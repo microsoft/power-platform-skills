@@ -22,6 +22,9 @@ function runHook({ input, configDir, ikeyPath, fakeProbe }) {
       ...process.env,
       POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
       POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath || "",
+      // Clear the workflow-wide opt-out backstop (set in power-pages-script-tests.yml)
+      // so the provisioned test still exercises the real emit path to its probe.
+      POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "",
       // Routes emission to a local probe instead of the real OneCollector.
       // Without it, the provisioned path (checked-in ikey.json ships enabled +
       // a real key) would POST a fake event to prod telemetry on every CI run.

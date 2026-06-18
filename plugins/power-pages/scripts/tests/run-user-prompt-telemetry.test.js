@@ -26,6 +26,9 @@ function runHook({ prompt, configDir, fakeProbe, ikeyPath }) {
       POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
       POWER_PLATFORM_SKILLS_FAKE_HTTPS: fakeProbe || "",
       POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath || "",
+      // Clear the workflow-wide opt-out backstop (set in power-pages-script-tests.yml)
+      // so the emit-detection test still exercises the real path to its probe.
+      POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "",
     },
     // The enabled path shells out to `pac auth who` + `pac --version`, each
     // capped at 8s (see lib/pac-auth.js). The hook's documented budget is ~30s;
