@@ -22,11 +22,9 @@ function runHook({ input, configDir, ikeyPath, fakeProbe }) {
       ...process.env,
       POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
       POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath || "",
-      // Route any actual emission to a local probe file instead of POSTing to
-      // the production OneCollector. CRITICAL for the provisioned/enabled path:
-      // the checked-in ikey.json now ships disabled:false + a real instrumentation
-      // key, so a hook test that reaches fireAndForget without a probe would emit
-      // a fake create-site event to prod telemetry on every CI run.
+      // Routes emission to a local probe instead of the real OneCollector.
+      // Without it, the provisioned path (checked-in ikey.json ships enabled +
+      // a real key) would POST a fake event to prod telemetry on every CI run.
       POWER_PLATFORM_SKILLS_FAKE_HTTPS: fakeProbe || "",
     },
     // The provisioned path shells out to `pac auth who` + `pac --version`, each
@@ -41,8 +39,6 @@ function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-// Poll for a file up to timeoutMs, sleeping between checks so the test runner
-// stays responsive. Returns whether the file exists at the end.
 function waitForFile(filePath, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (!fs.existsSync(filePath) && Date.now() < deadline) {
@@ -51,11 +47,10 @@ function waitForFile(filePath, timeoutMs) {
   return fs.existsSync(filePath);
 }
 
-// Writes an isolated, fully-provisioned telemetry config (temp ikey.json +
-// resolver.js) into configDir and returns the ikey path. Mirrors the shipped
-// plugin layout: the dispatcher discovers region routing via a resolver.js
-// sibling of ikey.json, so the region isProvisioned() gate runs against a
-// real-shaped (but example.invalid) key rather than the checked-in prod config.
+// Writes an isolated, provisioned telemetry config into configDir (temp
+// ikey.json + a resolver.js sibling — the dispatcher discovers region routing
+// by that convention) so emission runs against an example.invalid key instead
+// of the checked-in prod config. Returns the ikey path.
 function writeProvisionedConfig(configDir) {
   const ikeyPath = path.join(configDir, "ikey.json");
   fs.writeFileSync(
@@ -100,13 +95,9 @@ test("exits 0 when malformed stdin", () => {
 });
 
 test("exits 0 and emits skill_started to probe when skill is tracked (provisioned)", () => {
-  // Regression guard: this test previously ran the real hook with no ikey
-  // override and no FAKE_HTTPS probe. Once the checked-in ikey.json flipped to
-  // disabled:false with a real US instrumentation key, that produced a real
-  // HTTPS POST of a fake `create-site` skill_started event to the production
-  // OneCollector on every CI run (3 OS × every PR). Isolate via the override
-  // seam + a fake probe so the tracked-skill emit path is exercised WITHOUT
-  // touching prod telemetry.
+  // Regression guard: previously ran the real hook with no ikey override and no
+  // probe, so once the checked-in config went live it POSTed a fake create-site
+  // event to prod on every CI run. Override seam + probe keep it isolated.
   const configDir = mkConfigDir();
   const probePath = path.join(configDir, "probe.json");
   const ikeyPath = writeProvisionedConfig(configDir);

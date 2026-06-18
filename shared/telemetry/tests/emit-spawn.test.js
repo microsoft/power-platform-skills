@@ -118,11 +118,10 @@ test("opts.ikeyJsonPath points the dispatcher at the caller's ikey.json (no env 
 });
 
 test("env-var opt-out suppresses the POST through the real spawn chain (mirror still written)", async () => {
-  // Regression guard for the gap where emit-spawn's minimal child-env allowlist
-  // dropped POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT, so the dispatcher —
-  // the code that enforces the opt-out — never received it and POSTed anyway.
-  // The dispatcher's own unit test injects the var directly onto the child, which
-  // masked this; only the full fireAndForget → dispatcher chain exposes it.
+  // Regression guard: emit-spawn's minimal child-env allowlist used to drop the
+  // _OPTOUT var, so the dispatcher (which enforces the opt-out) never saw it and
+  // POSTed anyway. The dispatcher's own test injects the var directly, masking
+  // it — only the full fireAndForget → dispatcher chain exposes the gap.
   const tmp = mkTmp();
   const probe = path.join(tmp, "probe.json");
   const ikeyJsonPath = path.join(tmp, "ikey.json");
@@ -173,8 +172,8 @@ test("env-var opt-out suppresses the POST through the real spawn chain (mirror s
     await new Promise((r) => setTimeout(r, 100));
   }
   assert.ok(fs.existsSync(mirror), "local mirror should be written even when opted out");
-  // Opt-out honored → the FAKE_HTTPS probe (which stands in for the real POST)
-  // must NOT exist. The mirror above proves the child ran past the gate.
+  // Probe stands in for the real POST; the mirror above proves the child ran
+  // past the gate, so its absence means the opt-out suppressed transmission.
   assert.ok(!fs.existsSync(probe), "env-var opt-out must suppress the POST/probe");
 });
 

@@ -12,16 +12,6 @@ function fireAndForget(event, opts = {}) {
   const configDir = opts.configDir || "";
   const fakeProbe = opts.fakeProbe || "";
   const cloud = opts.cloud || "";
-  // The per-plugin transmission opt-out env var
-  // (POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT) is enforced inside the
-  // DETACHED dispatcher child (it suppresses the POST only, after the local
-  // mirror is written — so the hooks deliberately don't short-circuit on it).
-  // The child env below is a deliberate minimal allowlist that drops everything
-  // else, so we must forward this one var explicitly or the documented
-  // highest-precedence opt-out silently never reaches the code that honors it.
-  // Derive the exact var name from the event's pluginName and forward its value
-  // when present; forwarding a single boolean-ish flag preserves the
-  // no-secrets-to-the-child posture.
   const pluginName = event && event.data && event.data.pluginName;
   const optOutVarName = pluginName ? telemetryOptOutEnvVarName(pluginName) : "";
   const optOutValue =
@@ -56,11 +46,11 @@ function fireAndForget(event, opts = {}) {
         // plugin's real config rather than shared/'s placeholder.
         POWER_PLATFORM_SKILLS_IKEY_JSON:
           process.env.POWER_PLATFORM_SKILLS_IKEY_JSON || ikeyJsonPath || "",
-        // Forward the per-plugin opt-out flag under its real var name so the
-        // dispatcher's isTransmissionOptedOut() (which reads the child's
-        // process.env) can honor the env-var opt-out. Only added when actually
-        // set in the parent, so it never re-creates an empty var the dispatcher
-        // would treat as "present".
+        // The opt-out is enforced in the detached dispatcher, which reads the
+        // child's process.env — so the minimal allowlist must forward this var
+        // explicitly or the highest-precedence opt-out never reaches it. Added
+        // only when set, so it never plants an empty var the dispatcher would
+        // read as "present".
         ...(optOutVarName && optOutValue
           ? { [optOutVarName]: optOutValue }
           : {}),
