@@ -117,6 +117,67 @@ test("opts.ikeyJsonPath points the dispatcher at the caller's ikey.json (no env 
   );
 });
 
+test("env-var opt-out suppresses the POST through the real spawn chain (mirror still written)", async () => {
+  // Regression guard for the gap where emit-spawn's minimal child-env allowlist
+  // dropped POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT, so the dispatcher —
+  // the code that enforces the opt-out — never received it and POSTed anyway.
+  // The dispatcher's own unit test injects the var directly onto the child, which
+  // masked this; only the full fireAndForget → dispatcher chain exposes it.
+  const tmp = mkTmp();
+  const probe = path.join(tmp, "probe.json");
+  const ikeyJsonPath = path.join(tmp, "ikey.json");
+  fs.writeFileSync(
+    ikeyJsonPath,
+    JSON.stringify({
+      instrumentationKey: "placeholder",
+      collector_url: "https://example.invalid/",
+      event_stream_name: "PowerPagesPluginEvent",
+      disabled: false,
+    })
+  );
+  const optEvent = {
+    name: "PowerPagesPluginEvent",
+    data: {
+      eventName: "skill_started",
+      eventType: "Trace",
+      severity: "Info",
+      pluginName: "power-pages",
+      skillName: "hello",
+    },
+  };
+  const optVar = "POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT";
+  const prevOpt = process.env[optVar];
+  const prevIkeyJson = process.env.POWER_PLATFORM_SKILLS_IKEY_JSON;
+  process.env[optVar] = "1";
+  delete process.env.POWER_PLATFORM_SKILLS_IKEY_JSON; // exercise opts.ikeyJsonPath path
+  try {
+    fireAndForget(optEvent, {
+      iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
+      collectorUrl: "https://example.invalid/OneCollector/1.0/",
+      configDir: tmp,
+      fakeProbe: probe,
+      ikeyJsonPath,
+    });
+  } finally {
+    if (prevOpt === undefined) delete process.env[optVar];
+    else process.env[optVar] = prevOpt;
+    if (prevIkeyJson === undefined) delete process.env.POWER_PLATFORM_SKILLS_IKEY_JSON;
+    else process.env.POWER_PLATFORM_SKILLS_IKEY_JSON = prevIkeyJson;
+  }
+  // The local mirror is written BEFORE the opt-out gate, so wait on it to know
+  // the detached child actually ran and reached the gate (rather than asserting
+  // absence against a child that simply hadn't started yet).
+  const mirror = path.join(tmp, "events.jsonl");
+  for (let i = 0; i < 30; i++) {
+    if (fs.existsSync(mirror)) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  assert.ok(fs.existsSync(mirror), "local mirror should be written even when opted out");
+  // Opt-out honored → the FAKE_HTTPS probe (which stands in for the real POST)
+  // must NOT exist. The mirror above proves the child ran past the gate.
+  assert.ok(!fs.existsSync(probe), "env-var opt-out must suppress the POST/probe");
+});
+
 test("fireAndForget does not throw on empty-opts invocation", () => {
   fireAndForget({ name: "X", data: {} }, { iKey: "", collectorUrl: "" });
   // No assertion needed: test passes if no throw.
