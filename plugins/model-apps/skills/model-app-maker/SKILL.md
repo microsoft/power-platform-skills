@@ -29,22 +29,32 @@ vendored `cds-maker-kernel` bundle.
    `appShell`. Column `type` is one of Text / Memo / Choice / Boolean / Money /
    DateTime / Integer / Decimal / Lookup (Choice needs `options[]`). Keep the MVP
    to ONE entity unless the user asks for more. Write it to a scratch JSON file.
+   **Sample/test data (only if the user asks for it):** add a `sampleData` block
+   keyed by entity schemaName, e.g. `"sampleData": { "new_ticket": [ { "new_name":
+   "...", "new_priority": "High" } ] }`. Write Choice values as their **labels**
+   ("High") — the builder resolves them to the option ints. See
+   `samples/app-spec.support-tickets.json` for a full example. Sample data is
+   inserted only when the build is run with `--sample-data`.
 4. **Review gate.** Show the App Spec and the build **plan**:
    `node scripts/build-model-app.js --env <url> --spec @spec.json` (no `--apply` =
    dry-run; it prints the ordered plan and writes nothing). Let the user edit the
    spec. **Nothing is written to Dataverse until they confirm.**
 5. **Build.** `node scripts/build-model-app.js --env <url> --spec @spec.json --apply`
-   (add `--publish` to publish customizations, `--preview` to open the app/form in
-   the relay). The builder is deterministic and scopes everything to a dedicated
-   unmanaged solution.
+   (add `--publish` to publish customizations, `--sample-data` to insert the
+   spec's `sampleData`, `--preview` to open the app/form in the relay). The builder
+   is deterministic and scopes everything to a dedicated unmanaged solution. It
+   prints numbered `[n/total] <step>` progress lines as it runs — run it so the
+   user sees that output live (publishing can take 1-2 min and is the slow step).
 6. **Verify.** Open the app; iterate on the spec and re-run.
 
 ## What the builder does (in order)
 
-solution → tables + columns (`dv-*` scripts) → relationships → main form
-(kernel `buildForm` → PATCH the system-generated form) → view (kernel `buildView`
-→ create `savedquery`) → app module + sitemap (kernel `buildSitemap` →
-`appmodule` / `sitemap` / `AddAppComponents`) → publish (opt-in).
+solution → tables + columns (`dv-*` scripts) → relationships → **publish entities**
+→ **sample data** (opt-in `--sample-data`, inserted right after entities exist so
+columns resolve) → main form (kernel `buildForm` → PATCH the system-generated
+form) → view (kernel `buildView` → create `savedquery`) → app module + sitemap
+(kernel `buildSitemap` → `appmodule` / `sitemap` / `AddAppComponents`) → publish
+(opt-in `--publish`). Each phase emits a `[n/total]` progress line.
 
 ## Notes & limits
 

@@ -31,12 +31,31 @@ async function createSavedQuery(dv, { name, entityLogical, fetchxml, layoutxml }
   );
 }
 
+// Publishing can run long on a busy env; give it a generous client timeout so a
+// slow publish never fails an otherwise-successful build (default is 60s).
+const PUBLISH_TIMEOUT_MS = 240000;
+
 // Publish the given entities so their new attributes resolve when forms/views are
 // saved (an unpublished column is silently stripped from a form on save).
 async function publishEntities(dv, entityLogicalNames) {
   const entities = (entityLogicalNames || []).map((n) => `<entity>${n}</entity>`).join('');
   const ParameterXml = `<importexportxml><entities>${entities}</entities></importexportxml>`;
-  return dv('POST', 'PublishXml', { ParameterXml });
+  return dv('POST', 'PublishXml', { ParameterXml }, { timeout: PUBLISH_TIMEOUT_MS });
+}
+
+// Resolve an entity's plural collection (EntitySetName) for record CRUD. Falls
+// back to the conventional logical+'s' if metadata can't be read.
+async function getEntitySetName(dv, entityLogical) {
+  try {
+    const r = await dv('GET', `EntityDefinitions(LogicalName='${entityLogical}')?$select=EntitySetName`);
+    const name = r && r.data && r.data.EntitySetName;
+    if (name) {
+      return name;
+    }
+  } catch (e) {
+    /* fall back to the convention */
+  }
+  return entityLogical + 's';
 }
 
 // Resolve any PNG web resource to satisfy appmodule.webresourceid (a required FK).
@@ -65,7 +84,7 @@ async function addAppComponents(dv, appId, components) {
 }
 
 async function publishAll(dv) {
-  return dv('POST', 'PublishAllXml', {});
+  return dv('POST', 'PublishAllXml', {}, { timeout: PUBLISH_TIMEOUT_MS });
 }
 
 module.exports = {
@@ -74,6 +93,7 @@ module.exports = {
   patchFormXml,
   createSavedQuery,
   publishEntities,
+  getEntitySetName,
   resolveAppIcon,
   createAppModule,
   createSitemap,

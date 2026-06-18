@@ -4,10 +4,10 @@
 // + the Dataverse Web API. Dry-run by default; --apply writes, --publish publishes.
 //
 // Usage:
-//   node build-model-app.js --env <orgUrl> --spec @app-spec.json [--apply] [--publish] [--preview]
+//   node build-model-app.js --env <orgUrl> --spec @app-spec.json [--apply] [--publish] [--preview] [--sample-data]
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { validateAppSpec } = require('./lib/app-spec.js');
+const { validateAppSpec, sampleRecordsFor } = require('./lib/app-spec.js');
 const { runKernel } = require('./lib/maker-kernel.js');
 const { runAll } = require('./lib/build-steps.js');
 const { dataverseRequest, parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
@@ -43,6 +43,12 @@ function planFor(spec) {
   for (const r of spec.relationships || []) {
     steps.push(`create-relationship ${r.type} ${r.referenced}->${r.referencing}`);
   }
+  for (const e of spec.entities) {
+    const n = sampleRecordsFor(spec, e).length;
+    if (n) {
+      steps.push(`add ${n} sample record(s) to ${e.schemaName} (requires --sample-data)`);
+    }
+  }
   for (const f of spec.forms) {
     steps.push(`build + write main form for ${f.entity}`);
   }
@@ -74,12 +80,18 @@ async function main() {
   const specArg = flags.spec || positional[0];
   if (!env || !specArg) {
     process.stderr.write(
-      'Usage: node build-model-app.js --env <url> --spec @app-spec.json [--apply] [--publish] [--preview]\n'
+      'Usage: node build-model-app.js --env <url> --spec @app-spec.json [--apply] [--publish] [--preview] [--sample-data]\n'
     );
     process.exit(1);
   }
   const spec = readJsonArg(typeof specArg === 'string' && specArg.startsWith('@') ? specArg : '@' + specArg);
-  const opts = { apply: flags.apply === true, publish: flags.publish === true, preview: flags.preview === true, env };
+  const opts = {
+    apply: flags.apply === true,
+    publish: flags.publish === true,
+    preview: flags.preview === true,
+    sampleData: flags['sample-data'] === true,
+    env,
+  };
   const r = await buildModelApp(spec, opts, defaultDeps(env));
   emitResult(r.ok, r);
 }

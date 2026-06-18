@@ -18,6 +18,45 @@ function columnTypeMap(t) {
   return TYPE_MAP[t] || TYPE_MAP.Text;
 }
 
+// Map a Choice column's option LABELS to the integer values the builder assigns
+// (add-column.js is called with value = 100000000 + index, see build-steps.js).
+// { columnLogicalName: { "Active": 100000001, ... } }.
+function choiceValueMap(entity) {
+  const map = {};
+  for (const c of entity.columns || []) {
+    if (c.type === 'Choice' && Array.isArray(c.options)) {
+      const byLabel = {};
+      c.options.forEach((label, i) => {
+        byLabel[label] = 100000000 + i;
+      });
+      map[c.schemaName.toLowerCase()] = byLabel;
+    }
+  }
+  return map;
+}
+
+// The sample records declared for an entity (keyed by schemaName, case-insensitive).
+function sampleRecordsFor(spec, entity) {
+  const sd = spec.sampleData || {};
+  const key = Object.keys(sd).find((k) => k.toLowerCase() === entity.schemaName.toLowerCase());
+  return (key && Array.isArray(sd[key]) && sd[key]) || [];
+}
+
+// Turn author-friendly sample records into Web-API bodies: Choice values written
+// as labels ("Active") are resolved to their option ints; everything else passes
+// through unchanged (so raw ints, strings, booleans, ISO dates all still work).
+function resolveSampleRecords(entity, records) {
+  const choices = choiceValueMap(entity);
+  return (records || []).map((rec) => {
+    const out = {};
+    for (const [k, v] of Object.entries(rec)) {
+      const labels = choices[k.toLowerCase()];
+      out[k] = labels && typeof v === 'string' && labels[v] !== undefined ? labels[v] : v;
+    }
+    return out;
+  });
+}
+
 function validateAppSpec(spec) {
   const errors = [];
   if (!spec || typeof spec !== 'object') {
@@ -76,7 +115,29 @@ function validateAppSpec(spec) {
       }
     }
   }
+  if (spec.sampleData !== undefined) {
+    if (typeof spec.sampleData !== 'object' || spec.sampleData === null || Array.isArray(spec.sampleData)) {
+      errors.push('sampleData must be an object keyed by entity schemaName');
+    } else {
+      const lower = new Set([...entityNames].map((n) => n.toLowerCase()));
+      for (const [k, v] of Object.entries(spec.sampleData)) {
+        if (!lower.has(k.toLowerCase())) {
+          errors.push(`sampleData references unknown entity '${k}'`);
+        }
+        if (!Array.isArray(v)) {
+          errors.push(`sampleData['${k}'] must be an array of records`);
+        }
+      }
+    }
+  }
   return { ok: errors.length === 0, errors };
 }
 
-module.exports = { validateAppSpec, columnTypeMap, TYPE_MAP };
+module.exports = {
+  validateAppSpec,
+  columnTypeMap,
+  TYPE_MAP,
+  choiceValueMap,
+  sampleRecordsFor,
+  resolveSampleRecords,
+};

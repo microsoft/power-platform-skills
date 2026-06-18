@@ -1,14 +1,52 @@
 // Deterministic builder steps for the model-app-maker. Each step takes injectable
 // deps { runScript, dv, kernel, log } so the builder is fully unit-testable with
 // no environment. Ordering is strict (each step depends on the prior).
-const { columnTypeMap } = require('./app-spec.js');
+//
+// Progress: runAll augments deps with `deps.step(label)`, which emits a numbered
+// `[n/total] label` line so a caller (and the user) can see live which phase is
+// running — important because publishing can take a minute or two.
+const { columnTypeMap, sampleRecordsFor, resolveSampleRecords } = require('./app-spec.js');
 const recs = require('./dataverse-records.js');
+
+// Count the phase-level steps runAll will emit, so [n/total] has a stable total.
+// MUST mirror the deps.step(...) calls below.
+function countSteps(spec, opts) {
+  let n = 1; // solution
+  for (const e of spec.entities) {
+    n += 1; // table
+    for (const c of e.columns || []) {
+      if (columnTypeMap(c.type || 'Text').dv) {
+        n += 1; // add-column (lookups have no add-column step)
+      }
+    }
+  }
+  for (const rel of spec.relationships || []) {
+    if (rel.type === 'OneToMany') {
+      n += 1;
+    }
+  }
+  n += 1; // publish entities
+  if (opts.sampleData) {
+    for (const e of spec.entities) {
+      if (sampleRecordsFor(spec, e).length) {
+        n += 1; // insert sample data for this entity
+      }
+    }
+  }
+  n += spec.forms.length; // one per form
+  n += spec.views.length; // one per view
+  n += 1; // app shell
+  if (opts.publish) {
+    n += 1; // publish customizations
+  }
+  return n;
+}
 
 // --- 1. Data model: solution + tables + columns + relationships (via dv-* scripts).
 async function dataModel(spec, opts, deps, result) {
   const env = opts.env;
   const sol = spec.solution;
-  deps.log(`solution ${sol.uniqueName}`);
+  deps.step(`solution ${sol.uniqueName}`);
   // Resolve the publisher whose customization prefix matches the spec, so the
   // entity/column schema names (e.g. new_project) are accepted. Falls back to the
   // env's default publisher if none is found.
@@ -31,7 +69,7 @@ async function dataModel(spec, opts, deps, result) {
 
   result.created.entities = {};
   for (const e of spec.entities) {
-    deps.log(`table ${e.schemaName}`);
+    deps.step(`table ${e.schemaName} ("${e.displayName}")`);
     const t = deps.runScript('create-table.js', [
       env,
       e.schemaName,
@@ -54,6 +92,7 @@ async function dataModel(spec, opts, deps, result) {
         deps.log(`skip column ${c.schemaName} (type ${c.type} not via add-column)`);
         continue;
       }
+      deps.step(`column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})`);
       const args = [env, e.schemaName.toLowerCase(), c.schemaName, c.displayName || c.schemaName, map.dv, '--solution', sol.uniqueName];
       if (c.type === 'Choice') {
         args.push('--options', JSON.stringify((c.options || []).map((label, i) => ({ value: 100000000 + i, label }))));
@@ -67,6 +106,7 @@ async function dataModel(spec, opts, deps, result) {
       deps.log(`skip relationship type ${rel.type}`);
       continue;
     }
+    deps.step(`relationship ${rel.referenced}->${rel.referencing}`);
     deps.runScript('create-relationship.js', [
       '1n',
       env,
@@ -81,10 +121,28 @@ async function dataModel(spec, opts, deps, result) {
   }
 }
 
-// --- 2. Forms: kernel buildForm -> PATCH the system-generated main form.
+// --- 2. Sample data (opt-in): resolve choice labels -> ints, then bulk-create.
+// Runs right after entities are created + published, so the columns resolve.
+async function sampleData(spec, opts, deps, result) {
+  result.created.records = {};
+  for (const e of spec.entities) {
+    const records = sampleRecordsFor(spec, e);
+    if (!records.length) {
+      continue;
+    }
+    deps.step(`sample data: ${records.length} record(s) for ${e.schemaName}`);
+    const resolved = resolveSampleRecords(e, records);
+    const entitySet = await recs.getEntitySetName(deps.dv, e.schemaName.toLowerCase());
+    const r = deps.runScript('create-record.js', [opts.env, entitySet, '--body', JSON.stringify(resolved)]);
+    result.created.records[e.schemaName] = (r && r.ids) || [];
+  }
+}
+
+// --- 3. Forms: kernel buildForm -> PATCH the system-generated main form.
 async function forms(spec, opts, deps, result) {
   result.created.forms = {};
   for (const f of spec.forms) {
+    deps.step(`form for ${f.entity}`);
     const entityLogical = f.entity.toLowerCase();
     const entity = spec.entities.find((x) => x.schemaName.toLowerCase() === entityLogical);
     const typeOf = (logical) => {
@@ -122,10 +180,11 @@ async function forms(spec, opts, deps, result) {
   }
 }
 
-// --- 3. Views: kernel buildView -> create savedquery.
+// --- 4. Views: kernel buildView -> create savedquery.
 async function views(spec, opts, deps, result) {
   result.created.views = {};
   for (const v of spec.views) {
+    deps.step(`view "${v.name}" for ${v.entity}`);
     const entityLogical = v.entity.toLowerCase();
     const built = deps.kernel({
       kind: 'buildView',
@@ -154,10 +213,9 @@ async function views(spec, opts, deps, result) {
   }
 }
 
-// --- 4. App shell: kernel buildSitemap -> appmodule + sitemap + AddAppComponents -> publish (opt-in).
-// NOTE: the exact AddAppComponents component shapes are validated by the live E2E
-// (model-app-maker-plan Task 7) and may need adjustment per the env's API.
+// --- 5. App shell: kernel buildSitemap -> appmodule + sitemap + AddAppComponents -> publish (opt-in).
 async function appShell(spec, opts, deps, result) {
+  deps.step(`app shell (sitemap + app module "${spec.app.name}")`);
   const sm = deps.kernel({
     kind: 'buildSitemap',
     spec: {
@@ -210,7 +268,7 @@ async function appShell(spec, opts, deps, result) {
   }
 
   if (opts.publish) {
-    deps.log('publishing customizations');
+    deps.step('publish customizations (this can take 1-2 min)');
     await recs.publishAll(deps.dv);
   } else {
     deps.log('skipped publish (pass --publish to publish)');
@@ -218,17 +276,27 @@ async function appShell(spec, opts, deps, result) {
 }
 
 async function runAll(spec, opts, deps, result) {
-  await dataModel(spec, opts, deps, result);
+  // Augment deps with a numbered progress emitter shared by every phase.
+  const total = countSteps(spec, opts);
+  let i = 0;
+  const d = Object.assign({}, deps, {
+    step: (label) => deps.log(`[${++i}/${total}] ${label}`),
+  });
+
+  await dataModel(spec, opts, d, result);
   // Publish the new entities BEFORE building forms/views — Dataverse silently
   // strips form cells that reference unpublished attributes on save.
-  deps.log('publish entities');
+  d.step('publish entities');
   await recs.publishEntities(
-    deps.dv,
+    d.dv,
     spec.entities.map((e) => e.schemaName.toLowerCase())
   );
-  await forms(spec, opts, deps, result);
-  await views(spec, opts, deps, result);
-  await appShell(spec, opts, deps, result);
+  if (opts.sampleData) {
+    await sampleData(spec, opts, d, result);
+  }
+  await forms(spec, opts, d, result);
+  await views(spec, opts, d, result);
+  await appShell(spec, opts, d, result);
 }
 
-module.exports = { runAll, dataModel, forms, views, appShell };
+module.exports = { runAll, dataModel, sampleData, forms, views, appShell, countSteps };
