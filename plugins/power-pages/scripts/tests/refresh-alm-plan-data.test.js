@@ -1952,6 +1952,7 @@ test('reconcile: soft no-op when there is no plan', (t) => {
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'no-plan');
 });
+<<<<<<< HEAD
 
 // --- Gap 5: completion evaluator (In Execution -> Completed) -----------------
 
@@ -2046,3 +2047,5 @@ test('completion: a Draft plan is never auto-completed', (t) => {
   const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
   assert.equal(planData.PLAN_STATUS, 'Draft', 'Draft is not a pre-terminal execution state');
 });
+=======
+>>>>>>> origin/users/nityagi/table-discovery-fix

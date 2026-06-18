@@ -49,13 +49,27 @@ function collectReferencedEntityNames({ projectRoot, datamodelManifestPath } = {
     const dir = path.join(projectRoot, '.powerpages-site', 'table-permissions');
     if (fs.existsSync(dir)) {
       sawTablePermissionsDir = true;
+<<<<<<< HEAD
+=======
+      // Count the permission FILES present — `sources.tablePermissions` must mean
+      // "the site has table-permission files" (a reliable site-referenced signal,
+      // consumed by `tableCountScope`), NOT "we parsed at least one record". A
+      // temporarily-malformed file must not make a real site look manifest-only.
+      try {
+        sources.tablePermissions = fs.readdirSync(dir)
+          .filter((f) => /\.tablepermission\.yml$/i.test(f)).length;
+      } catch { /* keep 0 */ }
+>>>>>>> origin/users/nityagi/table-discovery-fix
       let records = [];
       try { records = loadTablePermissions(dir); } catch { records = []; }
       for (const r of records) {
         const name = r && r.entitylogicalname;          // NOT entityname (that's the display label)
         if (typeof name === 'string' && name.trim()) {
           names.add(name.trim().toLowerCase());
+<<<<<<< HEAD
           sources.tablePermissions += 1;
+=======
+>>>>>>> origin/users/nityagi/table-discovery-fix
         }
       }
     }

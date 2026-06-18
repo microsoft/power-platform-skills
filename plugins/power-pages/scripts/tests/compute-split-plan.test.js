@@ -236,6 +236,49 @@ test('computeSplitPlan Strategy 3 never overflows the attr cap when independent 
   for (const s of tableSolutions) {
     assert.equal(s.tableLogicalNames.length, 1, `${s.uniqueName} must hold exactly one table — no bucket over the attr cap`);
   }
+<<<<<<< HEAD
+=======
+});
+
+test('computeSplitPlan WARNS when >maxSchemaSplitSolutions independent attr-heavy clusters bust the attr cap (ceiling boundary)', () => {
+  // 9 INDEPENDENT (no-edge) 14000-attr tables, ceiling=8: the packer can open at
+  // most 8 buckets, so FFD's least-loaded fallback co-locates 2 tables in one
+  // solution -> 28000 attrs > maxSchemaAttrs(15000). The table-count guard misses
+  // it (each solution has <=2 tables, well under maxTableCount). The attr guard
+  // must surface it. (Regression for the ceiling-boundary silent overflow.)
+  const tables = Array.from({ length: 9 }, (_, i) => ({ logicalName: `tst_t${i}`, attributeCount: 14000 }));
+  const result = computeSplitPlan({
+    estimate: baseEstimate({ tableCount: 9, schemaAttrCount: 9 * 14000, tables, tableRelationships: [] }),
+    config: baseConfig(),
+    meta: { baseName: 'Test', siteName: 'Test Site' },
+  });
+  assert.equal(result.splitStrategy, 'strategy-3-schema-segmentation');
+  const attrWarn = (result.recommendations || []).find((r) => /columns — above the .* per-solution cap/i.test(r.message || ''));
+  assert.ok(attrWarn, 'expected an oversized-schema (attr-cap) warning when a Table solution exceeds maxSchemaAttrs at the ceiling');
+});
+
+test('computeSplitPlan: a Table domain componentCount is a schema-component proxy (sum attrs + 1/table), not the table count', () => {
+  // Counting 1-per-table severely undercounts solution components and can let an
+  // over-cap solution slip past validateSplits. Proxy = sum(attributeCount) + 1/table.
+  const result = computeSplitPlan({
+    // tableCount:34 makes the schema "red" so Strategy 3 fires; the proxy reads the
+    // per-table attributeCount from tables[] (500 + 300), independent of the global count.
+    estimate: baseEstimate({
+      tableCount: 34,
+      schemaAttrCount: 32000,
+      tables: [
+        { logicalName: 'tst_product', attributeCount: 500 },
+        { logicalName: 'tst_category', attributeCount: 300 },
+      ],
+    }),
+    config: baseConfig({ domains: [{ name: 'Catalog', tableLogicalNames: ['tst_product', 'tst_category'] }] }),
+    meta: { baseName: 'Test', siteName: 'Test Site' },
+  });
+  assert.equal(result.splitStrategy, 'strategy-3-schema-segmentation');
+  const catalog = result.proposedSolutions.find((s) => s.uniqueName === 'Test_Catalog');
+  assert.ok(catalog, 'Catalog Table domain solution exists');
+  assert.equal(catalog.componentCount, 802, 'sum(500+300) + 2 tables = 802 (proxy), not 2 (table count)');
+>>>>>>> origin/users/nityagi/table-discovery-fix
 });
 
 test('computeSplitPlan additive Strategy 4 prepends EnvVars solution', () => {

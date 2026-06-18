@@ -96,3 +96,21 @@ test('scopeCustomTables: keeps only referenced custom tables; drops unreferenced
 test('scopeCustomTables: empty referenced set -> empty (never a prefix dump)', () => {
   assert.deepEqual(scopeCustomTables(new Set(), [{ logicalName: 'new_x' }]), []);
 });
+<<<<<<< HEAD
+=======
+
+test('collectReferencedEntityNames: sources.tablePermissions reflects FILE existence even when files are unparseable', (t) => {
+  const root = makeProject(t);
+  const dir = path.join(root, '.powerpages-site', 'table-permissions');
+  fs.mkdirSync(dir, { recursive: true });
+  // A malformed permission file — present, but yields no entitylogicalname. Without
+  // counting files up-front, sources.tablePermissions would be 0 and a real site
+  // would be misclassified manifest-only/unavailable by tableCountScope.
+  fs.writeFileSync(path.join(dir, 'broken.tablepermission.yml'), ':\n  not: [valid yaml }}}\n');
+
+  const { names, available, sources } = collectReferencedEntityNames({ projectRoot: root });
+  assert.equal(available, true, 'the table-permissions dir exists → available');
+  assert.equal(sources.tablePermissions, 1, 'counts the permission FILE, not parsed records (0 parsed here)');
+  assert.equal(names.size, 0, 'no entity names parsed from the malformed file');
+});
+>>>>>>> origin/users/nityagi/table-discovery-fix

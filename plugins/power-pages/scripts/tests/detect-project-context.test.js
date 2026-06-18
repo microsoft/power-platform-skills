@@ -30,9 +30,15 @@ test('detectProjectContext: code site (powerpages.config.json) reports siteType 
   assert.equal(result.siteName, 'Code Site');
 });
 
+<<<<<<< HEAD
 test('detectProjectContext: enhanced data-model site resolves identity from .powerpages-site/website.yml', (t) => {
   const projectRoot = createTempProject(t);
   // No powerpages.config.json — this is an EDM / data-model config site.
+=======
+test('detectProjectContext: declarative (data-model) site resolves identity from .powerpages-site/website.yml', (t) => {
+  const projectRoot = createTempProject(t);
+  // No powerpages.config.json — this is a declarative ("data-model") design-studio site.
+>>>>>>> origin/users/nityagi/table-discovery-fix
   writeProjectFile(
     projectRoot,
     '.powerpages-site/website.yml',
@@ -53,6 +59,22 @@ test('detectProjectContext: enhanced data-model site resolves identity from .pow
   assert.equal(result.environmentUrl, null);
 });
 
+<<<<<<< HEAD
+=======
+test('detectProjectContext: .powerpages-site/.portalconfig/ is the positive declarative signal (even without website.yml)', (t) => {
+  const projectRoot = createTempProject(t);
+  // A declarative site identified by its .portalconfig/ marker, with no website.yml
+  // (rare, but .portalconfig is the authoritative signal — identity resolves at runtime).
+  writeProjectFile(projectRoot, '.powerpages-site/.portalconfig/manifest.yml', 'foo: bar\n');
+
+  const result = detectProjectContext({ projectRoot });
+  assert.equal(result.siteType, 'data-model', '.portalconfig/ marks a declarative site');
+  assert.equal(result.siteName, null);
+  assert.equal(result.websiteRecordId, null);
+  assert.equal(result.environmentUrl, null);
+});
+
+>>>>>>> origin/users/nityagi/table-discovery-fix
 test('detectProjectContext: config site wins over website.yml when both exist (code-site precedence)', (t) => {
   const projectRoot = createTempProject(t);
   writeProjectFile(projectRoot, 'powerpages.config.json', JSON.stringify({

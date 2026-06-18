@@ -214,4 +214,4 @@ Any use of third-party trademarks or logos are subject to those third-party's po
 
 ## Telemetry
 
-Plugins that ship 1DS telemetry (currently: `power-pages`) gather anonymous usage signals. Telemetry is default-on; users opt out per-plugin via the `/<plugin>:telemetry off` command (e.g. `/power-pages:telemetry off`), stored in `~/.power-platform-skills/config.json`. See `shared/telemetry/README.md` for what is sent.
+Plugins that ship 1DS telemetry (currently: `power-pages`) gather anonymous usage signals. Telemetry is default-on; users opt out per-plugin via the `/<plugin>:telemetry off` command (e.g. `/power-pages:telemetry off`), stored in `~/.power-platform-skills/config.json`. For automation/CI, each adopting plugin also honors a per-plugin opt-out environment variable `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT` (e.g. `POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT=1`); when set it disables transmission with the highest precedence, overriding any `/<plugin>:telemetry` choice. See `shared/telemetry/README.md`.
