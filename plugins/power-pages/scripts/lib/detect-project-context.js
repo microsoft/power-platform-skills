@@ -2,14 +2,14 @@
 
 // Reads Power Pages project context files from the project root.
 // Locates powerpages.config.json (code/SPA sites) OR .powerpages-site/website.yml
-// (data-model config sites, standard and enhanced data model), plus
+// (enhanced data-model "EDM" config sites), plus
 // .solution-manifest.json and .datamodel-manifest.json.
 //
 // Site identity resolution order (first match wins):
 //   1. powerpages.config.json  -> siteType "code"  (SPA sites; has siteName,
 //                                  websiteRecordId, environmentUrl)
-//   2. .powerpages-site/website.yml -> siteType "data-model"  (enhanced/standard
-//                                  data-model sites from `pac pages download`; the
+//   2. .powerpages-site/website.yml -> siteType "data-model"  (enhanced data-model
+//                                  "EDM" sites from `pac pages download`; the
 //                                  YAML carries `id` and `name`, but no environment URL —
 //                                  callers re-confirm the env via `pac env who`)
 //
@@ -73,6 +73,16 @@ function readWebsiteYml(filePath) {
     if (!m) continue;
     const key = m[1];
     let value = m[2].trim();
+    // Strip an inline YAML comment ( ` #...` preceded by whitespace) on UNQUOTED
+    // values — `id: abc # note` -> `abc`. A `#` inside quotes, or with no leading
+    // space, is left intact. (pac-downloaded website.yml is flat + uncommented, so
+    // this is defensive — but cheap, and stops a stray comment from corrupting the
+    // site identity.)
+    const looksQuoted = (value.startsWith('"') && value.endsWith('"')) ||
+                        (value.startsWith("'") && value.endsWith("'"));
+    if (!looksQuoted) {
+      value = value.replace(/\s+#.*$/, '').trim();
+    }
     // Strip surrounding quotes a YAML writer may add.
     if ((value.startsWith('"') && value.endsWith('"')) ||
         (value.startsWith("'") && value.endsWith("'"))) {
@@ -118,7 +128,7 @@ function detectProjectContext(options = {}) {
     };
   }
 
-  // 2. Data-model (standard/enhanced) site — identity comes from
+  // 2. Enhanced data-model ("EDM") site — identity comes from
   //    .powerpages-site/website.yml (`id` -> websiteRecordId, `name` -> siteName).
   //    There is no environment URL in the local files; callers re-confirm via `pac env who`.
   const websiteYmlPath = path.join(projectRoot, '.powerpages-site', 'website.yml');

@@ -93,10 +93,10 @@ function findPath(dir, target) {
  *
  * A project root is marked by EITHER:
  *   - `powerpages.config.json` — code/SPA sites (`pac pages download-code-site`), OR
- *   - a `.powerpages-site/` directory — data-model config sites (`pac pages download`,
- *     standard or enhanced data model). These have NO `powerpages.config.json`.
+ *   - a `.powerpages-site/` directory — enhanced data-model ("EDM") config sites
+ *     (`pac pages download`). These have NO `powerpages.config.json`.
  *
- * Code sites have both markers; data-model (e.g. enhanced data model) sites have only
+ * Code sites have both markers; EDM sites have only
  * `.powerpages-site/`. Checking for either makes root discovery work for both site types.
  *
  * @returns {string|null} Project root path, or null
