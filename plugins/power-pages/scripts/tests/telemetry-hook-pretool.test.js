@@ -133,7 +133,7 @@ test("pretool hook exits 0 when ikey.json has regions but default_region entry h
   fs.writeFileSync(
     ikeyPath,
     JSON.stringify({
-      event_stream_name: "PagesPluginEvent",
+      event_stream_name: "PagesAIPluginEvent",
       disabled: false,
       default_region: "us",
       regions: { us: { collector_url: "https://x" } },

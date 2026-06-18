@@ -53,7 +53,7 @@ function waitForFile(filePath, timeoutMs) {
   return fs.existsSync(filePath);
 }
 
-test("hook emits PagesPluginEvent with top-level fields for tracked slash command", () => {
+test("hook emits PagesAIPluginEvent with top-level fields for tracked slash command", () => {
   const configDir = mkConfigDir();
   const probePath = path.join(configDir, "probe.json");
   // Point the hook at a temp ikey.json via the override seam instead of
@@ -63,7 +63,7 @@ test("hook emits PagesPluginEvent with top-level fields for tracked slash comman
   fs.writeFileSync(
     ikeyPath,
     JSON.stringify({
-      event_stream_name: "PagesPluginEvent",
+      event_stream_name: "PagesAIPluginEvent",
       disabled: false,
       default_region: "us",
       regions: {
@@ -101,7 +101,7 @@ test("hook emits PagesPluginEvent with top-level fields for tracked slash comman
   assert.ok(probe.body.endsWith("\n"), "body must be newline-terminated");
   const body = JSON.parse(probe.body);
   assert.deepEqual(Object.keys(body).sort(), ["data", "iKey", "name", "time", "ver"]);
-  assert.equal(body.name, "PagesPluginEvent");
+  assert.equal(body.name, "PagesAIPluginEvent");
   assert.equal(body.ver, "4.0");
   assert.match(body.iKey, /^o:/);
   assert.equal(body.data.eventName, "skill_started");
