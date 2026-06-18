@@ -1,19 +1,6 @@
 #!/usr/bin/env node
 
 // Reads Power Pages project context files from the project root.
-<<<<<<< HEAD
-// Locates powerpages.config.json (code/SPA sites) OR .powerpages-site/website.yml
-// (data-model config sites, standard and enhanced data model), plus
-// .solution-manifest.json and .datamodel-manifest.json.
-//
-// Site identity resolution order (first match wins):
-//   1. powerpages.config.json  -> siteType "code"  (SPA sites; has siteName,
-//                                  websiteRecordId, environmentUrl)
-//   2. .powerpages-site/website.yml -> siteType "data-model"  (enhanced/standard
-//                                  data-model sites from `pac pages download`; the
-//                                  YAML carries `id` and `name`, but no environment URL —
-//                                  callers re-confirm the env via `pac env who`)
-=======
 // Locates powerpages.config.json (code/SPA sites) OR a .powerpages-site/ config tree
 // (declarative "data-model" sites — Power Pages design-studio sites), plus
 // .solution-manifest.json and .datamodel-manifest.json.
@@ -35,7 +22,6 @@
 //                                  via `pac env who`. `.portalconfig/` is the positive
 //                                  declarative marker; BOTH site types carry website.yml,
 //                                  so it isn't a reliable "declarative" signal alone.)
->>>>>>> origin/users/nityagi/table-discovery-fix
 //
 // Usage: node detect-project-context.js [--projectRoot <path>]
 //
@@ -97,8 +83,6 @@ function readWebsiteYml(filePath) {
     if (!m) continue;
     const key = m[1];
     let value = m[2].trim();
-<<<<<<< HEAD
-=======
     // Strip an inline YAML comment ( ` #...` preceded by whitespace) on UNQUOTED
     // values — `id: abc # note` -> `abc`. A `#` inside quotes, or with no leading
     // space, is left intact. (pac-downloaded website.yml is flat + uncommented, so
@@ -109,7 +93,6 @@ function readWebsiteYml(filePath) {
     if (!looksQuoted) {
       value = value.replace(/\s+#.*$/, '').trim();
     }
->>>>>>> origin/users/nityagi/table-discovery-fix
     // Strip surrounding quotes a YAML writer may add.
     if ((value.startsWith('"') && value.endsWith('"')) ||
         (value.startsWith("'") && value.endsWith("'"))) {
@@ -120,8 +103,6 @@ function readWebsiteYml(filePath) {
   return (out.id || out.name) ? out : null;
 }
 
-<<<<<<< HEAD
-=======
 function isDirectory(p) {
   try {
     return fs.statSync(p).isDirectory();
@@ -130,7 +111,6 @@ function isDirectory(p) {
   }
 }
 
->>>>>>> origin/users/nityagi/table-discovery-fix
 function detectProjectContext(options = {}) {
   const startDir = options.projectRoot || process.cwd();
   const projectRoot = options.projectRoot
@@ -166,16 +146,6 @@ function detectProjectContext(options = {}) {
     };
   }
 
-<<<<<<< HEAD
-  // 2. Data-model (standard/enhanced) site — identity comes from
-  //    .powerpages-site/website.yml (`id` -> websiteRecordId, `name` -> siteName).
-  //    There is no environment URL in the local files; callers re-confirm via `pac env who`.
-  const websiteYmlPath = path.join(projectRoot, '.powerpages-site', 'website.yml');
-  if (fs.existsSync(websiteYmlPath)) {
-    const site = readWebsiteYml(websiteYmlPath);
-    if (!site) {
-      throw new Error(`Could not read site id/name from: ${websiteYmlPath}`);
-=======
   // 2. Declarative ("data-model") site — a Power Pages design-studio site
   //    (`pac pages download`; standard or enhanced data model), as opposed to a
   //    code/SPA site. The authoritative positive marker is the
@@ -194,18 +164,12 @@ function detectProjectContext(options = {}) {
       if (!site) {
         throw new Error(`Could not read site id/name from: ${websiteYmlPath}`);
       }
->>>>>>> origin/users/nityagi/table-discovery-fix
     }
     return {
       projectRoot,
       siteType: 'data-model',
-<<<<<<< HEAD
-      siteName: site.name || null,
-      websiteRecordId: site.id || null,
-=======
       siteName: site ? (site.name || null) : null,
       websiteRecordId: site ? (site.id || null) : null,
->>>>>>> origin/users/nityagi/table-discovery-fix
       environmentUrl: null,
       solutionManifest,
       datamodelManifest,

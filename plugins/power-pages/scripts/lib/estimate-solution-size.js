@@ -353,15 +353,6 @@ async function discoverTableRelationships(envUrl, tables, token) {
     seen.add(key);
     edges.push(a < b ? [a, b] : [b, a]);
   };
-<<<<<<< HEAD
-  for (const t of tables) {
-    let rel;
-    try {
-      rel = await fetchTableRelationships(envUrl, t.logicalName, token);
-    } catch {
-      continue; // inaccessible table — skip its edges
-    }
-=======
   // Fetch each table's relationships with BOUNDED CONCURRENCY (~2 OData calls per
   // table; a 34-table site is 68 round-trips — serial is slow at plan time). Edge
   // assembly stays sequential, in table order, so dedup is deterministic.
@@ -383,7 +374,6 @@ async function discoverTableRelationships(envUrl, tables, token) {
   );
   for (const rel of results) {
     if (!rel) continue;
->>>>>>> origin/users/nityagi/table-discovery-fix
     for (const e of rel.oneToMany) addEdge(e.referencedEntity, e.referencingEntity);
     for (const e of rel.manyToMany) addEdge(e.entity1, e.entity2);
   }

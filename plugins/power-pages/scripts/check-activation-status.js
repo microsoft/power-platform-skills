@@ -43,53 +43,6 @@ function resolveSiteIdentity(projectRoot, deps = {}) {
   const _execSync = deps.execSync || execSync;
   const _readFileSync = deps.readFileSync || fs.readFileSync;
 
-<<<<<<< HEAD
-// --- Read site identity from powerpages.config.json (code/SPA sites) OR
-//     .powerpages-site/website.yml (data-model / enhanced data model "EDM" sites,
-//     which have no powerpages.config.json). website.yml carries both the site
-//     name and the website GUID, so EDM sites skip the pac-pages-list lookup below. ---
-let siteName;
-let websiteRecordId = null;
-const configPath = findPath(projectRoot, 'powerpages.config.json');
-if (configPath) {
-  try {
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    siteName = config.siteName;
-    websiteRecordId = config.websiteRecordId || null;
-  } catch {
-    output({ error: 'Failed to parse powerpages.config.json' });
-  }
-} else {
-  const websiteYmlPath = findPath(projectRoot, path.join('.powerpages-site', 'website.yml'));
-  const site = websiteYmlPath ? readWebsiteYml(websiteYmlPath) : null;
-  if (site) {
-    siteName = site.name;
-    websiteRecordId = site.id || null;
-  }
-}
-if (!siteName) {
-  output({ error: 'Site name not found — looked in powerpages.config.json and .powerpages-site/website.yml' });
-}
-
-// --- Get websiteRecordId from pac pages list (only when not already known,
-//     e.g. a code site whose config omitted it). EDM sites already have it from website.yml. ---
-if (!websiteRecordId) try {
-  const pacOutput = execSync('pac pages list', { encoding: 'utf8', timeout: 15000 });
-  // pac pages list outputs a table with columns. Find the row matching siteName.
-  // Column headers vary but Website Record ID is always a GUID column.
-  const lines = pacOutput.split(/\r?\n/).filter((l) => l.trim());
-  for (const line of lines) {
-    // Skip header/separator lines
-    if (line.includes('----') || line.toLowerCase().includes('website name')) continue;
-    // Check if this line contains our site name (case-insensitive)
-    if (line.toLowerCase().includes(siteName.toLowerCase())) {
-      // Extract GUID from the line
-      const guidMatch = line.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
-      if (guidMatch) {
-        websiteRecordId = guidMatch[0];
-      }
-      break;
-=======
   let siteName = null;
   let websiteRecordId = null;
   let source = null;
@@ -111,7 +64,6 @@ if (!websiteRecordId) try {
       siteName = site.name;
       websiteRecordId = site.id || null;
       source = 'website.yml';
->>>>>>> origin/users/nityagi/table-discovery-fix
     }
   }
 

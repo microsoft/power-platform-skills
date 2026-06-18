@@ -332,19 +332,11 @@ function partitionBySchema(estimate, meta, config) {
     componentTypes: ['Table'],
     description: `Schema domain: ${dom.name}. Tables: ${(dom.tableLogicalNames || []).join(', ') || '(derived)'}${domainDescSuffix}`,
     sizeMB: round(sizePerDomain),
-<<<<<<< HEAD
-    // A Table domain's component count IS its table count when known (each table
-    // is one Entity solution component). Falls back to an even attr-share split
-    // only for explicit domains that didn't list their tables.
-    componentCount: (dom.tableLogicalNames && dom.tableLogicalNames.length > 0)
-      ? dom.tableLogicalNames.length
-=======
     // Schema-component proxy when the domain's tables are known (sum of columns +
     // 1/table); falls back to an even attr-share split only for explicit domains
     // that didn't list their tables.
     componentCount: (dom.tableLogicalNames && dom.tableLogicalNames.length > 0)
       ? schemaComponentProxy(dom.tableLogicalNames)
->>>>>>> origin/users/nityagi/table-discovery-fix
       : Math.ceil((estimate.schemaAttrCount || 0) / domainCount),
     components: [],
     tableLogicalNames: dom.tableLogicalNames || [],
@@ -817,8 +809,6 @@ function computeSplitPlan({ estimate, config, meta }) {
       type: 'warning',
       message: `Solution ${s.uniqueName} holds ${s.tableLogicalNames.length} related tables — above the ${config.thresholds.maxTableCount}-per-solution cap — because they form one dependency cluster that cannot be split without breaking a relationship. Consider denormalizing the schema or raising maxTableCount in .alm-config.json.`,
     }));
-<<<<<<< HEAD
-=======
   // Oversized-SCHEMA guard (companion to the table-count guard above): a Table
   // solution whose summed column count exceeds maxSchemaAttrs. This fires at the
   // `maxSchemaSplitSolutions` ceiling — when MORE than that many independent
@@ -839,7 +829,6 @@ function computeSplitPlan({ estimate, config, meta }) {
       type: 'warning',
       message: `Solution ${s.uniqueName} holds tables totaling ${solutionSchemaAttrs(s)} columns — above the ${config.thresholds.maxSchemaAttrs}-column per-solution cap. This happens when more than ${config.thresholds.maxSchemaSplitSolutions} independent attr-heavy table clusters must share the capped number of schema-split solutions. Consider raising maxSchemaSplitSolutions (or maxSchemaAttrs) in .alm-config.json, or denormalizing the widest tables.`,
     }));
->>>>>>> origin/users/nityagi/table-discovery-fix
   // Surface estimator-side truncation warnings as `recommendations[]` entries
   // so the rendered plan shows them inline. These get the `error` type because
   // a truncated input is more dangerous than a normal split-decision warning
@@ -852,12 +841,8 @@ function computeSplitPlan({ estimate, config, meta }) {
   const recommendations = truncationRecs
     .concat(buildRecommendations(estimate, strategy, config))
     .concat(splitWarnings)
-<<<<<<< HEAD
-    .concat(oversizedClusterWarnings);
-=======
     .concat(oversizedClusterWarnings)
     .concat(oversizedAttrWarnings);
->>>>>>> origin/users/nityagi/table-discovery-fix
 
   const appliedStrategies = [strategy.primary];
   if (strategy.additive) appliedStrategies.push('strategy-4-config-isolation');

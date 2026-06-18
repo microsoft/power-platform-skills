@@ -236,8 +236,6 @@ test('computeSplitPlan Strategy 3 never overflows the attr cap when independent 
   for (const s of tableSolutions) {
     assert.equal(s.tableLogicalNames.length, 1, `${s.uniqueName} must hold exactly one table — no bucket over the attr cap`);
   }
-<<<<<<< HEAD
-=======
 });
 
 test('computeSplitPlan WARNS when >maxSchemaSplitSolutions independent attr-heavy clusters bust the attr cap (ceiling boundary)', () => {
@@ -278,7 +276,6 @@ test('computeSplitPlan: a Table domain componentCount is a schema-component prox
   const catalog = result.proposedSolutions.find((s) => s.uniqueName === 'Test_Catalog');
   assert.ok(catalog, 'Catalog Table domain solution exists');
   assert.equal(catalog.componentCount, 802, 'sum(500+300) + 2 tables = 802 (proxy), not 2 (table count)');
->>>>>>> origin/users/nityagi/table-discovery-fix
 });
 
 test('computeSplitPlan additive Strategy 4 prepends EnvVars solution', () => {

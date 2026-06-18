@@ -96,8 +96,6 @@ test('scopeCustomTables: keeps only referenced custom tables; drops unreferenced
 test('scopeCustomTables: empty referenced set -> empty (never a prefix dump)', () => {
   assert.deepEqual(scopeCustomTables(new Set(), [{ logicalName: 'new_x' }]), []);
 });
-<<<<<<< HEAD
-=======
 
 test('collectReferencedEntityNames: sources.tablePermissions reflects FILE existence even when files are unparseable', (t) => {
   const root = makeProject(t);
@@ -113,4 +111,3 @@ test('collectReferencedEntityNames: sources.tablePermissions reflects FILE exist
   assert.equal(sources.tablePermissions, 1, 'counts the permission FILE, not parsed records (0 parsed here)');
   assert.equal(names.size, 0, 'no entity names parsed from the malformed file');
 });
->>>>>>> origin/users/nityagi/table-discovery-fix

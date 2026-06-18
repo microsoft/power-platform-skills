@@ -86,8 +86,6 @@ test('odataGetAll follows @odata.nextLink and aggregates all pages', async () =>
   assert.deepEqual(rows.map((r) => r.id), [1, 2, 3]);
 });
 
-<<<<<<< HEAD
-=======
 test('odataGetAll FAILS CLOSED: throws when it hits maxPages with @odata.nextLink still present', async () => {
   const { odataGetAll } = require(helpersPath);
   // Every page advertises a nextLink → never terminates → hits the page cap.
@@ -102,7 +100,6 @@ test('odataGetAll FAILS CLOSED: throws when it hits maxPages with @odata.nextLin
   );
 });
 
->>>>>>> origin/users/nityagi/table-discovery-fix
 test('odataGet throws on non-2xx', async () => {
   const { odataGet } = require(helpersPath);
   const fakeRequest = async () => ({ statusCode: 404, body: 'not found' });

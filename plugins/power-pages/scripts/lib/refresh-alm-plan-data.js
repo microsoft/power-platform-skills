@@ -36,7 +36,6 @@
 //   finalize:
 //     - PLAN_STATUS = "Completed"
 //
-<<<<<<< HEAD
 // After every phase's step-sync, a completion evaluator flips PLAN_STATUS to
 // "Completed" (+ COMPLETED_AT) once all non-skip steps are completed and none
 // failed — so the last execution skill terminates the plan automatically,
@@ -44,8 +43,6 @@
 // Approved -> In Execution promotion that starts the lifecycle lives in
 // check-alm-plan.js (first execution-skill Phase 0).
 //
-=======
->>>>>>> origin/users/nityagi/table-discovery-fix
 // stdout JSON includes `nextStep: { name, skill: string | null } | null` (when ok:true) — the first
 // still-pending checklist step and the slash command that runs it. Execution
 // skills echo this so the user knows the next step to invoke (user-driven
@@ -1122,10 +1119,7 @@ function reconcile({ projectRoot, render, rendererPath }) {
       process.stderr.write(`[refresh-alm-plan-data] reconcile phase "${phase}" failed: ${e.message}\n`);
     }
   }
-<<<<<<< HEAD
   evaluatePlanCompletion(planData);
-=======
->>>>>>> origin/users/nityagi/table-discovery-fix
   fs.writeFileSync(dataPath, JSON.stringify(planData, null, 2), 'utf8');
 
   let rendered = false;
