@@ -1,7 +1,7 @@
 ---
 name: model-app-maker
 version: 0.1.0
-description: Builds a model-driven Power Apps APP from a natural-language intent — proposes a structured App Spec, confirms it with you, then provisions tables, columns, a main form, a view, and the app module + sitemap into a solution. Use when the user says "build an app for X", "create a model-driven app", or "make me an app to manage Y". For generative PAGES use /genpage; for editing one existing form use the model-maker relay.
+description: Builds a model-driven Power Apps APP from a natural-language intent — proposes a structured App Spec, confirms it with you, then provisions tables, columns, adaptive forms (with related-record sub-grids), views, charts, and the app module + sitemap into a solution. Use when the user says "build an app for X", "create a model-driven app", or "make me an app to manage Y". For generative PAGES use /genpage; for editing one existing form use the model-maker relay.
 author: Microsoft Corporation
 argument-hint: "<app description>"
 user-invocable: true
@@ -29,12 +29,33 @@ vendored `cds-maker-kernel` bundle.
    `appShell`. Column `type` is one of Text / Memo / Choice / Boolean / Money /
    DateTime / Integer / Decimal / Lookup (Choice needs `options[]`). Keep the MVP
    to ONE entity unless the user asks for more. Write it to a scratch JSON file.
+   **Adaptive form layout.** Prefer to OMIT `tabs` (or set `"layout": "auto"`) so the
+   kernel's `planFormLayout` groups/labels the fields for you (Summary / Details /
+   Classification, Memo full-width at the bottom, two-column when there are enough
+   fields). Only give explicit `tabs` (with `sections.fields`) when the maker wants a
+   specific structure — set `"layout": "explicit"` or just provide `tabs`. Optionally
+   pass `"purpose"` (e.g. `"tracking"`, `"catalog"`) to bias the grouping.
+   **Charts (auto-suggest).** For each **Choice** column on the app's primary entity,
+   propose one chart in `charts[]` named `<Entity> by <Choice>` (alternate Pie / Column),
+   e.g. `{ "entity": "new_ticket", "name": "Tickets by Priority", "groupBy":
+   "new_priority", "measure": "count", "chartType": "Pie" }`. The maker confirms,
+   edits, or removes them before build — nothing is created without confirmation.
+   **Related sub-grids.** To show child records on a parent form, declare
+   `form.subgrids: [{ "childEntity": "new_comment", "view": "Active Comments",
+   "label": "Comments" }]`. There must be a OneToMany relationship whose `referenced`
+   is the form's entity and `referencing` is `childEntity`; the builder derives the
+   relationship and resolves the child view id (defaults to the child's first view if
+   `view` is omitted) and places the sub-grid on a Related tab.
    **Sample/test data (only if the user asks for it):** add a `sampleData` block
    keyed by entity schemaName, e.g. `"sampleData": { "new_ticket": [ { "new_name":
    "...", "new_priority": "High" } ] }`. Write Choice values as their **labels**
-   ("High") — the builder resolves them to the option ints. See
-   `samples/app-spec.support-tickets.json` for a full example. Sample data is
-   inserted only when the build is run with `--sample-data`.
+   ("High") — the builder resolves them to the option ints. For **relational** data,
+   give a child record a `"$parent": { "entity": "new_customer", "match": { "new_name":
+   "Northwind Traders" } }` — the builder inserts parents first and binds the lookup.
+   See `samples/app-spec.support-tickets.json` (flat) and
+   `samples/app-spec.support-desk.json` (relational Customer → Tickets → Comments with
+   sub-grids + charts) for full examples. Sample data is inserted only with
+   `--sample-data`.
 4. **Review gate.** Show the App Spec and the build **plan**:
    `node scripts/build-model-app.js --env <url> --spec @spec.json` (no `--apply` =
    dry-run; it prints the ordered plan and writes nothing). Let the user edit the
@@ -50,11 +71,14 @@ vendored `cds-maker-kernel` bundle.
 ## What the builder does (in order)
 
 solution → tables + columns (`dv-*` scripts) → relationships → **publish entities**
-→ **sample data** (opt-in `--sample-data`, inserted right after entities exist so
-columns resolve) → main form (kernel `buildForm` → PATCH the system-generated
-form) → view (kernel `buildView` → create `savedquery`) → app module + sitemap
-(kernel `buildSitemap` → `appmodule` / `sitemap` / `AddAppComponents`) → publish
-(opt-in `--publish`). Each phase emits a `[n/total]` progress line.
+→ **sample data** (opt-in `--sample-data`, relational/topological + `$parent` binds)
+→ **views** (kernel `buildView` → `savedquery`) → **charts** (kernel `buildChart` →
+`savedqueryvisualization`) → **forms** (kernel `buildForm` with adaptive layout +
+sub-grids → PATCH the system form) → app module + sitemap (kernel `buildSitemap` →
+`appmodule` / `sitemap` / `AddAppComponents`, components include charts: type 59) →
+publish (opt-in `--publish`). Views and charts build **before** forms so a parent
+form's sub-grid can reference the child view id. Each phase emits a `[n/total]`
+progress line.
 
 ## Notes & limits
 
@@ -68,4 +92,5 @@ form) → view (kernel `buildView` → create `savedquery`) → app module + sit
   serializer headlessly — no browser needed for the build. The relay is only the
   optional `--preview`.
 - Not in scope (later phases): quick-create / quick-view forms, lookup/associated
-  views, multi-area sitemaps, security roles, charts, business rules.
+  views, multi-area sitemaps, security roles, business rules. (Adaptive main forms,
+  related-record sub-grids, and Choice-column charts are supported.)

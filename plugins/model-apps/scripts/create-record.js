@@ -18,6 +18,11 @@
 //
 // Output (single): { "ok": true, "count": 1, "ids": ["<guid>"] }
 // Output (bulk):   { "ok": true, "count": N, "ids": [...], "errors": [{index, status, message}, ...] }
+//   For bulk, `ids` is positionally aligned 1:1 with the input records: ids[i] is the
+//   created id for records[i], or null if that record failed (its failure is in `errors`,
+//   keyed by the same index). `count` is the number of successfully created records
+//   (non-null ids). Consumers that bind children to parents by position can rely on
+//   ids[i] always corresponding to records[i], even on partial failure.
 //
 // Exit codes: 0 if all succeed, 1 if any error.
 
@@ -46,11 +51,28 @@ async function createSingle(envUrl, entitySet, record) {
 }
 
 function parseBatchResponse(rawBody) {
-  // Split into HTTP parts by the "HTTP/1.1 NNN ..." status line.
-  // We don't try to parse multipart headers — Dataverse responses always include the
-  // status line + headers + blank line + body for each part.
-  const parts = rawBody.split(/HTTP\/1\.1 /).slice(1);
-  return parts.map((part) => {
+  // Split into HTTP parts by the "HTTP/1.1 NNN ..." status line. The text BEFORE
+  // each status line holds the multipart MIME headers for that part (including the
+  // echoed `Content-ID`, which Dataverse returns so callers can correlate each
+  // response with the request item it belongs to — responses are NOT guaranteed
+  // to come back in request order). We capture that MIME-header chunk so the
+  // caller can read the Content-ID and map results back to the right input slot.
+  const segments = rawBody.split(/HTTP\/1\.1 /);
+  // segments[0] is the preamble (MIME headers for the first part); each subsequent
+  // segment is "<status line + part headers + body>\r\n<MIME headers of next part>".
+  const parts = [];
+  for (let i = 1; i < segments.length; i++) {
+    const part = segments[i];
+    // The MIME headers preceding THIS part live at the tail of the previous segment.
+    // Take the LAST Content-ID in that segment: it is the MIME header immediately
+    // before this part's status line. (An earlier part's body could, in theory,
+    // contain the literal text "Content-ID"; matching the last occurrence avoids
+    // mis-attributing it.)
+    const prefix = segments[i - 1];
+    const cidMatches = prefix.match(/Content-ID:\s*(\d+)/gi);
+    const lastCid = cidMatches && cidMatches[cidMatches.length - 1];
+    const cidNum = lastCid && lastCid.match(/(\d+)/);
+    const contentId = cidNum ? Number(cidNum[1]) : null;
     const statusMatch = part.match(/^(\d{3})/);
     const status = statusMatch ? Number(statusMatch[1]) : 0;
     // Split header block from body at the first blank line
@@ -59,13 +81,19 @@ function parseBatchResponse(rawBody) {
     const body = blank >= 0 ? part.slice(blank + 4) : '';
     // Strip trailing boundary markers
     const cleanBody = body.replace(/\r?\n--[^\r\n]+(--)?\r?\n?$/g, '').trim();
-    return { status, headers, body: cleanBody };
-  });
+    parts.push({ status, headers, body: cleanBody, contentId });
+  }
+  return parts;
 }
 
 async function createBatch(envUrl, entitySet, records, batchSize = 100) {
   const cleanUrl = envUrl.replace(/\/+$/, '');
-  const all = { ids: [], errors: [] };
+  // `ids` is positionally aligned 1:1 with `records`: ids[i] is the created id for
+  // records[i], or null if that record failed / no id could be parsed. Callers
+  // (e.g. relational sample data $parent binding) rely on this alignment, so we
+  // must NEVER collapse out failed slots. `errors` carries the failure details.
+  const ids = new Array(records.length).fill(null);
+  const all = { ids, errors: [] };
 
   for (let chunkStart = 0; chunkStart < records.length; chunkStart += batchSize) {
     const chunk = records.slice(chunkStart, chunkStart + batchSize);
@@ -120,14 +148,23 @@ async function createBatch(envUrl, entitySet, records, batchSize = 100) {
 
     const parts = parseBatchResponse(res.body);
     parts.forEach((part, idx) => {
+      // Resolve the absolute record index this part belongs to. Prefer the echoed
+      // Content-ID (request-order-independent; we assigned it as recordIndex + 1);
+      // fall back to positional order within the chunk if it's missing.
+      const recordIndex =
+        part.contentId != null ? part.contentId - 1 : chunkStart + idx;
       if (part.status >= 200 && part.status < 300) {
         const locMatch = part.headers.match(/OData-EntityId:\s*([^\r\n]+)/i);
         const id = locMatch ? (locMatch[1].match(/\(([0-9a-f-]{36})\)/i) || [])[1] : null;
-        if (id) all.ids.push(id);
+        // Keep positional alignment: write into the record's own slot (null stays
+        // null when no id parses, so ids[i] never shifts for later records).
+        if (id && recordIndex >= 0 && recordIndex < ids.length) {
+          ids[recordIndex] = id;
+        }
       } else if (part.status > 0) {
         let msg = part.body;
         try { msg = JSON.parse(part.body).error.message; } catch { /* keep raw */ }
-        all.errors.push({ index: chunkStart + idx, status: part.status, message: msg });
+        all.errors.push({ index: recordIndex, status: part.status, message: msg });
       }
     });
   }
@@ -168,9 +205,12 @@ async function main() {
     if (Array.isArray(parsed)) {
       const result = await createBatch(envUrl, entitySet, parsed, batchSize);
       const allOk = result.errors.length === 0;
+      // `ids` is positionally aligned 1:1 with the input records (null = failed/unparsed),
+      // so consumers can map record[i] -> ids[i] safely even on partial failure.
+      // `count` reports the number of records actually created (non-null ids).
       emitResult(allOk, {
         ok: allOk,
-        count: result.ids.length,
+        count: result.ids.filter((id) => id != null).length,
         ids: result.ids,
         errors: result.errors,
       });
@@ -183,4 +223,9 @@ async function main() {
   }
 }
 
-main();
+// Only run as a CLI when invoked directly; allow `require()` for unit tests.
+if (require.main === module) {
+  main();
+}
+
+module.exports = { parseBatchResponse };

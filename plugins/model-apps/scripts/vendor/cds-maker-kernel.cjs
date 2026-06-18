@@ -5062,12 +5062,47 @@ function nameToken(label) {
   return label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "item";
 }
 function cellXml(f, lcid) {
+  if (f.rawCellXml) {
+    return f.rawCellXml;
+  }
   const classid = FIELD_CONTROL_CLASSIDS[(f.type || "string").toLowerCase()] || DEFAULT_CLASSID;
-  return `<cell id="${guid()}" showlabel="true" rowspan="${f.rowspan || 1}" colspan="1"><labels><label description="${escapeXml(f.logicalName)}" languagecode="${lcid}"/></labels><control id="${escapeXml(f.logicalName)}" classid="${classid}" datafieldname="${escapeXml(f.logicalName)}"/></cell>`;
+  const label = f.label || f.logicalName;
+  return `<cell id="${guid()}" showlabel="true" rowspan="${f.rowspan || 1}" colspan="${f.colspan || 1}"><labels><label description="${escapeXml(label)}" languagecode="${lcid}"/></labels><control id="${escapeXml(f.logicalName)}" classid="${classid}" datafieldname="${escapeXml(f.logicalName)}"/></cell>`;
+}
+function spacerCellXml(colspan) {
+  return `<cell id="${guid()}" showlabel="false" rowspan="1" colspan="${colspan}"><labels/></cell>`;
 }
 function sectionXml(s, lcid) {
-  const cells = s.fields.map((f) => cellXml(f, lcid)).join("");
-  return `<section name="${escapeXml(nameToken(s.label))}" id="${guid()}" IsUserDefined="0" showlabel="true" showbar="false" columns="${s.columns || 1}"><labels><label description="${escapeXml(s.label)}" languagecode="${lcid}"/></labels><rows><row>${cells}</row></rows></section>`;
+  const columns = Math.max(1, s.columns || 1);
+  const rows = [];
+  let rowCells = "";
+  let used = 0;
+  const closeRow = () => {
+    if (used < columns) {
+      rowCells += spacerCellXml(columns - used);
+    }
+    rows.push(`<row>${rowCells}</row>`);
+    rowCells = "";
+    used = 0;
+  };
+  for (const f of s.fields) {
+    const span = Math.min(columns, Math.max(1, f.colspan || 1));
+    if (used > 0 && used + span > columns) {
+      closeRow();
+    }
+    rowCells += cellXml({ ...f, colspan: span }, lcid);
+    used += span;
+    if (used >= columns) {
+      closeRow();
+    }
+  }
+  if (used > 0) {
+    closeRow();
+  }
+  if (rows.length === 0) {
+    rows.push("<row/>");
+  }
+  return `<section name="${escapeXml(nameToken(s.label))}" id="${guid()}" IsUserDefined="0" showlabel="true" showbar="false" columns="${columns}"><labels><label description="${escapeXml(s.label)}" languagecode="${lcid}"/></labels><rows>${rows.join("")}</rows></section>`;
 }
 function tabXml(t, lcid) {
   const sections = t.sections.map((s) => sectionXml(s, lcid)).join("");
@@ -34237,19 +34272,195 @@ var init_serialize = __esm({
   }
 });
 
+// lib/forms/planLayout.js
+function displayLabel(f) {
+  return f.displayName || f.label || f.logicalName;
+}
+function classify(f, index) {
+  const type = (f.type || "string").toLowerCase();
+  if (type === "memo") {
+    return "Description";
+  }
+  if (index === 0 || type === "lookup") {
+    return "Summary";
+  }
+  if (type === "money") {
+    return "Financials";
+  }
+  if (CHOICE_TYPES.has(type) || type === "datetime") {
+    return "Classification";
+  }
+  return "Details";
+}
+function planFormLayout(fields, opts = {}) {
+  const list = fields || [];
+  const count = list.length;
+  const columns = count <= 3 ? 1 : 2;
+  const buckets = /* @__PURE__ */ new Map();
+  for (const g of GROUP_ORDER) {
+    buckets.set(g, []);
+  }
+  list.forEach((f, i) => {
+    buckets.get(classify(f, i)).push(f);
+  });
+  const purpose = (opts.purpose || "").toLowerCase();
+  let order = [...GROUP_ORDER];
+  if (purpose === "tracking") {
+    order = ["Summary", "Classification", "Details", "Financials", "Description"];
+  }
+  const descriptionEmphasis = purpose === "catalog" || purpose === "knowledge";
+  const sectionColumns = columns;
+  const sections = [];
+  for (const g of order) {
+    const groupFields = buckets.get(g);
+    if (groupFields.length === 0) {
+      continue;
+    }
+    if (g === "Description") {
+      const memoRowspan = descriptionEmphasis ? 5 : 3;
+      sections.push({
+        label: g,
+        columns: sectionColumns,
+        fields: groupFields.map((f) => toFieldSpec(f, sectionColumns, memoRowspan))
+      });
+      continue;
+    }
+    sections.push({
+      label: g,
+      columns: sectionColumns,
+      fields: groupFields.map((f) => toFieldSpec(f, 1, 1))
+    });
+  }
+  if (sections.length === 0) {
+    sections.push({ label: "Summary", columns: sectionColumns, fields: [] });
+  }
+  const generalLabel = opts.tabLabel || "General";
+  if (count >= 15 && sections.length > 2) {
+    const primary = [];
+    const spilled = [];
+    let kept = 0;
+    for (const s of sections) {
+      if (s.label === "Description") {
+        primary.push(s);
+        continue;
+      }
+      if (kept < 2) {
+        primary.push(s);
+        kept += 1;
+      } else {
+        spilled.push(s);
+      }
+    }
+    if (spilled.length > 0) {
+      return {
+        tabs: [
+          { label: generalLabel, sections: primary },
+          { label: "Details", sections: spilled }
+        ]
+      };
+    }
+  }
+  return { tabs: [{ label: generalLabel, sections }] };
+}
+function toFieldSpec(f, colspan, rowspan) {
+  return {
+    logicalName: f.logicalName,
+    label: displayLabel(f),
+    type: (f.type || "string").toLowerCase(),
+    colspan,
+    rowspan
+  };
+}
+var GROUP_ORDER, CHOICE_TYPES;
+var init_planLayout = __esm({
+  "lib/forms/planLayout.js"() {
+    "use strict";
+    GROUP_ORDER = ["Summary", "Details", "Classification", "Financials", "Description"];
+    CHOICE_TYPES = /* @__PURE__ */ new Set(["picklist", "boolean"]);
+  }
+});
+
+// lib/forms/subgrid.js
+function guid2() {
+  return `{${(0, import_node_crypto2.randomUUID)().toUpperCase()}}`;
+}
+function normalizeViewId(viewId) {
+  const v = String(viewId || "").trim();
+  return v.startsWith("{") ? v : `{${v}}`;
+}
+function subgridCellXml(s, lcid = 1033) {
+  const columns = Math.max(1, s.columns || 2);
+  const rowspan = Math.max(6, s.rowspan || 6);
+  const viewId = normalizeViewId(s.viewId);
+  const recordsPerPage = s.recordsPerPage || 5;
+  const params = `<parameters><TargetEntityType>${escapeXml(s.targetEntity)}</TargetEntityType><RelationshipName>${escapeXml(s.relationshipName)}</RelationshipName><ViewId>${escapeXml(viewId)}</ViewId><ViewIds>${escapeXml(viewId)}</ViewIds><EnableQuickFind>true</EnableQuickFind><EnableViewPicker>true</EnableViewPicker><RecordsPerPage>${recordsPerPage}</RecordsPerPage><AutoExpand>Fixed</AutoExpand></parameters>`;
+  return `<cell id="${guid2()}" showlabel="true" rowspan="${rowspan}" colspan="${columns}"><labels><label description="${escapeXml(s.label)}" languagecode="${lcid}"/></labels><control id="${escapeXml(`subgrid_${s.targetEntity}`)}" classid="${SUBGRID_CONTROL_CLASSID}" indicationOfSubgrid="true">${params}</control></cell>`;
+}
+function subgridField(s, lcid = 1033) {
+  const columns = Math.max(1, s.columns || 2);
+  return {
+    logicalName: `subgrid_${s.targetEntity}`,
+    label: s.label,
+    colspan: columns,
+    rowspan: Math.max(6, s.rowspan || 6),
+    rawCellXml: subgridCellXml({ ...s, columns }, lcid)
+  };
+}
+function subgridSection(subgrids, opts = {}) {
+  const columns = Math.max(1, opts.columns || 2);
+  const lcid = opts.lcid ?? 1033;
+  return {
+    label: opts.label || "Related records",
+    columns,
+    fields: subgrids.map((s) => subgridField({ ...s, columns }, lcid))
+  };
+}
+var import_node_crypto2, SUBGRID_CONTROL_CLASSID;
+var init_subgrid = __esm({
+  "lib/forms/subgrid.js"() {
+    "use strict";
+    import_node_crypto2 = require("node:crypto");
+    init_escape();
+    SUBGRID_CONTROL_CLASSID = "{E7A81278-8635-4D9E-8D4D-59480B391C5B}";
+  }
+});
+
 // lib/forms/build.js
+function resolveFormSpec(spec, lcid) {
+  let base;
+  if (spec.tabs && spec.tabs.length > 0) {
+    base = { tabs: spec.tabs, lcid };
+  } else if (spec.autoFields) {
+    base = { ...planFormLayout(spec.autoFields, { purpose: spec.purpose }), lcid };
+  } else {
+    base = { tabs: [{ label: "General", sections: [] }], lcid };
+  }
+  if (spec.subgrids && spec.subgrids.length > 0) {
+    const relatedTab = {
+      label: RELATED_TAB_LABEL,
+      sections: [subgridSection(spec.subgrids, { columns: 2, lcid })]
+    };
+    base = { ...base, tabs: [...base.tabs, relatedTab] };
+  }
+  return base;
+}
 function buildForm(spec, ctx) {
   const lcid = ctx.lcid ?? spec.lcid ?? 1033;
-  const templated = buildMainFormXml({ ...spec, lcid });
+  const resolved = resolveFormSpec(spec, lcid);
+  const templated = buildMainFormXml({ ...resolved, lcid });
   const form = deserializeForm(templated, ctx);
   return serializeForm(form, lcid);
 }
+var RELATED_TAB_LABEL;
 var init_build = __esm({
   "lib/forms/build.js"() {
     "use strict";
     init_blankForm();
     init_deserialize();
     init_serialize();
+    init_planLayout();
+    init_subgrid();
+    RELATED_TAB_LABEL = "Related";
   }
 });
 
@@ -34761,6 +34972,24 @@ var init_buildSitemap = __esm({
   }
 });
 
+// lib/charts/buildChart.js
+function buildChart(spec) {
+  const chartType = VALID_CHART_TYPES.has(spec.chartType) ? spec.chartType : "Column";
+  const measureAlias = `${spec.primaryId}_count`;
+  const fetch = `<fetch mapping="logical" aggregate="true"><entity name="${escapeXml(spec.entity)}"><attribute name="${escapeXml(spec.primaryId)}" alias="${escapeXml(measureAlias)}" aggregate="count" /><attribute name="${escapeXml(spec.groupBy)}" alias="${escapeXml(spec.groupBy)}" groupby="true" /><order alias="${escapeXml(spec.groupBy)}" descending="false" /></entity></fetch>`;
+  const datadescription = `<datadefinition><fetchcollection>${fetch}</fetchcollection><categorycollection><category><measurecollection><measure alias="${escapeXml(measureAlias)}" /></measurecollection></category></categorycollection></datadefinition>`;
+  const presentationdescription = `<Chart Palette="BrightPastel"><Series><Series _Template_="All" ChartType="${escapeXml(chartType)}" IsValueShownAsLabel="True" Color="" CustomProperties="PointWidth=0.75, MaxPixelPointWidth=40"><SmartLabelStyle Enabled="True" /></Series></Series><ChartAreas><ChartArea _Template_="All" Name="Default"><AxisY LabelAutoFitMinFontSize="8" TitleForeColor="59, 59, 59"><MajorGrid LineColor="239, 242, 246" /><LabelStyle Font="{0}, 10.5px" ForeColor="59, 59, 59" /></AxisY><AxisX LabelAutoFitMinFontSize="8" TitleForeColor="59, 59, 59"><MajorGrid LineColor="239, 242, 246" /><LabelStyle Font="{0}, 10.5px" ForeColor="59, 59, 59" /></AxisX></ChartArea></ChartAreas><Legends><Legend _Template_="All" Alignment="Center" LegendStyle="Table" Docking="Bottom" IsEquallySpacedItems="True" Font="{0}, 10.5px" ForeColor="59, 59, 59" /></Legends><Titles><Title _Template_="All" Text="${escapeXml(spec.name)}" Alignment="TopLeft" DockingOffset="-3" Font="{0}, 13px, style=Bold" ForeColor="59, 59, 59" /></Titles></Chart>`;
+  return { datadescription, presentationdescription };
+}
+var VALID_CHART_TYPES;
+var init_buildChart = __esm({
+  "lib/charts/buildChart.js"() {
+    "use strict";
+    init_escape();
+    VALID_CHART_TYPES = /* @__PURE__ */ new Set(["Column", "Bar", "Pie", "Line"]);
+  }
+});
+
 // lib/cli.js
 var cli_exports = {};
 __export(cli_exports, {
@@ -34777,6 +35006,8 @@ function runJob(job) {
         return { ok: true, ...buildView(job.spec) };
       case "buildSitemap":
         return { ok: true, sitemapxml: buildSitemap(job.spec) };
+      case "buildChart":
+        return { ok: true, ...buildChart(job.spec) };
       default:
         return {
           ok: false,
@@ -34794,6 +35025,7 @@ var init_cli = __esm({
     init_roundTrip();
     init_buildView();
     init_buildSitemap();
+    init_buildChart();
   }
 });
 

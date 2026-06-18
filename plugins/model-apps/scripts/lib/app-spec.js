@@ -42,6 +42,38 @@ function sampleRecordsFor(spec, entity) {
   return (key && Array.isArray(sd[key]) && sd[key]) || [];
 }
 
+// Valid chart types (kernel buildChart ChartType values).
+const CHART_TYPES = ['Column', 'Bar', 'Pie', 'Line'];
+
+// Find the OneToMany relationship in the spec whose `referenced` = parentEntity and
+// `referencing` = childEntity (case-insensitive on both schema names). Returns the
+// relationship object (its `lookup.schemaName` is the @odata.bind nav-property; the
+// sub-grid RelationshipName is relationshipSchemaName(rel)), or null when none exists.
+function relationshipFor(spec, parentEntity, childEntity) {
+  const p = String(parentEntity || '').toLowerCase();
+  const c = String(childEntity || '').toLowerCase();
+  return (
+    (spec.relationships || []).find(
+      (r) =>
+        r.type === 'OneToMany' &&
+        String(r.referenced || '').toLowerCase() === p &&
+        String(r.referencing || '').toLowerCase() === c
+    ) || null
+  );
+}
+
+// The 1:N relationship's SCHEMA name (used for create-relationship.js and the
+// sub-grid RelationshipName). This MUST be distinct from the lookup attribute's
+// schema name — Dataverse rejects a relationship whose name collides with the
+// lookup column on the referencing table. Defaults to `<referenced>_<referencing>`
+// (both already publisher-prefixed), or an explicit `rel.schemaName` when provided.
+function relationshipSchemaName(rel) {
+  if (rel && rel.schemaName) {
+    return rel.schemaName;
+  }
+  return `${String(rel.referenced || '').toLowerCase()}_${String(rel.referencing || '').toLowerCase()}`;
+}
+
 // Turn author-friendly sample records into Web-API bodies: Choice values written
 // as labels ("Active") are resolved to their option ints; everything else passes
 // through unchanged (so raw ints, strings, booleans, ISO dates all still work).
@@ -72,11 +104,13 @@ function validateAppSpec(spec) {
     errors.push('app.name is required');
   }
   const entityNames = new Set();
+  const entityByLower = new Map(); // logical (lowercased schemaName) -> entity
   for (const e of spec.entities || []) {
     if (!e.schemaName) {
       errors.push('entity.schemaName is required');
     } else {
       entityNames.add(e.schemaName);
+      entityByLower.set(e.schemaName.toLowerCase(), e);
     }
     if (!e.primaryAttribute || !e.primaryAttribute.schemaName) {
       errors.push(`entity ${e.schemaName}: primaryAttribute.schemaName required`);
@@ -99,6 +133,51 @@ function validateAppSpec(spec) {
   for (const f of spec.forms || []) {
     if (!entityNames.has(f.entity)) {
       errors.push(`form references unknown entity '${f.entity}'`);
+    }
+    if (f.layout !== undefined && f.layout !== 'auto' && f.layout !== 'explicit') {
+      errors.push(`form ${f.entity}: layout must be 'auto' or 'explicit'`);
+    }
+    if (f.subgrids !== undefined) {
+      if (!Array.isArray(f.subgrids)) {
+        errors.push(`form ${f.entity}: subgrids must be an array`);
+      } else {
+        for (const sg of f.subgrids) {
+          if (!sg || !sg.childEntity) {
+            errors.push(`form ${f.entity}: a subgrid is missing childEntity`);
+            continue;
+          }
+          if (!entityByLower.has(String(sg.childEntity).toLowerCase())) {
+            errors.push(`form ${f.entity}: subgrid references unknown childEntity '${sg.childEntity}'`);
+            continue;
+          }
+          if (!relationshipFor(spec, f.entity, sg.childEntity)) {
+            errors.push(
+              `form ${f.entity}: no OneToMany relationship from '${f.entity}' to subgrid childEntity '${sg.childEntity}'`
+            );
+          }
+        }
+      }
+    }
+  }
+  for (const ch of spec.charts || []) {
+    if (!ch || !ch.entity || !entityByLower.has(String(ch.entity).toLowerCase())) {
+      errors.push(`chart references unknown entity '${ch && ch.entity}'`);
+      continue;
+    }
+    if (!ch.name) {
+      errors.push(`chart on '${ch.entity}': name is required`);
+    }
+    if (!CHART_TYPES.includes(ch.chartType)) {
+      errors.push(`chart '${ch.name || ch.entity}': chartType must be one of ${CHART_TYPES.join('|')}`);
+    }
+    const entity = entityByLower.get(String(ch.entity).toLowerCase());
+    const choiceCol =
+      entity &&
+      (entity.columns || []).find(
+        (c) => c.type === 'Choice' && c.schemaName.toLowerCase() === String(ch.groupBy || '').toLowerCase()
+      );
+    if (!choiceCol) {
+      errors.push(`chart '${ch.name || ch.entity}': groupBy '${ch.groupBy}' is not a Choice column on '${ch.entity}'`);
     }
   }
   for (const v of spec.views || []) {
@@ -126,6 +205,24 @@ function validateAppSpec(spec) {
         }
         if (!Array.isArray(v)) {
           errors.push(`sampleData['${k}'] must be an array of records`);
+          continue;
+        }
+        for (const rec of v) {
+          if (!rec || rec.$parent === undefined) {
+            continue;
+          }
+          const p = rec.$parent;
+          if (!p || typeof p !== 'object' || !p.entity || !lower.has(String(p.entity).toLowerCase())) {
+            errors.push(`sampleData['${k}']: $parent.entity '${p && p.entity}' is unknown`);
+            continue;
+          }
+          if (!p.match || typeof p.match !== 'object' || !Object.keys(p.match).length) {
+            errors.push(`sampleData['${k}']: $parent.match must be a non-empty object`);
+            continue;
+          }
+          if (!relationshipFor(spec, p.entity, k)) {
+            errors.push(`sampleData['${k}']: no OneToMany relationship from $parent '${p.entity}' to '${k}'`);
+          }
         }
       }
     }
@@ -140,4 +237,7 @@ module.exports = {
   choiceValueMap,
   sampleRecordsFor,
   resolveSampleRecords,
+  relationshipFor,
+  relationshipSchemaName,
+  CHART_TYPES,
 };

@@ -49,11 +49,15 @@ function planFor(spec) {
       steps.push(`add ${n} sample record(s) to ${e.schemaName} (requires --sample-data)`);
     }
   }
-  for (const f of spec.forms) {
-    steps.push(`build + write main form for ${f.entity}`);
-  }
   for (const v of spec.views) {
     steps.push(`build + create view "${v.name}" for ${v.entity}`);
+  }
+  for (const c of spec.charts || []) {
+    steps.push(`build + create chart "${c.name}" (${c.chartType}) for ${c.entity}`);
+  }
+  for (const f of spec.forms) {
+    const subs = (f.subgrids || []).map((s) => s.childEntity).join(', ');
+    steps.push(`build + write main form for ${f.entity}` + (subs ? ` (sub-grids: ${subs})` : ''));
   }
   steps.push(`build sitemap + appmodule "${spec.app.name}" + components`);
   return steps;

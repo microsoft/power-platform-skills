@@ -31,6 +31,24 @@ async function createSavedQuery(dv, { name, entityLogical, fetchxml, layoutxml }
   );
 }
 
+// Create a system chart (savedqueryvisualization) for an entity. The two XML blobs
+// come from the kernel buildChart job; primaryentitytypecode is the entity's logical
+// name. isdefault=false so it never displaces an existing default chart.
+async function createSavedQueryVisualization(dv, { name, primaryEntityLogical, datadescription, presentationdescription }) {
+  return dv(
+    'POST',
+    'savedqueryvisualizations',
+    {
+      name,
+      primaryentitytypecode: primaryEntityLogical,
+      datadescription,
+      presentationdescription,
+      isdefault: false,
+    },
+    { includeHeaders: true }
+  );
+}
+
 // Publishing can run long on a busy env; give it a generous client timeout so a
 // slow publish never fails an otherwise-successful build (default is 60s).
 const PUBLISH_TIMEOUT_MS = 240000;
@@ -92,6 +110,7 @@ module.exports = {
   findMainForm,
   patchFormXml,
   createSavedQuery,
+  createSavedQueryVisualization,
   publishEntities,
   getEntitySetName,
   resolveAppIcon,
