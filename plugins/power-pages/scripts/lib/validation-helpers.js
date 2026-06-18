@@ -176,6 +176,23 @@ function getPacAuthInfo() {
   }
 }
 
+// Default socket-inactivity timeout for makeRequest. 15 s is plenty for any
+// normal Dataverse OData call (read/write of a single record returns in ms).
+//
+// Long-running OData actions — CommitToGit, ConnectToGit, RefreshChangesFromGit,
+// PullChangesFromGit, DisconnectFromGit, big imports — hold the request open
+// server-side for tens of seconds to many minutes. Those callers MUST pass
+// `socketTimeoutMs: LONG_RUNNING_GIT_ACTION_TIMEOUT_MS` (15 min) so a slow
+// but ultimately successful server reply is not misread as a timeout failure.
+//
+// Empirical first-commit ranges for CommitToGit (HAR-confirmed 2026-06; see
+// references/inner-loop-empirical-findings.md §3 / §10):
+//   - small first-commit (~40 components):  ~25–60 s
+//   - medium solution (~200 components):    2–5 min
+//   - big solution (1000+ components):      5–15 min
+const DEFAULT_SOCKET_TIMEOUT_MS = 15000;
+const LONG_RUNNING_GIT_ACTION_TIMEOUT_MS = 900000;
+
 /**
  * Makes an HTTP/HTTPS request using Node.js built-in modules (cross-platform, no PowerShell).
  * Returns a Promise — callers must use `await`.
@@ -185,10 +202,20 @@ function getPacAuthInfo() {
  * @param {object} [options.headers={}] - Request headers
  * @param {string} [options.body=null] - Request body (string)
  * @param {boolean} [options.includeHeaders=false] - Include response headers in result
- * @param {number} [options.timeout=15000] - Timeout in ms
+ * @param {number} [options.socketTimeoutMs=15000] - Socket-inactivity timeout in ms.
+ *     The default suits normal Dataverse calls (record read/write returns in ms).
+ *     Pass `LONG_RUNNING_GIT_ACTION_TIMEOUT_MS` (15 min) for blocking OData
+ *     actions like CommitToGit that hold the request open server-side until
+ *     they finish writing every component to ADO.
+ * @param {number} [options.timeout] - DEPRECATED alias for `socketTimeoutMs`,
+ *     retained only for back-compat with any external caller. Prefer
+ *     `socketTimeoutMs`. If both are supplied, `socketTimeoutMs` wins.
  * @returns {Promise<{ statusCode: number, body: string, headers?: object } | { error: string }>}
  */
-function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHeaders = false, timeout = 15000 }) {
+function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHeaders = false, socketTimeoutMs, timeout }) {
+  const effectiveTimeoutMs = socketTimeoutMs !== undefined
+    ? socketTimeoutMs
+    : (timeout !== undefined ? timeout : DEFAULT_SOCKET_TIMEOUT_MS);
   return new Promise((resolve) => {
     const https = require('https');
     const http = require('http');
@@ -201,7 +228,7 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
         hostname: u.hostname,
         port: u.port || undefined,
         path: u.pathname + u.search,
-        timeout,
+        timeout: effectiveTimeoutMs,
       },
       (res) => {
         let data = '';
@@ -252,6 +279,8 @@ module.exports = {
   UUID_REGEX,
   getAuthToken,
   makeRequest,
+  DEFAULT_SOCKET_TIMEOUT_MS,
+  LONG_RUNNING_GIT_ACTION_TIMEOUT_MS,
   getEnvironmentUrl,
   getPacAuthInfo,
   CLOUD_TO_API,

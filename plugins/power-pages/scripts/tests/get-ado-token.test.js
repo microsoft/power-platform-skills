@@ -1,0 +1,283 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const {
+  getAdoToken,
+  extractTenantIdFromConnectionData,
+  ADO_ENTRA_RESOURCE_GUID,
+} = require('../lib/get-ado-token');
+
+// All tests use DI hooks (_execImpl for `az`, _makeRequestImpl for ADO REST)
+// so the suite runs entirely offline. The contract is documented in
+// get-ado-token.js's header comment.
+
+// ===== ADO_ENTRA_RESOURCE_GUID is the canonical, tenant-invariant ID =====
+
+test('ADO_ENTRA_RESOURCE_GUID is the documented ADO Entra app id', () => {
+  assert.equal(ADO_ENTRA_RESOURCE_GUID, '499b84ac-1321-427f-aa17-267ca6975798');
+});
+
+// ===== argument validation =====
+
+test('--verifyTenant without --organization → ok:false', async () => {
+  const r = await getAdoToken({ verifyTenant: true });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /organization/i);
+});
+
+// ===== az happy path =====
+
+test('valid az JSON → ok:true with OAuth tokenType, tenantId, expiresOn — and NEVER a raw token', async () => {
+  const fakeAz = (cmd) => {
+    assert.match(cmd, new RegExp(`az account get-access-token --resource ${ADO_ENTRA_RESOURCE_GUID}`));
+    return JSON.stringify({
+      token: 'eyJhbGc.eyJzdWIi.signature',
+      expiresOn: '2026-06-10T18:33:00+0000',
+      tenantId: '11111111-2222-3333-4444-555555555555',
+    });
+  };
+  const r = await getAdoToken({ _execImpl: fakeAz });
+  assert.equal(r.ok, true);
+  assert.equal(r.tokenType, 'OAuth');
+  assert.equal(r.token, undefined, 'result MUST NOT carry the raw token');
+  assert.equal(r.tokenFile, undefined, 'result MUST NOT carry a token file path');
+  assert.equal(r.tokenSha256, undefined, 'result MUST NOT carry a token digest');
+  assert.equal(r.tenantId, '11111111-2222-3333-4444-555555555555');
+  assert.equal(r.expiresOn, '2026-06-10T18:33:00+0000');
+  assert.equal(r.adoOrgTenantId, null);
+  assert.equal(r.tenantMismatch, false);
+  assert.equal(r.hint, null);
+});
+
+// ===== az failure paths =====
+
+test('az exits non-zero → ok:false with az login hint and stderr in error', async () => {
+  const fakeAz = () => {
+    const err = new Error('Command failed');
+    err.stderr = Buffer.from('ERROR: Please run "az login" to setup account.\n');
+    throw err;
+  };
+  const r = await getAdoToken({ _execImpl: fakeAz });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /az login/);
+  assert.match(r.error, /Please run "az login"/);
+});
+
+test('az returns non-JSON → ok:false', async () => {
+  const fakeAz = () => 'not actually json';
+  const r = await getAdoToken({ _execImpl: fakeAz });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /non-JSON/);
+});
+
+test('az returns JSON without accessToken → ok:false', async () => {
+  const fakeAz = () => JSON.stringify({ tenantId: 'x' });
+  const r = await getAdoToken({ _execImpl: fakeAz });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /accessToken/);
+});
+
+// ===== --verifyTenant + connectionData =====
+
+const VALID_AZ_PAYLOAD = () => JSON.stringify({
+  token: 'eyJhbGc.eyJzdWIi.signature',
+  expiresOn: '2026-06-10T18:33:00+0000',
+  tenantId: '11111111-2222-3333-4444-555555555555',
+});
+
+test('verifyTenant: connectionData returns matching tenant → tenantMismatch:false', async () => {
+  const fakeMake = async ({ url, headers }) => {
+    assert.match(url, /dev\.azure\.com\/contoso\/_apis\/connectionData/);
+    assert.equal(headers.Authorization, 'Bearer eyJhbGc.eyJzdWIi.signature');
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        authenticatedUser: {
+          properties: {
+            'Microsoft.IdentityModel.Claims.TenantId': {
+              $value: '11111111-2222-3333-4444-555555555555',
+            },
+          },
+        },
+      }),
+    };
+  };
+  const r = await getAdoToken({
+    organization: 'contoso',
+    verifyTenant: true,
+    _execImpl: VALID_AZ_PAYLOAD,
+    _makeRequestImpl: fakeMake,
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.adoOrgTenantId, '11111111-2222-3333-4444-555555555555');
+  assert.equal(r.tenantMismatch, false);
+  assert.equal(r.hint, null);
+});
+
+test('verifyTenant: connectionData returns different tenant → tenantMismatch:true with hint', async () => {
+  const fakeMake = async () => ({
+    statusCode: 200,
+    body: JSON.stringify({
+      authorizedUser: {
+        properties: {
+          'Microsoft.IdentityModel.Claims.TenantId': {
+            $value: '99999999-aaaa-bbbb-cccc-dddddddddddd',
+          },
+        },
+      },
+    }),
+  });
+  const r = await getAdoToken({
+    organization: 'contoso',
+    verifyTenant: true,
+    _execImpl: VALID_AZ_PAYLOAD,
+    _makeRequestImpl: fakeMake,
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.adoOrgTenantId, '99999999-aaaa-bbbb-cccc-dddddddddddd');
+  assert.equal(r.tenantMismatch, true);
+  assert.match(r.hint, /az login --tenant 99999999-aaaa-bbbb-cccc-dddddddddddd/);
+});
+
+test('verifyTenant: connectionData lacks tenant claim → tenantMismatch:false with skipped hint', async () => {
+  const fakeMake = async () => ({
+    statusCode: 200,
+    body: JSON.stringify({ authenticatedUser: { id: 'user-without-tenant-claim' } }),
+  });
+  const r = await getAdoToken({
+    organization: 'contoso',
+    verifyTenant: true,
+    _execImpl: VALID_AZ_PAYLOAD,
+    _makeRequestImpl: fakeMake,
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.adoOrgTenantId, null);
+  assert.equal(r.tenantMismatch, false);
+  assert.match(r.hint, /verification skipped/i);
+});
+
+test('verifyTenant: connectionData returns 401 → tenantMismatch:false with skipped hint', async () => {
+  const fakeMake = async () => ({ statusCode: 401, body: '{"message":"Unauthorized"}' });
+  const r = await getAdoToken({
+    organization: 'contoso',
+    verifyTenant: true,
+    _execImpl: VALID_AZ_PAYLOAD,
+    _makeRequestImpl: fakeMake,
+  });
+  // Don't hard-block — we have a token; the org just isn't probable. Soft skip.
+  assert.equal(r.ok, true);
+  assert.equal(r.tenantMismatch, false);
+  assert.match(r.hint, /HTTP 401/);
+});
+
+test('verifyTenant: connectionData network error → tenantMismatch:false with reachability hint', async () => {
+  const fakeMake = async () => ({ error: 'ECONNREFUSED' });
+  const r = await getAdoToken({
+    organization: 'contoso',
+    verifyTenant: true,
+    _execImpl: VALID_AZ_PAYLOAD,
+    _makeRequestImpl: fakeMake,
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.tenantMismatch, false);
+  assert.match(r.hint, /could not reach/);
+  assert.match(r.hint, /ECONNREFUSED/);
+});
+
+// ===== extractTenantIdFromConnectionData unit cases =====
+
+test('extractTenantIdFromConnectionData: authenticatedUser path', () => {
+  const t = extractTenantIdFromConnectionData({
+    authenticatedUser: {
+      properties: {
+        'Microsoft.IdentityModel.Claims.TenantId': {
+          $value: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+        },
+      },
+    },
+  });
+  assert.equal(t, 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
+});
+
+test('extractTenantIdFromConnectionData: authorizedUser fallback path', () => {
+  const t = extractTenantIdFromConnectionData({
+    authorizedUser: {
+      properties: {
+        TenantId: { $value: '12345678-1234-1234-1234-123456789012' },
+      },
+    },
+  });
+  assert.equal(t, '12345678-1234-1234-1234-123456789012');
+});
+
+test('extractTenantIdFromConnectionData: rejects non-GUID values', () => {
+  const t = extractTenantIdFromConnectionData({
+    authenticatedUser: {
+      properties: {
+        'Microsoft.IdentityModel.Claims.TenantId': { $value: 'not-a-guid' },
+      },
+    },
+  });
+  assert.equal(t, null);
+});
+
+test('extractTenantIdFromConnectionData: missing properties → null', () => {
+  assert.equal(extractTenantIdFromConnectionData({}), null);
+  assert.equal(extractTenantIdFromConnectionData(null), null);
+  assert.equal(extractTenantIdFromConnectionData({ authenticatedUser: {} }), null);
+});
+
+test('extractTenantIdFromConnectionData: properties as raw string (not {$value})', () => {
+  const t = extractTenantIdFromConnectionData({
+    authenticatedUser: {
+      properties: {
+        'Microsoft.IdentityModel.Claims.TenantId': '12345678-1234-1234-1234-123456789012',
+      },
+    },
+  });
+  assert.equal(t, '12345678-1234-1234-1234-123456789012');
+});
+
+// ===== security contract: the token is never persisted or returned =====
+
+test('masked-by-default: getAdoToken never returns a token, tokenFile, or sha — even in default mode', async () => {
+  const r = await getAdoToken({ _execImpl: VALID_AZ_PAYLOAD });
+  assert.equal(r.ok, true);
+  assert.equal(r.token, undefined, 'token MUST NEVER appear in the result');
+  assert.equal(r.tokenFile, undefined, 'no token file is ever written');
+  assert.equal(r.tokenSha256, undefined, 'no token digest is emitted');
+  // Non-credential fields are still present for the caller.
+  assert.equal(r.tokenType, 'OAuth');
+  assert.equal(r.tenantId, '11111111-2222-3333-4444-555555555555');
+});
+
+test('CLI stdout shape (JSON.stringify of the result) contains no JWT-looking value', async () => {
+  const r = await getAdoToken({ _execImpl: VALID_AZ_PAYLOAD });
+  const serialized = JSON.stringify(r);
+  assert.ok(!serialized.includes('eyJhbGc.eyJzdWIi.signature'),
+    'the serialized stdout payload MUST NOT contain the raw token');
+});
+
+test('acquire failure surfaces an error and still emits no token', async () => {
+  const fakeAz = () => {
+    const err = new Error('Command failed');
+    err.stderr = Buffer.from('ERROR: Please run "az login".\n');
+    throw err;
+  };
+  const r = await getAdoToken({ _execImpl: fakeAz });
+  assert.equal(r.ok, false);
+  assert.equal(r.token, undefined);
+  assert.match(r.error, /az login/);
+});
+
+test('_acquireImpl DI is honored (no shell-out) and token still never returned', async () => {
+  const r = await getAdoToken({
+    _acquireImpl: () => ({ ok: true, token: 'in-memory-only', tenantId: 't-x', expiresOn: 'e-x' }),
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.token, undefined);
+  assert.equal(r.tenantId, 't-x');
+});
+
