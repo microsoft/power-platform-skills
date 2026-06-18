@@ -8,8 +8,11 @@ const os = require('os');
 
 const {
   refresh,
+  reconcile,
   buildHostResolutionFromCheck,
   dropResolvedRisks,
+  computeNextStep,
+  mapStepToSkill,
 } = require('../lib/refresh-alm-plan-data');
 
 function makeProject(t) {
@@ -231,6 +234,27 @@ test('refresh test-site populates validationRuns[stage] from docs/alm/last-test-
   assert.equal(planData.validationRuns.Staging.summary.total, 12);
 });
 
+test('refresh test-site keys validationRuns by the BARE label even if given a "Deploy to {label}" stage', (t) => {
+  // Hardening (defense against the "Deploy to {label}" mismatch class): if a caller
+  // ever passes the pipeline stage NAME ("Deploy to Staging") instead of the bare
+  // label, the per-stage object key must still be "Staging" so the renderer (which
+  // looks up validationRuns by the bare label from the step name) finds it.
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    validationRuns: { Staging: null },
+    steps: [{ name: 'Test site in Staging', status: 'pending' }],
+  });
+  writeJson(path.join(root, 'docs', 'alm', 'last-test-site.json'), { runOutcome: 'passed', runAt: '2026-06-16T00:00:00.000Z' });
+
+  refresh({ projectRoot: root, phase: 'test-site', render: false, stageName: 'Deploy to Staging' });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.ok(planData.validationRuns.Staging, 'keyed by bare "Staging"');
+  assert.equal(planData.validationRuns['Deploy to Staging'], undefined, 'must NOT key by the "Deploy to" stage name');
+  assert.equal(planData.steps[0].status, 'completed', 'and the matching Test step still flips');
+});
+
 test('refresh test-site is a no-op when stageName is omitted', (t) => {
   const root = makeProject(t);
   writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
@@ -444,7 +468,7 @@ test('refresh deploy-pipeline ingests batchValidation block from last-deploy.jso
   const root = makeProject(t);
   writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
     SITE_NAME: 'TestSite',
-    STRATEGY: 'pipeline',
+    STRATEGY: 'pp-pipelines',
     steps: [{ name: 'Deploy via pipeline to Staging', status: 'in_progress' }],
     stages: [{ label: 'Staging', envUrl: 'https://staging.crm.dynamics.com' }],
   });
@@ -494,6 +518,66 @@ test('refresh deploy-pipeline ingests batchValidation block from last-deploy.jso
   });
 });
 
+test('refresh deploy-pipeline completes the "Activate site" step when the marker evidences activation, but not Test', (t) => {
+  // The PP deploy flow activates the site internally (marker.activationStatus),
+  // so a successful deploy must also complete the matching "Activate site in {stage}"
+  // step — otherwise computeNextStep would redundantly point the user at
+  // /activate-site. Testing remains a separate step (test-site flips it).
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    STRATEGY: 'pp-pipelines',
+    steps: [
+      { name: 'Deploy via pipeline to Staging', status: 'pending' },
+      { name: 'Activate site in Staging', status: 'pending' },
+      { name: 'Test site in Staging', status: 'pending' },
+    ],
+    stages: [{ label: 'Staging', envUrl: 'https://staging.crm.dynamics.com' }],
+  });
+  writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), {
+    stageRunId: 'srun-1', stageName: 'Staging', status: 'Succeeded',
+    deployedAt: '2026-06-16T00:00:00.000Z', activationStatus: 'Activated',
+    siteUrl: 'https://contoso.powerappsportals.com',
+  });
+
+  refresh({ projectRoot: root, phase: 'deploy-pipeline', render: false });
+  const steps = readJson(path.join(root, 'docs', '.alm-plan-data.json')).steps;
+  const byName = (n) => steps.find((s) => s.name === n).status;
+  assert.equal(byName('Deploy via pipeline to Staging'), 'completed');
+  assert.equal(byName('Activate site in Staging'), 'completed', 'deploy activates the site -> Activate step completes too');
+  assert.equal(byName('Test site in Staging'), 'pending', 'Test stays pending — it is the separate test-site step');
+});
+
+test('refresh deploy-pipeline leaves the "Activate site" step pending when activation was not done (null or deferred "Pending")', (t) => {
+  // Only an explicit "Activated" outcome completes the Activate step. A missing
+  // activationStatus (null) OR a deferred activation (deploy-pipeline writes
+  // "Pending" when the user defers) must leave the step pending — the user still
+  // needs to run /activate-site, and nextStep must keep surfacing it.
+  for (const activationStatus of [undefined, null, 'Pending', 'Failed']) {
+    const root = makeProject(t);
+    writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+      SITE_NAME: 'TestSite',
+      STRATEGY: 'pp-pipelines',
+      steps: [
+        { name: 'Deploy via pipeline to Staging', status: 'pending' },
+        { name: 'Activate site in Staging', status: 'pending' },
+      ],
+      stages: [{ label: 'Staging', envUrl: 'https://staging.crm.dynamics.com' }],
+    });
+    const marker = { stageRunId: 'srun-1', stageName: 'Staging', status: 'Succeeded', deployedAt: '2026-06-16T00:00:00.000Z' };
+    if (activationStatus !== undefined) marker.activationStatus = activationStatus;
+    writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), marker);
+
+    refresh({ projectRoot: root, phase: 'deploy-pipeline', render: false });
+    const steps = readJson(path.join(root, 'docs', '.alm-plan-data.json')).steps;
+    assert.equal(
+      steps.find((s) => s.name === 'Activate site in Staging').status,
+      'pending',
+      `activationStatus=${JSON.stringify(activationStatus)} must NOT complete the Activate step`,
+    );
+  }
+});
+
 test('refresh deploy-pipeline accepts legacy elapsedSecondsApprox name in batchValidation', (t) => {
   // Backward-compatibility: legacy SKILL.md prose (pre-v1.x) used
   // `elapsedSecondsApprox`. Markers written under that schema still in the
@@ -502,7 +586,7 @@ test('refresh deploy-pipeline accepts legacy elapsedSecondsApprox name in batchV
   const root = makeProject(t);
   writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
     SITE_NAME: 'TestSite',
-    STRATEGY: 'pipeline',
+    STRATEGY: 'pp-pipelines',
     steps: [{ name: 'Deploy via pipeline to Staging', status: 'in_progress' }],
     stages: [{ label: 'Staging', envUrl: 'https://staging.crm.dynamics.com' }],
   });
@@ -539,7 +623,7 @@ test('refresh deploy-pipeline sets batchValidation to null when marker omits the
   const root = makeProject(t);
   writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
     SITE_NAME: 'TestSite',
-    STRATEGY: 'pipeline',
+    STRATEGY: 'pp-pipelines',
     steps: [{ name: 'Deploy via pipeline to Staging', status: 'in_progress' }],
     stages: [{ label: 'Staging', envUrl: 'https://staging.crm.dynamics.com' }],
   });
@@ -1148,6 +1232,53 @@ test('step-sync: deploy-pipeline flips ONLY the matching stage step to completed
     'Production deploy step must stay pending — stage filter disambiguates "Deploy" steps');
 });
 
+test('step-sync: deploy-pipeline matches the REAL marker stageName "Deploy to {label}" (not just bare "Staging")', (t) => {
+  // Regression for the stage-name mismatch: setup-pipeline names pipeline stages
+  // "Deploy to {targetLabel}", and deploy-pipeline writes that verbatim as
+  // last-deploy.json's stageName ("Deploy to Staging"). The plan step is
+  // "Deploy via pipeline to Staging", so a raw substring match of the marker's
+  // "deploy to staging" against the step name FAILS and the step would never
+  // flip. setStepStatus must strip the leading "Deploy to " to recover "Staging".
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), {
+    stageRunId: 'sr-real', stageName: 'Deploy to Staging', status: 'Succeeded',
+    deployedAt: '2026-06-16T10:00:00Z', activationStatus: 'Activated',
+    siteUrl: 'https://contoso.powerappsportals.com',
+  });
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    steps: [
+      { name: 'Deploy via pipeline to Staging', status: 'pending' },
+      { name: 'Activate site in Staging', status: 'pending' },
+      { name: 'Test site in Staging', status: 'pending' },
+      { name: 'Deploy via pipeline to Production', status: 'pending' },
+    ],
+  });
+
+  refresh({ projectRoot: root, phase: 'deploy-pipeline', render: false });
+
+  const steps = readJson(path.join(root, 'docs', '.alm-plan-data.json')).steps;
+  const st = (n) => steps.find((s) => s.name === n).status;
+  assert.equal(st('Deploy via pipeline to Staging'), 'completed', 'real "Deploy to Staging" marker must flip the Staging deploy step');
+  assert.equal(st('Activate site in Staging'), 'completed', 'activation evidence + normalized stage must flip the Activate step');
+  assert.equal(st('Test site in Staging'), 'pending', 'Test stays the separate test-site step');
+  assert.equal(st('Deploy via pipeline to Production'), 'pending', 'Production must NOT be touched by a "Deploy to Staging" marker');
+});
+
+test('setStepStatus: exported helper normalizes a "Deploy to {label}" stage to the bare label', () => {
+  const { setStepStatus } = require('../lib/refresh-alm-plan-data');
+  const planData = {
+    steps: [
+      { name: 'Deploy via pipeline to Staging', status: 'pending' },
+      { name: 'Deploy via pipeline to Production', status: 'pending' },
+    ],
+  };
+  const flipped = setStepStatus(planData, { keyword: /\bdeploy\b/i, stage: 'Deploy to Staging', status: 'completed' });
+  assert.equal(flipped, 1);
+  assert.equal(planData.steps[0].status, 'completed');
+  assert.equal(planData.steps[1].status, 'pending');
+});
+
 test('step-sync: deploy-pipeline records "failed" status when marker shows failure', (t) => {
   const root = makeProject(t);
   writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), {
@@ -1592,4 +1723,232 @@ test('extractPerStageValues: defensive against null / wrong-type inputs', () => 
     Staging: { EnvironmentVariables: [null, { SchemaName: 'x' }, { SchemaName: 'y', Value: 'v' }] },
   });
   assert.deepEqual(result, { y: { Staging: 'v' } });
+});
+
+// --- nextStep (DRY next-step lookup for user-driven sequencing) ---------------
+
+test('mapStepToSkill: maps each step-name family to its slash command', () => {
+  assert.equal(mapStepToSkill('Setup solution'), '/power-pages:setup-solution');
+  assert.equal(mapStepToSkill('Setup pipeline'), '/power-pages:setup-pipeline');
+  assert.equal(mapStepToSkill('Export solution'), '/power-pages:export-solution');
+  assert.equal(mapStepToSkill('Import to Production'), '/power-pages:import-solution');
+  assert.equal(mapStepToSkill('Deploy via pipeline to Staging'), '/power-pages:deploy-pipeline');
+  assert.equal(mapStepToSkill('Activate site in Staging'), '/power-pages:activate-site');
+  assert.equal(mapStepToSkill('Test site in Production'), '/power-pages:test-site');
+  assert.equal(mapStepToSkill('Configure environment variables'), '/power-pages:configure-env-variables');
+  // No user-invocable skill → null (e.g. an internal finalize step or junk).
+  assert.equal(mapStepToSkill('Finalize'), null);
+  assert.equal(mapStepToSkill(''), null);
+  assert.equal(mapStepToSkill(undefined), null);
+});
+
+test('computeNextStep: returns the first pending step + its skill', () => {
+  const next = computeNextStep({
+    steps: [
+      { name: 'Setup solution', status: 'completed' },
+      { name: 'Setup pipeline', status: 'pending' },
+      { name: 'Deploy via pipeline to Staging', status: 'pending' },
+    ],
+  });
+  assert.deepEqual(next, { name: 'Setup pipeline', skill: '/power-pages:setup-pipeline' });
+});
+
+test('computeNextStep: skips skip:true steps', () => {
+  const next = computeNextStep({
+    steps: [
+      { name: 'Setup solution', status: 'completed' },
+      { name: 'Setup pipeline', status: 'pending', skip: true },
+      { name: 'Deploy via pipeline to Staging', status: 'pending' },
+    ],
+  });
+  assert.deepEqual(next, { name: 'Deploy via pipeline to Staging', skill: '/power-pages:deploy-pipeline' });
+});
+
+test('computeNextStep: skips non-pending statuses (completed/failed/in_progress)', () => {
+  const next = computeNextStep({
+    steps: [
+      { name: 'Setup solution', status: 'completed' },
+      { name: 'Setup pipeline', status: 'failed' },
+      { name: 'Deploy via pipeline to Staging', status: 'in_progress' },
+      { name: 'Activate site in Staging', status: 'pending' },
+    ],
+  });
+  assert.deepEqual(next, { name: 'Activate site in Staging', skill: '/power-pages:activate-site' });
+});
+
+test('computeNextStep: treats a missing status as pending', () => {
+  const next = computeNextStep({ steps: [{ name: 'Setup solution' }] });
+  assert.deepEqual(next, { name: 'Setup solution', skill: '/power-pages:setup-solution' });
+});
+
+test('computeNextStep: returns null when every step is complete or there are no steps', () => {
+  assert.equal(computeNextStep({ steps: [{ name: 'Setup solution', status: 'completed' }] }), null);
+  assert.equal(computeNextStep({ steps: [] }), null);
+  assert.equal(computeNextStep({}), null);
+  assert.equal(computeNextStep(null), null);
+});
+
+test('refresh: surfaces nextStep in its return value after a phase refresh', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    steps: [
+      { name: 'Setup solution', status: 'pending' },
+      { name: 'Setup pipeline', status: 'pending' },
+      { name: 'Deploy via pipeline to Staging', status: 'pending' },
+    ],
+  });
+  // setup-solution refresh flips "Setup solution" → completed, so nextStep is Setup pipeline.
+  const result = refresh({ projectRoot: root, phase: 'setup-solution', render: false });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.nextStep, { name: 'Setup pipeline', skill: '/power-pages:setup-pipeline' });
+});
+
+test('refresh: nextStep is null once the final pending step completes', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    steps: [
+      { name: 'Setup solution', status: 'completed' },
+      { name: 'Setup pipeline', status: 'pending' },
+    ],
+  });
+  const result = refresh({ projectRoot: root, phase: 'setup-pipeline', render: false });
+  assert.equal(result.ok, true);
+  assert.equal(result.nextStep, null, 'all steps complete → nextStep null');
+});
+
+// --- reconcile (the enforcement backstop / auto-heal) ------------------------
+
+// Backdate the plan file so a just-written marker is unambiguously "newer".
+function backdatePlan(root, secondsAgo = 60) {
+  const p = path.join(root, 'docs', '.alm-plan-data.json');
+  const t = (Date.now() - secondsAgo * 1000) / 1000;
+  fs.utimesSync(p, t, t);
+}
+
+test('reconcile: heals a skipped refresh — a newer last-deploy.json is ingested', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'T', pipelineMeta: { lastDeploy: null }, steps: [{ name: 'Deploy via pipeline to Staging', status: 'pending' }],
+    stages: [{ label: 'Staging', envUrl: 'https://stg.crm.dynamics.com/', type: 'target' }],
+  });
+  // Marker written AFTER the plan (skill ran but its refresh step was skipped).
+  writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), {
+    stageRunId: 'sr1', stageName: 'Staging', status: 'Succeeded', deployedAt: '2026-06-16T00:00:00.000Z',
+    artifactVersion: '1.0.0.2', componentCount: 118,
+  });
+  backdatePlan(root);
+
+  const result = reconcile({ projectRoot: root, render: false });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.reconciled, ['deploy-pipeline']);
+  // failed[] is part of the contract — empty when every phase heals cleanly.
+  assert.deepEqual(result.failed, []);
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.pipelineMeta.lastDeploy.status, 'Succeeded');
+  assert.equal(planData.pipelineMeta.lastDeploy.componentCount, 118);
+});
+
+test('reconcile: failed[] and nextStep are present on EVERY return path (stable contract)', (t) => {
+  // Contract guard (Copilot review on #191): a phase whose refresh throws must NOT
+  // be swallowed silently — it lands in result.failed = [{ phase, error }] while the
+  // other phases still heal, and BOTH failed[] and nextStep are present on the
+  // no-op / deferred / no-plan paths too so callers never special-case a missing
+  // property. (A phase only throws on a genuine marker-schema break — readJson is
+  // defensive — so we assert the contract shape rather than fabricate a throw.)
+  const noPlan = reconcile({ projectRoot: makeProject(t), render: false });
+  assert.ok(Array.isArray(noPlan.failed), 'no-plan path carries failed:[]');
+  assert.ok('nextStep' in noPlan && noPlan.nextStep === null, 'no-plan path carries nextStep:null');
+
+  const deferredRoot = makeProject(t);
+  writeJson(path.join(deferredRoot, 'docs', '.alm-plan-data.json'), { SITE_NAME: 'T' });
+  fs.writeFileSync(path.join(deferredRoot, '.alm-deferred'), 'deferred');
+  const deferred = reconcile({ projectRoot: deferredRoot, render: false });
+  assert.deepEqual(deferred.failed, [], 'deferred path carries failed:[]');
+  assert.ok('nextStep' in deferred && deferred.nextStep === null, 'deferred path carries nextStep:null');
+
+  // Nothing-pending but the plan still has an unfinished step -> reconcile must
+  // compute and return that step (not omit nextStep just because no heal ran).
+  const idleRoot = makeProject(t);
+  writeJson(path.join(idleRoot, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'T',
+    steps: [
+      { name: 'Setup solution', status: 'completed' },
+      { name: 'Setup pipeline', status: 'pending' },
+    ],
+  });
+  const future = (Date.now() + 60 * 1000) / 1000;
+  fs.utimesSync(path.join(idleRoot, 'docs', '.alm-plan-data.json'), future, future);
+  const idle = reconcile({ projectRoot: idleRoot, render: false });
+  assert.deepEqual(idle.failed, [], 'nothing-pending path carries failed:[]');
+  assert.deepEqual(idle.nextStep, { name: 'Setup pipeline', skill: '/power-pages:setup-pipeline' },
+    'nothing-pending path still surfaces the next unfinished step');
+});
+
+test('reconcile: idempotent no-op when the plan already reflects the markers', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), { stageName: 'Staging', status: 'Succeeded' });
+  // Plan written AFTER the marker -> already reflected -> nothing pending.
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), { SITE_NAME: 'T' });
+  const future = (Date.now() + 60 * 1000) / 1000;
+  fs.utimesSync(path.join(root, 'docs', '.alm-plan-data.json'), future, future);
+
+  const result = reconcile({ projectRoot: root, render: false });
+  assert.deepEqual(result.reconciled, []);
+});
+
+test('reconcile: host-only phase when only last-host-check.json is pending (no pipeline yet)', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'T',
+    hostResolution: { status: 'NoHost', hostEnvUrl: null },
+    pipelineMeta: null,
+    steps: [{ name: 'Setup pipeline', status: 'pending' }],
+  });
+  writeJson(path.join(root, 'docs', 'alm', 'last-host-check.json'), {
+    resolutionStatus: 'AvailableUsingCustomHost',
+    finalHostEnvUrl: 'https://host.crm.dynamics.com/',
+    hostType: 'custom',
+  });
+  backdatePlan(root);
+
+  const result = reconcile({ projectRoot: root, render: false });
+  assert.deepEqual(result.reconciled, ['ensure-pipelines-host']);
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.hostResolution.status, 'AvailableUsingCustomHost');
+  assert.equal(planData.hostResolution.hostEnvUrl, 'https://host.crm.dynamics.com/');
+  assert.equal(planData.pipelineMeta, null, 'host-only phase must NOT fabricate pipelineMeta');
+  assert.equal(planData.steps[0].status, 'pending', 'host-only phase must NOT flip the Setup pipeline step');
+});
+
+test('reconcile: a pending last-pipeline.json supersedes the host-only phase', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), { SITE_NAME: 'T', steps: [{ name: 'Setup pipeline', status: 'pending' }] });
+  writeJson(path.join(root, 'docs', 'alm', 'last-host-check.json'), { resolutionStatus: 'AvailableUsingCustomHost', finalHostEnvUrl: 'https://h/' });
+  writeJson(path.join(root, 'docs', 'alm', 'last-pipeline.json'), { pipelineId: 'p1', pipelineName: 'My Pipeline', stages: [] });
+  backdatePlan(root);
+
+  const result = reconcile({ projectRoot: root, render: false });
+  assert.ok(result.reconciled.includes('setup-pipeline'));
+  assert.ok(!result.reconciled.includes('ensure-pipelines-host'), 'setup-pipeline covers the host — no redundant host-only phase');
+});
+
+test('reconcile: honors the .alm-deferred opt-out (no-op)', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), { SITE_NAME: 'T' });
+  writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), { stageName: 'Staging', status: 'Succeeded' });
+  fs.writeFileSync(path.join(root, '.alm-deferred'), 'ni-dev — handled separately');
+  backdatePlan(root);
+
+  const result = reconcile({ projectRoot: root, render: false });
+  assert.equal(result.reconciled.length, 0);
+  assert.equal(result.reason, 'deferred');
+});
+
+test('reconcile: soft no-op when there is no plan', (t) => {
+  const root = makeProject(t);
+  const result = reconcile({ projectRoot: root, render: false });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'no-plan');
 });

@@ -269,10 +269,10 @@ For consumers like the rendered ALM plan (Manual path's per-target Activate step
 
 ```bash
 node -e "require('fs').mkdirSync('docs/alm',{recursive:true})"
-# Determine the stage label this activation was for. plan-alm orchestration
-# passes it via context (e.g. "Staging", "Production"); standalone invocations
-# may leave it null — refreshActivateSite falls back to env-URL matching
-# against planData.stages[].envUrl.
+# Determine the stage label this activation was for. The upstream ALM context
+# (e.g. the user running this after import-solution) supplies it as "Staging"/
+# "Production"; standalone invocations may leave it null — refreshActivateSite
+# falls back to env-URL matching against planData.stages[].envUrl.
 node -e "require('fs').writeFileSync('docs/alm/last-activate.json', JSON.stringify({
   stageName: <stageNameOrNull>,
   siteName: '<siteName>',
@@ -304,9 +304,11 @@ node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --render
 ```
 
-`{stageNameOrEmpty}` is the Manual-path target stage label (e.g. `Staging`, `Production`) the agent was activating — usually carried in by plan-alm Phase 7 orchestration. Pass an empty string when unknown; `refreshActivateSite` falls back to URL-matching `docs/alm/last-activate.json`'s `environmentUrl` against `planData.stages[].envUrl`, so standalone invocations still get captured.
+`{stageNameOrEmpty}` is the Manual-path target stage label (e.g. `Staging`, `Production`) the agent was activating — stated by the user, or inferred from the target env. Pass an empty string when unknown; `refreshActivateSite` falls back to URL-matching `docs/alm/last-activate.json`'s `environmentUrl` against `planData.stages[].envUrl`, so standalone invocations still get captured.
 
-The helper reads `docs/alm/last-activate.json`, writes a per-target entry into `planData.activations[stageName]` (siteUrl, status, activatedAt), and re-renders `docs/alm-plan.html` so the matching `Activate site in {stageName}` checklist step shows an `ACTIVATED` badge with the live site URL inline. When `docs/.alm-plan-data.json` is absent (standalone, not via plan-alm), the helper returns `ok:false` as a soft no-op.
+The helper reads `docs/alm/last-activate.json`, writes a per-target entry into `planData.activations[stageName]` (siteUrl, status, activatedAt), and re-renders `docs/alm-plan.html` so the matching `Activate site in {stageName}` checklist step shows an `ACTIVATED` badge with the live site URL inline. When `docs/.alm-plan-data.json` is absent (standalone, not part of an ALM plan), the helper returns `ok:false` as a soft no-op.
+
+**Point the user at the next step (user-driven sequencing).** The helper's stdout JSON includes `nextStep: { name, skill: string | null } | null`. When non-null, branch on `skill`: when `skill` is non-null, tell the user *"Plan updated. Next in your plan: **{nextStep.name}** → run `{nextStep.skill}` when you're ready."*; when `skill` is `null` (an internal step such as Finalize, no user command), name the step only — *"Plan updated. Next in your plan: **{nextStep.name}**."* — and never print `run null`. When `null` or the helper returned `ok:false`, say nothing about a next step. **Never auto-invoke the next skill** — the user drives execution.
 
 #### 5.3 Suggest Next Steps
 

@@ -104,6 +104,8 @@ From the user's request and the existing site state, determine:
 
 ### 2.2 Clarify if Ambiguous
 
+<!-- not-a-gate: ambiguous-intent clarification — sub-prompts under the upcoming Phase 3.4 plan gate; multi-question data-gathering that shapes the recommendation -->
+
 If the request could map to multiple approaches and the right choice isn't clear, use `AskUserQuestion` to clarify:
 
 | Question | When to ask |
@@ -280,7 +282,6 @@ Prepare a JSON object with these keys:
 { "approach": "serverlogic", "name": "Validate Transition", "detail": "Checks Draft→Submitted" },
 { "approach": "webapi", "name": "Update Status", "detail": "PATCH status to Submitted" }
 ```
-```
 
 Write the plan to `<PROJECT_ROOT>/docs/backend-plan.html` (create `docs/` if needed). Use the render script:
 
@@ -309,6 +310,14 @@ In the CLI, give only a brief summary:
 - A note that the browser-opened HTML contains the full details including data flow diagrams
 
 ### 3.4 Confirm with User
+
+<!-- gate: integrate-backend:3.4.plan-approval | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · integrate-backend:3.4.plan-approval):** Approve the integration plan before invoking the appropriate child skill (`integrate-webapi` / `add-server-logic` / `add-cloud-flow`). The plan HTML stays on disk regardless of choice — Cancel just stops the dispatch.
+>
+> **Trigger:** Phase 3.3 has rendered the HTML plan and surfaced a brief CLI summary.
+> **Why we ask:** Wrong child skill gets dispatched — `add-server-logic` for a Web API task wastes minutes; `add-cloud-flow` for a Web API task creates orphaned flow YAML.
+> **Cancel leaves:** Nothing — no child skill invoked, HTML plan stays at its saved path.
 
 Use `AskUserQuestion`:
 

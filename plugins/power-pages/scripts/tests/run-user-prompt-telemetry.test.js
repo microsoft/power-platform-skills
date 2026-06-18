@@ -10,10 +10,10 @@ const { spawnSync } = require("node:child_process");
 const PLUGIN_ROOT = path.resolve(__dirname, "..", "..");
 const HOOK = path.join(PLUGIN_ROOT, "hooks", "run-user-prompt-telemetry.js");
 
-// The live telemetry gates are the per-plugin opt-out in config.json and the
-// `disabled` flag in ikey.json — no consent file is read. So this just needs
-// to hand back an isolated tmpdir for the probe / ikey override.
 function mkConfigDir() {
+  // An isolated config dir. Emission is NOT gated by any telemetry.json here —
+  // the per-plugin opt-out is a config.json with telemetry[plugin] = "off"
+  // (see user-config.js); tests that need opt-out write that file explicitly.
   return fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-upt-"));
 }
 
@@ -60,11 +60,30 @@ test("hook emits PagesPluginEvent with top-level fields for tracked slash comman
   fs.writeFileSync(
     ikeyPath,
     JSON.stringify({
-      instrumentationKey: "test-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
-      collector_url: "https://example.invalid/OneCollector/1.0/",
       event_stream_name: "PagesPluginEvent",
       disabled: false,
+      default_region: "us",
+      regions: {
+        us: {
+          instrumentation_key: "test-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
+          collector_url: "https://example.invalid/OneCollector/1.0/",
+        },
+      },
     })
+  );
+  // The dispatcher discovers region routing via a resolver.js next to ikey.json.
+  // Mirror the shipped plugin layout by dropping one beside the temp config that
+  // re-exports the real region resolver from scripts/lib/telemetry/resolver.js.
+  const shippedResolver = path.join(
+    PLUGIN_ROOT,
+    "scripts",
+    "lib",
+    "telemetry",
+    "resolver.js"
+  );
+  fs.writeFileSync(
+    path.join(configDir, "resolver.js"),
+    `module.exports = require(${JSON.stringify(shippedResolver)});\n`
   );
 
   const { status } = runHook({

@@ -4,7 +4,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { readTelemetryChoice, setTelemetryChoice } = require("./user-config");
+const { setTelemetryChoice, effectiveTelemetryChoice } = require("./user-config");
 
 const ANONYMITY =
   "ℹ️  No personal data is collected. Telemetry is anonymous — it records only\n" +
@@ -58,7 +58,7 @@ function main() {
   const dir = configDir();
 
   if (action === "status") {
-    const on = readTelemetryChoice(dir, plugin) !== "off"; // default ON
+    const on = effectiveTelemetryChoice(dir, plugin) !== "off"; // default ON; honors env override when no stored choice
     if (on) {
       out(`Telemetry (${plugin}): ON`);
       out(ANONYMITY);

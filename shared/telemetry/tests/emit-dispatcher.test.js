@@ -32,7 +32,7 @@ function mkEnabledIkey(tmp) {
 function runDispatcher({ event, env }) {
   const tmp = env.configDir;
   const ikeyJsonPath = env.ikeyJsonPath || mkEnabledIkey(tmp);
-  // Opt-out is now a per-plugin config.json in the config dir (env var removed).
+  // Opt-out is a per-plugin config.json in the config dir (env var removed).
   if (env.off) {
     fs.writeFileSync(
       path.join(tmp, "config.json"),
@@ -49,6 +49,8 @@ function runDispatcher({ event, env }) {
       POWER_PLATFORM_SKILLS_COLLECTOR: env.collectorUrl || "",
       POWER_PLATFORM_SKILLS_FAKE_HTTPS: env.fakeProbe || "",
       POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyJsonPath,
+      POWER_PLATFORM_SKILLS_CLOUD: env.cloud || "",
+      POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: env.optOut || "",
     },
   });
 }
@@ -392,4 +394,160 @@ test("local mirror records the same data + time that gets POSTed to Kusto", () =
   assert.deepEqual(local.data, wire.data);
   assert.equal(local.ver, undefined, "local mirror omits envelope-only ver");
   assert.equal(local.iKey, undefined, "local mirror omits envelope-only iKey");
+});
+
+// ---- iKey/collector resolution (generic seam) -----------------------------
+
+test("dispatcher uses static instrumentationKey/collector_url when no resolver is present", () => {
+  // mkEnabledIkey writes a flat ikey.json (instrumentationKey + collector_url)
+  // and there is no resolver.js beside it → the static fallback is used.
+  const tmp = mkTmp();
+  const probePath = path.join(tmp, "probe.json");
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: { configDir: tmp, iKey: "", collectorUrl: "", fakeProbe: probePath },
+  });
+  assert.equal(status, 0);
+  assert.ok(fs.existsSync(probePath), "static-key config must POST");
+  const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
+  assert.equal(probe.headers["x-apikey"], "placeholder");
+});
+
+test("dispatcher uses an injected resolver.js to pick iKey/collector", () => {
+  const tmp = mkTmp();
+  const probePath = path.join(tmp, "probe.json");
+  const ikeyPath = path.join(tmp, "ikey.json");
+  fs.writeFileSync(
+    ikeyPath,
+    JSON.stringify({
+      event_stream_name: "PagesPluginEvent",
+      disabled: false,
+      default_region: "us",
+      regions: {
+        us: {
+          instrumentation_key: "ikeyusresolved",
+          collector_url: "https://example.invalid/OneCollector/1.0/",
+        },
+      },
+    })
+  );
+  // resolver.js beside ikey.json — discovered by convention.
+  fs.writeFileSync(
+    path.join(tmp, "resolver.js"),
+    "module.exports = {" +
+      "async resolve({ cfg }) {" +
+      "  const e = cfg.regions[cfg.default_region];" +
+      "  return { iKey: e.instrumentation_key, collectorUrl: e.collector_url };" +
+      "}," +
+      "isProvisioned: () => true };"
+  );
+  const { status } = runDispatcher({
+    event: { name: "PagesPluginEvent", data: { eventName: "skill_started", eventType: "Trace", severity: "Info" } },
+    env: { configDir: tmp, iKey: "", collectorUrl: "", fakeProbe: probePath, ikeyJsonPath: ikeyPath },
+  });
+  assert.equal(status, 0);
+  const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
+  assert.equal(probe.headers["x-apikey"], "ikeyusresolved");
+});
+
+test("dispatcher falls back to the static key when a resolver resolves to nothing", () => {
+  // Documented precedence is resolver → static → none. A resolver present but
+  // returning null/undefined must NOT suppress a configured static key.
+  const tmp = mkTmp();
+  const probePath = path.join(tmp, "probe.json");
+  const ikeyPath = path.join(tmp, "ikey.json");
+  fs.writeFileSync(
+    ikeyPath,
+    JSON.stringify({
+      instrumentationKey: "static-ikey-32-chars-minimum-aaaaaaaaaaaa",
+      collector_url: "https://example.invalid/OneCollector/1.0/",
+      event_stream_name: "PagesPluginEvent",
+      disabled: false,
+    })
+  );
+  // resolver.js that always resolves to nothing (no region matched).
+  fs.writeFileSync(
+    path.join(tmp, "resolver.js"),
+    "module.exports = { async resolve() { return null; }, isProvisioned: () => true };"
+  );
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: { configDir: tmp, iKey: "", collectorUrl: "", fakeProbe: probePath, ikeyJsonPath: ikeyPath },
+  });
+  assert.equal(status, 0);
+  assert.ok(fs.existsSync(probePath), "resolver→null must fall back to the static key and POST");
+  const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
+  assert.equal(probe.headers["x-apikey"], "static-ikey-32-chars-minimum-aaaaaaaaaaaa");
+});
+
+test("dispatcher writes the mirror but does NOT POST when neither resolver nor static key resolves", () => {
+  const tmp = mkTmp();
+  const probePath = path.join(tmp, "probe.json");
+  const ikeyPath = path.join(tmp, "ikey.json");
+  // Region-shaped but unprovisioned: no static instrumentationKey, no resolver.js.
+  fs.writeFileSync(
+    ikeyPath,
+    JSON.stringify({
+      event_stream_name: "PagesPluginEvent",
+      disabled: false,
+      default_region: "us",
+      regions: { us: { collector_url: "https://x" } },
+    })
+  );
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: { configDir: tmp, iKey: "", collectorUrl: "", fakeProbe: probePath, ikeyJsonPath: ikeyPath },
+  });
+  assert.equal(status, 0);
+  assert.ok(!fs.existsSync(probePath), "no key resolved → no POST");
+  assert.ok(fs.existsSync(path.join(tmp, "events.jsonl")), "local mirror still written");
+});
+
+test("env opt-out (no config choice) suppresses the POST but still writes the mirror", () => {
+  const tmp = mkTmp();
+  const probePath = path.join(tmp, "probe.json");
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: {
+      configDir: tmp,
+      iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
+      collectorUrl: "https://example.invalid/OneCollector/1.0/",
+      fakeProbe: probePath,
+      optOut: "1",
+    },
+  });
+  assert.equal(status, 0);
+  assert.ok(!fs.existsSync(probePath), "env opt-out must skip the POST");
+  assert.ok(
+    fs.existsSync(path.join(tmp, "events.jsonl")),
+    "env opt-out must still write the local mirror"
+  );
+});
+
+test("env opt-out overrides a persisted 'on' choice (env wins) — no POST", () => {
+  const tmp = mkTmp();
+  const probePath = path.join(tmp, "probe.json");
+  fs.writeFileSync(
+    path.join(tmp, "config.json"),
+    JSON.stringify({ telemetry: { "power-pages": "on" } })
+  );
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: {
+      configDir: tmp,
+      iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
+      collectorUrl: "https://example.invalid/OneCollector/1.0/",
+      fakeProbe: probePath,
+      optOut: "1",
+    },
+  });
+  assert.equal(status, 0);
+  assert.ok(
+    !fs.existsSync(probePath),
+    "env opt-out has highest precedence → must skip the POST even with config 'on'"
+  );
+  assert.ok(
+    fs.existsSync(path.join(tmp, "events.jsonl")),
+    "opt-out suppresses transmission only — the local mirror is still written"
+  );
 });

@@ -65,6 +65,14 @@ regression guard — no human invocation changes behavior.
 
 1. Locate the project root (`**/powerpages.config.json`) and check for `.powerpages-site/web-roles/`.
 
+<!-- gate: create-webroles:1.deploy-first | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · create-webroles:1.deploy-first):** `.powerpages-site` missing — skill cannot proceed without that folder. Prompt to deploy first or stop.
+>
+> **Trigger:** Phase 1 found no `.powerpages-site` directory.
+> **Why we ask:** Web role YAML files written to a non-existent path will never get picked up by deploy; user thinks roles were created but they weren't.
+> **Cancel leaves:** Nothing — no YAML files written.
+
 2. **If `.powerpages-site` does NOT exist:**
    - **In caller-suppress mode** (Phase 0 flag): stop with a contract-violation message —
      the calling skill should have gated on this folder existing before invoking us.
@@ -114,6 +122,14 @@ regression guard — no human invocation changes behavior.
 **Goal**: Decide which new web roles to create based on site needs and user input
 
 **Actions**:
+
+<!-- gate: create-webroles:3.role-selection | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · create-webroles:3.role-selection):** Multi-select over suggested + custom web roles. Drives the Phase 4 YAML file writes.
+>
+> **Trigger:** Phase 2 inventoried existing roles; Phase 3 suggests new ones.
+> **Why we ask:** Wrong roles get created locally — fixable but adds churn to the `.powerpages-site/web-roles/` folder.
+> **Cancel leaves:** Nothing — no YAML files written yet.
 
 1. Based on the site's purpose and the existing roles, suggest appropriate web roles. Use `AskUserQuestion` to confirm with the user.
 
@@ -224,6 +240,14 @@ name: <Role Name>
    > |-----------|-----|-----------|---------------|
    > | Content Editors | `a1b2c3d4-...` | false | false |
    > | *(etc.)* |
+
+<!-- gate: create-webroles:6.deploy | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · create-webroles:6.deploy):** Final post-create prompt — deploy now to make the new roles take effect, or defer.
+>
+> **Trigger:** Phase 5 validation succeeded.
+> **Why we ask:** Auto-invoking `/deploy-site` would push the site to whatever env PAC CLI happens to point at — wrong-env push is messy to undo.
+> **Cancel leaves:** Nothing — the YAML files stay on disk; no deploy fired.
 
 3. **In caller-suppress mode** (Phase 0 flag): skip the deploy ask and the closing reminder
    entirely. Return the created-roles summary to the caller and stop. The caller owns the

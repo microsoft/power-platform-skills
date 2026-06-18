@@ -140,7 +140,17 @@ When the user asks for follow-up UI changes to an already-integrated AI surface:
   end of the session, when the user has finished tweaking.
 - **Do NOT automatically `git commit`.** Let the user batch related tweaks into a single commit.
 - **Batch the deployment and commit into a single end-of-session prompt** once the user signals
-  they're done (or when you've completed the last requested change). Use `AskUserQuestion`:
+  they're done (or when you've completed the last requested change).
+
+<!-- gate: add-ai-webapi:iter.deploy-commit | category=consent | cancel-leaves=nothing -->
+
+> 🚦 **Gate (consent · add-ai-webapi:iter.deploy-commit):** End-of-iteration batched deploy + commit prompt — avoids a noisy per-tweak upload/commit cadence.
+>
+> **Trigger:** User signals they're done with UI tweaks for the session.
+> **Why we ask:** Auto-deploying or committing after every small edit produces one `git commit` + one `pac pages upload-code-site` per tweak; batching keeps history readable and avoids redundant deploys.
+> **Cancel leaves:** Nothing — source files already edited; no deploy or commit fired.
+
+  Use `AskUserQuestion`:
 
   | Question | Header | Options |
   |----------|--------|---------|
@@ -440,7 +450,17 @@ Wait for it to complete. Then re-check `.powerpages-site/web-roles/` before proc
 
 On **Skip**: this puts the run on a known-broken path — the AI endpoints will return 403 at
 runtime until the user manually creates a web role + table permissions. Don't fall through
-silently. Confirm the trade-off with a second `AskUserQuestion`:
+silently.
+
+<!-- gate: add-ai-webapi:4.2.skip-webrole | category=consent | cancel-leaves=nothing -->
+
+> 🚦 **Gate (consent · add-ai-webapi:4.2.skip-webrole):** Explicit acknowledgement before continuing without a web role — skipping leaves Layer 1/2 broken at runtime.
+>
+> **Trigger:** User chose "Skip" on the web-role creation offer.
+> **Why we ask:** Proceeding silently means the AI API endpoints return 403 at runtime; surfacing the trade-off lets the user make an informed stop-vs-continue choice.
+> **Cancel leaves:** Nothing — no code written yet.
+
+Confirm the trade-off with a second `AskUserQuestion`:
 
 | Question | Header | Options |
 |----------|--------|---------|
@@ -547,7 +567,17 @@ files and verifying each resolved call uses the real entity set and id.
 ### 5.5 Offer to commit
 
 Don't commit automatically — on iterative runs an unprompted `git commit` here creates a noisy
-series of commits for what is effectively one set of changes. Use `AskUserQuestion`:
+series of commits for what is effectively one set of changes.
+
+<!-- gate: add-ai-webapi:5.5.commit | category=consent | cancel-leaves=nothing -->
+
+> 🚦 **Gate (consent · add-ai-webapi:5.5.commit):** Explicit commit decision after Phase 5 summarization-service + UI wiring is complete.
+>
+> **Trigger:** All Phase 5 targets have been wired (service, framework wrapper, UI call sites).
+> **Why we ask:** Auto-committing on every integration run creates noisy one-commit-per-tweak history; letting the user batch is safer.
+> **Cancel leaves:** Nothing — source files written; no `git commit` fired.
+
+Use `AskUserQuestion`:
 
 | Question | Header | Options |
 |----------|--------|---------|
@@ -616,6 +646,14 @@ Phase 4 didn't land — read the file system, identify the gap, and surface it t
 than attempting to create Layer 1/2 files here.
 
 ### 6.4 Offer to commit
+
+<!-- gate: add-ai-webapi:6.4.commit | category=consent | cancel-leaves=nothing -->
+
+> 🚦 **Gate (consent · add-ai-webapi:6.4.commit):** Explicit commit decision after `Summarization/*` site settings are created by the architect.
+>
+> **Trigger:** `ai-webapi-settings-architect` has written all `Summarization/Data/Enable` + `Summarization/prompt/<id>` YAMLs.
+> **Why we ask:** Auto-committing could bundle dirty pre-existing YAMLs into the commit; explicit consent scopes the commit to just the architect's output.
+> **Cancel leaves:** Nothing — YAML files written to disk; no `git commit` fired.
 
 Use `AskUserQuestion`:
 

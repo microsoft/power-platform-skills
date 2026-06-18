@@ -81,6 +81,9 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
 3. **If not authenticated**:
 
    1. Inform the user they are not authenticated with PAC CLI.
+
+   <!-- not-a-gate: free-text env URL fallback when PAC CLI auth is missing — data-gathering, no destructive action -->
+
    2. Use `AskUserQuestion` to ask for the environment URL:
 
       | Question | Header | Options |
@@ -112,6 +115,14 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
 **Goal**: Ensure the user is deploying to the correct target environment
 
 **Actions**:
+
+<!-- gate: deploy-site:3.confirm-env | category=consent | cancel-leaves=nothing -->
+
+> 🚦 **Gate (consent · deploy-site:3.confirm-env):** Echo the current environment and require explicit confirmation before any upload. Covers the follow-up "pick a different env" sub-prompt in the same section — wrong-env deploys are the #1 destructive shared-state failure for this skill, so this gate must fire even when PAC CLI shows a recognizable env.
+>
+> **Trigger:** Phase 3 entry; environment resolved from PAC CLI.
+> **Why we ask:** Site uploaded to wrong tenant / wrong env — committed to a Dataverse instance the user did not intend; cleanup requires manual deletion or another deploy from a different env.
+> **Cancel leaves:** Nothing — no upload fired.
 
 1. Present the current environment information to the user and ask them to confirm.
 
@@ -159,6 +170,14 @@ Determine the project root directory. The project root is the directory containi
 **/powerpages.config.json
 ```
 
+<!-- gate: deploy-site:4.1.multi-project | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · deploy-site:4.1.multi-project):** More than one `powerpages.config.json` candidate found — pick the right project to deploy.
+>
+> **Trigger:** Phase 4.1 glob returned multiple matches.
+> **Why we ask:** Wrong project uploaded — pollutes the target env with files from a different site.
+> **Cancel leaves:** Nothing — no upload fired.
+
 If found in the current working directory or a subdirectory, use that directory as `PROJECT_ROOT`. If multiple are found, ask the user which one to deploy using `AskUserQuestion`.
 
 If not found, ask the user to provide the path to the project root.
@@ -166,6 +185,14 @@ If not found, ask the user to provide the path to the project root.
 ### 4.2 Offer Permissions Audit (Redeployments Only)
 
 If `.powerpages-site` already exists (i.e., this is not the first deployment), table permissions and site settings may have drifted from the code since the last deployment. Offer to audit before deploying.
+
+<!-- gate: deploy-site:4.2.audit-permissions | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · deploy-site:4.2.audit-permissions):** Re-deployment detected — offer to run `/audit-permissions` to catch drift between code and table permissions before push.
+>
+> **Trigger:** `.powerpages-site` exists (not first deployment).
+> **Why we ask:** Stale permission YAML deploys, causing 403s for users until next audit run.
+> **Cancel leaves:** Nothing — audit is read-only; declining just proceeds to build + upload.
 
 Use `AskUserQuestion`:
 
@@ -254,6 +281,14 @@ Evaluate the JSON result:
 
 #### 5.5.1 Ask About Activation (only if site is NOT already activated)
 
+<!-- gate: deploy-site:5.5.1.activate | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · deploy-site:5.5.1.activate):** Site deployed but not yet activated — offer to invoke `/activate-site` to provision the subdomain.
+>
+> **Trigger:** Phase 5.5 detected `activated:false` on a fresh deploy.
+> **Why we ask:** Auto-activating writes the wrong subdomain (permanent for the site); auto-skipping leaves the site without a live URL.
+> **Cancel leaves:** Nothing — no activation API call fired.
+
 Ask the user if they want to activate the site using `AskUserQuestion`:
 
 | Question | Header | Options |
@@ -268,6 +303,14 @@ Ask the user if they want to activate the site using `AskUserQuestion`:
 After confirming the site is activated (either it was already activated in step 5.5, or the user just activated it in step 5.5.1), offer to clear the runtime cache so the deployed changes are immediately visible.
 
 **Prerequisites**: The site must be activated and the project root must be known (from Phase 4.1).
+
+<!-- gate: deploy-site:5.6.restart-cache | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · deploy-site:5.6.restart-cache):** Restart the deployed site to flush its runtime cache. Brief production downtime (a few seconds) — explicit user consent required even though the action is recoverable.
+>
+> **Trigger:** Site confirmed activated (either pre-existing or just activated in 5.5.1).
+> **Why we ask:** Production users see stale content for several minutes until cache TTL expires.
+> **Cancel leaves:** Nothing — the deploy itself already succeeded; cache will refresh on its own.
 
 Use `AskUserQuestion` to confirm before proceeding:
 
@@ -306,6 +349,14 @@ Tell the user:
 > "The upload failed because JavaScript (.js) file attachments are blocked in your Power Pages environment. This is a security setting that prevents uploading .js files. To deploy a code site, this restriction needs to be relaxed for .js files."
 
 ### 6.2 Ask for Permission
+
+<!-- gate: deploy-site:6.2.unblock-js | category=consent | cancel-leaves=attachment-block-modified -->
+
+> 🚦 **Gate (consent · deploy-site:6.2.unblock-js):** Reactive `blockedattachments` modification — destructive shared-state change (tenant-wide env setting). Same shape as `deploy-pipeline:7.6.2.blocked-attachments`.
+>
+> **Trigger:** Upload failed with the blocked-`.js` error.
+> **Why we ask:** Auto-unblocking modifies a tenant security setting without explicit consent — visible across the entire environment, not just this site.
+> **Cancel leaves:** `attachment-block-modified` is only possible if the user approved and then a downstream step partial-completed. Pure Cancel here leaves nothing — the original blockedattachments value is untouched.
 
 Use `AskUserQuestion`:
 

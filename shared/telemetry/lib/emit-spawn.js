@@ -10,11 +10,12 @@ function fireAndForget(event, opts = {}) {
   const collectorUrl = opts.collectorUrl || "";
   const configDir = opts.configDir || "";
   const fakeProbe = opts.fakeProbe || "";
+  const cloud = opts.cloud || "";
   // Absolute path to the CALLING plugin's ikey.json. The dispatcher lives in
-  // shared/telemetry/lib (reached via symlink or relative require), so its own
+  // shared/telemetry/lib (reached via the per-plugin symlink), so its own
   // __dirname-based default would resolve to shared/'s placeholder, not the
-  // plugin's real config. Passing the path explicitly makes the dispatcher's
-  // kill-switch read the right file regardless of how lib/ is linked.
+  // plugin's real config. Passing the path explicitly makes the dispatcher
+  // read the right file regardless of how lib/ is linked.
   const ikeyJsonPath = opts.ikeyJsonPath || "";
 
   try {
@@ -34,9 +35,10 @@ function fireAndForget(event, opts = {}) {
         POWER_PLATFORM_SKILLS_COLLECTOR: collectorUrl,
         POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
         POWER_PLATFORM_SKILLS_FAKE_HTTPS: fakeProbe,
+        POWER_PLATFORM_SKILLS_CLOUD: cloud,
         // ikey.json path: an explicit env override (test seam) wins; otherwise
-        // the calling plugin's ikey.json path so the dispatcher's kill-switch
-        // reads the plugin's real config rather than shared/'s placeholder.
+        // the calling plugin's ikey.json path so the dispatcher reads the
+        // plugin's real config rather than shared/'s placeholder.
         POWER_PLATFORM_SKILLS_IKEY_JSON:
           process.env.POWER_PLATFORM_SKILLS_IKEY_JSON || ikeyJsonPath || "",
       },

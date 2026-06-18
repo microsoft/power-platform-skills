@@ -73,7 +73,7 @@ The helper returns JSON with `{ exists, deferred, stale, staleness: { reason, de
 |---|---|---|
 | Run `/power-pages:plan-alm` first? | ALM plan gate | Yes — run /power-pages:plan-alm now (Recommended), Continue without a plan (advanced — I know what I'm doing), Cancel |
 
-- **Yes (Recommended)** → invoke `/power-pages:plan-alm`. plan-alm's Phase 7 dispatches back into this skill at the appropriate stage.
+- **Yes (Recommended)** → invoke `/power-pages:plan-alm`. It builds the plan and returns — `plan-alm` is a planner and does not deploy. This skill then re-runs the Phase 0 check (now `exists:true`) and proceeds to Phase 1.
 - **Continue without a plan** → set `BYPASSED_PLAN_GATE = true` and proceed to Phase 1.
 - **Cancel** → exit cleanly.
 
@@ -129,10 +129,20 @@ Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line n
 
 ### Phase 2 — Identify Solution
 
+<!-- gate: export-solution:2.identify | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · export-solution:2.identify):** No `.solution-manifest.json` in project root — user must pick or paste a solution unique name before export proceeds. Fires only on the "not found" branch (step 3 below).
+>
+> **Trigger:** Phase 2 step 1 didn't find a manifest.
+> **Why we ask:** Auto-picking the wrong solution exports a managed zip that ships the wrong table/site/flow set to staging.
+> **Cancel leaves:** Nothing — no ExportSolutionAsync call yet.
+
 1. Look for `.solution-manifest.json` in project root (use `findProjectRoot` or `glob('**/.solution-manifest.json')`)
 2. If found: read `solution.uniqueName`, `solution.solutionId`, `environmentUrl`
    - Verify environment URLs match (warn if different — may be cross-environment export)
-3. If not found: ask user for solution unique name via `AskUserQuestion`
+3. If not found, use `AskUserQuestion` to pick the solution:
+   - Query Dataverse for available unmanaged solutions and present them as options
+   - Free-text fallback ("Other") for pasting the unique name directly
 4. Confirm solution exists in environment:
    ```
    GET {envUrl}/api/data/v9.2/solutions?$filter=uniquename eq '{solutionName}'&$select=solutionid,uniquename,friendlyname,version,ismanaged
@@ -225,8 +235,17 @@ Invoke `AskUserQuestion` immediately — do NOT describe this choice as chat tex
 
 Use the answer to set `"Managed": true` or `"Managed": false` in the `ExportSolutionAsync` request body.
 
-Also ask (separate `AskUserQuestion`):
+<!-- gate: export-solution:3.overwrite | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · export-solution:3.overwrite):** Output directory and overwrite-vs-new-name decision for the produced zip. If an existing zip is detected at the target path, the prompt offers Overwrite / pick new name / cancel.
+>
+> **Trigger:** Phase 3 after Managed/Unmanaged is picked.
+> **Why we ask:** Auto-overwriting replaces a previous export that may have been hand-tested already.
+> **Cancel leaves:** Nothing — no zip written.
+
+Also ask via `AskUserQuestion`:
 - Output directory (default: current project root)
+- If a zip already exists at the resolved output path: *"Overwrite / Pick new name / Cancel"*
 
 ### Phase 4 — Trigger Async Export
 
@@ -358,7 +377,9 @@ node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --render
 ```
 
-Re-renders `docs/alm-plan.html` so any step-status updates the agent made during this skill (`Export solution` → `status-completed`) flow through. When `docs/.alm-plan-data.json` is absent (standalone invocation, not via plan-alm), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+Re-renders `docs/alm-plan.html` so any step-status updates the agent made during this skill (`Export solution` → `status-completed`) flow through. When `docs/.alm-plan-data.json` is absent (standalone invocation, not part of an ALM plan), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+
+**Point the user at the next step (user-driven sequencing).** The helper's stdout JSON includes `nextStep: { name, skill: string | null } | null`. When non-null, branch on `skill`: when `skill` is non-null, tell the user *"Plan updated. Next in your plan: **{nextStep.name}** → run `{nextStep.skill}` when you're ready."*; when `skill` is `null` (an internal step such as Finalize, no user command), name the step only — *"Plan updated. Next in your plan: **{nextStep.name}**."* — and never print `run null`. (Typically: review the exported zip, then run `/power-pages:import-solution` for the first target.) When `null` or the helper returned `ok:false`, say nothing about a next step. **Never auto-invoke the next skill** — the user drives execution.
 
 ## Key Decision Points (Wait for User)
 

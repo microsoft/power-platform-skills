@@ -257,15 +257,15 @@ Runs a guided, end-to-end security review of a Power Pages site and consolidates
 
 > "Plan how to promote this site to staging and production"
 
-Orchestrator skill that creates an ALM (Application Lifecycle Management) plan for deploying a Power Pages site across environments. Gathers your promotion strategy, target environments, and approval requirements, generates a visual HTML plan, and after your approval executes the plan by calling the right ALM skills in sequence.
+Planner skill that creates an ALM (Application Lifecycle Management) plan for deploying a Power Pages site across environments. Gathers your promotion strategy, target environments, and approval requirements, then generates a visual HTML plan for your review and approval. **It does not deploy anything itself** — after you approve the plan, you run the individual ALM skills, which detect the plan and execute the right step in order.
 
 - Detects project state (config, manifests, current environment)
 - Branched flow for Power Platform Pipelines or manual export/import
-- Generates `docs/alm-plan.html` for review and approval
-- Dispatches to `setup-solution`, `setup-pipeline`, `export-solution`, `deploy-pipeline`, or `import-solution`
+- Generates `docs/alm-plan.html` for review and approval (the recommended execution sequence is the plan of record)
+- Recommends the skill sequence to run next — `setup-solution`, `setup-pipeline`/`export-solution`, `deploy-pipeline`/`import-solution` — each of which detects this plan, proceeds, and keeps it updated as it runs
 
 > [!TIP]
-> `/plan-alm` is the front door for any ALM intent. Use it instead of jumping straight to individual ALM skills when you want to deploy to staging, ship to production, or set up CI/CD.
+> `/plan-alm` is the front door for any ALM intent — run it first to produce the plan. It plans only; you then run the execution skills it recommends. Use it instead of jumping straight to individual ALM skills when you want to deploy to staging, ship to production, or set up CI/CD.
 
 #### `/setup-solution`
 
@@ -399,6 +399,7 @@ Enables, disables, or checks the status of anonymous usage telemetry. Per-user a
 - `/power-pages:telemetry off` — stop sending telemetry (nothing leaves your machine)
 - `/power-pages:telemetry on` — resume sending telemetry
 - No personal data is ever collected (anonymous: skill name, plugin version, OS, Node version)
+- Automation/CI: set `POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT=1` to disable (highest precedence — overrides any saved choice)
 
 ## Agents
 
@@ -443,9 +444,13 @@ A common end-to-end workflow looks like this:
 12. /deploy-site            →  Push final changes live
 13. /test-site              →  Runtime smoke test on the live URL
 14. /security-review        →  Full security review (headers, firewall, scan, permissions)
-15. /plan-alm               →  Plan multi-environment promotion
-16. /deploy-pipeline        →  Promote through staging → production
+15. /plan-alm               →  Plan multi-environment promotion (planning only — produces the plan)
+16. /setup-solution         →  Package the site into a Dataverse solution
+17. /setup-pipeline         →  Set up the Power Platform pipeline
+18. /deploy-pipeline        →  Promote through staging → production (run per stage)
 ```
+
+> Steps 16–18 are the execution sequence `/plan-alm` recommends — you run them yourself; each detects the approved plan and keeps it updated. `/plan-alm` never runs them for you.
 
 Steps can be run independently — you don't need to follow this exact order. Each skill checks its own prerequisites and will tell you if something is missing. If something goes wrong, `/diagnose-deployment` pattern-matches deployment errors and `/report-issue` opens a pre-filled GitHub issue.
 
@@ -524,8 +529,20 @@ inputs, site names, URLs, credentials, usernames, or hostnames.
 When **off**, nothing leaves your machine. A local diagnostic copy of each event
 is still written to `~/.power-platform-skills/events.jsonl` so you can see exactly
 what would have been sent; delete it anytime. The setting is stored at
-`~/.power-platform-skills/config.json` (`{ "telemetry": { "power-pages": "off" } }`),
-so CI/headless environments can opt out by writing that file directly.
+`~/.power-platform-skills/config.json`
+(`{ "telemetry": { "power-pages": "off" } }`).
+
+For automation / CI, set the per-plugin opt-out environment variable instead of
+editing that file:
+
+```bash
+POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT=1   # stop sending telemetry
+```
+
+Set it to `1` or `true` (dotnet `*_TELEMETRY_OPTOUT` convention). This opt-out has
+the **highest precedence** — it overrides a saved `/power-pages:telemetry` choice
+and even `/power-pages:telemetry on`. Like `off` from the command, it suppresses
+transmission only — the local `events.jsonl` mirror is still written.
 
 ## License
 

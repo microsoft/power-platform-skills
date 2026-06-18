@@ -73,6 +73,8 @@ This keeps the skill discoverable in each plugin while preserving install-time p
 
 Edit `shared/telemetry/` directly — the symlink makes changes live for every adopting plugin immediately; there is nothing to re-sync.
 
+Per-plugin iKey/collector routing is pluggable via a `resolver.js` placed next to the plugin's `ikey.json` (implementing the `resolve`/`isProvisioned` contract); the shared library ships only that contract plus a static-key fallback, not any routing logic. A per-plugin opt-out env var `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT` (derived as the uppercased plugin name with non-alphanumerics collapsed to `_`, suffixed `_OPTOUT`) disables transmission for automation when set to `1`/`true` (dotnet `*_TELEMETRY_OPTOUT` convention); it has the **highest precedence**, overriding both the persisted `config.json` choice and `/<plugin>:telemetry on`.
+
 Current adopters: `power-pages`. Others adopt on demand.
 
 ## Legacy Marketplace Compatibility
@@ -89,6 +91,105 @@ so removing or drifting these files can force users to reinstall. Run
 ## Code Conventions
 
 **DRY (Don't Repeat Yourself):** Never duplicate logic across files. Each plugin has shared utilities (e.g., `scripts/lib/`) and shared reference docs (e.g., `references/`). Always check for and reuse existing helpers before writing new code. When adding shared logic, put it in the plugin's shared modules — not in individual skill directories.
+
+### Code comments
+
+Most code in this repo is Node.js scripts and hooks that shell out to `pac`/`az`, call the Dataverse and Power Platform APIs, and parse loosely structured CLI output. The reasoning behind a line is rarely obvious from the line alone, so comments matter.
+
+* Err on the side of over-commenting code when the reasoning is not obvious. Comments should explain **WHY** code is written a particular way; the **WHY** is the most important part.
+* Do comment non-obvious implementation details: concurrency hazards, lifecycle constraints, compatibility requirements, platform quirks, upstream PAC CLI / Dataverse workarounds, and intentional deviations from the obvious helper or API.
+* When parsing strings, logs, CLI output, OData payloads, or other loosely structured data, include a comment with an example of the raw format being parsed. Show edge cases, escaping rules, delimiters, optional fields, or malformed-but-observed inputs when they affect the parser.
+* When code follows an external standard, protocol, or Power Platform convention (Dataverse status codes, OData error shapes, telemetry field contracts), include valid links to the relevant Microsoft Learn or specification source so future readers can verify the rule and understand why the code follows it.
+* When code touches telemetry, auth tokens, or anything privacy/security-sensitive, explain the scope, the opt-in/fail-closed behavior, and **why** — not just what it does.
+* Do not add comments that simply narrate clear code, such as "set the interval" immediately before assigning an interval.
+* Keep workaround comments close to the workaround. Include an issue link when the workaround is tied to an upstream bug, and describe the condition for removing it when that is known.
+
+Good comments explain the constraint or tradeoff:
+
+```javascript
+// `pac auth who` cold-starts the .NET runtime (~4s on Windows), so cache the parsed
+// result per process — repeated hook invocations must only fork the CLI once.
+let cachedAuth;
+```
+
+```javascript
+// Refresh the bearer token roughly every 60s instead of on every poll. A long solution
+// export outlives the token's lifetime, but refreshing each 5s cycle would hammer the
+// az CLI for no benefit.
+const tokenRefreshEvery = Math.max(1, Math.floor(60000 / intervalMs));
+```
+
+```javascript
+// Telemetry must never break the hook it runs inside, so this is fail-closed: a missing
+// executable, a timeout, or an unparseable banner all resolve to null rather than throw.
+return null;
+```
+
+```javascript
+// Allowlist-only scrubbing: the event spec already restricts payload fields to values
+// that cannot carry PII, so this is a documented seam for a future regex pass — not a
+// no-op left unfinished by mistake.
+function scrub(value) {
+  return value;
+}
+```
+
+Code that follows an external standard or convention should link the source:
+
+```javascript
+// Dataverse asyncoperations terminal states: statecode 3 (Completed) with statuscode 30
+// (Succeeded) means done; 31 (Failed) and 32 (Canceled) are the failure terminals.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/asyncoperation
+if (statecode === 3 && statuscode === 30) {
+  return { status: 'Succeeded' };
+}
+```
+
+Keep workaround comments next to the workaround and link the tracking issue:
+
+```javascript
+// Workaround: `pac solution export` can exit 0 while the Dataverse async job is still
+// running, so ignore the exit code and poll asyncoperations to a terminal state instead.
+// Remove once the CLI blocks on the job result.
+// Tracking: https://github.com/microsoft/power-platform-skills/issues/1234 (use the real issue)
+const status = await pollAsyncOperation(asyncJobId, envUrl, token);
+```
+
+Parsing comments should show the raw shape and important edge cases:
+
+```javascript
+// Parse the `pac auth who` banner, a label/value block, e.g.:
+//   Authority:    https://login.microsoftonline.com/<tenant>
+//   Tenant ID:    00000000-0000-0000-0000-000000000000
+//   User:         user@contoso.com
+// Values can themselves contain ':' (URLs), so match only up to the first colon after
+// the label, then trim. The JSON profile files are intentionally NOT parsed — that
+// format is internal and varies across PAC CLI versions.
+// `label` is a fixed, code-controlled string (e.g. 'Tenant ID'), so it is safe to
+// interpolate into the pattern. If a label ever comes from untrusted input, escape it
+// first to avoid regex injection.
+const re = new RegExp('^\\s*' + label + '\\s*:\\s*(\\S.*?)\\s*$', 'im');
+```
+
+```javascript
+// Dataverse OData errors arrive as:
+//   { "error": { "code": "0x80040217", "message": "..." } }
+// but some PAC surfaces capitalize the envelope as "Error", so check both before
+// falling back to plain-text pattern matching.
+const odataError = parsed.error || parsed.Error;
+```
+
+Avoid comments that restate the code:
+
+```javascript
+// Set the interval to five seconds.
+const intervalMs = 5000;
+
+// Loop over the findings.
+for (const finding of findings) {
+  report(finding);
+}
+```
 
 ## Maintaining This File
 

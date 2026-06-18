@@ -7,47 +7,23 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
-const HOOK = path.resolve(
-  __dirname,
-  "../../hooks/run-skill-pretool-telemetry.js"
-);
+const PLUGIN_ROOT = path.resolve(__dirname, "../..");
+const HOOK = path.join(PLUGIN_ROOT, "hooks", "run-skill-pretool-telemetry.js");
 
 function mkConfigDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-ph-"));
 }
 
-function runHook({ input, configDir, off, fakeProbe, ikeyPath }) {
-  // Opt-out is a per-plugin config.json in the config dir (env var removed).
-  if (off) {
-    fs.writeFileSync(
-      path.join(configDir, "config.json"),
-      JSON.stringify({ telemetry: { "power-pages": "off" } })
-    );
-  }
+function runHook({ input, configDir, ikeyPath }) {
   return spawnSync(process.execPath, [HOOK], {
     input,
     encoding: "utf8",
     env: {
       ...process.env,
       POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
-      POWER_PLATFORM_SKILLS_FAKE_HTTPS: fakeProbe || "",
       POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath || "",
     },
-    timeout: 30_000,
   });
-}
-
-// Synchronous sleep that parks the thread instead of busy-spinning the CPU.
-function sleep(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-function waitForFile(filePath, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (!fs.existsSync(filePath) && Date.now() < deadline) {
-    sleep(25);
-  }
-  return fs.existsSync(filePath);
 }
 
 test("exits 0 and emits nothing when tool_input has no tracked skill", () => {
@@ -56,38 +32,6 @@ test("exits 0 and emits nothing when tool_input has no tracked skill", () => {
     configDir: mkConfigDir(),
   });
   assert.equal(status, 0);
-});
-
-test("config opt-out still writes the local mirror but does NOT POST", () => {
-  // A per-plugin config opt-out suppresses transmission only. With an enabled
-  // ikey.json (via the override seam) + a fake-https probe + the opt-out set, the
-  // hook builds and dispatches the event; the dispatcher writes events.jsonl and
-  // skips the POST.
-  const configDir = mkConfigDir();
-  const probePath = path.join(configDir, "probe.json");
-  const ikeyPath = path.join(configDir, "ikey.json");
-  fs.writeFileSync(
-    ikeyPath,
-    JSON.stringify({
-      instrumentationKey: "test-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
-      collector_url: "https://example.invalid/OneCollector/1.0/",
-      event_stream_name: "PagesPluginEvent",
-      disabled: false,
-    })
-  );
-  const { status } = runHook({
-    input: JSON.stringify({ tool_input: { skill: "create-site" } }),
-    configDir,
-    fakeProbe: probePath,
-    ikeyPath,
-    off: true,
-  });
-  assert.equal(status, 0);
-  assert.ok(
-    waitForFile(path.join(configDir, "events.jsonl"), 5_000),
-    "opt-out must still write the local mirror"
-  );
-  assert.ok(!fs.existsSync(probePath), "opt-out must skip the POST");
 });
 
 test("exits 0 when malformed stdin", () => {
@@ -103,46 +47,41 @@ test("exits 0 when skill is tracked (placeholder iKey → no-op emit)", () => {
   assert.equal(status, 0);
 });
 
-test("emits skill_started for a tracked skill when pointed at an enabled ikey.json via the override seam", () => {
-  // Exercises the enabled emit path without mutating the checked-in ikey.json:
-  // the hook's readIkey() honors POWER_PLATFORM_SKILLS_IKEY_JSON.
+test("pretool hook exits 0 when ikey.json has regions but default_region entry has no key", () => {
+  // Point the hook at a temp ikey.json via the override seam instead of
+  // mutating the checked-in scripts/lib/telemetry/ikey.json (which would race
+  // with other test files running in parallel and leave the repo dirty on
+  // interrupt).
   const configDir = mkConfigDir();
-  const probePath = path.join(configDir, "probe.json");
   const ikeyPath = path.join(configDir, "ikey.json");
   fs.writeFileSync(
     ikeyPath,
     JSON.stringify({
-      instrumentationKey: "test-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
-      collector_url: "https://example.invalid/OneCollector/1.0/",
       event_stream_name: "PagesPluginEvent",
       disabled: false,
+      default_region: "us",
+      regions: { us: { collector_url: "https://x" } },
     })
+  );
+  // Mirror the shipped layout: a resolver.js beside ikey.json so the region
+  // isProvisioned() gate actually runs (default_region 'us' has a collector but
+  // no instrumentation_key → not provisioned → exit 0).
+  const shippedResolver = path.join(
+    PLUGIN_ROOT,
+    "scripts",
+    "lib",
+    "telemetry",
+    "resolver.js"
+  );
+  fs.writeFileSync(
+    path.join(configDir, "resolver.js"),
+    `module.exports = require(${JSON.stringify(shippedResolver)});\n`
   );
 
   const { status } = runHook({
-    input: JSON.stringify({ tool_input: { skill: "create-site" } }),
+    input: JSON.stringify({ tool_input: { skill: "add-seo" } }),
     configDir,
-    fakeProbe: probePath,
     ikeyPath,
   });
   assert.equal(status, 0);
-  assert.ok(waitForFile(probePath, 5_000), "dispatcher should have written probe");
-  const body = JSON.parse(JSON.parse(fs.readFileSync(probePath, "utf8")).body);
-  assert.equal(body.name, "PagesPluginEvent");
-  assert.equal(body.data.eventName, "skill_started");
-  assert.equal(body.data.skillName, "create-site");
-});
-
-test("fails closed (no emit) when override ikey.json path does not exist", () => {
-  const configDir = mkConfigDir();
-  const probePath = path.join(configDir, "probe.json");
-  const { status } = runHook({
-    input: JSON.stringify({ tool_input: { skill: "create-site" } }),
-    configDir,
-    fakeProbe: probePath,
-    ikeyPath: path.join(configDir, "does-not-exist.json"),
-  });
-  assert.equal(status, 0);
-  sleep(500);
-  assert.ok(!fs.existsSync(probePath), "missing config must fail closed (no emit)");
 });

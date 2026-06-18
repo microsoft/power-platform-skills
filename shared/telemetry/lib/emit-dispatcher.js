@@ -1,41 +1,44 @@
 #!/usr/bin/env node
 "use strict";
 
-const https = require("node:https");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const https = require("node:https");
 const { FIELD_TYPES, pick } = require("./events");
+const { loadResolver } = require("./resolver-loader");
+const { isTransmissionOptedOut } = require("./user-config");
 
 function exitSilently() {
   process.exit(0);
 }
-
 process.on("uncaughtException", exitSilently);
 process.on("unhandledRejection", exitSilently);
 process.stdin.on("error", exitSilently);
 
 const PLACEHOLDER_IKEY = "PLACEHOLDER_REPLACE_BEFORE_SHIPPING";
 const DEFAULT_LOCAL_DIR = path.join(os.homedir(), ".power-platform-skills");
-
-const IKEY = process.env.POWER_PLATFORM_SKILLS_IKEY || "";
-const COLLECTOR_URL = process.env.POWER_PLATFORM_SKILLS_COLLECTOR || "";
 const FAKE_PROBE = process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "";
+const CONFIG_DIR_ENV = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "";
+const CLOUD_ENV = process.env.POWER_PLATFORM_SKILLS_CLOUD || "";
+// Override env vars — TEST seams only. Production resolves the iKey/collector
+// via the plugin resolver / static config in ikey.json and never sets these.
+const IKEY_OVERRIDE = process.env.POWER_PLATFORM_SKILLS_IKEY || "";
+const COLLECTOR_OVERRIDE = process.env.POWER_PLATFORM_SKILLS_COLLECTOR || "";
 
-const { isTransmissionOptedOut } = require("./user-config");
+function localConfigDir() {
+  return CONFIG_DIR_ENV || DEFAULT_LOCAL_DIR;
+}
 
 // Anonymous telemetry is default-on. The user opt-out is per-plugin and lives in
 // config.json (telemetry[<pluginName>] === "off"), written by the telemetry skill.
 // It suppresses TRANSMISSION only; the local mirror is written before this gate.
-function localConfigDir() {
-  return process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || DEFAULT_LOCAL_DIR;
-}
 function isUserOptedOut(pluginName) {
   return isTransmissionOptedOut(localConfigDir(), pluginName);
 }
 
 // Path to the ikey.json config. Overridable via POWER_PLATFORM_SKILLS_IKEY_JSON
-// so tests can point at a temp file with their own disabled / iKey state.
+// so tests can point at a temp file with their own disabled / region state.
 function ikeyJsonPath() {
   return (
     process.env.POWER_PLATFORM_SKILLS_IKEY_JSON ||
@@ -43,21 +46,24 @@ function ikeyJsonPath() {
   );
 }
 
-// Repo-side kill switch: when ikey.json contains "disabled": true, no events
-// are emitted regardless of opt-out or iKey state. Lets the infrastructure
-// PRs land while the tenant-side annotation + Kusto table are still being
-// provisioned. Flip to false in a single PR when ready.
-function isDisabledByConfig() {
+// Returns the parsed ikey.json, or null when it is missing/unreadable. null is
+// treated as the repo kill switch (fail CLOSED): if we cannot read the config
+// we cannot confirm emission is authorized, so we suppress rather than risk a
+// POST / local log in an unexpected state.
+function readIkeyConfig() {
   try {
-    const cfg = JSON.parse(fs.readFileSync(ikeyJsonPath(), "utf8"));
-    return cfg.disabled === true;
+    return JSON.parse(fs.readFileSync(ikeyJsonPath(), "utf8"));
   } catch {
-    // ikey.json missing/unreadable → fail CLOSED (treat as disabled). The
-    // config is a kill switch; if we can't read it we cannot confirm emission
-    // is authorized, so we suppress rather than risk a POST / local log in an
-    // unexpected state.
-    return true;
+    return null;
   }
+}
+
+// Repo-side kill switch: a missing/unreadable config (null) or an explicit
+// `"disabled": true` suppresses ALL events regardless of opt-out or region
+// state. Lets infrastructure PRs land while the tenant-side annotation + Kusto
+// table are still being provisioned. Flip `disabled` to false when ready.
+function isDisabledByConfig(cfg) {
+  return !cfg || cfg.disabled === true;
 }
 
 // Reserved meta fields that builders always write into event.data. They are
@@ -82,12 +88,12 @@ function sanitizeData(data) {
 // Build the CS4.0 envelope from a pre-sanitized payload + timestamp. Both are
 // computed once in the stdin handler and shared with the local mirror so the
 // on-disk record and the wire envelope carry byte-identical `data` and `time`.
-function buildEnvelope(name, time, sanitized) {
+function buildEnvelope(eventName, time, sanitized, resolvedIKey, eventStreamName) {
   return {
     ver: "4.0",
-    name,
+    name: eventStreamName || eventName || "",
     time,
-    iKey: "o:" + IKEY.split("-")[0],
+    iKey: "o:" + String(resolvedIKey || "").split("-")[0],
     data: sanitized,
   };
 }
@@ -100,26 +106,30 @@ function writeProbe(filePath, { headers, body }) {
   }
 }
 
-function writeLocalLog(event) {
+function writeLocalLog(record) {
   try {
     const { appendLocal } = require("./local-log");
-    appendLocal(event, { configDir: localConfigDir() });
+    appendLocal(record, { configDir: localConfigDir() });
   } catch {
     // fail closed
   }
 }
 
-// ---- Repo-side kill switch (applies before ANY side effect) ----------------
-// The `disabled` repo config is the one true hard-off: no local log, no POST.
-// The per-plugin user opt-out is NOT checked here — it suppresses transmission
-// only, and is applied below AFTER the local mirror is written.
-if (isDisabledByConfig()) exitSilently();
+// ---- Read config + repo-side kill switch (applies before ANY side effect) --
+// The `disabled` repo config (and an unreadable config) is the one true
+// hard-off: no local log, no POST. The per-plugin user opt-out is NOT checked
+// here — it suppresses transmission only, and is applied below AFTER the local
+// mirror is written. cfg is reused for resolver context + static fallback in
+// the stdin handler.
+const cfg = readIkeyConfig();
+if (isDisabledByConfig(cfg)) exitSilently();
+const resolver = loadResolver(path.dirname(ikeyJsonPath()));
 
 // ---- Read stdin ------------------------------------------------------------
 let raw = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (c) => (raw += c));
-process.stdin.on("end", () => {
+process.stdin.on("end", async () => {
   let event;
   try {
     event = JSON.parse(raw);
@@ -135,7 +145,7 @@ process.stdin.on("end", () => {
   const localRecord = { time, name: event.name, data: sanitized };
 
   // Mirror to the local log for EVERY event that clears the repo kill switch —
-  // irrespective of whether a real iKey is configured AND irrespective of the
+  // irrespective of whether a real iKey resolves AND irrespective of the
   // per-plugin transmission opt-out. The file stays on the user's machine; it
   // is a local diagnostic mirror of what is (or would be) sent to Kusto, not
   // transmitted telemetry. (A `disabled: true` repo config wrote nothing — it
@@ -146,19 +156,56 @@ process.stdin.on("end", () => {
   const pluginName = event && event.data && event.data.pluginName;
   if (isUserOptedOut(pluginName)) return exitSilently();
 
+  // Resolve the destination iKey + collector. Precedence: env override (test
+  // seam) → plugin resolver.js (region/tenant/etc., owned by the plugin) →
+  // static single-key config in ikey.json → none. The shared dispatcher knows
+  // nothing about regions; the plugin's resolver.js owns that.
+  let iKey = IKEY_OVERRIDE;
+  let collectorUrl = COLLECTOR_OVERRIDE;
+  if (!iKey || !collectorUrl) {
+    if (resolver && typeof resolver.resolve === "function") {
+      let resolved = null;
+      try {
+        resolved = await resolver.resolve({
+          event,
+          cfg,
+          cloud: CLOUD_ENV,
+          configDir: CONFIG_DIR_ENV || undefined,
+        });
+      } catch {
+        // A plugin resolver threw/rejected — continue with no resolution rather
+        // than letting the global unhandledRejection handler exit. The local
+        // mirror was already written above; the static fallback below still
+        // runs, so a transient resolver failure degrades to the configured
+        // static key (or "no transmission") instead of crashing.
+        resolved = null;
+      }
+      if (resolved) {
+        iKey = iKey || resolved.iKey || "";
+        collectorUrl = collectorUrl || resolved.collectorUrl || "";
+      }
+    }
+    // Static fallback — documented precedence is resolver → static → none, so
+    // this runs whether or not a resolver was present. A resolver that returns
+    // nothing (or threw) still falls through to a configured static key rather
+    // than silently disabling transmission.
+    iKey = iKey || cfg.instrumentationKey || "";
+    collectorUrl = collectorUrl || cfg.collector_url || "";
+  }
+
   // Placeholder / unprovisioned mode → local mirror already written; no POST.
-  const keyMissing = !IKEY || IKEY === PLACEHOLDER_IKEY || !COLLECTOR_URL;
+  const keyMissing = !iKey || iKey === PLACEHOLDER_IKEY || !collectorUrl;
   if (keyMissing) {
     return exitSilently();
   }
 
   // Real iKey → Common Schema envelope (reuses the same time + sanitized data
   // as the local mirror) → HTTPS POST.
-  const envelope = buildEnvelope(event.name, time, sanitized);
+  const envelope = buildEnvelope(event.name, time, sanitized, iKey, cfg.event_stream_name);
   const body = JSON.stringify(envelope) + "\n";
   const headers = {
     "Content-Type": "application/x-json-stream; charset=utf-8",
-    "x-apikey": IKEY,
+    "x-apikey": iKey,
     "Content-Length": Buffer.byteLength(body),
   };
 
@@ -171,7 +218,7 @@ process.stdin.on("end", () => {
 
   let url;
   try {
-    url = new URL(COLLECTOR_URL);
+    url = new URL(collectorUrl);
   } catch {
     return exitSilently();
   }

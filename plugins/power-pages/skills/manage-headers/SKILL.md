@@ -97,6 +97,14 @@ MUST use plain language only. Never lead with words like CSP, CORS, HSTS, or MIM
 
 Read `references/headers-reference.md` for recommended values and guidance. **Present the most important gaps first** — headers that are missing or misconfigured relative to the recommended values.
 
+<!-- gate: manage-headers:3.per-finding | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · manage-headers:3.per-finding):** Per-finding loop — for each header gap, prompt accept / customize / skip. Fires PER FINDING in the loop; skipped findings leave the header at its current value, accepted/customized findings get an Edit / create-script call in Phase 4.
+>
+> **Trigger:** Phase 3 entry has tallied header gaps against `references/headers-reference.md`.
+> **Why we ask:** Auto-accepting can apply CSP/CORS values that break the site (legitimate scripts blocked, third-party widgets refused); auto-skipping leaves the site missing important headers.
+> **Cancel leaves:** Nothing — Phase 4's Edit / create-script call only fires on accepted findings.
+
 For each finding, present via `AskUserQuestion`:
 - A plain-language explanation of why the change matters
 - The recommended value

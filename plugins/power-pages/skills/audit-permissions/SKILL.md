@@ -489,6 +489,14 @@ Follow the skill tracking instructions in the reference to record this skill's u
 
 ### 6.2 Present Summary
 
+<!-- gate: audit-permissions:6.fix-offer | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · audit-permissions:6.fix-offer):** Offer to apply auto-fixes for critical/warning findings. The audit report has already been written; declining here just leaves the HTML report in place — no Dataverse / filesystem mutation.
+>
+> **Trigger:** Phase 6 has tallied findings and the HTML report is saved.
+> **Why we ask:** Tooling could silently invoke the table-permissions-architect agent — accept-by-default would write or mutate permission YAML against the user's intent.
+> **Cancel leaves:** Nothing — the audit report stays at its saved path. No web-role / table-permission files written.
+
 Present a summary to the user:
 
 1. **Critical findings count** — these need immediate attention

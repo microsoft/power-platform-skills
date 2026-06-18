@@ -103,6 +103,14 @@ Look for the `.powerpages-site` folder:
 
 > "The `.powerpages-site` folder was not found. Server logic files are stored inside this folder, so the site must be deployed at least once before creating server logic. Would you like to deploy now?"
 
+<!-- gate: add-server-logic:1.5.deploy-first | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · add-server-logic:1.5.deploy-first):** `.powerpages-site` missing — server logic files live inside it. Deploy first or stop.
+>
+> **Trigger:** Phase 1.5 found no `.powerpages-site` directory.
+> **Why we ask:** Server logic `.js`/`.yml` files written to a non-existent path won't deploy.
+> **Cancel leaves:** Nothing — no server logic files written yet.
+
 Use `AskUserQuestion`:
 
 | Question | Options |
@@ -182,6 +190,14 @@ Each entry includes: `name`, `displayName`, `description`, `type` (`action` or `
 
 If custom actions are found (`total > 0`), present a summary to the user grouped by binding type (unbound vs. entity-bound) and ask whether any should be used:
 
+<!-- gate: add-server-logic:2.1.2.use-custom-actions | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · add-server-logic:2.1.2.use-custom-actions):** Custom actions discovered — decide whether to wrap existing Dataverse Custom APIs/Process Actions or build server logic from scratch. Choice changes the Phase 5 implementation shape.
+>
+> **Trigger:** `list-custom-actions.js` returned at least one entry.
+> **Why we ask:** Auto-wrapping could attach the wrong action; auto-skipping duplicates logic that already exists in Dataverse.
+> **Cancel leaves:** Nothing — no server logic files written yet.
+
 Use `AskUserQuestion`:
 
 | Question | Options |
@@ -195,6 +211,8 @@ If the user says **No**, skip to Phase 2.2.
 **Step 3 — Map custom actions to server logic items:**
 
 If the user says **Yes**, for each server logic item being created, ask which custom action (if any) it should wrap:
+
+<!-- not-a-gate: per-item custom-action mapping — data-gathering sub-prompt under the Phase 2.1.2 Yes path; final intent is locked in by the Phase 4.4 plan gate -->
 
 Use `AskUserQuestion` for each server logic item:
 
@@ -248,6 +266,14 @@ These values will be used in Phase 7 to create the environment variables and sit
 
 If secrets were identified in Phase 2.3, ask the user now whether they want to use Azure Key Vault. This decision must happen before Phase 4 so the implementation plan can show the chosen secret management approach.
 
+<!-- gate: add-server-logic:2.3.1.keyvault | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · add-server-logic:2.3.1.keyvault):** Pick secret-storage mechanism (Key Vault vs plain env var). Choice changes the Phase 4 rendered plan and the Phase 7 implementation pipeline.
+>
+> **Trigger:** Phase 2.3 identified at least one secret value.
+> **Why we ask:** Plain env var creation can expose secrets in solution exports; auto-picking Key Vault forces additional Azure setup.
+> **Cancel leaves:** Nothing — no env var definitions written yet.
+
 Use `AskUserQuestion`:
 
 | Question | Options |
@@ -257,6 +283,8 @@ Use `AskUserQuestion`:
 Record the user's choice — it will be shown in the HTML plan (Phase 4) and executed in Phase 7.
 
 ### 2.4 Confirm with User
+
+<!-- not-a-gate: requirement clarification — multi-question data-gathering that shapes the upcoming Phase 4.4 plan gate -->
 
 If the requirements are ambiguous, use `AskUserQuestion` to clarify:
 
@@ -366,6 +394,14 @@ In the CLI, give only a brief summary that points the user to the HTML plan open
 Do not restate the per-server-logic breakdown, rationale, role assignments, or function details inline in the CLI unless the user explicitly asks for a text version. Tell the user where the detailed HTML plan file was saved, that it has been opened in the browser for review, and that the repo copy of the plan will be committed with the implementation artifacts unless the user asks to discard it.
 
 ### 4.4 Confirm with User
+
+<!-- gate: add-server-logic:4.4.plan-approval | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · add-server-logic:4.4.plan-approval):** Final sign-off on the rendered HTML plan before Phase 5 writes any `.serverlogic.yml` / `.js` files or Phase 7 creates env vars.
+>
+> **Trigger:** Phase 4.2 rendered the HTML plan; Phase 4.3 surfaced the CLI summary.
+> **Why we ask:** Server logic files committed under wrong names / wrong roles; env var definitions created against the wrong secret-storage mode.
+> **Cancel leaves:** Nothing — no server logic files written yet.
 
 Use `AskUserQuestion`:
 
@@ -846,6 +882,8 @@ The script outputs a JSON array of Key Vaults (`name`, `resourceGroup`, `locatio
 
 If Key Vaults were found, present the list and ask which one to use:
 
+<!-- not-a-gate: Key Vault selection — data-gathering for the secret-store call under the Phase 2.3.1 Key Vault branch -->
+
 Use `AskUserQuestion`:
 
 | Question | Context |
@@ -854,6 +892,14 @@ Use `AskUserQuestion`:
 
 If **no Key Vaults are found**, ask the user how to proceed:
 
+<!-- gate: add-server-logic:7.2a.no-vaults | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · add-server-logic:7.2a.no-vaults):** No Key Vaults found in the user's subscription — create one or fall back to plain env vars. Branches the secret-storage flow.
+>
+> **Trigger:** Phase 2.3.1 chose Key Vault but `list-azure-keyvaults.js` returned an empty list.
+> **Why we ask:** Auto-creating a Key Vault provisions Azure resources without explicit consent; auto-falling-back stores secrets as plain env vars after the user explicitly opted in to Key Vault.
+> **Cancel leaves:** Nothing — no Azure or Dataverse writes yet.
+
 Use `AskUserQuestion`:
 
 | Question | Options |
@@ -861,6 +907,8 @@ Use `AskUserQuestion`:
 | No Azure Key Vaults were found in your subscription. Would you like to create one, or fall back to storing secrets directly as environment variables? | Create a new Key Vault (Recommended), Store directly as environment variable |
 
 **If "Create a new Key Vault"**: Ask for a vault name, resource group, and location, then create it:
+
+<!-- not-a-gate: Key Vault provisioning parameters — data-gathering for the create-azure-keyvault.js call under the Phase 7.2a "Create new" path -->
 
 Use `AskUserQuestion`:
 
@@ -1040,6 +1088,14 @@ Server logic creates the backend — but without frontend code to call it, the e
 
 ### 9.1 Ask User About Integration Scope
 
+<!-- gate: add-server-logic:9.1.frontend-scope | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · add-server-logic:9.1.frontend-scope):** Decide whether the skill also wires the server logic into the frontend UI or stops at the backend.
+>
+> **Trigger:** Phase 8 completed (server logic deployed-ready).
+> **Why we ask:** Auto-integrating mutates UI files the user wanted to handle themselves; auto-skipping leaves the endpoints unreachable from the app.
+> **Cancel leaves:** Nothing — server logic backend is already on disk; this prompt only decides frontend follow-through.
+
 Use `AskUserQuestion`:
 
 | Question | Options |
@@ -1170,11 +1226,27 @@ Present a summary of everything that was done:
 
 ### 11.3 Ask to Deploy
 
+<!-- gate: add-server-logic:11.3.deploy | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · add-server-logic:11.3.deploy):** Post-implementation deploy prompt — server logic endpoints aren't reachable until deployed.
+>
+> **Trigger:** All server logic artifacts written and committed.
+> **Why we ask:** Auto-deploy picks wrong env.
+> **Cancel leaves:** Nothing — artifacts stay on disk; no deploy fired.
+
 Use `AskUserQuestion`:
 
 | Question | Options |
 |----------|---------|
 | The server logic work is ready. To make it live, the site needs to be deployed. Would you like to deploy now? | Yes, deploy now (Recommended), No, I'll deploy later |
+
+<!-- gate: add-server-logic:11.3.test | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · add-server-logic:11.3.test):** Post-deploy validation prompt — invokes `/test-site` to exercise the new endpoints live.
+>
+> **Trigger:** Deploy from the previous gate succeeded.
+> **Why we ask:** Skipping is harmless (manual test still possible); auto-invoking `/test-site` adds runtime.
+> **Cancel leaves:** Nothing — deploy has already completed.
 
 **If "Yes, deploy now"**: Invoke the `/deploy-site` skill to deploy the site.
 

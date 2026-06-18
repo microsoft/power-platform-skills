@@ -9,13 +9,14 @@ const crypto = require("node:crypto");
 const PLUGIN_ROOT = path.resolve(__dirname, "..");
 const TELEMETRY_DIR = path.join(PLUGIN_ROOT, "scripts", "lib", "telemetry");
 
-let emitSpawn, eventsLib, sessionLib, pacAuthLib, agentInfoLib;
+let emitSpawn, eventsLib, sessionLib, pacAuthLib, agentInfoLib, resolverLoader;
 try {
   emitSpawn = require(path.join(TELEMETRY_DIR, "lib", "emit-spawn"));
   eventsLib = require(path.join(TELEMETRY_DIR, "lib", "events"));
   sessionLib = require(path.join(TELEMETRY_DIR, "lib", "session"));
   pacAuthLib = require(path.join(TELEMETRY_DIR, "lib", "pac-auth"));
   agentInfoLib = require(path.join(TELEMETRY_DIR, "lib", "agent-info"));
+  resolverLoader = require(path.join(TELEMETRY_DIR, "lib", "resolver-loader"));
 } catch {
   process.exit(0);
 }
@@ -40,7 +41,7 @@ function readPluginVersion() {
 
 function readIkey() {
   // Test/override seam: POWER_PLATFORM_SKILLS_IKEY_JSON points at an alternate
-  // ikey.json so tests can flip disabled/iKey state without mutating the
+  // ikey.json so tests can flip disabled/region state without mutating the
   // checked-in config file. Mirrors emit-dispatcher.js / emit-from-prompt.js.
   const override = process.env.POWER_PLATFORM_SKILLS_IKEY_JSON;
   const ikeyPath =
@@ -49,17 +50,12 @@ function readIkey() {
       : path.join(TELEMETRY_DIR, "ikey.json");
   try {
     const cfg = JSON.parse(fs.readFileSync(ikeyPath, "utf8"));
-    return {
-      ikey: cfg.instrumentationKey || "",
-      collectorUrl: cfg.collector_url || "",
-      eventStreamName: cfg.event_stream_name || "",
-      disabled: cfg.disabled === true,
-    };
+    return { cfg, ikeyPath, eventStreamName: cfg.event_stream_name || "", disabled: cfg.disabled === true };
   } catch {
-    // ikey.json missing/unreadable → fail CLOSED (disabled: true), matching
-    // emit-dispatcher.js's isDisabledByConfig() so the kill switch can't be
-    // bypassed by a missing/corrupt config.
-    return { ikey: "", collectorUrl: "", eventStreamName: "", disabled: true };
+    // ikey.json missing/unreadable → fail CLOSED (disabled: true), matching the
+    // dispatcher's kill-switch semantics so a missing/corrupt config can't be
+    // bypassed into an emit attempt.
+    return { cfg: null, ikeyPath, eventStreamName: "", disabled: true };
   }
 }
 
@@ -98,9 +94,21 @@ function readStdin() {
   // enriched event is still built and dispatched so the detached dispatcher can
   // write the local diagnostic mirror; it reads the per-plugin config and skips
   // the POST. (Opting out therefore costs the same as an enabled run.)
-  const { ikey, collectorUrl, eventStreamName, disabled } = readIkey();
+  const { cfg, ikeyPath, eventStreamName, disabled } = readIkey();
   if (disabled) process.exit(0);
-  if (!ikey) process.exit(0);
+  const resolver = resolverLoader.loadResolver(path.dirname(ikeyPath));
+  let provisioned;
+  try {
+    provisioned =
+      resolver && typeof resolver.isProvisioned === "function"
+        ? resolver.isProvisioned(cfg)
+        : !!(cfg && cfg.instrumentationKey);
+  } catch {
+    // A plugin resolver threw — treat as not provisioned so a bad resolver
+    // can't crash the pretool hook and impact the tool run (fail closed).
+    provisioned = false;
+  }
+  if (!provisioned) process.exit(0);
 
   const correlation_id = crypto.randomUUID();
 
@@ -144,13 +152,14 @@ function readStdin() {
     emitSpawn.fireAndForget(
       eventsLib.buildSkillStarted(eventStreamName, fields),
       {
-        iKey: ikey,
-        collectorUrl,
+        cloud: (pacAuth && pacAuth.cloud) || "",
         configDir,
         fakeProbe,
-        // Point the dispatcher at this plugin's real ikey.json (lib/ is shared,
-        // so its __dirname default would otherwise hit shared/'s placeholder).
-        ikeyJsonPath: path.join(TELEMETRY_DIR, "ikey.json"),
+        // Point the dispatcher at the same ikey.json readIkey() used — the
+        // override seam when set, otherwise this plugin's real config. (lib/ is
+        // a symlink to shared/, so the dispatcher's __dirname default would
+        // otherwise hit shared/'s placeholder.)
+        ikeyJsonPath: ikeyPath,
       }
     );
   } catch {

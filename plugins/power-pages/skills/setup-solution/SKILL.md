@@ -69,7 +69,7 @@ The helper returns JSON with `{ exists, deferred, stale, staleness: { reason, de
 |---|---|---|
 | Run `/power-pages:plan-alm` first? | ALM plan gate | Yes — run /power-pages:plan-alm now (Recommended), Continue without a plan (advanced — I know what I'm doing), Cancel |
 
-- **Yes (Recommended)** → invoke `/power-pages:plan-alm`. plan-alm's Phase 7 dispatches back into this skill at the appropriate stage.
+- **Yes (Recommended)** → invoke `/power-pages:plan-alm`. It builds the plan and returns — `plan-alm` is a planner and does not deploy. This skill then re-runs the Phase 0 check (now `exists:true`) and proceeds to Phase 1.
 - **Continue without a plan** → set `BYPASSED_PLAN_GATE = true` and proceed to Phase 1.
 - **Cancel** → exit cleanly.
 
@@ -884,7 +884,14 @@ node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --render
 ```
 
-The helper resets `planData.plannedEnvVarCount` to 0 (the planned env vars have either been created or skipped at the user's request) and re-renders `docs/alm-plan.html` so the Overview stat card and Env Variables tab reflect post-setup state. When `docs/.alm-plan-data.json` is absent (standalone invocation, not via plan-alm), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+The helper resets `planData.plannedEnvVarCount` to 0 (the planned env vars have either been created or skipped at the user's request) and re-renders `docs/alm-plan.html` so the Overview stat card and Env Variables tab reflect post-setup state. When `docs/.alm-plan-data.json` is absent (standalone invocation, not part of an ALM plan), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+
+**Point the user at the next step (user-driven sequencing).** The helper's stdout JSON includes `nextStep: { name, skill: string | null } | null`. `skill` is `null` when the next pending step has no user-invocable command (e.g. an internal "Finalize" step) — so branch on it:
+
+- **`nextStep.skill` is non-null** → "Plan updated. Next in your plan: **{nextStep.name}** → run `{nextStep.skill}` when you're ready."
+- **`nextStep.skill` is `null`** → name the step only, with no command: "Plan updated. Next in your plan: **{nextStep.name}**." Never print `run null`.
+
+When `nextStep` itself is `null` (every planned step is done) or the helper returned `ok:false` (no plan on disk), say nothing about a next step. **Never auto-invoke the next skill** — `plan-alm` is a planner and the user drives execution one skill at a time.
 
 ## Key Decision Points (Wait for User)
 

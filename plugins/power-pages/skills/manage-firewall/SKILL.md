@@ -121,7 +121,15 @@ Each `AskUserQuestion` call is a **separate** call. Wait for the user's answer b
 
 ### Default approach
 
-Analyze the site's current state (firewall status, existing custom rules, managed rules, region eligibility) and **recommend the single most relevant action**. Present the recommendation with a plain-language explanation of why. The user can accept, choose a different action, or ask to just view the current state.
+<!-- gate: manage-firewall:3.action-choice | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · manage-firewall:3.action-choice):** Recommend an action based on the site's current state, then ask the user to accept or choose differently. Fires once per Phase 3 entry — loops back here if the user wants to make additional changes after Phase 4 applies the first one.
+>
+> **Trigger:** Phase 3 entry (interactive mode only — skipped in review mode).
+> **Why we ask:** Wrong-action firewall changes are visible to every site visitor; auto-recommend without consent can disable an active rule the maker added deliberately.
+> **Cancel leaves:** Nothing — Phase 4 hasn't fired yet.
+
+Analyze the site's current state (firewall status, existing custom rules, managed rules, region eligibility) and **recommend the single most relevant action**. Present the recommendation via `AskUserQuestion`:
 
 - Firewall off → recommend enabling it.
 - Firewall on, no custom rules → recommend adding a rule if there is a clear gap (e.g., no rate limiting). Otherwise, summarize the state and ask if the user wants to add a rule.
@@ -132,6 +140,8 @@ If the site's state does not warrant a specific recommendation, do not force one
 MUST NOT proactively offer actions that reduce security (disabling the firewall, removing managed rules, weakening existing rules). If the user needs those, they will ask.
 
 ### Option rules
+
+<!-- not-a-gate: meta-documentation describing how to structure `AskUserQuestion` options in this skill — not a literal call site. The actual destructive firewall changes (enable/disable/add-rule/remove-rule) are gated by the prose-described "apply only after user approval" rule in §3 Plan-validate-execute and §4 Apply the change. See approval-gates.md §6.24a + §6.25. -->
 
 When presenting options via `AskUserQuestion`:
 - Keep `label` to 1–5 words. Include `description` on every option.
@@ -151,6 +161,14 @@ List current custom rules showing: what each rule does (plain language), what tr
 
 ### Plan-validate-execute
 
+<!-- gate: manage-firewall:3.execute-consent | category=consent | cancel-leaves=nothing -->
+
+> 🚦 **Gate (consent · manage-firewall:3.execute-consent):** Final consent before any destructive WAF mutation (enable/disable, add/update/delete rule). Echoes the proposed JSON payload + the surfaced validation issues. Fires PER CHANGE — each enable, disable, rule add, rule update, and rule delete is its own consent.
+>
+> **Trigger:** Phase 3 action chosen, plan + validation surfaced.
+> **Why we ask:** Firewall changes are env-level and visible to every site visitor; auto-applying can lock out legitimate traffic or weaken protection.
+> **Cancel leaves:** Nothing — the API call hasn't fired yet; the plan + validation are throwaway.
+
 For all rule changes:
 
 1. **Plan** — build the JSON payload containing only the rules being added or updated.
@@ -159,7 +177,7 @@ For all rule changes:
    - Overlapping match conditions (same `matchVariable`/`operator`, overlapping `matchValue`) — explain which rule wins via first-match-wins
    - Contradictions between Allow and Block rules — flag and explain priority implications
    - Redundancy — suggest updating the existing rule instead of adding a duplicate
-3. **Execute** — apply only after user approval.
+3. **Execute** — apply only after user approval via `AskUserQuestion`:
 
 For deletions, show the rule names and what each currently does before proceeding.
 

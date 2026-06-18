@@ -10,7 +10,7 @@ Zero npm dependencies. Node stdlib only.
 
 ## What it does
 
-Anonymous `skill_started` telemetry over the 1DS Common Schema 4.0 envelope. A detached dispatcher child posts to the configured collector URL; the hook that emitted the event returns before the POST happens.
+Anonymous `skill_started` telemetry over the 1DS Common Schema 4.0 envelope. A detached dispatcher child resolves the destination iKey + collector URL (env override → plugin `resolver.js` → static key in `ikey.json`), then POSTs the event; the hook that emitted it returns before the POST happens.
 
 ```
 hook (~5ms when disabled, ~3-5s otherwise — incl. when the user opted out)
@@ -18,27 +18,52 @@ hook (~5ms when disabled, ~3-5s otherwise — incl. when the user opted out)
   └─ fireAndForget(event, opts)         ← shared/telemetry/lib/emit-spawn.js
        │
        └─ spawn(emit-dispatcher.js, detached)   ← runs in background
-            ├─ read ikey.json
+            ├─ read ikey.json (null/unreadable → HARD OFF)
             ├─ kill switch (cfg.disabled) → exit   ← HARD OFF: no local log, no POST
             ├─ sanitizeData (FIELD_TYPES allowlist)
             ├─ appendLocal({time,name,data}) → events.jsonl   ← ALWAYS (the mirror)
-            ├─ user opt-out (config.json telemetry[plugin]="off") → exit (mirror written, no POST)
+            ├─ user opt-out (env var POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT=1 OR config.json choice "off"; env wins) → exit (mirror written, no POST)
+            ├─ resolve destination → iKey + collector_url   ← resolver.js (plugin) or static key
             ├─ iKey missing/placeholder → exit (mirror already written, no POST)
             ├─ build CS4.0 envelope (same time + sanitized data)
-            └─ HTTPS POST to collector_url
+            └─ HTTPS POST to the resolved collector_url
 ```
 
 The local log is the on-disk **mirror** of what is (or would be) sent to Kusto:
 each line is `{time, name, data}` where `data` is the sanitized payload whose
 field names ARE the Kusto column names. It is written for **every** event that
 clears the repo `disabled` kill switch — irrespective of whether a real iKey is
-configured **and** irrespective of the user opt-out. Only the repo
-`disabled: true` kill switch produces zero side effects.
+resolved **and** irrespective of the user opt-out. Only the repo
+`disabled: true` kill switch (or a missing/unreadable `ikey.json`) produces zero
+side effects.
 
 The per-plugin user opt-out (`config.json` `telemetry[<plugin>] === "off"`, set
 via `/<plugin>:telemetry off`) suppresses **transmission**, not the local
 diagnostic mirror — so an opted-out run still writes `events.jsonl` (and pays the
 same event-building cost as an enabled run), it just never POSTs.
+
+### Custom routing (the resolver contract)
+
+The destination iKey/collector is **not** hard-coded, and the shared library is
+routing-agnostic. A plugin may drop a `resolver.js` next to its `ikey.json` to
+own that decision:
+
+```js
+module.exports = {
+  // async; may do network I/O (must cache). Returns { iKey, collectorUrl } or null.
+  async resolve({ event, cfg, cloud, configDir }) { /* ... */ },
+  // optional sync fast-gate so hooks skip the ~3-5s pac shellout when unprovisioned.
+  isProvisioned(cfg) { return true; },
+};
+```
+
+The dispatcher discovers it by convention (a `resolver.js` sibling of `ikey.json`)
+and resolves the destination by precedence: env override (test seam) →
+`resolver.js` → static `instrumentationKey`/`collector_url` in `ikey.json` → none.
+The power-pages plugin ships a `resolver.js` that does Artemis geo + cloud-stamp
+region routing; that implementation lives entirely in
+`plugins/power-pages/scripts/lib/telemetry/region/` — the shared library knows
+nothing about it.
 
 ## What is sent
 
@@ -54,7 +79,7 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 
 **PAC + agent (when available, otherwise omitted):**
 
-- `orgId`, `tenantId` — Dataverse org GUID and Entra tenant GUID, read from `pac auth who` if the user is signed in
+- `orgId`, `tenantId` — Dataverse org GUID and Entra tenant GUID, read from `pac auth who` if the user is signed in (`orgId` is passed to the plugin resolver — power-pages uses it for Artemis region routing)
 - `pacCliVersion` — semver from `pac --version`
 - `aiAgentName`, `aiAgentVersion` — host AI agent detected via env in the hook process before the detached dispatcher is spawned. Claude Code (`CLAUDECODE=1`) reports `Claude Code` with the version read from its installed `package.json` via `CLAUDE_CODE_EXECPATH`; that `package.json` only exists for npm-global installs, so when it can't be read (e.g. the native installer's standalone binary) the version falls back to the dotted semver parsed out of `AI_AGENT` (`claude-code_<maj>-<min>-<patch>_agent`), which Claude Code sets regardless of install method. GitHub Copilot CLI (`COPILOT_CLI=1`) reports `Copilot CLI` with the version from `COPILOT_CLI_BINARY_VERSION` or `COPILOT_CLI_VERSION`. Codex, OpenCode, Hermes, and OpenClaw are detected from their agent-specific env flags/version variables (`CODEX_*`, `OPENCODE_*`, `HERMES_*`, `OPENCLAW_*`) or from `AI_AGENT` when it includes a recognizable agent name. Explicit `AI_AGENT_NAME` / `AI_AGENT_VERSION` env vars override detection (used for testing); when `AI_AGENT_NAME` is set but `AI_AGENT_VERSION` is empty, the version is backfilled from whichever detector matches.
 
@@ -65,7 +90,7 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 
 ## What is NEVER sent
 
-File paths, cwd, env vars (except the telemetry kill switch), site names, Dataverse URLs, stack traces, `err.message` text, skill arguments, tool inputs, prompt text, usernames, hostnames.
+File paths, cwd, env vars, site names, Dataverse URLs, stack traces, `err.message` text, skill arguments, tool inputs, prompt text, usernames, hostnames.
 
 The dispatcher runs a defense-in-depth allowlist filter against `FIELD_TYPES` before serializing, so any field that bypasses the builders is dropped before it reaches the wire.
 
@@ -73,7 +98,15 @@ The dispatcher runs a defense-in-depth allowlist filter against `FIELD_TYPES` be
 
 - **Default-on.** Anonymous telemetry is enabled by default. No first-run prompt.
 - **Opt out of transmission** via `/<plugin>:telemetry off` (per-user, per-plugin). This writes `telemetry[<plugin>] = "off"` into `~/.power-platform-skills/config.json` and stops the network POST to the collector — **nothing leaves the machine** — but the local diagnostic mirror (`events.jsonl`) is still written so the user/developer can see exactly what would have been sent. It is therefore an opt-out of *transmission*, not of local logging. CI/headless can opt out by writing that file directly. Re-enable with `/<plugin>:telemetry on`.
-- **Repo-side kill switch (true hard-off).** `ikey.json` carries a `disabled` flag. When `true`, every entry point — hooks and `emit-from-prompt` — short-circuits BEFORE any PAC shellout or process spawn, so there is **no POST and no local log**. Ship `true` and flip to `false` only after the tenant-side Kusto stream and annotation are provisioned.
+- **Opt out for automation** via the per-plugin opt-out env var
+  `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT` (e.g.
+  `POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT=1`). Set it to `1` or `true`
+  (the dotnet `*_TELEMETRY_OPTOUT` convention) to disable transmission; it only
+  disables, never re-enables. It has the **highest precedence** — it overrides a
+  persisted `config.json` choice and `/<plugin>:telemetry on`. The dispatcher reads
+  it inside the transmission gate, after the local mirror is written, so it
+  suppresses transmission only — the local mirror is still written.
+- **Repo-side kill switch (true hard-off).** `ikey.json` carries a `disabled` flag. When `true` (or when `ikey.json` is missing/unreadable), every entry point — hooks, `emit-from-prompt`, and the dispatcher — short-circuits BEFORE any PAC shellout or process spawn, so there is **no POST and no local log**. Ship `true` and flip to `false` only after the tenant-side Kusto stream and annotation are provisioned.
 
 The `disabled` flag is checked at every layer that could perform user-facing work: the pretool/posttool hooks and `emit-from-prompt.js`. A disabled plugin emits zero side effects. The per-plugin user opt-out, by contrast, is enforced inside the detached dispatcher AFTER the local mirror is written — so an opted-out run still produces `events.jsonl` (and incurs the same event-building cost as an enabled run) but never transmits.
 
@@ -87,9 +120,12 @@ shared/telemetry/
 ├─ lib/
 │  ├─ events.js              # FIELD_TYPES allowlist + buildSkillStarted
 │  ├─ emit-spawn.js          # fireAndForget — spawn detached dispatcher
-│  ├─ emit-dispatcher.js     # detached child — kill switches, sanitize, POST
+│  ├─ emit-dispatcher.js     # detached child — kill switches, opt-out, destination resolve (resolver.js or static key), sanitize, POST
 │  ├─ emit-from-prompt.js    # UserPromptSubmit hook helper — detect slash command + emit skill_started
-│  ├─ pac-auth.js            # parses `pac auth who` for orgId / tenantId
+│  ├─ resolver-loader.js     # discovers an optional plugin resolver.js next to ikey.json
+│  ├─ user-config.js         # reads/writes the per-plugin telemetry opt-out in config.json
+│  ├─ telemetry-config.js    # CLI behind /<plugin>:telemetry on|off|status
+│  ├─ pac-auth.js            # parses `pac auth who` for orgId / tenantId / cloud
 │  ├─ agent-info.js          # detects AI agent host + reads `pac --version`
 │  ├─ session.js             # per-process session UUID
 │  ├─ prompt-detector.js     # parses `/plugin:skill` slash commands from prompt text
@@ -123,7 +159,10 @@ Now `scripts/lib/telemetry/lib` resolves to the shared library — there is no c
 
 ### 2. Configure `ikey.json`
 
-Create `plugins/<your-plugin>/scripts/lib/telemetry/ikey.json` — a **real file, not symlinked** (it carries this plugin's config, distinct from `shared/`'s placeholder):
+Create `plugins/<your-plugin>/scripts/lib/telemetry/ikey.json` — a **real file, not symlinked** (it carries this plugin's config, distinct from `shared/`'s placeholder).
+
+**Tier 1 — one static key (no routing).** Create a flat
+`plugins/<your-plugin>/scripts/lib/telemetry/ikey.json` (a real file, not symlinked):
 
 ```json
 {
@@ -134,9 +173,16 @@ Create `plugins/<your-plugin>/scripts/lib/telemetry/ikey.json` — a **real file
 }
 ```
 
-**Ship with `disabled: true`** until the tenant-side annotation, Kusto table, and FieldNameMappings are provisioned. Flip to `false` in a separate PR once verified.
+No resolver needed — the dispatcher uses the static `instrumentationKey` / `collector_url`.
 
-**Posture rule:** the **committed** `ikey.json` must stay `disabled: true`. A working-tree `disabled: false` is a local experiment only — never commit it.
+**Tier 2 — bring your own routing.** Shape `ikey.json` however your resolver wants,
+and drop a `resolver.js` next to it implementing `resolve()` (and optionally
+`isProvisioned()`). The dispatcher auto-discovers and calls it; the shared library
+is never touched. (Power-pages is the reference example: see
+`plugins/power-pages/scripts/lib/telemetry/resolver.js` + `region/`.)
+
+**Ship with `disabled: true`** until the tenant-side annotation, Kusto table, and
+FieldNameMappings are provisioned. The committed `ikey.json` must stay `disabled: true`.
 
 ### 3. Register hooks
 
@@ -146,7 +192,7 @@ In `plugins/<your-plugin>/hooks/hooks.json`, register the three hook scripts tha
 - `run-skill-posttool-validation.js` — runs your validator on `PostToolUse(Skill)`
 - `run-user-prompt-telemetry.js` — emits `skill_started` on `UserPromptSubmit` when the prompt is a tracked `/plugin:skill` slash command
 
-These hooks must call out to your plugin's `scripts/lib/<plugin>-hook-utils.js` for the tracked-skill list. Adapt the imports to your plugin's layout.
+These hooks must call out to your plugin's `scripts/lib/<plugin>-hook-utils.js` for the tracked-skill list, and pass `ikeyJsonPath` (the plugin's own `ikey.json`) into `fireAndForget` so the dispatcher reads the plugin's config rather than `shared/`'s placeholder. Adapt the imports to your plugin's layout.
 
 ### 4. Verify locally
 
@@ -183,7 +229,7 @@ Every module exposes injectable test seams via `opts._xxx` properties so tests r
 - `pac-auth.js` — `opts._exec` swaps `execFileSync`
 - `agent-info.js` — `opts._exec` swaps `execFileSync`
 - `emit-from-prompt.js` — `opts._emit`, `opts._readPacAuth`, `opts._readAgentInfo`
-- `emit-dispatcher.js` — `POWER_PLATFORM_SKILLS_FAKE_HTTPS` env var captures the would-be POST to a probe file
+- `emit-dispatcher.js` — `POWER_PLATFORM_SKILLS_FAKE_HTTPS` env var captures the would-be POST to a probe file; `POWER_PLATFORM_SKILLS_IKEY` / `POWER_PLATFORM_SKILLS_COLLECTOR` bypass resolver.js / static-key resolution
 - `session.js` — `_resetCache()` clears the per-process session-id cache between tests; `getSessionId(override)` accepts an explicit id (no filesystem state to redirect)
 
 Follow this pattern for any new module.

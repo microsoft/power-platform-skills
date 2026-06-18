@@ -121,3 +121,15 @@ test("fireAndForget does not throw on empty-opts invocation", () => {
   fireAndForget({ name: "X", data: {} }, { iKey: "", collectorUrl: "" });
   // No assertion needed: test passes if no throw.
 });
+
+test("fireAndForget forwards opts.cloud as POWER_PLATFORM_SKILLS_CLOUD env var", () => {
+  // We can't easily inspect the child env, but we can test that opts.cloud
+  // is accepted without throwing. The integration test in the dispatcher
+  // suite verifies the env-var is actually received by the child.
+  assert.doesNotThrow(() =>
+    fireAndForget(
+      { name: "X", data: {} },
+      { iKey: "", collectorUrl: "", cloud: "Public" }
+    )
+  );
+});

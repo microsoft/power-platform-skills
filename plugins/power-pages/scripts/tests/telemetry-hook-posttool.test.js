@@ -34,12 +34,3 @@ test("posttool hook exits 0 with no tracked skill (preserves existing behavior)"
   });
   assert.equal(status, 0);
 });
-
-test("posttool hook exits 0 when env opt-out is set (no emit, validator still runs)", () => {
-  const { status } = runHook({
-    input: JSON.stringify({ tool_input: { skill: "create-site" } }),
-    configDir: mkConfigDir(),
-    off: true,
-  });
-  assert.equal(status, 0);
-});

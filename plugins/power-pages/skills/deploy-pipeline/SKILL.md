@@ -83,7 +83,7 @@ The helper returns JSON with `{ exists, stale, staleness: { reason, detail }, ge
 |---|---|---|
 | Run `/power-pages:plan-alm` first? | ALM plan gate | Yes — run /power-pages:plan-alm now (Recommended), Continue without a plan (advanced — I just want to deploy), Cancel |
 
-- **Yes (Recommended)** → invoke `/power-pages:plan-alm`. plan-alm's Phase 7 dispatches back into this skill at the appropriate stage.
+- **Yes (Recommended)** → invoke `/power-pages:plan-alm`. It builds the plan and returns — `plan-alm` is a planner and does not deploy. This skill then re-runs the Phase 0 check (now `exists:true`) and proceeds to Phase 1.
 - **Continue without a plan** → set `BYPASSED_PLAN_GATE = true` and proceed to Phase 1. The deploy will still work, but env-var per-stage values, activation, and post-deploy validation aren't orchestrated.
 - **Cancel** → exit cleanly.
 
@@ -942,9 +942,11 @@ node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --render
 ```
 
-The helper reads the `docs/alm/last-deploy.json` you just wrote, ingests it into `planData.pipelineMeta.lastDeploy`, drops any pre-deploy "host not yet provisioned" risks, and re-renders `docs/alm-plan.html` so the Pipelines tab shows the actual run state (status, version, component count, activation, site URL). When `docs/.alm-plan-data.json` is absent (the skill was invoked standalone, not via plan-alm), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+The helper reads the `docs/alm/last-deploy.json` you just wrote, ingests it into `planData.pipelineMeta.lastDeploy`, drops any pre-deploy "host not yet provisioned" risks, and re-renders `docs/alm-plan.html` so the Pipelines tab shows the actual run state (status, version, component count, activation, site URL). When `docs/.alm-plan-data.json` is absent (the skill was invoked standalone, not part of an ALM plan), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
 
-This step is what makes the rendered plan stay current after a direct `/power-pages:deploy-pipeline` invocation. plan-alm Phase 7 also runs the same refresh as belt-and-suspenders; running it twice is idempotent (same input → same output).
+This step is what keeps the rendered plan current — `plan-alm` is a planner and does not refresh the plan itself, so each execution skill owns its own post-run refresh. Running it more than once is idempotent (same input → same output).
+
+**Point the user at the next step (user-driven sequencing).** The helper's stdout JSON includes `nextStep: { name, skill: string | null } | null`. When non-null, branch on `skill`: when `skill` is non-null, tell the user *"Plan updated. Next in your plan: **{nextStep.name}** → run `{nextStep.skill}` when you're ready."*; when `skill` is `null` (an internal step such as Finalize, no user command), name the step only — *"Plan updated. Next in your plan: **{nextStep.name}**."* — and never print `run null`. (For a multi-stage pipeline this is typically the next stage's deploy, or the next stage's activate/test if those are separate steps.) When `null` (all steps done) or the helper returned `ok:false` (no plan), say nothing about a next step. **Never auto-invoke the next skill** — the user drives execution.
 
 **7.6 Present summary:**
 

@@ -29,6 +29,7 @@ test("returns { orgId, tenantId } parsed from `pac auth who` output", () => {
   assert.deepEqual(result, {
     orgId: "33333333-3333-3333-3333-333333333333",
     tenantId: "11111111-1111-1111-1111-111111111111",
+    cloud: "Public",
   });
 });
 
@@ -41,6 +42,7 @@ test("returns { orgId: '', tenantId } when only Tenant Id line present", () => {
   assert.deepEqual(result, {
     orgId: "",
     tenantId: "11111111-1111-1111-1111-111111111111",
+    cloud: "Public",
   });
 });
 
@@ -53,6 +55,7 @@ test("returns { tenantId: '', orgId } when only Organization Id line present", (
   assert.deepEqual(result, {
     orgId: "33333333-3333-3333-3333-333333333333",
     tenantId: "",
+    cloud: "Public",
   });
 });
 
@@ -139,5 +142,35 @@ test("parses values with extra whitespace and mixed casing in label", () => {
   assert.deepEqual(result, {
     orgId: "33333333-3333-3333-3333-333333333333",
     tenantId: "11111111-1111-1111-1111-111111111111",
+    cloud: "",
   });
+});
+
+test("readPacAuth parses Cloud line", () => {
+  pacAuth._resetCache();
+  const fakeExec = () =>
+    "Tenant Id:        11111111-1111-1111-1111-111111111111\n" +
+    "Organization Id:  22222222-2222-2222-2222-222222222222\n" +
+    "Cloud:            Public\n";
+  const result = pacAuth.readPacAuth({ _exec: fakeExec });
+  assert.equal(result.cloud, "Public");
+});
+
+test("readPacAuth returns empty cloud when Cloud line is missing", () => {
+  pacAuth._resetCache();
+  const fakeExec = () =>
+    "Tenant Id:        11111111-1111-1111-1111-111111111111\n" +
+    "Organization Id:  22222222-2222-2222-2222-222222222222\n";
+  const result = pacAuth.readPacAuth({ _exec: fakeExec });
+  assert.equal(result.cloud, "");
+});
+
+test("readPacAuth parses Cloud with sovereign values", () => {
+  pacAuth._resetCache();
+  const fakeExec = () =>
+    "Tenant Id:        11111111-1111-1111-1111-111111111111\n" +
+    "Organization Id:  22222222-2222-2222-2222-222222222222\n" +
+    "Cloud:            UsGovHigh\n";
+  const result = pacAuth.readPacAuth({ _exec: fakeExec });
+  assert.equal(result.cloud, "UsGovHigh");
 });

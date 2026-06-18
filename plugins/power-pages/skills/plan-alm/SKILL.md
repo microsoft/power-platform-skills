@@ -3,9 +3,11 @@ name: plan-alm
 description: >-
   Creates an ALM (Application Lifecycle Management) plan for deploying a Power Pages
   site across environments. Gathers your promotion strategy, target environments, and
-  approval requirements upfront, generates a visual HTML plan document for review, then
-  — after your approval — executes the plan by calling setup-solution, setup-pipeline,
-  export-solution, and deploy-pipeline (or import-solution) in sequence.
+  approval requirements upfront, then generates a visual HTML plan document for your
+  review and approval. **plan-alm does not deploy anything itself** — it is a planner.
+  After you approve the plan, run the individual ALM skills (setup-solution,
+  setup-pipeline, deploy-pipeline, or export-solution/import-solution); each detects the
+  approved plan and executes the right step in order, keeping the plan updated as it runs.
   Use when asked to: "plan my alm", "set up alm", "create deployment plan",
   "plan my deployments", "help me deploy to multiple environments",
   "set up promotion strategy", "create cicd plan", "plan site promotion",
@@ -20,13 +22,15 @@ model: opus
 
 # plan-alm
 
-An 8-phase orchestrator that gathers ALM strategy from the user, generates an HTML deployment plan, gets approval, then executes the plan by calling existing skills in sequence.
+A 4-phase **planner** that gathers ALM strategy from the user, generates an HTML deployment plan, and gets approval. **It does not execute anything** — execution is delegated to the individual ALM skills, which the user runs afterward.
 
 ## Overview
 
-This skill detects the current project state (existing solution, pipeline), asks targeted questions about the desired promotion strategy (Power Platform Pipelines or Manual export/import), generates a visual `docs/alm-plan.html`, gets user approval, and then invokes `setup-solution`, `setup-pipeline` (or `export-solution`), and `deploy-pipeline` (or `import-solution`) in the correct order.
+This skill detects the current project state (existing solution, pipeline), asks targeted questions about the desired promotion strategy (Power Platform Pipelines or Manual export/import), generates a visual `docs/alm-plan.html`, and gets user approval. The four phases are: **Phase 1 — Detect**, **Phase 2 — Gather strategy**, **Phase 3 — Generate plan**, **Phase 4 — Approve & save**.
 
-**Do NOT create tasks at the start** — strategy is unknown until Phase 2 completes. Create all tasks in Phase 3 once the strategy is determined.
+**plan-alm never deploys.** The plan's `steps[]` array records the **recommended execution sequence**. After approval, the user invokes the individual skills — `setup-solution`, `setup-pipeline` (or `export-solution`), and `deploy-pipeline` (or `import-solution`) — in that order. Each of those skills detects the approved plan via its Phase 0 gate, proceeds without re-nagging, and refreshes the plan on completion. This separation is deliberate: it keeps `plan-alm` safe to run unattended (e.g. under autopilot) because no single answer can trigger an irreversible deployment.
+
+**Do NOT create tasks at the start** — strategy is unknown until Phase 2 completes. Create both tasks in Phase 3 once the strategy is determined.
 
 ---
 
@@ -59,16 +63,22 @@ Steps:
 
    If `deferred === false`, skip this step silently and proceed to step 1.
 
-1. **Resolve the site identity from the local project.** ALM skills are normally invoked from a site-root directory where `pac pages download-code-site` (or a create-site scaffold followed by a deploy) has written `.powerpages-site/website.yml`. That YAML file is the source of truth for `websiteRecordId` and `siteName`.
+1. **Resolve the site identity from the local project.** `.powerpages-site/website.yml` is the source of truth for `websiteRecordId` and `siteName`, and it is present for **both** Power Pages site types:
+   - **Code / SPA sites** — scaffolded by `/power-pages:create-site` and downloaded with `pac pages download-code-site`. These also have a `powerpages.config.json` and SPA source (`src/`, build output in `dist/`/`build/`).
+   - **Data-model sites (standard and enhanced data model / "EDM")** — downloaded with `pac pages download --modelVersion 1|2`. These have **no** `powerpages.config.json`; instead `.powerpages-site/` holds the config tree (`web-pages/`, `web-templates/`, `content-snippets/`, …) plus a `.powerpages-site/.portalconfig/` manifest pair. There is no local build output.
 
    **Resolution order** (first match wins):
-   1. **`.powerpages-site/website.yml`** (preferred, present for every deployed site) — read with the `Read` tool and extract:
+   1. **`.powerpages-site/website.yml`** (preferred, present for every downloaded/deployed site) — read with the `Read` tool and extract:
       - `id` field → `websiteRecordId`
       - `name` field → `siteName` (the file uses short keys; it is `name:`, not `adx_name:`)
-   2. **`powerpages.config.json`** (fallback, used during plugin development from this repo root or for sites scaffolded but not yet deployed) — read `siteName` and `websiteRecordId`.
+   2. **`powerpages.config.json`** (fallback — code/SPA sites only; used during plugin development from this repo root or for sites scaffolded but not yet deployed) — read `siteName` and `websiteRecordId`.
 
-   If neither is found, stop with:
-   > "No Power Pages site found in the current directory. Run this skill from your site project root (where `.powerpages-site/` exists after `pac pages download-code-site`). If you haven't created the site yet, run `/power-pages:create-site` first."
+   **Determine `SITE_TYPE`** (recorded in planData as `siteType`, surfaced in the plan, and used to skip SPA-only assumptions below):
+   - `data-model` when `.powerpages-site/.portalconfig/` exists, **or** `.powerpages-site/website.yml` resolved while no `powerpages.config.json` is present.
+   - `code` when `powerpages.config.json` is present.
+
+   If neither marker is found, stop with:
+   > "No Power Pages site found in the current directory. Run this skill from your site project root — that's where `.powerpages-site/` lives after `pac pages download-code-site` (code/SPA site) or `pac pages download --modelVersion 2` (enhanced data-model site). If you haven't created the site yet, run `/power-pages:create-site` first."
 
    `environmentUrl` is always re-confirmed from `pac env who` in step 4 — it does not need to come from either source.
 
@@ -96,7 +106,9 @@ Steps:
    ```bash
    node "${PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --envUrl "{DEV_ENV_URL}"
    ```
-   Store `.token` as `DEV_TOKEN` and `.userId` as `userId`. If this fails (auth error), set `DEV_TOKEN = null` and continue — contents discovery will be skipped gracefully.
+   Store `.token` as `DEV_TOKEN` and `.userId` as `userId`.
+
+   **Track plan quality.** Initialize a `PLAN_QUALITY` accumulator to `"complete"` at the start of Phase 1. If this token acquisition fails (auth error), set `DEV_TOKEN = null`, set `PLAN_QUALITY = "degraded"`, and record the cause (e.g. *"dev-environment auth failed — contents/size/host discovery skipped"*) — then continue. Contents discovery is skipped gracefully, but the resulting plan is built on partial inputs; Phase 3 surfaces this as a prominent risk so the user reviews before executing. (There is no execute path to block here — `plan-alm` only plans — but a degraded plan must be visibly flagged.)
 
 7. Discover and classify site settings (if `DEV_TOKEN` is available and `websiteRecordId` is known):
 
@@ -170,6 +182,8 @@ Steps:
       && mv ./docs/alm/alm-size-estimate.json.tmp ./docs/alm/alm-size-estimate.json
     ```
     When `SOLUTION_DONE = false`, omit `--solutionId`; the estimator's output will include `envVarCountScope: "publisher-prefix"` to signal the wider scope, and the renderer surfaces this caveat in the Env Variables tab so reviewers know the number reflects the tenant view, not a specific solution. `--projectRoot "."` enables the disk cross-check — the estimator walks the local build output (`dist/`, `public-output/`, `build/`, `.output/`) and surfaces `webFilesDiskMeasuredMB`. When that number is much larger than the Dataverse-measured `webFilesAggregateMB`, the estimator flips `truncationSuspected: true` with a warning — file-typed columns whose bytes aren't returned by `$select=content` are the usual cause and the plan should trust the disk number.
+
+> **`SITE_TYPE = "data-model"` (EDM/standard) sites have no build output**, so the disk cross-check finds no `dist/`/`build/` directory and `webFilesDiskMeasuredMB` stays `null` — this is expected, not a problem. Web files for data-model sites live as records under `.powerpages-site/web-files/` and are measured via the Dataverse query, so the size estimate is still valid; there's simply no SPA bundle on disk to cross-check against. Pass `--projectRoot "."` regardless — it's a harmless no-op for these sites.
     Then run the decision tree (same tmp-file pattern):
     ```bash
     node "${PLUGIN_ROOT}/scripts/lib/compute-split-plan.js" \
@@ -187,9 +201,12 @@ Steps:
     Report to the user:
     ```
     Estimated size: {totalSizeMB} MB — components: {count} — tier: {overall tier}.
+    Tables: {tableCount} — scoped to the site's table permissions ({tableCountScope}).
     Decision tree result: {splitStrategy} → {N} solutions recommended.
     Asset advisory: {K} files flagged for Azure Blob externalization.
     ```
+
+    > **Table count is site-referenced, not publisher-prefix.** The estimator scopes custom tables to the tables the site actually references (its table permissions + datamodel manifest), so a shared/default publisher (`new_`) no longer inflates the count. `tableCountScope` reports how it was scoped: `site-referenced` (table permissions), `manifest-only`, or `unavailable` (no local `.powerpages-site/` signal — table count is 0, never an env-wide dump). When `unavailable`, note that the table-based split signal was skipped. The estimate command already passes `--projectRoot "."`, which supplies the local table permissions.
 
 10b. **Enumerate environment variable definitions** (runs whenever `DEV_TOKEN` is available — the size estimator gives a count but not per-variable metadata).
 
@@ -313,6 +330,8 @@ Steps:
 
 Ask questions in sequence. **Solution is always Q1** — it is the prerequisite for all other steps. Branch after Q2 based on promotion strategy selection.
 
+**Log every major decision.** As each decision is made below (Q1 solution, Q1b split/override, Q2 strategy, Q3 stages/targets, Q4 host, Q5 approval mode, Q5 manual export type), append to a `DECISIONS_LOG` array: `{ field, value, source }` where `source = "default"` when the recommended/auto value was accepted without an active change, or `"explicit"` when the user picked a non-default option. Phase 4 renders a **"Decisions defaulted (please review)"** section from this log so a reviewer can see at a glance which choices were defaults vs. deliberate picks (closes the *"I never agreed to managed export"* gap). This adds no new prompts — it only records what the existing prompts produced.
+
 ### Q1 — Solution Setup (always asked first)
 
 **If `SOLUTION_DONE = true`** (manifest found in Phase 1):
@@ -404,22 +423,28 @@ Options:
 ### Q2 — Strategy Selection (always asked)
 
 <!-- gate: plan-alm:2.q2-strategy | category=plan | cancel-leaves=nothing -->
-> 🚦 **Gate (plan · plan-alm:2.q2-strategy):** Pick promotion strategy — PP Pipelines, manual export/import, existing pipeline, or help-me-decide. Branches the rest of the plan.
+> 🚦 **Gate (plan · plan-alm:2.q2-strategy):** Pick promotion strategy — PP Pipelines (Recommended), manual export/import, existing pipeline, or help-me-decide. Branches the rest of the plan.
+
+**Recommendation prelude (shown inline in the prompt body).** Before listing the options, surface the recommendation and any state that affects it, so the user sees it up front instead of having to drill into option 4:
+
+> **Recommendation: Power Platform Pipelines for ongoing CI/CD** — automated promotion, approval gates, and deployment history in one place. Manual export/import is intended for **one-off migrations** only; repeating it for every change loses the audit trail and silently allows version-skew bugs.
+>
+> *(Conditional, append when `HOST_RESOLUTION.resolutionStatus` ∈ {`AvailableUsingCustomHost`, `AvailableUsingCustomHostByAdminDefault`, `AvailableUsingPlatformHost`, `AvailableUnboundCustomHost`}):*
+> A pipelines host already exists in your tenant at `{HOST_RESOLUTION.finalHostEnvUrl}` (Pipelines v`{HOST_RESOLUTION.pipelinesSolutionVersion}`). PP Pipelines requires **no new infrastructure** for this project.
 
 Ask via `AskUserQuestion`:
 
 > "How do you want to promote your solution between environments?"
 
 Options:
-1. **Power Platform Pipelines** — Microsoft's native CI/CD, managed deployments, approval gates
-2. **Manual export/import** — export a zip from dev and import directly to each target environment
+1. **Power Platform Pipelines (Recommended for ongoing CI/CD)** — Microsoft's native CI/CD, managed deployments, approval gates
+2. **Manual export/import (one-off migrations only)** — export a zip from dev and import directly to each target environment
 3. **I already have a pipeline set up** — run a deployment now
-4. **Help me decide** — show a quick comparison
+4. **Help me decide** — show the full comparison again
 
-**If option 4 selected:** Explain:
-> "Power Platform Pipelines is recommended for teams and multiple environments — it provides automated promotion, approval gates, and deployment history in one place. Manual export/import is simpler for one-off migrations or when you only need to deploy once. For ongoing CI/CD, choose Power Platform Pipelines."
+Record the pick in `DECISIONS_LOG` (`{ field: "strategy", value, source }`).
 
-Then re-ask Q2 with only options 1–3.
+**If option 4 selected:** Re-print the recommendation prelude above, then re-ask Q2 with only options 1–3.
 
 **If option 3 selected:** Read `docs/alm/last-pipeline.json`, confirm pipeline name and stages, then skip to Phase 3 (generate plan) with `strategy = pp-pipelines`, `PIPELINE_DONE = true`.
 
@@ -444,6 +469,14 @@ If option 4: accept free-text description (via "Other") and build a stage list f
 Store stages as `PP_STAGES` (array of `{ label, envUrl, envName, type }`). Dev is always the source.
 
 For each stage, populate `envName` from `ENV_LIST` (gathered in Phase 1 Step 5 via `pac env list --output json`). Match by URL origin (lowercase, trailing slash stripped, path/query ignored) and copy the entry's `DisplayName` (or `displayName`) into `envName`. When no match is found — usually because the user pasted a custom URL via "Other" — leave `envName` unset; the renderer falls back to showing the URL alone in the stage card. The renderer puts `envName` between the stage label and the URL (e.g. *Staging / **Supplier Portal Staging** / https://orgd6a9894f.crm5.dynamics.com/*) so reviewers recognize the env at a glance and the URL stays available as a one-click jump-to-env. Set `type: "source"` for the dev/source stage and `type: "target"` for every downstream stage so the renderer applies the active-stage styling correctly.
+
+<!-- gate: plan-alm:2.q4-host | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · plan-alm:2.q4-host):** Host environment selection — branches on `HOST_RESOLUTION.status` and surfaces the right menu (use-detected / pick from list / NoHost host-type / Sandbox confirm / CannotRedirect block / manual paste). Drives `HOST_ENV_URL` and `WILL_PROVISION_*` flags for the rest of plan-alm and ensure-pipelines-host. Uses `AskUserQuestion` per branch.
+>
+> **Trigger:** Phase 2 Q4 entry; `HOST_RESOLUTION` populated in Phase 1 step 12.
+> **Why we ask:** Auto-picking a host can provision a new Custom Host (`WILL_PROVISION_CUSTOM`) consuming an Azure capacity quota the user didn't intend; or pick the wrong env, sending pipelines through a foreign host. The downstream ensure-pipelines-host skill TRUSTS this answer and skips its own 3.C menu.
+> **Cancel leaves:** Nothing — no provisioning fired yet.
 
 **Q4 (host environment — branches on `HOST_RESOLUTION.status` from Phase 1 step 12):**
 
@@ -537,19 +570,9 @@ Options:
 1. Managed — for staging/production (cannot edit in target)
 2. Unmanaged — for dev-to-dev (editable in target)
 
-Store as `EXPORT_TYPE`.
+Store as `EXPORT_TYPE`, and log the decision (`{ field: "exportType", value: EXPORT_TYPE, source: "default"|"explicit" }`).
 
-<!-- gate: plan-alm:2.q6-manual-checkpoint | category=plan | cancel-leaves=nothing -->
-> 🚦 **Gate (plan · plan-alm:2.q6-manual-checkpoint):** Pause between export and import for review, or proceed automatically.
-
-**Q6:** Ask via `AskUserQuestion`:
-> "Do you want a checkpoint pause between export and import for review?"
-
-Options:
-1. Yes — pause after export so I can review the zip before importing
-2. No — proceed automatically
-
-Store as `MANUAL_CHECKPOINT` (`true` or `false`).
+> **No checkpoint preference is collected.** `plan-alm` no longer runs the export/import itself, so the old *"pause between export and import?"* question (which only gated execution) is gone. The plan records the recommended sequence — `export-solution` then `import-solution` per target — and the user reviews the zip between those steps when they run them. A standing note to that effect is added to the plan's risks/steps in Phase 3.
 
 **Q6 (auto-detect, no question):** Same as PP Pipelines Q6 — check for env var definitions.
 
@@ -557,45 +580,14 @@ Store as `MANUAL_CHECKPOINT` (`true` or `false`).
 
 ## Phase 3 — Generate HTML Plan
 
-**Now create all tasks** — strategy is known.
-
-### Task creation
-
-**For PP Pipelines path**, create these tasks (in order):
+**Now create the two planner tasks** — strategy is known. `plan-alm` is a planner, so it has exactly **two** tasks regardless of path:
 
 | # | Subject | activeForm | Description |
 |---|---------|-----------|-------------|
 | 1 | Generate ALM plan | Generating ALM plan | Build planData, render docs/alm-plan.html |
-| 2 | Approve ALM plan | Awaiting plan approval | Present inline summary, get user confirmation |
-| 3 | Setup solution | Setting up solution | Invoke setup-solution skill (conditional) |
-| 4 | Setup pipeline | Setting up pipeline | Invoke setup-pipeline skill (conditional) |
-| 5..N | Deploy to {stageName} | Deploying to {stageName} | Invoke deploy-pipeline skill for this stage — one task per target stage |
-| 5..N+1 | Activate site in {stageName} | Activating site in {stageName} | Check activation status; if Pending/null: `pac env select --environment "{stage.targetEnvironmentUrl}"` then invoke activate-site — one task per target stage |
-| 5..N+2 | Test site in {stageName} | Testing site in {stageName} | Invoke /power-pages:test-site against the activated URL; capture pass/fail counts; non-blocking — one task per target stage |
-| N+3 | Finalize | Finalizing | Update HTML status, commit, run skill tracking |
+| 2 | Approve & save ALM plan | Awaiting plan approval | Present inline summary, capture approver, save (approved or draft) |
 
-Create one **Deploy to {stageName}** + **Activate site in {stageName}** + **Test site in {stageName}** task triplet for each target stage in `PP_STAGES` (e.g. Staging, Production).
-
-**For Manual path**, create:
-
-| # | Subject | activeForm | Description |
-|---|---------|-----------|-------------|
-| 1 | Generate ALM plan | Generating ALM plan | Build planData, render docs/alm-plan.html |
-| 2 | Approve ALM plan | Awaiting plan approval | Present inline summary, get user confirmation |
-| 3 | Setup solution | Setting up solution | Invoke setup-solution skill (conditional) |
-| 4 | Export solution | Exporting solution | Invoke export-solution skill |
-| 5..N | Import to {targetLabel} | Importing solution | Switch PAC CLI context, invoke import-solution (one task per target) |
-| N+1 | Activate site in {targetLabel} | Activating site | Check activation status, invoke activate-site if not yet provisioned (one task per target, optional) |
-| N+2 | Finalize | Finalizing | Update HTML status, commit, run skill tracking |
-
-If `SOLUTION_DONE = true`, add `(will skip — already set up)` to the setup-solution task description.
-If `PIPELINE_DONE = true` (PP path), add `(will skip — already set up)` to the setup-pipeline task description.
-
-**Activation steps (PP path):** Create a separate **"Activate site in {stageName}"** task for every target stage. After each `deploy-pipeline` invocation succeeds, the activation task for that stage runs immediately — do not wait until all stages are deployed. The planData `steps` array must include one `"Deploy to {stageName}"` + one `"Activate site in {stageName}"` + one `"Test site in {stageName}"` triplet per target stage. Activation and testing happen after every stage deployment — not just Production.
-
-**Test steps (PP path):** Create a separate **"Test site in {stageName}"** task for every target stage. After each activation completes (or is skipped), the test task runs immediately and is **non-blocking** — `test-site` writes `docs/alm/last-test-site.json`, plan-alm ingests it into `validationRuns[stageName]`, and the rendered HTML's **Validation** tab gets a per-stage sub-tab with categorized findings. Failures do not abort the plan.
-
-**Activation steps (Manual path):** For the Manual path, create one "Activate site in {targetLabel}" task per target environment. These run after the corresponding import completes. The Manual path does not include automatic test-site invocations — site testing is left to the user after manual deployment.
+> **Do not create Setup/Deploy/Activate/Test/Import/Finalize tasks.** Those are *execution* steps performed by the individual ALM skills the user runs after approval — they are not `plan-alm` tasks. The recommended sequence still appears in the plan: the planData `steps[]` array below lists it (all `status: "pending"`), and the rendered HTML's Execution Checklist shows it as the plan of record. Each downstream skill marks its own step complete (via `refresh-alm-plan-data.js`) when the user runs it.
 
 Mark task 1 ("Generate ALM plan") as `in_progress`.
 
@@ -606,6 +598,7 @@ Build a `planData` object with all gathered strategy inputs:
 ```json
 {
   "SITE_NAME": "{siteName}",
+  "siteType": "code | data-model",         // from Phase 1 Step 1 — "data-model" for enhanced/standard data-model (EDM) sites (no SPA build output), "code" for SPA sites
   "GENERATED_AT": "{ISO timestamp}",
   "STRATEGY": "pp-pipelines | manual",
   "EXPORT_TYPE": "managed | unmanaged",   // PP Pipelines path: always "managed"
@@ -613,7 +606,12 @@ Build a `planData` object with all gathered strategy inputs:
   "HAS_ENV_VARS": true | false,
   "SOLUTION_DONE": true | false,
   "PIPELINE_DONE": true | false,
-  "PLAN_STATUS": "Draft",
+  "PLAN_STATUS": "Draft",                 // set to "Approved" or "Draft" in Phase 4; plan-alm never sets "In Execution"/"Completed"
+  "PLAN_MODE": "draft",                   // "approved" | "draft" — set in Phase 4. Tooling/downstream skills distinguish an approved plan from a draft. Never "executed" (plan-alm doesn't execute).
+  "PLAN_QUALITY": "complete",             // "complete" | "degraded" — degraded when discovery was incomplete (Phase 1 auth failure or the Phase 3 completeness check failed). Surfaced as a prominent risk.
+  "decisionsLog": [                       // from DECISIONS_LOG (Phase 2) — drives the Phase 4 "Decisions defaulted" section
+    { "field": "strategy", "value": "pp-pipelines", "source": "explicit" }
+  ],
   "LAST_INVOCATION_AT": null,
   "APPROVED_BY": "",
   "APPROVAL_DATE": "",
@@ -632,6 +630,17 @@ Build a `planData` object with all gathered strategy inputs:
     { "name": "Activate site in Production", "status": "pending", "skip": false },
     { "name": "Test site in Production", "status": "pending", "skip": false }
   ],
+  // The steps[] above is the PP Pipelines path. For the MANUAL path (STRATEGY = "manual")
+  // emit this shape instead — do NOT include "Setup pipeline"/"Deploy via pipeline":
+  //   { "name": "Setup solution", ... },
+  //   { "name": "Export solution", ... },
+  //   then PER Manual target {targetLabel}:
+  //     { "name": "Import to {targetLabel}", ... },
+  //     { "name": "Activate site in {targetLabel}", ... },   // import-solution does NOT activate
+  //     { "name": "Test site in {targetLabel}", ... }
+  // These names are what refresh-alm-plan-data.js step-sync (export/import/activate/test)
+  // and computeNextStep match on, so the manual checklist and next-step nudges resolve
+  // to /power-pages:export-solution → /power-pages:import-solution → /power-pages:activate-site → /power-pages:test-site.
   "validationRuns": {
     "Staging": null,
     "Production": null
@@ -703,7 +712,7 @@ Build a `planData` object with all gathered strategy inputs:
 
 `plannedEnvVarCount` is computed from `SITE_SETTINGS_DATA` (Phase 1 Step 7): `(SITE_SETTINGS_DATA.promoteToEnvVar?.length || 0) + (SITE_SETTINGS_DATA.credentialNeedsDecision?.length || 0)`. When `SITE_SETTINGS_DATA` is null (Step 7 query failed), set `plannedEnvVarCount = 0`. The renderer reads this alongside `envVars.length` (existing) and `sizeAnalysis.envVarCount.value` (size-estimator's count) to produce a "N today / +M planned" display in the Overview stat card and Size Analysis signal.
 
-**`validationRuns` block** (PP Pipelines path only — initialize one entry per target stage with value `null`; populated during Phase 7 Step C by ingesting `docs/alm/last-test-site.json` after each stage's test run). The full categorized test report drives the new **Validation** tab in the rendered HTML. Shape per stage:
+**`validationRuns` block** (PP Pipelines path only — initialize one entry per target stage with value `null`). plan-alm leaves these `null` at plan time; they are populated later by **`test-site`'s own final-phase refresh** (`refresh-alm-plan-data.js --phase test-site --stageName {stage}`) when the user runs `test-site` for each stage. The full categorized test report drives the **Validation** tab in the rendered HTML. Shape per stage:
 
 ```json
 {
@@ -745,9 +754,9 @@ Build a `planData` object with all gathered strategy inputs:
 }
 ```
 
-The shape is identical to `docs/alm/last-test-site.json` written by `test-site` Phase 6.7a — `plan-alm` reads that file verbatim and assigns it to `validationRuns[stageName]`. The renderer maps `runOutcome` to green / yellow / red Outcome badges and produces a sub-tab per stage on the Validation tab. For the Manual path, omit `validationRuns` from planData.
+The shape is identical to `docs/alm/last-test-site.json` written by `test-site` Phase 6.7a — the refresh helper reads that file verbatim and assigns it to `validationRuns[stageName]` when `test-site` runs. The renderer maps `runOutcome` to green / yellow / red Outcome badges and produces a sub-tab per stage on the Validation tab. For the Manual path, omit `validationRuns` from planData.
 
-**`pipelineMeta` block** (PP Pipelines path only — read from `docs/alm/last-pipeline.json` and `docs/alm/last-deploy.json` at planData-build time. `null` on fresh plans where no pipeline is configured yet; populated after `setup-pipeline` and refreshed after each `deploy-pipeline` run via the post-deploy re-render in Phase 7). Highlights the pipeline that is actually moving configurations for this project. Shape:
+**`pipelineMeta` block** (PP Pipelines path only — read from `docs/alm/last-pipeline.json` and `docs/alm/last-deploy.json` at planData-build time. `null` on fresh plans where no pipeline is configured yet. Later refreshed by `setup-pipeline`'s and `deploy-pipeline`'s own final-phase refresh when the user runs them). Highlights the pipeline that is actually moving configurations for this project. Shape:
 
 ```json
 {
@@ -848,6 +857,17 @@ Populate `risks` based on gathered data:
 - If `HOST_RESOLUTION.status === "MultipleUnboundCustomHosts"`: `{ type: "info", message: HOST_RESOLUTION.candidates.existingCustomHosts.length + " existing Custom Hosts found in tenant. setup-pipeline will prompt for selection." }`
 - If `HOST_RESOLUTION.status === "PlatformHostExistsUnbound"`: `{ type: "info", message: "Tenant has a Platform Host. Reusing it is the lowest-friction option; creating a Custom Host instead provides better governance for separate-tenant or governed scenarios." }`
 - If `HOST_RESOLUTION.status === "CannotRedirect"`: `{ type: "warning", message: "CannotRedirect: source env ProjectHostEnvironmentId points at PE but tenant default custom host is set elsewhere. Resolution requires Power Platform admin." }` (Note: Phase 2 Q4 normally blocks plan generation in this state; this is a defensive entry in case the plan is somehow generated.)
+- **Manual path** (always, when `STRATEGY = "manual"`): `{ type: "info", message: "Recommended sequence: run /power-pages:export-solution, review the produced zip, then run /power-pages:import-solution for each target. plan-alm does not perform the export/import itself." }`
+- **Raw-discovery gaps (#9)** — for each of `rawDiscovery.estimate`, `rawDiscovery.splitPlan`, and (PP path) `rawDiscovery.hostResolution` that is `null` at planData-build time: `{ type: "warning", message: "Discovery for {X} did not run; the related size/split/host decisions in this plan are unverified." }` (substitute `{X}` = "solution size estimate" / "split analysis" / "pipeline host resolution").
+
+**Plan completeness check (#10).** Before writing planData, verify the plan rests on real discovery:
+- `sizeAnalysis.totalSizeMB` is non-null,
+- `stages[]` is non-empty,
+- `solutionContents` is populated when a solution is configured (`SOLUTION_DONE = true`).
+
+If any check fails, set `PLAN_QUALITY = "degraded"` and record which check failed. (This is in addition to the Phase 1 Step 6 auth-failure path that already sets degraded.)
+
+**Degraded-plan risk (#8)** — if `PLAN_QUALITY === "degraded"` (from the auth-failure path or the completeness check), prepend to `risks`: `{ type: "warning", message: "⚠ PLAN QUALITY: DEGRADED — discovery was incomplete ({cause}). Review carefully before executing; re-run /power-pages:plan-alm after fixing the cause (commonly dev-environment auth) to regenerate a complete plan." }`. Use `type: "warning"` (the renderer styles it). Substitute `{cause}` from the recorded reason(s).
 
 Write `planData` to `docs/.alm-plan-data.json` (create `docs/` if it doesn't exist).
 
@@ -859,7 +879,7 @@ node "${PLUGIN_ROOT}/skills/plan-alm/scripts/render-alm-plan.js" \
   --data "<projectRoot>/docs/.alm-plan-data.json"
 ```
 
-**Keep `docs/.alm-plan-data.json` on disk.** Phases 5 / 6 / 7 / 8 read this file to refresh `hostResolution`, `pipelineMeta`, `validationRuns`, `risks`, and the plan footer after each run step, then re-render `docs/alm-plan.html` so the rendered tabs reflect actual run state (not the pre-run plan). The file is also what `check-alm-plan.js` reads for the Phase 0 ALM-plan gate in `setup-pipeline` / `deploy-pipeline` / `setup-solution` / `export-solution` / `import-solution` / `configure-env-variables` — deleting it makes every downstream skill think no plan exists. Earlier guidance to delete this file after the initial render was incorrect and caused the Pipelines tab + risks list to stay frozen at pre-run state for the lifetime of the plan.
+**Keep `docs/.alm-plan-data.json` on disk — never delete it.** Two consumers depend on it after `plan-alm` exits: (1) the **execution skills' final-phase refresh** (`refresh-alm-plan-data.js`) reads it to update `hostResolution`, `pipelineMeta`, `validationRuns`, `risks`, `steps[]` status, and the footer as each skill runs, then re-renders `docs/alm-plan.html` so the rendered tabs reflect actual run state (not the pre-run plan); (2) `check-alm-plan.js` reads it for the Phase 0 ALM-plan gate in `setup-pipeline` / `deploy-pipeline` / `setup-solution` / `export-solution` / `import-solution` / `configure-env-variables` — deleting it makes every downstream skill think no plan exists (and fire its no-plan gate). Earlier guidance to delete this file after the initial render was incorrect and caused the Pipelines tab + risks list to stay frozen at pre-run state for the lifetime of the plan.
 
 Write `docs/alm/alm-plan-context.json` (persists so `setup-solution` can read it):
 ```json
@@ -922,9 +942,11 @@ Mark task 1 as `completed`.
 
 ---
 
-## Phase 4 — Present Plan and Get Approval
+## Phase 4 — Present Plan, Approve & Save
 
-Mark task 2 ("Approve ALM plan") as `in_progress`.
+Mark task 2 ("Approve & save ALM plan") as `in_progress`.
+
+**`plan-alm` stops here.** This phase saves the plan (approved or draft) and exits. It does **not** invoke `setup-solution`, `setup-pipeline`, `deploy-pipeline`, `export-solution`, or `import-solution`. The user runs those afterward.
 
 Present a concise inline Markdown summary:
 
@@ -936,377 +958,84 @@ Present a concise inline Markdown summary:
 **Approval gates:** {description from PP_APPROVAL_MODE, or "N/A — manual path"}
 **Solution export:** {Managed / Unmanaged}
 **Pipeline host:** {hostEnvUrl} ({status}) — *(PP Pipelines path only; when `WILL_ENSURE_HOST = true`, render as `Will be ensured during setup-pipeline ({status})` instead)*
+**Plan quality:** {complete / ⚠ DEGRADED — <cause>}
 
-**Steps that will run:**
-- [ ] Setup solution {(SKIP — already set up) if SOLUTION_DONE}
-- [ ] Setup pipeline {(SKIP — already set up) if PIPELINE_DONE} {(PP path only)}
-- [ ] Export solution {(manual path only)}
-- [ ] Import to {targetLabel} × {N} {(manual path only)}
-- [ ] Deploy via pipeline {(PP path only)}
+**Decisions defaulted (please review):**
+{For each DECISIONS_LOG entry, one line: "- {field}: {value} ({default} or {your pick})". Tag source:"default" as (default) and source:"explicit" as (your pick). If every decision was explicit, write "- (none — every choice was an explicit pick)".}
+
+**Recommended execution sequence (you run these after approval):**
+- [ ] /power-pages:setup-solution {(SKIP — already set up) if SOLUTION_DONE}
+- [ ] /power-pages:setup-pipeline {(SKIP — already set up) if PIPELINE_DONE} {(PP path only)}
+- [ ] /power-pages:export-solution {(manual path only)}
+- [ ] /power-pages:deploy-pipeline — per stage {(PP path only)}
+- [ ] /power-pages:import-solution — per target {(manual path only)}
 
 Full plan written to: docs/alm-plan.html
 ```
 
 <!-- gate: plan-alm:4.approve | category=plan | cancel-leaves=nothing -->
-> 🚦 **Gate (plan · plan-alm:4.approve):** The capstone — user approves the rendered HTML plan before plan-alm dispatches any downstream skill. Save-for-later writes the plan but exits without execution.
+> 🚦 **Gate (plan · plan-alm:4.approve):** The capstone — user saves the rendered HTML plan. `plan-alm` never executes; this gate only chooses whether the plan is saved **Approved** (ready for the user to run the execution skills) or **Draft**, or sends the user back to revise. No downstream skill is dispatched here.
 
 Ask via `AskUserQuestion`:
-> "Does this ALM plan look correct?"
+> "How would you like to save this ALM plan?"
 
 Options:
-1. **Approve and execute the plan**
-2. **Save plan but execute manually later**
+1. **Save plan — approved, ready to execute** (saves as Approved; you run the execution skills next)
+2. **Save plan as draft** (saves as Draft; re-run plan-alm to approve later)
 3. **I want to change something** — go back to questions
 
 - **If option 3:** Re-run Phase 2 (ask which section to change, then re-gather those answers). Regenerate the plan (repeat Phase 3). Re-present for approval.
-- **If option 2:** Capture the approver (see below), stamp `<span id="approved-by">` and `<span id="approval-date">` in the HTML, then update HTML plan footer `plan-status` span to "Approved — Deferred" via `Edit` tool. Commit `docs/alm-plan.html` with message `"Add ALM plan for {siteName} (deferred)"`. Show next steps for manual execution. Mark task 2 as `completed`. Exit the skill.
-- **If option 1:** Capture the approver (see below), stamp the HTML, then update `<span class="plan-status">` to "In Execution" via `Edit` tool. **Also update `docs/.alm-plan-data.json`** — set `PLAN_STATUS: "In Execution"` and write `LAST_INVOCATION_AT: "<ISO timestamp>"` (now). This is the signal `check-alm-plan.js` reads to set `inExecution.status === "active"` so the downstream skills' Phase 0 gates skip silently. `check-alm-plan.js` will refresh `LAST_INVOCATION_AT` on every subsequent invocation that finds the plan in execution, so the chain stays alive even across multi-hour deploys. Mark task 2 as `completed`.
+- **If option 1 (approved):** Capture the approver (see below). Stamp `<span id="approved-by">` / `<span id="approval-date">` in the HTML and set `<span class="plan-status">` text to `Approved` via `Edit`. **Update `docs/.alm-plan-data.json`**: set `PLAN_STATUS: "Approved"` and `PLAN_MODE: "approved"`. Then run the finalize steps below (skill tracking + commit), print the next-steps guidance, mark task 2 `completed`, and **exit**.
+- **If option 2 (draft):** Do **not** capture an approver. Set `<span class="plan-status">` text to `Draft` via `Edit`. Update `docs/.alm-plan-data.json`: `PLAN_STATUS: "Draft"`, `PLAN_MODE: "draft"`. Run the finalize steps below (commit only — skip skill tracking or run it, your choice; commit message `"Add ALM plan for {siteName} (draft)"`), tell the user to re-run `/power-pages:plan-alm` when ready to approve, mark task 2 `completed`, and **exit**.
 
-**Capturing the approver (both options 1 and 2):**
+**Capturing the approver (option 1 only) — always interactive (#1):**
 
-Capture the name silently using git, falling back to the OS user:
+Never auto-apply a name silently. First compute a **prefill suggestion** from git / OS user:
 
 ```bash
 node -e "const {execSync}=require('child_process');let n='';try{n=execSync('git config user.name',{encoding:'utf8'}).trim();}catch{};if(!n){n=process.env.USER||process.env.USERNAME||'';}process.stdout.write(n);"
 ```
 
-<!-- not-a-gate: approver-name fallback prompt — data-gathering when git config / env vars empty -->
+<!-- not-a-gate: approver-name capture — data-gathering prompt with git/OS-name prefill; always fires before stamping the audit trail -->
 
-Store the output as `APPROVER`. If `APPROVER` is empty (no git config, no USER env var), ask via `AskUserQuestion`:
+Then **always** ask via `AskUserQuestion` (even when the suggestion is non-empty) so a human actively confirms the approver recorded in the audit trail:
 
-> "Who is approving this plan? (needed for the audit trail in docs/alm-plan.html)"
+> "Who is approving this plan? (recorded in the audit trail in docs/alm-plan.html)"
 >
-> Options: 1. *{current system user from `whoami`}* · 2. Other (enter name)
+> Options: 1. *{suggested name from git/OS, if any}* · 2. Other (enter name)
 
-Once `APPROVER` is known, use `Edit` to replace the empty/placeholder value in `docs/alm-plan.html`:
+If the command returned an empty string, present only option 2 (free-text). Store the confirmed result as `APPROVER`, then use `Edit` to replace the spans in `docs/alm-plan.html`:
 
 - Find `<span id="approved-by">` (or `<span id="approved-by"></span>` / `<span id="approved-by">__APPROVED_BY__</span>`) and replace its inner text with `APPROVER`.
 - Find `<span id="approval-date">` and replace its inner text with the current ISO timestamp.
 
 Both spans are guaranteed to exist in the template — there is exactly one of each in the "Execution Checklist" tab footer.
 
----
+**Finalize (both save options):**
 
-## Phase 5 — Execute: setup-solution (conditional)
-
-**If `SOLUTION_DONE = true`:**
-Mark the "Setup solution" task as `completed` with description "Skipped — solution already configured". Update the HTML checklist step for "Setup solution" to `status-skipped` via `Edit` tool. Skip to Phase 6.
-
-**If `SOLUTION_DONE = false`:**
-Mark the "Setup solution" task as `in_progress`. Update the HTML checklist step to `status-in-progress` via `Edit` tool.
-
-Invoke the skill:
-```
-/power-pages:setup-solution
-```
-
-After completion: mark the task as `completed`. Update the HTML checklist step to `status-completed` via `Edit` tool.
-
----
-
-## Phase 6 — Execute: setup-pipeline OR export-solution
-
-### PP Pipelines path
-
-**If `PIPELINE_DONE = true`:**
-Mark the "Setup pipeline" task as `completed` with description "Skipped — pipeline already configured". Update HTML checklist step to `status-skipped`. Skip to Phase 7.
-
-**If `PIPELINE_DONE = false`:**
-Mark the "Setup pipeline" task as `in_progress`. Update HTML checklist step to `status-in-progress`.
-
-Invoke the skill:
-```
-/power-pages:setup-pipeline
-```
-
-After completion: mark task as `completed`. Update HTML checklist step to `status-completed`. Then run the post-run plan refresh — this is **not optional**; without it the Pipelines tab stays at "Will be ensured during setup-pipeline" and the risks list keeps surfacing the pre-run NoHost warning even though the host now exists:
-
-```bash
-node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
-  --projectRoot "." \
-  --phase setup-pipeline \
-  --render
-```
-
-This (a) reads `docs/alm/last-host-check.json` and rewrites `planData.hostResolution` to the post-run state (status flips from `NoHost` to `AvailableUsingCustomHost`, all the `willEnsure*` / `willProvision*` / `chosenEnvUrl` flags clear), (b) reads `docs/alm/last-pipeline.json` and populates `planData.pipelineMeta` with the actual pipeline name + ID + host URL + stages (no `lastDeploy` yet — that fills in after Phase 7 Step A), (c) drops resolved entries from `planData.risks` (NoHost / *Unbound* / Platform-Host warnings), then (d) re-renders `docs/alm-plan.html`. If the helper exits with `ok:false`, surface the reason — the most likely cause is that `docs/.alm-plan-data.json` is missing (Phase 3 must have written it; the file should never be deleted between phases).
-
-### Manual path
-
-Mark the "Export solution" task as `in_progress`. Update HTML checklist step to `status-in-progress`.
-
-Invoke the skill:
-```
-/power-pages:export-solution
-```
-
-After completion: mark task as `completed`. Update HTML checklist step to `status-completed`.
-
-**Refresh the plan after export.** Run the helper (export-solution self-refreshes too — this is belt-and-suspenders):
-
-```bash
-node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
-  --projectRoot "." \
-  --phase export-solution \
-  --render
-```
-
-The helper re-renders `docs/alm-plan.html` so the Export-step status update is visible to reviewers immediately.
-
-<!-- gate: plan-alm:7.manual-checkpoint | category=progress | cancel-leaves=partial-manifest -->
-> 🚦 **Gate (progress · plan-alm:7.manual-checkpoint):** Manual path pause between export and import — user reviews zip before import proceeds. Defer-now exits cleanly leaving the zip.
-
-**If `MANUAL_CHECKPOINT = true`:** Ask via `AskUserQuestion`:
-> "Export complete. Review the solution zip at `{zipPath}` before importing. Ready to proceed with import?"
-
-Options:
-1. Yes, proceed with import
-2. Stop here — I'll import manually later
-
-If option 2: update HTML plan footer to "Approved — Deferred (paused after export)". Commit `docs/alm-plan.html`. Exit.
-
----
-
-## Phase 7 — Execute: Deploy
-
-### PP Pipelines path
-
-**For each target stage in `PP_STAGES` (e.g. Staging, then Production), run this loop:**
-
-**Step A — Deploy:**
-Mark the "Deploy to {stageName}" task as `in_progress`. Update HTML checklist step to `status-in-progress`.
-
-Invoke the skill:
-```
-/power-pages:deploy-pipeline
-```
-
-**Halt-on-failure check (Step A.1).** After `deploy-pipeline` returns, read `docs/alm/last-deploy.json` to see what actually happened. **Do NOT unconditionally mark the deploy task `completed`** — `deploy-pipeline` can halt at many points (validation failure, Phase 3.6 batch-validation-failed, blocked-attachments cancel, user-cancel at Phase 6.0 consent gate, mid-deploy `AttachmentBlocked`, etc.) and each writes a marker with a status field. Proceeding to Step B / the next stage on a failed deploy wastes time and produces confusing output (activate-site against a target that didn't receive the solution).
-
-```bash
-node -e "try { const d = require('./docs/alm/last-deploy.json'); const gaps = Array.isArray(d.knownGaps) ? d.knownGaps : []; process.stdout.write(JSON.stringify({status: d.status, stageName: d.stageName, knownGaps: gaps, knownGapsCount: gaps.length})) } catch (e) { process.stdout.write(JSON.stringify({status: 'NoMarker', knownGaps: [], knownGapsCount: 0, error: e.message})) }"
-```
-
-The extractor returns `knownGaps: []` when the field is absent or malformed — the agent branches on `knownGapsCount > 0` rather than null/undefined checks, which avoids the ambiguity between "field missing" and "field present but empty array".
-
-Branch on the parsed status. **Check `knownGaps` presence first** because Phase 3.6.5's "deploy succeeded subset" path writes `status: "Succeeded"` alongside a populated `knownGaps[]` — a naive `status === "Succeeded"` branch would miss the gap signal:
-
-- **`knownGaps` is a non-empty array** (regardless of `status`): A subset of solutions deployed (Phase 3.6.5 "deploy succeeded subset" path) but at least one was intentionally skipped. Mark the deploy task `completed-with-gaps` (or `completed` with a note in the rendered plan). Show the user the recorded `knownGaps` and confirm they want to proceed to Step B for the partial deploy. Run the refresh-plan step regardless.
-- **`status === "Succeeded"`** (and no `knownGaps`): Mark deploy task `completed`. Update HTML checklist step to `status-completed`. Proceed to the refresh-plan step below, then Step B.
-- **Any other status** (`"Failed"`, `"ValidationFailed"`, `"Canceled"`, `"PendingApproval"` — user cancelled the approval pause, `"Unknown"` — poll timed out, `"NoMarker"` — the file didn't exist or was unparseable, or any unrecognised value): Mark deploy task `failed`. Update HTML checklist step to `status-failed`. Run the refresh-plan step so the rendered plan shows the failure surface. Then fire the deploy-failure gate below. The catch-all clause covers future deploy-pipeline status values without requiring this skill to be updated in lockstep.
-
-<!-- gate: plan-alm:7.deploy-failure | category=plan | cancel-leaves=nothing -->
-> 🚦 **Gate (plan · plan-alm:7.deploy-failure):** deploy-pipeline halted before completing the deploy to `{stageName}`. Caller decides: retry this stage (re-invoke deploy-pipeline — Dataverse import idempotency makes already-succeeded solutions in a multi-solution loop a no-op), skip this stage and continue to the next (advanced — leaves a stage gap; the rendered plan will show it), or exit the orchestration. Cancel exits the loop without touching subsequent stages.
-
-Use `AskUserQuestion`:
-
-  | Question | Header | Options |
-  |---|---|---|
-  | Deploy to `{stageName}` did not complete (`{status}`). What now? | Deploy failure | Retry this stage, Skip to next stage (advanced — leaves a gap), Exit orchestration |
-
-  - **Retry**: re-invoke `/power-pages:deploy-pipeline` for this stage. Re-run the halt-on-failure check on the retry's marker. Loop up to the user's tolerance.
-  - **Skip to next stage**: leave the deploy task `failed`, do NOT run Step B / Step C for this stage, continue the outer `PP_STAGES` loop. The rendered plan shows a stage gap; the user owns the consequence.
-  - **Exit orchestration**: stop the skill. The rendered plan reflects current state (succeeded stages + the failed one). Re-invoking `/power-pages:plan-alm` later resumes from Phase 7 against the existing plan.
-
-**Refresh the plan after each stage's deploy.** Run the helper (regardless of success/failure — the refresh ingests both outcomes):
-
-```bash
-node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
-  --projectRoot "." \
-  --phase deploy-pipeline \
-  --render
-```
-
-The helper reads `docs/alm/last-deploy.json`, populates `planData.pipelineMeta.lastDeploy` (status, stageName, deployedAt, artifactVersion, componentCount, activationStatus, siteUrl), and re-renders `docs/alm-plan.html`. The Pipelines tab now shows the actual pipeline name + ACTIVE chip + last-run footer (Succeeded / Failed status + version + component count + stage label). Cheap; runs once per stage in the deploy loop. The `setStepStatus` cross-cutting behavior already maps failure-status markers to `failed` step status so the checklist surfaces what actually happened — Step A.1's halt-on-failure gate just adds the user-facing prompt that was previously missing.
-
-**Step B — Activate (immediately after deploy for this stage, only when Step A succeeded or completed-with-gaps):**
-Mark the "Activate site in {stageName}" task as `in_progress`. Update HTML checklist step to `status-in-progress`.
-
-Read `docs/alm/last-deploy.json` to check whether activation already happened inside `deploy-pipeline`:
-```bash
-node -e "const d=require('./docs/alm/last-deploy.json'); process.stdout.write(JSON.stringify({activationStatus: d.activationStatus, siteUrl: d.siteUrl}))"
-```
-
-- `activationStatus === "Activated"`: site is live. Mark task `completed`. Update checklist step to `status-completed`. Show site URL.
-- `activationStatus === "Pending"` or `null`: activation was deferred or didn't run inside `deploy-pipeline` Phase 7.7. Re-prompt the user.
-
-  **Switch PAC CLI to the target environment first** — the activation flow reads the current env from `pac auth who` and looks up the site's record via `pac pages list` in that env. If PAC is still pointing at dev (or at the previous stage's env), activation would target the wrong environment. This mirrors the explicit switch pattern used by `deploy-pipeline` Phase 7.7 (the helper-and-switch-back pair around `check-activation-status.js`); plan-alm's Step C also switches PAC back at the end of the stage loop, but the forward switch BEFORE activate-site must happen here.
-
-  ```bash
-  pac env select --environment "{stage.targetEnvironmentUrl}"
-  ```
-
-  Where `{stage.targetEnvironmentUrl}` is the current stage's target environment URL — pulled from `planData.stages[]` (matched by `stage.label === stageName`, then `stage.envUrl`) or equivalently from `docs/alm/last-pipeline.json` `stages[].targetEnvironmentUrl`. Do NOT skip this switch even when only one target stage exists — by the time Step B runs, PAC may already have been switched back to dev by the end of `deploy-pipeline`.
-
-  <!-- gate: plan-alm:7.activate-step-b | category=plan | cancel-leaves=nothing -->
-  > 🚦 **Gate (plan · plan-alm:7.activate-step-b):** Per-stage post-deploy activation prompt — Step B second-chance when deploy-pipeline Phase 7.7 was skipped or errored. **Fires PER STAGE in the multi-stage execution loop.** Two stages (Staging + Production) where both need activation = two prompts. The "Yes, activate now" answer for Staging does NOT cover Production — each stage's activation is a distinct decision (different URLs, different audiences, different go-live timing). Do NOT batch.
-
-  Then ask via `AskUserQuestion`:
-
-  > "**{siteName}** was deployed to **{stageName}** successfully. The site is not yet activated (not publicly accessible). Activate it now?"
-
-  Options:
-  1. **Yes, activate now** — invoke `/power-pages:activate-site`. After it completes, mark task `completed`, update checklist step to `status-completed`.
-  2. **No, skip for now** — mark task `skipped`, update checklist step to `status-skipped`.
-
-  > **Why this gap mattered.** In the happy path, `deploy-pipeline` Phase 7.7 already activated the site (or got an explicit "No") and patched `activationStatus` into `docs/alm/last-deploy.json`. Step B sees `"Activated"` and skips. The gap shows up only when 7.7 was answered "No, I'll activate later" OR when 7.7 was skipped (e.g. activation-status check returned `error`) — in those cases Step B is the second-chance prompt, and it MUST do the PAC switch itself because 7.7's switch-back at the end of Phase 7.7 already returned PAC to dev. For a multi-stage plan this is especially important: on the Production iteration, PAC is back at dev after Staging's Step C; Step B for Production needs an explicit switch to the Production env URL, not Staging's.
-
-**Step C — Test site (immediately after activate for this stage):**
-Mark the "Test site in {stageName}" task as `in_progress`. Update HTML checklist step to `status-in-progress`.
-
-Determine the URL to test:
-- Prefer `siteUrl` from `docs/alm/last-deploy.json` (written by `deploy-pipeline`).
-- If absent or empty, fall back to the URL returned by the most recent `activate-site` invocation for this stage.
-- If both are unavailable (activation was skipped, no URL captured), mark the task `skipped` and set `validationRuns[stageName] = null`. Update checklist step to `status-skipped`.
-
-If a URL is available, invoke the skill (forwarding the URL as the argument):
-```
-/power-pages:test-site --siteUrl {activatedUrl}
-```
-
-When `test-site` completes, ingest its `docs/alm/last-test-site.json` marker into `validationRuns[stageName]` and re-render via the same refresh helper used by other phases:
-
-```bash
-node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
-  --projectRoot "." \
-  --phase test-site \
-  --stageName "{stageName}" \
-  --render
-```
-
-The helper reads `docs/alm/last-test-site.json`, populates `planData.validationRuns[{stageName}]` with the test outcome (runOutcome, summary counts, categories), and re-renders `docs/alm-plan.html` so the Validation tab updates immediately.
-
-`runOutcome` is set by `test-site` itself (see Phase 6.7a in the test-site skill): `"failed"` when any critical/high failure exists, `"passed-with-warnings"` for any non-critical failure or console errors, `"passed"` otherwise. Trust the value as written — do not re-compute.
-
-**Decision rule (non-blocking):** Regardless of `runOutcome`, mark the task `completed` and continue to the next stage. Failures are diagnostic, not gating — the plan does not abort.
-
-Update the HTML checklist step:
-- `runOutcome === "failed"` → `status-warning` (NEW status — yellow).
-- otherwise → `status-completed`.
-
-**Checklist substep rendering** (the renderer handles this automatically once `validationRuns` is populated and the planData re-rendered): every `Test site in {stageName}` step gets an inline substep showing the test-result badge (`PASSED` / `WARNINGS` / `FAILED`), the tested URL, the `pass / fail / skip` summary line, and a "View details &rarr;" link that jumps to the Validation tab. Every `Deploy via pipeline to {stageName}` and `Activate site in {stageName}` step also gets a `Target: <envUrl>` substep so reviewers see the target env without leaving the Execution tab. The renderer derives env URLs from `data.stages[].envUrl` (matched by trailing stage label) — keep stage labels consistent across `data.stages` and `data.steps`.
-
-After handling activation and testing, switch PAC CLI back to the dev environment:
-```bash
-pac env select --environment "{devEnvUrl}"
-```
-
-**Then repeat Step A + B + C for the next stage** (if any).
-
-### Manual path (one import per target environment)
-
-For each entry in `MANUAL_TARGETS`:
-
-1. Mark the "Import to {targetLabel}" task as `in_progress`. Update the corresponding HTML checklist step to `status-in-progress`.
-
-2. Switch the PAC CLI context to the target environment:
+1. **Skill tracking** (option 1; optional for draft):
+   > Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
    ```bash
-   pac env select --environment "{targetEnvUrl}"
+   node "${PLUGIN_ROOT}/scripts/update-skill-tracking.js" \
+     --projectRoot "." --skillName "PlanAlm" --authoringTool "ClaudeCode"
    ```
+2. **Commit the plan** — pick the commit message for the save option the user chose:
+   - **Option 1 (Approved):**
+     ```bash
+     git add docs/alm-plan.html && git commit -m "Add ALM plan for {siteName}"
+     ```
+   - **Option 2 (Draft):**
+     ```bash
+     git add docs/alm-plan.html && git commit -m "Add ALM plan for {siteName} (draft)"
+     ```
+   `docs/.alm-plan-data.json` stays on disk — it is read by `check-alm-plan.js` for every downstream skill's Phase 0 gate and refreshed by those skills as they run. **Never delete it.**
 
-3. Invoke the skill:
-   ```
-   /power-pages:import-solution
-   ```
+**Next-steps guidance (option 1 — print to the user, do NOT invoke):**
 
-4. After completion: mark the task as `completed`. Update the HTML checklist step to `status-completed`.
-
-5. **Refresh the plan after the import.** Run the helper (import-solution self-refreshes too — this is belt-and-suspenders):
-
-   ```bash
-   node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
-     --projectRoot "." \
-     --phase import-solution \
-     --stageName "{targetLabel}" \
-     --render
-   ```
-
-   `{targetLabel}` is the current iteration's target (e.g. `Staging`, `Production`). The helper reads `docs/alm/last-import.json`, writes a per-target entry into `planData.manualImports[targetLabel]` (status, version, component count, failures), and re-renders `docs/alm-plan.html`. The matching `Import to {targetLabel}` checklist step picks up an `IMPORTED` (or `FAILED`) badge with import details inline — same idiom as the test-site validation substep on PP-path Test steps. Always pass `--stageName` from the per-target loop so the helper doesn't have to fall back to URL matching.
-
-6. **Activate site in {targetLabel}** (optional) — mark the "Activate site in {targetLabel}" task as `in_progress`. Update HTML checklist step to `status-in-progress`.
-
-   PAC CLI is already pointing to the target environment from step 2. Run the activation check:
-   ```bash
-   node "${PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "."
-   ```
-
-   - **`activated: true`**: Site is already live. Mark task as `completed`. Update checklist step to `status-completed`.
-   - **`activated: false`**: Invoke `/power-pages:activate-site`. After completion, mark task as `completed`. Update checklist step to `status-completed`.
-   - **`error`**: Mark task as `skipped`. Note error in summary.
-
-7. **Refresh the plan after activation.** Run the helper (activate-site self-refreshes too — this is belt-and-suspenders):
-
-   ```bash
-   node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
-     --projectRoot "." \
-     --phase activate-site \
-     --render
-   ```
-
-After all imports: switch PAC CLI back to the dev environment:
-```bash
-pac env select --environment "{devEnvUrl}"
-```
-
----
-
-## Phase 8 — Finalize
-
-Mark the "Finalize" task as `in_progress`.
-
-### 8.1 Update HTML plan status
-
-Run the post-run plan refresh in `finalize` mode and re-render. This sets `planData.PLAN_STATUS = "Completed"` and produces the final HTML with all post-run state (latest hostResolution, pipelineMeta + lastDeploy, validationRuns, status footer) consistent across every tab:
-
-```bash
-node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
-  --projectRoot "." \
-  --phase finalize \
-  --render
-```
-
-If you also need to surface a timestamp in the footer (e.g. plan completion time), apply that via `Edit` tool **after** the re-render — the renderer doesn't currently emit a completion timestamp.
-
-### 8.2 Run skill tracking
-
-> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
-
-```bash
-node "${PLUGIN_ROOT}/scripts/update-skill-tracking.js" \
-  --projectRoot "." \
-  --skillName "PlanAlm" \
-  --authoringTool "ClaudeCode"
-```
-
-### 8.3 Commit
-
-```bash
-git add docs/alm-plan.html && git commit -m "Add ALM plan for {siteName}"
-```
-
-### 8.4 Present final summary
-
-Display a summary:
-
-```
-## ALM Complete: {siteName}
-
-**Strategy used:** {PP Pipelines / Manual export/import}
-**Skills invoked:** {comma-separated list of skills that ran}
-
-**Artifacts created:**
-- docs/alm-plan.html — ALM plan document
-- .solution-manifest.json — Solution configuration {(if newly created)}
-- docs/alm/last-pipeline.json — Pipeline configuration {(PP path only, if newly created)}
-- docs/alm/last-deploy.json — Last deployment record {(PP path only)}
-- {solutionName}_{managed|unmanaged}.zip — Solution package {(manual path only)}
-
-**Site activation:** {
-  PP path: "Activation status per stage is in docs/alm/last-deploy.json and each deploy history file."
-  Manual path: list each target env and its activation status (Activated / Pending)
-}
-```
-
-Mark the "Finalize" task as `completed`.
+> "Plan approved and saved. **plan-alm doesn't deploy** — run these next, in order. Each detects this plan and proceeds without re-asking, then updates the plan as it completes:
+> - **PP Pipelines path:** `/power-pages:setup-solution` → `/power-pages:setup-pipeline` → `/power-pages:deploy-pipeline` (once per target stage; the deploy flow activates the site for you — but if you defer activation, run `/power-pages:activate-site`) → `/power-pages:test-site` to validate each stage.
+> - **Manual path:** `/power-pages:setup-solution` → `/power-pages:export-solution` → review the zip → `/power-pages:import-solution` (once per target).
+> Skip any step marked *already set up*. You can re-open the plan any time at `docs/alm-plan.html`."
 
 ---
 
@@ -1315,33 +1044,26 @@ Mark the "Finalize" task as `completed`.
 | Task subject | activeForm | Description |
 |---|---|---|
 | Generate ALM plan | Generating ALM plan | Gather strategy inputs, build planData, render docs/alm-plan.html |
-| Approve ALM plan | Awaiting plan approval | Present inline summary + HTML plan path, get user confirmation |
-| Setup solution | Setting up solution | Invoke setup-solution skill (skip if .solution-manifest.json exists) |
-| Setup pipeline | Setting up pipeline | Invoke setup-pipeline skill — PP Pipelines path only (skip if docs/alm/last-pipeline.json exists). May delegate to ensure-pipelines-host internally to resolve or provision the host environment when `hostResolution.willEnsureDuringExecution` is true; that delegation is transparent to plan-alm and is not a separate top-level task. |
-| Export solution | Exporting solution | Invoke export-solution skill — Manual path only |
-| Deploy to {stageName} | Deploying to {stageName} | Invoke deploy-pipeline skill — PP Pipelines path, one task per target stage |
-| Activate site in {stageName} | Activating site in {stageName} | Check activation status + invoke activate-site immediately after each stage deploys — one task per target stage |
-| Test site in {stageName} | Testing site in {stageName} | Invoke /power-pages:test-site against the activated URL; capture pass/fail counts; non-blocking |
-| Import to {targetEnv} | Importing solution | Switch PAC CLI context, invoke import-solution — Manual path, one task per target |
-| Activate site in {targetEnv} | Activating site | Check activation status + invoke activate-site if needed — Manual path, one task per target |
-| Finalize | Finalizing | Update HTML plan status, commit, run skill tracking, present summary |
+| Approve & save ALM plan | Awaiting plan approval | Present inline summary (incl. defaulted-decisions + plan quality), capture approver, save Approved or Draft, commit, print next-steps |
+
+> `plan-alm` has exactly these two tasks. Setup / pipeline / deploy / export / import / activate / test are performed by the individual ALM skills the user runs **after** approval — they appear in the plan's `steps[]` (the recommended sequence) but are never `plan-alm` tasks.
 
 ---
 
 ## Key Decision Points (Wait for User)
 
-1. **Phase 2, Q1**: Solution setup — confirm existing or include `setup-solution` in plan
-2. **Phase 2, Q2**: Promotion strategy — PP Pipelines, Manual, or already set up
-3. **Phase 2, Q3–Q6** (PP path): Stage count, host env, approval gates (managed auto-set)
-   **Phase 2, Q3–Q6** (Manual path): Target count, target env URLs, export type, checkpoint pause
-4. **Phase 4**: Plan approval — execute, defer, or revise
-5. **Phase 6, Manual**: Checkpoint pause after export (if Q6 = Yes)
-6. **Phase 7 (delegated)**: Each invoked skill has its own approval gates
+1. **Phase 1**: `.alm-deferred` marker handling; pre-plan completeness check (if a solution exists)
+2. **Phase 2, Q1**: Solution setup — confirm existing or include `setup-solution` in plan
+3. **Phase 2, Q1b**: Split recommendation + override confirmation (if recommended)
+4. **Phase 2, Q2**: Promotion strategy — PP Pipelines, Manual, or already set up
+5. **Phase 2, Q3–Q5** (PP path): Stage count, host env, approval gates (managed auto-set)
+   **Phase 2, Q3–Q5** (Manual path): Target count, target env URLs, export type
+6. **Phase 4**: Save the plan — Approved, Draft, or revise. **This is the only "approval"; no execution follows.**
 
 ## Error Handling
 
-- No `powerpages.config.json`: stop, advise `/power-pages:create-site`
+- No `.powerpages-site/website.yml` **and** no `powerpages.config.json`: stop, advise `/power-pages:create-site` (Phase 1 resolves site identity from either marker — a data-model/EDM site has only `website.yml`, so don't hard-stop on the missing config alone)
 - `pac env list` fails: skip ENV_LIST pre-filling; ask for environment URLs manually
 - `render-alm-plan.js` fails (non-zero exit): report error, show planData JSON as fallback, ask user whether to proceed
-- Invoked skill fails: report the failure, mark the task as blocked, ask user whether to retry or exit
+- Discovery/auth failure: set `PLAN_QUALITY = "degraded"`, surface a prominent risk, still produce the plan (the user fixes auth and re-runs to regenerate)
 - Plan approval = option 3 (change something): re-run Phase 2 fully, then regenerate plan — do not carry over stale answers

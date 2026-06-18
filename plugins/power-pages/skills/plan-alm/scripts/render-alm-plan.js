@@ -898,7 +898,7 @@ function buildValidationTab(d) {
   // Renders the full "Site Validation" tab body. One sub-tab per target stage.
   // Each sub-tab shows a summary grid + per-category test cards.
   //
-  // Data shape (from plan-alm Phase 7 Step C, ingesting test-site's docs/alm/last-test-site.json):
+  // Data shape (populated by test-site's own final-phase refresh, ingesting docs/alm/last-test-site.json):
   //   data.validationRuns = {
   //     "<stageName>": null | {
   //       url, runAt, durationSec, runOutcome,

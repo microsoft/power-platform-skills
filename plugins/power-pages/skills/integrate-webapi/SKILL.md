@@ -184,6 +184,14 @@ Show the user:
 
 ### 3.2 Confirm Tables
 
+<!-- gate: integrate-webapi:3.2.confirm-tables | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · integrate-webapi:3.2.confirm-tables):** Final say on which tables get Web API integration code (client, types, services, hooks).
+>
+> **Trigger:** Explore agent surfaced candidate tables in Phase 3.1.
+> **Why we ask:** Auto-selecting all tables can generate orphaned TypeScript files for tables the user never intended to expose via Web API.
+> **Cancel leaves:** Nothing — no service/type/hook files written yet.
+
 **When AI-only read mode is active (Phase 1.6 flag set):** skip this step entirely. Use the `tables` list parsed from the sentinel verbatim — the caller has already confirmed the selection with the user. Do not issue an `AskUserQuestion`.
 
 Otherwise, use `AskUserQuestion` to confirm:
@@ -325,6 +333,14 @@ Do NOT issue the deploy prompt below — the caller owns the single deploy decis
 
 Otherwise, if `.powerpages-site` doesn't exist:
 
+<!-- gate: integrate-webapi:6.1.deploy-first | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · integrate-webapi:6.1.deploy-first):** `.powerpages-site` missing — needed by both architect agents. Deploy first, or skip permissions setup and finish without them.
+>
+> **Trigger:** Phase 6.1 found no `.powerpages-site` folder.
+> **Why we ask:** Auto-skipping leaves the integration broken (no permissions to back the Web API calls); auto-deploying picks the wrong env.
+> **Cancel leaves:** Nothing — services/types/hooks from Phase 4 stay on disk regardless.
+
 Use `AskUserQuestion`:
 
 | Question | Options |
@@ -336,6 +352,14 @@ Use `AskUserQuestion`:
 **If "Skip"**: Skip to Phase 7 with a note that permissions and site settings still need to be configured.
 
 ### 6.2 Choose Permissions Source
+
+<!-- gate: integrate-webapi:6.2.permissions-source | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · integrate-webapi:6.2.permissions-source):** Decide between uploading an existing permissions diagram (Path A) and letting the architect agents derive it (Path B). Choice routes the rest of Phase 6.
+>
+> **Trigger:** Entering Phase 6.2 after deployment prerequisite is satisfied.
+> **Why we ask:** Path A produces table permissions matching a stale or wrong diagram; Path B can take minutes to query Dataverse.
+> **Cancel leaves:** Nothing — no permission YAML written yet.
 
 **When AI-only read mode is active (Phase 1.6 flag set):** skip the permissions-source question
 entirely and default to **Path B (let the architects figure it out)** — proceed directly to
@@ -356,6 +380,14 @@ Otherwise, ask the user how they want to define the permissions using the `AskUs
 Route to the appropriate path:
 
 #### Path A: Upload Existing Permissions Diagram
+
+<!-- gate: integrate-webapi:6.2.permissions-approval | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · integrate-webapi:6.2.permissions-approval):** Final sign-off on the parsed permissions plan (from the uploaded diagram) before any web-role / table-permission / site-setting YAML write. Fires at step 6 of the Path A sequence below.
+>
+> **Trigger:** Path A — diagram parsed and Mermaid flowchart rendered.
+> **Why we ask:** Wrong scope / wrong CRUD flags get committed to `.powerpages-site/table-permissions/` — fixable but noisy in git history.
+> **Cancel leaves:** Nothing — no YAML files written yet.
 
 If the user chooses to upload an existing diagram:
 
@@ -559,6 +591,14 @@ Present a summary of everything that was done:
 | Site Settings | Created | X setting files |
 
 ### 7.3 Ask to Deploy
+
+<!-- gate: integrate-webapi:7.3.deploy | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · integrate-webapi:7.3.deploy):** Post-integration deploy prompt — Web API calls won't work until permissions and site settings are deployed.
+>
+> **Trigger:** All integration code + permissions YAML committed.
+> **Why we ask:** Auto-deploy picks whatever env PAC CLI happens to point at.
+> **Cancel leaves:** Nothing — integration artifacts stay on disk; no deploy fired.
 
 **Skip when AI-only read mode is active** (Phase 1.6 flag set) — the caller owns the single
 end-of-orchestration deploy decision. Return the Phase 7.2 summary and stop.
