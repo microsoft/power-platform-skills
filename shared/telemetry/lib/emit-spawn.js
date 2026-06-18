@@ -48,9 +48,10 @@ function fireAndForget(event, opts = {}) {
           process.env.POWER_PLATFORM_SKILLS_IKEY_JSON || ikeyJsonPath || "",
         // The opt-out is enforced in the detached dispatcher, which reads the
         // child's process.env — so the minimal allowlist must forward this var
-        // explicitly or the highest-precedence opt-out never reaches it. Added
-        // only when set, so it never plants an empty var the dispatcher would
-        // read as "present".
+        // explicitly or the highest-precedence opt-out never reaches it. Forward
+        // only when actually set: an empty/unset value is a no-op for the
+        // dispatcher's check (it trims and matches only "1"/"true"), so there's
+        // no point planting an empty var in the child env.
         ...(optOutVarName && optOutValue
           ? { [optOutVarName]: optOutValue }
           : {}),

@@ -59,7 +59,9 @@ function writeProvisionedConfig(configDir) {
   fs.writeFileSync(
     ikeyPath,
     JSON.stringify({
-      event_stream_name: "PagesPluginEvent",
+      // Mirror the shipped ikey.json stream name so the asserted envelope name
+      // matches real production behavior (the checked-in config uses this).
+      event_stream_name: "PagesAIPluginEvent",
       disabled: false,
       default_region: "us",
       regions: {
@@ -115,7 +117,7 @@ test("exits 0 and emits skill_started to probe when skill is tracked (provisione
   assert.ok(waitForFile(probePath, 5_000), "dispatcher should have written probe");
   const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
   const body = JSON.parse(probe.body);
-  assert.equal(body.name, "PagesPluginEvent");
+  assert.equal(body.name, "PagesAIPluginEvent");
   assert.equal(body.data.eventName, "skill_started");
   assert.equal(body.data.pluginName, "power-pages");
   assert.equal(body.data.skillName, "create-site");
