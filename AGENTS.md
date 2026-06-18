@@ -71,6 +71,23 @@ Edit `shared/telemetry/` directly — the symlink makes changes live for every a
 
 Per-plugin iKey/collector routing is pluggable via a `resolver.js` placed next to the plugin's `ikey.json` (implementing the `resolve`/`isProvisioned` contract); the shared library ships only that contract plus a static-key fallback, not any routing logic. A per-plugin opt-out env var `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT` (derived as the uppercased plugin name with non-alphanumerics collapsed to `_`, suffixed `_OPTOUT`) disables transmission for automation when set to `1`/`true` (dotnet `*_TELEMETRY_OPTOUT` convention); it has the **highest precedence**, overriding both the persisted `config.json` choice and `/<plugin>:telemetry on`.
 
+### CI must opt out of telemetry transmission
+
+An adopting plugin's committed `ikey.json` ships **enabled** (`disabled: false`) with a real production instrumentation key, so any process that runs a telemetry-emitting hook or script **without isolating emission** will POST a real (but fake-in-content) event to the production collector. CI runs are not real usage, and such events pollute the production telemetry stream.
+
+**Therefore: every GitHub Actions job that runs the test suite — or any step that could execute a telemetry-emitting hook/script for an adopting plugin — MUST set the plugin's opt-out env var at the job (or workflow) level.** For `power-pages`:
+
+```yaml
+jobs:
+    <job-name>:
+        runs-on: <runner>
+        env:
+            POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "1"
+        steps: ...
+```
+
+This opt-out suppresses **transmission only** (the local diagnostic mirror is still written), so it is safe and has no effect on what the job actually tests. Tests that need to assert that emission *happens* clear the var in their own spawned-process env and route the event to a local `POWER_PLATFORM_SKILLS_FAKE_HTTPS` probe instead of the real collector — so the job-level opt-out never breaks them. Existing reference: `.github/workflows/power-pages-script-tests.yml`. When you add a new such workflow (or a new emitting step to an existing one), add this env var in the same change; treat a CI job that runs the tests without it as a production-telemetry leak.
+
 Current adopters: `power-pages`. Others adopt on demand.
 
 ## Code Conventions
