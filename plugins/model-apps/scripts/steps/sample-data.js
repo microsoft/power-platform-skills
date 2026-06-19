@@ -80,4 +80,4 @@ async function sampleData(spec, opts, deps, result) {
   }
 }
 
-module.exports = { sampleData, recordMatches };
+module.exports = { sampleData };
