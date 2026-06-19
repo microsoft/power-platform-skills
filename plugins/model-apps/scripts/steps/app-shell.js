@@ -58,13 +58,6 @@ async function appShell(spec, opts, deps, result) {
     await recs.addAppComponents(deps.dv, appId, components);
     deps.runScript('add-to-solution.js', [opts.env, spec.solution.uniqueName, appId, '80']); // 80 = appmodule
   }
-
-  if (opts.publish) {
-    deps.step('publish customizations (this can take 1-2 min)');
-    await recs.publishAll(deps.dv);
-  } else {
-    deps.log('skipped publish (pass --publish to publish)');
-  }
 }
 
 module.exports = { appShell };
