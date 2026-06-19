@@ -12,5 +12,7 @@ test('registry lists the 8 ordered steps with run/verify/rollback', () => {
   for (const s of registry) {
     assert.strictEqual(typeof s.run, 'function');
     assert.strictEqual(typeof s.title, 'string');
+    assert.strictEqual(typeof s.verify, 'function');
+    assert.strictEqual(typeof s.rollback, 'function');
   }
 });

@@ -1,7 +1,7 @@
 const { columnTypeMap, sampleRecordsFor } = require('../lib/app-spec.js');
 
 // Count the phase-level steps runAll will emit, so [n/total] has a stable total.
-// MUST mirror the deps.step(...) calls below.
+// MUST mirror the deps.step(...) calls in each step function (steps/*.js) and registry.js.
 function countSteps(spec, opts) {
   let n = 1; // solution
   for (const e of spec.entities) {

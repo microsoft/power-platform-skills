@@ -1,6 +1,6 @@
 const recs = require('../lib/dataverse-records.js');
 
-// --- 5. App shell: kernel buildSitemap -> appmodule + sitemap + AddAppComponents -> publish (opt-in).
+// --- 5. App shell: kernel buildSitemap -> appmodule + sitemap + AddAppComponents.
 async function appShell(spec, opts, deps, result) {
   deps.step(`app shell (sitemap + app module "${spec.app.name}")`);
   const sm = deps.kernel({

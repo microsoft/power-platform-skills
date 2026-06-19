@@ -2,6 +2,7 @@
 const registry = require('../steps/registry.js');
 const { countSteps } = require('../steps/_progress.js');
 
+// Note: step.when is called as when(opts, spec) — opts first, since gating is opts-driven (e.g. (o) => o.sampleData).
 function activeSteps(spec, opts) {
   return registry.filter((s) => (s.when ? s.when(opts, spec) : true));
 }
