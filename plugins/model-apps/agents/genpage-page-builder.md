@@ -217,7 +217,8 @@ export default GeneratedComponent;
 - **Responsive design** — flexbox, relative units, never `100vh`/`100vw`
 - **WCAG AA accessibility** — ARIA labels, keyboard navigation, semantic HTML
 - **Error handling** — all async `dataApi` calls wrapped in try-catch
-- **Lookup fields** — use `@OData.Community.Display.V1.FormattedValue` for display names
+- **Lookup fields** — read display names via `@OData.Community.Display.V1.FormattedValue`; *set* a lookup on create/update with `_<field>_value: "/logicalSingular(guid)"`, never `@odata.bind` (the DataAPI silently drops it → orphaned row). See rules.md DataAPI Rule 13.
+- **All hooks above early returns** — every `useMemo`/`useState`/`useEffect`/`useCallback` must precede any loading/empty `return`, or detail pages crash with React error #310 on first open. See rules.md Critical Rule 19.
 - **Entity logical names** — singular lowercase (e.g., `"account"`)
 - **No placeholders** — no TODOs, no ellipses, no "implement later" comments
 - **Top-level functions** — components and utilities as separate top-level functions, no nesting
