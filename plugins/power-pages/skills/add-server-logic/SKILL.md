@@ -11,7 +11,7 @@ allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Skill, Task
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Add Server Logic
 
@@ -69,7 +69,7 @@ Read `powerpages.config.json` to get the site name and configuration:
 
 ### 1.3 Detect Framework
 
-Read `package.json` to determine the frontend framework (React, Vue, Angular, or Astro). This is needed for Phase 8 (client-side integration guidance). See `${CLAUDE_PLUGIN_ROOT}/references/framework-conventions.md` for the full framework detection mapping.
+Read `package.json` to determine the frontend framework (React, Vue, Angular, or Astro). This is needed for Phase 8 (client-side integration guidance). See `${PLUGIN_ROOT}/references/framework-conventions.md` for the full framework detection mapping.
 
 ### 1.4 Explore Existing Server Logic and Frontend Code
 
@@ -176,7 +176,7 @@ If any planned server logic item involves Dataverse operations, check whether th
 **Step 1 — Fetch custom actions:**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/list-custom-actions.js" "<ENV_URL>"
+node "${PLUGIN_ROOT}/scripts/list-custom-actions.js" "<ENV_URL>"
 ```
 
 The script outputs a JSON object with:
@@ -313,7 +313,7 @@ This step is critical because Server Logic is a preview feature and the SDK surf
 
 Use the reference document below as the source of truth for how to discover, classify, fetch, and reconcile Server Logic documentation:
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/skills/add-server-logic/references/server-logic-docs.md`
+> Reference: `${PLUGIN_ROOT}/skills/add-server-logic/references/server-logic-docs.md`
 
 Follow that reference to:
 
@@ -347,7 +347,7 @@ From the fetched docs, extract and note the items that matter for the current ta
 
 Build the server logic plan data and render the HTML plan before asking for approval.
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/skills/add-server-logic/references/server-logic-plan-data-format.md`
+> Reference: `${PLUGIN_ROOT}/skills/add-server-logic/references/server-logic-plan-data-format.md`
 
 The rendered plan should summarize:
 
@@ -374,7 +374,7 @@ Create the `docs/` folder if it does not already exist. Keep this HTML file insi
 Do **not** hand-author the HTML. Use the render script:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/render-serverlogic-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
+node "${PLUGIN_ROOT}/scripts/render-serverlogic-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
 ```
 
 The render script refuses to overwrite existing files. Before calling it, check if the default output path (`<PROJECT_ROOT>/docs/serverlogic-plan.html`) already exists. If it does, choose a new descriptive filename based on context — e.g., `serverlogic-plan-exchange-rate.html`, `serverlogic-plan-apr-2026.html`. Pass the chosen name via `--output`.
@@ -722,7 +722,7 @@ function get() {
 
 When a function returns the result of a `Server.Connector.Dataverse.*` method, the client sees a double-wrapped payload — the most common cause of broken frontend integrations. Before writing the function, pick one of three response shapes and record the choice for Phase 9: **Approach A — raw passthrough** (return the connector result as-is), **Approach B — envelope that wraps the connector result** (return `{ status, data: result }` without unwrapping `Body`), or **Approach C — fully normalized** (parse `Body` server-side and return a feature-specific shape — recommended for non-generic endpoints).
 
-See `${CLAUDE_PLUGIN_ROOT}/skills/add-server-logic/references/frontend-integration-reference.md` → "Dataverse Connector Response Format" for the double-wrapping explanation, the `CreateRecord` / `entityid` header behavior, and server- and client-side examples for each shape.
+See `${PLUGIN_ROOT}/skills/add-server-logic/references/frontend-integration-reference.md` → "Dataverse Connector Response Format" for the double-wrapping explanation, the `CreateRecord` / `entityid` header behavior, and server- and client-side examples for each shape.
 
 #### Referencing Secrets in Code
 
@@ -743,7 +743,7 @@ Do **not** duplicate Microsoft Learn SDK usage patterns inline in this skill. Us
 For each approved server logic item where the plan status is `create`, generate the metadata file with the deterministic writer script instead of hand-authoring the YAML. The script generates the UUID, writes the fields in the correct order, and returns the created file path as JSON. **Skip this step for `update` / `reuse` items** — the YAML already exists and should be updated manually if needed.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/add-server-logic/scripts/create-serverlogic-metadata.js" --projectRoot "<PROJECT_ROOT>" --name "<name>" --displayName "<human-readable display name>" --description "<description of what this server logic does>" --webRoleIds "<uuid1,uuid2,uuid3>"
+node "${PLUGIN_ROOT}/skills/add-server-logic/scripts/create-serverlogic-metadata.js" --projectRoot "<PROJECT_ROOT>" --name "<name>" --displayName "<human-readable display name>" --description "<description of what this server logic does>" --webRoleIds "<uuid1,uuid2,uuid3>"
 ```
 
 The generated `<PROJECT_ROOT>/.powerpages-site/server-logic/<name>/<name>.serverlogic.yml` file has this structure:
@@ -823,7 +823,7 @@ Extract the entity set name (first argument) from each method call. Build a mapp
 
 ### 6.2 Use the Table Permissions Architect
 
-When any approved server logic item uses `Server.Connector.Dataverse`, invoke the `table-permissions-architect` agent at `${CLAUDE_PLUGIN_ROOT}/agents/table-permissions-architect.md` to determine and create the required table permissions.
+When any approved server logic item uses `Server.Connector.Dataverse`, invoke the `table-permissions-architect` agent at `${PLUGIN_ROOT}/agents/table-permissions-architect.md` to determine and create the required table permissions.
 
 **Prompt:**
 
@@ -873,7 +873,7 @@ If the user chose Azure Key Vault in Phase 2.3.1:
 **Step 1 — List available Key Vaults:**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/list-azure-keyvaults.js"
+node "${PLUGIN_ROOT}/scripts/list-azure-keyvaults.js"
 ```
 
 The script outputs a JSON array of Key Vaults (`name`, `resourceGroup`, `location`) from the user's Azure subscription.
@@ -917,7 +917,7 @@ Use `AskUserQuestion`:
 | What name, resource group, and Azure region would you like for the new Key Vault? | Vault names must be 3-24 characters, globally unique, start with a letter, and contain only alphanumerics and hyphens. Suggest a name based on the project/site name. |
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-azure-keyvault.js" \
+node "${PLUGIN_ROOT}/scripts/create-azure-keyvault.js" \
   --name "<vault-name>" \
   --resourceGroup "<resource-group>" \
   --location "<location>"
@@ -941,7 +941,7 @@ Present the commands as a numbered list the user can copy and run. Use the stdin
 For each secret, run the following command (replacing <YOUR_SECRET_VALUE> with the actual value):
 
 1. <secret-name>:
-   printf '%s' '<YOUR_SECRET_VALUE>' | node "${CLAUDE_PLUGIN_ROOT}/scripts/store-keyvault-secret.js" \
+   printf '%s' '<YOUR_SECRET_VALUE>' | node "${PLUGIN_ROOT}/scripts/store-keyvault-secret.js" \
      --vaultName "<selected-vault>" \
      --secretName "<secret-name>"
 ```
@@ -975,7 +975,7 @@ Tell the user the Secret Identifier URI looks like `https://<vault-name>.vault.a
 After the user shares the `secretUri` output from each command, create an environment variable definition in Dataverse that references the Key Vault secret. Use the `secret` type:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
+node "${PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
   --schemaName "<prefix_SecretName>" \
   --displayName "<Secret Display Name>" \
   --type "secret" \
@@ -987,7 +987,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" 
 For each environment variable, create a site setting YAML that maps to it:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "<SiteSetting/Name>" \
   --envVarSchema "<schemaName-from-step-4>"
@@ -1004,7 +1004,7 @@ If the user chose not to use Azure Key Vault:
 For each secret identified in Phase 2.3, create the environment variable in Dataverse with a placeholder value:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
+node "${PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
   --schemaName "<prefix_SecretName>" \
   --displayName "<Secret Display Name>" \
   --value "PLACEHOLDER_SET_ACTUAL_VALUE"
@@ -1013,7 +1013,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" 
 **Step 2 — Create site setting for the environment variable:**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "<SiteSetting/Name>" \
   --envVarSchema "<schemaName-from-step-1>"
@@ -1065,7 +1065,7 @@ The following site settings control server logic behavior. Only create settings 
 Use the existing site setting creation script:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "ServerLogic/AllowedDomains" --value "api.example.com,api.other.com" --description "Restrict server logic external API calls to these domains"
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "ServerLogic/AllowedDomains" --value "api.example.com,api.other.com" --description "Restrict server logic external API calls to these domains"
 ```
 
 ### 8.2 Git Commit
@@ -1108,7 +1108,7 @@ Use `AskUserQuestion`:
 
 Use the reference below for the frontend integration approach, examples, and framework-specific patterns:
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/skills/add-server-logic/references/frontend-integration-reference.md`
+> Reference: `${PLUGIN_ROOT}/skills/add-server-logic/references/frontend-integration-reference.md`
 
 Based on the Explore agent's findings from Phase 1.4 and the approved plan, choose the integration approach from that reference and apply it consistently across all server logic endpoints being wired into the frontend.
 
@@ -1202,7 +1202,7 @@ Use the frontend integration reference from Phase 9 for the exact calling patter
 
 ### 11.1 Record Skill Usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "AddServerLogic"`.
 

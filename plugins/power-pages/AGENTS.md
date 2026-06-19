@@ -15,7 +15,7 @@ Read `PLUGIN_DEVELOPMENT_GUIDE.md` for UX and reliability standards when creatin
 - **Script changes require tests** — Whenever you add a new script or modify an existing script, add or update `node:test` coverage under `scripts/tests/`. Prefer one `*.test.js` file per script/module being tested, and keep the test command passing: `node --test plugins/power-pages/scripts/tests/` (Node's built-in runner discovers `*.test.js` files under the given directory). Validator changes are not an exception; they must always ship with test coverage.
 - **Dataverse-backed validation** must stay opt-in for local runs only. Do not require live Dataverse connectivity in CI workflows or default test runs; gate it behind explicit local flags such as `--validate-dataverse-relationships`.
 - **Azure CLI `--allow-no-subscriptions`** — this flag is only valid on `az login`. Other `az` subcommands (`az account get-access-token`, `az account show`, etc.) reject it as an unrecognized argument and exit 2, so do NOT add it to anything other than `az login`. When the user is not logged in to the Azure CLI, suggest plain `az login` first; only suggest `az login --allow-no-subscriptions` as a fallback if they don't have any associated Azure subscription, since that variant lets subscription-less accounts sign in and still mint AAD-scoped Dataverse/Power Platform tokens via subsequent `az account get-access-token` calls. Reuse the shared `getAuthToken` helper in `scripts/lib/validation-helpers.js` instead of shelling out to `az` directly.
-- **Reference docs** shared across skills live in `references/` — reference via `${CLAUDE_PLUGIN_ROOT}/references/` paths, don't duplicate.
+- **Reference docs** shared across skills live in `references/` — reference via `${PLUGIN_ROOT}/references/` paths, don't duplicate.
 - **Templates** use `__PLACEHOLDER__` tokens (e.g., `__SITE_NAME__`) replaced during scaffolding. The `gitignore` file is stored without the dot prefix and renamed to `.gitignore` during scaffolding.
 - **Hooks** are defined centrally in `hooks/hooks.json`, using `PostToolUse` with matcher `Skill` so validation runs when a tracked Power Pages skill completes.
 - **ALM split-decision thresholds** are intentionally tighter than the platform hard caps. `scripts/lib/alm-thresholds.js` recommends a split at 75 MB / 4000 components (vs platform caps of 95 MB / 6000), reserving ~20 MB / ~2000-component growth headroom in each split child. Override per-project via `.alm-config.json` if you have a justified reason to push closer to the caps.
@@ -27,7 +27,7 @@ Read `PLUGIN_DEVELOPMENT_GUIDE.md` for UX and reliability standards when creatin
 ## Skill Development Conventions
 
 ```
-.claude-plugin/plugin.json     ← Plugin metadata (name, version, keywords)
+.plugin/plugin.json            ← Open Plugins metadata (name, version, keywords)
 .mcp.json                      ← MCP server config (Playwright for browser automation)
 agents/
   data-model-architect.md      ← Agent: proposes Dataverse data models (read-only)
@@ -182,7 +182,7 @@ All skill folders are tracked. Skills without a `scripts/validate*.js` file are 
 
 ### Shared Scripts
 
-Shared utility scripts live at `scripts/` and are referenced by multiple skills and agents via `${CLAUDE_PLUGIN_ROOT}/scripts/`.
+Shared utility scripts live at `scripts/` and are referenced by multiple skills and agents via `${PLUGIN_ROOT}/scripts/`.
 
 - `generate-uuid.js`: Generates a random UUID v4. Self-contained, no dependencies. Used by `create-webroles` and the main agent when creating table permission / site setting files from the `webapi-permissions` agent plan.
 - `update-skill-tracking.js`: Updates skill usage tracking site settings. Takes `--projectRoot`, `--skillName`, and `--authoringTool` args. The agent passes its own name as `--authoringTool` (e.g., `ClaudeCode`, `GitHubCopilot`). Creates/increments a per-skill counter (`Site-AI-<SkillName>.sitesetting.yml`) and records the authoring tool (`Site-AI-AuthoringTool.sitesetting.yml`). Exits silently if `.powerpages-site/site-settings/` does not exist. Used by every user-invocable skill (each skill calls it in its final phase per the skill-tracking convention).
@@ -263,7 +263,7 @@ Shared reference documents live at `references/` and are referenced by multiple 
 - `cicd-pipeline-patterns.md`: PAC CLI service principal auth syntax; complete ADO `azure-pipelines.yml` template; complete GitHub Actions `deploy.yml` template; commented solution export/import blocks; secrets/variables setup tables; manual steps that cannot be automated; **Power Platform Pipelines API patterns** (HAR-confirmed): host env discovery via `RetrieveSetting`, `deploymentenvironments` create + `validationstatus` poll, `deploymentpipelines` create, `$ref` associate source (relative path format), `deploymentstages` create, `RetrieveDeploymentPipelineInfo`, stage run create + `ValidatePackageAsync` (204) + `operation` poll, `deploymentsettingsjson` PATCH, `DeployPackageAsync`, `stagerunstatus` terminal values, `docs/alm/last-pipeline.json` and `docs/alm/last-deploy.json` formats. Used by `setup-pipeline` and `deploy-pipeline`.
 - `approval-gates.md`: Canonical terminology, marker syntax, and catalog of every user-confirmation point ("Approval Gate") across the **entire power-pages skill set** (12 ALM + 12 non-ALM). Defines six categories (`intent` / `plan` / `progress` / `consent` / `final` / `pause`), an explicit-pairing marker (`<!-- gate: skill:phase | category=X | cancel-leaves=Y -->` + human `> 🚦 Gate (...)` block), the `cancel-leaves` vocabulary, and the seven gate-related lint rules enforced by `scripts/lint-skills-alm.js` at hard-fail severity: `GATE-must-have-marker`, `GATE-id-must-be-unique`, `GATE-must-be-in-catalog`, `GATE-intent-must-call-helper`, `GATE-cancel-leaves-known-vocab`, `GATE-prose-block-required` (marker must be followed by a 🚦 prose block within 10 lines, outside any code fence), and `CATALOG-row-must-have-marker` (reverse of `GATE-must-be-in-catalog` — every `kind: gate` catalog row must have a SKILL.md marker). §6.1–§6.12 catalogue the ALM skills; §6.13–§6.24 catalogue the non-ALM skills (`create-site`, `deploy-site`, `add-server-logic`, `add-cloud-flow`, `setup-auth`, `integrate-webapi`, `setup-datamodel`, `add-sample-data`, `add-seo`, `create-webroles`, `audit-permissions`, `integrate-backend`). `report-issue` is excluded because its workflow lives in the cross-plugin shared file. **New skills must extend §6 in the same PR they introduce an `AskUserQuestion`** — lint will block the PR otherwise.
 
-Skill-specific reference docs (e.g., `skills/setup-datamodel/references/odata-api-patterns.md`) contain only patterns unique to that skill and point to the shared docs via `${CLAUDE_PLUGIN_ROOT}/references/` paths for common content.
+Skill-specific reference docs (e.g., `skills/setup-datamodel/references/odata-api-patterns.md`) contain only patterns unique to that skill and point to the shared docs via `${PLUGIN_ROOT}/references/` paths for common content.
 
 ### MCP Integration
 
@@ -352,7 +352,7 @@ Note: `allowed-tools` must be a comma-separated list, not JSON array or YAML lis
 Every SKILL.md must include the following line immediately after the closing `---` of the frontmatter (before the `#` title):
 
 ```markdown
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 ```
 
 This runs a lightweight check comparing the local plugin version against `origin/main` and shows an update notice if a newer version is available.
@@ -366,7 +366,7 @@ This runs a lightweight check comparing the local plugin version against `origin
 - **Token refresh** — Refresh Azure CLI token every ~20 records / 3-4 tables / ~60 seconds.
 - **Git commits** — Commit after every significant milestone (each page/component, design foundations, phase completion).
 - **Agent spawning** — Process sequentially (not parallel), wait for completion, present output for approval.
-- **Skill tracking** — Every skill must record usage in its final phase via `> Reference: ${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md` (pointer pattern, not hardcoded command). When adding a new skill, also add its entry to the skill name mapping table in `references/skill-tracking-reference.md`.
+- **Skill tracking** — Every skill must record usage in its final phase via `> Reference: ${PLUGIN_ROOT}/references/skill-tracking-reference.md` (pointer pattern, not hardcoded command). When adding a new skill, also add its entry to the skill name mapping table in `references/skill-tracking-reference.md`.
 - **Shell-agnostic docs** — SKILL.md, agent, and reference files must not embed shell-specific syntax inside shell commands or code blocks. Use ` ```bash ` fences (or plain ` ``` `) only for cross-platform commands like `pac`, `az`, `dotnet`, and `node`. Do not use PowerShell cmdlets (`Get-ChildItem`, `Test-Path`, `New-Item`, `Get-Content`, `Remove-Item`, `ConvertFrom-Json`, `Invoke-RestMethod`, etc.) or PowerShell-only variable syntax inside shell commands/code blocks (e.g., `$var = command`, `$env:...`) — prefer `<placeholder>` angle-bracket style there (e.g., `<envUrl>`). Repo runtime placeholders used in prose/templates (such as `**Initial request:** $ARGUMENTS`) are allowed. For filesystem and JSON operations the agent already has first-class tools (`Glob`, `Read`, `Write`, `Edit`) — describe the intent in prose rather than prescribing a shell command.
 - **Dataverse API calls** — Use deterministic Node.js scripts (in the skill's `scripts/` directory) for Dataverse API queries. Scripts should import `getAuthToken` and `makeRequest` from `scripts/lib/validation-helpers.js`. Never use inline PowerShell `Invoke-RestMethod` for API calls — scripts are more reliable, testable, and cross-platform.
 - **ALM-aware by default** — Any skill that creates, modifies, or depends on Dataverse records that belong in a Power Pages site's solution (site components, env var definitions, web roles, site settings, server logic, cloud flow bindings, bot consumers, custom tables/columns, etc.) MUST ensure those records land in the user's solution when `.solution-manifest.json` exists. Concrete rules:

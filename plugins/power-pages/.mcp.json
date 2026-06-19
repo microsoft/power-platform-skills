@@ -1,12 +1,14 @@
 {
-    "playwright": {
-        "command": "node",
-        "args": [
-            "${CLAUDE_PLUGIN_ROOT}/scripts/launch-playwright-mcp.js"
-        ]
-    },
-    "microsoft-learn": {
-        "type": "http",
-        "url": "https://learn.microsoft.com/api/mcp"
+    "mcpServers": {
+        "playwright": {
+            "command": "node",
+            "args": [
+                "${CLAUDE_PLUGIN_ROOT}/scripts/launch-playwright-mcp.js"
+            ]
+        },
+        "microsoft-learn": {
+            "type": "http",
+            "url": "https://learn.microsoft.com/api/mcp"
+        }
     }
 }

@@ -46,7 +46,8 @@ If you prefer to install manually, run these commands inside a Claude Code or Gi
     ```bash
     /plugin install power-pages@power-platform-skills
     /plugin install model-apps@power-platform-skills
-    /plugin install code-apps@power-platform-skills
+    /plugin install mcp-apps@power-platform-skills
+    /plugin install code-apps-preview@power-platform-skills
     /plugin install canvas-apps@power-platform-skills
     ```
 
@@ -63,6 +64,12 @@ Create and deploy Power Pages sites using modern development approaches.
 Build and deploy Power Apps generative pages for model-driven apps.
 
 **Stack**: React + TypeScript + Fluent, deployed via PAC CLI
+
+### [MCP Apps](plugins/mcp-apps/README.md) (`plugins/mcp-apps`)
+
+Generate interactive MCP App widgets for MCP tools.
+
+**Stack**: HTML widgets using the MCP Apps protocol
 
 ### [Code Apps](plugins/code-apps/AGENTS.md) (`plugins/code-apps`)
 
@@ -86,6 +93,7 @@ To develop and test plugins locally, follow these steps:
     ```bash
     claude --plugin-dir /path/to/power-platform-skills/plugins/power-pages
     claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
+    claude --plugin-dir /path/to/power-platform-skills/plugins/mcp-apps
     claude --plugin-dir /path/to/power-platform-skills/plugins/code-apps
     claude --plugin-dir /path/to/power-platform-skills/plugins/canvas-apps
     ```
@@ -155,38 +163,54 @@ See the [Copilot CLI docs](https://docs.github.com/en/copilot/how-tos/use-copilo
 
 ```text
 power-platform-skills/
-├── .claude-plugin/
-│   └── marketplace.json      # Marketplace manifest (lists all plugins)
+├── marketplace.json          # Open Plugins marketplace manifest (lists all plugins)
+├── .claude-plugin/           # Legacy marketplace shim for existing subscriptions
+│   └── marketplace.json
 ├── .claude/
 │   └── settings.json         # Auto-allowed tools (pac, node, dotnet, etc.)
 ├── plugins/
 │   ├── power-pages/          # Power Pages plugin
-│   │   ├── .claude-plugin/
+│   │   ├── .plugin/
+│   │   │   └── plugin.json
+│   │   ├── .claude-plugin/   # Legacy manifest mirror
 │   │   │   └── plugin.json
 │   │   ├── commands/
 │   │   ├── shared/
 │   │   └── skills/
 │   ├── model-apps/           # Model Apps plugin
-│   |   ├── .claude-plugin/
+│   |   ├── .plugin/
 │   │   └── plugin.json
 │   |   ├── commands/
 │   |   ├── skills/
 │   |   ├── shared/           # Shared references + samples
 │   |   └── github/           # GitHub Copilot instructions
+│   ├── mcp-apps/             # MCP Apps widget generator plugin
+│   │   ├── .plugin/
+│   │   │   └── plugin.json
+│   │   ├── references/
+│   │   ├── samples/
+│   │   └── skills/
 │   ├── code-apps/            # Code Apps plugin
-│   │   ├── .claude-plugin/
+│   │   ├── .plugin/
 │   │   │   └── plugin.json
 │   │   ├── agents/
 │   │   ├── skills/
 │   │   └── shared/           # Shared instructions + references
 │   └── canvas-apps/          # Canvas Apps plugin
-│       ├── .claude-plugin/
+│       ├── .plugin/
 │       │   └── plugin.json
 │       ├── references/       # Technical + design guides
 │       └── skills/
 ├── AGENTS.md                 # Development guidelines
 └── README.md
 ```
+
+The `.claude-plugin` files are compatibility symlinks for users who subscribed
+before the Open Plugins migration. The root legacy marketplace points to
+`../marketplace.json`, and per-plugin legacy manifests point to
+`../.plugin/plugin.json`. The shared marketplace uses repository-root-relative
+plugin `source` paths so existing subscriptions can auto-update without
+requiring users to remove and reinstall the marketplace or plugins.
 
 ## Documentation
 

@@ -2,6 +2,7 @@
 
 const { spawn } = require("node:child_process");
 const path = require("node:path");
+const { telemetryOptOutEnvVarName } = require("./user-config");
 
 const DISPATCHER = path.resolve(__dirname, "emit-dispatcher.js");
 
@@ -11,6 +12,10 @@ function fireAndForget(event, opts = {}) {
   const configDir = opts.configDir || "";
   const fakeProbe = opts.fakeProbe || "";
   const cloud = opts.cloud || "";
+  const pluginName = event && event.data && event.data.pluginName;
+  const optOutVarName = pluginName ? telemetryOptOutEnvVarName(pluginName) : "";
+  const optOutValue =
+    optOutVarName && process.env[optOutVarName] ? process.env[optOutVarName] : "";
   // Absolute path to the CALLING plugin's ikey.json. The dispatcher lives in
   // shared/telemetry/lib (reached via the per-plugin symlink), so its own
   // __dirname-based default would resolve to shared/'s placeholder, not the
@@ -41,6 +46,15 @@ function fireAndForget(event, opts = {}) {
         // plugin's real config rather than shared/'s placeholder.
         POWER_PLATFORM_SKILLS_IKEY_JSON:
           process.env.POWER_PLATFORM_SKILLS_IKEY_JSON || ikeyJsonPath || "",
+        // The opt-out is enforced in the detached dispatcher, which reads the
+        // child's process.env — so the minimal allowlist must forward this var
+        // explicitly or the highest-precedence opt-out never reaches it. Forward
+        // only when actually set: an empty/unset value is a no-op for the
+        // dispatcher's check (it trims and matches only "1"/"true"), so there's
+        // no point planting an empty var in the child env.
+        ...(optOutVarName && optOutValue
+          ? { [optOutVarName]: optOutValue }
+          : {}),
       },
     });
     try {

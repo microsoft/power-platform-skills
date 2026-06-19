@@ -35,7 +35,7 @@ Your prompt includes:
 - The user's requirements
 - The **approved plan** (screens, aesthetic direction / approach, data strategy)
 - The working directory where files should be written
-- The plugin root directory (`${CLAUDE_PLUGIN_ROOT}`)
+- The plugin root directory (`${PLUGIN_ROOT}`)
 - **CREATE-specific context:** user preferences (target users, aesthetic, features)
 - **EDIT-specific context:** current app state (palette, variables, layout), synced file list
 
@@ -45,8 +45,8 @@ Your prompt includes:
 
 Read both reference documents before writing anything:
 
-- `${CLAUDE_PLUGIN_ROOT}/references/TechnicalGuide.md`
-- `${CLAUDE_PLUGIN_ROOT}/references/DesignGuide.md`
+- `${PLUGIN_ROOT}/references/TechnicalGuide.md`
+- `${PLUGIN_ROOT}/references/DesignGuide.md`
 
 Internalize both. These govern every YAML syntax and design decision.
 
@@ -142,7 +142,7 @@ Write `canvas-app-plan.md` to the working directory. This document is the **sing
 truth** for all `canvas-screen-builder` agents — each agent will only `Read`
 this file and will not call MCP tools. The document must be fully self-contained.
 
-Read `${CLAUDE_PLUGIN_ROOT}/references/PlanTemplates.md` for the mode-appropriate document
+Read `${PLUGIN_ROOT}/references/PlanTemplates.md` for the mode-appropriate document
 structure (CREATE or EDIT). Follow the template exactly — fill in every section with real
 content from the approved plan, discovery results, and control definitions. Do not omit
 sections unless the template says to.

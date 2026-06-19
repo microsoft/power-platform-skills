@@ -9,7 +9,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate,
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Set Up Dataverse Data Model
 
@@ -32,7 +32,7 @@ Guide the user through creating Dataverse tables, columns, and relationships for
 **Actions**:
 
 1. Create todo list with all 8 phases (see [Progress Tracking](#progress-tracking) table)
-2. Follow the prerequisite steps in `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md` to verify PAC CLI auth, acquire an Azure CLI token, and confirm API access. Note the environment URL as `<envUrl>` for subsequent script calls.
+2. Follow the prerequisite steps in `${PLUGIN_ROOT}/references/dataverse-prerequisites.md` to verify PAC CLI auth, acquire an Azure CLI token, and confirm API access. Note the environment URL as `<envUrl>` for subsequent script calls.
 
 **Output**: Verified PAC CLI auth, valid Azure CLI token, confirmed API access, `<envUrl>` noted
 
@@ -112,7 +112,7 @@ If the user chooses to let the Data Model Architect figure it out, proceed to **
      prompt: |
        You are the data-model-architect agent. Follow the instructions in
        the agent definition file at:
-       ${CLAUDE_PLUGIN_ROOT}/agents/data-model-architect.md
+       ${PLUGIN_ROOT}/agents/data-model-architect.md
 
        Analyze the current project and Dataverse environment, then propose
        a complete data model. Return:
@@ -180,7 +180,7 @@ Only proceed to creation after explicit user approval.
 Re-acquire the auth token (tokens expire after ~60 minutes):
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
+node "${PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
 ```
 
 ### 5.2 Query Existing Tables
@@ -188,7 +188,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
 For each table in the approved proposal marked as `new`, check whether it already exists:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "api/data/v9.2/EntityDefinitions(LogicalName='<table_logical_name>')"
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "api/data/v9.2/EntityDefinitions(LogicalName='<table_logical_name>')"
 ```
 
 - **If 404**: Table does not exist, proceed to create it
@@ -224,7 +224,7 @@ Refer to `references/odata-api-patterns.md` for full JSON body templates.
 For each new table, POST to the EntityDefinitions endpoint:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "api/data/v9.2/EntityDefinitions" --body '<JSON body from references/odata-api-patterns.md>'
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "api/data/v9.2/EntityDefinitions" --body '<JSON body from references/odata-api-patterns.md>'
 ```
 
 Use the deep-insert pattern to create the table and its columns in a single POST request. See `references/odata-api-patterns.md` for the complete JSON structure.
@@ -234,7 +234,7 @@ Use the deep-insert pattern to create the table and its columns in a single POST
 For tables marked as `modified`, add new columns one at a time:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "api/data/v9.2/EntityDefinitions(LogicalName='<table>')/Attributes" --body '<column JSON from references/odata-api-patterns.md>'
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "api/data/v9.2/EntityDefinitions(LogicalName='<table>')/Attributes" --body '<column JSON from references/odata-api-patterns.md>'
 ```
 
 ### 6.3 Track Progress
@@ -260,7 +260,7 @@ If creating many tables, the `dataverse-request.js` script handles 401 token ref
 Create lookup columns that establish 1:N relationships:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "api/data/v9.2/RelationshipDefinitions" --body '<relationship JSON from references/odata-api-patterns.md>'
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "api/data/v9.2/RelationshipDefinitions" --body '<relationship JSON from references/odata-api-patterns.md>'
 ```
 
 ### 7.2 Many-to-Many Relationships
@@ -268,7 +268,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "api/dat
 Create M:N relationships (intersect tables are created automatically):
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "api/data/v9.2/RelationshipDefinitions" --body '<M:N relationship JSON from references/odata-api-patterns.md>'
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "api/data/v9.2/RelationshipDefinitions" --body '<M:N relationship JSON from references/odata-api-patterns.md>'
 ```
 
 ### 7.3 Track Relationship Creation
@@ -290,7 +290,7 @@ Track each relationship creation attempt. Report failures without rolling back.
 Publish all customizations so the new tables and columns become available:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "api/data/v9.2/PublishXml" --body '{"ParameterXml":"<importexportxml><entities><entity>cr123_project</entity><entity>cr123_task</entity></entities></importexportxml>"}'
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "api/data/v9.2/PublishXml" --body '{"ParameterXml":"<importexportxml><entities><entity>cr123_project</entity><entity>cr123_task</entity></entities></importexportxml>"}'
 ```
 
 See `references/odata-api-patterns.md` for the full PublishXml pattern.
@@ -300,7 +300,7 @@ See `references/odata-api-patterns.md` for the full PublishXml pattern.
 For each created table, run a verification query:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "api/data/v9.2/EntityDefinitions(LogicalName='<table>')?$select=LogicalName,DisplayName"
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "api/data/v9.2/EntityDefinitions(LogicalName='<table>')?$select=LogicalName,DisplayName"
 ```
 
 ### 8.3 Write Manifest
@@ -324,11 +324,11 @@ After successful verification, write `.datamodel-manifest.json` to the project r
 }
 ```
 
-Use the `Write` tool to create this file at `<PROJECT_ROOT>/.datamodel-manifest.json`. Only include tables and columns that were confirmed to exist in Step 8.2. See `${CLAUDE_PLUGIN_ROOT}/references/datamodel-manifest-schema.md` for the full schema specification.
+Use the `Write` tool to create this file at `<PROJECT_ROOT>/.datamodel-manifest.json`. Only include tables and columns that were confirmed to exist in Step 8.2. See `${PLUGIN_ROOT}/references/datamodel-manifest-schema.md` for the full schema specification.
 
 ### 8.4 Record Skill Usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "SetupDatamodel"`.
 

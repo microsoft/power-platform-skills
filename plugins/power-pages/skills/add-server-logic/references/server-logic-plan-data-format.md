@@ -153,7 +153,7 @@ When `SECRETS_DATA` is `null` or `useKeyVault` is `false`, the banner and per-ca
 Do **not** write the HTML manually. Use the render script:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/render-serverlogic-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
+node "${PLUGIN_ROOT}/scripts/render-serverlogic-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
 ```
 
 The render script refuses to overwrite existing files. Before calling it, check if the default output path (`<PROJECT_ROOT>/docs/serverlogic-plan.html`) already exists. If it does, choose a new descriptive filename based on context — e.g., `serverlogic-plan-exchange-rate.html`, `serverlogic-plan-apr-2026.html`. Pass the chosen name via `--output`.

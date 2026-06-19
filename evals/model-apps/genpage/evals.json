@@ -59,7 +59,7 @@
         "Phase 2: Entity-builder is SKIPPED (no entities to create)",
         "Phase 4: pac model genpage generate-types --data-sources 'account' --output-file <working-dir>/RuntimeTypes.ts is run",
         "Phase 5b (single-page fast path): Plan has 1 page so orchestrator inlines the build — NO Task subagent dispatched for the page-builder",
-        "Phase 5b: Orchestrator reads ${CLAUDE_PLUGIN_ROOT}/references/verified-icons.txt before writing the .tsx",
+        "Phase 5b: Orchestrator reads ${PLUGIN_ROOT}/references/verified-icons.txt before writing the .tsx",
         "Phase 5b: A relevant sample file is read (e.g., 7-responsive-cards.tsx for card layout)",
         "Phase 5b: Generated .tsx uses only column names verified from RuntimeTypes.ts — no guessed names",
         "Phase 5b: After writing, orchestrator greps the .tsx for `from \"@fluentui/react-icons\"` imports and verifies each named import against verified-icons.txt — rewrites if any are missing",

@@ -14,7 +14,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, Task
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # configure-env-variables
 
@@ -53,7 +53,7 @@ When `inExecution.status` is anything other than `"active"` (`"not-running"`, `"
 **Step 1 — Run the gate helper.**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" --projectRoot "."
+node "${PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" --projectRoot "."
 ```
 
 The helper returns JSON with `{ exists, deferred, stale, staleness: { reason, detail }, generatedAt, planStatus, ... }`. Pass `--envUrl`, `--token`, `--solutionId` once Phase 1 has acquired them if you also want a freshness check; otherwise the helper does an existence-only check, which is sufficient for the gate decision below.
@@ -116,7 +116,7 @@ ls .powerpages-site/site-settings/   # list all site setting YAML files
 
 **1.2 Acquire token and verify prerequisites:**
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" \
+node "${PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" \
   --envUrl "{devEnvUrl}" \
   --require-manifest
 ```
@@ -170,9 +170,9 @@ Ask via `AskUserQuestion`:
 > N. I'll type my own setting names"
 
 For each selected setting, ask for:
-1. **Env var schema name** — generate via `${CLAUDE_PLUGIN_ROOT}/scripts/lib/generate-env-var-schema-name.js` (single source of truth shared with `setup-solution`):
+1. **Env var schema name** — generate via `${PLUGIN_ROOT}/scripts/lib/generate-env-var-schema-name.js` (single source of truth shared with `setup-solution`):
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/generate-env-var-schema-name.js" \
+   node "${PLUGIN_ROOT}/scripts/lib/generate-env-var-schema-name.js" \
      --publisherPrefix "{publisherPrefix}" --settingName "{settingName}"
    ```
    Output: `{ schemaName, sanitized }`. The canonical rule is `{prefix}_{settingName.replace(/[^A-Za-z0-9]+/g,'_').toLowerCase()}` — e.g. `Authentication/Registration/LocalLoginEnabled` becomes `ids_authentication_registration_localloginenabled`. Do NOT inline a custom rule here: setup-solution emits schema names from this helper, and configure-env-variables MUST match what setup-solution already created (otherwise the link to the existing site setting fails). The user can override the suggestion if they have a reason, but the default must come from the helper.
@@ -204,7 +204,7 @@ Definition-only flow — per-stage values come later from `deployment-settings.j
 
 **3.A.1 Check and create if needed** using `create-env-var-definition.js` (the script checks for an existing definition by `schemaName` before posting):
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-env-var-definition.js" \
+node "${PLUGIN_ROOT}/scripts/lib/create-env-var-definition.js" \
   --envUrl "{devEnvUrl}" \
   --token "{TOKEN}" \
   --schemaName "{schemaName}" \
@@ -263,7 +263,7 @@ Dataverse / the Power Platform Pipelines handler accept exactly three formats fo
 When the user has already stored the secret in Azure Key Vault and has a Secret Identifier URI in canonical form, use the atomic deep-insert path — the same flow `add-server-logic` Phase 7.2a uses:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "{devEnvUrl}" \
+node "${PLUGIN_ROOT}/scripts/create-environment-variable.js" "{devEnvUrl}" \
   --schemaName "{schemaName}" \
   --displayName "{displayName}" \
   --type secret \
@@ -272,14 +272,14 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "{devEnvUrl}
 
 This script POSTs a single deep-insert that creates the `environmentvariabledefinition` (type 100000005) AND the `environmentvariablevalues` row with the Key Vault URI in `value` — Dataverse resolves the secret at runtime by dereferencing the URI. The script is ALM-aware and adds the new definition to the target solution via `AddSolutionComponent` (same `resolve-target-solution.js` resolution order as the rest of the family).
 
-> **Cross-reference: see `${CLAUDE_PLUGIN_ROOT}/skills/add-server-logic/SKILL.md` Phase 7.2a** for the full Key Vault end-to-end: vault selection (`list-azure-keyvaults.js` / `create-azure-keyvault.js`), secret storage (`store-keyvault-secret.js` with stdin to keep the secret out of the conversation), and the URI handoff back to env-var creation. The implementation is identical; we re-use the same helper scripts.
+> **Cross-reference: see `${PLUGIN_ROOT}/skills/add-server-logic/SKILL.md` Phase 7.2a** for the full Key Vault end-to-end: vault selection (`list-azure-keyvaults.js` / `create-azure-keyvault.js`), secret storage (`store-keyvault-secret.js` with stdin to keep the secret out of the conversation), and the URI handoff back to env-var creation. The implementation is identical; we re-use the same helper scripts.
 
 ### 3.C — Secret env vars without a Key Vault URI (legacy / deferred)
 
 When the user has not chosen Key Vault yet or hasn't stored the secret, create the definition with an empty value placeholder and instruct the user to wire the value via Power Platform Admin Center after import:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-env-var-definition.js" \
+node "${PLUGIN_ROOT}/scripts/lib/create-env-var-definition.js" \
   --envUrl "{devEnvUrl}" \
   --token "{TOKEN}" \
   --schemaName "{schemaName}" \
@@ -302,7 +302,7 @@ Track created env var IDs: `{ schemaName, envVarDefId, siteSettingName, devValue
 
 For each site setting to link, run `link-site-setting-to-env-var.js` (HAR-confirmed PATCH via v9.0 API — no UI step required):
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/link-site-setting-to-env-var.js" \
+node "${PLUGIN_ROOT}/scripts/lib/link-site-setting-to-env-var.js" \
   --envUrl "{devEnvUrl}" \
   --token "{TOKEN}" \
   --siteSettingId "{siteSettingId}" \
@@ -376,7 +376,7 @@ Before persisting `deployment-settings.json` to disk, validate every entry again
 Catching invalid values **at write time** is the difference between a sub-second hard stop and a hours-long blind alley.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/validate-deployment-settings.js" \
+node "${PLUGIN_ROOT}/scripts/lib/validate-deployment-settings.js" \
   --settingsFile "./deployment-settings.json" \
   --envUrl "{devEnvUrl}" \
   --token "{token}"
@@ -414,7 +414,7 @@ GET {devEnvUrl}/api/data/v9.2/solutioncomponents?$filter=_solutionid_value eq {s
 **7.2b Verify values landed on dev env.** After creating the definitions + values, query the dev env to confirm each `environmentvariablevalues` row exists. The shared helper `scripts/lib/verify-env-var-values.js` does this read-only check:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-env-var-values.js" \
+node "${PLUGIN_ROOT}/scripts/lib/verify-env-var-values.js" \
   --envUrl "{devEnvUrl}" \
   --schemaNames "{comma-separated schema names just created}"
 ```
@@ -424,7 +424,7 @@ Capture stdout as JSON. If `summary.landed === summary.total`, the local definit
 **7.2b.bump Bump source solution version + manifest sync.** Creating new env var definitions and adding them to the solution via `AddSolutionComponent` modifies `solutions.modifiedon`. Bump the patch segment so downstream skills see a strictly-increasing version label AND the local `.solution-manifest.json` tracks the change:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/bump-solution-version.js" \
+node "${PLUGIN_ROOT}/scripts/lib/bump-solution-version.js" \
   --envUrl "{devEnvUrl}" \
   --token "{token}" \
   --uniqueName "{solutionUniqueName}" \
@@ -436,7 +436,7 @@ The helper returns `{ previous, next, bumped: true, manifestUpdated, manifestUpd
 **7.2c Refresh the post-config env var snapshot.** Re-run the discovery helper to write `docs/alm/last-env-vars.json` with the freshly-created definitions. Without this, the rendered ALM plan's Env Variables tab stays at whatever setup-solution last wrote — newly-created definitions don't appear until plan-alm runs again. The refresh helper invoked at the end of this phase ingests this sidecar into `planData.envVars[]` AND mirrors it over to `docs/alm/alm-env-vars.json` so both snapshots stay current:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-env-var-definitions.js" \
+node "${PLUGIN_ROOT}/scripts/lib/discover-env-var-definitions.js" \
   --envUrl "{devEnvUrl}" \
   --publisherPrefix "{publisherPrefix}" \
   --websiteRecordId "{websiteRecordId}" \
@@ -478,14 +478,14 @@ Next steps:
 
 **7.5 Record skill usage:**
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "ConfigureEnvVariables"`.
 
 **7.5b Refresh the ALM plan (if one exists):**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --projectRoot "." \
   --phase configure-env-variables \
   --render

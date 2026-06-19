@@ -110,7 +110,7 @@ function buildAmbientDeclarations() {
 // \`(window as any).\` casts.
 //
 // Regenerate by running:
-//   node \${CLAUDE_PLUGIN_ROOT}/scripts/generate-page-manifest.js <dir> <slug> --force
+//   node \${PLUGIN_ROOT}/scripts/generate-page-manifest.js <dir> <slug> --force
 
 export {};
 

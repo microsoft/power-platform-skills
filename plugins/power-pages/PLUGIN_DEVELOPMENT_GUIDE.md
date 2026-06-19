@@ -227,7 +227,7 @@ LLMs are probabilistic. When an LLM constructs inline bash commands for Datavers
 Skills invoke scripts via `node` with CLI arguments:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" \
+node "${PLUGIN_ROOT}/scripts/create-table-permission.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --permissionName "<Permission Name>" \
   --tableName "<table_logical_name>" \

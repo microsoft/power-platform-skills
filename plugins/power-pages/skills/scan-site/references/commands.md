@@ -48,7 +48,7 @@ A missing `.powerpages-site/website.yml` means the site has not been deployed ye
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/website.js" --websiteId <guid>
+node "${PLUGIN_ROOT}/scripts/website.js" --websiteId <guid>
 ```
 
 ### Parameters
@@ -80,7 +80,7 @@ Triggers an asynchronous deep scan. The service runs the scan in the background;
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/start-deep-scan.js" --portalId <portal-id>
+node "${PLUGIN_ROOT}/skills/scan-site/scripts/start-deep-scan.js" --portalId <portal-id>
 ```
 
 ### Parameters
@@ -119,8 +119,8 @@ Polls the scan-status endpoint until the scan finishes or the timeout elapses.
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/poll-deep-scan.js" --portalId <portal-id> [--timeoutMinutes <n>] [--intervalSeconds <n>]
-node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/poll-deep-scan.js" --portalId <portal-id> --once
+node "${PLUGIN_ROOT}/skills/scan-site/scripts/poll-deep-scan.js" --portalId <portal-id> [--timeoutMinutes <n>] [--intervalSeconds <n>]
+node "${PLUGIN_ROOT}/skills/scan-site/scripts/poll-deep-scan.js" --portalId <portal-id> --once
 ```
 
 ### Parameters
@@ -177,7 +177,7 @@ Fetches the latest completed deep-scan report. Outputs the full report JSON to s
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/get-latest-report.js" --portalId <portal-id>
+node "${PLUGIN_ROOT}/skills/scan-site/scripts/get-latest-report.js" --portalId <portal-id>
 ```
 
 ### Parameters
@@ -222,8 +222,8 @@ Transforms a deep-scan report into the unified findings shape used by the consol
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/transform-report.js" --portalId <portal-id>
-node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/transform-report.js" --reportFile <report-file>
+node "${PLUGIN_ROOT}/skills/scan-site/scripts/transform-report.js" --portalId <portal-id>
+node "${PLUGIN_ROOT}/skills/scan-site/scripts/transform-report.js" --reportFile <report-file>
 ```
 
 ### Parameters

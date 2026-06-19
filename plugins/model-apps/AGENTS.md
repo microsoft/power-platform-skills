@@ -25,7 +25,7 @@ claude --plugin-dir /path/to/plugins/model-apps
 ## Architecture
 
 ```
-.claude-plugin/plugin.json     ← Plugin metadata (name, version, keywords)
+.plugin/plugin.json            ← Open Plugins metadata (name, version, keywords)
 .mcp.json                      ← MCP server config (Playwright for browser verification)
 AGENTS.md                      ← Plugin guidance for AI agents (this file)
 CLAUDE.md                      ← Symlink → AGENTS.md
