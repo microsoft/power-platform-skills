@@ -18,7 +18,7 @@ allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Skill, Task
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Add AI Web API
 
@@ -52,7 +52,7 @@ Integrate Power Pages generative-AI summarization APIs into a SPA site. This ski
 > `adx_case`), or the standard incident table summarised on different facets (priority, owner,
 > SLA timer), is just a regular Data Summarization call with maker-defined values.
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/skills/add-ai-webapi/references/ai-api-reference.md` — canonical
+> Reference: `${PLUGIN_ROOT}/skills/add-ai-webapi/references/ai-api-reference.md` — canonical
 > API shapes, required headers, site-setting names, error codes, and the documented support-case
 > example. Read this at the start of the workflow; fetch the Microsoft Learn source pages with
 > `mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch` if the user asks for the latest.
@@ -220,7 +220,7 @@ Look for `powerpages.config.json` in the current directory or immediate subdirec
 ### 1.3 Detect framework
 
 Read `package.json` and detect React / Vue / Angular / Astro. See
-`${CLAUDE_PLUGIN_ROOT}/references/framework-conventions.md`.
+`${PLUGIN_ROOT}/references/framework-conventions.md`.
 
 ### 1.4 Check for data model
 
@@ -268,7 +268,7 @@ delegation needs at least one role before `/integrate-webapi` can create table p
 **Goal**: Find every candidate for each of the two APIs — scoped to AI only.
 
 The full Explore-agent prompt body, manifest shape, and delegation-decision rules live in
-`${CLAUDE_PLUGIN_ROOT}/skills/add-ai-webapi/references/explore-prompt.md`. Read that file
+`${PLUGIN_ROOT}/skills/add-ai-webapi/references/explore-prompt.md`. Read that file
 first, then invoke the **Explore agent** (via `Task` with `subagent_type: "Explore"`,
 thoroughness `medium`) and pass the prompt body verbatim.
 
@@ -382,7 +382,7 @@ After the user confirms targets, ask per-target follow-up questions only when ne
   chosen target kind decides which scope question (LIST or SINGLE-RECORD) to ask next.
 
 Question text, option lists, and the scope-classification → question mapping live in
-`${CLAUDE_PLUGIN_ROOT}/skills/add-ai-webapi/references/scope-classification.md`. Read it
+`${PLUGIN_ROOT}/skills/add-ai-webapi/references/scope-classification.md`. Read it
 when any per-target follow-up is required.
 
 The chosen values flow into the Phase 5 agent-invocation prompt as the **Scope for the summary
@@ -528,10 +528,10 @@ exists; web roles exist.
 ### 5.1 Invoke the `ai-webapi-integration` agent — first target (sequential)
 
 For the first target in the confirmed manifest, invoke the agent at
-`${CLAUDE_PLUGIN_ROOT}/agents/ai-webapi-integration.md` via `Task`. The full prompt
+`${PLUGIN_ROOT}/agents/ai-webapi-integration.md` via `Task`. The full prompt
 template — every field the agent expects, with notes on which orchestrator phase resolved
 each value — lives in
-`${CLAUDE_PLUGIN_ROOT}/skills/add-ai-webapi/references/agent-invocation-prompt.md`. Read
+`${PLUGIN_ROOT}/skills/add-ai-webapi/references/agent-invocation-prompt.md`. Read
 that file, copy the template, replace every `<…>` placeholder with the concrete value for
 the current target, and pass it via `Task`. The agent does not interpret placeholders;
 sending the literal text `<search | data>` will confuse it.
@@ -627,7 +627,7 @@ architect with a missing folder.
 
 ### 6.3 Invoke `ai-webapi-settings-architect`
 
-Invoke the agent at `${CLAUDE_PLUGIN_ROOT}/agents/ai-webapi-settings-architect.md` via `Task`:
+Invoke the agent at `${PLUGIN_ROOT}/agents/ai-webapi-settings-architect.md` via `Task`:
 
 > "Analyse this Power Pages SPA site and propose generative-AI summarization site settings.
 > The following Data Summarization targets were integrated in Phase 5: [list each target with its
@@ -767,7 +767,7 @@ identifier.)
 
 ### 8.1 Record skill usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Use `--skillName "AddAiWebapi"`.
 
@@ -872,7 +872,7 @@ Copilot card are the wrong defaults — collection endpoint, tabular-insight pro
 
 The full 10-rule playbook (collection endpoint, scope mirroring, prompt size, nav-property
 casing, mandatory `ContentSizeLimit`) lives in
-`${CLAUDE_PLUGIN_ROOT}/skills/add-ai-webapi/references/ai-api-reference.md` §2 "List-summary
+`${PLUGIN_ROOT}/skills/add-ai-webapi/references/ai-api-reference.md` §2 "List-summary
 playbook". Read that section before any list-summary target reaches Phase 5 — the Phase 5
 agent and the Phase 6 settings architect both reference the same playbook.
 

@@ -1,18 +1,24 @@
 #!/usr/bin/env node
 
 /**
- * Validates that plugin names use kebab-case in all plugin metadata files.
+ * Validates that plugin names follow the Open Plugins name constraints.
  */
 
 const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
-const KEBAB_CASE_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const OPEN_PLUGIN_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9.-]{0,62}[a-z0-9])?$/;
 
 function validateName(name, source) {
-  if (KEBAB_CASE_PATTERN.test(name)) return null;
-  return `${source}: '${name}' is not kebab-case`;
+  if (typeof name !== 'string') {
+    return `${source}: plugin name must be a string`;
+  }
+
+  if (OPEN_PLUGIN_NAME_PATTERN.test(name) && !name.includes('--') && !name.includes('..')) {
+    return null;
+  }
+  return `${source}: '${name}' does not follow Open Plugins name constraints`;
 }
 
 function readJson(filePath) {
@@ -26,14 +32,14 @@ function getPluginManifestPaths() {
   return fs
     .readdirSync(pluginsDirectory, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join(pluginsDirectory, entry.name, '.claude-plugin', 'plugin.json'))
+    .map((entry) => path.join(pluginsDirectory, entry.name, '.plugin', 'plugin.json'))
     .filter((filePath) => fs.existsSync(filePath))
     .sort();
 }
 
 const errors = [];
 
-const marketplacePath = path.join(ROOT, '.claude-plugin', 'marketplace.json');
+const marketplacePath = path.join(ROOT, 'marketplace.json');
 const marketplace = readJson(marketplacePath);
 for (const [index, plugin] of (marketplace.plugins || []).entries()) {
   const error = validateName(
@@ -53,11 +59,11 @@ for (const pluginManifestPath of getPluginManifestPaths()) {
 }
 
 if (errors.length > 0) {
-  console.log('Found plugin names that are not kebab-case:');
+  console.log('Found plugin names that do not follow Open Plugins name constraints:');
   for (const error of errors) {
     console.log(`- ${error}`);
   }
   process.exit(1);
 }
 
-console.log('All plugin names are kebab-case.');
+console.log('All plugin names follow Open Plugins name constraints.');

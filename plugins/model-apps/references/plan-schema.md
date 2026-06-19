@@ -147,7 +147,7 @@ validation rejects values that look like `crb2b_playername` or even
 | `## Entity Creation Required` | Entity-builder | Exact literal "No entity creation required..." when empty, else per-entity subsections |
 | `## Existing Entities` | Orchestrator (for `pac model genpage generate-types --data-sources`) | Comma-separated logical names |
 | `## Design Preferences` | Page-builder | Prose, free-form |
-| `## Relevant Samples` | Page-builder (for Read path resolution) | Sample filename must match a file in `${CLAUDE_PLUGIN_ROOT}/samples/` |
+| `## Relevant Samples` | Page-builder (for Read path resolution) | Sample filename must match a file in `${PLUGIN_ROOT}/samples/` |
 | `## Per-Page Specifications` | Page-builder | Each page gets one `### [Page Name]` subsection matching the Pages table |
 
 ---

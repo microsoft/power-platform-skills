@@ -19,7 +19,7 @@ allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Task, TaskC
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Set Up Authentication & Authorization
 
@@ -70,7 +70,7 @@ Look for `powerpages.config.json` in the current directory or immediate subdirec
 
 #### 1.2 Detect Framework
 
-Read `package.json` to determine the framework (React, Vue, Angular, or Astro). See `${CLAUDE_PLUGIN_ROOT}/references/framework-conventions.md` for the full framework detection mapping.
+Read `package.json` to determine the framework (React, Vue, Angular, or Astro). See `${PLUGIN_ROOT}/references/framework-conventions.md` for the full framework detection mapping.
 
 #### 1.3 Check Deployment Status
 
@@ -344,7 +344,7 @@ For each provider, also share the relevant Microsoft Learn documentation link so
 **For "Entra External ID"** — use the 4-step walkthrough below. Do NOT just ask the user for Authority/ClientId/Metadata upfront — those values come from a tenant + app registration + user flow that the user may not have set up yet. Walk them through each prerequisite before asking for the corresponding value.
 
 > Reference doc: https://learn.microsoft.com/en-us/power-pages/security/authentication/entra-external-id
-> See also `${CLAUDE_PLUGIN_ROOT}/skills/setup-auth/references/authentication-reference.md` for the full Entra External ID prerequisites section the steps below cross-reference.
+> See also `${PLUGIN_ROOT}/skills/setup-auth/references/authentication-reference.md` for the full Entra External ID prerequisites section the steps below cross-reference.
 
 **Pre-computed values for THIS site** — before starting the walkthrough, compute:
 - `SITE_URL` = the deployed site URL (e.g., `https://site-597pv.powerappsportals.com`). Read from `pac env who` + the site name, or from the site's existing settings.
@@ -759,7 +759,7 @@ The Web API `fields` site setting MUST include `contactid` plus the 8 editable f
 **Auto-detect the Privacy Extensions solution before asking.** Run:
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/check-solution-installed.js" --solutionName "msdynce_PortalPrivacyExtensions"
+node "${PLUGIN_ROOT}/scripts/check-solution-installed.js" --solutionName "msdynce_PortalPrivacyExtensions"
 ```
 
 The script prints JSON to stdout: `{ "installed": true, "version": "..." }` if found, or `{ "installed": false }` if the solution isn't in the environment. On infrastructure failure (no PAC environment, expired Azure CLI token, missing Read permission on the solutions table, network error), it exits non-zero and writes a human-readable reason to stderr.
@@ -1026,7 +1026,7 @@ Use `AskUserQuestion` to get approval:
 
 **Goal:** Create the authentication service, type declarations, and framework-specific auth hook/composable with local development mock support.
 
-Reference: `${CLAUDE_PLUGIN_ROOT}/skills/setup-auth/references/authentication-reference.md`
+Reference: `${PLUGIN_ROOT}/skills/setup-auth/references/authentication-reference.md`
 
 ### Actions
 
@@ -1178,7 +1178,7 @@ Integrate the hook into the Layout component so it runs on every page. Pass an `
 
 **Goal:** Create role-checking utilities and framework-specific authorization components (guards, directives, wrapper components).
 
-Reference: `${CLAUDE_PLUGIN_ROOT}/skills/setup-auth/references/authorization-reference.md`
+Reference: `${PLUGIN_ROOT}/skills/setup-auth/references/authorization-reference.md`
 
 ### Actions
 
@@ -2039,7 +2039,7 @@ If the auth button is not visible or the page has rendering errors, fix the issu
 The site needs provider-specific site settings. Check if `.powerpages-site/site-settings/` exists. Use the `create-site-setting.js` script for all site settings:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "<Setting/Name>" \
   --value "<value>" \
@@ -2086,21 +2086,21 @@ Example for two OIDC providers:
 > **ProfileRedirectEnabled MUST be `false` for code sites.** If `create-site-setting.js` reports this setting already exists, read the YAML file and check its value. If it is `true`, edit the file to set `value: false`. When this is `true`, the server redirects users to `/profile` after login/registration instead of respecting the `ReturnUrl` — which breaks the SPA flow.
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/Registration/ProfileRedirectEnabled" \
   --value "false" \
   --description "Disable profile redirect for code sites" \
   --type boolean
 
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/Registration/Enabled" \
   --value "true" \
   --description "Enable user registration (global toggle)" \
   --type boolean
 
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/Registration/ExternalLoginEnabled" \
   --value "true" \
@@ -2118,14 +2118,14 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 #   "Custom"             → user-provided comma-separated pairs
 # For SAML2/WsFed, use the claim URI form instead of OIDC short names.
 
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/{Type}/{ProviderName}/RegistrationClaimsMapping" \
   --value "firstname=given_name,lastname=family_name,emailaddress1=email" \
   --description "Map IdP claims to contact fields on first sign-in"
 
 # Only write if PROFILE_SYNC_FREQUENCY = "Both"
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/{Type}/{ProviderName}/LoginClaimsMapping" \
   --value "firstname=given_name,lastname=family_name,emailaddress1=email" \
@@ -2137,7 +2137,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 ```powershell
 # CONTACT_LINKING_CHOICE = "Link to existing"  → value "true"
 # CONTACT_LINKING_CHOICE = "Create new"        → value "false" (or skip — false is the server default)
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/{Type}/{ProviderName}/AllowContactMappingWithEmail" \
   --value "<true-or-false-from-choice>" \
@@ -2150,7 +2150,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 **Per-provider `RegistrationEnabled` setting** — for **every** external provider (OIDC, SAML2, WS-Federation, social), also write:
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/{Type}/{ProviderName}/RegistrationEnabled" \
   --value "true" \
@@ -2166,7 +2166,7 @@ For external providers, write logout settings only when the user picked **"Feder
 
 ```powershell
 # Only when LOGOUT_MODE = "Federated logout"
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/RPInitiatedLogout" \
   --value "true" \
@@ -2174,7 +2174,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --type boolean
 
 # REQUIRED when RPInitiatedLogout=true — must be paired
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/PostLogoutRedirectUri" \
   --value "<POST_LOGOUT_REDIRECT_URI from Phase 2.1.1>" \
@@ -2196,7 +2196,7 @@ For SAML2 / WS-Federation / social providers, the equivalent settings names diff
 # Uses `upn` for email because workforce Entra ID v1.0 tokens don't include the `email`
 # claim by default. UPN (user principal name, e.g. user@contoso.com) is the standard
 # substitute and matches what the user expects in their profile.
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/AzureAD/RegistrationClaimsMapping" \
   --value "firstname=given_name,lastname=family_name,emailaddress1=upn" \
@@ -2205,7 +2205,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 # LoginClaimsMapping — applied every sign-in. Updates contact fields if user info
 # changes in Entra (e.g., name change). Same mapping as Registration; safe to write
 # both for consistency.
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/AzureAD/LoginClaimsMapping" \
   --value "firstname=given_name,lastname=family_name,emailaddress1=upn" \
@@ -2220,7 +2220,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 
 ```powershell
 # Authority (required — or use MetadataAddress as alternative)
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/Authority" \
   --value "<authority-url-from-user>" \
@@ -2228,28 +2228,28 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 
 # MetadataAddress (optional — alternative to Authority for providers that need explicit metadata URL)
 # Create this if the user provides a metadata URL distinct from the authority
-# node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+# node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
 #   --projectRoot "<PROJECT_ROOT>" \
 #   --name "Authentication/OpenIdConnect/{ProviderName}/MetadataAddress" \
 #   --value "<metadata-url>" \
 #   --description "OIDC metadata endpoint URL"
 
 # ClientId — use value collected in Phase 2.1
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/ClientId" \
   --value "<client-id-from-user>" \
   --description "Application client ID"
 
 # AuthenticationType
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/AuthenticationType" \
   --value "<authority-url-from-user>" \
   --description "Provider identifier for ExternalLogin"
 
 # RedirectUri — use /signin-{ProviderName-lowercased} for guaranteed uniqueness
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/RedirectUri" \
   --value "<site-url>/signin-{ProviderName-lowercased}" \
@@ -2257,7 +2257,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 
 # CallbackPath — required to prevent collision when multiple OIDC providers exist
 # OWIN defaults ALL OIDC providers to /signin-oidc
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/CallbackPath" \
   --value "/signin-{ProviderName-lowercased}" \
@@ -2280,28 +2280,28 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 ```powershell
 # Authority — derived: https://{subdomain}.ciamlogin.com/{tenantId}
 # (do NOT append /v2.0/ — that breaks Entra External ID)
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/Authority" \
   --value "https://<EXTERNAL_ID_TENANT_SUBDOMAIN>.ciamlogin.com/<EXTERNAL_ID_TENANT_ID>" \
   --description "Entra External ID authority URL (derived)"
 
 # MetadataAddress — derived: Authority + /v2.0/.well-known/openid-configuration
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/MetadataAddress" \
   --value "https://<EXTERNAL_ID_TENANT_SUBDOMAIN>.ciamlogin.com/<EXTERNAL_ID_TENANT_ID>/v2.0/.well-known/openid-configuration" \
   --description "OIDC metadata document URL (derived)"
 
 # ClientId — from walkthrough Step 2
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/ClientId" \
   --value "<EXTERNAL_ID_CLIENT_ID>" \
   --description "Application client ID"
 
 # AuthenticationType — must match Authority exactly (used as the 'provider' form value in ExternalLogin POST)
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/AuthenticationType" \
   --value "https://<EXTERNAL_ID_TENANT_SUBDOMAIN>.ciamlogin.com/<EXTERNAL_ID_TENANT_ID>" \
@@ -2309,7 +2309,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 
 # RedirectUri — the full URI the maker registered in their Entra app.
 # Confirmed/customized by user in Step 2 of walkthrough (stored as REDIRECT_URI).
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/RedirectUri" \
   --value "<REDIRECT_URI>" \
@@ -2319,7 +2319,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 # new URL(REDIRECT_URI).pathname). Required to prevent CallbackPath collision when
 # multiple OIDC providers exist (OWIN defaults all OIDC to /signin-oidc otherwise).
 # The maker doesn't see this separately — the skill writes it automatically.
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/CallbackPath" \
   --value "<path-portion-of-REDIRECT_URI>" \
@@ -2338,19 +2338,19 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 **SAML2** — create settings for the provider:
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/SAML2/{ProviderName}/MetadataAddress" \
   --value "<metadata-url-from-user>" \
   --description "SAML IdP metadata URL"
 
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/SAML2/{ProviderName}/AuthenticationType" \
   --value "<site-url>" \
   --description "Provider identifier for ExternalLogin — MUST match providerIdentifier in authService exactly"
 
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/SAML2/{ProviderName}/ServiceProviderRealm" \
   --value "<site-url>" \
@@ -2362,19 +2362,19 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 **WS-Federation** — create settings for the provider:
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/WsFederation/{ProviderName}/MetadataAddress" \
   --value "<metadata-url-from-user>" \
   --description "WS-Fed metadata URL"
 
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/WsFederation/{ProviderName}/AuthenticationType" \
   --value "<provider-realm-or-identifier>" \
   --description "Provider identifier for ExternalLogin"
 
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/WsFederation/{ProviderName}/Wtrealm" \
   --value "<site-url>" \
@@ -2388,7 +2388,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 **Settings always written (regardless of registration mode):**
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/Registration/LocalLoginEnabled" \
   --value "true" \
@@ -2396,14 +2396,14 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --type boolean
 
 # Set to "true" if the user chose email login, "false" if they chose username login (Phase 2.1)
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/Registration/LocalLoginByEmail" \
   --value "<true-or-false-from-user-choice>" \
   --description "Login by email (true) or username (false)" \
   --type boolean
 
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/Registration/ResetPasswordEnabled" \
   --value "true" \
@@ -2426,21 +2426,21 @@ Example (write each setting that applies — skip Enabled/OpenReg/Invitation whe
 
 ```powershell
 # For all modes EXCEPT "Registration disabled":
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/Registration/Enabled" \
   --value "true" \
   --description "Master switch: registration is enabled" \
   --type boolean
 
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/Registration/OpenRegistrationEnabled" \
   --value "<true-or-false-from-mode>" \
   --description "Allow self-registration without an invitation" \
   --type boolean
 
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/Registration/InvitationEnabled" \
   --value "<true-or-false-from-mode>" \
@@ -2448,7 +2448,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --type boolean
 
 # For "Registration disabled" mode ONLY:
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/Registration/Enabled" \
   --value "false" \
@@ -2465,14 +2465,14 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 | Registration disabled | (skip — registration is off) | — |
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/Registration/CaptchaEnabled" \
   --value "false" \
   --description "Disable server-rendered CAPTCHA — SPA cannot render the widget" \
   --type boolean
 
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/Registration/IsCaptchaEnabledForRegistration" \
   --value "false" \
@@ -2494,7 +2494,7 @@ When the maker opted into the profile page (Phase 2.1), enable Web API on the `c
 
 ```powershell
 # Enable Web API on the contact table
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Webapi/contact/enabled" \
   --value "true" \
@@ -2503,7 +2503,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 
 # Allowed fields — USE THE EXACT VALUE BELOW (9 entries, all lowercase)
 # Case-sensitive: PascalCase or Title Case produces 403 even if the column exists
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Webapi/contact/fields" \
   --value "contactid,firstname,lastname,mobilephone,address1_line1,address1_city,address1_stateorprovince,address1_postalcode,address1_country" \
@@ -2535,7 +2535,7 @@ Skip the rest of this phase if no role found.
 **Step 2 — Create the table permission.**
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" \
+node "${PLUGIN_ROOT}/scripts/create-table-permission.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --permissionName "My Profile - Edit Own Contact" \
   --tableName "contact" \
@@ -2569,7 +2569,7 @@ Note: `create: false` + `delete: false` — users can read and update their own 
 **Facebook** — uses `AppId` (not `ClientId`). The App ID was collected in Phase 2.1:
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenAuth/Facebook/AppId" \
   --value "<app-id-from-user>" \
@@ -2579,7 +2579,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 **Google** — the Client ID was collected in Phase 2.1:
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenAuth/Google/ClientId" \
   --value "<client-id-from-user>" \
@@ -2589,7 +2589,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 **Microsoft Account** — the Client ID was collected in Phase 2.1:
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenAuth/MicrosoftAccount/ClientId" \
   --value "<client-id-from-user>" \
@@ -2615,7 +2615,7 @@ For secrets (`ClientSecret`, `AppSecret`), **never store them in site setting YA
 **Step 1 — List available Key Vaults:**
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/list-azure-keyvaults.js"
+node "${PLUGIN_ROOT}/scripts/list-azure-keyvaults.js"
 ```
 
 **Step 2 — Select or create a Key Vault:**
@@ -2635,7 +2635,7 @@ If **no Key Vaults are found**:
 **If "Create a new Key Vault"**: Ask for vault name, resource group, and location:
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-azure-keyvault.js" \
+node "${PLUGIN_ROOT}/scripts/create-azure-keyvault.js" \
   --name "<vault-name>" \
   --resourceGroup "<resource-group>" \
   --location "<location>"
@@ -2653,7 +2653,7 @@ Do **not** ask for secret values — they must never pass through the conversati
 For each secret, run the following command (replacing <YOUR_SECRET_VALUE> with the actual value):
 
 1. <Provider> Client Secret:
-   printf '%s' '<YOUR_SECRET_VALUE>' | node "${CLAUDE_PLUGIN_ROOT}/scripts/store-keyvault-secret.js" \
+   printf '%s' '<YOUR_SECRET_VALUE>' | node "${PLUGIN_ROOT}/scripts/store-keyvault-secret.js" \
      --vaultName "<selected-vault>" \
      --secretName "<provider>-client-secret"
 ```
@@ -2675,7 +2675,7 @@ Tell the user each command outputs a JSON object with a `secretUri` and to share
 After the user shares the `secretUri`, create an environment variable that references the Key Vault secret:
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
+node "${PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
   --schemaName "<prefix_ProviderClientSecret>" \
   --displayName "<Provider> Client Secret" \
   --type "secret" \
@@ -2685,7 +2685,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" 
 **Step 5 — Create site setting for the environment variable:**
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/ClientSecret" \
   --envVarSchema "<prefix_ProviderClientSecret>"
@@ -2707,12 +2707,12 @@ This creates a site setting with `envvar_schema` and `source: 1`, which tells Po
 If the user chose not to use Key Vault, create environment variables with placeholder values (plain string type, not secret type). The user updates them later via the Power Apps maker portal:
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
+node "${PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
   --schemaName "<prefix_ProviderClientSecret>" \
   --displayName "<Provider> Client Secret" \
   --value "PLACEHOLDER_SET_ACTUAL_VALUE"
 
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "<site-setting-name-from-table-above>" \
   --envVarSchema "<prefix_ProviderClientSecret>"
@@ -2730,7 +2730,7 @@ Present the list of environment variables that need updating (display name and s
 > **Prerequisite**: The GDPR/Privacy Extensions solution (`msdynce_PortalPrivacyExtensions`) must be installed in the Dataverse environment. Without it, the server ignores `TermsAgreementEnabled` entirely. Remind the user of this requirement.
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/Registration/TermsAgreementEnabled" \
   --value "true" \
@@ -2741,7 +2741,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 If the user provided a `TermsPublicationDate`:
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/Registration/TermsPublicationDate" \
   --value "<ISO-date-from-user>" \
@@ -2759,7 +2759,7 @@ Optionally create the other 3 snippets for the server-rendered terms page (used 
 
 #### 8.2 Record Skill Usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "SetupAuth"`.
 
@@ -2855,7 +2855,7 @@ After the summary, generate an HTML setup report at `<PROJECT_ROOT>/docs/auth-se
 **2. Render the report.** Run:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/render-auth-report.js" \
+node "${PLUGIN_ROOT}/scripts/render-auth-report.js" \
   --output "<PROJECT_ROOT>/docs/auth-setup-report.html" \
   --data "<path-to-temp-data.json>"
 ```

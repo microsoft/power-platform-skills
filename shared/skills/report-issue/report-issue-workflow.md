@@ -15,7 +15,7 @@ File a bug report on the [power-platform-skills](https://github.com/microsoft/po
 **Actions**:
 
 1. Create a task list with all 5 phases (see [Progress Tracking](#progress-tracking) table).
-2. **Auto-detect the plugin name** from the current plugin context by reading `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`. Extract the `name` field.
+2. **Auto-detect the plugin name** from the current plugin context by reading `${PLUGIN_ROOT}/.plugin/plugin.json`. Extract the `name` field.
 3. **Auto-detect the plugin version** from the same `plugin.json` — extract the `version` field.
 4. If the plugin name or version cannot be determined, use `AskUserQuestion` to ask the user.
 

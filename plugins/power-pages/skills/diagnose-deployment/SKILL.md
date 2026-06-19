@@ -11,7 +11,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, Task
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # diagnose-deployment
 
@@ -47,13 +47,13 @@ Auth failures are non-blocking — report them as findings, continue collecting 
 
 ### Phase 1.5 — Ground in current ALM documentation
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/alm-docs-grounding.md`
+> Reference: `${PLUGIN_ROOT}/references/alm-docs-grounding.md`
 
 Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line note and continue — this skill must remain runnable offline.
 
 1. Run `microsoft_docs_search` with the query: `Power Pages deployment errors solution import troubleshooting`.
 2. Fetch `https://learn.microsoft.com/en-us/power-platform/alm/solution-concepts-alm` (and at most one sister page on troubleshooting or known import errors) in parallel via `microsoft_docs_fetch`.
-3. Extract a one-paragraph summary of what Microsoft Learn currently says about common deployment failures and their resolution. Compare against `${CLAUDE_PLUGIN_ROOT}/references/deployment-error-catalog.md` and flag any new error patterns not yet captured in the catalog.
+3. Extract a one-paragraph summary of what Microsoft Learn currently says about common deployment failures and their resolution. Compare against `${PLUGIN_ROOT}/references/deployment-error-catalog.md` and flag any new error patterns not yet captured in the catalog.
 4. Use the summary to inform pattern-matching in Phase 5. If a new pattern is documented on Learn that isn't in the catalog, surface it to the user as a candidate addition rather than silently extending the catalog.
 
 ### Phase 2 — Collect Deployment Artifacts
@@ -82,7 +82,7 @@ pac pages upload-code-site --rootPath "." 2>&1
 Capture stdout+stderr as a single string. Pass to `scripts/parse-deployment-errors.js`:
 
 ```bash
-echo "{escaped-output}" | node "${CLAUDE_PLUGIN_ROOT}/scripts/parse-deployment-errors.js"
+echo "{escaped-output}" | node "${PLUGIN_ROOT}/scripts/parse-deployment-errors.js"
 ```
 
 Parse the JSON findings array. If the upload succeeded with no errors, note this and skip to Phase 5 with an empty findings list.
@@ -196,7 +196,7 @@ If manual steps remain: list them explicitly with commands or links.
 
 ### Record Skill Usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "DiagnoseDeployment"`.
 

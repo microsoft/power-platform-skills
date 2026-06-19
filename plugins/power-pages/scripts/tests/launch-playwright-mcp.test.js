@@ -15,7 +15,7 @@ test('buildMcpArgs launches Playwright MCP with fullscreen config', () => {
   const args = buildMcpArgs('chrome');
   const configIndex = args.indexOf('--config');
 
-  assert.deepEqual(args.slice(0, 3), ['@playwright/mcp@latest', '--browser', 'chrome']);
+  assert.deepEqual(args.slice(0, 4), ['-y', '@playwright/mcp@latest', '--browser', 'chrome']);
   assert.equal(args.includes('--viewport-size'), false);
   assert.notEqual(configIndex, -1);
   assert.equal(args[configIndex + 1], quoteShellArg(expectedConfigPath));
@@ -53,7 +53,7 @@ test('launch wires spawn and process exit handling', () => {
   });
 
   assert.equal(spawnCall.command, 'npx');
-  assert.deepEqual(spawnCall.args.slice(0, 3), ['@playwright/mcp@latest', '--browser', 'msedge']);
+  assert.deepEqual(spawnCall.args.slice(0, 4), ['-y', '@playwright/mcp@latest', '--browser', 'msedge']);
   assert.deepEqual(spawnCall.options, { stdio: 'inherit', shell: true });
 
   child.emit('exit', 7);

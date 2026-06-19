@@ -4,18 +4,21 @@ This file provides guidance to AI Agents when working with code in this reposito
 
 ## What This Repo Is
 
-A **plugin marketplace** for Power Platform development by Microsoft. The marketplace manifest (`.claude-plugin/marketplace.json`) references individual plugins in `plugins/`. Each plugin has its own `AGENTS.md` with plugin-specific guidance.
+A **plugin marketplace** for Power Platform development by Microsoft. The Open Plugins marketplace manifest (`marketplace.json`) references individual plugins in `plugins/`. Each plugin has its own `AGENTS.md` with plugin-specific guidance.
 
 ## Repository Structure
 
 ```
 power-platform-skills/
-├── .claude-plugin/
-│   └── marketplace.json      # Marketplace manifest (lists all available plugins)
+├── marketplace.json          # Open Plugins marketplace manifest (lists all available plugins)
+├── .claude-plugin/           # Legacy symlinks for existing subscriptions
+│   └── marketplace.json
 ├── plugins/                  # Directory containing individual plugins
 │   └── <plugin-name>/        # Individual plugin (e.g., power-pages)
-│       ├── .claude-plugin/
+│       ├── .plugin/
 │       │   └── plugin.json   # Plugin manifest
+│       ├── .claude-plugin/
+│       │   └── plugin.json   # Legacy manifest mirror
 │       ├── AGENTS.md         # Plugin-specific development guidelines
 │       ├── agents/           # Agent persona files
 │       ├── commands/         # Command entry points
@@ -42,7 +45,8 @@ No root-level build, lint, or test commands exist. Build/test tooling lives insi
 
 Each plugin follows this structure:
 
-- `.claude-plugin/plugin.json` — Plugin metadata (name, version, keywords)
+- `.plugin/plugin.json` — Open Plugins metadata (name, version, keywords)
+- `.claude-plugin/plugin.json` — legacy symlink to `.plugin/plugin.json` kept for existing subscriptions
 - `.mcp.json` — MCP server configuration (optional)
 - `agents/` — Agent definitions (`.md` files with YAML frontmatter)
 - `skills/` — Skill definitions, each in its own subdirectory with a `SKILL.md`
@@ -61,7 +65,7 @@ Skills that apply to all plugins live in `shared/skills/<skill-name>/`. The work
 - `plugins/<plugin>/skills/<skill-name>/SKILL.md` — Per-plugin wrapper generated from the template above
 - `plugins/<plugin>/skills/<skill-name>/<workflow>.md` — Symlink to the shared workflow when the plugin must work after installing only its own plugin directory
 
-This keeps the skill discoverable in each plugin while preserving install-time portability. Marketplace installs copy only the plugin directory, so per-plugin wrappers must not reference repo-root `shared/` paths at runtime. Instead, point the wrapper at `${CLAUDE_PLUGIN_ROOT}/skills/<skill-name>/<workflow>.md` and keep a symlink from that per-plugin path to the repo-root shared workflow; marketplace installers dereference same-marketplace symlinks into the installed plugin cache. When updating a shared skill, edit the workflow file and/or `SKILL.template.md` in `shared/`, then update the per-plugin wrappers (frontmatter + bundled workflow reference, with `{{PLUGIN_NAME}}` substituted) and ensure any per-plugin symlinks still resolve under `plugins/<plugin>/skills/<skill-name>/`. Commit the shared source and per-plugin symlinks together.
+This keeps the skill discoverable in each plugin while preserving install-time portability. Marketplace installs copy only the plugin directory, so per-plugin wrappers must not reference repo-root `shared/` paths at runtime. Instead, point the wrapper at `${PLUGIN_ROOT}/skills/<skill-name>/<workflow>.md` and keep a symlink from that per-plugin path to the repo-root shared workflow; marketplace installers dereference same-marketplace symlinks into the installed plugin cache. When updating a shared skill, edit the workflow file and/or `SKILL.template.md` in `shared/`, then update the per-plugin wrappers (frontmatter + bundled workflow reference, with `{{PLUGIN_NAME}}` substituted) and ensure any per-plugin symlinks still resolve under `plugins/<plugin>/skills/<skill-name>/`. Commit the shared source and per-plugin symlinks together.
 
 ## Shared Telemetry
 
@@ -71,7 +75,35 @@ Edit `shared/telemetry/` directly — the symlink makes changes live for every a
 
 Per-plugin iKey/collector routing is pluggable via a `resolver.js` placed next to the plugin's `ikey.json` (implementing the `resolve`/`isProvisioned` contract); the shared library ships only that contract plus a static-key fallback, not any routing logic. A per-plugin opt-out env var `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT` (derived as the uppercased plugin name with non-alphanumerics collapsed to `_`, suffixed `_OPTOUT`) disables transmission for automation when set to `1`/`true` (dotnet `*_TELEMETRY_OPTOUT` convention); it has the **highest precedence**, overriding both the persisted `config.json` choice and `/<plugin>:telemetry on`.
 
+### CI must opt out of telemetry transmission
+
+An adopting plugin's committed `ikey.json` ships **enabled** (`disabled: false`) with a real production instrumentation key, so any process that runs a telemetry-emitting hook or script **without isolating emission** will POST a real (but fake-in-content) event to the production collector. CI runs are not real usage, and such events pollute the production telemetry stream.
+
+**Therefore: every GitHub Actions job that runs the test suite — or any step that could execute a telemetry-emitting hook/script for an adopting plugin — MUST set the plugin's opt-out env var at the job (or workflow) level.** For `power-pages`:
+
+```yaml
+jobs:
+    <job-name>:
+        runs-on: <runner>
+        env:
+            POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "1"
+        steps: ...
+```
+
+This opt-out suppresses **transmission only** (the local diagnostic mirror is still written), so it is safe and has no effect on what the job actually tests. Tests that need to assert that emission *happens* clear the var in their own spawned-process env and route the event to a local `POWER_PLATFORM_SKILLS_FAKE_HTTPS` probe instead of the real collector — so the job-level opt-out never breaks them. Existing reference: `.github/workflows/power-pages-script-tests.yml`. When you add a new such workflow (or a new emitting step to an existing one), add this env var in the same change; treat a CI job that runs the tests without it as a production-telemetry leak.
+
 Current adopters: `power-pages`. Others adopt on demand.
+
+## Legacy Marketplace Compatibility
+
+Keep the root `.claude-plugin/marketplace.json` as a symlink to
+`../marketplace.json`, and keep each plugin's `.claude-plugin/plugin.json` as a
+symlink to `../.plugin/plugin.json`. The shared root marketplace must stay
+dual-compatible: use repository-root-relative plugin `source` paths and preserve
+legacy `category`/`tags` fields alongside Open Plugins metadata. Existing
+marketplace subscriptions may still resolve the legacy paths during auto-update,
+so removing or drifting these files can force users to reinstall. Run
+`node scripts/validate-legacy-compatibility.js` after metadata changes.
 
 ## Code Conventions
 

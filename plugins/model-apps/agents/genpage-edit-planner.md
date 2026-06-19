@@ -30,7 +30,7 @@ You will be invoked by the `/genpage` skill with a prompt that includes:
 
 - The user's edit intent: `$ARGUMENTS`
 - The working directory (absolute path)
-- The plugin root directory (`${CLAUDE_PLUGIN_ROOT}`)
+- The plugin root directory (`${PLUGIN_ROOT}`)
 - The app-id and page-id of the page being edited
 - The download directory: `<working-dir>/<page-id>/`
 
@@ -196,7 +196,7 @@ Write `genpage-edit-plan.md` to the working directory root (NOT inside the
  when applying the changes.>
 
 ## Relevant Samples
-<Optional. If a sample from ${CLAUDE_PLUGIN_ROOT}/samples/ would help the
+<Optional. If a sample from ${PLUGIN_ROOT}/samples/ would help the
  orchestrator understand a new pattern being added, list it here.>
 
 | Purpose | Sample |

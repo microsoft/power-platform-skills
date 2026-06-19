@@ -26,7 +26,7 @@ You will be invoked by the `/genpage` skill with a prompt that includes:
 
 - Path to `genpage-plan.md`
 - The working directory (where to write logs and intermediate JSON)
-- The plugin root (`${CLAUDE_PLUGIN_ROOT}`) — where the JS scripts live
+- The plugin root (`${PLUGIN_ROOT}`) — where the JS scripts live
 - The Dataverse environment URL (e.g. `https://aurorabapenv4ab3f.crmtest.dynamics.com`)
 
 The **Solution unique name** and **Publisher Prefix** are read directly from the
@@ -38,7 +38,7 @@ and `create-relationship.js` call. `Default` is a valid value — it lands new
 components in the env's built-in Default Solution. There is no "omit" branch.
 
 You operate entirely through the Web API via the plugin's scripts under
-`${CLAUDE_PLUGIN_ROOT}/scripts/`. **There is no MCP server. There is no Python. There
+`${PLUGIN_ROOT}/scripts/`. **There is no MCP server. There is no Python. There
 is no Dataverse Skills plugin dependency.**
 
 ---
@@ -48,7 +48,7 @@ is no Dataverse Skills plugin dependency.**
 Read `genpage-plan.md` at the path provided in your invocation prompt.
 
 The plan document follows a strict schema. See
-`${CLAUDE_PLUGIN_ROOT}/references/plan-schema.md` for the full contract,
+`${PLUGIN_ROOT}/references/plan-schema.md` for the full contract,
 especially the `## Entity Creation Required` section.
 
 Extract from the **`## Environment`** section:
@@ -108,7 +108,7 @@ You still re-probe defensively in case the orchestrator's check went stale
 (e.g., the user revoked auth mid-run):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/check-auth.js" <envUrl>
+node "${PLUGIN_ROOT}/scripts/check-auth.js" <envUrl>
 ```
 
 Parse the JSON output. If `ok: false`, **abort and surface the `message` field
@@ -169,7 +169,7 @@ contract above. Pass it on every command.
 #### 4a. Create the table
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table.js" \
+node "${PLUGIN_ROOT}/scripts/create-table.js" \
   "$ENV_URL" \
   "${PREFIX}_<SchemaName>" \
   "<Display Name>" \
@@ -194,7 +194,7 @@ omit `--solution "$SOLUTION"` for brevity but **every call must include it**.
 
 **String:**
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/add-column.js" \
+node "${PLUGIN_ROOT}/scripts/add-column.js" \
   "$ENV_URL" "<logicalName>" "${PREFIX}_email" "Email" string \
   --max-length 200 --format Email \
   --required-level None \
@@ -203,7 +203,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/add-column.js" \
 
 **Memo (long text):**
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/add-column.js" \
+node "${PLUGIN_ROOT}/scripts/add-column.js" \
   "$ENV_URL" "<logicalName>" "${PREFIX}_notes" "Notes" memo \
   --max-length 4000 --format TextArea \
   --solution "$SOLUTION"
@@ -211,25 +211,25 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/add-column.js" \
 
 **Integer / Decimal / Money:**
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/add-column.js" \
+node "${PLUGIN_ROOT}/scripts/add-column.js" \
   "$ENV_URL" "<logicalName>" "${PREFIX}_count" "Count" integer \
   --min 0 --max 10000 --solution "$SOLUTION"
 
-node "${CLAUDE_PLUGIN_ROOT}/scripts/add-column.js" \
+node "${PLUGIN_ROOT}/scripts/add-column.js" \
   "$ENV_URL" "<logicalName>" "${PREFIX}_amount" "Amount" money \
   --precision 2 --max 1000000 --solution "$SOLUTION"
 ```
 
 **DateTime:**
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/add-column.js" \
+node "${PLUGIN_ROOT}/scripts/add-column.js" \
   "$ENV_URL" "<logicalName>" "${PREFIX}_startdate" "Start Date" datetime \
   --format DateOnly --behavior UserLocal --solution "$SOLUTION"
 ```
 
 **Boolean:**
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/add-column.js" \
+node "${PLUGIN_ROOT}/scripts/add-column.js" \
   "$ENV_URL" "<logicalName>" "${PREFIX}_isactive" "Active" boolean \
   --true-label "Active" --false-label "Inactive" --default true \
   --solution "$SOLUTION"
@@ -237,7 +237,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/add-column.js" \
 
 **Picklist (choice column) — options are inline JSON or @file:**
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/add-column.js" \
+node "${PLUGIN_ROOT}/scripts/add-column.js" \
   "$ENV_URL" "<logicalName>" "${PREFIX}_status" "Status" picklist \
   --options '[{"value":100000000,"label":"Active"},{"value":100000001,"label":"Inactive"},{"value":100000002,"label":"OnHold"}]' \
   --solution "$SOLUTION"
@@ -254,7 +254,7 @@ Append a row to the log for each successful add.
 Once both the referenced and referencing tables exist:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-relationship.js" 1n \
+node "${PLUGIN_ROOT}/scripts/create-relationship.js" 1n \
   "$ENV_URL" \
   "${PREFIX}_<referenced>_${PREFIX}_<referencing>" \
   "${PREFIX}_<referencedTable>" \
@@ -275,7 +275,7 @@ properties on the child table — the navigation property name (e.g.
 #### 4d. Add N:N relationships
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-relationship.js" nn \
+node "${PLUGIN_ROOT}/scripts/create-relationship.js" nn \
   "$ENV_URL" \
   "${PREFIX}_<entity1>_${PREFIX}_<entity2>" \
   "${PREFIX}_<entity1>" \
@@ -294,7 +294,7 @@ Use `add-to-solution.js` only when you need to add an **existing** component
 (e.g., a system table you didn't create) to a solution:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/add-to-solution.js" \
+node "${PLUGIN_ROOT}/scripts/add-to-solution.js" \
   <envUrl> <solutionUniqueName> <componentId> 1
 ```
 
@@ -308,7 +308,7 @@ are in place.
 After all tables, columns, and relationships are created, run a verification query:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" \
   <envUrl> GET \
   "EntityDefinitions(LogicalName='<prefix>_<tableLogical>')?\$select=LogicalName,SchemaName,PrimaryNameAttribute"
 ```
@@ -354,7 +354,7 @@ If the user says yes:
 
 3. Create parent records first (no @odata.bind references):
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/create-record.js" \
+   node "${PLUGIN_ROOT}/scripts/create-record.js" \
      <envUrl> "<prefix>_<plural>" --body @<working-dir>/<parent>-records.json
    ```
 
@@ -369,7 +369,7 @@ If the user says yes:
    ]
    ```
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/create-record.js" \
+   node "${PLUGIN_ROOT}/scripts/create-record.js" \
      <envUrl> "<prefix>_<childPlural>" --body @<working-dir>/<child>-records.json
    ```
 
@@ -403,7 +403,7 @@ Ready for RuntimeTypes generation.
 
 ## Critical Constraints
 
-- **All Dataverse operations go through the JS scripts in `${CLAUDE_PLUGIN_ROOT}/scripts/`.**
+- **All Dataverse operations go through the JS scripts in `${PLUGIN_ROOT}/scripts/`.**
   Do NOT call `pac` for entity create/update (PAC's metadata commands are limited).
   Do NOT write Python. Do NOT call MCP tools.
 - **One script invocation per logical operation.** Each script is idempotent in the

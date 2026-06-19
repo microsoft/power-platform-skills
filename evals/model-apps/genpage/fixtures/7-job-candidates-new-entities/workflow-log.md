@@ -41,7 +41,7 @@
 - ## Entity Creation Required has 2 entities with suffix-only names (jobrequisition, candidate)
 
 ## Phase 2a — Pre-flight auth check
-- node ${CLAUDE_PLUGIN_ROOT}/scripts/check-auth.js → returned `{ ok: true, ... }`
+- node ${PLUGIN_ROOT}/scripts/check-auth.js → returned `{ ok: true, ... }`
 - Identity match between pac and az verified
 
 ## Phase 2b — Entity Builder (genpage-entity-builder agent invoked via Task)
@@ -76,7 +76,7 @@
 - Plan has 1 page → fast path taken (inlined build, no Task subagent dispatched)
 - Data mode: dataverse
 - Read sample: plugins/model-apps/samples/9-list-with-caching.tsx (Dataverse list + window cache)
-- Read ${CLAUDE_PLUGIN_ROOT}/references/verified-icons.txt
+- Read ${PLUGIN_ROOT}/references/verified-icons.txt
 - Wrote page.tsx
 - Post-write icon verification: grep `from "@fluentui/react-icons"` in page.tsx; verified `PeopleRegular`, `BriefcaseRegular` against verified-icons.txt — all present
 

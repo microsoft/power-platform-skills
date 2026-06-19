@@ -18,7 +18,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, Task
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # plan-alm
 
@@ -43,7 +43,7 @@ Steps:
 0. **Detect prior ALM deferral for this project.** Before any discovery work, check whether the project root contains a `.alm-deferred` marker file. The marker is written by users who explicitly opted ALM-skill validators out of "missing artifacts" warnings (e.g. *"this site is handled separately"* or *"ni-dev — no ALM"*). If a user is now invoking `plan-alm`, we should surface that the marker is present and ask what to do, rather than silently proceeding (which would build a plan the user previously decided not to maintain) or silently removing the marker (which would re-enable nags on every other ALM skill).
 
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" --projectRoot "." --no-heartbeat
+   node "${PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" --projectRoot "." --no-heartbeat
    ```
 
    > Use `--no-heartbeat` here: this is a **read-only** deferral check by the *planner*, not an execution-skill Phase 0 gate. Without it, `check-alm-plan.js` would promote an already-`Approved` plan to `In Execution` (and refresh the heartbeat) just because you re-opened `plan-alm` — but re-planning isn't execution. Execution skills call it *without* `--no-heartbeat` so the first one to run does the `Approved → In Execution` promotion.
@@ -106,7 +106,7 @@ Steps:
 
 6. Acquire dev environment token (silently):
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --envUrl "{DEV_ENV_URL}"
+   node "${PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --envUrl "{DEV_ENV_URL}"
    ```
    Store `.token` as `DEV_TOKEN` and `.userId` as `userId`.
 
@@ -125,11 +125,11 @@ Steps:
    ```
    On each response, append `value[]` to the running array. If `@odata.nextLink` is present, GET that URL with the same headers (no need to re-add the filter — the nextLink already encodes the query). Stop when the response has no `@odata.nextLink`. Cap at 100 iterations for safety.
 
-   Classify the returned settings using `${CLAUDE_PLUGIN_ROOT}/scripts/lib/classify-site-settings.js` — the single source of truth for the credential regex and tier mapping shared with `setup-solution` Phase 5. Either pipe the JSON array of `{name, value}` rows into the script's stdin (CLI mode) or `require()` it inline:
+   Classify the returned settings using `${PLUGIN_ROOT}/scripts/lib/classify-site-settings.js` — the single source of truth for the credential regex and tier mapping shared with `setup-solution` Phase 5. Either pipe the JSON array of `{name, value}` rows into the script's stdin (CLI mode) or `require()` it inline:
 
    ```bash
    echo '<JSON array of {name,value}>' \
-     | node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/classify-site-settings.js"
+     | node "${PLUGIN_ROOT}/scripts/lib/classify-site-settings.js"
    ```
 
    Output (the four-bucket shape that downstream phases + `setup-solution` consume directly):
@@ -175,7 +175,7 @@ Steps:
     ```
     Run the estimate helper to classify the site across size, component count, schema heaviness, web file aggregate, and env var count. Use the tmp-file write pattern — if the estimator fails, a prior good `docs/alm/alm-size-estimate.json` is preserved instead of being overwritten with an empty/partial file. When `SOLUTION_DONE = true` (a `.solution-manifest.json` exists), pass `--solutionId {solutionId}` so the env var count is scoped to the target solution — without it, the estimator falls back to a publisher-prefix tenant-wide query and overcounts whenever the prefix is shared across projects (the common `new_` / `cr5fe_` regression):
     ```bash
-    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/estimate-solution-size.js" \
+    node "${PLUGIN_ROOT}/scripts/lib/estimate-solution-size.js" \
       --envUrl "{DEV_ENV_URL}" --websiteRecordId "{websiteRecordId}" \
       --publisherPrefix "{publisherPrefix}" --siteName "{siteName}" \
       {if SOLUTION_DONE: --solutionId "{solutionManifest.solution.solutionId}"} \
@@ -188,7 +188,7 @@ Steps:
 > **`SITE_TYPE = "data-model"` (EDM/standard) sites have no build output**, so the disk cross-check finds no `dist/`/`build/` directory and `webFilesDiskMeasuredMB` stays `null` — this is expected, not a problem. Web files for data-model sites live as records under `.powerpages-site/web-files/` and are measured via the Dataverse query, so the size estimate is still valid; there's simply no SPA bundle on disk to cross-check against. Pass `--projectRoot "."` regardless — it's a harmless no-op for these sites.
     Then run the decision tree (same tmp-file pattern):
     ```bash
-    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/compute-split-plan.js" \
+    node "${PLUGIN_ROOT}/scripts/lib/compute-split-plan.js" \
       --estimate ./docs/alm/alm-size-estimate.json \
       --projectRoot "." \
       --siteName "{siteName}" \
@@ -217,7 +217,7 @@ Steps:
     Pass `--solutionId` when `SOLUTION_DONE = true` so the returned envVars[] is scoped to the target solution. The helper paginates correctly (Prefer: odata.maxpagesize + @odata.nextLink) regardless of scope — the difference is just which env vars are returned.
 
     ```bash
-    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-env-var-definitions.js" \
+    node "${PLUGIN_ROOT}/scripts/lib/discover-env-var-definitions.js" \
       --envUrl "{DEV_ENV_URL}" --token "{DEV_TOKEN}" \
       --publisherPrefix "{publisherPrefix}" \
       --websiteRecordId "{websiteRecordId}" \
@@ -240,7 +240,7 @@ Steps:
     Run the shared discovery helper against the source environment:
 
     ```bash
-    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
+    node "${PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
       --envUrl "{envUrl}" --token "{token}" \
       --siteId "{websiteRecordId from powerpages.config.json}" \
       --publisherPrefix "{solutionManifest.publisher.prefix}" \
@@ -293,7 +293,7 @@ Steps:
 
     Run the detect-only wrapper. Use the same tmp-file-then-mv pattern as Phase 1 step 10 so a prior good `docs/alm/alm-host-resolution.json` is preserved if the script fails mid-write. Pass `--skus Production,Sandbox,Trial` so trial-license and developer tenants see their eligible envs in the env-first menu (the helper's default is `Production,Sandbox`; we widen to include Trial here because plan-alm's NoHost branch always offers an existing-env install path that Trial envs can take, even though Trial envs cannot use the create-new fast-path):
     ```bash
-    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/ensure-pipelines-host-detect.js" \
+    node "${PLUGIN_ROOT}/scripts/lib/ensure-pipelines-host-detect.js" \
       --envUrl "{DEV_ENV_URL}" --token "{DEV_TOKEN}" --userId "{userId}" \
       --bapToken "{BAP_TOKEN}" \
       --projectRoot "." \
@@ -877,7 +877,7 @@ Write `planData` to `docs/.alm-plan-data.json` (create `docs/` if it doesn't exi
 ### Render the HTML plan
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/plan-alm/scripts/render-alm-plan.js" \
+node "${PLUGIN_ROOT}/skills/plan-alm/scripts/render-alm-plan.js" \
   --output "<projectRoot>/docs/alm-plan.html" \
   --data "<projectRoot>/docs/.alm-plan-data.json"
 ```
@@ -1017,9 +1017,9 @@ Both spans are guaranteed to exist in the template — there is exactly one of e
 **Finalize (both save options):**
 
 1. **Skill tracking** (option 1; optional for draft):
-   > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+   > Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/update-skill-tracking.js" \
+   node "${PLUGIN_ROOT}/scripts/update-skill-tracking.js" \
      --projectRoot "." --skillName "PlanAlm" --authoringTool "ClaudeCode"
    ```
 2. **Commit the plan** — pick the commit message for the save option the user chose:

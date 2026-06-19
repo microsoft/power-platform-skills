@@ -1,8 +1,10 @@
 {
-    "playwright": {
-        "command": "node",
-        "args": [
-            "${CLAUDE_PLUGIN_ROOT}/scripts/launch-playwright-mcp.js"
-        ]
+    "mcpServers": {
+        "playwright": {
+            "command": "node",
+            "args": [
+                "${CLAUDE_PLUGIN_ROOT}/scripts/launch-playwright-mcp.js"
+            ]
+        }
     }
 }

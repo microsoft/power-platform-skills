@@ -16,7 +16,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, Task
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # setup-pipeline
 
@@ -24,7 +24,7 @@ Sets up a **Power Platform Pipeline** for automated Power Pages solution deploym
 
 GitHub Actions and Azure DevOps Pipeline options are shown in the platform menu as **coming soon**.
 
-> Refer to `${CLAUDE_PLUGIN_ROOT}/references/cicd-pipeline-patterns.md` for all HAR-confirmed API patterns used in this skill.
+> Refer to `${PLUGIN_ROOT}/references/cicd-pipeline-patterns.md` for all HAR-confirmed API patterns used in this skill.
 
 ## Prerequisites
 
@@ -53,7 +53,7 @@ When `inExecution.status` is anything other than `"active"` (`"not-running"`, `"
 **Step 1 — Run the gate helper.**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" \
+node "${PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" \
   --projectRoot "." \
   --envUrl "{devEnvUrl}" \
   --token "{token}" \
@@ -124,7 +124,7 @@ Steps:
 
 1. Read project context using `detect-project-context.js`:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/detect-project-context.js"
+   node "${PLUGIN_ROOT}/scripts/lib/detect-project-context.js"
    ```
    Capture output as JSON; extract `.siteName` (store as `siteName`), `.websiteRecordId`, `.environmentUrl` (store as `devEnvUrl`), and `.solutionManifest` (store as `solutionManifest`). If `siteName` is absent (no `powerpages.config.json`), stop and advise running `/power-pages:create-site` first. If `solutionManifest` is null (no `.solution-manifest.json`), stop and advise running `/power-pages:setup-solution` first.
 
@@ -134,7 +134,7 @@ Steps:
 
 2. Run `verify-alm-prerequisites.js` to confirm PAC CLI auth, acquire a token, and verify API access:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --envUrl "{devEnvUrl}"
+   node "${PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --envUrl "{devEnvUrl}"
    ```
    Capture output as JSON; extract `.envUrl` (use to confirm `devEnvUrl`) and `.token` (store as `DEV_TOKEN`).
 
@@ -148,7 +148,7 @@ Steps:
 
    ```bash
    BAP_TOKEN=$(az account get-access-token --resource "https://service.powerapps.com/" --query accessToken -o tsv)
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/ensure-pipelines-host-detect.js" \
+   node "${PLUGIN_ROOT}/scripts/lib/ensure-pipelines-host-detect.js" \
      --envUrl "{devEnvUrl}" \
      --token "{DEV_TOKEN}" \
      --userId "{userId}" \
@@ -188,13 +188,13 @@ Steps:
 
 ### Phase 1.5 — Ground in current Pipelines documentation
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/alm-docs-grounding.md`
+> Reference: `${PLUGIN_ROOT}/references/alm-docs-grounding.md`
 
 Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line note and continue — this skill must remain runnable offline.
 
 1. Run `microsoft_docs_search` with the query: `Power Platform Pipelines setup OData API host environment deploymentenvironments`.
 2. Fetch `https://learn.microsoft.com/en-us/power-platform/alm/pipelines` (and at most one sister page on host setup or pipeline creation) in parallel via `microsoft_docs_fetch`.
-3. Extract a one-paragraph summary of what Microsoft Learn currently says about Pipelines host resolution, `deploymentenvironments` / `deploymentpipelines` / `deploymentstages` schema, and pipeline lifecycle. Compare against `${CLAUDE_PLUGIN_ROOT}/references/cicd-pipeline-patterns.md` and flag any divergence (new fields, deprecated APIs, changed validation status codes).
+3. Extract a one-paragraph summary of what Microsoft Learn currently says about Pipelines host resolution, `deploymentenvironments` / `deploymentpipelines` / `deploymentstages` schema, and pipeline lifecycle. Compare against `${PLUGIN_ROOT}/references/cicd-pipeline-patterns.md` and flag any divergence (new fields, deprecated APIs, changed validation status codes).
 4. Use the summary to inform Phase 2+ decisions. Do not silently change skill behavior — surface any divergence to the user as a soft warning before Phase 5 (Register Environments with the Pipelines Host).
 
 ### Phase 2 — Select CI/CD Platform
@@ -270,7 +270,7 @@ If response is 404 or returns an "unknown entity" error, stop and inform the use
 
 **4.2 Verify solution exists in dev environment** using `verify-solution-exists.js`:
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-solution-exists.js" \
+node "${PLUGIN_ROOT}/scripts/lib/verify-solution-exists.js" \
   --envUrl "{devEnvUrl}" \
   --uniqueName "{uniqueName}" \
   --token "{DEV_TOKEN}"
@@ -298,7 +298,7 @@ If found: ask via `AskUserQuestion` whether to use the existing pipeline ID or c
 Power Pages code sites include `.js` files in their compiled output. If `.js` is in the env's `blockedattachments` setting, `pac pages upload-code-site` (on the source) and `deploy-pipeline` (on targets) will both fail with `AttachmentBlocked`. Run this on the **source env** and on **every target env**:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/fix-blocked-attachments.js" \
+node "${PLUGIN_ROOT}/scripts/lib/fix-blocked-attachments.js" \
   --envUrl "{envUrl}" \
   --extensions js \
   --dry-run
@@ -323,7 +323,7 @@ Register each environment (source + targets) with the Pipelines host by creating
 Use `create-deployment-environment.js` for each environment (dev source + each target):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-deployment-environment.js" \
+node "${PLUGIN_ROOT}/scripts/lib/create-deployment-environment.js" \
   --hostEnvUrl "{HOST_ENV_URL}" \
   --token "{HOST_TOKEN}" \
   --name "{siteName} {label}" \
@@ -360,7 +360,7 @@ Match all of these case-insensitively (`String.prototype.toLowerCase()` before `
 <!-- gate: setup-pipeline:5a.pattern-15 | category=consent | cancel-leaves=nothing -->
 > 🚦 **Gate (consent · setup-pipeline:5a.pattern-15):** Target env stamped to a different Pipelines host. Offer force-link as documented auto-fix — DESTRUCTIVE: previous host loses pipeline access for this env. Cancel here exits setup-pipeline cleanly. **Fires PER ENV that triggers Pattern 15.** Phase 5 loops over source + each target env when registering with the host; if two target envs both turn out to be stamped to different hosts, this gate fires twice — once per env. Do NOT batch the consent across envs; the destructive blast radius is per-env (each env carries its own previous-host stamp and its own group of makers losing access).
 
-This is **Pattern 15** in `${CLAUDE_PLUGIN_ROOT}/references/deployment-error-catalog.md`. Do NOT silently retry. Surface the raw `errormessage` to the user verbatim and offer the documented auto-fix via `AskUserQuestion`:
+This is **Pattern 15** in `${PLUGIN_ROOT}/references/deployment-error-catalog.md`. Do NOT silently retry. Surface the raw `errormessage` to the user verbatim and offer the documented auto-fix via `AskUserQuestion`:
 
 ```
 question: "<envLabel> is already linked to a different Pipelines host. The /power-pages:force-link-environment skill can take over the association (DESTRUCTIVE to the previous host — makers there lose pipeline access for this env). Run it now?"
@@ -385,7 +385,7 @@ Report progress for each environment as validation completes.
 Use `create-deployment-pipeline.js` to create the pipeline, associate the source environment, and create all stage records in one call:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-deployment-pipeline.js" \
+node "${PLUGIN_ROOT}/scripts/lib/create-deployment-pipeline.js" \
   --hostEnvUrl "{HOST_ENV_URL}" \
   --token "{HOST_TOKEN}" \
   --pipelineName "{PIPELINE_NAME}" \
@@ -516,14 +516,14 @@ git commit -m "Add Power Platform Pipeline configuration for {siteName}"
 
 **7.5 Record skill usage:**
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "SetupPipeline"`.
 
 **7.5b Refresh the ALM plan (if one exists):**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --projectRoot "." \
   --phase setup-pipeline \
   --render

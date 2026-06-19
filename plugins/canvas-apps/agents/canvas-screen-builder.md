@@ -103,7 +103,7 @@ reserve your reasoning for logic correctness that the compiler cannot catch.
 After writing or editing the file, run the runtime-anti-pattern checks that `compile_canvas`
 does not catch.
 
-1. Read `${CLAUDE_PLUGIN_ROOT}/references/QAChecks.md`
+1. Read `${PLUGIN_ROOT}/references/QAChecks.md`
 2. Re-read the `.pa.yaml` file you just wrote or edited
 3. Apply each check in order; for every issue found, fix it inline using `Edit`
 4. Track the count and a one-line description of every fix applied
