@@ -903,7 +903,7 @@ Follow the skill tracking instructions in the reference to record this skill's u
 **Refresh the ALM plan (if one exists):**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --projectRoot "." \
   --phase ensure-pipelines-host \
   --render
