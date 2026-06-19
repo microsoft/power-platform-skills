@@ -310,7 +310,7 @@ Store all language IDs.
 
 Run the shared discovery helper, which scopes custom tables to the site's table permissions (+ datamodel manifest) intersected with the env's custom-unmanaged tables:
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
+node "${PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
   --envUrl "{envUrl}" --token "{token}" --siteId "{websiteRecordId}" \
   --projectRoot "." \
   {if .datamodel-manifest.json elsewhere: --datamodelManifest "<path>"}

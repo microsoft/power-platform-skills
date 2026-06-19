@@ -278,6 +278,28 @@ test('computeSplitPlan: a Table domain componentCount is a schema-component prox
   assert.equal(catalog.componentCount, 802, 'sum(500+300) + 2 tables = 802 (proxy), not 2 (table count)');
 });
 
+test('computeSplitPlan: schema-component proxy + attr-cap guard are CASE-INSENSITIVE on table names', () => {
+  // estimate.tables carry Dataverse LogicalName casing (e.g. bp_Inspection), but a
+  // user-authored .alm-config.json domain may list them in another case. The proxy
+  // (and the attr-cap guard) must match case-insensitively — otherwise the lookups
+  // miss, attrs read as 0, and the count collapses to the bare table count.
+  const result = computeSplitPlan({
+    estimate: baseEstimate({
+      tableCount: 34,
+      schemaAttrCount: 32000,
+      tables: [
+        { logicalName: 'bp_Inspection', attributeCount: 500 }, // Dataverse casing
+        { logicalName: 'bp_Permit', attributeCount: 300 },
+      ],
+    }),
+    config: baseConfig({ domains: [{ name: 'Core', tableLogicalNames: ['bp_inspection', 'bp_permit'] }] }), // lower-case
+    meta: { baseName: 'Test', siteName: 'Test Site' },
+  });
+  const core = result.proposedSolutions.find((s) => s.uniqueName === 'Test_Core');
+  assert.ok(core, 'Core domain solution exists');
+  assert.equal(core.componentCount, 802, 'case-insensitive proxy: 500+300+2 = 802, not 2 (missed lookups)');
+});
+
 test('computeSplitPlan additive Strategy 4 prepends EnvVars solution', () => {
   const result = computeSplitPlan({
     estimate: baseEstimate({ totalSizeMB: 142, webFilesAggregateMB: 110, envVarCount: 800 }),

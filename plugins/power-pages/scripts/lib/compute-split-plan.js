@@ -318,12 +318,15 @@ function partitionBySchema(estimate, meta, config) {
   // slip past validateSplits' maxComponentCount check (and distorts the Site
   // solution's count, which subtracts the domain counts). Proxy = sum(attributeCount)
   // + 1 per table (the entity component). attributeCount comes from estimate.tables[].
+  // Keys/lookups are LOWERCASED — table logical names are case-insensitive and are
+  // lowercased everywhere else (table permissions, relationship edges); user-authored
+  // .alm-config.json domain names may not match Dataverse casing exactly.
   const attrByTable = new Map(
     (Array.isArray(estimate.tables) ? estimate.tables : [])
-      .map((t) => [t && t.logicalName, (t && t.attributeCount) || 0]),
+      .map((t) => [t && t.logicalName && t.logicalName.toLowerCase(), (t && t.attributeCount) || 0]),
   );
   const schemaComponentProxy = (names) =>
-    (names || []).reduce((sum, n) => sum + (attrByTable.get(n) || 0), 0) + (names ? names.length : 0);
+    (names || []).reduce((sum, n) => sum + (attrByTable.get(String(n).toLowerCase()) || 0), 0) + (names ? names.length : 0);
 
   const domainSolutions = explicitDomains.map((dom, i) => ({
     uniqueName: `${meta.baseName}_${sanitizeDomainName(dom.name)}`,
@@ -815,13 +818,14 @@ function computeSplitPlan({ estimate, config, meta }) {
   // attr-heavy table clusters must share the capped number of split solutions, the
   // FFD packer's least-loaded fallback co-locates clusters and a bucket busts the
   // column cap. Without this, the overflow is silent (the table-count guard alone
-  // misses it). attributeCount comes from estimate.tables[].
+  // misses it). attributeCount comes from estimate.tables[]; keys/lookups lowercased
+  // (case-insensitive table names — see partitionBySchema).
   const attrByTable = new Map(
     (Array.isArray(estimate.tables) ? estimate.tables : [])
-      .map((t) => [t && t.logicalName, (t && t.attributeCount) || 0]),
+      .map((t) => [t && t.logicalName && t.logicalName.toLowerCase(), (t && t.attributeCount) || 0]),
   );
   const solutionSchemaAttrs = (s) =>
-    (s.tableLogicalNames || []).reduce((sum, n) => sum + (attrByTable.get(n) || 0), 0);
+    (s.tableLogicalNames || []).reduce((sum, n) => sum + (attrByTable.get(String(n).toLowerCase()) || 0), 0);
   const oversizedAttrWarnings = proposedSolutions
     .filter((s) => Array.isArray(s.tableLogicalNames) && s.tableLogicalNames.length > 0 &&
       solutionSchemaAttrs(s) > config.thresholds.maxSchemaAttrs)
