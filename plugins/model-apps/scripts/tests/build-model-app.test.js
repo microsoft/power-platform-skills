@@ -22,7 +22,9 @@ function mockSdk() {
     createTable: async (o) => { calls.push(['createTable', o]); return { logicalName: o.schemaName.toLowerCase(), entitySetName: `${o.schemaName.toLowerCase()}s` }; },
     createColumn: async (e, o) => { calls.push(['createColumn', e, o]); return { logicalName: o.schemaName.toLowerCase() }; },
     createRelationship: async (o) => { calls.push(['createRelationship', o]); return { schemaName: o.schemaName }; },
-    resolveEntitySetName: async (l) => `${l}s`,
+    findTables: async () => [],
+    findColumns: async () => [],
+    fetchEntityMetadata: async (l) => ({ logicalName: l, displayName: l, entitySetName: `${l}s`, attributes: [], relationships: [] }),
     createRecordsBulk: async (e, rows) => { calls.push(['createRecordsBulk', e]); return rows.map((_, i) => `${e}-${i}`); },
     createArtifact: (t, def) => { calls.push(['createArtifact', t]); return Object.assign({ id: `${t}-${++idc}` }, def); },
     pushArtifact: async (t, id) => ({ type: t, id, success: true }),
@@ -46,8 +48,8 @@ test('dry-run returns the plan and never touches the SDK', async () => {
   const { sdk, calls } = mockSdk();
   const r = await buildModelApp(desk, { apply: false, env: 'https://x' }, { sdk });
   assert.strictEqual(r.dryRun, true);
-  assert.ok(r.plan.some((p) => /create-solution/.test(p)));
-  assert.ok(r.plan.some((p) => /main form/.test(p)));
+  assert.ok(r.plan.some((p) => /solution/.test(p)));
+  assert.ok(r.plan.some((p) => /form for/.test(p)));
   assert.strictEqual(calls.length, 0);
 });
 

@@ -1896,7 +1896,7 @@ var require_MetadataApi = __commonJS({
   "../../../power-platform-ux/packages/cds-maker-sdk/lib/api/MetadataApi.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
-    exports2.fetchEntityMetadataFromApi = void 0;
+    exports2.findColumns = exports2.findTables = exports2.fetchEntityMetadataFromApi = void 0;
     var http_1 = require_http();
     function label(value) {
       var _a, _b;
@@ -1981,8 +1981,8 @@ var require_MetadataApi = __commonJS({
       return out;
     }
     async function fetchEntityMetadataFromApi(client, entityLogicalName) {
-      var _a;
-      const path = `${base(entityLogicalName)}?$select=LogicalName,DisplayName,IsCustomEntity&$expand=Attributes($select=LogicalName,DisplayName,AttributeType,IsCustomAttribute)`;
+      var _a, _b;
+      const path = `${base(entityLogicalName)}?$select=LogicalName,DisplayName,EntitySetName,IsCustomEntity&$expand=Attributes($select=LogicalName,DisplayName,AttributeType,IsCustomAttribute)`;
       const response = (0, http_1.ensureSuccess)(await client.get(path), client.apiUrl(path));
       const raw = response.body;
       const attributes = ((_a = raw.Attributes) !== null && _a !== void 0 ? _a : []).map((attr) => {
@@ -2004,11 +2004,50 @@ var require_MetadataApi = __commonJS({
       return {
         logicalName: raw.LogicalName,
         displayName: label(raw.DisplayName),
+        entitySetName: (_b = raw.EntitySetName) !== null && _b !== void 0 ? _b : "",
         attributes,
         relationships
       };
     }
     exports2.fetchEntityMetadataFromApi = fetchEntityMetadataFromApi;
+    async function findTables(client, query, options) {
+      var _a, _b;
+      const path = `/EntityDefinitions?$select=LogicalName,SchemaName,EntitySetName,DisplayName,IsCustomEntity`;
+      const response = (0, http_1.ensureSuccess)(await client.get(path), client.apiUrl(path));
+      const rows = (_b = (_a = response.body) === null || _a === void 0 ? void 0 : _a.value) !== null && _b !== void 0 ? _b : [];
+      const q = (query !== null && query !== void 0 ? query : "").toLowerCase();
+      const matches = rows.filter((r) => !(options === null || options === void 0 ? void 0 : options.customOnly) || r.IsCustomEntity).map((r) => {
+        var _a2, _b2;
+        return {
+          logicalName: r.LogicalName,
+          schemaName: (_a2 = r.SchemaName) !== null && _a2 !== void 0 ? _a2 : r.LogicalName,
+          displayName: label(r.DisplayName),
+          entitySetName: (_b2 = r.EntitySetName) !== null && _b2 !== void 0 ? _b2 : "",
+          isCustom: Boolean(r.IsCustomEntity)
+        };
+      }).filter((t) => t.logicalName.toLowerCase().includes(q) || t.schemaName.toLowerCase().includes(q) || t.displayName.toLowerCase().includes(q));
+      return typeof (options === null || options === void 0 ? void 0 : options.top) === "number" ? matches.slice(0, options.top) : matches;
+    }
+    exports2.findTables = findTables;
+    async function findColumns(client, entityLogicalName, query, options) {
+      var _a, _b;
+      const path = `${base(entityLogicalName)}/Attributes?$select=LogicalName,SchemaName,DisplayName,AttributeType,IsCustomAttribute`;
+      const response = (0, http_1.ensureSuccess)(await client.get(path), client.apiUrl(path));
+      const rows = (_b = (_a = response.body) === null || _a === void 0 ? void 0 : _a.value) !== null && _b !== void 0 ? _b : [];
+      const q = (query !== null && query !== void 0 ? query : "").toLowerCase();
+      const matches = rows.map((r) => {
+        var _a2, _b2;
+        return {
+          logicalName: r.LogicalName,
+          schemaName: (_a2 = r.SchemaName) !== null && _a2 !== void 0 ? _a2 : r.LogicalName,
+          displayName: label(r.DisplayName),
+          attributeType: (_b2 = r.AttributeType) !== null && _b2 !== void 0 ? _b2 : "Unknown",
+          isCustom: Boolean(r.IsCustomAttribute)
+        };
+      }).filter((c) => c.logicalName.toLowerCase().includes(q) || c.schemaName.toLowerCase().includes(q) || c.displayName.toLowerCase().includes(q));
+      return typeof (options === null || options === void 0 ? void 0 : options.top) === "number" ? matches.slice(0, options.top) : matches;
+    }
+    exports2.findColumns = findColumns;
   }
 });
 
@@ -81515,7 +81554,7 @@ var require_MakerSdk = __commonJS({
     var WorkspaceManager_1 = require_WorkspaceManager();
     var VersionManager_1 = require_VersionManager();
     var DataverseClient_1 = require_DataverseClient();
-    var MetadataApi_1 = require_MetadataApi();
+    var MetadataApi_12 = require_MetadataApi();
     var SchemaApi_12 = require_SchemaApi();
     var RecordApi_12 = require_RecordApi();
     var WebResourceApi_12 = require_WebResourceApi();
@@ -81585,9 +81624,20 @@ var require_MakerSdk = __commonJS({
         return summaries;
       }
       async fetchEntityMetadata(entityLogicalName) {
-        const meta = await (0, MetadataApi_1.fetchEntityMetadataFromApi)(this.dataverse, entityLogicalName);
+        const meta = await (0, MetadataApi_12.fetchEntityMetadataFromApi)(this.dataverse, entityLogicalName);
         this.workspace.writeEntityMetadata(entityLogicalName, meta);
         return meta;
+      }
+      /**
+       * Discover tables (matches logical/schema/display, returns `entitySetName`). Omit
+       * `query` to LIST every table; narrow with `options.customOnly` / `top`.
+       */
+      findTables(query, options) {
+        return (0, MetadataApi_12.findTables)(this.dataverse, query, options);
+      }
+      /** Discover columns of a table by a free-text query. Omit `query` to list all columns. */
+      findColumns(entityLogicalName, query, options) {
+        return (0, MetadataApi_12.findColumns)(this.dataverse, entityLogicalName, query, options);
       }
       // --- Schema authoring (Dataverse metadata writes) ---------------------
       //
@@ -82135,8 +82185,8 @@ var __exportStar = exports && exports.__exportStar || function(m, exports2) {
   for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports2, p)) __createBinding(exports2, m, p);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.deleteWebResource = exports.getWebResource = exports.updateWebResource = exports.createWebResource = exports.disassociateRecords = exports.associateRecords = exports.queryRecords = exports.getRecord = exports.deleteRecord = exports.upsertRecord = exports.updateRecord = exports.createRecordsBulk = exports.createRecord = exports.resolveEntitySetName = exports.deleteTable = exports.deleteGlobalOptionSet = exports.createGlobalOptionSet = exports.deleteRelationship = exports.createRelationship = exports.deleteAlternateKey = exports.createAlternateKey = exports.updateTable = exports.deleteColumn = exports.updateColumn = exports.insertStatusValue = exports.createCustomerColumn = exports.createColumn = exports.createTable = exports.dashboardRegistration = exports.DashboardAdapter = exports.chartRegistration = exports.ChartAdapter = exports.commandRegistration = exports.CommandAdapter = exports.appRegistration = exports.AppAdapter = exports.businessRuleRegistration = exports.BusinessRuleAdapter = exports.viewRegistration = exports.ViewAdapter = exports.SUBGRID_CLASS_ID = exports.addFormEventHandler = exports.addSubGridToForm = exports.formRegistration = exports.FormAdapter = exports.ArtifactAdapter = exports.findElements = exports.JsonPointer = exports.createMakerSdk = exports.MakerSdk = void 0;
-exports.SolutionComponentType = exports.fetchSolutionComponents = exports.deleteSolution = exports.importSolution = exports.exportSolution = exports.removeSolutionComponent = exports.addSolutionComponent = exports.setSolutionVersion = exports.createSolution = exports.createPublisher = void 0;
+exports.createWebResource = exports.disassociateRecords = exports.associateRecords = exports.queryRecords = exports.getRecord = exports.deleteRecord = exports.upsertRecord = exports.updateRecord = exports.createRecordsBulk = exports.createRecord = exports.resolveEntitySetName = exports.deleteTable = exports.deleteGlobalOptionSet = exports.createGlobalOptionSet = exports.deleteRelationship = exports.createRelationship = exports.deleteAlternateKey = exports.createAlternateKey = exports.updateTable = exports.deleteColumn = exports.updateColumn = exports.insertStatusValue = exports.createCustomerColumn = exports.createColumn = exports.createTable = exports.dashboardRegistration = exports.DashboardAdapter = exports.chartRegistration = exports.ChartAdapter = exports.commandRegistration = exports.CommandAdapter = exports.appRegistration = exports.AppAdapter = exports.businessRuleRegistration = exports.BusinessRuleAdapter = exports.viewRegistration = exports.ViewAdapter = exports.SUBGRID_CLASS_ID = exports.addFormEventHandler = exports.addSubGridToForm = exports.formRegistration = exports.FormAdapter = exports.ArtifactAdapter = exports.findColumns = exports.findTables = exports.fetchEntityMetadataFromApi = exports.findElements = exports.JsonPointer = exports.createMakerSdk = exports.MakerSdk = void 0;
+exports.SolutionComponentType = exports.fetchSolutionComponents = exports.deleteSolution = exports.importSolution = exports.exportSolution = exports.removeSolutionComponent = exports.addSolutionComponent = exports.setSolutionVersion = exports.createSolution = exports.createPublisher = exports.deleteWebResource = exports.getWebResource = exports.updateWebResource = void 0;
 var MakerSdk_1 = require_MakerSdk();
 Object.defineProperty(exports, "MakerSdk", { enumerable: true, get: function() {
   return MakerSdk_1.MakerSdk;
@@ -82166,6 +82216,16 @@ Object.defineProperty(exports, "JsonPointer", { enumerable: true, get: function(
 var treeFinder_1 = require_treeFinder();
 Object.defineProperty(exports, "findElements", { enumerable: true, get: function() {
   return treeFinder_1.findElements;
+} });
+var MetadataApi_1 = require_MetadataApi();
+Object.defineProperty(exports, "fetchEntityMetadataFromApi", { enumerable: true, get: function() {
+  return MetadataApi_1.fetchEntityMetadataFromApi;
+} });
+Object.defineProperty(exports, "findTables", { enumerable: true, get: function() {
+  return MetadataApi_1.findTables;
+} });
+Object.defineProperty(exports, "findColumns", { enumerable: true, get: function() {
+  return MetadataApi_1.findColumns;
 } });
 var AdapterBase_1 = require_AdapterBase();
 Object.defineProperty(exports, "ArtifactAdapter", { enumerable: true, get: function() {

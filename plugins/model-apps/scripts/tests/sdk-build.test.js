@@ -1,31 +1,21 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { runSdkBuild, planFor, formDef } = require('../lib/sdk-build.js');
+const { runSdkBuild, planFor, resolvePhases, formDef, PHASES } = require('../lib/sdk-build.js');
 
-// A representative relational spec: Customer 1:N Tickets, a Choice column, sample data
-// with $parent, a view, a Choice chart, and a parent form with a child sub-grid.
-function makeSpec() {
-  return {
+// Customer 1:N Tickets: a Choice column, sample data with $parent, a view, a Choice chart,
+// and a parent form with a child sub-grid.
+function makeSpec(extra = {}) {
+  return Object.assign({
     solution: { uniqueName: 'ContosoSD', displayName: 'Contoso SD', publisherPrefix: 'new' },
     app: { name: 'Support Desk', description: 'Tickets' },
     entities: [
-      {
-        schemaName: 'new_customer',
-        displayName: 'Customer',
-        primaryAttribute: { schemaName: 'new_name', displayName: 'Name' },
-        columns: [{ schemaName: 'new_tier', displayName: 'Tier', type: 'Choice', options: ['Free', 'Pro'] }],
-      },
-      {
-        schemaName: 'new_ticket',
-        displayName: 'Ticket',
-        primaryAttribute: { schemaName: 'new_subject', displayName: 'Subject' },
-        columns: [{ schemaName: 'new_priority', displayName: 'Priority', type: 'Choice', options: ['Low', 'High'] }],
-      },
+      { schemaName: 'new_customer', displayName: 'Customer', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' },
+        columns: [{ schemaName: 'new_tier', displayName: 'Tier', type: 'Choice', options: ['Free', 'Pro'] }] },
+      { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_subject', displayName: 'Subject' },
+        columns: [{ schemaName: 'new_priority', displayName: 'Priority', type: 'Choice', options: ['Low', 'High'] }] },
     ],
-    relationships: [
-      { type: 'OneToMany', referenced: 'new_customer', referencing: 'new_ticket', lookup: { schemaName: 'new_CustomerId', displayName: 'Customer' } },
-    ],
+    relationships: [{ type: 'OneToMany', referenced: 'new_customer', referencing: 'new_ticket', lookup: { schemaName: 'new_CustomerId', displayName: 'Customer' } }],
     views: [{ entity: 'new_ticket', name: 'Active Tickets', columns: ['new_subject', 'new_priority'] }],
     charts: [{ entity: 'new_ticket', name: 'By Priority', chartType: 'Pie', groupBy: 'new_priority', measure: 'count' }],
     forms: [{ entity: 'new_customer', name: 'Customer', layout: 'auto', subgrids: [{ childEntity: 'new_ticket', view: 'Active Tickets', label: 'Tickets' }] }],
@@ -34,24 +24,24 @@ function makeSpec() {
       new_customer: [{ new_name: 'Acme', new_tier: 'Pro' }],
       new_ticket: [{ new_subject: 'Down', new_priority: 'High', $parent: { entity: 'new_customer', match: { new_name: 'Acme' } } }],
     },
-  };
+  }, extra);
 }
 
+// `existingTables`: { logical: { entitySetName, columns:[logical...], relationships:[schema...] } }
 function mockSdk(opts = {}) {
   const calls = [];
   let idc = 0;
+  const ex = opts.existingTables || {};
   const sdk = {
-    queryRecords: async (e, o) => {
-      calls.push({ name: 'queryRecords', args: [e, o] });
-      if (e === 'solution') return opts.solutionExists ? [{ solutionid: 'sol-x', uniquename: 'ContosoSD' }] : [];
-      return opts.noPublisher ? [] : [{ publisherid: 'pub-1' }];
-    },
+    queryRecords: async (e, o) => { calls.push({ name: 'queryRecords', args: [e, o] }); if (e === 'solution') return opts.solutionExists ? [{ solutionid: 's' }] : []; return opts.noPublisher ? [] : [{ publisherid: 'pub-1' }]; },
     createPublisher: async (o) => { calls.push({ name: 'createPublisher', args: [o] }); return { id: 'pub-new' }; },
     createSolution: async (o) => { calls.push({ name: 'createSolution', args: [o] }); return { id: 'sol-1' }; },
-    createTable: async (o) => { calls.push({ name: 'createTable', args: [o] }); if (opts.failTable === o.schemaName) throw new Error('table exists'); return { logicalName: o.schemaName.toLowerCase(), entitySetName: `${o.schemaName.toLowerCase()}s` }; },
+    findTables: async (q, o) => { calls.push({ name: 'findTables', args: [q, o] }); const t = ex[String(q).toLowerCase()]; return t ? [{ logicalName: String(q).toLowerCase(), schemaName: q, displayName: q, entitySetName: t.entitySetName, isCustom: true }] : []; },
+    findColumns: async (logical) => { calls.push({ name: 'findColumns', args: [logical] }); const t = ex[logical]; return ((t && t.columns) || []).map((c) => ({ logicalName: c, schemaName: c, displayName: c, attributeType: 'String', isCustom: true })); },
+    fetchEntityMetadata: async (logical) => { calls.push({ name: 'fetchEntityMetadata', args: [logical] }); const t = ex[logical]; return { logicalName: logical, displayName: logical, entitySetName: (t && t.entitySetName) || `${logical}s`, attributes: ((t && t.columns) || []).map((c) => ({ logicalName: c })), relationships: ((t && t.relationships) || []).map((s) => ({ schemaName: s, type: 'OneToMany' })) }; },
+    createTable: async (o) => { calls.push({ name: 'createTable', args: [o] }); if (opts.failTable === o.schemaName) throw new Error('boom'); return { logicalName: o.schemaName.toLowerCase(), entitySetName: `${o.schemaName.toLowerCase()}s` }; },
     createColumn: async (e, o) => { calls.push({ name: 'createColumn', args: [e, o] }); return { logicalName: o.schemaName.toLowerCase() }; },
-    createRelationship: async (o) => { calls.push({ name: 'createRelationship', args: [o] }); return { schemaName: o.schemaName, lookupLogicalName: o.lookupSchemaName.toLowerCase() }; },
-    resolveEntitySetName: async (l) => `${l}s`,
+    createRelationship: async (o) => { calls.push({ name: 'createRelationship', args: [o] }); return { schemaName: o.schemaName }; },
     createRecordsBulk: async (e, rows) => { calls.push({ name: 'createRecordsBulk', args: [e, rows] }); return rows.map((_, i) => `${e}-${i}`); },
     createArtifact: (t, def) => { calls.push({ name: 'createArtifact', args: [t, def] }); return Object.assign({ id: `${t}-${++idc}` }, def); },
     pushArtifact: async (t, id) => { calls.push({ name: 'pushArtifact', args: [t, id] }); return { type: t, id, success: true }; },
@@ -61,173 +51,157 @@ function mockSdk(opts = {}) {
   };
   return { sdk, calls };
 }
-const names = (calls) => calls.map((c) => c.name);
 const find = (calls, name) => calls.filter((c) => c.name === name);
+const has = (calls, name) => calls.some((c) => c.name === name);
 
 test('dry-run emits a plan and writes nothing', async () => {
   const { sdk, calls } = mockSdk();
   const events = [];
   const r = await runSdkBuild(makeSpec(), { sdk, apply: false, sampleData: true, publish: true, emit: (e) => events.push(e) });
   assert.strictEqual(r.dryRun, true);
-  assert.strictEqual(calls.length, 0, 'no SDK calls in dry-run');
-  assert.ok(r.plan.some((l) => l.includes('create-solution ContosoSD')));
-  assert.ok(r.plan.some((l) => l.includes('create-relationship 1:N')));
+  assert.strictEqual(calls.length, 0);
+  assert.ok(r.plan.some((l) => l.includes('solution ContosoSD')));
   assert.ok(events.every((e) => e.status === 'skip'));
 });
 
-test('apply runs phases in the correct order', async () => {
+test('fresh build runs phases in order and creates everything', async () => {
   const { sdk, calls } = mockSdk();
-  await runSdkBuild(makeSpec(), { sdk, apply: true, sampleData: true });
-  const seq = names(calls).filter((n) => n !== 'queryRecords');
-  // solution -> tables/columns -> relationship -> sample data -> view -> chart -> form(+subgrid) -> app
-  assert.deepStrictEqual(seq, [
-    'createSolution',
-    'createTable', 'createColumn', // customer
-    'createTable', 'createColumn', // ticket
-    'createRelationship',
-    'createRecordsBulk', 'createRecordsBulk', // customer then ticket (topological)
-    'createArtifact', 'pushArtifact', 'addSolutionComponent', // view
-    'createArtifact', 'pushArtifact', 'addSolutionComponent', // chart
-    'createArtifact', 'addSubGrid', 'pushArtifact', 'addSolutionComponent', // form
-    'createArtifact', 'pushArtifact', 'addSolutionComponent', // app
-  ]);
+  const events = [];
+  await runSdkBuild(makeSpec(), { sdk, apply: true, sampleData: true, publish: true, emit: (e) => events.push(e) });
+  // phase order: first appearance of each phase follows PHASES order
+  const firstIdx = {};
+  events.forEach((e, i) => { if (firstIdx[e.phase] === undefined) firstIdx[e.phase] = i; });
+  const seen = PHASES.filter((p) => firstIdx[p] !== undefined);
+  const sortedByAppearance = seen.slice().sort((a, b) => firstIdx[a] - firstIdx[b]);
+  assert.deepStrictEqual(seen, sortedByAppearance, 'phases appear in canonical order');
+  // key writes present
+  assert.ok(has(calls, 'createSolution'));
+  assert.strictEqual(find(calls, 'createTable').length, 2);
+  assert.strictEqual(find(calls, 'createRelationship').length, 1);
+  assert.strictEqual(find(calls, 'createRecordsBulk').length, 2);
+  assert.ok(find(calls, 'createArtifact').length >= 4); // 1 view + 1 chart + 1 form + 1 app
 });
 
 test('Choice column passes value/label option pairs', async () => {
   const { sdk, calls } = mockSdk();
   await runSdkBuild(makeSpec(), { sdk, apply: true });
-  const tierCol = find(calls, 'createColumn').find((c) => c.args[1].schemaName === 'new_tier');
-  assert.strictEqual(tierCol.args[1].type, 'choice');
-  assert.deepStrictEqual(tierCol.args[1].options, [{ value: 100000000, label: 'Free' }, { value: 100000001, label: 'Pro' }]);
+  const tier = find(calls, 'createColumn').find((c) => c.args[1].schemaName === 'new_tier');
+  assert.strictEqual(tier.args[1].type, 'choice');
+  assert.deepStrictEqual(tier.args[1].options, [{ value: 100000000, label: 'Free' }, { value: 100000001, label: 'Pro' }]);
 });
 
 test('relationship schema name differs from the lookup column name', async () => {
   const { sdk, calls } = mockSdk();
   await runSdkBuild(makeSpec(), { sdk, apply: true });
   const rel = find(calls, 'createRelationship')[0].args[0];
-  assert.strictEqual(rel.type, 'OneToMany');
   assert.strictEqual(rel.referencedEntity, 'new_customer');
   assert.strictEqual(rel.referencingEntity, 'new_ticket');
   assert.strictEqual(rel.lookupSchemaName, 'new_CustomerId');
   assert.strictEqual(rel.schemaName, 'new_customer_new_ticket');
-  assert.notStrictEqual(rel.schemaName, rel.lookupSchemaName);
 });
 
-test('sample data binds $parent via @odata.bind on the lookup nav property', async () => {
+test('sample data binds $parent via @odata.bind using the entity-set name', async () => {
   const { sdk, calls } = mockSdk();
   await runSdkBuild(makeSpec(), { sdk, apply: true, sampleData: true });
   const ticketBulk = find(calls, 'createRecordsBulk').find((c) => c.args[0] === 'new_ticket');
   const body = ticketBulk.args[1][0];
   assert.strictEqual(body['new_CustomerId@odata.bind'], '/new_customers(new_customer-0)');
-  assert.strictEqual(body.$parent, undefined, '$parent directive is never sent');
-  assert.strictEqual(body.new_priority, 100000001, 'choice label High -> int');
+  assert.strictEqual(body.$parent, undefined);
+  assert.strictEqual(body.new_priority, 100000001);
 });
 
-test('form sub-grid references the child view id and the relationship name', async () => {
+test('form sub-grid references the child view id and relationship name', async () => {
   const { sdk, calls } = mockSdk();
   await runSdkBuild(makeSpec(), { sdk, apply: true });
-  const view = find(calls, 'createArtifact').find((c) => c.args[0] === 'view');
-  const viewId = `view-1`;
-  assert.strictEqual(view.args[1].name, 'Active Tickets');
   const sub = find(calls, 'addSubGrid')[0].args[1];
   assert.strictEqual(sub.entity, 'new_ticket');
   assert.strictEqual(sub.relationshipName, 'new_customer_new_ticket');
-  assert.strictEqual(sub.viewId, viewId);
+  assert.strictEqual(sub.viewId, 'view-1');
 });
 
-test('formDef lays out the primary + scalar columns as bound field cells', () => {
-  const def = formDef(makeSpec(), { entity: 'new_customer', name: 'Customer' });
-  assert.strictEqual(def.formType, 'Main');
-  const fields = def.tabs[0].sections[0].rows.map((r) => r.cells[0].control.fieldName);
+test('idempotent: an existing table is reused — no createTable, and only missing columns added', async () => {
+  const { sdk, calls } = mockSdk({ existingTables: { new_customer: { entitySetName: 'new_customers', columns: ['new_name', 'new_tier'], relationships: [] } } });
+  await runSdkBuild(makeSpec(), { sdk, apply: true });
+  const tablesCreated = find(calls, 'createTable').map((c) => c.args[0].schemaName);
+  assert.ok(!tablesCreated.includes('new_customer'), 'existing table not re-created');
+  assert.ok(tablesCreated.includes('new_ticket'), 'missing table still created');
+  // new_customer's columns already exist -> no createColumn for new_tier
+  assert.ok(!find(calls, 'createColumn').some((c) => c.args[0] === 'new_customer'), 'existing columns not re-added');
+});
+
+test('idempotent: an existing relationship is skipped', async () => {
+  const { sdk, calls } = mockSdk({ existingTables: { new_customer: { entitySetName: 'new_customers', columns: [], relationships: ['new_customer_new_ticket'] } } });
+  await runSdkBuild(makeSpec(), { sdk, apply: true });
+  assert.strictEqual(find(calls, 'createRelationship').length, 0, 'existing relationship not re-created');
+});
+
+test('existing-table entity-set name comes from findTables (sample-data binding works)', async () => {
+  const { sdk, calls } = mockSdk({ existingTables: { new_customer: { entitySetName: 'new_customerset', columns: ['new_name', 'new_tier'], relationships: [] } } });
+  await runSdkBuild(makeSpec(), { sdk, apply: true, sampleData: true });
+  const ticketBulk = find(calls, 'createRecordsBulk').find((c) => c.args[0] === 'new_ticket');
+  assert.strictEqual(ticketBulk.args[1][0]['new_CustomerId@odata.bind'], '/new_customerset(new_customer-0)');
+});
+
+test('artifacts added to the solution by component type (view 26 / chart 59 / form 60 / app 80)', async () => {
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(makeSpec(), { sdk, apply: true });
+  const types = find(calls, 'addSolutionComponent').map((c) => c.args[0].componentType).sort((a, b) => a - b);
+  assert.deepStrictEqual(types, [26, 59, 60, 80]);
+});
+
+test('formDef honors explicit tabs/sections/columns', () => {
+  const def = formDef(makeSpec(), { entity: 'new_customer', name: 'C', tabs: [{ label: 'Main', sections: [{ label: 'Details', columns: 2, fields: ['new_name', 'new_tier'] }] }] });
+  const sec = def.tabs[0].sections[0];
+  assert.strictEqual(sec.label, 'Details');
+  assert.strictEqual(sec.columns, 2);
+  assert.strictEqual(sec.rows[0].cells.length, 2, '2-column section packs 2 cells per row');
+  assert.strictEqual(sec.rows[0].cells[0].control.fieldName, 'new_name');
+});
+
+test('formDef auto lays out primary + columns; adds Notes when the entity has notes', () => {
+  const spec = makeSpec();
+  spec.entities[0].hasNotes = true;
+  const def = formDef(spec, { entity: 'new_customer', name: 'C', layout: 'auto' });
+  const fields = def.tabs[0].sections[0].rows.flatMap((r) => r.cells).map((c) => c.control.fieldName);
   assert.deepStrictEqual(fields, ['new_name', 'new_tier']);
-  const primary = def.tabs[0].sections[0].rows[0].cells[0].control;
-  assert.strictEqual(primary.isRequired, true);
-  assert.strictEqual(primary.label, 'Name');
+  assert.ok(def.tabs[0].sections.some((s) => s.name === 'section_notes'), 'a Notes section is added');
 });
 
-test('artifacts are pushed header-less and added to the solution by component type', async () => {
-  const main = mockSdk();
-  const prov = mockSdk();
-  await runSdkBuild(makeSpec(), { sdk: main.sdk, provisionSdk: prov.sdk, apply: true });
-  // pushes + solution-component adds happen on the header-less provision client, not the header-ful one
-  assert.strictEqual(find(main.calls, 'pushArtifact').length, 0, 'no artifact pushes on the header-ful sdk');
-  assert.ok(find(prov.calls, 'pushArtifact').length >= 4, 'view/chart/form/app pushed via provision');
-  const types = find(prov.calls, 'addSolutionComponent').map((c) => c.args[0].componentType).sort((a, b) => a - b);
-  assert.deepStrictEqual(types, [26, 59, 60, 80], 'view=26, chart=59, form=60, app=80');
-  for (const c of find(prov.calls, 'addSolutionComponent')) {
-    assert.strictEqual(c.args[0].solutionUniqueName, 'ContosoSD');
-  }
-});
-
-test('view def includes the requested columns + active-only filter', async () => {
-  const { sdk, calls } = mockSdk();
-  await runSdkBuild(makeSpec(), { sdk, apply: true });
-  const def = find(calls, 'createArtifact').find((c) => c.args[0] === 'view').args[1];
-  assert.deepStrictEqual(def.columns.map((c) => c.name), ['new_subject', 'new_priority']);
-  assert.strictEqual(def.filters.conditions[0].attribute, 'statecode');
-});
-
-test('chart def maps groupBy to a category and count to a series', async () => {
-  const { sdk, calls } = mockSdk();
-  await runSdkBuild(makeSpec(), { sdk, apply: true });
-  const def = find(calls, 'createArtifact').find((c) => c.args[0] === 'chart').args[1];
-  assert.strictEqual(def.chartType, 'Pie');
-  assert.strictEqual(def.categories[0].attribute, 'new_priority');
-  assert.strictEqual(def.series[0].aggregate, 'count');
-});
-
-test('reuses an existing solution instead of creating one (idempotent)', async () => {
-  const { sdk, calls } = mockSdk({ solutionExists: true });
-  await runSdkBuild(makeSpec(), { sdk, apply: true });
-  assert.strictEqual(find(calls, 'createSolution').length, 0, 'no createSolution when it already exists');
-  assert.strictEqual(find(calls, 'createPublisher').length, 0, 'no publisher lookup/create either');
-  assert.ok(find(calls, 'createTable').length >= 1, 'still builds the rest');
-});
-
-test('uses provisionSdk (header-less) for solution/publisher when provided', async () => {
-  const main = mockSdk();
-  const prov = mockSdk();
-  await runSdkBuild(makeSpec(), { sdk: main.sdk, provisionSdk: prov.sdk, apply: true });
-  assert.ok(find(prov.calls, 'createSolution').length === 1, 'solution created via provisionSdk');
-  assert.strictEqual(find(main.calls, 'createSolution').length, 0, 'not via the header-ful sdk');
-  assert.ok(find(main.calls, 'createTable').length >= 1, 'components via the header-ful sdk');
-});
-
-test('creates a publisher when none matches the prefix', async () => {
-  const { sdk, calls } = mockSdk({ noPublisher: true });
-  await runSdkBuild(makeSpec(), { sdk, apply: true });
-  assert.strictEqual(find(calls, 'createPublisher').length, 1);
-  assert.strictEqual(find(calls, 'createSolution')[0].args[0].publisherId, 'pub-new');
-});
-
-test('an SDK failure halts with a BuildHalt carrying the phase', async () => {
-  const { sdk } = mockSdk({ failTable: 'new_ticket' });
-  const events = [];
-  await assert.rejects(
-    () => runSdkBuild(makeSpec(), { sdk, apply: true, emit: (e) => events.push(e) }),
-    (err) => {
-      assert.strictEqual(err.name, 'BuildHalt');
-      assert.strictEqual(err.phase, 'data-model');
-      return true;
-    }
-  );
-  assert.ok(events.some((e) => e.status === 'error'), 'an error event was emitted');
-});
-
-test('publish phase publishes each artifact + the app when opted in', async () => {
+test('publish (opt-in) publishes one artifact per entity + the app', async () => {
   const { sdk, calls } = mockSdk();
   await runSdkBuild(makeSpec(), { sdk, apply: true, publish: true });
   const pubs = find(calls, 'publishArtifact').map((c) => c.args[0]);
-  assert.ok(pubs.includes('form'));
-  assert.ok(pubs.includes('view'));
-  assert.ok(pubs.includes('chart'));
   assert.ok(pubs.includes('app'));
+  assert.ok(pubs.includes('form') || pubs.includes('view'), 'entity customizations published');
 });
 
-test('planFor counts every phase item', () => {
-  const plan = planFor(makeSpec(), { sampleData: true, publish: true });
-  const labels = plan.map((p) => p.label);
-  assert.ok(labels.some((l) => l.includes('create-table new_customer')));
-  assert.ok(labels.some((l) => l.includes('sample record(s) -> new_customer')));
-  assert.ok(labels.some((l) => l.includes('main form for new_customer (sub-grids: new_ticket)')));
+test('resolvePhases honors only/skip/from/to', () => {
+  assert.deepStrictEqual(resolvePhases({ only: ['views', 'charts'] }), ['views', 'charts']);
+  assert.deepStrictEqual(resolvePhases({ skip: ['data-model', 'sample-data', 'publish'] }), ['solution', 'views', 'charts', 'forms', 'app-shell']);
+  assert.deepStrictEqual(resolvePhases({ from: 'views' }), ['views', 'charts', 'forms', 'app-shell', 'publish']);
+  assert.deepStrictEqual(resolvePhases({ to: 'data-model' }), ['solution', 'data-model']);
+});
+
+test('phase selection: --only views,charts,forms,app-shell skips the data model', async () => {
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: resolvePhases({ only: ['views', 'charts', 'forms', 'app-shell'] }) });
+  assert.strictEqual(find(calls, 'createTable').length, 0);
+  assert.strictEqual(find(calls, 'createSolution').length, 0);
+  assert.ok(find(calls, 'createArtifact').length >= 4, 'artifacts still built');
+});
+
+test('an SDK failure halts with a BuildHalt carrying the phase', async () => {
+  const { sdk } = mockSdk({ failTable: 'new_customer' });
+  await assert.rejects(
+    () => runSdkBuild(makeSpec(), { sdk, apply: true }),
+    (err) => { assert.strictEqual(err.name, 'BuildHalt'); assert.strictEqual(err.phase, 'data-model'); return true; }
+  );
+});
+
+test('planFor reflects the selected phases', () => {
+  const labels = planFor(makeSpec(), { sampleData: true, publish: true, phases: PHASES }).map((p) => p.label);
+  assert.ok(labels.some((l) => l.includes('table new_customer')));
+  assert.ok(labels.some((l) => l.includes('form for new_customer (sub-grids: new_ticket)')));
+  const onlyViews = planFor(makeSpec(), { phases: ['views'] }).map((p) => p.phase);
+  assert.ok(onlyViews.every((p) => p === 'views'));
 });

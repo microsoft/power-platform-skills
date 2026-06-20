@@ -31,12 +31,17 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
 - **`scripts/lib/spec-lint.js`** — pure App Spec guardrail (`lintAppSpec → { ok, errors,
   warnings }`): errors block the plan gate (e.g. the relationship-name-vs-lookup-name
   collision Dataverse rejects), warnings teach.
-- **`scripts/build-model-app.js` → `scripts/lib/sdk-build.js`** — the deterministic build
-  engine, run after approval. Maps the App Spec to ordered **`@maker-studio/cds-maker-sdk`**
-  calls (`createSolution`/`createTable`/`createColumn`/`createRelationship`/`createRecordsBulk`,
-  then `createArtifact`+`pushArtifact` for views/charts/forms/app, `addSubGrid` for sub-grids),
-  emitting `[n/total]` progress events the orchestrator narrates and a `BuildHalt` it gates on.
-  Dry-run by default; `--apply` writes, `--sample-data` / `--publish` opt-in.
+- **`scripts/build-model-app.js` → `scripts/lib/sdk-build.js`** — the deterministic, **idempotent**
+  build engine, run after approval. Discovers existing tables/columns/relationships via the SDK
+  (`findTables`/`findColumns`/`fetchEntityMetadata`) and creates only what's missing
+  (`createSolution`/`createTable`/`createColumn`/`createRelationship`/`createRecordsBulk`, then
+  `createArtifact`+`pushArtifact` for views/charts/forms/app, `addSubGrid` for sub-grids) — so
+  new, existing, and mixed envs all work. **All Dataverse access is via the SDK**, so metadata is
+  persisted under `<app-folder>/.maker-workspace/` for reuse/edits. Phases
+  (`solution·data-model·sample-data·views·charts·forms·app-shell·publish`) are selectable with
+  `--only`/`--skip`/`--from`/`--to`; independent ops run with bounded parallelism. Emits
+  `[n/total]` events the orchestrator narrates + a `BuildHalt` it gates on. Dry-run by default;
+  `--apply` writes, `--sample-data` / `--publish` opt-in.
 - **`scripts/vendor/cds-maker-sdk.cjs`** — the SDK vendored as a self-contained headless bundle
   (rebuild via `scripts/_vendor-build/`); **`scripts/lib/sdk-http-client.js`** injects an
   `az`-token HttpClient. No browser, no relay — the SDK reuses the designer's own serializers.

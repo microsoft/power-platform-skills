@@ -1,42 +1,42 @@
 #!/usr/bin/env node
 // model-app-maker builder: turn a validated App Spec into a model-driven app via the
 // headless @maker-studio/cds-maker-sdk (vendored, self-contained — see scripts/vendor/).
-// Auth is the caller's: an az-token HttpClient is injected into the SDK. Dry-run by
-// default; --apply writes, --sample-data / --publish opt-in.
+// Auth is the caller's: an az-token HttpClient is injected into the SDK. Idempotent — new,
+// existing, and mixed environments all work. Dry-run by default; --apply writes.
 //
 // Usage:
-//   node build-model-app.js --env <orgUrl> --spec @app-spec.json [--apply] [--sample-data] [--publish]
+//   node build-model-app.js --env <orgUrl> --spec @<app-folder>/app-spec.json [--apply]
+//        [--sample-data] [--publish]
+//        [--only <phases>] [--skip <phases>] [--from <phase>] [--to <phase>]
+//        [--workspace <dir>]
+//   phases: solution,data-model,sample-data,views,charts,forms,app-shell,publish
 const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { validateAppSpec } = require('./lib/app-spec.js');
-const { runSdkBuild, planFor } = require('./lib/sdk-build.js');
+const { runSdkBuild, planFor, resolvePhases } = require('./lib/sdk-build.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 
-// Construct the SDK against the vendored bundle + an az-token HttpClient. Construction
-// is offline (installs the xmldom shim, sets up a temp fs workspace) — no token is
-// fetched until the first write — so it's safe even for a dry-run. Returns two clients:
-//   sdk         — carries solutionUniqueName, so every component write is added to the
-//                 solution via the MSCRM.SolutionUniqueName header.
-//   provisionSdk — header-less, used to create the solution/publisher themselves (that
-//                 header is invalid while the solution is mid-creation).
-function makeSdk(env, spec) {
+// Construct the SDK against the vendored bundle + an az-token HttpClient. Two clients:
+//   sdk          — carries solutionUniqueName (metadata + record writes auto-join the
+//                  solution via the MSCRM.SolutionUniqueName header); does no workspace I/O.
+//   provisionSdk — header-less; owns the PERSISTENT workspace. Every discovery read
+//                  (findTables/findColumns/fetchEntityMetadata) and every artifact
+//                  (views/charts/forms/app) lands here, so the app folder accumulates the
+//                  metadata for reuse/edits. Construction is offline (no token until first call).
+function makeSdk(env, spec, workspaceDir) {
   const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
   const httpClient = createAzHttpClient(env);
   const sdk = createMakerSdk({
-    workspacePath: fs.mkdtempSync(path.join(os.tmpdir(), 'model-app-')),
+    workspacePath: fs.mkdtempSync(path.join(os.tmpdir(), 'model-app-')), // unused (no workspace ops)
     instanceUrl: env,
     httpClient,
     solutionUniqueName: spec.solution.uniqueName,
   });
-  sdk.initWorkspace(); // createArtifact (views/charts/forms/app) writes to the fs workspace
-  const provisionSdk = createMakerSdk({
-    workspacePath: fs.mkdtempSync(path.join(os.tmpdir(), 'model-app-prov-')),
-    instanceUrl: env,
-    httpClient,
-  });
-  provisionSdk.initWorkspace(); // also pushes view/chart/form/app artifacts (header-less)
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  const provisionSdk = createMakerSdk({ workspacePath: workspaceDir, instanceUrl: env, httpClient });
+  provisionSdk.initWorkspace();
   return { sdk, provisionSdk };
 }
 
@@ -44,6 +44,7 @@ function makeSdk(env, spec) {
 function cliEmit(log) {
   return (e) => {
     if (e.status === 'start') log(`[${e.n}/${e.total}] ${e.label}`);
+    else if (e.status === 'skip') log(`[${e.n}/${e.total}] ${e.label}`);
     else if (e.status === 'error') log(`  ✗ ${e.label}: ${e.detail || ''}`);
   };
 }
@@ -61,8 +62,13 @@ async function buildModelApp(spec, opts, deps) {
     apply: opts.apply,
     sampleData: opts.sampleData,
     publish: opts.publish,
+    phases: opts.phases,
     emit,
   });
+}
+
+function list(v) {
+  return typeof v === 'string' ? v.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
 }
 
 async function main() {
@@ -71,21 +77,23 @@ async function main() {
   const specArg = flags.spec || positional[0];
   if (!env || !specArg) {
     process.stderr.write(
-      'Usage: node build-model-app.js --env <url> --spec @app-spec.json [--apply] [--sample-data] [--publish]\n'
+      'Usage: node build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--only|--skip <phases>] [--from|--to <phase>] [--workspace <dir>]\n'
     );
     process.exit(1);
   }
-  const spec = readJsonArg(typeof specArg === 'string' && specArg.startsWith('@') ? specArg : '@' + specArg);
+  const specPath = path.resolve(typeof specArg === 'string' && specArg.startsWith('@') ? specArg.slice(1) : specArg);
+  const spec = readJsonArg('@' + specPath);
+  const workspaceDir = flags.workspace || path.join(path.dirname(specPath), '.maker-workspace');
   const opts = {
     apply: flags.apply === true,
     sampleData: flags['sample-data'] === true,
     publish: flags.publish === true,
+    phases: resolvePhases({ only: list(flags.only), skip: list(flags.skip), from: flags.from, to: flags.to }),
     env,
   };
-  // Construct the SDK for both dry-run and apply: it proves the vendored bundle + adapter
-  // wire up (offline), and apply needs it. A spec validation error short-circuits before
-  // any write inside runSdkBuild.
-  const { sdk, provisionSdk } = makeSdk(env, spec);
+  // Construct for both dry-run and apply: proves the vendored bundle + adapter wire up
+  // (offline), and apply needs it. A spec validation error short-circuits before any write.
+  const { sdk, provisionSdk } = makeSdk(env, spec, workspaceDir);
   const deps = { log: (m) => process.stderr.write(m + '\n'), sdk, provisionSdk };
   const r = await buildModelApp(spec, opts, deps);
   emitResult(r.ok, r);

@@ -217,19 +217,14 @@ Use `AskUserQuestion`. Order options so the **matching-prefix** choice is first
 
 #### 3. Act on the answer
 
-For each option, record `uniqueName` + `publisherPrefix` in the spec's `solution`
-block. Specifics:
+Just **record** `uniqueName` + `publisherPrefix` in the spec's `solution` block — **do not
+create the solution (or the publisher) here.** The build creates it idempotently via the SDK
+(`createSolution`) on apply, resolving/creating the publisher and reusing an existing solution
+of the same name. Specifics:
 
 - **Existing solution** → use it directly; capture its prefix from the query above.
-- **Create new under publisher `<prefix>`** → resolve publisher uniquename, then create:
-  ```bash
-  PUB=$(node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
-    "publishers?\$select=uniquename&\$filter=customizationprefix eq '<prefix>'&\$top=1")
-  node "${CLAUDE_PLUGIN_ROOT}/scripts/create-solution.js" "$ENV_URL" \
-    "<UniqueName>" "<Friendly Name>" --publisher "<publisherUniqueName>"
-  ```
-  Omit `--publisher` to use the env's Default Publisher (prefix `new`).
-  If the uniqueName collides, retry once with a numeric suffix.
+- **Create new under publisher `<prefix>`** → record `uniqueName` + `publisherPrefix`; the
+  build resolves the publisher (or creates `<prefix>publisher`) and the solution.
 - **Default Solution** → `uniqueName: Default`, `publisherPrefix: new`.
 
 If the chosen prefix differs from `detectedPrefix`, log a one-line warning to
@@ -248,6 +243,12 @@ hand-edit between turns.
 
 **Do not present the entire spec at once.** Level (a) must be agreed before
 Level (b) begins.
+
+> **Read the spec format once, up front** — don't reverse-engineer it from scripts:
+> [`references/app-spec-schema.md`](./app-spec-schema.md) (every field) and the worked sample
+> [`samples/app-spec.support-desk.json`](../samples/app-spec.support-desk.json). Author to that
+> shape. **Do not pre-create tables/columns/solution** during authoring — the build is
+> idempotent and creates only what's missing.
 
 ### Level (a) — Data model
 
