@@ -56,9 +56,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/errors/index.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/errors/index.js
 var require_errors = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/errors/index.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/errors/index.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.JsonPointerError = exports2.NotImplementedError = exports2.WorkspaceNotInitializedError = exports2.ConnectionError = exports2.VersionConflictError = exports2.InvalidArgumentError = exports2.ValidationError = exports2.PathNotFoundError = exports2.ArtifactNotFoundError = exports2.SdkError = void 0;
@@ -146,9 +146,9 @@ var require_errors = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/pointer/JsonPointer.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/pointer/JsonPointer.js
 var require_JsonPointer = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/pointer/JsonPointer.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/pointer/JsonPointer.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.JsonPointer = void 0;
@@ -290,9 +290,9 @@ var require_JsonPointer = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/utils/metaKeys.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/utils/metaKeys.js
 var require_metaKeys = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/utils/metaKeys.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/utils/metaKeys.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.stripPrivateKeys = exports2.isPrivateKey = void 0;
@@ -323,9 +323,9 @@ var require_metaKeys = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/pointer/treeFinder.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/pointer/treeFinder.js
 var require_treeFinder = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/pointer/treeFinder.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/pointer/treeFinder.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.findElements = void 0;
@@ -360,9 +360,9 @@ var require_treeFinder = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/workspace/WorkspaceManager.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/workspace/WorkspaceManager.js
 var require_WorkspaceManager = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/workspace/WorkspaceManager.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/workspace/WorkspaceManager.js"(exports2) {
     "use strict";
     var __createBinding2 = exports2 && exports2.__createBinding || (Object.create ? function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -572,9 +572,9 @@ var require_WorkspaceManager = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/utils/deepDiff.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/utils/deepDiff.js
 var require_deepDiff = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/utils/deepDiff.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/utils/deepDiff.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.deepEqual = exports2.deepDiff = void 0;
@@ -656,9 +656,9 @@ var require_deepDiff = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/workspace/VersionManager.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/workspace/VersionManager.js
 var require_VersionManager = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/workspace/VersionManager.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/workspace/VersionManager.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.VersionManager = void 0;
@@ -716,9 +716,9 @@ var require_VersionManager = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/compare-versions@3.4.0/node_modules/compare-versions/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/compare-versions@3.4.0/node_modules/compare-versions/index.js
 var require_compare_versions = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/compare-versions@3.4.0/node_modules/compare-versions/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/compare-versions@3.4.0/node_modules/compare-versions/index.js"(exports2, module2) {
     (function(root, factory) {
       if (typeof define === "function" && define.amd) {
         define([], factory);
@@ -780,9 +780,9 @@ var require_compare_versions = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-apis/lib/contracts/bap/environment.js
+// ../../../../../power-platform-ux/packages/powerapps-apis/lib/contracts/bap/environment.js
 var require_environment = __commonJS({
-  "../../../power-platform-ux/packages/powerapps-apis/lib/contracts/bap/environment.js"(exports2) {
+  "../../../../../power-platform-ux/packages/powerapps-apis/lib/contracts/bap/environment.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.EnvironmentFlowHostingType = exports2.EnvironmentDisableReasonCode = exports2.EnvironmentMigrationConstants = exports2.EnvironmentProvisioningStates = exports2.EnvironmentLocations = exports2.EnvironmentCreationTypeConstants = exports2.EnvironmentType = exports2.EnvironmentSkuConstants = exports2.environmentPermissions = exports2.DatabaseType = void 0;
@@ -998,9 +998,9 @@ var require_environment = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-apis/lib/helpers/bap/environment.js
+// ../../../../../power-platform-ux/packages/powerapps-apis/lib/helpers/bap/environment.js
 var require_environment2 = __commonJS({
-  "../../../power-platform-ux/packages/powerapps-apis/lib/helpers/bap/environment.js"(exports2) {
+  "../../../../../power-platform-ux/packages/powerapps-apis/lib/helpers/bap/environment.js"(exports2) {
     "use strict";
     var __importDefault = exports2 && exports2.__importDefault || function(mod) {
       return mod && mod.__esModule ? mod : { "default": mod };
@@ -1360,9 +1360,9 @@ var require_environment2 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-apis/lib/helpers/cds/cdsUris.js
+// ../../../../../power-platform-ux/packages/powerapps-apis/lib/helpers/cds/cdsUris.js
 var require_cdsUris = __commonJS({
-  "../../../power-platform-ux/packages/powerapps-apis/lib/helpers/cds/cdsUris.js"(exports2) {
+  "../../../../../power-platform-ux/packages/powerapps-apis/lib/helpers/cds/cdsUris.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.getRequiredComponentsQueryUrl = exports2.solutionComponentCountSummariesQueryUrl = exports2.solutionComponentSummariesQueryUrl = exports2.solutionComponentConfigurationsQueryUrl = exports2.chartsQueryUrl = exports2.workflowsQueryUrl = exports2.entityDefinitionsQueryUrl = exports2.solutionComponentDefinitionsQueryUrl = exports2.getCreateNewArticleTemplateUrl = exports2.getCreateNewPublisherUrl = exports2.getEnableSecurityRolesUrl = exports2.getArticleTemplateUrl = exports2.getFieldSecurityProfileDesignerUrl = exports2.getSecurityRoleDesignerUrl = exports2.getMailMergeTemplateDesignerUrl = exports2.getEmailTemplateDesignerUrl = exports2.getConnectionRoleDesignerUrl = exports2.getSiteMapDesignerUrl = exports2.getWebResourceFileUrl = exports2.getWebResourceDesignerUrl = exports2.getReportDesignerUrl = exports2.getBusinessProcessFlowDesignerUrl = exports2.getProcessShareUrl = exports2.getProcessDesignerUrl = exports2.getChartDesignerUrl = exports2.getOpenModernEntityDashboardUrl = exports2.getNewModernEntityDashboardUrl = exports2.getNewModernDashboardUrl = exports2.getOpenModernDashboardUrl = exports2.getDashboardDesignerUrl = exports2.getAppModuleDesignerUrl = exports2.privilegesQueryUrls = exports2.xrmApiUrl = exports2.getPlayAppModuleUrl = exports2.getCrmAdminSecurityUsersUrl = exports2.getCrmAdminSecurityRolesUrl = exports2.getCrmMyAppsUrl = exports2.getCrmAppDesignerUrl = exports2.getCrmDevResourcesUrl = exports2.getCrmAllPublishersUrl = exports2.getCrmAllSolutionsUrl = exports2.getSolutionPublisherUrl = exports2.getExportTranslationFileName = exports2.getExportSolutionTranslationUrl = exports2.getImportSolutionTranslationUrl = exports2.getShowSolutionDependenciesUrl = exports2.getShowComponentDependenciesUrl = exports2.cdsServiceUrl = exports2.ODATA_NEXT_LINK = exports2.ODATA_MAX_PAGE_SIZE = void 0;
@@ -1752,9 +1752,9 @@ var require_cdsUris = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/api/DataverseClient.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/DataverseClient.js
 var require_DataverseClient = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/api/DataverseClient.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/DataverseClient.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.DataverseClient = void 0;
@@ -1810,9 +1810,9 @@ var require_DataverseClient = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/utils/http.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/utils/http.js
 var require_http = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/utils/http.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/utils/http.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.nowIso = exports2.deleteRecord = exports2.ensureSuccess = exports2.readCreatedId = exports2.readEtag = exports2.VERSION_CONFLICT_CODE = void 0;
@@ -1891,9 +1891,9 @@ var require_http = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/api/MetadataApi.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/MetadataApi.js
 var require_MetadataApi = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/api/MetadataApi.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/MetadataApi.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.findColumns = exports2.findTables = exports2.fetchEntityMetadataFromApi = void 0;
@@ -2051,9 +2051,9 @@ var require_MetadataApi = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/api/SchemaApi.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/SchemaApi.js
 var require_SchemaApi = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/api/SchemaApi.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/SchemaApi.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.updateTable = exports2.deleteAlternateKey = exports2.createAlternateKey = exports2.deleteGlobalOptionSet = exports2.createGlobalOptionSet = exports2.deleteRelationship = exports2.deleteColumn = exports2.updateColumn = exports2.deleteTable = exports2.createRelationship = exports2.insertStatusValue = exports2.createCustomerColumn = exports2.createColumn = exports2.createTable = exports2.resolveEntitySetName = void 0;
@@ -2258,28 +2258,30 @@ var require_SchemaApi = __commonJS({
       const lcid = (_a = opts.languageCode) !== null && _a !== void 0 ? _a : DEFAULT_LCID;
       const prefix2 = prefixOf(opts.schemaName);
       const primarySchema = (_b = opts.primaryColumnSchemaName) !== null && _b !== void 0 ? _b : `${prefix2}_Name`;
+      const primaryNameAttr = {
+        "@odata.type": "Microsoft.Dynamics.CRM.StringAttributeMetadata",
+        AttributeType: "String",
+        AttributeTypeName: { Value: "StringType" },
+        SchemaName: primarySchema,
+        RequiredLevel: requiredLevel("None"),
+        MaxLength: (_c = opts.primaryColumnMaxLength) !== null && _c !== void 0 ? _c : 100,
+        FormatName: { Value: "Text" },
+        DisplayName: label((_d = opts.primaryColumnDisplayName) !== null && _d !== void 0 ? _d : "Name", lcid),
+        IsPrimaryName: true
+      };
+      if (opts.primaryColumnAutoNumberFormat) {
+        primaryNameAttr.AutoNumberFormat = opts.primaryColumnAutoNumberFormat;
+      }
       const body = {
         "@odata.type": "Microsoft.Dynamics.CRM.EntityMetadata",
         SchemaName: opts.schemaName,
         DisplayName: label(opts.displayName, lcid),
-        DisplayCollectionName: label((_c = opts.pluralName) !== null && _c !== void 0 ? _c : `${opts.displayName}s`, lcid),
-        OwnershipType: (_d = opts.ownership) !== null && _d !== void 0 ? _d : "UserOwned",
+        DisplayCollectionName: label((_e = opts.pluralName) !== null && _e !== void 0 ? _e : `${opts.displayName}s`, lcid),
+        OwnershipType: (_f = opts.ownership) !== null && _f !== void 0 ? _f : "UserOwned",
         IsActivity: false,
-        HasActivities: (_e = opts.hasActivities) !== null && _e !== void 0 ? _e : false,
-        HasNotes: (_f = opts.hasNotes) !== null && _f !== void 0 ? _f : false,
-        Attributes: [
-          {
-            "@odata.type": "Microsoft.Dynamics.CRM.StringAttributeMetadata",
-            AttributeType: "String",
-            AttributeTypeName: { Value: "StringType" },
-            SchemaName: primarySchema,
-            RequiredLevel: requiredLevel("None"),
-            MaxLength: (_g = opts.primaryColumnMaxLength) !== null && _g !== void 0 ? _g : 100,
-            FormatName: { Value: "Text" },
-            DisplayName: label((_h = opts.primaryColumnDisplayName) !== null && _h !== void 0 ? _h : "Name", lcid),
-            IsPrimaryName: true
-          }
-        ]
+        HasActivities: (_g = opts.hasActivities) !== null && _g !== void 0 ? _g : false,
+        HasNotes: (_h = opts.hasNotes) !== null && _h !== void 0 ? _h : false,
+        Attributes: [primaryNameAttr]
       };
       if (opts.description) {
         body.Description = label(opts.description, lcid);
@@ -2452,6 +2454,9 @@ var require_SchemaApi = __commonJS({
       if (opts.maxLength !== void 0) {
         full.MaxLength = opts.maxLength;
       }
+      if (opts.autoNumberFormat !== void 0) {
+        full.AutoNumberFormat = opts.autoNumberFormat;
+      }
       const putPath = `${attrBase}(${ids.MetadataId})`;
       (0, http_1.ensureSuccess)(await client.put(putPath, full, { headers: { "MSCRM.MergeLabels": "true" } }), client.apiUrl(putPath));
     }
@@ -2573,9 +2578,9 @@ var require_SchemaApi = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/api/RecordApi.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/RecordApi.js
 var require_RecordApi = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/api/RecordApi.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/RecordApi.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.disassociateRecords = exports2.associateRecords = exports2.createRecordsBulk = exports2.upsertRecord = exports2.queryRecords = exports2.getRecord = exports2.deleteRecord = exports2.updateRecord = exports2.createRecord = void 0;
@@ -2693,9 +2698,9 @@ var require_RecordApi = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/api/WebResourceApi.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/WebResourceApi.js
 var require_WebResourceApi = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/api/WebResourceApi.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/WebResourceApi.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.deleteWebResource = exports2.getWebResource = exports2.updateWebResource = exports2.createWebResource = void 0;
@@ -2797,9 +2802,9 @@ var require_WebResourceApi = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/api/SolutionApi.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/SolutionApi.js
 var require_SolutionApi = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/api/SolutionApi.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/SolutionApi.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.deleteSolution = exports2.importSolution = exports2.exportSolution = exports2.removeSolutionComponent = exports2.addSolutionComponent = exports2.setSolutionVersion = exports2.createSolution = exports2.createPublisher = exports2.fetchSolutionComponents = exports2.SolutionComponentType = void 0;
@@ -2948,14 +2953,14 @@ var require_SolutionApi = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Common/CRMTypes.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Common/CRMTypes.js
 var CRMTypes_exports = {};
 __export(CRMTypes_exports, {
   Guid: () => Guid
 });
 var Guid;
 var init_CRMTypes = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Common/CRMTypes.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Common/CRMTypes.js"() {
     "use strict";
     Guid = class _Guid {
       guidString;
@@ -2986,10 +2991,10 @@ var init_CRMTypes = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Common/StringUtilities.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Common/StringUtilities.js
 var StringUtilities;
 var init_StringUtilities = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Common/StringUtilities.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Common/StringUtilities.js"() {
     "use strict";
     init_ScriptUtilities();
     StringUtilities = class _StringUtilities {
@@ -3189,14 +3194,14 @@ var init_StringUtilities = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Common/ScriptUtilities.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Common/ScriptUtilities.js
 var ScriptUtilities_exports = {};
 __export(ScriptUtilities_exports, {
   ScriptUtilities: () => ScriptUtilities
 });
 var ScriptUtilities;
 var init_ScriptUtilities = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Common/ScriptUtilities.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Common/ScriptUtilities.js"() {
     "use strict";
     init_CRMTypes();
     init_StringUtilities();
@@ -3318,7 +3323,7 @@ var init_ScriptUtilities = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormDesignerConstants.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormDesignerConstants.js
 var FormDesignerConstants_exports = {};
 __export(FormDesignerConstants_exports, {
   ChartGridMode: () => ChartGridMode,
@@ -3366,7 +3371,7 @@ __export(FormDesignerConstants_exports, {
 });
 var FormType, ComponentType, FormDesignerSideBarTab, ElementNames, ElementProperties, ElementType, compositeFieldNames, compositeFields, compositeAddressFields, EntityAttributeProperty, LookUpTable, FormState, HeaderDensityType, FormPresentation, DisplayConditionsInfo, NavBarChildElementType, FormActivationState, TabLayoutTypes, SectionDefaultProperties, TabDefaultProperties, SectionLayoutTypes, ControlLayoutTypes, TabContentType, ColumnLayoutWidths, UnboundControlPropertyKeys, PropertyModelKeys, PropertyModelSectionKeys, EventType, ChartGridMode, RELATED_TAB_ID, MORE_TAB_PREFIX, RELATED_TAB_PREFIX, PREVIEW_ID_NAVIGATION_AREA, PREVIEW_ID_TAB_PANEL, PREVIEW_ID_HEADER_FLYOUT, PREVIEW_ID_TAB_LIST, PREVIEW_ID_HEADER_OVERFLOW_BUTTON, PREVIEW_ID_TAB, PREVIEW_ID_QUICKCREATE_ROOT, TelemetryPropertyNames, ComponentCategory, FormCanvasServiceScope;
 var init_FormDesignerConstants = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormDesignerConstants.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormDesignerConstants.js"() {
     "use strict";
     (function(FormType3) {
       FormType3[FormType3["Dashboard"] = 0] = "Dashboard";
@@ -3978,7 +3983,7 @@ var init_FormDesignerConstants = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/ControlClassIds.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/ControlClassIds.js
 var ControlClassIds_exports = {};
 __export(ControlClassIds_exports, {
   ControlClassId: () => ControlClassId,
@@ -4066,7 +4071,7 @@ function getControlDisplayNames(t) {
 }
 var ControlClassId, ControlNamePrefixes;
 var init_ControlClassIds = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/ControlClassIds.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/ControlClassIds.js"() {
     "use strict";
     (function(ControlClassId2) {
       ControlClassId2["AccessPrivilegeControl"] = "F93A31B2-99AC-4084-8EC2-D4027C31369A";
@@ -4158,9 +4163,9 @@ var init_ControlClassIds = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-icm-info/lib/index.js
+// ../../../../../power-platform-ux/packages/shell-icm-info/lib/index.js
 var require_lib = __commonJS({
-  "../../../power-platform-ux/packages/shell-icm-info/lib/index.js"(exports2) {
+  "../../../../../power-platform-ux/packages/shell-icm-info/lib/index.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.getEmailForTeam = exports2.getRoutingIdForTeam = exports2.getIterationPathForTeam = exports2.getAreaPathForTeam = exports2.getTeamForArea = exports2.FallbackTeam = exports2.Priority = exports2.Severity = exports2.Team = void 0;
@@ -4610,10 +4615,10 @@ var require_lib = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/Constants.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/Constants.js
 var ShellTelemetryScope, OneDSEndpoints, CollectorEndpoints, AdditionalTopLevelContextFields, CommonContextProperties, TopLevelContextProperties, GuidRegex, GuidWithNoSpacesRegex;
 var init_Constants = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/Constants.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/Constants.js"() {
     "use strict";
     ShellTelemetryScope = "shell-telemetry";
     OneDSEndpoints = {
@@ -4838,9 +4843,9 @@ var init_Constants = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/requires-port@1.0.0/node_modules/requires-port/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/requires-port@1.0.0/node_modules/requires-port/index.js
 var require_requires_port = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/requires-port@1.0.0/node_modules/requires-port/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/requires-port@1.0.0/node_modules/requires-port/index.js"(exports2, module2) {
     "use strict";
     module2.exports = function required(port, protocol) {
       protocol = protocol.split(":")[0];
@@ -4865,9 +4870,9 @@ var require_requires_port = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/querystringify@2.2.0/node_modules/querystringify/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/querystringify@2.2.0/node_modules/querystringify/index.js
 var require_querystringify = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/querystringify@2.2.0/node_modules/querystringify/index.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/querystringify@2.2.0/node_modules/querystringify/index.js"(exports2) {
     "use strict";
     var has = Object.prototype.hasOwnProperty;
     var undef;
@@ -4917,9 +4922,9 @@ var require_querystringify = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/url-parse@1.5.9/node_modules/url-parse/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/url-parse@1.5.9/node_modules/url-parse/index.js
 var require_url_parse = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/url-parse@1.5.9/node_modules/url-parse/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/url-parse@1.5.9/node_modules/url-parse/index.js"(exports2, module2) {
     "use strict";
     var required = require_requires_port();
     var qs = require_querystringify();
@@ -5222,39 +5227,39 @@ var require_url_parse = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/rng.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/rng.js
 function rng() {
   return import_crypto.default.randomFillSync(rnds8);
 }
 var import_crypto, rnds8;
 var init_rng = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/rng.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/rng.js"() {
     import_crypto = __toESM(require("crypto"));
     rnds8 = new Uint8Array(16);
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/regex.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/regex.js
 var regex_default;
 var init_regex = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/regex.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/regex.js"() {
     regex_default = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|00000000-0000-0000-0000-000000000000)$/i;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/validate.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/validate.js
 function validate(uuid) {
   return typeof uuid === "string" && regex_default.test(uuid);
 }
 var validate_default;
 var init_validate = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/validate.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/validate.js"() {
     init_regex();
     validate_default = validate;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/stringify.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/stringify.js
 function stringify(arr, offset = 0) {
   const uuid = (byteToHex[arr[offset + 0]] + byteToHex[arr[offset + 1]] + byteToHex[arr[offset + 2]] + byteToHex[arr[offset + 3]] + "-" + byteToHex[arr[offset + 4]] + byteToHex[arr[offset + 5]] + "-" + byteToHex[arr[offset + 6]] + byteToHex[arr[offset + 7]] + "-" + byteToHex[arr[offset + 8]] + byteToHex[arr[offset + 9]] + "-" + byteToHex[arr[offset + 10]] + byteToHex[arr[offset + 11]] + byteToHex[arr[offset + 12]] + byteToHex[arr[offset + 13]] + byteToHex[arr[offset + 14]] + byteToHex[arr[offset + 15]]).toLowerCase();
   if (!validate_default(uuid)) {
@@ -5264,7 +5269,7 @@ function stringify(arr, offset = 0) {
 }
 var byteToHex, stringify_default;
 var init_stringify = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/stringify.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/stringify.js"() {
     init_validate();
     byteToHex = [];
     for (let i = 0; i < 256; ++i) {
@@ -5274,7 +5279,7 @@ var init_stringify = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/v1.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/v1.js
 function v1(options, buf, offset) {
   let i = buf && offset || 0;
   const b = buf || new Array(16);
@@ -5325,7 +5330,7 @@ function v1(options, buf, offset) {
 }
 var _nodeId, _clockseq, _lastMSecs, _lastNSecs, v1_default;
 var init_v1 = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/v1.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/v1.js"() {
     init_rng();
     init_stringify();
     _lastMSecs = 0;
@@ -5334,7 +5339,7 @@ var init_v1 = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/parse.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/parse.js
 function parse(uuid) {
   if (!validate_default(uuid)) {
     throw TypeError("Invalid UUID");
@@ -5361,13 +5366,13 @@ function parse(uuid) {
 }
 var parse_default;
 var init_parse = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/parse.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/parse.js"() {
     init_validate();
     parse_default = parse;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/v35.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/v35.js
 function stringToBytes(str) {
   str = unescape(encodeURIComponent(str));
   const bytes = [];
@@ -5412,7 +5417,7 @@ function v35_default(name, version2, hashfunc) {
 }
 var DNS, URL2;
 var init_v35 = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/v35.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/v35.js"() {
     init_stringify();
     init_parse();
     DNS = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
@@ -5420,7 +5425,7 @@ var init_v35 = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/md5.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/md5.js
 function md5(bytes) {
   if (Array.isArray(bytes)) {
     bytes = Buffer.from(bytes);
@@ -5431,16 +5436,16 @@ function md5(bytes) {
 }
 var import_crypto2, md5_default;
 var init_md5 = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/md5.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/md5.js"() {
     import_crypto2 = __toESM(require("crypto"));
     md5_default = md5;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/v3.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/v3.js
 var v3, v3_default;
 var init_v3 = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/v3.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/v3.js"() {
     init_v35();
     init_md5();
     v3 = v35_default("v3", 48, md5_default);
@@ -5448,7 +5453,7 @@ var init_v3 = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/v4.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/v4.js
 function v4(options, buf, offset) {
   options = options || {};
   const rnds = options.random || (options.rng || rng)();
@@ -5465,14 +5470,14 @@ function v4(options, buf, offset) {
 }
 var v4_default;
 var init_v4 = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/v4.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/v4.js"() {
     init_rng();
     init_stringify();
     v4_default = v4;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/sha1.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/sha1.js
 function sha1(bytes) {
   if (Array.isArray(bytes)) {
     bytes = Buffer.from(bytes);
@@ -5483,16 +5488,16 @@ function sha1(bytes) {
 }
 var import_crypto3, sha1_default;
 var init_sha1 = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/sha1.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/sha1.js"() {
     import_crypto3 = __toESM(require("crypto"));
     sha1_default = sha1;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/v5.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/v5.js
 var v5, v5_default;
 var init_v5 = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/v5.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/v5.js"() {
     init_v35();
     init_sha1();
     v5 = v35_default("v5", 80, sha1_default);
@@ -5500,15 +5505,15 @@ var init_v5 = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/nil.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/nil.js
 var nil_default;
 var init_nil = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/nil.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/nil.js"() {
     nil_default = "00000000-0000-0000-0000-000000000000";
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/version.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/version.js
 function version(uuid) {
   if (!validate_default(uuid)) {
     throw TypeError("Invalid UUID");
@@ -5517,13 +5522,13 @@ function version(uuid) {
 }
 var version_default;
 var init_version = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/version.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/version.js"() {
     init_validate();
     version_default = version;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/index.js
 var esm_node_exports = {};
 __export(esm_node_exports, {
   NIL: () => nil_default,
@@ -5537,7 +5542,7 @@ __export(esm_node_exports, {
   version: () => version_default
 });
 var init_esm_node = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/index.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/uuid@8.3.0/node_modules/uuid/dist/esm-node/index.js"() {
     init_v1();
     init_v3();
     init_v4();
@@ -5550,10 +5555,10 @@ var init_esm_node = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/ActionType.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/ActionType.js
 var ActionType;
 var init_ActionType = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/ActionType.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/ActionType.js"() {
     "use strict";
     (function(ActionType3) {
       ActionType3["ClickLink"] = "ClickLink";
@@ -5565,10 +5570,10 @@ var init_ActionType = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/EventType.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/EventType.js
 var EventType2, SeverityLevel, ScenarioModifier, TraceModifier;
 var init_EventType = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/EventType.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/EventType.js"() {
     "use strict";
     (function(EventType4) {
       EventType4["ClickLink"] = "ClickLink";
@@ -5604,7 +5609,7 @@ var init_EventType = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/Performance.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/Performance.js
 function startMarker(id) {
   if (performanceSupported) {
     performanceAPI.mark(`${perfMarkerPrefix}${id}_START`);
@@ -5635,7 +5640,7 @@ function getLatestDataPointForTask(taskName) {
 }
 var perfMarkerPrefix, performanceAPI, performanceSupported;
 var init_Performance = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/Performance.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/Performance.js"() {
     "use strict";
     perfMarkerPrefix = "__PA_PERF_MARKER__";
     performanceAPI = typeof window !== "undefined" && (window.performance || window.webkitPerformance || window.msPerformance || window.mozPerformance);
@@ -5647,21 +5652,21 @@ var init_Performance = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/Provider/TelemetryInitializer.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/Provider/TelemetryInitializer.js
 function telemetryProviderInstance() {
   return _instance;
 }
 var _instance;
 var init_TelemetryInitializer = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/Provider/TelemetryInitializer.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/Provider/TelemetryInitializer.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/ScenarioType.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/ScenarioType.js
 var ScenarioType;
 var init_ScenarioType = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/ScenarioType.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/ScenarioType.js"() {
     "use strict";
     (function(ScenarioType2) {
       ScenarioType2["Create"] = "Create";
@@ -5673,10 +5678,10 @@ var init_ScenarioType = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/Helper/TimestampHelper.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/Helper/TimestampHelper.js
 var getHumanReadableTimestamp;
 var init_TimestampHelper = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/Helper/TimestampHelper.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/Helper/TimestampHelper.js"() {
     "use strict";
     init_Performance();
     getHumanReadableTimestamp = () => {
@@ -5694,9 +5699,9 @@ var init_TimestampHelper = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/object-assign@4.1.1/node_modules/object-assign/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/object-assign@4.1.1/node_modules/object-assign/index.js
 var require_object_assign = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/object-assign@4.1.1/node_modules/object-assign/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/object-assign@4.1.1/node_modules/object-assign/index.js"(exports2, module2) {
     "use strict";
     var getOwnPropertySymbols = Object.getOwnPropertySymbols;
     var hasOwnProperty = Object.prototype.hasOwnProperty;
@@ -5764,9 +5769,9 @@ var require_object_assign = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react@16.14.0/node_modules/react/cjs/react.production.min.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react@16.14.0/node_modules/react/cjs/react.production.min.js
 var require_react_production_min = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react@16.14.0/node_modules/react/cjs/react.production.min.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react@16.14.0/node_modules/react/cjs/react.production.min.js"(exports2) {
     "use strict";
     var l = require_object_assign();
     var n = "function" === typeof Symbol && Symbol.for;
@@ -6042,18 +6047,18 @@ var require_react_production_min = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/prop-types@15.7.2/node_modules/prop-types/lib/ReactPropTypesSecret.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/prop-types@15.7.2/node_modules/prop-types/lib/ReactPropTypesSecret.js
 var require_ReactPropTypesSecret = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/prop-types@15.7.2/node_modules/prop-types/lib/ReactPropTypesSecret.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/prop-types@15.7.2/node_modules/prop-types/lib/ReactPropTypesSecret.js"(exports2, module2) {
     "use strict";
     var ReactPropTypesSecret = "SECRET_DO_NOT_PASS_THIS_OR_YOU_WILL_BE_FIRED";
     module2.exports = ReactPropTypesSecret;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/prop-types@15.7.2/node_modules/prop-types/checkPropTypes.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/prop-types@15.7.2/node_modules/prop-types/checkPropTypes.js
 var require_checkPropTypes = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/prop-types@15.7.2/node_modules/prop-types/checkPropTypes.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/prop-types@15.7.2/node_modules/prop-types/checkPropTypes.js"(exports2, module2) {
     "use strict";
     var printWarning = function() {
     };
@@ -6117,9 +6122,9 @@ var require_checkPropTypes = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react@16.14.0/node_modules/react/cjs/react.development.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react@16.14.0/node_modules/react/cjs/react.development.js
 var require_react_development = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react@16.14.0/node_modules/react/cjs/react.development.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react@16.14.0/node_modules/react/cjs/react.development.js"(exports2) {
     "use strict";
     if (process.env.NODE_ENV !== "production") {
       (function() {
@@ -7414,9 +7419,9 @@ var require_react_development = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react@16.14.0/node_modules/react/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react@16.14.0/node_modules/react/index.js
 var require_react = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react@16.14.0/node_modules/react/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react@16.14.0/node_modules/react/index.js"(exports2, module2) {
     "use strict";
     if (process.env.NODE_ENV === "production") {
       module2.exports = require_react_production_min();
@@ -7426,10 +7431,10 @@ var require_react = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/PageLoadLogger.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/PageLoadLogger.js
 var React, currentPage;
 var init_PageLoadLogger = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/PageLoadLogger.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/PageLoadLogger.js"() {
     "use strict";
     React = __toESM(require_react());
     init_lib4();
@@ -7440,10 +7445,10 @@ var init_PageLoadLogger = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/ScenarioLogger.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/ScenarioLogger.js
 var scenarioData, scenarioKeysSet, addScenarioLog;
 var init_ScenarioLogger = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/ScenarioLogger.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/ScenarioLogger.js"() {
     "use strict";
     init_esm_node();
     init_TimestampHelper();
@@ -7477,10 +7482,10 @@ var init_ScenarioLogger = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/HttpClientLogger.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/HttpClientLogger.js
 var httpClientData, httpClientKeysSet, addHttpClientLog;
 var init_HttpClientLogger = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/HttpClientLogger.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/HttpClientLogger.js"() {
     "use strict";
     init_TimestampHelper();
     init_PageLoadLogger();
@@ -7516,7 +7521,7 @@ var init_HttpClientLogger = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-config/lib/settings.js
+// ../../../../../power-platform-ux/packages/shell-config/lib/settings.js
 function getSettings() {
   if (config) {
     return config;
@@ -7569,13 +7574,13 @@ function isLocal() {
 }
 var config, sovereignRegions;
 var init_settings = __esm({
-  "../../../power-platform-ux/packages/shell-config/lib/settings.js"() {
+  "../../../../../power-platform-ux/packages/shell-config/lib/settings.js"() {
     "use strict";
     sovereignRegions = ["dod", "high", "gov", "mooncake", "ex", "rx"];
   }
 });
 
-// ../../../power-platform-ux/packages/shell-config/lib/dataBoundary.js
+// ../../../../../power-platform-ux/packages/shell-config/lib/dataBoundary.js
 function checkAndLogUnexpectedGeo(geo, parentDictionary, parent) {
   if (!geo) {
     if (unexpectedGeos.has(geo)) {
@@ -7704,7 +7709,7 @@ function getGraphqlEndpointWithDomain(enableNonVersioned) {
 }
 var import_url_parse, DataBoundaries, GeoShortCodes, GeoToDataBoundary, unexpectedGeos, LocationToGeoShortCode, _currentGeo, GEO;
 var init_dataBoundary = __esm({
-  "../../../power-platform-ux/packages/shell-config/lib/dataBoundary.js"() {
+  "../../../../../power-platform-ux/packages/shell-config/lib/dataBoundary.js"() {
     "use strict";
     init_settings();
     import_url_parse = __toESM(require_url_parse());
@@ -7944,10 +7949,10 @@ var init_dataBoundary = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-config/lib/azureRegionsToGeoMappings.js
+// ../../../../../power-platform-ux/packages/shell-config/lib/azureRegionsToGeoMappings.js
 var azureRegions, azureRegionsToGeoMappings;
 var init_azureRegionsToGeoMappings = __esm({
-  "../../../power-platform-ux/packages/shell-config/lib/azureRegionsToGeoMappings.js"() {
+  "../../../../../power-platform-ux/packages/shell-config/lib/azureRegionsToGeoMappings.js"() {
     "use strict";
     azureRegions = {
       // Americas
@@ -8084,7 +8089,7 @@ var init_azureRegionsToGeoMappings = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-config/lib/versionedEndpoint.js
+// ../../../../../power-platform-ux/packages/shell-config/lib/versionedEndpoint.js
 function removeTrailingSlash(endpoint) {
   if (endpoint.endsWith("/")) {
     return endpoint.substring(0, endpoint.length - 1);
@@ -8134,14 +8139,14 @@ function getInitialPaths() {
 }
 var import_url_parse2;
 var init_versionedEndpoint = __esm({
-  "../../../power-platform-ux/packages/shell-config/lib/versionedEndpoint.js"() {
+  "../../../../../power-platform-ux/packages/shell-config/lib/versionedEndpoint.js"() {
     "use strict";
     import_url_parse2 = __toESM(require_url_parse());
     init_settings();
   }
 });
 
-// ../../../power-platform-ux/packages/shell-config/lib/index.js
+// ../../../../../power-platform-ux/packages/shell-config/lib/index.js
 var lib_exports = {};
 __export(lib_exports, {
   DataBoundaries: () => DataBoundaries,
@@ -8165,7 +8170,7 @@ __export(lib_exports, {
   setCurrentGeo_INTERNAL_DO_NOT_USE: () => setCurrentGeo_INTERNAL_DO_NOT_USE
 });
 var init_lib = __esm({
-  "../../../power-platform-ux/packages/shell-config/lib/index.js"() {
+  "../../../../../power-platform-ux/packages/shell-config/lib/index.js"() {
     "use strict";
     init_settings();
     init_dataBoundary();
@@ -8174,7 +8179,7 @@ var init_lib = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-settings/lib/CompositeSettingsOverridesProvider.js
+// ../../../../../power-platform-ux/packages/shell-settings/lib/CompositeSettingsOverridesProvider.js
 function initializeCompositeSettingsOverridesProvider(providers) {
   if (compositeOverridesProvider && !module.hot) {
     throw new Error("Settings overrides provider is already initialized");
@@ -8192,7 +8197,7 @@ function getProvider(predicate) {
 }
 var CompositeSettingsOverridesProvider, compositeOverridesProvider;
 var init_CompositeSettingsOverridesProvider = __esm({
-  "../../../power-platform-ux/packages/shell-settings/lib/CompositeSettingsOverridesProvider.js"() {
+  "../../../../../power-platform-ux/packages/shell-settings/lib/CompositeSettingsOverridesProvider.js"() {
     "use strict";
     CompositeSettingsOverridesProvider = class {
       overridesProviders;
@@ -8222,7 +8227,7 @@ var init_CompositeSettingsOverridesProvider = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-settings/lib/TenantBasedOverridesProvider.js
+// ../../../../../power-platform-ux/packages/shell-settings/lib/TenantBasedOverridesProvider.js
 function isTenantBasedOverridesProvider(x) {
   return x instanceof TenantBasedOverridesProvider;
 }
@@ -8240,7 +8245,7 @@ function addTenantFeatureOverride(_config, packageName, name, override) {
 }
 var resolvedTenantId, TenantBasedOverridesProvider, resolveTenant;
 var init_TenantBasedOverridesProvider = __esm({
-  "../../../power-platform-ux/packages/shell-settings/lib/TenantBasedOverridesProvider.js"() {
+  "../../../../../power-platform-ux/packages/shell-settings/lib/TenantBasedOverridesProvider.js"() {
     "use strict";
     init_lib();
     init_CompositeSettingsOverridesProvider();
@@ -8278,7 +8283,7 @@ var init_TenantBasedOverridesProvider = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-settings/lib/SettingsConfig.js
+// ../../../../../power-platform-ux/packages/shell-settings/lib/SettingsConfig.js
 function createSettingPropertyGetter(config2, key) {
   const { region } = getSettings();
   return () => {
@@ -8356,7 +8361,7 @@ function getSettingsConfig(packageName) {
 }
 var settingsConfigs;
 var init_SettingsConfig = __esm({
-  "../../../power-platform-ux/packages/shell-settings/lib/SettingsConfig.js"() {
+  "../../../../../power-platform-ux/packages/shell-settings/lib/SettingsConfig.js"() {
     "use strict";
     init_lib();
     init_CompositeSettingsOverridesProvider();
@@ -8366,7 +8371,7 @@ var init_SettingsConfig = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-settings/lib/FeatureGatesConfig.js
+// ../../../../../power-platform-ux/packages/shell-settings/lib/FeatureGatesConfig.js
 function createFeatureGatePropertyGetter(config2, featureName) {
   const { region } = getSettings();
   return () => {
@@ -8458,7 +8463,7 @@ function getFeatureGatesConfig(packageName) {
 }
 var featuresConfigs;
 var init_FeatureGatesConfig = __esm({
-  "../../../power-platform-ux/packages/shell-settings/lib/FeatureGatesConfig.js"() {
+  "../../../../../power-platform-ux/packages/shell-settings/lib/FeatureGatesConfig.js"() {
     "use strict";
     init_lib();
     init_lib2();
@@ -8468,10 +8473,10 @@ var init_FeatureGatesConfig = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-settings/lib/QueryStringOverridesProvider.js
+// ../../../../../power-platform-ux/packages/shell-settings/lib/QueryStringOverridesProvider.js
 var import_url_parse3, QueryStringOverridesProvider;
 var init_QueryStringOverridesProvider = __esm({
-  "../../../power-platform-ux/packages/shell-settings/lib/QueryStringOverridesProvider.js"() {
+  "../../../../../power-platform-ux/packages/shell-settings/lib/QueryStringOverridesProvider.js"() {
     "use strict";
     import_url_parse3 = __toESM(require_url_parse());
     QueryStringOverridesProvider = class {
@@ -8510,7 +8515,7 @@ var init_QueryStringOverridesProvider = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-settings/lib/index.js
+// ../../../../../power-platform-ux/packages/shell-settings/lib/index.js
 var lib_exports2 = {};
 __export(lib_exports2, {
   QueryStringOverridesProvider: () => QueryStringOverridesProvider,
@@ -8533,7 +8538,7 @@ function isValidRegion(region) {
 }
 var allRegions;
 var init_lib2 = __esm({
-  "../../../power-platform-ux/packages/shell-settings/lib/index.js"() {
+  "../../../../../power-platform-ux/packages/shell-settings/lib/index.js"() {
     "use strict";
     init_TenantBasedOverridesProvider();
     init_FeatureGatesConfig();
@@ -8557,10 +8562,10 @@ var init_lib2 = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/settings.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/settings.js
 var settings_default;
 var init_settings2 = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/settings.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/settings.js"() {
     "use strict";
     init_lib2();
     init_EventType();
@@ -8579,7 +8584,7 @@ var init_settings2 = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/ppux-telemetry-api/lib/Logger.js
+// ../../../../../power-platform-ux/packages/ppux-telemetry-api/lib/Logger.js
 function getErrorProperties(error, isNested) {
   const errorProperties = {};
   if (error) {
@@ -8599,20 +8604,20 @@ function getErrorProperties(error, isNested) {
   return errorProperties;
 }
 var init_Logger = __esm({
-  "../../../power-platform-ux/packages/ppux-telemetry-api/lib/Logger.js"() {
+  "../../../../../power-platform-ux/packages/ppux-telemetry-api/lib/Logger.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/ppux-telemetry-api/lib/index.js
+// ../../../../../power-platform-ux/packages/ppux-telemetry-api/lib/index.js
 var init_lib3 = __esm({
-  "../../../power-platform-ux/packages/ppux-telemetry-api/lib/index.js"() {
+  "../../../../../power-platform-ux/packages/ppux-telemetry-api/lib/index.js"() {
     "use strict";
     init_Logger();
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/Helper/SensitiveData.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/Helper/SensitiveData.js
 function stripBearerTokenFromHeaders(headers) {
   if (headers) {
     const headersToLog = filterHeadersToLog(headers);
@@ -8740,7 +8745,7 @@ function filterHeadersToLog(headers) {
 }
 var import_url_parse4, BearerTokenRegex, sasTokenRegex, azureSearchAPIKey, emailRegex, headerAllowList, deniedKeys, knownSensitiveUrlStringsRegex;
 var init_SensitiveData = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/Helper/SensitiveData.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/Helper/SensitiveData.js"() {
     "use strict";
     import_url_parse4 = __toESM(require_url_parse());
     init_lib3();
@@ -8808,7 +8813,7 @@ var init_SensitiveData = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/Logger.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/Logger.js
 function trackCreateScenario(eventScope, scenarioName2, eventData, team, teamPriority) {
   const scenarioId = v1_default();
   startMarker(`${scenarioName2}.${scenarioId}`);
@@ -9217,7 +9222,7 @@ function flushAndTeardown() {
 }
 var import_url_parse5, _client, _sessionId, _currentPageId, _currentGeo2;
 var init_Logger2 = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/Logger.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/Logger.js"() {
     "use strict";
     import_url_parse5 = __toESM(require_url_parse());
     init_esm_node();
@@ -9243,12 +9248,12 @@ var init_Logger2 = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/ErrorHandler.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/ErrorHandler.js
 function handleException(error) {
   trackErrorTrace(ShellTelemetryScope, { eventName: "ErrorHandler/handleCrash" }, error);
 }
 var init_ErrorHandler = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/ErrorHandler.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/ErrorHandler.js"() {
     "use strict";
     init_Constants();
     init_Logger2();
@@ -9256,18 +9261,18 @@ var init_ErrorHandler = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/Helper/ExtractErrorPropsForTelemetryHelper.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/Helper/ExtractErrorPropsForTelemetryHelper.js
 var init_ExtractErrorPropsForTelemetryHelper = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/Helper/ExtractErrorPropsForTelemetryHelper.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/Helper/ExtractErrorPropsForTelemetryHelper.js"() {
     "use strict";
     init_SensitiveData();
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/Helper/OneDS/EventInfoLogHelper.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/Helper/OneDS/EventInfoLogHelper.js
 var EventPropertyType;
 var init_EventInfoLogHelper = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/Helper/OneDS/EventInfoLogHelper.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/Helper/OneDS/EventInfoLogHelper.js"() {
     "use strict";
     init_EventType();
     init_SensitiveData();
@@ -9287,25 +9292,25 @@ var init_EventInfoLogHelper = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/Helper/ShellMountedHelper.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/Helper/ShellMountedHelper.js
 var init_ShellMountedHelper = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/Helper/ShellMountedHelper.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/Helper/ShellMountedHelper.js"() {
     "use strict";
     init_lib4();
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/Helper/InitializeCompositeTelemetry.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/Helper/InitializeCompositeTelemetry.js
 var init_InitializeCompositeTelemetry = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/Helper/InitializeCompositeTelemetry.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/Helper/InitializeCompositeTelemetry.js"() {
     "use strict";
     init_lib4();
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/Helper/index.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/Helper/index.js
 var init_Helper = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/Helper/index.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/Helper/index.js"() {
     "use strict";
     init_EventInfoLogHelper();
     init_ShellMountedHelper();
@@ -9314,57 +9319,57 @@ var init_Helper = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/Provider/TelemetryClient.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/Provider/TelemetryClient.js
 var init_TelemetryClient = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/Provider/TelemetryClient.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/Provider/TelemetryClient.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/Provider/CompositeTelemetryClient.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/Provider/CompositeTelemetryClient.js
 var init_CompositeTelemetryClient = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/Provider/CompositeTelemetryClient.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/Provider/CompositeTelemetryClient.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/Provider/ConsoleTelemetryClient.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/Provider/ConsoleTelemetryClient.js
 var init_ConsoleTelemetryClient = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/Provider/ConsoleTelemetryClient.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/Provider/ConsoleTelemetryClient.js"() {
     "use strict";
     init_lib();
     init_EventType();
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/Helper/OneDS/OutgoingRequestLogHelper.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/Helper/OneDS/OutgoingRequestLogHelper.js
 var init_OutgoingRequestLogHelper = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/Helper/OneDS/OutgoingRequestLogHelper.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/Helper/OneDS/OutgoingRequestLogHelper.js"() {
     "use strict";
     init_SensitiveData();
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/Helper/OneDS/PageViewLogHelper.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/Helper/OneDS/PageViewLogHelper.js
 var init_PageViewLogHelper = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/Helper/OneDS/PageViewLogHelper.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/Helper/OneDS/PageViewLogHelper.js"() {
     "use strict";
     init_SensitiveData();
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/Helper/OneDS/SessionLogHelper.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/Helper/OneDS/SessionLogHelper.js
 var init_SessionLogHelper = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/Helper/OneDS/SessionLogHelper.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/Helper/OneDS/SessionLogHelper.js"() {
     "use strict";
     init_lib();
     init_SensitiveData();
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/Helper/OneDS/TraceLogHelper.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/Helper/OneDS/TraceLogHelper.js
 var init_TraceLogHelper = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/Helper/OneDS/TraceLogHelper.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/Helper/OneDS/TraceLogHelper.js"() {
     "use strict";
     init_EventType();
     init_SensitiveData();
@@ -9372,10 +9377,10 @@ var init_TraceLogHelper = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/Provider/OneDSTelemetryClient.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/Provider/OneDSTelemetryClient.js
 var import_url_parse6;
 var init_OneDSTelemetryClient = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/Provider/OneDSTelemetryClient.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/Provider/OneDSTelemetryClient.js"() {
     "use strict";
     init_lib();
     import_url_parse6 = __toESM(require_url_parse());
@@ -9390,9 +9395,9 @@ var init_OneDSTelemetryClient = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/Provider/GeoTelemetryClient.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/Provider/GeoTelemetryClient.js
 var init_GeoTelemetryClient = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/Provider/GeoTelemetryClient.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/Provider/GeoTelemetryClient.js"() {
     "use strict";
     init_lib();
     init_Constants();
@@ -9400,9 +9405,9 @@ var init_GeoTelemetryClient = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/Provider/index.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/Provider/index.js
 var init_Provider = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/Provider/index.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/Provider/index.js"() {
     "use strict";
     init_TelemetryClient();
     init_CompositeTelemetryClient();
@@ -9413,9 +9418,9 @@ var init_Provider = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react-is@16.13.1/node_modules/react-is/cjs/react-is.production.min.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-is@16.13.1/node_modules/react-is/cjs/react-is.production.min.js
 var require_react_is_production_min = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react-is@16.13.1/node_modules/react-is/cjs/react-is.production.min.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-is@16.13.1/node_modules/react-is/cjs/react-is.production.min.js"(exports2) {
     "use strict";
     var b = "function" === typeof Symbol && Symbol.for;
     var c = b ? Symbol.for("react.element") : 60103;
@@ -9526,9 +9531,9 @@ var require_react_is_production_min = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react-is@16.13.1/node_modules/react-is/cjs/react-is.development.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-is@16.13.1/node_modules/react-is/cjs/react-is.development.js
 var require_react_is_development = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react-is@16.13.1/node_modules/react-is/cjs/react-is.development.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-is@16.13.1/node_modules/react-is/cjs/react-is.development.js"(exports2) {
     "use strict";
     if (process.env.NODE_ENV !== "production") {
       (function() {
@@ -9681,9 +9686,9 @@ var require_react_is_development = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react-is@16.13.1/node_modules/react-is/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-is@16.13.1/node_modules/react-is/index.js
 var require_react_is = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react-is@16.13.1/node_modules/react-is/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-is@16.13.1/node_modules/react-is/index.js"(exports2, module2) {
     "use strict";
     if (process.env.NODE_ENV === "production") {
       module2.exports = require_react_is_production_min();
@@ -9693,9 +9698,9 @@ var require_react_is = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/prop-types@15.7.2/node_modules/prop-types/factoryWithTypeCheckers.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/prop-types@15.7.2/node_modules/prop-types/factoryWithTypeCheckers.js
 var require_factoryWithTypeCheckers = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/prop-types@15.7.2/node_modules/prop-types/factoryWithTypeCheckers.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/prop-types@15.7.2/node_modules/prop-types/factoryWithTypeCheckers.js"(exports2, module2) {
     "use strict";
     var ReactIs = require_react_is();
     var assign2 = require_object_assign();
@@ -10117,9 +10122,9 @@ var require_factoryWithTypeCheckers = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/prop-types@15.7.2/node_modules/prop-types/factoryWithThrowingShims.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/prop-types@15.7.2/node_modules/prop-types/factoryWithThrowingShims.js
 var require_factoryWithThrowingShims = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/prop-types@15.7.2/node_modules/prop-types/factoryWithThrowingShims.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/prop-types@15.7.2/node_modules/prop-types/factoryWithThrowingShims.js"(exports2, module2) {
     "use strict";
     var ReactPropTypesSecret = require_ReactPropTypesSecret();
     function emptyFunction() {
@@ -10172,9 +10177,9 @@ var require_factoryWithThrowingShims = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/prop-types@15.7.2/node_modules/prop-types/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/prop-types@15.7.2/node_modules/prop-types/index.js
 var require_prop_types = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/prop-types@15.7.2/node_modules/prop-types/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/prop-types@15.7.2/node_modules/prop-types/index.js"(exports2, module2) {
     if (process.env.NODE_ENV !== "production") {
       ReactIs = require_react_is();
       throwOnDirectAccess = true;
@@ -10187,9 +10192,9 @@ var require_prop_types = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/resolve-pathname@3.0.0/node_modules/resolve-pathname/cjs/resolve-pathname.min.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/resolve-pathname@3.0.0/node_modules/resolve-pathname/cjs/resolve-pathname.min.js
 var require_resolve_pathname_min = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/resolve-pathname@3.0.0/node_modules/resolve-pathname/cjs/resolve-pathname.min.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/resolve-pathname@3.0.0/node_modules/resolve-pathname/cjs/resolve-pathname.min.js"(exports2, module2) {
     "use strict";
     function isAbsolute(e) {
       return "/" === e.charAt(0);
@@ -10219,9 +10224,9 @@ var require_resolve_pathname_min = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/resolve-pathname@3.0.0/node_modules/resolve-pathname/cjs/resolve-pathname.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/resolve-pathname@3.0.0/node_modules/resolve-pathname/cjs/resolve-pathname.js
 var require_resolve_pathname = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/resolve-pathname@3.0.0/node_modules/resolve-pathname/cjs/resolve-pathname.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/resolve-pathname@3.0.0/node_modules/resolve-pathname/cjs/resolve-pathname.js"(exports2, module2) {
     "use strict";
     function isAbsolute(pathname) {
       return pathname.charAt(0) === "/";
@@ -10277,9 +10282,9 @@ var require_resolve_pathname = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/resolve-pathname@3.0.0/node_modules/resolve-pathname/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/resolve-pathname@3.0.0/node_modules/resolve-pathname/index.js
 var require_resolve_pathname2 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/resolve-pathname@3.0.0/node_modules/resolve-pathname/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/resolve-pathname@3.0.0/node_modules/resolve-pathname/index.js"(exports2, module2) {
     "use strict";
     if (process.env.NODE_ENV === "production") {
       module2.exports = require_resolve_pathname_min();
@@ -10289,9 +10294,9 @@ var require_resolve_pathname2 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/value-equal@1.0.1/node_modules/value-equal/cjs/value-equal.min.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/value-equal@1.0.1/node_modules/value-equal/cjs/value-equal.min.js
 var require_value_equal_min = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/value-equal@1.0.1/node_modules/value-equal/cjs/value-equal.min.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/value-equal@1.0.1/node_modules/value-equal/cjs/value-equal.min.js"(exports2, module2) {
     "use strict";
     function valueOf(e) {
       return e.valueOf ? e.valueOf() : Object.prototype.valueOf.call(e);
@@ -10312,9 +10317,9 @@ var require_value_equal_min = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/value-equal@1.0.1/node_modules/value-equal/cjs/value-equal.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/value-equal@1.0.1/node_modules/value-equal/cjs/value-equal.js
 var require_value_equal = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/value-equal@1.0.1/node_modules/value-equal/cjs/value-equal.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/value-equal@1.0.1/node_modules/value-equal/cjs/value-equal.js"(exports2, module2) {
     "use strict";
     function valueOf(obj) {
       return obj.valueOf ? obj.valueOf() : Object.prototype.valueOf.call(obj);
@@ -10341,9 +10346,9 @@ var require_value_equal = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/value-equal@1.0.1/node_modules/value-equal/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/value-equal@1.0.1/node_modules/value-equal/index.js
 var require_value_equal2 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/value-equal@1.0.1/node_modules/value-equal/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/value-equal@1.0.1/node_modules/value-equal/index.js"(exports2, module2) {
     "use strict";
     if (process.env.NODE_ENV === "production") {
       module2.exports = require_value_equal_min();
@@ -10353,9 +10358,9 @@ var require_value_equal2 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/tiny-warning@1.0.3/node_modules/tiny-warning/dist/tiny-warning.cjs.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/tiny-warning@1.0.3/node_modules/tiny-warning/dist/tiny-warning.cjs.js
 var require_tiny_warning_cjs = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/tiny-warning@1.0.3/node_modules/tiny-warning/dist/tiny-warning.cjs.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/tiny-warning@1.0.3/node_modules/tiny-warning/dist/tiny-warning.cjs.js"(exports2, module2) {
     "use strict";
     var isProduction = process.env.NODE_ENV === "production";
     function warning(condition, message) {
@@ -10377,9 +10382,9 @@ var require_tiny_warning_cjs = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/tiny-invariant@1.3.3/node_modules/tiny-invariant/dist/tiny-invariant.cjs.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/tiny-invariant@1.3.3/node_modules/tiny-invariant/dist/tiny-invariant.cjs.js
 var require_tiny_invariant_cjs = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/tiny-invariant@1.3.3/node_modules/tiny-invariant/dist/tiny-invariant.cjs.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/tiny-invariant@1.3.3/node_modules/tiny-invariant/dist/tiny-invariant.cjs.js"(exports2, module2) {
     "use strict";
     var isProduction = process.env.NODE_ENV === "production";
     var prefix2 = "Invariant failed";
@@ -10398,9 +10403,9 @@ var require_tiny_invariant_cjs = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/history@4.10.1/node_modules/history/cjs/history.min.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/history@4.10.1/node_modules/history/cjs/history.min.js
 var require_history_min = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/history@4.10.1/node_modules/history/cjs/history.min.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/history@4.10.1/node_modules/history/cjs/history.min.js"(exports2) {
     "use strict";
     function _interopDefault(t) {
       return t && "object" == typeof t && "default" in t ? t.default : t;
@@ -10768,9 +10773,9 @@ var require_history_min = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/history@4.10.1/node_modules/history/cjs/history.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/history@4.10.1/node_modules/history/cjs/history.js
 var require_history = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/history@4.10.1/node_modules/history/cjs/history.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/history@4.10.1/node_modules/history/cjs/history.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     function _interopDefault(ex) {
@@ -11500,9 +11505,9 @@ var require_history = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/history@4.10.1/node_modules/history/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/history@4.10.1/node_modules/history/index.js
 var require_history2 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/history@4.10.1/node_modules/history/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/history@4.10.1/node_modules/history/index.js"(exports2, module2) {
     "use strict";
     if (process.env.NODE_ENV === "production") {
       module2.exports = require_history_min();
@@ -11512,9 +11517,9 @@ var require_history2 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/setPrototypeOf.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/setPrototypeOf.js
 var require_setPrototypeOf = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/setPrototypeOf.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/setPrototypeOf.js"(exports2, module2) {
     function _setPrototypeOf(t, e) {
       return module2.exports = _setPrototypeOf = Object.setPrototypeOf ? Object.setPrototypeOf.bind() : function(t2, e2) {
         return t2.__proto__ = e2, t2;
@@ -11524,9 +11529,9 @@ var require_setPrototypeOf = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/inheritsLoose.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/inheritsLoose.js
 var require_inheritsLoose = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/inheritsLoose.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/inheritsLoose.js"(exports2, module2) {
     var setPrototypeOf = require_setPrototypeOf();
     function _inheritsLoose(t, o) {
       t.prototype = Object.create(o.prototype), t.prototype.constructor = t, setPrototypeOf(t, o);
@@ -11535,9 +11540,9 @@ var require_inheritsLoose = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/mini-create-react-context@0.4.1_prop-types@15.7.2_react@16.14.0/node_modules/mini-create-react-context/dist/cjs/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/mini-create-react-context@0.4.1_prop-types@15.7.2_react@16.14.0/node_modules/mini-create-react-context/dist/cjs/index.js
 var require_cjs = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/mini-create-react-context@0.4.1_prop-types@15.7.2_react@16.14.0/node_modules/mini-create-react-context/dist/cjs/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/mini-create-react-context@0.4.1_prop-types@15.7.2_react@16.14.0/node_modules/mini-create-react-context/dist/cjs/index.js"(exports2, module2) {
     "use strict";
     var React26 = require_react();
     var _inheritsLoose = require_inheritsLoose();
@@ -11687,18 +11692,18 @@ var require_cjs = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/isarray@0.0.1/node_modules/isarray/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/isarray@0.0.1/node_modules/isarray/index.js
 var require_isarray = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/isarray@0.0.1/node_modules/isarray/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/isarray@0.0.1/node_modules/isarray/index.js"(exports2, module2) {
     module2.exports = Array.isArray || function(arr) {
       return Object.prototype.toString.call(arr) == "[object Array]";
     };
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/path-to-regexp@1.9.0/node_modules/path-to-regexp/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/path-to-regexp@1.9.0/node_modules/path-to-regexp/index.js
 var require_path_to_regexp = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/path-to-regexp@1.9.0/node_modules/path-to-regexp/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/path-to-regexp@1.9.0/node_modules/path-to-regexp/index.js"(exports2, module2) {
     var isarray = require_isarray();
     module2.exports = pathToRegexp;
     module2.exports.parse = parse12;
@@ -11969,9 +11974,9 @@ var require_path_to_regexp = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/hoist-non-react-statics@3.3.2/node_modules/hoist-non-react-statics/dist/hoist-non-react-statics.cjs.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/hoist-non-react-statics@3.3.2/node_modules/hoist-non-react-statics/dist/hoist-non-react-statics.cjs.js
 var require_hoist_non_react_statics_cjs = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/hoist-non-react-statics@3.3.2/node_modules/hoist-non-react-statics/dist/hoist-non-react-statics.cjs.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/hoist-non-react-statics@3.3.2/node_modules/hoist-non-react-statics/dist/hoist-non-react-statics.cjs.js"(exports2, module2) {
     "use strict";
     var reactIs = require_react_is();
     var REACT_STATICS = {
@@ -12057,9 +12062,9 @@ var require_hoist_non_react_statics_cjs = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react-router@5.2.0_react@16.14.0/node_modules/react-router/cjs/react-router.min.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-router@5.2.0_react@16.14.0/node_modules/react-router/cjs/react-router.min.js
 var require_react_router_min = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react-router@5.2.0_react@16.14.0/node_modules/react-router/cjs/react-router.min.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-router@5.2.0_react@16.14.0/node_modules/react-router/cjs/react-router.min.js"(exports2) {
     "use strict";
     function _interopDefault(t) {
       return t && "object" == typeof t && "default" in t ? t.default : t;
@@ -12313,9 +12318,9 @@ var require_react_router_min = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react-router@5.2.0_react@16.14.0/node_modules/react-router/cjs/react-router.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-router@5.2.0_react@16.14.0/node_modules/react-router/cjs/react-router.js
 var require_react_router = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react-router@5.2.0_react@16.14.0/node_modules/react-router/cjs/react-router.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-router@5.2.0_react@16.14.0/node_modules/react-router/cjs/react-router.js"(exports2) {
     "use strict";
     function _interopDefault(ex) {
       return ex && typeof ex === "object" && "default" in ex ? ex["default"] : ex;
@@ -12916,9 +12921,9 @@ var require_react_router = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react-router@5.2.0_react@16.14.0/node_modules/react-router/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-router@5.2.0_react@16.14.0/node_modules/react-router/index.js
 var require_react_router2 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react-router@5.2.0_react@16.14.0/node_modules/react-router/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-router@5.2.0_react@16.14.0/node_modules/react-router/index.js"(exports2, module2) {
     "use strict";
     if (process.env.NODE_ENV === "production") {
       module2.exports = require_react_router_min();
@@ -12928,9 +12933,9 @@ var require_react_router2 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react-router-dom@5.2.0_react@16.14.0/node_modules/react-router-dom/cjs/react-router-dom.min.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-router-dom@5.2.0_react@16.14.0/node_modules/react-router-dom/cjs/react-router-dom.min.js
 var require_react_router_dom_min = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react-router-dom@5.2.0_react@16.14.0/node_modules/react-router-dom/cjs/react-router-dom.min.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-router-dom@5.2.0_react@16.14.0/node_modules/react-router-dom/cjs/react-router-dom.min.js"(exports2) {
     "use strict";
     function _interopDefault(e) {
       return e && "object" == typeof e && "default" in e ? e.default : e;
@@ -13064,9 +13069,9 @@ var require_react_router_dom_min = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react-router-dom@5.2.0_react@16.14.0/node_modules/react-router-dom/cjs/react-router-dom.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-router-dom@5.2.0_react@16.14.0/node_modules/react-router-dom/cjs/react-router-dom.js
 var require_react_router_dom = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react-router-dom@5.2.0_react@16.14.0/node_modules/react-router-dom/cjs/react-router-dom.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-router-dom@5.2.0_react@16.14.0/node_modules/react-router-dom/cjs/react-router-dom.js"(exports2) {
     "use strict";
     function _interopDefault(ex) {
       return ex && typeof ex === "object" && "default" in ex ? ex["default"] : ex;
@@ -13410,9 +13415,9 @@ var require_react_router_dom = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react-router-dom@5.2.0_react@16.14.0/node_modules/react-router-dom/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-router-dom@5.2.0_react@16.14.0/node_modules/react-router-dom/index.js
 var require_react_router_dom2 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react-router-dom@5.2.0_react@16.14.0/node_modules/react-router-dom/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-router-dom@5.2.0_react@16.14.0/node_modules/react-router-dom/index.js"(exports2, module2) {
     "use strict";
     if (process.env.NODE_ENV === "production") {
       module2.exports = require_react_router_dom_min();
@@ -13422,10 +13427,10 @@ var require_react_router_dom2 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/PageLogger.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/PageLogger.js
 var import_react, import_react_router_dom, _PageLogger, PageLogger;
 var init_PageLogger = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/PageLogger.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/PageLogger.js"() {
     "use strict";
     import_react = __toESM(require_react());
     import_react_router_dom = __toESM(require_react_router_dom2());
@@ -13453,10 +13458,10 @@ var init_PageLogger = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/ExternalNavigation.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/ExternalNavigation.js
 var UrlsToIgnore;
 var init_ExternalNavigation = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/ExternalNavigation.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/ExternalNavigation.js"() {
     "use strict";
     init_EventType();
     init_Logger2();
@@ -13465,17 +13470,17 @@ var init_ExternalNavigation = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/Types.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/Types.js
 var init_Types = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/Types.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/Types.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/shell-telemetry/lib/index.js
+// ../../../../../power-platform-ux/packages/shell-telemetry/lib/index.js
 var import_shell_icm_info;
 var init_lib4 = __esm({
-  "../../../power-platform-ux/packages/shell-telemetry/lib/index.js"() {
+  "../../../../../power-platform-ux/packages/shell-telemetry/lib/index.js"() {
     "use strict";
     import_shell_icm_info = __toESM(require_lib());
     init_Constants();
@@ -13495,10 +13500,10 @@ var init_lib4 = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Constants.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Constants.js
 var CdsDesignerModelsScope, FormCustomControlFileScope, FormCellFileScope;
 var init_Constants2 = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Constants.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Constants.js"() {
     "use strict";
     CdsDesignerModelsScope = "cds-designer-models";
     FormCustomControlFileScope = "FormCustomControl";
@@ -13506,10 +13511,10 @@ var init_Constants2 = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Common/Dictionary.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Common/Dictionary.js
 var Dictionary, HashMap;
 var init_Dictionary = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Common/Dictionary.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Common/Dictionary.js"() {
     "use strict";
     Dictionary = class {
       keys;
@@ -13661,10 +13666,10 @@ var init_Dictionary = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/CanvasLockedFieldsLookUp.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/CanvasLockedFieldsLookUp.js
 var CanvasLockedFieldsLookUp;
 var init_CanvasLockedFieldsLookUp = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/CanvasLockedFieldsLookUp.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/CanvasLockedFieldsLookUp.js"() {
     "use strict";
     init_Dictionary();
     init_FormDesignerConstants();
@@ -13699,10 +13704,10 @@ var init_CanvasLockedFieldsLookUp = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Services/FormModelServices/ChangeTrackerService.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Services/FormModelServices/ChangeTrackerService.js
 var FormModelChangeType, FormModelChange, FormElementNodePropertyChange, FormElementAttributeValueChange, FormModelChangeSet, FormModelChangeTracker;
 var init_ChangeTrackerService = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Services/FormModelServices/ChangeTrackerService.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Services/FormModelServices/ChangeTrackerService.js"() {
     "use strict";
     (function(FormModelChangeType2) {
       FormModelChangeType2[FormModelChangeType2["FormElementNodeChange"] = 0] = "FormElementNodeChange";
@@ -13812,10 +13817,10 @@ var init_ChangeTrackerService = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormElementBase.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormElementBase.js
 var Attribute, FormElementNode;
 var init_FormElementBase = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormElementBase.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormElementBase.js"() {
     "use strict";
     init_ScriptUtilities();
     init_StringUtilities();
@@ -14269,10 +14274,10 @@ var init_FormElementBase = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/CustomControls/ControlDescription.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/CustomControls/ControlDescription.js
 var ControlDescription;
 var init_ControlDescription = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/CustomControls/ControlDescription.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/CustomControls/ControlDescription.js"() {
     "use strict";
     init_CRMTypes();
     init_ScriptUtilities();
@@ -14379,10 +14384,10 @@ var init_ControlDescription = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Services/FormModelServices/CCFConstants.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Services/FormModelServices/CCFConstants.js
 var CCFPropertyConstants, JSONParametersConstants, ManifestXMLConstants, CustomControlDataType, DefaultControlNameKeys, CustomControlNames, ICCModeEnum, Usage, LookUpType, NumberType;
 var init_CCFConstants = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Services/FormModelServices/CCFConstants.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Services/FormModelServices/CCFConstants.js"() {
     "use strict";
     CCFPropertyConstants = {
       // General parameters
@@ -14568,10 +14573,10 @@ var init_CCFConstants = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/settings.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/settings.js
 var settings_default2;
 var init_settings3 = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/settings.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/settings.js"() {
     "use strict";
     init_lib2();
     settings_default2 = createSettingsConfig({
@@ -14593,10 +14598,10 @@ var init_settings3 = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/EntityModels/EntityLookupTypes.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/EntityModels/EntityLookupTypes.js
 var EntityMetadataLookUpBase, EntityAttributeType, EntityAttributeTypeFormat, EntityAttributeRequiredLevel, EntityAttributeDataSourceType, AttributeDataSourceType, AttributeDataSourceTypeMask, AttributePrecisionSource, EntityResxKeyLookUp;
 var init_EntityLookupTypes = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/EntityModels/EntityLookupTypes.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/EntityModels/EntityLookupTypes.js"() {
     "use strict";
     init_Dictionary();
     EntityMetadataLookUpBase = class {
@@ -14803,10 +14808,10 @@ var init_EntityLookupTypes = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormElementConstants.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormElementConstants.js
 var TabColumnWidth, CellLayoutTypes, ControlLayoutTypes2, SectionFieldLabelAlignmentTypes, FormFactor, ColumnsCount, SectionFieldLabelPositionTypes, TagNames, SectionDefaultProperties2, HeaderInsertionValidationMessage, ElementRemovalValidationMessage, UnsupportedActionDialogMessages;
 var init_FormElementConstants = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormElementConstants.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormElementConstants.js"() {
     "use strict";
     TabColumnWidth = {
       ThreeEqColumn_FirstColumn: 34,
@@ -14910,9 +14915,9 @@ var init_FormElementConstants = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-apis/lib/contracts/cds/EnumTypes.js
+// ../../../../../power-platform-ux/packages/powerapps-apis/lib/contracts/cds/EnumTypes.js
 var require_EnumTypes = __commonJS({
-  "../../../power-platform-ux/packages/powerapps-apis/lib/contracts/cds/EnumTypes.js"(exports2) {
+  "../../../../../power-platform-ux/packages/powerapps-apis/lib/contracts/cds/EnumTypes.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.DateTimeBehavior = exports2.PrecisionSource = exports2.StringFormatName = exports2.SourceType = exports2.ImeMode = exports2.SolutionEntityTypeCodeExtToComponentTypeCode = exports2.SolutionComponentTypeCodeToEntityTypeCodeExt = exports2.SolutionComponentVirtualAttributeSubtype = exports2.EntityTypeCode = exports2.SolutionComponentTypeCodeExt = exports2.RootComponentBehavior = exports2.SolutionComponentTypeCode = exports2.EntityKeyIndexStatus = exports2.ViewStateCode = exports2.ViewStatusCode = exports2.RelationshipSecurityTypes = exports2.CascadeType = exports2.RelationshipTypeExt = exports2.RelationshipType = exports2.AppSubType = exports2.BusinessProcessType = exports2.WorkflowCategory = exports2.WorkflowScope = exports2.WorkflowTypeCode = exports2.StatusCodeEnabledDisabled = exports2.StateCodeEnabledDisabled = exports2.StatusCode = exports2.StateCode = exports2.OptionSetType = exports2.AttributeTypeCodeNum = exports2.AttributeFormatName = exports2.AttributeFormatCode = exports2.AttributeTypeName = exports2.AttributeTypeCode = exports2.PluginSourceType = exports2.AuthType = exports2.PluginIsolationMode = exports2.ComponentState = exports2.ChartType = exports2.ChartsType = exports2.ViewType = exports2.AttributeType = exports2.ActivationState = exports2.FormPresentation = exports2.FormType = exports2.TableTypeCode = exports2.TableTypes = exports2.ActivityTypeMask = exports2.PrincipalType = exports2.OwnershipTypes = void 0;
@@ -15663,10 +15668,10 @@ var require_EnumTypes = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Services/FormModelServices/CustomControlMetadata.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Services/FormModelServices/CustomControlMetadata.js
 var import_EnumTypes, SupportedPlatform, controlModeMap, usageMap, CustomControlConfigurationType, CustomControlUnsupportedReason, supportedPropertyTypes, defaultTypeGroups;
 var init_CustomControlMetadata = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Services/FormModelServices/CustomControlMetadata.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Services/FormModelServices/CustomControlMetadata.js"() {
     "use strict";
     init_lib4();
     init_ScriptUtilities();
@@ -15785,10 +15790,10 @@ var init_CustomControlMetadata = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/CustomControls/FormCustomControl.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/CustomControls/FormCustomControl.js
 var FormCustomControl;
 var init_FormCustomControl = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/CustomControls/FormCustomControl.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/CustomControls/FormCustomControl.js"() {
     "use strict";
     init_lib4();
     init_CRMTypes();
@@ -16218,10 +16223,10 @@ var init_FormCustomControl = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/CRMFormControlType.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/CRMFormControlType.js
 var CRMFormControlType;
 var init_CRMFormControlType = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/CRMFormControlType.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/CRMFormControlType.js"() {
     "use strict";
     CRMFormControlType = class {
       static get CustomControl() {
@@ -16279,10 +16284,10 @@ var init_CRMFormControlType = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FieldControlTypesLookUp.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FieldControlTypesLookUp.js
 var DeprecatedControlClassIds, CustomControlUniqueId, FieldControlTypes;
 var init_FieldControlTypesLookUp = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FieldControlTypesLookUp.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FieldControlTypesLookUp.js"() {
     "use strict";
     init_CRMTypes();
     init_Dictionary();
@@ -16779,10 +16784,10 @@ var init_FieldControlTypesLookUp = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-event-utilities/lib/TypedEvent.js
+// ../../../../../power-platform-ux/packages/cds-event-utilities/lib/TypedEvent.js
 var TypedEvent;
 var init_TypedEvent = __esm({
-  "../../../power-platform-ux/packages/cds-event-utilities/lib/TypedEvent.js"() {
+  "../../../../../power-platform-ux/packages/cds-event-utilities/lib/TypedEvent.js"() {
     "use strict";
     TypedEvent = class {
       listeners = [];
@@ -16840,10 +16845,10 @@ var init_TypedEvent = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Common/CRMDescriptors.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Common/CRMDescriptors.js
 var LabelAlignment, LabelPosition, SectionAlignmentType, FormState2, FormType2, AttributeRequiredLevel, AttributeTypeCode;
 var init_CRMDescriptors = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Common/CRMDescriptors.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Common/CRMDescriptors.js"() {
     "use strict";
     (function(LabelAlignment2) {
       LabelAlignment2[LabelAlignment2["Center"] = 0] = "Center";
@@ -16918,10 +16923,10 @@ var init_CRMDescriptors = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/featureGates.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/featureGates.js
 var featureGates;
 var init_featureGates = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/featureGates.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/featureGates.js"() {
     "use strict";
     init_lib2();
     featureGates = createFeatureGatesConfig({
@@ -17042,7 +17047,7 @@ var init_featureGates = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-settings/lib/Features/Feature.js
+// ../../../../../power-platform-ux/packages/shell-settings/lib/Features/Feature.js
 function createFeature(featureInfo) {
   return {
     ...featureInfo,
@@ -17059,15 +17064,15 @@ function extractFeatureConfig(teamConfig, keys) {
   return config2;
 }
 var init_Feature = __esm({
-  "../../../power-platform-ux/packages/shell-settings/lib/Features/Feature.js"() {
+  "../../../../../power-platform-ux/packages/shell-settings/lib/Features/Feature.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/shell-storage/lib/StorageWithFallback.js
+// ../../../../../power-platform-ux/packages/shell-storage/lib/StorageWithFallback.js
 var StorageWithFallback;
 var init_StorageWithFallback = __esm({
-  "../../../power-platform-ux/packages/shell-storage/lib/StorageWithFallback.js"() {
+  "../../../../../power-platform-ux/packages/shell-storage/lib/StorageWithFallback.js"() {
     "use strict";
     StorageWithFallback = class {
       storages;
@@ -17099,10 +17104,10 @@ var init_StorageWithFallback = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-storage/lib/StorageHelper.js
+// ../../../../../power-platform-ux/packages/shell-storage/lib/StorageHelper.js
 var StorageHelper;
 var init_StorageHelper = __esm({
-  "../../../power-platform-ux/packages/shell-storage/lib/StorageHelper.js"() {
+  "../../../../../power-platform-ux/packages/shell-storage/lib/StorageHelper.js"() {
     "use strict";
     init_StorageWithFallback();
     StorageHelper = class _StorageHelper {
@@ -17143,17 +17148,17 @@ var init_StorageHelper = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-storage/lib/index.js
+// ../../../../../power-platform-ux/packages/shell-storage/lib/index.js
 var init_lib5 = __esm({
-  "../../../power-platform-ux/packages/shell-storage/lib/index.js"() {
+  "../../../../../power-platform-ux/packages/shell-storage/lib/index.js"() {
     "use strict";
     init_StorageHelper();
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/synctasks@0.3.3/node_modules/synctasks/dist/SyncTasks.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/synctasks@0.3.3/node_modules/synctasks/dist/SyncTasks.js
 var require_SyncTasks = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/synctasks@0.3.3/node_modules/synctasks/dist/SyncTasks.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/synctasks@0.3.3/node_modules/synctasks/dist/SyncTasks.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.config = {
@@ -17625,9 +17630,9 @@ var require_SyncTasks = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/AllowBackgroundFetchData.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/AllowBackgroundFetchData.js
 var require_AllowBackgroundFetchData = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/AllowBackgroundFetchData.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/AllowBackgroundFetchData.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var SyncTasks = require_SyncTasks();
@@ -17664,9 +17669,9 @@ var require_AllowBackgroundFetchData = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/AppActiveData.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/AppActiveData.js
 var require_AppActiveData = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/AppActiveData.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/AppActiveData.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var SyncTasks = require_SyncTasks();
@@ -17703,9 +17708,9 @@ var require_AppActiveData = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/subscribableevent@1.0.1/node_modules/subscribableevent/dist-cjs/SubscribableEvent.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/subscribableevent@1.0.1/node_modules/subscribableevent/dist-cjs/SubscribableEvent.js
 var require_SubscribableEvent = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/subscribableevent@1.0.1/node_modules/subscribableevent/dist-cjs/SubscribableEvent.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/subscribableevent@1.0.1/node_modules/subscribableevent/dist-cjs/SubscribableEvent.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var SubscriptionToken = (
@@ -17766,9 +17771,9 @@ var require_SubscribableEvent = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/Models.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/Models.js
 var require_Models = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/Models.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/Models.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var EcsConfigType3;
@@ -17779,9 +17784,9 @@ var require_Models = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/Cache.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/Cache.js
 var require_Cache = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/Cache.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/Cache.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var subscribableevent_1 = require_SubscribableEvent();
@@ -17854,9 +17859,9 @@ var require_Cache = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/Config.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/Config.js
 var require_Config = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/Config.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/Config.js"(exports2) {
     "use strict";
     var __assign = exports2 && exports2.__assign || function() {
       __assign = Object.assign || function(t) {
@@ -17906,9 +17911,9 @@ var require_Config = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/simplerestclients@0.2.12/node_modules/simplerestclients/dist/utils.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/simplerestclients@0.2.12/node_modules/simplerestclients/dist/utils.js
 var require_utils = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/simplerestclients@0.2.12/node_modules/simplerestclients/dist/utils.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/simplerestclients@0.2.12/node_modules/simplerestclients/dist/utils.js"(exports2) {
     "use strict";
     var __assign = exports2 && exports2.__assign || function() {
       __assign = Object.assign || function(t) {
@@ -17966,9 +17971,9 @@ var require_utils = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/simplerestclients@0.2.12/node_modules/simplerestclients/dist/ExponentialTime.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/simplerestclients@0.2.12/node_modules/simplerestclients/dist/ExponentialTime.js
 var require_ExponentialTime = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/simplerestclients@0.2.12/node_modules/simplerestclients/dist/ExponentialTime.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/simplerestclients@0.2.12/node_modules/simplerestclients/dist/ExponentialTime.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var utils_1 = require_utils();
@@ -18035,9 +18040,9 @@ var require_ExponentialTime = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/simplerestclients@0.2.12/node_modules/simplerestclients/dist/SimpleWebRequest.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/simplerestclients@0.2.12/node_modules/simplerestclients/dist/SimpleWebRequest.js
 var require_SimpleWebRequest = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/simplerestclients@0.2.12/node_modules/simplerestclients/dist/SimpleWebRequest.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/simplerestclients@0.2.12/node_modules/simplerestclients/dist/SimpleWebRequest.js"(exports2) {
     "use strict";
     var __extends = exports2 && exports2.__extends || /* @__PURE__ */ function() {
       var extendStatics = function(d, b) {
@@ -18640,9 +18645,9 @@ var require_SimpleWebRequest = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/simplerestclients@0.2.12/node_modules/simplerestclients/dist/GenericRestClient.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/simplerestclients@0.2.12/node_modules/simplerestclients/dist/GenericRestClient.js
 var require_GenericRestClient = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/simplerestclients@0.2.12/node_modules/simplerestclients/dist/GenericRestClient.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/simplerestclients@0.2.12/node_modules/simplerestclients/dist/GenericRestClient.js"(exports2) {
     "use strict";
     var __assign = exports2 && exports2.__assign || function() {
       __assign = Object.assign || function(t) {
@@ -18752,9 +18757,9 @@ var require_GenericRestClient = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/simplerestclients@0.2.12/node_modules/simplerestclients/dist/SimpleRestClients.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/simplerestclients@0.2.12/node_modules/simplerestclients/dist/SimpleRestClients.js
 var require_SimpleRestClients = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/simplerestclients@0.2.12/node_modules/simplerestclients/dist/SimpleRestClients.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/simplerestclients@0.2.12/node_modules/simplerestclients/dist/SimpleRestClients.js"(exports2) {
     "use strict";
     function __export2(m) {
       for (var p in m) if (!exports2.hasOwnProperty(p)) exports2[p] = m[p];
@@ -18766,16 +18771,16 @@ var require_SimpleRestClients = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/simplerestclients@0.2.12/node_modules/simplerestclients/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/simplerestclients@0.2.12/node_modules/simplerestclients/index.js
 var require_simplerestclients = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/simplerestclients@0.2.12/node_modules/simplerestclients/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/simplerestclients@0.2.12/node_modules/simplerestclients/index.js"(exports2, module2) {
     module2.exports = require_SimpleRestClients();
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/TelemetryEventBase.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/TelemetryEventBase.js
 var require_TelemetryEventBase = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/TelemetryEventBase.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/TelemetryEventBase.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var TelemetryEventBase = (
@@ -18796,9 +18801,9 @@ var require_TelemetryEventBase = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/TelemetryEvents.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/TelemetryEvents.js
 var require_TelemetryEvents = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/TelemetryEvents.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/TelemetryEvents.js"(exports2) {
     "use strict";
     var __extends = exports2 && exports2.__extends || /* @__PURE__ */ function() {
       var extendStatics = function(d, b) {
@@ -18883,9 +18888,9 @@ var require_TelemetryEvents = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/RestClient.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/RestClient.js
 var require_RestClient = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/RestClient.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/RestClient.js"(exports2) {
     "use strict";
     var __extends = exports2 && exports2.__extends || /* @__PURE__ */ function() {
       var extendStatics = function(d, b) {
@@ -19138,9 +19143,9 @@ var require_RestClient = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/Scheduler.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/Scheduler.js
 var require_Scheduler = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/Scheduler.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/Scheduler.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var Models_1 = require_Models();
@@ -19260,9 +19265,9 @@ var require_Scheduler = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/SkypeTokenData.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/SkypeTokenData.js
 var require_SkypeTokenData = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/SkypeTokenData.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/SkypeTokenData.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var subscribableevent_1 = require_SubscribableEvent();
@@ -19319,9 +19324,9 @@ var require_SkypeTokenData = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/TelemetryManager.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/TelemetryManager.js
 var require_TelemetryManager = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/TelemetryManager.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/TelemetryManager.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var subscribableevent_1 = require_SubscribableEvent();
@@ -19360,9 +19365,9 @@ var require_TelemetryManager = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/EcsClient.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/EcsClient.js
 var require_EcsClient = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/EcsClient.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@skype+ecsclient@2.0.19/node_modules/@skype/ecsclient/dist/EcsClient.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var AllowBackgroundFetchData_1 = require_AllowBackgroundFetchData();
@@ -19442,9 +19447,9 @@ var require_EcsClient = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/lodash.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/lodash.js
 var require_lodash = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/lodash.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/lodash.js"(exports2, module2) {
     (function() {
       var undefined2;
       var VERSION = "4.18.1";
@@ -24940,10 +24945,10 @@ var require_lodash = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-settings/lib/Features/FeaturesClient.types.js
+// ../../../../../power-platform-ux/packages/shell-settings/lib/Features/FeaturesClient.types.js
 var LoadingStatus;
 var init_FeaturesClient_types = __esm({
-  "../../../power-platform-ux/packages/shell-settings/lib/Features/FeaturesClient.types.js"() {
+  "../../../../../power-platform-ux/packages/shell-settings/lib/Features/FeaturesClient.types.js"() {
     "use strict";
     (function(LoadingStatus2) {
       LoadingStatus2[LoadingStatus2["NotLoaded"] = 0] = "NotLoaded";
@@ -24954,7 +24959,7 @@ var init_FeaturesClient_types = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-settings/lib/Features/LocalCache.js
+// ../../../../../power-platform-ux/packages/shell-settings/lib/Features/LocalCache.js
 function getLocalCache(clientName, storage, endpointType = "PROD") {
   const getKey = (configType) => `ShellSettings_ECS_ClientCache_${clientName}_${import_Models.EcsConfigType[configType]}_${endpointType}`;
   return {
@@ -24970,17 +24975,17 @@ function getLocalCache(clientName, storage, endpointType = "PROD") {
 }
 var import_Models;
 var init_LocalCache = __esm({
-  "../../../power-platform-ux/packages/shell-settings/lib/Features/LocalCache.js"() {
+  "../../../../../power-platform-ux/packages/shell-settings/lib/Features/LocalCache.js"() {
     "use strict";
     import_Models = __toESM(require_Models());
     init_lib5();
   }
 });
 
-// ../../../power-platform-ux/packages/shell-settings/lib/Features/settings.js
+// ../../../../../power-platform-ux/packages/shell-settings/lib/Features/settings.js
 var settings_default3;
 var init_settings4 = __esm({
-  "../../../power-platform-ux/packages/shell-settings/lib/Features/settings.js"() {
+  "../../../../../power-platform-ux/packages/shell-settings/lib/Features/settings.js"() {
     "use strict";
     init_SettingsConfig();
     settings_default3 = createSettingsConfig({
@@ -25007,10 +25012,10 @@ var init_settings4 = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-settings/lib/Features/FeaturesClient.js
+// ../../../../../power-platform-ux/packages/shell-settings/lib/Features/FeaturesClient.js
 var import_ecsclient, import_Models2, import_lodash, ONE_MINUTE, FeaturesClient, featureConfigMergeCustomizer;
 var init_FeaturesClient = __esm({
-  "../../../power-platform-ux/packages/shell-settings/lib/Features/FeaturesClient.js"() {
+  "../../../../../power-platform-ux/packages/shell-settings/lib/Features/FeaturesClient.js"() {
     "use strict";
     init_lib5();
     import_ecsclient = __toESM(require_EcsClient());
@@ -25164,9 +25169,9 @@ var init_FeaturesClient = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/p-defer@3.0.0/node_modules/p-defer/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/p-defer@3.0.0/node_modules/p-defer/index.js
 var require_p_defer = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/p-defer@3.0.0/node_modules/p-defer/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/p-defer@3.0.0/node_modules/p-defer/index.js"(exports2, module2) {
     "use strict";
     var pDefer = () => {
       const deferred = {};
@@ -25180,7 +25185,7 @@ var require_p_defer = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-settings/lib/Features/React.js
+// ../../../../../power-platform-ux/packages/shell-settings/lib/Features/React.js
 function useFeature(client, feature, options) {
   const [config2, setConfig] = (0, import_react2.useState)(client.getConfig(feature));
   (0, import_react2.useEffect)(() => {
@@ -25222,7 +25227,7 @@ function createWithFeatureHOC(client) {
 }
 var import_hoist_non_react_statics, import_react2;
 var init_React = __esm({
-  "../../../power-platform-ux/packages/shell-settings/lib/Features/React.js"() {
+  "../../../../../power-platform-ux/packages/shell-settings/lib/Features/React.js"() {
     "use strict";
     import_hoist_non_react_statics = __toESM(require_hoist_non_react_statics_cjs());
     import_react2 = __toESM(require_react());
@@ -25230,7 +25235,7 @@ var init_React = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-settings/lib/Features/withQueryStringOverride.js
+// ../../../../../power-platform-ux/packages/shell-settings/lib/Features/withQueryStringOverride.js
 function withQueryStringOverride(featuresClient) {
   const { query } = (0, import_url_parse7.default)(
     window.location.href,
@@ -25272,7 +25277,7 @@ function processQueryStringParams(featuresClient, query) {
 }
 var import_lodash2, import_url_parse7, separator, prefix;
 var init_withQueryStringOverride = __esm({
-  "../../../power-platform-ux/packages/shell-settings/lib/Features/withQueryStringOverride.js"() {
+  "../../../../../power-platform-ux/packages/shell-settings/lib/Features/withQueryStringOverride.js"() {
     "use strict";
     import_lodash2 = __toESM(require_lodash());
     import_url_parse7 = __toESM(require_url_parse());
@@ -25281,7 +25286,7 @@ var init_withQueryStringOverride = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-settings/lib/Features/FeaturesClient.factory.js
+// ../../../../../power-platform-ux/packages/shell-settings/lib/Features/FeaturesClient.factory.js
 function createFeaturesClient(clientName, logger, endpointType) {
   const featuresClient = withQueryStringOverride(new FeaturesClient(clientName, logger, endpointType));
   function useFeaturesClientInitParams(initParams) {
@@ -25321,7 +25326,7 @@ function createFeatureFactory(client) {
 }
 var import_p_defer, import_react3;
 var init_FeaturesClient_factory = __esm({
-  "../../../power-platform-ux/packages/shell-settings/lib/Features/FeaturesClient.factory.js"() {
+  "../../../../../power-platform-ux/packages/shell-settings/lib/Features/FeaturesClient.factory.js"() {
     "use strict";
     import_p_defer = __toESM(require_p_defer());
     import_react3 = __toESM(require_react());
@@ -25333,9 +25338,9 @@ var init_FeaturesClient_factory = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-settings/lib/Features/index.js
+// ../../../../../power-platform-ux/packages/shell-settings/lib/Features/index.js
 var init_Features = __esm({
-  "../../../power-platform-ux/packages/shell-settings/lib/Features/index.js"() {
+  "../../../../../power-platform-ux/packages/shell-settings/lib/Features/index.js"() {
     "use strict";
     init_Feature();
     init_FeaturesClient();
@@ -25345,7 +25350,7 @@ var init_Features = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-features/lib/Logger.js
+// ../../../../../power-platform-ux/packages/shell-features/lib/Logger.js
 function getLogger(scope) {
   return {
     logEvent: (eventName, eventData, severity) => {
@@ -25364,16 +25369,16 @@ function getLogger(scope) {
   };
 }
 var init_Logger3 = __esm({
-  "../../../power-platform-ux/packages/shell-features/lib/Logger.js"() {
+  "../../../../../power-platform-ux/packages/shell-features/lib/Logger.js"() {
     "use strict";
     init_lib4();
   }
 });
 
-// ../../../power-platform-ux/packages/shell-features/lib/ShellFeaturesClient.js
+// ../../../../../power-platform-ux/packages/shell-features/lib/ShellFeaturesClient.js
 var shellFeaturesClient, createShellFeature, useShellFeaturesClientInitParams;
 var init_ShellFeaturesClient = __esm({
-  "../../../power-platform-ux/packages/shell-features/lib/ShellFeaturesClient.js"() {
+  "../../../../../power-platform-ux/packages/shell-features/lib/ShellFeaturesClient.js"() {
     "use strict";
     init_Features();
     init_Logger3();
@@ -25381,7 +25386,7 @@ var init_ShellFeaturesClient = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+set-version@8.2.13/node_modules/@fluentui/set-version/lib/setVersion.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+set-version@8.2.13/node_modules/@fluentui/set-version/lib/setVersion.js
 function setVersion(packageName, packageVersion) {
   if (typeof _win !== "undefined") {
     var packages = _win.__packages__ = _win.__packages__ || {};
@@ -25394,7 +25399,7 @@ function setVersion(packageName, packageVersion) {
 }
 var packagesCache, _win;
 var init_setVersion = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+set-version@8.2.13/node_modules/@fluentui/set-version/lib/setVersion.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+set-version@8.2.13/node_modules/@fluentui/set-version/lib/setVersion.js"() {
     packagesCache = {};
     _win = void 0;
     try {
@@ -25404,33 +25409,33 @@ var init_setVersion = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+set-version@8.2.13/node_modules/@fluentui/set-version/lib/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+set-version@8.2.13/node_modules/@fluentui/set-version/lib/index.js
 var init_lib6 = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+set-version@8.2.13/node_modules/@fluentui/set-version/lib/index.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+set-version@8.2.13/node_modules/@fluentui/set-version/lib/index.js"() {
     init_setVersion();
     setVersion("@fluentui/set-version", "6.0.0");
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+react@8.112.9_@types+react-dom@16.9.2_@types+react@16.9.9_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@fluentui/react/lib/version.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+react@8.112.9_@types+react-dom@16.9.2_@types+react@16.9.9_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@fluentui/react/lib/version.js
 var init_version2 = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+react@8.112.9_@types+react-dom@16.9.2_@types+react@16.9.9_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@fluentui/react/lib/version.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+react@8.112.9_@types+react-dom@16.9.2_@types+react@16.9.9_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@fluentui/react/lib/version.js"() {
     init_lib6();
     setVersion("@fluentui/react", "8.112.9");
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/dom/canUseDOM.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/dom/canUseDOM.js
 function canUseDOM() {
   return typeof window !== "undefined" && !!(window.document && // eslint-disable-next-line deprecation/deprecation
   window.document.createElement);
 }
 var init_canUseDOM = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/dom/canUseDOM.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/dom/canUseDOM.js"() {
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/dom/getWindow.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/dom/getWindow.js
 function getWindow(rootElement) {
   if (!canUseDOM() || typeof _window === "undefined") {
     return void 0;
@@ -25441,7 +25446,7 @@ function getWindow(rootElement) {
 }
 var _window;
 var init_getWindow = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/dom/getWindow.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/dom/getWindow.js"() {
     init_canUseDOM();
     _window = void 0;
     try {
@@ -25451,7 +25456,7 @@ var init_getWindow = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/dom/getDocument.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/dom/getDocument.js
 function getDocument(rootElement) {
   if (!canUseDOM() || typeof document === "undefined") {
     return void 0;
@@ -25461,12 +25466,12 @@ function getDocument(rootElement) {
   }
 }
 var init_getDocument = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/dom/getDocument.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/dom/getDocument.js"() {
     init_canUseDOM();
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+merge-styles@8.5.13/node_modules/@fluentui/merge-styles/lib/StyleOptionsState.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+merge-styles@8.5.13/node_modules/@fluentui/merge-styles/lib/StyleOptionsState.js
 function setRTL(isRTL2) {
   if (_rtl !== isRTL2) {
     _rtl = isRTL2;
@@ -25480,28 +25485,28 @@ function getRTL() {
 }
 var _rtl;
 var init_StyleOptionsState = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+merge-styles@8.5.13/node_modules/@fluentui/merge-styles/lib/StyleOptionsState.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+merge-styles@8.5.13/node_modules/@fluentui/merge-styles/lib/StyleOptionsState.js"() {
     _rtl = getRTL();
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+merge-styles@8.5.13/node_modules/@fluentui/merge-styles/lib/version.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+merge-styles@8.5.13/node_modules/@fluentui/merge-styles/lib/version.js
 var init_version3 = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+merge-styles@8.5.13/node_modules/@fluentui/merge-styles/lib/version.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+merge-styles@8.5.13/node_modules/@fluentui/merge-styles/lib/version.js"() {
     init_lib6();
     setVersion("@fluentui/merge-styles", "8.5.13");
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+merge-styles@8.5.13/node_modules/@fluentui/merge-styles/lib/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+merge-styles@8.5.13/node_modules/@fluentui/merge-styles/lib/index.js
 var init_lib7 = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+merge-styles@8.5.13/node_modules/@fluentui/merge-styles/lib/index.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+merge-styles@8.5.13/node_modules/@fluentui/merge-styles/lib/index.js"() {
     init_StyleOptionsState();
     init_version3();
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/sessionStorage.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/sessionStorage.js
 function setItem(key, data) {
   var _a;
   try {
@@ -25510,12 +25515,12 @@ function setItem(key, data) {
   }
 }
 var init_sessionStorage = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/sessionStorage.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/sessionStorage.js"() {
     init_getWindow();
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/rtl.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/rtl.js
 function setRTL2(isRTL2, persistSetting) {
   if (persistSetting === void 0) {
     persistSetting = false;
@@ -25532,7 +25537,7 @@ function setRTL2(isRTL2, persistSetting) {
 }
 var RTL_LOCAL_STORAGE_KEY, _isRTL;
 var init_rtl = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/rtl.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/rtl.js"() {
     init_getDocument();
     init_sessionStorage();
     init_lib7();
@@ -25540,33 +25545,33 @@ var init_rtl = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/version.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/version.js
 var init_version4 = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/version.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/version.js"() {
     init_lib6();
     setVersion("@fluentui/utilities", "8.13.21");
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/index.js
 var init_lib8 = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/index.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+utilities@8.13.21_@types+react@16.9.9_react@16.14.0/node_modules/@fluentui/utilities/lib/index.js"() {
     init_rtl();
     init_version4();
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+react@8.112.9_@types+react-dom@16.9.2_@types+react@16.9.9_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@fluentui/react/lib/Utilities.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+react@8.112.9_@types+react-dom@16.9.2_@types+react@16.9.9_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@fluentui/react/lib/Utilities.js
 var init_Utilities = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+react@8.112.9_@types+react-dom@16.9.2_@types+react@16.9.9_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@fluentui/react/lib/Utilities.js"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@fluentui+react@8.112.9_@types+react-dom@16.9.2_@types+react@16.9.9_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@fluentui/react/lib/Utilities.js"() {
     init_version2();
     init_lib8();
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/typeof.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/typeof.js
 var require_typeof = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/typeof.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/typeof.js"(exports2, module2) {
     function _typeof(o) {
       "@babel/helpers - typeof";
       return module2.exports = _typeof = "function" == typeof Symbol && "symbol" == typeof Symbol.iterator ? function(o2) {
@@ -25579,9 +25584,9 @@ var require_typeof = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/interopRequireWildcard.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/interopRequireWildcard.js
 var require_interopRequireWildcard = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/interopRequireWildcard.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/interopRequireWildcard.js"(exports2, module2) {
     var _typeof = require_typeof()["default"];
     function _interopRequireWildcard(e, t) {
       if ("function" == typeof WeakMap) var r = /* @__PURE__ */ new WeakMap(), n = /* @__PURE__ */ new WeakMap();
@@ -25604,9 +25609,9 @@ var require_interopRequireWildcard = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/interopRequireDefault.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/interopRequireDefault.js
 var require_interopRequireDefault = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/interopRequireDefault.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/interopRequireDefault.js"(exports2, module2) {
     function _interopRequireDefault(e) {
       return e && e.__esModule ? e : {
         "default": e
@@ -25616,9 +25621,9 @@ var require_interopRequireDefault = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/objectWithoutPropertiesLoose.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/objectWithoutPropertiesLoose.js
 var require_objectWithoutPropertiesLoose = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/objectWithoutPropertiesLoose.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/objectWithoutPropertiesLoose.js"(exports2, module2) {
     function _objectWithoutPropertiesLoose(r, e) {
       if (null == r) return {};
       var t = {};
@@ -25632,9 +25637,9 @@ var require_objectWithoutPropertiesLoose = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/objectWithoutProperties.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/objectWithoutProperties.js
 var require_objectWithoutProperties = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/objectWithoutProperties.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/objectWithoutProperties.js"(exports2, module2) {
     var objectWithoutPropertiesLoose = require_objectWithoutPropertiesLoose();
     function _objectWithoutProperties(e, t) {
       if (null == e) return {};
@@ -25649,9 +25654,9 @@ var require_objectWithoutProperties = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/toPrimitive.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/toPrimitive.js
 var require_toPrimitive = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/toPrimitive.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/toPrimitive.js"(exports2, module2) {
     var _typeof = require_typeof()["default"];
     function toPrimitive(t, r) {
       if ("object" != _typeof(t) || !t) return t;
@@ -25667,9 +25672,9 @@ var require_toPrimitive = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/toPropertyKey.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/toPropertyKey.js
 var require_toPropertyKey = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/toPropertyKey.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/toPropertyKey.js"(exports2, module2) {
     var _typeof = require_typeof()["default"];
     var toPrimitive = require_toPrimitive();
     function toPropertyKey(t) {
@@ -25680,9 +25685,9 @@ var require_toPropertyKey = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/defineProperty.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/defineProperty.js
 var require_defineProperty = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/defineProperty.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/defineProperty.js"(exports2, module2) {
     var toPropertyKey = require_toPropertyKey();
     function _defineProperty(e, r, t) {
       return (r = toPropertyKey(r)) in e ? Object.defineProperty(e, r, {
@@ -25696,9 +25701,9 @@ var require_defineProperty = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/void-elements@3.1.0/node_modules/void-elements/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/void-elements@3.1.0/node_modules/void-elements/index.js
 var require_void_elements = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/void-elements@3.1.0/node_modules/void-elements/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/void-elements@3.1.0/node_modules/void-elements/index.js"(exports2, module2) {
     module2.exports = {
       "area": true,
       "base": true,
@@ -25718,9 +25723,9 @@ var require_void_elements = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/html-parse-stringify@3.0.1/node_modules/html-parse-stringify/dist/html-parse-stringify.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/html-parse-stringify@3.0.1/node_modules/html-parse-stringify/dist/html-parse-stringify.js
 var require_html_parse_stringify = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/html-parse-stringify@3.0.1/node_modules/html-parse-stringify/dist/html-parse-stringify.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/html-parse-stringify@3.0.1/node_modules/html-parse-stringify/dist/html-parse-stringify.js"(exports2, module2) {
     var e;
     var t = (e = require_void_elements()) && "object" == typeof e && "default" in e ? e.default : e;
     var n = /\s([^'"/\s><]+?)[\s/>]|([^\s=]+)=\s?(".*?"|'.*?')/g;
@@ -25784,9 +25789,9 @@ var require_html_parse_stringify = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/classCallCheck.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/classCallCheck.js
 var require_classCallCheck = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/classCallCheck.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/classCallCheck.js"(exports2, module2) {
     function _classCallCheck(a, n) {
       if (!(a instanceof n)) throw new TypeError("Cannot call a class as a function");
     }
@@ -25794,9 +25799,9 @@ var require_classCallCheck = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/createClass.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/createClass.js
 var require_createClass = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/createClass.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/createClass.js"(exports2, module2) {
     var toPropertyKey = require_toPropertyKey();
     function _defineProperties(e, r) {
       for (var t = 0; t < r.length; t++) {
@@ -25813,9 +25818,9 @@ var require_createClass = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/context.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/context.js
 var require_context = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/context.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/context.js"(exports2) {
     "use strict";
     var _interopRequireDefault = require_interopRequireDefault();
     Object.defineProperty(exports2, "__esModule", {
@@ -25946,9 +25951,9 @@ var require_context = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/utils.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/utils.js
 var require_utils2 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/utils.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/utils.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", {
       value: true
@@ -26018,9 +26023,9 @@ var require_utils2 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/Trans.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/Trans.js
 var require_Trans = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/Trans.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/Trans.js"(exports2) {
     "use strict";
     var _interopRequireWildcard = require_interopRequireWildcard();
     var _interopRequireDefault = require_interopRequireDefault();
@@ -26265,9 +26270,9 @@ var require_Trans = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/arrayWithHoles.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/arrayWithHoles.js
 var require_arrayWithHoles = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/arrayWithHoles.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/arrayWithHoles.js"(exports2, module2) {
     function _arrayWithHoles(r) {
       if (Array.isArray(r)) return r;
     }
@@ -26275,9 +26280,9 @@ var require_arrayWithHoles = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/iterableToArrayLimit.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/iterableToArrayLimit.js
 var require_iterableToArrayLimit = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/iterableToArrayLimit.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/iterableToArrayLimit.js"(exports2, module2) {
     function _iterableToArrayLimit(r, l) {
       var t = null == r ? null : "undefined" != typeof Symbol && r[Symbol.iterator] || r["@@iterator"];
       if (null != t) {
@@ -26303,9 +26308,9 @@ var require_iterableToArrayLimit = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/arrayLikeToArray.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/arrayLikeToArray.js
 var require_arrayLikeToArray = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/arrayLikeToArray.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/arrayLikeToArray.js"(exports2, module2) {
     function _arrayLikeToArray(r, a) {
       (null == a || a > r.length) && (a = r.length);
       for (var e = 0, n = Array(a); e < a; e++) n[e] = r[e];
@@ -26315,9 +26320,9 @@ var require_arrayLikeToArray = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/unsupportedIterableToArray.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/unsupportedIterableToArray.js
 var require_unsupportedIterableToArray = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/unsupportedIterableToArray.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/unsupportedIterableToArray.js"(exports2, module2) {
     var arrayLikeToArray = require_arrayLikeToArray();
     function _unsupportedIterableToArray(r, a) {
       if (r) {
@@ -26330,9 +26335,9 @@ var require_unsupportedIterableToArray = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/nonIterableRest.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/nonIterableRest.js
 var require_nonIterableRest = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/nonIterableRest.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/nonIterableRest.js"(exports2, module2) {
     function _nonIterableRest() {
       throw new TypeError("Invalid attempt to destructure non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method.");
     }
@@ -26340,9 +26345,9 @@ var require_nonIterableRest = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/slicedToArray.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/slicedToArray.js
 var require_slicedToArray = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/slicedToArray.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/slicedToArray.js"(exports2, module2) {
     var arrayWithHoles = require_arrayWithHoles();
     var iterableToArrayLimit = require_iterableToArrayLimit();
     var unsupportedIterableToArray = require_unsupportedIterableToArray();
@@ -26354,9 +26359,9 @@ var require_slicedToArray = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/useTranslation.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/useTranslation.js
 var require_useTranslation = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/useTranslation.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/useTranslation.js"(exports2) {
     "use strict";
     var _interopRequireDefault = require_interopRequireDefault();
     Object.defineProperty(exports2, "__esModule", {
@@ -26472,9 +26477,9 @@ var require_useTranslation = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/withTranslation.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/withTranslation.js
 var require_withTranslation = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/withTranslation.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/withTranslation.js"(exports2) {
     "use strict";
     var _interopRequireDefault = require_interopRequireDefault();
     Object.defineProperty(exports2, "__esModule", {
@@ -26546,9 +26551,9 @@ var require_withTranslation = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/Translation.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/Translation.js
 var require_Translation = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/Translation.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/Translation.js"(exports2) {
     "use strict";
     var _interopRequireDefault = require_interopRequireDefault();
     Object.defineProperty(exports2, "__esModule", {
@@ -26569,9 +26574,9 @@ var require_Translation = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/I18nextProvider.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/I18nextProvider.js
 var require_I18nextProvider = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/I18nextProvider.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/I18nextProvider.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", {
       value: true
@@ -26594,9 +26599,9 @@ var require_I18nextProvider = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/useSSR.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/useSSR.js
 var require_useSSR = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/useSSR.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/useSSR.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", {
       value: true
@@ -26629,9 +26634,9 @@ var require_useSSR = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/withSSR.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/withSSR.js
 var require_withSSR = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/withSSR.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/withSSR.js"(exports2) {
     "use strict";
     var _interopRequireDefault = require_interopRequireDefault();
     Object.defineProperty(exports2, "__esModule", {
@@ -26688,9 +26693,9 @@ var require_withSSR = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/index.js
 var require_commonjs = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/index.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-i18next@11.8.15_i18next@19.8.4_react@16.14.0/node_modules/react-i18next/dist/commonjs/index.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", {
       value: true
@@ -26796,18 +26801,18 @@ var require_commonjs = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-localization/lib/scopes.js
+// ../../../../../power-platform-ux/packages/shell-localization/lib/scopes.js
 var ShellLocalizationScope;
 var init_scopes = __esm({
-  "../../../power-platform-ux/packages/shell-localization/lib/scopes.js"() {
+  "../../../../../power-platform-ux/packages/shell-localization/lib/scopes.js"() {
     "use strict";
     ShellLocalizationScope = "shell-localization";
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/objectSpread.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/objectSpread.js
 var require_objectSpread = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/objectSpread.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/objectSpread.js"(exports2, module2) {
     var defineProperty = require_defineProperty();
     function _objectSpread(e) {
       for (var r = 1; r < arguments.length; r++) {
@@ -26824,9 +26829,9 @@ var require_objectSpread = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/assertThisInitialized.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/assertThisInitialized.js
 var require_assertThisInitialized = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/assertThisInitialized.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/assertThisInitialized.js"(exports2, module2) {
     function _assertThisInitialized(e) {
       if (void 0 === e) throw new ReferenceError("this hasn't been initialised - super() hasn't been called");
       return e;
@@ -26835,9 +26840,9 @@ var require_assertThisInitialized = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/possibleConstructorReturn.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/possibleConstructorReturn.js
 var require_possibleConstructorReturn = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/possibleConstructorReturn.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/possibleConstructorReturn.js"(exports2, module2) {
     var _typeof = require_typeof()["default"];
     var assertThisInitialized = require_assertThisInitialized();
     function _possibleConstructorReturn(t, e) {
@@ -26849,9 +26854,9 @@ var require_possibleConstructorReturn = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/getPrototypeOf.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/getPrototypeOf.js
 var require_getPrototypeOf = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/getPrototypeOf.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/getPrototypeOf.js"(exports2, module2) {
     function _getPrototypeOf(t) {
       return module2.exports = _getPrototypeOf = Object.setPrototypeOf ? Object.getPrototypeOf.bind() : function(t2) {
         return t2.__proto__ || Object.getPrototypeOf(t2);
@@ -26861,9 +26866,9 @@ var require_getPrototypeOf = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/inherits.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/inherits.js
 var require_inherits = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/inherits.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@babel+runtime@7.28.6/node_modules/@babel/runtime/helpers/inherits.js"(exports2, module2) {
     var setPrototypeOf = require_setPrototypeOf();
     function _inherits(t, e) {
       if ("function" != typeof e && null !== e) throw new TypeError("Super expression must either be null or a function");
@@ -26881,9 +26886,9 @@ var require_inherits = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/i18next@19.8.4/node_modules/i18next/dist/cjs/i18next.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/i18next@19.8.4/node_modules/i18next/dist/cjs/i18next.js
 var require_i18next = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/i18next@19.8.4/node_modules/i18next/dist/cjs/i18next.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/i18next@19.8.4/node_modules/i18next/dist/cjs/i18next.js"(exports2, module2) {
     "use strict";
     function _interopDefault(ex) {
       return ex && typeof ex === "object" && "default" in ex ? ex["default"] : ex;
@@ -28833,9 +28838,9 @@ var require_i18next = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/i18next-browser-languagedetector@6.0.1/node_modules/i18next-browser-languagedetector/dist/cjs/i18nextBrowserLanguageDetector.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/i18next-browser-languagedetector@6.0.1/node_modules/i18next-browser-languagedetector/dist/cjs/i18nextBrowserLanguageDetector.js
 var require_i18nextBrowserLanguageDetector = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/i18next-browser-languagedetector@6.0.1/node_modules/i18next-browser-languagedetector/dist/cjs/i18nextBrowserLanguageDetector.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/i18next-browser-languagedetector@6.0.1/node_modules/i18next-browser-languagedetector/dist/cjs/i18nextBrowserLanguageDetector.js"(exports2, module2) {
     "use strict";
     function _interopDefault(ex) {
       return ex && typeof ex === "object" && "default" in ex ? ex["default"] : ex;
@@ -29178,9 +29183,9 @@ var require_i18nextBrowserLanguageDetector = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/i18next-xhr-backend@3.2.2/node_modules/i18next-xhr-backend/dist/cjs/i18nextXHRBackend.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/i18next-xhr-backend@3.2.2/node_modules/i18next-xhr-backend/dist/cjs/i18nextXHRBackend.js
 var require_i18nextXHRBackend = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/i18next-xhr-backend@3.2.2/node_modules/i18next-xhr-backend/dist/cjs/i18nextXHRBackend.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/i18next-xhr-backend@3.2.2/node_modules/i18next-xhr-backend/dist/cjs/i18nextXHRBackend.js"(exports2, module2) {
     "use strict";
     function _interopDefault(ex) {
       return ex && typeof ex === "object" && "default" in ex ? ex["default"] : ex;
@@ -29359,9 +29364,9 @@ var require_i18nextXHRBackend = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/i18next-chained-backend@3.0.2/node_modules/i18next-chained-backend/dist/cjs/i18nextChainedBackend.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/i18next-chained-backend@3.0.2/node_modules/i18next-chained-backend/dist/cjs/i18nextChainedBackend.js
 var require_i18nextChainedBackend = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/i18next-chained-backend@3.0.2/node_modules/i18next-chained-backend/dist/cjs/i18nextChainedBackend.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/i18next-chained-backend@3.0.2/node_modules/i18next-chained-backend/dist/cjs/i18nextChainedBackend.js"(exports2, module2) {
     "use strict";
     var _classCallCheck = require_classCallCheck();
     var _createClass = require_createClass();
@@ -29464,10 +29469,10 @@ var require_i18nextChainedBackend = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-localization/lib/featureGates.js
+// ../../../../../power-platform-ux/packages/shell-localization/lib/featureGates.js
 var featureGates_default;
 var init_featureGates2 = __esm({
-  "../../../power-platform-ux/packages/shell-localization/lib/featureGates.js"() {
+  "../../../../../power-platform-ux/packages/shell-localization/lib/featureGates.js"() {
     "use strict";
     init_lib2();
     featureGates_default = createFeatureGatesConfig({
@@ -29488,7 +29493,7 @@ var init_featureGates2 = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-localization/lib/fallbacks.js
+// ../../../../../power-platform-ux/packages/shell-localization/lib/fallbacks.js
 function memoize2(fn) {
   let result;
   return () => result ? result : result = fn();
@@ -29498,7 +29503,7 @@ function fallbackLng(lang) {
 }
 var fallbacks, primaryFallback, primaryFallbacks, supportedLngs, getSupportedFallbacks;
 var init_fallbacks = __esm({
-  "../../../power-platform-ux/packages/shell-localization/lib/fallbacks.js"() {
+  "../../../../../power-platform-ux/packages/shell-localization/lib/fallbacks.js"() {
     "use strict";
     fallbacks = {
       "agq": "fr-FR",
@@ -29940,10 +29945,10 @@ var init_fallbacks = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-localization/lib/rtl-helpers.js
+// ../../../../../power-platform-ux/packages/shell-localization/lib/rtl-helpers.js
 var import_i18next, isRTLForced, isLocaleRTL, isCurrentLocaleRTL, isRTLLocaleSupported;
 var init_rtl_helpers = __esm({
-  "../../../power-platform-ux/packages/shell-localization/lib/rtl-helpers.js"() {
+  "../../../../../power-platform-ux/packages/shell-localization/lib/rtl-helpers.js"() {
     "use strict";
     import_i18next = __toESM(require_i18next());
     init_featureGates2();
@@ -29972,7 +29977,7 @@ var init_rtl_helpers = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-localization/lib/current-locale.js
+// ../../../../../power-platform-ux/packages/shell-localization/lib/current-locale.js
 function getCurrentLocale() {
   const locale = import_i18next2.default.languages ? import_i18next2.default.languages[0] : import_i18next2.default.language;
   if (locale && isLocaleRTL(locale)) {
@@ -29982,7 +29987,7 @@ function getCurrentLocale() {
 }
 var import_i18next2;
 var init_current_locale = __esm({
-  "../../../power-platform-ux/packages/shell-localization/lib/current-locale.js"() {
+  "../../../../../power-platform-ux/packages/shell-localization/lib/current-locale.js"() {
     "use strict";
     import_i18next2 = __toESM(require_i18next());
     init_rtl_helpers();
@@ -29991,10 +29996,10 @@ var init_current_locale = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-localization/lib/LocalStorageLanguageDetector.js
+// ../../../../../power-platform-ux/packages/shell-localization/lib/LocalStorageLanguageDetector.js
 var localStorageLanguage;
 var init_LocalStorageLanguageDetector = __esm({
-  "../../../power-platform-ux/packages/shell-localization/lib/LocalStorageLanguageDetector.js"() {
+  "../../../../../power-platform-ux/packages/shell-localization/lib/LocalStorageLanguageDetector.js"() {
     "use strict";
     localStorageLanguage = {
       name: "localStorageLanguage",
@@ -30010,10 +30015,10 @@ var init_LocalStorageLanguageDetector = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-localization/lib/NavigatorLanguageDetector.js
+// ../../../../../power-platform-ux/packages/shell-localization/lib/NavigatorLanguageDetector.js
 var navigatorWithFallback;
 var init_NavigatorLanguageDetector = __esm({
-  "../../../power-platform-ux/packages/shell-localization/lib/NavigatorLanguageDetector.js"() {
+  "../../../../../power-platform-ux/packages/shell-localization/lib/NavigatorLanguageDetector.js"() {
     "use strict";
     init_lib4();
     init_fallbacks();
@@ -30043,9 +30048,9 @@ var init_NavigatorLanguageDetector = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/i18next-pseudo@2.2.1/node_modules/i18next-pseudo/lib/utils.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/i18next-pseudo@2.2.1/node_modules/i18next-pseudo/lib/utils.js
 var require_utils3 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/i18next-pseudo@2.2.1/node_modules/i18next-pseudo/lib/utils.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/i18next-pseudo@2.2.1/node_modules/i18next-pseudo/lib/utils.js"(exports2) {
     "use strict";
     exports2.__esModule = true;
     var uglifiedAlphabet = exports2.uglifiedAlphabet = {
@@ -30110,9 +30115,9 @@ var require_utils3 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/i18next-pseudo@2.2.1/node_modules/i18next-pseudo/lib/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/i18next-pseudo@2.2.1/node_modules/i18next-pseudo/lib/index.js
 var require_lib2 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/i18next-pseudo@2.2.1/node_modules/i18next-pseudo/lib/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/i18next-pseudo@2.2.1/node_modules/i18next-pseudo/lib/index.js"(exports2, module2) {
     "use strict";
     exports2.__esModule = true;
     exports2.default = void 0;
@@ -30178,7 +30183,7 @@ var require_lib2 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-localization/lib/pseudoLocHelper.js
+// ../../../../../power-platform-ux/packages/shell-localization/lib/pseudoLocHelper.js
 function isPseudoLocalizationPersisted() {
   try {
     return localStorage.getItem(pseudoLocLocalStorageKey)?.toLocaleLowerCase() === "true";
@@ -30197,7 +30202,7 @@ function isPseudoLocalizationEnabled() {
 }
 var import_i18next_pseudo, pseudoLocLocalStorageKey;
 var init_pseudoLocHelper = __esm({
-  "../../../power-platform-ux/packages/shell-localization/lib/pseudoLocHelper.js"() {
+  "../../../../../power-platform-ux/packages/shell-localization/lib/pseudoLocHelper.js"() {
     "use strict";
     init_featureGates2();
     import_i18next_pseudo = __toESM(require_lib2());
@@ -30205,10 +30210,10 @@ var init_pseudoLocHelper = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-localization/lib/InitializeService.js
+// ../../../../../power-platform-ux/packages/shell-localization/lib/InitializeService.js
 var import_i18next3, import_i18next_browser_languagedetector, import_i18next_xhr_backend, import_i18next_chained_backend, import_react_i18next, import_i18next_pseudo2, languageDetector, createXhrBackend, settings, backends, currentLngNS, initPromise, InitializeService_default;
 var init_InitializeService = __esm({
-  "../../../power-platform-ux/packages/shell-localization/lib/InitializeService.js"() {
+  "../../../../../power-platform-ux/packages/shell-localization/lib/InitializeService.js"() {
     "use strict";
     init_lib();
     init_lib4();
@@ -30355,7 +30360,7 @@ var init_InitializeService = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-localization/lib/helpers.js
+// ../../../../../power-platform-ux/packages/shell-localization/lib/helpers.js
 function getLangFromLangLocale(langLocale) {
   return getLangFromLangLocaleNoFallback(langLocale) || "en";
 }
@@ -30367,17 +30372,17 @@ function getSupportsRTL() {
 }
 var supportsRTL;
 var init_helpers = __esm({
-  "../../../power-platform-ux/packages/shell-localization/lib/helpers.js"() {
+  "../../../../../power-platform-ux/packages/shell-localization/lib/helpers.js"() {
     "use strict";
     init_InitializeService();
     supportsRTL = false;
   }
 });
 
-// ../../../power-platform-ux/packages/shell-localization/lib/rtl.js
+// ../../../../../power-platform-ux/packages/shell-localization/lib/rtl.js
 var isRTL;
 var init_rtl2 = __esm({
-  "../../../power-platform-ux/packages/shell-localization/lib/rtl.js"() {
+  "../../../../../power-platform-ux/packages/shell-localization/lib/rtl.js"() {
     "use strict";
     init_rtl_helpers();
     init_current_locale();
@@ -30390,9 +30395,9 @@ var init_rtl2 = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/shallowequal@1.1.0/node_modules/shallowequal/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/shallowequal@1.1.0/node_modules/shallowequal/index.js
 var require_shallowequal = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/shallowequal@1.1.0/node_modules/shallowequal/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/shallowequal@1.1.0/node_modules/shallowequal/index.js"(exports2, module2) {
     module2.exports = function shallowEqual(objA, objB, compare, compareContext) {
       var ret = compare ? compare.call(compareContext, objA, objB) : void 0;
       if (ret !== void 0) {
@@ -30427,9 +30432,9 @@ var require_shallowequal = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react-side-effect@1.2.0_react@16.14.0/node_modules/react-side-effect/lib/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-side-effect@1.2.0_react@16.14.0/node_modules/react-side-effect/lib/index.js
 var require_lib3 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react-side-effect@1.2.0_react@16.14.0/node_modules/react-side-effect/lib/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-side-effect@1.2.0_react@16.14.0/node_modules/react-side-effect/lib/index.js"(exports2, module2) {
     "use strict";
     function _interopDefault(ex) {
       return ex && typeof ex === "object" && "default" in ex ? ex["default"] : ex;
@@ -30532,9 +30537,9 @@ var require_lib3 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react-fast-compare@2.0.4/node_modules/react-fast-compare/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-fast-compare@2.0.4/node_modules/react-fast-compare/index.js
 var require_react_fast_compare = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react-fast-compare@2.0.4/node_modules/react-fast-compare/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-fast-compare@2.0.4/node_modules/react-fast-compare/index.js"(exports2, module2) {
     "use strict";
     var isArray = Array.isArray;
     var keyList = Object.keys;
@@ -30592,9 +30597,9 @@ var require_react_fast_compare = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react-helmet@5.2.1_react@16.14.0/node_modules/react-helmet/lib/HelmetConstants.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-helmet@5.2.1_react@16.14.0/node_modules/react-helmet/lib/HelmetConstants.js
 var require_HelmetConstants = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react-helmet@5.2.1_react@16.14.0/node_modules/react-helmet/lib/HelmetConstants.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-helmet@5.2.1_react@16.14.0/node_modules/react-helmet/lib/HelmetConstants.js"(exports2) {
     exports2.__esModule = true;
     var ATTRIBUTE_NAMES = exports2.ATTRIBUTE_NAMES = {
       BODY: "bodyAttributes",
@@ -30654,9 +30659,9 @@ var require_HelmetConstants = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react-helmet@5.2.1_react@16.14.0/node_modules/react-helmet/lib/HelmetUtils.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-helmet@5.2.1_react@16.14.0/node_modules/react-helmet/lib/HelmetUtils.js
 var require_HelmetUtils = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react-helmet@5.2.1_react@16.14.0/node_modules/react-helmet/lib/HelmetUtils.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-helmet@5.2.1_react@16.14.0/node_modules/react-helmet/lib/HelmetUtils.js"(exports2) {
     exports2.__esModule = true;
     exports2.warn = exports2.requestAnimationFrame = exports2.reducePropsToState = exports2.mapStateOnServer = exports2.handleClientStateChange = exports2.convertReactPropstoHtmlAttributes = void 0;
     var _typeof = typeof Symbol === "function" && typeof Symbol.iterator === "symbol" ? function(obj) {
@@ -31085,9 +31090,9 @@ var require_HelmetUtils = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/react-helmet@5.2.1_react@16.14.0/node_modules/react-helmet/lib/Helmet.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-helmet@5.2.1_react@16.14.0/node_modules/react-helmet/lib/Helmet.js
 var require_Helmet = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/react-helmet@5.2.1_react@16.14.0/node_modules/react-helmet/lib/Helmet.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/react-helmet@5.2.1_react@16.14.0/node_modules/react-helmet/lib/Helmet.js"(exports2) {
     exports2.__esModule = true;
     exports2.Helmet = void 0;
     var _extends = Object.assign || function(target) {
@@ -31356,7 +31361,7 @@ var require_Helmet = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-localization/lib/Provider.js
+// ../../../../../power-platform-ux/packages/shell-localization/lib/Provider.js
 async function loadNamespaces(namespaces) {
   await initPromise;
   return new Promise((resolve) => InitializeService_default.loadNamespaces(namespaces, (e) => {
@@ -31371,7 +31376,7 @@ function getFixedT(namespace, language) {
 }
 var import_react4, import_react_i18next2, import_react_helmet, LocalizationProvider, useTranslation;
 var init_Provider2 = __esm({
-  "../../../power-platform-ux/packages/shell-localization/lib/Provider.js"() {
+  "../../../../../power-platform-ux/packages/shell-localization/lib/Provider.js"() {
     "use strict";
     init_lib4();
     init_Utilities();
@@ -31404,9 +31409,9 @@ var init_Provider2 = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_listCacheClear.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_listCacheClear.js
 var require_listCacheClear = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_listCacheClear.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_listCacheClear.js"(exports2, module2) {
     function listCacheClear() {
       this.__data__ = [];
       this.size = 0;
@@ -31415,9 +31420,9 @@ var require_listCacheClear = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/eq.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/eq.js
 var require_eq = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/eq.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/eq.js"(exports2, module2) {
     function eq(value, other) {
       return value === other || value !== value && other !== other;
     }
@@ -31425,9 +31430,9 @@ var require_eq = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_assocIndexOf.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_assocIndexOf.js
 var require_assocIndexOf = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_assocIndexOf.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_assocIndexOf.js"(exports2, module2) {
     var eq = require_eq();
     function assocIndexOf(array, key) {
       var length = array.length;
@@ -31442,9 +31447,9 @@ var require_assocIndexOf = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_listCacheDelete.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_listCacheDelete.js
 var require_listCacheDelete = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_listCacheDelete.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_listCacheDelete.js"(exports2, module2) {
     var assocIndexOf = require_assocIndexOf();
     var arrayProto = Array.prototype;
     var splice = arrayProto.splice;
@@ -31466,9 +31471,9 @@ var require_listCacheDelete = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_listCacheGet.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_listCacheGet.js
 var require_listCacheGet = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_listCacheGet.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_listCacheGet.js"(exports2, module2) {
     var assocIndexOf = require_assocIndexOf();
     function listCacheGet(key) {
       var data = this.__data__, index = assocIndexOf(data, key);
@@ -31478,9 +31483,9 @@ var require_listCacheGet = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_listCacheHas.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_listCacheHas.js
 var require_listCacheHas = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_listCacheHas.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_listCacheHas.js"(exports2, module2) {
     var assocIndexOf = require_assocIndexOf();
     function listCacheHas(key) {
       return assocIndexOf(this.__data__, key) > -1;
@@ -31489,9 +31494,9 @@ var require_listCacheHas = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_listCacheSet.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_listCacheSet.js
 var require_listCacheSet = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_listCacheSet.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_listCacheSet.js"(exports2, module2) {
     var assocIndexOf = require_assocIndexOf();
     function listCacheSet(key, value) {
       var data = this.__data__, index = assocIndexOf(data, key);
@@ -31507,9 +31512,9 @@ var require_listCacheSet = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_ListCache.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_ListCache.js
 var require_ListCache = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_ListCache.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_ListCache.js"(exports2, module2) {
     var listCacheClear = require_listCacheClear();
     var listCacheDelete = require_listCacheDelete();
     var listCacheGet = require_listCacheGet();
@@ -31532,9 +31537,9 @@ var require_ListCache = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_stackClear.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_stackClear.js
 var require_stackClear = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_stackClear.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_stackClear.js"(exports2, module2) {
     var ListCache = require_ListCache();
     function stackClear() {
       this.__data__ = new ListCache();
@@ -31544,9 +31549,9 @@ var require_stackClear = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_stackDelete.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_stackDelete.js
 var require_stackDelete = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_stackDelete.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_stackDelete.js"(exports2, module2) {
     function stackDelete(key) {
       var data = this.__data__, result = data["delete"](key);
       this.size = data.size;
@@ -31556,9 +31561,9 @@ var require_stackDelete = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_stackGet.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_stackGet.js
 var require_stackGet = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_stackGet.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_stackGet.js"(exports2, module2) {
     function stackGet(key) {
       return this.__data__.get(key);
     }
@@ -31566,9 +31571,9 @@ var require_stackGet = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_stackHas.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_stackHas.js
 var require_stackHas = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_stackHas.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_stackHas.js"(exports2, module2) {
     function stackHas(key) {
       return this.__data__.has(key);
     }
@@ -31576,17 +31581,17 @@ var require_stackHas = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_freeGlobal.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_freeGlobal.js
 var require_freeGlobal = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_freeGlobal.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_freeGlobal.js"(exports2, module2) {
     var freeGlobal = typeof global == "object" && global && global.Object === Object && global;
     module2.exports = freeGlobal;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_root.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_root.js
 var require_root = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_root.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_root.js"(exports2, module2) {
     var freeGlobal = require_freeGlobal();
     var freeSelf = typeof self == "object" && self && self.Object === Object && self;
     var root = freeGlobal || freeSelf || Function("return this")();
@@ -31594,18 +31599,18 @@ var require_root = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Symbol.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Symbol.js
 var require_Symbol = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Symbol.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Symbol.js"(exports2, module2) {
     var root = require_root();
     var Symbol2 = root.Symbol;
     module2.exports = Symbol2;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getRawTag.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getRawTag.js
 var require_getRawTag = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getRawTag.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getRawTag.js"(exports2, module2) {
     var Symbol2 = require_Symbol();
     var objectProto = Object.prototype;
     var hasOwnProperty = objectProto.hasOwnProperty;
@@ -31632,9 +31637,9 @@ var require_getRawTag = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_objectToString.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_objectToString.js
 var require_objectToString = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_objectToString.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_objectToString.js"(exports2, module2) {
     var objectProto = Object.prototype;
     var nativeObjectToString = objectProto.toString;
     function objectToString(value) {
@@ -31644,9 +31649,9 @@ var require_objectToString = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseGetTag.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseGetTag.js
 var require_baseGetTag = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseGetTag.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseGetTag.js"(exports2, module2) {
     var Symbol2 = require_Symbol();
     var getRawTag = require_getRawTag();
     var objectToString = require_objectToString();
@@ -31663,9 +31668,9 @@ var require_baseGetTag = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isObject.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isObject.js
 var require_isObject = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isObject.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isObject.js"(exports2, module2) {
     function isObject(value) {
       var type = typeof value;
       return value != null && (type == "object" || type == "function");
@@ -31674,9 +31679,9 @@ var require_isObject = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isFunction.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isFunction.js
 var require_isFunction = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isFunction.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isFunction.js"(exports2, module2) {
     var baseGetTag = require_baseGetTag();
     var isObject = require_isObject();
     var asyncTag = "[object AsyncFunction]";
@@ -31694,18 +31699,18 @@ var require_isFunction = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_coreJsData.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_coreJsData.js
 var require_coreJsData = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_coreJsData.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_coreJsData.js"(exports2, module2) {
     var root = require_root();
     var coreJsData = root["__core-js_shared__"];
     module2.exports = coreJsData;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isMasked.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isMasked.js
 var require_isMasked = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isMasked.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isMasked.js"(exports2, module2) {
     var coreJsData = require_coreJsData();
     var maskSrcKey = function() {
       var uid = /[^.]+$/.exec(coreJsData && coreJsData.keys && coreJsData.keys.IE_PROTO || "");
@@ -31718,9 +31723,9 @@ var require_isMasked = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_toSource.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_toSource.js
 var require_toSource = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_toSource.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_toSource.js"(exports2, module2) {
     var funcProto = Function.prototype;
     var funcToString = funcProto.toString;
     function toSource(func) {
@@ -31740,9 +31745,9 @@ var require_toSource = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIsNative.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIsNative.js
 var require_baseIsNative = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIsNative.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIsNative.js"(exports2, module2) {
     var isFunction = require_isFunction();
     var isMasked = require_isMasked();
     var isObject = require_isObject();
@@ -31767,9 +31772,9 @@ var require_baseIsNative = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getValue.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getValue.js
 var require_getValue = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getValue.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getValue.js"(exports2, module2) {
     function getValue(object, key) {
       return object == null ? void 0 : object[key];
     }
@@ -31777,9 +31782,9 @@ var require_getValue = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getNative.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getNative.js
 var require_getNative = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getNative.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getNative.js"(exports2, module2) {
     var baseIsNative = require_baseIsNative();
     var getValue = require_getValue();
     function getNative(object, key) {
@@ -31790,9 +31795,9 @@ var require_getNative = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Map.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Map.js
 var require_Map = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Map.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Map.js"(exports2, module2) {
     var getNative = require_getNative();
     var root = require_root();
     var Map2 = getNative(root, "Map");
@@ -31800,18 +31805,18 @@ var require_Map = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_nativeCreate.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_nativeCreate.js
 var require_nativeCreate = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_nativeCreate.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_nativeCreate.js"(exports2, module2) {
     var getNative = require_getNative();
     var nativeCreate = getNative(Object, "create");
     module2.exports = nativeCreate;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_hashClear.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_hashClear.js
 var require_hashClear = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_hashClear.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_hashClear.js"(exports2, module2) {
     var nativeCreate = require_nativeCreate();
     function hashClear() {
       this.__data__ = nativeCreate ? nativeCreate(null) : {};
@@ -31821,9 +31826,9 @@ var require_hashClear = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_hashDelete.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_hashDelete.js
 var require_hashDelete = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_hashDelete.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_hashDelete.js"(exports2, module2) {
     function hashDelete(key) {
       var result = this.has(key) && delete this.__data__[key];
       this.size -= result ? 1 : 0;
@@ -31833,9 +31838,9 @@ var require_hashDelete = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_hashGet.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_hashGet.js
 var require_hashGet = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_hashGet.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_hashGet.js"(exports2, module2) {
     var nativeCreate = require_nativeCreate();
     var HASH_UNDEFINED = "__lodash_hash_undefined__";
     var objectProto = Object.prototype;
@@ -31852,9 +31857,9 @@ var require_hashGet = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_hashHas.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_hashHas.js
 var require_hashHas = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_hashHas.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_hashHas.js"(exports2, module2) {
     var nativeCreate = require_nativeCreate();
     var objectProto = Object.prototype;
     var hasOwnProperty = objectProto.hasOwnProperty;
@@ -31866,9 +31871,9 @@ var require_hashHas = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_hashSet.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_hashSet.js
 var require_hashSet = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_hashSet.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_hashSet.js"(exports2, module2) {
     var nativeCreate = require_nativeCreate();
     var HASH_UNDEFINED = "__lodash_hash_undefined__";
     function hashSet(key, value) {
@@ -31881,9 +31886,9 @@ var require_hashSet = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Hash.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Hash.js
 var require_Hash = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Hash.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Hash.js"(exports2, module2) {
     var hashClear = require_hashClear();
     var hashDelete = require_hashDelete();
     var hashGet = require_hashGet();
@@ -31906,9 +31911,9 @@ var require_Hash = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_mapCacheClear.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_mapCacheClear.js
 var require_mapCacheClear = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_mapCacheClear.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_mapCacheClear.js"(exports2, module2) {
     var Hash = require_Hash();
     var ListCache = require_ListCache();
     var Map2 = require_Map();
@@ -31924,9 +31929,9 @@ var require_mapCacheClear = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isKeyable.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isKeyable.js
 var require_isKeyable = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isKeyable.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isKeyable.js"(exports2, module2) {
     function isKeyable(value) {
       var type = typeof value;
       return type == "string" || type == "number" || type == "symbol" || type == "boolean" ? value !== "__proto__" : value === null;
@@ -31935,9 +31940,9 @@ var require_isKeyable = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getMapData.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getMapData.js
 var require_getMapData = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getMapData.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getMapData.js"(exports2, module2) {
     var isKeyable = require_isKeyable();
     function getMapData(map6, key) {
       var data = map6.__data__;
@@ -31947,9 +31952,9 @@ var require_getMapData = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_mapCacheDelete.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_mapCacheDelete.js
 var require_mapCacheDelete = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_mapCacheDelete.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_mapCacheDelete.js"(exports2, module2) {
     var getMapData = require_getMapData();
     function mapCacheDelete(key) {
       var result = getMapData(this, key)["delete"](key);
@@ -31960,9 +31965,9 @@ var require_mapCacheDelete = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_mapCacheGet.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_mapCacheGet.js
 var require_mapCacheGet = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_mapCacheGet.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_mapCacheGet.js"(exports2, module2) {
     var getMapData = require_getMapData();
     function mapCacheGet(key) {
       return getMapData(this, key).get(key);
@@ -31971,9 +31976,9 @@ var require_mapCacheGet = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_mapCacheHas.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_mapCacheHas.js
 var require_mapCacheHas = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_mapCacheHas.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_mapCacheHas.js"(exports2, module2) {
     var getMapData = require_getMapData();
     function mapCacheHas(key) {
       return getMapData(this, key).has(key);
@@ -31982,9 +31987,9 @@ var require_mapCacheHas = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_mapCacheSet.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_mapCacheSet.js
 var require_mapCacheSet = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_mapCacheSet.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_mapCacheSet.js"(exports2, module2) {
     var getMapData = require_getMapData();
     function mapCacheSet(key, value) {
       var data = getMapData(this, key), size = data.size;
@@ -31996,9 +32001,9 @@ var require_mapCacheSet = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_MapCache.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_MapCache.js
 var require_MapCache = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_MapCache.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_MapCache.js"(exports2, module2) {
     var mapCacheClear = require_mapCacheClear();
     var mapCacheDelete = require_mapCacheDelete();
     var mapCacheGet = require_mapCacheGet();
@@ -32021,9 +32026,9 @@ var require_MapCache = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_stackSet.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_stackSet.js
 var require_stackSet = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_stackSet.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_stackSet.js"(exports2, module2) {
     var ListCache = require_ListCache();
     var Map2 = require_Map();
     var MapCache = require_MapCache();
@@ -32047,9 +32052,9 @@ var require_stackSet = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Stack.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Stack.js
 var require_Stack = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Stack.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Stack.js"(exports2, module2) {
     var ListCache = require_ListCache();
     var stackClear = require_stackClear();
     var stackDelete = require_stackDelete();
@@ -32069,9 +32074,9 @@ var require_Stack = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_defineProperty.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_defineProperty.js
 var require_defineProperty2 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_defineProperty.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_defineProperty.js"(exports2, module2) {
     var getNative = require_getNative();
     var defineProperty = function() {
       try {
@@ -32085,9 +32090,9 @@ var require_defineProperty2 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseAssignValue.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseAssignValue.js
 var require_baseAssignValue = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseAssignValue.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseAssignValue.js"(exports2, module2) {
     var defineProperty = require_defineProperty2();
     function baseAssignValue(object, key, value) {
       if (key == "__proto__" && defineProperty) {
@@ -32105,9 +32110,9 @@ var require_baseAssignValue = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_assignMergeValue.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_assignMergeValue.js
 var require_assignMergeValue = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_assignMergeValue.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_assignMergeValue.js"(exports2, module2) {
     var baseAssignValue = require_baseAssignValue();
     var eq = require_eq();
     function assignMergeValue(object, key, value) {
@@ -32119,9 +32124,9 @@ var require_assignMergeValue = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_createBaseFor.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_createBaseFor.js
 var require_createBaseFor = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_createBaseFor.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_createBaseFor.js"(exports2, module2) {
     function createBaseFor(fromRight) {
       return function(object, iteratee, keysFunc) {
         var index = -1, iterable = Object(object), props = keysFunc(object), length = props.length;
@@ -32138,18 +32143,18 @@ var require_createBaseFor = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseFor.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseFor.js
 var require_baseFor = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseFor.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseFor.js"(exports2, module2) {
     var createBaseFor = require_createBaseFor();
     var baseFor = createBaseFor();
     module2.exports = baseFor;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_cloneBuffer.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_cloneBuffer.js
 var require_cloneBuffer = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_cloneBuffer.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_cloneBuffer.js"(exports2, module2) {
     var root = require_root();
     var freeExports = typeof exports2 == "object" && exports2 && !exports2.nodeType && exports2;
     var freeModule = freeExports && typeof module2 == "object" && module2 && !module2.nodeType && module2;
@@ -32168,18 +32173,18 @@ var require_cloneBuffer = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Uint8Array.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Uint8Array.js
 var require_Uint8Array = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Uint8Array.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Uint8Array.js"(exports2, module2) {
     var root = require_root();
     var Uint8Array2 = root.Uint8Array;
     module2.exports = Uint8Array2;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_cloneArrayBuffer.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_cloneArrayBuffer.js
 var require_cloneArrayBuffer = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_cloneArrayBuffer.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_cloneArrayBuffer.js"(exports2, module2) {
     var Uint8Array2 = require_Uint8Array();
     function cloneArrayBuffer(arrayBuffer) {
       var result = new arrayBuffer.constructor(arrayBuffer.byteLength);
@@ -32190,9 +32195,9 @@ var require_cloneArrayBuffer = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_cloneTypedArray.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_cloneTypedArray.js
 var require_cloneTypedArray = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_cloneTypedArray.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_cloneTypedArray.js"(exports2, module2) {
     var cloneArrayBuffer = require_cloneArrayBuffer();
     function cloneTypedArray(typedArray, isDeep) {
       var buffer = isDeep ? cloneArrayBuffer(typedArray.buffer) : typedArray.buffer;
@@ -32202,9 +32207,9 @@ var require_cloneTypedArray = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_copyArray.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_copyArray.js
 var require_copyArray = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_copyArray.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_copyArray.js"(exports2, module2) {
     function copyArray(source, array) {
       var index = -1, length = source.length;
       array || (array = Array(length));
@@ -32217,9 +32222,9 @@ var require_copyArray = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseCreate.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseCreate.js
 var require_baseCreate = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseCreate.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseCreate.js"(exports2, module2) {
     var isObject = require_isObject();
     var objectCreate = Object.create;
     var baseCreate = /* @__PURE__ */ function() {
@@ -32242,9 +32247,9 @@ var require_baseCreate = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_overArg.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_overArg.js
 var require_overArg = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_overArg.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_overArg.js"(exports2, module2) {
     function overArg(func, transform) {
       return function(arg) {
         return func(transform(arg));
@@ -32254,18 +32259,18 @@ var require_overArg = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getPrototype.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getPrototype.js
 var require_getPrototype = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getPrototype.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getPrototype.js"(exports2, module2) {
     var overArg = require_overArg();
     var getPrototype = overArg(Object.getPrototypeOf, Object);
     module2.exports = getPrototype;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isPrototype.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isPrototype.js
 var require_isPrototype = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isPrototype.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isPrototype.js"(exports2, module2) {
     var objectProto = Object.prototype;
     function isPrototype(value) {
       var Ctor = value && value.constructor, proto = typeof Ctor == "function" && Ctor.prototype || objectProto;
@@ -32275,9 +32280,9 @@ var require_isPrototype = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_initCloneObject.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_initCloneObject.js
 var require_initCloneObject = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_initCloneObject.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_initCloneObject.js"(exports2, module2) {
     var baseCreate = require_baseCreate();
     var getPrototype = require_getPrototype();
     var isPrototype = require_isPrototype();
@@ -32288,9 +32293,9 @@ var require_initCloneObject = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isObjectLike.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isObjectLike.js
 var require_isObjectLike = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isObjectLike.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isObjectLike.js"(exports2, module2) {
     function isObjectLike(value) {
       return value != null && typeof value == "object";
     }
@@ -32298,9 +32303,9 @@ var require_isObjectLike = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIsArguments.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIsArguments.js
 var require_baseIsArguments = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIsArguments.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIsArguments.js"(exports2, module2) {
     var baseGetTag = require_baseGetTag();
     var isObjectLike = require_isObjectLike();
     var argsTag = "[object Arguments]";
@@ -32311,9 +32316,9 @@ var require_baseIsArguments = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isArguments.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isArguments.js
 var require_isArguments = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isArguments.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isArguments.js"(exports2, module2) {
     var baseIsArguments = require_baseIsArguments();
     var isObjectLike = require_isObjectLike();
     var objectProto = Object.prototype;
@@ -32328,17 +32333,17 @@ var require_isArguments = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isArray.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isArray.js
 var require_isArray = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isArray.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isArray.js"(exports2, module2) {
     var isArray = Array.isArray;
     module2.exports = isArray;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isLength.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isLength.js
 var require_isLength = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isLength.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isLength.js"(exports2, module2) {
     var MAX_SAFE_INTEGER = 9007199254740991;
     function isLength(value) {
       return typeof value == "number" && value > -1 && value % 1 == 0 && value <= MAX_SAFE_INTEGER;
@@ -32347,9 +32352,9 @@ var require_isLength = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isArrayLike.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isArrayLike.js
 var require_isArrayLike = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isArrayLike.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isArrayLike.js"(exports2, module2) {
     var isFunction = require_isFunction();
     var isLength = require_isLength();
     function isArrayLike(value) {
@@ -32359,9 +32364,9 @@ var require_isArrayLike = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isArrayLikeObject.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isArrayLikeObject.js
 var require_isArrayLikeObject = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isArrayLikeObject.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isArrayLikeObject.js"(exports2, module2) {
     var isArrayLike = require_isArrayLike();
     var isObjectLike = require_isObjectLike();
     function isArrayLikeObject(value) {
@@ -32371,9 +32376,9 @@ var require_isArrayLikeObject = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/stubFalse.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/stubFalse.js
 var require_stubFalse = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/stubFalse.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/stubFalse.js"(exports2, module2) {
     function stubFalse() {
       return false;
     }
@@ -32381,9 +32386,9 @@ var require_stubFalse = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isBuffer.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isBuffer.js
 var require_isBuffer = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isBuffer.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isBuffer.js"(exports2, module2) {
     var root = require_root();
     var stubFalse = require_stubFalse();
     var freeExports = typeof exports2 == "object" && exports2 && !exports2.nodeType && exports2;
@@ -32396,9 +32401,9 @@ var require_isBuffer = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isPlainObject.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isPlainObject.js
 var require_isPlainObject = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isPlainObject.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isPlainObject.js"(exports2, module2) {
     var baseGetTag = require_baseGetTag();
     var getPrototype = require_getPrototype();
     var isObjectLike = require_isObjectLike();
@@ -32423,9 +32428,9 @@ var require_isPlainObject = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIsTypedArray.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIsTypedArray.js
 var require_baseIsTypedArray = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIsTypedArray.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIsTypedArray.js"(exports2, module2) {
     var baseGetTag = require_baseGetTag();
     var isLength = require_isLength();
     var isObjectLike = require_isObjectLike();
@@ -32463,9 +32468,9 @@ var require_baseIsTypedArray = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseUnary.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseUnary.js
 var require_baseUnary = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseUnary.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseUnary.js"(exports2, module2) {
     function baseUnary(func) {
       return function(value) {
         return func(value);
@@ -32475,9 +32480,9 @@ var require_baseUnary = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_nodeUtil.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_nodeUtil.js
 var require_nodeUtil = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_nodeUtil.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_nodeUtil.js"(exports2, module2) {
     var freeGlobal = require_freeGlobal();
     var freeExports = typeof exports2 == "object" && exports2 && !exports2.nodeType && exports2;
     var freeModule = freeExports && typeof module2 == "object" && module2 && !module2.nodeType && module2;
@@ -32497,9 +32502,9 @@ var require_nodeUtil = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isTypedArray.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isTypedArray.js
 var require_isTypedArray = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isTypedArray.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isTypedArray.js"(exports2, module2) {
     var baseIsTypedArray = require_baseIsTypedArray();
     var baseUnary = require_baseUnary();
     var nodeUtil = require_nodeUtil();
@@ -32509,9 +32514,9 @@ var require_isTypedArray = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_safeGet.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_safeGet.js
 var require_safeGet = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_safeGet.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_safeGet.js"(exports2, module2) {
     function safeGet(object, key) {
       if (key === "constructor" && typeof object[key] === "function") {
         return;
@@ -32525,9 +32530,9 @@ var require_safeGet = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_assignValue.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_assignValue.js
 var require_assignValue = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_assignValue.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_assignValue.js"(exports2, module2) {
     var baseAssignValue = require_baseAssignValue();
     var eq = require_eq();
     var objectProto = Object.prototype;
@@ -32542,9 +32547,9 @@ var require_assignValue = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_copyObject.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_copyObject.js
 var require_copyObject = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_copyObject.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_copyObject.js"(exports2, module2) {
     var assignValue = require_assignValue();
     var baseAssignValue = require_baseAssignValue();
     function copyObject(source, props, object, customizer) {
@@ -32569,9 +32574,9 @@ var require_copyObject = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseTimes.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseTimes.js
 var require_baseTimes = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseTimes.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseTimes.js"(exports2, module2) {
     function baseTimes(n, iteratee) {
       var index = -1, result = Array(n);
       while (++index < n) {
@@ -32583,9 +32588,9 @@ var require_baseTimes = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isIndex.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isIndex.js
 var require_isIndex = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isIndex.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isIndex.js"(exports2, module2) {
     var MAX_SAFE_INTEGER = 9007199254740991;
     var reIsUint = /^(?:0|[1-9]\d*)$/;
     function isIndex(value, length) {
@@ -32597,9 +32602,9 @@ var require_isIndex = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_arrayLikeKeys.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_arrayLikeKeys.js
 var require_arrayLikeKeys = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_arrayLikeKeys.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_arrayLikeKeys.js"(exports2, module2) {
     var baseTimes = require_baseTimes();
     var isArguments = require_isArguments();
     var isArray = require_isArray();
@@ -32625,9 +32630,9 @@ var require_arrayLikeKeys = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_nativeKeysIn.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_nativeKeysIn.js
 var require_nativeKeysIn = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_nativeKeysIn.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_nativeKeysIn.js"(exports2, module2) {
     function nativeKeysIn(object) {
       var result = [];
       if (object != null) {
@@ -32641,9 +32646,9 @@ var require_nativeKeysIn = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseKeysIn.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseKeysIn.js
 var require_baseKeysIn = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseKeysIn.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseKeysIn.js"(exports2, module2) {
     var isObject = require_isObject();
     var isPrototype = require_isPrototype();
     var nativeKeysIn = require_nativeKeysIn();
@@ -32665,9 +32670,9 @@ var require_baseKeysIn = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/keysIn.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/keysIn.js
 var require_keysIn = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/keysIn.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/keysIn.js"(exports2, module2) {
     var arrayLikeKeys = require_arrayLikeKeys();
     var baseKeysIn = require_baseKeysIn();
     var isArrayLike = require_isArrayLike();
@@ -32678,9 +32683,9 @@ var require_keysIn = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/toPlainObject.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/toPlainObject.js
 var require_toPlainObject = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/toPlainObject.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/toPlainObject.js"(exports2, module2) {
     var copyObject = require_copyObject();
     var keysIn = require_keysIn();
     function toPlainObject(value) {
@@ -32690,9 +32695,9 @@ var require_toPlainObject = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseMergeDeep.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseMergeDeep.js
 var require_baseMergeDeep = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseMergeDeep.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseMergeDeep.js"(exports2, module2) {
     var assignMergeValue = require_assignMergeValue();
     var cloneBuffer = require_cloneBuffer();
     var cloneTypedArray = require_cloneTypedArray();
@@ -32755,9 +32760,9 @@ var require_baseMergeDeep = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseMerge.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseMerge.js
 var require_baseMerge = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseMerge.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseMerge.js"(exports2, module2) {
     var Stack = require_Stack();
     var assignMergeValue = require_assignMergeValue();
     var baseFor = require_baseFor();
@@ -32786,9 +32791,9 @@ var require_baseMerge = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/identity.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/identity.js
 var require_identity = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/identity.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/identity.js"(exports2, module2) {
     function identity(value) {
       return value;
     }
@@ -32796,9 +32801,9 @@ var require_identity = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_apply.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_apply.js
 var require_apply = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_apply.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_apply.js"(exports2, module2) {
     function apply(func, thisArg, args) {
       switch (args.length) {
         case 0:
@@ -32816,9 +32821,9 @@ var require_apply = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_overRest.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_overRest.js
 var require_overRest = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_overRest.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_overRest.js"(exports2, module2) {
     var apply = require_apply();
     var nativeMax = Math.max;
     function overRest(func, start, transform) {
@@ -32841,9 +32846,9 @@ var require_overRest = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/constant.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/constant.js
 var require_constant = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/constant.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/constant.js"(exports2, module2) {
     function constant(value) {
       return function() {
         return value;
@@ -32853,9 +32858,9 @@ var require_constant = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseSetToString.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseSetToString.js
 var require_baseSetToString = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseSetToString.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseSetToString.js"(exports2, module2) {
     var constant = require_constant();
     var defineProperty = require_defineProperty2();
     var identity = require_identity();
@@ -32871,9 +32876,9 @@ var require_baseSetToString = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_shortOut.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_shortOut.js
 var require_shortOut = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_shortOut.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_shortOut.js"(exports2, module2) {
     var HOT_COUNT = 800;
     var HOT_SPAN = 16;
     var nativeNow = Date.now;
@@ -32896,9 +32901,9 @@ var require_shortOut = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_setToString.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_setToString.js
 var require_setToString = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_setToString.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_setToString.js"(exports2, module2) {
     var baseSetToString = require_baseSetToString();
     var shortOut = require_shortOut();
     var setToString = shortOut(baseSetToString);
@@ -32906,9 +32911,9 @@ var require_setToString = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseRest.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseRest.js
 var require_baseRest = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseRest.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseRest.js"(exports2, module2) {
     var identity = require_identity();
     var overRest = require_overRest();
     var setToString = require_setToString();
@@ -32919,9 +32924,9 @@ var require_baseRest = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isIterateeCall.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isIterateeCall.js
 var require_isIterateeCall = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isIterateeCall.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isIterateeCall.js"(exports2, module2) {
     var eq = require_eq();
     var isArrayLike = require_isArrayLike();
     var isIndex = require_isIndex();
@@ -32940,9 +32945,9 @@ var require_isIterateeCall = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_createAssigner.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_createAssigner.js
 var require_createAssigner = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_createAssigner.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_createAssigner.js"(exports2, module2) {
     var baseRest = require_baseRest();
     var isIterateeCall = require_isIterateeCall();
     function createAssigner(assigner) {
@@ -32967,9 +32972,9 @@ var require_createAssigner = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/merge.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/merge.js
 var require_merge = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/merge.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/merge.js"(exports2, module2) {
     var baseMerge = require_baseMerge();
     var createAssigner = require_createAssigner();
     var merge4 = createAssigner(function(object, source, srcIndex) {
@@ -32979,10 +32984,10 @@ var require_merge = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-localization/lib/resource-bundle.js
+// ../../../../../power-platform-ux/packages/shell-localization/lib/resource-bundle.js
 var import_i18next4, import_merge;
 var init_resource_bundle = __esm({
-  "../../../power-platform-ux/packages/shell-localization/lib/resource-bundle.js"() {
+  "../../../../../power-platform-ux/packages/shell-localization/lib/resource-bundle.js"() {
     "use strict";
     import_i18next4 = __toESM(require_i18next());
     import_merge = __toESM(require_merge());
@@ -32992,9 +32997,9 @@ var init_resource_bundle = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-localization/lib/index.js
+// ../../../../../power-platform-ux/packages/shell-localization/lib/index.js
 var init_lib9 = __esm({
-  "../../../power-platform-ux/packages/shell-localization/lib/index.js"() {
+  "../../../../../power-platform-ux/packages/shell-localization/lib/index.js"() {
     "use strict";
     init_Provider2();
     init_fallbacks();
@@ -33008,9 +33013,9 @@ var init_lib9 = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-features/lib/StandardFeatureFilters.js
+// ../../../../../power-platform-ux/packages/shell-features/lib/StandardFeatureFilters.js
 var init_StandardFeatureFilters = __esm({
-  "../../../power-platform-ux/packages/shell-features/lib/StandardFeatureFilters.js"() {
+  "../../../../../power-platform-ux/packages/shell-features/lib/StandardFeatureFilters.js"() {
     "use strict";
     init_lib();
     init_lib9();
@@ -33018,9 +33023,9 @@ var init_StandardFeatureFilters = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-features/lib/index.js
+// ../../../../../power-platform-ux/packages/shell-features/lib/index.js
 var init_lib10 = __esm({
-  "../../../power-platform-ux/packages/shell-features/lib/index.js"() {
+  "../../../../../power-platform-ux/packages/shell-features/lib/index.js"() {
     "use strict";
     init_ShellFeaturesClient();
     init_Logger3();
@@ -33028,10 +33033,10 @@ var init_lib10 = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-features/lib/MakerPortalFeaturesClient.js
+// ../../../../../power-platform-ux/packages/powerapps-features/lib/MakerPortalFeaturesClient.js
 var makerFeaturesClient, createMakerFeature, useMakerFeaturesClientInitParams;
 var init_MakerPortalFeaturesClient = __esm({
-  "../../../power-platform-ux/packages/powerapps-features/lib/MakerPortalFeaturesClient.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-features/lib/MakerPortalFeaturesClient.js"() {
     "use strict";
     init_lib10();
     init_FeaturesClient_factory();
@@ -33039,10 +33044,10 @@ var init_MakerPortalFeaturesClient = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/ecsFeatureGates.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/ecsFeatureGates.js
 var EnableAutoInsertionOfCellInRow, enableOneGridEventsForFormDesigner;
 var init_ecsFeatureGates = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/ecsFeatureGates.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/ecsFeatureGates.js"() {
     "use strict";
     init_featureGates();
     init_MakerPortalFeaturesClient();
@@ -33067,10 +33072,10 @@ var init_ecsFeatureGates = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormElementIdNode.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormElementIdNode.js
 var FormElementIdNode;
 var init_FormElementIdNode = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormElementIdNode.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormElementIdNode.js"() {
     "use strict";
     init_CRMTypes();
     init_ScriptUtilities();
@@ -33393,10 +33398,10 @@ var init_FormElementIdNode = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormControlDependency.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormControlDependency.js
 var FormControlDependency;
 var init_FormControlDependency = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormControlDependency.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormControlDependency.js"() {
     "use strict";
     init_StringUtilities();
     init_FormDesignerConstants();
@@ -33426,10 +33431,10 @@ var init_FormControlDependency = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormEvent.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormEvent.js
 var EventType3, FormEvent;
 var init_FormEvent = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormEvent.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormEvent.js"() {
     "use strict";
     init_ScriptUtilities();
     init_FormControlDependency();
@@ -33538,10 +33543,10 @@ var init_FormEvent = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormControl.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormControl.js
 var FormControl;
 var init_FormControl = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormControl.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormControl.js"() {
     "use strict";
     init_CRMTypes();
     init_Dictionary();
@@ -33943,10 +33948,10 @@ var init_FormControl = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormGridControl.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormGridControl.js
 var FormGridControl;
 var init_FormGridControl = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormGridControl.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormGridControl.js"() {
     "use strict";
     init_StringUtilities();
     init_CCFConstants();
@@ -34117,10 +34122,10 @@ var init_FormGridControl = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormLookupControl.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormLookupControl.js
 var FormLookupControl;
 var init_FormLookupControl = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormLookupControl.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormLookupControl.js"() {
     "use strict";
     init_StringUtilities();
     init_CCFConstants();
@@ -34279,10 +34284,10 @@ var init_FormLookupControl = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormCell.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormCell.js
 var UniqueNameSeparator, FormCell;
 var init_FormCell = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormCell.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormCell.js"() {
     "use strict";
     init_lib4();
     init_FormElementIdNode();
@@ -34715,10 +34720,10 @@ var init_FormCell = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormLibrary.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormLibrary.js
 var FormLibrary;
 var init_FormLibrary = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormLibrary.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormLibrary.js"() {
     "use strict";
     init_StringUtilities();
     init_FormDesignerConstants();
@@ -34773,10 +34778,10 @@ var init_FormLibrary = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormRow.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormRow.js
 var FormRow;
 var init_FormRow = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormRow.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormRow.js"() {
     "use strict";
     init_ScriptUtilities();
     init_FormCell();
@@ -34889,7 +34894,7 @@ var init_FormRow = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormSection.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormSection.js
 function transformLabelAlignment(fieldLabelAlignment) {
   switch (fieldLabelAlignment) {
     case SectionFieldLabelAlignmentTypes.Left:
@@ -34928,7 +34933,7 @@ function transformColumnCount(columnCount) {
 }
 var DefaultSectionLabelWidth, FormSection;
 var init_FormSection = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormSection.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormSection.js"() {
     "use strict";
     init_CRMDescriptors();
     init_CRMTypes();
@@ -35342,10 +35347,10 @@ var init_FormSection = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormColumn.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormColumn.js
 var FormColumn;
 var init_FormColumn = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormColumn.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormColumn.js"() {
     "use strict";
     init_FormDesignerConstants();
     init_FormElementBase();
@@ -35445,10 +35450,10 @@ var init_FormColumn = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormNavigationSection.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormNavigationSection.js
 var FormNavigationSection;
 var init_FormNavigationSection = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormNavigationSection.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormNavigationSection.js"() {
     "use strict";
     init_CRMTypes();
     init_FormDesignerConstants();
@@ -35480,10 +35485,10 @@ var init_FormNavigationSection = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormNavigationColumn.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormNavigationColumn.js
 var FormNavigationColumn;
 var init_FormNavigationColumn = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormNavigationColumn.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormNavigationColumn.js"() {
     "use strict";
     init_FormColumn();
     init_FormDesignerConstants();
@@ -35506,10 +35511,10 @@ var init_FormNavigationColumn = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormTab.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormTab.js
 var FormTab;
 var init_FormTab = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormTab.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormTab.js"() {
     "use strict";
     init_CRMTypes();
     init_ScriptUtilities();
@@ -35751,10 +35756,10 @@ var init_FormTab = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormNavigationTab.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormNavigationTab.js
 var FormNavigationTab;
 var init_FormNavigationTab = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormNavigationTab.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormNavigationTab.js"() {
     "use strict";
     init_CRMTypes();
     init_FormDesignerConstants();
@@ -35829,7 +35834,7 @@ var init_FormNavigationTab = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/Form.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/Form.js
 function transformFormType(formType) {
   switch (formType) {
     // TODO: add more as designer support expands
@@ -35863,7 +35868,7 @@ function getHeaderDensityTypeFromString(headerDensityType, formType) {
 }
 var DefaultWidth, Form;
 var init_Form = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/Form.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/Form.js"() {
     "use strict";
     init_TypedEvent();
     init_lib4();
@@ -36488,10 +36493,10 @@ var init_Form = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormDisplayCondition.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormDisplayCondition.js
 var FormDisplayCondition, EveryOne;
 var init_FormDisplayCondition = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormDisplayCondition.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormDisplayCondition.js"() {
     "use strict";
     init_CRMTypes();
     init_ScriptUtilities();
@@ -36538,10 +36543,10 @@ var init_FormDisplayCondition = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormEventHandler.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormEventHandler.js
 var FormEventHandler;
 var init_FormEventHandler = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormEventHandler.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormEventHandler.js"() {
     "use strict";
     init_FormDesignerConstants();
     init_FormElementBase();
@@ -36639,10 +36644,10 @@ var init_FormEventHandler = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/HeaderFooterModel.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/HeaderFooterModel.js
 var HeaderFooterModel;
 var init_HeaderFooterModel = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/HeaderFooterModel.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/HeaderFooterModel.js"() {
     "use strict";
     init_FormDesignerConstants();
     init_FormSection();
@@ -36681,10 +36686,10 @@ var init_HeaderFooterModel = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormFooter.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormFooter.js
 var FormFooter;
 var init_FormFooter = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormFooter.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormFooter.js"() {
     "use strict";
     init_FormDesignerConstants();
     init_HeaderFooterModel();
@@ -36731,10 +36736,10 @@ var init_FormFooter = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormHeader.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormHeader.js
 var FormHeader;
 var init_FormHeader = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormHeader.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/FormHeader.js"() {
     "use strict";
     init_FormDesignerConstants();
     init_HeaderFooterModel();
@@ -36805,10 +36810,10 @@ var init_FormHeader = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/NavElementBase.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/NavElementBase.js
 var NavElementBase;
 var init_NavElementBase = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/NavElementBase.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/NavElementBase.js"() {
     "use strict";
     init_CRMTypes();
     init_StringUtilities();
@@ -36922,10 +36927,10 @@ var init_NavElementBase = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/RelatedTabConstants.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/RelatedTabConstants.js
 var ErrorCode;
 var init_RelatedTabConstants = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/RelatedTabConstants.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/RelatedTabConstants.js"() {
     "use strict";
     (function(ErrorCode2) {
       ErrorCode2[ErrorCode2["NavLinkNotAvailable"] = -1] = "NavLinkNotAvailable";
@@ -36935,10 +36940,10 @@ var init_RelatedTabConstants = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/NavBar.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/NavBar.js
 var NavBar;
 var init_NavBar = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/NavBar.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/NavBar.js"() {
     "use strict";
     init_ScriptUtilities();
     init_FormDesignerConstants();
@@ -37047,10 +37052,10 @@ var init_NavBar = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/NavBarArea.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/NavBarArea.js
 var TypeNavigationBarArea, navigationBarAreaIds, navigationAreaIdToAreaType, defaultSequenceNumber, NavBarArea;
 var init_NavBarArea = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/NavBarArea.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/NavBarArea.js"() {
     "use strict";
     init_CRMTypes();
     init_FormDesignerConstants();
@@ -37143,10 +37148,10 @@ var init_NavBarArea = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/NavBarAreas.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/NavBarAreas.js
 var NavBarAreas;
 var init_NavBarAreas = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/NavBarAreas.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/NavBarAreas.js"() {
     "use strict";
     init_FormDesignerConstants();
     init_NavElementBase();
@@ -37177,10 +37182,10 @@ var init_NavBarAreas = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/NavBarByRelationship.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/NavBarByRelationship.js
 var NavBarByRelationship;
 var init_NavBarByRelationship = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/NavBarByRelationship.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/NavBarByRelationship.js"() {
     "use strict";
     init_ScriptUtilities();
     init_FormDesignerConstants();
@@ -37248,10 +37253,10 @@ var init_NavBarByRelationship = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/NavBarItem.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/NavBarItem.js
 var NavBarItem;
 var init_NavBarItem = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/NavBarItem.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/NavBarItem.js"() {
     "use strict";
     init_FormDesignerConstants();
     init_NavElementBase();
@@ -37272,10 +37277,10 @@ var init_NavBarItem = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/Navigation.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/Navigation.js
 var Navigation;
 var init_Navigation = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/Navigation.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Models/Form/Navigation.js"() {
     "use strict";
     init_CRMTypes();
     init_FormDesignerConstants();
@@ -37398,7 +37403,7 @@ var init_Navigation = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Services/FormModelServices/DeserializationService.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Services/FormModelServices/DeserializationService.js
 var DeserializationService_exports = {};
 __export(DeserializationService_exports, {
   ControlType: () => ControlType,
@@ -37408,7 +37413,7 @@ __export(DeserializationService_exports, {
 });
 var DeserializedFormElementNode, DeserializationServiceScope, ControlType, DeserializationService;
 var init_DeserializationService = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Services/FormModelServices/DeserializationService.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Services/FormModelServices/DeserializationService.js"() {
     "use strict";
     init_lib4();
     init_CRMTypes();
@@ -37705,7 +37710,7 @@ var init_DeserializationService = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-designer-models/lib/Services/FormModelServices/SerializationService.js
+// ../../../../../power-platform-ux/packages/cds-designer-models/lib/Services/FormModelServices/SerializationService.js
 var SerializationService_exports = {};
 __export(SerializationService_exports, {
   SerializationService: () => SerializationService,
@@ -37714,7 +37719,7 @@ __export(SerializationService_exports, {
 });
 var SerializationServiceScope, SerializedFormElementNode, SerializationService;
 var init_SerializationService = __esm({
-  "../../../power-platform-ux/packages/cds-designer-models/lib/Services/FormModelServices/SerializationService.js"() {
+  "../../../../../power-platform-ux/packages/cds-designer-models/lib/Services/FormModelServices/SerializationService.js"() {
     "use strict";
     init_StringUtilities();
     init_FormElementBase();
@@ -37788,9 +37793,9 @@ var init_SerializationService = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/types/form.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/form.js
 var require_form = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/types/form.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/form.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.FORM_META_KEY = void 0;
@@ -37798,9 +37803,9 @@ var require_form = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/AdapterBase.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/AdapterBase.js
 var require_AdapterBase = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/AdapterBase.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/AdapterBase.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.ArtifactAdapter = void 0;
@@ -37810,9 +37815,9 @@ var require_AdapterBase = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/api/FormApi.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/FormApi.js
 var require_FormApi = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/api/FormApi.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/FormApi.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.formApi = void 0;
@@ -37866,9 +37871,9 @@ var require_FormApi = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/utils/idGenerator.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/utils/idGenerator.js
 var require_idGenerator = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/utils/idGenerator.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/utils/idGenerator.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.assignMissingIds = exports2.newId = void 0;
@@ -37907,9 +37912,9 @@ var require_idGenerator = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@xmldom+xmldom@0.8.13/node_modules/@xmldom/xmldom/lib/conventions.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@xmldom+xmldom@0.8.13/node_modules/@xmldom/xmldom/lib/conventions.js
 var require_conventions = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@xmldom+xmldom@0.8.13/node_modules/@xmldom/xmldom/lib/conventions.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@xmldom+xmldom@0.8.13/node_modules/@xmldom/xmldom/lib/conventions.js"(exports2) {
     "use strict";
     function find4(list, predicate, ac) {
       if (ac === void 0) {
@@ -38046,9 +38051,9 @@ var require_conventions = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@xmldom+xmldom@0.8.13/node_modules/@xmldom/xmldom/lib/dom.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@xmldom+xmldom@0.8.13/node_modules/@xmldom/xmldom/lib/dom.js
 var require_dom = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@xmldom+xmldom@0.8.13/node_modules/@xmldom/xmldom/lib/dom.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@xmldom+xmldom@0.8.13/node_modules/@xmldom/xmldom/lib/dom.js"(exports2) {
     var conventions = require_conventions();
     var find4 = conventions.find;
     var NAMESPACE = conventions.NAMESPACE;
@@ -39597,9 +39602,9 @@ var require_dom = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@xmldom+xmldom@0.8.13/node_modules/@xmldom/xmldom/lib/entities.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@xmldom+xmldom@0.8.13/node_modules/@xmldom/xmldom/lib/entities.js
 var require_entities = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@xmldom+xmldom@0.8.13/node_modules/@xmldom/xmldom/lib/entities.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@xmldom+xmldom@0.8.13/node_modules/@xmldom/xmldom/lib/entities.js"(exports2) {
     "use strict";
     var freeze = require_conventions().freeze;
     exports2.XML_ENTITIES = freeze({
@@ -41740,9 +41745,9 @@ var require_entities = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@xmldom+xmldom@0.8.13/node_modules/@xmldom/xmldom/lib/sax.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@xmldom+xmldom@0.8.13/node_modules/@xmldom/xmldom/lib/sax.js
 var require_sax = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@xmldom+xmldom@0.8.13/node_modules/@xmldom/xmldom/lib/sax.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@xmldom+xmldom@0.8.13/node_modules/@xmldom/xmldom/lib/sax.js"(exports2) {
     var NAMESPACE = require_conventions().NAMESPACE;
     var nameStartChar = /[A-Z_a-z\xC0-\xD6\xD8-\xF6\u00F8-\u02FF\u0370-\u037D\u037F-\u1FFF\u200C-\u200D\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD]/;
     var nameChar = new RegExp("[\\-\\.0-9" + nameStartChar.source.slice(1, -1) + "\\u00B7\\u0300-\\u036F\\u203F-\\u2040]");
@@ -42329,9 +42334,9 @@ var require_sax = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@xmldom+xmldom@0.8.13/node_modules/@xmldom/xmldom/lib/dom-parser.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@xmldom+xmldom@0.8.13/node_modules/@xmldom/xmldom/lib/dom-parser.js
 var require_dom_parser = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@xmldom+xmldom@0.8.13/node_modules/@xmldom/xmldom/lib/dom-parser.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@xmldom+xmldom@0.8.13/node_modules/@xmldom/xmldom/lib/dom-parser.js"(exports2) {
     var conventions = require_conventions();
     var dom = require_dom();
     var entities = require_entities();
@@ -42545,9 +42550,9 @@ var require_dom_parser = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@xmldom+xmldom@0.8.13/node_modules/@xmldom/xmldom/lib/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@xmldom+xmldom@0.8.13/node_modules/@xmldom/xmldom/lib/index.js
 var require_lib4 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@xmldom+xmldom@0.8.13/node_modules/@xmldom/xmldom/lib/index.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@xmldom+xmldom@0.8.13/node_modules/@xmldom/xmldom/lib/index.js"(exports2) {
     var dom = require_dom();
     exports2.DOMImplementation = dom.DOMImplementation;
     exports2.XMLSerializer = dom.XMLSerializer;
@@ -42555,9 +42560,9 @@ var require_lib4 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/platform/domShim.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/platform/domShim.js
 var require_domShim = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/platform/domShim.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/platform/domShim.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.installDomShim = void 0;
@@ -42597,12 +42602,12 @@ var require_domShim = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/FormAdapter.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/FormAdapter.js
 var require_FormAdapter = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/FormAdapter.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/FormAdapter.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
-    exports2.addFormEventHandler = exports2.addSubGridToForm = exports2.SUBGRID_CLASS_ID = exports2.formRegistration = exports2.FormAdapter = void 0;
+    exports2.addCustomControlToForm = exports2.addFormEventHandler = exports2.addSubGridToForm = exports2.SUBGRID_CLASS_ID = exports2.formRegistration = exports2.FormAdapter = void 0;
     var CRMTypes_1 = (init_CRMTypes(), __toCommonJS(CRMTypes_exports));
     var ScriptUtilities_1 = (init_ScriptUtilities(), __toCommonJS(ScriptUtilities_exports));
     var FormDesignerConstants_1 = (init_FormDesignerConstants(), __toCommonJS(FormDesignerConstants_exports));
@@ -43166,12 +43171,86 @@ var require_FormAdapter = __commonJS({
       return json;
     }
     exports2.addFormEventHandler = addFormEventHandler;
+    function findControlByField(doc, fieldName) {
+      const controls = doc.getElementsByTagName("control");
+      for (let i = 0; i < controls.length; i += 1) {
+        if (controls[i].getAttribute("datafieldname") === fieldName) {
+          return controls[i];
+        }
+      }
+      return void 0;
+    }
+    function importXml(doc, xml) {
+      const parsed = new DOMParser().parseFromString(xml, "text/xml");
+      return doc.importNode ? doc.importNode(parsed.documentElement, true) : parsed.documentElement;
+    }
+    function pcfCustomControlXml(options, formFactor) {
+      var _a;
+      const boundProperty = options.boundProperty || "value";
+      const params = (_a = options.parameters) !== null && _a !== void 0 ? _a : {};
+      const extra = Object.keys(params).map((key) => `<${key}>${esc(params[key])}</${key}>`).join("");
+      return `<customControl name="${esc(options.controlName)}" formFactor="${formFactor}"><parameters><${boundProperty}>${esc(options.fieldName)}</${boundProperty}>${extra}</parameters></customControl>`;
+    }
+    function defaultCustomControlXml(classId, fieldName, formFactor) {
+      return `<customControl id="${braced(classId)}" formFactor="${formFactor}"><parameters><datafieldname>${esc(fieldName)}</datafieldname></parameters></customControl>`;
+    }
+    function addCustomControlToForm(json, options) {
+      var _a;
+      (0, domShim_1.installDomShim)();
+      const meta = json[form_1.FORM_META_KEY];
+      if (!(meta === null || meta === void 0 ? void 0 : meta.formxml)) {
+        throw new Error("addCustomControl: form has no $meta.formxml \u2014 fetch (or push) the form first");
+      }
+      const doc = new DOMParser().parseFromString(meta.formxml, "text/xml");
+      const form = doc.documentElement;
+      const control = findControlByField(doc, options.fieldName);
+      if (!control) {
+        throw new Error(`addCustomControl: field '${options.fieldName}' is not on the form \u2014 add the column to a section first`);
+      }
+      let uniqueId = control.getAttribute("uniqueid") || "";
+      if (!uniqueId) {
+        uniqueId = braced(CRMTypes_1.Guid.NewGuid());
+        control.setAttribute("uniqueid", uniqueId);
+      }
+      const forControl = braced(uniqueId);
+      const classId = control.getAttribute("classid") || "";
+      let descriptions = directChild(form, "controlDescriptions");
+      if (!descriptions) {
+        descriptions = doc.createElement("controlDescriptions");
+        form.appendChild(descriptions);
+      }
+      const wanted = forControl.replace(/[{}]/g, "").toLowerCase();
+      let description = Array.from(descriptions.getElementsByTagName("controlDescription")).find((d) => (d.getAttribute("forControl") || "").replace(/[{}]/g, "").toLowerCase() === wanted);
+      if (!description) {
+        description = doc.createElement("controlDescription");
+        description.setAttribute("forControl", forControl);
+        descriptions.appendChild(description);
+      }
+      const formFactors = options.formFactors && options.formFactors.length > 0 ? options.formFactors : [2];
+      const existing = Array.from(description.getElementsByTagName("customControl"));
+      const byFactor = (ff) => existing.filter((c) => (c.getAttribute("formFactor") || "") === String(ff));
+      for (const ff of formFactors) {
+        byFactor(ff).forEach((c) => description === null || description === void 0 ? void 0 : description.removeChild(c));
+        description.appendChild(importXml(doc, pcfCustomControlXml(options, ff)));
+      }
+      if (((_a = options.keepDefaultFallback) !== null && _a !== void 0 ? _a : true) && classId) {
+        for (const ff of [0, 1]) {
+          if (formFactors.includes(ff) || byFactor(ff).length > 0) {
+            continue;
+          }
+          description.appendChild(importXml(doc, defaultCustomControlXml(classId, options.fieldName, ff)));
+        }
+      }
+      meta.formxml = new XMLSerializer().serializeToString(doc);
+      return json;
+    }
+    exports2.addCustomControlToForm = addCustomControlToForm;
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/api/ViewApi.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/ViewApi.js
 var require_ViewApi = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/api/ViewApi.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/ViewApi.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.viewApi = void 0;
@@ -43255,9 +43334,9 @@ var require_ViewApi = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/ViewAdapter.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/ViewAdapter.js
 var require_ViewAdapter = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/ViewAdapter.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/ViewAdapter.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.viewRegistration = exports2.ViewAdapter = void 0;
@@ -43633,9 +43712,9 @@ var require_ViewAdapter = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-apis/lib/contracts/cds/object-model/pbl-enums.js
+// ../../../../../power-platform-ux/packages/powerapps-apis/lib/contracts/cds/object-model/pbl-enums.js
 var require_pbl_enums = __commonJS({
-  "../../../power-platform-ux/packages/powerapps-apis/lib/contracts/cds/object-model/pbl-enums.js"(exports2) {
+  "../../../../../power-platform-ux/packages/powerapps-apis/lib/contracts/cds/object-model/pbl-enums.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.WorkflowConditionOperator = exports2.WorkflowAttributeType = exports2.SystemStep = exports2.FieldRequiredLevelTypes = exports2.AttributeDateTimeBehavior = void 0;
@@ -43743,7 +43822,7 @@ var require_pbl_enums = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-business-rule-designer/lib/services/workflowJsonMapper.js
+// ../../../../../power-platform-ux/packages/cds-business-rule-designer/lib/services/workflowJsonMapper.js
 var workflowJsonMapper_exports = {};
 __export(workflowJsonMapper_exports, {
   deserializeWorkflowJson: () => deserializeWorkflowJson,
@@ -44241,7 +44320,7 @@ function serializeToWorkflowJson(rule) {
 }
 var import_EnumTypes2, import_pbl_enums, CLAUSE_OPERATOR_TO_PBL, PBL_TO_CLAUSE_OPERATOR;
 var init_workflowJsonMapper = __esm({
-  "../../../power-platform-ux/packages/cds-business-rule-designer/lib/services/workflowJsonMapper.js"() {
+  "../../../../../power-platform-ux/packages/cds-business-rule-designer/lib/services/workflowJsonMapper.js"() {
     "use strict";
     init_esm_node();
     import_EnumTypes2 = __toESM(require_EnumTypes());
@@ -44271,7 +44350,7 @@ var init_workflowJsonMapper = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-business-rule-designer/lib/utils/operatorUtils.js
+// ../../../../../power-platform-ux/packages/cds-business-rule-designer/lib/utils/operatorUtils.js
 function operatorNeedsValue(operator) {
   return !NO_VALUE_OPERATORS.has(operator);
 }
@@ -44306,7 +44385,7 @@ function areFieldKindsCompatible(targetType, candidateType) {
 }
 var NO_VALUE_OPERATORS, STRING_TYPES, DATE_TYPES, BOOLEAN_TYPES;
 var init_operatorUtils = __esm({
-  "../../../power-platform-ux/packages/cds-business-rule-designer/lib/utils/operatorUtils.js"() {
+  "../../../../../power-platform-ux/packages/cds-business-rule-designer/lib/utils/operatorUtils.js"() {
     "use strict";
     NO_VALUE_OPERATORS = /* @__PURE__ */ new Set([
       "ContainsData",
@@ -44318,7 +44397,7 @@ var init_operatorUtils = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-business-rule-designer/lib/store/rule/treeUtils.js
+// ../../../../../power-platform-ux/packages/cds-business-rule-designer/lib/store/rule/treeUtils.js
 var treeUtils_exports = {};
 __export(treeUtils_exports, {
   appendToBranch: () => appendToBranch,
@@ -44680,7 +44759,7 @@ function findPath(node, targetId, path) {
 }
 var TRIGGER_GENERATING_ACTION_TYPES;
 var init_treeUtils = __esm({
-  "../../../power-platform-ux/packages/cds-business-rule-designer/lib/store/rule/treeUtils.js"() {
+  "../../../../../power-platform-ux/packages/cds-business-rule-designer/lib/store/rule/treeUtils.js"() {
     "use strict";
     init_esm_node();
     init_operatorUtils();
@@ -44695,9 +44774,9 @@ var init_treeUtils = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/api/BusinessRuleApi.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/BusinessRuleApi.js
 var require_BusinessRuleApi = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/api/BusinessRuleApi.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/BusinessRuleApi.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.businessRuleApi = void 0;
@@ -44772,9 +44851,9 @@ var require_BusinessRuleApi = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/BusinessRuleAdapter.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/BusinessRuleAdapter.js
 var require_BusinessRuleAdapter = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/BusinessRuleAdapter.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/BusinessRuleAdapter.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.BUSINESS_RULE_NULL_GUID = exports2.businessRuleRegistration = exports2.BusinessRuleAdapter = void 0;
@@ -45032,7 +45111,7 @@ var require_BusinessRuleAdapter = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/makeSiteMapTelemetryObject.js
+// ../../../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/makeSiteMapTelemetryObject.js
 function makeSiteMapTelemetryObject(siteMapXml) {
   return {
     areaCount: siteMapXml?.Area?.length ?? 0,
@@ -45051,22 +45130,22 @@ function makeSiteMapTelemetryObject(siteMapXml) {
   };
 }
 var init_makeSiteMapTelemetryObject = __esm({
-  "../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/makeSiteMapTelemetryObject.js"() {
+  "../../../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/makeSiteMapTelemetryObject.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/cds-app-service/lib/utilities/element/isElementNode.js
+// ../../../../../power-platform-ux/packages/cds-app-service/lib/utilities/element/isElementNode.js
 function isElementNode(node) {
   return node.nodeType === Node.ELEMENT_NODE;
 }
 var init_isElementNode = __esm({
-  "../../../power-platform-ux/packages/cds-app-service/lib/utilities/element/isElementNode.js"() {
+  "../../../../../power-platform-ux/packages/cds-app-service/lib/utilities/element/isElementNode.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/utils/hex.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/utils/hex.js
 function generateHexString(length) {
   let str = "";
   for (let i = 0; i < length; i++) {
@@ -45076,13 +45155,13 @@ function generateHexString(length) {
 }
 var hexCharacters;
 var init_hex = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/utils/hex.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/utils/hex.js"() {
     "use strict";
     hexCharacters = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "a", "b", "c", "d", "e", "f"];
   }
 });
 
-// ../../../power-platform-ux/packages/cds-app-service/lib/utilities/string.js
+// ../../../../../power-platform-ux/packages/cds-app-service/lib/utilities/string.js
 function isNullOrEmpty(str) {
   return !str;
 }
@@ -45096,15 +45175,15 @@ function escapeXml(input) {
   return input;
 }
 var init_string = __esm({
-  "../../../power-platform-ux/packages/cds-app-service/lib/utilities/string.js"() {
+  "../../../../../power-platform-ux/packages/cds-app-service/lib/utilities/string.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/model/nodeTypes.js
+// ../../../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/model/nodeTypes.js
 var NodeTypes, nodeTypes_default;
 var init_nodeTypes = __esm({
-  "../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/model/nodeTypes.js"() {
+  "../../../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/model/nodeTypes.js"() {
     "use strict";
     (function(NodeTypes2) {
       NodeTypes2[NodeTypes2["Area"] = 0] = "Area";
@@ -45132,7 +45211,7 @@ var init_nodeTypes = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/parsingService.js
+// ../../../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/parsingService.js
 function getUniqueDesignerId(node, nodeDesignerIds) {
   let designerId = node.Id;
   while (nodeDesignerIds.has(designerId)) {
@@ -45218,7 +45297,7 @@ function convertPdmXmlToJson(xmlDoc) {
   return jsonObj;
 }
 var init_parsingService = __esm({
-  "../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/parsingService.js"() {
+  "../../../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/parsingService.js"() {
     "use strict";
     init_isElementNode();
     init_hex();
@@ -45227,7 +45306,7 @@ var init_parsingService = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/deserializeSiteMap.js
+// ../../../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/deserializeSiteMap.js
 var deserializeSiteMap_exports = {};
 __export(deserializeSiteMap_exports, {
   deserializePropertiesDirectiveMappingXml: () => deserializePropertiesDirectiveMappingXml,
@@ -45253,24 +45332,24 @@ function deserializePropertiesDirectiveMappingXml(pdmXml) {
   return pdMapping;
 }
 var init_deserializeSiteMap = __esm({
-  "../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/deserializeSiteMap.js"() {
+  "../../../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/deserializeSiteMap.js"() {
     "use strict";
     init_makeSiteMapTelemetryObject();
     init_parsingService();
   }
 });
 
-// ../../../power-platform-ux/packages/cds-app-service/lib/utilities/misc/isNullOrUndefined.js
+// ../../../../../power-platform-ux/packages/cds-app-service/lib/utilities/misc/isNullOrUndefined.js
 function isNullOrUndefined(value) {
   return value === null || value === void 0;
 }
 var init_isNullOrUndefined = __esm({
-  "../../../power-platform-ux/packages/cds-app-service/lib/utilities/misc/isNullOrUndefined.js"() {
+  "../../../../../power-platform-ux/packages/cds-app-service/lib/utilities/misc/isNullOrUndefined.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/serializeSiteMap.js
+// ../../../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/serializeSiteMap.js
 var serializeSiteMap_exports = {};
 __export(serializeSiteMap_exports, {
   SiteMapSerializer: () => SiteMapSerializer,
@@ -45288,7 +45367,7 @@ function serializeSiteMap(siteMapXml, serializeScenario, xmlSerializer, telemetr
 }
 var emptyString, SiteMapSerializer;
 var init_serializeSiteMap = __esm({
-  "../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/serializeSiteMap.js"() {
+  "../../../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/serializeSiteMap.js"() {
     "use strict";
     init_isNullOrUndefined();
     init_string();
@@ -45520,32 +45599,32 @@ var init_serializeSiteMap = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/model/siteMapXml.js
+// ../../../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/model/siteMapXml.js
 var siteMapXml_exports = {};
 __export(siteMapXml_exports, {
   defaultSiteMapXmlVersion: () => defaultSiteMapXmlVersion
 });
 var defaultSiteMapXmlVersion;
 var init_siteMapXml = __esm({
-  "../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/model/siteMapXml.js"() {
+  "../../../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/model/siteMapXml.js"() {
     "use strict";
     defaultSiteMapXmlVersion = "7.0.0.0";
   }
 });
 
-// ../../../power-platform-ux/packages/cds-app-service/lib/utilities/types/writeable.js
+// ../../../../../power-platform-ux/packages/cds-app-service/lib/utilities/types/writeable.js
 function writeable(obj) {
   return obj;
 }
 var init_writeable = __esm({
-  "../../../power-platform-ux/packages/cds-app-service/lib/utilities/types/writeable.js"() {
+  "../../../../../power-platform-ux/packages/cds-app-service/lib/utilities/types/writeable.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/cds-app-service/lib/services/dashboard/pageUrls.js
+// ../../../../../power-platform-ux/packages/cds-app-service/lib/services/dashboard/pageUrls.js
 var init_pageUrls = __esm({
-  "../../../power-platform-ux/packages/cds-app-service/lib/services/dashboard/pageUrls.js"() {
+  "../../../../../power-platform-ux/packages/cds-app-service/lib/services/dashboard/pageUrls.js"() {
     "use strict";
   }
 });
@@ -45606,9 +45685,9 @@ var require_CaeHelper = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/bind.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/bind.js
 var require_bind = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/bind.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/bind.js"(exports2, module2) {
     "use strict";
     module2.exports = function bind(fn, thisArg) {
       return function wrap() {
@@ -45618,9 +45697,9 @@ var require_bind = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/utils.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/utils.js
 var require_utils4 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/utils.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/utils.js"(exports2, module2) {
     "use strict";
     var bind = require_bind();
     var toString = Object.prototype.toString;
@@ -45888,17 +45967,17 @@ var require_utils4 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/defaultRedactKeys.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/defaultRedactKeys.js
 var require_defaultRedactKeys = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/defaultRedactKeys.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/defaultRedactKeys.js"(exports2, module2) {
     "use strict";
     module2.exports = ["authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key", "password"];
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/AxiosError.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/AxiosError.js
 var require_AxiosError = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/AxiosError.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/AxiosError.js"(exports2, module2) {
     "use strict";
     var utils = require_utils4();
     var DEFAULT_REDACT_KEYS = require_defaultRedactKeys();
@@ -46032,9 +46111,9 @@ var require_AxiosError = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/delayed-stream@1.0.0/node_modules/delayed-stream/lib/delayed_stream.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/delayed-stream@1.0.0/node_modules/delayed-stream/lib/delayed_stream.js
 var require_delayed_stream = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/delayed-stream@1.0.0/node_modules/delayed-stream/lib/delayed_stream.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/delayed-stream@1.0.0/node_modules/delayed-stream/lib/delayed_stream.js"(exports2, module2) {
     var Stream = require("stream").Stream;
     var util = require("util");
     module2.exports = DelayedStream;
@@ -46123,9 +46202,9 @@ var require_delayed_stream = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/combined-stream@1.0.9/node_modules/combined-stream/lib/combined_stream.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/combined-stream@1.0.9/node_modules/combined-stream/lib/combined_stream.js
 var require_combined_stream = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/combined-stream@1.0.9/node_modules/combined-stream/lib/combined_stream.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/combined-stream@1.0.9/node_modules/combined-stream/lib/combined_stream.js"(exports2, module2) {
     var util = require("util");
     var Stream = require("stream").Stream;
     var DelayedStream = require_delayed_stream();
@@ -46292,9 +46371,9 @@ var require_combined_stream = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/mime-db@1.52.0/node_modules/mime-db/db.json
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/mime-db@1.52.0/node_modules/mime-db/db.json
 var require_db = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/mime-db@1.52.0/node_modules/mime-db/db.json"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/mime-db@1.52.0/node_modules/mime-db/db.json"(exports2, module2) {
     module2.exports = {
       "application/1d-interleaved-parityfec": {
         source: "iana"
@@ -54817,16 +54896,16 @@ var require_db = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/mime-db@1.52.0/node_modules/mime-db/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/mime-db@1.52.0/node_modules/mime-db/index.js
 var require_mime_db = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/mime-db@1.52.0/node_modules/mime-db/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/mime-db@1.52.0/node_modules/mime-db/index.js"(exports2, module2) {
     module2.exports = require_db();
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/mime-types@2.1.35/node_modules/mime-types/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/mime-types@2.1.35/node_modules/mime-types/index.js
 var require_mime_types = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/mime-types@2.1.35/node_modules/mime-types/index.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/mime-types@2.1.35/node_modules/mime-types/index.js"(exports2) {
     "use strict";
     var db = require_mime_db();
     var extname = require("path").extname;
@@ -54914,9 +54993,9 @@ var require_mime_types = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/lib/defer.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/lib/defer.js
 var require_defer = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/lib/defer.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/lib/defer.js"(exports2, module2) {
     module2.exports = defer3;
     function defer3(fn) {
       var nextTick = typeof setImmediate == "function" ? setImmediate : typeof process == "object" && typeof process.nextTick == "function" ? process.nextTick : null;
@@ -54929,9 +55008,9 @@ var require_defer = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/lib/async.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/lib/async.js
 var require_async = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/lib/async.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/lib/async.js"(exports2, module2) {
     var defer3 = require_defer();
     module2.exports = async;
     function async(callback) {
@@ -54952,9 +55031,9 @@ var require_async = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/lib/abort.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/lib/abort.js
 var require_abort = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/lib/abort.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/lib/abort.js"(exports2, module2) {
     module2.exports = abort;
     function abort(state) {
       Object.keys(state.jobs).forEach(clean.bind(state));
@@ -54968,9 +55047,9 @@ var require_abort = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/lib/iterate.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/lib/iterate.js
 var require_iterate = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/lib/iterate.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/lib/iterate.js"(exports2, module2) {
     var async = require_async();
     var abort = require_abort();
     module2.exports = iterate;
@@ -55001,9 +55080,9 @@ var require_iterate = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/lib/state.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/lib/state.js
 var require_state = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/lib/state.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/lib/state.js"(exports2, module2) {
     module2.exports = state;
     function state(list, sortMethod) {
       var isNamedList = !Array.isArray(list), initState = {
@@ -55023,9 +55102,9 @@ var require_state = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/lib/terminator.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/lib/terminator.js
 var require_terminator = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/lib/terminator.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/lib/terminator.js"(exports2, module2) {
     var abort = require_abort();
     var async = require_async();
     module2.exports = terminator;
@@ -55040,9 +55119,9 @@ var require_terminator = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/parallel.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/parallel.js
 var require_parallel = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/parallel.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/parallel.js"(exports2, module2) {
     var iterate = require_iterate();
     var initState = require_state();
     var terminator = require_terminator();
@@ -55067,9 +55146,9 @@ var require_parallel = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/serialOrdered.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/serialOrdered.js
 var require_serialOrdered = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/serialOrdered.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/serialOrdered.js"(exports2, module2) {
     var iterate = require_iterate();
     var initState = require_state();
     var terminator = require_terminator();
@@ -55101,9 +55180,9 @@ var require_serialOrdered = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/serial.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/serial.js
 var require_serial = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/serial.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/serial.js"(exports2, module2) {
     var serialOrdered = require_serialOrdered();
     module2.exports = serial;
     function serial(list, iterator, callback) {
@@ -55112,9 +55191,9 @@ var require_serial = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/index.js
 var require_asynckit = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/asynckit@0.4.0/node_modules/asynckit/index.js"(exports2, module2) {
     module2.exports = {
       parallel: require_parallel(),
       serial: require_serial(),
@@ -55123,121 +55202,121 @@ var require_asynckit = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/es-object-atoms@1.1.1/node_modules/es-object-atoms/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/es-object-atoms@1.1.1/node_modules/es-object-atoms/index.js
 var require_es_object_atoms = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/es-object-atoms@1.1.1/node_modules/es-object-atoms/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/es-object-atoms@1.1.1/node_modules/es-object-atoms/index.js"(exports2, module2) {
     "use strict";
     module2.exports = Object;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/index.js
 var require_es_errors = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/index.js"(exports2, module2) {
     "use strict";
     module2.exports = Error;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/eval.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/eval.js
 var require_eval = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/eval.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/eval.js"(exports2, module2) {
     "use strict";
     module2.exports = EvalError;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/range.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/range.js
 var require_range = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/range.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/range.js"(exports2, module2) {
     "use strict";
     module2.exports = RangeError;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/ref.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/ref.js
 var require_ref = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/ref.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/ref.js"(exports2, module2) {
     "use strict";
     module2.exports = ReferenceError;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/syntax.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/syntax.js
 var require_syntax = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/syntax.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/syntax.js"(exports2, module2) {
     "use strict";
     module2.exports = SyntaxError;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/type.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/type.js
 var require_type = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/type.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/type.js"(exports2, module2) {
     "use strict";
     module2.exports = TypeError;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/uri.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/uri.js
 var require_uri = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/uri.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/es-errors@1.3.0/node_modules/es-errors/uri.js"(exports2, module2) {
     "use strict";
     module2.exports = URIError;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/abs.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/abs.js
 var require_abs = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/abs.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/abs.js"(exports2, module2) {
     "use strict";
     module2.exports = Math.abs;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/floor.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/floor.js
 var require_floor = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/floor.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/floor.js"(exports2, module2) {
     "use strict";
     module2.exports = Math.floor;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/max.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/max.js
 var require_max = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/max.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/max.js"(exports2, module2) {
     "use strict";
     module2.exports = Math.max;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/min.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/min.js
 var require_min = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/min.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/min.js"(exports2, module2) {
     "use strict";
     module2.exports = Math.min;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/pow.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/pow.js
 var require_pow = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/pow.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/pow.js"(exports2, module2) {
     "use strict";
     module2.exports = Math.pow;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/round.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/round.js
 var require_round = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/round.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/round.js"(exports2, module2) {
     "use strict";
     module2.exports = Math.round;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/isNaN.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/isNaN.js
 var require_isNaN = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/isNaN.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/isNaN.js"(exports2, module2) {
     "use strict";
     module2.exports = Number.isNaN || function isNaN2(a) {
       return a !== a;
@@ -55245,9 +55324,9 @@ var require_isNaN = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/sign.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/sign.js
 var require_sign = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/sign.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/math-intrinsics@1.1.0/node_modules/math-intrinsics/sign.js"(exports2, module2) {
     "use strict";
     var $isNaN = require_isNaN();
     module2.exports = function sign(number) {
@@ -55259,17 +55338,17 @@ var require_sign = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/gopd@1.2.0/node_modules/gopd/gOPD.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/gopd@1.2.0/node_modules/gopd/gOPD.js
 var require_gOPD = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/gopd@1.2.0/node_modules/gopd/gOPD.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/gopd@1.2.0/node_modules/gopd/gOPD.js"(exports2, module2) {
     "use strict";
     module2.exports = Object.getOwnPropertyDescriptor;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/gopd@1.2.0/node_modules/gopd/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/gopd@1.2.0/node_modules/gopd/index.js
 var require_gopd = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/gopd@1.2.0/node_modules/gopd/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/gopd@1.2.0/node_modules/gopd/index.js"(exports2, module2) {
     "use strict";
     var $gOPD = require_gOPD();
     if ($gOPD) {
@@ -55283,9 +55362,9 @@ var require_gopd = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/es-define-property@1.0.1/node_modules/es-define-property/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/es-define-property@1.0.1/node_modules/es-define-property/index.js
 var require_es_define_property = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/es-define-property@1.0.1/node_modules/es-define-property/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/es-define-property@1.0.1/node_modules/es-define-property/index.js"(exports2, module2) {
     "use strict";
     var $defineProperty = Object.defineProperty || false;
     if ($defineProperty) {
@@ -55299,9 +55378,9 @@ var require_es_define_property = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/has-symbols@1.1.0/node_modules/has-symbols/shams.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/has-symbols@1.1.0/node_modules/has-symbols/shams.js
 var require_shams = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/has-symbols@1.1.0/node_modules/has-symbols/shams.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/has-symbols@1.1.0/node_modules/has-symbols/shams.js"(exports2, module2) {
     "use strict";
     module2.exports = function hasSymbols() {
       if (typeof Symbol !== "function" || typeof Object.getOwnPropertySymbols !== "function") {
@@ -55354,9 +55433,9 @@ var require_shams = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/has-symbols@1.1.0/node_modules/has-symbols/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/has-symbols@1.1.0/node_modules/has-symbols/index.js
 var require_has_symbols = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/has-symbols@1.1.0/node_modules/has-symbols/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/has-symbols@1.1.0/node_modules/has-symbols/index.js"(exports2, module2) {
     "use strict";
     var origSymbol = typeof Symbol !== "undefined" && Symbol;
     var hasSymbolSham = require_shams();
@@ -55378,26 +55457,26 @@ var require_has_symbols = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/get-proto@1.0.1/node_modules/get-proto/Reflect.getPrototypeOf.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/get-proto@1.0.1/node_modules/get-proto/Reflect.getPrototypeOf.js
 var require_Reflect_getPrototypeOf = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/get-proto@1.0.1/node_modules/get-proto/Reflect.getPrototypeOf.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/get-proto@1.0.1/node_modules/get-proto/Reflect.getPrototypeOf.js"(exports2, module2) {
     "use strict";
     module2.exports = typeof Reflect !== "undefined" && Reflect.getPrototypeOf || null;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/get-proto@1.0.1/node_modules/get-proto/Object.getPrototypeOf.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/get-proto@1.0.1/node_modules/get-proto/Object.getPrototypeOf.js
 var require_Object_getPrototypeOf = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/get-proto@1.0.1/node_modules/get-proto/Object.getPrototypeOf.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/get-proto@1.0.1/node_modules/get-proto/Object.getPrototypeOf.js"(exports2, module2) {
     "use strict";
     var $Object = require_es_object_atoms();
     module2.exports = $Object.getPrototypeOf || null;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/function-bind@1.1.2/node_modules/function-bind/implementation.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/function-bind@1.1.2/node_modules/function-bind/implementation.js
 var require_implementation = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/function-bind@1.1.2/node_modules/function-bind/implementation.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/function-bind@1.1.2/node_modules/function-bind/implementation.js"(exports2, module2) {
     "use strict";
     var ERROR_MESSAGE = "Function.prototype.bind called on incompatible ";
     var toStr = Object.prototype.toString;
@@ -55471,42 +55550,42 @@ var require_implementation = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/function-bind@1.1.2/node_modules/function-bind/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/function-bind@1.1.2/node_modules/function-bind/index.js
 var require_function_bind = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/function-bind@1.1.2/node_modules/function-bind/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/function-bind@1.1.2/node_modules/function-bind/index.js"(exports2, module2) {
     "use strict";
     var implementation = require_implementation();
     module2.exports = Function.prototype.bind || implementation;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/call-bind-apply-helpers@1.0.2/node_modules/call-bind-apply-helpers/functionCall.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/call-bind-apply-helpers@1.0.2/node_modules/call-bind-apply-helpers/functionCall.js
 var require_functionCall = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/call-bind-apply-helpers@1.0.2/node_modules/call-bind-apply-helpers/functionCall.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/call-bind-apply-helpers@1.0.2/node_modules/call-bind-apply-helpers/functionCall.js"(exports2, module2) {
     "use strict";
     module2.exports = Function.prototype.call;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/call-bind-apply-helpers@1.0.2/node_modules/call-bind-apply-helpers/functionApply.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/call-bind-apply-helpers@1.0.2/node_modules/call-bind-apply-helpers/functionApply.js
 var require_functionApply = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/call-bind-apply-helpers@1.0.2/node_modules/call-bind-apply-helpers/functionApply.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/call-bind-apply-helpers@1.0.2/node_modules/call-bind-apply-helpers/functionApply.js"(exports2, module2) {
     "use strict";
     module2.exports = Function.prototype.apply;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/call-bind-apply-helpers@1.0.2/node_modules/call-bind-apply-helpers/reflectApply.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/call-bind-apply-helpers@1.0.2/node_modules/call-bind-apply-helpers/reflectApply.js
 var require_reflectApply = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/call-bind-apply-helpers@1.0.2/node_modules/call-bind-apply-helpers/reflectApply.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/call-bind-apply-helpers@1.0.2/node_modules/call-bind-apply-helpers/reflectApply.js"(exports2, module2) {
     "use strict";
     module2.exports = typeof Reflect !== "undefined" && Reflect && Reflect.apply;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/call-bind-apply-helpers@1.0.2/node_modules/call-bind-apply-helpers/actualApply.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/call-bind-apply-helpers@1.0.2/node_modules/call-bind-apply-helpers/actualApply.js
 var require_actualApply = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/call-bind-apply-helpers@1.0.2/node_modules/call-bind-apply-helpers/actualApply.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/call-bind-apply-helpers@1.0.2/node_modules/call-bind-apply-helpers/actualApply.js"(exports2, module2) {
     "use strict";
     var bind = require_function_bind();
     var $apply = require_functionApply();
@@ -55516,9 +55595,9 @@ var require_actualApply = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/call-bind-apply-helpers@1.0.2/node_modules/call-bind-apply-helpers/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/call-bind-apply-helpers@1.0.2/node_modules/call-bind-apply-helpers/index.js
 var require_call_bind_apply_helpers = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/call-bind-apply-helpers@1.0.2/node_modules/call-bind-apply-helpers/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/call-bind-apply-helpers@1.0.2/node_modules/call-bind-apply-helpers/index.js"(exports2, module2) {
     "use strict";
     var bind = require_function_bind();
     var $TypeError = require_type();
@@ -55533,9 +55612,9 @@ var require_call_bind_apply_helpers = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/dunder-proto@1.0.1/node_modules/dunder-proto/get.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/dunder-proto@1.0.1/node_modules/dunder-proto/get.js
 var require_get = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/dunder-proto@1.0.1/node_modules/dunder-proto/get.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/dunder-proto@1.0.1/node_modules/dunder-proto/get.js"(exports2, module2) {
     "use strict";
     var callBind = require_call_bind_apply_helpers();
     var gOPD = require_gopd();
@@ -55564,9 +55643,9 @@ var require_get = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/get-proto@1.0.1/node_modules/get-proto/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/get-proto@1.0.1/node_modules/get-proto/index.js
 var require_get_proto = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/get-proto@1.0.1/node_modules/get-proto/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/get-proto@1.0.1/node_modules/get-proto/index.js"(exports2, module2) {
     "use strict";
     var reflectGetProto = require_Reflect_getPrototypeOf();
     var originalGetProto = require_Object_getPrototypeOf();
@@ -55584,9 +55663,9 @@ var require_get_proto = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/hasown@2.0.2/node_modules/hasown/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/hasown@2.0.2/node_modules/hasown/index.js
 var require_hasown = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/hasown@2.0.2/node_modules/hasown/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/hasown@2.0.2/node_modules/hasown/index.js"(exports2, module2) {
     "use strict";
     var call = Function.prototype.call;
     var $hasOwn = Object.prototype.hasOwnProperty;
@@ -55595,9 +55674,9 @@ var require_hasown = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/get-intrinsic@1.3.0/node_modules/get-intrinsic/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/get-intrinsic@1.3.0/node_modules/get-intrinsic/index.js
 var require_get_intrinsic = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/get-intrinsic@1.3.0/node_modules/get-intrinsic/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/get-intrinsic@1.3.0/node_modules/get-intrinsic/index.js"(exports2, module2) {
     "use strict";
     var undefined2;
     var $Object = require_es_object_atoms();
@@ -55926,9 +56005,9 @@ var require_get_intrinsic = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/has-tostringtag@1.0.2/node_modules/has-tostringtag/shams.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/has-tostringtag@1.0.2/node_modules/has-tostringtag/shams.js
 var require_shams2 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/has-tostringtag@1.0.2/node_modules/has-tostringtag/shams.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/has-tostringtag@1.0.2/node_modules/has-tostringtag/shams.js"(exports2, module2) {
     "use strict";
     var hasSymbols = require_shams();
     module2.exports = function hasToStringTagShams() {
@@ -55937,9 +56016,9 @@ var require_shams2 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/es-set-tostringtag@2.1.0/node_modules/es-set-tostringtag/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/es-set-tostringtag@2.1.0/node_modules/es-set-tostringtag/index.js
 var require_es_set_tostringtag = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/es-set-tostringtag@2.1.0/node_modules/es-set-tostringtag/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/es-set-tostringtag@2.1.0/node_modules/es-set-tostringtag/index.js"(exports2, module2) {
     "use strict";
     var GetIntrinsic = require_get_intrinsic();
     var $defineProperty = GetIntrinsic("%Object.defineProperty%", true);
@@ -55969,9 +56048,9 @@ var require_es_set_tostringtag = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/form-data@4.0.5/node_modules/form-data/lib/populate.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/form-data@4.0.5/node_modules/form-data/lib/populate.js
 var require_populate = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/form-data@4.0.5/node_modules/form-data/lib/populate.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/form-data@4.0.5/node_modules/form-data/lib/populate.js"(exports2, module2) {
     "use strict";
     module2.exports = function(dst, src) {
       Object.keys(src).forEach(function(prop) {
@@ -55982,9 +56061,9 @@ var require_populate = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/form-data@4.0.5/node_modules/form-data/lib/form_data.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/form-data@4.0.5/node_modules/form-data/lib/form_data.js
 var require_form_data = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/form-data@4.0.5/node_modules/form-data/lib/form_data.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/form-data@4.0.5/node_modules/form-data/lib/form_data.js"(exports2, module2) {
     "use strict";
     var CombinedStream = require_combined_stream();
     var util = require("util");
@@ -56301,16 +56380,16 @@ var require_form_data = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/env/classes/FormData.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/env/classes/FormData.js
 var require_FormData = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/env/classes/FormData.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/env/classes/FormData.js"(exports2, module2) {
     module2.exports = require_form_data();
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/toFormData.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/toFormData.js
 var require_toFormData = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/toFormData.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/toFormData.js"(exports2, module2) {
     "use strict";
     var utils = require_utils4();
     var AxiosError = require_AxiosError();
@@ -56439,9 +56518,9 @@ var require_toFormData = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/AxiosURLSearchParams.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/AxiosURLSearchParams.js
 var require_AxiosURLSearchParams = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/AxiosURLSearchParams.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/AxiosURLSearchParams.js"(exports2, module2) {
     "use strict";
     var toFormData = require_toFormData();
     function encode(str) {
@@ -56480,9 +56559,9 @@ var require_AxiosURLSearchParams = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/buildURL.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/buildURL.js
 var require_buildURL = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/buildURL.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/buildURL.js"(exports2, module2) {
     "use strict";
     var utils = require_utils4();
     var AxiosURLSearchParams = require_AxiosURLSearchParams();
@@ -56513,9 +56592,9 @@ var require_buildURL = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/InterceptorManager.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/InterceptorManager.js
 var require_InterceptorManager = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/InterceptorManager.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/InterceptorManager.js"(exports2, module2) {
     "use strict";
     var utils = require_utils4();
     function InterceptorManager() {
@@ -56551,9 +56630,9 @@ var require_InterceptorManager = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/normalizeHeaderName.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/normalizeHeaderName.js
 var require_normalizeHeaderName = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/normalizeHeaderName.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/normalizeHeaderName.js"(exports2, module2) {
     "use strict";
     var utils = require_utils4();
     module2.exports = function normalizeHeaderName(headers, normalizedName) {
@@ -56567,9 +56646,9 @@ var require_normalizeHeaderName = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/defaults/transitional.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/defaults/transitional.js
 var require_transitional = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/defaults/transitional.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/defaults/transitional.js"(exports2, module2) {
     "use strict";
     module2.exports = {
       silentJSONParsing: true,
@@ -56579,26 +56658,26 @@ var require_transitional = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/platform/node/classes/URLSearchParams.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/platform/node/classes/URLSearchParams.js
 var require_URLSearchParams = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/platform/node/classes/URLSearchParams.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/platform/node/classes/URLSearchParams.js"(exports2, module2) {
     "use strict";
     var url = require("url");
     module2.exports = url.URLSearchParams;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/platform/node/classes/FormData.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/platform/node/classes/FormData.js
 var require_FormData2 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/platform/node/classes/FormData.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/platform/node/classes/FormData.js"(exports2, module2) {
     "use strict";
     module2.exports = require_form_data();
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/platform/node/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/platform/node/index.js
 var require_node = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/platform/node/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/platform/node/index.js"(exports2, module2) {
     "use strict";
     module2.exports = {
       isNode: true,
@@ -56612,17 +56691,17 @@ var require_node = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/platform/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/platform/index.js
 var require_platform = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/platform/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/platform/index.js"(exports2, module2) {
     "use strict";
     module2.exports = require_node();
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/toURLEncodedForm.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/toURLEncodedForm.js
 var require_toURLEncodedForm = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/toURLEncodedForm.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/toURLEncodedForm.js"(exports2, module2) {
     "use strict";
     var utils = require_utils4();
     var toFormData = require_toFormData();
@@ -56641,9 +56720,9 @@ var require_toURLEncodedForm = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/formDataToJSON.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/formDataToJSON.js
 var require_formDataToJSON = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/formDataToJSON.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/formDataToJSON.js"(exports2, module2) {
     "use strict";
     var utils = require_utils4();
     function parsePropPath(name) {
@@ -56700,9 +56779,9 @@ var require_formDataToJSON = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/settle.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/settle.js
 var require_settle = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/settle.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/settle.js"(exports2, module2) {
     "use strict";
     var AxiosError = require_AxiosError();
     module2.exports = function settle(resolve, reject, response) {
@@ -56722,9 +56801,9 @@ var require_settle = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/cookies.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/cookies.js
 var require_cookies = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/cookies.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/cookies.js"(exports2, module2) {
     "use strict";
     var utils = require_utils4();
     module2.exports = utils.isStandardBrowserEnv() ? (
@@ -56785,9 +56864,9 @@ var require_cookies = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/isAbsoluteURL.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/isAbsoluteURL.js
 var require_isAbsoluteURL = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/isAbsoluteURL.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/isAbsoluteURL.js"(exports2, module2) {
     "use strict";
     module2.exports = function isAbsoluteURL2(url) {
       return /^([a-z][a-z\d+\-.]*:)?\/\//i.test(url);
@@ -56795,9 +56874,9 @@ var require_isAbsoluteURL = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/combineURLs.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/combineURLs.js
 var require_combineURLs = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/combineURLs.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/combineURLs.js"(exports2, module2) {
     "use strict";
     module2.exports = function combineURLs2(baseURL, relativeURL) {
       return relativeURL ? baseURL.replace(/\/?\/$/, "") + "/" + relativeURL.replace(/^\/+/, "") : baseURL;
@@ -56805,9 +56884,9 @@ var require_combineURLs = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/buildFullPath.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/buildFullPath.js
 var require_buildFullPath = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/buildFullPath.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/buildFullPath.js"(exports2, module2) {
     "use strict";
     var isAbsoluteURL2 = require_isAbsoluteURL();
     var combineURLs2 = require_combineURLs();
@@ -56821,9 +56900,9 @@ var require_buildFullPath = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/parseHeaders.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/parseHeaders.js
 var require_parseHeaders = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/parseHeaders.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/parseHeaders.js"(exports2, module2) {
     "use strict";
     var utils = require_utils4();
     var ignoreDuplicateOf = [
@@ -56873,9 +56952,9 @@ var require_parseHeaders = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/isURLSameOrigin.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/isURLSameOrigin.js
 var require_isURLSameOrigin = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/isURLSameOrigin.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/isURLSameOrigin.js"(exports2, module2) {
     "use strict";
     var utils = require_utils4();
     module2.exports = utils.isStandardBrowserEnv() ? (
@@ -56920,9 +56999,9 @@ var require_isURLSameOrigin = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/cancel/CanceledError.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/cancel/CanceledError.js
 var require_CanceledError = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/cancel/CanceledError.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/cancel/CanceledError.js"(exports2, module2) {
     "use strict";
     var AxiosError = require_AxiosError();
     var utils = require_utils4();
@@ -56937,9 +57016,9 @@ var require_CanceledError = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/parseProtocol.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/parseProtocol.js
 var require_parseProtocol = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/parseProtocol.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/parseProtocol.js"(exports2, module2) {
     "use strict";
     module2.exports = function parseProtocol(url) {
       var match = /^([-+\w]{1,25})(:?\/\/|:)/.exec(url);
@@ -56948,9 +57027,9 @@ var require_parseProtocol = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/adapters/xhr.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/adapters/xhr.js
 var require_xhr = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/adapters/xhr.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/adapters/xhr.js"(exports2, module2) {
     "use strict";
     var utils = require_utils4();
     var settle = require_settle();
@@ -57148,9 +57227,9 @@ var require_xhr = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/proxy-from-env@1.1.0/node_modules/proxy-from-env/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/proxy-from-env@1.1.0/node_modules/proxy-from-env/index.js
 var require_proxy_from_env = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/proxy-from-env@1.1.0/node_modules/proxy-from-env/index.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/proxy-from-env@1.1.0/node_modules/proxy-from-env/index.js"(exports2) {
     "use strict";
     var parseUrl = require("url").parse;
     var DEFAULT_PORTS = {
@@ -57218,9 +57297,9 @@ var require_proxy_from_env = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/ms@2.1.3/node_modules/ms/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/ms@2.1.3/node_modules/ms/index.js
 var require_ms = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/ms@2.1.3/node_modules/ms/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/ms@2.1.3/node_modules/ms/index.js"(exports2, module2) {
     var s = 1e3;
     var m = s * 60;
     var h = m * 60;
@@ -57334,9 +57413,9 @@ var require_ms = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/debug@4.4.3/node_modules/debug/src/common.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/debug@4.4.3/node_modules/debug/src/common.js
 var require_common = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/debug@4.4.3/node_modules/debug/src/common.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/debug@4.4.3/node_modules/debug/src/common.js"(exports2, module2) {
     function setup(env) {
       createDebug.debug = createDebug;
       createDebug.default = createDebug;
@@ -57511,9 +57590,9 @@ var require_common = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/debug@4.4.3/node_modules/debug/src/browser.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/debug@4.4.3/node_modules/debug/src/browser.js
 var require_browser = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/debug@4.4.3/node_modules/debug/src/browser.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/debug@4.4.3/node_modules/debug/src/browser.js"(exports2, module2) {
     exports2.formatArgs = formatArgs;
     exports2.save = save;
     exports2.load = load;
@@ -57681,9 +57760,9 @@ var require_browser = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/has-flag@4.0.0/node_modules/has-flag/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/has-flag@4.0.0/node_modules/has-flag/index.js
 var require_has_flag = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/has-flag@4.0.0/node_modules/has-flag/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/has-flag@4.0.0/node_modules/has-flag/index.js"(exports2, module2) {
     "use strict";
     module2.exports = (flag, argv = process.argv) => {
       const prefix2 = flag.startsWith("-") ? "" : flag.length === 1 ? "-" : "--";
@@ -57694,9 +57773,9 @@ var require_has_flag = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/supports-color@7.2.0/node_modules/supports-color/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/supports-color@7.2.0/node_modules/supports-color/index.js
 var require_supports_color = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/supports-color@7.2.0/node_modules/supports-color/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/supports-color@7.2.0/node_modules/supports-color/index.js"(exports2, module2) {
     "use strict";
     var os = require("os");
     var tty = require("tty");
@@ -57796,9 +57875,9 @@ var require_supports_color = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/debug@4.4.3/node_modules/debug/src/node.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/debug@4.4.3/node_modules/debug/src/node.js
 var require_node2 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/debug@4.4.3/node_modules/debug/src/node.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/debug@4.4.3/node_modules/debug/src/node.js"(exports2, module2) {
     var tty = require("tty");
     var util = require("util");
     exports2.init = init;
@@ -57970,9 +58049,9 @@ var require_node2 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/debug@4.4.3/node_modules/debug/src/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/debug@4.4.3/node_modules/debug/src/index.js
 var require_src = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/debug@4.4.3/node_modules/debug/src/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/debug@4.4.3/node_modules/debug/src/index.js"(exports2, module2) {
     if (typeof process === "undefined" || process.type === "renderer" || process.browser === true || process.__nwjs) {
       module2.exports = require_browser();
     } else {
@@ -57981,9 +58060,9 @@ var require_src = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/follow-redirects@1.16.0/node_modules/follow-redirects/debug.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/follow-redirects@1.16.0/node_modules/follow-redirects/debug.js
 var require_debug = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/follow-redirects@1.16.0/node_modules/follow-redirects/debug.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/follow-redirects@1.16.0/node_modules/follow-redirects/debug.js"(exports2, module2) {
     var debug;
     module2.exports = function() {
       if (!debug) {
@@ -58001,9 +58080,9 @@ var require_debug = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/follow-redirects@1.16.0/node_modules/follow-redirects/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/follow-redirects@1.16.0/node_modules/follow-redirects/index.js
 var require_follow_redirects = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/follow-redirects@1.16.0/node_modules/follow-redirects/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/follow-redirects@1.16.0/node_modules/follow-redirects/index.js"(exports2, module2) {
     var url = require("url");
     var URL3 = url.URL;
     var http = require("http");
@@ -58512,32 +58591,32 @@ var require_follow_redirects = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/follow-redirects@1.16.0/node_modules/follow-redirects/http.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/follow-redirects@1.16.0/node_modules/follow-redirects/http.js
 var require_http2 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/follow-redirects@1.16.0/node_modules/follow-redirects/http.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/follow-redirects@1.16.0/node_modules/follow-redirects/http.js"(exports2, module2) {
     module2.exports = require_follow_redirects().http;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/follow-redirects@1.16.0/node_modules/follow-redirects/https.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/follow-redirects@1.16.0/node_modules/follow-redirects/https.js
 var require_https = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/follow-redirects@1.16.0/node_modules/follow-redirects/https.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/follow-redirects@1.16.0/node_modules/follow-redirects/https.js"(exports2, module2) {
     module2.exports = require_follow_redirects().https;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/env/data.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/env/data.js
 var require_data = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/env/data.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/env/data.js"(exports2, module2) {
     module2.exports = {
       "version": "0.32.0"
     };
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/fromDataURI.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/fromDataURI.js
 var require_fromDataURI = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/fromDataURI.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/fromDataURI.js"(exports2, module2) {
     "use strict";
     var AxiosError = require_AxiosError();
     var parseProtocol = require_parseProtocol();
@@ -58572,9 +58651,9 @@ var require_fromDataURI = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/estimateDataURLDecodedBytes.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/estimateDataURLDecodedBytes.js
 var require_estimateDataURLDecodedBytes = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/estimateDataURLDecodedBytes.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/estimateDataURLDecodedBytes.js"(exports2, module2) {
     "use strict";
     function estimateDataURLDecodedBytes(url) {
       if (!url || typeof url !== "string") return 0;
@@ -58631,9 +58710,9 @@ var require_estimateDataURLDecodedBytes = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/shouldBypassProxy.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/shouldBypassProxy.js
 var require_shouldBypassProxy = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/shouldBypassProxy.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/shouldBypassProxy.js"(exports2, module2) {
     "use strict";
     var URL3 = require("url").URL;
     var DEFAULT_PORTS = {
@@ -58770,9 +58849,9 @@ var require_shouldBypassProxy = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/adapters/http.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/adapters/http.js
 var require_http3 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/adapters/http.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/adapters/http.js"(exports2, module2) {
     "use strict";
     var utils = require_utils4();
     var settle = require_settle();
@@ -59359,9 +59438,9 @@ var require_http3 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/defaults/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/defaults/index.js
 var require_defaults = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/defaults/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/defaults/index.js"(exports2, module2) {
     "use strict";
     var utils = require_utils4();
     var normalizeHeaderName = require_normalizeHeaderName();
@@ -59503,9 +59582,9 @@ var require_defaults = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/transformData.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/transformData.js
 var require_transformData = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/transformData.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/transformData.js"(exports2, module2) {
     "use strict";
     var utils = require_utils4();
     var defaults = require_defaults();
@@ -59519,9 +59598,9 @@ var require_transformData = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/cancel/isCancel.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/cancel/isCancel.js
 var require_isCancel = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/cancel/isCancel.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/cancel/isCancel.js"(exports2, module2) {
     "use strict";
     module2.exports = function isCancel(value) {
       return !!(value && value.__CANCEL__);
@@ -59529,9 +59608,9 @@ var require_isCancel = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/sanitizeHeaderValue.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/sanitizeHeaderValue.js
 var require_sanitizeHeaderValue = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/sanitizeHeaderValue.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/sanitizeHeaderValue.js"(exports2, module2) {
     "use strict";
     var utils = require_utils4();
     var INVALID_HEADER_VALUE_RE = /[^\x09\x20-\x7E\x80-\xFF]/g;
@@ -59549,9 +59628,9 @@ var require_sanitizeHeaderValue = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/dispatchRequest.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/dispatchRequest.js
 var require_dispatchRequest = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/dispatchRequest.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/dispatchRequest.js"(exports2, module2) {
     "use strict";
     var utils = require_utils4();
     var transformData = require_transformData();
@@ -59622,9 +59701,9 @@ var require_dispatchRequest = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/mergeConfig.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/mergeConfig.js
 var require_mergeConfig = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/mergeConfig.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/mergeConfig.js"(exports2, module2) {
     "use strict";
     var utils = require_utils4();
     module2.exports = function mergeConfig(config1, config2) {
@@ -59718,9 +59797,9 @@ var require_mergeConfig = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/validator.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/validator.js
 var require_validator = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/validator.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/validator.js"(exports2, module2) {
     "use strict";
     var VERSION = require_data().version;
     var AxiosError = require_AxiosError();
@@ -59783,9 +59862,9 @@ var require_validator = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/Axios.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/Axios.js
 var require_Axios = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/Axios.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/core/Axios.js"(exports2, module2) {
     "use strict";
     var utils = require_utils4();
     var buildURL = require_buildURL();
@@ -59917,9 +59996,9 @@ var require_Axios = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/cancel/CancelToken.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/cancel/CancelToken.js
 var require_CancelToken = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/cancel/CancelToken.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/cancel/CancelToken.js"(exports2, module2) {
     "use strict";
     var CanceledError = require_CanceledError();
     function CancelToken(executor) {
@@ -59997,9 +60076,9 @@ var require_CancelToken = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/spread.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/spread.js
 var require_spread = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/spread.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/spread.js"(exports2, module2) {
     "use strict";
     module2.exports = function spread(callback) {
       return function wrap(arr) {
@@ -60009,9 +60088,9 @@ var require_spread = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/isAxiosError.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/isAxiosError.js
 var require_isAxiosError = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/isAxiosError.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/helpers/isAxiosError.js"(exports2, module2) {
     "use strict";
     var utils = require_utils4();
     module2.exports = function isAxiosError3(payload) {
@@ -60020,9 +60099,9 @@ var require_isAxiosError = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/axios.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/axios.js
 var require_axios = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/axios.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/lib/axios.js"(exports2, module2) {
     "use strict";
     var utils = require_utils4();
     var bind = require_bind();
@@ -60062,14 +60141,14 @@ var require_axios = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/index.js
 var require_axios2 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/axios@0.32.0/node_modules/axios/index.js"(exports2, module2) {
     module2.exports = require_axios();
   }
 });
 
-// ../../../power-platform-ux/packages/shell-http-client/lib/HttpClientProvider.js
+// ../../../../../power-platform-ux/packages/shell-http-client/lib/HttpClientProvider.js
 function withHttpClient(Component4) {
   const HttpClientComponent = (props) => {
     return React5.createElement(Component4, { ...props, httpClient: HttpClient_default });
@@ -60078,24 +60157,24 @@ function withHttpClient(Component4) {
 }
 var React5;
 var init_HttpClientProvider = __esm({
-  "../../../power-platform-ux/packages/shell-http-client/lib/HttpClientProvider.js"() {
+  "../../../../../power-platform-ux/packages/shell-http-client/lib/HttpClientProvider.js"() {
     "use strict";
     React5 = __toESM(require_react());
     init_HttpClient();
   }
 });
 
-// ../../../power-platform-ux/packages/shell-http-client/lib/PagingHelpers.js
+// ../../../../../power-platform-ux/packages/shell-http-client/lib/PagingHelpers.js
 var import_url_parse8;
 var init_PagingHelpers = __esm({
-  "../../../power-platform-ux/packages/shell-http-client/lib/PagingHelpers.js"() {
+  "../../../../../power-platform-ux/packages/shell-http-client/lib/PagingHelpers.js"() {
     "use strict";
     import_url_parse8 = __toESM(require_url_parse());
     init_HttpClient();
   }
 });
 
-// ../../../power-platform-ux/packages/shell-http-client/lib/ErrorHandlers.js
+// ../../../../../power-platform-ux/packages/shell-http-client/lib/ErrorHandlers.js
 async function retryErrorResponseHandler(retries, status, error) {
   const configWithMetadata = error.config;
   if (error.response && error.response.status === status && configWithMetadata && (configWithMetadata.maxRetries === void 0 || configWithMetadata.maxRetries > 0)) {
@@ -60128,7 +60207,7 @@ async function prepareConfigForRetry(config2, service) {
 }
 var import_shell_authentication, import_url_parse9;
 var init_ErrorHandlers = __esm({
-  "../../../power-platform-ux/packages/shell-http-client/lib/ErrorHandlers.js"() {
+  "../../../../../power-platform-ux/packages/shell-http-client/lib/ErrorHandlers.js"() {
     "use strict";
     import_shell_authentication = __toESM(require_shell_authentication());
     init_lib();
@@ -60137,20 +60216,20 @@ var init_ErrorHandlers = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-http-client/lib/Cancel.js
+// ../../../../../power-platform-ux/packages/shell-http-client/lib/Cancel.js
 var import_isCancel, import_CancelToken;
 var init_Cancel = __esm({
-  "../../../power-platform-ux/packages/shell-http-client/lib/Cancel.js"() {
+  "../../../../../power-platform-ux/packages/shell-http-client/lib/Cancel.js"() {
     "use strict";
     import_isCancel = __toESM(require_isCancel());
     import_CancelToken = __toESM(require_CancelToken());
   }
 });
 
-// ../../../power-platform-ux/packages/shell-http-client/lib/Helpers.js
+// ../../../../../power-platform-ux/packages/shell-http-client/lib/Helpers.js
 var import_buildURL, import_combineURLs, import_isAbsoluteURL, import_isAxiosError, isAbsoluteURL, combineURLs;
 var init_Helpers = __esm({
-  "../../../power-platform-ux/packages/shell-http-client/lib/Helpers.js"() {
+  "../../../../../power-platform-ux/packages/shell-http-client/lib/Helpers.js"() {
     "use strict";
     import_buildURL = __toESM(require_buildURL());
     import_combineURLs = __toESM(require_combineURLs());
@@ -60161,17 +60240,17 @@ var init_Helpers = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-http-client/lib/helpers/LoggedHeadersHelpers.js
+// ../../../../../power-platform-ux/packages/shell-http-client/lib/helpers/LoggedHeadersHelpers.js
 var init_LoggedHeadersHelpers = __esm({
-  "../../../power-platform-ux/packages/shell-http-client/lib/helpers/LoggedHeadersHelpers.js"() {
+  "../../../../../power-platform-ux/packages/shell-http-client/lib/helpers/LoggedHeadersHelpers.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/shell-http-client/lib/Types.js
+// ../../../../../power-platform-ux/packages/shell-http-client/lib/Types.js
 var HttpHeaders;
 var init_Types2 = __esm({
-  "../../../power-platform-ux/packages/shell-http-client/lib/Types.js"() {
+  "../../../../../power-platform-ux/packages/shell-http-client/lib/Types.js"() {
     "use strict";
     HttpHeaders = {
       // These headers are used for CoreFramework ClientCorrelation tracking.
@@ -60218,10 +60297,10 @@ var require_AuthenticationService = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-http-client/lib/helpers/CoreFrameworkCorrelationHeadersHelper.js
+// ../../../../../power-platform-ux/packages/shell-http-client/lib/helpers/CoreFrameworkCorrelationHeadersHelper.js
 var import_AuthenticationService, aadClientId;
 var init_CoreFrameworkCorrelationHeadersHelper = __esm({
-  "../../../power-platform-ux/packages/shell-http-client/lib/helpers/CoreFrameworkCorrelationHeadersHelper.js"() {
+  "../../../../../power-platform-ux/packages/shell-http-client/lib/helpers/CoreFrameworkCorrelationHeadersHelper.js"() {
     "use strict";
     init_lib();
     init_Types2();
@@ -60231,9 +60310,9 @@ var init_CoreFrameworkCorrelationHeadersHelper = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-http-client/lib/index.js
+// ../../../../../power-platform-ux/packages/shell-http-client/lib/index.js
 var init_lib11 = __esm({
-  "../../../power-platform-ux/packages/shell-http-client/lib/index.js"() {
+  "../../../../../power-platform-ux/packages/shell-http-client/lib/index.js"() {
     "use strict";
     init_HttpClientProvider();
     init_HttpClient();
@@ -60247,19 +60326,19 @@ var init_lib11 = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-http-client/lib/CommonInterceptors.js
+// ../../../../../power-platform-ux/packages/shell-http-client/lib/CommonInterceptors.js
 function addCommonInterceptors(instance) {
   instance.interceptors.request.use(baseRequestInterceptor);
   instance.interceptors.response.use(baseResponseInterceptor, errorResponseHandler);
 }
 var init_CommonInterceptors = __esm({
-  "../../../power-platform-ux/packages/shell-http-client/lib/CommonInterceptors.js"() {
+  "../../../../../power-platform-ux/packages/shell-http-client/lib/CommonInterceptors.js"() {
     "use strict";
     init_HttpClient();
   }
 });
 
-// ../../../power-platform-ux/packages/shell-http-client/lib/HttpClient.js
+// ../../../../../power-platform-ux/packages/shell-http-client/lib/HttpClient.js
 function isUsingIE() {
   return /MSIE|Trident/.test(window.navigator.userAgent);
 }
@@ -60437,7 +60516,7 @@ function getInvokePattern(config2, serviceDefinition) {
 }
 var import_shell_authentication2, import_CaeHelper, import_axios, import_url_parse10, GraphQLHostName, LocalGraphQLEndpoint, HttpClientScope, preRequestHandlers, preResponseHandlers, preRequestInterceptor, baseRequestInterceptor, baseResponseInterceptor, errorResponseHandler, doNotUseMeDirectlyKnownServices, httpClient, HttpClient_default, normalizeKnownServiceId;
 var init_HttpClient = __esm({
-  "../../../power-platform-ux/packages/shell-http-client/lib/HttpClient.js"() {
+  "../../../../../power-platform-ux/packages/shell-http-client/lib/HttpClient.js"() {
     "use strict";
     import_shell_authentication2 = __toESM(require_shell_authentication());
     import_CaeHelper = __toESM(require_CaeHelper());
@@ -60560,9 +60639,9 @@ var init_HttpClient = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/morphism@0.9.1/node_modules/morphism/dist/morphism.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/morphism@0.9.1/node_modules/morphism/dist/morphism.js
 var require_morphism = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/morphism@0.9.1/node_modules/morphism/dist/morphism.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/morphism@0.9.1/node_modules/morphism/dist/morphism.js"(exports2, module2) {
     module2.exports = function(r) {
       var e = {};
       function t(n) {
@@ -60739,18 +60818,18 @@ var require_morphism = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/mappings/powerApps/webresourceMapping.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/mappings/powerApps/webresourceMapping.js
 var import_morphism;
 var init_webresourceMapping = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/mappings/powerApps/webresourceMapping.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/mappings/powerApps/webresourceMapping.js"() {
     "use strict";
     import_morphism = __toESM(require_morphism());
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-apis/lib/helpers/powerApps/powerAppsUris/uriHelpers.js
+// ../../../../../power-platform-ux/packages/powerapps-apis/lib/helpers/powerApps/powerAppsUris/uriHelpers.js
 var require_uriHelpers = __commonJS({
-  "../../../power-platform-ux/packages/powerapps-apis/lib/helpers/powerApps/powerAppsUris/uriHelpers.js"(exports2) {
+  "../../../../../power-platform-ux/packages/powerapps-apis/lib/helpers/powerApps/powerAppsUris/uriHelpers.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.createQueryString = exports2.getEnvironmentUpdateCadenceQueryParam = exports2.PPAPIVersion = exports2.RpApiVersion = void 0;
@@ -60799,7 +60878,7 @@ var require_AuthenticationProvider = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-common/lib/ProviderConsumer.js
+// ../../../../../power-platform-ux/packages/shell-common/lib/ProviderConsumer.js
 function getWithProviderFunction(contextElement, loadingStatusField) {
   return (Component4, waitConfig) => {
     return function WrappedComponent(props) {
@@ -60818,7 +60897,7 @@ function getWithProviderFunction(contextElement, loadingStatusField) {
 }
 var React6, ProviderLoadingStatus;
 var init_ProviderConsumer = __esm({
-  "../../../power-platform-ux/packages/shell-common/lib/ProviderConsumer.js"() {
+  "../../../../../power-platform-ux/packages/shell-common/lib/ProviderConsumer.js"() {
     "use strict";
     React6 = __toESM(require_react());
     (function(ProviderLoadingStatus2) {
@@ -60829,10 +60908,10 @@ var init_ProviderConsumer = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-persistent-storage/lib/featureGates.js
+// ../../../../../power-platform-ux/packages/shell-persistent-storage/lib/featureGates.js
 var featureGates2;
 var init_featureGates3 = __esm({
-  "../../../power-platform-ux/packages/shell-persistent-storage/lib/featureGates.js"() {
+  "../../../../../power-platform-ux/packages/shell-persistent-storage/lib/featureGates.js"() {
     "use strict";
     init_lib2();
     featureGates2 = createFeatureGatesConfig({
@@ -60859,7 +60938,7 @@ var init_featureGates3 = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-persistent-storage/lib/SafeStorage.js
+// ../../../../../power-platform-ux/packages/shell-persistent-storage/lib/SafeStorage.js
 function timeout(promise, milliseconds) {
   const timeoutPromise = new Promise((_resolve, reject) => {
     const timeoutId = setTimeout(() => {
@@ -60871,7 +60950,7 @@ function timeout(promise, milliseconds) {
 }
 var SafeStorage;
 var init_SafeStorage = __esm({
-  "../../../power-platform-ux/packages/shell-persistent-storage/lib/SafeStorage.js"() {
+  "../../../../../power-platform-ux/packages/shell-persistent-storage/lib/SafeStorage.js"() {
     "use strict";
     SafeStorage = class {
       internalCache;
@@ -60914,10 +60993,10 @@ var init_SafeStorage = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-persistent-storage/lib/DisabledCache.js
+// ../../../../../power-platform-ux/packages/shell-persistent-storage/lib/DisabledCache.js
 var DisabledCache;
 var init_DisabledCache = __esm({
-  "../../../power-platform-ux/packages/shell-persistent-storage/lib/DisabledCache.js"() {
+  "../../../../../power-platform-ux/packages/shell-persistent-storage/lib/DisabledCache.js"() {
     "use strict";
     DisabledCache = class {
       setItemAsync(key, item) {
@@ -60936,7 +61015,7 @@ var init_DisabledCache = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-persistent-storage/lib/UserStorage.js
+// ../../../../../power-platform-ux/packages/shell-persistent-storage/lib/UserStorage.js
 function getUserId() {
   return (0, import_shell_authentication3.getUserIdentifier)();
 }
@@ -60946,7 +61025,7 @@ function getUserSpecificKey(key) {
 }
 var import_shell_authentication3, UserStorage;
 var init_UserStorage = __esm({
-  "../../../power-platform-ux/packages/shell-persistent-storage/lib/UserStorage.js"() {
+  "../../../../../power-platform-ux/packages/shell-persistent-storage/lib/UserStorage.js"() {
     "use strict";
     import_shell_authentication3 = __toESM(require_shell_authentication());
     UserStorage = class {
@@ -60978,10 +61057,10 @@ var init_UserStorage = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-persistent-storage/lib/LocalStorageCache.js
+// ../../../../../power-platform-ux/packages/shell-persistent-storage/lib/LocalStorageCache.js
 var obfuscatedStorageKeyPrefix, storageKeyPrefix, LocalStorageCache, localStorageCache;
 var init_LocalStorageCache = __esm({
-  "../../../power-platform-ux/packages/shell-persistent-storage/lib/LocalStorageCache.js"() {
+  "../../../../../power-platform-ux/packages/shell-persistent-storage/lib/LocalStorageCache.js"() {
     "use strict";
     init_featureGates3();
     init_SafeStorage();
@@ -61036,9 +61115,9 @@ var init_LocalStorageCache = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/localforage@1.7.3/node_modules/localforage/dist/localforage.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/localforage@1.7.3/node_modules/localforage/dist/localforage.js
 var require_localforage = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/localforage@1.7.3/node_modules/localforage/dist/localforage.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/localforage@1.7.3/node_modules/localforage/dist/localforage.js"(exports2, module2) {
     (function(f) {
       if (typeof exports2 === "object" && typeof module2 !== "undefined") {
         module2.exports = f();
@@ -63174,10 +63253,10 @@ var require_localforage = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-persistent-storage/lib/IndexedDbCache.js
+// ../../../../../power-platform-ux/packages/shell-persistent-storage/lib/IndexedDbCache.js
 var import_localforage;
 var init_IndexedDbCache = __esm({
-  "../../../power-platform-ux/packages/shell-persistent-storage/lib/IndexedDbCache.js"() {
+  "../../../../../power-platform-ux/packages/shell-persistent-storage/lib/IndexedDbCache.js"() {
     "use strict";
     import_localforage = __toESM(require_localforage());
     init_featureGates3();
@@ -63187,18 +63266,18 @@ var init_IndexedDbCache = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-persistent-storage/lib/index.js
+// ../../../../../power-platform-ux/packages/shell-persistent-storage/lib/index.js
 var init_lib12 = __esm({
-  "../../../power-platform-ux/packages/shell-persistent-storage/lib/index.js"() {
+  "../../../../../power-platform-ux/packages/shell-persistent-storage/lib/index.js"() {
     "use strict";
     init_LocalStorageCache();
     init_IndexedDbCache();
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/core.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/core.js
 var require_core = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/core.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/core.js"(exports2, module2) {
     (function(root, factory) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory();
@@ -63804,9 +63883,9 @@ var require_core = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/x64-core.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/x64-core.js
 var require_x64_core = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/x64-core.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/x64-core.js"(exports2, module2) {
     (function(root, factory) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core());
@@ -64061,9 +64140,9 @@ var require_x64_core = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/lib-typedarrays.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/lib-typedarrays.js
 var require_lib_typedarrays = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/lib-typedarrays.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/lib-typedarrays.js"(exports2, module2) {
     (function(root, factory) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core());
@@ -64106,9 +64185,9 @@ var require_lib_typedarrays = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/enc-utf16.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/enc-utf16.js
 var require_enc_utf16 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/enc-utf16.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/enc-utf16.js"(exports2, module2) {
     (function(root, factory) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core());
@@ -64224,9 +64303,9 @@ var require_enc_utf16 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/enc-base64.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/enc-base64.js
 var require_enc_base64 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/enc-base64.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/enc-base64.js"(exports2, module2) {
     (function(root, factory) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core());
@@ -64332,9 +64411,9 @@ var require_enc_base64 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/enc-base64url.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/enc-base64url.js
 var require_enc_base64url = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/enc-base64url.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/enc-base64url.js"(exports2, module2) {
     (function(root, factory) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core());
@@ -64451,9 +64530,9 @@ var require_enc_base64url = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/md5.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/md5.js
 var require_md5 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/md5.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/md5.js"(exports2, module2) {
     (function(root, factory) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core());
@@ -64630,9 +64709,9 @@ var require_md5 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/sha1.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/sha1.js
 var require_sha1 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/sha1.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/sha1.js"(exports2, module2) {
     (function(root, factory) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core());
@@ -64721,9 +64800,9 @@ var require_sha1 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/sha256.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/sha256.js
 var require_sha256 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/sha256.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/sha256.js"(exports2, module2) {
     (function(root, factory) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core());
@@ -64842,9 +64921,9 @@ var require_sha256 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/sha224.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/sha224.js
 var require_sha224 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/sha224.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/sha224.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_sha256());
@@ -64887,9 +64966,9 @@ var require_sha224 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/sha512.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/sha512.js
 var require_sha512 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/sha512.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/sha512.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_x64_core());
@@ -65169,9 +65248,9 @@ var require_sha512 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/sha384.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/sha384.js
 var require_sha384 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/sha384.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/sha384.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_x64_core(), require_sha512());
@@ -65215,9 +65294,9 @@ var require_sha384 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/sha3.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/sha3.js
 var require_sha3 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/sha3.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/sha3.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_x64_core());
@@ -65417,9 +65496,9 @@ var require_sha3 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/ripemd160.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/ripemd160.js
 var require_ripemd160 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/ripemd160.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/ripemd160.js"(exports2, module2) {
     (function(root, factory) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core());
@@ -65888,9 +65967,9 @@ var require_ripemd160 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/hmac.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/hmac.js
 var require_hmac = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/hmac.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/hmac.js"(exports2, module2) {
     (function(root, factory) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core());
@@ -65995,9 +66074,9 @@ var require_hmac = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/pbkdf2.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/pbkdf2.js
 var require_pbkdf2 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/pbkdf2.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/pbkdf2.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_sha256(), require_hmac());
@@ -66093,9 +66172,9 @@ var require_pbkdf2 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/evpkdf.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/evpkdf.js
 var require_evpkdf = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/evpkdf.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/evpkdf.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_sha1(), require_hmac());
@@ -66184,9 +66263,9 @@ var require_evpkdf = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/cipher-core.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/cipher-core.js
 var require_cipher_core = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/cipher-core.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/cipher-core.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_evpkdf());
@@ -66828,9 +66907,9 @@ var require_cipher_core = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/mode-cfb.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/mode-cfb.js
 var require_mode_cfb = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/mode-cfb.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/mode-cfb.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_cipher_core());
@@ -66880,9 +66959,9 @@ var require_mode_cfb = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/mode-ctr.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/mode-ctr.js
 var require_mode_ctr = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/mode-ctr.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/mode-ctr.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_cipher_core());
@@ -66920,9 +66999,9 @@ var require_mode_ctr = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/mode-ctr-gladman.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/mode-ctr-gladman.js
 var require_mode_ctr_gladman = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/mode-ctr-gladman.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/mode-ctr-gladman.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_cipher_core());
@@ -66995,9 +67074,9 @@ var require_mode_ctr_gladman = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/mode-ofb.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/mode-ofb.js
 var require_mode_ofb = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/mode-ofb.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/mode-ofb.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_cipher_core());
@@ -67033,9 +67112,9 @@ var require_mode_ofb = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/mode-ecb.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/mode-ecb.js
 var require_mode_ecb = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/mode-ecb.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/mode-ecb.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_cipher_core());
@@ -67064,9 +67143,9 @@ var require_mode_ecb = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/pad-ansix923.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/pad-ansix923.js
 var require_pad_ansix923 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/pad-ansix923.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/pad-ansix923.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_cipher_core());
@@ -67096,9 +67175,9 @@ var require_pad_ansix923 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/pad-iso10126.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/pad-iso10126.js
 var require_pad_iso10126 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/pad-iso10126.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/pad-iso10126.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_cipher_core());
@@ -67124,9 +67203,9 @@ var require_pad_iso10126 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/pad-iso97971.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/pad-iso97971.js
 var require_pad_iso97971 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/pad-iso97971.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/pad-iso97971.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_cipher_core());
@@ -67151,9 +67230,9 @@ var require_pad_iso97971 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/pad-zeropadding.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/pad-zeropadding.js
 var require_pad_zeropadding = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/pad-zeropadding.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/pad-zeropadding.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_cipher_core());
@@ -67185,9 +67264,9 @@ var require_pad_zeropadding = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/pad-nopadding.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/pad-nopadding.js
 var require_pad_nopadding = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/pad-nopadding.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/pad-nopadding.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_cipher_core());
@@ -67208,9 +67287,9 @@ var require_pad_nopadding = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/format-hex.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/format-hex.js
 var require_format_hex = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/format-hex.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/format-hex.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_cipher_core());
@@ -67268,9 +67347,9 @@ var require_format_hex = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/aes.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/aes.js
 var require_aes = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/aes.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/aes.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_enc_base64(), require_md5(), require_evpkdf(), require_cipher_core());
@@ -67422,9 +67501,9 @@ var require_aes = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/tripledes.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/tripledes.js
 var require_tripledes = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/tripledes.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/tripledes.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_enc_base64(), require_md5(), require_evpkdf(), require_cipher_core());
@@ -68203,9 +68282,9 @@ var require_tripledes = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/rc4.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/rc4.js
 var require_rc4 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/rc4.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/rc4.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_enc_base64(), require_md5(), require_evpkdf(), require_cipher_core());
@@ -68286,9 +68365,9 @@ var require_rc4 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/rabbit.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/rabbit.js
 var require_rabbit = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/rabbit.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/rabbit.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_enc_base64(), require_md5(), require_evpkdf(), require_cipher_core());
@@ -68415,9 +68494,9 @@ var require_rabbit = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/rabbit-legacy.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/rabbit-legacy.js
 var require_rabbit_legacy = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/rabbit-legacy.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/rabbit-legacy.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_enc_base64(), require_md5(), require_evpkdf(), require_cipher_core());
@@ -68541,9 +68620,9 @@ var require_rabbit_legacy = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/blowfish.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/blowfish.js
 var require_blowfish = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/blowfish.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/blowfish.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_enc_base64(), require_md5(), require_evpkdf(), require_cipher_core());
@@ -69730,9 +69809,9 @@ var require_blowfish = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/index.js
 var require_crypto_js = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/crypto-js@4.2.0/node_modules/crypto-js/index.js"(exports2, module2) {
     (function(root, factory, undef) {
       if (typeof exports2 === "object") {
         module2.exports = exports2 = factory(require_core(), require_x64_core(), require_lib_typedarrays(), require_enc_utf16(), require_enc_base64(), require_enc_base64url(), require_md5(), require_sha1(), require_sha256(), require_sha224(), require_sha512(), require_sha384(), require_sha3(), require_ripemd160(), require_hmac(), require_pbkdf2(), require_evpkdf(), require_cipher_core(), require_mode_cfb(), require_mode_ctr(), require_mode_ctr_gladman(), require_mode_ofb(), require_mode_ecb(), require_pad_ansix923(), require_pad_iso10126(), require_pad_iso97971(), require_pad_zeropadding(), require_pad_nopadding(), require_format_hex(), require_aes(), require_tripledes(), require_rc4(), require_rabbit(), require_rabbit_legacy(), require_blowfish());
@@ -69747,9 +69826,9 @@ var require_crypto_js = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_setCacheAdd.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_setCacheAdd.js
 var require_setCacheAdd = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_setCacheAdd.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_setCacheAdd.js"(exports2, module2) {
     var HASH_UNDEFINED = "__lodash_hash_undefined__";
     function setCacheAdd(value) {
       this.__data__.set(value, HASH_UNDEFINED);
@@ -69759,9 +69838,9 @@ var require_setCacheAdd = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_setCacheHas.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_setCacheHas.js
 var require_setCacheHas = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_setCacheHas.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_setCacheHas.js"(exports2, module2) {
     function setCacheHas(value) {
       return this.__data__.has(value);
     }
@@ -69769,9 +69848,9 @@ var require_setCacheHas = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_SetCache.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_SetCache.js
 var require_SetCache = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_SetCache.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_SetCache.js"(exports2, module2) {
     var MapCache = require_MapCache();
     var setCacheAdd = require_setCacheAdd();
     var setCacheHas = require_setCacheHas();
@@ -69788,9 +69867,9 @@ var require_SetCache = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_arraySome.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_arraySome.js
 var require_arraySome = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_arraySome.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_arraySome.js"(exports2, module2) {
     function arraySome(array, predicate) {
       var index = -1, length = array == null ? 0 : array.length;
       while (++index < length) {
@@ -69804,9 +69883,9 @@ var require_arraySome = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_cacheHas.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_cacheHas.js
 var require_cacheHas = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_cacheHas.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_cacheHas.js"(exports2, module2) {
     function cacheHas(cache, key) {
       return cache.has(key);
     }
@@ -69814,9 +69893,9 @@ var require_cacheHas = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_equalArrays.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_equalArrays.js
 var require_equalArrays = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_equalArrays.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_equalArrays.js"(exports2, module2) {
     var SetCache = require_SetCache();
     var arraySome = require_arraySome();
     var cacheHas = require_cacheHas();
@@ -69869,9 +69948,9 @@ var require_equalArrays = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_mapToArray.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_mapToArray.js
 var require_mapToArray = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_mapToArray.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_mapToArray.js"(exports2, module2) {
     function mapToArray(map6) {
       var index = -1, result = Array(map6.size);
       map6.forEach(function(value, key) {
@@ -69883,9 +69962,9 @@ var require_mapToArray = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_setToArray.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_setToArray.js
 var require_setToArray = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_setToArray.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_setToArray.js"(exports2, module2) {
     function setToArray(set2) {
       var index = -1, result = Array(set2.size);
       set2.forEach(function(value) {
@@ -69897,9 +69976,9 @@ var require_setToArray = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_equalByTag.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_equalByTag.js
 var require_equalByTag = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_equalByTag.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_equalByTag.js"(exports2, module2) {
     var Symbol2 = require_Symbol();
     var Uint8Array2 = require_Uint8Array();
     var eq = require_eq();
@@ -69971,9 +70050,9 @@ var require_equalByTag = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_arrayPush.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_arrayPush.js
 var require_arrayPush = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_arrayPush.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_arrayPush.js"(exports2, module2) {
     function arrayPush(array, values2) {
       var index = -1, length = values2.length, offset = array.length;
       while (++index < length) {
@@ -69985,9 +70064,9 @@ var require_arrayPush = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseGetAllKeys.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseGetAllKeys.js
 var require_baseGetAllKeys = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseGetAllKeys.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseGetAllKeys.js"(exports2, module2) {
     var arrayPush = require_arrayPush();
     var isArray = require_isArray();
     function baseGetAllKeys(object, keysFunc, symbolsFunc) {
@@ -69998,9 +70077,9 @@ var require_baseGetAllKeys = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_arrayFilter.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_arrayFilter.js
 var require_arrayFilter = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_arrayFilter.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_arrayFilter.js"(exports2, module2) {
     function arrayFilter(array, predicate) {
       var index = -1, length = array == null ? 0 : array.length, resIndex = 0, result = [];
       while (++index < length) {
@@ -70015,9 +70094,9 @@ var require_arrayFilter = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/stubArray.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/stubArray.js
 var require_stubArray = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/stubArray.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/stubArray.js"(exports2, module2) {
     function stubArray() {
       return [];
     }
@@ -70025,9 +70104,9 @@ var require_stubArray = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getSymbols.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getSymbols.js
 var require_getSymbols = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getSymbols.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getSymbols.js"(exports2, module2) {
     var arrayFilter = require_arrayFilter();
     var stubArray = require_stubArray();
     var objectProto = Object.prototype;
@@ -70046,18 +70125,18 @@ var require_getSymbols = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_nativeKeys.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_nativeKeys.js
 var require_nativeKeys = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_nativeKeys.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_nativeKeys.js"(exports2, module2) {
     var overArg = require_overArg();
     var nativeKeys = overArg(Object.keys, Object);
     module2.exports = nativeKeys;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseKeys.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseKeys.js
 var require_baseKeys = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseKeys.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseKeys.js"(exports2, module2) {
     var isPrototype = require_isPrototype();
     var nativeKeys = require_nativeKeys();
     var objectProto = Object.prototype;
@@ -70078,9 +70157,9 @@ var require_baseKeys = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/keys.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/keys.js
 var require_keys = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/keys.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/keys.js"(exports2, module2) {
     var arrayLikeKeys = require_arrayLikeKeys();
     var baseKeys = require_baseKeys();
     var isArrayLike = require_isArrayLike();
@@ -70091,9 +70170,9 @@ var require_keys = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getAllKeys.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getAllKeys.js
 var require_getAllKeys = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getAllKeys.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getAllKeys.js"(exports2, module2) {
     var baseGetAllKeys = require_baseGetAllKeys();
     var getSymbols = require_getSymbols();
     var keys = require_keys();
@@ -70104,9 +70183,9 @@ var require_getAllKeys = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_equalObjects.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_equalObjects.js
 var require_equalObjects = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_equalObjects.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_equalObjects.js"(exports2, module2) {
     var getAllKeys = require_getAllKeys();
     var COMPARE_PARTIAL_FLAG = 1;
     var objectProto = Object.prototype;
@@ -70158,9 +70237,9 @@ var require_equalObjects = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_DataView.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_DataView.js
 var require_DataView = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_DataView.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_DataView.js"(exports2, module2) {
     var getNative = require_getNative();
     var root = require_root();
     var DataView2 = getNative(root, "DataView");
@@ -70168,9 +70247,9 @@ var require_DataView = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Promise.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Promise.js
 var require_Promise = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Promise.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Promise.js"(exports2, module2) {
     var getNative = require_getNative();
     var root = require_root();
     var Promise2 = getNative(root, "Promise");
@@ -70178,9 +70257,9 @@ var require_Promise = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Set.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Set.js
 var require_Set = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Set.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_Set.js"(exports2, module2) {
     var getNative = require_getNative();
     var root = require_root();
     var Set2 = getNative(root, "Set");
@@ -70188,9 +70267,9 @@ var require_Set = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_WeakMap.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_WeakMap.js
 var require_WeakMap = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_WeakMap.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_WeakMap.js"(exports2, module2) {
     var getNative = require_getNative();
     var root = require_root();
     var WeakMap2 = getNative(root, "WeakMap");
@@ -70198,9 +70277,9 @@ var require_WeakMap = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getTag.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getTag.js
 var require_getTag = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getTag.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getTag.js"(exports2, module2) {
     var DataView2 = require_DataView();
     var Map2 = require_Map();
     var Promise2 = require_Promise();
@@ -70244,9 +70323,9 @@ var require_getTag = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIsEqualDeep.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIsEqualDeep.js
 var require_baseIsEqualDeep = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIsEqualDeep.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIsEqualDeep.js"(exports2, module2) {
     var Stack = require_Stack();
     var equalArrays = require_equalArrays();
     var equalByTag = require_equalByTag();
@@ -70295,9 +70374,9 @@ var require_baseIsEqualDeep = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIsEqual.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIsEqual.js
 var require_baseIsEqual = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIsEqual.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIsEqual.js"(exports2, module2) {
     var baseIsEqualDeep = require_baseIsEqualDeep();
     var isObjectLike = require_isObjectLike();
     function baseIsEqual(value, other, bitmask, customizer, stack) {
@@ -70313,9 +70392,9 @@ var require_baseIsEqual = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isEqual.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isEqual.js
 var require_isEqual = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isEqual.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isEqual.js"(exports2, module2) {
     var baseIsEqual = require_baseIsEqual();
     function isEqual3(value, other) {
       return baseIsEqual(value, other);
@@ -70324,7 +70403,7 @@ var require_isEqual = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-embedding/lib/Widget/Widget.js
+// ../../../../../power-platform-ux/packages/shell-embedding/lib/Widget/Widget.js
 function isInWidgetMode() {
   return window.parent !== window && !window.Cypress;
 }
@@ -70339,12 +70418,12 @@ function getWidgetSettings(location2) {
   };
 }
 var init_Widget = __esm({
-  "../../../power-platform-ux/packages/shell-embedding/lib/Widget/Widget.js"() {
+  "../../../../../power-platform-ux/packages/shell-embedding/lib/Widget/Widget.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/shell-embedding/lib/Rpc/Exception.js
+// ../../../../../power-platform-ux/packages/shell-embedding/lib/Rpc/Exception.js
 function convertToException(error) {
   if (error instanceof Error || error.name && error.message && !error.hasOwnProperty("_stackTrace")) {
     return new Exception("ErrorException", "Error", error.message, error);
@@ -70356,7 +70435,7 @@ function convertToException(error) {
 }
 var Exception, UnknownException, RpcException, ArgumentException;
 var init_Exception = __esm({
-  "../../../power-platform-ux/packages/shell-embedding/lib/Rpc/Exception.js"() {
+  "../../../../../power-platform-ux/packages/shell-embedding/lib/Rpc/Exception.js"() {
     "use strict";
     Exception = class {
       _type;
@@ -70420,7 +70499,7 @@ var init_Exception = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-embedding/lib/Rpc/Guid.js
+// ../../../../../power-platform-ux/packages/shell-embedding/lib/Rpc/Guid.js
 function guid() {
   let oct = "";
   let tmp;
@@ -70433,14 +70512,14 @@ function guid() {
 }
 var hexValues, separator2;
 var init_Guid = __esm({
-  "../../../power-platform-ux/packages/shell-embedding/lib/Rpc/Guid.js"() {
+  "../../../../../power-platform-ux/packages/shell-embedding/lib/Rpc/Guid.js"() {
     "use strict";
     hexValues = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F"];
     separator2 = "-";
   }
 });
 
-// ../../../power-platform-ux/packages/shell-embedding/lib/Rpc/Rpc.js
+// ../../../../../power-platform-ux/packages/shell-embedding/lib/Rpc/Rpc.js
 function defer2() {
   const deferred = {};
   deferred.promise = new Promise((resolve, reject) => {
@@ -70451,7 +70530,7 @@ function defer2() {
 }
 var PING, PONG, Rpc;
 var init_Rpc = __esm({
-  "../../../power-platform-ux/packages/shell-embedding/lib/Rpc/Rpc.js"() {
+  "../../../../../power-platform-ux/packages/shell-embedding/lib/Rpc/Rpc.js"() {
     "use strict";
     init_Exception();
     init_Guid();
@@ -70648,10 +70727,10 @@ var init_Rpc = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-embedding/lib/Rpc/WindowPostMessageRpcHandler.js
+// ../../../../../power-platform-ux/packages/shell-embedding/lib/Rpc/WindowPostMessageRpcHandler.js
 var WindowPostMessageRpcHandler;
 var init_WindowPostMessageRpcHandler = __esm({
-  "../../../power-platform-ux/packages/shell-embedding/lib/Rpc/WindowPostMessageRpcHandler.js"() {
+  "../../../../../power-platform-ux/packages/shell-embedding/lib/Rpc/WindowPostMessageRpcHandler.js"() {
     "use strict";
     WindowPostMessageRpcHandler = class {
       _listeners = {};
@@ -70707,19 +70786,19 @@ var init_WindowPostMessageRpcHandler = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-embedding/lib/Rpc/index.js
+// ../../../../../power-platform-ux/packages/shell-embedding/lib/Rpc/index.js
 var init_Rpc2 = __esm({
-  "../../../power-platform-ux/packages/shell-embedding/lib/Rpc/index.js"() {
+  "../../../../../power-platform-ux/packages/shell-embedding/lib/Rpc/index.js"() {
     "use strict";
     init_Rpc();
     init_WindowPostMessageRpcHandler();
   }
 });
 
-// ../../../power-platform-ux/packages/shell-embedding/lib/HostContext/HostContext.js
+// ../../../../../power-platform-ux/packages/shell-embedding/lib/HostContext/HostContext.js
 var React7, getHost, HostContext, HostContextProvider, HostContextConsumer;
 var init_HostContext = __esm({
-  "../../../power-platform-ux/packages/shell-embedding/lib/HostContext/HostContext.js"() {
+  "../../../../../power-platform-ux/packages/shell-embedding/lib/HostContext/HostContext.js"() {
     "use strict";
     React7 = __toESM(require_react());
     getHost = () => {
@@ -70739,10 +70818,10 @@ var init_HostContext = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-embedding/lib/HostContext/Host.js
+// ../../../../../power-platform-ux/packages/shell-embedding/lib/HostContext/Host.js
 var Host;
 var init_Host = __esm({
-  "../../../power-platform-ux/packages/shell-embedding/lib/HostContext/Host.js"() {
+  "../../../../../power-platform-ux/packages/shell-embedding/lib/HostContext/Host.js"() {
     "use strict";
     (function(Host2) {
       Host2["Teams"] = "teams";
@@ -70756,16 +70835,16 @@ var init_Host = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/shell-embedding/lib/HostContext/index.js
+// ../../../../../power-platform-ux/packages/shell-embedding/lib/HostContext/index.js
 var init_HostContext2 = __esm({
-  "../../../power-platform-ux/packages/shell-embedding/lib/HostContext/index.js"() {
+  "../../../../../power-platform-ux/packages/shell-embedding/lib/HostContext/index.js"() {
     "use strict";
     init_HostContext();
     init_Host();
   }
 });
 
-// ../../../power-platform-ux/packages/shell-embedding/lib/index.js
+// ../../../../../power-platform-ux/packages/shell-embedding/lib/index.js
 var lib_exports3 = {};
 __export(lib_exports3, {
   Host: () => Host,
@@ -70779,7 +70858,7 @@ __export(lib_exports3, {
   isInWidgetMode: () => isInWidgetMode
 });
 var init_lib13 = __esm({
-  "../../../power-platform-ux/packages/shell-embedding/lib/index.js"() {
+  "../../../../../power-platform-ux/packages/shell-embedding/lib/index.js"() {
     "use strict";
     init_Widget();
     init_Rpc2();
@@ -70787,10 +70866,10 @@ var init_lib13 = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/backendHelper.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/backendHelper.js
 var import_shell_authentication4, shouldUseFlowRp;
 var init_backendHelper = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/backendHelper.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/backendHelper.js"() {
     "use strict";
     import_shell_authentication4 = __toESM(require_shell_authentication());
     init_lib13();
@@ -70798,10 +70877,10 @@ var init_backendHelper = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/EnvironmentProvider.constants.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/EnvironmentProvider.constants.js
 var import_uriHelpers, EnvironmentListType, EnvironmentFilterBehavior, EnvironmentStorageKeys, ENVIRONMENT_ID_PLACEHOLDER, DEFAULT_ENVIRONMENT_NAME_PLACEHOLDER, telemetryScopeName, BapApiVersion, PpapiApiVersion, EnvironmentsToPull, environmentsListEndpoint, environmentsListEndpointPPAPI, environmentsListExpandCapacityEndpoint, environmentsListExpandCapacityEndpointPPAPI, defaultEnvironmentName, sharePointEnvironmentName, defaultFilterExpression, excludeCdsLiteEnvironments, onlyIncludeEnvironmentsLinkedToTeams, EnvironmentsListPollingPeriod, EnvironmentsListExpandCapacityPollingPeriod, BapRpEndpoint;
 var init_EnvironmentProvider_constants = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/EnvironmentProvider.constants.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/EnvironmentProvider.constants.js"() {
     "use strict";
     import_uriHelpers = __toESM(require_uriHelpers());
     (function(EnvironmentListType2) {
@@ -70837,10 +70916,10 @@ var init_EnvironmentProvider_constants = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/featureGates.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/featureGates.js
 var featureGates3;
 var init_featureGates4 = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/featureGates.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/featureGates.js"() {
     "use strict";
     init_lib2();
     featureGates3 = createFeatureGatesConfig({
@@ -70886,10 +70965,10 @@ var init_featureGates4 = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/settings.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/settings.js
 var settings_default4;
 var init_settings5 = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/settings.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/settings.js"() {
     "use strict";
     init_lib2();
     settings_default4 = createSettingsConfig({
@@ -70923,9 +71002,9 @@ var init_settings5 = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-shared-feature-gates/lib/featureGates.js
+// ../../../../../power-platform-ux/packages/powerapps-shared-feature-gates/lib/featureGates.js
 var require_featureGates = __commonJS({
-  "../../../power-platform-ux/packages/powerapps-shared-feature-gates/lib/featureGates.js"(exports2) {
+  "../../../../../power-platform-ux/packages/powerapps-shared-feature-gates/lib/featureGates.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.isForceTip2InTestEnabled = exports2.forceTip2InTest = exports2.featureGates = void 0;
@@ -71020,13 +71099,13 @@ var require_featureGates = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/ExternalTypes.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/ExternalTypes.js
 var ExternalTypes_exports = {};
 __export(ExternalTypes_exports, {
   ProviderLoadingStatus: () => ProviderLoadingStatus
 });
 var init_ExternalTypes = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/ExternalTypes.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/ExternalTypes.js"() {
     "use strict";
     __reExport(ExternalTypes_exports, __toESM(require_environment()));
     __reExport(ExternalTypes_exports, __toESM(require_environment2()));
@@ -71034,10 +71113,10 @@ var init_ExternalTypes = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-features/lib/featureGates.js
+// ../../../../../power-platform-ux/packages/powerapps-features/lib/featureGates.js
 var sharedFeatureGates;
 var init_featureGates5 = __esm({
-  "../../../power-platform-ux/packages/powerapps-features/lib/featureGates.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-features/lib/featureGates.js"() {
     "use strict";
     init_lib2();
     sharedFeatureGates = createFeatureGatesConfig({
@@ -71428,10 +71507,10 @@ var init_featureGates5 = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/subscribable.mjs
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/subscribable.mjs
 var Subscribable;
 var init_subscribable = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/subscribable.mjs"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/subscribable.mjs"() {
     Subscribable = class {
       constructor() {
         this.listeners = /* @__PURE__ */ new Set();
@@ -71459,7 +71538,7 @@ var init_subscribable = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/utils.mjs
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/utils.mjs
 function noop() {
   return void 0;
 }
@@ -71588,15 +71667,15 @@ function replaceData(prevData, data, options) {
 }
 var isServer;
 var init_utils = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/utils.mjs"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/utils.mjs"() {
     isServer = typeof window === "undefined" || "Deno" in window;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/focusManager.mjs
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/focusManager.mjs
 var FocusManager, focusManager;
 var init_focusManager = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/focusManager.mjs"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/focusManager.mjs"() {
     init_subscribable();
     init_utils();
     FocusManager = class extends Subscribable {
@@ -71667,10 +71746,10 @@ var init_focusManager = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/onlineManager.mjs
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/onlineManager.mjs
 var onlineEvents, OnlineManager, onlineManager;
 var init_onlineManager = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/onlineManager.mjs"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/onlineManager.mjs"() {
     init_subscribable();
     init_utils();
     onlineEvents = ["online", "offline"];
@@ -71744,7 +71823,7 @@ var init_onlineManager = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/retryer.mjs
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/retryer.mjs
 function canFetch(networkMode) {
   return (networkMode != null ? networkMode : "online") === "online" ? onlineManager.isOnline() : true;
 }
@@ -71753,7 +71832,7 @@ function isCancelledError(value) {
 }
 var CancelledError;
 var init_retryer = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/retryer.mjs"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/retryer.mjs"() {
     init_onlineManager();
     CancelledError = class {
       constructor(options) {
@@ -71764,7 +71843,7 @@ var init_retryer = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/notifyManager.mjs
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/notifyManager.mjs
 function createNotifyManager() {
   let queue = [];
   let transactions = 0;
@@ -71832,13 +71911,13 @@ function createNotifyManager() {
 }
 var notifyManager;
 var init_notifyManager = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/notifyManager.mjs"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/notifyManager.mjs"() {
     init_utils();
     notifyManager = createNotifyManager();
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/mutation.mjs
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/mutation.mjs
 function getDefaultState() {
   return {
     context: void 0,
@@ -71852,11 +71931,11 @@ function getDefaultState() {
   };
 }
 var init_mutation = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/mutation.mjs"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/mutation.mjs"() {
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/queryObserver.mjs
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/queryObserver.mjs
 function shouldLoadOnMount(query, options) {
   return options.enabled !== false && !query.state.dataUpdatedAt && !(query.state.status === "error" && options.retryOnMount === false);
 }
@@ -71890,7 +71969,7 @@ function shouldAssignObserverCurrentProperties(observer, optimisticResult, optio
 }
 var QueryObserver;
 var init_queryObserver = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/queryObserver.mjs"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/queryObserver.mjs"() {
     init_utils();
     init_notifyManager();
     init_focusManager();
@@ -72303,10 +72382,10 @@ var init_queryObserver = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/mutationObserver.mjs
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/mutationObserver.mjs
 var MutationObserver;
 var init_mutationObserver = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/mutationObserver.mjs"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/mutationObserver.mjs"() {
     init_mutation();
     init_notifyManager();
     init_subscribable();
@@ -72415,9 +72494,9 @@ var init_mutationObserver = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/index.mjs
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/index.mjs
 var init_lib14 = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/index.mjs"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+query-core@4.32.6/node_modules/@tanstack/query-core/build/lib/index.mjs"() {
     init_queryObserver();
     init_mutationObserver();
     init_notifyManager();
@@ -72425,9 +72504,9 @@ var init_lib14 = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/use-sync-external-store@1.5.0_react@16.14.0/node_modules/use-sync-external-store/cjs/use-sync-external-store-shim.production.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/use-sync-external-store@1.5.0_react@16.14.0/node_modules/use-sync-external-store/cjs/use-sync-external-store-shim.production.js
 var require_use_sync_external_store_shim_production = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/use-sync-external-store@1.5.0_react@16.14.0/node_modules/use-sync-external-store/cjs/use-sync-external-store-shim.production.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/use-sync-external-store@1.5.0_react@16.14.0/node_modules/use-sync-external-store/cjs/use-sync-external-store-shim.production.js"(exports2) {
     "use strict";
     var React26 = require_react();
     function is(x, y) {
@@ -72478,9 +72557,9 @@ var require_use_sync_external_store_shim_production = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/use-sync-external-store@1.5.0_react@16.14.0/node_modules/use-sync-external-store/cjs/use-sync-external-store-shim.development.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/use-sync-external-store@1.5.0_react@16.14.0/node_modules/use-sync-external-store/cjs/use-sync-external-store-shim.development.js
 var require_use_sync_external_store_shim_development = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/use-sync-external-store@1.5.0_react@16.14.0/node_modules/use-sync-external-store/cjs/use-sync-external-store-shim.development.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/use-sync-external-store@1.5.0_react@16.14.0/node_modules/use-sync-external-store/cjs/use-sync-external-store-shim.development.js"(exports2) {
     "use strict";
     "production" !== process.env.NODE_ENV && function() {
       function is(x, y) {
@@ -72542,9 +72621,9 @@ var require_use_sync_external_store_shim_development = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/use-sync-external-store@1.5.0_react@16.14.0/node_modules/use-sync-external-store/shim/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/use-sync-external-store@1.5.0_react@16.14.0/node_modules/use-sync-external-store/shim/index.js
 var require_shim = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/use-sync-external-store@1.5.0_react@16.14.0/node_modules/use-sync-external-store/shim/index.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/use-sync-external-store@1.5.0_react@16.14.0/node_modules/use-sync-external-store/shim/index.js"(exports2, module2) {
     "use strict";
     if (process.env.NODE_ENV === "production") {
       module2.exports = require_use_sync_external_store_shim_production();
@@ -72554,17 +72633,17 @@ var require_shim = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/useSyncExternalStore.mjs
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/useSyncExternalStore.mjs
 var import_shim, useSyncExternalStore;
 var init_useSyncExternalStore = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/useSyncExternalStore.mjs"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/useSyncExternalStore.mjs"() {
     "use client";
     import_shim = __toESM(require_shim(), 1);
     useSyncExternalStore = import_shim.useSyncExternalStore;
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/QueryClientProvider.mjs
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/QueryClientProvider.mjs
 function getQueryClientContext(context, contextSharing) {
   if (context) {
     return context;
@@ -72579,7 +72658,7 @@ function getQueryClientContext(context, contextSharing) {
 }
 var React8, defaultContext, QueryClientSharingContext, useQueryClient;
 var init_QueryClientProvider = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/QueryClientProvider.mjs"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/QueryClientProvider.mjs"() {
     "use client";
     React8 = __toESM(require_react(), 1);
     defaultContext = /* @__PURE__ */ React8.createContext(void 0);
@@ -72596,10 +72675,10 @@ var init_QueryClientProvider = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/isRestoring.mjs
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/isRestoring.mjs
 var React9, IsRestoringContext, useIsRestoring, IsRestoringProvider;
 var init_isRestoring = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/isRestoring.mjs"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/isRestoring.mjs"() {
     "use client";
     React9 = __toESM(require_react(), 1);
     IsRestoringContext = /* @__PURE__ */ React9.createContext(false);
@@ -72608,7 +72687,7 @@ var init_isRestoring = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/QueryErrorResetBoundary.mjs
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/QueryErrorResetBoundary.mjs
 function createValue() {
   let isReset = false;
   return {
@@ -72625,7 +72704,7 @@ function createValue() {
 }
 var React10, QueryErrorResetBoundaryContext, useQueryErrorResetBoundary;
 var init_QueryErrorResetBoundary = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/QueryErrorResetBoundary.mjs"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/QueryErrorResetBoundary.mjs"() {
     "use client";
     React10 = __toESM(require_react(), 1);
     QueryErrorResetBoundaryContext = /* @__PURE__ */ React10.createContext(createValue());
@@ -72633,7 +72712,7 @@ var init_QueryErrorResetBoundary = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/utils.mjs
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/utils.mjs
 function shouldThrowError(_useErrorBoundary, params) {
   if (typeof _useErrorBoundary === "function") {
     return _useErrorBoundary(...params);
@@ -72641,14 +72720,14 @@ function shouldThrowError(_useErrorBoundary, params) {
   return !!_useErrorBoundary;
 }
 var init_utils2 = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/utils.mjs"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/utils.mjs"() {
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/errorBoundaryUtils.mjs
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/errorBoundaryUtils.mjs
 var React11, ensurePreventErrorBoundaryRetry, useClearResetErrorBoundary, getHasError;
 var init_errorBoundaryUtils = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/errorBoundaryUtils.mjs"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/errorBoundaryUtils.mjs"() {
     "use client";
     React11 = __toESM(require_react(), 1);
     init_utils2();
@@ -72675,10 +72754,10 @@ var init_errorBoundaryUtils = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/suspense.mjs
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/suspense.mjs
 var ensureStaleTime, willFetch, shouldSuspend, fetchOptimistic;
 var init_suspense = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/suspense.mjs"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/suspense.mjs"() {
     ensureStaleTime = (defaultedOptions) => {
       if (defaultedOptions.suspense) {
         if (typeof defaultedOptions.staleTime !== "number") {
@@ -72701,7 +72780,7 @@ var init_suspense = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/useBaseQuery.mjs
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/useBaseQuery.mjs
 function useBaseQuery(options, Observer) {
   const queryClient = useQueryClient({
     context: options.context
@@ -72749,7 +72828,7 @@ function useBaseQuery(options, Observer) {
 }
 var React12;
 var init_useBaseQuery = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/useBaseQuery.mjs"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/useBaseQuery.mjs"() {
     "use client";
     React12 = __toESM(require_react(), 1);
     init_lib14();
@@ -72762,20 +72841,20 @@ var init_useBaseQuery = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/useQuery.mjs
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/useQuery.mjs
 function useQuery(arg1, arg2, arg3) {
   const parsedOptions = parseQueryArgs(arg1, arg2, arg3);
   return useBaseQuery(parsedOptions, QueryObserver);
 }
 var init_useQuery = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/useQuery.mjs"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/useQuery.mjs"() {
     "use client";
     init_lib14();
     init_useBaseQuery();
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/useMutation.mjs
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/useMutation.mjs
 function useMutation(arg1, arg2, arg3) {
   const options = parseMutationArgs(arg1, arg2, arg3);
   const queryClient = useQueryClient({
@@ -72802,7 +72881,7 @@ function noop2() {
 }
 var React13;
 var init_useMutation = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/useMutation.mjs"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/useMutation.mjs"() {
     "use client";
     React13 = __toESM(require_react(), 1);
     init_lib14();
@@ -72812,9 +72891,9 @@ var init_useMutation = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/index.mjs
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/index.mjs
 var init_lib15 = __esm({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/index.mjs"() {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/@tanstack+react-query@4.32.6_react-dom@16.14.0_react@16.14.0__react@16.14.0/node_modules/@tanstack/react-query/build/lib/index.mjs"() {
     init_lib14();
     init_useQuery();
     init_QueryClientProvider();
@@ -72822,10 +72901,10 @@ var init_lib15 = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/JitEnvironment.constant.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/JitEnvironment.constant.js
 var BapRpEndpoint2, JITEnvironmentScope, JITCreateEnvironmentScenario, JITCreateEnvironment, JITCreateEnvironmentFailed, JITCreateEnvironmentFailedMessage;
 var init_JitEnvironment_constant = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/JitEnvironment.constant.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/JitEnvironment.constant.js"() {
     "use strict";
     BapRpEndpoint2 = `https://bap-rp/providers/Microsoft.BusinessAppPlatform/environments`;
     JITEnvironmentScope = "JITEnvironmentScope";
@@ -72836,7 +72915,7 @@ var init_JitEnvironment_constant = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useSwitchEnvironment.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useSwitchEnvironment.js
 function useSwitchEnvironment() {
   const { addAndSetEnvironment } = React14.useContext(EnvironmentContext);
   return {
@@ -72845,14 +72924,14 @@ function useSwitchEnvironment() {
 }
 var React14;
 var init_useSwitchEnvironment = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useSwitchEnvironment.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useSwitchEnvironment.js"() {
     "use strict";
     React14 = __toESM(require_react());
     init_lib16();
   }
 });
 
-// ../../../power-platform-ux/packages/shell-common/lib/Utils/resourcesHelpers.js
+// ../../../../../power-platform-ux/packages/shell-common/lib/Utils/resourcesHelpers.js
 function formatResourceString(resource, ...args) {
   if (!args || args.length === 0) {
     return resource;
@@ -72880,13 +72959,13 @@ function formatResourceString(resource, ...args) {
 }
 var React15;
 var init_resourcesHelpers = __esm({
-  "../../../power-platform-ux/packages/shell-common/lib/Utils/resourcesHelpers.js"() {
+  "../../../../../power-platform-ux/packages/shell-common/lib/Utils/resourcesHelpers.js"() {
     "use strict";
     React15 = __toESM(require_react());
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useCreateEnvironment.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useCreateEnvironment.js
 function useCreateEnvironment({ type, location: location2, environmentDisplayName, switchToEnvironmentAfterCreation }) {
   const createEnvironmentScenario = (0, import_react5.useRef)();
   const { switchEnvironment } = useSwitchEnvironment();
@@ -72913,7 +72992,7 @@ function useCreateEnvironment({ type, location: location2, environmentDisplayNam
 }
 var import_AuthenticationProvider, import_react5, createEnvironment;
 var init_useCreateEnvironment = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useCreateEnvironment.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useCreateEnvironment.js"() {
     "use strict";
     import_AuthenticationProvider = __toESM(require_AuthenticationProvider());
     import_react5 = __toESM(require_react());
@@ -72955,7 +73034,7 @@ var init_useCreateEnvironment = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useAttachDataverseToEnvironment.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useAttachDataverseToEnvironment.js
 function useAttachDataverseToEnvironment(props) {
   const { environment } = props;
   const scenario = import_react6.default.useRef(null);
@@ -72982,7 +73061,7 @@ function useAttachDataverseToEnvironment(props) {
 }
 var import_react6, import_environment, attachDatabaseToEnvironment;
 var init_useAttachDataverseToEnvironment = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useAttachDataverseToEnvironment.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useAttachDataverseToEnvironment.js"() {
     "use strict";
     init_HttpClient();
     init_lib4();
@@ -73010,7 +73089,7 @@ var init_useAttachDataverseToEnvironment = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/usePollDataverseAttachmentStatus.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/usePollDataverseAttachmentStatus.js
 function usePollDataverseAttachmentStatus(props) {
   const { attachmentProvisioningResponse, maxPollingAttempts = MAX_POLLING_ATTEMPTS } = props;
   const { addOrUpdateEnvironment } = import_react7.default.useContext(EnvironmentContext);
@@ -73030,7 +73109,7 @@ function usePollDataverseAttachmentStatus(props) {
 }
 var import_react7, MAX_POLLING_ATTEMPTS, pollAttachmentStatus, pollDatabaseAttachmentProgress;
 var init_usePollDataverseAttachmentStatus = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/usePollDataverseAttachmentStatus.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/usePollDataverseAttachmentStatus.js"() {
     "use strict";
     init_HttpClient();
     init_lib4();
@@ -73106,7 +73185,7 @@ var init_usePollDataverseAttachmentStatus = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getDevEnvironment.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getDevEnvironment.js
 async function getDevEnvironmentFn(props) {
   const { envListLoadPromise, getEnvironmentsList, userInfoContext, previousPreferredEnvironmentProvidersPromise } = props;
   const tFnPromise = getTranslateFnWithTimeout("EnvironmentPicker");
@@ -73149,7 +73228,7 @@ async function getDevEnvironmentFn(props) {
 }
 var LOAD_TRANSLATIONS_TIMEOUT, ENVIRONMENT_NAME_TRANSLATION_KEY, getDevEnvironment, provisionDevEnvironment, getTranslateFnWithTimeout;
 var init_getDevEnvironment = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getDevEnvironment.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getDevEnvironment.js"() {
     "use strict";
     init_lib4();
     init_EnvironmentProvider_constants();
@@ -73197,7 +73276,7 @@ var init_getDevEnvironment = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getDefaultEnvironment.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getDefaultEnvironment.js
 async function getDefaultEnvironmentFn({ envListLoadPromise, getEnvironmentsList, getSingleEnvironmentUrl: getSingleEnvironmentUrl2 }) {
   const scenario = trackLoadScenario(telemetryScopeName, "preferredEnvironment/getDefaultEnvironment", {}, import_shell_icm_info.Team.Shell);
   try {
@@ -73220,7 +73299,7 @@ async function getDefaultEnvironmentFn({ envListLoadPromise, getEnvironmentsList
 }
 var getDefaultEnvironment;
 var init_getDefaultEnvironment = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getDefaultEnvironment.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getDefaultEnvironment.js"() {
     "use strict";
     init_ExternalTypes();
     init_EnvironmentProvider();
@@ -73234,9 +73313,9 @@ var init_getDefaultEnvironment = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-apis/lib/helpers/stringHelpers.js
+// ../../../../../power-platform-ux/packages/powerapps-apis/lib/helpers/stringHelpers.js
 var require_stringHelpers = __commonJS({
-  "../../../power-platform-ux/packages/powerapps-apis/lib/helpers/stringHelpers.js"(exports2) {
+  "../../../../../power-platform-ux/packages/powerapps-apis/lib/helpers/stringHelpers.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.equalsIgnoreCase = void 0;
@@ -73253,7 +73332,7 @@ var require_stringHelpers = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getEnvironmentFromPathname.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getEnvironmentFromPathname.js
 async function getEnvironmentFromPathnameFn({ envListLoadPromise, getEnvironmentsList, getSingleEnvironmentUrl: getSingleEnvironmentUrl2 }) {
   const scenario = trackLoadScenario(telemetryScopeName, "preferredEnvironment/getEnvironmentFromPathname", {}, import_shell_icm_info.Team.Shell);
   const environmentNameFromUrl = getCurrentEnvironmentNameFromPathname(window.location.pathname);
@@ -73289,7 +73368,7 @@ function isNotPlaceholderEnvironmentName(environmentName) {
 }
 var import_stringHelpers, getEnvironmentFromPathname;
 var init_getEnvironmentFromPathname = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getEnvironmentFromPathname.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getEnvironmentFromPathname.js"() {
     "use strict";
     init_EnvironmentProvider();
     init_HttpClient();
@@ -73303,7 +73382,7 @@ var init_getEnvironmentFromPathname = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getFirstEnvironment.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getFirstEnvironment.js
 async function getFirstEnvironmentFn({ envListLoadPromise, getEnvironmentsList }) {
   const scenario = trackLoadScenario(telemetryScopeName, "preferredEnvironment/getFirstEnvironment", {}, import_shell_icm_info.Team.Shell);
   try {
@@ -73318,7 +73397,7 @@ async function getFirstEnvironmentFn({ envListLoadPromise, getEnvironmentsList }
 }
 var getFirstEnvironment;
 var init_getFirstEnvironment = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getFirstEnvironment.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getFirstEnvironment.js"() {
     "use strict";
     init_lib4();
     init_EnvironmentProvider_constants();
@@ -73329,10 +73408,10 @@ var init_getFirstEnvironment = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getFirstPreferredEnvironmentStrategy.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getFirstPreferredEnvironmentStrategy.js
 var getFirstPreferredEnvironmentStrategy, getFirstPreferredEnvironment;
 var init_getFirstPreferredEnvironmentStrategy = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getFirstPreferredEnvironmentStrategy.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getFirstPreferredEnvironmentStrategy.js"() {
     "use strict";
     init_lib4();
     init_EnvironmentProvider_constants();
@@ -73379,7 +73458,7 @@ var init_getFirstPreferredEnvironmentStrategy = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/mruEnvironmentLocalStorage.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/mruEnvironmentLocalStorage.js
 async function getMruEnvironmentFromLocalStorageInternal({ envListLoadPromise, getEnvironmentsList, getSingleEnvironmentUrl: getSingleEnvironmentUrl2, localStorageKey }) {
   const scenario = trackLoadScenario(telemetryScopeName, "preferredEnvironment/getMruEnvironmentFromLocalStorage", {}, import_shell_icm_info.Team.Shell);
   try {
@@ -73433,7 +73512,7 @@ function getRecentEnvironmentKey(localStorageKey) {
 }
 var import_featureGates7, import_stringHelpers2, import_AuthenticationService2, getMruEnvironmentFromLocalStorage;
 var init_mruEnvironmentLocalStorage = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/mruEnvironmentLocalStorage.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/mruEnvironmentLocalStorage.js"() {
     "use strict";
     init_ExternalTypes();
     init_lib12();
@@ -73451,7 +73530,7 @@ var init_mruEnvironmentLocalStorage = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getSharePointEnvironment.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getSharePointEnvironment.js
 async function getSharePointEnvironmentFn({ getSingleEnvironmentUrl: getSingleEnvironmentUrl2 }) {
   const scenario = trackLoadScenario(telemetryScopeName, "preferredEnvironment/getSharePointEnvironment", {}, import_shell_icm_info.Team.Shell);
   try {
@@ -73473,7 +73552,7 @@ async function getSharePointEnvironmentFn({ getSingleEnvironmentUrl: getSingleEn
 }
 var getSharePointEnvironment;
 var init_getSharePointEnvironment = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getSharePointEnvironment.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getSharePointEnvironment.js"() {
     "use strict";
     init_EnvironmentProvider();
     init_HttpClient();
@@ -73486,7 +73565,7 @@ var init_getSharePointEnvironment = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getUserDataverseEnvironmentByType.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getUserDataverseEnvironmentByType.js
 async function getUserDataverseEnvironmentByTypeFn({ envListLoadPromise, getEnvironmentsList, environmentTypes = [
   ExternalTypes_exports.EnvironmentSkuConstants.Sandbox,
   ExternalTypes_exports.EnvironmentSkuConstants.Production,
@@ -73513,7 +73592,7 @@ async function getUserDataverseEnvironmentByTypeFn({ envListLoadPromise, getEnvi
 }
 var getUserDataverseEnvironmentByType;
 var init_getUserDataverseEnvironmentByType = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getUserDataverseEnvironmentByType.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getUserDataverseEnvironmentByType.js"() {
     "use strict";
     init_lib4();
     init_EnvironmentProvider_constants();
@@ -73525,10 +73604,10 @@ var init_getUserDataverseEnvironmentByType = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getDefaultProviderImpl.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getDefaultProviderImpl.js
 var import_shell_authentication5, getDefaultProviderImpl;
 var init_getDefaultProviderImpl = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getDefaultProviderImpl.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/getDefaultProviderImpl.js"() {
     "use strict";
     import_shell_authentication5 = __toESM(require_shell_authentication());
     init_getDefaultEnvironment();
@@ -73552,9 +73631,9 @@ var init_getDefaultProviderImpl = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/index.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/index.js
 var init_PreferredEnvironmentProviders = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/index.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/PreferredEnvironmentProviders/index.js"() {
     "use strict";
     init_getDevEnvironment();
     init_getDefaultEnvironment();
@@ -73567,7 +73646,7 @@ var init_PreferredEnvironmentProviders = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/EnvironmentProvider.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/EnvironmentProvider.js
 function getSingleEnvironmentUrl(environmentName, refreshCache = false) {
   if (environmentName === defaultEnvironmentName || environmentName === sharePointEnvironmentName) {
     return `https://bap-rp/api/providers/Microsoft.BusinessAppPlatform/environments/${environmentName}?api-version=${BapApiVersion}&$expand=properties.permissions&$filter=${defaultFilterExpression}`;
@@ -73654,7 +73733,7 @@ function filterEnvironment(environment) {
 }
 var import_environment2, import_environment3, import_uriHelpers2, import_AuthenticationProvider2, import_shell_authentication6, import_crypto_js, import_isEqual, React18, import_react_router_dom2, import_featureGates10, import_stringHelpers3, EnvironmentContext, deprecateLegacyPARPForEssentialServices, deferredInitialLoadEnvironmentsResolve, deferredInitialLoadEnvironmentsReject, initialLoadEnvironmentsPromise, deferredInitialLoadCachedEnvironmentsResolve, initialLoadCachedEnvironmentsPromise, ConnectedEnvironmentProvider, EnvironmentProvider;
 var init_EnvironmentProvider = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/EnvironmentProvider.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/EnvironmentProvider.js"() {
     "use strict";
     import_environment2 = __toESM(require_environment());
     import_environment3 = __toESM(require_environment2());
@@ -74103,14 +74182,14 @@ var init_EnvironmentProvider = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/EnvironmentProvider.types.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/EnvironmentProvider.types.js
 var init_EnvironmentProvider_types = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/EnvironmentProvider.types.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/EnvironmentProvider.types.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/environmentHelpers.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/environmentHelpers.js
 function isEnvironmentMismatchedWithRegionSetting(environment) {
   if ((0, import_featureGates11.isForceTip2InTestEnabled)()) {
     return false;
@@ -74127,7 +74206,7 @@ function isEnvironmentMismatchedWithRegionSetting(environment) {
 }
 var import_environment4, import_featureGates11, PathRegex, isEnvironmentInLocationPath;
 var init_environmentHelpers = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/environmentHelpers.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/environmentHelpers.js"() {
     "use strict";
     init_lib();
     import_environment4 = __toESM(require_environment2());
@@ -74143,10 +74222,10 @@ var init_environmentHelpers = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/EnvironmentCapacityProvider.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/EnvironmentCapacityProvider.js
 var import_environment5, React19, EnvironmentCapacityContext, ConnectedEnvironmentCapacityProvider, EnvironmentCapacityProvider, withEnvironmentCapacity;
 var init_EnvironmentCapacityProvider = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/EnvironmentCapacityProvider.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/EnvironmentCapacityProvider.js"() {
     "use strict";
     import_environment5 = __toESM(require_environment2());
     init_ProviderConsumer();
@@ -74260,7 +74339,7 @@ var init_EnvironmentCapacityProvider = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/HOCs/withEnvironments.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/HOCs/withEnvironments.js
 function withEnvironments(Component4) {
   const Wrapper = (props) => {
     const environments = useEnvironments();
@@ -74271,14 +74350,14 @@ function withEnvironments(Component4) {
 }
 var import_react8;
 var init_withEnvironments = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/HOCs/withEnvironments.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/HOCs/withEnvironments.js"() {
     "use strict";
     init_lib16();
     import_react8 = __toESM(require_react());
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/HOCs/withCurrentEnvironment.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/HOCs/withCurrentEnvironment.js
 function withCurrentEnvironment(Component4, wait) {
   const Wrapper = (props) => {
     const currentEnvironment = useCurrentEnvironment();
@@ -74292,14 +74371,14 @@ function withCurrentEnvironment(Component4, wait) {
 }
 var import_react9;
 var init_withCurrentEnvironment = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/HOCs/withCurrentEnvironment.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/HOCs/withCurrentEnvironment.js"() {
     "use strict";
     init_lib16();
     import_react9 = __toESM(require_react());
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/HOCs/withSwitchEnvironment.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/HOCs/withSwitchEnvironment.js
 function withSwitchEnvironment(Component4) {
   const Wrapper = (props) => {
     const switchEnvironmentReturn = useSwitchEnvironment();
@@ -74310,17 +74389,17 @@ function withSwitchEnvironment(Component4) {
 }
 var import_react10;
 var init_withSwitchEnvironment = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/HOCs/withSwitchEnvironment.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/HOCs/withSwitchEnvironment.js"() {
     "use strict";
     init_lib16();
     import_react10 = __toESM(require_react());
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/Utils/queryStatus.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/Utils/queryStatus.js
 var deriveQueryStatus;
 var init_queryStatus = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/Utils/queryStatus.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/Utils/queryStatus.js"() {
     "use strict";
     deriveQueryStatus = (status) => {
       return {
@@ -74332,7 +74411,7 @@ var init_queryStatus = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useCurrentEnvironment.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useCurrentEnvironment.js
 function useCurrentEnvironment() {
   const { currentEnvironment, currentEnvironmentLoadingStatus, refreshCurrentEnvironment } = React23.useContext(EnvironmentContext);
   const status = React23.useMemo(() => {
@@ -74357,7 +74436,7 @@ function useCurrentEnvironment() {
 }
 var React23;
 var init_useCurrentEnvironment = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useCurrentEnvironment.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useCurrentEnvironment.js"() {
     "use strict";
     React23 = __toESM(require_react());
     init_lib16();
@@ -74365,7 +74444,7 @@ var init_useCurrentEnvironment = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useCurrentEnvironmentName.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useCurrentEnvironmentName.js
 function useCurrentEnvironmentName() {
   const { currentEnvironment, currentEnvironmentLoadingStatus } = React24.useContext(EnvironmentContext);
   const status = React24.useMemo(() => {
@@ -74387,7 +74466,7 @@ function useCurrentEnvironmentName() {
 }
 var React24;
 var init_useCurrentEnvironmentName = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useCurrentEnvironmentName.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useCurrentEnvironmentName.js"() {
     "use strict";
     React24 = __toESM(require_react());
     init_lib16();
@@ -74395,7 +74474,7 @@ var init_useCurrentEnvironmentName = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useEnvironments.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useEnvironments.js
 function useEnvironments() {
   const { _environments, allEnvironmentsLoadingStatus, forceRefreshEnvironmentsList } = React25.useContext(EnvironmentContext);
   const status = React25.useMemo(() => {
@@ -74418,7 +74497,7 @@ function useEnvironments() {
 }
 var React25;
 var init_useEnvironments = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useEnvironments.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useEnvironments.js"() {
     "use strict";
     React25 = __toESM(require_react());
     init_lib16();
@@ -74426,7 +74505,7 @@ var init_useEnvironments = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useGetEnvironmentByName.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useGetEnvironmentByName.js
 function useGetEnvironmentByName(options) {
   const { onGetEnvironmentByName } = (0, import_react11.useContext)(EnvironmentContext);
   const queryClient = useQueryClient();
@@ -74469,7 +74548,7 @@ async function useEnvironmentByName(environmentName, disabled, options) {
 }
 var import_react11, staleTime, queryKey, getBapEnvironmentByName, getBapEnvironmentUrl;
 var init_useGetEnvironmentByName = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useGetEnvironmentByName.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/useGetEnvironmentByName.js"() {
     "use strict";
     init_HttpClient();
     init_lib4();
@@ -74498,9 +74577,9 @@ var init_useGetEnvironmentByName = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/index.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/index.js
 var init_Hooks = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/index.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/Hooks/index.js"() {
     "use strict";
     init_useAttachDataverseToEnvironment();
     init_useCreateEnvironment();
@@ -74513,58 +74592,58 @@ var init_Hooks = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/Types/AttachDataverseToEnvironmentMutationResult.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/Types/AttachDataverseToEnvironmentMutationResult.js
 var init_AttachDataverseToEnvironmentMutationResult = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/Types/AttachDataverseToEnvironmentMutationResult.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/Types/AttachDataverseToEnvironmentMutationResult.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/Types/CurrentEnvironmentNameQueryResult.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/Types/CurrentEnvironmentNameQueryResult.js
 var init_CurrentEnvironmentNameQueryResult = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/Types/CurrentEnvironmentNameQueryResult.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/Types/CurrentEnvironmentNameQueryResult.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/Types/CurrentEnvironmentQueryResult.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/Types/CurrentEnvironmentQueryResult.js
 var init_CurrentEnvironmentQueryResult = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/Types/CurrentEnvironmentQueryResult.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/Types/CurrentEnvironmentQueryResult.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/Types/EnvironmentsQueryResult.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/Types/EnvironmentsQueryResult.js
 var init_EnvironmentsQueryResult = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/Types/EnvironmentsQueryResult.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/Types/EnvironmentsQueryResult.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/Types/SwitchEnvironmentQueryResult.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/Types/SwitchEnvironmentQueryResult.js
 var init_SwitchEnvironmentQueryResult = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/Types/SwitchEnvironmentQueryResult.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/Types/SwitchEnvironmentQueryResult.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/Types/PollDataverseAttachmentStatusQueryResult.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/Types/PollDataverseAttachmentStatusQueryResult.js
 var init_PollDataverseAttachmentStatusQueryResult = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/Types/PollDataverseAttachmentStatusQueryResult.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/Types/PollDataverseAttachmentStatusQueryResult.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/Types/CreateEnvironmentMutationResult.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/Types/CreateEnvironmentMutationResult.js
 var init_CreateEnvironmentMutationResult = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/Types/CreateEnvironmentMutationResult.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/Types/CreateEnvironmentMutationResult.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/Types/index.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/Types/index.js
 var init_Types3 = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/Types/index.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/Types/index.js"() {
     "use strict";
     init_AttachDataverseToEnvironmentMutationResult();
     init_CurrentEnvironmentNameQueryResult();
@@ -74576,7 +74655,7 @@ var init_Types3 = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/Utils/environmentNameHeaderHelper.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/Utils/environmentNameHeaderHelper.js
 function overrideEnvironmentNameHeader(environmentName) {
   return {
     [environmentNameHeaderKey]: environmentName
@@ -74600,21 +74679,21 @@ function getEnvironmentNameFromHeaders(config2) {
 }
 var environmentNameHeaderKey;
 var init_environmentNameHeaderHelper = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/Utils/environmentNameHeaderHelper.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/Utils/environmentNameHeaderHelper.js"() {
     "use strict";
     environmentNameHeaderKey = "x-ms-environment-name";
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/Utils/index.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/Utils/index.js
 var init_Utils = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/Utils/index.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/Utils/index.js"() {
     "use strict";
     init_environmentNameHeaderHelper();
   }
 });
 
-// ../../../power-platform-ux/packages/power-platform-environment/lib/index.js
+// ../../../../../power-platform-ux/packages/power-platform-environment/lib/index.js
 var lib_exports4 = {};
 __export(lib_exports4, {
   BapApiVersion: () => BapApiVersion,
@@ -74680,7 +74759,7 @@ __export(lib_exports4, {
   withSwitchEnvironment: () => withSwitchEnvironment
 });
 var init_lib16 = __esm({
-  "../../../power-platform-ux/packages/power-platform-environment/lib/index.js"() {
+  "../../../../../power-platform-ux/packages/power-platform-environment/lib/index.js"() {
     "use strict";
     init_EnvironmentProvider();
     init_EnvironmentProvider_constants();
@@ -74699,18 +74778,18 @@ var init_lib16 = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-metadata-client/lib/MetadataClientLogging.js
+// ../../../../../power-platform-ux/packages/cds-metadata-client/lib/MetadataClientLogging.js
 var init_MetadataClientLogging = __esm({
-  "../../../power-platform-ux/packages/cds-metadata-client/lib/MetadataClientLogging.js"() {
+  "../../../../../power-platform-ux/packages/cds-metadata-client/lib/MetadataClientLogging.js"() {
     "use strict";
     init_lib4();
   }
 });
 
-// ../../../power-platform-ux/packages/cds-metadata-client/lib/featureGates.js
+// ../../../../../power-platform-ux/packages/cds-metadata-client/lib/featureGates.js
 var featureGates4;
 var init_featureGates6 = __esm({
-  "../../../power-platform-ux/packages/cds-metadata-client/lib/featureGates.js"() {
+  "../../../../../power-platform-ux/packages/cds-metadata-client/lib/featureGates.js"() {
     "use strict";
     init_lib2();
     featureGates4 = createFeatureGatesConfig({
@@ -74737,10 +74816,10 @@ var init_featureGates6 = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-metadata-client/lib/MetadataClient.js
+// ../../../../../power-platform-ux/packages/cds-metadata-client/lib/MetadataClient.js
 var MetadataClientCreationStatus;
 var init_MetadataClient = __esm({
-  "../../../power-platform-ux/packages/cds-metadata-client/lib/MetadataClient.js"() {
+  "../../../../../power-platform-ux/packages/cds-metadata-client/lib/MetadataClient.js"() {
     "use strict";
     init_lib16();
     init_HttpClient();
@@ -74756,49 +74835,49 @@ var init_MetadataClient = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useRunObjectCheckerForComponents.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useRunObjectCheckerForComponents.js
 var init_useRunObjectCheckerForComponents = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useRunObjectCheckerForComponents.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useRunObjectCheckerForComponents.js"() {
     "use strict";
     init_MetadataClient();
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/constants.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/constants.js
 var init_constants = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/constants.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/constants.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/uriHelpers.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/uriHelpers.js
 var init_uriHelpers = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/uriHelpers.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/uriHelpers.js"() {
     "use strict";
     init_constants();
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/IObjectCheckerRun.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/IObjectCheckerRun.js
 var init_IObjectCheckerRun = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/IObjectCheckerRun.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/IObjectCheckerRun.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/mappings/cds/AnalysisResultsMapping.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/mappings/cds/AnalysisResultsMapping.js
 var import_morphism2;
 var init_AnalysisResultsMapping = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/mappings/cds/AnalysisResultsMapping.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/mappings/cds/AnalysisResultsMapping.js"() {
     "use strict";
     init_IObjectCheckerRun();
     import_morphism2 = __toESM(require_morphism());
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIsMatch.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIsMatch.js
 var require_baseIsMatch = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIsMatch.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIsMatch.js"(exports2, module2) {
     var Stack = require_Stack();
     var baseIsEqual = require_baseIsEqual();
     var COMPARE_PARTIAL_FLAG = 1;
@@ -74838,9 +74917,9 @@ var require_baseIsMatch = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isStrictComparable.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isStrictComparable.js
 var require_isStrictComparable = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isStrictComparable.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isStrictComparable.js"(exports2, module2) {
     var isObject = require_isObject();
     function isStrictComparable(value) {
       return value === value && !isObject(value);
@@ -74849,9 +74928,9 @@ var require_isStrictComparable = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getMatchData.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getMatchData.js
 var require_getMatchData = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getMatchData.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_getMatchData.js"(exports2, module2) {
     var isStrictComparable = require_isStrictComparable();
     var keys = require_keys();
     function getMatchData(object) {
@@ -74866,9 +74945,9 @@ var require_getMatchData = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_matchesStrictComparable.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_matchesStrictComparable.js
 var require_matchesStrictComparable = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_matchesStrictComparable.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_matchesStrictComparable.js"(exports2, module2) {
     function matchesStrictComparable(key, srcValue) {
       return function(object) {
         if (object == null) {
@@ -74881,9 +74960,9 @@ var require_matchesStrictComparable = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseMatches.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseMatches.js
 var require_baseMatches = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseMatches.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseMatches.js"(exports2, module2) {
     var baseIsMatch = require_baseIsMatch();
     var getMatchData = require_getMatchData();
     var matchesStrictComparable = require_matchesStrictComparable();
@@ -74900,9 +74979,9 @@ var require_baseMatches = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isSymbol.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isSymbol.js
 var require_isSymbol = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isSymbol.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/isSymbol.js"(exports2, module2) {
     var baseGetTag = require_baseGetTag();
     var isObjectLike = require_isObjectLike();
     var symbolTag = "[object Symbol]";
@@ -74913,9 +74992,9 @@ var require_isSymbol = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isKey.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isKey.js
 var require_isKey = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isKey.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_isKey.js"(exports2, module2) {
     var isArray = require_isArray();
     var isSymbol = require_isSymbol();
     var reIsDeepProp = /\.|\[(?:[^[\]]*|(["'])(?:(?!\1)[^\\]|\\.)*?\1)\]/;
@@ -74934,9 +75013,9 @@ var require_isKey = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/memoize.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/memoize.js
 var require_memoize = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/memoize.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/memoize.js"(exports2, module2) {
     var MapCache = require_MapCache();
     var FUNC_ERROR_TEXT = "Expected a function";
     function memoize3(func, resolver) {
@@ -74960,9 +75039,9 @@ var require_memoize = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_memoizeCapped.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_memoizeCapped.js
 var require_memoizeCapped = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_memoizeCapped.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_memoizeCapped.js"(exports2, module2) {
     var memoize3 = require_memoize();
     var MAX_MEMOIZE_SIZE = 500;
     function memoizeCapped(func) {
@@ -74979,9 +75058,9 @@ var require_memoizeCapped = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_stringToPath.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_stringToPath.js
 var require_stringToPath = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_stringToPath.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_stringToPath.js"(exports2, module2) {
     var memoizeCapped = require_memoizeCapped();
     var rePropName = /[^.[\]]+|\[(?:(-?\d+(?:\.\d+)?)|(["'])((?:(?!\2)[^\\]|\\.)*?)\2)\]|(?=(?:\.|\[\])(?:\.|\[\]|$))/g;
     var reEscapeChar = /\\(\\)?/g;
@@ -74999,9 +75078,9 @@ var require_stringToPath = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_arrayMap.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_arrayMap.js
 var require_arrayMap = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_arrayMap.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_arrayMap.js"(exports2, module2) {
     function arrayMap(array, iteratee) {
       var index = -1, length = array == null ? 0 : array.length, result = Array(length);
       while (++index < length) {
@@ -75013,9 +75092,9 @@ var require_arrayMap = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseToString.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseToString.js
 var require_baseToString = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseToString.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseToString.js"(exports2, module2) {
     var Symbol2 = require_Symbol();
     var arrayMap = require_arrayMap();
     var isArray = require_isArray();
@@ -75040,9 +75119,9 @@ var require_baseToString = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/toString.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/toString.js
 var require_toString = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/toString.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/toString.js"(exports2, module2) {
     var baseToString = require_baseToString();
     function toString(value) {
       return value == null ? "" : baseToString(value);
@@ -75051,9 +75130,9 @@ var require_toString = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_castPath.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_castPath.js
 var require_castPath = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_castPath.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_castPath.js"(exports2, module2) {
     var isArray = require_isArray();
     var isKey = require_isKey();
     var stringToPath = require_stringToPath();
@@ -75068,9 +75147,9 @@ var require_castPath = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_toKey.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_toKey.js
 var require_toKey = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_toKey.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_toKey.js"(exports2, module2) {
     var isSymbol = require_isSymbol();
     var INFINITY = 1 / 0;
     function toKey(value) {
@@ -75084,9 +75163,9 @@ var require_toKey = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseGet.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseGet.js
 var require_baseGet = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseGet.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseGet.js"(exports2, module2) {
     var castPath = require_castPath();
     var toKey = require_toKey();
     function baseGet(object, path) {
@@ -75101,9 +75180,9 @@ var require_baseGet = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/get.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/get.js
 var require_get2 = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/get.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/get.js"(exports2, module2) {
     var baseGet = require_baseGet();
     function get(object, path, defaultValue) {
       var result = object == null ? void 0 : baseGet(object, path);
@@ -75113,9 +75192,9 @@ var require_get2 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseHasIn.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseHasIn.js
 var require_baseHasIn = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseHasIn.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseHasIn.js"(exports2, module2) {
     function baseHasIn(object, key) {
       return object != null && key in Object(object);
     }
@@ -75123,9 +75202,9 @@ var require_baseHasIn = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_hasPath.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_hasPath.js
 var require_hasPath = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_hasPath.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_hasPath.js"(exports2, module2) {
     var castPath = require_castPath();
     var isArguments = require_isArguments();
     var isArray = require_isArray();
@@ -75152,9 +75231,9 @@ var require_hasPath = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/hasIn.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/hasIn.js
 var require_hasIn = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/hasIn.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/hasIn.js"(exports2, module2) {
     var baseHasIn = require_baseHasIn();
     var hasPath = require_hasPath();
     function hasIn(object, path) {
@@ -75164,9 +75243,9 @@ var require_hasIn = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseMatchesProperty.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseMatchesProperty.js
 var require_baseMatchesProperty = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseMatchesProperty.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseMatchesProperty.js"(exports2, module2) {
     var baseIsEqual = require_baseIsEqual();
     var get = require_get2();
     var hasIn = require_hasIn();
@@ -75189,9 +75268,9 @@ var require_baseMatchesProperty = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseProperty.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseProperty.js
 var require_baseProperty = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseProperty.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseProperty.js"(exports2, module2) {
     function baseProperty(key) {
       return function(object) {
         return object == null ? void 0 : object[key];
@@ -75201,9 +75280,9 @@ var require_baseProperty = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_basePropertyDeep.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_basePropertyDeep.js
 var require_basePropertyDeep = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_basePropertyDeep.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_basePropertyDeep.js"(exports2, module2) {
     var baseGet = require_baseGet();
     function basePropertyDeep(path) {
       return function(object) {
@@ -75214,9 +75293,9 @@ var require_basePropertyDeep = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/property.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/property.js
 var require_property = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/property.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/property.js"(exports2, module2) {
     var baseProperty = require_baseProperty();
     var basePropertyDeep = require_basePropertyDeep();
     var isKey = require_isKey();
@@ -75228,9 +75307,9 @@ var require_property = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIteratee.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIteratee.js
 var require_baseIteratee = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIteratee.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseIteratee.js"(exports2, module2) {
     var baseMatches = require_baseMatches();
     var baseMatchesProperty = require_baseMatchesProperty();
     var identity = require_identity();
@@ -75252,9 +75331,9 @@ var require_baseIteratee = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_createFind.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_createFind.js
 var require_createFind = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_createFind.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_createFind.js"(exports2, module2) {
     var baseIteratee = require_baseIteratee();
     var isArrayLike = require_isArrayLike();
     var keys = require_keys();
@@ -75276,9 +75355,9 @@ var require_createFind = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseFindIndex.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseFindIndex.js
 var require_baseFindIndex = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseFindIndex.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseFindIndex.js"(exports2, module2) {
     function baseFindIndex(array, predicate, fromIndex, fromRight) {
       var length = array.length, index = fromIndex + (fromRight ? 1 : -1);
       while (fromRight ? index-- : ++index < length) {
@@ -75292,9 +75371,9 @@ var require_baseFindIndex = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_trimmedEndIndex.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_trimmedEndIndex.js
 var require_trimmedEndIndex = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_trimmedEndIndex.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_trimmedEndIndex.js"(exports2, module2) {
     var reWhitespace = /\s/;
     function trimmedEndIndex(string) {
       var index = string.length;
@@ -75306,9 +75385,9 @@ var require_trimmedEndIndex = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseTrim.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseTrim.js
 var require_baseTrim = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseTrim.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/_baseTrim.js"(exports2, module2) {
     var trimmedEndIndex = require_trimmedEndIndex();
     var reTrimStart = /^\s+/;
     function baseTrim(string) {
@@ -75318,9 +75397,9 @@ var require_baseTrim = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/toNumber.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/toNumber.js
 var require_toNumber = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/toNumber.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/toNumber.js"(exports2, module2) {
     var baseTrim = require_baseTrim();
     var isObject = require_isObject();
     var isSymbol = require_isSymbol();
@@ -75351,9 +75430,9 @@ var require_toNumber = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/toFinite.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/toFinite.js
 var require_toFinite = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/toFinite.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/toFinite.js"(exports2, module2) {
     var toNumber = require_toNumber();
     var INFINITY = 1 / 0;
     var MAX_INTEGER = 17976931348623157e292;
@@ -75372,9 +75451,9 @@ var require_toFinite = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/toInteger.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/toInteger.js
 var require_toInteger = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/toInteger.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/toInteger.js"(exports2, module2) {
     var toFinite = require_toFinite();
     function toInteger(value) {
       var result = toFinite(value), remainder = result % 1;
@@ -75384,9 +75463,9 @@ var require_toInteger = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/findIndex.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/findIndex.js
 var require_findIndex = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/findIndex.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/findIndex.js"(exports2, module2) {
     var baseFindIndex = require_baseFindIndex();
     var baseIteratee = require_baseIteratee();
     var toInteger = require_toInteger();
@@ -75406,9 +75485,9 @@ var require_findIndex = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/find.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/find.js
 var require_find = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/find.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/lodash@4.18.1/node_modules/lodash/find.js"(exports2, module2) {
     var createFind = require_createFind();
     var findIndex2 = require_findIndex();
     var find4 = createFind(findIndex2);
@@ -75416,10 +75495,10 @@ var require_find = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/objectCheckerHelpers.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/objectCheckerHelpers.js
 var import_find, StatusCodes;
 var init_objectCheckerHelpers = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/objectCheckerHelpers.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/objectCheckerHelpers.js"() {
     "use strict";
     import_find = __toESM(require_find());
     (function(StatusCodes2) {
@@ -75433,10 +75512,10 @@ var init_objectCheckerHelpers = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useGetSolutionObjectCheckerResults.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useGetSolutionObjectCheckerResults.js
 var import_lodash3;
 var init_useGetSolutionObjectCheckerResults = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useGetSolutionObjectCheckerResults.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useGetSolutionObjectCheckerResults.js"() {
     "use strict";
     init_uriHelpers();
     init_resourcesHelpers();
@@ -75447,9 +75526,9 @@ var init_useGetSolutionObjectCheckerResults = __esm({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/jsutils/inspect.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/jsutils/inspect.js
 var require_inspect = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/jsutils/inspect.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/jsutils/inspect.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", {
       value: true
@@ -75493,9 +75572,9 @@ var require_inspect = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/jsutils/invariant.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/jsutils/invariant.js
 var require_invariant = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/jsutils/invariant.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/jsutils/invariant.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", {
       value: true
@@ -75509,9 +75588,9 @@ var require_invariant = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/jsutils/defineToStringTag.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/jsutils/defineToStringTag.js
 var require_defineToStringTag = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/jsutils/defineToStringTag.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/jsutils/defineToStringTag.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", {
       value: true
@@ -75529,9 +75608,9 @@ var require_defineToStringTag = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/source.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/source.js
 var require_source = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/source.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/source.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", {
       value: true
@@ -75568,9 +75647,9 @@ var require_source = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/location.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/location.js
 var require_location = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/location.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/location.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", {
       value: true
@@ -75593,9 +75672,9 @@ var require_location = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/error/printError.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/error/printError.js
 var require_printError = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/error/printError.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/error/printError.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", {
       value: true
@@ -75716,9 +75795,9 @@ var require_printError = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/error/GraphQLError.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/error/GraphQLError.js
 var require_GraphQLError = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/error/GraphQLError.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/error/GraphQLError.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", {
       value: true
@@ -75840,9 +75919,9 @@ var require_GraphQLError = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/error/syntaxError.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/error/syntaxError.js
 var require_syntaxError = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/error/syntaxError.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/error/syntaxError.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", {
       value: true
@@ -75855,9 +75934,9 @@ var require_syntaxError = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/error/locatedError.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/error/locatedError.js
 var require_locatedError = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/error/locatedError.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/error/locatedError.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", {
       value: true
@@ -75873,9 +75952,9 @@ var require_locatedError = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/error/formatError.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/error/formatError.js
 var require_formatError = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/error/formatError.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/error/formatError.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", {
       value: true
@@ -75905,9 +75984,9 @@ var require_formatError = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/error/index.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/error/index.js
 var require_error = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/error/index.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/error/index.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", {
       value: true
@@ -75950,9 +76029,9 @@ var require_error = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/blockStringValue.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/blockStringValue.js
 var require_blockStringValue = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/blockStringValue.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/blockStringValue.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", {
       value: true
@@ -75997,9 +76076,9 @@ var require_blockStringValue = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/lexer.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/lexer.js
 var require_lexer = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/lexer.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/lexer.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", {
       value: true
@@ -76434,9 +76513,9 @@ var require_lexer = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/kinds.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/kinds.js
 var require_kinds = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/kinds.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/kinds.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", {
       value: true
@@ -76502,9 +76581,9 @@ var require_kinds = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/directiveLocation.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/directiveLocation.js
 var require_directiveLocation = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/directiveLocation.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/directiveLocation.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", {
       value: true
@@ -76537,9 +76616,9 @@ var require_directiveLocation = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/parser.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/parser.js
 var require_parser = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/parser.js"(exports2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql@14.0.2/node_modules/graphql/language/parser.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", {
       value: true
@@ -77461,9 +77540,9 @@ var require_parser = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql-tag@2.10.3_graphql@14.0.2/node_modules/graphql-tag/lib/graphql-tag.umd.js
+// ../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql-tag@2.10.3_graphql@14.0.2/node_modules/graphql-tag/lib/graphql-tag.umd.js
 var require_graphql_tag_umd = __commonJS({
-  "../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql-tag@2.10.3_graphql@14.0.2/node_modules/graphql-tag/lib/graphql-tag.umd.js"(exports2, module2) {
+  "../../../../../power-platform-ux/common/temp/node_modules/.pnpm/graphql-tag@2.10.3_graphql@14.0.2/node_modules/graphql-tag/lib/graphql-tag.umd.js"(exports2, module2) {
     (function(global2, factory) {
       typeof exports2 === "object" && typeof module2 !== "undefined" ? factory() : typeof define === "function" && define.amd ? define(factory) : factory();
     })(exports2, function() {
@@ -77591,10 +77670,10 @@ var require_graphql_tag_umd = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/getSolutionSubComponents.gql.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/getSolutionSubComponents.gql.js
 var import_graphql_tag, GetSubComponentsGql;
 var init_getSolutionSubComponents_gql = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/getSolutionSubComponents.gql.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/getSolutionSubComponents.gql.js"() {
     "use strict";
     import_graphql_tag = __toESM(require_graphql_tag_umd());
     GetSubComponentsGql = import_graphql_tag.default`
@@ -77618,20 +77697,20 @@ var init_getSolutionSubComponents_gql = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/mappings/cds/SystemFormToSolutionComponentMapping.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/mappings/cds/SystemFormToSolutionComponentMapping.js
 var import_morphism3;
 var init_SystemFormToSolutionComponentMapping = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/mappings/cds/SystemFormToSolutionComponentMapping.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/mappings/cds/SystemFormToSolutionComponentMapping.js"() {
     "use strict";
     import_morphism3 = __toESM(require_morphism());
     init_constants();
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useGetSubComponent.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useGetSubComponent.js
 var import_react12;
 var init_useGetSubComponent = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useGetSubComponent.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useGetSubComponent.js"() {
     "use strict";
     init_MetadataClient();
     init_resourcesHelpers();
@@ -77641,7 +77720,7 @@ var init_useGetSubComponent = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/telemetryHelpers.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/telemetryHelpers.js
 function getScenarioDataForLogging(scenarioCategory, scenarioSource) {
   return {
     scenario: {
@@ -77652,7 +77731,7 @@ function getScenarioDataForLogging(scenarioCategory, scenarioSource) {
 }
 var TelemetryScenarioNames, TelemetryEventNames, ScenarioSource, ScenarioCategory, ScenarioName;
 var init_telemetryHelpers = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/telemetryHelpers.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/telemetryHelpers.js"() {
     "use strict";
     init_lib4();
     (function(TelemetryScenarioNames2) {
@@ -77941,10 +78020,10 @@ var init_telemetryHelpers = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useSolutionLayers.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useSolutionLayers.js
 var import_react13;
 var init_useSolutionLayers = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useSolutionLayers.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useSolutionLayers.js"() {
     "use strict";
     init_lib4();
     init_telemetryHelpers();
@@ -77953,10 +78032,10 @@ var init_useSolutionLayers = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/shared/developerEnvironmentDefaults.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/shared/developerEnvironmentDefaults.js
 var developerEnvironmentNamespace, environmentDefaultsSolutionUniqueName, developerEnvironmentDefaults;
 var init_developerEnvironmentDefaults = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/shared/developerEnvironmentDefaults.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/shared/developerEnvironmentDefaults.js"() {
     "use strict";
     init_lib16();
     developerEnvironmentNamespace = "b64f2ff1-1111-ee11-a672-00224820c644";
@@ -78288,9 +78367,9 @@ var init_developerEnvironmentDefaults = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-apis/lib/helpers/cds/organization.js
+// ../../../../../power-platform-ux/packages/powerapps-apis/lib/helpers/cds/organization.js
 var require_organization = __commonJS({
-  "../../../power-platform-ux/packages/powerapps-apis/lib/helpers/cds/organization.js"(exports2) {
+  "../../../../../power-platform-ux/packages/powerapps-apis/lib/helpers/cds/organization.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.map = void 0;
@@ -78315,10 +78394,10 @@ var require_organization = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/getOrganizationSettings.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/getOrganizationSettings.js
 var import_organization;
 var init_getOrganizationSettings = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/getOrganizationSettings.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/getOrganizationSettings.js"() {
     "use strict";
     import_organization = __toESM(require_organization());
     init_hooks();
@@ -78327,10 +78406,10 @@ var init_getOrganizationSettings = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useOrganization.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useOrganization.js
 var import_react14, scenarioName, devEnvironmentDefaultOrganizationSettings;
 var init_useOrganization = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useOrganization.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useOrganization.js"() {
     "use strict";
     init_HttpClient();
     import_react14 = __toESM(require_react());
@@ -78348,9 +78427,9 @@ var init_useOrganization = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-apis/lib/contracts/cds/appModule.js
+// ../../../../../power-platform-ux/packages/powerapps-apis/lib/contracts/cds/appModule.js
 var require_appModule = __commonJS({
-  "../../../power-platform-ux/packages/powerapps-apis/lib/contracts/cds/appModule.js"(exports2) {
+  "../../../../../power-platform-ux/packages/powerapps-apis/lib/contracts/cds/appModule.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.ComponentState = exports2.sampleAppIdentifiers = void 0;
@@ -78369,9 +78448,9 @@ var require_appModule = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-apis/lib/helpers/cds/appModule.js
+// ../../../../../power-platform-ux/packages/powerapps-apis/lib/helpers/cds/appModule.js
 var require_appModule2 = __commonJS({
-  "../../../power-platform-ux/packages/powerapps-apis/lib/helpers/cds/appModule.js"(exports2) {
+  "../../../../../power-platform-ux/packages/powerapps-apis/lib/helpers/cds/appModule.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.isAppModuleManaged = exports2.getAppModelUniqueName = exports2.isSampleAppModule = exports2.getOwnerFromODataCreatedByValue = exports2.getPublishedDate = exports2.getCreatedDate = exports2.getModifiedDate = exports2.getModifiedDateString = exports2.getAppModuleDisplayName = void 0;
@@ -78419,9 +78498,9 @@ var require_appModule2 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-apis/lib/helpers/genericApp.js
+// ../../../../../power-platform-ux/packages/powerapps-apis/lib/helpers/genericApp.js
 var require_genericApp = __commonJS({
-  "../../../power-platform-ux/packages/powerapps-apis/lib/helpers/genericApp.js"(exports2) {
+  "../../../../../power-platform-ux/packages/powerapps-apis/lib/helpers/genericApp.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.AppTypes = void 0;
@@ -78437,19 +78516,19 @@ var require_genericApp = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/mappings/cds/cdsRoleMapping.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/mappings/cds/cdsRoleMapping.js
 var import_morphism4;
 var init_cdsRoleMapping = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/mappings/cds/cdsRoleMapping.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/mappings/cds/cdsRoleMapping.js"() {
     "use strict";
     import_morphism4 = __toESM(require_morphism());
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/mappings/cds/appModulesTypeMapping.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/mappings/cds/appModulesTypeMapping.js
 var AppModuleHelpers, import_genericApp, import_morphism5;
 var init_appModulesTypeMapping = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/mappings/cds/appModulesTypeMapping.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/mappings/cds/appModulesTypeMapping.js"() {
     "use strict";
     AppModuleHelpers = __toESM(require_appModule2());
     import_genericApp = __toESM(require_genericApp());
@@ -78458,34 +78537,34 @@ var init_appModulesTypeMapping = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/shared/utils.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/shared/utils.js
 var import_react15;
 var init_utils3 = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/shared/utils.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/shared/utils.js"() {
     "use strict";
     import_react15 = __toESM(require_react());
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/utils/cds/appModuleUriHelpers.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/utils/cds/appModuleUriHelpers.js
 var init_appModuleUriHelpers = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/utils/cds/appModuleUriHelpers.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/utils/cds/appModuleUriHelpers.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/utils/cds/cdsHelpers.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/utils/cds/cdsHelpers.js
 var init_cdsHelpers = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/utils/cds/cdsHelpers.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/utils/cds/cdsHelpers.js"() {
     "use strict";
     init_HttpClient();
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/appModule.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/appModule.js
 var import_EnumTypes3, import_cdsUris, allFieldsNeeded, fieldSelectionParam;
 var init_appModule = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/appModule.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/appModule.js"() {
     "use strict";
     import_EnumTypes3 = __toESM(require_EnumTypes());
     import_cdsUris = __toESM(require_cdsUris());
@@ -78515,10 +78594,10 @@ var init_appModule = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useAppModulePublish.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useAppModulePublish.js
 var import_react16, scenarioData2;
 var init_useAppModulePublish = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useAppModulePublish.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useAppModulePublish.js"() {
     "use strict";
     init_lib4();
     import_react16 = __toESM(require_react());
@@ -78528,19 +78607,19 @@ var init_useAppModulePublish = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useAppModuleMetadataVersions.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useAppModuleMetadataVersions.js
 var init_useAppModuleMetadataVersions = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useAppModuleMetadataVersions.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useAppModuleMetadataVersions.js"() {
     "use strict";
     init_appModule();
     init_useCurrentEnvironmentName();
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useAppModuleContext.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useAppModuleContext.js
 var import_react17;
 var init_useAppModuleContext = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useAppModuleContext.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useAppModuleContext.js"() {
     "use strict";
     init_lib4();
     import_react17 = __toESM(require_react());
@@ -78550,61 +78629,61 @@ var init_useAppModuleContext = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/constants/columnLevelSecurity.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/constants/columnLevelSecurity.js
 var init_columnLevelSecurity = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/constants/columnLevelSecurity.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/constants/columnLevelSecurity.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/columnLevelSecurity/createAttributeMaskingRule.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/columnLevelSecurity/createAttributeMaskingRule.js
 var init_createAttributeMaskingRule = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/columnLevelSecurity/createAttributeMaskingRule.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/columnLevelSecurity/createAttributeMaskingRule.js"() {
     "use strict";
     init_HttpClient();
     init_columnLevelSecurity();
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/columnLevelSecurity/deleteAttributeMaskingRule.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/columnLevelSecurity/deleteAttributeMaskingRule.js
 var init_deleteAttributeMaskingRule = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/columnLevelSecurity/deleteAttributeMaskingRule.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/columnLevelSecurity/deleteAttributeMaskingRule.js"() {
     "use strict";
     init_HttpClient();
     init_columnLevelSecurity();
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/columnLevelSecurity/getAttributeMaskingRule.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/columnLevelSecurity/getAttributeMaskingRule.js
 var init_getAttributeMaskingRule = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/columnLevelSecurity/getAttributeMaskingRule.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/columnLevelSecurity/getAttributeMaskingRule.js"() {
     "use strict";
     init_HttpClient();
     init_columnLevelSecurity();
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/columnLevelSecurity/getMaskingRules.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/columnLevelSecurity/getMaskingRules.js
 var init_getMaskingRules = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/columnLevelSecurity/getMaskingRules.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/columnLevelSecurity/getMaskingRules.js"() {
     "use strict";
     init_HttpClient();
     init_columnLevelSecurity();
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/columnLevelSecurity/updateAttributeMaskingRule.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/columnLevelSecurity/updateAttributeMaskingRule.js
 var init_updateAttributeMaskingRule = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/columnLevelSecurity/updateAttributeMaskingRule.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/cds/columnLevelSecurity/updateAttributeMaskingRule.js"() {
     "use strict";
     init_HttpClient();
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useColumnLevelSecurity.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useColumnLevelSecurity.js
 var import_react18;
 var init_useColumnLevelSecurity = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useColumnLevelSecurity.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/useColumnLevelSecurity.js"() {
     "use strict";
     init_lib4();
     init_lib16();
@@ -78618,9 +78697,9 @@ var init_useColumnLevelSecurity = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/index.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/index.js
 var init_cds = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/index.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/cds/index.js"() {
     "use strict";
     init_useRunObjectCheckerForComponents();
     init_useGetSolutionObjectCheckerResults();
@@ -78635,10 +78714,10 @@ var init_cds = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/telemetry/loadProgress/loadProgress.helpers.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/telemetry/loadProgress/loadProgress.helpers.js
 var import_lodash4, ComponentLoadState;
 var init_loadProgress_helpers = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/telemetry/loadProgress/loadProgress.helpers.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/telemetry/loadProgress/loadProgress.helpers.js"() {
     "use strict";
     import_lodash4 = __toESM(require_lodash());
     (function(ComponentLoadState2) {
@@ -78650,10 +78729,10 @@ var init_loadProgress_helpers = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/telemetry/loadProgress/useLoadProgressTelemetry.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/telemetry/loadProgress/useLoadProgressTelemetry.js
 var import_react19, import_lodash5;
 var init_useLoadProgressTelemetry = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/telemetry/loadProgress/useLoadProgressTelemetry.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/telemetry/loadProgress/useLoadProgressTelemetry.js"() {
     "use strict";
     import_react19 = __toESM(require_react());
     import_lodash5 = __toESM(require_lodash());
@@ -78662,40 +78741,40 @@ var init_useLoadProgressTelemetry = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/telemetry/loadProgress/index.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/telemetry/loadProgress/index.js
 var init_loadProgress = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/telemetry/loadProgress/index.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/telemetry/loadProgress/index.js"() {
     "use strict";
     init_loadProgress_helpers();
     init_useLoadProgressTelemetry();
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/graphQlResponseHelpers.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/graphQlResponseHelpers.js
 var init_graphQlResponseHelpers = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/graphQlResponseHelpers.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/graphQlResponseHelpers.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeployPackage.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeployPackage.js
 var init_DeployPackage = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeployPackage.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeployPackage.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentArtifact.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentArtifact.js
 var init_DeploymentArtifact = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentArtifact.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentArtifact.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentEnvironment.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentEnvironment.js
 var DeploymentEnvironmentType;
 var init_DeploymentEnvironment = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentEnvironment.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentEnvironment.js"() {
     "use strict";
     (function(DeploymentEnvironmentType2) {
       DeploymentEnvironmentType2[DeploymentEnvironmentType2["Development"] = 2e8] = "Development";
@@ -78704,10 +78783,10 @@ var init_DeploymentEnvironment = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentEnvironmentInfo.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentEnvironmentInfo.js
 var DeploymentEnvironmentInfoErrorCode;
 var init_DeploymentEnvironmentInfo = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentEnvironmentInfo.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentEnvironmentInfo.js"() {
     "use strict";
     (function(DeploymentEnvironmentInfoErrorCode2) {
       DeploymentEnvironmentInfoErrorCode2[DeploymentEnvironmentInfoErrorCode2["ProjectHostNotFound"] = 1] = "ProjectHostNotFound";
@@ -78716,24 +78795,24 @@ var init_DeploymentEnvironmentInfo = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentPipeline.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentPipeline.js
 var init_DeploymentPipeline = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentPipeline.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentPipeline.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentPipelineInfo.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentPipelineInfo.js
 var init_DeploymentPipelineInfo = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentPipelineInfo.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentPipelineInfo.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentStage.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentStage.js
 var DelegatedDeploymentType;
 var init_DeploymentStage = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentStage.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentStage.js"() {
     "use strict";
     (function(DelegatedDeploymentType2) {
       DelegatedDeploymentType2[DelegatedDeploymentType2["PipelineOwner"] = 1] = "PipelineOwner";
@@ -78742,10 +78821,10 @@ var init_DeploymentStage = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentStageRun.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentStageRun.js
 var StageRunStatus, DeploymentOperation, DeploymentOperationStatus, DeploymentSubOperation, PreDeploymentStepStatus;
 var init_DeploymentStageRun = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentStageRun.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentStageRun.js"() {
     "use strict";
     (function(StageRunStatus2) {
       StageRunStatus2[StageRunStatus2["NotStarted"] = 2e8] = "NotStarted";
@@ -78795,128 +78874,128 @@ var init_DeploymentStageRun = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentStageRunValidation.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentStageRunValidation.js
 var init_DeploymentStageRunValidation = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentStageRunValidation.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentStageRunValidation.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentUpdateSettings.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentUpdateSettings.js
 var init_DeploymentUpdateSettings = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentUpdateSettings.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/DeploymentUpdateSettings.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/Publisher.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/Publisher.js
 var init_Publisher = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/Publisher.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/Publisher.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/RetrieveDeploymentPipelinesResponse.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/RetrieveDeploymentPipelinesResponse.js
 var init_RetrieveDeploymentPipelinesResponse = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/RetrieveDeploymentPipelinesResponse.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/RetrieveDeploymentPipelinesResponse.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/Solution.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/Solution.js
 var init_Solution = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/Solution.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/Solution.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/StageRunDetails.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/StageRunDetails.js
 var init_StageRunDetails = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/StageRunDetails.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/StageRunDetails.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/StageRunExecutionInfo.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/StageRunExecutionInfo.js
 var init_StageRunExecutionInfo = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/StageRunExecutionInfo.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/StageRunExecutionInfo.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/SystemUser.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/SystemUser.js
 var init_SystemUser = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/SystemUser.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/SystemUser.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/ValidatePackageResponse.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/ValidatePackageResponse.js
 var init_ValidatePackageResponse = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/ValidatePackageResponse.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/ValidatePackageResponse.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/appModule.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/appModule.js
 var init_appModule2 = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/appModule.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/appModule.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/appModuleContext.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/appModuleContext.js
 var init_appModuleContext = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/appModuleContext.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/appModuleContext.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/chart.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/chart.js
 var init_chart = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/chart.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/chart.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/form.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/form.js
 var init_form = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/form.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/form.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/siteMap.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/siteMap.js
 var init_siteMap = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/siteMap.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/siteMap.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/solutionComponentLayer.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/solutionComponentLayer.js
 var init_solutionComponentLayer = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/solutionComponentLayer.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/solutionComponentLayer.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/systemForm.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/systemForm.js
 var init_systemForm = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/systemForm.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/systemForm.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/view.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/view.js
 var init_view = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/view.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/view.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/index.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/index.js
 var init_cds2 = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/index.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/types-shared/cds/index.js"() {
     "use strict";
     init_DeployPackage();
     init_DeploymentArtifact();
@@ -78947,17 +79026,17 @@ var init_cds2 = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/utils/queryKey.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/utils/queryKey.js
 var init_queryKey = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/utils/queryKey.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/utils/queryKey.js"() {
     "use strict";
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/utils/uriHelpers.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/utils/uriHelpers.js
 var ServiceType;
 var init_uriHelpers2 = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/utils/uriHelpers.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/utils/uriHelpers.js"() {
     "use strict";
     (function(ServiceType2) {
       ServiceType2["RP"] = "pa-rp";
@@ -78980,19 +79059,19 @@ var init_uriHelpers2 = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/pollingHelpers.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/pollingHelpers.js
 var DefaultPollTimeInMs;
 var init_pollingHelpers = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/pollingHelpers.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/pollingHelpers.js"() {
     "use strict";
     DefaultPollTimeInMs = 60 * 1e3;
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/powerApps/useEnvironment.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/powerApps/useEnvironment.js
 var import_uriHelpers5, import_react20;
 var init_useEnvironment = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/powerApps/useEnvironment.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/powerApps/useEnvironment.js"() {
     "use strict";
     import_uriHelpers5 = __toESM(require_uriHelpers());
     init_featureGates5();
@@ -79010,17 +79089,17 @@ var init_useEnvironment = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/powerApps/index.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/powerApps/index.js
 var init_powerApps = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/powerApps/index.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/powerApps/index.js"() {
     "use strict";
     init_useEnvironment();
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/index.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/index.js
 var init_hooks = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/index.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/hooks/index.js"() {
     "use strict";
     init_cds();
     init_objectCheckerHelpers();
@@ -79031,10 +79110,10 @@ var init_hooks = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/powerApps/getWebresourcesByNames.js
+// ../../../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/powerApps/getWebresourcesByNames.js
 var import_cdsUris2, import_shell_icm_info2;
 var init_getWebresourcesByNames = __esm({
-  "../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/powerApps/getWebresourcesByNames.js"() {
+  "../../../../../power-platform-ux/packages/powerapps-ui-common/lib/functions/powerApps/getWebresourcesByNames.js"() {
     "use strict";
     init_HttpClient();
     init_webresourceMapping();
@@ -79044,10 +79123,10 @@ var init_getWebresourcesByNames = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-app-service/lib/services/webResources/webResources.js
+// ../../../../../power-platform-ux/packages/cds-app-service/lib/services/webResources/webResources.js
 var WebResourceType, defaultAppWebResourceIcon;
 var init_webResources = __esm({
-  "../../../power-platform-ux/packages/cds-app-service/lib/services/webResources/webResources.js"() {
+  "../../../../../power-platform-ux/packages/cds-app-service/lib/services/webResources/webResources.js"() {
     "use strict";
     init_getWebresourcesByNames();
     init_lib4();
@@ -79065,10 +79144,10 @@ var init_webResources = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/model/advancedSettingsTypes.js
+// ../../../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/model/advancedSettingsTypes.js
 var PrivilegeTypes, EntityPrivilegeOptions, MiscellaneousPrivilegeTypes, ClientOptions, SkuOptions;
 var init_advancedSettingsTypes = __esm({
-  "../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/model/advancedSettingsTypes.js"() {
+  "../../../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/model/advancedSettingsTypes.js"() {
     "use strict";
     (function(PrivilegeTypes2) {
       PrivilegeTypes2["Entity"] = "Entity";
@@ -79108,10 +79187,10 @@ var init_advancedSettingsTypes = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/helpers/subAreaHelpers.js
+// ../../../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/helpers/subAreaHelpers.js
 var subAreaDefaultIcon;
 var init_subAreaHelpers = __esm({
-  "../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/helpers/subAreaHelpers.js"() {
+  "../../../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/helpers/subAreaHelpers.js"() {
     "use strict";
     init_pageUrls();
     init_webResources();
@@ -79120,10 +79199,10 @@ var init_subAreaHelpers = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/model/resourceIds.js
+// ../../../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/model/resourceIds.js
 var unknownResourceId, newAreaTitleResourceId, newGroupTitleResourceId;
 var init_resourceIds = __esm({
-  "../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/model/resourceIds.js"() {
+  "../../../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/model/resourceIds.js"() {
     "use strict";
     unknownResourceId = "SitemapDesigner.Unknown";
     newAreaTitleResourceId = "SitemapDesigner.NewTitle";
@@ -79131,7 +79210,7 @@ var init_resourceIds = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/helpers/nodeBuilders.js
+// ../../../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/helpers/nodeBuilders.js
 var nodeBuilders_exports = {};
 __export(nodeBuilders_exports, {
   makeArea: () => makeArea,
@@ -79219,7 +79298,7 @@ function makeSubArea(overrides = {}) {
   };
 }
 var init_nodeBuilders = __esm({
-  "../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/helpers/nodeBuilders.js"() {
+  "../../../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/helpers/nodeBuilders.js"() {
     "use strict";
     init_hex();
     init_nodeTypes();
@@ -79227,18 +79306,18 @@ var init_nodeBuilders = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/helpers/nodeIdentifiers.js
+// ../../../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/helpers/nodeIdentifiers.js
 function isSubAreaNode(node) {
   return node.Type === nodeTypes_default.SubArea;
 }
 var init_nodeIdentifiers = __esm({
-  "../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/helpers/nodeIdentifiers.js"() {
+  "../../../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/helpers/nodeIdentifiers.js"() {
     "use strict";
     init_nodeTypes();
   }
 });
 
-// ../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/helpers/nodeHelpers.js
+// ../../../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/helpers/nodeHelpers.js
 var nodeHelpers_exports = {};
 __export(nodeHelpers_exports, {
   clearDescription: () => clearDescription,
@@ -79516,7 +79595,7 @@ function convertStringBooleanToBoolean(property) {
   return property === "true";
 }
 var init_nodeHelpers = __esm({
-  "../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/helpers/nodeHelpers.js"() {
+  "../../../../../power-platform-ux/packages/cds-app-service/lib/services/siteMap/helpers/nodeHelpers.js"() {
     "use strict";
     init_string();
     init_writeable();
@@ -79526,9 +79605,9 @@ var init_nodeHelpers = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/api/AppApi.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/AppApi.js
 var require_AppApi = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/api/AppApi.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/AppApi.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.appApi = void 0;
@@ -79768,9 +79847,9 @@ var require_AppApi = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/AppAdapter.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/AppAdapter.js
 var require_AppAdapter = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/AppAdapter.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/AppAdapter.js"(exports2) {
     "use strict";
     var __importDefault = exports2 && exports2.__importDefault || function(mod) {
       return mod && mod.__esModule ? mod : { "default": mod };
@@ -80051,7 +80130,7 @@ var require_AppAdapter = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-command-designer/lib/context/AppActions.types.js
+// ../../../../../power-platform-ux/packages/cds-command-designer/lib/context/AppActions.types.js
 var AppActions_types_exports = {};
 __export(AppActions_types_exports, {
   ActionType: () => ActionType2,
@@ -80068,7 +80147,7 @@ __export(AppActions_types_exports, {
 });
 var VisibilityType, ActionType2, IconType, ButtonType, Location, Context, Scope, OnClickEventType, AppActionVisibilityType, AppActionOrigin, CannotUpdateAppActionColumns;
 var init_AppActions_types = __esm({
-  "../../../power-platform-ux/packages/cds-command-designer/lib/context/AppActions.types.js"() {
+  "../../../../../power-platform-ux/packages/cds-command-designer/lib/context/AppActions.types.js"() {
     "use strict";
     (function(VisibilityType2) {
       VisibilityType2[VisibilityType2["NotSupported"] = 0] = "NotSupported";
@@ -80141,9 +80220,9 @@ var init_AppActions_types = __esm({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/api/CommandApi.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/CommandApi.js
 var require_CommandApi = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/api/CommandApi.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/CommandApi.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.commandApi = void 0;
@@ -80256,9 +80335,9 @@ var require_CommandApi = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/CommandAdapter.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/CommandAdapter.js
 var require_CommandAdapter = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/CommandAdapter.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/CommandAdapter.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.commandRegistration = exports2.CommandAdapter = void 0;
@@ -80619,9 +80698,9 @@ var require_CommandAdapter = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/types/chart.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/chart.js
 var require_chart = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/types/chart.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/chart.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.CHART_META_KEY = void 0;
@@ -80629,9 +80708,9 @@ var require_chart = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/api/ChartApi.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/ChartApi.js
 var require_ChartApi = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/api/ChartApi.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/ChartApi.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.chartApi = void 0;
@@ -80696,9 +80775,9 @@ var require_ChartApi = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/ChartAdapter.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/ChartAdapter.js
 var require_ChartAdapter = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/ChartAdapter.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/ChartAdapter.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.chartRegistration = exports2.ChartAdapter = void 0;
@@ -81020,9 +81099,9 @@ var require_ChartAdapter = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/types/dashboard.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/dashboard.js
 var require_dashboard = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/types/dashboard.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/dashboard.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.DASHBOARD_META_KEY = void 0;
@@ -81030,9 +81109,9 @@ var require_dashboard = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/api/DashboardApi.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/DashboardApi.js
 var require_DashboardApi = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/api/DashboardApi.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/api/DashboardApi.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.dashboardApi = void 0;
@@ -81105,9 +81184,9 @@ var require_DashboardApi = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/DashboardAdapter.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/DashboardAdapter.js
 var require_DashboardAdapter = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/DashboardAdapter.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/adapters/DashboardAdapter.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.dashboardRegistration = exports2.DashboardAdapter = void 0;
@@ -81501,9 +81580,9 @@ var require_DashboardAdapter = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/registrations.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/registrations.js
 var require_registrations = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/registrations.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/registrations.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.buildRegistrations = void 0;
@@ -81529,9 +81608,9 @@ var require_registrations = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/utils/deepClone.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/utils/deepClone.js
 var require_deepClone = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/utils/deepClone.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/utils/deepClone.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.cloneJson = void 0;
@@ -81542,9 +81621,9 @@ var require_deepClone = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/MakerSdk.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/MakerSdk.js
 var require_MakerSdk = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/MakerSdk.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/MakerSdk.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.createMakerSdk = exports2.MakerSdk = void 0;
@@ -81911,6 +81990,24 @@ var require_MakerSdk = __commonJS({
         this.workspace.writeArtifact("form", formId, json);
         return this.getArtifact("form", formId);
       }
+      /**
+       * Bind a custom (PCF) control to an existing field on a form (e.g. render a
+       * column with a slider, map, or rich-text control). The form must have been
+       * fetched first (the binding is injected into the retained `$meta.formxml`).
+       *
+       * IMPORTANT (verified live): a custom-control binding persists only when the form
+       * is delivered via **solution import**, NOT a plain `pushArtifact`. A bare
+       * `systemforms` Web API write strips the control `uniqueid` the binding is keyed
+       * to, so the server drops it. Package the form into a solution and `importSolution`
+       * to ship the binding; `importSolution` also deploys the control bundle itself.
+       * See {@link addCustomControlToForm}.
+       */
+      addCustomControl(formId, options) {
+        const json = this.readRaw("form", formId);
+        (0, FormAdapter_12.addCustomControlToForm)(json, options);
+        this.workspace.writeArtifact("form", formId, json);
+        return this.getArtifact("form", formId);
+      }
       createArtifact(type, definition) {
         const reg = this.requireRegistration(type, "createArtifact");
         const created = reg.adapter.assignIds(reg.adapter.createDefault(definition));
@@ -82069,9 +82166,9 @@ var require_MakerSdk = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/types/common.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/common.js
 var require_common2 = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/types/common.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/common.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.ARTIFACT_TYPES = void 0;
@@ -82087,87 +82184,87 @@ var require_common2 = __commonJS({
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/types/artifacts.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/artifacts.js
 var require_artifacts = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/types/artifacts.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/artifacts.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/types/view.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/view.js
 var require_view = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/types/view.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/view.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/types/businessRule.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/businessRule.js
 var require_businessRule = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/types/businessRule.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/businessRule.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/types/app.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/app.js
 var require_app = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/types/app.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/app.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/types/command.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/command.js
 var require_command = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/types/command.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/command.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/types/metadata.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/metadata.js
 var require_metadata = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/types/metadata.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/metadata.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/types/schema.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/schema.js
 var require_schema = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/types/schema.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/schema.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/types/webResource.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/webResource.js
 var require_webResource = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/types/webResource.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/webResource.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/types/solution.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/solution.js
 var require_solution = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/types/solution.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/solution.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/types/httpClient.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/httpClient.js
 var require_httpClient = __commonJS({
-  "../../../power-platform-ux/packages/cds-maker-sdk/lib/types/httpClient.js"(exports2) {
+  "../../../../../power-platform-ux/packages/cds-maker-sdk/lib/types/httpClient.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
   }
 });
 
-// ../../../power-platform-ux/packages/cds-maker-sdk/lib/index.js
+// ../../../../../power-platform-ux/packages/cds-maker-sdk/lib/index.js
 var __createBinding = exports && exports.__createBinding || (Object.create ? function(o, m, k, k2) {
   if (k2 === void 0) k2 = k;
   var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -82185,8 +82282,8 @@ var __exportStar = exports && exports.__exportStar || function(m, exports2) {
   for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports2, p)) __createBinding(exports2, m, p);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.createWebResource = exports.disassociateRecords = exports.associateRecords = exports.queryRecords = exports.getRecord = exports.deleteRecord = exports.upsertRecord = exports.updateRecord = exports.createRecordsBulk = exports.createRecord = exports.resolveEntitySetName = exports.deleteTable = exports.deleteGlobalOptionSet = exports.createGlobalOptionSet = exports.deleteRelationship = exports.createRelationship = exports.deleteAlternateKey = exports.createAlternateKey = exports.updateTable = exports.deleteColumn = exports.updateColumn = exports.insertStatusValue = exports.createCustomerColumn = exports.createColumn = exports.createTable = exports.dashboardRegistration = exports.DashboardAdapter = exports.chartRegistration = exports.ChartAdapter = exports.commandRegistration = exports.CommandAdapter = exports.appRegistration = exports.AppAdapter = exports.businessRuleRegistration = exports.BusinessRuleAdapter = exports.viewRegistration = exports.ViewAdapter = exports.SUBGRID_CLASS_ID = exports.addFormEventHandler = exports.addSubGridToForm = exports.formRegistration = exports.FormAdapter = exports.ArtifactAdapter = exports.findColumns = exports.findTables = exports.fetchEntityMetadataFromApi = exports.findElements = exports.JsonPointer = exports.createMakerSdk = exports.MakerSdk = void 0;
-exports.SolutionComponentType = exports.fetchSolutionComponents = exports.deleteSolution = exports.importSolution = exports.exportSolution = exports.removeSolutionComponent = exports.addSolutionComponent = exports.setSolutionVersion = exports.createSolution = exports.createPublisher = exports.deleteWebResource = exports.getWebResource = exports.updateWebResource = void 0;
+exports.disassociateRecords = exports.associateRecords = exports.queryRecords = exports.getRecord = exports.deleteRecord = exports.upsertRecord = exports.updateRecord = exports.createRecordsBulk = exports.createRecord = exports.resolveEntitySetName = exports.deleteTable = exports.deleteGlobalOptionSet = exports.createGlobalOptionSet = exports.deleteRelationship = exports.createRelationship = exports.deleteAlternateKey = exports.createAlternateKey = exports.updateTable = exports.deleteColumn = exports.updateColumn = exports.insertStatusValue = exports.createCustomerColumn = exports.createColumn = exports.createTable = exports.dashboardRegistration = exports.DashboardAdapter = exports.chartRegistration = exports.ChartAdapter = exports.commandRegistration = exports.CommandAdapter = exports.appRegistration = exports.AppAdapter = exports.businessRuleRegistration = exports.BusinessRuleAdapter = exports.viewRegistration = exports.ViewAdapter = exports.SUBGRID_CLASS_ID = exports.addCustomControlToForm = exports.addFormEventHandler = exports.addSubGridToForm = exports.formRegistration = exports.FormAdapter = exports.ArtifactAdapter = exports.findColumns = exports.findTables = exports.fetchEntityMetadataFromApi = exports.findElements = exports.JsonPointer = exports.createMakerSdk = exports.MakerSdk = void 0;
+exports.SolutionComponentType = exports.fetchSolutionComponents = exports.deleteSolution = exports.importSolution = exports.exportSolution = exports.removeSolutionComponent = exports.addSolutionComponent = exports.setSolutionVersion = exports.createSolution = exports.createPublisher = exports.deleteWebResource = exports.getWebResource = exports.updateWebResource = exports.createWebResource = void 0;
 var MakerSdk_1 = require_MakerSdk();
 Object.defineProperty(exports, "MakerSdk", { enumerable: true, get: function() {
   return MakerSdk_1.MakerSdk;
@@ -82243,6 +82340,9 @@ Object.defineProperty(exports, "addSubGridToForm", { enumerable: true, get: func
 } });
 Object.defineProperty(exports, "addFormEventHandler", { enumerable: true, get: function() {
   return FormAdapter_1.addFormEventHandler;
+} });
+Object.defineProperty(exports, "addCustomControlToForm", { enumerable: true, get: function() {
+  return FormAdapter_1.addCustomControlToForm;
 } });
 Object.defineProperty(exports, "SUBGRID_CLASS_ID", { enumerable: true, get: function() {
   return FormAdapter_1.SUBGRID_CLASS_ID;

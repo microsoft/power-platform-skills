@@ -82,6 +82,27 @@ function relationshipSchemaName(rel) {
   return `${String(rel.referenced || '').toLowerCase()}_${String(rel.referencing || '').toLowerCase()}`;
 }
 
+// Find the ManyToMany relationship linking two entities (order-independent), or null.
+function manyToManyFor(spec, entityA, entityB) {
+  const a = String(entityA || '').toLowerCase();
+  const b = String(entityB || '').toLowerCase();
+  return (
+    (spec.relationships || []).find((r) => {
+      if (r.type !== 'ManyToMany') return false;
+      const e1 = String(r.entity1 || '').toLowerCase();
+      const e2 = String(r.entity2 || '').toLowerCase();
+      return (e1 === a && e2 === b) || (e1 === b && e2 === a);
+    }) || null
+  );
+}
+
+// The N:N relationship's SCHEMA name (the intersect/RelationshipName), defaulting to
+// `<entity1>_<entity2>` — matches the builder's createRelationship naming.
+function manyToManySchemaName(rel) {
+  if (rel && rel.schemaName) return rel.schemaName;
+  return `${String(rel.entity1 || '').toLowerCase()}_${String(rel.entity2 || '').toLowerCase()}`;
+}
+
 // Turn author-friendly sample records into Web-API bodies: Choice values written
 // as labels ("Active") are resolved to their option ints; everything else passes
 // through unchanged (so raw ints, strings, booleans, ISO dates all still work).
@@ -179,9 +200,9 @@ function validateAppSpec(spec) {
             errors.push(`form ${f.entity}: subgrid references unknown childEntity '${sg.childEntity}'`);
             continue;
           }
-          if (!relationshipFor(spec, f.entity, sg.childEntity)) {
+          if (!relationshipFor(spec, f.entity, sg.childEntity) && !manyToManyFor(spec, f.entity, sg.childEntity)) {
             errors.push(
-              `form ${f.entity}: no OneToMany relationship from '${f.entity}' to subgrid childEntity '${sg.childEntity}'`
+              `form ${f.entity}: no OneToMany or ManyToMany relationship between '${f.entity}' and subgrid childEntity '${sg.childEntity}'`
             );
           }
         }
@@ -268,5 +289,7 @@ module.exports = {
   resolveSampleRecords,
   relationshipFor,
   relationshipSchemaName,
+  manyToManyFor,
+  manyToManySchemaName,
   CHART_TYPES,
 };

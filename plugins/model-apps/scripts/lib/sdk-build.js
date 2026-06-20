@@ -18,6 +18,8 @@ const {
   resolveSampleRecords,
   relationshipFor,
   relationshipSchemaName,
+  manyToManyFor,
+  manyToManySchemaName,
 } = require('./app-spec.js');
 const { topoOrderEntities } = require('./_graph.js');
 
@@ -108,6 +110,18 @@ async function mapLimit(items, limit, fn) {
 function choiceOptions(col) {
   return (col.options || []).map((label, i) => ({ value: 100000000 + i, label }));
 }
+// Resolve a view-filter value: a Choice/MultiChoice label becomes its option int; everything
+// else (raw ints, strings, ISO dates) passes through. No-value operators omit the value entirely.
+function resolveFilterValue(spec, entityLogical, attr, val) {
+  if (typeof val !== 'string') return val;
+  const e = entityByLogical(spec, entityLogical);
+  const c = e && (e.columns || []).find((x) => x.schemaName.toLowerCase() === String(attr).toLowerCase());
+  if (c && (c.type === 'Choice' || c.type === 'MultiChoice') && Array.isArray(c.options)) {
+    const i = c.options.indexOf(val);
+    if (i >= 0) return 100000000 + i;
+  }
+  return val;
+}
 function entityByLogical(spec, logical) {
   const l = String(logical).toLowerCase();
   return (spec.entities || []).find((e) => e.schemaName.toLowerCase() === l);
@@ -176,13 +190,30 @@ function planFor(spec, opts) {
 }
 
 // --- phase builders (pure: spec -> SDK payloads) ---------------------------------------
+// Build a saved-query def. `v.filters[]` adds rich conditions ({ attr, op, value?/values? });
+// no-value operators (eq-userid, this-week, null, …) omit the value, and in/not-in expand to a
+// nested or/and group of eq/ne (the SDK's filter serializer is single-value per condition).
 function viewDef(spec, v) {
   const entityLogical = v.entity.toLowerCase();
   const cols = (v.columns && v.columns.length ? v.columns : [primaryNameOf(spec, entityLogical)]).map((name, i) => ({ name: String(name).toLowerCase(), width: 100, order: i }));
-  const filters = v.activeOnly === false
-    ? { type: 'and', conditions: [], groups: [] }
-    : { type: 'and', conditions: [{ attribute: 'statecode', operator: 'eq', value: '0' }], groups: [] };
-  return { name: v.name, description: '', entityLogicalName: entityLogical, queryType: 0, isDefault: false, columns: cols, filters,
+  const conditions = [];
+  const groups = [];
+  if (v.activeOnly !== false) conditions.push({ attribute: 'statecode', operator: 'eq', value: '0' });
+  for (const f of v.filters || []) {
+    const attr = String(f.attr).toLowerCase();
+    const op = f.op || 'eq';
+    if (op === 'in' || op === 'not-in') {
+      const subOp = op === 'in' ? 'eq' : 'ne';
+      const vals = (f.values || []).map((x) => resolveFilterValue(spec, entityLogical, attr, x));
+      groups.push({ type: op === 'in' ? 'or' : 'and', conditions: vals.map((x) => ({ attribute: attr, operator: subOp, value: String(x) })), groups: [] });
+    } else {
+      const cond = { attribute: attr, operator: op };
+      if (f.value !== undefined) cond.value = String(resolveFilterValue(spec, entityLogical, attr, f.value));
+      conditions.push(cond);
+    }
+  }
+  return { name: v.name, description: '', entityLogicalName: entityLogical, queryType: 0, isDefault: false, columns: cols,
+    filters: { type: 'and', conditions, groups },
     sort: (v.sort || []).map((s) => ({ attribute: String(s.attr).toLowerCase(), descending: s.dir === 'desc' })) };
 }
 
@@ -321,6 +352,7 @@ async function runSdkBuild(spec, opts = {}) {
   //    (find*/fetch*), then create only what's missing. Captures entitySetName for every
   //    entity (fresh -> createTable result, existing -> findTables hit).
   const globalChoiceIds = {};
+  const statusReasonValues = {}; // { entityLogical: { label: { value, stateCode } } } — captured for sample data
   if (has('data-model')) {
     // 2a. Global option sets (shared choices) — built before columns that bind to them.
     for (const gc of spec.globalChoices || []) {
@@ -343,8 +375,11 @@ async function runSdkBuild(spec, opts = {}) {
         existingCols = new Set(((await provision.findColumns(logical)) || []).map((c) => c.logicalName));
       } else {
         await run('data-model', `table ${e.schemaName}`, async () => {
-          const t = await sdk.createTable({ schemaName: e.schemaName, displayName: e.displayName, pluralName: e.pluralName || `${e.displayName}s`,
-            primaryColumnSchemaName: e.primaryAttribute.schemaName, primaryColumnDisplayName: e.primaryAttribute.displayName || 'Name', hasNotes: e.hasNotes === true });
+          const createOpts = { schemaName: e.schemaName, displayName: e.displayName, pluralName: e.pluralName || `${e.displayName}s`,
+            primaryColumnSchemaName: e.primaryAttribute.schemaName, primaryColumnDisplayName: e.primaryAttribute.displayName || 'Name', hasNotes: e.hasNotes === true };
+          // AutoNumber the primary/title column when requested (the order number IS the identity).
+          if (e.primaryAttribute.autoNumberFormat) createOpts.primaryColumnAutoNumberFormat = e.primaryAttribute.autoNumberFormat;
+          const t = await sdk.createTable(createOpts);
           result.created.entities[e.schemaName] = { logicalName: (t.logicalName || logical), entitySetName: t.entitySetName };
         }, { recoverable: true });
       }
@@ -357,9 +392,13 @@ async function runSdkBuild(spec, opts = {}) {
         () => c.type === 'Customer'
           ? sdk.createCustomerColumn(logical, { schemaName: c.schemaName, displayName: c.displayName || c.schemaName, required: REQUIRED(c) })
           : sdk.createColumn(logical, columnOptions(c, globalChoiceIds))));
-      // custom status reasons
+      // custom status reasons — capture the assigned option value so sample data can set them
       for (const sr of e.statusReasons || []) {
-        await run('data-model', `status reason ${e.schemaName}: ${sr.label}`, () => sdk.insertStatusValue(logical, { label: sr.label, stateCode: STATE_CODE[sr.state] !== undefined ? STATE_CODE[sr.state] : 0, color: sr.color }));
+        await run('data-model', `status reason ${e.schemaName}: ${sr.label}`, async () => {
+          const stateCode = STATE_CODE[sr.state] !== undefined ? STATE_CODE[sr.state] : 0;
+          const value = await sdk.insertStatusValue(logical, { label: sr.label, stateCode, color: sr.color, value: sr.value });
+          (statusReasonValues[logical] = statusReasonValues[logical] || {})[sr.label] = { value, stateCode };
+        });
       }
       // alternate keys
       for (const k of e.alternateKeys || []) {
@@ -404,16 +443,25 @@ async function runSdkBuild(spec, opts = {}) {
         const entityLogical = e.schemaName.toLowerCase();
         const resolved = resolveSampleRecords(e, records);
         const bodies = [];
+        const matchHit = (parentLogical, match) => (createdByEntity[parentLogical] || []).find((h) => Object.entries(match).every(([k, val]) => { const rk = Object.keys(h.raw).find((x) => x.toLowerCase() === k.toLowerCase()); return rk !== undefined && h.raw[rk] === val; }));
         for (let i = 0; i < resolved.length; i++) {
           const raw = records[i];
           const body = Object.assign({}, resolved[i]);
-          delete body.$parent;
-          const parent = raw && raw.$parent;
-          if (parent && parent.entity && parent.match) {
+          delete body.$parent; delete body.$parents; delete body.statusReason;
+          // Parent lookups — one (`$parent`) or many (`$parents`, e.g. a junction row binding
+          // both sides). Each is bound to its relationship's lookup nav property via @odata.bind.
+          const parents = [].concat(raw && raw.$parent ? [raw.$parent] : [], (raw && raw.$parents) || []);
+          for (const parent of parents) {
+            if (!parent || !parent.entity || !parent.match) continue;
             const parentLogical = parent.entity.toLowerCase();
-            const hit = (createdByEntity[parentLogical] || []).find((h) => Object.entries(parent.match).every(([k, v]) => { const rk = Object.keys(h.raw).find((x) => x.toLowerCase() === k.toLowerCase()); return rk !== undefined && h.raw[rk] === v; }));
+            const hit = matchHit(parentLogical, parent.match);
             const rel = relationshipFor(spec, parent.entity, e.schemaName);
             if (hit && hit.id && rel) body[`${rel.lookup.schemaName}@odata.bind`] = `/${await entitySetFor(parentLogical)}(${hit.id})`;
+          }
+          // Custom status reason -> statecode + the captured statuscode option value.
+          if (raw && raw.statusReason) {
+            const sv = (statusReasonValues[e.schemaName.toLowerCase()] || {})[raw.statusReason];
+            if (sv) { body.statuscode = sv.value; body.statecode = sv.stateCode; }
           }
           bodies.push(body);
         }
@@ -472,11 +520,15 @@ async function runSdkBuild(spec, opts = {}) {
     const defs = spec.forms.map((f) => {
       const def = formDef(spec, f);
       def.__subgrids = (f.subgrids || []).map((sg) => {
-        const rel = relationshipFor(spec, f.entity, sg.childEntity); if (!rel) return null;
+        // A sub-grid can hang off a 1:N (child has the lookup) or an N:N (intersect) relationship.
+        const oneToMany = relationshipFor(spec, f.entity, sg.childEntity);
+        const nn = oneToMany ? null : manyToManyFor(spec, f.entity, sg.childEntity);
+        if (!oneToMany && !nn) return null;
+        const relationshipName = oneToMany ? relationshipSchemaName(oneToMany) : manyToManySchemaName(nn);
         const childLogical = sg.childEntity.toLowerCase();
         let viewId = sg.view && result.created.views[sg.view];
         if (!viewId) { const cv = (spec.views || []).find((v) => v.entity.toLowerCase() === childLogical); viewId = cv && result.created.views[cv.name]; }
-        return { entity: childLogical, relationshipName: relationshipSchemaName(rel), viewId, label: sg.label || sg.childEntity };
+        return { entity: childLogical, relationshipName, viewId, label: sg.label || sg.childEntity };
       }).filter(Boolean);
       return { f, def };
     });

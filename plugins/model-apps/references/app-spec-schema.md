@@ -9,6 +9,26 @@ deterministic builder (`scripts/build-model-app.js`). Author it to this shape, l
 > data. Read it first; it shows every section in use. `app-spec.project-tracker.json` shows an
 > **explicit form layout** (`tabs`).
 
+## Modeling cheatsheet — read this before exploring anything else
+
+This doc is the **single source**; everything the builder supports is here, so you should NOT need
+to read the SDK, the lint, or the engine to author a spec. Common asks → how to model them:
+
+| You want… | Model it as | Section |
+|---|---|---|
+| An auto-numbered identity (WO-00001) that **is** the title | `autoNumberFormat` on `primaryAttribute` | entities |
+| An auto-number that is **not** the title | a column `type: "AutoNumber"` + `autoNumberFormat` | entities |
+| A plain many-to-many | `ManyToMany` relationship; sub-grid on either side | relationships |
+| **N:N with attributes** (role/date per link) | a **junction entity** + two `OneToMany`; `$parents` for sample rows | relationships / sampleData |
+| Client-side validation / defaulting | a `webResources[]` script + form `events[]` | webResources / forms |
+| "My …", "… this week", "not Completed/Cancelled" views | view `filters[]` (`eq-userid`, `this-week`, `not-in`) | views |
+| Records pre-set to a custom status reason | `statusReasons[]` on the entity + `statusReason` on sample rows | entities / sampleData |
+| A child grid on a parent form | `subgrids[]` (1:N or N:N — auto-resolved) | forms |
+
+The builder is **idempotent** and runs everything in one pass (no post-build scripts): tables,
+columns, relationships, web resources, views, charts, forms (+ sub-grids + JS handlers), the app,
+sample data (incl. multi-parent junction links + status reasons), and publish.
+
 ## Top-level shape
 
 ```jsonc
@@ -35,6 +55,8 @@ deterministic builder (`scripts/build-model-app.js`). Author it to this shape, l
   "pluralName": "Tickets",               // optional (defaults to "<displayName>s")
   "hasNotes": true,                       // optional — enables the Notes/timeline on the table + form
   "primaryAttribute": { "schemaName": "new_subject", "displayName": "Subject" },
+  // primary can be auto-numbered (the number IS the record identity — recommended for orders/cases):
+  // "primaryAttribute": { "schemaName": "new_ordernumber", "displayName": "Order Number", "autoNumberFormat": "WO-{SEQNUM:5}" },
   "columns": [
     { "schemaName": "new_priority", "displayName": "Priority", "type": "Choice", "options": ["Low","High"] },
     { "schemaName": "new_duedate",  "displayName": "Due Date", "type": "DateTime" }
@@ -51,6 +73,8 @@ deterministic builder (`scripts/build-model-app.js`). Author it to this shape, l
   (e.g. `"C-{SEQNUM:5}"`); Calculated/Rollup → `source: "Calculated"|"Rollup"` + `formula`.
 - **Choice / MultiChoice** need `options[]` (string labels) **or** a `globalChoice` reference
   (see `globalChoices` below). **Customer** is a polymorphic account/contact lookup.
+- **AutoNumber** can also be the **primary** column — put `autoNumberFormat` on `primaryAttribute`
+  (above) instead of adding a separate column, so the generated number is the record identity.
 
 ### entity sub-sections (optional)
 ```jsonc
@@ -77,6 +101,12 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 ```jsonc
 { "type": "ManyToMany", "entity1": "new_project", "entity2": "new_tag" }  // intersect auto-named
 ```
+- A **plain N:N** (no extra fields on the link) — use `ManyToMany`. A form sub-grid can sit on
+  *either* side (the builder resolves the N:N relationship name automatically).
+- **N:N that needs attributes on the link** (e.g. a role/date per assignment) — model a
+  **junction entity** with two `OneToMany` relationships into it, and put the payload columns on
+  the junction. Sample rows then bind **both** parents via `$parents` (see sampleData). This is the
+  recommended pattern for "Technician ↔ Work Order with a Role".
 
 ## webResources[] (optional — client-side logic)
 ```jsonc
@@ -92,8 +122,20 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 ## views[]
 ```jsonc
 { "entity": "new_ticket", "name": "Active Tickets", "columns": ["new_subject","new_priority"],
-  "sort": [{ "attr": "new_subject", "dir": "asc" }], "activeOnly": true }
+  "sort": [{ "attr": "new_subject", "dir": "asc" }], "activeOnly": true,
+  // optional rich filters (beyond the default active-records condition):
+  "filters": [
+    { "attr": "ownerid", "op": "eq-userid" },                       // "my" records — no value
+    { "attr": "new_priority", "op": "not-in", "values": ["Low"] },  // multi-value (Choice labels resolve to ints)
+    { "attr": "new_duedate", "op": "this-week" }                    // relative-date — no value
+  ] }
 ```
+- `activeOnly` (default `true`) adds `statecode eq 0`. `filters[]` add conditions: `op` is any
+  FetchXML operator — `eq`/`ne`/`lt`/`le`/`gt`/`ge`/`like`, no-value ops (`eq-userid`, `null`,
+  `not-null`, `this-week`/`this-month`/`today`/…), and multi-value `in`/`not-in` (use `values[]`).
+  Choice **labels** in `value`/`values` resolve to option ints. This is what "My Open Orders"
+  (`ownerid eq-userid` + `new_status not-in [Completed, Cancelled]`) and "Completed This Week"
+  (`new_status eq Completed` + `modifiedon this-week`) need — no post-build FetchXML patching.
 
 ## charts[]
 ```jsonc
@@ -121,7 +163,8 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
     { "event": "onchange", "attribute": "new_priority", "library": "new_ticket.js", "function": "Ticket.onPriority" }
   ] }
 ```
-- A sub-grid needs a matching `OneToMany` from the form's entity to `childEntity` (lint-enforced).
+- A sub-grid needs a matching `OneToMany` **or** `ManyToMany` between the form's entity and
+  `childEntity` (lint-enforced); the builder resolves the relationship name either way.
 - **`events[]`** wire client-side JS: `event` is `onload`/`onsave`/`onchange` (`onchange` needs an
   `attribute`), `library` references a declared `webResources[]` name (lint-enforced), `function` is
   the JS function. Optional `enabled` (default true), `passExecutionContext` (default true),
@@ -134,12 +177,22 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 ```
 
 ## sampleData (optional)
-Keyed by entity `schemaName`. Choice values are **labels** (resolved to ints). Relate a child to
-its parent with `$parent` (topologically inserted, bound via the lookup):
+Keyed by entity `schemaName`. Choice values are **labels** (resolved to ints). Relate records to
+parents with `$parent` (one) or `$parents` (several — for a junction row), and set a custom status
+with `statusReason`. All are topologically inserted and bound via the lookup nav-property.
 ```jsonc
 {
   "new_customer": [ { "new_name": "Northwind", "new_tier": "Pro" } ],
-  "new_ticket":   [ { "new_subject": "Down", "new_priority": "High",
-                      "$parent": { "entity": "new_customer", "match": { "new_name": "Northwind" } } } ]
+  "new_ticket":   [ { "new_subject": "Down", "new_priority": "High", "statusReason": "Passed QA",
+                      "$parent": { "entity": "new_customer", "match": { "new_name": "Northwind" } } } ],
+  // a junction row binds BOTH parents — no post-build association script needed:
+  "new_assignment": [ { "new_name": "WO-1 / Jane", "new_role": "Lead",
+                        "$parents": [ { "entity": "new_workorder", "match": { "new_name": "Replace compressor" } },
+                                      { "entity": "new_technician", "match": { "new_name": "Jane Doe" } } ] } ]
 }
 ```
+- **`$parents`** is the array form of `$parent` — each entry binds one lookup, so a junction/intersect
+  row links to every parent it points at (the engine sets each `<lookup>@odata.bind`).
+- **`statusReason`** must match a declared `statusReasons[]` label on the entity; the engine resolves
+  it to the right `statecode` + `statuscode` (so "Completed orders with Passed/Pending QA" just work).
+- **MultiChoice** sample values are a comma-separated string of option ints (e.g. `"100000000,100000001"`).

@@ -1,11 +1,10 @@
 ---
 name: model-app-maker
-version: 0.3.0
+version: 0.4.0
 description: Builds a model-driven Power Apps app from a natural-language intent — tables, columns, relationships, adaptive forms with sub-grids, views, Choice-column charts, and an app module + sitemap — via the headless cds-maker-sdk. Runs an interactive, multi-turn authoring flow (env selection, App Spec authoring, guardrail lint, plan-mode approval) and a narrated build. Use when the user says "build an app for X", "create a model-driven app", or "make me an app to manage Y". For generative PAGES use /genpage.
 author: Microsoft Corporation
 argument-hint: "<app description>"
 user-invocable: true
-model: sonnet
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, EnterPlanMode, ExitPlanMode, TaskCreate, TaskUpdate, TaskList
 ---
 
@@ -120,6 +119,10 @@ run with bounded parallelism; publish is one round-trip per entity + the app. Vi
   of views/forms is a later increment.)
 - Not in scope (later): dashboards, commands (ribbon buttons), business rules, quick-create /
   quick-view forms, lookup/associated views, multi-area sitemaps, security roles. (Supported:
-  the full data model — all column types, global choices, status reasons, alternate keys, N:N;
-  adaptive main forms with sub-grids; Choice-column charts; **web resources + form JS event
-  handlers**.) See [`docs/model-app-maker-roadmap.md`](../../docs/model-app-maker-roadmap.md).
+  the full data model — all column types, **AutoNumber primary**, global choices, status reasons,
+  alternate keys, **N:N + junction-with-payload**; adaptive main forms with **1:N / N:N sub-grids**;
+  Choice-column charts; **rich view filters** (`eq-userid`/`this-week`/`in`/`not-in`); web resources
+  + form JS event handlers; sample data with **multi-parent `$parents`** + **`statusReason`**.) See
+  [`docs/model-app-maker-roadmap.md`](../../docs/model-app-maker-roadmap.md) and the one-page
+  [`references/app-spec-schema.md`](../../references/app-spec-schema.md) — author from that **single**
+  doc; you should not need to read the SDK, lint, or engine to write a spec.

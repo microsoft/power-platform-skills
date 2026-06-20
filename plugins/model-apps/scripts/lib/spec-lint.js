@@ -2,9 +2,14 @@
 // Pure App Spec guardrail. Returns { ok, errors, warnings }. errors block the plan
 // gate; warnings teach. Bakes in the modeling lessons hit live — notably the
 // relationship schema-name vs lookup-name collision Dataverse rejects.
-const { relationshipSchemaName } = require('./app-spec.js');
+const { relationshipSchemaName, relationshipFor } = require('./app-spec.js');
 
 const CHOICE_OPTION_WARN = 12;
+const SEQNUM_RE = /\{SEQNUM(:\d+)?\}/i;
+// FetchXML operators that take no <value> (so a filter may omit value/values).
+const NO_VALUE_OPS = new Set(['null', 'not-null', 'eq-userid', 'ne-userid', 'eq-useroruserteams', 'eq-userteams',
+  'today', 'yesterday', 'tomorrow', 'this-week', 'last-week', 'next-week', 'this-month', 'last-month', 'next-month',
+  'this-year', 'last-year', 'next-year', 'this-fiscal-year', 'last-seven-days', 'next-seven-days']);
 
 function lintAppSpec(spec) {
   const errors = [];
@@ -49,6 +54,9 @@ function lintAppSpec(spec) {
     if (!e.primaryAttribute || !e.primaryAttribute.schemaName || !e.primaryAttribute.displayName) {
       E(`Entity ${e.schemaName} is missing a primaryAttribute (schemaName + displayName)`);
     }
+    if (e.primaryAttribute && e.primaryAttribute.autoNumberFormat && !SEQNUM_RE.test(e.primaryAttribute.autoNumberFormat)) {
+      W(`Entity ${e.schemaName} primary AutoNumber format '${e.primaryAttribute.autoNumberFormat}' has no {SEQNUM} token — every record would get the same value`);
+    }
 
     const cols = new Set();
     for (const c of e.columns || []) {
@@ -61,6 +69,7 @@ function lintAppSpec(spec) {
         else if (c.options && c.options.length > CHOICE_OPTION_WARN) W(`Column ${e.schemaName}.${c.schemaName} has ${c.options.length} options — consider a lookup table`);
       }
       if ((c.source === 'Calculated' || c.source === 'Rollup') && !c.formula) W(`${c.source} column ${e.schemaName}.${c.schemaName} has no formula — it will be created empty`);
+      if (c.type === 'AutoNumber' && c.autoNumberFormat && !SEQNUM_RE.test(c.autoNumberFormat)) W(`AutoNumber column ${e.schemaName}.${c.schemaName} format '${c.autoNumberFormat}' has no {SEQNUM} token`);
     }
     const keyable = new Set([...cols, lc(e.primaryAttribute && e.primaryAttribute.schemaName)]);
     for (const k of e.alternateKeys || []) {
@@ -94,10 +103,13 @@ function lintAppSpec(spec) {
 
   for (const f of spec.forms || []) {
     for (const sg of f.subgrids || []) {
-      const ok = (spec.relationships || []).some(
+      const has1N = (spec.relationships || []).some(
         (r) => r.type === 'OneToMany' && lc(r.referenced) === lc(f.entity) && lc(r.referencing) === lc(sg.childEntity)
       );
-      if (!ok) E(`Form ${f.entity} sub-grid for ${sg.childEntity} has no matching OneToMany relationship`);
+      const hasNN = (spec.relationships || []).some(
+        (r) => r.type === 'ManyToMany' && ((lc(r.entity1) === lc(f.entity) && lc(r.entity2) === lc(sg.childEntity)) || (lc(r.entity1) === lc(sg.childEntity) && lc(r.entity2) === lc(f.entity)))
+      );
+      if (!has1N && !hasNN) E(`Form ${f.entity} sub-grid for ${sg.childEntity} has no matching OneToMany or ManyToMany relationship`);
     }
     for (const ev of f.events || []) {
       if (!FORM_EVENTS.has(lc(ev.event))) { E(`Form ${f.entity} has an event with unknown type '${ev.event}' (use onload/onsave/onchange)`); continue; }
@@ -117,6 +129,35 @@ function lintAppSpec(spec) {
     const col = (ent.columns || []).find((c) => lc(c.schemaName) === lc(ch.groupBy));
     if (!col) W(`Chart '${ch.name}' groups by '${ch.groupBy}', which isn't a column on ${ch.entity}`);
     else if (col.type !== 'Choice') W(`Chart '${ch.name}' groups by a non-Choice column '${ch.groupBy}' — Choice columns chart best`);
+  }
+
+  // View filters: each condition needs a value unless the operator is a no-value kind; in/not-in
+  // need a values[]. Choice labels in values resolve to ints at build time.
+  for (const v of spec.views || []) {
+    for (const f of v.filters || []) {
+      if (!f.attr) { E(`View '${v.name}' has a filter without an attr`); continue; }
+      const op = f.op || 'eq';
+      if (op === 'in' || op === 'not-in') {
+        if (!(Array.isArray(f.values) && f.values.length)) E(`View '${v.name}' filter on '${f.attr}' uses ${op} but has no values[]`);
+      } else if (!NO_VALUE_OPS.has(op) && f.value === undefined) {
+        E(`View '${v.name}' filter on '${f.attr}' (${op}) needs a value`);
+      }
+    }
+  }
+
+  // Sample data: a custom statusReason must be declared on the entity; every $parent/$parents
+  // bind must have a OneToMany from the named parent to this entity (so the lookup exists).
+  for (const [ent, recs] of Object.entries(spec.sampleData || {})) {
+    const e = (spec.entities || []).find((x) => lc(x.schemaName) === lc(ent));
+    if (!e) continue; // unknown-entity is already an error in validateAppSpec
+    const declaredReasons = new Set((e.statusReasons || []).map((s) => lc(s.label)));
+    for (const rec of Array.isArray(recs) ? recs : []) {
+      if (rec && rec.statusReason && !declaredReasons.has(lc(rec.statusReason))) E(`sampleData['${ent}'] sets statusReason '${rec.statusReason}', which isn't a declared status reason on ${ent}`);
+      const parents = [].concat(rec && rec.$parent ? [rec.$parent] : [], (rec && rec.$parents) || []);
+      for (const p of parents) {
+        if (p && p.entity && !relationshipFor(spec, p.entity, ent)) E(`sampleData['${ent}']: no OneToMany from parent '${p.entity}' to '${ent}' (needed to bind the lookup)`);
+      }
+    }
   }
 
   dupWarn((spec.views || []).map((v) => v.name), 'view', W);

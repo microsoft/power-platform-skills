@@ -32,6 +32,15 @@ backlog. The build engine is `scripts/lib/sdk-build.js`; the App Spec contract i
 - ✅ **Web resources** (`webResources[]`) — JS/HTML/CSS shipped via `createWebResource`, added to the solution (component type 61). Source from `content` / `contentPath` / `contentBase64`. Idempotent (reuse by name).
 - ✅ **Form JS event handlers** (`forms[].events[]`) — `onload`/`onsave`/`onchange` wired via `addFormEventHandler` (fetch → inject → push → publish). Lint enforces the library reference + onchange attribute.
 - ✅ Shakeout (2026-06-20): built a Widget app (table, Choice/Integer columns, web resource, view, chart, form with onload+onchange handlers, app, sample data) on 983a1; verified the web resource content + the form's injected `formLibraries`/events in Dataverse; tore down all session artifacts.
+
+### SDK-fix uptake + folded build steps (2026-06-20) — no more post-build scripts
+Rebundled the SDK (branch `users/akmaloo/cds-maker-sdk`) and folded every manual post-build step into the one-pass builder:
+- ✅ **AutoNumber primary column** — `primaryAttribute.autoNumberFormat` → `createTable.primaryColumnAutoNumberFormat` (the number is the record identity).
+- ✅ **N:N sub-grids** — a sub-grid resolves a `OneToMany` **or** `ManyToMany` relationship; plus documented the **junction-with-payload** pattern for N:N-with-attributes.
+- ✅ **Multi-parent sample rows** — `$parents[]` binds a junction row to both sides (e.g. technician↔work-order assignment) — replaces the manual association script.
+- ✅ **Status reasons on sample rows** — `statusReason` label → resolved `statecode`+`statuscode` (the engine captures `insertStatusValue`'s assigned value).
+- ✅ **Rich view filters** — `filters[]` with `eq-userid`/`this-week`/`in`/`not-in`/… and Choice-label resolution (`in`/`not-in` expand to nested groups) — replaces manual FetchXML patching.
+- ✅ **Docs**: `app-spec-schema.md` is now the single authoring source (modeling cheatsheet up top), so the skill needs no SDK/lint/engine spelunking. Removed the `model: sonnet` pin so the skill inherits the session model.
 - ✅ Adaptive main forms (auto + explicit tabs/sections), related-record sub-grids, Notes section.
 - ✅ Views (active-records), Choice-column charts, app module + sitemap.
 

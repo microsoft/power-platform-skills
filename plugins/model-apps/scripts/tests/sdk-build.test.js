@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { runSdkBuild, planFor, resolvePhases, formDef, PHASES } = require('../lib/sdk-build.js');
+const { runSdkBuild, planFor, resolvePhases, formDef, viewDef, PHASES } = require('../lib/sdk-build.js');
 
 // Customer 1:N Tickets: a Choice column, sample data with $parent, a view, a Choice chart,
 // and a parent form with a child sub-grid.
@@ -244,6 +244,90 @@ test('Tier 2: planFor and totals account for web resources and event wiring', as
   // web-resources phase only runs when selected
   const onlyWr = planFor(specWithFormJs(), { phases: ['web-resources'] }).map((p) => p.phase);
   assert.ok(onlyWr.length && onlyWr.every((p) => p === 'web-resources'));
+});
+
+// --- Tier 2.x: SDK fix uptake (AutoNumber primary, N:N sub-grids) + folded build steps ----
+test('AutoNumber primary column flows to createTable.primaryColumnAutoNumberFormat', async () => {
+  const spec = makeSpec();
+  spec.entities[1].primaryAttribute.autoNumberFormat = 'WO-{SEQNUM:5}';
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true });
+  const ct = find(calls, 'createTable').find((c) => c.args[0].schemaName === 'new_ticket');
+  assert.strictEqual(ct.args[0].primaryColumnAutoNumberFormat, 'WO-{SEQNUM:5}');
+  // a table without the format doesn't carry the option
+  const other = find(calls, 'createTable').find((c) => c.args[0].schemaName === 'new_customer');
+  assert.strictEqual(other.args[0].primaryColumnAutoNumberFormat, undefined);
+});
+
+test('an N:N sub-grid uses the ManyToMany relationship schema name', async () => {
+  const spec = makeSpec();
+  spec.entities.push({ schemaName: 'new_tag', displayName: 'Tag', primaryAttribute: { schemaName: 'new_label', displayName: 'Label' }, columns: [] });
+  spec.relationships.push({ type: 'ManyToMany', entity1: 'new_customer', entity2: 'new_tag' });
+  spec.views.push({ entity: 'new_tag', name: 'All Tags', columns: ['new_label'] });
+  spec.forms[0].subgrids.push({ childEntity: 'new_tag', view: 'All Tags', label: 'Tags' });
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true });
+  const sub = find(calls, 'addSubGrid').map((c) => c.args[1]).find((s) => s.entity === 'new_tag');
+  assert.ok(sub, 'N:N sub-grid is placed on the form');
+  assert.strictEqual(sub.relationshipName, 'new_customer_new_tag');
+});
+
+test('a junction sample row binds multiple parents via $parents', async () => {
+  const spec = {
+    solution: { uniqueName: 'J', displayName: 'J', publisherPrefix: 'new' }, app: { name: 'J', description: '' },
+    entities: [
+      { schemaName: 'new_wo', displayName: 'WO', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] },
+      { schemaName: 'new_tech', displayName: 'Tech', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] },
+      { schemaName: 'new_assign', displayName: 'Assign', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] },
+    ],
+    relationships: [
+      { type: 'OneToMany', referenced: 'new_wo', referencing: 'new_assign', lookup: { schemaName: 'new_woid', displayName: 'WO' } },
+      { type: 'OneToMany', referenced: 'new_tech', referencing: 'new_assign', lookup: { schemaName: 'new_techid', displayName: 'Tech' } },
+    ],
+    views: [], charts: [], forms: [], appShell: { areas: [] },
+    sampleData: {
+      new_wo: [{ new_name: 'WO1' }], new_tech: [{ new_name: 'T1' }],
+      new_assign: [{ new_name: 'A1', $parents: [{ entity: 'new_wo', match: { new_name: 'WO1' } }, { entity: 'new_tech', match: { new_name: 'T1' } }] }],
+    },
+  };
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true, sampleData: true });
+  const body = find(calls, 'createRecordsBulk').find((c) => c.args[0] === 'new_assign').args[1][0];
+  assert.strictEqual(body['new_woid@odata.bind'], '/new_wos(new_wo-0)');
+  assert.strictEqual(body['new_techid@odata.bind'], '/new_techs(new_tech-0)');
+  assert.strictEqual(body.$parents, undefined);
+});
+
+test('a sample row sets a custom status reason (statecode + captured statuscode value)', async () => {
+  const spec = makeSpec();
+  spec.entities[1].statusReasons = [{ label: 'Escalated', state: 'Active' }];
+  spec.sampleData.new_ticket[0].statusReason = 'Escalated';
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true, sampleData: true });
+  const body = find(calls, 'createRecordsBulk').find((c) => c.args[0] === 'new_ticket').args[1][0];
+  assert.strictEqual(body.statuscode, 100000001, 'value captured from insertStatusValue');
+  assert.strictEqual(body.statecode, 0, 'Active state');
+  assert.strictEqual(body.statusReason, undefined, 'sentinel stripped from the body');
+});
+
+test('view filters: no-value ops, in/not-in groups, and Choice-label resolution', () => {
+  const spec = makeSpec();
+  const def = viewDef(spec, { entity: 'new_ticket', name: 'My Open', columns: ['new_subject'], activeOnly: true,
+    filters: [
+      { attr: 'ownerid', op: 'eq-userid' },
+      { attr: 'new_priority', op: 'not-in', values: ['Low'] },
+      { attr: 'modifiedon', op: 'this-week' },
+    ] });
+  const conds = def.filters.conditions;
+  assert.ok(conds.some((c) => c.attribute === 'statecode' && c.value === '0'), 'activeOnly retained');
+  const owner = conds.find((c) => c.attribute === 'ownerid');
+  assert.strictEqual(owner.operator, 'eq-userid');
+  assert.strictEqual(owner.value, undefined, 'no-value operator omits value');
+  assert.ok(conds.some((c) => c.attribute === 'modifiedon' && c.operator === 'this-week' && c.value === undefined));
+  const grp = def.filters.groups.find((g) => g.type === 'and');
+  assert.ok(grp, 'not-in becomes a nested AND group');
+  assert.strictEqual(grp.conditions[0].operator, 'ne');
+  assert.strictEqual(grp.conditions[0].value, '100000000', "'Low' resolved to its option int");
 });
 
 test('formDef honors explicit tabs/sections/columns', () => {

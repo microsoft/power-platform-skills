@@ -260,12 +260,18 @@ the `relationships` block. Present your proposal clearly, then use
 > or would you like to adjust any tables, columns, or relationships before we
 > move on to forms and views?"
 
-Column `type` must be one of:
-`Text` | `Memo` | `Choice` | `Boolean` | `Money` | `DateTime` | `Integer` | `Decimal` | `Lookup`
+Column `type` is one of: `Text · Memo · Choice · MultiChoice · Boolean · Money · DateTime ·
+Integer · BigInt · Decimal · Double · File · Image · AutoNumber · Customer`. A `Choice`/`MultiChoice`
+column needs `options[]` **or** a `globalChoice` reference. Lookups are **not** a column type —
+declare a `OneToMany` relationship instead.
 
-A `Choice` column **must** include an `options[]` array of string labels.
-A `Lookup` column is expressed as a `OneToMany` relationship entry — do not
-repeat it as a column type on the referencing entity.
+> **Author from [`references/app-spec-schema.md`](./app-spec-schema.md) — it is the single source.**
+> Its **modeling cheatsheet** answers the recurring questions without reading the SDK/lint/engine:
+> auto-number identity → `autoNumberFormat` on `primaryAttribute`; **N:N with attributes** (e.g.
+> Technician↔Work-Order with a Role) → a **junction entity** + two `OneToMany` (sample rows bind
+> both via `$parents`); "my/this-week/not-Completed" views → view `filters[]`; records pre-set to a
+> custom status → `statusReason` on sample rows. The builder does all of this in one pass — never
+> hand-author post-build association/status/FetchXML scripts.
 
 When the user has entities that already exist (detected in Step 3), propose
 columns that complement rather than duplicate what's already there. Build

@@ -82,7 +82,7 @@ test('validateAppSpec rejects a sub-grid childEntity with no OneToMany relations
   bad.forms[0].subgrids[0].childEntity = 'new_comment';
   const r = validateAppSpec(bad);
   assert.strictEqual(r.ok, false);
-  assert.ok(r.errors.some((e) => /no OneToMany relationship/.test(e)));
+  assert.ok(r.errors.some((e) => /no OneToMany or ManyToMany relationship/.test(e)));
 });
 
 test('validateAppSpec rejects a sub-grid referencing an unknown childEntity', () => {
