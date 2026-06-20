@@ -1,72 +1,105 @@
 ---
 name: model-app-maker
-version: 0.1.0
-description: Builds a model-driven Power Apps APP from a natural-language intent — proposes a structured App Spec, confirms it with you, then provisions tables, columns, adaptive forms (with related-record sub-grids), views, charts, and the app module + sitemap into a solution. Use when the user says "build an app for X", "create a model-driven app", or "make me an app to manage Y". For generative PAGES use /genpage; for editing one existing form use the model-maker relay.
+version: 0.2.0
+description: Builds a model-driven Power Apps app from a natural-language intent. Delegates interactive planning (env selection, App Spec authoring, guardrail lint, plan-mode approval) to the `model-app-planner` agent, then runs the deterministic build. Use when the user says "build an app for X", "create a model-driven app", or "make me an app to manage Y". For generative PAGES use /genpage; for editing one existing form use the model-maker relay.
 author: Microsoft Corporation
 argument-hint: "<app description>"
 user-invocable: true
 model: sonnet
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList
 ---
 
 # model-app-maker — intent → model-driven app
 
-Turn a natural-language request into a runnable model-driven app. This skill is a
-thin loop around the deterministic builder (`scripts/build-model-app.js`); it does
-NOT hand-write metadata or XML — tables/columns/relationships go through the
-plugin's `dv-*` scripts, and forms/views/sitemap XML is produced headlessly by the
-vendored `cds-maker-kernel` bundle.
+Thin orchestrator. The interactive planning (env, requirements, the App Spec, the
+guardrail lint, and the plan-mode approval) is done by the `model-app-planner` agent;
+this skill coordinates it and runs the build.
 
 ## Workflow
 
-1. **Confirm the target environment** (org URL) — the mandatory multi-env safety
-   check. Never provision without it.
-2. **Confirm auth:** `node scripts/check-auth.js <envUrl>` → expect `ok:true` and
-   `identitiesMatch:true`.
-3. **Propose an App Spec.** From the user's prompt, draft a structured App Spec
-   (see `samples/app-spec.project-tracker.json` for the exact shape): `solution`,
-   `app`, `entities` (with `columns` + `type`), `relationships`, `forms`, `views`,
-   `appShell`. Column `type` is one of Text / Memo / Choice / Boolean / Money /
-   DateTime / Integer / Decimal / Lookup (Choice needs `options[]`). Keep the MVP
-   to ONE entity unless the user asks for more. Write it to a scratch JSON file.
-   **Adaptive form layout.** Prefer to OMIT `tabs` (or set `"layout": "auto"`) so the
-   kernel's `planFormLayout` groups/labels the fields for you (Summary / Details /
-   Classification, Memo full-width at the bottom, two-column when there are enough
-   fields). Only give explicit `tabs` (with `sections.fields`) when the maker wants a
-   specific structure — set `"layout": "explicit"` or just provide `tabs`. Optionally
-   pass `"purpose"` (e.g. `"tracking"`, `"catalog"`) to bias the grouping.
-   **Charts (auto-suggest).** For each **Choice** column on the app's primary entity,
-   propose one chart in `charts[]` named `<Entity> by <Choice>` (alternate Pie / Column),
-   e.g. `{ "entity": "new_ticket", "name": "Tickets by Priority", "groupBy":
-   "new_priority", "measure": "count", "chartType": "Pie" }`. The maker confirms,
-   edits, or removes them before build — nothing is created without confirmation.
-   **Related sub-grids.** To show child records on a parent form, declare
-   `form.subgrids: [{ "childEntity": "new_comment", "view": "Active Comments",
-   "label": "Comments" }]`. There must be a OneToMany relationship whose `referenced`
-   is the form's entity and `referencing` is `childEntity`; the builder derives the
-   relationship and resolves the child view id (defaults to the child's first view if
-   `view` is omitted) and places the sub-grid on a Related tab.
-   **Sample/test data (only if the user asks for it):** add a `sampleData` block
-   keyed by entity schemaName, e.g. `"sampleData": { "new_ticket": [ { "new_name":
-   "...", "new_priority": "High" } ] }`. Write Choice values as their **labels**
-   ("High") — the builder resolves them to the option ints. For **relational** data,
-   give a child record a `"$parent": { "entity": "new_customer", "match": { "new_name":
-   "Northwind Traders" } }` — the builder inserts parents first and binds the lookup.
-   See `samples/app-spec.support-tickets.json` (flat) and
-   `samples/app-spec.support-desk.json` (relational Customer → Tickets → Comments with
-   sub-grids + charts) for full examples. Sample data is inserted only with
-   `--sample-data`.
-4. **Review gate.** Show the App Spec and the build **plan**:
-   `node scripts/build-model-app.js --env <url> --spec @spec.json` (no `--apply` =
-   dry-run; it prints the ordered plan and writes nothing). Let the user edit the
-   spec. **Nothing is written to Dataverse until they confirm.**
-5. **Build.** `node scripts/build-model-app.js --env <url> --spec @spec.json --apply`
-   (add `--publish` to publish customizations, `--sample-data` to insert the
-   spec's `sampleData`, `--preview` to open the app/form in the relay). The builder
-   is deterministic and scopes everything to a dedicated unmanaged solution. It
-   prints numbered `[n/total] <step>` progress lines as it runs — run it so the
-   user sees that output live (publishing can take 1-2 min and is the slow step).
-6. **Verify.** Open the app; iterate on the spec and re-run.
+### Phase 0 — Working directory
+
+1. Derive a short kebab-case slug from the app description in `$ARGUMENTS`
+   (e.g., "Project Tracker" → `project-tracker`).
+2. `mkdir -p <slug>` and resolve its absolute path.
+3. This directory is the **working directory** for all subsequent phases; it holds
+   `app-spec.json`, `model-app-plan.md`, and `workflow-log.md`.
+
+### Phase 1 — Plan (invoke `model-app-planner` via `Task`)
+
+> **CRITICAL — you MUST invoke `model-app-planner` via the `Task` tool. You MUST
+> NOT inline its prerequisite, auth, env, or authoring questions yourself with
+> `AskUserQuestion`.**
+>
+> The planner is not optional or skippable. It runs:
+> 1. Prerequisite validation (`node --version`, `pac help` >= 2.7.0)
+> 2. PAC CLI auth check and environment selection (`pac auth list`, `pac org who`)
+> 3. Detect existing Dataverse tables and model-driven apps
+> 4. Two-level interactive authoring — data model first, then forms/views/charts/
+>    sample data — confirmed turn by turn via `AskUserQuestion` inside the subagent
+> 5. Guardrail lint (`spec-lint.js`) — hard gate; errors block plan-mode entry
+> 6. Plan-mode approval (`EnterPlanMode` / `ExitPlanMode`)
+> 7. Writes `app-spec.json` and `model-app-plan.md` to the working directory
+>
+> Even if `$ARGUMENTS` appears self-explanatory, **still invoke the planner** — the
+> prereq / auth / env steps must run, and the structured two-level authoring gives
+> the user labeled options rather than free-text guesses.
+
+#### Invocation
+
+Invoke `model-app-planner` via the `Task` tool with a prompt that includes:
+
+- The user's requirements: `$ARGUMENTS`
+- The working directory (absolute path from Phase 0)
+- The plugin root: `${CLAUDE_PLUGIN_ROOT}`
+
+Example prompt:
+
+> You are the model-app-planner agent. Plan a model-driven app for the following
+> requirements:
+>
+> [paste $ARGUMENTS here verbatim, or "no arguments provided — gather from user"]
+>
+> Working directory: [absolute path from Phase 0]
+> Plugin root: ${CLAUDE_PLUGIN_ROOT}
+>
+> Follow the instructions in your agent file. Validate prereqs, confirm auth and
+> environment, detect existing tables and apps, run two-level interactive authoring,
+> lint the spec, and get plan-mode approval. Write app-spec.json and
+> model-app-plan.md to the working directory. Return a summary with the env URL,
+> solution, tables, and artifact counts when complete.
+
+Wait for the planner to finish — it returns a summary and has written `app-spec.json`.
+Capture the `envUrl` from the summary. Proceed to Phase 2.
+
+### Phase 2 — Build
+
+**Dry-run first** (no `--apply` = prints the ordered plan, writes nothing):
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/build-model-app.js" \
+  --env <envUrl> \
+  --spec @<working-dir>/app-spec.json
+```
+
+Show the plan output to the user. On their go-ahead, apply:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/build-model-app.js" \
+  --env <envUrl> \
+  --spec @<working-dir>/app-spec.json \
+  --apply [--sample-data] [--publish]
+```
+
+Run the command so the `[n/total]` progress lines display live. Publishing is the
+slow step (1–2 min). Everything is scoped to a dedicated unmanaged solution.
+`<envUrl>` is the environment URL the planner captured in Phase 1.
+
+### Phase 3 — Verify & iterate
+
+Open the app in the browser. Refine `app-spec.json` and re-run Phase 2 to iterate.
+
+---
 
 ## What the builder does (in order)
 
