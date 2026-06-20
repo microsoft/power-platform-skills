@@ -28,9 +28,10 @@ backlog. The build engine is `scripts/lib/sdk-build.js`; the App Spec contract i
 - ✅ Customer (polymorphic) columns.
 - ⚠ Calculated / Rollup formula columns (`source` + `formula` plumbed through; not live-verified).
 
-### Tier 2 — UI + logic (partial)
+### Tier 2 — UI + logic (partial) — **live-verified on 983a1**
 - ✅ **Web resources** (`webResources[]`) — JS/HTML/CSS shipped via `createWebResource`, added to the solution (component type 61). Source from `content` / `contentPath` / `contentBase64`. Idempotent (reuse by name).
 - ✅ **Form JS event handlers** (`forms[].events[]`) — `onload`/`onsave`/`onchange` wired via `addFormEventHandler` (fetch → inject → push → publish). Lint enforces the library reference + onchange attribute.
+- ✅ Shakeout (2026-06-20): built a Widget app (table, Choice/Integer columns, web resource, view, chart, form with onload+onchange handlers, app, sample data) on 983a1; verified the web resource content + the form's injected `formLibraries`/events in Dataverse; tore down all session artifacts.
 - ✅ Adaptive main forms (auto + explicit tabs/sections), related-record sub-grids, Notes section.
 - ✅ Views (active-records), Choice-column charts, app module + sitemap.
 
