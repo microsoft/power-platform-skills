@@ -333,6 +333,12 @@ Always set `"measure": "count"`.
 
 Entities with no Choice columns get no chart suggestion (but the user may add one).
 
+**A chart's `groupBy` MUST be a Choice column.** The build validator
+(`validateAppSpec`) rejects a chart that groups by a non-Choice column — the lint
+gate only *warns*, so this would otherwise surface as a confusing build failure
+*after* approval. Never propose (or accept) a chart over a Text/DateTime/Number
+column; steer the user to a Choice column instead.
+
 #### Sample data
 
 Suggest a `sampleData` block **right alongside** the forms/views/charts. Populate
