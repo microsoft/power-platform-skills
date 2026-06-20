@@ -58,3 +58,36 @@ test('pushArtifact builds a real FormXML payload headlessly', async () => {
   const body = capture[0].body;
   assert.ok(typeof body.formxml === 'string' && body.formxml.includes('<form'), 'payload carries FormXML');
 });
+
+test('createWebResource posts base64 content + the right webresourcetype (Tier 2)', async () => {
+  const capture = [];
+  const sdk = freshSdk(capture);
+  await sdk.createWebResource({ name: 'new_smoke.js', displayName: 'Smoke', type: 'js', content: 'function f(){return 1;}', publish: false });
+  const post = capture.find((c) => /webresourceset/.test(c.url));
+  assert.ok(post, 'a POST to /webresourceset was issued');
+  assert.strictEqual(post.body.webresourcetype, 3, 'js -> webresourcetype 3');
+  assert.strictEqual(post.body.name, 'new_smoke.js');
+  // content must be base64 (headless btoa/Buffer path), decoding back to the source
+  assert.strictEqual(Buffer.from(post.body.content, 'base64').toString('utf8'), 'function f(){return 1;}');
+});
+
+test('addFormEventHandler injects a handler into the retained FormXML headlessly (Tier 2)', () => {
+  const { createMakerSdk } = require(BUNDLE);
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'sdk-evt-'));
+  const formXml = '<form><tabs><tab name="general"><columns><column><sections><section><rows /></section></sections></column></columns></tab></tabs></form>';
+  const httpClient = {
+    get: async () => ({ status: 200, headers: { etag: 'W/"1"' }, body: { formid: '22222222-2222-2222-2222-222222222222', name: 'F', type: 2, objecttypecode: 'account', formxml: formXml } }),
+    post: async () => ({ status: 204, headers: {}, body: {} }),
+    patch: async () => ({ status: 204, headers: {}, body: {} }),
+    delete: async () => ({ status: 204, headers: {}, body: {} }),
+    put: async () => ({ status: 204, headers: {}, body: {} }),
+  };
+  const sdk = createMakerSdk({ workspacePath: ws, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+  sdk.initWorkspace();
+  return sdk.fetchArtifact('form', '22222222-2222-2222-2222-222222222222').then((fetched) => {
+    assert.ok(fetched, 'form fetched');
+    sdk.addFormEventHandler('22222222-2222-2222-2222-222222222222', { event: 'onload', libraryName: 'new_smoke.js', functionName: 'Ticket.onLoad', passExecutionContext: true });
+    const raw = sdk.getArtifact('form', '22222222-2222-2222-2222-222222222222');
+    assert.ok(raw, 'form still readable after wiring a handler');
+  });
+});

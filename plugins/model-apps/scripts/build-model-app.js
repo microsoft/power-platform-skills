@@ -63,6 +63,7 @@ async function buildModelApp(spec, opts, deps) {
     sampleData: opts.sampleData,
     publish: opts.publish,
     phases: opts.phases,
+    appDir: opts.appDir, // resolves web-resource `contentPath` relative to the app folder
     emit,
   });
 }
@@ -89,6 +90,7 @@ async function main() {
     sampleData: flags['sample-data'] === true,
     publish: flags.publish === true,
     phases: resolvePhases({ only: list(flags.only), skip: list(flags.skip), from: flags.from, to: flags.to }),
+    appDir: path.dirname(specPath),
     env,
   };
   // Construct for both dry-run and apply: proves the vendored bundle + adapter wire up

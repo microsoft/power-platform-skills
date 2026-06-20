@@ -82,8 +82,8 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/build-model-app.js" \
 
 **Run only what's needed** with phase selectors (the agent decides from detect-existing):
 `--only <phases>` · `--skip <phases>` · `--from <phase>` · `--to <phase>`
-(phases: `solution,data-model,sample-data,views,charts,forms,app-shell,publish`). E.g. when all
-tables already exist: `--apply --skip data-model`. SDK metadata is persisted under
+(phases: `solution,data-model,sample-data,web-resources,views,charts,forms,app-shell,publish`).
+E.g. when all tables already exist: `--apply --skip data-model`. SDK metadata is persisted under
 `<working-dir>/.maker-workspace/` (override with `--workspace`), so edits can reuse it.
 
 Narrate progress as it runs. If the build **halts** (`BuildHalt`) on an unrecoverable error,
@@ -100,9 +100,10 @@ Open the app in the browser. Refine `app-spec.json` and re-run Phase 2 to iterat
 solution (idempotent) → data model — **discover** existing tables/columns/relationships via the
 SDK (`findTables` / `findColumns` / `fetchEntityMetadata`) and create only what's missing
 (`createTable` / `createColumn` / `createRelationship`) → **sample data** (opt-in; relational/
-topological, `$parent`→`@odata.bind` using the entity-set name) → **views** → **charts** →
-**forms** (primary + columns laid out, explicit `tabs` honored, `addSubGrid` per sub-grid) →
-**app module + sitemap** → publish (opt-in). All Dataverse access goes through the SDK, so the
+topological, `$parent`→`@odata.bind` using the entity-set name) → **web resources** (opt-in;
+`createWebResource` for form JS/HTML/CSS) → **views** → **charts** → **forms** (primary + columns
+laid out, explicit `tabs` honored, `addSubGrid` per sub-grid, `addFormEventHandler` per `events[]`)
+→ **app module + sitemap** → publish (opt-in). All Dataverse access goes through the SDK, so the
 downloaded metadata lands in `.maker-workspace/`. Independent ops (columns, views/charts/forms)
 run with bounded parallelism; publish is one round-trip per entity + the app. Views/charts build
 **before** forms so a sub-grid can reference the child view id. Each step emits `[n/total]`.
@@ -117,6 +118,8 @@ run with bounded parallelism; publish is one round-trip per entity + the app. Vi
 - **Idempotent.** Existing solution/tables/columns/relationships are detected and reused, so
   re-runs and existing-table envs work without collisions. (Full spec-vs-deployed *diff* editing
   of views/forms is a later increment.)
-- Not in scope (later): quick-create / quick-view forms, lookup/associated views, multi-area
-  sitemaps, security roles, business rules. (Adaptive main forms, related-record sub-grids, and
-  Choice-column charts are supported.)
+- Not in scope (later): dashboards, commands (ribbon buttons), business rules, quick-create /
+  quick-view forms, lookup/associated views, multi-area sitemaps, security roles. (Supported:
+  the full data model — all column types, global choices, status reasons, alternate keys, N:N;
+  adaptive main forms with sub-grids; Choice-column charts; **web resources + form JS event
+  handlers**.) See [`docs/model-app-maker-roadmap.md`](../../docs/model-app-maker-roadmap.md).

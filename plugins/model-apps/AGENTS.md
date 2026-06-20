@@ -35,13 +35,15 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   build engine, run after approval. Discovers existing tables/columns/relationships via the SDK
   (`findTables`/`findColumns`/`fetchEntityMetadata`) and creates only what's missing
   (`createSolution`/`createTable`/`createColumn`/`createRelationship`/`createRecordsBulk`, then
-  `createArtifact`+`pushArtifact` for views/charts/forms/app, `addSubGrid` for sub-grids) — so
-  new, existing, and mixed envs all work. **All Dataverse access is via the SDK**, so metadata is
-  persisted under `<app-folder>/.maker-workspace/` for reuse/edits. Phases
-  (`solution·data-model·sample-data·views·charts·forms·app-shell·publish`) are selectable with
-  `--only`/`--skip`/`--from`/`--to`; independent ops run with bounded parallelism. Emits
-  `[n/total]` events the orchestrator narrates + a `BuildHalt` it gates on. Dry-run by default;
-  `--apply` writes, `--sample-data` / `--publish` opt-in.
+  `createWebResource` for form JS, `createArtifact`+`pushArtifact` for views/charts/forms/app,
+  `addSubGrid` for sub-grids, `addFormEventHandler` for form events) — so new, existing, and mixed
+  envs all work. The data model is **complete** (all column types, global choices, status reasons,
+  alternate keys, N:N). **All Dataverse access is via the SDK**, so metadata is persisted under
+  `<app-folder>/.maker-workspace/` for reuse/edits. Phases
+  (`solution·data-model·sample-data·web-resources·views·charts·forms·app-shell·publish`) are
+  selectable with `--only`/`--skip`/`--from`/`--to`; independent ops run with bounded parallelism.
+  Emits `[n/total]` events the orchestrator narrates + a `BuildHalt` it gates on. Dry-run by
+  default; `--apply` writes, `--sample-data` / `--publish` opt-in.
 - **`scripts/vendor/cds-maker-sdk.cjs`** — the SDK vendored as a self-contained headless bundle
   (rebuild via `scripts/_vendor-build/`); **`scripts/lib/sdk-http-client.js`** injects an
   `az`-token HttpClient. No browser, no relay — the SDK reuses the designer's own serializers.

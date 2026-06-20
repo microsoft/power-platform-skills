@@ -11,6 +11,8 @@
 // emit(event): { phase, status:'start'|'ok'|'skip'|'error', label, n, total, detail? }
 // On an SDK error, throws a BuildHalt the orchestrator can gate on (AskUserQuestion).
 
+const fs = require('node:fs');
+const path = require('node:path');
 const {
   sampleRecordsFor,
   resolveSampleRecords,
@@ -57,9 +59,15 @@ const STATE_CODE = { Active: 0, Inactive: 1 };
 // classic Notes/timeline control classId.
 const STD_FIELD_CLASS_ID = '4273EDBD-AC1D-40d3-9FB2-095C621B552D';
 const NOTES_CLASS_ID = '06375649-C143-495E-A496-C962E5B4488E';
-const COMPONENT_TYPE = { view: 26, chart: 59, form: 60, app: 80 };
+const COMPONENT_TYPE = { view: 26, chart: 59, form: 60, webResource: 61, app: 80 };
 
-const PHASES = ['solution', 'data-model', 'sample-data', 'views', 'charts', 'forms', 'app-shell', 'publish'];
+// Web-resource kinds (App Spec `type`) -> SDK createWebResource `type` token. The SDK maps
+// the token to the Dataverse webresourcetype code (js=3, html=1, css=2, …).
+const WEB_RESOURCE_KINDS = new Set(['js', 'html', 'css', 'xml', 'png', 'jpg', 'gif', 'xsl', 'ico', 'svg', 'resx']);
+// Form-event kinds the SDK can wire (addFormEventHandler).
+const FORM_EVENTS = new Set(['onload', 'onsave', 'onchange']);
+
+const PHASES = ['solution', 'data-model', 'sample-data', 'web-resources', 'views', 'charts', 'forms', 'app-shell', 'publish'];
 
 class BuildHalt extends Error {
   constructor(message, { phase, code, recoverable = false, cause } = {}) {
@@ -109,6 +117,27 @@ function primaryNameOf(spec, logical) {
   return e ? e.primaryAttribute.schemaName.toLowerCase() : `${String(logical).toLowerCase()}name`;
 }
 
+// Map an App Spec web resource to SDK createWebResource options. Content comes from inline
+// `content` (text), `contentBase64`, or a `contentPath` read relative to the app folder.
+function webResourceOpts(wr, appDir) {
+  const o = { name: wr.name, displayName: wr.displayName || wr.name, type: String(wr.type || 'js').toLowerCase() };
+  if (wr.description) o.description = wr.description;
+  if (wr.contentBase64 !== undefined) o.contentBase64 = wr.contentBase64;
+  else if (wr.content !== undefined) o.content = wr.content;
+  else if (wr.contentPath) o.content = fs.readFileSync(path.isAbsolute(wr.contentPath) ? wr.contentPath : path.join(appDir || '.', wr.contentPath), 'utf8');
+  else o.content = '';
+  return o;
+}
+
+// Map an App Spec form event to SDK addFormEventHandler options.
+function formEventOpts(ev) {
+  const o = { event: ev.event, libraryName: ev.library, functionName: ev.function,
+    enabled: ev.enabled !== false, passExecutionContext: ev.passExecutionContext !== false };
+  if (ev.attribute) o.attribute = String(ev.attribute).toLowerCase();
+  if (ev.parameters !== undefined) o.parameters = ev.parameters;
+  return o;
+}
+
 // --- the ordered plan (dry-run + totals) -----------------------------------------------
 function planFor(spec, opts) {
   const has = (p) => !opts.phases || opts.phases.includes(p);
@@ -133,9 +162,14 @@ function planFor(spec, opts) {
   if (has('sample-data') && opts.sampleData) {
     for (const e of spec.entities) { const n = sampleRecordsFor(spec, e).length; if (n) items.push({ phase: 'sample-data', label: `${n} sample record(s) -> ${e.schemaName}` }); }
   }
+  if (has('web-resources')) for (const wr of spec.webResources || []) items.push({ phase: 'web-resources', label: `web resource ${wr.name} (${wr.type || 'js'})` });
   if (has('views')) for (const v of spec.views) items.push({ phase: 'views', label: `view "${v.name}" for ${v.entity}` });
   if (has('charts')) for (const c of spec.charts || []) items.push({ phase: 'charts', label: `chart "${c.name}" (${c.chartType}) for ${c.entity}` });
-  if (has('forms')) for (const f of spec.forms) { const subs = (f.subgrids || []).map((s) => s.childEntity).join(', '); items.push({ phase: 'forms', label: `form for ${f.entity}${subs ? ` (sub-grids: ${subs})` : ''}` }); }
+  if (has('forms')) for (const f of spec.forms) {
+    const subs = (f.subgrids || []).map((s) => s.childEntity).join(', ');
+    items.push({ phase: 'forms', label: `form for ${f.entity}${subs ? ` (sub-grids: ${subs})` : ''}` });
+    if ((f.events || []).length) items.push({ phase: 'forms', label: `wire ${f.events.length} event handler(s) on ${f.entity}` });
+  }
   if (has('app-shell')) items.push({ phase: 'app-shell', label: `app module "${spec.app.name}" + sitemap` });
   if (has('publish') && opts.publish) items.push({ phase: 'publish', label: 'publish customizations' });
   return items;
@@ -253,7 +287,7 @@ async function runSdkBuild(spec, opts = {}) {
     return { ok: true, dryRun: true, plan: plan.map((p) => p.label) };
   }
 
-  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, views: {}, charts: {}, forms: {}, app: null } };
+  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, app: null } };
   const total = plan.length;
   let n = 0;
   const run = async (phase, label, fn, { recoverable = false } = {}) => {
@@ -390,6 +424,25 @@ async function runSdkBuild(spec, opts = {}) {
     }
   }
 
+  // 3b. Web resources (opt-in via spec.webResources) — JS/HTML/CSS shipped for form logic.
+  //     Idempotent: an existing web resource of the same name is reused (and assumed already
+  //     in the solution). Built before forms so a form event handler can bind its library.
+  if (has('web-resources')) {
+    for (const wr of spec.webResources || []) {
+      const existing = await provision.queryRecords('webresource', { select: ['webresourceid'], filter: `name eq '${wr.name}'`, top: 1 });
+      if (existing && existing[0] && existing[0].webresourceid) {
+        result.created.webResources[wr.name] = existing[0].webresourceid;
+        emit({ phase: 'web-resources', status: 'skip', label: `web resource ${wr.name} (exists — reuse)`, n: (n += 1), total });
+        continue;
+      }
+      await run('web-resources', `web resource ${wr.name} (${wr.type || 'js'})`, async () => {
+        const r = await provision.createWebResource(webResourceOpts(wr, opts.appDir));
+        result.created.webResources[wr.name] = r.id;
+        await provision.addSolutionComponent({ componentId: r.id, componentType: COMPONENT_TYPE.webResource, solutionUniqueName: sol.uniqueName });
+      });
+    }
+  }
+
   // helper: create an artifact header-less, push, add to the solution.
   const buildArtifact = (type, def) => run(type === 'app' ? 'app-shell' : `${type}s`, `${type} "${def.name}"`, async () => {
     const art = provision.createArtifact(type, def);
@@ -413,6 +466,8 @@ async function runSdkBuild(spec, opts = {}) {
   }
 
   // 6. Forms (independent -> parallel; sub-grids reference the child view ids built above).
+  //    A form with `events[]` then gets its JS handlers wired: fetch the pushed form (to
+  //    retain its formxml), inject onload/onsave/onchange handlers, push + publish.
   if (has('forms')) {
     const defs = spec.forms.map((f) => {
       const def = formDef(spec, f);
@@ -425,7 +480,19 @@ async function runSdkBuild(spec, opts = {}) {
       }).filter(Boolean);
       return { f, def };
     });
-    const ids = await mapLimit(defs, concurrency, (d) => buildArtifact('form', d.def));
+    const ids = await mapLimit(defs, concurrency, async (d) => {
+      const id = await buildArtifact('form', d.def);
+      const events = (d.f.events || []).filter((ev) => FORM_EVENTS.has(ev.event) && ev.library && ev.function);
+      if (events.length) {
+        await run('forms', `wire ${events.length} event handler(s) on ${d.f.entity}`, async () => {
+          await provision.fetchArtifact('form', id);
+          for (const ev of events) provision.addFormEventHandler(id, formEventOpts(ev));
+          await provision.pushArtifact('form', id);
+          await provision.publishArtifact('form', id);
+        });
+      }
+      return id;
+    });
     defs.forEach((d, i) => { result.created.forms[d.f.entity.toLowerCase()] = ids[i]; });
   }
 
@@ -450,4 +517,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, chartDef, formDef, appDef };
+module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, chartDef, formDef, appDef, webResourceOpts, formEventOpts, WEB_RESOURCE_KINDS, FORM_EVENTS };

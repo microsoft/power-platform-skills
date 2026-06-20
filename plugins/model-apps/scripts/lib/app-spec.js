@@ -138,12 +138,33 @@ function validateAppSpec(spec) {
   if (!entityNames.size) {
     errors.push('at least one entity is required');
   }
+  // Web resources (optional — JS/HTML/CSS shipped for form logic).
+  const WEB_RESOURCE_KINDS = new Set(['js', 'html', 'css', 'xml', 'png', 'jpg', 'gif', 'xsl', 'ico', 'svg', 'resx']);
+  const FORM_EVENTS = new Set(['onload', 'onsave', 'onchange']);
+  const webResourceNames = new Set();
+  for (const wr of spec.webResources || []) {
+    if (!wr || !wr.name) { errors.push('a webResource is missing a name'); continue; }
+    webResourceNames.add(wr.name.toLowerCase());
+    if (!WEB_RESOURCE_KINDS.has(String(wr.type || 'js').toLowerCase())) {
+      errors.push(`webResource ${wr.name}: type must be one of ${[...WEB_RESOURCE_KINDS].join('|')}`);
+    }
+    if (wr.content === undefined && wr.contentBase64 === undefined && !wr.contentPath) {
+      errors.push(`webResource ${wr.name}: needs content, contentBase64, or contentPath`);
+    }
+  }
   for (const f of spec.forms || []) {
     if (!entityNames.has(f.entity)) {
       errors.push(`form references unknown entity '${f.entity}'`);
     }
     if (f.layout !== undefined && f.layout !== 'auto' && f.layout !== 'explicit') {
       errors.push(`form ${f.entity}: layout must be 'auto' or 'explicit'`);
+    }
+    for (const ev of f.events || []) {
+      if (!ev || !FORM_EVENTS.has(ev.event)) { errors.push(`form ${f.entity}: event must be one of ${[...FORM_EVENTS].join('|')}`); continue; }
+      if (!ev.library) errors.push(`form ${f.entity}: ${ev.event} handler is missing a library (web-resource name)`);
+      else if (!webResourceNames.has(String(ev.library).toLowerCase())) errors.push(`form ${f.entity}: ${ev.event} handler references undeclared web resource '${ev.library}'`);
+      if (!ev.function) errors.push(`form ${f.entity}: ${ev.event} handler is missing a function name`);
+      if (ev.event === 'onchange' && !ev.attribute) errors.push(`form ${f.entity}: onchange handler requires an attribute (column logical name)`);
     }
     if (f.subgrids !== undefined) {
       if (!Array.isArray(f.subgrids)) {

@@ -298,6 +298,31 @@ a `subgrids` entry that shows the child records inline:
 }
 ```
 
+#### Form JS (optional — client-side logic)
+
+When the user wants validation or dynamic behaviour (e.g. "warn when priority is
+High", "default the due date"), propose a `webResources[]` script and wire it onto
+the form with `events[]`. Keep the JS small and real (no placeholders); name the
+script with the solution prefix and a `.js` extension:
+
+```json
+"webResources": [
+  { "name": "new_ticket.js", "displayName": "Ticket Scripts", "type": "js",
+    "content": "var Ticket={onLoad:function(ctx){},onPriority:function(ctx){}};" }
+],
+"forms": [
+  { "entity": "new_ticket", "type": "main", "name": "Ticket", "layout": "auto",
+    "events": [
+      { "event": "onload", "library": "new_ticket.js", "function": "Ticket.onLoad" },
+      { "event": "onchange", "attribute": "new_priority", "library": "new_ticket.js", "function": "Ticket.onPriority" }
+    ] }
+]
+```
+
+`event` is `onload`/`onsave`/`onchange` (`onchange` needs an `attribute`); `library`
+must reference a declared `webResources[]` name (lint-enforced). Only propose form JS
+when the user asks for behaviour the data model can't express — don't add it by default.
+
 #### Views
 
 Propose one active-records view per entity. Include the primary attribute plus

@@ -33,7 +33,10 @@ function mockSdk(opts = {}) {
   let idc = 0;
   const ex = opts.existingTables || {};
   const sdk = {
-    queryRecords: async (e, o) => { calls.push({ name: 'queryRecords', args: [e, o] }); if (e === 'solution') return opts.solutionExists ? [{ solutionid: 's' }] : []; return opts.noPublisher ? [] : [{ publisherid: 'pub-1' }]; },
+    queryRecords: async (e, o) => { calls.push({ name: 'queryRecords', args: [e, o] }); if (e === 'solution') return opts.solutionExists ? [{ solutionid: 's' }] : []; if (e === 'webresource') return opts.existingWebResource ? [{ webresourceid: 'wr-existing' }] : []; return opts.noPublisher ? [] : [{ publisherid: 'pub-1' }]; },
+    createWebResource: async (o) => { calls.push({ name: 'createWebResource', args: [o] }); return { id: `wr-${++idc}`, name: o.name }; },
+    fetchArtifact: async (t, id) => { calls.push({ name: 'fetchArtifact', args: [t, id] }); return { id }; },
+    addFormEventHandler: (id, o) => { calls.push({ name: 'addFormEventHandler', args: [id, o] }); return {}; },
     createPublisher: async (o) => { calls.push({ name: 'createPublisher', args: [o] }); return { id: 'pub-new' }; },
     createSolution: async (o) => { calls.push({ name: 'createSolution', args: [o] }); return { id: 'sol-1' }; },
     findTables: async (q, o) => { calls.push({ name: 'findTables', args: [q, o] }); const t = ex[String(q).toLowerCase()]; return t ? [{ logicalName: String(q).toLowerCase(), schemaName: q, displayName: q, entitySetName: t.entitySetName, isCustom: true }] : []; },
@@ -183,6 +186,66 @@ test('Tier 1 data model: global choices, rich column types, customer, status, al
   assert.strictEqual(nn.args[0].entity2, 'new_ticket');
 });
 
+// --- Tier 2: UI + logic (web resources + form event handlers) --------------------------
+function specWithFormJs() {
+  const spec = makeSpec();
+  spec.webResources = [
+    { name: 'new_ticket.js', displayName: 'Ticket Scripts', type: 'js', content: 'var Ticket={onLoad:function(){},onPriority:function(){}};' },
+  ];
+  // wire handlers onto the customer form (makeSpec's only form)
+  spec.forms[0].events = [
+    { event: 'onload', library: 'new_ticket.js', function: 'Ticket.onLoad' },
+    { event: 'onchange', attribute: 'new_tier', library: 'new_ticket.js', function: 'Ticket.onPriority', enabled: true },
+  ];
+  return spec;
+}
+
+test('Tier 2: web resource is created, added to the solution (type 61), and its id captured', async () => {
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(specWithFormJs(), { sdk, apply: true });
+  const wr = find(calls, 'createWebResource')[0].args[0];
+  assert.strictEqual(wr.name, 'new_ticket.js');
+  assert.strictEqual(wr.type, 'js');
+  assert.ok(wr.content.includes('onLoad'));
+  const comps = find(calls, 'addSolutionComponent').map((c) => c.args[0].componentType);
+  assert.ok(comps.includes(61), 'web resource added to solution as component type 61');
+});
+
+test('Tier 2: idempotent — an existing web resource is reused (no createWebResource)', async () => {
+  const { sdk, calls } = mockSdk({ existingWebResource: true });
+  const events = [];
+  await runSdkBuild(specWithFormJs(), { sdk, apply: true, emit: (e) => events.push(e) });
+  assert.strictEqual(find(calls, 'createWebResource').length, 0, 'existing web resource not re-created');
+  assert.ok(events.some((e) => e.status === 'skip' && /web resource new_ticket\.js \(exists/.test(e.label)));
+});
+
+test('Tier 2: form events are wired (fetch -> addFormEventHandler -> push -> publish) with mapped opts', async () => {
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(specWithFormJs(), { sdk, apply: true });
+  const formId = find(calls, 'createArtifact').find((c) => c.args[0] === 'form').args; // ['form', def]
+  assert.ok(has(calls, 'fetchArtifact'), 'form fetched before wiring handlers');
+  const handlers = find(calls, 'addFormEventHandler').map((c) => c.args[1]);
+  assert.strictEqual(handlers.length, 2);
+  const onload = handlers.find((h) => h.event === 'onload');
+  assert.strictEqual(onload.libraryName, 'new_ticket.js');
+  assert.strictEqual(onload.functionName, 'Ticket.onLoad');
+  assert.strictEqual(onload.passExecutionContext, true);
+  const onchange = handlers.find((h) => h.event === 'onchange');
+  assert.strictEqual(onchange.attribute, 'new_tier', 'onchange attribute lower-cased');
+  // a form with events publishes itself after the re-push
+  assert.ok(find(calls, 'publishArtifact').some((c) => c.args[0] === 'form'), 'form published after wiring');
+  assert.ok(formId, 'form artifact created');
+});
+
+test('Tier 2: planFor and totals account for web resources and event wiring', async () => {
+  const labels = planFor(specWithFormJs(), { phases: PHASES }).map((p) => p.label);
+  assert.ok(labels.some((l) => /web resource new_ticket\.js/.test(l)));
+  assert.ok(labels.some((l) => /wire 2 event handler\(s\) on new_customer/.test(l)));
+  // web-resources phase only runs when selected
+  const onlyWr = planFor(specWithFormJs(), { phases: ['web-resources'] }).map((p) => p.phase);
+  assert.ok(onlyWr.length && onlyWr.every((p) => p === 'web-resources'));
+});
+
 test('formDef honors explicit tabs/sections/columns', () => {
   const def = formDef(makeSpec(), { entity: 'new_customer', name: 'C', tabs: [{ label: 'Main', sections: [{ label: 'Details', columns: 2, fields: ['new_name', 'new_tier'] }] }] });
   const sec = def.tabs[0].sections[0];
@@ -211,7 +274,7 @@ test('publish (opt-in) publishes one artifact per entity + the app', async () =>
 
 test('resolvePhases honors only/skip/from/to', () => {
   assert.deepStrictEqual(resolvePhases({ only: ['views', 'charts'] }), ['views', 'charts']);
-  assert.deepStrictEqual(resolvePhases({ skip: ['data-model', 'sample-data', 'publish'] }), ['solution', 'views', 'charts', 'forms', 'app-shell']);
+  assert.deepStrictEqual(resolvePhases({ skip: ['data-model', 'sample-data', 'publish'] }), ['solution', 'web-resources', 'views', 'charts', 'forms', 'app-shell']);
   assert.deepStrictEqual(resolvePhases({ from: 'views' }), ['views', 'charts', 'forms', 'app-shell', 'publish']);
   assert.deepStrictEqual(resolvePhases({ to: 'data-model' }), ['solution', 'data-model']);
 });

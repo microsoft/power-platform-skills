@@ -16,6 +16,23 @@ function lintAppSpec(spec) {
   const prefix = spec.solution && spec.solution.publisherPrefix;
   const entityNames = new Set();
   const globalChoiceNames = new Set((spec.globalChoices || []).map((g) => lc(g.name)));
+  const webResourceNames = new Set((spec.webResources || []).map((w) => lc(w.name)));
+  const WEB_RESOURCE_KINDS = new Set(['js', 'html', 'css', 'xml', 'png', 'jpg', 'gif', 'xsl', 'ico', 'svg', 'resx']);
+  const FORM_EVENTS = new Set(['onload', 'onsave', 'onchange']);
+  // columns per entity (logical) — used to validate onchange attributes.
+  const columnsByEntity = {};
+  for (const e of spec.entities || []) {
+    const set = new Set((e.columns || []).map((c) => lc(c.schemaName)));
+    if (e.primaryAttribute && e.primaryAttribute.schemaName) set.add(lc(e.primaryAttribute.schemaName));
+    columnsByEntity[lc(e.schemaName)] = set;
+  }
+  for (const wr of spec.webResources || []) {
+    if (!wr.name) E('A webResource is missing a name');
+    if (!WEB_RESOURCE_KINDS.has(lc(wr.type || 'js'))) E(`webResource '${wr.name}' has unknown type '${wr.type}'`);
+    if (wr.content === undefined && wr.contentBase64 === undefined && !wr.contentPath) E(`webResource '${wr.name}' needs content, contentBase64, or contentPath`);
+    if (lc(wr.type || 'js') === 'js' && wr.name && !lc(wr.name).endsWith('.js')) W(`web resource '${wr.name}' is a script but its name doesn't end in .js — Dataverse convention expects the extension`);
+    if (prefix && wr.name && !lc(wr.name).startsWith(lc(prefix) + '_')) W(`web resource '${wr.name}' does not use the solution prefix '${prefix}_'`);
+  }
   for (const g of spec.globalChoices || []) {
     if (!g.name) E('A globalChoice is missing a name');
     if (!(Array.isArray(g.options) && g.options.length)) E(`globalChoice '${g.name}' needs options[]`);
@@ -81,6 +98,16 @@ function lintAppSpec(spec) {
         (r) => r.type === 'OneToMany' && lc(r.referenced) === lc(f.entity) && lc(r.referencing) === lc(sg.childEntity)
       );
       if (!ok) E(`Form ${f.entity} sub-grid for ${sg.childEntity} has no matching OneToMany relationship`);
+    }
+    for (const ev of f.events || []) {
+      if (!FORM_EVENTS.has(lc(ev.event))) { E(`Form ${f.entity} has an event with unknown type '${ev.event}' (use onload/onsave/onchange)`); continue; }
+      if (!ev.library) E(`Form ${f.entity} ${ev.event} handler is missing a library (web-resource name)`);
+      else if (!webResourceNames.has(lc(ev.library))) E(`Form ${f.entity} ${ev.event} handler references undeclared web resource '${ev.library}' — add it to webResources[]`);
+      if (!ev.function) E(`Form ${f.entity} ${ev.event} handler is missing a function name`);
+      if (lc(ev.event) === 'onchange') {
+        if (!ev.attribute) E(`Form ${f.entity} onchange handler requires an attribute (column logical name)`);
+        else if ((columnsByEntity[lc(f.entity)] || new Set()).size && !columnsByEntity[lc(f.entity)].has(lc(ev.attribute))) W(`Form ${f.entity} onchange handler binds '${ev.attribute}', which isn't a column on ${f.entity}`);
+      }
     }
   }
 

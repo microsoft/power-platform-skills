@@ -17,9 +17,11 @@ deterministic builder (`scripts/build-model-app.js`). Author it to this shape, l
   "app":      { "name": "Support Desk", "description": "Track tickets" },
   "entities":      [ /* tables — see below */ ],
   "relationships": [ /* 1:N links — see below */ ],
+  "globalChoices": [ /* optional shared option sets */ ],
+  "webResources":  [ /* optional JS/HTML/CSS for form logic */ ],
   "views":         [ /* saved queries */ ],
   "charts":        [ /* Choice-column charts */ ],
-  "forms":         [ /* main forms */ ],
+  "forms":         [ /* main forms — may wire JS event handlers */ ],
   "appShell":      { "areas": [ /* sitemap */ ] },
   "sampleData":    { /* optional, keyed by entity schemaName */ }
 }
@@ -76,6 +78,17 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 { "type": "ManyToMany", "entity1": "new_project", "entity2": "new_tag" }  // intersect auto-named
 ```
 
+## webResources[] (optional — client-side logic)
+```jsonc
+[ { "name": "new_ticket.js", "displayName": "Ticket Scripts", "type": "js",
+    "content": "var Ticket={onLoad:function(ctx){},onPriority:function(ctx){}};" } ]
+```
+- `type`: `js · html · css · xml · png · jpg · gif · svg · ico · xsl · resx` (script web resources
+  should be named with a `.js` extension).
+- Source comes from **one** of: `content` (inline text), `contentPath` (a file read relative to the
+  app folder at build time), or `contentBase64` (for binary types).
+- Built **before** forms and added to the solution; reference one from a form `events[]` handler.
+
 ## views[]
 ```jsonc
 { "entity": "new_ticket", "name": "Active Tickets", "columns": ["new_subject","new_priority"],
@@ -100,8 +113,19 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 { "entity": "new_project", "type": "main", "name": "Project",
   "tabs": [ { "label": "General", "sections": [
     { "label": "Details", "columns": 2, "fields": ["new_name","new_budget","new_status"] } ] } ] }
+
+// form JS: wire onload/onsave/onchange handlers to a web-resource library
+{ "entity": "new_ticket", "type": "main", "name": "Ticket", "layout": "auto",
+  "events": [
+    { "event": "onload",   "library": "new_ticket.js", "function": "Ticket.onLoad" },
+    { "event": "onchange", "attribute": "new_priority", "library": "new_ticket.js", "function": "Ticket.onPriority" }
+  ] }
 ```
 - A sub-grid needs a matching `OneToMany` from the form's entity to `childEntity` (lint-enforced).
+- **`events[]`** wire client-side JS: `event` is `onload`/`onsave`/`onchange` (`onchange` needs an
+  `attribute`), `library` references a declared `webResources[]` name (lint-enforced), `function` is
+  the JS function. Optional `enabled` (default true), `passExecutionContext` (default true),
+  `parameters`. The build fetches the pushed form, injects the handlers, then publishes it.
 
 ## appShell
 ```jsonc
