@@ -7,11 +7,18 @@ const TYPE_MAP = {
   Text: { dv: 'string' },
   Memo: { dv: 'memo' },
   Choice: { dv: 'picklist' },
+  MultiChoice: { dv: 'multiselectpicklist' },
   Boolean: { dv: 'boolean' },
   Money: { dv: 'money' },
   DateTime: { dv: 'datetime' },
   Integer: { dv: 'integer' },
+  BigInt: { dv: 'bigint' },
   Decimal: { dv: 'decimal' },
+  Double: { dv: 'double' },
+  File: { dv: 'file' },
+  Image: { dv: 'image' },
+  AutoNumber: { dv: 'string' },
+  Customer: { dv: 'lookup' }, // polymorphic account/contact — built via createCustomerColumn
   Lookup: { dv: null }, // lookups come from relationships, not a column
 };
 
@@ -123,8 +130,8 @@ function validateAppSpec(spec) {
       if (c.type && !TYPE_MAP[c.type]) {
         errors.push(`entity ${e.schemaName}: column ${c.schemaName} has unknown type '${c.type}'`);
       }
-      if (c.type === 'Choice' && (!Array.isArray(c.options) || !c.options.length)) {
-        errors.push(`column ${c.schemaName}: Choice needs options[]`);
+      if ((c.type === 'Choice' || c.type === 'MultiChoice') && !(Array.isArray(c.options) && c.options.length) && !c.globalChoice) {
+        errors.push(`column ${c.schemaName}: ${c.type} needs options[] or a globalChoice reference`);
       }
     }
   }

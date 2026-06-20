@@ -15,6 +15,11 @@ function lintAppSpec(spec) {
 
   const prefix = spec.solution && spec.solution.publisherPrefix;
   const entityNames = new Set();
+  const globalChoiceNames = new Set((spec.globalChoices || []).map((g) => lc(g.name)));
+  for (const g of spec.globalChoices || []) {
+    if (!g.name) E('A globalChoice is missing a name');
+    if (!(Array.isArray(g.options) && g.options.length)) E(`globalChoice '${g.name}' needs options[]`);
+  }
 
   for (const e of spec.entities || []) {
     const key = lc(e.schemaName);
@@ -33,16 +38,31 @@ function lintAppSpec(spec) {
       const ck = lc(c.schemaName);
       if (cols.has(ck)) E(`Entity ${e.schemaName} has a duplicate column ${c.schemaName}`);
       cols.add(ck);
-      if (c.type === 'Choice') {
-        if (!(c.options && c.options.length)) E(`Choice column ${e.schemaName}.${c.schemaName} needs options[]`);
-        else if (c.options.length > CHOICE_OPTION_WARN) {
-          W(`Column ${e.schemaName}.${c.schemaName} has ${c.options.length} Choice options — consider a lookup table`);
-        }
+      if (c.type === 'Choice' || c.type === 'MultiChoice') {
+        if (c.globalChoice && !globalChoiceNames.has(lc(c.globalChoice))) E(`Column ${e.schemaName}.${c.schemaName} references unknown globalChoice '${c.globalChoice}'`);
+        else if (!c.globalChoice && !(c.options && c.options.length)) E(`${c.type} column ${e.schemaName}.${c.schemaName} needs options[] or a globalChoice`);
+        else if (c.options && c.options.length > CHOICE_OPTION_WARN) W(`Column ${e.schemaName}.${c.schemaName} has ${c.options.length} options — consider a lookup table`);
       }
+      if ((c.source === 'Calculated' || c.source === 'Rollup') && !c.formula) W(`${c.source} column ${e.schemaName}.${c.schemaName} has no formula — it will be created empty`);
+    }
+    const keyable = new Set([...cols, lc(e.primaryAttribute && e.primaryAttribute.schemaName)]);
+    for (const k of e.alternateKeys || []) {
+      if (!k.schemaName) E(`Entity ${e.schemaName} has an alternate key without a schemaName`);
+      for (const kc of k.columns || []) if (!keyable.has(lc(kc))) E(`Alternate key ${e.schemaName}.${k.schemaName} references unknown column '${kc}'`);
+      if (!(k.columns && k.columns.length)) E(`Alternate key ${e.schemaName}.${k.schemaName} needs columns[]`);
+    }
+    for (const sr of e.statusReasons || []) {
+      if (!sr.label) E(`Entity ${e.schemaName} has a statusReason without a label`);
+      if (sr.state && sr.state !== 'Active' && sr.state !== 'Inactive') E(`statusReason '${sr.label}' state must be 'Active' or 'Inactive'`);
     }
   }
 
   for (const r of spec.relationships || []) {
+    if (r.type === 'ManyToMany') {
+      if (!entityNames.has(lc(r.entity1))) E(`N:N relationship references unknown entity '${r.entity1}'`);
+      if (!entityNames.has(lc(r.entity2))) E(`N:N relationship references unknown entity '${r.entity2}'`);
+      continue;
+    }
     if (r.type !== 'OneToMany') continue;
     if (!entityNames.has(lc(r.referenced))) E(`Relationship references unknown entity '${r.referenced}'`);
     if (!entityNames.has(lc(r.referencing))) E(`Relationship references unknown entity '${r.referencing}'`);

@@ -19,12 +19,39 @@ const {
 } = require('./app-spec.js');
 const { topoOrderEntities } = require('./_graph.js');
 
-// App Spec column type -> SDK ColumnType. Lookup is omitted: it's a side effect of a
-// OneToMany relationship, never a column.
+// App Spec column type -> SDK ColumnType. Lookup is omitted (side effect of a OneToMany
+// relationship); Customer is handled specially (createCustomerColumn).
 const SDK_COLUMN_TYPE = {
-  Text: 'string', Memo: 'memo', Choice: 'choice', Boolean: 'boolean',
-  Money: 'money', DateTime: 'dateTime', Integer: 'integer', Decimal: 'decimal',
+  Text: 'string', Memo: 'memo', Choice: 'choice', MultiChoice: 'multiChoice',
+  Boolean: 'boolean', Money: 'money', DateTime: 'dateTime',
+  Integer: 'integer', BigInt: 'bigint', Decimal: 'decimal', Double: 'double',
+  File: 'file', Image: 'image', AutoNumber: 'autonumber',
 };
+const REQUIRED = (c) => (c.required === true ? 'ApplicationRequired' : c.required === 'recommended' ? 'Recommended' : 'None');
+
+// Map an App Spec column to SDK CreateColumnOptions. `globalChoiceIds` maps a global-choice
+// name -> its metadataId (so a column can bind to a shared option set).
+function columnOptions(c, globalChoiceIds) {
+  const o = { schemaName: c.schemaName, displayName: c.displayName || c.schemaName, type: SDK_COLUMN_TYPE[c.type || 'Text'], required: REQUIRED(c) };
+  switch (c.type) {
+    case 'Text': if (c.maxLength) o.maxLength = c.maxLength; if (c.format) o.stringFormat = c.format; break;
+    case 'Memo': if (c.maxLength) o.maxLength = c.maxLength; break;
+    case 'Integer': case 'BigInt': case 'Decimal': case 'Double': case 'Money':
+      if (c.minValue !== undefined) o.minValue = c.minValue;
+      if (c.maxValue !== undefined) o.maxValue = c.maxValue;
+      if (c.precision !== undefined) o.precision = c.precision; break;
+    case 'DateTime': if (c.dateFormat) o.dateFormat = c.dateFormat; break;
+    case 'Boolean': if (c.trueLabel) o.trueLabel = c.trueLabel; if (c.falseLabel) o.falseLabel = c.falseLabel; break;
+    case 'Choice': case 'MultiChoice':
+      if (c.globalChoice && globalChoiceIds[c.globalChoice]) o.globalChoiceMetadataId = globalChoiceIds[c.globalChoice];
+      else o.options = choiceOptions(c); break;
+    case 'File': case 'Image': if (c.maxSizeKb) o.maxSizeKb = c.maxSizeKb; if (c.type === 'Image' && c.isPrimaryImage) o.isPrimaryImage = true; break;
+    case 'AutoNumber': if (c.autoNumberFormat) o.autoNumberFormat = c.autoNumberFormat; break;
+  }
+  if (c.source === 'Calculated' || c.source === 'Rollup') { o.sourceType = c.source; if (c.formula) o.formulaDefinition = c.formula; }
+  return o;
+}
+const STATE_CODE = { Active: 0, Inactive: 1 };
 
 // Standard field control classId (Dataverse picks the widget by attribute type) and the
 // classic Notes/timeline control classId.
@@ -89,14 +116,18 @@ function planFor(spec, opts) {
   const sol = spec.solution;
   if (has('solution')) items.push({ phase: 'solution', label: `solution ${sol.uniqueName} (publisher ${sol.publisherPrefix})` });
   if (has('data-model')) {
+    for (const gc of spec.globalChoices || []) items.push({ phase: 'data-model', label: `global choice ${gc.name}` });
     for (const e of spec.entities) {
       items.push({ phase: 'data-model', label: `table ${e.schemaName} ("${e.displayName}")` });
       for (const c of e.columns || []) {
-        if (SDK_COLUMN_TYPE[c.type || 'Text']) items.push({ phase: 'data-model', label: `column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})` });
+        if (SDK_COLUMN_TYPE[c.type || 'Text'] || c.type === 'Customer') items.push({ phase: 'data-model', label: `column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})` });
       }
+      for (const sr of e.statusReasons || []) items.push({ phase: 'data-model', label: `status reason ${e.schemaName}: ${sr.label}` });
+      for (const k of e.alternateKeys || []) items.push({ phase: 'data-model', label: `alt key ${e.schemaName}.${k.schemaName}` });
     }
     for (const r of spec.relationships || []) {
       if (r.type === 'OneToMany') items.push({ phase: 'data-model', label: `relationship 1:N ${r.referenced}->${r.referencing}` });
+      else if (r.type === 'ManyToMany') items.push({ phase: 'data-model', label: `relationship N:N ${r.entity1}<->${r.entity2}` });
     }
   }
   if (has('sample-data') && opts.sampleData) {
@@ -255,7 +286,18 @@ async function runSdkBuild(spec, opts = {}) {
   // 2. Data model — idempotent. Discover existing tables/columns/relationships via the SDK
   //    (find*/fetch*), then create only what's missing. Captures entitySetName for every
   //    entity (fresh -> createTable result, existing -> findTables hit).
+  const globalChoiceIds = {};
   if (has('data-model')) {
+    // 2a. Global option sets (shared choices) — built before columns that bind to them.
+    for (const gc of spec.globalChoices || []) {
+      await run('data-model', `global choice ${gc.name}`, async () => {
+        try {
+          const r = await sdk.createGlobalOptionSet({ name: gc.name, displayName: gc.displayName || gc.name, options: (gc.options || []).map((label, i) => ({ value: 100000000 + i, label })) });
+          globalChoiceIds[gc.name] = r.metadataId;
+        } catch (e) { /* already exists — a fresh column binding falls back to inline options (idempotent global-choice lookup is a follow-up SDK method) */ }
+      });
+    }
+    // 2b. Tables -> columns (all types + customer) -> status reasons -> alternate keys.
     for (const e of spec.entities) {
       const logical = e.schemaName.toLowerCase();
       const hits = await provision.findTables(e.schemaName, { top: 50 });
@@ -272,25 +314,39 @@ async function runSdkBuild(spec, opts = {}) {
           result.created.entities[e.schemaName] = { logicalName: (t.logicalName || logical), entitySetName: t.entitySetName };
         }, { recoverable: true });
       }
-      // Columns: create only the missing ones (parallel, bounded).
-      const toAdd = (e.columns || []).filter((c) => SDK_COLUMN_TYPE[c.type || 'Text'] && !existingCols.has(c.schemaName.toLowerCase()));
-      await mapLimit(toAdd, concurrency, (c) => run('data-model', `column ${e.schemaName}.${c.schemaName}`, async () => {
-        const col = { schemaName: c.schemaName, displayName: c.displayName || c.schemaName, type: SDK_COLUMN_TYPE[c.type || 'Text'] };
-        if (c.type === 'Choice') col.options = choiceOptions(c);
-        await sdk.createColumn(logical, col);
-      }));
+      // columns: every buildable column (all scalar types + Customer; Lookup comes from a
+      // relationship). Existing ones emit a skip; missing ones are created (parallel, bounded).
+      const buildable = (e.columns || []).filter((c) => SDK_COLUMN_TYPE[c.type || 'Text'] || c.type === 'Customer');
+      for (const c of buildable) if (existingCols.has(c.schemaName.toLowerCase())) emit({ phase: 'data-model', status: 'skip', label: `column ${e.schemaName}.${c.schemaName} (exists)`, n: (n += 1), total });
+      const toCreate = buildable.filter((c) => !existingCols.has(c.schemaName.toLowerCase()));
+      await mapLimit(toCreate, concurrency, (c) => run('data-model', `column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})`,
+        () => c.type === 'Customer'
+          ? sdk.createCustomerColumn(logical, { schemaName: c.schemaName, displayName: c.displayName || c.schemaName, required: REQUIRED(c) })
+          : sdk.createColumn(logical, columnOptions(c, globalChoiceIds))));
+      // custom status reasons
+      for (const sr of e.statusReasons || []) {
+        await run('data-model', `status reason ${e.schemaName}: ${sr.label}`, () => sdk.insertStatusValue(logical, { label: sr.label, stateCode: STATE_CODE[sr.state] !== undefined ? STATE_CODE[sr.state] : 0, color: sr.color }));
+      }
+      // alternate keys
+      for (const k of e.alternateKeys || []) {
+        await run('data-model', `alt key ${e.schemaName}.${k.schemaName}`, () => sdk.createAlternateKey(logical, { schemaName: k.schemaName, displayName: k.displayName || k.schemaName, keyAttributes: (k.columns || []).map((x) => x.toLowerCase()) }));
+      }
     }
-    // Relationships: skip those already on the referenced entity.
+    // 2c. Relationships — 1:N and N:N; skip those already present.
     for (const rel of spec.relationships || []) {
-      if (rel.type !== 'OneToMany') continue;
-      const schema = relationshipSchemaName(rel);
-      let exists = false;
-      try { exists = ((await provision.fetchEntityMetadata(rel.referenced.toLowerCase())).relationships || []).some((r) => r.schemaName.toLowerCase() === schema.toLowerCase()); } catch { /* referenced just created — none yet */ }
-      if (exists) { emit({ phase: 'data-model', status: 'skip', label: `relationship ${schema} (exists)`, n: (n += 1), total }); continue; }
-      await run('data-model', `relationship ${rel.referenced}->${rel.referencing}`, async () => {
-        await sdk.createRelationship({ type: 'OneToMany', schemaName: schema, referencedEntity: rel.referenced.toLowerCase(), referencingEntity: rel.referencing.toLowerCase(),
-          lookupSchemaName: rel.lookup.schemaName, lookupDisplayName: rel.lookup.displayName });
-      });
+      if (rel.type === 'OneToMany') {
+        const schema = relationshipSchemaName(rel);
+        let exists = false;
+        try { exists = ((await provision.fetchEntityMetadata(rel.referenced.toLowerCase())).relationships || []).some((r) => r.schemaName.toLowerCase() === schema.toLowerCase()); } catch { /* just created */ }
+        if (exists) { emit({ phase: 'data-model', status: 'skip', label: `relationship ${schema} (exists)`, n: (n += 1), total }); continue; }
+        await run('data-model', `relationship 1:N ${rel.referenced}->${rel.referencing}`, () => sdk.createRelationship({ type: 'OneToMany', schemaName: schema, referencedEntity: rel.referenced.toLowerCase(), referencingEntity: rel.referencing.toLowerCase(), lookupSchemaName: rel.lookup.schemaName, lookupDisplayName: rel.lookup.displayName }));
+      } else if (rel.type === 'ManyToMany') {
+        const schema = rel.schemaName || `${rel.entity1.toLowerCase()}_${rel.entity2.toLowerCase()}`;
+        let exists = false;
+        try { exists = ((await provision.fetchEntityMetadata(rel.entity1.toLowerCase())).relationships || []).some((r) => r.schemaName.toLowerCase() === schema.toLowerCase()); } catch { /* just created */ }
+        if (exists) { emit({ phase: 'data-model', status: 'skip', label: `relationship ${schema} (exists)`, n: (n += 1), total }); continue; }
+        await run('data-model', `relationship N:N ${rel.entity1}<->${rel.entity2}`, () => sdk.createRelationship({ type: 'ManyToMany', schemaName: schema, entity1: rel.entity1.toLowerCase(), entity2: rel.entity2.toLowerCase(), intersectEntityName: rel.intersectEntityName }));
+      }
     }
   }
 

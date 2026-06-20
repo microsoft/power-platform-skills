@@ -42,6 +42,10 @@ function mockSdk(opts = {}) {
     createTable: async (o) => { calls.push({ name: 'createTable', args: [o] }); if (opts.failTable === o.schemaName) throw new Error('boom'); return { logicalName: o.schemaName.toLowerCase(), entitySetName: `${o.schemaName.toLowerCase()}s` }; },
     createColumn: async (e, o) => { calls.push({ name: 'createColumn', args: [e, o] }); return { logicalName: o.schemaName.toLowerCase() }; },
     createRelationship: async (o) => { calls.push({ name: 'createRelationship', args: [o] }); return { schemaName: o.schemaName }; },
+    createGlobalOptionSet: async (o) => { calls.push({ name: 'createGlobalOptionSet', args: [o] }); return { name: o.name, metadataId: `gc-${o.name}` }; },
+    createCustomerColumn: async (e, o) => { calls.push({ name: 'createCustomerColumn', args: [e, o] }); return { logicalName: o.schemaName.toLowerCase() }; },
+    insertStatusValue: async (e, o) => { calls.push({ name: 'insertStatusValue', args: [e, o] }); return 100000001; },
+    createAlternateKey: async (e, o) => { calls.push({ name: 'createAlternateKey', args: [e, o] }); return { logicalName: o.schemaName.toLowerCase() }; },
     createRecordsBulk: async (e, rows) => { calls.push({ name: 'createRecordsBulk', args: [e, rows] }); return rows.map((_, i) => `${e}-${i}`); },
     createArtifact: (t, def) => { calls.push({ name: 'createArtifact', args: [t, def] }); return Object.assign({ id: `${t}-${++idc}` }, def); },
     pushArtifact: async (t, id) => { calls.push({ name: 'pushArtifact', args: [t, id] }); return { type: t, id, success: true }; },
@@ -147,6 +151,36 @@ test('artifacts added to the solution by component type (view 26 / chart 59 / fo
   await runSdkBuild(makeSpec(), { sdk, apply: true });
   const types = find(calls, 'addSolutionComponent').map((c) => c.args[0].componentType).sort((a, b) => a - b);
   assert.deepStrictEqual(types, [26, 59, 60, 80]);
+});
+
+test('Tier 1 data model: global choices, rich column types, customer, status, alt keys, N:N', async () => {
+  const spec = makeSpec();
+  spec.globalChoices = [{ name: 'new_severity', displayName: 'Severity', options: ['Low', 'High'] }];
+  spec.entities[0].columns.push(
+    { schemaName: 'new_ref', displayName: 'Ref', type: 'AutoNumber', autoNumberFormat: 'C-{SEQNUM:5}' },
+    { schemaName: 'new_sev', displayName: 'Severity', type: 'Choice', globalChoice: 'new_severity' },
+    { schemaName: 'new_owner', displayName: 'Owner', type: 'Customer' },
+    { schemaName: 'new_photo', displayName: 'Photo', type: 'Image', maxSizeKb: 5120 },
+    { schemaName: 'new_score', displayName: 'Score', type: 'Decimal', minValue: 0, maxValue: 100, precision: 2 }
+  );
+  spec.entities[0].statusReasons = [{ label: 'In Review', state: 'Active' }];
+  spec.entities[0].alternateKeys = [{ schemaName: 'new_namekey', displayName: 'Name Key', columns: ['new_name'] }];
+  spec.relationships.push({ type: 'ManyToMany', entity1: 'new_customer', entity2: 'new_ticket' });
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true });
+
+  assert.strictEqual(find(calls, 'createGlobalOptionSet')[0].args[0].name, 'new_severity');
+  const col = (n) => find(calls, 'createColumn').find((c) => c.args[1].schemaName === n).args[1];
+  assert.strictEqual(col('new_sev').globalChoiceMetadataId, 'gc-new_severity', 'choice binds the global set');
+  assert.strictEqual(col('new_ref').autoNumberFormat, 'C-{SEQNUM:5}');
+  assert.strictEqual(col('new_photo').maxSizeKb, 5120);
+  assert.deepStrictEqual([col('new_score').minValue, col('new_score').maxValue, col('new_score').precision], [0, 100, 2]);
+  assert.strictEqual(find(calls, 'createCustomerColumn')[0].args[1].schemaName, 'new_owner', 'customer via createCustomerColumn');
+  assert.strictEqual(find(calls, 'insertStatusValue')[0].args[1].label, 'In Review');
+  assert.strictEqual(find(calls, 'createAlternateKey')[0].args[1].schemaName, 'new_namekey');
+  const nn = find(calls, 'createRelationship').find((c) => c.args[0].type === 'ManyToMany');
+  assert.strictEqual(nn.args[0].entity1, 'new_customer');
+  assert.strictEqual(nn.args[0].entity2, 'new_ticket');
 });
 
 test('formDef honors explicit tabs/sections/columns', () => {

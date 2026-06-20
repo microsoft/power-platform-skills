@@ -39,10 +39,28 @@ deterministic builder (`scripts/build-model-app.js`). Author it to this shape, l
   ]
 }
 ```
-- **Column `type`:** `Text · Memo · Choice · Boolean · Money · DateTime · Integer · Decimal`.
-  `Choice` **requires** `options[]` (string labels). **Lookups are NOT columns** — declare a
-  `OneToMany` relationship instead.
-- `required: true` marks a column application-required.
+- **Column `type`:** `Text · Memo · Choice · MultiChoice · Boolean · Money · DateTime ·
+  Integer · BigInt · Decimal · Double · File · Image · AutoNumber · Customer`.
+  **Lookups are NOT columns** — declare a `OneToMany` relationship instead.
+- **Per-type options** (all optional): `required: true` / `"recommended"`; Text → `maxLength`,
+  `format` (`Text`/`Email`/`Url`/`Phone`); numeric → `minValue`/`maxValue`/`precision`;
+  DateTime → `dateFormat` (`DateOnly`/`DateAndTime`); Boolean → `trueLabel`/`falseLabel`;
+  File/Image → `maxSizeKb`, Image → `isPrimaryImage`; AutoNumber → `autoNumberFormat`
+  (e.g. `"C-{SEQNUM:5}"`); Calculated/Rollup → `source: "Calculated"|"Rollup"` + `formula`.
+- **Choice / MultiChoice** need `options[]` (string labels) **or** a `globalChoice` reference
+  (see `globalChoices` below). **Customer** is a polymorphic account/contact lookup.
+
+### entity sub-sections (optional)
+```jsonc
+"statusReasons": [ { "label": "In Review", "state": "Active" } ],   // custom status values
+"alternateKeys": [ { "schemaName": "new_emailkey", "displayName": "Email Key", "columns": ["new_email"] } ]
+```
+
+## globalChoices[] (optional — shared option sets)
+```jsonc
+[ { "name": "new_priority", "displayName": "Priority", "options": ["Low","Medium","High"] } ]
+```
+Reference from a column via `"globalChoice": "new_priority"` (built before the columns that bind it).
 
 ## relationships[]
 ```jsonc
@@ -52,6 +70,11 @@ deterministic builder (`scripts/build-model-app.js`). Author it to this shape, l
 - `referenced` = the "one" (parent); `referencing` = the "many" (child, gets the lookup column).
 - The relationship's schema name defaults to `<referenced>_<referencing>` and **must differ**
   from `lookup.schemaName` (Dataverse rejects a collision — the lint enforces this).
+
+**Many-to-many:**
+```jsonc
+{ "type": "ManyToMany", "entity1": "new_project", "entity2": "new_tag" }  // intersect auto-named
+```
 
 ## views[]
 ```jsonc
