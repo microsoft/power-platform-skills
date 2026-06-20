@@ -1,6 +1,6 @@
 ---
 name: model-app-maker
-version: 0.4.0
+version: 0.5.0
 description: Builds a model-driven Power Apps app from a natural-language intent — tables, columns, relationships, adaptive forms with sub-grids, views, Choice-column charts, and an app module + sitemap — via the headless cds-maker-sdk. Runs an interactive, multi-turn authoring flow (env selection, App Spec authoring, guardrail lint, plan-mode approval) and a narrated build. Use when the user says "build an app for X", "create a model-driven app", or "make me an app to manage Y". For generative PAGES use /genpage.
 author: Microsoft Corporation
 argument-hint: "<app description>"
@@ -51,8 +51,10 @@ running every prompt yourself via `AskUserQuestion`. In short:
    moving on. Then propose **forms + views + charts + sample data** together; confirm. Persist
    `app-spec.json` after each level so the user can hand-edit between turns. Forms default to
    `layout: "auto"`; use explicit `tabs`/`sections`/`columns` when the user wants real grouping
-   (see the schema). **Don't pre-create tables/columns** during authoring — the build does it
-   idempotently (it adds only what's missing).
+   (see the schema). **Show the form wireframe** so the user can see the layout + Notes before
+   approving: `node "${CLAUDE_PLUGIN_ROOT}/scripts/preview-form.js" --spec @<working-dir>/app-spec.json`.
+   **Don't pre-create tables/columns** during authoring — the build does it idempotently (adds
+   only what's missing).
 5. **Guardrail lint (hard gate)** — run `spec-lint.js`; **errors block**, warnings teach:
    ```bash
    node -e "const{lintAppSpec}=require('${CLAUDE_PLUGIN_ROOT}/scripts/lib/spec-lint.js');const s=require('<working-dir>/app-spec.json');const r=lintAppSpec(s);console.log(JSON.stringify(r,null,2));process.exit(r.ok?0:1)"
@@ -66,13 +68,16 @@ running every prompt yourself via `AskUserQuestion`. In short:
 > (skips existing solution/tables/columns/relationships — so new, existing, and mixed envs all
 > just work), so you don't pre-create anything or special-case existing tables.
 
-**Dry-run first** (no `--apply` → prints the ordered plan, writes nothing):
+**Dry-run first** (no `--apply` → prints the ordered plan grouped by phase, writes nothing):
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/build-model-app.js" --env <envUrl> --spec @<working-dir>/app-spec.json
 ```
 
-Show the plan. On the user's go-ahead, **apply** — run it so the `[n/total]` lines stream live:
+The output is the broken-down build plan — phases as `▶ <phase>` headers, each step as
+`[n/total] ▢ <label>`. Show it. On the user's go-ahead, **apply** — each step then streams its
+status live (`[n/total] ✓ created` / `⊘ skipped` / `✗ failed — <error>`) and a closing
+`✓ build complete — X created, Y skipped, Z failed` summary:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/build-model-app.js" \

@@ -41,6 +41,10 @@ Rebundled the SDK (branch `users/akmaloo/cds-maker-sdk`) and folded every manual
 - ✅ **Status reasons on sample rows** — `statusReason` label → resolved `statecode`+`statuscode` (the engine captures `insertStatusValue`'s assigned value).
 - ✅ **Rich view filters** — `filters[]` with `eq-userid`/`this-week`/`in`/`not-in`/… and Choice-label resolution (`in`/`not-in` expand to nested groups) — replaces manual FetchXML patching.
 - ✅ **Docs**: `app-spec-schema.md` is now the single authoring source (modeling cheatsheet up top), so the skill needs no SDK/lint/engine spelunking. Removed the `model: sonnet` pin so the skill inherits the session model.
+
+### Authoring UX (2026-06-20)
+- ✅ **Form wireframe preview** — `scripts/preview-form.js` renders each form as an ASCII wireframe (tabs, sections, fields + widget hints, Notes/timeline, sub-grids, form JS) so the user can *see* a form during authoring before approving.
+- ✅ **Build steps broken down with status** — the build log is phase-grouped (`▶ phase`) with a per-step status glyph (`✓` created / `⊘` skipped / `✗` failed) and a closing summary; dry-run lists the same plan with a `▢` marker.
 - ✅ Adaptive main forms (auto + explicit tabs/sections), related-record sub-grids, Notes section.
 - ✅ Views (active-records), Choice-column charts, app module + sitemap.
 

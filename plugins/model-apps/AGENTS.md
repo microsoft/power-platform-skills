@@ -44,9 +44,14 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   selectable with `--only`/`--skip`/`--from`/`--to`; independent ops run with bounded parallelism.
   Emits `[n/total]` events the orchestrator narrates + a `BuildHalt` it gates on. Dry-run by
   default; `--apply` writes, `--sample-data` / `--publish` opt-in.
+- **`scripts/preview-form.js` → `scripts/lib/form-preview.js`** — renders an ASCII **form
+  wireframe** (tabs, sections, fields with widget hints, the Notes/timeline block, sub-grids, form
+  JS) from the App Spec, so the user can review a form visually during authoring before approving.
 - **`scripts/vendor/cds-maker-sdk.cjs`** — the SDK vendored as a self-contained headless bundle
   (rebuild via `scripts/_vendor-build/`); **`scripts/lib/sdk-http-client.js`** injects an
   `az`-token HttpClient. No browser, no relay — the SDK reuses the designer's own serializers.
+- The build log is **phase-grouped with per-step status** (`▶ phase` / `[n/total] ✓ created` /
+  `⊘ skipped` / `✗ failed`) + a closing summary; dry-run lists the same plan with a `▢` marker.
 
 Flow: Phase 0 (working dir) → Phase 1 (author the spec interactively, **in the main loop**,
 per `references/authoring-flow.md`) → Phase 2 (narrated SDK build) → Phase 3 (verify & iterate).

@@ -40,12 +40,24 @@ function makeSdk(env, spec, workspaceDir) {
   return { sdk, provisionSdk };
 }
 
-// Turn engine progress events into the live [n/total] lines the orchestrator/CLI shows.
-function cliEmit(log) {
+// Turn engine progress events into a phase-grouped, status-marked build log:
+//   ▶ <phase>
+//     [n/total] ✓ <label>        (created)
+//     [n/total] ⊘ <label>        (skipped — already exists)
+//     [n/total] ✗ <label> — err  (failed)
+// In a dry-run (opts.apply false) the same grouping lists the plan with a ▢ marker. `opts.counts`
+// (optional) accumulates ok/skip/error totals so the caller can print a closing summary.
+function cliEmit(log, opts = {}) {
+  const counts = opts.counts;
+  let phase = null;
   return (e) => {
-    if (e.status === 'start') log(`[${e.n}/${e.total}] ${e.label}`);
-    else if (e.status === 'skip') log(`[${e.n}/${e.total}] ${e.label}`);
-    else if (e.status === 'error') log(`  ✗ ${e.label}: ${e.detail || ''}`);
+    if (e.phase !== phase) { phase = e.phase; log(`\n▶ ${phase}`); }
+    if (e.status === 'start') return; // header only; the terminal event prints the status line
+    if (!opts.apply) { log(`  [${e.n}/${e.total}] ▢ ${e.label}`); return; } // dry-run plan
+    if (counts) counts[e.status] = (counts[e.status] || 0) + 1;
+    const glyph = e.status === 'ok' ? '✓' : e.status === 'skip' ? '⊘' : '✗';
+    const tail = e.status === 'error' ? ` — ${e.detail || ''}` : '';
+    log(`  [${e.n}/${e.total}] ${glyph} ${e.label}${tail}`);
   };
 }
 
@@ -55,8 +67,9 @@ async function buildModelApp(spec, opts, deps) {
     return { ok: false, errors: v.errors };
   }
   const log = deps.log || (() => undefined);
-  const emit = deps.emit || cliEmit(log);
-  return runSdkBuild(spec, {
+  const counts = { ok: 0, skip: 0, error: 0 };
+  const emit = deps.emit || cliEmit(log, { apply: opts.apply, counts });
+  const r = await runSdkBuild(spec, {
     sdk: deps.sdk,
     provisionSdk: deps.provisionSdk,
     apply: opts.apply,
@@ -66,6 +79,10 @@ async function buildModelApp(spec, opts, deps) {
     appDir: opts.appDir, // resolves web-resource `contentPath` relative to the app folder
     emit,
   });
+  if (opts.apply && r && r.ok && !r.dryRun) {
+    log(`\n✓ build complete — ${counts.ok} created, ${counts.skip} skipped, ${counts.error} failed (${counts.ok + counts.skip + counts.error} steps)`);
+  }
+  return r;
 }
 
 function list(v) {

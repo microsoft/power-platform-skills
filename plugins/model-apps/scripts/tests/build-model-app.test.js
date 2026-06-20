@@ -61,18 +61,31 @@ test('apply threads through to the SDK engine (solution + tables created)', asyn
   assert.ok(calls.filter((c) => c[0] === 'createTable').length >= 1);
 });
 
-test('apply emits monotonic [n/total] progress lines that end at total', async () => {
+test('apply emits one status-marked [n/total] line per step, with phase headers + a summary', async () => {
   const { sdk } = mockSdk();
   const cap = logCapture();
   await buildModelApp(desk, { apply: true, env: 'https://x' }, { sdk, log: cap.log });
-  const lines = cap.logs.filter((l) => /^\[\d+\/\d+\]/.test(l));
+  const lines = cap.logs.filter((l) => /\[\d+\/\d+\]/.test(l));
   assert.ok(lines.length >= 6);
-  const parse = (l) => l.match(/^\[(\d+)\/(\d+)\]/).slice(1, 3).map(Number);
+  const parse = (l) => l.match(/\[(\d+)\/(\d+)\]/).slice(1, 3).map(Number);
   const totals = new Set(lines.map((l) => parse(l)[1]));
   assert.strictEqual(totals.size, 1, 'one consistent total');
-  const idxs = lines.map((l) => parse(l)[0]);
-  assert.deepStrictEqual(idxs, idxs.slice().sort((a, b) => a - b), 'monotonic');
-  assert.strictEqual(idxs[0], 1, 'starts at 1');
+  const total = [...totals][0];
+  const ns = lines.map((l) => parse(l)[0]);
+  assert.strictEqual(new Set(ns).size, ns.length, 'each step reported exactly once');
+  assert.ok(Math.min(...ns) >= 1 && Math.max(...ns) <= total, 'every n within [1,total]');
+  assert.ok(cap.logs.some((l) => /✓/.test(l)), 'completed steps are marked ✓');
+  assert.ok(cap.logs.some((l) => /▶ /.test(l)), 'phases are grouped under ▶ headers');
+  assert.ok(cap.logs.some((l) => /build complete — \d+ created/.test(l)), 'a closing summary is printed');
+});
+
+test('dry-run lists the plan grouped by phase with a ▢ marker (no summary)', async () => {
+  const { sdk } = mockSdk();
+  const cap = logCapture();
+  await buildModelApp(desk, { apply: false, env: 'https://x' }, { sdk, log: cap.log });
+  assert.ok(cap.logs.some((l) => /▶ /.test(l)), 'plan is grouped under phase headers');
+  assert.ok(cap.logs.some((l) => /\[\d+\/\d+\] ▢ /.test(l)), 'plan items use the ▢ marker');
+  assert.ok(!cap.logs.some((l) => /build complete/.test(l)), 'no summary on a dry-run');
 });
 
 test('--sample-data threads through (records created); without it, none', async () => {

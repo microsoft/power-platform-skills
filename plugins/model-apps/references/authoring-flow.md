@@ -304,6 +304,17 @@ a `subgrids` entry that shows the child records inline:
 }
 ```
 
+**Show the form wireframe.** After writing the proposed forms to `app-spec.json`, render an
+ASCII wireframe so the user can *see* each form's tabs, sections, fields, the Notes block, and
+sub-grids before approving — then ask for changes:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/preview-form.js" --spec @<working-dir>/app-spec.json [--entity <schemaName>]
+```
+
+Include the wireframe in the same turn as the forms/views/charts proposal (it's the visual
+companion to the JSON). Iterate on the spec and re-render until the user is happy with the layout.
+
 #### Form JS (optional — client-side logic)
 
 When the user wants validation or dynamic behaviour (e.g. "warn when priority is
