@@ -1,34 +1,17 @@
----
-name: model-app-planner
-description: >-
-  Plans a model-driven Power Apps app interactively. Validates prerequisites,
-  authenticates via PAC CLI, detects existing Dataverse tables and model-driven
-  apps, interactively builds an App Spec in two levels (data model first, then
-  artifacts and sample data), runs a guardrail lint, gets plan-mode approval,
-  and writes app-spec.json. Called by the model-app-maker skill — not invoked
-  directly by users.
-color: blue
-tools:
-  - Read
-  - Write
-  - Bash
-  - EnterPlanMode
-  - ExitPlanMode
-  - AskUserQuestion
-  - TaskCreate
-  - TaskUpdate
-  - TaskList
----
+# Authoring Flow — the App Spec playbook (run in the main loop)
 
-# Model-App Planner
+This is the **authoring playbook** the `/model-app-maker` skill executes **itself, in the main
+conversation** — Phase 1 of `skills/model-app-maker/SKILL.md`. It is **not** a subagent: a
+`Task` subagent is headless, so `AskUserQuestion` and plan mode would never reach the user from
+inside one. Throughout this file, **"you" means the orchestrator running in the main loop**; run
+every prompt yourself so each question and the plan-mode gate surface to the user.
 
-You are the planning agent for interactive model-driven app creation. Your job is to validate
-the environment, authenticate with PAC CLI, detect what already exists in the Dataverse
-environment, build a complete App Spec through two-level interactive authoring, run the
-guardrail lint, get user approval in plan mode, and write the final artifacts so the
-downstream build step can execute without needing to ask questions or re-run discovery.
+Your job: validate the environment, authenticate with PAC CLI, detect what already exists,
+build a complete App Spec through two-level interactive authoring, run the guardrail lint, get
+user approval in plan mode, and write `app-spec.json` + `model-app-plan.md` so the build engine
+can execute without re-asking or re-discovering.
 
-You will be invoked by the `model-app-maker` skill with a prompt that includes:
+Inputs you already have in the main loop:
 
 - The user's requirements (`$ARGUMENTS`)
 - The working directory (absolute path where artifacts should be written)
@@ -525,9 +508,10 @@ Lint: ok=true, errors=0, warnings=N
 Plan approved: yes
 ```
 
-### Return to orchestrator
+### Hand off to the build phase
 
-Return a concise summary:
+You are still in the main loop — proceed directly to **Phase 2 (Build)** of `SKILL.md` using the
+`app-spec.json` and env URL you just produced. First, recap a concise summary to the user:
 
 ```
 Planning complete.
@@ -549,15 +533,15 @@ Plan: <working-dir>/model-app-plan.md
 
 Mark the "Write app-spec.json and model-app-plan.md" task complete.
 
-## Critical Constraints
+## Critical Constraints (Phase 1 — authoring only)
 
-- **Do NOT write to Dataverse.** Table creation, column creation, relationship
-  creation, and record insertion are handled by the downstream build step —
-  not by this planner.
-- **Do NOT hand-write metadata XML or solution ZIP files.** The build step drives
-  `pac model create` and the plugin's Web API scripts for all Dataverse writes.
-- **Do NOT generate page code (.tsx files).** Page generation is handled by
-  `genpage-page-builder` if generative pages are needed separately.
+- **Do NOT write to Dataverse during authoring.** Table/column/relationship creation and
+  record insertion happen in **Phase 2 (Build)**, driven by the `cds-maker-sdk` build engine —
+  not here. Authoring only reads (`pac` discovery) and writes local files.
+- **Do NOT hand-write metadata XML or solution ZIP files.** The build engine
+  (`build-model-app.js` → `lib/sdk-build.js`) produces all FormXml/FetchXml/sitemap and Web API
+  writes via the SDK.
+- **Do NOT generate page code (.tsx files).** Generative pages are a separate skill (`/genpage`).
 - **Interaction points are limited to:**
   1. Step 2 — environment selection (if multiple auth profiles).
   2. Step 3 — app selection and solution selection.

@@ -33,9 +33,8 @@ test('validateAppSpec rejects a Choice column with no options', () => {
   assert.ok(r.errors.some((e) => e.includes('Choice needs options')));
 });
 
-test('columnTypeMap maps Choice to picklist', () => {
+test('columnTypeMap maps Choice to the Dataverse picklist type', () => {
   assert.strictEqual(columnTypeMap('Choice').dv, 'picklist');
-  assert.strictEqual(columnTypeMap('Choice').kernel, 'picklist');
 });
 
 // --- Rich-spec validation (charts / sub-grids / relational sample data) ----

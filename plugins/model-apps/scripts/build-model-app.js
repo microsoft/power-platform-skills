@@ -1,66 +1,39 @@
 #!/usr/bin/env node
-// model-app-maker builder: turn a validated App Spec into a model-driven app.
-// Deterministic; reuses the dv-* metadata scripts + the vendored cds-maker-kernel
-// + the Dataverse Web API. Dry-run by default; --apply writes, --publish publishes.
+// model-app-maker builder: turn a validated App Spec into a model-driven app via the
+// headless @maker-studio/cds-maker-sdk (vendored, self-contained — see scripts/vendor/).
+// Auth is the caller's: an az-token HttpClient is injected into the SDK. Dry-run by
+// default; --apply writes, --sample-data / --publish opt-in.
 //
 // Usage:
-//   node build-model-app.js --env <orgUrl> --spec @app-spec.json [--apply] [--publish] [--preview] [--sample-data]
+//   node build-model-app.js --env <orgUrl> --spec @app-spec.json [--apply] [--sample-data] [--publish]
+const os = require('node:os');
+const fs = require('node:fs');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
-const { validateAppSpec, sampleRecordsFor } = require('./lib/app-spec.js');
-const { runKernel } = require('./lib/maker-kernel.js');
-const { runAll } = require('./lib/build-steps.js');
-const { dataverseRequest, parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
+const { validateAppSpec } = require('./lib/app-spec.js');
+const { runSdkBuild, planFor } = require('./lib/sdk-build.js');
+const { createAzHttpClient } = require('./lib/sdk-http-client.js');
+const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 
-function defaultDeps(env) {
-  return {
-    runScript: (name, args) => {
-      const r = spawnSync(process.execPath, [path.join(__dirname, name), ...args], {
-        encoding: 'utf8',
-        maxBuffer: 16 * 1024 * 1024,
-      });
-      if (r.status !== 0) {
-        throw new Error(`${name} failed: ${r.stderr || r.stdout}`);
-      }
-      return JSON.parse(r.stdout);
-    },
-    dv: (method, apiPath, body, opts) => dataverseRequest(env, method, apiPath, body, opts || {}),
-    kernel: (job) => runKernel(job),
-    log: (m) => process.stderr.write(m + '\n'),
-  };
+// Construct the SDK against the vendored bundle + an az-token HttpClient. Construction
+// is offline (installs the xmldom shim, sets up a temp fs workspace) — no token is
+// fetched until the first write — so it's safe even for a dry-run.
+function makeSdk(env, spec) {
+  const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'model-app-'));
+  return createMakerSdk({
+    workspacePath: ws,
+    instanceUrl: env,
+    httpClient: createAzHttpClient(env),
+    solutionUniqueName: spec.solution.uniqueName,
+  });
 }
 
-// Human-readable build plan (used by the dry-run and printed before --apply).
-function planFor(spec) {
-  const steps = [];
-  steps.push(`create-solution ${spec.solution.uniqueName} (publisher ${spec.solution.publisherPrefix})`);
-  for (const e of spec.entities) {
-    steps.push(`create-table ${e.schemaName} ("${e.displayName}")`);
-    for (const c of e.columns || []) {
-      steps.push(`add-column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})`);
-    }
-  }
-  for (const r of spec.relationships || []) {
-    steps.push(`create-relationship ${r.type} ${r.referenced}->${r.referencing}`);
-  }
-  for (const e of spec.entities) {
-    const n = sampleRecordsFor(spec, e).length;
-    if (n) {
-      steps.push(`add ${n} sample record(s) to ${e.schemaName} (requires --sample-data)`);
-    }
-  }
-  for (const v of spec.views) {
-    steps.push(`build + create view "${v.name}" for ${v.entity}`);
-  }
-  for (const c of spec.charts || []) {
-    steps.push(`build + create chart "${c.name}" (${c.chartType}) for ${c.entity}`);
-  }
-  for (const f of spec.forms) {
-    const subs = (f.subgrids || []).map((s) => s.childEntity).join(', ');
-    steps.push(`build + write main form for ${f.entity}` + (subs ? ` (sub-grids: ${subs})` : ''));
-  }
-  steps.push(`build sitemap + appmodule "${spec.app.name}" + components`);
-  return steps;
+// Turn engine progress events into the live [n/total] lines the orchestrator/CLI shows.
+function cliEmit(log) {
+  return (e) => {
+    if (e.status === 'start') log(`[${e.n}/${e.total}] ${e.label}`);
+    else if (e.status === 'error') log(`  ✗ ${e.label}: ${e.detail || ''}`);
+  };
 }
 
 async function buildModelApp(spec, opts, deps) {
@@ -68,14 +41,15 @@ async function buildModelApp(spec, opts, deps) {
   if (!v.ok) {
     return { ok: false, errors: v.errors };
   }
-  const plan = planFor(spec);
-  if (!opts.apply) {
-    (deps.log || (() => undefined))('PLAN:\n' + plan.join('\n'));
-    return { ok: true, dryRun: true, plan };
-  }
-  const result = { ok: true, created: {} };
-  await runAll(spec, opts, deps, result);
-  return result;
+  const log = deps.log || (() => undefined);
+  const emit = deps.emit || cliEmit(log);
+  return runSdkBuild(spec, {
+    sdk: deps.sdk,
+    apply: opts.apply,
+    sampleData: opts.sampleData,
+    publish: opts.publish,
+    emit,
+  });
 }
 
 async function main() {
@@ -84,19 +58,22 @@ async function main() {
   const specArg = flags.spec || positional[0];
   if (!env || !specArg) {
     process.stderr.write(
-      'Usage: node build-model-app.js --env <url> --spec @app-spec.json [--apply] [--publish] [--preview] [--sample-data]\n'
+      'Usage: node build-model-app.js --env <url> --spec @app-spec.json [--apply] [--sample-data] [--publish]\n'
     );
     process.exit(1);
   }
   const spec = readJsonArg(typeof specArg === 'string' && specArg.startsWith('@') ? specArg : '@' + specArg);
   const opts = {
     apply: flags.apply === true,
-    publish: flags.publish === true,
-    preview: flags.preview === true,
     sampleData: flags['sample-data'] === true,
+    publish: flags.publish === true,
     env,
   };
-  const r = await buildModelApp(spec, opts, defaultDeps(env));
+  // Construct the SDK for both dry-run and apply: it proves the vendored bundle + adapter
+  // wire up (offline), and apply needs it. A spec validation error short-circuits before
+  // any write inside runSdkBuild.
+  const deps = { log: (m) => process.stderr.write(m + '\n'), sdk: makeSdk(env, spec) };
+  const r = await buildModelApp(spec, opts, deps);
   emitResult(r.ok, r);
 }
 

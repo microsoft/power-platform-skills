@@ -1,17 +1,18 @@
 // App Spec schema + validator. The App Spec is the reviewable contract between
 // the model-app-maker's LLM proposal and the deterministic builder.
 
-// App Spec column type -> { dv: add-column.js type, kernel: blankForm field type }.
+// App Spec column type -> { dv: Dataverse attribute type name }. (The SDK build engine
+// maps App Spec types to the SDK's own ColumnType in lib/sdk-build.js.)
 const TYPE_MAP = {
-  Text: { dv: 'string', kernel: 'string' },
-  Memo: { dv: 'memo', kernel: 'memo' },
-  Choice: { dv: 'picklist', kernel: 'picklist' },
-  Boolean: { dv: 'boolean', kernel: 'boolean' },
-  Money: { dv: 'money', kernel: 'money' },
-  DateTime: { dv: 'datetime', kernel: 'datetime' },
-  Integer: { dv: 'integer', kernel: 'integer' },
-  Decimal: { dv: 'decimal', kernel: 'decimal' },
-  Lookup: { dv: null, kernel: 'lookup' }, // lookups come from relationships, not add-column
+  Text: { dv: 'string' },
+  Memo: { dv: 'memo' },
+  Choice: { dv: 'picklist' },
+  Boolean: { dv: 'boolean' },
+  Money: { dv: 'money' },
+  DateTime: { dv: 'datetime' },
+  Integer: { dv: 'integer' },
+  Decimal: { dv: 'decimal' },
+  Lookup: { dv: null }, // lookups come from relationships, not a column
 };
 
 function columnTypeMap(t) {
@@ -19,7 +20,7 @@ function columnTypeMap(t) {
 }
 
 // Map a Choice column's option LABELS to the integer values the builder assigns
-// (add-column.js is called with value = 100000000 + index, see build-steps.js).
+// (the SDK build engine assigns value = 100000000 + index; see lib/sdk-build.js).
 // { columnLogicalName: { "Active": 100000001, ... } }.
 function choiceValueMap(entity) {
   const map = {};
@@ -42,7 +43,7 @@ function sampleRecordsFor(spec, entity) {
   return (key && Array.isArray(sd[key]) && sd[key]) || [];
 }
 
-// Valid chart types (kernel buildChart ChartType values).
+// Valid chart types (SDK ChartSeriesType values).
 const CHART_TYPES = ['Column', 'Bar', 'Pie', 'Line'];
 
 // Find the OneToMany relationship in the spec whose `referenced` = parentEntity and

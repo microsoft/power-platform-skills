@@ -19,25 +19,32 @@ No Dataverse Skills plugin or Python dependency.
 A second skill (`/model-app-maker`) builds a whole **model-driven app** (tables, columns,
 relationships, adaptive forms with sub-grids, views, Choice-column charts, app module +
 sitemap) from a natural-language intent — distinct from `/genpage`, which builds generative
-*pages*. It's a thin orchestrator over the `model-app-planner` agent:
+*pages*. The **entire flow runs in the main conversation loop** (not via a `Task` subagent):
+subagents are headless, so `AskUserQuestion` and plan mode can't reach the user from one, and
+the whole point is the multi-turn, propose-then-confirm authoring + the live build narration.
 
-- **`model-app-planner`** (agent) — the interactive create flow: validates prereqs, selects
-  the env via PAC (`pac auth list` / `pac org who`), detects existing tables/apps, authors
-  the **App Spec** in two confirmed levels (data model first, then forms/views/charts +
-  sample data), runs the `spec-lint.js` guardrail, and gets plan-mode approval. Writes
-  `app-spec.json` (the machine contract) + `model-app-plan.md`.
+- **`references/authoring-flow.md`** — the Phase-1 authoring playbook the skill executes itself:
+  validate prereqs, select the env via PAC (`pac auth list` / `pac org who`), detect existing
+  tables/apps, author the **App Spec** in two confirmed levels (data model first, then
+  forms/views/charts + sample data), run the `spec-lint.js` guardrail, get plan-mode approval.
+  Writes `app-spec.json` (the machine contract) + `model-app-plan.md`.
 - **`scripts/lib/spec-lint.js`** — pure App Spec guardrail (`lintAppSpec → { ok, errors,
   warnings }`): errors block the plan gate (e.g. the relationship-name-vs-lookup-name
   collision Dataverse rejects), warnings teach.
-- **`scripts/build-model-app.js`** — the deterministic builder the skill runs after approval
-  (tables/columns/relationships via the `dv-*` scripts, then forms/views/charts/sitemap via
-  the vendored `cds-maker-kernel`). Dry-run by default; `--apply` writes, `--sample-data` /
-  `--publish` opt-in.
+- **`scripts/build-model-app.js` → `scripts/lib/sdk-build.js`** — the deterministic build
+  engine, run after approval. Maps the App Spec to ordered **`@maker-studio/cds-maker-sdk`**
+  calls (`createSolution`/`createTable`/`createColumn`/`createRelationship`/`createRecordsBulk`,
+  then `createArtifact`+`pushArtifact` for views/charts/forms/app, `addSubGrid` for sub-grids),
+  emitting `[n/total]` progress events the orchestrator narrates and a `BuildHalt` it gates on.
+  Dry-run by default; `--apply` writes, `--sample-data` / `--publish` opt-in.
+- **`scripts/vendor/cds-maker-sdk.cjs`** — the SDK vendored as a self-contained headless bundle
+  (rebuild via `scripts/_vendor-build/`); **`scripts/lib/sdk-http-client.js`** injects an
+  `az`-token HttpClient. No browser, no relay — the SDK reuses the designer's own serializers.
 
-Flow: Phase 0 (working dir) → Phase 1 (invoke `model-app-planner` via `Task`) → Phase 2
-(build, narrated) → Phase 3 (verify & iterate). **Upcoming phases:** swap the build engine
-to `cds-maker-sdk`; an **edit flow** (`model-app-edit-planner` + spec-diff) for updating a
-deployed app; shippable-defaults provisioning (security role / quick-create / standard views).
+Flow: Phase 0 (working dir) → Phase 1 (author the spec interactively, **in the main loop**,
+per `references/authoring-flow.md`) → Phase 2 (narrated SDK build) → Phase 3 (verify & iterate).
+**Upcoming:** an **edit flow** (spec-diff against a deployed app); shippable-defaults
+provisioning (security role / quick-create / standard views); teardown.
 
 ## Local Development
 
