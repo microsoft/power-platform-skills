@@ -16,16 +16,28 @@ const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js'
 
 // Construct the SDK against the vendored bundle + an az-token HttpClient. Construction
 // is offline (installs the xmldom shim, sets up a temp fs workspace) — no token is
-// fetched until the first write — so it's safe even for a dry-run.
+// fetched until the first write — so it's safe even for a dry-run. Returns two clients:
+//   sdk         — carries solutionUniqueName, so every component write is added to the
+//                 solution via the MSCRM.SolutionUniqueName header.
+//   provisionSdk — header-less, used to create the solution/publisher themselves (that
+//                 header is invalid while the solution is mid-creation).
 function makeSdk(env, spec) {
   const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
-  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'model-app-'));
-  return createMakerSdk({
-    workspacePath: ws,
+  const httpClient = createAzHttpClient(env);
+  const sdk = createMakerSdk({
+    workspacePath: fs.mkdtempSync(path.join(os.tmpdir(), 'model-app-')),
     instanceUrl: env,
-    httpClient: createAzHttpClient(env),
+    httpClient,
     solutionUniqueName: spec.solution.uniqueName,
   });
+  sdk.initWorkspace(); // createArtifact (views/charts/forms/app) writes to the fs workspace
+  const provisionSdk = createMakerSdk({
+    workspacePath: fs.mkdtempSync(path.join(os.tmpdir(), 'model-app-prov-')),
+    instanceUrl: env,
+    httpClient,
+  });
+  provisionSdk.initWorkspace(); // also pushes view/chart/form/app artifacts (header-less)
+  return { sdk, provisionSdk };
 }
 
 // Turn engine progress events into the live [n/total] lines the orchestrator/CLI shows.
@@ -45,6 +57,7 @@ async function buildModelApp(spec, opts, deps) {
   const emit = deps.emit || cliEmit(log);
   return runSdkBuild(spec, {
     sdk: deps.sdk,
+    provisionSdk: deps.provisionSdk,
     apply: opts.apply,
     sampleData: opts.sampleData,
     publish: opts.publish,
@@ -72,7 +85,8 @@ async function main() {
   // Construct the SDK for both dry-run and apply: it proves the vendored bundle + adapter
   // wire up (offline), and apply needs it. A spec validation error short-circuits before
   // any write inside runSdkBuild.
-  const deps = { log: (m) => process.stderr.write(m + '\n'), sdk: makeSdk(env, spec) };
+  const { sdk, provisionSdk } = makeSdk(env, spec);
+  const deps = { log: (m) => process.stderr.write(m + '\n'), sdk, provisionSdk };
   const r = await buildModelApp(spec, opts, deps);
   emitResult(r.ok, r);
 }

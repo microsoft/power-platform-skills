@@ -16,7 +16,7 @@ function mockSdk() {
   const calls = [];
   let idc = 0;
   const sdk = {
-    queryRecords: async () => [{ publisherid: 'pub-1' }],
+    queryRecords: async (e) => (e === 'solution' ? [] : [{ publisherid: 'pub-1' }]),
     createPublisher: async () => ({ id: 'pub-new' }),
     createSolution: async (o) => { calls.push(['createSolution', o]); return { id: 'sol-1' }; },
     createTable: async (o) => { calls.push(['createTable', o]); return { logicalName: o.schemaName.toLowerCase(), entitySetName: `${o.schemaName.toLowerCase()}s` }; },
@@ -27,6 +27,7 @@ function mockSdk() {
     createArtifact: (t, def) => { calls.push(['createArtifact', t]); return Object.assign({ id: `${t}-${++idc}` }, def); },
     pushArtifact: async (t, id) => ({ type: t, id, success: true }),
     addSubGrid: () => ({}),
+    addSolutionComponent: async () => undefined,
     publishArtifact: async () => undefined,
   };
   return { sdk, calls };

@@ -41,7 +41,11 @@ function mockSdk(opts = {}) {
   const calls = [];
   let idc = 0;
   const sdk = {
-    queryRecords: async (e, o) => { calls.push({ name: 'queryRecords', args: [e, o] }); return opts.noPublisher ? [] : [{ publisherid: 'pub-1' }]; },
+    queryRecords: async (e, o) => {
+      calls.push({ name: 'queryRecords', args: [e, o] });
+      if (e === 'solution') return opts.solutionExists ? [{ solutionid: 'sol-x', uniquename: 'ContosoSD' }] : [];
+      return opts.noPublisher ? [] : [{ publisherid: 'pub-1' }];
+    },
     createPublisher: async (o) => { calls.push({ name: 'createPublisher', args: [o] }); return { id: 'pub-new' }; },
     createSolution: async (o) => { calls.push({ name: 'createSolution', args: [o] }); return { id: 'sol-1' }; },
     createTable: async (o) => { calls.push({ name: 'createTable', args: [o] }); if (opts.failTable === o.schemaName) throw new Error('table exists'); return { logicalName: o.schemaName.toLowerCase(), entitySetName: `${o.schemaName.toLowerCase()}s` }; },
@@ -52,6 +56,7 @@ function mockSdk(opts = {}) {
     createArtifact: (t, def) => { calls.push({ name: 'createArtifact', args: [t, def] }); return Object.assign({ id: `${t}-${++idc}` }, def); },
     pushArtifact: async (t, id) => { calls.push({ name: 'pushArtifact', args: [t, id] }); return { type: t, id, success: true }; },
     addSubGrid: (formId, o) => { calls.push({ name: 'addSubGrid', args: [formId, o] }); return {}; },
+    addSolutionComponent: async (o) => { calls.push({ name: 'addSolutionComponent', args: [o] }); },
     publishArtifact: async (t, id) => { calls.push({ name: 'publishArtifact', args: [t, id] }); },
   };
   return { sdk, calls };
@@ -81,10 +86,10 @@ test('apply runs phases in the correct order', async () => {
     'createTable', 'createColumn', // ticket
     'createRelationship',
     'createRecordsBulk', 'createRecordsBulk', // customer then ticket (topological)
-    'createArtifact', 'pushArtifact', // view
-    'createArtifact', 'pushArtifact', // chart
-    'createArtifact', 'addSubGrid', 'pushArtifact', // form
-    'createArtifact', 'pushArtifact', // app
+    'createArtifact', 'pushArtifact', 'addSolutionComponent', // view
+    'createArtifact', 'pushArtifact', 'addSolutionComponent', // chart
+    'createArtifact', 'addSubGrid', 'pushArtifact', 'addSolutionComponent', // form
+    'createArtifact', 'pushArtifact', 'addSolutionComponent', // app
   ]);
 });
 
@@ -140,6 +145,20 @@ test('formDef lays out the primary + scalar columns as bound field cells', () =>
   assert.strictEqual(primary.label, 'Name');
 });
 
+test('artifacts are pushed header-less and added to the solution by component type', async () => {
+  const main = mockSdk();
+  const prov = mockSdk();
+  await runSdkBuild(makeSpec(), { sdk: main.sdk, provisionSdk: prov.sdk, apply: true });
+  // pushes + solution-component adds happen on the header-less provision client, not the header-ful one
+  assert.strictEqual(find(main.calls, 'pushArtifact').length, 0, 'no artifact pushes on the header-ful sdk');
+  assert.ok(find(prov.calls, 'pushArtifact').length >= 4, 'view/chart/form/app pushed via provision');
+  const types = find(prov.calls, 'addSolutionComponent').map((c) => c.args[0].componentType).sort((a, b) => a - b);
+  assert.deepStrictEqual(types, [26, 59, 60, 80], 'view=26, chart=59, form=60, app=80');
+  for (const c of find(prov.calls, 'addSolutionComponent')) {
+    assert.strictEqual(c.args[0].solutionUniqueName, 'ContosoSD');
+  }
+});
+
 test('view def includes the requested columns + active-only filter', async () => {
   const { sdk, calls } = mockSdk();
   await runSdkBuild(makeSpec(), { sdk, apply: true });
@@ -155,6 +174,23 @@ test('chart def maps groupBy to a category and count to a series', async () => {
   assert.strictEqual(def.chartType, 'Pie');
   assert.strictEqual(def.categories[0].attribute, 'new_priority');
   assert.strictEqual(def.series[0].aggregate, 'count');
+});
+
+test('reuses an existing solution instead of creating one (idempotent)', async () => {
+  const { sdk, calls } = mockSdk({ solutionExists: true });
+  await runSdkBuild(makeSpec(), { sdk, apply: true });
+  assert.strictEqual(find(calls, 'createSolution').length, 0, 'no createSolution when it already exists');
+  assert.strictEqual(find(calls, 'createPublisher').length, 0, 'no publisher lookup/create either');
+  assert.ok(find(calls, 'createTable').length >= 1, 'still builds the rest');
+});
+
+test('uses provisionSdk (header-less) for solution/publisher when provided', async () => {
+  const main = mockSdk();
+  const prov = mockSdk();
+  await runSdkBuild(makeSpec(), { sdk: main.sdk, provisionSdk: prov.sdk, apply: true });
+  assert.ok(find(prov.calls, 'createSolution').length === 1, 'solution created via provisionSdk');
+  assert.strictEqual(find(main.calls, 'createSolution').length, 0, 'not via the header-ful sdk');
+  assert.ok(find(main.calls, 'createTable').length >= 1, 'components via the header-ful sdk');
 });
 
 test('creates a publisher when none matches the prefix', async () => {

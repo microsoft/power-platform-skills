@@ -67,6 +67,24 @@ test('refreshes token once on 401 then succeeds', async () => {
   assert.strictEqual(calls[1].headers.Authorization, 'Bearer T2'); // refreshed
 });
 
+test('retries a transient 500 (SQL deadlock) with backoff, then succeeds', async () => {
+  const { request, calls } = fakeTransport(() =>
+    calls.length <= 2 ? { statusCode: 500, headers: {}, body: 'deadlock 1205' } : { statusCode: 200, headers: {}, body: '{"ok":true}' }
+  );
+  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request, sleep: async () => {} });
+  const res = await http.post('https://org/x', { a: 1 });
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(calls.length, 3); // 500, 500, 200
+});
+
+test('gives up after max attempts on a persistent 500 — surfaces it (no throw)', async () => {
+  const { request, calls } = fakeTransport({ statusCode: 500, headers: {}, body: 'boom' });
+  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request, sleep: async () => {} });
+  const res = await http.get('https://org/x');
+  assert.strictEqual(res.status, 500); // the SDK decides what to do with it
+  assert.strictEqual(calls.length, 4);
+});
+
 test('throws only when no token is available', async () => {
   const { request } = fakeTransport({ statusCode: 200, headers: {}, body: '{}' });
   const http = createAzHttpClient('https://org', { getToken: () => null, request });

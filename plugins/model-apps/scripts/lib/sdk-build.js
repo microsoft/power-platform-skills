@@ -213,6 +213,17 @@ function appDef(spec, result) {
 async function runSdkBuild(spec, opts = {}) {
   const { sdk, apply = false, sampleData = false, publish = false } = opts;
   const emit = opts.emit || (() => undefined);
+  // Header-less client. A writer constructed with solutionUniqueName stamps
+  // MSCRM.SolutionUniqueName on every call. That breaks two cases: (1) createSolution/
+  // createPublisher — the solution doesn't exist yet; (2) artifact pushes (savedqueries/
+  // systemforms/appmodules) — Dataverse rejects that header on those endpoints. So the
+  // solution lifecycle AND the view/chart/form/app pushes go through this header-less client,
+  // and each pushed artifact is added to the solution explicitly via addSolutionComponent.
+  // Metadata writes (tables/columns/relationships/records) keep the header-ful `sdk` (the
+  // header is honored there). Falls back to `sdk` for mock-injected tests.
+  const provision = opts.provisionSdk || sdk;
+  // Dataverse solution-component type codes for the artifacts this engine adds.
+  const COMPONENT_TYPE = { view: 26, chart: 59, form: 60, app: 80 };
   const buildOpts = { sampleData, publish };
   const plan = planFor(spec, buildOpts);
 
@@ -242,11 +253,19 @@ async function runSdkBuild(spec, opts = {}) {
     }
   };
 
-  // 1. Solution (publisher resolve/create -> createSolution).
+  // 1. Solution. Resolve the publisher by prefix (the env's default publisher has prefix
+  //    `new`), then create the solution — both via the header-less `provision` client.
+  //    Idempotent: reuse an existing solution of the same unique name instead of colliding.
   const sol = spec.solution;
   await run('solution', `create-solution ${sol.uniqueName}`, async () => {
+    const existing = await provision.queryRecords('solution', {
+      select: ['solutionid', 'uniquename'],
+      filter: `uniquename eq '${sol.uniqueName}'`,
+      top: 1,
+    });
+    if (existing && existing[0]) return; // reuse the existing solution
     let publisherId;
-    const pubs = await sdk.queryRecords('publisher', {
+    const pubs = await provision.queryRecords('publisher', {
       select: ['publisherid', 'uniquename'],
       filter: `customizationprefix eq '${sol.publisherPrefix}'`,
       top: 1,
@@ -254,14 +273,14 @@ async function runSdkBuild(spec, opts = {}) {
     if (pubs && pubs[0] && pubs[0].publisherid) {
       publisherId = pubs[0].publisherid;
     } else {
-      const created = await sdk.createPublisher({
+      const created = await provision.createPublisher({
         uniqueName: `${sol.publisherPrefix}publisher`,
         friendlyName: `${sol.publisherPrefix} publisher`,
         prefix: sol.publisherPrefix,
       });
       publisherId = created.id;
     }
-    await sdk.createSolution({ uniqueName: sol.uniqueName, friendlyName: sol.displayName || sol.uniqueName, publisherId });
+    await provision.createSolution({ uniqueName: sol.uniqueName, friendlyName: sol.displayName || sol.uniqueName, publisherId });
   }, { recoverable: true });
 
   // 2. Data model: tables -> columns -> relationships.
@@ -340,21 +359,23 @@ async function runSdkBuild(spec, opts = {}) {
     }
   }
 
-  // 4. Views.
+  // 4. Views. Header-less push, then add to the solution explicitly.
   for (const v of spec.views) {
     await run('views', `view "${v.name}"`, async () => {
-      const art = sdk.createArtifact('view', viewDef(spec, v));
-      await sdk.pushArtifact('view', art.id);
-      result.created.views[v.name] = art.id;
+      const art = provision.createArtifact('view', viewDef(spec, v));
+      const pushed = await provision.pushArtifact('view', art.id);
+      await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.view, solutionUniqueName: sol.uniqueName });
+      result.created.views[v.name] = pushed.id;
     });
   }
 
   // 5. Charts (before forms, so a form could reference one).
   for (const ch of spec.charts || []) {
     await run('charts', `chart "${ch.name}"`, async () => {
-      const art = sdk.createArtifact('chart', chartDef(spec, ch));
-      await sdk.pushArtifact('chart', art.id);
-      result.created.charts[ch.name] = art.id;
+      const art = provision.createArtifact('chart', chartDef(spec, ch));
+      const pushed = await provision.pushArtifact('chart', art.id);
+      await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.chart, solutionUniqueName: sol.uniqueName });
+      result.created.charts[ch.name] = pushed.id;
     });
   }
 
@@ -364,7 +385,7 @@ async function runSdkBuild(spec, opts = {}) {
   for (const f of spec.forms) {
     await run('forms', `main form for ${f.entity}`, async () => {
       const entityLogical = f.entity.toLowerCase();
-      const art = sdk.createArtifact('form', formDef(spec, f));
+      const art = provision.createArtifact('form', formDef(spec, f));
       for (const sg of f.subgrids || []) {
         const rel = relationshipFor(spec, f.entity, sg.childEntity);
         if (!rel) continue;
@@ -374,32 +395,34 @@ async function runSdkBuild(spec, opts = {}) {
           const childView = (spec.views || []).find((v) => v.entity.toLowerCase() === childLogical);
           viewId = childView && result.created.views[childView.name];
         }
-        sdk.addSubGrid(art.id, {
+        provision.addSubGrid(art.id, {
           entity: childLogical,
           relationshipName: relationshipSchemaName(rel),
           viewId,
           label: sg.label || sg.childEntity,
         });
       }
-      await sdk.pushArtifact('form', art.id);
-      result.created.forms[entityLogical] = art.id;
+      const pushed = await provision.pushArtifact('form', art.id);
+      await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.form, solutionUniqueName: sol.uniqueName });
+      result.created.forms[entityLogical] = pushed.id;
     });
   }
 
   // 7. App module + sitemap.
   await run('app-shell', `app module "${spec.app.name}"`, async () => {
-    const art = sdk.createArtifact('app', appDef(spec, result.created));
-    await sdk.pushArtifact('app', art.id);
-    result.created.app = art.id;
+    const art = provision.createArtifact('app', appDef(spec, result.created));
+    const pushed = await provision.pushArtifact('app', art.id);
+    await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.app, solutionUniqueName: sol.uniqueName });
+    result.created.app = pushed.id;
   });
 
   // 8. Publish (opt-in): publish each created entity-artifact + the app so customizations go live.
   if (publish) {
     await run('publish', 'publish customizations', async () => {
-      for (const [, id] of Object.entries(result.created.forms)) await sdk.publishArtifact('form', id);
-      for (const [, id] of Object.entries(result.created.views)) if (id) await sdk.publishArtifact('view', id);
-      for (const [, id] of Object.entries(result.created.charts)) if (id) await sdk.publishArtifact('chart', id);
-      if (result.created.app) await sdk.publishArtifact('app', result.created.app);
+      for (const [, id] of Object.entries(result.created.forms)) await provision.publishArtifact('form', id);
+      for (const [, id] of Object.entries(result.created.views)) if (id) await provision.publishArtifact('view', id);
+      for (const [, id] of Object.entries(result.created.charts)) if (id) await provision.publishArtifact('chart', id);
+      if (result.created.app) await provision.publishArtifact('app', result.created.app);
     });
   }
 
