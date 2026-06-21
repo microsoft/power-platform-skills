@@ -27,7 +27,7 @@
 //
 // Usage:
 //   node list-incoming-updates.js [--envUrl <url>] [--token <token>]
-//                                 [--solutionUniqueName <name>]
+//                                 [--solutionUniqueName <name> | --solutionId <guid>]
 //
 // TODO: HAR-verify — entity name for the Updates tab. Candidates:
 // `gitupdatefiles`, `gitincomingupdates`, `msdyn_gitupdates`. Using
@@ -37,14 +37,16 @@
 'use strict';
 
 const { getAuthToken, getEnvironmentUrl, makeRequest } = require('./validation-helpers');
+const { listSourceControlComponents } = require('./list-source-control-components');
 
 function parseArgs(argv) {
   const args = argv.slice(2);
-  const out = { envUrl: null, token: null, solutionUniqueName: null };
+  const out = { envUrl: null, token: null, solutionUniqueName: null, solutionId: null };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--envUrl' && args[i + 1]) out.envUrl = args[++i];
     else if (args[i] === '--token' && args[i + 1]) out.token = args[++i];
     else if (args[i] === '--solutionUniqueName' && args[i + 1]) out.solutionUniqueName = args[++i];
+    else if (args[i] === '--solutionId' && args[i + 1]) out.solutionId = args[++i];
   }
   return out;
 }
@@ -61,9 +63,10 @@ const UPDATE_TYPE_LABEL = Object.freeze({
  * @param {string} [options.envUrl]
  * @param {string} [options.token]
  * @param {string} [options.solutionUniqueName]
+ * @param {string} [options.solutionId]
  * @returns {Promise<{ count: number, items: object[] } | { error: string }>}
  */
-async function listIncomingUpdates({ envUrl, token, solutionUniqueName } = {}) {
+async function listIncomingUpdates({ envUrl, token, solutionUniqueName, solutionId } = {}) {
   const url = envUrl || getEnvironmentUrl();
   if (!url) return { error: 'Could not determine environment URL.' };
   const tok = token || getAuthToken(url);
@@ -93,7 +96,42 @@ async function listIncomingUpdates({ envUrl, token, solutionUniqueName } = {}) {
   });
 
   if (res.error) return { error: res.error };
-  if (res.statusCode === 404) return { count: 0, items: [], hint: 'gitupdatefiles 404 — entity name may differ; run RefreshChangesFromGit first.' };
+  if (res.statusCode === 404) {
+    const hint = 'gitupdatefiles 404 — entity name may differ; run RefreshChangesFromGit first.';
+    if (!solutionId && !solutionUniqueName) return { count: 0, items: [], hint };
+    // The portal "Updates" tab = rows that need to be PULLED into the env. That is
+    // BOTH pure incoming updates (action eq 2) AND conflicts the maker resolved as
+    // "accept incoming" that have not been pulled yet (action eq 3 AND useraction eq 2).
+    // Querying only action eq 2 SILENTLY UNDER-REPORTS the latter (verified live
+    // 2026-06-19, sri-alm-dev-1: portal showed Updates(1) for an accepted-incoming
+    // site setting while this helper returned 0). Missing it also breaks the
+    // conflict flow's "accept-incoming → route to pull" hand-off (the dispatcher
+    // would see nothing to pull and the accepted change would never land).
+    const [pure, acceptedPendingPull] = await Promise.all([
+      listSourceControlComponents({ envUrl: url, token: tok, solutionId, solutionUniqueName, action: 2 }),
+      listSourceControlComponents({ envUrl: url, token: tok, solutionId, solutionUniqueName, action: 3, userAction: 2 }),
+    ]);
+    if (pure.error) return { error: pure.error, statusCode: pure.statusCode, hint };
+    if (acceptedPendingPull.error) return { error: acceptedPendingPull.error, statusCode: acceptedPendingPull.statusCode, hint };
+    const seen = new Set();
+    const items = [];
+    for (const r of [...(pure.items || []), ...(acceptedPendingPull.items || [])]) {
+      const key = r.sourceControlComponentId || r.componentId;
+      if (key && seen.has(key)) continue;
+      if (key) seen.add(key);
+      items.push({
+        componentId:   r.componentId || null,
+        updateId:      r.sourceControlComponentId || null,
+        componentName: r.componentName || null,
+        componentPath: r.componentPath || null,
+        componentType: r.componentType || null,
+        updateType:    r.action === 3 ? 'AcceptedPendingPull' : null,
+        commitSha:     null,
+        commitMessage: null,
+      });
+    }
+    return { count: items.length, items, via: 'sourcecontrolcomponent', hint };
+  }
   if (res.statusCode !== 200) {
     let msg = `HTTP ${res.statusCode}`;
     try { msg = JSON.parse(res.body).error.message || msg; } catch {}

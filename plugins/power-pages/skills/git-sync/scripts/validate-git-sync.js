@@ -18,7 +18,10 @@
  *   - Conflict resolve  → last-conflict-resolution.json :
  *                         skill/resolvedAt/envUrl/conflictsFound/
  *                         conflictsResolved/status ∈ {succeeded, partial,
- *                         failed}; partial + remainingConflicts>0 blocks.
+ *                         failed, manual-resolution-required}; partial +
+ *                         remainingConflicts>0 blocks. The selective-merge
+ *                         strategy writes the same marker (+ strategy/adoCommitId);
+ *                         manual-resolution-required (IL-015 portal fallback) passes.
  *
  * Blocks on: corrupt JSON, missing required fields, status=failed, unknown
  * status, missing commitId (real commit), or unresolved partial conflicts.
@@ -45,7 +48,7 @@ const REQUIRED_SYNC_FIELDS = ['skill', 'syncedAt', 'envUrl', 'status'];
 const SYNC_STATUSES = new Set(['succeeded', 'already-up-to-date', 'failed']);
 
 const REQUIRED_CONFLICT_FIELDS = ['skill', 'resolvedAt', 'envUrl', 'conflictsFound', 'conflictsResolved', 'status'];
-const CONFLICT_STATUSES = new Set(['succeeded', 'partial', 'failed']);
+const CONFLICT_STATUSES = new Set(['succeeded', 'partial', 'failed', 'manual-resolution-required']);
 
 function readJson(p) {
   return JSON.parse(fs.readFileSync(p, 'utf8'));

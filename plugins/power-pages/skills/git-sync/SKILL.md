@@ -23,7 +23,7 @@ model: opus
 
 - `commit-to-git` → **commit** flow (Changes → `CommitToGit`). Full detail: `references/changes-reference.md`.
 - `sync-from-git` → **pull** flow (Updates → `RefreshChangesFromGit` + `PullChangesFromGit`). Full detail: `references/update-reference.md`.
-- `resolve-conflicts` → **conflict** flow (Conflicts → resolve). Full detail: `references/conflict-reference.md`.
+- `resolve-conflicts` → **conflict** flow (Conflicts → resolve). Full detail: `references/conflict-reference.md` (incl. VS Code **selective merge**: `references/selective-merge-reference.md`).
 
 **Initial request:** $ARGUMENTS
 
@@ -64,11 +64,27 @@ Conflicts always gate first regardless of `--commit` / `--pull`.
 Steps:
 
 1. Report progress: "Detecting Git sync state."
-2. Run `detect-git-binding.js`; then list the three counts (`list-pending-changes.js`, `list-incoming-updates.js`, `list-conflicts.js`).
-3. Call `detectSyncDirection({ counts, args })` from `${CLAUDE_PLUGIN_ROOT}/scripts/lib/detect-sync-direction.js`. Trust its shape: `{ mode, ordering, requiresConflictFirst, state, reason, explicitOverride }` where `mode ∈ {commit, pull, both, conflicts-first, clean}`.
-4. Announce the state and mode. If `mode = clean`, report "You're up to date" (offer open-pr) and exit.
+2. **Resolve `envUrl` once and reuse it.** Run `pac env who` and read the `Environment URL:` line — that value is `<envUrl>`. Pass it explicitly as `--envUrl "<envUrl>"` to **every** helper below. (Helpers can self-derive it by re-running `pac env who`, but that is slower and can fail to parse — always pass it.)
+3. Run `detect-git-binding.js --envUrl "<envUrl>"`. The bound solution's unique name is `boundSolutions[0].uniqueName` — that value is `<solutionUniqueName>`. You need it for the count helpers below.
+4. List the three counts. **All three require BOTH `--envUrl` AND `--solutionUniqueName`** — without `--solutionUniqueName` the conflict/update helpers fall back to a 404'd entity and silently return `count: 0`, which would wrongly route the flow to `clean`:
 
-**Output:** `mode`, `ordering`, and `requiresConflictFirst` are known.
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/list-pending-changes.js"   --envUrl "<envUrl>" --solutionUniqueName "<solutionUniqueName>"
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/list-incoming-updates.js"  --envUrl "<envUrl>" --solutionUniqueName "<solutionUniqueName>"
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/list-conflicts.js"         --envUrl "<envUrl>" --solutionUniqueName "<solutionUniqueName>"
+   ```
+
+   Read each helper's `count` field for Changes, Updates, and Conflicts respectively.
+5. Compute the direction. `detect-sync-direction.js` is callable as a function (`detectSyncDirection({ counts, args })`) **or** via its CLI with the three counts:
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/detect-sync-direction.js" --changes <N> --updates <N> --conflicts <N>
+   ```
+
+   Trust its shape: `{ mode, ordering, requiresConflictFirst, state, reason, explicitOverride }` where `mode ∈ {commit, pull, both, conflicts-first, clean}`. (Add `--commit` / `--pull` to force an explicit direction.)
+6. Announce the state and mode. If `mode = clean`, report "You're up to date" (offer open-pr) and exit.
+
+**Output:** `envUrl`, `solutionUniqueName`, `mode`, `ordering`, and `requiresConflictFirst` are known.
 
 ---
 
@@ -111,8 +127,12 @@ Steps:
 
 Steps:
 
-1. Run `refresh-changes-from-git.js` (RefreshChangesFromGit — read-only; populates Updates + Conflicts without mutating). This is also the lightweight "status" answer.
-2. Re-list the three counts. For **Changes**, run `classify-change-set.js` to split real config from compiled-bundle churn.
+1. Run `refresh-changes-from-git.js` (RefreshChangesFromGit — read-only; populates Updates + Conflicts without mutating). This is also the lightweight "status" answer. **Both `--envUrl` and `--solutionUniqueName` are required** — the action errors without the solution unique name in its body:
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-changes-from-git.js" --envUrl "<envUrl>" --solutionUniqueName "<solutionUniqueName>"
+   ```
+2. Re-list the three counts (again with `--envUrl` AND `--solutionUniqueName`, as in Phase 0). For **Changes**, run `classify-change-set.js` to split real config from compiled-bundle churn.
 3. Render the unified summary (≤ ~12 lines):
    - **Changes:** `{configCount}` config changes (list config items by name) **+ `{churnCount}` build-output files** (bundle churn — collapsed; expand on request). Never hide config.
    - **Updates:** preview incoming (e.g. "teammate added a Contact form, modified the nav web template").

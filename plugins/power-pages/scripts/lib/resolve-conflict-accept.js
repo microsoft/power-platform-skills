@@ -7,7 +7,7 @@
 // vs variant-B discussion and the // TODO: HAR-verify notes.
 //
 // Output (JSON to stdout):
-//   Success: { resolved: true, conflictId, outcome: "accept-incoming", calledAt }
+//   Success: { resolved: true, conflictId, outcome: "accept-incoming", via, calledAt }
 //   Failure: { error, statusCode?, errorCode? }
 //
 // Usage:
@@ -15,12 +15,16 @@
 //       --envUrl              <url>
 //       --conflictId          <id>
 //       [--solutionUniqueName <name>]
+//       [--solutionId         <id>]      // with --componentId enables useraction path
+//       [--componentId        <id>]      // Power Pages component id
 //       [--token              <dvToken>]
 //       [--action             <name>]    // default ResolveGitConflict; override for variant B
 
 'use strict';
 
 const { getAuthToken, makeRequest } = require('./validation-helpers');
+const { resolveGitConflictUserAction } = require('./resolve-git-conflict-useraction');
+const { tryResolveViaUserAction, resolveViaAction } = require('./resolve-conflict-common');
 
 const RESOLUTION_ACCEPT_INCOMING = 1;
 const DEFAULT_ACTION = 'ResolveGitConflict'; // TODO: HAR-verify
@@ -30,6 +34,7 @@ function parseArgs(argv) {
   const out = {
     envUrl: null, token: null,
     conflictId: null, solutionUniqueName: null,
+    componentId: null, solutionId: null,
     action: DEFAULT_ACTION,
   };
   for (let i = 0; i < args.length; i++) {
@@ -37,13 +42,23 @@ function parseArgs(argv) {
     else if (args[i] === '--token' && args[i + 1]) out.token = args[++i];
     else if (args[i] === '--conflictId' && args[i + 1]) out.conflictId = args[++i];
     else if (args[i] === '--solutionUniqueName' && args[i + 1]) out.solutionUniqueName = args[++i];
+    else if (args[i] === '--componentId' && args[i + 1]) out.componentId = args[++i];
+    else if (args[i] === '--solutionId' && args[i + 1]) out.solutionId = args[++i];
     else if (args[i] === '--action' && args[i + 1]) out.action = args[++i];
   }
   return out;
 }
 
+/**
+ * Resolve one Git conflict by accepting the incoming Git version.
+ * Uses the sourcecontrolcomponent useraction path when identifiers are available,
+ * then falls back to the legacy ResolveGitConflict action for compatibility.
+ * @param {object} options
+ * @returns {Promise<object>}
+ */
 async function resolveConflictAccept({
-  envUrl, token, conflictId, solutionUniqueName, action = DEFAULT_ACTION,
+  envUrl, token, conflictId, solutionUniqueName, componentId, solutionId, action = DEFAULT_ACTION,
+  deps = {}, _resolveUserAction,
 } = {}) {
   if (!envUrl) throw new Error('--envUrl is required');
   if (!conflictId) throw new Error('--conflictId is required');
@@ -51,42 +66,33 @@ async function resolveConflictAccept({
   const tok = token || getAuthToken(envUrl);
   if (!tok) return { error: 'Could not acquire auth token.' };
 
-  const apiUrl = `${envUrl.replace(/\/+$/, '')}/api/data/v9.2/${action}`;
-  const bodyObj = { ConflictId: conflictId, Resolution: RESOLUTION_ACCEPT_INCOMING };
-  if (solutionUniqueName) bodyObj.SolutionUniqueName = solutionUniqueName;
-
-  const res = await makeRequest({
-    url: apiUrl,
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${tok}`,
-      'OData-MaxVersion': '4.0',
-      'OData-Version': '4.0',
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    },
-    body: JSON.stringify(bodyObj),
-  });
-
-  if (res.error) return { error: res.error };
-  if (res.statusCode !== 204 && res.statusCode !== 200) {
-    let msg = `HTTP ${res.statusCode}`;
-    let code = null;
-    try {
-      const parsed = JSON.parse(res.body);
-      msg = parsed.error?.message || msg;
-      code = parsed.error?.code || null;
-    } catch {}
-    return { error: msg, statusCode: res.statusCode, errorCode: code };
-  }
-
-  return {
-    resolved: true,
+  const resolveUserActionFn = _resolveUserAction || deps.resolveGitConflictUserAction || resolveGitConflictUserAction;
+  const makeRequestFn = deps.makeRequest || makeRequest;
+  const useraction = await tryResolveViaUserAction({
+    envUrl,
+    token: tok,
     conflictId,
+    solutionId,
+    solutionUniqueName,
+    componentId,
+    decision: 'accept-incoming',
     outcome: 'accept-incoming',
     action,
-    calledAt: new Date().toISOString(),
-  };
+    resolveUserActionFn,
+    makeRequestFn,
+  });
+  if (useraction) return useraction;
+
+  return resolveViaAction({
+    envUrl,
+    token: tok,
+    conflictId,
+    solutionUniqueName,
+    action,
+    resolution: RESOLUTION_ACCEPT_INCOMING,
+    outcome: 'accept-incoming',
+    makeRequestFn,
+  });
 }
 
 if (require.main === module) {

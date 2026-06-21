@@ -369,7 +369,7 @@ Unified Git configuration skill for Dataverse Git integration. Detects the code 
 
 > "Sync my Dataverse Git workspace" — push Changes, pull Updates, or resolve Conflicts
 
-Unified per-cycle inner-loop skill. Detects Changes / Updates / Conflicts, renders one readable config-vs-bundle-churn summary, previews incoming updates, explains conflicts semantically, then runs the right flow with gates: commit (`CommitToGit`), pull (`RefreshChangesFromGit` + `PullChangesFromGit`), or conflict resolution.
+Unified per-cycle inner-loop skill. Detects Changes / Updates / Conflicts, renders one readable config-vs-bundle-churn summary, previews incoming updates, explains conflicts semantically, then runs the right flow with gates: commit (`CommitToGit`), pull (`RefreshChangesFromGit` + `PullChangesFromGit`), or conflict resolution. Conflicts can be resolved by **keep current**, **accept incoming**, or **selectively merge** — a real 3-way merge in VS Code (BASE/OURS/THEIRS, AI-assisted) that the portal doesn't offer; the merged file is committed to ADO and pulled back into the environment. Selective merge uses the companion **Power Pages Selective Merge** VS Code extension (`vscode-extension/`).
 
 **Modes:**
 - `--dry-run` / `--dry-run --json` — commit pre-flight only; writes `last-validation.json`; no mutation.

@@ -153,7 +153,9 @@ The helper calls `PullChangesFromGit` with `AdditionalParameters.DeleteDeletedCo
    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/ado-list-commits.js" --organization "<organization>" --project "<project>" --repository "<repository>" --branch "<branch>" --top 1
    ```
 
-3. Verify `binding.branchSyncedCommitId == commits[0].commitId` case-insensitively. A successful pull must also have `updates.count === 0`.
+3. **Primary success signal:** `updates.count === 0` after the pull **and** `detect-git-binding.js` reports `cleanState: "Clean"`. That is what proves the pull landed — assert it first.
+
+   **Secondary (best-effort) parity:** you may compare `binding.branchSyncedCommitId == commits[0].commitId` case-insensitively, but **do NOT mark the pull failed solely because they differ.** `branchSyncedCommitId` tracks the last **outbound** commit (it advances on `CommitToGit`, NOT on `PullChangesFromGit`), so after a pure pull it legitimately lags the ADO head. Record the comparison as `parityVerified` for the trace, but treat a mismatch as informational, not a failure.
 4. Resolve the marker path through `${CLAUDE_PLUGIN_ROOT}/scripts/lib/inner-loop-paths.js` with key `lastSync`; do not inline the path in code. Write `last-sync.json`:
 
    ```json
@@ -177,7 +179,7 @@ The helper calls `PullChangesFromGit` with `AdditionalParameters.DeleteDeletedCo
    }
    ```
 
-   Use `status: "already-up-to-date"` for the Step 2 no-op path. Use `status: "failed"` if Updates remain, the ADO head cannot be read, or parity does not verify; include a concise `failureReason`.
+   Use `status: "already-up-to-date"` for the Step 2 no-op path. Use `status: "succeeded"` when `updates.count === 0` and the state is Clean (regardless of the secondary SHA parity). Use `status: "failed"` only if **Updates remain** after the pull or the pull action itself errored; include a concise `failureReason`. A best-effort SHA-parity mismatch alone is **not** a failure.
 
 5. Write a per-run trace through `${CLAUDE_PLUGIN_ROOT}/scripts/lib/write-run-trace.js`. Include structured, pre-redacted fields only: `skill: "git-sync"`, `mode: "pull"`, phase timings, gate decisions, helper names and exit codes, mutation result, final counts, `branchSyncedCommitId`, `adoHeadCommitId`, `status`, and marker version. Never include raw helper stdout, Dataverse tokens, or ADO tokens.
 

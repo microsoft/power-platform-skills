@@ -3,53 +3,48 @@
 // Lists conflicts between local Changes and incoming Updates — the equivalent
 // of the "Conflicts" tab in the maker portal's Git integration UI.
 //
-// Important: `RefreshChangesFromGit` MUST be called before this helper so
-// Dataverse has populated the conflicts entity. Conflicts arise when both the
-// env and the ADO branch have modifications to the same component.
+// CANONICAL SOURCE (verified live 2026-06-19): the portal Conflicts tab queries
+// `sourcecontrolcomponents?$filter=(action eq 3 and useraction eq 0)` (action 3 =
+// Conflict, useraction 0 = not yet resolved), partitioned by solutionId. We use
+// that as the PRIMARY source whenever a solution is known; `gitconflictfiles` (a
+// legacy entity that 404s on most tenants) is only a fallback for the no-solution
+// case. Each conflict row carries componentpath + the three SHA hashes
+// (git/lastsync/env) so callers can build the ADO path and classify sides.
 //
-// The resolve-conflicts skill uses this helper to enumerate each conflict and
-// present a per-object "keep existing" / "accept incoming" card to the user.
+// `RefreshChangesFromGit` MUST be called before this helper so Dataverse has
+// populated the conflict rows.
 //
 // Output (JSON to stdout):
 //   {
 //     count: <number>,
+//     via: "sourcecontrolcomponent" | "gitconflictfiles",
 //     items: [
 //       {
-//         conflictId:          "<guid>",
-//         componentName:       "<display name>",
-//         componentType:       "<e.g. 'mspp_webtemplate'>",
-//         localChangeType:     "Add" | "Modify" | "Delete",
-//         incomingChangeType:  "Add" | "Modify" | "Delete",
-//         localCommitSha:      "<git sha>" | null,
-//         incomingCommitSha:   "<git sha>" | null,
-//         resolutionRequired:  true,
-//       },
-//       ...
+//         conflictId, componentId, componentName, componentPath, componentType,
+//         partitionId, gitHashId, lastSyncHashId, envHashId,
+//         localChangeType, incomingChangeType, resolutionRequired: true,
+//       }, ...
 //     ]
 //   }
 //   On error: { error: "<message>", statusCode?: <number> }
 //
 // Usage:
 //   node list-conflicts.js [--envUrl <url>] [--token <token>]
-//                          [--solutionUniqueName <name>]
-//
-// TODO: HAR-verify — entity name for Conflicts tab. Candidates:
-// `gitconflicts`, `gitconflictfiles`, `msdyn_gitconflicts`.
-// Also verify: can both localCommitSha and incomingCommitSha be non-null, or
-// does only one side always have a SHA (e.g., local changes haven't been
-// committed yet)?
+//                          [--solutionUniqueName <name> | --solutionId <guid>]
 
 'use strict';
 
 const { getAuthToken, getEnvironmentUrl, makeRequest } = require('./validation-helpers');
+const { listSourceControlComponents } = require('./list-source-control-components');
 
 function parseArgs(argv) {
   const args = argv.slice(2);
-  const out = { envUrl: null, token: null, solutionUniqueName: null };
+  const out = { envUrl: null, token: null, solutionUniqueName: null, solutionId: null };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--envUrl' && args[i + 1]) out.envUrl = args[++i];
     else if (args[i] === '--token' && args[i + 1]) out.token = args[++i];
     else if (args[i] === '--solutionUniqueName' && args[i + 1]) out.solutionUniqueName = args[++i];
+    else if (args[i] === '--solutionId' && args[i + 1]) out.solutionId = args[++i];
   }
   return out;
 }
@@ -61,16 +56,46 @@ const CHANGE_TYPE_LABEL = Object.freeze({ 0: 'Add', 1: 'Modify', 2: 'Delete' });
  * @param {string} [options.envUrl]
  * @param {string} [options.token]
  * @param {string} [options.solutionUniqueName]
+ * @param {string} [options.solutionId]
  * @returns {Promise<{ count: number, items: object[] } | { error: string }>}
  */
-async function listConflicts({ envUrl, token, solutionUniqueName } = {}) {
+async function listConflicts({ envUrl, token, solutionUniqueName, solutionId } = {}) {
   const url = envUrl || getEnvironmentUrl();
   if (!url) return { error: 'Could not determine environment URL.' };
   const tok = token || getAuthToken(url);
   if (!tok) return { error: 'Could not acquire auth token.' };
   const base = url.replace(/\/+$/, '');
 
-  // TODO: HAR-verify entity name for the Conflicts tab.
+  // PRIMARY: the canonical Conflicts-tab query on sourcecontrolcomponent
+  // (action eq 3 = Conflict, useraction eq 0 = unresolved), partitioned by
+  // solutionId. Used whenever a solution is known.
+  if (solutionId || solutionUniqueName) {
+    const scc = await listSourceControlComponents({
+      envUrl: url, token: tok, solutionId, solutionUniqueName, action: 3, userAction: 0,
+    });
+    if (!scc.error) {
+      const items = scc.items.map((r) => ({
+        conflictId:         r.sourceControlComponentId || null,
+        componentId:        r.componentId || null,
+        componentName:      r.componentName || null,
+        componentPath:      r.componentPath || null,
+        componentType:      r.componentType || null,
+        partitionId:        r.partitionId || null,
+        gitHashId:          r.gitHashId || null,
+        lastSyncHashId:     r.lastSyncHashId || null,
+        envHashId:          r.envHashId || null,
+        localChangeType:    null,
+        incomingChangeType: null,
+        localCommitSha:     null,
+        incomingCommitSha:  null,
+        resolutionRequired: true,
+      }));
+      return { count: items.length, items, via: 'sourcecontrolcomponent' };
+    }
+    // On a hard error (not a clean empty), fall through to the legacy entity.
+  }
+
+  // FALLBACK / no-solution: the legacy gitconflictfiles entity (404s on most tenants).
   let filterExpr = '';
   if (solutionUniqueName) {
     filterExpr = `&$filter=solutionuniquename eq '${solutionUniqueName}'`;
@@ -94,7 +119,31 @@ async function listConflicts({ envUrl, token, solutionUniqueName } = {}) {
   });
 
   if (res.error) return { error: res.error };
-  if (res.statusCode === 404) return { count: 0, items: [], hint: 'gitconflictfiles 404 — entity may differ; run RefreshChangesFromGit first.' };
+  if (res.statusCode === 404) {
+    const hint = 'gitconflictfiles 404 — entity may differ; run RefreshChangesFromGit first.';
+    if (!solutionId && !solutionUniqueName) return { count: 0, items: [], hint };
+    const fallback = await listSourceControlComponents({
+      envUrl: url, token: tok, solutionId, solutionUniqueName, action: 3, userAction: 0,
+    });
+    if (fallback.error) return { error: fallback.error, statusCode: fallback.statusCode, hint };
+    const items = fallback.items.map((r) => ({
+      conflictId:         r.sourceControlComponentId || null,
+      componentId:        r.componentId || null,
+      componentName:      r.componentName || null,
+      componentPath:      r.componentPath || null,
+      componentType:      r.componentType || null,
+      partitionId:        r.partitionId || null,
+      gitHashId:          r.gitHashId || null,
+      lastSyncHashId:     r.lastSyncHashId || null,
+      envHashId:          r.envHashId || null,
+      localChangeType:    null,
+      incomingChangeType: null,
+      localCommitSha:     null,
+      incomingCommitSha:  null,
+      resolutionRequired: true,
+    }));
+    return { count: items.length, items, via: 'sourcecontrolcomponent', hint };
+  }
   if (res.statusCode !== 200) {
     let msg = `HTTP ${res.statusCode}`;
     try { msg = JSON.parse(res.body).error.message || msg; } catch {}
@@ -117,7 +166,7 @@ async function listConflicts({ envUrl, token, solutionUniqueName } = {}) {
     resolutionRequired: true,
   }));
 
-  return { count: items.length, items };
+  return { count: items.length, items, via: 'gitconflictfiles' };
 }
 
 if (require.main === module) {

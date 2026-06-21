@@ -43,9 +43,74 @@ test('resolve-conflict-accept: happy path uses Resolution=1', async () => {
   await closeAll(s);
   assert.equal(r.resolved, true);
   assert.equal(r.outcome, 'accept-incoming');
+  assert.equal(r.via, 'resolvegitconflict');
   const body = JSON.parse(s.received[0].body);
   assert.equal(body.Resolution, 1);
   assert.equal(body.ConflictId, 'c-2');
+});
+
+test('resolve-conflict-accept: useraction primary path succeeds with resolved solution name', async () => {
+  const s = await createQueuedServer([
+    { status: 200, body: JSON.stringify({ value: [{ solutionid: 'sol-1' }] }) },
+  ]);
+  const calls = [];
+  const r = await resolveConflictAccept({
+    envUrl: serverUrl(s),
+    token: 'tok',
+    conflictId: 'c-ua',
+    solutionUniqueName: 'MySol',
+    componentId: 'component-1',
+    _resolveUserAction: async (args) => {
+      calls.push(args);
+      return { ok: true, resolved: true, sourceControlComponentId: 'scc-1', useraction: 2, statusCode: 200 };
+    },
+  });
+  await closeAll(s);
+  assert.equal(r.resolved, true);
+  assert.equal(r.via, 'useraction');
+  assert.equal(r.sourceControlComponentId, 'scc-1');
+  assert.equal(r.useraction, 2);
+  assert.deepEqual(calls[0], {
+    envUrl: serverUrl(s),
+    token: 'tok',
+    solutionId: 'sol-1',
+    componentId: 'component-1',
+    decision: 'accept-incoming',
+  });
+  assert.equal(s.received.length, 1);
+  assert.match(s.received[0].url, /\/api\/data\/v9\.2\/solutions\?/);
+});
+
+test('resolve-conflict-accept: useraction notFound falls back to ResolveGitConflict', async () => {
+  const s = await createQueuedServer([{ status: 204, body: '' }]);
+  const r = await resolveConflictAccept({
+    envUrl: serverUrl(s),
+    token: 'tok',
+    conflictId: 'c-fallback',
+    solutionId: 'sol-2',
+    componentId: 'component-2',
+    _resolveUserAction: async () => ({ ok: false, notFound: true, error: 'No matching conflict row' }),
+  });
+  await closeAll(s);
+  assert.equal(r.resolved, true);
+  assert.equal(r.via, 'resolvegitconflict');
+  const body = JSON.parse(s.received[0].body);
+  assert.equal(body.ConflictId, 'c-fallback');
+  assert.equal(body.Resolution, 1);
+});
+
+test('resolve-conflict-accept: absent ResolveGitConflict action 404 is still surfaced', async () => {
+  const s = await createQueuedServer([
+    { status: 404, body: JSON.stringify({ error: { message: "Resource not found for the segment 'ResolveGitConflict'.", code: '0x0' } }) },
+  ]);
+  const r = await resolveConflictAccept({
+    envUrl: serverUrl(s), token: 'tok', conflictId: 'c-404',
+  });
+  await closeAll(s);
+  assert.match(r.error, /Resource not found/);
+  assert.equal(r.statusCode, 404);
+  assert.equal(r.errorCode, '0x0');
+  assert.equal(r.via, 'resolvegitconflict');
 });
 
 test('resolve-conflict-accept: HTTP error surfaces', async () => {
@@ -58,4 +123,5 @@ test('resolve-conflict-accept: HTTP error surfaces', async () => {
   await closeAll(s);
   assert.equal(r.error, 'Internal');
   assert.equal(r.statusCode, 500);
+  assert.equal(r.via, 'resolvegitconflict');
 });

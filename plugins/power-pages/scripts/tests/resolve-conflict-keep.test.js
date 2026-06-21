@@ -48,6 +48,7 @@ test('resolve-conflict-keep: happy path returns 204', async () => {
   assert.equal(r.conflictId, 'conf-1');
   assert.equal(r.outcome, 'keep-environment');
   assert.equal(r.action, 'ResolveGitConflict');
+  assert.equal(r.via, 'resolvegitconflict');
 
   const body = JSON.parse(s.received[0].body);
   assert.equal(body.ConflictId, 'conf-1');
@@ -65,7 +66,72 @@ test('resolve-conflict-keep: --action override changes endpoint', async () => {
   await closeAll(s);
   assert.equal(r.resolved, true);
   assert.equal(r.action, 'KeepEnvironmentVersion');
+  assert.equal(r.via, 'resolvegitconflict');
   assert.match(s.received[0].url, /\/api\/data\/v9\.2\/KeepEnvironmentVersion$/);
+});
+
+test('resolve-conflict-keep: useraction primary path succeeds with resolved solution name', async () => {
+  const s = await createQueuedServer([
+    { status: 200, body: JSON.stringify({ value: [{ solutionid: 'sol-keep' }] }) },
+  ]);
+  const calls = [];
+  const r = await resolveConflictKeep({
+    envUrl: serverUrl(s),
+    token: 'tok',
+    conflictId: 'keep-ua',
+    solutionUniqueName: 'KeepSol',
+    componentId: 'component-keep',
+    _resolveUserAction: async (args) => {
+      calls.push(args);
+      return { ok: true, resolved: true, sourceControlComponentId: 'scc-keep', useraction: 1, statusCode: 200 };
+    },
+  });
+  await closeAll(s);
+  assert.equal(r.resolved, true);
+  assert.equal(r.via, 'useraction');
+  assert.equal(r.sourceControlComponentId, 'scc-keep');
+  assert.equal(r.useraction, 1);
+  assert.deepEqual(calls[0], {
+    envUrl: serverUrl(s),
+    token: 'tok',
+    solutionId: 'sol-keep',
+    componentId: 'component-keep',
+    decision: 'keep-current',
+  });
+  assert.equal(s.received.length, 1);
+  assert.match(s.received[0].url, /\/api\/data\/v9\.2\/solutions\?/);
+});
+
+test('resolve-conflict-keep: useraction notFound falls back to ResolveGitConflict', async () => {
+  const s = await createQueuedServer([{ status: 204, body: '' }]);
+  const r = await resolveConflictKeep({
+    envUrl: serverUrl(s),
+    token: 'tok',
+    conflictId: 'keep-fallback',
+    solutionId: 'sol-keep-2',
+    componentId: 'component-keep-2',
+    _resolveUserAction: async () => ({ ok: false, notFound: true, error: 'No matching conflict row' }),
+  });
+  await closeAll(s);
+  assert.equal(r.resolved, true);
+  assert.equal(r.via, 'resolvegitconflict');
+  const body = JSON.parse(s.received[0].body);
+  assert.equal(body.ConflictId, 'keep-fallback');
+  assert.equal(body.Resolution, 0);
+});
+
+test('resolve-conflict-keep: absent ResolveGitConflict action 404 is still surfaced', async () => {
+  const s = await createQueuedServer([
+    { status: 404, body: JSON.stringify({ error: { message: "Resource not found for the segment 'ResolveGitConflict'.", code: '0x0' } }) },
+  ]);
+  const r = await resolveConflictKeep({
+    envUrl: serverUrl(s), token: 'tok', conflictId: 'keep-404',
+  });
+  await closeAll(s);
+  assert.match(r.error, /Resource not found/);
+  assert.equal(r.statusCode, 404);
+  assert.equal(r.errorCode, '0x0');
+  assert.equal(r.via, 'resolvegitconflict');
 });
 
 test('resolve-conflict-keep: HTTP error surfaces envelope', async () => {
@@ -79,4 +145,5 @@ test('resolve-conflict-keep: HTTP error surfaces envelope', async () => {
   assert.equal(r.error, 'Conflict not found');
   assert.equal(r.statusCode, 404);
   assert.equal(r.errorCode, 'IL_CONFLICT_404');
+  assert.equal(r.via, 'resolvegitconflict');
 });

@@ -17,6 +17,22 @@ function createTestServer(statusCode, body) {
 }
 function serverUrl(s) { const { address, port } = s.address(); return `http://${address}:${port}`; }
 
+function createQueuedServer(responses) {
+  const queue = [...responses];
+  const received = [];
+  const server = http.createServer((req, res) => {
+    received.push({ method: req.method, url: req.url, headers: req.headers });
+    const next = queue.shift() || { status: 500, body: JSON.stringify({ error: { message: 'Unexpected request' } }) };
+    res.writeHead(next.status, next.headers || { 'Content-Type': 'application/json' });
+    res.end(typeof next.body === 'string' ? next.body : JSON.stringify(next.body));
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve({ server, port: server.address().port, received }));
+  });
+}
+function queuedServerUrl(s) { return `http://127.0.0.1:${s.port}`; }
+function closeQueuedServer(s) { return new Promise((resolve) => s.server.close(resolve)); }
+
 test('CHANGE_TYPE_LABEL shared constant is frozen and has 3 entries', () => {
   assert.equal(Object.keys(CHANGE_TYPE_LABEL).length, 3);
   assert.throws(() => { CHANGE_TYPE_LABEL[3] = 'Rename'; }, /read.?only|assign|cannot/i);
@@ -85,6 +101,49 @@ test('returns 404 hint when entity returns 404', async () => {
     assert.equal(result.count, 0);
     assert.ok(result.hint);
   } finally { server.close(); }
+});
+
+test('uses sourcecontrolcomponent as the PRIMARY source when a solution is provided (action eq 3 and useraction eq 0)', async () => {
+  const server = await createQueuedServer([
+    {
+      status: 200,
+      body: {
+        value: [{
+          sourcecontrolcomponentid: 'scc-conflict-1',
+          componentid: 'ppc-1',
+          componentdisplayname: 'Header',
+          componentpath: 'web-templates/header.html',
+          componenttype: 'mspp_webtemplate',
+          partitionid: 'sol-1',
+          githashid: 'g1', lastsynchashid: 'b1', envhashid: 'e1',
+          action: 3,
+          useraction: 0,
+        }],
+      },
+    },
+  ]);
+  try {
+    const result = await listConflicts({ envUrl: queuedServerUrl(server), token: 'tok', solutionId: 'sol-1' });
+    assert.equal(result.count, 1);
+    assert.equal(result.via, 'sourcecontrolcomponent');
+    const item = result.items[0];
+    assert.equal(item.conflictId, 'scc-conflict-1');
+    assert.equal(item.componentId, 'ppc-1');
+    assert.equal(item.componentName, 'Header');
+    assert.equal(item.componentPath, 'web-templates/header.html');
+    assert.equal(item.componentType, 'mspp_webtemplate');
+    assert.equal(item.partitionId, 'sol-1');
+    assert.equal(item.gitHashId, 'g1');
+    assert.equal(item.lastSyncHashId, 'b1');
+    assert.equal(item.envHashId, 'e1');
+    assert.equal(item.resolutionRequired, true);
+    // PRIMARY = sourcecontrolcomponents, with the canonical conflict filter, no gitconflictfiles call
+    assert.match(server.received[0].url, /sourcecontrolcomponents/);
+    assert.match(decodeURIComponent(server.received[0].url), /action eq 3 and useraction eq 0/);
+    assert.doesNotMatch(decodeURIComponent(server.received[0].url), /iscommitted/);
+    assert.match(server.received[0].url, /partitionId=sol-1/);
+    assert.equal(server.received.length, 1, 'did not fall back to gitconflictfiles');
+  } finally { await closeQueuedServer(server); }
 });
 
 test('returns error on non-200 non-404 response', async () => {

@@ -10,9 +10,11 @@
 //
 //   Canonical query:
 //     GET /api/data/v9.2/sourcecontrolcomponents
-//        ?$filter=partitionid eq <solutionid> and iscommitted eq false
+//        ?$filter=partitionid eq <solutionid> and iscommitted eq false and action eq 1
 //        &$count=true&$top=<page>
 //        Prefer: odata.include-annotations="*"
+//     (action eq 1 = Push. Without it the inert action=0 baseline is counted,
+//      producing false "pending changes" on a clean env — verified live 2026-06-19.)
 //
 //   Field mapping:
 //     componentId    ← objectid (the entity's own id)
@@ -119,8 +121,13 @@ async function listPendingChanges({ envUrl, token, solutionUniqueName, solutionI
     sid = r.solutionId;
   }
 
-  // Build filter. iscommitted eq false is the canonical "pending Changes" predicate.
-  const filterParts = ['iscommitted eq false'];
+  // Build filter. Pending "Changes" = rows to PUSH = `iscommitted eq false AND
+  // action eq 1` (Push). `iscommitted eq false` ALONE over-counts: it also matches
+  // the inert synced baseline (action eq 0 / None) the portal Changes tab hides.
+  // Verified live (sri-alm-dev-1, RetailOS): 238 iscommitted=false rows were ALL
+  // action=0 with portal Changes(0); `and action eq 1` → 0. (action: 0=None,
+  // 1=Push, 2=Pull, 3=Conflict — from tenant option-set metadata.)
+  const filterParts = ['iscommitted eq false', 'action eq 1'];
   if (sid) filterParts.push(`partitionid eq ${sid}`);
   const filterExpr = filterParts.join(' and ');
 

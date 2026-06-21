@@ -106,12 +106,15 @@ Connect-to-Git enforces that **`PullChangesFromGit` cannot proceed while Conflic
 
 ---
 
-## 7. What we cannot do (defer to v2)
+## 7. Selective 3-way merge (IMPLEMENTED) + remaining v2 items
 
-These are **out of scope for v1** and should be flagged to the user with a graceful "manual workflow" pointer if they ask:
+**Three-way textual merge** of a conflicted component's source field is now **implemented** via the VS Code companion extension. When the user picks **"Selectively merge (recommended)"** in the conflict-decisions gate, the flow assembles BASE/OURS/THEIRS, opens a real 3-way merge in VS Code (with a diff3 pre-seed + AI assistance), commits the merged file to ADO, and accepts + pulls it into the environment. Full spec: `skills/git-sync/references/selective-merge-reference.md`. This replaces the old "export both sides as YAML and merge manually" workaround for text-mergeable types (web template `source`, content snippet `value`, web page `copy`/`summary`).
 
-- **Three-way textual merge** of two versions of a Web Template's HTML. The component-level conflict model doesn't support it; users who need this should export both sides as YAML and merge manually in their IDE, then choose "Keep existing" and re-commit.
-- **`conflict-resolution-advisor` sub-agent** — semantic diff with auto-recommendation. Architecture doc §5.5 lists this as a v2 candidate; v1 does deterministic side-by-side display + manual choice.
+Still deferred to **v2**:
+
+- **Text web-file merge** (CSS/JS) — web-file bytes live in a separate annotation, not the `powerpagecomponent.content` envelope; v1 routes web files to binary keep/accept.
+- **JSON/multi-line site-setting value merge** — the value is embedded in the `.sitesetting.yml`; v1 routes settings to binary keep/accept.
+- **Dedicated side-by-side merge editor + in-editor `vscode.lm` refine** — v1 uses conflict-marker resolution with the built-in merge-conflict CodeLens + an agent-computed proposal.
 - **Partial resolution** (resolve some conflicts, commit, then resolve others) — the `commit-to-git` path requires zero conflicts before it'll accept the next commit, so users must resolve all of them in one pass.
 
 ---

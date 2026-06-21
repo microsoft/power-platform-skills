@@ -254,6 +254,40 @@ test('multi-solution-bound env (no --solutionUniqueName) returns boundSolutions[
   } finally { server.close(); }
 });
 
+// Regression: pending-Changes detection MUST filter to action eq 1 (Push). The
+// `iscommitted eq false` predicate ALONE also matches the inert action=0 baseline,
+// which yields a false "Dirty" on a clean env (live 2026-06-19, sri-alm-dev-1:
+// 238 iscommitted=false rows were ALL action=0 while the portal showed Changes(0)).
+test('every sourcecontrolcomponents query filters action eq 1; 0 such rows → Clean (not false Dirty)', async () => {
+  const SOL_A = 'aaaaaaaa-1111-1111-1111-111111111111';
+  const seen = [];
+  const server = await new Promise((resolve) => {
+    const s = http.createServer((req, res) => {
+      const p = req.url || '';
+      seen.push(p);
+      let status = 200; let body = {};
+      if (p.startsWith('/api/data/v9.2/gitintegrations')) { status = 404; body = { error: { message: 'nf' } }; }
+      else if (p.startsWith('/api/data/v9.2/sourcecontrolconfigurations')) { body = { value: [{ sourcecontrolconfigurationid: 'cfg', organizationname: 'o', projectname: 'p', repositoryname: 'r', gitprovider: 0 }] }; }
+      else if (p.startsWith('/api/data/v9.2/sourcecontrolbranchconfigurations')) { body = { value: [{ branchname: 'main', rootfolderpath: 'solutions/SolA', branchsyncedcommitId: 'aaa', upstreambranchsyncedcommitid: 'aaa', statuscode: 0 }] }; }
+      else if (p.startsWith('/api/data/v9.2/solutions')) { body = { value: [{ solutionid: SOL_A, uniquename: 'SolA', enabledforsourcecontrolintegration: true, sourcecontrolsyncstatus: 3 }] }; }
+      else if (p.startsWith('/api/data/v9.2/sourcecontrolcomponents')) { body = { '@odata.count': 0, value: [] }; }
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(body));
+    });
+    s.listen(0, '127.0.0.1', () => resolve(s));
+  });
+  try {
+    const result = await detectGitBinding({ envUrl: serverUrl(server), token: 'test-tok' });
+    assert.equal(result.cleanState, 'Clean', '0 action=1 rows ⇒ Clean, not a false Dirty');
+    const compQueries = seen.filter((u) => u.includes('sourcecontrolcomponents')).map(decodeURIComponent);
+    assert.ok(compQueries.length > 0, 'queried sourcecontrolcomponents');
+    for (const q of compQueries) {
+      assert.match(q, /iscommitted eq false/);
+      assert.match(q, /action eq 1/, `query must filter action eq 1: ${q}`);
+    }
+  } finally { server.close(); }
+});
+
 test('single-solution-bound env (no --solutionUniqueName) returns boundSolutions[1] and multipleSolutionsBound:false', async () => {
   const SOL_A = 'aaaaaaaa-1111-1111-1111-111111111111';
   const server = await createRoutedServer([

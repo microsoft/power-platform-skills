@@ -121,35 +121,37 @@ If only IDs/change types are available, render those fields and state that field
 
 **Output:** `docs/inner-loop/conflicts.html` written and referenced in the chat summary.
 
-## Step 3 — Collect per-component resolution decisions
+## Step 3 — Collect the resolution strategy (one blanket choice, not per-component)
 
-**Goal:** Capture one decision for every conflict before mutating anything.
+**Goal:** Capture the resolution strategy with a SINGLE question, then auto-assign it — never ask once per conflict (that does not scale to large conflict sets).
 
-Show a compact Markdown roster in chat with columns: number, component, type, semantic explanation, and decision. Point the user to `docs/inner-loop/conflicts.html` for the side-by-side report.
+First, **partition the roster** by selective-merge eligibility:
+- **Eligible (text-mergeable):** web template `source`, content snippet `value`, web page `copy`/`summary`.
+- **Not eligible (binary-only):** web files, scalar/credential site settings, and components deleted in Git.
+
+Show a compact Markdown roster in chat (number, component, type, eligibility, semantic explanation). Point the user to `docs/inner-loop/conflicts.html` for the side-by-side report.
 
 <!-- gate: git-sync:2.conflict-decisions | category=progress | cancel-leaves=partial-decisions -->
-> 🚦 **Gate (progress · git-sync:2.conflict-decisions):** Surface `AskUserQuestion` and collect a per-component decision map. Cancellation leaves any already-collected decisions as draft only; no conflict resolution has been applied yet.
+> 🚦 **Gate (progress · git-sync:2.conflict-decisions):** Surface ONE `AskUserQuestion` for the whole batch — do **not** loop per component. Cancellation leaves the draft decisions only; nothing has been applied.
 >
 > | Question | Header | Options |
 > |---|---|---|
-> | For each conflicted component in the roster, which side should win? Choose one option per component. | Conflict resolution decisions | Keep current changes, Accept incoming changes |
+> | `{eligibleCount}` of `{totalCount}` conflict(s) can be selectively merged. How should I resolve the batch? | Conflict resolution | Selectively merge all eligible (recommended), Keep all current changes, Accept all incoming changes |
 
-Normalize decisions as:
+**Apply the single answer to the whole batch — no per-component prompts:**
+
+- **Selectively merge all eligible** → assign `strategy: "selective-merge"` to **every** eligible (text-mergeable) conflict automatically. If any binary-only conflicts remain, ask **one** follow-up question for *that subset only* (`Keep all current` / `Accept all incoming`) and apply it to all of them. Never ask per component.
+- **Keep all current changes** → assign `strategy: "keep-current"` to every conflict.
+- **Accept all incoming changes** → assign `strategy: "accept-incoming"` to every conflict.
+
+> Only drop to a per-component question if the user **explicitly** asks to decide individual components differently. The default is always the single blanket choice above.
+
+Normalize decisions as one entry per conflict (the strategy is filled in from the blanket choice, not asked again):
 
 ```json
 [
-  {
-    "conflictId": "<guid>",
-    "componentName": "<display name>",
-    "componentType": "<component type>",
-    "strategy": "keep-current"
-  },
-  {
-    "conflictId": "<guid>",
-    "componentName": "<display name>",
-    "componentType": "<component type>",
-    "strategy": "accept-incoming"
-  }
+  { "conflictId": "<guid>", "componentName": "<display name>", "componentType": "<type>", "strategy": "selective-merge" },
+  { "conflictId": "<guid>", "componentName": "<display name>", "componentType": "<type>", "strategy": "accept-incoming" }
 ]
 ```
 
@@ -157,10 +159,11 @@ Decision meanings:
 
 | Option | Strategy | Helper | After resolution |
 |---|---|---|---|
+| Selectively merge | `selective-merge` | `references/selective-merge-reference.md` | Merged file committed to ADO, then accepted + pulled into the environment. |
 | Keep current changes | `keep-current` | `resolve-conflict-keep.js` | Component moves to **Changes** and must later be committed. |
 | Accept incoming changes | `accept-incoming` | `resolve-conflict-accept.js` | Component moves to **Updates** and must later be pulled. |
 
-**Output:** `decisions[]` has exactly one entry for each `conflicts.items[]` entry.
+**Output:** `decisions[]` has exactly one entry for each `conflicts.items[]` entry, every `strategy` filled from the blanket choice (or the single binary-subset follow-up).
 
 ## Step 4 — Apply resolutions
 
@@ -168,34 +171,50 @@ Decision meanings:
 
 Process decisions one at a time. Do not run conflict helpers in parallel.
 
-For `keep-current`:
+**Dispatch `selective-merge` first.** For every component whose strategy is `selective-merge`, **read and follow `references/selective-merge-reference.md`** — that flow assembles BASE/OURS/THEIRS, runs the VS Code merge, commits the merged file to ADO, and accepts + pulls it into the environment. Do **not** call the keep/accept helpers for those components. Apply the remaining `keep-current` / `accept-incoming` decisions below.
+
+### The primary (IL-015-proof) mechanism: `useraction` PATCH
+
+`keep-current` and `accept-incoming` are both applied by PATCHing `useraction` on the component's `sourcecontrolcomponent` row (the Maker Portal's own mechanism). This is the **primary** path — it works even where the legacy `ResolveGitConflict` OData action is absent (IL-015, common). Use `resolve-git-conflict-useraction.js` directly:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/resolve-conflict-keep.js" \
+# keep-current  → --decision keep-current   (useraction 1)
+# accept-incoming → --decision accept-incoming (useraction 2)
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/resolve-git-conflict-useraction.js" \
   --envUrl "<envUrl>" \
-  --conflictId "<conflictId>" \
-  --solutionUniqueName "<solutionUniqueName>"
+  --solutionId "<solutionId>" \
+  --componentId "<componentId>" \
+  --decision "<accept-incoming|keep-current>" \
+  --etag "*"
 ```
 
-For `accept-incoming`:
+Map the args from the per-conflict roster + binding (note the names — they are NOT `--conflictId`/`--solutionUniqueName`/`--action`):
 
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/resolve-conflict-accept.js" \
-  --envUrl "<envUrl>" \
-  --conflictId "<conflictId>" \
-  --solutionUniqueName "<solutionUniqueName>"
-```
+| Arg | Source | Notes |
+|---|---|---|
+| `--componentId` | `list-conflicts.js` → `items[].componentId` | the powerpagecomponent GUID, **not** `conflictId` |
+| `--solutionId` | `detect-git-binding.js` → `boundSolutions[0].solutionId` | the solution GUID, **not** `--solutionUniqueName` |
+| `--decision` | the recorded strategy | `accept-incoming` or `keep-current` (**not** `--action`) |
+| `--etag` | pass `"*"` | blind concurrency — see note below |
 
-Track each result as `applied`, `failed`, or `applied-via-portal` with the helper output or error details.
+> **`--etag "*"` note:** Without `--etag`, the helper tries to read the row's ETag first. If you pass `--sourceControlComponentId "<conflictId>"`, that read is a composite-key GET that is **restricted on some tenants** (`"Restricted API is not called by Microsoft publisher plugin"`). Passing `--etag "*"` skips the read and uses blind concurrency (`If-Match: *`), which always works. Omit `--etag` only if you want optimistic concurrency and the `--componentId` lookup path succeeds on your tenant.
 
-If a helper returns `statusCode: 404` or an error indicating the `ResolveGitConflict` action is unavailable, stop the API path and enter fallback mode before any retry loop. Do not keep retrying an absent tenant action.
+A `notFound` result means there is no `action=3` row for that component (already resolved or not yet surfaced) — re-run `refresh-changes-from-git.js` and re-list. A `412` (`conflict: true`) means the row changed since read — re-read and retry (or use `--etag "*"`).
+
+> **Convenience wrappers:** `resolve-conflict-accept.js` / `resolve-conflict-keep.js` take the **same** useraction path internally **when** given `--componentId` and `--solutionId` (plus `--envUrl`). If you call them with only `--conflictId`/`--solutionUniqueName`, they cannot take the useraction path and fall through to the often-absent `ResolveGitConflict` action — so always pass `--componentId` and `--solutionId` to them too.
+
+Track each result as `applied` (`ok:true`), `failed`, or `applied-via-portal` with the helper output or error details.
+
+### Last resort — Maker Portal walkthrough
+
+Only if the `useraction` PATCH **and** the `ResolveGitConflict` fallback both fail on this tenant (neither programmatic path is available), fall back to the portal.
 
 <!-- gate: git-sync:2.conflict-fallback | category=consent | cancel-leaves=no-changes -->
-> 🚦 **Gate (consent · git-sync:2.conflict-fallback):** Fires only when the programmatic conflict-resolution action is unavailable. Surface `AskUserQuestion` before switching to the Maker Portal walkthrough.
+> 🚦 **Gate (consent · git-sync:2.conflict-fallback):** Fires only when **no** programmatic conflict-resolution path works (useraction PATCH failed AND `ResolveGitConflict` is absent). Surface `AskUserQuestion` before switching to the Maker Portal walkthrough.
 >
 > | Question | Header | Options |
 > |---|---|---|
-> | The programmatic conflict-resolution action is not available on this tenant. I can walk you through applying the recorded decisions in the Maker Portal and then verify the result. Proceed? | Manual conflict fallback | Walk me through it, Cancel — no changes |
+> | I couldn't resolve the conflict(s) programmatically on this tenant. I can walk you through applying the recorded decisions in the Maker Portal and then verify the result. Proceed? | Manual conflict fallback | Walk me through it, Cancel — no changes |
 
 Fallback walkthrough:
 
@@ -210,7 +229,7 @@ Fallback walkthrough:
 4. Apply the matching button in the portal, then continue to the next decision.
 5. Mark portal-applied decisions as `applied-via-portal` and set `resolvedVia: "maker-portal"` in the marker.
 
-**Output:** Every decision was attempted through the API or the Maker Portal fallback.
+**Output:** Every decision was attempted through the `useraction` PATCH (primary) or the Maker Portal fallback (last resort).
 
 ## Step 5 — Verify conflicts cleared and write marker
 
@@ -325,21 +344,14 @@ Fallback walkthrough:
 | `docs/inner-loop/conflicts.html` | `conflictsHtml` | Human-readable side-by-side diff with semantic explanations. |
 | `docs/inner-loop/last-conflict-resolution.json` | `lastConflictResolution` | Machine-readable resolution marker for dispatcher and validators. |
 
-## Future — VS Code + LLM selective 3-way merge (planned, not yet built)
+## Selective 3-way merge — IMPLEMENTED
 
-This is a design note only; do not execute it in the current flow.
+The VS Code selective 3-way merge is **built**. When the user picks **"Selectively merge (recommended)"** for a text-mergeable component, follow **`references/selective-merge-reference.md`**:
 
-- Later, this reference is where selective conflict merging will land.
-- It replaces the binary **Keep current changes** / **Accept incoming changes** choice above.
-- Merge inputs: **BASE** = `branchSyncedCommitId` common ancestor.
-- **OURS** = the current environment component.
-- **THEIRS** = the Azure DevOps file.
-- The agent opens these in a VS Code merge editor when available.
-- The LLM proposes resolutions only for overlapping hunks.
-- A human confirms every proposed resolution; LLM output is never auto-applied.
-- Security-sensitive component types get a harder gate or remain binary-only.
-- Examples: auth-related site settings, secrets, plug-in code, and server-side code.
-- Before apply, the flow runs validate-before-apply checks.
-- It also captures an environment-side snapshot for reversibility.
-- Non-VS-Code fallback: write BASE/OURS/THEIRS files plus a proposed patch for review.
-- Once built, this selective merge step replaces Step 4 while preserving dispatcher hand-back and marker semantics.
+- **BASE** = the source file at `upstreamBranchSyncedCommitId`; **OURS** = the live Dataverse content field; **THEIRS** = the Azure DevOps source file at the branch tip.
+- A deterministic diff3 auto-merges non-overlapping hunks and writes a git-style **working file** (`merged.<ext>`) with `<<<<<<< Dataverse / ======= / >>>>>>> Azure DevOps` markers for the overlapping hunks. **No AI/Copilot proposes the merge** — the human resolves the markers in VS Code's native 3-way Merge Editor. A result that still contains `<<<<<<<` markers is never committed.
+- Security-sensitive components (auth/secret site settings, server logic, plug-ins) stay binary-only and are excluded from this flow.
+- The merged file is committed to ADO, then accepted + pulled into the environment; OURS is snapshotted first for reversibility.
+- Non-VS-Code fallback: edit `merged.<ext>` (alongside `base.<ext>` / `dataverse.<ext>` / `ado.<ext>`) directly under the secure run store path the helper prints (`runDir`), removing every `<<<<<<<` marker; artifacts are owner-only and wiped on completion/cancel.
+
+This selective-merge step is dispatched from Step 4 (per-component) while preserving dispatcher hand-back and marker semantics (`strategy: "selective-merge"`).

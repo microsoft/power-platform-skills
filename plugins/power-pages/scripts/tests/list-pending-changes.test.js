@@ -295,3 +295,27 @@ test('caps at maxItems and reports truncated:true when count exceeds the safety 
     assert.equal(result.truncated, true, 'cap tripped → truncated');
   } finally { server.close(); }
 });
+
+// Regression: the pending-Changes query MUST filter to action eq 1 (Push). Without
+// it, the inert action=0 baseline is counted, producing false "pending changes" on
+// a clean env (live 2026-06-19: 238 iscommitted=false rows were all action=0 while
+// the portal showed Changes(0)).
+test('query filters to "iscommitted eq false AND action eq 1" (excludes the action=0 baseline)', async () => {
+  const seen = [];
+  const server = await new Promise((resolve) => {
+    const s = http.createServer((req, res) => {
+      seen.push(req.url);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ '@odata.count': 0, value: [] }));
+    });
+    s.listen(0, '127.0.0.1', () => resolve(s));
+  });
+  try {
+    await listPendingChanges({ envUrl: serverUrl(server), token: 'tok' });
+    const compQuery = seen.find((u) => u.includes('sourcecontrolcomponents'));
+    assert.ok(compQuery, 'queried sourcecontrolcomponents');
+    const decoded = decodeURIComponent(compQuery);
+    assert.match(decoded, /iscommitted eq false/);
+    assert.match(decoded, /action eq 1/);
+  } finally { server.close(); }
+});

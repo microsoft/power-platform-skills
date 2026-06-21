@@ -114,6 +114,14 @@ describe('validate-git-sync', () => {
   it('approves partial conflict with remainingConflicts = 0', (t) => {
     assert.equal(run(makeProject(t, { conflict: { ...GOOD_CONFLICT, status: 'partial', remainingConflicts: 0 } })).status, 0);
   });
+  it('approves a selective-merge marker', (t) => {
+    const selectiveMerge = { ...GOOD_CONFLICT, strategy: 'selective-merge', adoCommitId: 'deadbeef', runId: 'merge-1' };
+    assert.equal(run(makeProject(t, { conflict: selectiveMerge })).status, 0);
+  });
+  it('approves manual-resolution-required (IL-015 portal fallback) even with remaining conflicts', (t) => {
+    const manual = { ...GOOD_CONFLICT, status: 'manual-resolution-required', strategy: 'selective-merge', conflictsResolved: 0, remainingConflicts: 2 };
+    assert.equal(run(makeProject(t, { conflict: manual })).status, 0);
+  });
 
   // ---- multiple flows in one session (Mixed) ----
   it('validates all present markers; approves when all are good', (t) => {

@@ -196,7 +196,10 @@ async function detectViaSourceControlEntities(tok, base, solutionUniqueName) {
   //    and count REAL pending changes from sourcecontrolcomponent.
   //    (HAR 2026-06 §3+§8+§10: the branch-config commit columns track INBOUND
   //    sync only — they do NOT reflect outbound pending pushes. The real
-  //    "Dirty" signal is sourcecontrolcomponent rows with iscommitted=false.)
+  //    "Dirty"/Changes signal is sourcecontrolcomponent rows with
+  //    iscommitted=false AND action eq 1 (Push). `iscommitted eq false` alone is
+  //    NOT sufficient — it also matches the inert action=0 baseline and yields
+  //    huge false positives on a clean env. Verified live 2026-06-19.)
   let solRow = null;
   let pendingChangesCount = null;
   if (solutionUniqueName) {
@@ -209,7 +212,14 @@ async function detectViaSourceControlEntities(tok, base, solutionUniqueName) {
       try { solRow = (JSON.parse(solRes.body).value || [])[0] || null; } catch { /* leave null */ }
     }
     if (solRow && solRow.solutionid) {
-      const filter = `partitionid eq ${solRow.solutionid} and iscommitted eq false`;
+      // Pending "Changes" = rows the env must PUSH = action eq 1 (Push). The
+      // `iscommitted eq false` predicate ALONE over-counts: it also matches the
+      // inert synced baseline (action eq 0 / None), which the portal's Changes
+      // tab does NOT show. Verified live (sri-alm-dev-1, RetailOS): 238 rows had
+      // iscommitted=false but ALL were action=0 while the portal showed Changes(0);
+      // adding `and action eq 1` yields 0, matching the portal. (action option-set:
+      // 0=None,1=Push,2=Pull,3=Conflict — confirmed from tenant metadata.)
+      const filter = `partitionid eq ${solRow.solutionid} and iscommitted eq false and action eq 1`;
       const pendRes = await makeRequest({
         url: `${base}/api/data/v9.2/sourcecontrolcomponents?$filter=${encodeURIComponent(filter)}&$count=true&$top=1`,
         method: 'GET',
@@ -250,7 +260,8 @@ async function detectViaSourceControlEntities(tok, base, solutionUniqueName) {
         if (solutionUniqueName && solRow && s.solutionid === solRow.solutionid && typeof pendingChangesCount === 'number') {
           pc = pendingChangesCount;
         } else {
-          const filter = `partitionid eq ${s.solutionid} and iscommitted eq false`;
+          // action eq 1 (Push) only — exclude the inert action=0 baseline (see note above).
+          const filter = `partitionid eq ${s.solutionid} and iscommitted eq false and action eq 1`;
           const pr = await makeRequest({
             url: `${base}/api/data/v9.2/sourcecontrolcomponents?$filter=${encodeURIComponent(filter)}&$count=true&$top=1`,
             method: 'GET',
@@ -300,7 +311,7 @@ async function detectViaSourceControlEntities(tok, base, solutionUniqueName) {
     // rows from disconnected solutions that the aggregate would miss.
     try {
       const envPendRes = await makeRequest({
-        url: `${base}/api/data/v9.2/sourcecontrolcomponents?$filter=${encodeURIComponent('iscommitted eq false')}&$count=true&$top=1`,
+        url: `${base}/api/data/v9.2/sourcecontrolcomponents?$filter=${encodeURIComponent('iscommitted eq false and action eq 1')}&$count=true&$top=1`,
         method: 'GET',
         headers: { ...hdr, Prefer: 'odata.include-annotations="*"' },
       });

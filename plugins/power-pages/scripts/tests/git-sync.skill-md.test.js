@@ -85,12 +85,13 @@ test('update-reference.md carries the pull-flow gates', () => {
   }
 });
 
-test('conflict-reference.md carries the conflict-flow gates + a Future VS Code/LLM section', () => {
+test('conflict-reference.md carries the conflict-flow gates + the implemented selective-merge upgrade', () => {
   const doc = readRef('conflict-reference.md');
   for (const id of ['2.conflict-decisions', '2.conflict-fallback']) {
     assert.match(doc, new RegExp(`git-sync:${escapeRegExp(id)}`), `conflict-reference.md must define git-sync:${id}`);
   }
-  assert.match(doc, /Future/i, 'conflict-reference.md must document the future VS Code/LLM upgrade');
+  assert.match(doc, /selective-merge-reference\.md/i, 'conflict-reference.md must dispatch to the selective-merge flow');
+  assert.ok(fs.existsSync(path.join(REF_DIR, 'selective-merge-reference.md')), 'selective-merge-reference.md must exist');
 });
 
 // ===== modes referenced =====
