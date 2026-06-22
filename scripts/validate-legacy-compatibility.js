@@ -72,13 +72,21 @@ function assertTextMirror(mirrorPath, sourcePath) {
 
 // Guard CLAUDE.md only where it exists (root + some plugins); a directory with no
 // CLAUDE.md is intentional (e.g. code-apps, mcp-apps) and must not fail the check.
+// Use lstat (not existsSync) for the presence test: existsSync follows symlinks, so
+// a DANGLING CLAUDE.md symlink would look absent and skip the very guard meant to
+// reject symlinks. lstat sees the link itself; only a true ENOENT means "no file".
 function checkClaudeMirror(directory) {
   const claudePath = path.join(directory, 'CLAUDE.md');
   const agentsPath = path.join(directory, 'AGENTS.md');
-  if (!fs.existsSync(claudePath)) {
-    return;
+  try {
+    fs.lstatSync(claudePath);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return;
+    }
+    throw error;
   }
-  const label = normalizeRelative(path.relative(ROOT, claudePath)) || 'CLAUDE.md';
+  const label = normalizeRelative(path.relative(ROOT, claudePath));
   check(label, () => {
     assert.ok(fs.existsSync(agentsPath), `missing sibling AGENTS.md for ${label}`);
     assertTextMirror(claudePath, agentsPath);
