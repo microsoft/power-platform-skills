@@ -45,6 +45,22 @@ function baseEstimate(overrides = {}) {
   };
 }
 
+// --- buildSizeAnalysis: tableCountScope passthrough -------------------------
+
+test('buildSizeAnalysis carries tableCountScope onto sizeAnalysis.tableCount.scope', () => {
+  const thresholds = baseConfig().thresholds;
+  const a = buildSizeAnalysis(baseEstimate({ tableCount: 0, tableCountScope: 'unavailable' }), thresholds);
+  assert.equal(a.tableCount.value, 0);
+  assert.equal(a.tableCount.scope, 'unavailable', 'scope must pass through so the renderer can disambiguate a real 0 from "could not enumerate"');
+
+  const b = buildSizeAnalysis(baseEstimate({ tableCount: 7, tableCountScope: 'site-referenced' }), thresholds);
+  assert.equal(b.tableCount.scope, 'site-referenced');
+
+  // Older estimate blobs without the field → null (renderer omits the note).
+  const c = buildSizeAnalysis(baseEstimate({ tableCount: 3 }), thresholds);
+  assert.equal(c.tableCount.scope, null);
+});
+
 // --- selectStrategy branches ------------------------------------------------
 
 test('Scenario A (typical customer): Green everywhere → single solution', () => {
