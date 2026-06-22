@@ -36,8 +36,8 @@
  *   node update-state.js --output-dir <DIR> --clear-activity
  *
  *   # set migration track (called at end of step 1.7 once env type + mode known)
- *   # Track A = mode configurationData|all (Dev/Test/UAT/Single env)
- *   # Track B = mode configurationDataReferences (Prod, ALM assumed)
+ *   # A = Authoring Track  (mode configurationData|all — Dev/Test/UAT/Single env)
+ *   # B = Downstream Track (mode configurationDataReferences — Prod, ALM assumed)
  *   node update-state.js --output-dir <DIR> --set-track A
  *   node update-state.js --output-dir <DIR> --set-track B
  *
@@ -85,6 +85,12 @@ function statePathFor(outputDir) {
 
 function reportPathFor(outputDir) {
   return path.join(outputDir, 'skill-execution-report.html');
+}
+
+function trackName(track) {
+  if (track === TRACK.A) return 'Authoring Track';
+  if (track === TRACK.B) return 'Downstream Track';
+  return `Unknown (${track})`;
 }
 
 function loadState(outputDir) {
@@ -310,12 +316,12 @@ function cmdSetTrack(args) {
   }
   const state = loadState(outputDir);
   if (state.track === track) {
-    console.log(`✓ Track already set to ${track}; no change`);
+    console.log(`✓ Track already set to ${track} (${trackName(track)}); no change`);
     return;
   }
   rebuildPhasesForTrack(state, track);
   persist(state, outputDir);
-  console.log(`✓ Track set to ${track}; Phase 2 + Phase 3 rebuilt from blueprint`);
+  console.log(`✓ Track set to ${track} (${trackName(track)}); Phase 2 + Phase 3 rebuilt from blueprint`);
 }
 
 function cmdRenderOnly(args) {

@@ -86,8 +86,8 @@ Surface that callout at these **7 checkpoints**:
 |---|---|---|
 | 1 | After `--init` runs (end of step 1.2) | `skill-execution-report.html` (initialized state) |
 | 2 | End of Phase 1, before Phase 2 approval | `skill-execution-report.html` (shows full Phase 1 outcomes + plan for next phase) |
-| 3 | After step 2.2 (Track A) — customization CSV parsed | `customization-report.html` (findings catalog) |
-| 4 | Mid-step 2.3 (Track A) — after auto-rewrites are staged, before apply+upload approval | `remediation-diff.json` + `remediation-staged/` tree, augmented prompt files (review the **Remediation Diff** card in the live report) |
+| 3 | After step 2.2 (Authoring Track) — customization CSV parsed | `customization-report.html` (findings catalog) |
+| 4 | Mid-step 2.3 (Authoring Track) — after auto-rewrites are staged, before apply+upload approval | `remediation-diff.json` + `remediation-staged/` tree, augmented prompt files (review the **Remediation Diff** card in the live report) |
 | 5 | End of Phase 2, before Phase 3 approval | `skill-execution-report.html` (shows Phase 2 outcomes) |
 | 6 | End of Phase 3, before Phase 4 approval | `skill-execution-report.html` (shows EDM activation status) |
 | 7 | End of Phase 4 (data-diff produced) | `migration-data-diff.json` + `skill-execution-report.html` |
@@ -349,7 +349,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 
    - **Reverted**: Site was previously rolled back to SDM. Treat as fresh start. Proceed to step 1.5.
 
-   - **Completed**: A prior migration finished but the data model version was not yet flipped to EDM (otherwise step 1.3 would have stopped earlier). Skip ahead to the activation step in Phase 3 (Track A 3.1 or Track B 3.4 — track is derived in step 1.7, so complete 1.7 first to know which).
+   - **Completed**: A prior migration finished but the data model version was not yet flipped to EDM (otherwise step 1.3 would have stopped earlier). Skip ahead to the activation step in Phase 3 (Authoring Track 3.1 or Downstream Track 3.4 — track is derived in step 1.7, so complete 1.7 first to know which).
 
    - **Failed**: A prior migration failed. Show the last step and error details (from chunk records in the verbose output), then ask:
 
@@ -371,7 +371,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
      |----------|--------|---------|
      | A migration is already running for this site. How to proceed? | In-Flight Migration | Wait and poll until complete, Reset and start over, Exit and check back later |
 
-     - **Wait**: Skip the rest of Phase 1 and Phase 2 setup work; jump directly to the migration-status polling loop (Track A 2.1 step 2 or Track B 3.1 step 3 — depends on which mode the in-flight migration was started with; complete 1.7 first to determine track). After polling reports Completed, continue to the activation step (Track A 3.1 / Track B 3.4).
+     - **Wait**: Skip the rest of Phase 1 and Phase 2 setup work; jump directly to the migration-status polling loop (Authoring Track 2.1 step 2 or Downstream Track 3.1 step 3 — depends on which mode the in-flight migration was started with; complete 1.7 first to determine track). After polling reports Completed, continue to the activation step (Authoring Track 3.1 / Downstream Track 3.4).
      - **Reset and start over**: Show the reset warning (see step 4), confirm, run reset, then proceed to step 1.5.
      - **Exit**: Halt the skill cleanly. User can re-invoke later — step 1.4 will re-detect the in-flight migration.
 
@@ -547,7 +547,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 
 ### 1.7 Determine Environment Type and Migration Mode
 
-**Goal**: Capture env type, select migration mode, and derive the **migration track** (Track A vs Track B) that controls the shape of Phase 2 and Phase 3.
+**Goal**: Capture env type, select migration mode, and derive the **migration track** (Authoring Track vs Downstream Track) that controls the shape of Phase 2 and Phase 3.
 
 **Actions**:
 
@@ -587,13 +587,13 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 
 4. **Derive Migration Track**
 
-   | Final Mode | Track |
-   |---|---|
-   | `configurationData` | **A** |
-   | `all` | **A** |
-   | `configurationDataReferences` | **B** |
+   | Final Mode | Track | CLI Value |
+   |---|---|---|
+   | `configurationData` | **Authoring** | `A` |
+   | `all` | **Authoring** | `A` |
+   | `configurationDataReferences` | **Downstream** | `B` |
 
-   Persist track to state. Track A and Track B have **different Phase 2 structures**; **Phase 3 is identical in both tracks** (5 sub-steps, with step 3.1 auto-skipped when mode = `all`).
+   Persist track to state. The Authoring Track and Downstream Track have **different Phase 2 structures**; **Phase 3 is identical in both tracks** (5 sub-steps, with step 3.1 auto-skipped when mode = `all`).
 
 **Output**: Environment type captured, migration mode confirmed, track derived
 
@@ -627,12 +627,12 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 
 This phase has **two completely different shapes** depending on the migration track derived in step 1.7. Pick the matching section below; ignore the other one.
 
-- [**Phase 2 — Track A**](#phase-2--track-a) — mode is `configurationData` or `all` (Dev / Test/UAT / Single env)
-- [**Phase 2 — Track B**](#phase-2--track-b) — mode is `configurationDataReferences` (Prod, ALM assumed)
+- [**Phase 2 — Authoring Track**](#phase-2--authoring-track) — mode is `configurationData` or `all` (Dev / Test/UAT / Single env)
+- [**Phase 2 — Downstream Track**](#phase-2--downstream-track) — mode is `configurationDataReferences` (Prod, ALM assumed)
 
 ---
 
-## Phase 2 — Track A
+## Phase 2 — Authoring Track
 
 **Applies when**: state.track === 'A' (mode = `configurationData` or `all`)
 
@@ -654,7 +654,7 @@ This phase has **two completely different shapes** depending on the migration tr
    pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --mode <MODE>
    ```
 
-   Where `<MODE>` is the value confirmed in step 1.7 (either `configurationData` or `all` for Track A).
+   Where `<MODE>` is the value confirmed in step 1.7 (either `configurationData` or `all` for the Authoring Track).
 
 2. **Monitor & Poll**
 
@@ -946,7 +946,7 @@ After auto-rewrites are uploaded (or skipped due to zero findings) and any manua
 
 **Output**: SDM snapshot captured; FetchXML/Liquid auto-rewrites applied and uploaded (if findings); augmented prompts handed off; readiness gate confirmed.
 
-> **→ Update report (end of Phase 2 Track A):**
+> **→ Update report (end of Phase 2 Authoring Track):**
 >
 > ```
 > --set-step 2.3 --status completed --output "Snapshot captured · <auto-rewrites done|no remediation needed> · readiness confirmed"
@@ -968,7 +968,7 @@ After auto-rewrites are uploaded (or skipped due to zero findings) and any manua
 
 ---
 
-## Phase 2 — Track B
+## Phase 2 — Downstream Track
 
 **Applies when**: state.track === 'B' (mode = `configurationDataReferences`)
 
@@ -1080,7 +1080,7 @@ After whichever option, loop back to **step 2.1** to re-verify the site is now p
 
 **Output**: User has confirmed configuration metadata is ready; skill proceeds to Phase 3.
 
-> **→ Update report (end of Phase 2 Track B):**
+> **→ Update report (end of Phase 2 Downstream Track):**
 >
 > ```
 > --set-step 2.3 --status completed --output "Metadata ready · proceeding to Phase 3"
@@ -1104,14 +1104,14 @@ After whichever option, loop back to **step 2.1** to re-verify the site is now p
 
 ## Phase 3: Migration Execution (track-branched)
 
-Phase 3 has **two different shapes** depending on the migration track. Track A is shorter (3 sub-steps) because customization remediation already happened in Phase 2.3. Track B is longer (5 sub-steps) because customizations get scanned and remediated here (Phase 2 for Track B was just metadata verification).
+Phase 3 has **two different shapes** depending on the migration track. The Authoring Track is shorter (3 sub-steps) because customization remediation already happened in Phase 2.3. The Downstream Track is longer (5 sub-steps) because customizations get scanned and remediated here (Phase 2 for the Downstream Track was just metadata verification).
 
-- [**Phase 3 — Track A**](#phase-3--track-a) — track A (mode = `configurationData` or `all`). 3 sub-steps: migrate refs → activate → restart.
-- [**Phase 3 — Track B**](#phase-3--track-b) — track B (mode = `configurationDataReferences`). 5 sub-steps: migrate refs → locate customization report → remediate → activate → restart.
+- [**Phase 3 — Authoring Track**](#phase-3--authoring-track) — Authoring Track (mode = `configurationData` or `all`). 3 sub-steps: migrate refs → activate → restart.
+- [**Phase 3 — Downstream Track**](#phase-3--downstream-track) — Downstream Track (mode = `configurationDataReferences`). 5 sub-steps: migrate refs → locate customization report → remediate → activate → restart.
 
 ---
 
-## Phase 3 — Track A
+## Phase 3 — Authoring Track
 
 **Applies when**: state.track === 'A' (mode = `configurationData` or `all`)
 
@@ -1132,9 +1132,9 @@ Phase 3 has **two different shapes** depending on the migration track. Track A i
    - If `state.mode === 'all'`: refs were already migrated in Phase 2.1. Mark this sub-step completed with output `"Skipped — refs already migrated in Phase 2.1 (mode=all)"` and proceed to step 3.2.
    - Otherwise: proceed with the migration command below.
 
-2. **Capture SDM source snapshot** (Track B only — Track A already snapshotted in step 2.3)
+2. **Capture SDM source snapshot** (Downstream Track only — Authoring Track already snapshotted in step 2.3)
 
-   For Track B, before running the migration, capture the SDM source so Phase 4 has a baseline to diff against:
+   For the Downstream Track, before running the migration, capture the SDM source so Phase 4 has a baseline to diff against:
 
    ```powershell
    pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 1 --path "./mysite"
@@ -1252,7 +1252,7 @@ Phase 3 has **two different shapes** depending on the migration track. Track A i
 
 **Output**: User has confirmed the site is restarted on EDM.
 
-> **→ Update report (end of Phase 3 Track A):**
+> **→ Update report (end of Phase 3 Authoring Track):**
 >
 > ```
 > --set-step 3.3 --status completed --output "Site restarted by user · live on EDM"
@@ -1274,7 +1274,7 @@ Phase 3 has **two different shapes** depending on the migration track. Track A i
 
 ---
 
-## Phase 3 — Track B
+## Phase 3 — Downstream Track
 
 **Applies when**: state.track === 'B' (mode = `configurationDataReferences`)
 
@@ -1290,7 +1290,7 @@ Phase 3 has **two different shapes** depending on the migration track. Track A i
 
 **Actions**:
 
-1. **Capture SDM snapshot** (Track B specific — Track A captures in 2.3)
+1. **Capture SDM snapshot** (Downstream Track specific — Authoring Track captures in 2.3)
 
    ```powershell
    pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 1 --path "./mysite"
@@ -1321,7 +1321,7 @@ Phase 3 has **two different shapes** depending on the migration track. Track A i
    pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --checkMigrationStatus
    ```
 
-   Same polling pattern as Phase 2 Track A 2.1 — Completed proceeds; In Progress sets `--set-activity` and re-checks; Failed / 30-min timeout offers retry / reset / exit.
+   Same polling pattern as Phase 2 Authoring Track 2.1 — Completed proceeds; In Progress sets `--set-activity` and re-checks; Failed / 30-min timeout offers retry / reset / exit.
 
 **Output**: SDM snapshot captured, transactional references migrated, customization CSV auto-emitted.
 
@@ -1335,7 +1335,7 @@ Phase 3 has **two different shapes** depending on the migration track. Track A i
 
 **Actions**:
 
-Same logic as Track A Phase 2.2 — glob `SiteCustomization*.csv` in `<OUTPUT_DIR>` + cwd; if missing, run explicit `--siteCustomizationReportPath`; parse and summarize findings.
+Same logic as Authoring Track Phase 2.2 — glob `SiteCustomization*.csv` in `<OUTPUT_DIR>` + cwd; if missing, run explicit `--siteCustomizationReportPath`; parse and summarize findings.
 
 **Output**: Customization report located and parsed.
 
@@ -1345,7 +1345,7 @@ Same logic as Track A Phase 2.2 — glob `SiteCustomization*.csv` in `<OUTPUT_DI
 
 ### 3.3 Remediate Customizations
 
-**Goal**: If customizations are flagged, apply auto-rewrites + augmented prompts and upload. Findings on Prod/Test/UAT usually indicate an ALM gap, so the warning is stronger than Track A's.
+**Goal**: If customizations are flagged, apply auto-rewrites + augmented prompts and upload. Findings on Prod/Test/UAT usually indicate an ALM gap, so the warning is stronger than the Authoring Track's.
 
 **Actions**:
 
@@ -1364,15 +1364,15 @@ Same logic as Track A Phase 2.2 — glob `SiteCustomization*.csv` in `<OUTPUT_DI
    - **Pause skill**: halt cleanly; user fixes upstream and re-runs.
    - **Cancel**: halt cleanly.
 
-3. **Stage FetchXML rewrites** — same script as Track A Phase 2.3 step 4 (writes proposed files to `remediation-staged/`).
+3. **Stage FetchXML rewrites** — same script as Authoring Track Phase 2.3 step 4 (writes proposed files to `remediation-staged/`).
 
-4. **Stage Liquid annotations** — same script as Track A Phase 2.3 step 5 (writes annotated files to `remediation-staged/`).
+4. **Stage Liquid annotations** — same script as Authoring Track Phase 2.3 step 5 (writes annotated files to `remediation-staged/`).
 
-5. **Generate augmented prompts** — same as Track A Phase 2.3 step 6 (plugin + DME prompts surfaced for separate Claude sessions).
+5. **Generate augmented prompts** — same as Authoring Track Phase 2.3 step 6 (plugin + DME prompts surfaced for separate Claude sessions).
 
-6. **Review and approve** — same as Track A Phase 2.3 step 7 (`--set-approval 3 in-phase`, AskUserQuestion gates the apply+upload). Users review the **Remediation Diff** card in the live report.
+6. **Review and approve** — same as Authoring Track Phase 2.3 step 7 (`--set-approval 3 in-phase`, AskUserQuestion gates the apply+upload). Users review the **Remediation Diff** card in the live report.
 
-7. **Apply staged changes and upload** — same as Track A Phase 2.3 step 8 (`apply-remediation.js` copies staged → live, then `pac pages upload`). On "No — discard staged changes", run `apply-remediation.js --discard` and skip upload.
+7. **Apply staged changes and upload** — same as Authoring Track Phase 2.3 step 8 (`apply-remediation.js` copies staged → live, then `pac pages upload`). On "No — discard staged changes", run `apply-remediation.js --discard` and skip upload.
 
    ```powershell
    node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/apply-remediation.js" `
@@ -1392,7 +1392,7 @@ Same logic as Track A Phase 2.2 — glob `SiteCustomization*.csv` in `<OUTPUT_DI
 
 ### 3.4 Activate EDM (Update Data Model Version)
 
-Identical to Track A's step 3.2 — retrieve Portal ID, run `--updateDataModelVersion`, confirm switch.
+Identical to the Authoring Track's step 3.2 — retrieve Portal ID, run `--updateDataModelVersion`, confirm switch.
 
 > **→ Update report:**
 >
@@ -1405,9 +1405,9 @@ Identical to Track A's step 3.2 — retrieve Portal ID, run `--updateDataModelVe
 
 ### 3.5 Restart Site (manual)
 
-Identical to Track A's step 3.3 — print restart instructions, wait for user confirmation via AskUserQuestion.
+Identical to the Authoring Track's step 3.3 — print restart instructions, wait for user confirmation via AskUserQuestion.
 
-> **→ Update report (end of Phase 3 Track B):**
+> **→ Update report (end of Phase 3 Downstream Track):**
 >
 > ```
 > --set-step 3.5 --status completed --output "Site restarted by user · live on EDM"
@@ -1579,13 +1579,13 @@ Identical to Track A's step 3.3 — print restart instructions, wait for user co
 
 2. **Rollback (if user opted for it)**
 
-   Confirm the Portal ID collected during activation (Track A step 3.2 or Track B step 3.4) is still correct:
+   Confirm the Portal ID collected during activation (Authoring Track step 3.2 or Downstream Track step 3.4) is still correct:
 
    | Question | Header | Options |
    |----------|--------|---------|
    | Confirm Portal ID for rollback: `<PORTAL_ID>`. Is this correct? | Confirm Portal ID | Yes, proceed with rollback, No, let me re-enter it |
 
-   If "No": ask user to paste the correct Portal ID directly (don't try to construct the site URL — same reasoning as step 3.4 / 3.4-Track-B).
+   If "No": ask user to paste the correct Portal ID directly (don't try to construct the site URL — same reasoning as step 3.4 / 3.4-Downstream-Track).
 
    ```powershell
    pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --revertToStandardDataModel --portalId "<PORTAL_ID>"
@@ -1607,7 +1607,7 @@ Identical to Track A's step 3.3 — print restart instructions, wait for user co
    Runtime check:       <passed | issues found | deferred | declined>
    Customizations:      <count> (or "None") — see customization-report.html
    Environment:         <ENV_TYPE>
-   Track:               <A | B>
+   Track:               <Authoring | Downstream>
 
    Reports in <OUTPUT_DIR>:
      migration-state.json          — single source of truth for state
@@ -1648,16 +1648,16 @@ Identical to Track A's step 3.3 — print restart instructions, wait for user co
 
 > **Track-aware naming for Phase 2 and Phase 3:** Both phases have different structures depending on the track derived in step 1.7. The live execution report shows the track-specific phase title and sub-step list:
 >
-> - **Track A** (mode = `configurationData` or `all`):
+> - **Authoring Track** (mode = `configurationData` or `all`):
 >   - Phase 2 renders as "Configuration Migration & Customization Remediation" (3 sub-steps)
 >   - Phase 3 renders as "Migration Execution" (**3 sub-steps**: Migrate Refs → Activate EDM → Restart)
-> - **Track B** (mode = `configurationDataReferences`):
+> - **Downstream Track** (mode = `configurationDataReferences`):
 >   - Phase 2 renders as "Setting Up Metadata" (3 sub-steps)
 >   - Phase 3 renders as "Migration Execution" (**5 sub-steps**: Migrate Refs → Locate Report → Remediate → Activate EDM → Restart)
 >
 > **Phase 4 has 3 sub-steps in both tracks**: Data Diff Validation → Runtime Smoke Test Recommendation (`/test-site`) → Final Status & Summary.
 >
-> **Track A total = 16 sub-steps. Track B total = 18 sub-steps.** The `--set-track A|B` command at end of 1.7 rebuilds Phase 2 and Phase 3 cards in the live report from the chosen blueprint.
+> **Authoring Track total = 16 sub-steps. Downstream Track total = 18 sub-steps.** The `--set-track A|B` command at end of 1.7 (where `A` = Authoring Track and `B` = Downstream Track) rebuilds Phase 2 and Phase 3 cards in the live report from the chosen blueprint.
 
 ---
 

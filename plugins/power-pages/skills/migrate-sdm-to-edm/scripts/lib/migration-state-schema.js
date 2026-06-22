@@ -3,17 +3,17 @@
  *
  * Source of truth for migration-state.json. Three responsibilities:
  *   1. `buildInitialState()` — the skeleton the skill writes at startup, before any
- *      sub-step has run. Defaults to Track A (more common). Matches stage0-initialized.html.
+ *      sub-step has run. Defaults to the Authoring Track (more common). Matches stage0-initialized.html.
  *   2. Constants for status / kind / track values used by phases, sub-steps, the
  *      approval gate, and the augmented-prompt cards.
  *   3. Canonical phase blueprints per track. Phase 1 and Phase 4 are shared across
  *      tracks; Phase 2 and Phase 3 differ.
  *
- * Track A — mode is `configurationData` or `all`
+ * Authoring Track (CLI value `A`) — mode is `configurationData` or `all`
  *   For Dev / Test / UAT / Single env. Migrates metadata locally, allows a
  *   customization-remediation pass, then activates EDM.
  *
- * Track B — mode is `configurationDataReferences`
+ * Downstream Track (CLI value `B`) — mode is `configurationDataReferences`
  *   For Prod (ALM assumed). Verifies metadata is already in EDM, then migrates
  *   transactional references and activates.
  *
@@ -52,7 +52,7 @@ const TRACK = Object.freeze({
   B: 'B',
 });
 
-// Track A defaults to Dev/Test/UAT/Single-env (the most common). Until step 1.7
+// The Authoring Track defaults to Dev/Test/UAT/Single-env (the most common). Until step 1.7
 // runs --set-track, the live report renders against this default.
 const DEFAULT_TRACK = TRACK.A;
 
@@ -103,8 +103,8 @@ const PHASE_2_TRACK_B = {
   ],
 };
 
-// Phase 3 differs by track. Track A already cleaned up customizations in Phase 2.3,
-// so Phase 3 only needs migrate refs → activate → restart. Track B never ran the
+// Phase 3 differs by track. The Authoring Track already cleaned up customizations in Phase 2.3,
+// so Phase 3 only needs migrate refs → activate → restart. The Downstream Track never ran the
 // customization remediation in Phase 2, so Phase 3 includes locate + remediate
 // after refs migrate.
 const PHASE_3_TRACK_A = {
@@ -153,9 +153,9 @@ function makePhasesFromBlueprint(blueprints) {
 }
 
 /**
- * Build a fresh migration-state.json skeleton. Defaults to Track A; the skill
+ * Build a fresh migration-state.json skeleton. Defaults to the Authoring Track; the skill
  * calls `--set-track A|B` at the end of step 1.7 once env type and migration
- * mode are known.
+ * mode are known (`A` = Authoring Track, `B` = Downstream Track).
  */
 function buildInitialState({ webSiteId, outputDir, track = DEFAULT_TRACK, startedAt = new Date().toISOString() } = {}) {
   if (!webSiteId) throw new Error('buildInitialState: webSiteId is required');
@@ -197,8 +197,8 @@ function buildInitialState({ webSiteId, outputDir, track = DEFAULT_TRACK, starte
  * shared between tracks and may contain completed sub-steps). Replaces Phase 2
  * and Phase 3 with the new track's blueprints (pristine).
  *
- * Called by update-state.js --set-track A|B, typically at the end of step 1.7
- * when the user confirms env type + migration mode.
+ * Called by update-state.js --set-track A|B (`A` = Authoring Track, `B` = Downstream Track),
+ * typically at the end of step 1.7 when the user confirms env type + migration mode.
  */
 function rebuildPhasesForTrack(state, newTrack) {
   if (!PHASE_BLUEPRINTS_BY_TRACK[newTrack]) {
@@ -229,7 +229,7 @@ module.exports = {
   DEFAULT_TRACK,
   PHASE_BLUEPRINTS_BY_TRACK,
   // Back-compat exports — `PHASE_BLUEPRINT` was the pre-track flat list. We
-  // alias it to Track A so any external caller that imported it keeps working.
+  // alias it to the Authoring Track (CLI value `A`) so any external caller that imported it keeps working.
   PHASE_BLUEPRINT: PHASE_BLUEPRINTS_BY_TRACK.A,
   buildInitialState,
   rebuildPhasesForTrack,
