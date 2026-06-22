@@ -142,6 +142,29 @@ test('validateAppSpec rejects sub-grids on a non-Main form', () => {
   assert.ok(!r.ok && r.errors.some((e) => /can't host sub-grids/.test(e)));
 });
 
+test('validateAppSpec accepts a command referencing a declared web resource', () => {
+  const ok = cloneDesk();
+  ok.webResources = [{ name: 'new_ticket.js', type: 'js', content: 'x' }];
+  ok.commands = [{ entity: 'new_ticket', label: 'Escalate', library: 'new_ticket.js', function: 'T.escalate' }];
+  const r = validateAppSpec(ok);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('validateAppSpec rejects a command referencing an undeclared web resource', () => {
+  const bad = cloneDesk();
+  bad.commands = [{ entity: 'new_ticket', label: 'Escalate', library: 'missing.js', function: 'T.escalate' }];
+  const r = validateAppSpec(bad);
+  assert.ok(!r.ok && r.errors.some((e) => /is not a declared webResources/.test(e)));
+});
+
+test('validateAppSpec rejects a command with no function', () => {
+  const bad = cloneDesk();
+  bad.webResources = [{ name: 'new_ticket.js', type: 'js', content: 'x' }];
+  bad.commands = [{ entity: 'new_ticket', label: 'Escalate', library: 'new_ticket.js' }];
+  const r = validateAppSpec(bad);
+  assert.ok(!r.ok && r.errors.some((e) => /function .* is required/.test(e)));
+});
+
 test('validateAppSpec rejects an invalid form.layout value', () => {
   const bad = cloneDesk();
   bad.forms[0].layout = 'fancy';

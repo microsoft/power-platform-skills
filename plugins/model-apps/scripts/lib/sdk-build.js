@@ -13,6 +13,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 const {
   sampleRecordsFor,
   resolveSampleRecords,
@@ -69,7 +70,52 @@ const WEB_RESOURCE_KINDS = new Set(['js', 'html', 'css', 'xml', 'png', 'jpg', 'g
 // Form-event kinds the SDK can wire (addFormEventHandler).
 const FORM_EVENTS = new Set(['onload', 'onsave', 'onchange']);
 
-const PHASES = ['solution', 'data-model', 'sample-data', 'web-resources', 'views', 'charts', 'forms', 'app-shell', 'publish'];
+const PHASES = ['solution', 'data-model', 'sample-data', 'web-resources', 'views', 'charts', 'forms', 'commands', 'app-shell', 'publish'];
+
+// Command-bar locations (CommandBarJson.location). MainTab = the entity's form/grid command bar.
+const COMMAND_LOCATIONS = new Set(['MainTab', 'HomeTab', 'ContextualTab']);
+
+// Build a command (modern command-bar) artifact for one entity's buttons. Buttons are emitted as
+// LOOSE controls in a single empty-title group per location (a real titled group is a separate
+// appaction that needs a parent command-bar row the adapter doesn't synthesize for from-scratch
+// commands — Dataverse 400s "Group button must have parentappactionid"). Each control gets a GUID
+// id with `command` set to the same id (the appactionid). A button with a `library` + `function`
+// gets a functional JS on-click action (resolved to the created web-resource id); `hidden`/`disabled`
+// set static visibility. Throws if a referenced web resource wasn't created.
+function commandDef(entityLogical, cmds, webResources) {
+  const byLocation = new Map(); // location -> controls[]
+  for (const c of cmds) {
+    const location = c.location || 'MainTab';
+    const id = randomUUID();
+    const control = { id, type: 'Button', label: c.label, command: id };
+    if (c.icon) control.icon = c.icon;
+    if (c.library && c.function) {
+      const wrId = webResources[c.library];
+      if (!wrId) throw new Error(`command "${c.label}" references web resource '${c.library}' which wasn't created — declare it in webResources[] and don't skip the web-resources phase`);
+      control.action = { type: 'javascript', webResourceId: wrId, functionName: c.function };
+      if (c.parameters !== undefined) control.action.parameters = c.parameters;
+    }
+    if (c.hidden) control.hidden = true;
+    if (c.disabled) control.disabled = true;
+    if (!byLocation.has(location)) byLocation.set(location, []);
+    byLocation.get(location).push(control);
+  }
+  const commandBars = [...byLocation.entries()].map(([location, controls]) => ({
+    location,
+    groups: [{ id: '', title: '', controls }],
+  }));
+  return { entityLogicalName: entityLogical, commandBars };
+}
+
+// Group an entity's commands (keyed by lowercased entity logical name).
+function commandsByEntity(spec) {
+  const byEntity = {};
+  for (const c of spec.commands || []) {
+    const k = String(c.entity).toLowerCase();
+    (byEntity[k] = byEntity[k] || []).push(c);
+  }
+  return byEntity;
+}
 
 class BuildHalt extends Error {
   constructor(message, { phase, code, recoverable = false, cause } = {}) {
@@ -198,6 +244,7 @@ function planFor(spec, opts) {
     items.push({ phase: 'forms', label: `${ft === 'Main' ? 'form' : `${ft} form`} for ${f.entity}${subs ? ` (sub-grids: ${subs})` : ''}` });
     if ((f.events || []).length) items.push({ phase: 'forms', label: `wire ${f.events.length} event handler(s) on ${f.entity}` });
   }
+  if (has('commands')) for (const [entity, cmds] of Object.entries(commandsByEntity(spec))) items.push({ phase: 'commands', label: `command bar for ${entity} (${cmds.length} button(s))` });
   if (has('app-shell')) items.push({ phase: 'app-shell', label: `app module "${spec.app.name}" + sitemap` });
   if (has('publish') && opts.publish) items.push({ phase: 'publish', label: 'publish customizations' });
   return items;
@@ -334,7 +381,7 @@ async function runSdkBuild(spec, opts = {}) {
     return { ok: true, dryRun: true, plan: plan.map((p) => p.label) };
   }
 
-  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, app: null } };
+  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, commands: {}, app: null } };
   const total = plan.length;
   let n = 0;
   const run = async (phase, label, fn, { recoverable = false, skipIf } = {}) => {
@@ -584,6 +631,22 @@ async function runSdkBuild(spec, opts = {}) {
     // Key the entity's MAIN form by entity (the app wires one form per entity below); quick-create
     // / quick-view forms are still built + added to the solution, just not the entity's app form.
     defs.forEach((d, i) => { if ((d.f.formType || 'Main') === 'Main') result.created.forms[d.f.entity.toLowerCase()] = ids[i]; });
+  }
+
+  // 6b. Commands (modern command-bar buttons). One command artifact per entity; a button with a
+  //     library+function gets a functional JS on-click action bound to the created web resource.
+  //     Pushed via the workspace-owning `provision` client (the appaction lands in the Default
+  //     solution — it's not a standard solution-component type — but is entity-scoped so it shows
+  //     on the entity's command bar in the app regardless).
+  if (has('commands')) {
+    for (const [entityLogical, cmds] of Object.entries(commandsByEntity(spec))) {
+      await run('commands', `command bar for ${entityLogical} (${cmds.length} button(s))`, async () => {
+        const def = commandDef(entityLogical, cmds, result.created.webResources);
+        const art = provision.createArtifact('command', def);
+        const pushed = await provision.pushArtifact('command', art.id);
+        result.created.commands[entityLogical] = pushed.id;
+      });
+    }
   }
 
   // 7. App module + sitemap.

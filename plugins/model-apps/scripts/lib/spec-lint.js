@@ -127,6 +127,17 @@ function lintAppSpec(spec) {
     }
   }
 
+  // Commands (modern command-bar buttons) — a functional button needs a JS library + function.
+  const COMMAND_LOCATIONS = new Set(['maintab', 'hometab', 'contextualtab']);
+  for (const c of spec.commands || []) {
+    if (!c.entity || !entityNames.has(lc(c.entity))) { E(`Command references unknown entity '${c.entity}'`); continue; }
+    if (!c.label) E(`A command on ${c.entity} is missing a label`);
+    if (c.location && !COMMAND_LOCATIONS.has(lc(c.location))) E(`Command '${c.label}' has invalid location '${c.location}' (MainTab/HomeTab/ContextualTab)`);
+    if (!c.library) E(`Command '${c.label}' on ${c.entity} needs a library (web-resource name)`);
+    else if (!webResourceNames.has(lc(c.library))) E(`Command '${c.label}' references undeclared web resource '${c.library}' — add it to webResources[]`);
+    if (!c.function) E(`Command '${c.label}' on ${c.entity} needs a function name`);
+  }
+
   for (const ch of spec.charts || []) {
     const ent = (spec.entities || []).find((e) => lc(e.schemaName) === lc(ch.entity));
     if (!ent) { E(`Chart '${ch.name}' references unknown entity '${ch.entity}'`); continue; }

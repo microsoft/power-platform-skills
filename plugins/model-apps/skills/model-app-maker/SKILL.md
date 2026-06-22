@@ -86,7 +86,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/build-model-app.js" \
 
 **Run only what's needed** with phase selectors (the agent decides from detect-existing):
 `--only <phases>` · `--skip <phases>` · `--from <phase>` · `--to <phase>`
-(phases: `solution,data-model,sample-data,web-resources,views,charts,forms,app-shell,publish`).
+(phases: `solution,data-model,sample-data,web-resources,views,charts,forms,commands,app-shell,publish`).
 E.g. when all tables already exist: `--apply --skip data-model`. SDK metadata is persisted under
 `<working-dir>/.maker-workspace/` (override with `--workspace`), so edits can reuse it.
 
@@ -122,13 +122,14 @@ run with bounded parallelism; publish is one round-trip per entity + the app. Vi
 - **Idempotent.** Existing solution/tables/columns/relationships are detected and reused, so
   re-runs and existing-table envs work without collisions. (Full spec-vs-deployed *diff* editing
   of views/forms is a later increment.)
-- Not in scope (later): dashboards, commands (ribbon buttons), business rules, PCF custom controls,
-  quick-view *placement*, lookup/associated views, multi-area sitemaps, security roles. (Supported:
-  the full data model — all column types, **AutoNumber primary**, global choices, status reasons,
-  alternate keys, **N:N + junction-with-payload**; adaptive main forms with **1:N / N:N sub-grids**;
-  **quick-create / quick-view forms** (`formType`); Choice-column charts; **rich view filters**
-  (`eq-userid`/`this-week`/`in`/`not-in`); web resources + form JS event handlers; sample data with
-  **multi-parent `$parents`** + **`statusReason`** (Choice/MultiChoice labels auto-resolve).) See
+- Not in scope (later): dashboards, business rules, PCF custom controls, **conditional** command
+  visibility (Power-Fx-only), quick-view *placement*, lookup/associated views, multi-area sitemaps,
+  security roles. (Supported: the full data model — all column types, **AutoNumber primary**, global
+  choices, status reasons, alternate keys, **N:N + junction-with-payload**; adaptive main forms with
+  **1:N / N:N sub-grids**; **quick-create / quick-view forms** (`formType`); Choice-column charts;
+  **modern command-bar buttons** (`commands[]` — JS on-click + static hidden/disabled); **rich view
+  filters** (`eq-userid`/`this-week`/`in`/`not-in`); web resources + form JS event handlers; sample
+  data with **multi-parent `$parents`** + **`statusReason`** (Choice/MultiChoice labels auto-resolve).) See
   [`docs/model-app-maker-roadmap.md`](../../docs/model-app-maker-roadmap.md) and the one-page
   [`references/app-spec-schema.md`](../../references/app-spec-schema.md) — author from that **single**
   doc; you should not need to read the SDK, lint, or engine to write a spec.

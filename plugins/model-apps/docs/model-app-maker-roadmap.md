@@ -19,7 +19,7 @@ backlog. The build engine is `scripts/lib/sdk-build.js`; the App Spec contract i
 - ✅ Live narration (`[n/total]`), `BuildHalt` gate, dry-run default, `--sample-data` / `--publish` opt-in.
 - ✅ Perf: bounded-concurrency `mapLimit` for independent ops; one publish round-trip per entity + the app.
 - ✅ Headless vendored SDK bundle + `az`-token HttpClient with transient (429/5xx) retry.
-- ✅ Lint guardrail (`spec-lint.js`) + hard validator (`app-spec.js`); 196 tests green.
+- ✅ Lint guardrail (`spec-lint.js`) + hard validator (`app-spec.js`); 203 tests green.
 
 ### Tier 1 — complete data model
 - ✅ All column types: Text · Memo · Choice · MultiChoice · Boolean · Money · DateTime · Integer · BigInt · Decimal · Double · File · Image · AutoNumber · Customer, with per-type options.
@@ -112,12 +112,14 @@ not runtime phase selection or re-run state):
   QuickCreate is a full simplified create form; QuickView is created but **placement on a parent
   form (via a lookup) isn't auto-wired** (no SDK helper — lint warns). Notes/sub-grids are Main-only
   (validator + lint enforced). ✅ live-verified on 983a1 (a QuickCreate form built as `type=QuickCreate`).
-- 🔲 **Modern command-bar buttons** — ⚠ **SDK gap, not just wiring (verified in `CommandAdapter.js`):**
-  the adapter writes button *structure* (label/icon/location/group) but `stripReadOnlyColumns` drops
-  `OnClickEventJavaScriptWebResourceId` and `newRow` has no action — so a from-scratch button has **no
-  on-click behavior**. It's round-trip-oriented (relabel/restructure existing commands). Needs SDK
-  action-synthesis (JS web-resource bind / Power Fx command definition) before a functional button is
-  buildable. Don't ship dead buttons.
+- ✅ **Modern command-bar buttons** — `commands[]` → `createArtifact('command')`, **functional**
+  JS on-click (the SDK now sets `onclickeventtype=2` + the web-resource bind + function name) plus
+  static `hidden`/`disabled`. Buttons are emitted as loose controls (empty-title group — a titled
+  group needs a parent command-bar row the adapter doesn't synthesize: Dataverse 400s "Group button
+  must have parentappactionid"). ✅ **live-verified on 983a1 (2026-06-21):** 2 buttons landed with
+  `onclickeventtype=2`, the right function names + web-resource bind, and `isdisabled=true` on the
+  disabled one; torn down clean. ⚠ **Deferred:** conditional (rule-based) visibility + Power Fx
+  on-click are Power-Fx-only and need a component library that can't be authored headlessly.
 - 🔲 **Dashboards** (`dashboards[]` → `createArtifact('dashboard')`). The SDK adapter is
   overlay-oriented (`createDefault` seeds one cell), so this needs a **from-scratch FormXML tile
   generator** (chart/list control cells) before push. Medium-large.

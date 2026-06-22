@@ -383,6 +383,41 @@ test('quick-create / quick-view forms build with their formType; Notes stays on 
   assert.ok(!hasNotes(byName('Ticket Card')), 'QuickView form has no Notes section');
 });
 
+test('commands: a functional button is built with a JS on-click action + static visibility', async () => {
+  const spec = makeSpec();
+  spec.webResources = [{ name: 'new_ticket.js', type: 'js', content: 'var T={escalate:function(){}};' }];
+  spec.commands = [
+    { entity: 'new_ticket', label: 'Escalate', location: 'MainTab', group: 'Actions', library: 'new_ticket.js', function: 'T.escalate', disabled: true },
+  ];
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true });
+  const cmd = find(calls, 'createArtifact').find((c) => c.args[0] === 'command');
+  assert.ok(cmd, 'command artifact created');
+  const def = cmd.args[1];
+  assert.strictEqual(def.entityLogicalName, 'new_ticket');
+  const ctrl = def.commandBars[0].groups[0].controls[0];
+  assert.strictEqual(def.commandBars[0].location, 'MainTab');
+  assert.strictEqual(def.commandBars[0].groups[0].title, '', 'loose-controls group (empty title) — no parentless group row');
+  assert.strictEqual(ctrl.label, 'Escalate');
+  assert.strictEqual(ctrl.command, ctrl.id, 'command references its own appactionid');
+  assert.strictEqual(ctrl.action.type, 'javascript');
+  assert.strictEqual(ctrl.action.functionName, 'T.escalate');
+  assert.ok(ctrl.action.webResourceId, 'on-click resolved to the created web-resource id');
+  assert.strictEqual(ctrl.disabled, true);
+  assert.ok(find(calls, 'pushArtifact').some((c) => c.args[0] === 'command'), 'command pushed');
+});
+
+test('commands: planFor lists a command bar per entity', () => {
+  const spec = makeSpec();
+  spec.webResources = [{ name: 'new_ticket.js', type: 'js', content: 'x' }];
+  spec.commands = [
+    { entity: 'new_ticket', label: 'A', library: 'new_ticket.js', function: 'X.a' },
+    { entity: 'new_ticket', label: 'B', library: 'new_ticket.js', function: 'X.b' },
+  ];
+  const labels = planFor(spec, { phases: PHASES }).map((p) => p.label);
+  assert.ok(labels.some((l) => /command bar for new_ticket \(2 button\(s\)\)/.test(l)));
+});
+
 test('alt-key creation still halts on a genuine (non-duplicate) error', async () => {
   const spec = makeSpec();
   spec.entities[0].alternateKeys = [{ schemaName: 'new_namekey', displayName: 'Name Key', columns: ['new_name'] }];
@@ -450,8 +485,8 @@ test('publish (opt-in) publishes one artifact per entity + the app', async () =>
 
 test('resolvePhases honors only/skip/from/to', () => {
   assert.deepStrictEqual(resolvePhases({ only: ['views', 'charts'] }), ['views', 'charts']);
-  assert.deepStrictEqual(resolvePhases({ skip: ['data-model', 'sample-data', 'publish'] }), ['solution', 'web-resources', 'views', 'charts', 'forms', 'app-shell']);
-  assert.deepStrictEqual(resolvePhases({ from: 'views' }), ['views', 'charts', 'forms', 'app-shell', 'publish']);
+  assert.deepStrictEqual(resolvePhases({ skip: ['data-model', 'sample-data', 'publish'] }), ['solution', 'web-resources', 'views', 'charts', 'forms', 'commands', 'app-shell']);
+  assert.deepStrictEqual(resolvePhases({ from: 'views' }), ['views', 'charts', 'forms', 'commands', 'app-shell', 'publish']);
   assert.deepStrictEqual(resolvePhases({ to: 'data-model' }), ['solution', 'data-model']);
 });
 

@@ -78,6 +78,22 @@ test('errors on a relationship referencing an unknown entity', () => {
   assert.ok(r.errors.some((m) => /unknown entity/i.test(m)));
 });
 
+test('errors on a command with no function and an undeclared library', () => {
+  const s = base();
+  s.commands = [{ entity: 'new_ticket', label: 'Escalate', library: 'missing.js' }];
+  const r = lintAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((m) => /needs a function/i.test(m)));
+  assert.ok(r.errors.some((m) => /undeclared web resource/i.test(m)));
+});
+
+test('accepts a command bound to a declared web resource + function', () => {
+  const s = base();
+  s.webResources = [{ name: 'new_ticket.js', type: 'js', content: 'x' }];
+  s.commands = [{ entity: 'new_ticket', label: 'Escalate', library: 'new_ticket.js', function: 'T.escalate' }];
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
 test('warns on prefix drift', () => {
   const s = base();
   s.entities[1].schemaName = 'cr123_ticket';

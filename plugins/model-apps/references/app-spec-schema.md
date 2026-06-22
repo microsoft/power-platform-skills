@@ -24,9 +24,11 @@ to read the SDK, the lint, or the engine to author a spec. Common asks → how t
 | "My …", "… this week", "not Completed/Cancelled" views | view `filters[]` (`eq-userid`, `this-week`, `not-in`) | views |
 | Records pre-set to a custom status reason | `statusReasons[]` on the entity + `statusReason` on sample rows | entities / sampleData |
 | A child grid on a parent form | `subgrids[]` (1:N or N:N — auto-resolved) | forms |
+| A simplified create dialog / read-only related card | `forms[].formType` `QuickCreate` / `QuickView` | forms |
+| A command-bar button that runs JS | `commands[]` (`library` + `function`; optional `hidden`/`disabled`) | commands |
 
 The builder is **idempotent** and runs everything in one pass (no post-build scripts): tables,
-columns, relationships, web resources, views, charts, forms (+ sub-grids + JS handlers), the app,
+columns, relationships, web resources, views, charts, forms (+ sub-grids + JS handlers), commands, the app,
 sample data (incl. multi-parent junction links + status reasons), and publish.
 
 ## Top-level shape
@@ -176,6 +178,23 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   `attribute`), `library` references a declared `webResources[]` name (lint-enforced), `function` is
   the JS function. Optional `enabled` (default true), `passExecutionContext` (default true),
   `parameters`. The build fetches the pushed form, injects the handlers, then publishes it.
+
+## commands[] (optional — modern command-bar buttons)
+```jsonc
+{ "entity": "new_order", "label": "Escalate", "location": "MainTab",
+  "library": "new_order.js", "function": "Order.escalate",   // on-click JS (web resource + fn)
+  "disabled": false, "hidden": false }                        // optional static visibility
+```
+- A button's on-click calls `function` in the declared `library` web resource (both lint-enforced) —
+  this is what makes it **functional** (not a structural-only button). `parameters` (optional) passes a
+  raw arg string.
+- **`location`** is `MainTab` (default — the entity form/grid command bar), `HomeTab`, or `ContextualTab`.
+- **`hidden`** / **`disabled`** set *static* visibility/enablement. **Conditional (rule-based)
+  visibility is not supported** — it's Power Fx-only on modern commands and needs a component library
+  that can't be authored headlessly.
+- Buttons are emitted as loose controls (no custom grouping — a titled group needs a parent command-bar
+  row the SDK doesn't synthesize from scratch). The command lands in the Default solution but is
+  entity-scoped, so it shows on the entity's command bar in the app.
 
 ## appShell
 ```jsonc

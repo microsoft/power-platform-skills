@@ -2587,10 +2587,25 @@ var require_RecordApi = __commonJS({
     var http_1 = require_http();
     var errors_1 = require_errors();
     var SchemaApi_12 = require_SchemaApi();
+    function normalizeRecordData(data) {
+      const source = data;
+      let changed = false;
+      const out = {};
+      for (const key of Object.keys(source)) {
+        const value = source[key];
+        if (Array.isArray(value) && value.every((v) => typeof v === "number")) {
+          out[key] = value.join(",");
+          changed = true;
+        } else {
+          out[key] = value;
+        }
+      }
+      return changed ? out : data;
+    }
     async function createRecord(client, entityLogicalName, data) {
       const entitySet = await (0, SchemaApi_12.resolveEntitySetName)(client, entityLogicalName);
       const path = `/${entitySet}`;
-      const response = (0, http_1.ensureSuccess)(await client.post(path, data), client.apiUrl(path));
+      const response = (0, http_1.ensureSuccess)(await client.post(path, normalizeRecordData(data)), client.apiUrl(path));
       const id = (0, http_1.readCreatedId)(response, `${entityLogicalName}id`);
       if (!id) {
         throw new errors_1.InvalidArgumentError(`Dataverse did not return an id for the created '${entityLogicalName}' row`);
@@ -2601,7 +2616,7 @@ var require_RecordApi = __commonJS({
     async function updateRecord(client, entityLogicalName, id, data) {
       const entitySet = await (0, SchemaApi_12.resolveEntitySetName)(client, entityLogicalName);
       const path = `/${entitySet}(${id})`;
-      (0, http_1.ensureSuccess)(await client.patch(path, data), client.apiUrl(path));
+      (0, http_1.ensureSuccess)(await client.patch(path, normalizeRecordData(data)), client.apiUrl(path));
     }
     exports2.updateRecord = updateRecord;
     async function deleteRecord(client, entityLogicalName, id) {
@@ -2659,7 +2674,7 @@ var require_RecordApi = __commonJS({
     async function upsertRecord(client, entityLogicalName, key, data) {
       const entitySet = await (0, SchemaApi_12.resolveEntitySetName)(client, entityLogicalName);
       const path = `/${entitySet}${upsertKeySegment(key)}`;
-      const response = (0, http_1.ensureSuccess)(await client.patch(path, data), client.apiUrl(path));
+      const response = (0, http_1.ensureSuccess)(await client.patch(path, normalizeRecordData(data)), client.apiUrl(path));
       const created = response.status === 201;
       const insertedId = (0, http_1.readCreatedId)(response, `${entityLogicalName}id`);
       const id = insertedId !== null && insertedId !== void 0 ? insertedId : "id" in key ? key.id : "";
@@ -2674,7 +2689,7 @@ var require_RecordApi = __commonJS({
       const entitySet = await (0, SchemaApi_12.resolveEntitySetName)(client, entityLogicalName);
       const targets = rows.map((row) => ({
         "@odata.type": `Microsoft.Dynamics.CRM.${entityLogicalName}`,
-        ...row
+        ...normalizeRecordData(row)
       }));
       const path = `/${entitySet}/Microsoft.Dynamics.CRM.CreateMultiple`;
       const response = (0, http_1.ensureSuccess)(await client.post(path, { Targets: targets }), client.apiUrl(path));
@@ -42607,7 +42622,7 @@ var require_FormAdapter = __commonJS({
   "../power-platform-ux/packages/cds-maker-sdk/lib/adapters/FormAdapter.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
-    exports2.addCustomControlToForm = exports2.addFormEventHandler = exports2.addNotesControlToForm = exports2.NOTES_CLASS_ID = exports2.addSubGridToForm = exports2.SUBGRID_CLASS_ID = exports2.formRegistration = exports2.FormAdapter = void 0;
+    exports2.addCustomControlToForm = exports2.addFormEventHandler = exports2.addFieldToForm = exports2.classIdForAttributeType = exports2.addNotesControlToForm = exports2.NOTES_CLASS_ID = exports2.addSubGridToForm = exports2.SUBGRID_CLASS_ID = exports2.formRegistration = exports2.FormAdapter = void 0;
     var CRMTypes_1 = (init_CRMTypes(), __toCommonJS(CRMTypes_exports));
     var ScriptUtilities_1 = (init_ScriptUtilities(), __toCommonJS(ScriptUtilities_exports));
     var FormDesignerConstants_1 = (init_FormDesignerConstants(), __toCommonJS(FormDesignerConstants_exports));
@@ -43153,6 +43168,83 @@ var require_FormAdapter = __commonJS({
       return json;
     }
     exports2.addNotesControlToForm = addNotesControlToForm;
+    var ATTR_TYPE_TO_CONTROL = {
+      Lookup: String(ControlClassIds_1.ControlClassId.LookupControl),
+      Customer: String(ControlClassIds_1.ControlClassId.LookupControl),
+      Owner: String(ControlClassIds_1.ControlClassId.LookupControl),
+      PartyList: String(ControlClassIds_1.ControlClassId.PartyListControl),
+      Boolean: String(ControlClassIds_1.ControlClassId.BooleanControl),
+      DateTime: String(ControlClassIds_1.ControlClassId.DateTimeControl),
+      Decimal: String(ControlClassIds_1.ControlClassId.DecimalControl),
+      Double: String(ControlClassIds_1.ControlClassId.DecimalControl),
+      Money: String(ControlClassIds_1.ControlClassId.CurrencyControl),
+      Integer: String(ControlClassIds_1.ControlClassId.IntegerControl),
+      BigInt: String(ControlClassIds_1.ControlClassId.IntegerControl),
+      Memo: String(ControlClassIds_1.ControlClassId.TextAreaControl),
+      String: String(ControlClassIds_1.ControlClassId.TextboxControl)
+    };
+    var PICKLIST_CONTROL_CLASS_ID = "3EF39988-22BB-4F0B-BBBE-64B5A3748AEE";
+    function classIdForAttributeType(attributeType) {
+      if (attributeType === "Picklist" || attributeType === "State" || attributeType === "Status") {
+        return PICKLIST_CONTROL_CLASS_ID;
+      }
+      return attributeType && ATTR_TYPE_TO_CONTROL[attributeType] || String(ControlClassIds_1.ControlClassId.TextboxControl);
+    }
+    exports2.classIdForAttributeType = classIdForAttributeType;
+    function fieldRowXml(cellId, controlId, classId, fieldName, label, required, rowspan) {
+      return `<row><cell id="{${cellId}}" showlabel="true" visible="true" colspan="1" rowspan="${rowspan}">` + labelsXml(label) + `<control id="${esc(controlId)}" classid="{${classId}}" datafieldname="${esc(fieldName)}" disabled="false" isrequired="${required ? "true" : "false"}" /></cell></row>`;
+    }
+    function addFieldToForm(json, options) {
+      var _a, _b, _c;
+      (0, domShim_1.installDomShim)();
+      const controlId = options.controlId || options.fieldName;
+      const label = (_a = options.label) !== null && _a !== void 0 ? _a : options.fieldName;
+      const classId = options.classId || String(ControlClassIds_1.ControlClassId.TextboxControl);
+      const required = (_b = options.required) !== null && _b !== void 0 ? _b : false;
+      const rowspan = (_c = options.rowspan) !== null && _c !== void 0 ? _c : 1;
+      const control = {
+        id: controlId,
+        classId,
+        fieldName: options.fieldName,
+        type: "Field",
+        isRequired: required,
+        isReadOnly: false,
+        label,
+        showLabel: true,
+        parameters: {}
+      };
+      const cellId = CRMTypes_1.Guid.NewGuid();
+      const cell = { id: cellId, visible: true, colspan: 1, rowspan, control };
+      let target;
+      for (const tab of json.tabs) {
+        for (const section of tab.sections) {
+          if (!options.sectionName || section.name === options.sectionName) {
+            target = section;
+            break;
+          }
+        }
+        if (target) {
+          break;
+        }
+      }
+      if (!target) {
+        throw new Error(`addField: no section found${options.sectionName ? ` named '${options.sectionName}'` : ""}`);
+      }
+      target.rows.push({ cells: [cell] });
+      const meta = json[form_1.FORM_META_KEY];
+      if (meta === null || meta === void 0 ? void 0 : meta.formxml) {
+        const doc = new DOMParser().parseFromString(meta.formxml, "text/xml");
+        const rows = findSectionRows(doc, target.id);
+        if (rows) {
+          const rowDoc = new DOMParser().parseFromString(fieldRowXml(cellId, controlId, classId, options.fieldName, label, required, rowspan), "text/xml");
+          const imported = doc.importNode ? doc.importNode(rowDoc.documentElement, true) : rowDoc.documentElement;
+          rows.appendChild(imported);
+          meta.formxml = new XMLSerializer().serializeToString(doc);
+        }
+      }
+      return json;
+    }
+    exports2.addFieldToForm = addFieldToForm;
     function directChild(parent, tagName) {
       const nodes = parent.childNodes;
       for (let i = 0; i < nodes.length; i += 1) {
@@ -43299,6 +43391,611 @@ var require_FormAdapter = __commonJS({
       return json;
     }
     exports2.addCustomControlToForm = addCustomControlToForm;
+  }
+});
+
+// ../power-platform-ux/packages/cds-maker-sdk/lib/types/dashboard.js
+var require_dashboard = __commonJS({
+  "../power-platform-ux/packages/cds-maker-sdk/lib/types/dashboard.js"(exports2) {
+    "use strict";
+    Object.defineProperty(exports2, "__esModule", { value: true });
+    exports2.DASHBOARD_META_KEY = void 0;
+    exports2.DASHBOARD_META_KEY = "$meta";
+  }
+});
+
+// ../power-platform-ux/packages/cds-maker-sdk/lib/api/DashboardApi.js
+var require_DashboardApi = __commonJS({
+  "../power-platform-ux/packages/cds-maker-sdk/lib/api/DashboardApi.js"(exports2) {
+    "use strict";
+    Object.defineProperty(exports2, "__esModule", { value: true });
+    exports2.dashboardApi = void 0;
+    var http_1 = require_http();
+    var DASHBOARD_SELECT = "$select=formid,name,description,formxml,type,objecttypecode,istabletenabled,iscustomizable,componentstate,versionnumber";
+    var DASHBOARD_LIST_SELECT = "$select=formid,name,type,objecttypecode";
+    var STANDARD_DASHBOARD_TYPE = 0;
+    var INTERACTIVE_DASHBOARD_TYPE = 10;
+    exports2.dashboardApi = {
+      async get(client, id) {
+        const path = `/systemforms(${id})?${DASHBOARD_SELECT}`;
+        const response = (0, http_1.ensureSuccess)(await client.get(path), client.apiUrl(path));
+        return { raw: response.body, etag: (0, http_1.readEtag)(response) };
+      },
+      async list(client, options) {
+        var _a;
+        const filters = [`(type eq ${STANDARD_DASHBOARD_TYPE} or type eq ${INTERACTIVE_DASHBOARD_TYPE})`];
+        if (options === null || options === void 0 ? void 0 : options.entityLogicalName) {
+          filters.push(`objecttypecode eq '${options.entityLogicalName}'`);
+        }
+        const path = `/systemforms?${DASHBOARD_LIST_SELECT}&$filter=${filters.join(" and ")}`;
+        const response = (0, http_1.ensureSuccess)(await client.get(path), client.apiUrl(path));
+        const body = response.body;
+        const records = (_a = body === null || body === void 0 ? void 0 : body.value) !== null && _a !== void 0 ? _a : [];
+        return records.map((record) => {
+          var _a2, _b;
+          return {
+            type: "dashboard",
+            id: (_a2 = record.formid) !== null && _a2 !== void 0 ? _a2 : "",
+            name: (_b = record.name) !== null && _b !== void 0 ? _b : "",
+            entityLogicalName: record.objecttypecode,
+            isDirty: false
+          };
+        });
+      },
+      async create(client, payload) {
+        var _a;
+        const body = payload;
+        const path = "/systemforms";
+        const record = {
+          name: body.name,
+          description: body.description,
+          formxml: body.formxml,
+          istabletenabled: body.istabletenabled,
+          // `type` is Edm.String — send the string token (e.g. '0'), never a number.
+          type: body.type
+        };
+        if (body.objecttypecode) {
+          record.objecttypecode = body.objecttypecode;
+        }
+        const response = (0, http_1.ensureSuccess)(await client.post(path, record), client.apiUrl(path));
+        return { id: (_a = (0, http_1.readCreatedId)(response, "formid")) !== null && _a !== void 0 ? _a : "", etag: (0, http_1.readEtag)(response) };
+      },
+      async update(client, id, payload, etag) {
+        const body = payload;
+        const path = `/systemforms(${id})`;
+        const headers = etag ? { "If-Match": etag } : void 0;
+        const response = (0, http_1.ensureSuccess)(await client.patch(path, {
+          name: body.name,
+          description: body.description,
+          formxml: body.formxml,
+          istabletenabled: body.istabletenabled
+        }, headers ? { headers } : void 0), client.apiUrl(path));
+        return { id, etag: (0, http_1.readEtag)(response) };
+      },
+      delete(client, id) {
+        return (0, http_1.deleteRecord)(client, "systemforms", id);
+      }
+    };
+  }
+});
+
+// ../power-platform-ux/packages/cds-maker-sdk/lib/adapters/DashboardAdapter.js
+var require_DashboardAdapter = __commonJS({
+  "../power-platform-ux/packages/cds-maker-sdk/lib/adapters/DashboardAdapter.js"(exports2) {
+    "use strict";
+    Object.defineProperty(exports2, "__esModule", { value: true });
+    exports2.dashboardRegistration = exports2.addDashboardTileToForm = exports2.DashboardAdapter = void 0;
+    var dashboard_1 = require_dashboard();
+    var AdapterBase_12 = require_AdapterBase();
+    var DashboardApi_1 = require_DashboardApi();
+    var domShim_1 = require_domShim();
+    var idGenerator_1 = require_idGenerator();
+    var LCID = 1033;
+    var STANDARD_TYPE = "0";
+    var INTERACTIVE_TYPE = "10";
+    var CLASS_ID_TO_TYPE = /* @__PURE__ */ new Map([
+      ["{E7A81278-8635-4D9E-8D4D-59480B391C5B}", "chart"],
+      // also List (ChartGridMode disambiguates)
+      ["{FD2A7985-3187-444E-908D-6624B21F69C0}", "iframe"],
+      ["{9FDF5F91-88B1-47F4-AD53-C11EFC01A01D}", "webresource"],
+      ["{EE9078C8-6946-4E2C-B8F8-35E65F4BE6A8}", "stream"],
+      ["{06375649-C143-495E-A496-C962E5B4488E}", "timeline"],
+      ["{8C54228C-1B25-4909-A12A-F2B968BB0D62}", "powerbi"],
+      ["{F9A8A302-114E-466A-B582-6771B2AE0D92}", "assistant"]
+    ]);
+    var ASSISTANT_UNIQUE_ID = "{3FF9A528-DD50-4ACA-8F10-2E5ED73513AD}";
+    var DashboardAdapter = class extends AdapterBase_12.ArtifactAdapter {
+      toJson(internal) {
+        var _a, _b, _c, _d;
+        (0, domShim_1.installDomShim)();
+        const formxml = (_a = internal.formxml) !== null && _a !== void 0 ? _a : "";
+        const doc = parseXml2(formxml);
+        const json = {
+          id: (_b = internal.formid) !== null && _b !== void 0 ? _b : "",
+          name: (_c = internal.name) !== null && _c !== void 0 ? _c : "",
+          description: (_d = internal.description) !== null && _d !== void 0 ? _d : "",
+          dashboardType: dashboardTypeFromValue(internal.type),
+          entityLogicalName: internal.objecttypecode ? internal.objecttypecode : null,
+          enabledForMobile: !!internal.istabletenabled,
+          layoutType: layoutTypeFromDoc(doc),
+          components: parseComponents(doc)
+        };
+        if (formxml) {
+          json[dashboard_1.DASHBOARD_META_KEY] = { formxml };
+        }
+        return json;
+      }
+      fromJson(json) {
+        var _a;
+        (0, domShim_1.installDomShim)();
+        return {
+          formid: json.id,
+          name: json.name,
+          description: json.description,
+          type: json.dashboardType === "Interactive" ? INTERACTIVE_TYPE : STANDARD_TYPE,
+          objecttypecode: (_a = json.entityLogicalName) !== null && _a !== void 0 ? _a : "",
+          istabletenabled: json.enabledForMobile,
+          formxml: this.buildFormXml(json)
+        };
+      }
+      fromApiResponse(response) {
+        return this.toJson(response !== null && response !== void 0 ? response : {});
+      }
+      toApiPayload(json) {
+        return {
+          name: json.name,
+          description: json.description,
+          formxml: this.buildFormXml(json),
+          istabletenabled: json.enabledForMobile,
+          // `type` is Edm.String — send the string token, never a number.
+          type: json.dashboardType === "Interactive" ? INTERACTIVE_TYPE : STANDARD_TYPE,
+          objecttypecode: json.entityLogicalName
+        };
+      }
+      createDefault(definition) {
+        var _a, _b, _c, _d, _e, _f, _g, _h;
+        (0, domShim_1.installDomShim)();
+        const json = {
+          // Dataverse mints the formid server-side on create; seed a fresh GUID so the
+          // workspace has a key, then adopt the server id on the first push.
+          id: (_a = definition.id) !== null && _a !== void 0 ? _a : (0, idGenerator_1.newId)(),
+          name: (_b = definition.name) !== null && _b !== void 0 ? _b : "New Dashboard",
+          description: (_c = definition.description) !== null && _c !== void 0 ? _c : "",
+          dashboardType: (_d = definition.dashboardType) !== null && _d !== void 0 ? _d : "Standard",
+          entityLogicalName: (_e = definition.entityLogicalName) !== null && _e !== void 0 ? _e : null,
+          enabledForMobile: (_f = definition.enabledForMobile) !== null && _f !== void 0 ? _f : false,
+          layoutType: (_g = definition.layoutType) !== null && _g !== void 0 ? _g : 0,
+          components: (_h = definition.components) !== null && _h !== void 0 ? _h : []
+        };
+        json[dashboard_1.DASHBOARD_META_KEY] = { formxml: defaultFormXml() };
+        return json;
+      }
+      /**
+       * Dashboard component ids come from the source formxml `<control id>` and cell
+       * ids; there are no model-minted GUIDs to backfill, so the element is returned
+       * unchanged (matching the View/Chart no-op behaviour).
+       */
+      assignIds(element) {
+        return element;
+      }
+      // --- write (surgical overlay onto retained source formxml) ----------------
+      /**
+       * Re-emit formxml. When a source formxml is retained (fetch -> edit -> push, or
+       * a seeded createDefault), parse it and surgically overlay ONLY the modeled
+       * edits onto the matching cells — the cell label and the control parameters —
+       * leaving rows, shadow rows, verticallayout, sections, tabs and every unmapped
+       * attribute byte-stable. A genuinely source-less dashboard falls back to the
+       * minimal default template.
+       */
+      buildFormXml(json) {
+        var _a;
+        const sourceXml = (_a = json[dashboard_1.DASHBOARD_META_KEY]) === null || _a === void 0 ? void 0 : _a.formxml;
+        const xml = sourceXml !== null && sourceXml !== void 0 ? sourceXml : defaultFormXml();
+        const doc = parseXml2(xml);
+        overlayComponents(doc, json.components);
+        return serialize(doc);
+      }
+    };
+    exports2.DashboardAdapter = DashboardAdapter;
+    function parseXml2(xml) {
+      return new DOMParser().parseFromString(xml || "<form/>", "text/xml");
+    }
+    function serialize(doc) {
+      return new XMLSerializer().serializeToString(doc).replace(/^\s*<\?xml[^>]*\?>\s*/i, "");
+    }
+    function dashboardTypeFromValue(type) {
+      return String(type !== null && type !== void 0 ? type : "") === INTERACTIVE_TYPE ? "Interactive" : "Standard";
+    }
+    function layoutTypeFromDoc(doc) {
+      var _a;
+      const form = doc.getElementsByTagName("form")[0];
+      const raw = (_a = form === null || form === void 0 ? void 0 : form.getAttribute("formLayout")) !== null && _a !== void 0 ? _a : form === null || form === void 0 ? void 0 : form.getAttribute("layoutType");
+      const parsed = parseInt(raw !== null && raw !== void 0 ? raw : "", 10);
+      return Number.isNaN(parsed) ? 0 : parsed;
+    }
+    function childElements(parent, tagName) {
+      const result = [];
+      const children = parent.childNodes;
+      for (let i = 0; i < children.length; i += 1) {
+        const node = children[i];
+        if (node.nodeType === 1 && node.tagName.toLowerCase() === tagName) {
+          result.push(node);
+        }
+      }
+      return result;
+    }
+    function parseComponents(doc) {
+      const components = [];
+      const tabs = doc.getElementsByTagName("tab");
+      for (let tabIndex = 0; tabIndex < tabs.length; tabIndex += 1) {
+        const columnsRoots = childElements(tabs[tabIndex], "columns");
+        const columns = columnsRoots.flatMap((root) => childElements(root, "column"));
+        for (let columnIndex = 0; columnIndex < columns.length; columnIndex += 1) {
+          const sectionsRoots = childElements(columns[columnIndex], "sections");
+          const sections = sectionsRoots.flatMap((root) => childElements(root, "section"));
+          for (let sectionIndex = 0; sectionIndex < sections.length; sectionIndex += 1) {
+            parseSection(sections[sectionIndex], { tabIndex, columnIndex, sectionIndex }, components);
+          }
+        }
+      }
+      return components;
+    }
+    function parseSection(section, pos, out) {
+      const rowsRoots = childElements(section, "rows");
+      const rows = rowsRoots.flatMap((root) => childElements(root, "row"));
+      for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+        const cells = childElements(rows[rowIndex], "cell");
+        for (let cellIndex = 0; cellIndex < cells.length; cellIndex += 1) {
+          const component = parseCell(cells[cellIndex], { ...pos, rowIndex, cellIndex });
+          if (component) {
+            out.push(component);
+          }
+        }
+      }
+    }
+    function parseCell(cell, position) {
+      var _a, _b, _c;
+      const cellId = stripBraces((_a = cell.getAttribute("id")) !== null && _a !== void 0 ? _a : "");
+      if (cellId.toLowerCase().startsWith("spacer")) {
+        return null;
+      }
+      const control = childElements(cell, "control")[0];
+      if (!control) {
+        return null;
+      }
+      const classId = (_b = control.getAttribute("classid")) !== null && _b !== void 0 ? _b : "";
+      const parameters = flattenParameters(control);
+      const label = cellLabel(cell);
+      const type = componentType(classId, parameters, control);
+      const icProperties = serializeIcProperties(control);
+      return {
+        id: (_c = control.getAttribute("id")) !== null && _c !== void 0 ? _c : cellId,
+        type,
+        name: label || parameters.TargetEntityType || parameters.WebResourceName || "Component",
+        classId,
+        position,
+        colspan: numAttr(cell, "colspan", 1),
+        rowspan: numAttr(cell, "rowspan", 1),
+        parameters,
+        ...icProperties ? { icProperties } : {}
+      };
+    }
+    function findIcProperties(control) {
+      const children = control.childNodes;
+      for (let i = 0; i < children.length; i += 1) {
+        const node = children[i];
+        if (node.nodeType === 1 && node.tagName.toLowerCase() === "icproperties") {
+          return node;
+        }
+      }
+      return void 0;
+    }
+    function serializeIcProperties(control) {
+      const el = findIcProperties(control);
+      return el ? new XMLSerializer().serializeToString(el) : void 0;
+    }
+    function overlayIcProperties(doc, control, xml) {
+      const existing = findIcProperties(control);
+      if (!xml) {
+        if (existing) {
+          control.removeChild(existing);
+        }
+        return;
+      }
+      const parsed = new DOMParser().parseFromString(xml, "text/xml").documentElement;
+      const imported = doc.importNode ? doc.importNode(parsed, true) : parsed;
+      if (existing) {
+        control.replaceChild(imported, existing);
+      } else {
+        control.appendChild(imported);
+      }
+    }
+    function cellLabel(cell) {
+      var _a, _b;
+      const labelsRoot = childElements(cell, "labels")[0];
+      if (!labelsRoot) {
+        return "";
+      }
+      const labels = childElements(labelsRoot, "label");
+      const preferred = (_a = labels.find((label) => label.getAttribute("languagecode") === String(LCID))) !== null && _a !== void 0 ? _a : labels[0];
+      return (_b = preferred === null || preferred === void 0 ? void 0 : preferred.getAttribute("description")) !== null && _b !== void 0 ? _b : "";
+    }
+    function flattenParameters(control) {
+      var _a;
+      const parameters = {};
+      const root = childElements(control, "parameters")[0];
+      if (!root) {
+        return parameters;
+      }
+      const children = root.childNodes;
+      for (let i = 0; i < children.length; i += 1) {
+        const node = children[i];
+        if (node.nodeType === 1) {
+          parameters[node.tagName] = ((_a = node.textContent) !== null && _a !== void 0 ? _a : "").trim();
+        }
+      }
+      return parameters;
+    }
+    function componentType(classId, parameters, control) {
+      var _a;
+      const base = CLASS_ID_TO_TYPE.get(classId.toUpperCase());
+      if (!base) {
+        return "unknown";
+      }
+      if (base === "chart") {
+        return parameters.ChartGridMode === "Chart" ? "chart" : "list";
+      }
+      if (base === "assistant") {
+        const uniqueId = ((_a = control.getAttribute("uniqueid")) !== null && _a !== void 0 ? _a : "").toUpperCase();
+        return uniqueId === ASSISTANT_UNIQUE_ID ? "assistant" : base;
+      }
+      return base;
+    }
+    function numAttr(element, name, fallback) {
+      var _a;
+      const parsed = parseInt((_a = element.getAttribute(name)) !== null && _a !== void 0 ? _a : "", 10);
+      return Number.isNaN(parsed) ? fallback : parsed;
+    }
+    function stripBraces(value) {
+      return value.replace(/^\{/, "").replace(/\}$/, "");
+    }
+    function overlayComponents(doc, components) {
+      const byPosition = indexCellsByPosition(doc);
+      for (const component of components) {
+        const cell = byPosition.get(positionKey(component.position));
+        if (!cell) {
+          continue;
+        }
+        const control = childElements(cell, "control")[0];
+        if (!control) {
+          continue;
+        }
+        overlayLabel(doc, cell, component.name);
+        overlayParameters(doc, control, component.parameters);
+        if (component.icProperties !== void 0) {
+          overlayIcProperties(doc, control, component.icProperties);
+        }
+      }
+    }
+    function indexCellsByPosition(doc) {
+      var _a;
+      const map6 = /* @__PURE__ */ new Map();
+      const tabs = doc.getElementsByTagName("tab");
+      for (let tabIndex = 0; tabIndex < tabs.length; tabIndex += 1) {
+        const columns = childElements(tabs[tabIndex], "columns").flatMap((root) => childElements(root, "column"));
+        for (let columnIndex = 0; columnIndex < columns.length; columnIndex += 1) {
+          const sections = childElements(columns[columnIndex], "sections").flatMap((root) => childElements(root, "section"));
+          for (let sectionIndex = 0; sectionIndex < sections.length; sectionIndex += 1) {
+            const rows = childElements(sections[sectionIndex], "rows").flatMap((root) => childElements(root, "row"));
+            for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+              const cells = childElements(rows[rowIndex], "cell");
+              for (let cellIndex = 0; cellIndex < cells.length; cellIndex += 1) {
+                const cell = cells[cellIndex];
+                const cellId = stripBraces((_a = cell.getAttribute("id")) !== null && _a !== void 0 ? _a : "");
+                if (cellId.toLowerCase().startsWith("spacer")) {
+                  continue;
+                }
+                if (!childElements(cell, "control")[0]) {
+                  continue;
+                }
+                map6.set(positionKey({ tabIndex, columnIndex, sectionIndex, rowIndex, cellIndex }), cell);
+              }
+            }
+          }
+        }
+      }
+      return map6;
+    }
+    function positionKey(position) {
+      return `${position.tabIndex}.${position.columnIndex}.${position.sectionIndex}.${position.rowIndex}.${position.cellIndex}`;
+    }
+    function overlayLabel(doc, cell, name) {
+      if (!name) {
+        return;
+      }
+      let labelsRoot = childElements(cell, "labels")[0];
+      if (!labelsRoot) {
+        labelsRoot = doc.createElement("labels");
+        cell.appendChild(labelsRoot);
+      }
+      let label = childElements(labelsRoot, "label").find((l) => l.getAttribute("languagecode") === String(LCID));
+      if (!label) {
+        label = childElements(labelsRoot, "label")[0];
+      }
+      if (!label) {
+        label = doc.createElement("label");
+        label.setAttribute("languagecode", String(LCID));
+        labelsRoot.appendChild(label);
+      }
+      label.setAttribute("description", name);
+    }
+    function overlayParameters(doc, control, parameters) {
+      const keys = Object.keys(parameters);
+      if (keys.length === 0) {
+        return;
+      }
+      let root = childElements(control, "parameters")[0];
+      if (!root) {
+        root = doc.createElement("parameters");
+        control.appendChild(root);
+      }
+      const existing = /* @__PURE__ */ new Map();
+      const children = root.childNodes;
+      for (let i = 0; i < children.length; i += 1) {
+        const node = children[i];
+        if (node.nodeType === 1) {
+          existing.set(node.tagName, node);
+        }
+      }
+      for (const key of keys) {
+        const value = parameters[key];
+        const node = existing.get(key);
+        if (node) {
+          node.textContent = value;
+        } else {
+          const created = doc.createElement(key);
+          created.textContent = value;
+          root.appendChild(created);
+        }
+      }
+    }
+    function defaultFormXml() {
+      const tabId = `{${(0, idGenerator_1.newId)()}}`;
+      const sectionId = `{${(0, idGenerator_1.newId)()}}`;
+      const cellId = `{${(0, idGenerator_1.newId)()}}`;
+      return `<form><tabs><tab id="${tabId}" name="General" showlabel="true" expanded="true" verticallayout="true"><columns><column width="100%"><sections><section id="${sectionId}" name="Section 1" showlabel="false" columns="1"><rows><row><cell id="${cellId}" rowspan="12" colspan="1" showlabel="true" /></row></rows></section></sections></column></columns></tab></tabs></form>`;
+    }
+    var TILE_CLASS_ID = {
+      chart: "E7A81278-8635-4D9E-8D4D-59480B391C5B",
+      list: "E7A81278-8635-4D9E-8D4D-59480B391C5B",
+      // shares the chart classid; ChartGridMode disambiguates
+      iframe: "FD2A7985-3187-444E-908D-6624B21F69C0",
+      webresource: "9FDF5F91-88B1-47F4-AD53-C11EFC01A01D"
+    };
+    function tileBraced(guid2) {
+      return `{${guid2.replace(/[{}]/g, "")}}`;
+    }
+    function tileParameters(o) {
+      var _a;
+      const p = {};
+      if (o.type === "chart" || o.type === "list") {
+        if (o.targetEntity) {
+          p.TargetEntityType = o.targetEntity;
+        }
+        if (o.viewId) {
+          p.ViewId = tileBraced(o.viewId);
+          p.IsUserView = "false";
+        }
+        p.ChartGridMode = o.type === "chart" ? "Chart" : "Grid";
+        if (o.type === "chart" && o.visualizationId) {
+          p.VisualizationId = tileBraced(o.visualizationId);
+          p.IsUserChart = "false";
+        }
+        p.EnableChartPicker = "false";
+        p.RecordsPerPage = "10";
+      } else if (o.type === "iframe") {
+        if (o.url) {
+          p.Url = o.url;
+        }
+        p.Security = "false";
+        p.Scrolling = "auto";
+        p.Border = "false";
+      } else if (o.type === "webresource" && o.webResourceName) {
+        p.WebResourceName = o.webResourceName;
+      }
+      return { ...p, ...(_a = o.parameters) !== null && _a !== void 0 ? _a : {} };
+    }
+    function dashboardSectionRows(doc, sectionIndex) {
+      var _a;
+      const tab = doc.getElementsByTagName("tab")[0];
+      if (!tab) {
+        throw new Error("addDashboardTile: dashboard formxml has no <tab>");
+      }
+      const column = childElements(tab, "columns").flatMap((r) => childElements(r, "column"))[0];
+      if (!column) {
+        throw new Error("addDashboardTile: dashboard formxml has no <column>");
+      }
+      const sections = childElements(column, "sections").flatMap((r) => childElements(r, "section"));
+      const section = (_a = sections[sectionIndex]) !== null && _a !== void 0 ? _a : sections[0];
+      if (!section) {
+        throw new Error("addDashboardTile: dashboard formxml has no <section>");
+      }
+      let rows = childElements(section, "rows")[0];
+      if (!rows) {
+        rows = doc.createElement("rows");
+        section.appendChild(rows);
+      }
+      return rows;
+    }
+    function addDashboardTileToForm(json, options) {
+      var _a, _b, _c;
+      (0, domShim_1.installDomShim)();
+      let meta = json[dashboard_1.DASHBOARD_META_KEY];
+      if (!meta || !meta.formxml) {
+        meta = { formxml: defaultFormXml() };
+        json[dashboard_1.DASHBOARD_META_KEY] = meta;
+      }
+      const doc = parseXml2(meta.formxml);
+      const sectionIndex = (_a = options.sectionIndex) !== null && _a !== void 0 ? _a : 0;
+      const rowsEl = dashboardSectionRows(doc, sectionIndex);
+      for (const row2 of childElements(rowsEl, "row")) {
+        if (!childElements(row2, "cell").some((c) => childElements(c, "control").length > 0)) {
+          rowsEl.removeChild(row2);
+        }
+      }
+      const tileIndex = childElements(rowsEl, "row").length;
+      const classId = TILE_CLASS_ID[options.type];
+      const colspan = (_b = options.colspan) !== null && _b !== void 0 ? _b : 1;
+      const rowspan = (_c = options.rowspan) !== null && _c !== void 0 ? _c : 4;
+      const cellId = tileBraced((0, idGenerator_1.newId)());
+      const controlId = tileBraced((0, idGenerator_1.newId)());
+      const params = tileParameters(options);
+      const row = doc.createElement("row");
+      const cell = doc.createElement("cell");
+      cell.setAttribute("id", cellId);
+      cell.setAttribute("colspan", String(colspan));
+      cell.setAttribute("rowspan", String(rowspan));
+      cell.setAttribute("showlabel", "true");
+      const labels = doc.createElement("labels");
+      const label = doc.createElement("label");
+      label.setAttribute("description", options.name);
+      label.setAttribute("languagecode", String(LCID));
+      labels.appendChild(label);
+      cell.appendChild(labels);
+      const control = doc.createElement("control");
+      control.setAttribute("id", controlId);
+      control.setAttribute("classid", tileBraced(classId));
+      const parameters = doc.createElement("parameters");
+      for (const key of Object.keys(params)) {
+        const node = doc.createElement(key);
+        node.textContent = params[key];
+        parameters.appendChild(node);
+      }
+      control.appendChild(parameters);
+      cell.appendChild(control);
+      row.appendChild(cell);
+      rowsEl.appendChild(row);
+      meta.formxml = serialize(doc);
+      json.components.push({
+        id: controlId,
+        type: options.type,
+        name: options.name,
+        classId,
+        position: { tabIndex: 0, columnIndex: 0, sectionIndex, rowIndex: tileIndex, cellIndex: 0 },
+        colspan,
+        rowspan,
+        parameters: params
+      });
+      return json;
+    }
+    exports2.addDashboardTileToForm = addDashboardTileToForm;
+    function dashboardRegistration() {
+      return {
+        adapter: new DashboardAdapter(),
+        api: DashboardApi_1.dashboardApi
+      };
+    }
+    exports2.dashboardRegistration = dashboardRegistration;
   }
 });
 
@@ -80562,6 +81259,16 @@ var require_CommandAdapter = __commonJS({
       if (icon) {
         control.icon = icon;
       }
+      const action = actionFromRow(row);
+      if (action) {
+        control.action = action;
+      }
+      if (typeof row.hidden === "boolean") {
+        control.hidden = row.hidden;
+      }
+      if (typeof row.isdisabled === "boolean") {
+        control.disabled = row.isdisabled;
+      }
       if (typeof row.location === "number" && row.location !== barLoc) {
         control.location = row.location;
       }
@@ -80675,7 +81382,51 @@ var require_CommandAdapter = __commonJS({
       base.type = controlToButtonType(control.type);
       base.buttonlabeltext = control.label;
       applyIcon(base, control.icon, (_b = meta === null || meta === void 0 ? void 0 : meta.commands[control.id]) === null || _b === void 0 ? void 0 : _b.raw);
+      applyAction(base, control.action);
+      if (control.hidden !== void 0) {
+        base.hidden = control.hidden;
+      }
+      if (control.disabled !== void 0) {
+        base.isdisabled = control.disabled;
+      }
       return base;
+    }
+    var ONCLICK_TYPE_JAVASCRIPT = 2;
+    function applyAction(base, action) {
+      if (!action || action.type !== "javascript") {
+        return;
+      }
+      base.onclickeventtype = ONCLICK_TYPE_JAVASCRIPT;
+      if (action.webResourceId) {
+        const wrId = action.webResourceId.replace(/[{}]/g, "");
+        base["OnClickEventJavaScriptWebResourceId@odata.bind"] = `/webresourceset(${wrId})`;
+      }
+      base.onclickeventjavascriptfunctionname = action.functionName;
+      if (action.parameters !== void 0) {
+        base.onclickeventjavascriptparameters = action.parameters;
+      }
+    }
+    function actionFromRow(row) {
+      var _a;
+      const fn = row.onclickeventjavascriptfunctionname;
+      if (typeof fn !== "string" || !fn) {
+        return void 0;
+      }
+      const expanded = row.OnClickEventJavaScriptWebResourceId;
+      const valueId = row._onclickeventjavascriptwebresourceid_value;
+      const action = {
+        type: "javascript",
+        webResourceId: (_a = typeof valueId === "string" ? valueId : expanded === null || expanded === void 0 ? void 0 : expanded.webresourceid) !== null && _a !== void 0 ? _a : "",
+        functionName: fn
+      };
+      if (expanded === null || expanded === void 0 ? void 0 : expanded.name) {
+        action.libraryName = expanded.name;
+      }
+      const params = row.onclickeventjavascriptparameters;
+      if (typeof params === "string" && params) {
+        action.parameters = params;
+      }
+      return action;
     }
     function applyIcon(base, icon, raw) {
       const previous = raw ? iconFromRow(raw) : void 0;
@@ -80732,6 +81483,10 @@ var require_CommandAdapter = __commonJS({
       delete body._appmoduleid_value;
       delete body._iconwebresourceid_value;
       delete body._onclickeventjavascriptwebresourceid_value;
+      delete body._onclickeventformulacomponentlibraryid_value;
+      delete body._visibilityformulacomponentlibraryid_value;
+      delete body.VisibilityFormulaComponentLibraryId;
+      delete body.OnClickEventFormulaComponentLibraryId;
       delete body.scope;
       return body;
     }
@@ -81153,487 +81908,6 @@ var require_ChartAdapter = __commonJS({
   }
 });
 
-// ../power-platform-ux/packages/cds-maker-sdk/lib/types/dashboard.js
-var require_dashboard = __commonJS({
-  "../power-platform-ux/packages/cds-maker-sdk/lib/types/dashboard.js"(exports2) {
-    "use strict";
-    Object.defineProperty(exports2, "__esModule", { value: true });
-    exports2.DASHBOARD_META_KEY = void 0;
-    exports2.DASHBOARD_META_KEY = "$meta";
-  }
-});
-
-// ../power-platform-ux/packages/cds-maker-sdk/lib/api/DashboardApi.js
-var require_DashboardApi = __commonJS({
-  "../power-platform-ux/packages/cds-maker-sdk/lib/api/DashboardApi.js"(exports2) {
-    "use strict";
-    Object.defineProperty(exports2, "__esModule", { value: true });
-    exports2.dashboardApi = void 0;
-    var http_1 = require_http();
-    var DASHBOARD_SELECT = "$select=formid,name,description,formxml,type,objecttypecode,istabletenabled,iscustomizable,componentstate,versionnumber";
-    var DASHBOARD_LIST_SELECT = "$select=formid,name,type,objecttypecode";
-    var STANDARD_DASHBOARD_TYPE = 0;
-    var INTERACTIVE_DASHBOARD_TYPE = 10;
-    exports2.dashboardApi = {
-      async get(client, id) {
-        const path = `/systemforms(${id})?${DASHBOARD_SELECT}`;
-        const response = (0, http_1.ensureSuccess)(await client.get(path), client.apiUrl(path));
-        return { raw: response.body, etag: (0, http_1.readEtag)(response) };
-      },
-      async list(client, options) {
-        var _a;
-        const filters = [`(type eq ${STANDARD_DASHBOARD_TYPE} or type eq ${INTERACTIVE_DASHBOARD_TYPE})`];
-        if (options === null || options === void 0 ? void 0 : options.entityLogicalName) {
-          filters.push(`objecttypecode eq '${options.entityLogicalName}'`);
-        }
-        const path = `/systemforms?${DASHBOARD_LIST_SELECT}&$filter=${filters.join(" and ")}`;
-        const response = (0, http_1.ensureSuccess)(await client.get(path), client.apiUrl(path));
-        const body = response.body;
-        const records = (_a = body === null || body === void 0 ? void 0 : body.value) !== null && _a !== void 0 ? _a : [];
-        return records.map((record) => {
-          var _a2, _b;
-          return {
-            type: "dashboard",
-            id: (_a2 = record.formid) !== null && _a2 !== void 0 ? _a2 : "",
-            name: (_b = record.name) !== null && _b !== void 0 ? _b : "",
-            entityLogicalName: record.objecttypecode,
-            isDirty: false
-          };
-        });
-      },
-      async create(client, payload) {
-        var _a;
-        const body = payload;
-        const path = "/systemforms";
-        const record = {
-          name: body.name,
-          description: body.description,
-          formxml: body.formxml,
-          istabletenabled: body.istabletenabled,
-          // `type` is Edm.String — send the string token (e.g. '0'), never a number.
-          type: body.type
-        };
-        if (body.objecttypecode) {
-          record.objecttypecode = body.objecttypecode;
-        }
-        const response = (0, http_1.ensureSuccess)(await client.post(path, record), client.apiUrl(path));
-        return { id: (_a = (0, http_1.readCreatedId)(response, "formid")) !== null && _a !== void 0 ? _a : "", etag: (0, http_1.readEtag)(response) };
-      },
-      async update(client, id, payload, etag) {
-        const body = payload;
-        const path = `/systemforms(${id})`;
-        const headers = etag ? { "If-Match": etag } : void 0;
-        const response = (0, http_1.ensureSuccess)(await client.patch(path, {
-          name: body.name,
-          description: body.description,
-          formxml: body.formxml,
-          istabletenabled: body.istabletenabled
-        }, headers ? { headers } : void 0), client.apiUrl(path));
-        return { id, etag: (0, http_1.readEtag)(response) };
-      },
-      delete(client, id) {
-        return (0, http_1.deleteRecord)(client, "systemforms", id);
-      }
-    };
-  }
-});
-
-// ../power-platform-ux/packages/cds-maker-sdk/lib/adapters/DashboardAdapter.js
-var require_DashboardAdapter = __commonJS({
-  "../power-platform-ux/packages/cds-maker-sdk/lib/adapters/DashboardAdapter.js"(exports2) {
-    "use strict";
-    Object.defineProperty(exports2, "__esModule", { value: true });
-    exports2.dashboardRegistration = exports2.DashboardAdapter = void 0;
-    var dashboard_1 = require_dashboard();
-    var AdapterBase_12 = require_AdapterBase();
-    var DashboardApi_1 = require_DashboardApi();
-    var domShim_1 = require_domShim();
-    var idGenerator_1 = require_idGenerator();
-    var LCID = 1033;
-    var STANDARD_TYPE = "0";
-    var INTERACTIVE_TYPE = "10";
-    var CLASS_ID_TO_TYPE = /* @__PURE__ */ new Map([
-      ["{E7A81278-8635-4D9E-8D4D-59480B391C5B}", "chart"],
-      // also List (ChartGridMode disambiguates)
-      ["{FD2A7985-3187-444E-908D-6624B21F69C0}", "iframe"],
-      ["{9FDF5F91-88B1-47F4-AD53-C11EFC01A01D}", "webresource"],
-      ["{EE9078C8-6946-4E2C-B8F8-35E65F4BE6A8}", "stream"],
-      ["{06375649-C143-495E-A496-C962E5B4488E}", "timeline"],
-      ["{8C54228C-1B25-4909-A12A-F2B968BB0D62}", "powerbi"],
-      ["{F9A8A302-114E-466A-B582-6771B2AE0D92}", "assistant"]
-    ]);
-    var ASSISTANT_UNIQUE_ID = "{3FF9A528-DD50-4ACA-8F10-2E5ED73513AD}";
-    var DashboardAdapter = class extends AdapterBase_12.ArtifactAdapter {
-      toJson(internal) {
-        var _a, _b, _c, _d;
-        (0, domShim_1.installDomShim)();
-        const formxml = (_a = internal.formxml) !== null && _a !== void 0 ? _a : "";
-        const doc = parseXml2(formxml);
-        const json = {
-          id: (_b = internal.formid) !== null && _b !== void 0 ? _b : "",
-          name: (_c = internal.name) !== null && _c !== void 0 ? _c : "",
-          description: (_d = internal.description) !== null && _d !== void 0 ? _d : "",
-          dashboardType: dashboardTypeFromValue(internal.type),
-          entityLogicalName: internal.objecttypecode ? internal.objecttypecode : null,
-          enabledForMobile: !!internal.istabletenabled,
-          layoutType: layoutTypeFromDoc(doc),
-          components: parseComponents(doc)
-        };
-        if (formxml) {
-          json[dashboard_1.DASHBOARD_META_KEY] = { formxml };
-        }
-        return json;
-      }
-      fromJson(json) {
-        var _a;
-        (0, domShim_1.installDomShim)();
-        return {
-          formid: json.id,
-          name: json.name,
-          description: json.description,
-          type: json.dashboardType === "Interactive" ? INTERACTIVE_TYPE : STANDARD_TYPE,
-          objecttypecode: (_a = json.entityLogicalName) !== null && _a !== void 0 ? _a : "",
-          istabletenabled: json.enabledForMobile,
-          formxml: this.buildFormXml(json)
-        };
-      }
-      fromApiResponse(response) {
-        return this.toJson(response !== null && response !== void 0 ? response : {});
-      }
-      toApiPayload(json) {
-        return {
-          name: json.name,
-          description: json.description,
-          formxml: this.buildFormXml(json),
-          istabletenabled: json.enabledForMobile,
-          // `type` is Edm.String — send the string token, never a number.
-          type: json.dashboardType === "Interactive" ? INTERACTIVE_TYPE : STANDARD_TYPE,
-          objecttypecode: json.entityLogicalName
-        };
-      }
-      createDefault(definition) {
-        var _a, _b, _c, _d, _e, _f, _g, _h;
-        (0, domShim_1.installDomShim)();
-        const json = {
-          // Dataverse mints the formid server-side on create; seed a fresh GUID so the
-          // workspace has a key, then adopt the server id on the first push.
-          id: (_a = definition.id) !== null && _a !== void 0 ? _a : (0, idGenerator_1.newId)(),
-          name: (_b = definition.name) !== null && _b !== void 0 ? _b : "New Dashboard",
-          description: (_c = definition.description) !== null && _c !== void 0 ? _c : "",
-          dashboardType: (_d = definition.dashboardType) !== null && _d !== void 0 ? _d : "Standard",
-          entityLogicalName: (_e = definition.entityLogicalName) !== null && _e !== void 0 ? _e : null,
-          enabledForMobile: (_f = definition.enabledForMobile) !== null && _f !== void 0 ? _f : false,
-          layoutType: (_g = definition.layoutType) !== null && _g !== void 0 ? _g : 0,
-          components: (_h = definition.components) !== null && _h !== void 0 ? _h : []
-        };
-        json[dashboard_1.DASHBOARD_META_KEY] = { formxml: defaultFormXml() };
-        return json;
-      }
-      /**
-       * Dashboard component ids come from the source formxml `<control id>` and cell
-       * ids; there are no model-minted GUIDs to backfill, so the element is returned
-       * unchanged (matching the View/Chart no-op behaviour).
-       */
-      assignIds(element) {
-        return element;
-      }
-      // --- write (surgical overlay onto retained source formxml) ----------------
-      /**
-       * Re-emit formxml. When a source formxml is retained (fetch -> edit -> push, or
-       * a seeded createDefault), parse it and surgically overlay ONLY the modeled
-       * edits onto the matching cells — the cell label and the control parameters —
-       * leaving rows, shadow rows, verticallayout, sections, tabs and every unmapped
-       * attribute byte-stable. A genuinely source-less dashboard falls back to the
-       * minimal default template.
-       */
-      buildFormXml(json) {
-        var _a;
-        const sourceXml = (_a = json[dashboard_1.DASHBOARD_META_KEY]) === null || _a === void 0 ? void 0 : _a.formxml;
-        const xml = sourceXml !== null && sourceXml !== void 0 ? sourceXml : defaultFormXml();
-        const doc = parseXml2(xml);
-        overlayComponents(doc, json.components);
-        return serialize(doc);
-      }
-    };
-    exports2.DashboardAdapter = DashboardAdapter;
-    function parseXml2(xml) {
-      return new DOMParser().parseFromString(xml || "<form/>", "text/xml");
-    }
-    function serialize(doc) {
-      return new XMLSerializer().serializeToString(doc).replace(/^\s*<\?xml[^>]*\?>\s*/i, "");
-    }
-    function dashboardTypeFromValue(type) {
-      return String(type !== null && type !== void 0 ? type : "") === INTERACTIVE_TYPE ? "Interactive" : "Standard";
-    }
-    function layoutTypeFromDoc(doc) {
-      var _a;
-      const form = doc.getElementsByTagName("form")[0];
-      const raw = (_a = form === null || form === void 0 ? void 0 : form.getAttribute("formLayout")) !== null && _a !== void 0 ? _a : form === null || form === void 0 ? void 0 : form.getAttribute("layoutType");
-      const parsed = parseInt(raw !== null && raw !== void 0 ? raw : "", 10);
-      return Number.isNaN(parsed) ? 0 : parsed;
-    }
-    function childElements(parent, tagName) {
-      const result = [];
-      const children = parent.childNodes;
-      for (let i = 0; i < children.length; i += 1) {
-        const node = children[i];
-        if (node.nodeType === 1 && node.tagName.toLowerCase() === tagName) {
-          result.push(node);
-        }
-      }
-      return result;
-    }
-    function parseComponents(doc) {
-      const components = [];
-      const tabs = doc.getElementsByTagName("tab");
-      for (let tabIndex = 0; tabIndex < tabs.length; tabIndex += 1) {
-        const columnsRoots = childElements(tabs[tabIndex], "columns");
-        const columns = columnsRoots.flatMap((root) => childElements(root, "column"));
-        for (let columnIndex = 0; columnIndex < columns.length; columnIndex += 1) {
-          const sectionsRoots = childElements(columns[columnIndex], "sections");
-          const sections = sectionsRoots.flatMap((root) => childElements(root, "section"));
-          for (let sectionIndex = 0; sectionIndex < sections.length; sectionIndex += 1) {
-            parseSection(sections[sectionIndex], { tabIndex, columnIndex, sectionIndex }, components);
-          }
-        }
-      }
-      return components;
-    }
-    function parseSection(section, pos, out) {
-      const rowsRoots = childElements(section, "rows");
-      const rows = rowsRoots.flatMap((root) => childElements(root, "row"));
-      for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
-        const cells = childElements(rows[rowIndex], "cell");
-        for (let cellIndex = 0; cellIndex < cells.length; cellIndex += 1) {
-          const component = parseCell(cells[cellIndex], { ...pos, rowIndex, cellIndex });
-          if (component) {
-            out.push(component);
-          }
-        }
-      }
-    }
-    function parseCell(cell, position) {
-      var _a, _b, _c;
-      const cellId = stripBraces((_a = cell.getAttribute("id")) !== null && _a !== void 0 ? _a : "");
-      if (cellId.toLowerCase().startsWith("spacer")) {
-        return null;
-      }
-      const control = childElements(cell, "control")[0];
-      if (!control) {
-        return null;
-      }
-      const classId = (_b = control.getAttribute("classid")) !== null && _b !== void 0 ? _b : "";
-      const parameters = flattenParameters(control);
-      const label = cellLabel(cell);
-      const type = componentType(classId, parameters, control);
-      const icProperties = serializeIcProperties(control);
-      return {
-        id: (_c = control.getAttribute("id")) !== null && _c !== void 0 ? _c : cellId,
-        type,
-        name: label || parameters.TargetEntityType || parameters.WebResourceName || "Component",
-        classId,
-        position,
-        colspan: numAttr(cell, "colspan", 1),
-        rowspan: numAttr(cell, "rowspan", 1),
-        parameters,
-        ...icProperties ? { icProperties } : {}
-      };
-    }
-    function findIcProperties(control) {
-      const children = control.childNodes;
-      for (let i = 0; i < children.length; i += 1) {
-        const node = children[i];
-        if (node.nodeType === 1 && node.tagName.toLowerCase() === "icproperties") {
-          return node;
-        }
-      }
-      return void 0;
-    }
-    function serializeIcProperties(control) {
-      const el = findIcProperties(control);
-      return el ? new XMLSerializer().serializeToString(el) : void 0;
-    }
-    function overlayIcProperties(doc, control, xml) {
-      const existing = findIcProperties(control);
-      if (!xml) {
-        if (existing) {
-          control.removeChild(existing);
-        }
-        return;
-      }
-      const parsed = new DOMParser().parseFromString(xml, "text/xml").documentElement;
-      const imported = doc.importNode ? doc.importNode(parsed, true) : parsed;
-      if (existing) {
-        control.replaceChild(imported, existing);
-      } else {
-        control.appendChild(imported);
-      }
-    }
-    function cellLabel(cell) {
-      var _a, _b;
-      const labelsRoot = childElements(cell, "labels")[0];
-      if (!labelsRoot) {
-        return "";
-      }
-      const labels = childElements(labelsRoot, "label");
-      const preferred = (_a = labels.find((label) => label.getAttribute("languagecode") === String(LCID))) !== null && _a !== void 0 ? _a : labels[0];
-      return (_b = preferred === null || preferred === void 0 ? void 0 : preferred.getAttribute("description")) !== null && _b !== void 0 ? _b : "";
-    }
-    function flattenParameters(control) {
-      var _a;
-      const parameters = {};
-      const root = childElements(control, "parameters")[0];
-      if (!root) {
-        return parameters;
-      }
-      const children = root.childNodes;
-      for (let i = 0; i < children.length; i += 1) {
-        const node = children[i];
-        if (node.nodeType === 1) {
-          parameters[node.tagName] = ((_a = node.textContent) !== null && _a !== void 0 ? _a : "").trim();
-        }
-      }
-      return parameters;
-    }
-    function componentType(classId, parameters, control) {
-      var _a;
-      const base = CLASS_ID_TO_TYPE.get(classId.toUpperCase());
-      if (!base) {
-        return "unknown";
-      }
-      if (base === "chart") {
-        return parameters.ChartGridMode === "Chart" ? "chart" : "list";
-      }
-      if (base === "assistant") {
-        const uniqueId = ((_a = control.getAttribute("uniqueid")) !== null && _a !== void 0 ? _a : "").toUpperCase();
-        return uniqueId === ASSISTANT_UNIQUE_ID ? "assistant" : base;
-      }
-      return base;
-    }
-    function numAttr(element, name, fallback) {
-      var _a;
-      const parsed = parseInt((_a = element.getAttribute(name)) !== null && _a !== void 0 ? _a : "", 10);
-      return Number.isNaN(parsed) ? fallback : parsed;
-    }
-    function stripBraces(value) {
-      return value.replace(/^\{/, "").replace(/\}$/, "");
-    }
-    function overlayComponents(doc, components) {
-      const byPosition = indexCellsByPosition(doc);
-      for (const component of components) {
-        const cell = byPosition.get(positionKey(component.position));
-        if (!cell) {
-          continue;
-        }
-        const control = childElements(cell, "control")[0];
-        if (!control) {
-          continue;
-        }
-        overlayLabel(doc, cell, component.name);
-        overlayParameters(doc, control, component.parameters);
-        if (component.icProperties !== void 0) {
-          overlayIcProperties(doc, control, component.icProperties);
-        }
-      }
-    }
-    function indexCellsByPosition(doc) {
-      var _a;
-      const map6 = /* @__PURE__ */ new Map();
-      const tabs = doc.getElementsByTagName("tab");
-      for (let tabIndex = 0; tabIndex < tabs.length; tabIndex += 1) {
-        const columns = childElements(tabs[tabIndex], "columns").flatMap((root) => childElements(root, "column"));
-        for (let columnIndex = 0; columnIndex < columns.length; columnIndex += 1) {
-          const sections = childElements(columns[columnIndex], "sections").flatMap((root) => childElements(root, "section"));
-          for (let sectionIndex = 0; sectionIndex < sections.length; sectionIndex += 1) {
-            const rows = childElements(sections[sectionIndex], "rows").flatMap((root) => childElements(root, "row"));
-            for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
-              const cells = childElements(rows[rowIndex], "cell");
-              for (let cellIndex = 0; cellIndex < cells.length; cellIndex += 1) {
-                const cell = cells[cellIndex];
-                const cellId = stripBraces((_a = cell.getAttribute("id")) !== null && _a !== void 0 ? _a : "");
-                if (cellId.toLowerCase().startsWith("spacer")) {
-                  continue;
-                }
-                if (!childElements(cell, "control")[0]) {
-                  continue;
-                }
-                map6.set(positionKey({ tabIndex, columnIndex, sectionIndex, rowIndex, cellIndex }), cell);
-              }
-            }
-          }
-        }
-      }
-      return map6;
-    }
-    function positionKey(position) {
-      return `${position.tabIndex}.${position.columnIndex}.${position.sectionIndex}.${position.rowIndex}.${position.cellIndex}`;
-    }
-    function overlayLabel(doc, cell, name) {
-      if (!name) {
-        return;
-      }
-      let labelsRoot = childElements(cell, "labels")[0];
-      if (!labelsRoot) {
-        labelsRoot = doc.createElement("labels");
-        cell.appendChild(labelsRoot);
-      }
-      let label = childElements(labelsRoot, "label").find((l) => l.getAttribute("languagecode") === String(LCID));
-      if (!label) {
-        label = childElements(labelsRoot, "label")[0];
-      }
-      if (!label) {
-        label = doc.createElement("label");
-        label.setAttribute("languagecode", String(LCID));
-        labelsRoot.appendChild(label);
-      }
-      label.setAttribute("description", name);
-    }
-    function overlayParameters(doc, control, parameters) {
-      const keys = Object.keys(parameters);
-      if (keys.length === 0) {
-        return;
-      }
-      let root = childElements(control, "parameters")[0];
-      if (!root) {
-        root = doc.createElement("parameters");
-        control.appendChild(root);
-      }
-      const existing = /* @__PURE__ */ new Map();
-      const children = root.childNodes;
-      for (let i = 0; i < children.length; i += 1) {
-        const node = children[i];
-        if (node.nodeType === 1) {
-          existing.set(node.tagName, node);
-        }
-      }
-      for (const key of keys) {
-        const value = parameters[key];
-        const node = existing.get(key);
-        if (node) {
-          node.textContent = value;
-        } else {
-          const created = doc.createElement(key);
-          created.textContent = value;
-          root.appendChild(created);
-        }
-      }
-    }
-    function defaultFormXml() {
-      const tabId = `{${(0, idGenerator_1.newId)()}}`;
-      const sectionId = `{${(0, idGenerator_1.newId)()}}`;
-      const cellId = `{${(0, idGenerator_1.newId)()}}`;
-      return `<form><tabs><tab id="${tabId}" name="General" showlabel="true" expanded="true" verticallayout="true"><columns><column width="100%"><sections><section id="${sectionId}" name="Section 1" showlabel="false" columns="1"><rows><row><cell id="${cellId}" rowspan="12" colspan="1" showlabel="true" /></row></rows></section></sections></column></columns></tab></tabs></form>`;
-    }
-    function dashboardRegistration() {
-      return {
-        adapter: new DashboardAdapter(),
-        api: DashboardApi_1.dashboardApi
-      };
-    }
-    exports2.dashboardRegistration = dashboardRegistration;
-  }
-});
-
 // ../power-platform-ux/packages/cds-maker-sdk/lib/registrations.js
 var require_registrations = __commonJS({
   "../power-platform-ux/packages/cds-maker-sdk/lib/registrations.js"(exports2) {
@@ -81693,6 +81967,7 @@ var require_MakerSdk = __commonJS({
     var WebResourceApi_12 = require_WebResourceApi();
     var SolutionApi_12 = require_SolutionApi();
     var FormAdapter_12 = require_FormAdapter();
+    var DashboardAdapter_12 = require_DashboardAdapter();
     var registrations_1 = require_registrations();
     var domShim_1 = require_domShim();
     var idGenerator_1 = require_idGenerator();
@@ -82040,9 +82315,54 @@ var require_MakerSdk = __commonJS({
        * binding. Adding to an existing form needs `publishArtifact` after push, like
        * sub-grids. See {@link addNotesControlToForm}.
        */
+      /**
+       * Add a tile (chart / list / iframe / web resource) to a dashboard. Unlike the
+       * overlay path (which only edits cells that already carry a control), this
+       * SYNTHESIZES a new `<cell><control>` and appends it — so a dashboard created
+       * from scratch (`createArtifact('dashboard', …)`) gets functional tiles. Writes
+       * both the typed component list and the retained `$meta.formxml` (the push
+       * source), so push + publish renders the tile. See {@link addDashboardTileToForm}.
+       */
+      addDashboardTile(dashboardId, options) {
+        const json = this.readRaw("dashboard", dashboardId);
+        (0, DashboardAdapter_12.addDashboardTileToForm)(json, options);
+        this.workspace.writeArtifact("dashboard", dashboardId, json);
+        return this.getArtifact("dashboard", dashboardId);
+      }
       addNotesControl(formId, options) {
         const json = this.readRaw("form", formId);
         (0, FormAdapter_12.addNotesControlToForm)(json, options);
+        this.workspace.writeArtifact("form", formId, json);
+        return this.getArtifact("form", formId);
+      }
+      /**
+       * Add a bound field to a form, auto-labeled from the column's display name and
+       * rendered with the right control for its type (both read from entity metadata,
+       * fetched once if not cached). This avoids the raw-logical-name label that an
+       * explicit-layout form otherwise shows (e.g. `new_customerid` instead of
+       * `Customer`). Pass an explicit `label` / `classId` to override. The form must
+       * have been fetched first; adding to an existing form needs `publishArtifact`
+       * after push, like sub-grids. See {@link addFieldToForm}.
+       */
+      async addField(formId, options) {
+        var _a, _b;
+        const json = this.readRaw("form", formId);
+        let field;
+        try {
+          field = this.getFieldMetadata(json.entityLogicalName, options.fieldName);
+        } catch {
+          try {
+            await this.fetchEntityMetadata(json.entityLogicalName);
+            field = this.getFieldMetadata(json.entityLogicalName, options.fieldName);
+          } catch {
+            field = void 0;
+          }
+        }
+        (0, FormAdapter_12.addFieldToForm)(json, {
+          ...options,
+          label: (_a = options.label) !== null && _a !== void 0 ? _a : field === null || field === void 0 ? void 0 : field.displayName,
+          classId: (_b = options.classId) !== null && _b !== void 0 ? _b : (0, FormAdapter_12.classIdForAttributeType)(field === null || field === void 0 ? void 0 : field.attributeType)
+        });
         this.workspace.writeArtifact("form", formId, json);
         return this.getArtifact("form", formId);
       }
@@ -82351,8 +82671,8 @@ var __exportStar = exports && exports.__exportStar || function(m, exports2) {
   for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports2, p)) __createBinding(exports2, m, p);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.queryRecords = exports.getRecord = exports.deleteRecord = exports.upsertRecord = exports.updateRecord = exports.createRecordsBulk = exports.createRecord = exports.resolveEntitySetName = exports.deleteTable = exports.deleteGlobalOptionSet = exports.createGlobalOptionSet = exports.deleteRelationship = exports.createRelationship = exports.deleteAlternateKey = exports.createAlternateKey = exports.updateTable = exports.deleteColumn = exports.updateColumn = exports.insertStatusValue = exports.createCustomerColumn = exports.createColumn = exports.createTable = exports.dashboardRegistration = exports.DashboardAdapter = exports.chartRegistration = exports.ChartAdapter = exports.commandRegistration = exports.CommandAdapter = exports.appRegistration = exports.AppAdapter = exports.businessRuleRegistration = exports.BusinessRuleAdapter = exports.viewRegistration = exports.ViewAdapter = exports.NOTES_CLASS_ID = exports.SUBGRID_CLASS_ID = exports.addNotesControlToForm = exports.addCustomControlToForm = exports.addFormEventHandler = exports.addSubGridToForm = exports.formRegistration = exports.FormAdapter = exports.ArtifactAdapter = exports.findColumns = exports.findTables = exports.fetchEntityMetadataFromApi = exports.findElements = exports.JsonPointer = exports.createMakerSdk = exports.MakerSdk = void 0;
-exports.SolutionComponentType = exports.fetchSolutionComponents = exports.deleteSolution = exports.importSolution = exports.exportSolution = exports.removeSolutionComponent = exports.addSolutionComponent = exports.setSolutionVersion = exports.createSolution = exports.createPublisher = exports.deleteWebResource = exports.getWebResource = exports.updateWebResource = exports.createWebResource = exports.disassociateRecords = exports.associateRecords = void 0;
+exports.upsertRecord = exports.updateRecord = exports.createRecordsBulk = exports.createRecord = exports.resolveEntitySetName = exports.deleteTable = exports.deleteGlobalOptionSet = exports.createGlobalOptionSet = exports.deleteRelationship = exports.createRelationship = exports.deleteAlternateKey = exports.createAlternateKey = exports.updateTable = exports.deleteColumn = exports.updateColumn = exports.insertStatusValue = exports.createCustomerColumn = exports.createColumn = exports.createTable = exports.addDashboardTileToForm = exports.dashboardRegistration = exports.DashboardAdapter = exports.chartRegistration = exports.ChartAdapter = exports.commandRegistration = exports.CommandAdapter = exports.appRegistration = exports.AppAdapter = exports.businessRuleRegistration = exports.BusinessRuleAdapter = exports.viewRegistration = exports.ViewAdapter = exports.NOTES_CLASS_ID = exports.SUBGRID_CLASS_ID = exports.classIdForAttributeType = exports.addFieldToForm = exports.addNotesControlToForm = exports.addCustomControlToForm = exports.addFormEventHandler = exports.addSubGridToForm = exports.formRegistration = exports.FormAdapter = exports.ArtifactAdapter = exports.findColumns = exports.findTables = exports.fetchEntityMetadataFromApi = exports.findElements = exports.JsonPointer = exports.createMakerSdk = exports.MakerSdk = void 0;
+exports.SolutionComponentType = exports.fetchSolutionComponents = exports.deleteSolution = exports.importSolution = exports.exportSolution = exports.removeSolutionComponent = exports.addSolutionComponent = exports.setSolutionVersion = exports.createSolution = exports.createPublisher = exports.deleteWebResource = exports.getWebResource = exports.updateWebResource = exports.createWebResource = exports.disassociateRecords = exports.associateRecords = exports.queryRecords = exports.getRecord = exports.deleteRecord = void 0;
 var MakerSdk_1 = require_MakerSdk();
 Object.defineProperty(exports, "MakerSdk", { enumerable: true, get: function() {
   return MakerSdk_1.MakerSdk;
@@ -82416,6 +82736,12 @@ Object.defineProperty(exports, "addCustomControlToForm", { enumerable: true, get
 Object.defineProperty(exports, "addNotesControlToForm", { enumerable: true, get: function() {
   return FormAdapter_1.addNotesControlToForm;
 } });
+Object.defineProperty(exports, "addFieldToForm", { enumerable: true, get: function() {
+  return FormAdapter_1.addFieldToForm;
+} });
+Object.defineProperty(exports, "classIdForAttributeType", { enumerable: true, get: function() {
+  return FormAdapter_1.classIdForAttributeType;
+} });
 Object.defineProperty(exports, "SUBGRID_CLASS_ID", { enumerable: true, get: function() {
   return FormAdapter_1.SUBGRID_CLASS_ID;
 } });
@@ -82463,6 +82789,9 @@ Object.defineProperty(exports, "DashboardAdapter", { enumerable: true, get: func
 } });
 Object.defineProperty(exports, "dashboardRegistration", { enumerable: true, get: function() {
   return DashboardAdapter_1.dashboardRegistration;
+} });
+Object.defineProperty(exports, "addDashboardTileToForm", { enumerable: true, get: function() {
+  return DashboardAdapter_1.addDashboardTileToForm;
 } });
 var SchemaApi_1 = require_SchemaApi();
 Object.defineProperty(exports, "createTable", { enumerable: true, get: function() {

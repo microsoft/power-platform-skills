@@ -276,6 +276,17 @@ function validateAppSpec(spec) {
       errors.push(`view references unknown entity '${v.entity}'`);
     }
   }
+  // Commands (modern command-bar buttons). A functional button needs a JS library + function;
+  // the library must be a declared web resource (the on-click binds to it).
+  const COMMAND_LOCATIONS = new Set(['MainTab', 'HomeTab', 'ContextualTab']);
+  for (const c of spec.commands || []) {
+    if (!c || !c.entity || !entityNames.has(c.entity)) { errors.push(`command references unknown entity '${c && c.entity}'`); continue; }
+    if (!c.label) errors.push(`command on ${c.entity}: label is required`);
+    if (c.location && !COMMAND_LOCATIONS.has(c.location)) errors.push(`command '${c.label}' on ${c.entity}: location must be MainTab|HomeTab|ContextualTab`);
+    if (!c.library) errors.push(`command '${c.label}' on ${c.entity}: library (web-resource name) is required`);
+    else if (!webResourceNames.has(String(c.library).toLowerCase())) errors.push(`command '${c.label}' on ${c.entity}: library '${c.library}' is not a declared webResources[] name`);
+    if (!c.function) errors.push(`command '${c.label}' on ${c.entity}: function (JS function name) is required`);
+  }
   for (const a of (spec.appShell && spec.appShell.areas) || []) {
     for (const g of a.groups || []) {
       for (const sa of g.subAreas || []) {
