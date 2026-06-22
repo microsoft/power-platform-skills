@@ -11,7 +11,7 @@ A **plugin marketplace** for Power Platform development by Microsoft. The Open P
 ```
 power-platform-skills/
 ├── marketplace.json          # Open Plugins marketplace manifest (lists all available plugins)
-├── .claude-plugin/           # Legacy symlinks for existing subscriptions
+├── .claude-plugin/           # Legacy manifest mirrors for existing subscriptions
 │   └── marketplace.json
 ├── plugins/                  # Directory containing individual plugins
 │   └── <plugin-name>/        # Individual plugin (e.g., power-pages)
@@ -46,7 +46,7 @@ No root-level build, lint, or test commands exist. Build/test tooling lives insi
 Each plugin follows this structure:
 
 - `.plugin/plugin.json` — Open Plugins metadata (name, version, keywords)
-- `.claude-plugin/plugin.json` — legacy symlink to `.plugin/plugin.json` kept for existing subscriptions
+- `.claude-plugin/plugin.json` — legacy mirror of `.plugin/plugin.json` kept for existing subscriptions
 - `.mcp.json` — MCP server configuration (optional)
 - `agents/` — Agent definitions (`.md` files with YAML frontmatter)
 - `skills/` — Skill definitions, each in its own subdirectory with a `SKILL.md`
@@ -96,13 +96,14 @@ Current adopters: `power-pages`. Others adopt on demand.
 
 ## Legacy Marketplace Compatibility
 
-Keep the root `.claude-plugin/marketplace.json` as a symlink to
-`../marketplace.json`, and keep each plugin's `.claude-plugin/plugin.json` as a
-symlink to `../.plugin/plugin.json`. The shared root marketplace must stay
-dual-compatible: use repository-root-relative plugin `source` paths and preserve
-legacy `category`/`tags` fields alongside Open Plugins metadata. Existing
-marketplace subscriptions may still resolve the legacy paths during auto-update,
-so removing or drifting these files can force users to reinstall. Run
+Keep the root `.claude-plugin/marketplace.json` and each plugin's
+`.claude-plugin/plugin.json` as JSON mirrors of their Open Plugins counterparts.
+The shared root marketplace must stay dual-compatible: use repository-root-relative
+plugin `source` paths and preserve legacy `category`/`tags` fields alongside Open
+Plugins metadata. Existing marketplace subscriptions may still resolve the legacy
+paths during auto-update, so removing or drifting these files can force users to
+reinstall. Because mirrors are committed files (not symlinks), update both source
+and legacy copies together, then run
 `node scripts/validate-legacy-compatibility.js` after metadata changes.
 
 ## Code Conventions

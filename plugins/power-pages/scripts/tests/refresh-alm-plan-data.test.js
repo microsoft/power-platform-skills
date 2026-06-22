@@ -279,6 +279,74 @@ test('refresh finalize sets PLAN_STATUS to Completed', (t) => {
   assert.equal(planData.PLAN_STATUS, 'Completed');
 });
 
+// evaluatePlanCompletion — the In Execution → Completed transition that makes the
+// LAST execution skill terminate the plan automatically. These tests pin the
+// status-gate edges (the defensive "Approved" fallback + the Draft / failed-step
+// guards) so the lifecycle can't silently over- or under-complete.
+
+test('completion: the last execution phase flips a plan from Approved straight to Completed (defensive fallback)', (t) => {
+  // Normal flow promotes Approved → In Execution in check-alm-plan.js's Phase 0
+  // gate. If that promotion was ever skipped (read-only caller, --no-heartbeat,
+  // a manual run) the plan can still be "Approved" when its final step lands.
+  // evaluatePlanCompletion accepts BOTH In Execution AND Approved so the plan
+  // still terminates instead of getting wedged one transition short of done.
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    PLAN_STATUS: 'Approved',
+    SITE_NAME: 'TestSite',
+    validationRuns: { Staging: null },
+    steps: [
+      { name: 'Deploy via pipeline to Staging', status: 'completed' },
+      { name: 'Test site in Staging', status: 'pending' },
+    ],
+  });
+  writeJson(path.join(root, 'docs', 'alm', 'last-test-site.json'), { runOutcome: 'passed', runAt: '2026-06-16T00:00:00.000Z' });
+
+  refresh({ projectRoot: root, phase: 'test-site', render: false, stageName: 'Staging' });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.steps[1].status, 'completed', 'the final step flips to completed');
+  assert.equal(planData.PLAN_STATUS, 'Completed', 'Approved → Completed (defensive fallback path)');
+  assert.ok(planData.COMPLETED_AT, 'COMPLETED_AT is stamped on completion');
+});
+
+test('completion: a Draft plan is never auto-completed even when every step is done', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    PLAN_STATUS: 'Draft',
+    SITE_NAME: 'TestSite',
+    validationRuns: { Staging: null },
+    steps: [{ name: 'Test site in Staging', status: 'completed' }],
+  });
+  writeJson(path.join(root, 'docs', 'alm', 'last-test-site.json'), { runOutcome: 'passed', runAt: '2026-06-16T00:00:00.000Z' });
+
+  refresh({ projectRoot: root, phase: 'test-site', render: false, stageName: 'Staging' });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.PLAN_STATUS, 'Draft', 'an unapproved plan must not complete itself');
+  assert.equal(planData.COMPLETED_AT, undefined, 'no COMPLETED_AT stamp for a Draft plan');
+});
+
+test('completion: a failed step blocks completion so a failed deploy can never look "done"', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    PLAN_STATUS: 'In Execution',
+    SITE_NAME: 'TestSite',
+    validationRuns: { Staging: null },
+    steps: [
+      { name: 'Deploy via pipeline to Staging', status: 'failed' },
+      { name: 'Test site in Staging', status: 'pending' },
+    ],
+  });
+  writeJson(path.join(root, 'docs', 'alm', 'last-test-site.json'), { runOutcome: 'passed', runAt: '2026-06-16T00:00:00.000Z' });
+
+  refresh({ projectRoot: root, phase: 'test-site', render: false, stageName: 'Staging' });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.PLAN_STATUS, 'In Execution', 'a failed step keeps the plan in execution');
+  assert.equal(planData.COMPLETED_AT, undefined, 'no COMPLETED_AT while a step is failed');
+});
+
 test('refresh setup-pipeline preserves prior pipelineMeta.reusedByWiring annotation', (t) => {
   const root = makeProject(t);
   writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
