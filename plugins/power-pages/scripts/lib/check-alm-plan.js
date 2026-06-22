@@ -80,6 +80,7 @@
 const fs = require('fs');
 const path = require('path');
 const helpers = require('./validation-helpers');
+const { planDataPath, planHtmlPath } = require('./alm-paths');
 
 // Heartbeat window — how recent `lastInvocationAt` must be for the plan to count
 // as actively executing. 60 minutes is comfortably larger than the longest single
@@ -185,8 +186,8 @@ function readDeferralLocal(projectRoot) {
 
 async function checkAlmPlan({ projectRoot, envUrl, token, solutionId, makeRequest, writeHeartbeat = true, now }) {
   if (!projectRoot) throw new Error('--projectRoot is required');
-  const planPath = path.join(projectRoot, 'docs', '.alm-plan-data.json');
-  const htmlPath = path.join(projectRoot, 'docs', 'alm-plan.html');
+  const planPath = planDataPath(projectRoot);
+  const htmlPath = planHtmlPath(projectRoot);
   const nowMs = (typeof now === 'number') ? now : Date.now();
 
   // Deferral marker check — runs first, regardless of plan presence.

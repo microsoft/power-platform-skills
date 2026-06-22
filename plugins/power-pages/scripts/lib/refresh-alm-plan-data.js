@@ -56,7 +56,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { almPath } = require('./alm-paths');
+const { almPath, planDataPath, planHtmlPath } = require('./alm-paths');
 
 const PHASES = new Set([
   'setup-solution',
@@ -1049,8 +1049,8 @@ function mtimeMs(filePath) {
 // marker schema the refresh can't parse); the reconcile still heals the other phases.
 function reconcile({ projectRoot, render, rendererPath }) {
   if (!projectRoot) throw new Error('--projectRoot is required');
-  const dataPath = path.join(projectRoot, 'docs', '.alm-plan-data.json');
-  const htmlPath = path.join(projectRoot, 'docs', 'alm-plan.html');
+  const dataPath = planDataPath(projectRoot);
+  const htmlPath = planHtmlPath(projectRoot);
 
   // Respect the project-level ALM opt-out. nextStep is null on these early paths
   // (there's nothing to guide toward), kept on the return for a stable contract so
@@ -1151,8 +1151,8 @@ function refresh({ projectRoot, phase, render, rendererPath, stageName }) {
     throw new Error('--phase must be one of: ' + [...PHASES].join(', '));
   }
 
-  const dataPath = path.join(projectRoot, 'docs', '.alm-plan-data.json');
-  const htmlPath = path.join(projectRoot, 'docs', 'alm-plan.html');
+  const dataPath = planDataPath(projectRoot);
+  const htmlPath = planHtmlPath(projectRoot);
 
   if (!fs.existsSync(dataPath)) {
     return {

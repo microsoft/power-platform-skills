@@ -8,6 +8,7 @@ const {
   getValidatorScript,
   isAlmPlanSkill,
 } = require('../scripts/lib/powerpages-hook-utils');
+const { planDataPath } = require('../scripts/lib/alm-paths');
 
 const DEBUG = process.env.DEBUG === '1' || process.env.DEBUG === 'true';
 
@@ -62,7 +63,7 @@ process.stdin.on('end', () => {
     // changes the hook's exit code (the validator's status stands). Triggering on
     // any ALM skill (not just the marker's writer) catches a skip that surfaces only
     // when the NEXT ALM skill runs. Honors .alm-deferred + no-plan inside reconcile.
-    if (isAlmPlanSkill(skillName) && fs.existsSync(path.join(cwd, 'docs', '.alm-plan-data.json'))) {
+    if (isAlmPlanSkill(skillName) && fs.existsSync(planDataPath(cwd))) {
       try {
         const refreshPath = path.join(__dirname, '..', 'scripts', 'lib', 'refresh-alm-plan-data.js');
         const rec = spawnSync(process.execPath, [refreshPath, '--projectRoot', cwd, '--reconcile', '--render'], {
