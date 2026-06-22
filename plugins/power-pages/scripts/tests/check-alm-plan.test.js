@@ -593,6 +593,7 @@ test('Approved + stale source solution: stale gate is NOT masked by the promotio
   }
 });
 
+
 test('does NOT promote Approved when writeHeartbeat is false (read-only callers: plan-alm, audits, tests)', async () => {
   const dir = tempProject({ SITE_NAME: 'T', PLAN_STATUS: 'Approved' });
   try {

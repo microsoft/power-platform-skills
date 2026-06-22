@@ -789,3 +789,64 @@ test('estimateSolutionSize tableCountScope is "unavailable" with no local signal
   assert.equal(result.tableCountScope, 'unavailable');
   assert.deepEqual(result.tableRelationships, []);
 });
+
+// --- resolveSiteType: correct build-axis label (was hardcoded 'code-site') -----
+
+test('resolveSiteType prefers the explicit caller value (plan-alm Phase 1 detection)', () => {
+  const { resolveSiteType } = require('../lib/estimate-solution-size');
+  assert.equal(resolveSiteType('declarative', '/whatever'), 'declarative');
+  assert.equal(resolveSiteType('code', null), 'code');
+});
+
+test('resolveSiteType normalizes the legacy "data-model" alias to "declarative"', () => {
+  const { resolveSiteType } = require('../lib/estimate-solution-size');
+  assert.equal(resolveSiteType('data-model', '/whatever'), 'declarative');
+});
+
+test('resolveSiteType ignores a non-canonical value (e.g. unsubstituted "{SITE_TYPE}") and probes instead', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { resolveSiteType } = require('../lib/estimate-solution-size');
+  const edmRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'est-stype-lit-'));
+  try {
+    fs.mkdirSync(path.join(edmRoot, '.powerpages-site', '.portalconfig'), { recursive: true });
+    // Garbage label must NOT pass through; the marker probe wins.
+    assert.equal(resolveSiteType('{SITE_TYPE}', edmRoot), 'declarative');
+    // No markers + garbage label → 'unknown', never the garbage.
+    assert.equal(resolveSiteType('{SITE_TYPE}', null), 'unknown');
+  } finally {
+    fs.rmSync(edmRoot, { recursive: true, force: true });
+  }
+});
+
+test('resolveSiteType falls back to local markers: powerpages.config.json => code, .portalconfig => declarative', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { resolveSiteType } = require('../lib/estimate-solution-size');
+
+  const codeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'est-stype-code-'));
+  const edmRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'est-stype-edm-'));
+  const bareRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'est-stype-bare-'));
+  try {
+    fs.writeFileSync(path.join(codeRoot, 'powerpages.config.json'), '{}');
+    assert.equal(resolveSiteType(null, codeRoot), 'code');
+
+    fs.mkdirSync(path.join(edmRoot, '.powerpages-site', '.portalconfig'), { recursive: true });
+    assert.equal(resolveSiteType(null, edmRoot), 'declarative', 'EDM/declarative site must NOT be mislabeled code');
+
+    // No markers and no projectRoot → 'unknown', never a wrong guess.
+    assert.equal(resolveSiteType(null, bareRoot), 'unknown');
+    assert.equal(resolveSiteType(null, null), 'unknown');
+  } finally {
+    for (const d of [codeRoot, edmRoot, bareRoot]) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test('parseArgs captures --siteType', () => {
+  const { parseArgs } = require('../lib/estimate-solution-size');
+  const a = parseArgs(['node', 'x', '--siteType', 'declarative', '--envUrl', 'https://x']);
+  assert.equal(a.siteType, 'declarative');
+  assert.equal(parseArgs(['node', 'x']).siteType, null);
+});

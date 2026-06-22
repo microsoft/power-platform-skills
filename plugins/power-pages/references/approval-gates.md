@@ -256,14 +256,16 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 
 ---
 
-### 6.1 `plan-alm` (15 calls; planner)
+### 6.1 `plan-alm` (17 calls; planner)
 
 > `plan-alm` is a **planner** — it produces an approved/draft HTML plan and never executes. The execution gates that used to live in Phases 5–8 (deploy-failure, post-deploy activation, manual export/import checkpoint) now belong to the individual ALM skills the user runs afterward; they are catalogued under those skills' sections, not here.
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
 | `plan-alm:1.deferral` | gate | progress | 1 | `.alm-deferred` marker present — *"Continue with deferral / remove and proceed / cancel"* | `deferral-marker` |
+| `plan-alm:1.approve-draft` | gate | plan | 1 (0b) | Existing **Draft** plan found — *"Approve this draft now (no re-plan) / re-plan from scratch / cancel"*. Approve writes status via `set-plan-status.js` and exits | nothing |
 | `plan-alm:1.completeness` | gate | progress | 1 | Completeness check found gaps — *"Sync first / plan with gaps / cancel"* | nothing |
+| `plan-alm:1.env-match` | gate | progress | 1 (6b) | `pac env who` env ≠ project's (recorded-URL mismatch or `websiteRecordId` not found in connected env) — *"Switch PAC env & re-run / continue against connected env (degraded) / cancel"*. Only fires on a detected mismatch | nothing |
 | `plan-alm:2.q1-existing` | gate | plan | 2 (Q1) | `SOLUTION_DONE=true` — *"Use existing solution **{name}**?"* | nothing |
 | `plan-alm:2.q1-fresh` | gate | plan | 2 (Q1) | `SOLUTION_DONE=false` — *"Include solution setup in plan?"* | nothing |
 | `plan-alm:2.q1b-split` | gate | plan | 2 (Q1b) | `RECOMMEND_SPLIT=true` — *"Follow recommended {strategy} split?"* | nothing |

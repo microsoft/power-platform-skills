@@ -121,11 +121,21 @@ Tasks to create:
 
 Steps:
 
-1. Run `verify-alm-prerequisites.js` to confirm PAC CLI auth, acquire a token, and verify API access:
+1. **Resolve the project's configured environment URL first, then assert PAC is actually connected to it.** `verify-alm-prerequisites.js` resolves the env from PAC's *ambient org context* (`pac env who`), which is **not** guaranteed to match the project. If PAC has drifted to another environment (duplicate active `pac auth` profiles, or an external process flipping the active env), the skill would silently run discovery — and later `pac pipeline deploy` — against the **wrong** environment (potentially PROD). Assert the match and **hard-stop** on mismatch rather than pinning `--envUrl`: pinning would correct only the Dataverse-API calls while later PAC-CLI operations still follow the drifted context, so asserting that PAC itself is on the right env is the safer gate.
+
+   Read the project's recorded env URL (first match wins): `.solution-manifest.json` → top-level `environmentUrl`, else `powerpages.config.json` → `environmentUrl`. Store as `CONFIGURED_ENV_URL`. (Both fields are top-level `environmentUrl` strings; declarative/EDM sites have no `powerpages.config.json`, so the manifest is the source there.)
+
+   **Pass `--expectedEnvUrl` only when `CONFIGURED_ENV_URL` actually resolved to a URL.** Use the first form when a recorded env URL exists, the second when neither file records one — do **not** pass an empty or unresolved `--expectedEnvUrl "{CONFIGURED_ENV_URL}"`:
+
    ```bash
+   # CONFIGURED_ENV_URL resolved (recorded in manifest/config) — assert PAC is on it:
+   node "${PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --require-manifest --expectedEnvUrl "{CONFIGURED_ENV_URL}"
+
+   # Neither file records an env URL — omit the flag, fall back to the pac-context default:
    node "${PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --require-manifest
    ```
-   Capture output as JSON; extract `.envUrl` (store as `devEnvUrl`) and `.token` (store as `DEV_TOKEN`). If the script exits non-zero, stop and surface the error — it will indicate whether `az login`, `pac auth`, or WhoAmI failed.
+
+   `--expectedEnvUrl` makes the helper compare PAC's resolved env (origin-only) against `CONFIGURED_ENV_URL` and exit non-zero with an *"Environment mismatch: PAC CLI is connected to {X} but this project targets {Y} — run `pac env select …`"* error on mismatch. (As a safety net the helper skips the assertion if the value isn't a parseable env URL — an empty string or an unsubstituted placeholder won't hard-stop — but prefer omitting the flag outright when there's no recorded URL.) Capture output as JSON; extract `.envUrl` (store as `devEnvUrl`) and `.token` (store as `DEV_TOKEN`). If the script exits non-zero, stop and surface the error — it indicates an env mismatch, or that `az login` / `pac auth` / WhoAmI failed.
 
 2. Run `detect-project-context.js` to read project config and solution manifest:
    ```bash
@@ -288,6 +298,8 @@ Use `solutionId` from `.solution-manifest.json` as `ARTIFACT_SOLUTION_ID` and `u
 > GET {hostEnvUrl}/api/data/v9.1/deploymentpipelines({pipelineId})/deploymentpipeline_deploymentenvironment?$select=deploymentenvironmentid,name,environmenttype
 > ```
 > Filter for `environmenttype = 200000000` to get the source record. Use `deploymentenvironmentid` as the `sourceDeploymentEnvironmentId`. For the artifact/solution list, use `sourceDeploymentEnvironmentId` from `docs/alm/last-pipeline.json` and `solutionName` from `.solution-manifest.json` as fallbacks. Set a flag `VALIDATE_PACKAGE_UNAVAILABLE = true` to skip Phase 4.2–4.3 and use the PAC CLI path in Phase 6.
+>
+> **If `RetrieveDeploymentPipelineInfo` returns a NON-404 error (e.g. 400/4xx/5xx)** — observed: some Pipelines packages return **400** for this call even though `ValidatePackageAsync` works fine — do **NOT** set `VALIDATE_PACKAGE_UNAVAILABLE`. The 404 branch above is specifically for older packages that lack the OData validation API; a 400 is just this metadata call failing, not the validation API being absent. Instead, fall back to `sourceDeploymentEnvironmentId` from `docs/alm/last-pipeline.json` (and `solutionName` from `.solution-manifest.json`) and **continue the normal `ValidatePackageAsync` flow** (Phase 4 onward). If `docs/alm/last-pipeline.json` is somehow missing `sourceDeploymentEnvironmentId`, use the same `deploymentpipeline_deploymentenvironment` navigation-property GET shown in the 404 branch above to recover it (still **without** setting `VALIDATE_PACKAGE_UNAVAILABLE`). Only a genuine 404 — or a later `ValidatePackageAsync` 404 (Phase 4.2) — routes to the PAC-CLI path.
 
 ### Phase 3.5 — Pre-deploy Completeness Check
 
@@ -1189,6 +1201,17 @@ Evaluate the result and take action based on the outcome. In all cases, **after 
 - `"activationStatus": "{ACTIVATION_OUTCOME.status}"` (or keep `null` if `ACTIVATION_OUTCOME` is null)
 - `"siteUrl": "{ACTIVATION_OUTCOME.siteUrl}"` (or keep `null`)
 
+**Re-refresh the ALM plan so the activation outcome reaches it.** The Phase 7.5b refresh ran *before* activation was resolved, so the plan's "Activate site in {stage}" step is still pending even though `last-deploy.json` now records `activationStatus`. Re-run the refresh now that the marker is patched — the `deploy-pipeline` phase auto-completes the activate step when `activationStatus` is `"Activated"` (a deferred `"Pending"` correctly leaves it pending):
+
+```bash
+node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase deploy-pipeline \
+  --render
+```
+
+(Soft no-op when no ALM plan exists — `refresh-alm-plan-data.js` returns `ok:false` when `docs/.alm-plan-data.json` is absent.)
+
 Then update the deploy history HTML file (in-place `Edit`) — replace `__ACTIVATION_SECTION__` with the appropriate HTML:
 
 - **`status: "Activated"`**:
@@ -1284,7 +1307,7 @@ Authorization: Bearer {HOST_TOKEN}
 
 | Task subject | activeForm | Description |
 |---|---|---|
-| Verify prerequisites | Verifying prerequisites | Run verify-alm-prerequisites.js (--require-manifest) for PAC/az/WhoAmI; run detect-project-context.js for solutionManifest/siteName; read docs/alm/last-pipeline.json for pipelineId/stages; acquire host env token |
+| Verify prerequisites | Verifying prerequisites | Run verify-alm-prerequisites.js (--require-manifest --expectedEnvUrl from project config; hard-stops on PAC env drift) for PAC/az/WhoAmI; run detect-project-context.js for solutionManifest/siteName; read docs/alm/last-pipeline.json for pipelineId/stages; acquire host env token |
 | Select target stage | Selecting target stage | Show available stages from docs/alm/last-pipeline.json; ask user to select target; warn if last deploy to this stage failed |
 | Resolve pipeline info | Resolving pipeline info | Call RetrieveDeploymentPipelineInfo (v9.1) to get SourceDeploymentEnvironmentId and DeployableArtifacts; match solution |
 | Validate package | Validating package | **`MULTI_RUN_MODE`**: run Phase 3.6 once (parallel batch) — `validate-stage-runs-batch.js` fans out create-stage-run + ValidatePackageAsync + poll-validation-status for all non-skipped solutions concurrently; halts the deploy on any failure or pending-approval batch; persists per-solution stageRunIds for the serial deploy loop to reuse. **Single-solution / legacy v2**: Phase 4 inline — POST deploymentstageruns (→ 201 or 204+header); POST ValidatePackageAsync top-level action (204); poll stagerunstatus until not 200000006; JSON.parse validationresults twice; fetch aigenerateddeploymentnotes; PATCH artifactversion + deploymentnotes + deploymentsettingsjson (from deployment-settings.json) |

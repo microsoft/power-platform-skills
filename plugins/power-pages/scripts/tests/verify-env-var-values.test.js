@@ -133,6 +133,31 @@ test('readSettingsFile filters Stages[] by stageLabel (case-insensitive)', async
   assert.equal(prodEntries[1].value, 'prod-b');
 });
 
+test('readSettingsFile matches a "Deploy to {label}" pipeline stage name against a "{label}"-keyed file (Gap E: total:0 bug)', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-env-norm-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  // Stages[] array shape, keyed "Staging"; deploy-pipeline passes the pipeline
+  // stage NAME "Deploy to Staging" — must still resolve (was returning [] → total:0,
+  // a silent no-op that falsely reassured the override had landed).
+  const arrFile = path.join(dir, 'arr.json');
+  fs.writeFileSync(arrFile, JSON.stringify({
+    Stages: [{ Name: 'Staging', EnvironmentVariables: [{ SchemaName: 'c311_feature_label', Value: 'staging-val' }] }],
+  }));
+  assert.deepEqual(readSettingsFile(arrFile, 'Deploy to Staging'), [
+    { schemaName: 'c311_feature_label', value: 'staging-val', stageLabel: 'Staging' },
+  ]);
+
+  // Keyed-object shape (configure-env-variables / what Pipelines accepts) — same fix.
+  const objFile = path.join(dir, 'obj.json');
+  fs.writeFileSync(objFile, JSON.stringify({
+    stages: { Staging: { EnvironmentVariables: [{ SchemaName: 'c311_feature_label', Value: 'staging-val' }] } },
+  }));
+  const entries = readSettingsFile(objFile, 'Deploy to Staging');
+  assert.equal(entries.length, 1, 'String-type override must be counted, not dropped to total:0');
+  assert.equal(entries[0].schemaName, 'c311_feature_label');
+});
+
 test('readSettingsFile with no stageLabel flattens Stages[]', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-env-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

@@ -65,6 +65,7 @@ function parseArgs(argv) {
     datamodelManifest: null,
     solutionId: null,
     projectRoot: null,
+    siteType: null,
   };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--envUrl' && args[i + 1]) out.envUrl = args[++i];
@@ -75,8 +76,44 @@ function parseArgs(argv) {
     else if (args[i] === '--datamodelManifest' && args[i + 1]) out.datamodelManifest = args[++i];
     else if (args[i] === '--solutionId' && args[i + 1]) out.solutionId = args[++i];
     else if (args[i] === '--projectRoot' && args[i + 1]) out.projectRoot = args[++i];
+    else if (args[i] === '--siteType' && args[i + 1]) out.siteType = args[++i];
   }
   return out;
+}
+
+// Resolve the build-axis site type for the estimator's diagnostic `siteType`
+// output field. Prefer the caller-supplied value (plan-alm resolves this in
+// Phase 1 via detect-project-context.js, the authoritative source), and fall
+// back to a lightweight local probe of the same markers detect-project-context.js
+// resolves on (also described in the plugin's AGENTS.md "detect-project-context.js" entry):
+//   - `powerpages.config.json`          → code / SPA site
+//   - `.powerpages-site/.portalconfig/` → declarative design-studio (EDM/standard) site
+// Returns the canonical values ('code' | 'declarative') to match
+// detect-project-context.js — NOT the old hardcoded 'code-site', which mislabeled
+// every declarative/EDM site as a code site. ('declarative' was formerly labeled
+// 'data-model'; a caller still passing the legacy 'data-model' is NORMALIZED to
+// 'declarative' so the output is always canonical.) Returns 'unknown' when neither
+// marker is present (e.g. running outside a project root).
+function resolveSiteType(explicitSiteType, projectRoot) {
+  // Normalize the caller-supplied label. 'data-model' is the legacy alias for
+  // 'declarative' (back-compat). Only canonical labels are trusted verbatim;
+  // anything else — notably an unsubstituted "{SITE_TYPE}" template literal an
+  // agent forwarded without resolving it — is IGNORED in favor of the local
+  // marker probe, so garbage never lands in the diagnostic output.
+  if (explicitSiteType === 'data-model') return 'declarative';
+  if (explicitSiteType === 'code' || explicitSiteType === 'declarative' || explicitSiteType === 'unknown') {
+    return explicitSiteType;
+  }
+  if (!projectRoot) return 'unknown';
+  const fs = require('fs');
+  const path = require('path');
+  try {
+    if (fs.existsSync(path.join(projectRoot, 'powerpages.config.json'))) return 'code';
+    if (fs.existsSync(path.join(projectRoot, '.powerpages-site', '.portalconfig'))) return 'declarative';
+  } catch {
+    // Filesystem probe is best-effort — a diagnostic label must never be fatal.
+  }
+  return 'unknown';
 }
 
 // Page size for paginated OData queries. Dataverse caps `Prefer: odata.maxpagesize`
@@ -738,7 +775,7 @@ async function countSolutionMembership(envUrl, solutionId, token, sitePpcIdSet =
   };
 }
 
-async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherPrefix, siteName, datamodelManifest, solutionId, projectRoot }) {
+async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherPrefix, siteName, datamodelManifest, solutionId, projectRoot, siteType }) {
   if (!envUrl || !websiteRecordId) {
     throw new Error('--envUrl and --websiteRecordId are required');
   }
@@ -1122,7 +1159,10 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
     // scope so reviewers can spot the divergence.
     envVarCountTenantWide,
     mediaRatio: Math.round(webMeasure.mediaRatio * 100) / 100,
-    siteType: 'code-site',
+    // Build-axis label: 'code' | 'declarative' | 'unknown' (was hardcoded
+    // 'code-site', which mislabeled every declarative/EDM site). Prefers the
+    // caller-supplied --siteType (plan-alm Phase 1), falls back to a local marker probe.
+    siteType: resolveSiteType(siteType, projectRoot),
     tables: tables.map((t) => ({ logicalName: t.logicalName, attributeCount: t.attributeCount || 0 })),
     // Dependency edges among the scoped tables ([a,b], lowercased, a<b) — consumed
     // by compute-split-plan.js to cluster related tables into the same solution.
@@ -1183,5 +1223,7 @@ module.exports = {
   classifyPPCs,
   countSolutionMembership,
   isProbablyBundleChunk,
+  resolveSiteType,
+  parseArgs,
   BYTES_PER,
 };

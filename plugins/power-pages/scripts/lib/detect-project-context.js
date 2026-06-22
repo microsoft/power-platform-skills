@@ -2,20 +2,22 @@
 
 // Reads Power Pages project context files from the project root.
 // Locates powerpages.config.json (code/SPA sites) OR a .powerpages-site/ config tree
-// (declarative "data-model" sites — Power Pages design-studio sites), plus
+// (declarative sites — Power Pages design-studio sites), plus
 // .solution-manifest.json and .datamodel-manifest.json.
 //
 // NOTE on terminology: the discriminator here is the BUILD axis — code/SPA site vs
 // declarative (design-studio) site — NOT the Dataverse data-model axis. A declarative
 // site can be on the standard OR the enhanced data model ("EDM"); both download to a
-// .powerpages-site/ tree via `pac pages download`. siteType "data-model" names that
-// declarative bucket (kept for compatibility with plan-alm); a future pass may rename
-// it to "declarative".
+// .powerpages-site/ tree via `pac pages download`. siteType "declarative" names that
+// bucket. (It was historically labeled "data-model"; that value is now the legacy
+// alias. Nothing branches on the literal — it is a diagnostic label the agent reads
+// and the estimator echoes — so the rename is safe, and any plan-data written before
+// the rename that still carries "data-model" remains equivalent.)
 //
 // Site identity resolution order (first match wins):
 //   1. powerpages.config.json  -> siteType "code"  (code/SPA sites; has siteName,
 //                                  websiteRecordId, environmentUrl)
-//   2. .powerpages-site/ (.portalconfig/ + website.yml) -> siteType "data-model"
+//   2. .powerpages-site/ (.portalconfig/ + website.yml) -> siteType "declarative"
 //                                  (declarative design-studio sites; standard or
 //                                  enhanced data model. website.yml carries `id` and
 //                                  `name` but no environment URL — callers re-confirm
@@ -31,7 +33,7 @@
 // Output (JSON to stdout):
 //   {
 //     "projectRoot": "...",
-//     "siteType": "code" | "data-model",
+//     "siteType": "code" | "declarative",   // "declarative" was formerly "data-model"
 //     "siteName": "...",
 //     "websiteRecordId": "...",
 //     "environmentUrl": "..." | null,
@@ -146,7 +148,7 @@ function detectProjectContext(options = {}) {
     };
   }
 
-  // 2. Declarative ("data-model") site — a Power Pages design-studio site
+  // 2. Declarative site (siteType "declarative", formerly "data-model") — a Power Pages design-studio site
   //    (`pac pages download`; standard or enhanced data model), as opposed to a
   //    code/SPA site. The authoritative positive marker is the
   //    `.powerpages-site/.portalconfig/` directory (only declarative sites have it).
@@ -167,7 +169,7 @@ function detectProjectContext(options = {}) {
     }
     return {
       projectRoot,
-      siteType: 'data-model',
+      siteType: 'declarative',
       siteName: site ? (site.name || null) : null,
       websiteRecordId: site ? (site.id || null) : null,
       environmentUrl: null,

@@ -63,7 +63,31 @@ Steps:
    - **Continue and keep marker** → set `DEFERRAL_PRESERVED = true` and `DEFERRAL_REASON = {reason}`. Proceed to step 1. Surface a one-line note in the Phase 1 step 9 user report (e.g. *"Note: `.alm-deferred` is preserved — other ALM skills will continue to skip plan-completeness checks for this project."*) so the user remembers the marker remains in effect after planning.
    - **Cancel** → exit cleanly (don't touch the marker).
 
-   If `deferred === false`, skip this step silently and proceed to step 1.
+   If `deferred === false`, skip this step silently and proceed to step 0b.
+
+0b. **Offer to approve an existing Draft in place (skip re-planning).** The same `check-alm-plan.js` output from step 0 also carries `exists` and `planStatus`. When `exists === true` **and** `planStatus === "Draft"`, the user already has a saved Draft plan — offer to approve it directly instead of regenerating the whole plan. (This is the only Draft→Approved path; without it, approving a draft means a full re-plan.)
+
+   <!-- gate: plan-alm:1.approve-draft | category=plan | cancel-leaves=nothing -->
+   > 🚦 **Gate (plan · plan-alm:1.approve-draft):** An existing **Draft** plan was found — approve it in place (no re-plan), re-plan from scratch, or cancel. Approving here writes the status via `set-plan-status.js` and exits without re-running discovery; no deployment is triggered.
+
+   Ask via `AskUserQuestion`:
+   > "This site already has an ALM plan saved as **Draft** (`docs/alm-plan.html`). What would you like to do?"
+
+   | Question | Header | Options |
+   |---|---|---|
+   | What would you like to do? | Existing draft plan | Approve this draft now — no re-plan (Recommended), Re-plan from scratch, Cancel |
+
+   - **Approve this draft now (Recommended)** → capture the approver using the **Phase 4 approver-capture procedure** (the always-interactive prompt with git/OS-name prefill), then write the status atomically with the helper:
+
+     ```bash
+     node "${PLUGIN_ROOT}/scripts/lib/set-plan-status.js" --projectRoot "." --status Approved --approver "{APPROVER}" --render
+     ```
+
+     Commit (`git add docs/alm-plan.html docs/.alm-plan-data.json && git commit -m "Approve ALM plan for {siteName}"`), run skill tracking (Phase 4 finalize), print the Phase 4 next-steps guidance, and **exit**. Do **not** continue to step 1 — there is nothing to re-plan.
+   - **Re-plan from scratch** → proceed to step 1 (the rest of Phase 1 regenerates the plan; Phase 4 saves the new version).
+   - **Cancel** → exit cleanly (leave the Draft as-is).
+
+   If `exists === false`, or `planStatus` is anything other than `"Draft"` (`Approved` / `In Execution` / `Completed` / null), skip this step silently and proceed to step 1.
 
 1. **Resolve the site identity from the local project.** `.powerpages-site/website.yml` is the source of truth for `websiteRecordId` and `siteName`, and it is present for **both** Power Pages site types:
    - **Code / SPA sites** — scaffolded by `/power-pages:create-site` and downloaded with `pac pages download-code-site`. These also have a `powerpages.config.json` and SPA source (`src/`, build output in `dist/`/`build/`).
@@ -75,8 +99,8 @@ Steps:
       - `name` field → `siteName` (the file uses short keys; it is `name:`, not `adx_name:`)
    2. **`powerpages.config.json`** (fallback — code/SPA sites only; used during plugin development from this repo root or for sites scaffolded but not yet deployed) — read `siteName` and `websiteRecordId`.
 
-   **Determine `SITE_TYPE`** (recorded in planData as `siteType`, surfaced in the plan, and used to skip SPA-only assumptions below):
-   - `data-model` when `.powerpages-site/.portalconfig/` exists, **or** `.powerpages-site/website.yml` resolved while no `powerpages.config.json` is present.
+   **Determine `SITE_TYPE`** (recorded in planData as `siteType` and used to skip SPA-only assumptions below; it is a data field in `docs/.alm-plan-data.json`, not rendered in the HTML):
+   - `declarative` when `.powerpages-site/.portalconfig/` exists, **or** `.powerpages-site/website.yml` resolved while no `powerpages.config.json` is present. (This value was formerly `data-model`; plans written before the rename may still carry `data-model`, which is equivalent.)
    - `code` when `powerpages.config.json` is present.
 
    If neither marker is found, stop with:
@@ -96,13 +120,13 @@ Steps:
    ```bash
    pac env who
    ```
-   Capture the `Environment URL` and display name. Store as `DEV_ENV_URL` and `DEV_ENV_NAME`.
+   Capture the environment URL and display name. Store as `DEV_ENV_URL` and `DEV_ENV_NAME`. **The URL label varies by PAC version**: current PAC (2.8.x) prints it under `Org URL:`; older builds used `Environment URL:` — read whichever is present (there is no `Environment URL:` line on 2.8.x, so do not look only for that label). The display name is the `Friendly Name:` / `Connected to...` value. If you can't parse it reliably, leave `DEV_ENV_URL` empty — Step 6's `verify-alm-prerequisites.js` resolves the authoritative URL from `pac env who` via the shared `getEnvironmentUrl()` helper (which matches both labels) and returns it as `.envUrl`.
 
 5. Run silently:
    ```bash
-   pac env list --output json 2>/dev/null
+   node "${PLUGIN_ROOT}/scripts/lib/list-environments.js"
    ```
-   Store output as `ENV_LIST` for pre-filling environment URLs in Phase 2.
+   Store the JSON array as `ENV_LIST` for pre-filling environment URLs in Phase 2. (This helper parses `pac env list`; the old `pac env list --output json` is invalid on current PAC CLI — `pac env list` only accepts `--filter` — so the helper exists to produce the JSON the table form doesn't. It prints `[]` and exits 0 if PAC is unauthenticated, so pre-fill simply degrades to manual entry.) Each entry is `{ displayName, environmentId, environmentUrl, uniqueName, active }`.
 
 6. Acquire dev environment token (silently):
    ```bash
@@ -111,6 +135,33 @@ Steps:
    Store `.token` as `DEV_TOKEN` and `.userId` as `userId`.
 
    **Track plan quality.** Initialize a `PLAN_QUALITY` accumulator to `"complete"` at the start of Phase 1. If this token acquisition fails (auth error), set `DEV_TOKEN = null`, set `PLAN_QUALITY = "degraded"`, and record the cause (e.g. *"dev-environment auth failed — contents/size/host discovery skipped"*) — then continue. Contents discovery is skipped gracefully, but the resulting plan is built on partial inputs; Phase 3 surfaces this as a prominent risk so the user reviews before executing. (There is no execute path to block here — `plan-alm` only plans — but a degraded plan must be visibly flagged.)
+
+6b. **Environment-match guard** — confirm `pac env who` points at the project's environment *before* running discovery. `DEV_ENV_URL` comes from whatever environment PAC happens to be connected to, which is **not** guaranteed to be the project's. If it isn't, every query in Steps 7–12 runs against the wrong environment and silently produces a degraded plan (zero or wrong site settings, wrong size, wrong host) that *looks* valid. Cross-check both signals available:
+
+    1. **Recorded-URL comparison** (no token needed): collect any environment URL the project already records — `powerpages.config.json` → top-level `environmentUrl` (code/SPA sites; absent for declarative/EDM sites) and `.solution-manifest.json` → top-level `environmentUrl` if present. Normalize by **origin** (lowercase host, drop trailing slash + path/query). If any recorded URL exists and its origin **differs** from `DEV_ENV_URL`'s origin → **mismatch**.
+    2. **Site-existence probe** (covers declarative/EDM sites that record no URL; only when `DEV_TOKEN` is available): verify the site's `websiteRecordId` actually exists in the connected env:
+       ```
+       GET {DEV_ENV_URL}/api/data/v9.2/powerpagesites({websiteRecordId})?$select=powerpagesiteid
+       Authorization: Bearer {DEV_TOKEN}
+       ```
+       A `404` (or empty result) means the connected environment does not contain this site → **mismatch**. (Skip this probe when `DEV_TOKEN = null` — Step 6 already degraded the plan; don't double-prompt.)
+
+    If **neither** signal indicates a mismatch, continue silently to Step 7 — do not prompt. Only prompt on a detected mismatch:
+
+    <!-- gate: plan-alm:1.env-match | category=progress | cancel-leaves=nothing -->
+    > 🚦 **Gate (progress · plan-alm:1.env-match):** PAC CLI is connected to an environment that does not match the project's. Switch and re-run, or continue against the connected env (degraded plan).
+
+    Ask via `AskUserQuestion`:
+
+    | Question | Header | Options |
+    |---|---|---|
+    | PAC CLI is connected to **{DEV_ENV_NAME}** (`{DEV_ENV_URL}`), which does not match this project's configured environment ({recorded URL, or "this site was not found there"}). Discovery will run against the connected environment. How do you want to proceed? | Env Mismatch | Switch PAC env & re-run (Recommended), Continue against {DEV_ENV_NAME} anyway |
+
+    Exactly two outcomes (both halt-or-proceed; no separate "cancel" — "Switch & re-run" already stops the skill):
+    - **Switch PAC env & re-run (Recommended)**: stop the skill. Tell the user to point PAC at the right environment (`pac auth select --name <profile>` or `pac org select --environment <url>`) and re-run `/power-pages:plan-alm`. Nothing has been written.
+    - **Continue against {DEV_ENV_NAME} anyway**: proceed to Step 7 against `DEV_ENV_URL`, but set `PLAN_QUALITY = "degraded"` and record the cause (*"discovery ran against {DEV_ENV_NAME}, which may not be the project's environment — verify the plan's site settings / size / host before executing"*) so Phase 3 surfaces it as a prominent risk.
+
+    > **Why this exists**: a real EDM-site run produced a valid-looking plan after PAC had silently stayed connected to a different env than the project targeted. The site-existence probe + recorded-URL comparison catch that at the earliest gate, before any discovery runs.
 
 7. Discover and classify site settings (if `DEV_TOKEN` is available and `websiteRecordId` is known):
 
@@ -179,13 +230,13 @@ Steps:
       --envUrl "{DEV_ENV_URL}" --websiteRecordId "{websiteRecordId}" \
       --publisherPrefix "{publisherPrefix}" --siteName "{siteName}" \
       {if SOLUTION_DONE: --solutionId "{solutionManifest.solution.solutionId}"} \
-      --projectRoot "." \
+      --projectRoot "." --siteType "{SITE_TYPE}" \
       --datamodelManifest "./.datamodel-manifest.json" > ./docs/alm/alm-size-estimate.json.tmp \
       && mv ./docs/alm/alm-size-estimate.json.tmp ./docs/alm/alm-size-estimate.json
     ```
     When `SOLUTION_DONE = false`, omit `--solutionId`; the estimator's output will include `envVarCountScope: "publisher-prefix"` to signal the wider scope, and the renderer surfaces this caveat in the Env Variables tab so reviewers know the number reflects the tenant view, not a specific solution. `--projectRoot "."` enables the disk cross-check — the estimator walks the local build output (`dist/`, `public-output/`, `build/`, `.output/`) and surfaces `webFilesDiskMeasuredMB`. When that number is much larger than the Dataverse-measured `webFilesAggregateMB`, the estimator flips `truncationSuspected: true` with a warning — file-typed columns whose bytes aren't returned by `$select=content` are the usual cause and the plan should trust the disk number.
 
-> **`SITE_TYPE = "data-model"` (EDM/standard) sites have no build output**, so the disk cross-check finds no `dist/`/`build/` directory and `webFilesDiskMeasuredMB` stays `null` — this is expected, not a problem. Web files for data-model sites live as records under `.powerpages-site/web-files/` and are measured via the Dataverse query, so the size estimate is still valid; there's simply no SPA bundle on disk to cross-check against. Pass `--projectRoot "."` regardless — it's a harmless no-op for these sites.
+> **`SITE_TYPE = "declarative"` (EDM/standard data-model) sites have no build output**, so the disk cross-check finds no `dist/`/`build/` directory and `webFilesDiskMeasuredMB` stays `null` — this is expected, not a problem. Web files for declarative sites live as records under `.powerpages-site/web-files/` and are measured via the Dataverse query, so the size estimate is still valid; there's simply no SPA bundle on disk to cross-check against. Pass `--projectRoot "."` regardless — it's a harmless no-op for these sites.
     Then run the decision tree (same tmp-file pattern):
     ```bash
     node "${PLUGIN_ROOT}/scripts/lib/compute-split-plan.js" \
@@ -471,7 +522,10 @@ If option 4: accept free-text description (via "Other") and build a stage list f
 
 Store stages as `PP_STAGES` (array of `{ label, envUrl, envName, type }`). Dev is always the source.
 
-For each stage, populate `envName` from `ENV_LIST` (gathered in Phase 1 Step 5 via `pac env list --output json`). Match by URL origin (lowercase, trailing slash stripped, path/query ignored) and copy the entry's `DisplayName` (or `displayName`) into `envName`. When no match is found — usually because the user pasted a custom URL via "Other" — leave `envName` unset; the renderer falls back to showing the URL alone in the stage card. The renderer puts `envName` between the stage label and the URL (e.g. *Staging / **Supplier Portal Staging** / https://orgd6a9894f.crm5.dynamics.com/*) so reviewers recognize the env at a glance and the URL stays available as a one-click jump-to-env. Set `type: "source"` for the dev/source stage and `type: "target"` for every downstream stage so the renderer applies the active-stage styling correctly.
+For each stage, populate `envName` from `ENV_LIST` (gathered in Phase 1 Step 5 via `list-environments.js`). Match by URL origin (lowercase, trailing slash stripped, path/query ignored) against each entry's `environmentUrl` and copy the entry's `displayName` into `envName`. When no match is found — usually because the user pasted a custom URL via "Other" — leave `envName` unset; the renderer falls back to showing the URL alone in the stage card. The renderer puts `envName` between the stage label and the URL (e.g. *Staging / **Supplier Portal Staging** / https://orgd6a9894f.crm5.dynamics.com/*) so reviewers recognize the env at a glance and the URL stays available as a one-click jump-to-env. Set `type: "source"` for the dev/source stage and `type: "target"` for every downstream stage so the renderer applies the active-stage styling correctly.
+
+<!-- not-a-gate: informational reconciliation note; surfaces a soft warning but creates no decision/prompt -->
+**Reconcile the chosen stages against an existing pipeline (soft warning, PP path).** When `PIPELINE_DONE = true` (a `docs/alm/last-pipeline.json` exists), compare each chosen **target** stage in `PP_STAGES` against that file's `stages[]` (match by `targetEnvironmentUrl` origin, then by stage `name`). For every chosen target that has **no** matching stage on the existing pipeline, record a `{ type: "warning" }` entry for the plan's Risks section: *"Chosen target '{label}' ({envUrl}) has no matching stage on the existing pipeline '{pipelineName}' — setup-pipeline will need to add it."* This catches the real mismatch where a saved plan says *Dev → Production directly* but the live pipeline only has a single *Deploy to Staging* stage. It is **informational only** — do not block or re-prompt; the user can still approve the plan, and `setup-pipeline` reconciles the actual stages at execution time.
 
 <!-- gate: plan-alm:2.q4-host | category=plan | cancel-leaves=nothing -->
 
@@ -505,7 +559,7 @@ Store the resulting `HOST_ENV_URL` for use by the rest of plan-alm. The auxiliar
 2. **Fill remaining slots up to 5** from the rest of the eligible list, in the order returned by `list-tenant-envs.js` (name-hint pattern `pipeline|deploy|host|alm|cicd|govern` → admin-perms → recency).
 3. **Append "Other (paste URL)"** as the last per-env entry inside option 1's nested list — escape hatch for envs that didn't make the cap.
 4. When `eligible.length > 5`, suffix option 1's headline with: ` Showing top 5 of {N}; the remaining {N-5} eligible env(s) can be reached via the "Other (paste URL)" entry.` When `eligible.length <= 5`, no suffix (all envs visible inline).
-5. When the user picks "Other (paste URL)", pre-fill the URL input with `ENV_LIST` (the `pac env list --output json` output gathered in Phase 1) so they can paste-or-pick from the full inventory rather than typing a URL by hand.
+5. When the user picks "Other (paste URL)", pre-fill the URL input with `ENV_LIST` (the `list-environments.js` output gathered in Phase 1 — each entry's `environmentUrl`) so they can paste-or-pick from the full inventory rather than typing a URL by hand.
 
 The same cap policy applies to `ensure-pipelines-host` Phase 3.C — see that skill's Step 3a for the same rules. Keep the two implementations consistent so users see the same prompt shape regardless of whether they enter via plan-alm or directly via setup-pipeline → ensure-pipelines-host.
 
@@ -601,7 +655,7 @@ Build a `planData` object with all gathered strategy inputs:
 ```json
 {
   "SITE_NAME": "{siteName}",
-  "siteType": "code | data-model",         // from Phase 1 Step 1 — "data-model" for enhanced/standard data-model (EDM) sites (no SPA build output), "code" for SPA sites
+  "siteType": "code | declarative",        // from Phase 1 Step 1 — "declarative" (formerly "data-model") for enhanced/standard data-model (EDM) design-studio sites (no SPA build output), "code" for SPA sites
   "GENERATED_AT": "{ISO timestamp}",
   "STRATEGY": "pp-pipelines | manual",
   "EXPORT_TYPE": "managed | unmanaged",   // PP Pipelines path: always "managed"
@@ -861,7 +915,7 @@ Populate `risks` based on gathered data:
 - If `HOST_RESOLUTION.status === "PlatformHostExistsUnbound"`: `{ type: "info", message: "Tenant has a Platform Host. Reusing it is the lowest-friction option; creating a Custom Host instead provides better governance for separate-tenant or governed scenarios." }`
 - If `HOST_RESOLUTION.status === "CannotRedirect"`: `{ type: "warning", message: "CannotRedirect: source env ProjectHostEnvironmentId points at PE but tenant default custom host is set elsewhere. Resolution requires Power Platform admin." }` (Note: Phase 2 Q4 normally blocks plan generation in this state; this is a defensive entry in case the plan is somehow generated.)
 - **Manual path** (always, when `STRATEGY = "manual"`): `{ type: "info", message: "Recommended sequence: run /power-pages:export-solution, review the produced zip, then run /power-pages:import-solution for each target. plan-alm does not perform the export/import itself." }`
-- **Raw-discovery gaps (#9)** — for each of `rawDiscovery.estimate`, `rawDiscovery.splitPlan`, and (PP path) `rawDiscovery.hostResolution` that is `null` at planData-build time: `{ type: "warning", message: "Discovery for {X} did not run; the related size/split/host decisions in this plan are unverified." }` (substitute `{X}` = "solution size estimate" / "split analysis" / "pipeline host resolution").
+- **Raw-discovery gaps (#9)** — for each of `rawDiscovery.estimate`, `rawDiscovery.splitPlan`, and (PP path) `rawDiscovery.hostResolution` that is `null` at planData-build time: `{ type: "warning", message: "Discovery for {X} did not run; the related size/split/host decisions in this plan are unverified." }` (substitute `{X}` = "solution size estimate" / "split analysis" / "pipeline host resolution"). **Carve-out for `rawDiscovery.hostResolution`:** when `PIPELINE_DONE = true`, host resolution is *intentionally* skipped (Phase 1 Step 12's skip rule — the host comes from `docs/alm/last-pipeline.json`, not a fresh probe), so a `null` `hostResolution` is expected, not a gap. **Do NOT emit the "pipeline host resolution" warning when `PIPELINE_DONE = true`** — it would be a spurious "host resolution did not run" on every project that already has a pipeline. The `estimate` and `splitPlan` gap warnings still apply regardless of `PIPELINE_DONE`.
 
 **Plan completeness check (#10).** Before writing planData, verify the plan rests on real discovery:
 - `sizeAnalysis.totalSizeMB` is non-null,
@@ -988,8 +1042,20 @@ Options:
 3. **I want to change something** — go back to questions
 
 - **If option 3:** Re-run Phase 2 (ask which section to change, then re-gather those answers). Regenerate the plan (repeat Phase 3). Re-present for approval.
-- **If option 1 (approved):** Capture the approver (see below). Stamp `<span id="approved-by">` / `<span id="approval-date">` in the HTML and set `<span class="plan-status">` text to `Approved` via `Edit`. **Update `docs/.alm-plan-data.json`**: set `PLAN_STATUS: "Approved"` and `PLAN_MODE: "approved"`. Then run the finalize steps below (skill tracking + commit), print the next-steps guidance, mark task 2 `completed`, and **exit**.
-- **If option 2 (draft):** Do **not** capture an approver. Set `<span class="plan-status">` text to `Draft` via `Edit`. Update `docs/.alm-plan-data.json`: `PLAN_STATUS: "Draft"`, `PLAN_MODE: "draft"`. Run the finalize steps below (commit only — skip skill tracking or run it, your choice; commit message `"Add ALM plan for {siteName} (draft)"`), tell the user to re-run `/power-pages:plan-alm` when ready to approve, mark task 2 `completed`, and **exit**.
+- **If option 1 (approved):** Capture the approver (see below), then write the status **and** approver atomically with the deterministic helper. **Do not hand-edit the HTML spans** — the badge, `approved-by`, and `approval-date` are all derived from `docs/.alm-plan-data.json` on render, so a manual span Edit is non-durable (the next execution-skill refresh re-derives it). The helper updates plan-data (`PLAN_STATUS`, `PLAN_MODE`, `APPROVED_BY`, `APPROVAL_DATE` — all four together) and re-renders `docs/alm-plan.html`:
+
+  ```bash
+  node "${PLUGIN_ROOT}/scripts/lib/set-plan-status.js" --projectRoot "." --status Approved --approver "{APPROVER}" --render
+  ```
+
+  Then run the finalize steps below (skill tracking + commit), print the next-steps guidance, mark task 2 `completed`, and **exit**.
+- **If option 2 (draft):** Do **not** capture an approver. Save as Draft with the same helper (writes plan-data + re-renders; clears any stale approver fields so the plan never ends up "Draft + approver"):
+
+  ```bash
+  node "${PLUGIN_ROOT}/scripts/lib/set-plan-status.js" --projectRoot "." --status Draft --render
+  ```
+
+  Run the finalize steps below (commit only — skip skill tracking or run it, your choice; commit message `"Add ALM plan for {siteName} (draft)"`), tell the user to re-run `/power-pages:plan-alm` when ready to approve, mark task 2 `completed`, and **exit**.
 
 **Capturing the approver (option 1 only) — always interactive (#1):**
 
@@ -1007,12 +1073,7 @@ Then **always** ask via `AskUserQuestion` (even when the suggestion is non-empty
 >
 > Options: 1. *{suggested name from git/OS, if any}* · 2. Other (enter name)
 
-If the command returned an empty string, present only option 2 (free-text). Store the confirmed result as `APPROVER`, then use `Edit` to replace the spans in `docs/alm-plan.html`:
-
-- Find `<span id="approved-by">` (or `<span id="approved-by"></span>` / `<span id="approved-by">__APPROVED_BY__</span>`) and replace its inner text with `APPROVER`.
-- Find `<span id="approval-date">` and replace its inner text with the current ISO timestamp.
-
-Both spans are guaranteed to exist in the template — there is exactly one of each in the "Execution Checklist" tab footer.
+If the command returned an empty string, present only option 2 (free-text). Store the confirmed result as `APPROVER` and pass it to `set-plan-status.js` (option 1 above) — **do not** hand-edit the `approved-by` / `approval-date` spans. The helper writes `APPROVED_BY` + `APPROVAL_DATE` (current ISO timestamp) into `docs/.alm-plan-data.json` and re-renders, and the template fills both spans from plan-data. This keeps the audit trail and the status in lockstep — the half-written "approver recorded but status still Draft" state (which `validate-plan-alm.js` now blocks) cannot happen.
 
 **Finalize (both save options):**
 

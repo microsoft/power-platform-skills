@@ -112,3 +112,45 @@ test('odataGet throws on transport error', async () => {
   await assert.rejects(() => odataGet('https://x/y', 'tok', fakeRequest), /OData request failed/);
 });
 
+
+// --- parseEnvironmentUrl: PAC `pac env who` label compatibility (2.8.x "Org URL:") ---
+
+test('parseEnvironmentUrl extracts the URL from the 2.8.x "Org URL:" banner', () => {
+  const { parseEnvironmentUrl } = require(helpersPath);
+  // Real `pac env who` shape on PAC 2.8.1 — the URL is under "Org URL:",
+  // and there is an "Environment ID:" line but NO "Environment URL:" line.
+  const who = [
+    'Connected as admin@contoso.onmicrosoft.com',
+    'Connected to... CitizenServicesDev',
+    'Organization Information',
+    '  Org ID:                     00e3facc-644f-f111-b31f-6045bd29e553',
+    '  Friendly Name:              CitizenServicesDev',
+    '  Org URL:                    https://org4a2942d9.crm17.dynamics.com/',
+    '  Environment ID:             d3b0c5e9-6fd9-e4f0-9bdc-eaf672fb6c5d',
+  ].join('\n');
+  assert.equal(parseEnvironmentUrl(who), 'https://org4a2942d9.crm17.dynamics.com');
+});
+
+test('parseEnvironmentUrl still extracts the URL from the legacy "Environment URL:" banner', () => {
+  const { parseEnvironmentUrl } = require(helpersPath);
+  const who = 'Environment URL:    https://legacy.crm.dynamics.com/\nUser: x@y.com';
+  assert.equal(parseEnvironmentUrl(who), 'https://legacy.crm.dynamics.com');
+});
+
+test('parseEnvironmentUrl returns null when no URL label is present (and on empty input)', () => {
+  const { parseEnvironmentUrl } = require(helpersPath);
+  assert.equal(parseEnvironmentUrl('Connected as x@y.com\nNo URL here'), null);
+  assert.equal(parseEnvironmentUrl(''), null);
+  assert.equal(parseEnvironmentUrl(null), null);
+});
+
+test('getEnvironmentUrl parses the 2.8.x "Org URL:" output via mocked execSync', (t) => {
+  const originalExecSync = childProcess.execSync;
+  childProcess.execSync = () => '  Org URL:   https://orgABC.crm.dynamics.com/\n';
+  t.after(() => { childProcess.execSync = originalExecSync; });
+  // Re-require fresh so the module binds the mocked execSync.
+  delete require.cache[require.resolve(helpersPath)];
+  const { getEnvironmentUrl } = require(helpersPath);
+  assert.equal(getEnvironmentUrl(), 'https://orgABC.crm.dynamics.com');
+  delete require.cache[require.resolve(helpersPath)];
+});

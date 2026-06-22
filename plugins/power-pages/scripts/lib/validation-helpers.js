@@ -93,7 +93,7 @@ function findPath(dir, target) {
  *
  * A project root is marked by EITHER:
  *   - `powerpages.config.json` — code/SPA sites (`pac pages download-code-site`), OR
- *   - a `.powerpages-site/` directory — declarative ("data-model") design-studio sites
+ *   - a `.powerpages-site/` directory — declarative design-studio sites
  *     (`pac pages download`; standard or enhanced data model). These have NO
  *     `powerpages.config.json`.
  *
@@ -160,11 +160,25 @@ function getAuthToken(resourceUrl) {
  * Gets the environment URL from `pac env who`.
  * @returns {string|null} Environment URL, or null
  */
+// Pure parser (exported for unit testing — getEnvironmentUrl() shells out, so the
+// regex itself is tested here against raw banner text rather than through execSync).
+// PAC CLI labels the environment URL differently across versions / commands:
+// `pac env who` on 2.8.x prints it under "Org URL:" (inside "Organization
+// Information"); older/other builds emit "Environment URL:". Match EITHER — with
+// only the "Environment URL:" form this returned null on 2.8.x and every caller
+// relying on the pac-env-who fallback (verify-alm-prerequisites when --envUrl is
+// omitted, the datamodel / solution / permissions validators) silently failed.
+// Example 2.8.1 line: `  Org URL:    https://org4a2942d9.crm17.dynamics.com/`
+function parseEnvironmentUrl(whoOutput) {
+  if (!whoOutput) return null;
+  const match = whoOutput.match(/(?:Org URL|Environment URL):\s*(https:\/\/[^\s]+)/i);
+  return match ? match[1].replace(/\/+$/, '') : null;
+}
+
 function getEnvironmentUrl() {
   try {
     const output = execSync('pac env who', { encoding: 'utf8', timeout: 15000 });
-    const match = output.match(/Environment URL:\s*(https:\/\/[^\s]+)/i);
-    return match ? match[1].replace(/\/+$/, '') : null;
+    return parseEnvironmentUrl(output);
   } catch {
     return null;
   }
@@ -326,6 +340,7 @@ module.exports = {
   odataGet,
   odataGetAll,
   getEnvironmentUrl,
+  parseEnvironmentUrl,
   getPacAuthInfo,
   CLOUD_TO_API,
   CLOUD_TO_SITE_DOMAIN,

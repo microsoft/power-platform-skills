@@ -64,6 +64,14 @@
 const fs = require('fs');
 const helpers = require('./validation-helpers');
 const { getAuthToken } = helpers;
+// Reuse the single "Deploy to {label}" → "{label}" normalizer so this helper
+// matches the caller's --stageLabel against deployment-settings.json stage keys
+// the SAME way the rest of the ALM stage consumers do. Without it, deploy-pipeline
+// passing `--stageLabel "Deploy to Staging"` (the pipeline stage name) failed to
+// match a settings file keyed by "Staging" → readSchemaNamesFromSettings returned
+// [] → the whole verify reported total:0 (a silent no-op that gave false
+// reassurance the overrides had landed).
+const { normalizeStageLabel } = require('./refresh-alm-plan-data');
 
 function parseArgs(argv) {
   const args = argv.slice(2);
@@ -125,7 +133,9 @@ function readSettingsFile(filePath, stageLabel, options = {}) {
     throw new Error(`--settingsFile ${filePath} is not valid JSON: ${err.message}`);
   }
 
-  const lowerLabel = stageLabel ? stageLabel.toLowerCase() : null;
+  // Normalize the requested label ("Deploy to Staging" → "staging") so it lines up
+  // with however the settings file names its stages — see the require comment above.
+  const lowerLabel = stageLabel ? normalizeStageLabel(stageLabel).toLowerCase() : null;
 
   // Shape 2: per-stage array (`Stages: []`)
   if (Array.isArray(parsed.Stages)) {
@@ -145,7 +155,7 @@ function readSettingsFile(filePath, stageLabel, options = {}) {
       return preserveAllStages ? all : dedupeBySchemaName(all);
     }
     const stage = parsed.Stages.find(
-      (s) => (s.Name || '').toLowerCase() === lowerLabel
+      (s) => normalizeStageLabel(s.Name || '').toLowerCase() === lowerLabel
     );
     if (!stage || !Array.isArray(stage.EnvironmentVariables)) return [];
     return stage.EnvironmentVariables.map((ev) => ({
@@ -184,9 +194,9 @@ function readSettingsFile(filePath, stageLabel, options = {}) {
       }
       return preserveAllStages ? all : dedupeBySchemaName(all);
     }
-    // Case-insensitive key match
+    // Case-insensitive key match (normalized so "Deploy to Staging" ↔ "Staging")
     const matchKey = Object.keys(stagesObj).find(
-      (k) => k.toLowerCase() === lowerLabel
+      (k) => normalizeStageLabel(k).toLowerCase() === lowerLabel
     );
     if (!matchKey) return [];
     const stage = stagesObj[matchKey];
