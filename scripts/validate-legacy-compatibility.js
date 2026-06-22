@@ -6,6 +6,19 @@
  * during auto-update, so these files must stay in sync. Mirrors are committed
  * files (not links), so this guard must pass whenever marketplace/plugin
  * metadata changes.
+ *
+ * It also forbids these mirrors from being committed as symlinks. A symlinked
+ * manifest is exactly the cross-platform failure mode from issue #201: on
+ * Windows clones without core.symlinks (Developer Mode off — the default), git
+ * materializes the link as a tiny text file containing the link target (e.g.
+ * "../marketplace.json"), and the consumer then runs JSON.parse on that text and
+ * fails with `Unexpected token '.'`. Because Linux/CI checkouts DO resolve
+ * symlinks, a content-only comparison would pass there and let the regression
+ * back in — so the regular-file assertion is what actually guards the fix.
+ * See: https://github.com/microsoft/power-platform-skills/issues/201
+ *
+ * The same symlink hazard applies to the per-directory CLAUDE.md mirrors of
+ * AGENTS.md, so those are guarded here too (regular file + identical content).
  */
 
 const fs = require('fs');
@@ -33,8 +46,43 @@ function expectedLegacySource(pluginDirectory) {
   return `./${normalizeRelative(path.relative(ROOT, pluginDirectory))}`;
 }
 
+// A committed symlink here is the issue #201 failure mode (see file header), so
+// reject any mirror that is not a regular on-disk file. lstat (not stat) so the
+// link itself is inspected rather than its target.
+// The caller's check() label already names the path, so keep this message generic.
+function assertRegularFile(targetPath) {
+  const stat = fs.lstatSync(targetPath);
+  assert.ok(
+    stat.isFile() && !stat.isSymbolicLink(),
+    'must be a committed regular file, not a symlink'
+  );
+}
+
 function assertJsonMirror(legacyPath, sourcePath) {
+  assertRegularFile(legacyPath);
   assert.deepEqual(readJson(legacyPath), readJson(sourcePath));
+}
+
+// CLAUDE.md is a byte-for-byte copy of the sibling AGENTS.md (same forbid-symlink
+// rule). Compared as raw text, not JSON.
+function assertTextMirror(mirrorPath, sourcePath) {
+  assertRegularFile(mirrorPath);
+  assert.equal(fs.readFileSync(mirrorPath, 'utf8'), fs.readFileSync(sourcePath, 'utf8'));
+}
+
+// Guard CLAUDE.md only where it exists (root + some plugins); a directory with no
+// CLAUDE.md is intentional (e.g. code-apps, mcp-apps) and must not fail the check.
+function checkClaudeMirror(directory) {
+  const claudePath = path.join(directory, 'CLAUDE.md');
+  const agentsPath = path.join(directory, 'AGENTS.md');
+  if (!fs.existsSync(claudePath)) {
+    return;
+  }
+  const label = normalizeRelative(path.relative(ROOT, claudePath)) || 'CLAUDE.md';
+  check(label, () => {
+    assert.ok(fs.existsSync(agentsPath), `missing sibling AGENTS.md for ${label}`);
+    assertTextMirror(claudePath, agentsPath);
+  });
 }
 
 const errors = [];
@@ -51,6 +99,8 @@ check('legacy marketplace manifest', () => {
   assert.ok(fs.existsSync(LEGACY_MARKETPLACE_PATH), 'missing .claude-plugin/marketplace.json');
   assertJsonMirror(LEGACY_MARKETPLACE_PATH, OPEN_MARKETPLACE_PATH);
 });
+
+checkClaudeMirror(ROOT);
 
 if (errors.length === 0) {
   const openMarketplace = readJson(OPEN_MARKETPLACE_PATH);
@@ -87,6 +137,8 @@ if (errors.length === 0) {
       assert.ok(fs.existsSync(legacyManifestPath), 'missing legacy plugin manifest');
       assertJsonMirror(legacyManifestPath, openManifestPath);
     });
+
+    checkClaudeMirror(pluginDirectory);
   }
 
   for (const legacyPluginName of legacyPlugins.keys()) {
