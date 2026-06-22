@@ -126,7 +126,9 @@ const ALM_PLAN_SKILLS = new Set([
  * True when `value` (a raw skill name, `/skill`, or `power-pages:skill`) resolves
  * to an ALM plan skill. Normalizes via `detectTrackedSkill`, so it also confirms
  * the skill actually exists in this plugin.
- * @param {string} value
+ * Accepts any value — non-strings (including null/undefined) resolve to false
+ * via detectTrackedSkill, so callers may pass an unvalidated skill name.
+ * @param {*} value
  * @returns {boolean}
  */
 function isAlmPlanSkill(value) {

@@ -84,6 +84,28 @@ test('hook spawns the reconcile backstop and heals a skipped refresh after an AL
   const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
   assert.equal(planData.pipelineMeta.lastDeploy.status, 'Succeeded');
   assert.equal(planData.pipelineMeta.lastDeploy.componentCount, 118);
+  // A clean reconcile must stay quiet on stderr — the hook fires on every Skill
+  // use, so success must not produce failure noise.
+  assert.doesNotMatch(res.stderr, /reconcile/i, 'a successful reconcile must not write failure noise to stderr');
+});
+
+test('hook forwards reconcile failure detail to stderr without changing the exit code', (t) => {
+  // A malformed plan file makes refresh-alm-plan-data.js --reconcile throw and exit
+  // non-zero with its reason on stderr. The hook must (a) surface that — the prior
+  // empty JSON.parse catch swallowed spawn errors / timeouts / non-zero exits — and
+  // (b) stay non-blocking (the reconcile is best-effort; the validator's status stands).
+  const root = makeProject(t);
+  fs.writeFileSync(path.join(root, 'docs', '.alm-plan-data.json'), 'not json {{{', 'utf8');
+  // A newer marker guarantees the reconcile reaches the plan-parse (and would heal if it could).
+  writeJson(path.join(root, 'docs', 'alm', 'last-export.json'), { solutionUniqueName: 'S', exportedAt: '2026-06-16T00:00:00.000Z' });
+  backdatePlan(root);
+
+  // export-solution is an ALM skill; its validator gracefully approves (no zip) → exit 0.
+  const res = runHook(root, 'export-solution');
+
+  assert.equal(res.status, 0, 'a broken reconcile must not change the validator-determined exit code');
+  assert.match(res.stderr, /reconcile did not complete/i, 'the hook must report the broken reconcile');
+  assert.match(res.stderr, /Could not parse/i, 'the child reconcile stderr must be forwarded verbatim');
 });
 
 test('hook does NOT reconcile for a non-ALM skill even when a plan + newer marker exist', (t) => {

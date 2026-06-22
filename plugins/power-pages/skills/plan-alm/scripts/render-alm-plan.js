@@ -6,8 +6,13 @@
  *   node render-alm-plan.js --output <path> --data <json-file>
  *
  * Required top-level keys in the JSON data file:
- *   SITE_NAME, GENERATED_AT, STRATEGY, PLAN_STATUS, APPROVED_BY, APPROVAL_DATE, COMPLETED_AT,
+ *   SITE_NAME, GENERATED_AT, STRATEGY, PLAN_STATUS, APPROVED_BY, APPROVAL_DATE,
  *   stages, steps, risks
+ *
+ * Optional lifecycle key:
+ *   COMPLETED_AT — present only once the plan reaches PLAN_STATUS "Completed";
+ *   the renderer emits the footer "Completed" line when it exists and omits it
+ *   otherwise (an in-flight plan has no COMPLETED_AT).
  *
  * Optional v2 keys (added for split-solutions support):
  *   sizeAnalysis, assetAdvisory, proposedSolutions, appliedStrategies,
