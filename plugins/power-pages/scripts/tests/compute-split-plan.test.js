@@ -39,7 +39,7 @@ function baseEstimate(overrides = {}) {
     botCount: 0,
     envVarCount: 5,
     mediaRatio: 0.3,
-    siteType: 'code-site',
+    siteType: 'code',
     tables: [],
     ...overrides,
   };

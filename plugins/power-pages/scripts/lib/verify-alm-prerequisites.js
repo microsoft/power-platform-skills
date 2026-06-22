@@ -42,15 +42,40 @@ function parseArgs(argv) {
   return { envUrl, requireManifest, expectedEnvUrl };
 }
 
-// Compare two Dataverse env URLs by origin only (scheme+host), case-insensitive,
-// path/query/trailing-slash ignored — so `https://Org.crm.dynamics.com/` and
-// `https://org.crm.dynamics.com/api/data/v9.2` count as the same environment.
+// Normalize a Dataverse env reference to its origin (scheme+host), lowercased.
+// Tolerates a missing scheme (`org.crm.dynamics.com` → `https://org.crm.dynamics.com`)
+// since a hand-authored manifest may omit it. Returns null when the value is empty
+// or not a parseable host — so the caller can treat "can't compare" distinctly from
+// "definitely different" and avoid a false mismatch on garbage input.
+function envOrigin(u) {
+  const s = String(u || '').trim();
+  if (!s) return null;
+  // Try as-is, then with an https:// prefix (covers a bare host like
+  // `org.crm.dynamics.com`). The WHATWG URL parser is lenient and will happily
+  // accept `https://{CONFIGURED_ENV_URL}` as a "host", so after parsing we ALSO
+  // require a plausible DNS hostname (dot-separated alnum/hyphen labels). That
+  // rejects an unsubstituted `{PLACEHOLDER}`, `null`, or other junk (→ null) so it
+  // can never be compared as if it were a real environment.
+  for (const candidate of [s, 'https://' + s.replace(/^\/+/, '')]) {
+    let parsed;
+    try { parsed = new URL(candidate); } catch { continue; }
+    const host = parsed.hostname.toLowerCase();
+    if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(host)) continue;
+    return parsed.origin.toLowerCase();
+  }
+  return null;
+}
+
+// Compare two env references by origin only — path/query/trailing-slash/case ignored.
+// Returns true (same), false (definitely different), or null (indeterminate: one side
+// isn't a parseable env URL). Callers must hard-stop ONLY on an explicit `false`, never
+// on null, so a missing/placeholder/garbage value disables the assertion instead of
+// blocking a legitimate run.
 function sameEnvOrigin(a, b) {
-  const origin = (u) => {
-    try { return new URL(u).origin.toLowerCase(); }
-    catch { return String(u || '').replace(/\/+$/, '').toLowerCase(); }
-  };
-  return origin(a) === origin(b);
+  const oa = envOrigin(a);
+  const ob = envOrigin(b);
+  if (oa === null || ob === null) return null;
+  return oa === ob;
 }
 
 async function verifyAlmPrerequisites({ envUrl, requireManifest, expectedEnvUrl } = {}) {
@@ -75,7 +100,12 @@ async function verifyAlmPrerequisites({ envUrl, requireManifest, expectedEnvUrl 
   // env (from .solution-manifest.json / powerpages.config.json / the approved plan)
   // passes it here; a mismatch HARD-STOPS before any token acquisition or write, so
   // an ALM operation can never silently target the wrong environment (e.g. PROD).
-  if (expectedEnvUrl && !sameEnvOrigin(resolvedEnvUrl, expectedEnvUrl)) {
+  // HARD-STOP only on a DEFINITE mismatch (sameEnvOrigin === false). A null result
+  // means expectedEnvUrl wasn't a parseable env URL (empty, an unsubstituted
+  // `{PLACEHOLDER}`, junk) — in that case skip the assertion rather than block a
+  // legitimate run on bad input; the SKILL.md guidance is to omit the flag entirely
+  // when no env URL is recorded.
+  if (expectedEnvUrl && sameEnvOrigin(resolvedEnvUrl, expectedEnvUrl) === false) {
     throw new Error(
       `Environment mismatch: PAC CLI is connected to ${resolvedEnvUrl} but this project targets ` +
       `${expectedEnvUrl.replace(/\/+$/, '')}. Run \`pac env select --environment ${expectedEnvUrl.replace(/\/+$/, '')}\` ` +
@@ -157,4 +187,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { verifyAlmPrerequisites, parseArgs, sameEnvOrigin };
+module.exports = { verifyAlmPrerequisites, parseArgs, sameEnvOrigin, envOrigin };

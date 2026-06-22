@@ -125,11 +125,17 @@ Steps:
 
    Read the project's recorded env URL (first match wins): `.solution-manifest.json` → top-level `environmentUrl`, else `powerpages.config.json` → `environmentUrl`. Store as `CONFIGURED_ENV_URL`. (Both fields are top-level `environmentUrl` strings; declarative/EDM sites have no `powerpages.config.json`, so the manifest is the source there.)
 
+   **Pass `--expectedEnvUrl` only when `CONFIGURED_ENV_URL` actually resolved to a URL.** Use the first form when a recorded env URL exists, the second when neither file records one — do **not** pass an empty or unresolved `--expectedEnvUrl "{CONFIGURED_ENV_URL}"`:
+
    ```bash
+   # CONFIGURED_ENV_URL resolved (recorded in manifest/config) — assert PAC is on it:
    node "${PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --require-manifest --expectedEnvUrl "{CONFIGURED_ENV_URL}"
+
+   # Neither file records an env URL — omit the flag, fall back to the pac-context default:
+   node "${PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --require-manifest
    ```
 
-   `--expectedEnvUrl` makes the helper compare PAC's resolved env (origin-only) against `CONFIGURED_ENV_URL` and exit non-zero with an *"Environment mismatch: PAC CLI is connected to {X} but this project targets {Y} — run `pac env select …`"* error on mismatch. (If neither file records an env URL, omit `--expectedEnvUrl`; the helper falls back to the pac-context default with no assertion.) Capture output as JSON; extract `.envUrl` (store as `devEnvUrl`) and `.token` (store as `DEV_TOKEN`). If the script exits non-zero, stop and surface the error — it indicates an env mismatch, or that `az login` / `pac auth` / WhoAmI failed.
+   `--expectedEnvUrl` makes the helper compare PAC's resolved env (origin-only) against `CONFIGURED_ENV_URL` and exit non-zero with an *"Environment mismatch: PAC CLI is connected to {X} but this project targets {Y} — run `pac env select …`"* error on mismatch. (As a safety net the helper skips the assertion if the value isn't a parseable env URL — an empty string or an unsubstituted placeholder won't hard-stop — but prefer omitting the flag outright when there's no recorded URL.) Capture output as JSON; extract `.envUrl` (store as `devEnvUrl`) and `.token` (store as `DEV_TOKEN`). If the script exits non-zero, stop and surface the error — it indicates an env mismatch, or that `az login` / `pac auth` / WhoAmI failed.
 
 2. Run `detect-project-context.js` to read project config and solution manifest:
    ```bash
@@ -293,7 +299,7 @@ Use `solutionId` from `.solution-manifest.json` as `ARTIFACT_SOLUTION_ID` and `u
 > ```
 > Filter for `environmenttype = 200000000` to get the source record. Use `deploymentenvironmentid` as the `sourceDeploymentEnvironmentId`. For the artifact/solution list, use `sourceDeploymentEnvironmentId` from `docs/alm/last-pipeline.json` and `solutionName` from `.solution-manifest.json` as fallbacks. Set a flag `VALIDATE_PACKAGE_UNAVAILABLE = true` to skip Phase 4.2–4.3 and use the PAC CLI path in Phase 6.
 >
-> **If `RetrieveDeploymentPipelineInfo` returns a NON-404 error (e.g. 400/4xx/5xx)** — observed: some Pipelines packages return **400** for this call even though `ValidatePackageAsync` works fine — do **NOT** set `VALIDATE_PACKAGE_UNAVAILABLE`. The 404 branch above is specifically for older packages that lack the OData validation API; a 400 is just this metadata call failing, not the validation API being absent. Instead, fall back to `sourceDeploymentEnvironmentId` from `docs/alm/last-pipeline.json` (and `solutionName` from `.solution-manifest.json`) and **continue the normal `ValidatePackageAsync` flow** (Phase 4 onward). Only a genuine 404 — or a later `ValidatePackageAsync` 404 (Phase 4.2) — routes to the PAC-CLI path.
+> **If `RetrieveDeploymentPipelineInfo` returns a NON-404 error (e.g. 400/4xx/5xx)** — observed: some Pipelines packages return **400** for this call even though `ValidatePackageAsync` works fine — do **NOT** set `VALIDATE_PACKAGE_UNAVAILABLE`. The 404 branch above is specifically for older packages that lack the OData validation API; a 400 is just this metadata call failing, not the validation API being absent. Instead, fall back to `sourceDeploymentEnvironmentId` from `docs/alm/last-pipeline.json` (and `solutionName` from `.solution-manifest.json`) and **continue the normal `ValidatePackageAsync` flow** (Phase 4 onward). If `docs/alm/last-pipeline.json` is somehow missing `sourceDeploymentEnvironmentId`, use the same `deploymentpipeline_deploymentenvironment` navigation-property GET shown in the 404 branch above to recover it (still **without** setting `VALIDATE_PACKAGE_UNAVAILABLE`). Only a genuine 404 — or a later `ValidatePackageAsync` 404 (Phase 4.2) — routes to the PAC-CLI path.
 
 ### Phase 3.5 — Pre-deploy Completeness Check
 

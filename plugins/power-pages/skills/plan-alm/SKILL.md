@@ -138,7 +138,7 @@ Steps:
 
 6b. **Environment-match guard** — confirm `pac env who` points at the project's environment *before* running discovery. `DEV_ENV_URL` comes from whatever environment PAC happens to be connected to, which is **not** guaranteed to be the project's. If it isn't, every query in Steps 7–12 runs against the wrong environment and silently produces a degraded plan (zero or wrong site settings, wrong size, wrong host) that *looks* valid. Cross-check both signals available:
 
-    1. **Recorded-URL comparison** (no token needed): collect any environment URL the project already records — `powerpages.config.json` → `environmentUrl` (code/SPA sites; absent for declarative/EDM sites) and `.solution-manifest.json` → its `environmentUrl`/`environmentUrl`-equivalent field if present. Normalize by **origin** (lowercase host, drop trailing slash + path/query). If any recorded URL exists and its origin **differs** from `DEV_ENV_URL`'s origin → **mismatch**.
+    1. **Recorded-URL comparison** (no token needed): collect any environment URL the project already records — `powerpages.config.json` → top-level `environmentUrl` (code/SPA sites; absent for declarative/EDM sites) and `.solution-manifest.json` → top-level `environmentUrl` if present. Normalize by **origin** (lowercase host, drop trailing slash + path/query). If any recorded URL exists and its origin **differs** from `DEV_ENV_URL`'s origin → **mismatch**.
     2. **Site-existence probe** (covers declarative/EDM sites that record no URL; only when `DEV_TOKEN` is available): verify the site's `websiteRecordId` actually exists in the connected env:
        ```
        GET {DEV_ENV_URL}/api/data/v9.2/powerpagesites({websiteRecordId})?$select=powerpagesiteid
@@ -155,10 +155,11 @@ Steps:
 
     | Question | Header | Options |
     |---|---|---|
-    | PAC CLI is connected to **{DEV_ENV_NAME}** (`{DEV_ENV_URL}`), which does not match this project's configured environment ({recorded URL, or "this site was not found there"}). Discovery will run against the connected environment. How do you want to proceed? | Env Mismatch | Cancel — switch PAC env, then re-run (Recommended), Continue against {DEV_ENV_NAME} anyway, Cancel |
+    | PAC CLI is connected to **{DEV_ENV_NAME}** (`{DEV_ENV_URL}`), which does not match this project's configured environment ({recorded URL, or "this site was not found there"}). Discovery will run against the connected environment. How do you want to proceed? | Env Mismatch | Switch PAC env & re-run (Recommended), Continue against {DEV_ENV_NAME} anyway |
 
-    - **Cancel — switch PAC env (Recommended)**: stop the skill. Tell the user to point PAC at the right environment (`pac auth select --name <profile>` or `pac org select --environment <url>`) and re-run `/power-pages:plan-alm`. Nothing has been written.
-    - **Continue anyway**: proceed to Step 7 against `DEV_ENV_URL`, but set `PLAN_QUALITY = "degraded"` and record the cause (*"discovery ran against {DEV_ENV_NAME}, which may not be the project's environment — verify the plan's site settings / size / host before executing"*) so Phase 3 surfaces it as a prominent risk.
+    Exactly two outcomes (both halt-or-proceed; no separate "cancel" — "Switch & re-run" already stops the skill):
+    - **Switch PAC env & re-run (Recommended)**: stop the skill. Tell the user to point PAC at the right environment (`pac auth select --name <profile>` or `pac org select --environment <url>`) and re-run `/power-pages:plan-alm`. Nothing has been written.
+    - **Continue against {DEV_ENV_NAME} anyway**: proceed to Step 7 against `DEV_ENV_URL`, but set `PLAN_QUALITY = "degraded"` and record the cause (*"discovery ran against {DEV_ENV_NAME}, which may not be the project's environment — verify the plan's site settings / size / host before executing"*) so Phase 3 surfaces it as a prominent risk.
 
     > **Why this exists**: a real EDM-site run produced a valid-looking plan after PAC had silently stayed connected to a different env than the project targeted. The site-existence probe + recorded-URL comparison catch that at the earliest gate, before any discovery runs.
 

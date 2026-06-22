@@ -170,7 +170,15 @@ function setPlanStatus(opts) {
     fs.renameSync(htmlTmp, htmlPath);
     rendered = true;
   }
-  fs.renameSync(dataTmp, dataPath);
+  // Commit the JSON. If this final rename ever fails (e.g. a transient lock on the
+  // plan file), unlink the staged temp so we don't leave an orphaned
+  // `.alm-plan-data.json.tmp` behind, then rethrow so the caller sees the failure.
+  try {
+    fs.renameSync(dataTmp, dataPath);
+  } catch (e) {
+    try { fs.unlinkSync(dataTmp); } catch {}
+    throw e;
+  }
 
   return {
     ok: true,

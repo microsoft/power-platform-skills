@@ -121,3 +121,36 @@ test('parseArgs captures --expectedEnvUrl', () => {
   assert.equal(a.requireManifest, true);
   assert.equal(parseArgs(['node', 'x']).expectedEnvUrl, null);
 });
+
+// --- sameEnvOrigin / envOrigin robustness (no false hard-stop on garbage/bare host) ---
+
+test('sameEnvOrigin: true/false for parseable URLs; null (indeterminate) for unparseable', () => {
+  const { sameEnvOrigin } = require('../lib/verify-alm-prerequisites');
+  assert.equal(sameEnvOrigin('https://a.crm.dynamics.com', 'https://A.crm.dynamics.com/api/data/v9.2'), true);
+  assert.equal(sameEnvOrigin('https://a.crm.dynamics.com', 'https://b.crm.dynamics.com'), false);
+  // Bare host (no scheme) on the expected side must still match a scheme-prefixed resolved URL.
+  assert.equal(sameEnvOrigin('https://dev.crm.dynamics.com', 'dev.crm.dynamics.com'), true);
+  // Unparseable / empty / unsubstituted placeholder → null (caller must NOT hard-stop).
+  assert.equal(sameEnvOrigin('https://dev.crm.dynamics.com', ''), null);
+  assert.equal(sameEnvOrigin('https://dev.crm.dynamics.com', '{CONFIGURED_ENV_URL}'), null);
+  assert.equal(sameEnvOrigin('https://dev.crm.dynamics.com', null), null);
+});
+
+test('verifyAlmPrerequisites does NOT hard-stop when expectedEnvUrl is an unsubstituted placeholder', async (t) => {
+  const helpers = require('../lib/validation-helpers');
+  const origEnv = helpers.getEnvironmentUrl;
+  const origToken = helpers.getAuthToken;
+  const origReq = helpers.makeRequest;
+  helpers.getEnvironmentUrl = () => 'https://dev.crm.dynamics.com';
+  helpers.getAuthToken = () => 'tok';
+  helpers.makeRequest = async () => ({ statusCode: 200, body: JSON.stringify({ UserId: 'u', OrganizationId: 'o' }) });
+  t.after(() => {
+    helpers.getEnvironmentUrl = origEnv;
+    helpers.getAuthToken = origToken;
+    helpers.makeRequest = origReq;
+  });
+  // A SKILL that fails to resolve {CONFIGURED_ENV_URL} would pass the literal — must
+  // NOT block the run (the assertion is skipped on an unparseable expected value).
+  const res = await verifyAlmPrerequisites({ expectedEnvUrl: '{CONFIGURED_ENV_URL}' });
+  assert.equal(res.envUrl, 'https://dev.crm.dynamics.com');
+});
