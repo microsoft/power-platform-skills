@@ -25,5 +25,11 @@ jobs:
             - name: validate-legacy-compatibility
               run: node scripts/validate-legacy-compatibility.js
 
+            # Runs the script against the real repo above; this exercises its
+            # symlink-rejection / mirror-drift logic against fixture trees so the guard
+            # can't silently rot. ubuntu runner creates symlinks, so no cases are skipped.
+            - name: validate-legacy-compatibility-tests
+              run: node --test scripts/tests/
+
             - name: validate-skill-descriptions
               run: node scripts/validate-skill-descriptions.js

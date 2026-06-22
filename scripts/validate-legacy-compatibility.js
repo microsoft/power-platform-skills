@@ -25,7 +25,13 @@ const fs = require('fs');
 const path = require('path');
 const assert = require('assert/strict');
 
-const ROOT = path.resolve(__dirname, '..');
+// Normally the repo root. Tests set LEGACY_COMPAT_ROOT to point the exact same checks
+// at a throwaway fixture tree — without this seam the script can only ever validate the
+// real repo (always clean), so the guard logic itself would be untestable and could rot
+// silently. Unset in CI/production; it only ever widens where the script looks.
+const ROOT = process.env.LEGACY_COMPAT_ROOT
+  ? path.resolve(process.env.LEGACY_COMPAT_ROOT)
+  : path.resolve(__dirname, '..');
 const OPEN_MARKETPLACE_PATH = path.join(ROOT, 'marketplace.json');
 const LEGACY_MARKETPLACE_PATH = path.join(ROOT, '.claude-plugin', 'marketplace.json');
 

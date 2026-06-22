@@ -106,6 +106,14 @@ reinstall. Because mirrors are committed files (not symlinks), update both sourc
 and legacy copies together, then run
 `node scripts/validate-legacy-compatibility.js` after metadata changes.
 
+Each `CLAUDE.md` is likewise a committed **real-file mirror** of its sibling
+`AGENTS.md` (root and per-plugin), for the same reason: a symlink materializes as a
+broken text file on Windows clones without Developer Mode. So when you edit an
+`AGENTS.md`, copy it over the sibling `CLAUDE.md` in the same change — neither file
+may be a symlink. `validate-legacy-compatibility.js` enforces both rules (regular
+file + identical content) and runs in CI via `validate-repository-metadata`; its
+fixture-based regression tests live at `scripts/tests/` (`node --test scripts/tests/`).
+
 ## Code Conventions
 
 **DRY (Don't Repeat Yourself):** Never duplicate logic across files. Each plugin has shared utilities (e.g., `scripts/lib/`) and shared reference docs (e.g., `references/`). Always check for and reuse existing helpers before writing new code. When adding shared logic, put it in the plugin's shared modules — not in individual skill directories.
