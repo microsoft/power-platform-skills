@@ -121,11 +121,15 @@ Tasks to create:
 
 Steps:
 
-1. Run `verify-alm-prerequisites.js` to confirm PAC CLI auth, acquire a token, and verify API access:
+1. **Resolve the project's configured environment URL first, then verify prerequisites against it.** `verify-alm-prerequisites.js` defaults to whatever environment PAC's *org context* is connected to (`pac env who`), which is **not** guaranteed to match the project — and when that context is stale/ambiguous (e.g. duplicate active `pac auth` profiles) it fails with a misleading *"PAC CLI is not authenticated"*. Pin the env explicitly so the gate is deterministic.
+
+   Read the project's recorded env URL (first match wins): `.solution-manifest.json` → top-level `environmentUrl`, else `powerpages.config.json` → `environmentUrl`. Store as `CONFIGURED_ENV_URL`. (Both fields are top-level `environmentUrl` strings; declarative/EDM sites have no `powerpages.config.json`, so the manifest is the source there.)
+
    ```bash
-   node "${PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --require-manifest
+   node "${PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --require-manifest --envUrl "{CONFIGURED_ENV_URL}"
    ```
-   Capture output as JSON; extract `.envUrl` (store as `devEnvUrl`) and `.token` (store as `DEV_TOKEN`). If the script exits non-zero, stop and surface the error — it will indicate whether `az login`, `pac auth`, or WhoAmI failed.
+
+   (If neither file records an env URL, omit `--envUrl` and fall back to the pac-context default — `verify-alm-prerequisites.js` then resolves it via `pac env who`.) Capture output as JSON; extract `.envUrl` (store as `devEnvUrl`) and `.token` (store as `DEV_TOKEN`). If the script exits non-zero, stop and surface the error — it will indicate whether `az login`, `pac auth`, or WhoAmI failed.
 
 2. Run `detect-project-context.js` to read project config and solution manifest:
    ```bash
@@ -1189,6 +1193,17 @@ Evaluate the result and take action based on the outcome. In all cases, **after 
 - `"activationStatus": "{ACTIVATION_OUTCOME.status}"` (or keep `null` if `ACTIVATION_OUTCOME` is null)
 - `"siteUrl": "{ACTIVATION_OUTCOME.siteUrl}"` (or keep `null`)
 
+**Re-refresh the ALM plan so the activation outcome reaches it.** The Phase 7.5b refresh ran *before* activation was resolved, so the plan's "Activate site in {stage}" step is still pending even though `last-deploy.json` now records `activationStatus`. Re-run the refresh now that the marker is patched — the `deploy-pipeline` phase auto-completes the activate step when `activationStatus` is `"Activated"` (a deferred `"Pending"` correctly leaves it pending):
+
+```bash
+node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase deploy-pipeline \
+  --render
+```
+
+(Soft no-op when no ALM plan exists — `refresh-alm-plan-data.js` returns `ok:false` when `docs/.alm-plan-data.json` is absent.)
+
 Then update the deploy history HTML file (in-place `Edit`) — replace `__ACTIVATION_SECTION__` with the appropriate HTML:
 
 - **`status: "Activated"`**:
@@ -1284,7 +1299,7 @@ Authorization: Bearer {HOST_TOKEN}
 
 | Task subject | activeForm | Description |
 |---|---|---|
-| Verify prerequisites | Verifying prerequisites | Run verify-alm-prerequisites.js (--require-manifest) for PAC/az/WhoAmI; run detect-project-context.js for solutionManifest/siteName; read docs/alm/last-pipeline.json for pipelineId/stages; acquire host env token |
+| Verify prerequisites | Verifying prerequisites | Run verify-alm-prerequisites.js (--require-manifest --envUrl pinned from project config) for PAC/az/WhoAmI; run detect-project-context.js for solutionManifest/siteName; read docs/alm/last-pipeline.json for pipelineId/stages; acquire host env token |
 | Select target stage | Selecting target stage | Show available stages from docs/alm/last-pipeline.json; ask user to select target; warn if last deploy to this stage failed |
 | Resolve pipeline info | Resolving pipeline info | Call RetrieveDeploymentPipelineInfo (v9.1) to get SourceDeploymentEnvironmentId and DeployableArtifacts; match solution |
 | Validate package | Validating package | **`MULTI_RUN_MODE`**: run Phase 3.6 once (parallel batch) — `validate-stage-runs-batch.js` fans out create-stage-run + ValidatePackageAsync + poll-validation-status for all non-skipped solutions concurrently; halts the deploy on any failure or pending-approval batch; persists per-solution stageRunIds for the serial deploy loop to reuse. **Single-solution / legacy v2**: Phase 4 inline — POST deploymentstageruns (→ 201 or 204+header); POST ValidatePackageAsync top-level action (204); poll stagerunstatus until not 200000006; JSON.parse validationresults twice; fetch aigenerateddeploymentnotes; PATCH artifactversion + deploymentnotes + deploymentsettingsjson (from deployment-settings.json) |
