@@ -524,11 +524,70 @@ test('promotes Approved -> In Execution on the first execution-skill Phase 0 (wr
   try {
     const r = await checkAlmPlan({ projectRoot: dir });
     assert.equal(r.planStatus, 'In Execution', 'returned status reflects the promotion');
-    assert.equal(r.inExecution.status, 'active', 'newly In Execution with first heartbeat is active');
-    // Promotion + heartbeat are persisted to disk for the next in-chain skill.
+    // inExecution is classified from the PRIOR (Approved) status, so the FIRST
+    // execution-skill entry reports "not-running" — NOT "active". This keeps the
+    // caller on the normal Phase 0 path where it still honors stale:true; an
+    // "active" shortcut here would mask a stale plan on the first run after approval.
+    assert.equal(r.inExecution.status, 'not-running', 'first Approved->In Execution entry is not-running');
+    // Promotion + heartbeat are still persisted to disk for the NEXT in-chain skill,
+    // which reads "In Execution" + a fresh heartbeat and classifies as "active".
     const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'docs', '.alm-plan-data.json'), 'utf8'));
     assert.equal(onDisk.PLAN_STATUS, 'In Execution');
     assert.ok(onDisk.LAST_INVOCATION_AT, 'first heartbeat written');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('second in-chain skill sees the promoted In Execution plan as active', async () => {
+  // Simulates the next execution skill after the promotion: PLAN_STATUS is already
+  // "In Execution" with a fresh heartbeat on disk, so the active-chain machinery
+  // engages and Phase 0 gates are skipped (no re-nagging within a running run).
+  const dir = tempProject({
+    SITE_NAME: 'T',
+    PLAN_STATUS: 'In Execution',
+    LAST_INVOCATION_AT: new Date().toISOString(),
+  });
+  try {
+    const r = await checkAlmPlan({ projectRoot: dir });
+    assert.equal(r.inExecution.status, 'active');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Approved + stale source solution: stale gate is NOT masked by the promotion (inExecution stays not-running)', async () => {
+  // Regression for the freshness-gate masking bug: an Approved plan whose source
+  // solution was modified after generation must still surface stale:true on the
+  // first execution skill. If the promotion classified inExecution as "active",
+  // callers that skip Phase 0 on active status (deploy-pipeline SKILL.md) would
+  // bypass the stale-plan confirmation. The promotion is persisted, but THIS call
+  // must report inExecution "not-running" so stale:true is acted on.
+  const dir = tempProject({
+    SITE_NAME: 'T',
+    PLAN_STATUS: 'Approved',
+    GENERATED_AT: '2026-04-01T00:00:00.000Z',
+  });
+  // Solution modifiedon is AFTER GENERATED_AT → stale.
+  const fakeRequest = async () => ({
+    statusCode: 200,
+    body: JSON.stringify({ modifiedon: '2026-04-15T08:42:00Z', version: '1.0.0.4' }),
+  });
+  try {
+    const r = await checkAlmPlan({
+      projectRoot: dir,
+      envUrl: 'https://example.crm.dynamics.com',
+      token: 'tok',
+      solutionId: 'sol-guid',
+      makeRequest: fakeRequest,
+    });
+    assert.equal(r.stale, true, 'stale source solution still flagged');
+    assert.equal(r.staleness.reason, 'solution-modified');
+    assert.notEqual(r.inExecution.status, 'active', 'active shortcut must NOT mask the stale gate');
+    assert.equal(r.inExecution.status, 'not-running');
+    // Promotion still happens on disk (next skill sees In Execution).
+    const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'docs', '.alm-plan-data.json'), 'utf8'));
+    assert.equal(onDisk.PLAN_STATUS, 'In Execution');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
