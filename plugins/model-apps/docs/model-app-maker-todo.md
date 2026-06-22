@@ -44,30 +44,21 @@ component library can't be authored headlessly (blocker A). Classic JS enable-ru
 Power-Fx-flavored. Distinct from command visibility (this is field-level *form* logic). Build behind a
 capability flag once an org supports it.
 
-## 🟡 Quick-view form placement — no SDK helper
-**What:** place a created `QuickView` form onto a parent form via a lookup (a quick-view control).
-**Why deferred:** `formType: "QuickView"` **creates** the form, but there's no `addQuickViewControl`
-helper to drop it on a parent form (unlike `addSubGrid`). Lint warns. **Unblock:** an SDK quick-view
-placement helper, or a `$meta.formxml` injector (like `addCustomControl`/`addFormEventHandler`).
-
-## 🟡 Dashboard sitemap placement — not auto-wired
-**What:** make a built dashboard land in the app's sitemap/nav.
-**Why deferred:** the dashboard is created + added to the solution, but `AddAppComponents` wiring for a
-dashboard isn't done, so it isn't surfaced in the app automatically. **Unblock:** add the dashboard
-(component type 60) to the app components + a sitemap subarea in the app-shell phase.
-
 ## 🟡 Interactive (type 10) dashboards
 **What:** interactive/streams dashboards.
 **Why deferred:** different formxml machinery (streams/tiles keyed by cell id in `icProperties`); the
 SDK parses them best-effort and relies on `$meta.formxml` pass-through. The tile generator targets
 Standard (type 0) dashboards. **Unblock:** an interactive-dashboard tile generator.
 
-## 🟡 Command grouping (titled groups)
-**What:** group command buttons under a titled group on the bar.
-**Why deferred:** a titled group is a separate appaction that needs a parent command-bar row the
-adapter doesn't synthesize for from-scratch commands (Dataverse 400 "Group button must have
-parentappactionid"). Buttons currently emit as **loose controls** (empty-title group), which works.
-**Unblock:** SDK synthesis of the parent command-bar/group rows.
+## 🟡 Command grouping — *titled* groups (flyouts/split buttons now ship)
+**What:** group command buttons under a **titled** group on the bar.
+**Why deferred:** a titled group is a separate Group appaction that needs a parent command-bar row the
+adapter doesn't synthesize for from-scratch commands — **re-confirmed live** on a fresh entity
+(Dataverse 400 "Group button must have parentappactionid"). The engine can't supply that parent (it's
+adapter-internal). Buttons emit as **loose controls** (empty-title group). **Flyout / split-button
+menus DO work** (`commands[].type: FlyoutAnchor|SplitButton` + `children[]`) — the adapter synthesizes
+the *intervening* group there because it's parented to the flyout control. **Unblock for titled
+groups:** SDK synthesis of the parent command-bar/group rows for from-scratch commands.
 
 ## ⚠ Calculated / Rollup formula columns — not live-verified
 **What:** `source: "Calculated" | "Rollup"` + `formula`.

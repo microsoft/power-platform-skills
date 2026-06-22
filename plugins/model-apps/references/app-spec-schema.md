@@ -25,8 +25,11 @@ to read the SDK, the lint, or the engine to author a spec. Common asks → how t
 | Records pre-set to a custom status reason | `statusReasons[]` on the entity + `statusReason` on sample rows | entities / sampleData |
 | A child grid on a parent form | `subgrids[]` (1:N or N:N — auto-resolved) | forms |
 | A simplified create dialog / read-only related card | `forms[].formType` `QuickCreate` / `QuickView` | forms |
+| A related record's card shown on a form | `forms[].quickViews[]` (lookup + a `QuickView` form by name) | forms |
 | A command-bar button that runs JS | `commands[]` (`library` + `function`; optional `hidden`/`disabled`) | commands |
+| A command **drop-down menu** of buttons | `commands[].type: "FlyoutAnchor"` + `children[]` | commands |
 | A dashboard of chart/list tiles | `dashboards[]` (`tiles[]` reference declared `views`/`charts`) | dashboards |
+| A dashboard in the app nav | a `dashboard` sitemap subarea in `appShell` (auto-pins it) | appShell |
 
 The builder is **idempotent** and runs everything in one pass (no post-build scripts): tables,
 columns, relationships, web resources, views, charts, forms (+ sub-grids + JS handlers), commands, dashboards, the app,
@@ -168,11 +171,20 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 
 // quick-create form: a simplified create form (same entity). formType defaults to "Main".
 { "entity": "new_ticket", "name": "Ticket Quick Create", "formType": "QuickCreate", "layout": "auto" }
+
+// quick-view placement: embed a related record's QuickView form on a host form via a lookup column
+{ "entity": "new_ticket", "name": "Ticket", "formType": "Main", "layout": "auto",
+  "quickViews": [ { "lookup": "new_customerid", "targetEntity": "new_customer",
+                    "form": "Customer Card", "label": "Customer" } ] }
+{ "entity": "new_customer", "name": "Customer Card", "formType": "QuickView", "layout": "auto" }
 ```
 - **`formType`** is `Main` (default), `QuickCreate`, or `QuickView`. A `QuickCreate` form is a
   simplified create form on the same entity (no sub-grids, no Notes; events allowed). A `QuickView`
-  form is read-only (no sub-grids, no events) and is **created**, but placing it on a parent form via
-  a lookup is not auto-wired yet (lint warns). Sub-grids/Notes are Main-form only.
+  form is read-only (no sub-grids, no events). Sub-grids/Notes are Main-form only.
+- **`quickViews[]`** (on a host form) embed a `QuickView` form via a lookup: `lookup` is the lookup
+  column on the host, `targetEntity` the related entity, `form` the **name** of a `QuickView` form
+  declared in `forms[]` (lint-enforced). Optional `label`, `section`, `displayAsCard`. The control
+  renders from plain formxml, so it persists on a plain push.
 - A sub-grid needs a matching `OneToMany` **or** `ManyToMany` between the form's entity and
   `childEntity` (lint-enforced); the builder resolves the relationship name either way.
 - **`events[]`** wire client-side JS: `event` is `onload`/`onsave`/`onchange` (`onchange` needs an
@@ -185,6 +197,11 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 { "entity": "new_order", "label": "Escalate", "location": "MainTab",
   "library": "new_order.js", "function": "Order.escalate",   // on-click JS (web resource + fn)
   "disabled": false, "hidden": false }                        // optional static visibility
+
+// flyout (drop-down) menu: a container button whose children are the menu items
+{ "entity": "new_order", "label": "More", "type": "FlyoutAnchor", "children": [
+  { "label": "Approve", "library": "new_order.js", "function": "Order.approve" },
+  { "label": "Reject",  "library": "new_order.js", "function": "Order.reject" } ] }
 ```
 - A button's on-click calls `function` in the declared `library` web resource (both lint-enforced) —
   this is what makes it **functional** (not a structural-only button). `parameters` (optional) passes a
@@ -193,9 +210,11 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 - **`hidden`** / **`disabled`** set *static* visibility/enablement. **Conditional (rule-based)
   visibility is not supported** — it's Power Fx-only on modern commands and needs a component library
   that can't be authored headlessly.
-- Buttons are emitted as loose controls (no custom grouping — a titled group needs a parent command-bar
-  row the SDK doesn't synthesize from scratch). The command lands in the Default solution but is
-  entity-scoped, so it shows on the entity's command bar in the app.
+- **`type`** is `Button` (default), `FlyoutAnchor`, or `SplitButton`. A flyout/split container holds
+  `children[]` (each a button with its own `library`+`function`) instead of an on-click of its own —
+  the menu items live under it. Top-level buttons emit as **loose controls**; a *titled* group is not
+  supported (it needs a parent command-bar row the SDK doesn't synthesize from scratch). The command
+  lands in the Default solution but is entity-scoped, so it shows on the entity's command bar.
 
 ## dashboards[] (optional — chart/list/iframe/web-resource tiles)
 ```jsonc
@@ -209,13 +228,19 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   data); a **list** tile needs a declared `view`. The target entity is derived from the view. `name`
   defaults to the chart/view name; `colspan`/`rowspan` optional (default 1×4).
 - Built after views/charts (it references their ids). The dashboard is **global** (not entity-scoped)
-  and added to the solution; **placing it in the app sitemap is manual for now**.
+  and added to the solution. To surface it in the app nav, add a `dashboard` sitemap subarea (below) —
+  that also auto-pins it as an app component.
 
 ## appShell
 ```jsonc
-{ "areas": [ { "label": "Main", "groups": [ { "label": "Records",
-  "subAreas": [ { "entity": "new_customer", "title": "Customers" } ] } ] } ] }
+{ "areas": [ { "label": "Main", "groups": [ { "label": "Records", "subAreas": [
+  { "entity": "new_customer", "title": "Customers" },     // a table
+  { "dashboard": "Operations", "title": "Overview" },     // a built dashboard (by name)
+  { "url": "https://…",       "title": "Help" }           // an external link
+] } ] } ] }
 ```
+- A subarea names exactly **one** target (lint-enforced): `entity` (a table), `dashboard` (the **name**
+  of a `dashboards[]` entry — auto-pinned as an app component so the app includes it), or `url`.
 
 ## sampleData (optional)
 Keyed by entity `schemaName`. Choice values are **labels** (resolved to ints) — for **both** inline

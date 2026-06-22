@@ -38,9 +38,11 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   `createWebResource` for form JS, `createArtifact`+`pushArtifact` for views/charts/forms/app,
   `addSubGrid` for sub-grids, `addFormEventHandler` for form events) — so new, existing, and mixed
   envs all work. The data model is **complete** (all column types, global choices, status reasons,
-  alternate keys, N:N). It also builds **quick-create/quick-view forms** (`formType`) and **modern
-  command-bar buttons** (`commands[]` — functional JS on-click + static hidden/disabled), and
-  **dashboards** (`dashboards[]` — chart/list/iframe/webresource tiles).
+  alternate keys, N:N). It also builds **quick-create/quick-view forms** (`formType`) with **quick-view
+  placement** (`forms[].quickViews[]` — embed a QuickView form via a lookup), **modern command-bar
+  buttons** (`commands[]` — functional JS on-click + static hidden/disabled, incl. **flyout/split-button
+  menus** via `type`+`children[]`), and **dashboards** (`dashboards[]` — chart/list/iframe/webresource
+  tiles) with **sitemap placement** (a `dashboard` subarea auto-pins the dashboard as an app component).
   **All Dataverse access is via the SDK**, so metadata is persisted under
   `<app-folder>/.maker-workspace/` for reuse/edits. Phases
   (`solution·data-model·sample-data·web-resources·views·charts·forms·commands·dashboards·app-shell·publish`) are

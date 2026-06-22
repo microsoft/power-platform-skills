@@ -135,6 +135,25 @@ not runtime phase selection or re-run state):
   pre-deployed control — not live-verifiable here. Shipping a stripped (non-functional) binding would
   be dead wiring, so deferred until the SDK packages a form artifact into an importable zip.
 
+### SDK uptake, round 2 (2026-06-22) — three former 🟡-deferrals shipped + live-verified
+Pulled the latest SDK (rebundled, 3142 KB) for three new helpers, each wired (engine + validator +
+lint + tests) and **live-verified on 983a1** via one combined throwaway probe (`Rc3Probe`), torn down
+clean. Tests 207 → **222**.
+- ✅ **Quick-view placement** — `forms[].quickViews[]` → `sdk.addQuickViewControl(hostFormId, …)` embeds
+  a `QuickView` form on a host form via a lookup column (resolved by form name). A forms-phase post-pass
+  (fetch → add → push → publish); renders from plain formxml, so no solution import. **Live:** the host
+  Main form's formxml carried a `{5C5600E0-…}` QuickViewControl bound to `datafieldname=<lookup>`.
+- ✅ **Command flyout / split menus** — `commands[].type: FlyoutAnchor|SplitButton` + `children[]`; the
+  adapter synthesizes the *intervening* group (parented to the flyout). **Live:** `More` (FlyoutAnchor)
+  → synthesized Group → `Option A`/`Option B`. **Titled groups stay deferred** — re-confirmed the
+  from-scratch 400 ("Group button must have parentappactionid") on a fresh entity; the parent
+  command-bar row is adapter-internal, so the engine can't supply it. (Despite the SDK note that
+  "labeled groups already worked," from-scratch *titled* groups don't — only flyouts do.)
+- ✅ **Dashboard → sitemap placement** — a `dashboard` sitemap subarea (`appShell …subAreas[].dashboard`)
+  → `{type:'DashBoard', dashboardId}`; the SDK auto-pins the dashboard as an app component (type 60) so
+  `ValidateApp` passes. **Live:** the app's sitemap carried a `DefaultDashboard=…` subarea and the
+  dashboard was pinned (componenttype 60); app created clean.
+
 ### P2 — shippable defaults + breadth
 - 🔲 **Standard system views** (All Records, Active, Inactive, Lookup, Associated) auto-generated per table.
 - 🔲 **Multi-area sitemaps** + richer app-shell (multiple areas/groups, icons, ordering).
