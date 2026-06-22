@@ -87,9 +87,10 @@ const PHASE_2_TRACK_A = {
   id: 2,
   title: 'Configuration Migration & Customization Remediation',
   subSteps: [
-    { id: '2.1', label: 'Migrate Metadata' },
-    { id: '2.2', label: 'Locate Customization Report' },
-    { id: '2.3', label: 'Remediate Customizations' },
+    { id: '2.1', label: 'Capture SDM Snapshot' },
+    { id: '2.2', label: 'Migrate Metadata' },
+    { id: '2.3', label: 'Locate Customization Report' },
+    { id: '2.4', label: 'Remediate Customizations' },
   ],
 };
 
