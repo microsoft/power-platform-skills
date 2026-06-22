@@ -1217,4 +1217,8 @@ module.exports = {
   // the "where is render-alm-plan.js / how is it invoked" knowledge in one place.
   findRendererPath,
   invokeRenderer,
+  // Single source of the "Deploy to {label}" → "{label}" normalization so every
+  // stage consumer (verify-env-var-values.js included) matches stage labels the
+  // same way — prevents the mismatch recurring in one un-normalized code path.
+  normalizeStageLabel,
 };

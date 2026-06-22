@@ -121,15 +121,15 @@ Tasks to create:
 
 Steps:
 
-1. **Resolve the project's configured environment URL first, then verify prerequisites against it.** `verify-alm-prerequisites.js` defaults to whatever environment PAC's *org context* is connected to (`pac env who`), which is **not** guaranteed to match the project — and when that context is stale/ambiguous (e.g. duplicate active `pac auth` profiles) it fails with a misleading *"PAC CLI is not authenticated"*. Pin the env explicitly so the gate is deterministic.
+1. **Resolve the project's configured environment URL first, then assert PAC is actually connected to it.** `verify-alm-prerequisites.js` resolves the env from PAC's *ambient org context* (`pac env who`), which is **not** guaranteed to match the project. If PAC has drifted to another environment (duplicate active `pac auth` profiles, or an external process flipping the active env), the skill would silently run discovery — and later `pac pipeline deploy` — against the **wrong** environment (potentially PROD). Assert the match and **hard-stop** on mismatch rather than pinning `--envUrl`: pinning would correct only the Dataverse-API calls while later PAC-CLI operations still follow the drifted context, so asserting that PAC itself is on the right env is the safer gate.
 
    Read the project's recorded env URL (first match wins): `.solution-manifest.json` → top-level `environmentUrl`, else `powerpages.config.json` → `environmentUrl`. Store as `CONFIGURED_ENV_URL`. (Both fields are top-level `environmentUrl` strings; declarative/EDM sites have no `powerpages.config.json`, so the manifest is the source there.)
 
    ```bash
-   node "${PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --require-manifest --envUrl "{CONFIGURED_ENV_URL}"
+   node "${PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --require-manifest --expectedEnvUrl "{CONFIGURED_ENV_URL}"
    ```
 
-   (If neither file records an env URL, omit `--envUrl` and fall back to the pac-context default — `verify-alm-prerequisites.js` then resolves it via `pac env who`.) Capture output as JSON; extract `.envUrl` (store as `devEnvUrl`) and `.token` (store as `DEV_TOKEN`). If the script exits non-zero, stop and surface the error — it will indicate whether `az login`, `pac auth`, or WhoAmI failed.
+   `--expectedEnvUrl` makes the helper compare PAC's resolved env (origin-only) against `CONFIGURED_ENV_URL` and exit non-zero with an *"Environment mismatch: PAC CLI is connected to {X} but this project targets {Y} — run `pac env select …`"* error on mismatch. (If neither file records an env URL, omit `--expectedEnvUrl`; the helper falls back to the pac-context default with no assertion.) Capture output as JSON; extract `.envUrl` (store as `devEnvUrl`) and `.token` (store as `DEV_TOKEN`). If the script exits non-zero, stop and surface the error — it indicates an env mismatch, or that `az login` / `pac auth` / WhoAmI failed.
 
 2. Run `detect-project-context.js` to read project config and solution manifest:
    ```bash
@@ -292,6 +292,8 @@ Use `solutionId` from `.solution-manifest.json` as `ARTIFACT_SOLUTION_ID` and `u
 > GET {hostEnvUrl}/api/data/v9.1/deploymentpipelines({pipelineId})/deploymentpipeline_deploymentenvironment?$select=deploymentenvironmentid,name,environmenttype
 > ```
 > Filter for `environmenttype = 200000000` to get the source record. Use `deploymentenvironmentid` as the `sourceDeploymentEnvironmentId`. For the artifact/solution list, use `sourceDeploymentEnvironmentId` from `docs/alm/last-pipeline.json` and `solutionName` from `.solution-manifest.json` as fallbacks. Set a flag `VALIDATE_PACKAGE_UNAVAILABLE = true` to skip Phase 4.2–4.3 and use the PAC CLI path in Phase 6.
+>
+> **If `RetrieveDeploymentPipelineInfo` returns a NON-404 error (e.g. 400/4xx/5xx)** — observed: some Pipelines packages return **400** for this call even though `ValidatePackageAsync` works fine — do **NOT** set `VALIDATE_PACKAGE_UNAVAILABLE`. The 404 branch above is specifically for older packages that lack the OData validation API; a 400 is just this metadata call failing, not the validation API being absent. Instead, fall back to `sourceDeploymentEnvironmentId` from `docs/alm/last-pipeline.json` (and `solutionName` from `.solution-manifest.json`) and **continue the normal `ValidatePackageAsync` flow** (Phase 4 onward). Only a genuine 404 — or a later `ValidatePackageAsync` 404 (Phase 4.2) — routes to the PAC-CLI path.
 
 ### Phase 3.5 — Pre-deploy Completeness Check
 
@@ -1299,7 +1301,7 @@ Authorization: Bearer {HOST_TOKEN}
 
 | Task subject | activeForm | Description |
 |---|---|---|
-| Verify prerequisites | Verifying prerequisites | Run verify-alm-prerequisites.js (--require-manifest --envUrl pinned from project config) for PAC/az/WhoAmI; run detect-project-context.js for solutionManifest/siteName; read docs/alm/last-pipeline.json for pipelineId/stages; acquire host env token |
+| Verify prerequisites | Verifying prerequisites | Run verify-alm-prerequisites.js (--require-manifest --expectedEnvUrl from project config; hard-stops on PAC env drift) for PAC/az/WhoAmI; run detect-project-context.js for solutionManifest/siteName; read docs/alm/last-pipeline.json for pipelineId/stages; acquire host env token |
 | Select target stage | Selecting target stage | Show available stages from docs/alm/last-pipeline.json; ask user to select target; warn if last deploy to this stage failed |
 | Resolve pipeline info | Resolving pipeline info | Call RetrieveDeploymentPipelineInfo (v9.1) to get SourceDeploymentEnvironmentId and DeployableArtifacts; match solution |
 | Validate package | Validating package | **`MULTI_RUN_MODE`**: run Phase 3.6 once (parallel batch) — `validate-stage-runs-batch.js` fans out create-stage-run + ValidatePackageAsync + poll-validation-status for all non-skipped solutions concurrently; halts the deploy on any failure or pending-approval batch; persists per-solution stageRunIds for the serial deploy loop to reuse. **Single-solution / legacy v2**: Phase 4 inline — POST deploymentstageruns (→ 201 or 204+header); POST ValidatePackageAsync top-level action (204); poll stagerunstatus until not 200000006; JSON.parse validationresults twice; fetch aigenerateddeploymentnotes; PATCH artifactversion + deploymentnotes + deploymentsettingsjson (from deployment-settings.json) |

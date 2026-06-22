@@ -79,3 +79,45 @@ test('verifyAlmPrerequisites returns envUrl, userId, organizationId on success',
   assert.equal(result.organizationId, 'org-1');
   assert.ok(result.token);
 });
+
+// --- --expectedEnvUrl: hard-stop on ambient PAC env drift (Gap C) ---
+
+test('verifyAlmPrerequisites HARD-STOPS when resolved PAC env != expectedEnvUrl', async (t) => {
+  const helpers = require('../lib/validation-helpers');
+  const origEnv = helpers.getEnvironmentUrl;
+  // PAC drifted to prod; the project targets dev.
+  helpers.getEnvironmentUrl = () => 'https://org-prod.crm.dynamics.com';
+  t.after(() => { helpers.getEnvironmentUrl = origEnv; });
+
+  await assert.rejects(
+    () => verifyAlmPrerequisites({ expectedEnvUrl: 'https://org-dev.crm.dynamics.com' }),
+    /Environment mismatch.*org-prod.*targets.*org-dev/s,
+  );
+});
+
+test('verifyAlmPrerequisites passes the env assertion when origins match (slash/case/path ignored)', async (t) => {
+  const helpers = require('../lib/validation-helpers');
+  const origEnv = helpers.getEnvironmentUrl;
+  const origToken = helpers.getAuthToken;
+  const origReq = helpers.makeRequest;
+  helpers.getEnvironmentUrl = () => 'https://Org-Dev.crm.dynamics.com';   // mixed case, no trailing slash
+  helpers.getAuthToken = () => 'tok';
+  helpers.makeRequest = async () => ({ statusCode: 200, body: JSON.stringify({ UserId: 'u', OrganizationId: 'o' }) });
+  t.after(() => {
+    helpers.getEnvironmentUrl = origEnv;
+    helpers.getAuthToken = origToken;
+    helpers.makeRequest = origReq;
+  });
+
+  // Expected URL differs only by case + trailing slash → same origin → no throw.
+  const res = await verifyAlmPrerequisites({ expectedEnvUrl: 'https://org-dev.crm.dynamics.com/' });
+  assert.equal(res.envUrl, 'https://Org-Dev.crm.dynamics.com');
+});
+
+test('parseArgs captures --expectedEnvUrl', () => {
+  const { parseArgs } = require('../lib/verify-alm-prerequisites');
+  const a = parseArgs(['node', 'x', '--expectedEnvUrl', 'https://dev.crm.dynamics.com', '--require-manifest']);
+  assert.equal(a.expectedEnvUrl, 'https://dev.crm.dynamics.com');
+  assert.equal(a.requireManifest, true);
+  assert.equal(parseArgs(['node', 'x']).expectedEnvUrl, null);
+});

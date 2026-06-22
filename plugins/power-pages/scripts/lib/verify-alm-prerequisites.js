@@ -5,11 +5,14 @@
 //   2. Azure CLI is installed and logged in (az account get-access-token)
 //   3. Dataverse API is reachable (WhoAmI)
 //
-// Usage: node verify-alm-prerequisites.js [--envUrl <url>] [--require-manifest]
+// Usage: node verify-alm-prerequisites.js [--envUrl <url>] [--require-manifest] [--expectedEnvUrl <url>]
 //
 // Options:
 //   --envUrl <url>        Override environment URL (default: read from pac env who)
 //   --require-manifest    Fail if .solution-manifest.json is not found in project root
+//   --expectedEnvUrl <url>  Assert the resolved env matches this origin; HARD-STOP on
+//                           mismatch (guards against an ambient PAC context drifting to
+//                           the wrong environment). Compared origin-only. No-op if unset.
 //
 // Output (JSON to stdout):
 //   { "envUrl": "...", "token": "...", "userId": "...", "organizationId": "...", "tenantId": "..." }
@@ -28,16 +31,29 @@ function parseArgs(argv) {
   const args = argv.slice(2);
   let envUrl = null;
   let requireManifest = false;
+  let expectedEnvUrl = null;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--envUrl' && args[i + 1]) envUrl = args[++i];
     else if (args[i] === '--require-manifest') requireManifest = true;
+    else if (args[i] === '--expectedEnvUrl' && args[i + 1]) expectedEnvUrl = args[++i];
   }
 
-  return { envUrl, requireManifest };
+  return { envUrl, requireManifest, expectedEnvUrl };
 }
 
-async function verifyAlmPrerequisites({ envUrl, requireManifest } = {}) {
+// Compare two Dataverse env URLs by origin only (scheme+host), case-insensitive,
+// path/query/trailing-slash ignored — so `https://Org.crm.dynamics.com/` and
+// `https://org.crm.dynamics.com/api/data/v9.2` count as the same environment.
+function sameEnvOrigin(a, b) {
+  const origin = (u) => {
+    try { return new URL(u).origin.toLowerCase(); }
+    catch { return String(u || '').replace(/\/+$/, '').toLowerCase(); }
+  };
+  return origin(a) === origin(b);
+}
+
+async function verifyAlmPrerequisites({ envUrl, requireManifest, expectedEnvUrl } = {}) {
   // Step 1: PAC CLI check
   let resolvedEnvUrl = envUrl;
   if (!resolvedEnvUrl) {
@@ -49,6 +65,25 @@ async function verifyAlmPrerequisites({ envUrl, requireManifest } = {}) {
     }
   }
   resolvedEnvUrl = resolvedEnvUrl.replace(/\/+$/, '');
+
+  // Step 1b: Environment-match assertion (opt-in via --expectedEnvUrl). When the
+  // env is resolved from the ambient PAC context (no explicit --envUrl), it is NOT
+  // guaranteed to be the project's environment — and since getEnvironmentUrl() now
+  // parses PAC 2.8.x's "Org URL:" successfully, a DRIFTED PAC context resolves and
+  // proceeds SILENTLY instead of failing loudly the way the old parse-miss did
+  // (which had been an accidental safety net). A caller that knows the project's
+  // env (from .solution-manifest.json / powerpages.config.json / the approved plan)
+  // passes it here; a mismatch HARD-STOPS before any token acquisition or write, so
+  // an ALM operation can never silently target the wrong environment (e.g. PROD).
+  if (expectedEnvUrl && !sameEnvOrigin(resolvedEnvUrl, expectedEnvUrl)) {
+    throw new Error(
+      `Environment mismatch: PAC CLI is connected to ${resolvedEnvUrl} but this project targets ` +
+      `${expectedEnvUrl.replace(/\/+$/, '')}. Run \`pac env select --environment ${expectedEnvUrl.replace(/\/+$/, '')}\` ` +
+      '(or `pac auth select` to the right profile) and retry. If `pac env who` keeps reverting to a ' +
+      'different environment, an external process is changing the active env — resolve that before ' +
+      'running ALM skills, or pass --envUrl to pin this run explicitly.'
+    );
+  }
 
   // Step 2: Azure CLI token
   const token = helpers.getAuthToken(resolvedEnvUrl);
@@ -109,9 +144,9 @@ async function verifyAlmPrerequisites({ envUrl, requireManifest } = {}) {
 
 // CLI entry point
 if (require.main === module) {
-  const { envUrl, requireManifest } = parseArgs(process.argv);
+  const { envUrl, requireManifest, expectedEnvUrl } = parseArgs(process.argv);
 
-  verifyAlmPrerequisites({ envUrl, requireManifest })
+  verifyAlmPrerequisites({ envUrl, requireManifest, expectedEnvUrl })
     .then((result) => {
       console.log(JSON.stringify(result));
       process.exit(0);
@@ -122,4 +157,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { verifyAlmPrerequisites };
+module.exports = { verifyAlmPrerequisites, parseArgs, sameEnvOrigin };
