@@ -1,1 +1,132 @@
-../marketplace.json
+{
+    "name": "power-platform-skills",
+    "owner": {
+        "name": "Microsoft"
+    },
+    "metadata": {
+        "description": "Plugins for Power Platform development with Claude Code and GitHub Copilot",
+        "pluginRoot": "."
+    },
+    "plugins": [
+        {
+            "name": "power-pages",
+            "source": "./plugins/power-pages",
+            "description": "Power Pages development and management plugin for Claude Code and GitHub Copilot",
+            "category": "development",
+            "version": "2.4.0",
+            "license": "MIT",
+            "tags": [
+                "power platform",
+                "power pages",
+                "microsoft power platform",
+                "microsoft"
+            ],
+            "keywords": [
+                "power platform",
+                "power pages",
+                "microsoft power platform",
+                "microsoft"
+            ]
+        },
+        {
+            "name": "model-apps",
+            "source": "./plugins/model-apps",
+            "description": "Build and deploy generative pages for Power Apps model-driven apps",
+            "category": "development",
+            "version": "2.2.0",
+            "license": "MIT",
+            "tags": [
+                "power platform",
+                "power apps",
+                "model-driven apps",
+                "generative pages",
+                "genux",
+                "microsoft"
+            ],
+            "keywords": [
+                "power platform",
+                "power apps",
+                "model-driven apps",
+                "generative pages",
+                "genux",
+                "microsoft"
+            ]
+        },
+        {
+            "name": "mcp-apps",
+            "source": "./plugins/mcp-apps",
+            "description": "Generate MCP App widgets for MCP tools",
+            "category": "development",
+            "version": "1.0.0",
+            "license": "MIT",
+            "tags": [
+                "mcp",
+                "mcp-apps",
+                "widget",
+                "power platform",
+                "microsoft"
+            ],
+            "keywords": [
+                "mcp",
+                "mcp-apps",
+                "widget",
+                "power platform",
+                "microsoft"
+            ]
+        },
+        {
+            "name": "canvas-apps",
+            "source": "./plugins/canvas-apps",
+            "description": "Build Power Apps Canvas Apps using the Canvas Authoring MCP server",
+            "category": "development",
+            "version": "2.1.0",
+            "license": "MIT",
+            "tags": [
+                "power platform",
+                "power apps",
+                "canvas apps",
+                "pa-yaml",
+                "msapp",
+                "connectors",
+                "microsoft"
+            ],
+            "keywords": [
+                "power platform",
+                "power apps",
+                "canvas apps",
+                "pa-yaml",
+                "msapp",
+                "connectors",
+                "microsoft"
+            ]
+        },
+        {
+            "name": "code-apps-preview",
+            "source": "./plugins/code-apps",
+            "description": "Build and deploy Power Apps code apps using React, Vite, and Power Platform connectors",
+            "category": "development",
+            "version": "1.0.0",
+            "license": "MIT",
+            "tags": [
+                "power platform",
+                "power apps",
+                "code apps",
+                "react",
+                "vite",
+                "dataverse",
+                "connectors",
+                "microsoft"
+            ],
+            "keywords": [
+                "power platform",
+                "power apps",
+                "code apps",
+                "react",
+                "vite",
+                "dataverse",
+                "connectors",
+                "microsoft"
+            ]
+        }
+    ]
+}
