@@ -205,12 +205,12 @@ power-platform-skills/
 └── README.md
 ```
 
-The `.claude-plugin` files are compatibility symlinks for users who subscribed
-before the Open Plugins migration. The root legacy marketplace points to
-`../marketplace.json`, and per-plugin legacy manifests point to
-`../.plugin/plugin.json`. The shared marketplace uses repository-root-relative
-plugin `source` paths so existing subscriptions can auto-update without
-requiring users to remove and reinstall the marketplace or plugins.
+The `.claude-plugin` files are compatibility mirrors for users who subscribed
+before the Open Plugins migration. The root legacy marketplace mirrors
+`marketplace.json`, and per-plugin legacy manifests mirror `.plugin/plugin.json`.
+The shared marketplace uses repository-root-relative plugin `source` paths so
+existing subscriptions can auto-update without requiring users to remove and
+reinstall the marketplace or plugins.
 
 ## Documentation
 

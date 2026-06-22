@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
 /**
- * Validates that legacy .claude-plugin manifests symlink to the Open Plugins
- * metadata. These symlinks allow existing marketplace subscriptions to
- * auto-update without requiring users to remove and reinstall the marketplace.
+ * Validates that legacy .claude-plugin manifests mirror the Open Plugins
+ * metadata. Existing marketplace subscriptions still resolve the legacy paths
+ * during auto-update, so these files must stay in sync. Mirrors are committed
+ * files (not links), so this guard must pass whenever marketplace/plugin
+ * metadata changes.
  */
 
 const fs = require('fs');
@@ -31,13 +33,8 @@ function expectedLegacySource(pluginDirectory) {
   return `./${normalizeRelative(path.relative(ROOT, pluginDirectory))}`;
 }
 
-function assertSymlinkTarget(linkPath, expectedTarget) {
-  const stat = fs.lstatSync(linkPath);
-  assert.ok(stat.isSymbolicLink(), 'legacy plugin manifest must be a symlink');
-  assert.equal(
-    normalizeRelative(fs.readlinkSync(linkPath)),
-    normalizeRelative(expectedTarget)
-  );
+function assertJsonMirror(legacyPath, sourcePath) {
+  assert.deepEqual(readJson(legacyPath), readJson(sourcePath));
 }
 
 const errors = [];
@@ -52,7 +49,7 @@ function check(label, fn) {
 
 check('legacy marketplace manifest', () => {
   assert.ok(fs.existsSync(LEGACY_MARKETPLACE_PATH), 'missing .claude-plugin/marketplace.json');
-  assertSymlinkTarget(LEGACY_MARKETPLACE_PATH, path.join('..', 'marketplace.json'));
+  assertJsonMirror(LEGACY_MARKETPLACE_PATH, OPEN_MARKETPLACE_PATH);
 });
 
 if (errors.length === 0) {
@@ -88,8 +85,7 @@ if (errors.length === 0) {
 
     check(relativeLegacyManifestPath, () => {
       assert.ok(fs.existsSync(legacyManifestPath), 'missing legacy plugin manifest');
-      assertSymlinkTarget(legacyManifestPath, path.join('..', '.plugin', 'plugin.json'));
-      assert.deepEqual(readJson(legacyManifestPath), readJson(openManifestPath));
+      assertJsonMirror(legacyManifestPath, openManifestPath);
     });
   }
 
