@@ -3,7 +3,8 @@
 Status of the `/model-app-maker` skill (intent → model-driven app via the headless
 `cds-maker-sdk`). Tracks what's shipped, what's pending (by priority), and the full enhancement
 backlog. The build engine is `scripts/lib/sdk-build.js`; the App Spec contract is
-`references/app-spec-schema.md`.
+`references/app-spec-schema.md`. **Intentionally deferred / blocked items (with the *why*) are
+tracked in [`model-app-maker-todo.md`](./model-app-maker-todo.md).**
 
 **Legend:** ✅ done · �priority (P0 = next, P1 = soon, P2 = later) · ⚠ not live-verified.
 
@@ -127,10 +128,12 @@ not runtime phase selection or re-run state):
   with 2 cells/controls referencing the created view savedqueryid + chart visualizationId; torn down
   clean. ⚠ **Deferred:** sitemap placement (the dashboard isn't auto-added to the app yet);
   interactive (type 10) dashboards.
-- 🔲 **PCF custom controls** (`addCustomControl`). ⚠ **Architectural:** the binding persists only via
-  **solution export→import** — a plain `pushArtifact`/`systemforms` write strips it. Needs a new
-  delivery path (package the form + control bundle into a solution, `importSolution`) and a source
-  for the control bundle. Biggest lift; design needed.
+- ⛔ **PCF custom controls** (`addCustomControl`) — **DEFERRED** (blocker recorded in
+  [`model-app-maker-todo.md`](./model-app-maker-todo.md)). The binding persists only via **solution
+  import**; a plain `pushArtifact` strips the control `uniqueid`. Delivering it needs zip surgery
+  (export → patch `customizations.xml` → rezip → import) the SDK doesn't package, a new zip dep, and a
+  pre-deployed control — not live-verifiable here. Shipping a stripped (non-functional) binding would
+  be dead wiring, so deferred until the SDK packages a form artifact into an importable zip.
 
 ### P2 — shippable defaults + breadth
 - 🔲 **Standard system views** (All Records, Active, Inactive, Lookup, Associated) auto-generated per table.
