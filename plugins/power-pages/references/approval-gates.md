@@ -263,6 +263,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
 | `plan-alm:1.deferral` | gate | progress | 1 | `.alm-deferred` marker present — *"Continue with deferral / remove and proceed / cancel"* | `deferral-marker` |
+| `plan-alm:1.approve-draft` | gate | plan | 1 (0b) | Existing **Draft** plan found — *"Approve this draft now (no re-plan) / re-plan from scratch / cancel"*. Approve writes status via `set-plan-status.js` and exits | nothing |
 | `plan-alm:1.completeness` | gate | progress | 1 | Completeness check found gaps — *"Sync first / plan with gaps / cancel"* | nothing |
 | `plan-alm:2.q1-existing` | gate | plan | 2 (Q1) | `SOLUTION_DONE=true` — *"Use existing solution **{name}**?"* | nothing |
 | `plan-alm:2.q1-fresh` | gate | plan | 2 (Q1) | `SOLUTION_DONE=false` — *"Include solution setup in plan?"* | nothing |

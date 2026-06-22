@@ -1212,4 +1212,9 @@ module.exports = {
   STEP_TO_SKILL,
   MARKER_TO_PHASE,
   PHASES,
+  // Exported so other plan-data writers (e.g. set-plan-status.js) reuse the SAME
+  // renderer-invocation instead of re-implementing the execFileSync call — keeps
+  // the "where is render-alm-plan.js / how is it invoked" knowledge in one place.
+  findRendererPath,
+  invokeRenderer,
 };

@@ -63,7 +63,31 @@ Steps:
    - **Continue and keep marker** → set `DEFERRAL_PRESERVED = true` and `DEFERRAL_REASON = {reason}`. Proceed to step 1. Surface a one-line note in the Phase 1 step 9 user report (e.g. *"Note: `.alm-deferred` is preserved — other ALM skills will continue to skip plan-completeness checks for this project."*) so the user remembers the marker remains in effect after planning.
    - **Cancel** → exit cleanly (don't touch the marker).
 
-   If `deferred === false`, skip this step silently and proceed to step 1.
+   If `deferred === false`, skip this step silently and proceed to step 0b.
+
+0b. **Offer to approve an existing Draft in place (skip re-planning).** The same `check-alm-plan.js` output from step 0 also carries `exists` and `planStatus`. When `exists === true` **and** `planStatus === "Draft"`, the user already has a saved Draft plan — offer to approve it directly instead of regenerating the whole plan. (This is the only Draft→Approved path; without it, approving a draft means a full re-plan.)
+
+   <!-- gate: plan-alm:1.approve-draft | category=plan | cancel-leaves=nothing -->
+   > 🚦 **Gate (plan · plan-alm:1.approve-draft):** An existing **Draft** plan was found — approve it in place (no re-plan), re-plan from scratch, or cancel. Approving here writes the status via `set-plan-status.js` and exits without re-running discovery; no deployment is triggered.
+
+   Ask via `AskUserQuestion`:
+   > "This site already has an ALM plan saved as **Draft** (`docs/alm-plan.html`). What would you like to do?"
+
+   | Question | Header | Options |
+   |---|---|---|
+   | What would you like to do? | Existing draft plan | Approve this draft now — no re-plan (Recommended), Re-plan from scratch, Cancel |
+
+   - **Approve this draft now (Recommended)** → capture the approver using the **Phase 4 approver-capture procedure** (the always-interactive prompt with git/OS-name prefill), then write the status atomically with the helper:
+
+     ```bash
+     node "${PLUGIN_ROOT}/scripts/lib/set-plan-status.js" --projectRoot "." --status Approved --approver "{APPROVER}" --render
+     ```
+
+     Commit (`git add docs/alm-plan.html docs/.alm-plan-data.json && git commit -m "Approve ALM plan for {siteName}"`), run skill tracking (Phase 4 finalize), print the Phase 4 next-steps guidance, and **exit**. Do **not** continue to step 1 — there is nothing to re-plan.
+   - **Re-plan from scratch** → proceed to step 1 (the rest of Phase 1 regenerates the plan; Phase 4 saves the new version).
+   - **Cancel** → exit cleanly (leave the Draft as-is).
+
+   If `exists === false`, or `planStatus` is anything other than `"Draft"` (`Approved` / `In Execution` / `Completed` / null), skip this step silently and proceed to step 1.
 
 1. **Resolve the site identity from the local project.** `.powerpages-site/website.yml` is the source of truth for `websiteRecordId` and `siteName`, and it is present for **both** Power Pages site types:
    - **Code / SPA sites** — scaffolded by `/power-pages:create-site` and downloaded with `pac pages download-code-site`. These also have a `powerpages.config.json` and SPA source (`src/`, build output in `dist/`/`build/`).
@@ -988,8 +1012,20 @@ Options:
 3. **I want to change something** — go back to questions
 
 - **If option 3:** Re-run Phase 2 (ask which section to change, then re-gather those answers). Regenerate the plan (repeat Phase 3). Re-present for approval.
-- **If option 1 (approved):** Capture the approver (see below). Stamp `<span id="approved-by">` / `<span id="approval-date">` in the HTML and set `<span class="plan-status">` text to `Approved` via `Edit`. **Update `docs/.alm-plan-data.json`**: set `PLAN_STATUS: "Approved"` and `PLAN_MODE: "approved"`. Then run the finalize steps below (skill tracking + commit), print the next-steps guidance, mark task 2 `completed`, and **exit**.
-- **If option 2 (draft):** Do **not** capture an approver. Set `<span class="plan-status">` text to `Draft` via `Edit`. Update `docs/.alm-plan-data.json`: `PLAN_STATUS: "Draft"`, `PLAN_MODE: "draft"`. Run the finalize steps below (commit only — skip skill tracking or run it, your choice; commit message `"Add ALM plan for {siteName} (draft)"`), tell the user to re-run `/power-pages:plan-alm` when ready to approve, mark task 2 `completed`, and **exit**.
+- **If option 1 (approved):** Capture the approver (see below), then write the status **and** approver atomically with the deterministic helper. **Do not hand-edit the HTML spans** — the badge, `approved-by`, and `approval-date` are all derived from `docs/.alm-plan-data.json` on render, so a manual span Edit is non-durable (the next execution-skill refresh re-derives it). The helper updates plan-data (`PLAN_STATUS`, `PLAN_MODE`, `APPROVED_BY`, `APPROVAL_DATE` — all four together) and re-renders `docs/alm-plan.html`:
+
+  ```bash
+  node "${PLUGIN_ROOT}/scripts/lib/set-plan-status.js" --projectRoot "." --status Approved --approver "{APPROVER}" --render
+  ```
+
+  Then run the finalize steps below (skill tracking + commit), print the next-steps guidance, mark task 2 `completed`, and **exit**.
+- **If option 2 (draft):** Do **not** capture an approver. Save as Draft with the same helper (writes plan-data + re-renders; clears any stale approver fields so the plan never ends up "Draft + approver"):
+
+  ```bash
+  node "${PLUGIN_ROOT}/scripts/lib/set-plan-status.js" --projectRoot "." --status Draft --render
+  ```
+
+  Run the finalize steps below (commit only — skip skill tracking or run it, your choice; commit message `"Add ALM plan for {siteName} (draft)"`), tell the user to re-run `/power-pages:plan-alm` when ready to approve, mark task 2 `completed`, and **exit**.
 
 **Capturing the approver (option 1 only) — always interactive (#1):**
 
@@ -1007,12 +1043,7 @@ Then **always** ask via `AskUserQuestion` (even when the suggestion is non-empty
 >
 > Options: 1. *{suggested name from git/OS, if any}* · 2. Other (enter name)
 
-If the command returned an empty string, present only option 2 (free-text). Store the confirmed result as `APPROVER`, then use `Edit` to replace the spans in `docs/alm-plan.html`:
-
-- Find `<span id="approved-by">` (or `<span id="approved-by"></span>` / `<span id="approved-by">__APPROVED_BY__</span>`) and replace its inner text with `APPROVER`.
-- Find `<span id="approval-date">` and replace its inner text with the current ISO timestamp.
-
-Both spans are guaranteed to exist in the template — there is exactly one of each in the "Execution Checklist" tab footer.
+If the command returned an empty string, present only option 2 (free-text). Store the confirmed result as `APPROVER` and pass it to `set-plan-status.js` (option 1 above) — **do not** hand-edit the `approved-by` / `approval-date` spans. The helper writes `APPROVED_BY` + `APPROVAL_DATE` (current ISO timestamp) into `docs/.alm-plan-data.json` and re-renders, and the template fills both spans from plan-data. This keeps the audit trail and the status in lockstep — the half-written "approver recorded but status still Draft" state (which `validate-plan-alm.js` now blocks) cannot happen.
 
 **Finalize (both save options):**
 
