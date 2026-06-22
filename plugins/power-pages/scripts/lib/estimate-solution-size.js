@@ -90,8 +90,8 @@ function parseArgs(argv) {
 // Returns the canonical values ('code' | 'declarative') to match
 // detect-project-context.js — NOT the old hardcoded 'code-site', which mislabeled
 // every declarative/EDM site as a code site. ('declarative' was formerly labeled
-// 'data-model'; the value is diagnostic-only, so a caller still passing 'data-model'
-// is echoed unchanged and remains equivalent.) Returns 'unknown' when neither
+// 'data-model'; a caller still passing the legacy 'data-model' is NORMALIZED to
+// 'declarative' so the output is always canonical.) Returns 'unknown' when neither
 // marker is present (e.g. running outside a project root).
 function resolveSiteType(explicitSiteType, projectRoot) {
   // Normalize the caller-supplied label. 'data-model' is the legacy alias for
