@@ -129,6 +129,33 @@ test('--render regenerates docs/alm-plan.html with the matching badge', (t) => {
   assert.match(html, /Jane/);
 });
 
+test('--render failure leaves BOTH plan-data and alm-plan.html unchanged (atomic)', (t) => {
+  const root = makeProject(t, {
+    PLAN_STATUS: 'Draft', SITE_NAME: 'DemoSite', GENERATED_AT: '2026-06-22',
+  });
+  const dataPath = path.join(root, 'docs', '.alm-plan-data.json');
+  const htmlPath = path.join(root, 'docs', 'alm-plan.html');
+  const before = fs.readFileSync(dataPath, 'utf8');
+
+  // A renderer that always fails — simulates a missing/broken render script or an
+  // unexpected render error. setPlanStatus must NOT leave a half-applied state.
+  const badRenderer = path.join(root, 'bad-renderer.js');
+  fs.writeFileSync(badRenderer, 'process.stderr.write("boom\\n"); process.exit(1);\n');
+
+  assert.throws(() => setPlanStatus({
+    projectRoot: root, status: 'Approved', approver: 'Jane', render: true,
+    rendererPath: badRenderer, makeNow: () => '2026-06-22T00:00:00.000Z',
+  }));
+
+  // plan-data must be byte-for-byte unchanged (still Draft, no approver) — the
+  // status write must not "land" while the HTML stays stale.
+  assert.equal(fs.readFileSync(dataPath, 'utf8'), before, 'plan-data must be untouched on render failure');
+  // No HTML written, and no leftover temp files.
+  assert.equal(fs.existsSync(htmlPath), false, 'no alm-plan.html on render failure');
+  assert.equal(fs.existsSync(dataPath + '.tmp'), false, 'no stale .alm-plan-data.json.tmp');
+  assert.equal(fs.existsSync(htmlPath + '.tmp'), false, 'no stale alm-plan.html.tmp');
+});
+
 test('idempotent: re-writing the same status yields the same plan-data', (t) => {
   const root = makeProject(t, { PLAN_STATUS: 'Draft', SITE_NAME: 'T' });
   setPlanStatus({ projectRoot: root, status: 'Approved', approver: 'A', makeNow: () => '2026-06-22T00:00:00.000Z' });

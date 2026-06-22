@@ -138,18 +138,36 @@ function setPlanStatus(opts) {
   planData.APPROVED_BY = finalApprover;
   planData.APPROVAL_DATE = finalApprovalDate;
 
-  // Atomic write: temp + rename, so a crash mid-write can't truncate the plan
-  // file that every downstream Phase 0 gate depends on.
-  const tmp = dataPath + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(planData, null, 2));
-  fs.renameSync(tmp, dataPath);
+  // Stage the new plan-data to a temp file (don't commit it yet). Atomicity
+  // matters two ways: (1) a crash mid-write can't truncate the plan file every
+  // downstream Phase 0 gate depends on; (2) when --render is requested, a renderer
+  // failure must leave BOTH docs/.alm-plan-data.json AND docs/alm-plan.html
+  // unchanged — otherwise the status write lands, the HTML stays stale, the CLI
+  // exits non-zero, and a caller that commits docs/ ships a new JSON beside a
+  // stale HTML. So we render FROM the staged temp into a temp HTML first, and only
+  // swap both into place after a clean render. Without --render, just commit the JSON.
+  const dataTmp = dataPath + '.tmp';
+  fs.writeFileSync(dataTmp, JSON.stringify(planData, null, 2));
 
   let rendered = false;
   if (render) {
     const htmlPath = planHtmlPath(projectRoot);
-    invokeRenderer(findRendererPath(rendererPath), dataPath, htmlPath);
+    const htmlTmp = htmlPath + '.tmp';
+    try {
+      invokeRenderer(findRendererPath(rendererPath), dataTmp, htmlTmp);
+    } catch (e) {
+      // Render failed — discard both staged files so nothing changed on disk.
+      try { fs.unlinkSync(dataTmp); } catch {}
+      try { fs.unlinkSync(htmlTmp); } catch {}
+      throw e;
+    }
+    // Both products are ready: commit the HTML then the JSON. (Same-dir renames in
+    // one process; a failure between them is vanishingly unlikely and would at worst
+    // reproduce the pre-existing "JSON behind HTML" state, never a torn JSON file.)
+    fs.renameSync(htmlTmp, htmlPath);
     rendered = true;
   }
+  fs.renameSync(dataTmp, dataPath);
 
   return {
     ok: true,
