@@ -84,7 +84,8 @@ function parseArgs(argv) {
 // Resolve the build-axis site type for the estimator's diagnostic `siteType`
 // output field. Prefer the caller-supplied value (plan-alm resolves this in
 // Phase 1 via detect-project-context.js, the authoritative source), and fall
-// back to a lightweight local probe of the same markers documented in CLAUDE.md:
+// back to a lightweight local probe of the same markers detect-project-context.js
+// resolves on (also described in the plugin's AGENTS.md "detect-project-context.js" entry):
 //   - `powerpages.config.json`          → code / SPA site
 //   - `.powerpages-site/.portalconfig/` → declarative design-studio (EDM/standard) site
 // Returns the canonical values ('code' | 'declarative') to match

@@ -161,9 +161,12 @@ function setPlanStatus(opts) {
       try { fs.unlinkSync(htmlTmp); } catch {}
       throw e;
     }
-    // Both products are ready: commit the HTML then the JSON. (Same-dir renames in
-    // one process; a failure between them is vanishingly unlikely and would at worst
-    // reproduce the pre-existing "JSON behind HTML" state, never a torn JSON file.)
+    // Both products are ready: commit the HTML then the JSON. A crash BETWEEN these
+    // two same-dir renames (vanishingly unlikely in one process) would leave the new
+    // HTML in place with the JSON still old — "HTML ahead of JSON". That's benign and
+    // self-healing: the next render re-derives the HTML from whatever the JSON says,
+    // and no file is ever torn (each rename is atomic). It is the inverse of the
+    // original pre-atomic bug (new JSON + stale HTML), and harmless in the same way.
     fs.renameSync(htmlTmp, htmlPath);
     rendered = true;
   }
