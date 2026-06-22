@@ -61,6 +61,11 @@ function buildSizeAnalysis(estimate, thresholds) {
     tableCount: {
       value: estimate.tableCount,
       tier: classifyTier(estimate.tableCount, 10, thresholds.maxTableCount),
+      // Carry the discovery scope so the renderer can disambiguate a genuine
+      // "0 tables" from "couldn't enumerate" — without it a 0 reads as a tiny
+      // site. estimate.tableCountScope ∈ "site-referenced" | "manifest-only" |
+      // "unavailable" (the last → 0 tables by default, not a confirmed empty schema).
+      scope: estimate.tableCountScope || null,
     },
     webFilesAggregateMB: {
       value: estimate.webFilesAggregateMB,

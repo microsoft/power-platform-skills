@@ -1980,3 +1980,56 @@ test('render-alm-plan: omits the Completed footer line when COMPLETED_AT is abse
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+// ── tableCount discovery-scope annotation (Size Analysis signal) ──────────────
+
+test('render-alm-plan: tableCount "unavailable" scope renders a clarifying note (a 0 is not a tiny site)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      sizeAnalysis: { tableCount: { value: 0, tier: 'green', scope: 'unavailable' } },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.match(html, /signal-scope-info/, 'an under-reporting scope must render the scope note');
+    assert.match(html, /unavailable/i);
+    assert.match(html, /not.*a confirmed empty schema/i);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: tableCount "manifest-only" scope renders the manifest caveat', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      sizeAnalysis: { tableCount: { value: 2, tier: 'green', scope: 'manifest-only' } },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.match(html, /signal-scope-info/);
+    assert.match(html, /datamodel manifest only/i);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: tableCount "site-referenced" (complete) scope renders NO scope note', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      sizeAnalysis: { tableCount: { value: 5, tier: 'green', scope: 'site-referenced' } },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.doesNotMatch(html, /signal-scope-info/, 'the complete scope must not add a caveat');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

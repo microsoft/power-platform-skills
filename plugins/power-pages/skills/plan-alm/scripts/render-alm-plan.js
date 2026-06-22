@@ -354,6 +354,18 @@ function buildSignalCards() {
         signalExtras += `<div class="signal-sample-info" style="font-size:11px;margin-top:6px;padding-top:6px;border-top:1px solid var(--surface2);color:var(--text-dim);">Aggregate extrapolated from a stratified sample of <strong>${webFileSampleSize}</strong> of <strong>${webFileCount.toLocaleString()}</strong> web files.</div>`;
       }
     }
+    // Tables signal annotation: a 0 / low count means different things depending
+    // on HOW the tables were discovered. "site-referenced" is the complete signal
+    // (table-permissions ∩ env custom tables); the other two scopes can under-report
+    // — surface that so a reviewer doesn't read a 0 as a confirmed empty schema.
+    if (s.key === 'tableCount' && a.scope && a.scope !== 'site-referenced') {
+      const scopeNote = a.scope === 'unavailable'
+        ? 'Custom-table discovery was <strong>unavailable</strong> (no table-permission source resolved) &mdash; this count defaults to 0, <strong>not</strong> a confirmed empty schema.'
+        : a.scope === 'manifest-only'
+          ? 'Counted from the datamodel manifest only (the live environment table list was unavailable) &mdash; may differ from what is actually deployed.'
+          : `Discovery scope: <strong>${escapeHtml(a.scope)}</strong>.`;
+      signalExtras += `<div class="signal-scope-info" style="font-size:11px;margin-top:6px;padding-top:6px;border-top:1px solid var(--surface2);color:var(--text-dim);">${scopeNote}</div>`;
+    }
     return `<div class="signal-card">
   <div class="signal-name">${s.label}</div>
   <div class="signal-value" style="color:${color};">${valueDisplay}</div>
