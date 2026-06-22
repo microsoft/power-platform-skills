@@ -208,9 +208,11 @@ power-platform-skills/
 The `.claude-plugin` files are compatibility mirrors for users who subscribed
 before the Open Plugins migration. The root legacy marketplace mirrors
 `marketplace.json`, and per-plugin legacy manifests mirror `.plugin/plugin.json`.
-The shared marketplace uses repository-root-relative plugin `source` paths so
-existing subscriptions can auto-update without requiring users to remove and
-reinstall the marketplace or plugins.
+The shared marketplace keeps marketplace-level `owner` and `metadata`, while each
+plugin entry is intentionally just `name` plus repository-root-relative `source`.
+Plugin descriptions, versions, licenses, and keywords are controlled from each
+plugin's `.plugin/plugin.json`. This keeps existing subscriptions updating without
+duplicating display/update metadata.
 
 ## Documentation
 

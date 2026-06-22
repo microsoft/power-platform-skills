@@ -156,9 +156,9 @@ function readStdin() {
         configDir,
         fakeProbe,
         // Point the dispatcher at the same ikey.json readIkey() used — the
-        // override seam when set, otherwise this plugin's real config. (lib/ is
-        // a symlink to shared/, so the dispatcher's __dirname default would
-        // otherwise hit shared/'s placeholder.)
+        // override seam when set, otherwise this plugin's real config. This keeps
+        // shared-source tests and plugin-bundled library copies from accidentally
+        // falling back to shared/telemetry's placeholder ikey.json.
         ikeyJsonPath: ikeyPath,
       }
     );
