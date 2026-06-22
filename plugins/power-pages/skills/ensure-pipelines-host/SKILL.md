@@ -524,7 +524,7 @@ Track the total eligible count separately — when `eligible.length > 5`, surfac
 - `eligible.length <= 5` → empty string (no suffix; all envs visible).
 - `eligible.length > 5` → ` Showing top 5 of {N}; the remaining {N-5} eligible env(s) can be reached via the "Other (paste URL)" entry.` (leading space).
 
-When the user picks "Other (paste URL)", **pre-fill** the URL input with `pac env list --output json` results so they can paste-or-pick from the full tenant inventory rather than typing a URL by hand.
+When the user picks "Other (paste URL)", **pre-fill** the URL input with the environment list from `node "${PLUGIN_ROOT}/scripts/lib/list-environments.js"` (parses `pac env list` into JSON `{ displayName, environmentId, environmentUrl, uniqueName, active }`; the old `pac env list --output json` is invalid on current PAC CLI) so they can paste-or-pick from the inventory rather than typing a URL by hand.
 
 **Test scenarios to verify when changing this prompt:**
 - 0 eligible → sub-option `a` dropped (sub-prompt shows only `b` / `c`).

@@ -513,13 +513,13 @@ Accept: application/json
 
 Returns `{ "SettingValue": "{BAP-environment-GUID}" }` or empty/null if no default is configured.
 
-Cross-reference the GUID with `pac env list` output to find the host environment URL:
+Cross-reference the GUID with the environment list to find the host environment URL:
 
 ```bash
-pac env list --output json 2>/dev/null
+node "${PLUGIN_ROOT}/scripts/lib/list-environments.js"
 ```
 
-Match on `EnvironmentId` field. If no match, probe each environment from `pac env list` with:
+This emits a JSON array of `{ displayName, environmentId, environmentUrl, uniqueName, active }`. (It parses `pac env list`; the older `pac env list --output json` is invalid on current PAC CLI, which only accepts `--filter` on `env list`.) Match the GUID on the `environmentId` field. If no match, probe each environment from `pac env list` with:
 
 ```
 GET {envUrl}/api/data/v9.1/deploymentpipelines?$top=0

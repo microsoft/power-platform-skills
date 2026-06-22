@@ -144,9 +144,9 @@ Steps:
 
 3. Run silently:
    ```bash
-   pac env list --output json 2>/dev/null
+   node "${PLUGIN_ROOT}/scripts/lib/list-environments.js"
    ```
-   Store output as `ENV_LIST`.
+   Store the JSON array as `ENV_LIST` (entries: `{ displayName, environmentId, environmentUrl, uniqueName, active }`). This helper parses `pac env list` — the old `pac env list --output json` is invalid on current PAC CLI (`pac env list` only accepts `--filter`). It prints `[]` and exits 0 when PAC is unauthenticated, so this step degrades gracefully.
 
 4. **Resolve the Pipelines host via `ensure-pipelines-host-detect.js`** (the same flow `/power-pages:ensure-pipelines-host` runs internally — it reads any cached `docs/alm/last-host-check.json`, then walks the resolution order: org-setting binding → BAP env GET → tenant default custom host → tenant-wide enumeration. Read-only; never prompts the user):
 

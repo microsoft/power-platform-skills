@@ -789,3 +789,42 @@ test('estimateSolutionSize tableCountScope is "unavailable" with no local signal
   assert.equal(result.tableCountScope, 'unavailable');
   assert.deepEqual(result.tableRelationships, []);
 });
+
+// --- resolveSiteType: correct build-axis label (was hardcoded 'code-site') -----
+
+test('resolveSiteType prefers the explicit caller value (plan-alm Phase 1 detection)', () => {
+  const { resolveSiteType } = require('../lib/estimate-solution-size');
+  assert.equal(resolveSiteType('data-model', '/whatever'), 'data-model');
+  assert.equal(resolveSiteType('code', null), 'code');
+});
+
+test('resolveSiteType falls back to local markers: powerpages.config.json => code, .portalconfig => data-model', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { resolveSiteType } = require('../lib/estimate-solution-size');
+
+  const codeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'est-stype-code-'));
+  const edmRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'est-stype-edm-'));
+  const bareRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'est-stype-bare-'));
+  try {
+    fs.writeFileSync(path.join(codeRoot, 'powerpages.config.json'), '{}');
+    assert.equal(resolveSiteType(null, codeRoot), 'code');
+
+    fs.mkdirSync(path.join(edmRoot, '.powerpages-site', '.portalconfig'), { recursive: true });
+    assert.equal(resolveSiteType(null, edmRoot), 'data-model', 'EDM/declarative site must NOT be mislabeled code');
+
+    // No markers and no projectRoot → 'unknown', never a wrong guess.
+    assert.equal(resolveSiteType(null, bareRoot), 'unknown');
+    assert.equal(resolveSiteType(null, null), 'unknown');
+  } finally {
+    for (const d of [codeRoot, edmRoot, bareRoot]) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test('parseArgs captures --siteType', () => {
+  const { parseArgs } = require('../lib/estimate-solution-size');
+  const a = parseArgs(['node', 'x', '--siteType', 'data-model', '--envUrl', 'https://x']);
+  assert.equal(a.siteType, 'data-model');
+  assert.equal(parseArgs(['node', 'x']).siteType, null);
+});

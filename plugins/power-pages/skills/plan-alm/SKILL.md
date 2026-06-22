@@ -124,9 +124,9 @@ Steps:
 
 5. Run silently:
    ```bash
-   pac env list --output json 2>/dev/null
+   node "${PLUGIN_ROOT}/scripts/lib/list-environments.js"
    ```
-   Store output as `ENV_LIST` for pre-filling environment URLs in Phase 2.
+   Store the JSON array as `ENV_LIST` for pre-filling environment URLs in Phase 2. (This helper parses `pac env list`; the old `pac env list --output json` is invalid on current PAC CLI — `pac env list` only accepts `--filter` — so the helper exists to produce the JSON the table form doesn't. It prints `[]` and exits 0 if PAC is unauthenticated, so pre-fill simply degrades to manual entry.) Each entry is `{ displayName, environmentId, environmentUrl, uniqueName, active }`.
 
 6. Acquire dev environment token (silently):
    ```bash
@@ -135,6 +135,32 @@ Steps:
    Store `.token` as `DEV_TOKEN` and `.userId` as `userId`.
 
    **Track plan quality.** Initialize a `PLAN_QUALITY` accumulator to `"complete"` at the start of Phase 1. If this token acquisition fails (auth error), set `DEV_TOKEN = null`, set `PLAN_QUALITY = "degraded"`, and record the cause (e.g. *"dev-environment auth failed — contents/size/host discovery skipped"*) — then continue. Contents discovery is skipped gracefully, but the resulting plan is built on partial inputs; Phase 3 surfaces this as a prominent risk so the user reviews before executing. (There is no execute path to block here — `plan-alm` only plans — but a degraded plan must be visibly flagged.)
+
+6b. **Environment-match guard** — confirm `pac env who` points at the project's environment *before* running discovery. `DEV_ENV_URL` comes from whatever environment PAC happens to be connected to, which is **not** guaranteed to be the project's. If it isn't, every query in Steps 7–12 runs against the wrong environment and silently produces a degraded plan (zero/À-côté site settings, wrong size, wrong host) that *looks* valid. Cross-check both signals available:
+
+    1. **Recorded-URL comparison** (no token needed): collect any environment URL the project already records — `powerpages.config.json` → `environmentUrl` (code/SPA sites; absent for declarative/EDM sites) and `.solution-manifest.json` → its `environmentUrl`/`environmentUrl`-equivalent field if present. Normalize by **origin** (lowercase host, drop trailing slash + path/query). If any recorded URL exists and its origin **differs** from `DEV_ENV_URL`'s origin → **mismatch**.
+    2. **Site-existence probe** (covers declarative/EDM sites that record no URL; only when `DEV_TOKEN` is available): verify the site's `websiteRecordId` actually exists in the connected env:
+       ```
+       GET {DEV_ENV_URL}/api/data/v9.2/powerpagesites({websiteRecordId})?$select=powerpagesiteid
+       Authorization: Bearer {DEV_TOKEN}
+       ```
+       A `404` (or empty result) means the connected environment does not contain this site → **mismatch**. (Skip this probe when `DEV_TOKEN = null` — Step 6 already degraded the plan; don't double-prompt.)
+
+    If **neither** signal indicates a mismatch, continue silently to Step 7 — do not prompt. Only prompt on a detected mismatch:
+
+    <!-- gate: plan-alm:1.env-match | category=progress | cancel-leaves=nothing -->
+    > 🚦 **Gate (progress · plan-alm:1.env-match):** PAC CLI is connected to an environment that does not match the project's. Switch and re-run, or continue against the connected env (degraded plan).
+
+    Ask via `AskUserQuestion`:
+
+    | Question | Header | Options |
+    |---|---|---|
+    | PAC CLI is connected to **{DEV_ENV_NAME}** (`{DEV_ENV_URL}`), which does not match this project's configured environment ({recorded URL, or "this site was not found there"}). Discovery will run against the connected environment. How do you want to proceed? | Env Mismatch | Cancel — switch PAC env, then re-run (Recommended), Continue against {DEV_ENV_NAME} anyway, Cancel |
+
+    - **Cancel — switch PAC env (Recommended)**: stop the skill. Tell the user to point PAC at the right environment (`pac auth select --name <profile>` or `pac org select --environment <url>`) and re-run `/power-pages:plan-alm`. Nothing has been written.
+    - **Continue anyway**: proceed to Step 7 against `DEV_ENV_URL`, but set `PLAN_QUALITY = "degraded"` and record the cause (*"discovery ran against {DEV_ENV_NAME}, which may not be the project's environment — verify the plan's site settings / size / host before executing"*) so Phase 3 surfaces it as a prominent risk.
+
+    > **Why this exists**: a real EDM-site run produced a valid-looking plan after PAC had silently stayed connected to a different env than the project targeted. The site-existence probe + recorded-URL comparison catch that at the earliest gate, before any discovery runs.
 
 7. Discover and classify site settings (if `DEV_TOKEN` is available and `websiteRecordId` is known):
 
@@ -203,7 +229,7 @@ Steps:
       --envUrl "{DEV_ENV_URL}" --websiteRecordId "{websiteRecordId}" \
       --publisherPrefix "{publisherPrefix}" --siteName "{siteName}" \
       {if SOLUTION_DONE: --solutionId "{solutionManifest.solution.solutionId}"} \
-      --projectRoot "." \
+      --projectRoot "." --siteType "{SITE_TYPE}" \
       --datamodelManifest "./.datamodel-manifest.json" > ./docs/alm/alm-size-estimate.json.tmp \
       && mv ./docs/alm/alm-size-estimate.json.tmp ./docs/alm/alm-size-estimate.json
     ```
@@ -495,7 +521,7 @@ If option 4: accept free-text description (via "Other") and build a stage list f
 
 Store stages as `PP_STAGES` (array of `{ label, envUrl, envName, type }`). Dev is always the source.
 
-For each stage, populate `envName` from `ENV_LIST` (gathered in Phase 1 Step 5 via `pac env list --output json`). Match by URL origin (lowercase, trailing slash stripped, path/query ignored) and copy the entry's `DisplayName` (or `displayName`) into `envName`. When no match is found — usually because the user pasted a custom URL via "Other" — leave `envName` unset; the renderer falls back to showing the URL alone in the stage card. The renderer puts `envName` between the stage label and the URL (e.g. *Staging / **Supplier Portal Staging** / https://orgd6a9894f.crm5.dynamics.com/*) so reviewers recognize the env at a glance and the URL stays available as a one-click jump-to-env. Set `type: "source"` for the dev/source stage and `type: "target"` for every downstream stage so the renderer applies the active-stage styling correctly.
+For each stage, populate `envName` from `ENV_LIST` (gathered in Phase 1 Step 5 via `list-environments.js`). Match by URL origin (lowercase, trailing slash stripped, path/query ignored) against each entry's `environmentUrl` and copy the entry's `displayName` into `envName`. When no match is found — usually because the user pasted a custom URL via "Other" — leave `envName` unset; the renderer falls back to showing the URL alone in the stage card. The renderer puts `envName` between the stage label and the URL (e.g. *Staging / **Supplier Portal Staging** / https://orgd6a9894f.crm5.dynamics.com/*) so reviewers recognize the env at a glance and the URL stays available as a one-click jump-to-env. Set `type: "source"` for the dev/source stage and `type: "target"` for every downstream stage so the renderer applies the active-stage styling correctly.
 
 <!-- gate: plan-alm:2.q4-host | category=plan | cancel-leaves=nothing -->
 
@@ -529,7 +555,7 @@ Store the resulting `HOST_ENV_URL` for use by the rest of plan-alm. The auxiliar
 2. **Fill remaining slots up to 5** from the rest of the eligible list, in the order returned by `list-tenant-envs.js` (name-hint pattern `pipeline|deploy|host|alm|cicd|govern` → admin-perms → recency).
 3. **Append "Other (paste URL)"** as the last per-env entry inside option 1's nested list — escape hatch for envs that didn't make the cap.
 4. When `eligible.length > 5`, suffix option 1's headline with: ` Showing top 5 of {N}; the remaining {N-5} eligible env(s) can be reached via the "Other (paste URL)" entry.` When `eligible.length <= 5`, no suffix (all envs visible inline).
-5. When the user picks "Other (paste URL)", pre-fill the URL input with `ENV_LIST` (the `pac env list --output json` output gathered in Phase 1) so they can paste-or-pick from the full inventory rather than typing a URL by hand.
+5. When the user picks "Other (paste URL)", pre-fill the URL input with `ENV_LIST` (the `list-environments.js` output gathered in Phase 1 — each entry's `environmentUrl`) so they can paste-or-pick from the full inventory rather than typing a URL by hand.
 
 The same cap policy applies to `ensure-pipelines-host` Phase 3.C — see that skill's Step 3a for the same rules. Keep the two implementations consistent so users see the same prompt shape regardless of whether they enter via plan-alm or directly via setup-pipeline → ensure-pipelines-host.
 
@@ -885,7 +911,7 @@ Populate `risks` based on gathered data:
 - If `HOST_RESOLUTION.status === "PlatformHostExistsUnbound"`: `{ type: "info", message: "Tenant has a Platform Host. Reusing it is the lowest-friction option; creating a Custom Host instead provides better governance for separate-tenant or governed scenarios." }`
 - If `HOST_RESOLUTION.status === "CannotRedirect"`: `{ type: "warning", message: "CannotRedirect: source env ProjectHostEnvironmentId points at PE but tenant default custom host is set elsewhere. Resolution requires Power Platform admin." }` (Note: Phase 2 Q4 normally blocks plan generation in this state; this is a defensive entry in case the plan is somehow generated.)
 - **Manual path** (always, when `STRATEGY = "manual"`): `{ type: "info", message: "Recommended sequence: run /power-pages:export-solution, review the produced zip, then run /power-pages:import-solution for each target. plan-alm does not perform the export/import itself." }`
-- **Raw-discovery gaps (#9)** — for each of `rawDiscovery.estimate`, `rawDiscovery.splitPlan`, and (PP path) `rawDiscovery.hostResolution` that is `null` at planData-build time: `{ type: "warning", message: "Discovery for {X} did not run; the related size/split/host decisions in this plan are unverified." }` (substitute `{X}` = "solution size estimate" / "split analysis" / "pipeline host resolution").
+- **Raw-discovery gaps (#9)** — for each of `rawDiscovery.estimate`, `rawDiscovery.splitPlan`, and (PP path) `rawDiscovery.hostResolution` that is `null` at planData-build time: `{ type: "warning", message: "Discovery for {X} did not run; the related size/split/host decisions in this plan are unverified." }` (substitute `{X}` = "solution size estimate" / "split analysis" / "pipeline host resolution"). **Carve-out for `rawDiscovery.hostResolution`:** when `PIPELINE_DONE = true`, host resolution is *intentionally* skipped (Phase 1 Step 12's skip rule — the host comes from `docs/alm/last-pipeline.json`, not a fresh probe), so a `null` `hostResolution` is expected, not a gap. **Do NOT emit the "pipeline host resolution" warning when `PIPELINE_DONE = true`** — it would be a spurious "host resolution did not run" on every project that already has a pipeline. The `estimate` and `splitPlan` gap warnings still apply regardless of `PIPELINE_DONE`.
 
 **Plan completeness check (#10).** Before writing planData, verify the plan rests on real discovery:
 - `sizeAnalysis.totalSizeMB` is non-null,
