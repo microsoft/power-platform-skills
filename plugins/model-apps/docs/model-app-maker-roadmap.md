@@ -72,6 +72,12 @@ not runtime phase selection or re-run state):
   *with* `data-model` is now safe.
 - ✅ **SDK rebundled** from `users/akmaloo/cds-maker-sdk` (Notes/timeline control, quick-create /
   quick-view form types, PCF `addCustomControl`, verified PCF binding). Bundle 3121 KB.
+- ✅ **Live-verified on 983a1 (2026-06-21):** a throwaway 3-table app exercised every change —
+  AutoNumber primary (`RC-1000`), global-choice label→int (Silver→`100000002`), MultiChoice single
+  (`'100000001'`) + multi (`'100000000,100000002'`) as strings, status-reason pinned value
+  (`statuscode 100000000`), junction `$parents` (both lookups set), QuickCreate form (`type=QuickCreate`),
+  and an idempotent `--only data-model` re-run (alt-key + status reason both `⊘ exists`, no halt/dup).
+  Built 22/22, verified via Web API, torn down clean.
 
 ### Authoring UX (2026-06-20)
 - ✅ **Form wireframe preview** — `scripts/preview-form.js` renders each form as an ASCII wireframe (tabs, sections, fields + widget hints, Notes/timeline, sub-grids, form JS) so the user can *see* a form during authoring before approving.
@@ -105,9 +111,13 @@ not runtime phase selection or re-run state):
 - ✅ **Quick-create / quick-view forms** (`forms[].formType` = `Main`/`QuickCreate`/`QuickView`).
   QuickCreate is a full simplified create form; QuickView is created but **placement on a parent
   form (via a lookup) isn't auto-wired** (no SDK helper — lint warns). Notes/sub-grids are Main-only
-  (validator + lint enforced). ⚠ not yet live-verified on 983a1.
-- 🔲 **Modern command-bar buttons** (`commands[]` → `createArtifact('command')`, the `appaction`
-  table). New phase + spec section (button label, location, web-resource function) + lint + tests.
+  (validator + lint enforced). ✅ live-verified on 983a1 (a QuickCreate form built as `type=QuickCreate`).
+- 🔲 **Modern command-bar buttons** — ⚠ **SDK gap, not just wiring (verified in `CommandAdapter.js`):**
+  the adapter writes button *structure* (label/icon/location/group) but `stripReadOnlyColumns` drops
+  `OnClickEventJavaScriptWebResourceId` and `newRow` has no action — so a from-scratch button has **no
+  on-click behavior**. It's round-trip-oriented (relabel/restructure existing commands). Needs SDK
+  action-synthesis (JS web-resource bind / Power Fx command definition) before a functional button is
+  buildable. Don't ship dead buttons.
 - 🔲 **Dashboards** (`dashboards[]` → `createArtifact('dashboard')`). The SDK adapter is
   overlay-oriented (`createDefault` seeds one cell), so this needs a **from-scratch FormXML tile
   generator** (chart/list control cells) before push. Medium-large.
