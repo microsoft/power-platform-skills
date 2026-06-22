@@ -82,7 +82,12 @@ runValidation((cwd) => {
     }
     if (planData) {
       const status = planData.PLAN_STATUS || null;
-      const approver = (planData.APPROVED_BY || '').trim();
+      // Coerce before trimming: APPROVED_BY is normally a string, but a hand-edited
+      // plan-data could set it to a truthy non-string (number/object), and calling
+      // .trim() on that throws — which would escape runValidation and silently
+      // approve, bypassing this guard. String(...) keeps the guard robust to any
+      // malformed-but-parseable JSON.
+      const approver = String(planData.APPROVED_BY || '').trim();
       // Draft must NOT carry an approver — "approver set + Draft" is the stuck
       // state where the plan shows as approved but never advances (check-alm-plan
       // only promotes from "Approved").
@@ -90,8 +95,9 @@ runValidation((cwd) => {
         block(
           `validate-plan-alm: docs/.alm-plan-data.json is inconsistent — APPROVED_BY is "${approver}" ` +
           `but PLAN_STATUS is "Draft". An approver was recorded but the plan was never moved to ` +
-          `"Approved", so downstream skills will treat it as unapproved. Re-run the approve step ` +
-          `(scripts/lib/set-plan-status.js --status Approved --approver "${approver}" --render) so the status matches.`
+          `"Approved", so downstream skills will treat it as unapproved. Re-run the approve step so ` +
+          `the status matches:\n` +
+          `  node "\${PLUGIN_ROOT}/scripts/lib/set-plan-status.js" --projectRoot "${projectRoot}" --status Approved --approver "${approver}" --render`
         );
         return;
       }
@@ -100,7 +106,8 @@ runValidation((cwd) => {
         block(
           `validate-plan-alm: docs/.alm-plan-data.json is inconsistent — PLAN_STATUS is "Approved" ` +
           `but APPROVED_BY is empty. An approved plan must record who approved it. Re-run the approve ` +
-          `step (scripts/lib/set-plan-status.js --status Approved --approver "<name>" --render).`
+          `step with the approver's name:\n` +
+          `  node "\${PLUGIN_ROOT}/scripts/lib/set-plan-status.js" --projectRoot "${projectRoot}" --status Approved --approver "<name>" --render`
         );
         return;
       }

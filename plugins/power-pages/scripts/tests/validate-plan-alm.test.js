@@ -154,6 +154,22 @@ test('validate-plan-alm: blocks when PLAN_STATUS is Approved but APPROVED_BY is 
   }
 });
 
+test('validate-plan-alm: still blocks the stuck state when APPROVED_BY is a non-string (hand-edited)', () => {
+  // Regression: a hand-edited plan-data could set APPROVED_BY to a truthy non-string
+  // (a number/object). Before the String() coercion, `.trim()` threw, runValidation
+  // swallowed the error and silently APPROVED — bypassing the guard. The coercion
+  // keeps the Draft+approver stuck state caught (exit 2) instead of leaking through.
+  const dir = makeProjectWithPlan({ PLAN_STATUS: 'Draft', APPROVED_BY: 123 });
+  try {
+    const { status, stderr } = runValidator(dir);
+    assert.equal(status, 2, 'non-string approver must not bypass the guard via a thrown .trim()');
+    assert.match(stderr, /inconsistent/i);
+    assert.match(stderr, /123/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('validate-plan-alm: approves consistent Approved (status + approver) and Draft (no approver)', () => {
   for (const planData of [
     { PLAN_STATUS: 'Approved', APPROVED_BY: 'Jane' },
