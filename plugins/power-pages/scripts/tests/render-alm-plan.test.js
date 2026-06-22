@@ -1944,3 +1944,39 @@ test('render-alm-plan: checklist link onclick reuses the existing data-tab click
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+// ── COMPLETED_AT footer line (lifecycle terminal) ────────────────────────────
+
+test('render-alm-plan: surfaces COMPLETED_AT in the footer when the plan is Completed', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-completed-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const { status } = runScript(
+      makeValidData({ PLAN_STATUS: 'Completed', COMPLETED_AT: '2026-06-16T18:30:00.000Z' }),
+      outputPath,
+    );
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.match(html, /id="completed-at"/, 'completed-at span rendered');
+    assert.match(html, /Completed:<\/strong>\s*<span id="completed-at">2026-06-16T18:30:00\.000Z<\/span>/);
+    assert.ok(!html.includes('__COMPLETED_LINE__'), 'no orphan placeholder');
+    assert.match(html, /class="plan-status completed"/, 'status badge styled completed');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: omits the Completed footer line when COMPLETED_AT is absent', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-nocompleted-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const { status } = runScript(makeValidData({ PLAN_STATUS: 'In Execution' }), outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(!html.includes('id="completed-at"'), 'no completed-at span when not completed');
+    assert.ok(!html.includes('__COMPLETED_LINE__'), 'placeholder still replaced (empty)');
+    assert.match(html, /class="plan-status in-execution"/, 'status badge styled in-execution');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

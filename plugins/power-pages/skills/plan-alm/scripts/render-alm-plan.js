@@ -9,6 +9,11 @@
  *   SITE_NAME, GENERATED_AT, STRATEGY, PLAN_STATUS, APPROVED_BY, APPROVAL_DATE,
  *   stages, steps, risks
  *
+ * Optional lifecycle key:
+ *   COMPLETED_AT — present only once the plan reaches PLAN_STATUS "Completed";
+ *   the renderer emits the footer "Completed" line when it exists and omits it
+ *   otherwise (an in-flight plan has no COMPLETED_AT).
+ *
  * Optional v2 keys (added for split-solutions support):
  *   sizeAnalysis, assetAdvisory, proposedSolutions, appliedStrategies,
  *   recommendations, envVars, breakdown, estimationMethod, estimationAccuracyPct
@@ -1448,6 +1453,12 @@ const replacements = {
   PLAN_STATUS: escapeHtml(data.PLAN_STATUS || 'Draft'),
   APPROVED_BY: escapeHtml(data.APPROVED_BY || ''),
   APPROVAL_DATE: escapeHtml(data.APPROVAL_DATE || ''),
+  // Completion footer line — only rendered once the plan reaches "Completed"
+  // (refresh-alm-plan-data.js stamps COMPLETED_AT when every step is done).
+  // Empty string otherwise, so the placeholder is always replaced (no orphan token).
+  COMPLETED_LINE: data.COMPLETED_AT
+    ? `<br><strong>Completed:</strong> <span id="completed-at">${escapeHtml(data.COMPLETED_AT)}</span>`
+    : '',
   OVERVIEW_SUMMARY: buildOverviewSummary(),
   STAT_COMPONENTS: (componentCount || 0).toLocaleString(),
   STAT_ENVVARS: envVarStatDisplay(),

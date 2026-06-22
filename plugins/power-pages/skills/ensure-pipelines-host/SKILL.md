@@ -900,6 +900,17 @@ Record skill usage:
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "EnsurePipelinesHost"`.
 
+**Refresh the ALM plan (if one exists):**
+
+```bash
+node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase ensure-pipelines-host \
+  --render
+```
+
+This updates `planData.hostResolution` from the `docs/alm/last-host-check.json` you just wrote (host-only — no pipeline yet) and drops the pre-run NoHost risks, then re-renders `docs/alm-plan.html`. **Do this here, not just in setup-pipeline Phase 7** — a host install can take 18+ minutes and cross a session boundary, so deferring the refresh risks the plan never reflecting the host. When `docs/.alm-plan-data.json` is absent (standalone, not part of an ALM plan), the helper returns `ok:false` as a soft no-op. The centralized PostToolUse hook also reconciles the plan as a backstop, but refreshing at the source keeps the rendered plan current immediately.
+
 Present summary table:
 
 | Field | Value |

@@ -43,8 +43,10 @@ Steps:
 0. **Detect prior ALM deferral for this project.** Before any discovery work, check whether the project root contains a `.alm-deferred` marker file. The marker is written by users who explicitly opted ALM-skill validators out of "missing artifacts" warnings (e.g. *"this site is handled separately"* or *"ni-dev — no ALM"*). If a user is now invoking `plan-alm`, we should surface that the marker is present and ask what to do, rather than silently proceeding (which would build a plan the user previously decided not to maintain) or silently removing the marker (which would re-enable nags on every other ALM skill).
 
    ```bash
-   node "${PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" --projectRoot "."
+   node "${PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" --projectRoot "." --no-heartbeat
    ```
+
+   > Use `--no-heartbeat` here: this is a **read-only** deferral check by the *planner*, not an execution-skill Phase 0 gate. Without it, `check-alm-plan.js` would promote an already-`Approved` plan to `In Execution` (and refresh the heartbeat) just because you re-opened `plan-alm` — but re-planning isn't execution. Execution skills call it *without* `--no-heartbeat` so the first one to run does the `Approved → In Execution` promotion.
 
    <!-- gate: plan-alm:1.deferral | category=progress | cancel-leaves=deferral-marker -->
    > 🚦 **Gate (progress · plan-alm:1.deferral):** `.alm-deferred` marker present — continue and remove, continue and keep marker, or cancel. Determines whether downstream ALM skills resume gate enforcement.
