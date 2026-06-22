@@ -102,7 +102,8 @@ The shared root marketplace must stay dual-compatible: use repository-root-relat
 plugin `source` paths and preserve legacy `category`/`tags` fields alongside Open
 Plugins metadata. Existing marketplace subscriptions may still resolve the legacy
 paths during auto-update, so removing or drifting these files can force users to
-reinstall. Run
+reinstall. Because mirrors are committed files (not symlinks), update both source
+and legacy copies together, then run
 `node scripts/validate-legacy-compatibility.js` after metadata changes.
 
 ## Code Conventions

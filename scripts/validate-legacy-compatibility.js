@@ -3,7 +3,9 @@
 /**
  * Validates that legacy .claude-plugin manifests mirror the Open Plugins
  * metadata. Existing marketplace subscriptions still resolve the legacy paths
- * during auto-update, so these files must stay in sync.
+ * during auto-update, so these files must stay in sync. Mirrors are committed
+ * files (not links), so this guard must pass whenever marketplace/plugin
+ * metadata changes.
  */
 
 const fs = require('fs');
