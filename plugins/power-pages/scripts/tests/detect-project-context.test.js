@@ -46,10 +46,10 @@ test('detectProjectContext: declarative (data-model) site resolves identity from
   );
 
   const result = detectProjectContext({ projectRoot });
-  assert.equal(result.siteType, 'data-model');
+  assert.equal(result.siteType, 'declarative');
   assert.equal(result.websiteRecordId, '2ecc32f6-8665-f111-a826-000d3a5a7777');
   assert.equal(result.siteName, 'Application processing EDM site - permitapplication-elyyn');
-  // Data-model sites carry no environment URL locally — callers re-confirm via `pac env who`.
+  // Declarative sites carry no environment URL locally — callers re-confirm via `pac env who`.
   assert.equal(result.environmentUrl, null);
 });
 
@@ -60,7 +60,7 @@ test('detectProjectContext: .powerpages-site/.portalconfig/ is the positive decl
   writeProjectFile(projectRoot, '.powerpages-site/.portalconfig/manifest.yml', 'foo: bar\n');
 
   const result = detectProjectContext({ projectRoot });
-  assert.equal(result.siteType, 'data-model', '.portalconfig/ marks a declarative site');
+  assert.equal(result.siteType, 'declarative', '.portalconfig/ marks a declarative site');
   assert.equal(result.siteName, null);
   assert.equal(result.websiteRecordId, null);
   assert.equal(result.environmentUrl, null);

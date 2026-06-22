@@ -256,7 +256,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 
 ---
 
-### 6.1 `plan-alm` (16 calls; planner)
+### 6.1 `plan-alm` (17 calls; planner)
 
 > `plan-alm` is a **planner** — it produces an approved/draft HTML plan and never executes. The execution gates that used to live in Phases 5–8 (deploy-failure, post-deploy activation, manual export/import checkpoint) now belong to the individual ALM skills the user runs afterward; they are catalogued under those skills' sections, not here.
 

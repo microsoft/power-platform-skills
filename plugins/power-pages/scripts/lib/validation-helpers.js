@@ -93,7 +93,7 @@ function findPath(dir, target) {
  *
  * A project root is marked by EITHER:
  *   - `powerpages.config.json` — code/SPA sites (`pac pages download-code-site`), OR
- *   - a `.powerpages-site/` directory — declarative ("data-model") design-studio sites
+ *   - a `.powerpages-site/` directory — declarative design-studio sites
  *     (`pac pages download`; standard or enhanced data model). These have NO
  *     `powerpages.config.json`.
  *

@@ -11,9 +11,11 @@
 //   and errors with "An unknown argument --output was passed", so the JSON
 //   pre-fill silently never worked. `pac env list` DOES emit a plain table with
 //   an "Environment URL" column, so this helper runs the plain command and parses
-//   that table into JSON. (`pac admin list --json` also yields JSON but is
-//   admin-only and enumerates the WHOLE tenant — wrong scope for a per-user
-//   pre-fill — so we deliberately parse `pac env list` instead.)
+//   that table into JSON. (`pac admin list --json` — used by pac-bap-shim.js —
+//   also yields JSON, but it scopes to environments the signed-in user ADMINISTERS,
+//   not the maker-accessible set `pac env list` shows, and returns a different
+//   BAP-shaped object; `pac env list` is the right scope + shape for a maker
+//   pre-fill, so we parse it instead.)
 //
 // Usage:
 //   node list-environments.js            -> prints JSON array to stdout

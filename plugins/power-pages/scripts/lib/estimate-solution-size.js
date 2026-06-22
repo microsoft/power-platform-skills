@@ -86,19 +86,29 @@ function parseArgs(argv) {
 // Phase 1 via detect-project-context.js, the authoritative source), and fall
 // back to a lightweight local probe of the same markers documented in CLAUDE.md:
 //   - `powerpages.config.json`          → code / SPA site
-//   - `.powerpages-site/.portalconfig/` → declarative design-studio (data-model/EDM) site
-// Returns the canonical values ('code' | 'data-model') to match
+//   - `.powerpages-site/.portalconfig/` → declarative design-studio (EDM/standard) site
+// Returns the canonical values ('code' | 'declarative') to match
 // detect-project-context.js — NOT the old hardcoded 'code-site', which mislabeled
-// every EDM/data-model site as a code site. Returns 'unknown' when neither marker
-// is present (e.g. running outside a project root).
+// every declarative/EDM site as a code site. ('declarative' was formerly labeled
+// 'data-model'; the value is diagnostic-only, so a caller still passing 'data-model'
+// is echoed unchanged and remains equivalent.) Returns 'unknown' when neither
+// marker is present (e.g. running outside a project root).
 function resolveSiteType(explicitSiteType, projectRoot) {
-  if (explicitSiteType) return explicitSiteType;
+  // Normalize the caller-supplied label. 'data-model' is the legacy alias for
+  // 'declarative' (back-compat). Only canonical labels are trusted verbatim;
+  // anything else — notably an unsubstituted "{SITE_TYPE}" template literal an
+  // agent forwarded without resolving it — is IGNORED in favor of the local
+  // marker probe, so garbage never lands in the diagnostic output.
+  if (explicitSiteType === 'data-model') return 'declarative';
+  if (explicitSiteType === 'code' || explicitSiteType === 'declarative' || explicitSiteType === 'unknown') {
+    return explicitSiteType;
+  }
   if (!projectRoot) return 'unknown';
   const fs = require('fs');
   const path = require('path');
   try {
     if (fs.existsSync(path.join(projectRoot, 'powerpages.config.json'))) return 'code';
-    if (fs.existsSync(path.join(projectRoot, '.powerpages-site', '.portalconfig'))) return 'data-model';
+    if (fs.existsSync(path.join(projectRoot, '.powerpages-site', '.portalconfig'))) return 'declarative';
   } catch {
     // Filesystem probe is best-effort — a diagnostic label must never be fatal.
   }
@@ -1148,7 +1158,7 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
     // scope so reviewers can spot the divergence.
     envVarCountTenantWide,
     mediaRatio: Math.round(webMeasure.mediaRatio * 100) / 100,
-    // Build-axis label: 'code' | 'data-model' | 'unknown' (was hardcoded
+    // Build-axis label: 'code' | 'declarative' | 'unknown' (was hardcoded
     // 'code-site', which mislabeled every declarative/EDM site). Prefers the
     // caller-supplied --siteType (plan-alm Phase 1), falls back to a local marker probe.
     siteType: resolveSiteType(siteType, projectRoot),

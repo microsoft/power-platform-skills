@@ -99,8 +99,8 @@ Steps:
       - `name` field → `siteName` (the file uses short keys; it is `name:`, not `adx_name:`)
    2. **`powerpages.config.json`** (fallback — code/SPA sites only; used during plugin development from this repo root or for sites scaffolded but not yet deployed) — read `siteName` and `websiteRecordId`.
 
-   **Determine `SITE_TYPE`** (recorded in planData as `siteType`, surfaced in the plan, and used to skip SPA-only assumptions below):
-   - `data-model` when `.powerpages-site/.portalconfig/` exists, **or** `.powerpages-site/website.yml` resolved while no `powerpages.config.json` is present.
+   **Determine `SITE_TYPE`** (recorded in planData as `siteType` and used to skip SPA-only assumptions below; it is a data field in `docs/.alm-plan-data.json`, not rendered in the HTML):
+   - `declarative` when `.powerpages-site/.portalconfig/` exists, **or** `.powerpages-site/website.yml` resolved while no `powerpages.config.json` is present. (This value was formerly `data-model`; plans written before the rename may still carry `data-model`, which is equivalent.)
    - `code` when `powerpages.config.json` is present.
 
    If neither marker is found, stop with:
@@ -120,7 +120,7 @@ Steps:
    ```bash
    pac env who
    ```
-   Capture the `Environment URL` and display name. Store as `DEV_ENV_URL` and `DEV_ENV_NAME`.
+   Capture the environment URL and display name. Store as `DEV_ENV_URL` and `DEV_ENV_NAME`. **The URL label varies by PAC version**: current PAC (2.8.x) prints it under `Org URL:`; older builds used `Environment URL:` — read whichever is present (there is no `Environment URL:` line on 2.8.x, so do not look only for that label). The display name is the `Friendly Name:` / `Connected to...` value. If you can't parse it reliably, leave `DEV_ENV_URL` empty — Step 6's `verify-alm-prerequisites.js` resolves the authoritative URL from `pac env who` via the shared `getEnvironmentUrl()` helper (which matches both labels) and returns it as `.envUrl`.
 
 5. Run silently:
    ```bash
@@ -136,7 +136,7 @@ Steps:
 
    **Track plan quality.** Initialize a `PLAN_QUALITY` accumulator to `"complete"` at the start of Phase 1. If this token acquisition fails (auth error), set `DEV_TOKEN = null`, set `PLAN_QUALITY = "degraded"`, and record the cause (e.g. *"dev-environment auth failed — contents/size/host discovery skipped"*) — then continue. Contents discovery is skipped gracefully, but the resulting plan is built on partial inputs; Phase 3 surfaces this as a prominent risk so the user reviews before executing. (There is no execute path to block here — `plan-alm` only plans — but a degraded plan must be visibly flagged.)
 
-6b. **Environment-match guard** — confirm `pac env who` points at the project's environment *before* running discovery. `DEV_ENV_URL` comes from whatever environment PAC happens to be connected to, which is **not** guaranteed to be the project's. If it isn't, every query in Steps 7–12 runs against the wrong environment and silently produces a degraded plan (zero/À-côté site settings, wrong size, wrong host) that *looks* valid. Cross-check both signals available:
+6b. **Environment-match guard** — confirm `pac env who` points at the project's environment *before* running discovery. `DEV_ENV_URL` comes from whatever environment PAC happens to be connected to, which is **not** guaranteed to be the project's. If it isn't, every query in Steps 7–12 runs against the wrong environment and silently produces a degraded plan (zero or wrong site settings, wrong size, wrong host) that *looks* valid. Cross-check both signals available:
 
     1. **Recorded-URL comparison** (no token needed): collect any environment URL the project already records — `powerpages.config.json` → `environmentUrl` (code/SPA sites; absent for declarative/EDM sites) and `.solution-manifest.json` → its `environmentUrl`/`environmentUrl`-equivalent field if present. Normalize by **origin** (lowercase host, drop trailing slash + path/query). If any recorded URL exists and its origin **differs** from `DEV_ENV_URL`'s origin → **mismatch**.
     2. **Site-existence probe** (covers declarative/EDM sites that record no URL; only when `DEV_TOKEN` is available): verify the site's `websiteRecordId` actually exists in the connected env:
@@ -235,7 +235,7 @@ Steps:
     ```
     When `SOLUTION_DONE = false`, omit `--solutionId`; the estimator's output will include `envVarCountScope: "publisher-prefix"` to signal the wider scope, and the renderer surfaces this caveat in the Env Variables tab so reviewers know the number reflects the tenant view, not a specific solution. `--projectRoot "."` enables the disk cross-check — the estimator walks the local build output (`dist/`, `public-output/`, `build/`, `.output/`) and surfaces `webFilesDiskMeasuredMB`. When that number is much larger than the Dataverse-measured `webFilesAggregateMB`, the estimator flips `truncationSuspected: true` with a warning — file-typed columns whose bytes aren't returned by `$select=content` are the usual cause and the plan should trust the disk number.
 
-> **`SITE_TYPE = "data-model"` (EDM/standard) sites have no build output**, so the disk cross-check finds no `dist/`/`build/` directory and `webFilesDiskMeasuredMB` stays `null` — this is expected, not a problem. Web files for data-model sites live as records under `.powerpages-site/web-files/` and are measured via the Dataverse query, so the size estimate is still valid; there's simply no SPA bundle on disk to cross-check against. Pass `--projectRoot "."` regardless — it's a harmless no-op for these sites.
+> **`SITE_TYPE = "declarative"` (EDM/standard data-model) sites have no build output**, so the disk cross-check finds no `dist/`/`build/` directory and `webFilesDiskMeasuredMB` stays `null` — this is expected, not a problem. Web files for declarative sites live as records under `.powerpages-site/web-files/` and are measured via the Dataverse query, so the size estimate is still valid; there's simply no SPA bundle on disk to cross-check against. Pass `--projectRoot "."` regardless — it's a harmless no-op for these sites.
     Then run the decision tree (same tmp-file pattern):
     ```bash
     node "${PLUGIN_ROOT}/scripts/lib/compute-split-plan.js" \
@@ -651,7 +651,7 @@ Build a `planData` object with all gathered strategy inputs:
 ```json
 {
   "SITE_NAME": "{siteName}",
-  "siteType": "code | data-model",         // from Phase 1 Step 1 — "data-model" for enhanced/standard data-model (EDM) sites (no SPA build output), "code" for SPA sites
+  "siteType": "code | declarative",        // from Phase 1 Step 1 — "declarative" (formerly "data-model") for enhanced/standard data-model (EDM) design-studio sites (no SPA build output), "code" for SPA sites
   "GENERATED_AT": "{ISO timestamp}",
   "STRATEGY": "pp-pipelines | manual",
   "EXPORT_TYPE": "managed | unmanaged",   // PP Pipelines path: always "managed"
