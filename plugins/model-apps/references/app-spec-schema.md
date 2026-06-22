@@ -162,7 +162,14 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
     { "event": "onload",   "library": "new_ticket.js", "function": "Ticket.onLoad" },
     { "event": "onchange", "attribute": "new_priority", "library": "new_ticket.js", "function": "Ticket.onPriority" }
   ] }
+
+// quick-create form: a simplified create form (same entity). formType defaults to "Main".
+{ "entity": "new_ticket", "name": "Ticket Quick Create", "formType": "QuickCreate", "layout": "auto" }
 ```
+- **`formType`** is `Main` (default), `QuickCreate`, or `QuickView`. A `QuickCreate` form is a
+  simplified create form on the same entity (no sub-grids, no Notes; events allowed). A `QuickView`
+  form is read-only (no sub-grids, no events) and is **created**, but placing it on a parent form via
+  a lookup is not auto-wired yet (lint warns). Sub-grids/Notes are Main-form only.
 - A sub-grid needs a matching `OneToMany` **or** `ManyToMany` between the form's entity and
   `childEntity` (lint-enforced); the builder resolves the relationship name either way.
 - **`events[]`** wire client-side JS: `event` is `onload`/`onsave`/`onchange` (`onchange` needs an
@@ -177,9 +184,11 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 ```
 
 ## sampleData (optional)
-Keyed by entity `schemaName`. Choice values are **labels** (resolved to ints). Relate records to
-parents with `$parent` (one) or `$parents` (several — for a junction row), and set a custom status
-with `statusReason`. All are topologically inserted and bound via the lookup nav-property.
+Keyed by entity `schemaName`. Choice values are **labels** (resolved to ints) — for **both** inline
+`options[]` columns **and** `globalChoice`-backed columns (write `"Platinum"`, not `100000000`; the
+engine resolves it, and the lint flags any label that isn't a declared option). Raw option ints still
+work. Relate records to parents with `$parent` (one) or `$parents` (several — for a junction row), and
+set a custom status with `statusReason`. All are topologically inserted and bound via the lookup nav-property.
 ```jsonc
 {
   "new_customer": [ { "new_name": "Northwind", "new_tier": "Pro" } ],
@@ -195,4 +204,10 @@ with `statusReason`. All are topologically inserted and bound via the lookup nav
   row links to every parent it points at (the engine sets each `<lookup>@odata.bind`).
 - **`statusReason`** must match a declared `statusReasons[]` label on the entity; the engine resolves
   it to the right `statecode` + `statuscode` (so "Completed orders with Passed/Pending QA" just work).
-- **MultiChoice** sample values are a comma-separated string of option ints (e.g. `"100000000,100000001"`).
+  The status option value is captured during the **data-model** phase — if you set `statusReason` on
+  a sample row, **don't `--skip data-model`** in the same run (the build halts loudly rather than
+  silently inserting a default status). Re-running *with* `data-model` is safe: status reasons are
+  created with a pinned, deterministic value, so a re-run skips the existing one instead of
+  duplicating it.
+- **MultiChoice** sample values are a comma-separated string of option **labels** (`"A,C"`) or ints
+  (`"100000000,100000002"`) — each known label token is resolved.

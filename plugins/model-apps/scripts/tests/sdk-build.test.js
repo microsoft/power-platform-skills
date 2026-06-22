@@ -47,8 +47,13 @@ function mockSdk(opts = {}) {
     createRelationship: async (o) => { calls.push({ name: 'createRelationship', args: [o] }); return { schemaName: o.schemaName }; },
     createGlobalOptionSet: async (o) => { calls.push({ name: 'createGlobalOptionSet', args: [o] }); return { name: o.name, metadataId: `gc-${o.name}` }; },
     createCustomerColumn: async (e, o) => { calls.push({ name: 'createCustomerColumn', args: [e, o] }); return { logicalName: o.schemaName.toLowerCase() }; },
-    insertStatusValue: async (e, o) => { calls.push({ name: 'insertStatusValue', args: [e, o] }); return 100000001; },
-    createAlternateKey: async (e, o) => { calls.push({ name: 'createAlternateKey', args: [e, o] }); return { logicalName: o.schemaName.toLowerCase() }; },
+    insertStatusValue: async (e, o) => { calls.push({ name: 'insertStatusValue', args: [e, o] }); if (opts.statusExists) { const err = new Error('HTTP 400: a status value with this name already exists'); err.statusCode = 400; throw err; } return 100000001; },
+    createAlternateKey: async (e, o) => {
+      calls.push({ name: 'createAlternateKey', args: [e, o] });
+      if (opts.altKeyExists) { const err = new Error(`HTTP 400 from /Keys: An attribute or relationship with the name '${o.schemaName}' already exists`); err.statusCode = 400; throw err; }
+      if (opts.altKeyError) { const err = new Error('HTTP 400 from /Keys: key attribute is not valid'); err.statusCode = 400; throw err; }
+      return { logicalName: o.schemaName.toLowerCase() };
+    },
     createRecordsBulk: async (e, rows) => { calls.push({ name: 'createRecordsBulk', args: [e, rows] }); return rows.map((_, i) => `${e}-${i}`); },
     createArtifact: (t, def) => { calls.push({ name: 'createArtifact', args: [t, def] }); return Object.assign({ id: `${t}-${++idc}` }, def); },
     pushArtifact: async (t, id) => { calls.push({ name: 'pushArtifact', args: [t, id] }); return { type: t, id, success: true }; },
@@ -308,6 +313,93 @@ test('a sample row sets a custom status reason (statecode + captured statuscode 
   assert.strictEqual(body.statuscode, 100000001, 'value captured from insertStatusValue');
   assert.strictEqual(body.statecode, 0, 'Active state');
   assert.strictEqual(body.statusReason, undefined, 'sentinel stripped from the body');
+});
+
+// --- Live-build hardening: global-choice sample labels, alt-key idempotency, status guard ---
+
+test('a global-choice sample value is resolved from its label to the option int', async () => {
+  const spec = makeSpec();
+  spec.globalChoices = [{ name: 'new_tierset', displayName: 'Tier', options: ['Platinum', 'Gold', 'Silver', 'Bronze'] }];
+  // make new_customer.new_tier a GLOBAL choice (makeSpec ships it inline) and set a label.
+  spec.entities[0].columns[0] = { schemaName: 'new_tier', displayName: 'Tier', type: 'Choice', globalChoice: 'new_tierset' };
+  spec.sampleData.new_customer[0].new_tier = 'Silver';
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true, sampleData: true });
+  const body = find(calls, 'createRecordsBulk').find((c) => c.args[0] === 'new_customer').args[1][0];
+  assert.strictEqual(body.new_tier, 100000002, 'global-choice label resolved to 100000000+index');
+});
+
+test('alt-key creation is idempotent: an already-exists error is a skip, not a halt', async () => {
+  const spec = makeSpec();
+  spec.entities[0].alternateKeys = [{ schemaName: 'new_namekey', displayName: 'Name Key', columns: ['new_name'] }];
+  const { sdk, calls } = mockSdk({ altKeyExists: true });
+  const events = [];
+  await runSdkBuild(spec, { sdk, apply: true, emit: (e) => events.push(e) }); // must NOT throw
+  assert.ok(has(calls, 'createAlternateKey'), 'createAlternateKey was attempted');
+  assert.ok(events.some((e) => e.status === 'skip' && /alt key new_customer\.new_namekey \(exists\)/.test(e.label)), 'duplicate alt key emits a skip');
+  assert.ok(has(calls, 'createArtifact'), 'the build continued past the duplicate alt key');
+});
+
+test('status reasons are idempotent: an already-exists insert is skipped (no halt), value still captured', async () => {
+  const spec = makeSpec();
+  spec.entities[1].statusReasons = [{ label: 'Escalated', state: 'Active' }];
+  spec.sampleData.new_ticket[0].statusReason = 'Escalated';
+  const { sdk, calls } = mockSdk({ statusExists: true });
+  const events = [];
+  await runSdkBuild(spec, { sdk, apply: true, sampleData: true, emit: (e) => events.push(e) }); // must NOT throw
+  assert.ok(events.some((e) => e.status === 'skip' && /status reason new_ticket: Escalated \(exists\)/.test(e.label)), 'duplicate status reason emits a skip');
+  const body = find(calls, 'createRecordsBulk').find((c) => c.args[0] === 'new_ticket').args[1][0];
+  assert.strictEqual(body.statuscode, 100000000, 'pinned value captured even when the insert was skipped');
+  assert.strictEqual(body.statecode, 0);
+});
+
+test('status reasons pin a deterministic value (passed explicitly so re-runs are idempotent)', async () => {
+  const spec = makeSpec();
+  spec.entities[1].statusReasons = [{ label: 'Escalated', state: 'Active' }, { label: 'On Hold', state: 'Active' }];
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true });
+  const vals = find(calls, 'insertStatusValue').map((c) => c.args[1].value);
+  assert.deepStrictEqual(vals, [100000000, 100000001], 'explicit publisher-range values, indexed per entity');
+});
+
+test('quick-create / quick-view forms build with their formType; Notes stays on Main only', async () => {
+  const spec = makeSpec();
+  spec.entities[1].hasNotes = true; // new_ticket
+  spec.forms.push(
+    { entity: 'new_ticket', name: 'Ticket', formType: 'Main', layout: 'auto' },
+    { entity: 'new_ticket', name: 'Ticket Quick Create', formType: 'QuickCreate', layout: 'auto' },
+    { entity: 'new_ticket', name: 'Ticket Card', formType: 'QuickView', layout: 'auto' }
+  );
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true });
+  const formDefs = find(calls, 'createArtifact').filter((c) => c.args[0] === 'form').map((c) => c.args[1]);
+  const byName = (n) => formDefs.find((d) => d.name === n);
+  assert.strictEqual(byName('Customer').formType, 'Main', 'default form type is Main');
+  assert.strictEqual(byName('Ticket Quick Create').formType, 'QuickCreate');
+  assert.strictEqual(byName('Ticket Card').formType, 'QuickView');
+  const hasNotes = (d) => d.tabs.some((t) => t.sections.some((s) => s.name === 'section_notes'));
+  assert.ok(hasNotes(byName('Ticket')), 'Main form carries the Notes section');
+  assert.ok(!hasNotes(byName('Ticket Quick Create')), 'QuickCreate form has no Notes section');
+  assert.ok(!hasNotes(byName('Ticket Card')), 'QuickView form has no Notes section');
+});
+
+test('alt-key creation still halts on a genuine (non-duplicate) error', async () => {
+  const spec = makeSpec();
+  spec.entities[0].alternateKeys = [{ schemaName: 'new_namekey', displayName: 'Name Key', columns: ['new_name'] }];
+  const { sdk } = mockSdk({ altKeyError: true });
+  await assert.rejects(runSdkBuild(spec, { sdk, apply: true }), /data-model failed/);
+});
+
+test('statusReason without the data-model phase halts loudly (no silent default status)', async () => {
+  const spec = makeSpec();
+  spec.entities[1].statusReasons = [{ label: 'Escalated', state: 'Active' }];
+  spec.sampleData.new_ticket[0].statusReason = 'Escalated';
+  const { sdk } = mockSdk();
+  // skip data-model -> the status value is never captured; the guard must halt.
+  await assert.rejects(
+    runSdkBuild(spec, { sdk, apply: true, sampleData: true, phases: resolvePhases({ skip: ['data-model'] }) }),
+    /status value wasn't captured/
+  );
 });
 
 test('view filters: no-value ops, in/not-in groups, and Choice-label resolution', () => {

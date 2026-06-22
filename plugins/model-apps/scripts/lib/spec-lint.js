@@ -2,7 +2,7 @@
 // Pure App Spec guardrail. Returns { ok, errors, warnings }. errors block the plan
 // gate; warnings teach. Bakes in the modeling lessons hit live — notably the
 // relationship schema-name vs lookup-name collision Dataverse rejects.
-const { relationshipSchemaName, relationshipFor } = require('./app-spec.js');
+const { relationshipSchemaName, relationshipFor, choiceValueMap } = require('./app-spec.js');
 
 const CHOICE_OPTION_WARN = 12;
 const SEQNUM_RE = /\{SEQNUM(:\d+)?\}/i;
@@ -102,6 +102,10 @@ function lintAppSpec(spec) {
   }
 
   for (const f of spec.forms || []) {
+    const formType = f.formType || 'Main';
+    if (!['Main', 'QuickCreate', 'QuickView'].includes(formType)) E(`Form ${f.entity} has invalid formType '${f.formType}' (use Main/QuickCreate/QuickView)`);
+    if (formType !== 'Main' && (f.subgrids || []).length) E(`Form ${f.entity} is a ${formType} form but declares sub-grids — sub-grids are Main-form only`);
+    if (formType === 'QuickView') W(`Form ${f.entity} is a QuickView form — it's created, but placing it on a parent form (via a lookup) isn't auto-wired yet; add the quick-view control in the designer`);
     for (const sg of f.subgrids || []) {
       const has1N = (spec.relationships || []).some(
         (r) => r.type === 'OneToMany' && lc(r.referenced) === lc(f.entity) && lc(r.referencing) === lc(sg.childEntity)
@@ -146,16 +150,31 @@ function lintAppSpec(spec) {
   }
 
   // Sample data: a custom statusReason must be declared on the entity; every $parent/$parents
-  // bind must have a OneToMany from the named parent to this entity (so the lookup exists).
+  // bind must have a OneToMany from the named parent to this entity (so the lookup exists);
+  // every Choice/MultiChoice value must be a declared option label or an option int (a raw
+  // label only auto-resolves for inline-option columns — global choices used to slip through
+  // and get rejected by Dataverse, so catch unresolvable labels here regardless of binding).
   for (const [ent, recs] of Object.entries(spec.sampleData || {})) {
     const e = (spec.entities || []).find((x) => lc(x.schemaName) === lc(ent));
     if (!e) continue; // unknown-entity is already an error in validateAppSpec
     const declaredReasons = new Set((e.statusReasons || []).map((s) => lc(s.label)));
+    const choiceInts = choiceValueMap(e, spec); // { colLogical: { label: int } } for Choice/MultiChoice
     for (const rec of Array.isArray(recs) ? recs : []) {
       if (rec && rec.statusReason && !declaredReasons.has(lc(rec.statusReason))) E(`sampleData['${ent}'] sets statusReason '${rec.statusReason}', which isn't a declared status reason on ${ent}`);
       const parents = [].concat(rec && rec.$parent ? [rec.$parent] : [], (rec && rec.$parents) || []);
       for (const p of parents) {
         if (p && p.entity && !relationshipFor(spec, p.entity, ent)) E(`sampleData['${ent}']: no OneToMany from parent '${p.entity}' to '${ent}' (needed to bind the lookup)`);
+      }
+      for (const [field, val] of Object.entries(rec || {})) {
+        if (field.startsWith('$')) continue;
+        const byLabel = choiceInts[lc(field)];
+        if (!byLabel || typeof val !== 'string') continue; // not a choice column, or already an int
+        if (byLabel[val] !== undefined) continue;          // whole value is a known label (incl. labels with commas)
+        const tokens = val.indexOf(',') >= 0 ? val.split(',').map((t) => t.trim()) : [val];
+        for (const tok of tokens) {
+          if (tok === '' || /^\d+$/.test(tok)) continue;   // blank or a raw option int
+          if (byLabel[tok] === undefined) E(`sampleData['${ent}'] sets ${field}='${tok}', which isn't a valid option for that Choice column — use a declared option label or its integer value`);
+        }
       }
     }
   }

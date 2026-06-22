@@ -26,19 +26,30 @@ function columnTypeMap(t) {
   return TYPE_MAP[t] || TYPE_MAP.Text;
 }
 
-// Map a Choice column's option LABELS to the integer values the builder assigns
-// (the SDK build engine assigns value = 100000000 + index; see lib/sdk-build.js).
-// { columnLogicalName: { "Active": 100000001, ... } }.
-function choiceValueMap(entity) {
+// Map every Choice / MultiChoice column's option LABELS to the integer values the
+// builder assigns (value = 100000000 + index — the same convention used for inline
+// option sets AND global option sets; see lib/sdk-build.js). Resolves inline `options[]`
+// columns AND columns bound to a `globalChoice` (looked up in spec.globalChoices). Pass
+// `spec` to resolve global choices; without it, only inline-option columns resolve.
+// { columnLogicalName: { "Platinum": 100000000, ... } }.
+function choiceValueMap(entity, spec) {
+  const globalByName = {};
+  for (const g of (spec && spec.globalChoices) || []) {
+    const byLabel = {};
+    (g.options || []).forEach((label, i) => { byLabel[String(label)] = 100000000 + i; });
+    globalByName[String(g.name).toLowerCase()] = byLabel;
+  }
   const map = {};
   for (const c of entity.columns || []) {
-    if (c.type === 'Choice' && Array.isArray(c.options)) {
-      const byLabel = {};
-      c.options.forEach((label, i) => {
-        byLabel[label] = 100000000 + i;
-      });
-      map[c.schemaName.toLowerCase()] = byLabel;
+    if (c.type !== 'Choice' && c.type !== 'MultiChoice') continue;
+    let byLabel = null;
+    if (Array.isArray(c.options) && c.options.length) {
+      byLabel = {};
+      c.options.forEach((label, i) => { byLabel[String(label)] = 100000000 + i; });
+    } else if (c.globalChoice && globalByName[String(c.globalChoice).toLowerCase()]) {
+      byLabel = globalByName[String(c.globalChoice).toLowerCase()];
     }
+    if (byLabel) map[c.schemaName.toLowerCase()] = byLabel;
   }
   return map;
 }
@@ -103,19 +114,39 @@ function manyToManySchemaName(rel) {
   return `${String(rel.entity1 || '').toLowerCase()}_${String(rel.entity2 || '').toLowerCase()}`;
 }
 
-// Turn author-friendly sample records into Web-API bodies: Choice values written
-// as labels ("Active") are resolved to their option ints; everything else passes
-// through unchanged (so raw ints, strings, booleans, ISO dates all still work).
-function resolveSampleRecords(entity, records) {
-  const choices = choiceValueMap(entity);
+// Turn author-friendly sample records into Web-API bodies: Choice / MultiChoice values
+// written as labels ("Platinum", or "Low,High" for multi-select) are resolved to their
+// option ints — for inline-option AND global-choice columns (pass `spec` so global
+// choices resolve). Everything else passes through unchanged (raw ints, strings,
+// booleans, ISO dates, and unknown tokens all still work).
+function resolveSampleRecords(entity, records, spec) {
+  const choices = choiceValueMap(entity, spec);
+  const multi = new Set((entity.columns || []).filter((c) => c.type === 'MultiChoice').map((c) => c.schemaName.toLowerCase()));
   return (records || []).map((rec) => {
     const out = {};
     for (const [k, v] of Object.entries(rec)) {
-      const labels = choices[k.toLowerCase()];
-      out[k] = labels && typeof v === 'string' && labels[v] !== undefined ? labels[v] : v;
+      const byLabel = choices[k.toLowerCase()];
+      out[k] = byLabel ? resolveChoiceValue(byLabel, v, multi.has(k.toLowerCase())) : v;
     }
     return out;
   });
+}
+
+// Resolve one sample value against a column's { label -> int } map.
+//  - single-select Choice: a known label becomes its integer value (Edm.Int32);
+//  - MultiChoice (multi-select picklist): the Web API expects a COMMA-SEPARATED STRING of
+//    option ints *even for a single value* — so every token is resolved and re-joined as a
+//    string (a bare Int32 is rejected: "Cannot convert '100000002' (Int32) to Edm.String").
+// Unknown tokens and non-strings pass through unchanged (raw ints still work for single-select).
+function resolveChoiceValue(byLabel, v, isMulti) {
+  if (typeof v !== 'string') return v;
+  if (isMulti) {
+    return v.split(',').map((t) => {
+      const tok = t.trim();
+      return byLabel[tok] !== undefined ? String(byLabel[tok]) : tok;
+    }).join(',');
+  }
+  return byLabel[v] !== undefined ? byLabel[v] : v;
 }
 
 function validateAppSpec(spec) {
@@ -179,6 +210,16 @@ function validateAppSpec(spec) {
     }
     if (f.layout !== undefined && f.layout !== 'auto' && f.layout !== 'explicit') {
       errors.push(`form ${f.entity}: layout must be 'auto' or 'explicit'`);
+    }
+    const formType = f.formType === undefined ? 'Main' : f.formType;
+    if (!['Main', 'QuickCreate', 'QuickView'].includes(formType)) {
+      errors.push(`form ${f.entity}: formType must be one of Main|QuickCreate|QuickView`);
+    }
+    if (formType !== 'Main' && Array.isArray(f.subgrids) && f.subgrids.length) {
+      errors.push(`form ${f.entity}: ${formType} forms can't host sub-grids (Main forms only)`);
+    }
+    if (formType === 'QuickView' && Array.isArray(f.events) && f.events.length) {
+      errors.push(`form ${f.entity}: QuickView forms are read-only and can't have event handlers`);
     }
     for (const ev of f.events || []) {
       if (!ev || !FORM_EVENTS.has(ev.event)) { errors.push(`form ${f.entity}: event must be one of ${[...FORM_EVENTS].join('|')}`); continue; }

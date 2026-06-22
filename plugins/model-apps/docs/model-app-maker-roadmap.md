@@ -19,7 +19,7 @@ backlog. The build engine is `scripts/lib/sdk-build.js`; the App Spec contract i
 - ✅ Live narration (`[n/total]`), `BuildHalt` gate, dry-run default, `--sample-data` / `--publish` opt-in.
 - ✅ Perf: bounded-concurrency `mapLimit` for independent ops; one publish round-trip per entity + the app.
 - ✅ Headless vendored SDK bundle + `az`-token HttpClient with transient (429/5xx) retry.
-- ✅ Lint guardrail (`spec-lint.js`) + hard validator (`app-spec.js`); 169 tests green.
+- ✅ Lint guardrail (`spec-lint.js`) + hard validator (`app-spec.js`); 196 tests green.
 
 ### Tier 1 — complete data model
 - ✅ All column types: Text · Memo · Choice · MultiChoice · Boolean · Money · DateTime · Integer · BigInt · Decimal · Double · File · Image · AutoNumber · Customer, with per-type options.
@@ -41,6 +41,37 @@ Rebundled the SDK (branch `users/akmaloo/cds-maker-sdk`) and folded every manual
 - ✅ **Status reasons on sample rows** — `statusReason` label → resolved `statecode`+`statuscode` (the engine captures `insertStatusValue`'s assigned value).
 - ✅ **Rich view filters** — `filters[]` with `eq-userid`/`this-week`/`in`/`not-in`/… and Choice-label resolution (`in`/`not-in` expand to nested groups) — replaces manual FetchXML patching.
 - ✅ **Docs**: `app-spec-schema.md` is now the single authoring source (modeling cheatsheet up top), so the skill needs no SDK/lint/engine spelunking. Removed the `model: sonnet` pin so the skill inherits the session model.
+
+### Live-build hardening (2026-06-20) — three gaps hit in a real build, now closed
+Found during a live build; each is fixed where it actually belongs (lint can only see the spec,
+not runtime phase selection or re-run state):
+- ✅ **Global-choice sample labels resolve** — `resolveSampleRecords`/`choiceValueMap` now map labels
+  → option ints for `globalChoice`-backed Choice **and** MultiChoice columns (not just inline
+  `options[]`), using the same `100000000+index` convention the engine creates them with. Writing
+  `"Platinum"` for a global choice just works. **Lint backstop:** any Choice/MultiChoice sample value
+  that isn't a declared option label or a raw int is now an error (catches typos forever).
+- ✅ **Alt-key creation is idempotent** — the SDK has no key lister, so a re-run used to halt on the
+  duplicate. A reusable `skipIf` on the engine's `run()` + an `isAlreadyExists(err)` classifier turns
+  an already-exists create into a **skip** (a genuine bad-key error still halts). Re-running
+  `data-model` no longer needs `--skip`.
+- ✅ **Status-reason guard** — custom `statusReason` option values are captured during `data-model`;
+  if that phase is skipped, the engine now **halts loudly** ("status value wasn't captured…") instead
+  of silently inserting the record with a default status. (Fixing the alt-key idempotency removes the
+  reason anyone was skipping `data-model` in the first place.)
+
+### Live-build hardening, round 2 (2026-06-21) — two more gaps from a real build
+- ✅ **MultiChoice single value renders as a string** — a multi-select picklist needs a
+  comma-separated `Edm.String` *even for one value*; the resolver was emitting a bare `Int32`
+  (`Cannot convert '100000002' (Int32) to Edm.String`). `resolveChoiceValue` now stringifies +
+  comma-joins MultiChoice tokens (single-select Choice still resolves to an int).
+- ✅ **Status reasons are idempotent across `data-model` re-runs** — `insertStatusValue` is NOT
+  idempotent (no explicit Value → Dataverse auto-assigns a new one each call → duplicates). The
+  engine now PINS a deterministic publisher-range value (`100000000+i`, or `sr.value`) and passes
+  it explicitly, so a re-run hits already-exists → `skipIf` skips (no duplicate) while the value
+  stays captured for sample data. Resolves the catch-22 with the status-capture guard: re-running
+  *with* `data-model` is now safe.
+- ✅ **SDK rebundled** from `users/akmaloo/cds-maker-sdk` (Notes/timeline control, quick-create /
+  quick-view form types, PCF `addCustomControl`, verified PCF binding). Bundle 3121 KB.
 
 ### Authoring UX (2026-06-20)
 - ✅ **Form wireframe preview** — `scripts/preview-form.js` renders each form as an ASCII wireframe (tabs, sections, fields + widget hints, Notes/timeline, sub-grids, form JS) so the user can *see* a form during authoring before approving.
@@ -70,8 +101,22 @@ Rebundled the SDK (branch `users/akmaloo/cds-maker-sdk`) and folded every manual
 - 🔲 **Teardown command** — delete session-created artifacts in dependency order (app 80 / sitemap 62 / forms 60 / charts 59 / views 26 / web resources 61 / relationships / columns / tables), via `RetrieveDependenciesForDelete`. (One-off teardown recipe already proven manually; make it a first-class, classifier-safe command.)
 - 🔲 **Form events on existing forms** — current wiring assumes a freshly built form; the edit flow should fetch an existing form, add/replace handlers, and publish.
 
+### SDK uptake (2026-06-21) — in progress (user approved all four)
+- ✅ **Quick-create / quick-view forms** (`forms[].formType` = `Main`/`QuickCreate`/`QuickView`).
+  QuickCreate is a full simplified create form; QuickView is created but **placement on a parent
+  form (via a lookup) isn't auto-wired** (no SDK helper — lint warns). Notes/sub-grids are Main-only
+  (validator + lint enforced). ⚠ not yet live-verified on 983a1.
+- 🔲 **Modern command-bar buttons** (`commands[]` → `createArtifact('command')`, the `appaction`
+  table). New phase + spec section (button label, location, web-resource function) + lint + tests.
+- 🔲 **Dashboards** (`dashboards[]` → `createArtifact('dashboard')`). The SDK adapter is
+  overlay-oriented (`createDefault` seeds one cell), so this needs a **from-scratch FormXML tile
+  generator** (chart/list control cells) before push. Medium-large.
+- 🔲 **PCF custom controls** (`addCustomControl`). ⚠ **Architectural:** the binding persists only via
+  **solution export→import** — a plain `pushArtifact`/`systemforms` write strips it. Needs a new
+  delivery path (package the form + control bundle into a solution, `importSolution`) and a source
+  for the control bundle. Biggest lift; design needed.
+
 ### P2 — shippable defaults + breadth
-- 🔲 **Quick-create forms** + **quick-view forms** (`formType` variants).
 - 🔲 **Standard system views** (All Records, Active, Inactive, Lookup, Associated) auto-generated per table.
 - 🔲 **Multi-area sitemaps** + richer app-shell (multiple areas/groups, icons, ordering).
 - 🔲 **Tier 3 — governance:** security roles, environment variables, connection references.

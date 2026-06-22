@@ -82,6 +82,19 @@ class BuildHalt extends Error {
   }
 }
 
+// A metadata create that fails because the component already exists (the classic re-run
+// case). Dataverse answers 409, or 400 with a duplicate-name message. Used to make
+// otherwise non-idempotent creates (e.g. alternate keys — the SDK has no key lister) safe
+// to re-run: the build skips instead of halting. Kept deliberately narrow so a genuine
+// failure (bad key attribute, etc.) still surfaces.
+function isAlreadyExists(err) {
+  if (!err) return false;
+  const status = err.statusCode || err.status || (err.cause && (err.cause.statusCode || err.cause.status));
+  if (status === 409) return true;
+  const msg = String((err && err.message) || '').toLowerCase();
+  return /already exists|duplicate|with the (?:specified|same) name|a key with/.test(msg);
+}
+
 /** Resolve --only/--skip/--from/--to into the ordered set of phases to run. */
 function resolvePhases({ only, skip, from, to } = {}) {
   let active = PHASES.slice();
@@ -180,8 +193,9 @@ function planFor(spec, opts) {
   if (has('views')) for (const v of spec.views) items.push({ phase: 'views', label: `view "${v.name}" for ${v.entity}` });
   if (has('charts')) for (const c of spec.charts || []) items.push({ phase: 'charts', label: `chart "${c.name}" (${c.chartType}) for ${c.entity}` });
   if (has('forms')) for (const f of spec.forms) {
+    const ft = f.formType || 'Main';
     const subs = (f.subgrids || []).map((s) => s.childEntity).join(', ');
-    items.push({ phase: 'forms', label: `form for ${f.entity}${subs ? ` (sub-grids: ${subs})` : ''}` });
+    items.push({ phase: 'forms', label: `${ft === 'Main' ? 'form' : `${ft} form`} for ${f.entity}${subs ? ` (sub-grids: ${subs})` : ''}` });
     if ((f.events || []).length) items.push({ phase: 'forms', label: `wire ${f.events.length} event handler(s) on ${f.entity}` });
   }
   if (has('app-shell')) items.push({ phase: 'app-shell', label: `app module "${spec.app.name}" + sitemap` });
@@ -280,13 +294,15 @@ function formDef(spec, f) {
       sections: [{ name: 'section_general', label: 'General', visible: true, showLabel: false, columns, rows: rowsFromCells(cells, columns) }] }];
   }
 
-  // Notes section (opt-in: form.notes or entity.hasNotes).
-  const wantNotes = f.notes === true || (entity && entity.hasNotes === true);
+  const formType = f.formType || 'Main';
+  // Notes section (opt-in: form.notes or entity.hasNotes) — Main forms only; quick-create /
+  // quick-view forms don't host the activity timeline.
+  const wantNotes = formType === 'Main' && (f.notes === true || (entity && entity.hasNotes === true));
   if (wantNotes) {
     tabs[0].sections.push({ name: 'section_notes', label: 'Notes', visible: true, showLabel: true, columns: 1, rows: [{ cells: [notesCell()] }] });
   }
 
-  return { entityLogicalName: entityLogical, name: f.name || `${f.entity} form`, formType: 'Main', status: 'Active', tabs };
+  return { entityLogicalName: entityLogical, name: f.name || `${f.entity} form`, formType, status: 'Active', tabs };
 }
 
 function appDef(spec, result) {
@@ -321,7 +337,7 @@ async function runSdkBuild(spec, opts = {}) {
   const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, app: null } };
   const total = plan.length;
   let n = 0;
-  const run = async (phase, label, fn, { recoverable = false } = {}) => {
+  const run = async (phase, label, fn, { recoverable = false, skipIf } = {}) => {
     const myN = (n += 1);
     emit({ phase, status: 'start', label, n: myN, total });
     try {
@@ -329,6 +345,9 @@ async function runSdkBuild(spec, opts = {}) {
       emit({ phase, status: 'ok', label, n: myN, total });
       return out;
     } catch (err) {
+      // Idempotency escape hatch: a create that fails only because the component already
+      // exists is a skip, not a halt (used where the SDK offers no check-first lister).
+      if (skipIf && skipIf(err)) { emit({ phase, status: 'skip', label: `${label} (exists)`, n: myN, total }); return undefined; }
       emit({ phase, status: 'error', label, n: myN, total, detail: String((err && err.message) || err) });
       throw new BuildHalt(`${phase} failed: ${(err && err.message) || err}`, { phase, code: (err && err.code) || 'sdk-error', recoverable, cause: err });
     }
@@ -392,17 +411,30 @@ async function runSdkBuild(spec, opts = {}) {
         () => c.type === 'Customer'
           ? sdk.createCustomerColumn(logical, { schemaName: c.schemaName, displayName: c.displayName || c.schemaName, required: REQUIRED(c) })
           : sdk.createColumn(logical, columnOptions(c, globalChoiceIds))));
-      // custom status reasons — capture the assigned option value so sample data can set them
+      // custom status reasons — capture the option value so sample data can set them. IDEMPOTENT:
+      // insertStatusValue itself is not (with no explicit Value, Dataverse auto-assigns a NEW value
+      // every call, duplicating the reason on a data-model re-run). So we PIN a deterministic value
+      // (publisher range 100000000+i, matching how the engine assigns choice/global option values;
+      // authors may override via sr.value) and pass it explicitly: a re-run then hits an already-exists
+      // error that skipIf turns into a skip (no duplicate), while the value stays captured for sample
+      // data. On a fresh insert we overwrite with the server-returned value (authoritative).
+      let srIdx = 0;
       for (const sr of e.statusReasons || []) {
+        const stateCode = STATE_CODE[sr.state] !== undefined ? STATE_CODE[sr.state] : 0;
+        const pinned = typeof sr.value === 'number' ? sr.value : 100000000 + srIdx;
+        srIdx += 1;
+        (statusReasonValues[logical] = statusReasonValues[logical] || {})[sr.label] = { value: pinned, stateCode };
         await run('data-model', `status reason ${e.schemaName}: ${sr.label}`, async () => {
-          const stateCode = STATE_CODE[sr.state] !== undefined ? STATE_CODE[sr.state] : 0;
-          const value = await sdk.insertStatusValue(logical, { label: sr.label, stateCode, color: sr.color, value: sr.value });
-          (statusReasonValues[logical] = statusReasonValues[logical] || {})[sr.label] = { value, stateCode };
-        });
+          const v = await sdk.insertStatusValue(logical, { label: sr.label, stateCode, color: sr.color, value: pinned });
+          statusReasonValues[logical][sr.label] = { value: typeof v === 'number' ? v : pinned, stateCode };
+        }, { recoverable: true, skipIf: isAlreadyExists });
       }
-      // alternate keys
+      // alternate keys — idempotent: the SDK has no key lister, so a re-run that hits an
+      // already-exists error is treated as a skip (not a halt) via skipIf.
       for (const k of e.alternateKeys || []) {
-        await run('data-model', `alt key ${e.schemaName}.${k.schemaName}`, () => sdk.createAlternateKey(logical, { schemaName: k.schemaName, displayName: k.displayName || k.schemaName, keyAttributes: (k.columns || []).map((x) => x.toLowerCase()) }));
+        await run('data-model', `alt key ${e.schemaName}.${k.schemaName}`,
+          () => sdk.createAlternateKey(logical, { schemaName: k.schemaName, displayName: k.displayName || k.schemaName, keyAttributes: (k.columns || []).map((x) => x.toLowerCase()) }),
+          { recoverable: true, skipIf: isAlreadyExists });
       }
     }
     // 2c. Relationships — 1:N and N:N; skip those already present.
@@ -441,7 +473,7 @@ async function runSdkBuild(spec, opts = {}) {
       if (!records.length) continue;
       await run('sample-data', `${records.length} record(s) -> ${e.schemaName}`, async () => {
         const entityLogical = e.schemaName.toLowerCase();
-        const resolved = resolveSampleRecords(e, records);
+        const resolved = resolveSampleRecords(e, records, spec);
         const bodies = [];
         const matchHit = (parentLogical, match) => (createdByEntity[parentLogical] || []).find((h) => Object.entries(match).every(([k, val]) => { const rk = Object.keys(h.raw).find((x) => x.toLowerCase() === k.toLowerCase()); return rk !== undefined && h.raw[rk] === val; }));
         for (let i = 0; i < resolved.length; i++) {
@@ -458,10 +490,14 @@ async function runSdkBuild(spec, opts = {}) {
             const rel = relationshipFor(spec, parent.entity, e.schemaName);
             if (hit && hit.id && rel) body[`${rel.lookup.schemaName}@odata.bind`] = `/${await entitySetFor(parentLogical)}(${hit.id})`;
           }
-          // Custom status reason -> statecode + the captured statuscode option value.
+          // Custom status reason -> statecode + the captured statuscode option value. The
+          // value is captured during the data-model phase (insertStatusValue); if that phase
+          // was skipped this run, the value is unknown — halt loudly instead of silently
+          // inserting the record with a default status (the live foot-gun behind this guard).
           if (raw && raw.statusReason) {
             const sv = (statusReasonValues[e.schemaName.toLowerCase()] || {})[raw.statusReason];
-            if (sv) { body.statuscode = sv.value; body.statecode = sv.stateCode; }
+            if (!sv) throw new Error(`record sets statusReason '${raw.statusReason}' on ${e.schemaName}, but its status value wasn't captured — include the data-model phase (don't --skip data-model) so the custom status reason is created and its option value captured`);
+            body.statuscode = sv.value; body.statecode = sv.stateCode;
           }
           bodies.push(body);
         }
@@ -545,7 +581,9 @@ async function runSdkBuild(spec, opts = {}) {
       }
       return id;
     });
-    defs.forEach((d, i) => { result.created.forms[d.f.entity.toLowerCase()] = ids[i]; });
+    // Key the entity's MAIN form by entity (the app wires one form per entity below); quick-create
+    // / quick-view forms are still built + added to the solution, just not the entity's app form.
+    defs.forEach((d, i) => { if ((d.f.formType || 'Main') === 'Main') result.created.forms[d.f.entity.toLowerCase()] = ids[i]; });
   }
 
   // 7. App module + sitemap.

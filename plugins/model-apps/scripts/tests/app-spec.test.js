@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
-const { validateAppSpec, columnTypeMap, relationshipFor } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
+const { validateAppSpec, columnTypeMap, relationshipFor, resolveSampleRecords } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
 
 const sample = JSON.parse(
   fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.project-tracker.json'), 'utf8')
@@ -35,6 +35,41 @@ test('validateAppSpec rejects a Choice column with no options', () => {
 
 test('columnTypeMap maps Choice to the Dataverse picklist type', () => {
   assert.strictEqual(columnTypeMap('Choice').dv, 'picklist');
+});
+
+test('resolveSampleRecords resolves inline AND global Choice labels (and multi-select tokens) to option ints', () => {
+  const spec = { globalChoices: [{ name: 'new_tierset', options: ['Platinum', 'Gold', 'Silver', 'Bronze'] }] };
+  const entity = {
+    columns: [
+      { schemaName: 'new_tier', type: 'Choice', globalChoice: 'new_tierset' }, // global
+      { schemaName: 'new_pri', type: 'Choice', options: ['Low', 'High'] },      // inline
+      { schemaName: 'new_tags', type: 'MultiChoice', options: ['A', 'B', 'C'] },// multi-select
+    ],
+  };
+  const [r] = resolveSampleRecords(entity, [{ new_tier: 'Silver', new_pri: 'High', new_tags: 'A,C', new_name: 'Acme' }], spec);
+  assert.strictEqual(r.new_tier, 100000002, 'global-choice label -> option int');
+  assert.strictEqual(r.new_pri, 100000001, 'inline-choice label -> option int');
+  assert.strictEqual(r.new_tags, '100000000,100000002', 'multi-select tokens resolved');
+  assert.strictEqual(r.new_name, 'Acme', 'non-choice value passes through');
+});
+
+test('resolveSampleRecords renders a single MultiChoice label as a comma-string, not a bare Int32', () => {
+  // regression: a multi-select picklist needs Edm.String even for one value
+  // ("Cannot convert '100000002' (Int32) to Edm.String").
+  const entity = { columns: [{ schemaName: 'new_certs', type: 'MultiChoice', options: ['Plumbing', 'HVAC', 'Electrical'] }] };
+  const [one] = resolveSampleRecords(entity, [{ new_certs: 'HVAC' }], {});
+  assert.strictEqual(one.new_certs, '100000001', 'single multi-select value is a STRING');
+  assert.strictEqual(typeof one.new_certs, 'string', 'never a bare number');
+  const [many] = resolveSampleRecords(entity, [{ new_certs: 'Plumbing,Electrical' }], {});
+  assert.strictEqual(many.new_certs, '100000000,100000002', 'multiple values comma-joined as a string');
+});
+
+test('resolveSampleRecords leaves raw ints and unknown tokens untouched', () => {
+  const entity = { columns: [{ schemaName: 'new_pri', type: 'Choice', options: ['Low', 'High'] }] };
+  const [r] = resolveSampleRecords(entity, [{ new_pri: 100000001 }], {});
+  assert.strictEqual(r.new_pri, 100000001, 'raw option int unchanged');
+  const [r2] = resolveSampleRecords(entity, [{ new_pri: 'Nope' }], {});
+  assert.strictEqual(r2.new_pri, 'Nope', 'unknown label passes through (lint flags it)');
 });
 
 // --- Rich-spec validation (charts / sub-grids / relational sample data) ----
@@ -91,6 +126,20 @@ test('validateAppSpec rejects a sub-grid referencing an unknown childEntity', ()
   const r = validateAppSpec(bad);
   assert.strictEqual(r.ok, false);
   assert.ok(r.errors.some((e) => /unknown childEntity/.test(e)));
+});
+
+test('validateAppSpec rejects an invalid formType', () => {
+  const bad = cloneDesk();
+  bad.forms[0].formType = 'Card2';
+  const r = validateAppSpec(bad);
+  assert.ok(!r.ok && r.errors.some((e) => /formType must be one of/.test(e)));
+});
+
+test('validateAppSpec rejects sub-grids on a non-Main form', () => {
+  const bad = cloneDesk(); // desk forms[0] (Customer) has a Tickets sub-grid
+  bad.forms[0].formType = 'QuickCreate';
+  const r = validateAppSpec(bad);
+  assert.ok(!r.ok && r.errors.some((e) => /can't host sub-grids/.test(e)));
 });
 
 test('validateAppSpec rejects an invalid form.layout value', () => {

@@ -122,12 +122,13 @@ run with bounded parallelism; publish is one round-trip per entity + the app. Vi
 - **Idempotent.** Existing solution/tables/columns/relationships are detected and reused, so
   re-runs and existing-table envs work without collisions. (Full spec-vs-deployed *diff* editing
   of views/forms is a later increment.)
-- Not in scope (later): dashboards, commands (ribbon buttons), business rules, quick-create /
-  quick-view forms, lookup/associated views, multi-area sitemaps, security roles. (Supported:
+- Not in scope (later): dashboards, commands (ribbon buttons), business rules, PCF custom controls,
+  quick-view *placement*, lookup/associated views, multi-area sitemaps, security roles. (Supported:
   the full data model — all column types, **AutoNumber primary**, global choices, status reasons,
   alternate keys, **N:N + junction-with-payload**; adaptive main forms with **1:N / N:N sub-grids**;
-  Choice-column charts; **rich view filters** (`eq-userid`/`this-week`/`in`/`not-in`); web resources
-  + form JS event handlers; sample data with **multi-parent `$parents`** + **`statusReason`**.) See
+  **quick-create / quick-view forms** (`formType`); Choice-column charts; **rich view filters**
+  (`eq-userid`/`this-week`/`in`/`not-in`); web resources + form JS event handlers; sample data with
+  **multi-parent `$parents`** + **`statusReason`** (Choice/MultiChoice labels auto-resolve).) See
   [`docs/model-app-maker-roadmap.md`](../../docs/model-app-maker-roadmap.md) and the one-page
   [`references/app-spec-schema.md`](../../references/app-spec-schema.md) — author from that **single**
   doc; you should not need to read the SDK, lint, or engine to write a spec.

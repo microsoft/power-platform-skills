@@ -56,6 +56,21 @@ test('errors on a sub-grid with no matching OneToMany', () => {
   assert.ok(r.errors.some((m) => /no matching OneToMany/i.test(m)));
 });
 
+test('warns that a QuickView form needs manual placement (created, not auto-wired)', () => {
+  const s = base();
+  s.forms = [{ entity: 'new_ticket', formType: 'QuickView' }];
+  const r = lintAppSpec(s);
+  assert.ok(r.ok, JSON.stringify(r.errors));
+  assert.ok(r.warnings.some((m) => /QuickView form/i.test(m) && /placing it/i.test(m)));
+});
+
+test('errors on sub-grids declared on a non-Main form', () => {
+  const s = base();
+  s.forms = [{ entity: 'new_customer', formType: 'QuickCreate', subgrids: [{ childEntity: 'new_ticket' }] }];
+  const r = lintAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((m) => /Main-form only/i.test(m)));
+});
+
 test('errors on a relationship referencing an unknown entity', () => {
   const s = base();
   s.relationships[0].referencing = 'new_nope';
@@ -68,4 +83,34 @@ test('warns on prefix drift', () => {
   s.entities[1].schemaName = 'cr123_ticket';
   const r = lintAppSpec(s);
   assert.ok(r.warnings.some((m) => /prefix/i.test(m)));
+});
+
+// --- Sample-data Choice value resolvability (the global-choice live gap) -----------------
+
+test('errors on a sampleData Choice value that is neither a declared label nor an int', () => {
+  const s = base();
+  s.sampleData = { new_ticket: [{ new_name: 'T1', new_priority: 'Platnium' }] }; // typo, not Low/High
+  const r = lintAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((m) => /isn't a valid option/i.test(m)));
+});
+
+test('catches an unresolvable label on a GLOBAL-choice column (the gap that slipped past)', () => {
+  const s = base();
+  s.globalChoices = [{ name: 'new_tierset', options: ['Platinum', 'Gold', 'Silver', 'Bronze'] }];
+  s.entities[0].columns.push({ schemaName: 'new_tier', displayName: 'Tier', type: 'Choice', globalChoice: 'new_tierset' });
+  s.sampleData = { new_customer: [{ new_name: 'C1', new_tier: 'Platnium' }] }; // typo for Platinum
+  const r = lintAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((m) => /new_tier='Platnium'/.test(m)));
+});
+
+test('accepts sampleData Choice values that match a declared label (inline or global) or a raw int', () => {
+  const s = base();
+  s.globalChoices = [{ name: 'new_tierset', options: ['Platinum', 'Gold'] }];
+  s.entities[0].columns.push({ schemaName: 'new_tier', displayName: 'Tier', type: 'Choice', globalChoice: 'new_tierset' });
+  s.sampleData = {
+    new_ticket: [{ new_name: 'T1', new_priority: 'High' }, { new_name: 'T2', new_priority: 100000000 }],
+    new_customer: [{ new_name: 'C1', new_tier: 'Gold' }],
+  };
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });

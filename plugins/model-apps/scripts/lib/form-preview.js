@@ -77,7 +77,8 @@ function renderFormWireframe(spec, f) {
   const entity = entityByLogical(spec, f.entity);
   const def = formDef(spec, f);
   const lines = [];
-  lines.push(topBorder(def.name || f.entity));
+  const typeTag = def.formType && def.formType !== 'Main' ? ` [${def.formType}]` : '';
+  lines.push(topBorder(`${def.name || f.entity}${typeTag}`));
 
   const tabLabels = def.tabs.map((t) => t.label || 'General');
   if (tabLabels.length > 1) {
