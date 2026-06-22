@@ -182,6 +182,55 @@ test('validateAppSpec rejects a dashboard chart tile referencing an unknown char
   assert.ok(!r.ok && r.errors.some((e) => /unknown chart/.test(e)));
 });
 
+test('validateAppSpec accepts a quick-view placement referencing a QuickView form', () => {
+  const ok = cloneDesk();
+  ok.forms = [
+    { entity: 'new_ticket', name: 'Ticket', formType: 'Main', quickViews: [{ lookup: 'new_customerid', targetEntity: 'new_customer', form: 'Customer QV' }] },
+    { entity: 'new_customer', name: 'Customer QV', formType: 'QuickView' },
+  ];
+  const r = validateAppSpec(ok);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('validateAppSpec rejects a quick-view whose form is not a QuickView', () => {
+  const bad = cloneDesk();
+  bad.forms = [
+    { entity: 'new_ticket', name: 'Ticket', formType: 'Main', quickViews: [{ lookup: 'new_customerid', targetEntity: 'new_customer', form: 'Customer' }] },
+    { entity: 'new_customer', name: 'Customer', formType: 'Main' },
+  ];
+  const r = validateAppSpec(bad);
+  assert.ok(!r.ok && r.errors.some((e) => /must have formType: "QuickView"/.test(e)));
+});
+
+test('validateAppSpec accepts a flyout command (children carry the actions); rejects a child with no function', () => {
+  const ok = cloneDesk();
+  ok.webResources = [{ name: 'new_ticket.js', type: 'js', content: 'x' }];
+  ok.commands = [{ entity: 'new_ticket', label: 'More', type: 'FlyoutAnchor', children: [
+    { label: 'Escalate', library: 'new_ticket.js', function: 'T.escalate' },
+  ] }];
+  assert.strictEqual(validateAppSpec(ok).ok, true, JSON.stringify(validateAppSpec(ok).errors));
+  const bad = cloneDesk();
+  bad.webResources = [{ name: 'new_ticket.js', type: 'js', content: 'x' }];
+  bad.commands = [{ entity: 'new_ticket', label: 'More', type: 'FlyoutAnchor', children: [{ label: 'Escalate', library: 'new_ticket.js' }] }];
+  const r = validateAppSpec(bad);
+  assert.ok(!r.ok && r.errors.some((e) => /child 'Escalate'.*function .* is required/.test(e)));
+});
+
+test('validateAppSpec accepts a DashBoard sitemap subarea, rejects an unknown dashboard + a double-target subarea', () => {
+  const ok = cloneDesk();
+  ok.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: ok.views[0].name, name: 'L' }] }];
+  ok.appShell.areas[0].groups[0].subAreas.push({ dashboard: 'Ops', title: 'Overview' });
+  assert.strictEqual(validateAppSpec(ok).ok, true, JSON.stringify(validateAppSpec(ok).errors));
+
+  const unknown = cloneDesk();
+  unknown.appShell.areas[0].groups[0].subAreas.push({ dashboard: 'Nope', title: 'X' });
+  assert.ok(validateAppSpec(unknown).errors.some((e) => /unknown dashboard 'Nope'/.test(e)));
+
+  const dbl = cloneDesk();
+  dbl.appShell.areas[0].groups[0].subAreas.push({ entity: 'new_ticket', url: 'https://x', title: 'Both' });
+  assert.ok(validateAppSpec(dbl).errors.some((e) => /sets multiple targets/.test(e)));
+});
+
 test('validateAppSpec rejects an invalid form.layout value', () => {
   const bad = cloneDesk();
   bad.forms[0].layout = 'fancy';

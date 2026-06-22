@@ -101,11 +101,14 @@ function lintAppSpec(spec) {
     }
   }
 
+  // QuickView forms referenced by a host form's quickViews[] (so we only warn about unplaced ones).
+  const placedQuickViewForms = new Set();
+  for (const f of spec.forms || []) for (const qv of f.quickViews || []) if (qv && qv.form) placedQuickViewForms.add(qv.form);
   for (const f of spec.forms || []) {
     const formType = f.formType || 'Main';
     if (!['Main', 'QuickCreate', 'QuickView'].includes(formType)) E(`Form ${f.entity} has invalid formType '${f.formType}' (use Main/QuickCreate/QuickView)`);
     if (formType !== 'Main' && (f.subgrids || []).length) E(`Form ${f.entity} is a ${formType} form but declares sub-grids — sub-grids are Main-form only`);
-    if (formType === 'QuickView') W(`Form ${f.entity} is a QuickView form — it's created, but placing it on a parent form (via a lookup) isn't auto-wired yet; add the quick-view control in the designer`);
+    if (formType === 'QuickView' && !placedQuickViewForms.has(f.name)) W(`Form ${f.entity} is a QuickView form but isn't placed on any host form — add a quickViews[] entry (lookup + form) on the parent form to surface it`);
     for (const sg of f.subgrids || []) {
       const has1N = (spec.relationships || []).some(
         (r) => r.type === 'OneToMany' && lc(r.referenced) === lc(f.entity) && lc(r.referencing) === lc(sg.childEntity)
@@ -125,17 +128,40 @@ function lintAppSpec(spec) {
         else if ((columnsByEntity[lc(f.entity)] || new Set()).size && !columnsByEntity[lc(f.entity)].has(lc(ev.attribute))) W(`Form ${f.entity} onchange handler binds '${ev.attribute}', which isn't a column on ${f.entity}`);
       }
     }
+    // Quick-view placement: each entry embeds a QuickView form (by name) via a lookup column.
+    for (const qv of f.quickViews || []) {
+      if (!qv || !qv.lookup) { E(`Form ${f.entity} has a quickView missing lookup (the lookup column logical name)`); continue; }
+      if (!qv.targetEntity || !entityNames.has(lc(qv.targetEntity))) E(`Form ${f.entity} quickView references unknown targetEntity '${qv.targetEntity}'`);
+      const qf = qv.form && (spec.forms || []).find((x) => x.name === qv.form);
+      if (!qf) E(`Form ${f.entity} quickView references form '${qv.form}' not found in forms[]`);
+      else if ((qf.formType || 'Main') !== 'QuickView') E(`Form ${f.entity} quickView form '${qv.form}' must be a QuickView form`);
+    }
   }
 
-  // Commands (modern command-bar buttons) — a functional button needs a JS library + function.
+  // Commands (modern command-bar buttons) — a functional leaf button needs a JS library + function;
+  // a flyout/split container (type FlyoutAnchor/SplitButton) instead holds child buttons.
   const COMMAND_LOCATIONS = new Set(['maintab', 'hometab', 'contextualtab']);
+  const COMMAND_TYPES = new Set(['button', 'flyoutanchor', 'splitbutton']);
+  const lintCmdAction = (label, ent, library, fn) => {
+    if (!library) E(`Command '${label}' on ${ent} needs a library (web-resource name)`);
+    else if (!webResourceNames.has(lc(library))) E(`Command '${label}' references undeclared web resource '${library}' — add it to webResources[]`);
+    if (!fn) E(`Command '${label}' on ${ent} needs a function name`);
+  };
   for (const c of spec.commands || []) {
     if (!c.entity || !entityNames.has(lc(c.entity))) { E(`Command references unknown entity '${c.entity}'`); continue; }
     if (!c.label) E(`A command on ${c.entity} is missing a label`);
     if (c.location && !COMMAND_LOCATIONS.has(lc(c.location))) E(`Command '${c.label}' has invalid location '${c.location}' (MainTab/HomeTab/ContextualTab)`);
-    if (!c.library) E(`Command '${c.label}' on ${c.entity} needs a library (web-resource name)`);
-    else if (!webResourceNames.has(lc(c.library))) E(`Command '${c.label}' references undeclared web resource '${c.library}' — add it to webResources[]`);
-    if (!c.function) E(`Command '${c.label}' on ${c.entity} needs a function name`);
+    const type = c.type || 'Button';
+    if (!COMMAND_TYPES.has(lc(type))) E(`Command '${c.label}' has invalid type '${c.type}' (Button/FlyoutAnchor/SplitButton)`);
+    if (lc(type) === 'flyoutanchor' || lc(type) === 'splitbutton') {
+      if (!(Array.isArray(c.children) && c.children.length)) E(`Command '${c.label}' on ${c.entity} is a ${type} but has no children[] (menu buttons)`);
+      for (const ch of c.children || []) {
+        if (!ch || !ch.label) { E(`Command '${c.label}' on ${c.entity} has a child button without a label`); continue; }
+        lintCmdAction(`${c.label} ▸ ${ch.label}`, c.entity, ch.library, ch.function);
+      }
+    } else {
+      lintCmdAction(c.label, c.entity, c.library, c.function);
+    }
   }
 
   // Dashboards — chart/list tiles must reference a declared chart/view; webresource a web resource.
@@ -151,6 +177,21 @@ function lintAppSpec(spec) {
       if ((t.type === 'chart' || t.type === 'list') && (!t.view || !viewNames.has(lc(t.view)))) E(`Dashboard '${d.name}' ${t.type} tile references unknown view '${t.view}'`);
       if (t.type === 'iframe' && !t.url) E(`Dashboard '${d.name}' iframe tile needs a url`);
       if (t.type === 'webresource' && (!t.webResource || !webResourceNames.has(lc(t.webResource)))) E(`Dashboard '${d.name}' webresource tile references undeclared web resource '${t.webResource}'`);
+    }
+  }
+
+  // Sitemap subareas — each names exactly one target (entity/dashboard/url). A DashBoard subarea
+  // surfaces a built dashboard in the app nav (and auto-pins it as an app component).
+  const dashNames = new Set((spec.dashboards || []).map((d) => d && d.name).filter(Boolean));
+  for (const a of (spec.appShell && spec.appShell.areas) || []) {
+    for (const g of a.groups || []) {
+      for (const sa of g.subAreas || []) {
+        const targets = ['entity', 'dashboard', 'url'].filter((k) => sa[k]);
+        if (targets.length === 0) E(`Sitemap subarea "${sa.title || ''}" needs an entity, dashboard, or url`);
+        else if (targets.length > 1) E(`Sitemap subarea "${sa.title || ''}" sets multiple targets (${targets.join(', ')}) — pick one`);
+        if (sa.entity && !entityNames.has(lc(sa.entity))) E(`Sitemap subarea references unknown entity '${sa.entity}'`);
+        if (sa.dashboard && !dashNames.has(sa.dashboard)) E(`Sitemap subarea references unknown dashboard '${sa.dashboard}' — declare it in dashboards[]`);
+      }
     }
   }
 

@@ -228,6 +228,14 @@ function validateAppSpec(spec) {
       if (!ev.function) errors.push(`form ${f.entity}: ${ev.event} handler is missing a function name`);
       if (ev.event === 'onchange' && !ev.attribute) errors.push(`form ${f.entity}: onchange handler requires an attribute (column logical name)`);
     }
+    for (const qv of f.quickViews || []) {
+      if (!qv || !qv.lookup) { errors.push(`form ${f.entity}: a quickView is missing lookup (the lookup column logical name on this form)`); continue; }
+      if (!qv.targetEntity || !entityByLower.has(String(qv.targetEntity).toLowerCase())) errors.push(`form ${f.entity}: quickView references unknown targetEntity '${qv.targetEntity}'`);
+      if (!qv.form) { errors.push(`form ${f.entity}: quickView is missing form (the name of a QuickView form in forms[])`); continue; }
+      const qf = (spec.forms || []).find((x) => x.name === qv.form);
+      if (!qf) errors.push(`form ${f.entity}: quickView references form '${qv.form}' not found in forms[]`);
+      else if ((qf.formType || 'Main') !== 'QuickView') errors.push(`form ${f.entity}: quickView form '${qv.form}' must have formType: "QuickView"`);
+    }
     if (f.subgrids !== undefined) {
       if (!Array.isArray(f.subgrids)) {
         errors.push(`form ${f.entity}: subgrids must be an array`);
@@ -279,13 +287,30 @@ function validateAppSpec(spec) {
   // Commands (modern command-bar buttons). A functional button needs a JS library + function;
   // the library must be a declared web resource (the on-click binds to it).
   const COMMAND_LOCATIONS = new Set(['MainTab', 'HomeTab', 'ContextualTab']);
+  const COMMAND_TYPES = new Set(['Button', 'FlyoutAnchor', 'SplitButton']);
+  // A leaf button (top-level or a flyout child) needs a JS library + function; the library must be
+  // a declared web resource (the on-click binds to it).
+  const checkCmdAction = (where, library, fn) => {
+    if (!library) errors.push(`${where}: library (web-resource name) is required`);
+    else if (!webResourceNames.has(String(library).toLowerCase())) errors.push(`${where}: library '${library}' is not a declared webResources[] name`);
+    if (!fn) errors.push(`${where}: function (JS function name) is required`);
+  };
   for (const c of spec.commands || []) {
     if (!c || !c.entity || !entityNames.has(c.entity)) { errors.push(`command references unknown entity '${c && c.entity}'`); continue; }
     if (!c.label) errors.push(`command on ${c.entity}: label is required`);
     if (c.location && !COMMAND_LOCATIONS.has(c.location)) errors.push(`command '${c.label}' on ${c.entity}: location must be MainTab|HomeTab|ContextualTab`);
-    if (!c.library) errors.push(`command '${c.label}' on ${c.entity}: library (web-resource name) is required`);
-    else if (!webResourceNames.has(String(c.library).toLowerCase())) errors.push(`command '${c.label}' on ${c.entity}: library '${c.library}' is not a declared webResources[] name`);
-    if (!c.function) errors.push(`command '${c.label}' on ${c.entity}: function (JS function name) is required`);
+    const type = c.type || 'Button';
+    if (!COMMAND_TYPES.has(type)) errors.push(`command '${c.label}' on ${c.entity}: type must be Button|FlyoutAnchor|SplitButton`);
+    if (type === 'FlyoutAnchor' || type === 'SplitButton') {
+      // A flyout/split container holds child buttons; it has no on-click of its own.
+      if (!Array.isArray(c.children) || !c.children.length) errors.push(`command '${c.label}' on ${c.entity}: a ${type} needs children[] (its menu buttons)`);
+      for (const ch of c.children || []) {
+        if (!ch || !ch.label) { errors.push(`command '${c.label}' on ${c.entity}: a child button is missing a label`); continue; }
+        checkCmdAction(`command '${c.label}' child '${ch.label}' on ${c.entity}`, ch.library, ch.function);
+      }
+    } else {
+      checkCmdAction(`command '${c.label}' on ${c.entity}`, c.library, c.function);
+    }
   }
   // Dashboards: chart/list tiles reference a declared chart/view; iframe needs a url; webresource a
   // declared web resource.
@@ -311,12 +336,15 @@ function validateAppSpec(spec) {
       }
     }
   }
+  const dashNamesSet = new Set((spec.dashboards || []).map((d) => d && d.name).filter(Boolean));
   for (const a of (spec.appShell && spec.appShell.areas) || []) {
     for (const g of a.groups || []) {
       for (const sa of g.subAreas || []) {
-        if (sa.entity && !entityNames.has(sa.entity)) {
-          errors.push(`sitemap subArea references unknown entity '${sa.entity}'`);
-        }
+        const targets = ['entity', 'dashboard', 'url'].filter((k) => sa[k]);
+        if (targets.length === 0) errors.push(`sitemap subArea "${sa.title || ''}" needs an entity, dashboard, or url`);
+        else if (targets.length > 1) errors.push(`sitemap subArea "${sa.title || ''}" sets multiple targets (${targets.join(', ')}) — pick one`);
+        if (sa.entity && !entityNames.has(sa.entity)) errors.push(`sitemap subArea references unknown entity '${sa.entity}'`);
+        if (sa.dashboard && !dashNamesSet.has(sa.dashboard)) errors.push(`sitemap subArea references unknown dashboard '${sa.dashboard}' (declare it in dashboards[])`);
       }
     }
   }

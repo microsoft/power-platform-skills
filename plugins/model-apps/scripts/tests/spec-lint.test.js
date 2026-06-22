@@ -56,12 +56,74 @@ test('errors on a sub-grid with no matching OneToMany', () => {
   assert.ok(r.errors.some((m) => /no matching OneToMany/i.test(m)));
 });
 
-test('warns that a QuickView form needs manual placement (created, not auto-wired)', () => {
+test('warns when a QuickView form is built but not placed on any host form', () => {
   const s = base();
-  s.forms = [{ entity: 'new_ticket', formType: 'QuickView' }];
+  s.forms = [{ entity: 'new_ticket', name: 'Ticket QV', formType: 'QuickView' }];
   const r = lintAppSpec(s);
   assert.ok(r.ok, JSON.stringify(r.errors));
-  assert.ok(r.warnings.some((m) => /QuickView form/i.test(m) && /placing it/i.test(m)));
+  assert.ok(r.warnings.some((m) => /QuickView form/i.test(m) && /isn't placed/i.test(m)));
+});
+
+test('a placed QuickView form draws no unplaced warning, and quick-view refs validate', () => {
+  const s = base();
+  s.forms = [
+    { entity: 'new_ticket', name: 'Ticket', formType: 'Main',
+      quickViews: [{ lookup: 'new_customerid', targetEntity: 'new_customer', form: 'Customer QV' }] },
+    { entity: 'new_customer', name: 'Customer QV', formType: 'QuickView' },
+  ];
+  const r = lintAppSpec(s);
+  assert.ok(r.ok, JSON.stringify(r.errors));
+  assert.ok(!r.warnings.some((m) => /isn't placed/i.test(m)), 'no unplaced warning once referenced');
+});
+
+test('errors when a quick-view references a non-QuickView (or unknown) form', () => {
+  const s = base();
+  s.forms = [
+    { entity: 'new_ticket', name: 'Ticket', formType: 'Main',
+      quickViews: [{ lookup: 'new_customerid', targetEntity: 'new_customer', form: 'Customer' }] },
+    { entity: 'new_customer', name: 'Customer', formType: 'Main' },
+  ];
+  const r = lintAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((m) => /must be a QuickView form/i.test(m)));
+});
+
+test('command flyouts: a FlyoutAnchor needs children; children need a library + function', () => {
+  const s = base();
+  s.webResources = [{ name: 'new_ticket.js', type: 'js', content: 'x' }];
+  s.commands = [
+    { entity: 'new_ticket', label: 'More', type: 'FlyoutAnchor', children: [{ label: 'A' }] }, // child missing lib/fn
+  ];
+  const r = lintAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((m) => /needs a library/i.test(m) || /needs a function/i.test(m)));
+});
+
+test('command flyouts: a well-formed flyout (with library-backed children) passes', () => {
+  const s = base();
+  s.webResources = [{ name: 'new_ticket.js', type: 'js', content: 'x' }];
+  s.commands = [
+    { entity: 'new_ticket', label: 'More', type: 'FlyoutAnchor', children: [
+      { label: 'A', library: 'new_ticket.js', function: 'T.a' },
+    ] },
+  ];
+  const r = lintAppSpec(s);
+  assert.ok(r.ok, JSON.stringify(r.errors));
+});
+
+test('sitemap: a DashBoard subarea must reference a declared dashboard', () => {
+  const s = base();
+  s.appShell = { areas: [{ label: 'Main', groups: [{ label: 'G', subAreas: [{ dashboard: 'Ops', title: 'Overview' }] }] }] };
+  const r = lintAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((m) => /unknown dashboard 'Ops'/i.test(m)));
+  s.dashboards = [{ name: 'Ops', tiles: [{ type: 'iframe', url: 'https://x', name: 'X' }] }];
+  const r2 = lintAppSpec(s);
+  assert.ok(r2.ok, JSON.stringify(r2.errors));
+});
+
+test('sitemap: a subarea with two targets is rejected', () => {
+  const s = base();
+  s.appShell = { areas: [{ label: 'Main', groups: [{ label: 'G', subAreas: [{ entity: 'new_customer', url: 'https://x', title: 'Both' }] }] }] };
+  const r = lintAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((m) => /sets multiple targets/i.test(m)));
 });
 
 test('errors on sub-grids declared on a non-Main form', () => {

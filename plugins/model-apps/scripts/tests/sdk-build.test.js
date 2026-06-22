@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { runSdkBuild, planFor, resolvePhases, formDef, viewDef, PHASES } = require('../lib/sdk-build.js');
+const { runSdkBuild, planFor, resolvePhases, formDef, viewDef, appDef, PHASES } = require('../lib/sdk-build.js');
 
 // Customer 1:N Tickets: a Choice column, sample data with $parent, a view, a Choice chart,
 // and a parent form with a child sub-grid.
@@ -58,6 +58,7 @@ function mockSdk(opts = {}) {
     createArtifact: (t, def) => { calls.push({ name: 'createArtifact', args: [t, def] }); return Object.assign({ id: `${t}-${++idc}` }, def); },
     pushArtifact: async (t, id) => { calls.push({ name: 'pushArtifact', args: [t, id] }); return { type: t, id, success: true }; },
     addSubGrid: (formId, o) => { calls.push({ name: 'addSubGrid', args: [formId, o] }); return {}; },
+    addQuickViewControl: (formId, o) => { calls.push({ name: 'addQuickViewControl', args: [formId, o] }); return {}; },
     addDashboardTile: (id, o) => { calls.push({ name: 'addDashboardTile', args: [id, o] }); return {}; },
     addSolutionComponent: async (o) => { calls.push({ name: 'addSolutionComponent', args: [o] }); },
     publishArtifact: async (t, id) => { calls.push({ name: 'publishArtifact', args: [t, id] }); },
@@ -388,7 +389,7 @@ test('commands: a functional button is built with a JS on-click action + static 
   const spec = makeSpec();
   spec.webResources = [{ name: 'new_ticket.js', type: 'js', content: 'var T={escalate:function(){}};' }];
   spec.commands = [
-    { entity: 'new_ticket', label: 'Escalate', location: 'MainTab', group: 'Actions', library: 'new_ticket.js', function: 'T.escalate', disabled: true },
+    { entity: 'new_ticket', label: 'Escalate', location: 'MainTab', library: 'new_ticket.js', function: 'T.escalate', disabled: true },
   ];
   const { sdk, calls } = mockSdk();
   await runSdkBuild(spec, { sdk, apply: true });
@@ -399,6 +400,7 @@ test('commands: a functional button is built with a JS on-click action + static 
   const ctrl = def.commandBars[0].groups[0].controls[0];
   assert.strictEqual(def.commandBars[0].location, 'MainTab');
   assert.strictEqual(def.commandBars[0].groups[0].title, '', 'loose-controls group (empty title) — no parentless group row');
+  assert.strictEqual(def.commandBars[0].groups[0].id, '', 'loose group carries an empty id (emitted as loose controls)');
   assert.strictEqual(ctrl.label, 'Escalate');
   assert.strictEqual(ctrl.command, ctrl.id, 'command references its own appactionid');
   assert.strictEqual(ctrl.action.type, 'javascript');
@@ -443,6 +445,79 @@ test('commands: planFor lists a command bar per entity', () => {
   ];
   const labels = planFor(spec, { phases: PHASES }).map((p) => p.label);
   assert.ok(labels.some((l) => /command bar for new_ticket \(2 button\(s\)\)/.test(l)));
+});
+
+test('quick-view placement: a QuickView form is embedded on a host form via a lookup (addQuickViewControl)', async () => {
+  const spec = makeSpec();
+  spec.forms = [
+    { entity: 'new_ticket', name: 'Ticket', formType: 'Main', layout: 'auto',
+      quickViews: [{ lookup: 'new_CustomerId', targetEntity: 'new_customer', form: 'Customer QV', label: 'Customer' }] },
+    { entity: 'new_customer', name: 'Customer QV', formType: 'QuickView', layout: 'auto' },
+  ];
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true });
+  const qv = find(calls, 'addQuickViewControl');
+  assert.strictEqual(qv.length, 1, 'one quick-view control placed');
+  const [hostId, o] = qv[0].args;
+  assert.strictEqual(o.lookupFieldName, 'new_customerid', 'lookup lower-cased');
+  assert.strictEqual(o.targetEntity, 'new_customer');
+  assert.ok(o.quickViewFormId && o.quickViewFormId !== hostId, 'resolved to the QuickView form id (not the host)');
+  assert.ok(find(calls, 'fetchArtifact').some((c) => c.args[0] === 'form'), 'host form fetched before placement');
+  assert.ok(find(calls, 'publishArtifact').some((c) => c.args[0] === 'form'), 'host form published after placement');
+  assert.ok(planFor(spec, { phases: PHASES }).some((p) => /place 1 quick-view\(s\) on new_ticket/.test(p.label)), 'plan lists the placement step');
+});
+
+test('quick-view placement halts clearly when the referenced form was not built', async () => {
+  const spec = makeSpec();
+  spec.forms = [
+    { entity: 'new_ticket', name: 'Ticket', formType: 'Main', layout: 'auto',
+      quickViews: [{ lookup: 'new_CustomerId', targetEntity: 'new_customer', form: 'Nope' }] },
+  ];
+  const { sdk } = mockSdk();
+  await assert.rejects(runSdkBuild(spec, { sdk, apply: true }), /quick-view references form 'Nope' which wasn't built/);
+});
+
+test('commands: loose buttons + a flyout with children build to the right shape (one loose group)', async () => {
+  const spec = makeSpec();
+  spec.webResources = [{ name: 'new_ticket.js', type: 'js', content: 'x' }];
+  spec.commands = [
+    { entity: 'new_ticket', label: 'Loose', library: 'new_ticket.js', function: 'T.loose' },
+    { entity: 'new_ticket', label: 'More', type: 'FlyoutAnchor', children: [
+      { label: 'Child A', library: 'new_ticket.js', function: 'T.a' },
+      { label: 'Child B', library: 'new_ticket.js', function: 'T.b' },
+    ] },
+  ];
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true });
+  const def = find(calls, 'createArtifact').find((c) => c.args[0] === 'command').args[1];
+  const groups = def.commandBars[0].groups;
+  assert.strictEqual(groups.length, 1, 'one loose group per location (no parentless titled groups)');
+  assert.strictEqual(groups[0].title, '', 'loose group: empty title');
+  assert.strictEqual(groups[0].id, '', 'loose group: empty id');
+  const flyout = groups[0].controls.find((c) => c.type === 'FlyoutAnchor');
+  assert.ok(flyout, 'flyout control built');
+  assert.strictEqual(flyout.children.length, 2, 'flyout carries its child buttons (adapter synthesizes the intervening group)');
+  assert.ok(!flyout.action, 'flyout container has no on-click of its own');
+  assert.strictEqual(flyout.children[0].action.functionName, 'T.a', 'child button carries the JS on-click');
+  assert.strictEqual(flyout.children[0].command, flyout.children[0].id, 'child references its own appactionid');
+});
+
+test('app-shell: a DashBoard subarea references a built dashboard (the SDK auto-pins it as a component)', () => {
+  const spec = makeSpec();
+  spec.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Tickets', name: 'Recent' }] }];
+  spec.appShell.areas[0].groups[0].subAreas.push({ dashboard: 'Ops', title: 'Overview' });
+  const def = appDef(spec, { forms: {}, views: {}, charts: {}, dashboards: { Ops: 'dash-123' } });
+  const subs = def.siteMap.areas[0].groups[0].subAreas;
+  const dash = subs.find((s) => s.type === 'DashBoard');
+  assert.ok(dash, 'DashBoard subarea emitted');
+  assert.strictEqual(dash.dashboardId, 'dash-123', 'resolved to the built dashboard id');
+  assert.strictEqual(subs.find((s) => s.type === 'Entity').entity, 'new_customer', 'entity subarea still works alongside');
+});
+
+test('app-shell: a DashBoard subarea for an unbuilt dashboard throws a clear error', () => {
+  const spec = makeSpec();
+  spec.appShell.areas[0].groups[0].subAreas.push({ dashboard: 'Missing', title: 'X' });
+  assert.throws(() => appDef(spec, { forms: {}, views: {}, charts: {}, dashboards: {} }), /references dashboard 'Missing' which wasn't built/);
 });
 
 test('alt-key creation still halts on a genuine (non-duplicate) error', async () => {

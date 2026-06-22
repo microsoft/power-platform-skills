@@ -42622,7 +42622,7 @@ var require_FormAdapter = __commonJS({
   "../power-platform-ux/packages/cds-maker-sdk/lib/adapters/FormAdapter.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
-    exports2.addCustomControlToForm = exports2.addFormEventHandler = exports2.addFieldToForm = exports2.classIdForAttributeType = exports2.addNotesControlToForm = exports2.NOTES_CLASS_ID = exports2.addSubGridToForm = exports2.SUBGRID_CLASS_ID = exports2.formRegistration = exports2.FormAdapter = void 0;
+    exports2.addCustomControlToForm = exports2.addFormEventHandler = exports2.addQuickViewControlToForm = exports2.QUICK_VIEW_CLASS_ID = exports2.addFieldToForm = exports2.classIdForAttributeType = exports2.addNotesControlToForm = exports2.NOTES_CLASS_ID = exports2.addSubGridToForm = exports2.SUBGRID_CLASS_ID = exports2.formRegistration = exports2.FormAdapter = void 0;
     var CRMTypes_1 = (init_CRMTypes(), __toCommonJS(CRMTypes_exports));
     var ScriptUtilities_1 = (init_ScriptUtilities(), __toCommonJS(ScriptUtilities_exports));
     var FormDesignerConstants_1 = (init_FormDesignerConstants(), __toCommonJS(FormDesignerConstants_exports));
@@ -43245,6 +43245,74 @@ var require_FormAdapter = __commonJS({
       return json;
     }
     exports2.addFieldToForm = addFieldToForm;
+    exports2.QUICK_VIEW_CLASS_ID = ControlClassIds_1.ControlClassId.QuickViewControl;
+    function quickFormsParamValue(targetEntity, quickViewFormId) {
+      const id = quickViewFormId.replace(/[{}]/g, "");
+      return `<QuickFormIds><QuickFormId entityname="${targetEntity}">${id}</QuickFormId></QuickFormIds>`;
+    }
+    function escText(value) {
+      return String(value !== null && value !== void 0 ? value : "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+    function quickViewRowXml(cellId, control, label, lookupFieldName, rowspan) {
+      const params = Object.keys(control.parameters).map((key) => `<${key}>${escText(control.parameters[key])}</${key}>`).join("");
+      return `<row><cell id="{${cellId}}" showlabel="true" visible="true" colspan="1" rowspan="${rowspan}">` + labelsXml(label) + `<control id="${esc(control.id)}" classid="{${control.classId}}" datafieldname="${esc(lookupFieldName)}" disabled="false" isrequired="false"><parameters>${params}</parameters></control></cell></row>`;
+    }
+    function addQuickViewControlToForm(json, options) {
+      var _a, _b;
+      (0, domShim_1.installDomShim)();
+      const controlId = options.controlId || `${options.lookupFieldName}_quickform`;
+      const label = (_a = options.label) !== null && _a !== void 0 ? _a : options.lookupFieldName;
+      const rowspan = (_b = options.rowspan) !== null && _b !== void 0 ? _b : 1;
+      const parameters = {
+        QuickForms: quickFormsParamValue(options.targetEntity, options.quickViewFormId),
+        ControlMode: "Edit"
+      };
+      if (options.displayAsCard) {
+        parameters.DisplayAsCustomer360Tile = "true";
+      }
+      const control = {
+        id: controlId,
+        classId: String(exports2.QUICK_VIEW_CLASS_ID),
+        fieldName: options.lookupFieldName,
+        type: "QuickForm",
+        isRequired: false,
+        isReadOnly: false,
+        label,
+        showLabel: true,
+        parameters
+      };
+      const cellId = CRMTypes_1.Guid.NewGuid();
+      const cell = { id: cellId, visible: true, colspan: 1, rowspan, control };
+      let target;
+      for (const tab of json.tabs) {
+        for (const section of tab.sections) {
+          if (!options.sectionName || section.name === options.sectionName) {
+            target = section;
+            break;
+          }
+        }
+        if (target) {
+          break;
+        }
+      }
+      if (!target) {
+        throw new Error(`addQuickViewControl: no section found${options.sectionName ? ` named '${options.sectionName}'` : ""}`);
+      }
+      target.rows.push({ cells: [cell] });
+      const meta = json[form_1.FORM_META_KEY];
+      if (meta === null || meta === void 0 ? void 0 : meta.formxml) {
+        const doc = new DOMParser().parseFromString(meta.formxml, "text/xml");
+        const rows = findSectionRows(doc, target.id);
+        if (rows) {
+          const rowDoc = new DOMParser().parseFromString(quickViewRowXml(cellId, control, label, options.lookupFieldName, rowspan), "text/xml");
+          const imported = doc.importNode ? doc.importNode(rowDoc.documentElement, true) : rowDoc.documentElement;
+          rows.appendChild(imported);
+          meta.formxml = new XMLSerializer().serializeToString(doc);
+        }
+      }
+      return json;
+    }
+    exports2.addQuickViewControlToForm = addQuickViewControlToForm;
     function directChild(parent, tagName) {
       const nodes = parent.childNodes;
       for (let i = 0; i < nodes.length; i += 1) {
@@ -80543,6 +80611,9 @@ var require_AppApi = __commonJS({
             savedqueryvisualizationid: chartId
           });
         }
+        for (const dashboardId of dedupe(body.components.dashboards)) {
+          components.push({ "@odata.type": "Microsoft.Dynamics.CRM.systemform", formid: dashboardId });
+        }
         const seenForms = new Set(body.components.forms);
         const seenViews = new Set(body.components.views);
         const seenCharts = new Set(body.components.charts);
@@ -80666,17 +80737,20 @@ var require_AppAdapter = __commonJS({
         return json;
       }
       toApiPayload(json) {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o;
         (0, domShim_1.installDomShim)();
         const meta = json[META_KEY];
         const siteMapXml = this.fromJson(json);
         const sitemapxml = (0, serializeSiteMap_1.default)(siteMapXml, NOOP_SCENARIO, new xmldom_1.XMLSerializer());
         const entities = [];
+        const siteMapDashboards = [];
         for (const area of (_b = (_a = json.siteMap) === null || _a === void 0 ? void 0 : _a.areas) !== null && _b !== void 0 ? _b : []) {
           for (const group of (_c = area.groups) !== null && _c !== void 0 ? _c : []) {
             for (const subArea of (_d = group.subAreas) !== null && _d !== void 0 ? _d : []) {
               if (subArea.type === "Entity" && subArea.entity) {
                 entities.push(subArea.entity);
+              } else if (subArea.type === "DashBoard" && subArea.dashboardId) {
+                siteMapDashboards.push(subArea.dashboardId);
               }
             }
           }
@@ -80693,7 +80767,8 @@ var require_AppAdapter = __commonJS({
           components: {
             forms: (_g = (_f = json.components) === null || _f === void 0 ? void 0 : _f.forms) !== null && _g !== void 0 ? _g : [],
             views: (_j = (_h = json.components) === null || _h === void 0 ? void 0 : _h.views) !== null && _j !== void 0 ? _j : [],
-            charts: (_l = (_k = json.components) === null || _k === void 0 ? void 0 : _k.charts) !== null && _l !== void 0 ? _l : []
+            charts: (_l = (_k = json.components) === null || _k === void 0 ? void 0 : _k.charts) !== null && _l !== void 0 ? _l : [],
+            dashboards: [...(_o = (_m = json.components) === null || _m === void 0 ? void 0 : _m.dashboards) !== null && _o !== void 0 ? _o : [], ...siteMapDashboards]
           }
         };
       }
@@ -81106,7 +81181,8 @@ var require_CommandAdapter = __commonJS({
         const meta = {
           entityMetadataId: (_b = internal.entityMetadataId) !== null && _b !== void 0 ? _b : "",
           bars: {},
-          commands: {}
+          commands: {},
+          flyoutGroups: {}
         };
         const idOf = (row) => {
           var _a2;
@@ -81149,7 +81225,7 @@ var require_CommandAdapter = __commonJS({
         for (const [location2, topRows] of barBuckets) {
           commandBars.push({
             location: location2,
-            groups: buildGroups(topRows, idOf, childrenOf, barToLocation(location2))
+            groups: buildGroups(topRows, idOf, childrenOf, barToLocation(location2), meta)
           });
         }
         const json = {
@@ -81225,7 +81301,7 @@ var require_CommandAdapter = __commonJS({
       }
     };
     exports2.CommandAdapter = CommandAdapter;
-    function buildGroups(topRows, idOf, childrenOf, barLoc) {
+    function buildGroups(topRows, idOf, childrenOf, barLoc, meta) {
       var _a, _b;
       const groups = [];
       const looseControls = [];
@@ -81235,10 +81311,10 @@ var require_CommandAdapter = __commonJS({
           groups.push({
             id,
             title: (_a = row.grouptitle) !== null && _a !== void 0 ? _a : "",
-            controls: sortByOrder((_b = childrenOf.get(id)) !== null && _b !== void 0 ? _b : []).map((child) => buildControl(child, idOf, childrenOf, barLoc))
+            controls: sortByOrder((_b = childrenOf.get(id)) !== null && _b !== void 0 ? _b : []).map((child) => buildControl(child, idOf, childrenOf, barLoc, meta))
           });
         } else {
-          looseControls.push(buildControl(row, idOf, childrenOf, barLoc));
+          looseControls.push(buildControl(row, idOf, childrenOf, barLoc, meta));
         }
       }
       if (looseControls.length > 0) {
@@ -81246,8 +81322,8 @@ var require_CommandAdapter = __commonJS({
       }
       return groups;
     }
-    function buildControl(row, idOf, childrenOf, barLoc) {
-      var _a, _b;
+    function buildControl(row, idOf, childrenOf, barLoc, meta) {
+      var _a, _b, _c, _d;
       const id = idOf(row);
       const control = {
         id,
@@ -81274,7 +81350,18 @@ var require_CommandAdapter = __commonJS({
       }
       const children = childrenOf.get(id);
       if (children && children.length > 0) {
-        control.children = sortByOrder(children).map((child) => buildControl(child, idOf, childrenOf, barLoc));
+        const flat = [];
+        for (const child of sortByOrder(children)) {
+          if (child.type === AppActions_types_1.ButtonType.Group) {
+            meta.flyoutGroups[id] = (_c = child.appactionid) !== null && _c !== void 0 ? _c : idOf(child);
+            for (const grandchild of sortByOrder((_d = childrenOf.get(idOf(child))) !== null && _d !== void 0 ? _d : [])) {
+              flat.push(buildControl(grandchild, idOf, childrenOf, barLoc, meta));
+            }
+          } else {
+            flat.push(buildControl(child, idOf, childrenOf, barLoc, meta));
+          }
+        }
+        control.children = flat;
       }
       return control;
     }
@@ -81366,10 +81453,16 @@ var require_CommandAdapter = __commonJS({
       return group.title.length > 0;
     }
     function collectControlRows(control, numericLocation, parentId, json, meta, out) {
-      var _a;
+      var _a, _b;
       out.push(buildControlRow(control, numericLocation, parentId, json, meta));
-      for (const child of (_a = control.children) !== null && _a !== void 0 ? _a : []) {
-        collectControlRows(child, numericLocation, control.id, json, meta, out);
+      const children = (_a = control.children) !== null && _a !== void 0 ? _a : [];
+      if (children.length === 0) {
+        return;
+      }
+      const groupId = (_b = meta === null || meta === void 0 ? void 0 : meta.flyoutGroups[control.id]) !== null && _b !== void 0 ? _b : (0, idGenerator_1.newId)();
+      out.push(buildFlyoutGroupRow(groupId, numericLocation, control.id, json, meta));
+      for (const child of children) {
+        collectControlRows(child, numericLocation, groupId, json, meta, out);
       }
     }
     function buildControlRow(control, numericLocation, parentId, json, meta) {
@@ -81445,6 +81538,15 @@ var require_CommandAdapter = __commonJS({
       const base = baseRow(group.id, numericLocation, parentId, json, meta);
       base.type = AppActions_types_1.ButtonType.Group;
       base.grouptitle = group.title;
+      return base;
+    }
+    function buildFlyoutGroupRow(groupId, numericLocation, flyoutId, json, meta) {
+      const base = baseRow(groupId, numericLocation, flyoutId, json, meta);
+      base.type = AppActions_types_1.ButtonType.Group;
+      if (base.grouptitle === void 0) {
+        base.grouptitle = "";
+      }
+      base.isgrouptitlehidden = true;
       return base;
     }
     function baseRow(id, numericLocation, parentId, json, meta) {
@@ -82336,6 +82438,23 @@ var require_MakerSdk = __commonJS({
         return this.getArtifact("form", formId);
       }
       /**
+       * Add a Quick View control to a form — embeds a related record's quick-view form
+       * (a read-only snapshot of fields from the looked-up record), bound to a lookup
+       * column on this form. The quick-view (type 6) form must already exist; pass its
+       * `formid` as `quickViewFormId` (e.g. push a `createArtifact('form', …)` of
+       * `formType: 'QuickView'` first, then read its id). Classic control — it renders
+       * from formxml, so unlike `addCustomControl` it persists via a plain
+       * `pushArtifact` (no solution import). The form must have been fetched/created
+       * first; adding to an existing form needs `publishArtifact` after push, like
+       * sub-grids. See {@link addQuickViewControlToForm}.
+       */
+      addQuickViewControl(formId, options) {
+        const json = this.readRaw("form", formId);
+        (0, FormAdapter_12.addQuickViewControlToForm)(json, options);
+        this.workspace.writeArtifact("form", formId, json);
+        return this.getArtifact("form", formId);
+      }
+      /**
        * Add a bound field to a form, auto-labeled from the column's display name and
        * rendered with the right control for its type (both read from entity metadata,
        * fetched once if not cached). This avoids the raw-logical-name label that an
@@ -82671,8 +82790,8 @@ var __exportStar = exports && exports.__exportStar || function(m, exports2) {
   for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports2, p)) __createBinding(exports2, m, p);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.upsertRecord = exports.updateRecord = exports.createRecordsBulk = exports.createRecord = exports.resolveEntitySetName = exports.deleteTable = exports.deleteGlobalOptionSet = exports.createGlobalOptionSet = exports.deleteRelationship = exports.createRelationship = exports.deleteAlternateKey = exports.createAlternateKey = exports.updateTable = exports.deleteColumn = exports.updateColumn = exports.insertStatusValue = exports.createCustomerColumn = exports.createColumn = exports.createTable = exports.addDashboardTileToForm = exports.dashboardRegistration = exports.DashboardAdapter = exports.chartRegistration = exports.ChartAdapter = exports.commandRegistration = exports.CommandAdapter = exports.appRegistration = exports.AppAdapter = exports.businessRuleRegistration = exports.BusinessRuleAdapter = exports.viewRegistration = exports.ViewAdapter = exports.NOTES_CLASS_ID = exports.SUBGRID_CLASS_ID = exports.classIdForAttributeType = exports.addFieldToForm = exports.addNotesControlToForm = exports.addCustomControlToForm = exports.addFormEventHandler = exports.addSubGridToForm = exports.formRegistration = exports.FormAdapter = exports.ArtifactAdapter = exports.findColumns = exports.findTables = exports.fetchEntityMetadataFromApi = exports.findElements = exports.JsonPointer = exports.createMakerSdk = exports.MakerSdk = void 0;
-exports.SolutionComponentType = exports.fetchSolutionComponents = exports.deleteSolution = exports.importSolution = exports.exportSolution = exports.removeSolutionComponent = exports.addSolutionComponent = exports.setSolutionVersion = exports.createSolution = exports.createPublisher = exports.deleteWebResource = exports.getWebResource = exports.updateWebResource = exports.createWebResource = exports.disassociateRecords = exports.associateRecords = exports.queryRecords = exports.getRecord = exports.deleteRecord = void 0;
+exports.createRecordsBulk = exports.createRecord = exports.resolveEntitySetName = exports.deleteTable = exports.deleteGlobalOptionSet = exports.createGlobalOptionSet = exports.deleteRelationship = exports.createRelationship = exports.deleteAlternateKey = exports.createAlternateKey = exports.updateTable = exports.deleteColumn = exports.updateColumn = exports.insertStatusValue = exports.createCustomerColumn = exports.createColumn = exports.createTable = exports.addDashboardTileToForm = exports.dashboardRegistration = exports.DashboardAdapter = exports.chartRegistration = exports.ChartAdapter = exports.commandRegistration = exports.CommandAdapter = exports.appRegistration = exports.AppAdapter = exports.businessRuleRegistration = exports.BusinessRuleAdapter = exports.viewRegistration = exports.ViewAdapter = exports.QUICK_VIEW_CLASS_ID = exports.NOTES_CLASS_ID = exports.SUBGRID_CLASS_ID = exports.classIdForAttributeType = exports.addQuickViewControlToForm = exports.addFieldToForm = exports.addNotesControlToForm = exports.addCustomControlToForm = exports.addFormEventHandler = exports.addSubGridToForm = exports.formRegistration = exports.FormAdapter = exports.ArtifactAdapter = exports.findColumns = exports.findTables = exports.fetchEntityMetadataFromApi = exports.findElements = exports.JsonPointer = exports.createMakerSdk = exports.MakerSdk = void 0;
+exports.SolutionComponentType = exports.fetchSolutionComponents = exports.deleteSolution = exports.importSolution = exports.exportSolution = exports.removeSolutionComponent = exports.addSolutionComponent = exports.setSolutionVersion = exports.createSolution = exports.createPublisher = exports.deleteWebResource = exports.getWebResource = exports.updateWebResource = exports.createWebResource = exports.disassociateRecords = exports.associateRecords = exports.queryRecords = exports.getRecord = exports.deleteRecord = exports.upsertRecord = exports.updateRecord = void 0;
 var MakerSdk_1 = require_MakerSdk();
 Object.defineProperty(exports, "MakerSdk", { enumerable: true, get: function() {
   return MakerSdk_1.MakerSdk;
@@ -82739,6 +82858,9 @@ Object.defineProperty(exports, "addNotesControlToForm", { enumerable: true, get:
 Object.defineProperty(exports, "addFieldToForm", { enumerable: true, get: function() {
   return FormAdapter_1.addFieldToForm;
 } });
+Object.defineProperty(exports, "addQuickViewControlToForm", { enumerable: true, get: function() {
+  return FormAdapter_1.addQuickViewControlToForm;
+} });
 Object.defineProperty(exports, "classIdForAttributeType", { enumerable: true, get: function() {
   return FormAdapter_1.classIdForAttributeType;
 } });
@@ -82747,6 +82869,9 @@ Object.defineProperty(exports, "SUBGRID_CLASS_ID", { enumerable: true, get: func
 } });
 Object.defineProperty(exports, "NOTES_CLASS_ID", { enumerable: true, get: function() {
   return FormAdapter_1.NOTES_CLASS_ID;
+} });
+Object.defineProperty(exports, "QUICK_VIEW_CLASS_ID", { enumerable: true, get: function() {
+  return FormAdapter_1.QUICK_VIEW_CLASS_ID;
 } });
 var ViewAdapter_1 = require_ViewAdapter();
 Object.defineProperty(exports, "ViewAdapter", { enumerable: true, get: function() {

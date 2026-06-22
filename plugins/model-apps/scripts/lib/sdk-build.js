@@ -93,30 +93,45 @@ function dashboardTileOpts(spec, tile, result) {
 // Command-bar locations (CommandBarJson.location). MainTab = the entity's form/grid command bar.
 const COMMAND_LOCATIONS = new Set(['MainTab', 'HomeTab', 'ContextualTab']);
 
-// Build a command (modern command-bar) artifact for one entity's buttons. Buttons are emitted as
-// LOOSE controls in a single empty-title group per location (a real titled group is a separate
-// appaction that needs a parent command-bar row the adapter doesn't synthesize for from-scratch
-// commands — Dataverse 400s "Group button must have parentappactionid"). Each control gets a GUID
-// id with `command` set to the same id (the appactionid). A button with a `library` + `function`
-// gets a functional JS on-click action (resolved to the created web-resource id); `hidden`/`disabled`
-// set static visibility. Throws if a referenced web resource wasn't created.
+// Build one command control: a button, or a flyout/split-button carrying nested `children`. Each
+// control gets a GUID `id` with `command` set to the same id (the appactionid). A button with a
+// `library` + `function` gets a functional JS on-click action bound to the created web resource;
+// `hidden`/`disabled` set static visibility. A flyout/split container (type FlyoutAnchor|SplitButton)
+// carries `children` instead of an action — the SDK's CommandAdapter synthesizes the required
+// intervening Group between a flyout and its buttons (Dataverse forbids a button parented directly
+// to a flyout). Throws if a referenced web resource wasn't created.
+function buildCommandControl(c, webResources) {
+  const id = randomUUID();
+  const type = c.type || 'Button';
+  const control = { id, type, label: c.label, command: id };
+  if (c.icon) control.icon = c.icon;
+  if (c.library && c.function) {
+    const wrId = webResources[c.library];
+    if (!wrId) throw new Error(`command "${c.label}" references web resource '${c.library}' which wasn't created — declare it in webResources[] and don't skip the web-resources phase`);
+    control.action = { type: 'javascript', webResourceId: wrId, functionName: c.function };
+    if (c.parameters !== undefined) control.action.parameters = c.parameters;
+  }
+  if (c.hidden) control.hidden = true;
+  if (c.disabled) control.disabled = true;
+  if ((type === 'FlyoutAnchor' || type === 'SplitButton') && Array.isArray(c.children)) {
+    control.children = c.children.map((ch) => buildCommandControl(ch, webResources));
+  }
+  return control;
+}
+
+// Build a command (modern command-bar) artifact for one entity's buttons. Controls are emitted as
+// LOOSE controls in a single empty-title group per location (id '' — not a real appaction, so the
+// adapter emits its controls directly). A control may be a flyout/split button carrying `children`:
+// that works because the adapter parents the synthesized intervening group to the flyout control.
+// TITLED groups are intentionally NOT emitted — a from-scratch titled group is a Group appaction
+// that needs a parent command-bar row the adapter doesn't synthesize (Dataverse 400 "Group button
+// must have parentappactionid", confirmed live on a fresh entity), so grouping stays deferred.
 function commandDef(entityLogical, cmds, webResources) {
   const byLocation = new Map(); // location -> controls[]
   for (const c of cmds) {
     const location = c.location || 'MainTab';
-    const id = randomUUID();
-    const control = { id, type: 'Button', label: c.label, command: id };
-    if (c.icon) control.icon = c.icon;
-    if (c.library && c.function) {
-      const wrId = webResources[c.library];
-      if (!wrId) throw new Error(`command "${c.label}" references web resource '${c.library}' which wasn't created — declare it in webResources[] and don't skip the web-resources phase`);
-      control.action = { type: 'javascript', webResourceId: wrId, functionName: c.function };
-      if (c.parameters !== undefined) control.action.parameters = c.parameters;
-    }
-    if (c.hidden) control.hidden = true;
-    if (c.disabled) control.disabled = true;
     if (!byLocation.has(location)) byLocation.set(location, []);
-    byLocation.get(location).push(control);
+    byLocation.get(location).push(buildCommandControl(c, webResources));
   }
   const commandBars = [...byLocation.entries()].map(([location, controls]) => ({
     location,
@@ -261,6 +276,7 @@ function planFor(spec, opts) {
     const subs = (f.subgrids || []).map((s) => s.childEntity).join(', ');
     items.push({ phase: 'forms', label: `${ft === 'Main' ? 'form' : `${ft} form`} for ${f.entity}${subs ? ` (sub-grids: ${subs})` : ''}` });
     if ((f.events || []).length) items.push({ phase: 'forms', label: `wire ${f.events.length} event handler(s) on ${f.entity}` });
+    if ((f.quickViews || []).length) items.push({ phase: 'forms', label: `place ${f.quickViews.length} quick-view(s) on ${f.entity}` });
   }
   if (has('commands')) for (const [entity, cmds] of Object.entries(commandsByEntity(spec))) items.push({ phase: 'commands', label: `command bar for ${entity} (${cmds.length} button(s))` });
   if (has('dashboards')) for (const d of spec.dashboards || []) items.push({ phase: 'dashboards', label: `dashboard "${d.name}" (${(d.tiles || []).length} tile(s))` });
@@ -374,9 +390,21 @@ function formDef(spec, f) {
 function appDef(spec, result) {
   const sol = spec.solution;
   const uniqueName = `${sol.publisherPrefix}_${spec.app.name}`.replace(/[^a-z0-9_]/gi, '').toLowerCase();
+  // A subarea is an Entity (table) by default, a DashBoard (a built dashboard, by name — the SDK
+  // auto-pins its dashboardId as an app component so the nav actually includes it), or a URL.
+  const subAreaJson = (s, id) => {
+    const base = { id, title: s.title };
+    if (s.dashboard) {
+      const dashboardId = (result.dashboards || {})[s.dashboard];
+      if (!dashboardId) throw new Error(`sitemap subarea "${s.title}" references dashboard '${s.dashboard}' which wasn't built — declare it in dashboards[] and don't skip the dashboards phase`);
+      return { ...base, type: 'DashBoard', dashboardId };
+    }
+    if (s.url) return { ...base, type: 'URL', url: s.url };
+    return { ...base, type: 'Entity', entity: s.entity && s.entity.toLowerCase() };
+  };
   const areas = (spec.appShell.areas || []).map((a, ai) => ({ id: `area_${ai}`, title: a.label,
     groups: (a.groups || []).map((g, gi) => ({ id: `group_${ai}_${gi}`, title: g.label,
-      subAreas: (g.subAreas || []).map((s, si) => ({ id: `sub_${ai}_${gi}_${si}`, type: 'Entity', entity: s.entity && s.entity.toLowerCase(), title: s.title })) })) }));
+      subAreas: (g.subAreas || []).map((s, si) => subAreaJson(s, `sub_${ai}_${gi}_${si}`)) })) }));
   return { name: spec.app.name, uniqueName, description: spec.app.description || '', siteMap: { areas },
     components: { forms: Object.values(result.forms || {}).filter(Boolean), views: Object.values(result.views || {}).filter(Boolean), charts: Object.values(result.charts || {}).filter(Boolean) } };
 }
@@ -650,6 +678,28 @@ async function runSdkBuild(spec, opts = {}) {
     // Key the entity's MAIN form by entity (the app wires one form per entity below); quick-create
     // / quick-view forms are still built + added to the solution, just not the entity's app form.
     defs.forEach((d, i) => { if ((d.f.formType || 'Main') === 'Main') result.created.forms[d.f.entity.toLowerCase()] = ids[i]; });
+    // Quick-view placement: embed a built QuickView form onto a host form via a lookup column
+    // (addQuickViewControl), referencing the quick-view form by name. Runs after ALL forms are
+    // built so a host can reference a QuickView form created concurrently. The control renders
+    // from plain formxml (no <controlDescriptions>), so it persists via push + publish.
+    const formIdByName = {};
+    defs.forEach((d, i) => { if (d.f.name) formIdByName[d.f.name] = ids[i]; });
+    for (let i = 0; i < defs.length; i++) {
+      const f = defs[i].f;
+      const qvs = (f.quickViews || []).filter((q) => q && q.lookup && q.targetEntity && q.form);
+      if (!qvs.length) continue;
+      const hostId = ids[i];
+      await run('forms', `place ${qvs.length} quick-view(s) on ${f.entity}`, async () => {
+        await provision.fetchArtifact('form', hostId);
+        for (const qv of qvs) {
+          const qvFormId = formIdByName[qv.form];
+          if (!qvFormId) throw new Error(`form "${f.name || f.entity}" quick-view references form '${qv.form}' which wasn't built — declare it in forms[] with formType: "QuickView" and a matching name`);
+          provision.addQuickViewControl(hostId, { lookupFieldName: String(qv.lookup).toLowerCase(), targetEntity: String(qv.targetEntity).toLowerCase(), quickViewFormId: qvFormId, label: qv.label, sectionName: qv.section, displayAsCard: qv.displayAsCard });
+        }
+        await provision.pushArtifact('form', hostId);
+        await provision.publishArtifact('form', hostId);
+      });
+    }
   }
 
   // 6b. Commands (modern command-bar buttons). One command artifact per entity; a button with a
