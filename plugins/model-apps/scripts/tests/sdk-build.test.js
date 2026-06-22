@@ -58,6 +58,7 @@ function mockSdk(opts = {}) {
     createArtifact: (t, def) => { calls.push({ name: 'createArtifact', args: [t, def] }); return Object.assign({ id: `${t}-${++idc}` }, def); },
     pushArtifact: async (t, id) => { calls.push({ name: 'pushArtifact', args: [t, id] }); return { type: t, id, success: true }; },
     addSubGrid: (formId, o) => { calls.push({ name: 'addSubGrid', args: [formId, o] }); return {}; },
+    addDashboardTile: (id, o) => { calls.push({ name: 'addDashboardTile', args: [id, o] }); return {}; },
     addSolutionComponent: async (o) => { calls.push({ name: 'addSolutionComponent', args: [o] }); },
     publishArtifact: async (t, id) => { calls.push({ name: 'publishArtifact', args: [t, id] }); },
   };
@@ -407,6 +408,32 @@ test('commands: a functional button is built with a JS on-click action + static 
   assert.ok(find(calls, 'pushArtifact').some((c) => c.args[0] === 'command'), 'command pushed');
 });
 
+test('dashboards: chart + list tiles resolve the created view/visualization ids', async () => {
+  const spec = makeSpec(); // has view "Active Tickets" + chart "By Priority" on new_ticket
+  spec.dashboards = [
+    { name: 'Ops', tiles: [
+      { type: 'chart', chart: 'By Priority', view: 'Active Tickets' },
+      { type: 'list', view: 'Active Tickets', name: 'Recent' },
+    ] },
+  ];
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true });
+  const dash = find(calls, 'createArtifact').find((c) => c.args[0] === 'dashboard');
+  assert.ok(dash && dash.args[1].name === 'Ops', 'dashboard artifact created');
+  const tiles = find(calls, 'addDashboardTile').map((c) => c.args[1]);
+  assert.strictEqual(tiles.length, 2);
+  const chart = tiles.find((t) => t.type === 'chart');
+  assert.strictEqual(chart.targetEntity, 'new_ticket', 'entity derived from the view');
+  assert.ok(chart.viewId, 'view id resolved');
+  assert.ok(chart.visualizationId, 'chart visualization id resolved');
+  const list = tiles.find((t) => t.type === 'list');
+  assert.strictEqual(list.name, 'Recent');
+  assert.ok(list.viewId);
+  // added to the solution as a systemform (60) and pushed
+  assert.ok(find(calls, 'pushArtifact').some((c) => c.args[0] === 'dashboard'));
+  assert.ok(find(calls, 'addSolutionComponent').some((c) => c.args[0].componentType === 60));
+});
+
 test('commands: planFor lists a command bar per entity', () => {
   const spec = makeSpec();
   spec.webResources = [{ name: 'new_ticket.js', type: 'js', content: 'x' }];
@@ -485,8 +512,8 @@ test('publish (opt-in) publishes one artifact per entity + the app', async () =>
 
 test('resolvePhases honors only/skip/from/to', () => {
   assert.deepStrictEqual(resolvePhases({ only: ['views', 'charts'] }), ['views', 'charts']);
-  assert.deepStrictEqual(resolvePhases({ skip: ['data-model', 'sample-data', 'publish'] }), ['solution', 'web-resources', 'views', 'charts', 'forms', 'commands', 'app-shell']);
-  assert.deepStrictEqual(resolvePhases({ from: 'views' }), ['views', 'charts', 'forms', 'commands', 'app-shell', 'publish']);
+  assert.deepStrictEqual(resolvePhases({ skip: ['data-model', 'sample-data', 'publish'] }), ['solution', 'web-resources', 'views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell']);
+  assert.deepStrictEqual(resolvePhases({ from: 'views' }), ['views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell', 'publish']);
   assert.deepStrictEqual(resolvePhases({ to: 'data-model' }), ['solution', 'data-model']);
 });
 

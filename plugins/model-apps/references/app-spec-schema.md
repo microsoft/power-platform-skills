@@ -26,9 +26,10 @@ to read the SDK, the lint, or the engine to author a spec. Common asks → how t
 | A child grid on a parent form | `subgrids[]` (1:N or N:N — auto-resolved) | forms |
 | A simplified create dialog / read-only related card | `forms[].formType` `QuickCreate` / `QuickView` | forms |
 | A command-bar button that runs JS | `commands[]` (`library` + `function`; optional `hidden`/`disabled`) | commands |
+| A dashboard of chart/list tiles | `dashboards[]` (`tiles[]` reference declared `views`/`charts`) | dashboards |
 
 The builder is **idempotent** and runs everything in one pass (no post-build scripts): tables,
-columns, relationships, web resources, views, charts, forms (+ sub-grids + JS handlers), commands, the app,
+columns, relationships, web resources, views, charts, forms (+ sub-grids + JS handlers), commands, dashboards, the app,
 sample data (incl. multi-parent junction links + status reasons), and publish.
 
 ## Top-level shape
@@ -195,6 +196,20 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 - Buttons are emitted as loose controls (no custom grouping — a titled group needs a parent command-bar
   row the SDK doesn't synthesize from scratch). The command lands in the Default solution but is
   entity-scoped, so it shows on the entity's command bar in the app.
+
+## dashboards[] (optional — chart/list/iframe/web-resource tiles)
+```jsonc
+{ "name": "Operations", "tiles": [
+  { "type": "chart", "chart": "Orders by Status", "view": "Active Orders" },  // chart needs both
+  { "type": "list",  "view": "Active Orders", "name": "Recent" },             // list needs a view
+  { "type": "iframe", "url": "https://…", "name": "Map" },
+  { "type": "webresource", "webResource": "new_widget.html", "name": "Widget" } ] }
+```
+- A **chart** tile needs both a declared `chart` (the visualization) **and** a declared `view` (its
+  data); a **list** tile needs a declared `view`. The target entity is derived from the view. `name`
+  defaults to the chart/view name; `colspan`/`rowspan` optional (default 1×4).
+- Built after views/charts (it references their ids). The dashboard is **global** (not entity-scoped)
+  and added to the solution; **placing it in the app sitemap is manual for now**.
 
 ## appShell
 ```jsonc

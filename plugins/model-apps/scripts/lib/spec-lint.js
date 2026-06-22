@@ -138,6 +138,22 @@ function lintAppSpec(spec) {
     if (!c.function) E(`Command '${c.label}' on ${c.entity} needs a function name`);
   }
 
+  // Dashboards — chart/list tiles must reference a declared chart/view; webresource a web resource.
+  const DASH_TILE_TYPES = new Set(['chart', 'list', 'iframe', 'webresource']);
+  const viewNames = new Set((spec.views || []).map((v) => lc(v.name)));
+  const chartNames = new Set((spec.charts || []).map((c) => lc(c.name)));
+  for (const d of spec.dashboards || []) {
+    if (!d.name) { E('A dashboard is missing a name'); continue; }
+    if (!(d.tiles && d.tiles.length)) W(`Dashboard '${d.name}' has no tiles`);
+    for (const t of d.tiles || []) {
+      if (!DASH_TILE_TYPES.has(t.type)) { E(`Dashboard '${d.name}' has a tile with invalid type '${t.type}' (chart/list/iframe/webresource)`); continue; }
+      if (t.type === 'chart' && (!t.chart || !chartNames.has(lc(t.chart)))) E(`Dashboard '${d.name}' chart tile references unknown chart '${t.chart}'`);
+      if ((t.type === 'chart' || t.type === 'list') && (!t.view || !viewNames.has(lc(t.view)))) E(`Dashboard '${d.name}' ${t.type} tile references unknown view '${t.view}'`);
+      if (t.type === 'iframe' && !t.url) E(`Dashboard '${d.name}' iframe tile needs a url`);
+      if (t.type === 'webresource' && (!t.webResource || !webResourceNames.has(lc(t.webResource)))) E(`Dashboard '${d.name}' webresource tile references undeclared web resource '${t.webResource}'`);
+    }
+  }
+
   for (const ch of spec.charts || []) {
     const ent = (spec.entities || []).find((e) => lc(e.schemaName) === lc(ch.entity));
     if (!ent) { E(`Chart '${ch.name}' references unknown entity '${ch.entity}'`); continue; }

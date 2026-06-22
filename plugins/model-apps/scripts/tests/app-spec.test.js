@@ -165,6 +165,23 @@ test('validateAppSpec rejects a command with no function', () => {
   assert.ok(!r.ok && r.errors.some((e) => /function .* is required/.test(e)));
 });
 
+test('validateAppSpec accepts a dashboard with chart + list tiles on declared view/chart', () => {
+  const ok = cloneDesk();
+  ok.dashboards = [{ name: 'Ops', tiles: [
+    { type: 'chart', chart: ok.charts[0].name, view: ok.views[0].name },
+    { type: 'list', view: ok.views[0].name, name: 'List' },
+  ] }];
+  const r = validateAppSpec(ok);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('validateAppSpec rejects a dashboard chart tile referencing an unknown chart', () => {
+  const bad = cloneDesk();
+  bad.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', chart: 'Nope', view: bad.views[0].name }] }];
+  const r = validateAppSpec(bad);
+  assert.ok(!r.ok && r.errors.some((e) => /unknown chart/.test(e)));
+});
+
 test('validateAppSpec rejects an invalid form.layout value', () => {
   const bad = cloneDesk();
   bad.forms[0].layout = 'fancy';

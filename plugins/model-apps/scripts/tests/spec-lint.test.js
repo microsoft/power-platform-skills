@@ -94,6 +94,14 @@ test('accepts a command bound to a declared web resource + function', () => {
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });
 
+test('errors on a dashboard tile referencing an unknown view', () => {
+  const s = base();
+  s.views = [{ entity: 'new_ticket', name: 'Active', columns: ['new_name'] }];
+  s.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Missing' }] }];
+  const r = lintAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((m) => /references unknown view/i.test(m)));
+});
+
 test('warns on prefix drift', () => {
   const s = base();
   s.entities[1].schemaName = 'cr123_ticket';

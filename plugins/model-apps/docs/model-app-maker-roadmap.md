@@ -19,7 +19,7 @@ backlog. The build engine is `scripts/lib/sdk-build.js`; the App Spec contract i
 - ✅ Live narration (`[n/total]`), `BuildHalt` gate, dry-run default, `--sample-data` / `--publish` opt-in.
 - ✅ Perf: bounded-concurrency `mapLimit` for independent ops; one publish round-trip per entity + the app.
 - ✅ Headless vendored SDK bundle + `az`-token HttpClient with transient (429/5xx) retry.
-- ✅ Lint guardrail (`spec-lint.js`) + hard validator (`app-spec.js`); 203 tests green.
+- ✅ Lint guardrail (`spec-lint.js`) + hard validator (`app-spec.js`); 207 tests green.
 
 ### Tier 1 — complete data model
 - ✅ All column types: Text · Memo · Choice · MultiChoice · Boolean · Money · DateTime · Integer · BigInt · Decimal · Double · File · Image · AutoNumber · Customer, with per-type options.
@@ -120,9 +120,13 @@ not runtime phase selection or re-run state):
   `onclickeventtype=2`, the right function names + web-resource bind, and `isdisabled=true` on the
   disabled one; torn down clean. ⚠ **Deferred:** conditional (rule-based) visibility + Power Fx
   on-click are Power-Fx-only and need a component library that can't be authored headlessly.
-- 🔲 **Dashboards** (`dashboards[]` → `createArtifact('dashboard')`). The SDK adapter is
-  overlay-oriented (`createDefault` seeds one cell), so this needs a **from-scratch FormXML tile
-  generator** (chart/list control cells) before push. Medium-large.
+- ✅ **Dashboards** (`dashboards[]` → `createArtifact('dashboard')` + `addDashboardTile`). The SDK's
+  tile generator synthesizes chart/list/iframe/webresource `<cell><control>` tiles (chart/list
+  reference the views/charts already built); pushed + added to the solution (systemform, type 60).
+  ✅ **live-verified on 983a1 (2026-06-21):** a Standard dashboard with a chart + list tile landed
+  with 2 cells/controls referencing the created view savedqueryid + chart visualizationId; torn down
+  clean. ⚠ **Deferred:** sitemap placement (the dashboard isn't auto-added to the app yet);
+  interactive (type 10) dashboards.
 - 🔲 **PCF custom controls** (`addCustomControl`). ⚠ **Architectural:** the binding persists only via
   **solution export→import** — a plain `pushArtifact`/`systemforms` write strips it. Needs a new
   delivery path (package the form + control bundle into a solution, `importSolution`) and a source

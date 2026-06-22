@@ -39,10 +39,11 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   `addSubGrid` for sub-grids, `addFormEventHandler` for form events) — so new, existing, and mixed
   envs all work. The data model is **complete** (all column types, global choices, status reasons,
   alternate keys, N:N). It also builds **quick-create/quick-view forms** (`formType`) and **modern
-  command-bar buttons** (`commands[]` — functional JS on-click + static hidden/disabled).
+  command-bar buttons** (`commands[]` — functional JS on-click + static hidden/disabled), and
+  **dashboards** (`dashboards[]` — chart/list/iframe/webresource tiles).
   **All Dataverse access is via the SDK**, so metadata is persisted under
   `<app-folder>/.maker-workspace/` for reuse/edits. Phases
-  (`solution·data-model·sample-data·web-resources·views·charts·forms·commands·app-shell·publish`) are
+  (`solution·data-model·sample-data·web-resources·views·charts·forms·commands·dashboards·app-shell·publish`) are
   selectable with `--only`/`--skip`/`--from`/`--to`; independent ops run with bounded parallelism.
   Emits `[n/total]` events the orchestrator narrates + a `BuildHalt` it gates on. Dry-run by
   default; `--apply` writes, `--sample-data` / `--publish` opt-in.

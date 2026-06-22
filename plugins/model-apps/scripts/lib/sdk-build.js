@@ -62,7 +62,7 @@ const STATE_CODE = { Active: 0, Inactive: 1 };
 // classic Notes/timeline control classId.
 const STD_FIELD_CLASS_ID = '4273EDBD-AC1D-40d3-9FB2-095C621B552D';
 const NOTES_CLASS_ID = '06375649-C143-495E-A496-C962E5B4488E';
-const COMPONENT_TYPE = { view: 26, chart: 59, form: 60, webResource: 61, app: 80 };
+const COMPONENT_TYPE = { view: 26, chart: 59, form: 60, dashboard: 60, webResource: 61, app: 80 };
 
 // Web-resource kinds (App Spec `type`) -> SDK createWebResource `type` token. The SDK maps
 // the token to the Dataverse webresourcetype code (js=3, html=1, css=2, …).
@@ -70,7 +70,25 @@ const WEB_RESOURCE_KINDS = new Set(['js', 'html', 'css', 'xml', 'png', 'jpg', 'g
 // Form-event kinds the SDK can wire (addFormEventHandler).
 const FORM_EVENTS = new Set(['onload', 'onsave', 'onchange']);
 
-const PHASES = ['solution', 'data-model', 'sample-data', 'web-resources', 'views', 'charts', 'forms', 'commands', 'app-shell', 'publish'];
+const PHASES = ['solution', 'data-model', 'sample-data', 'web-resources', 'views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell', 'publish'];
+
+// Map a dashboard tile (App Spec) to the SDK's AddDashboardTileOptions. chart/list tiles resolve
+// the underlying view (savedqueryid) — and the chart its visualization id — from what the build
+// already created; the target entity is derived from the referenced view. iframe/webresource tiles
+// carry a url / web-resource name.
+function dashboardTileOpts(spec, tile, result) {
+  const viewEntity = (name) => { const v = (spec.views || []).find((x) => x.name === name); return v && v.entity.toLowerCase(); };
+  const span = (o) => { if (tile.colspan) o.colspan = tile.colspan; if (tile.rowspan) o.rowspan = tile.rowspan; return o; };
+  if (tile.type === 'chart') {
+    return span({ type: 'chart', name: tile.name || tile.chart, targetEntity: tile.entity ? tile.entity.toLowerCase() : viewEntity(tile.view),
+      viewId: result.created.views[tile.view], visualizationId: result.created.charts[tile.chart] });
+  }
+  if (tile.type === 'list') {
+    return span({ type: 'list', name: tile.name || tile.view, targetEntity: tile.entity ? tile.entity.toLowerCase() : viewEntity(tile.view), viewId: result.created.views[tile.view] });
+  }
+  if (tile.type === 'iframe') return span({ type: 'iframe', name: tile.name, url: tile.url });
+  return span({ type: 'webresource', name: tile.name, webResourceName: tile.webResource });
+}
 
 // Command-bar locations (CommandBarJson.location). MainTab = the entity's form/grid command bar.
 const COMMAND_LOCATIONS = new Set(['MainTab', 'HomeTab', 'ContextualTab']);
@@ -245,6 +263,7 @@ function planFor(spec, opts) {
     if ((f.events || []).length) items.push({ phase: 'forms', label: `wire ${f.events.length} event handler(s) on ${f.entity}` });
   }
   if (has('commands')) for (const [entity, cmds] of Object.entries(commandsByEntity(spec))) items.push({ phase: 'commands', label: `command bar for ${entity} (${cmds.length} button(s))` });
+  if (has('dashboards')) for (const d of spec.dashboards || []) items.push({ phase: 'dashboards', label: `dashboard "${d.name}" (${(d.tiles || []).length} tile(s))` });
   if (has('app-shell')) items.push({ phase: 'app-shell', label: `app module "${spec.app.name}" + sitemap` });
   if (has('publish') && opts.publish) items.push({ phase: 'publish', label: 'publish customizations' });
   return items;
@@ -381,7 +400,7 @@ async function runSdkBuild(spec, opts = {}) {
     return { ok: true, dryRun: true, plan: plan.map((p) => p.label) };
   }
 
-  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, commands: {}, app: null } };
+  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, commands: {}, dashboards: {}, app: null } };
   const total = plan.length;
   let n = 0;
   const run = async (phase, label, fn, { recoverable = false, skipIf } = {}) => {
@@ -645,6 +664,22 @@ async function runSdkBuild(spec, opts = {}) {
         const art = provision.createArtifact('command', def);
         const pushed = await provision.pushArtifact('command', art.id);
         result.created.commands[entityLogical] = pushed.id;
+      });
+    }
+  }
+
+  // 6c. Dashboards. createArtifact('dashboard') seeds a dashboard; addDashboardTile synthesizes
+  //     each chart/list/iframe/webresource tile (referencing the views/charts already built), then
+  //     push + add to the solution (systemform, component type 60). Global (no entity); placement in
+  //     the app sitemap is manual for now.
+  if (has('dashboards')) {
+    for (const dash of spec.dashboards || []) {
+      await run('dashboards', `dashboard "${dash.name}" (${(dash.tiles || []).length} tile(s))`, async () => {
+        const art = provision.createArtifact('dashboard', { name: dash.name });
+        for (const tile of dash.tiles || []) provision.addDashboardTile(art.id, dashboardTileOpts(spec, tile, result));
+        const pushed = await provision.pushArtifact('dashboard', art.id);
+        await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.dashboard, solutionUniqueName: sol.uniqueName });
+        result.created.dashboards[dash.name] = pushed.id;
       });
     }
   }

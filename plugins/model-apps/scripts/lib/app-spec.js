@@ -287,6 +287,30 @@ function validateAppSpec(spec) {
     else if (!webResourceNames.has(String(c.library).toLowerCase())) errors.push(`command '${c.label}' on ${c.entity}: library '${c.library}' is not a declared webResources[] name`);
     if (!c.function) errors.push(`command '${c.label}' on ${c.entity}: function (JS function name) is required`);
   }
+  // Dashboards: chart/list tiles reference a declared chart/view; iframe needs a url; webresource a
+  // declared web resource.
+  const DASH_TILE_TYPES = new Set(['chart', 'list', 'iframe', 'webresource']);
+  const viewNamesSet = new Set((spec.views || []).map((v) => v.name));
+  const chartNamesSet = new Set((spec.charts || []).map((c) => c.name));
+  for (const d of spec.dashboards || []) {
+    if (!d || !d.name) { errors.push('a dashboard is missing a name'); continue; }
+    if (!Array.isArray(d.tiles) || !d.tiles.length) { errors.push(`dashboard '${d.name}': needs tiles[]`); continue; }
+    for (const t of d.tiles) {
+      if (!t || !DASH_TILE_TYPES.has(t.type)) { errors.push(`dashboard '${d.name}': tile type must be chart|list|iframe|webresource`); continue; }
+      if (t.type === 'chart') {
+        if (!t.chart || !chartNamesSet.has(t.chart)) errors.push(`dashboard '${d.name}': chart tile references unknown chart '${t.chart}'`);
+        if (!t.view || !viewNamesSet.has(t.view)) errors.push(`dashboard '${d.name}': chart tile needs a declared view for its data — '${t.view}' not found`);
+      } else if (t.type === 'list') {
+        if (!t.view || !viewNamesSet.has(t.view)) errors.push(`dashboard '${d.name}': list tile references unknown view '${t.view}'`);
+      } else if (t.type === 'iframe') {
+        if (!t.url) errors.push(`dashboard '${d.name}': iframe tile needs a url`);
+        if (!t.name) errors.push(`dashboard '${d.name}': iframe tile needs a name`);
+      } else if (t.type === 'webresource') {
+        if (!t.webResource || !webResourceNames.has(String(t.webResource).toLowerCase())) errors.push(`dashboard '${d.name}': webresource tile references undeclared web resource '${t.webResource}'`);
+        if (!t.name) errors.push(`dashboard '${d.name}': webresource tile needs a name`);
+      }
+    }
+  }
   for (const a of (spec.appShell && spec.appShell.areas) || []) {
     for (const g of a.groups || []) {
       for (const sa of g.subAreas || []) {
