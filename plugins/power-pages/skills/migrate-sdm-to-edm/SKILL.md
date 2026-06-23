@@ -291,7 +291,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
    |----------|--------|---------|
    | Which D365 portal? | D365 Portal | Community, Customer Self-Service, Employee Self-Service, Partner |
 
-   **Q2d — if "Other or Unknown":** no follow-up. Treat as Other/Unknown — step 1.6 skips the template-specific V2 package check and relies on `PowerPages_Core` validation only.
+   **Q2d — if "Other or Unknown":** no follow-up. Treat as Other/Unknown — step 1.6 skips the template-specific V2 package check entirely. The foundation packages (CDSBasePortal, PowerPagesCore) were already validated in step 1.5.
 
    Store the final chosen template — it drives the V2 package check in step 1.6.
 
@@ -415,7 +415,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 
 ### 1.5 Validate Required Dependencies
 
-**Goal**: Verify required packages are installed in environment
+**Goal**: Verify required first-party packages are installed at the minimum required version, and install/upgrade them via `pac application install` with explicit user confirmation when they're not.
 
 **Actions**:
 
@@ -430,28 +430,57 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
    > **Important:** The `--includeSystemSolutions` flag is required. Without it, `pac solution list` returns only user/managed-by-customer solutions and omits the first-party packages we need to verify (`CDSBasePortal`, `PowerPagesCore`, and the V2 template solutions checked in step 1.6).
 
    Search the output for:
-   - `CDSBasePortal` — Dataverse base portal package (required: 9.3.2307.x+)
-   - `PowerPagesCore` — Power Pages Core package (required: 1.0.2309.63+)
+   - `CDSBasePortal` — Dataverse base portal package (required: **9.3.2307.x+**)
+   - `PowerPagesCore` — Power Pages Core package (required: **1.0.2309.63+**)
 
-   Present the found versions to the user.
+   Capture both the **installed version** (or `not found`) and present them to the user.
 
-2. **Evaluate Results**
+2. **Evaluate and Install/Upgrade as Needed**
 
-   - **Both found and versions meet requirements**: Inform user and proceed to step 1.6.
-   - **One or both not found**: Stop with message: "Required packages are not installed. Please install them from Power Platform admin center > Manage > Dynamics 365 apps before proceeding."
-   - **Found but version too low**: Show current vs required version and stop with upgrade guidance.
-   - **`pac solution list --includeSystemSolutions` fails or output is unclear**: Fall back to asking the user:
+   For **each** of `CDSBasePortal` and `PowerPagesCore`, evaluate independently:
+
+   - **Found and version meets minimum**: log "OK · v<X>" and move on to the next package.
+   - **Not found OR installed version is below the minimum**: surface the gap and ask the user before running any install:
+
+     | Question | Header | Options |
+     |----------|--------|---------|
+     | `<PACKAGE_NAME>` is `<not installed OR v<X> · needs v<MIN>+>`. Install/upgrade via `pac application install` (pulls the latest from the Microsoft application catalog)? | Install Package | Yes — install/upgrade now, Skip — I'll install manually, Cancel — stop the skill |
+
+     - **Yes**: run
+
+       ```powershell
+       pac application install --application-name "<PACKAGE_NAME>"
+       ```
+
+       Wait for completion. On some clouds the install is asynchronous, so re-run `pac solution list --includeSystemSolutions` afterwards to confirm the package now meets the minimum version. If the re-check still shows the old version, ask the user to wait a minute and re-check, or proceed knowing the install is in flight.
+
+     - **Skip**: log the user's choice and proceed to step 1.6. The migration command in Phase 2/3 will surface a clearer error if the package version is genuinely too low; the user has acknowledged the risk.
+
+     - **Cancel**: halt the skill cleanly.
+
+   - **`pac application install` errors** (rare for these first-party packages — they're always in the Microsoft application catalog, but the call can fail on older PAC builds, missing tenant roles, or transient catalog issues): fall back to manual install.
+
+     | Question | Header | Options |
+     |----------|--------|---------|
+     | `pac application install --application-name "<PACKAGE_NAME>"` failed: `<error message>`. Install manually via Power Platform admin center → Resources → Dynamics 365 apps → find `<PACKAGE_NAME>` → Install? | Manual Install | I'll install manually now (then continue), Skip — I'll install later, Cancel — stop the skill |
+
+     - **I'll install manually**: pause until user confirms install is complete, then re-run step 1 above to verify.
+     - **Skip / Cancel**: same as above.
+
+3. **Fallback if Automatic Check Fails Entirely**
+
+   If `pac solution list --includeSystemSolutions` itself errors out (older PAC build, missing role, transient error), fall back to asking the user:
 
    | Question | Header | Options |
    |----------|--------|---------|
    | Unable to verify packages automatically. Can you confirm both Dataverse base portal package (9.3.2307.x+) and Power Pages Core (1.0.2309.63+) are installed? | Deps Confirmed | Yes, confirmed, Not sure — help me check |
 
-   - If "Not sure": Guide user to Power Platform admin center > Solutions to verify package versions.
-   - If "Yes": Proceed to step 1.6.
+   - If "Not sure": guide user to Power Platform admin center → Resources → Dynamics 365 apps to verify package versions.
+   - If "Yes": proceed to step 1.6.
 
-**Output**: Required package versions verified (Dataverse base portal 9.3.2307.x+, Power Pages Core 1.0.2309.63+)
+**Output**: Both required first-party packages verified at or above the minimum version, installed/upgraded via `pac application install`, or explicitly acknowledged as skipped by the user.
 
-> **→ Update report:** `--set-step 1.5 --status completed --output "CDSBasePortal <ver> · PowerPagesCore <ver> — both OK"`
+> **→ Update report:** `--set-step 1.5 --status completed --output "CDSBasePortal <state> · PowerPagesCore <state>"` where `<state>` is one of `v<X> OK`, `installed via pac application install (v<X> → v<Y>)`, `upgraded via pac application install (v<X> → v<Y>)`, or `user skipped — proceeding at user's risk`. Capturing the install method explicitly so the user can audit afterwards.
 
 ---
 
@@ -535,25 +564,9 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 
    > **Note:** if `pac application list` itself errors out (older PAC builds, missing role), fall back to offering the dummy-site method directly without the catalog check.
 
-3. **Verify PowerPages_Core Application**
+**Output**: V2 template package verified/installed (or explicitly skipped). `PowerPagesCore` was already verified and installed/upgraded as needed in step 1.5.
 
-   Check if `PowerPages_Core` application is installed. If missing, ask:
-
-   | Question | Header | Options |
-   |----------|--------|---------|
-   | PowerPages_Core application is not installed. Should I install it now? | Install Core | Yes, install, No, skip |
-
-   If "Yes":
-
-   ```powershell
-   pac application install --application-name "PowerPages_Core"
-   ```
-
-   Wait for completion or failure.
-
-**Output**: V2 template package verified/installed (or explicitly skipped); PowerPages_Core available
-
-> **→ Update report:** `--set-step 1.6 --status completed --output "<V2_UNIQUE_NAME> <state> · PowerPages_Core <state>"`. If the V2 package was installed during this step, mention the method explicitly so the user can audit — e.g., `"installed via pac application install"` or `"installed via dummy EDM site"`.
+> **→ Update report:** `--set-step 1.6 --status completed --output "<V2_UNIQUE_NAME> <state>"`. If the V2 package was installed during this step, mention the method explicitly so the user can audit — e.g., `"installed via pac application install"` or `"installed via dummy EDM site"`.
 
 ---
 
