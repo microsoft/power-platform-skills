@@ -77,9 +77,8 @@ const PHASE_4 = {
   id: 4,
   title: 'Post-Migration Validation',
   subSteps: [
-    { id: '4.1', label: 'Data Diff Validation (SDM ↔ EDM)' },
-    { id: '4.2', label: 'Runtime Smoke Test Recommendation (/test-site)' },
-    { id: '4.3', label: 'Final Status, Optional Rollback, Summary' },
+    { id: '4.1', label: 'Runtime Smoke Test Recommendation (/test-site)' },
+    { id: '4.2', label: 'Final Status, Optional Rollback, Summary' },
   ],
 };
 
@@ -105,18 +104,19 @@ const PHASE_2_TRACK_B = {
 };
 
 // Phase 3 differs by track. The Authoring Track already cleaned up customizations in Phase 2.3,
-// so Phase 3 only needs migrate refs → activate → restart. The Downstream Track never ran the
-// customization remediation in Phase 2, so Phase 3 includes locate + remediate
+// so Phase 3 only needs verify metadata → migrate refs → activate → restart. The Downstream Track
+// never ran the customization remediation in Phase 2, so Phase 3 includes locate + remediate
 // after refs migrate.
 const PHASE_3_TRACK_A = {
   id: 3,
   title: 'Migration Execution',
   subSteps: [
-    // When mode=`all`, SKILL.md instructs the agent to mark 3.1 completed with
+    { id: '3.1', label: 'Data Diff Validation (SDM ↔ EDM Metadata)' },
+    // When mode=`all`, SKILL.md instructs the agent to mark 3.2 completed with
     // output "Skipped — refs already migrated in Phase 2.1 (mode=all)".
-    { id: '3.1', label: 'Migrate Transactional References' },
-    { id: '3.2', label: 'Activate EDM (Update Data Model Version)' },
-    { id: '3.3', label: 'Restart Site' },
+    { id: '3.2', label: 'Migrate Transactional References' },
+    { id: '3.3', label: 'Activate EDM (Update Data Model Version)' },
+    { id: '3.4', label: 'Restart Site' },
   ],
 };
 
@@ -124,11 +124,12 @@ const PHASE_3_TRACK_B = {
   id: 3,
   title: 'Migration Execution',
   subSteps: [
-    { id: '3.1', label: 'Migrate Transactional References' },
-    { id: '3.2', label: 'Locate Customization Report' },
-    { id: '3.3', label: 'Remediate Customizations' },
-    { id: '3.4', label: 'Activate EDM (Update Data Model Version)' },
-    { id: '3.5', label: 'Restart Site' },
+    { id: '3.1', label: 'Data Diff Validation (SDM ↔ EDM Metadata)' },
+    { id: '3.2', label: 'Migrate Transactional References' },
+    { id: '3.3', label: 'Locate Customization Report' },
+    { id: '3.4', label: 'Remediate Customizations' },
+    { id: '3.5', label: 'Activate EDM (Update Data Model Version)' },
+    { id: '3.6', label: 'Restart Site' },
   ],
 };
 

@@ -90,7 +90,7 @@ Surface that callout at these **7 checkpoints**:
 | 4 | Mid-step 2.4 (Authoring Track) — after auto-rewrites are staged, before apply+upload approval | `remediation-diff.json` + `remediation-staged/` tree, augmented prompt files (review the **Remediation Diff** card in the live report) |
 | 5 | End of Phase 2, before Phase 3 approval | `sdm-to-edm-migration-report.html` (shows Phase 2 outcomes) |
 | 6 | End of Phase 3, before Phase 4 approval | `sdm-to-edm-migration-report.html` (shows EDM activation status) |
-| 7 | End of Phase 4 (data-diff produced) | `migration-data-diff.json` + `sdm-to-edm-migration-report.html` |
+| 7 | Phase 3.1 (Data Diff Validation — pre-refs gate) | `migration-data-diff.json` + `sdm-to-edm-migration-report.html` (Pages & Components card now shows SDM↔EDM per-category pills) |
 
 The skill-level approval prompt that follows (via AskUserQuestion) is for the **user's substantive approval to proceed** — not Claude Code's standard command-execution permission prompt. Always print the file paths in chat first so the user knows where to look.
 
@@ -359,7 +359,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 
    - **Reverted**: Site was previously rolled back to SDM. Treat as fresh start. Proceed to step 1.5.
 
-   - **Completed**: A prior migration finished but the data model version was not yet flipped to EDM (otherwise step 1.3 would have stopped earlier). Skip ahead to the activation step in Phase 3 (Authoring Track 3.1 or Downstream Track 3.4 — track is derived in step 1.7, so complete 1.7 first to know which).
+   - **Completed**: A prior migration finished but the data model version was not yet flipped to EDM (otherwise step 1.3 would have stopped earlier). Skip ahead to the activation step in Phase 3 (Authoring Track 3.3 or Downstream Track 3.5 — track is derived in step 1.7, so complete 1.7 first to know which).
 
    - **Failed**: A prior migration failed. Show the last step and error details (from chunk records in the verbose output), then ask:
 
@@ -381,7 +381,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
      |----------|--------|---------|
      | A migration is already running for this site. How to proceed? | In-Flight Migration | Wait and poll until complete, Reset and start over, Exit and check back later |
 
-     - **Wait**: Skip the rest of Phase 1 and Phase 2 setup work; jump directly to the migration-status polling loop (Authoring Track 2.2 step 2 or Downstream Track 3.1 step 3 — depends on which mode the in-flight migration was started with; complete 1.7 first to determine track). After polling reports Completed, continue to the activation step (Authoring Track 3.1 / Downstream Track 3.4).
+     - **Wait**: Skip the rest of Phase 1 and Phase 2 setup work; jump directly to the migration-status polling loop (Authoring Track 2.2 step 2 for an in-flight metadata migration, or Authoring Track 3.2 step 3 / Downstream Track 3.2 step 2 for an in-flight refs migration — depends on which mode the in-flight migration was started with; complete 1.7 first to determine track). After polling reports Completed, continue to the activation step (Authoring Track 3.3 / Downstream Track 3.5).
      - **Reset and start over**: Show the reset warning (see step 4), confirm, run reset, then proceed to step 1.5.
      - **Exit**: Halt the skill cleanly. User can re-invoke later — step 1.4 will re-detect the in-flight migration.
 
@@ -587,7 +587,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
    Mode descriptions:
    - `configurationData`: Migrate metadata (web pages, snippets, settings, etc.) only. **Recommended default** — auto-generates a customization report, allows remediation before refs migrate in Phase 3.
    - `configurationDataReferences`: Migrate transactional data references only. Assumes config metadata is already in EDM (typically via ALM solution import on Test/UAT/Prod).
-   - `all`: Migrate metadata AND refs in one shot. **Advanced override.** Only safe if no `adx_*` customizations exist. When chosen, Phase 3.1 (Migrate Transactional References) is skipped automatically because refs are already done in Phase 2.2 — but Phase 3.4 (Activate EDM) and Phase 3.5 (Restart Site) still run.
+   - `all`: Migrate metadata AND refs in one shot. **Advanced override.** Only safe if no `adx_*` customizations exist. When chosen, Phase 3.2 (Migrate Transactional References) is skipped automatically because refs are already done in Phase 2.2 — but Phase 3.1 (Data Diff Validation), Phase 3.3 (Activate EDM), and Phase 3.4 (Restart Site) still run.
 
    If user picks an override for their env, show a warning:
    - **`all` on any env**: "Recommended only when you know there are no `adx_*` customizations. Once refs migrate, customization fixes become much harder. Proceed?"
@@ -603,7 +603,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
    | `all` | **Authoring** | `A` |
    | `configurationDataReferences` | **Downstream** | `B` |
 
-   Persist track to state. The Authoring Track and Downstream Track have **different Phase 2 structures**; **Phase 3 is identical in both tracks** (5 sub-steps, with step 3.1 auto-skipped when mode = `all`).
+   Persist track to state. The Authoring Track and Downstream Track have **different Phase 2 structures**; **both Phase 3 tracks start with the same Data Diff Validation (3.1)** but the Downstream Track has additional customization steps after refs migrate. Step 3.2 (Migrate Transactional References) auto-skipped when mode = `all`.
 
 **Output**: Environment type captured, migration mode confirmed, track derived
 
@@ -666,7 +666,7 @@ This phase has **two completely different shapes** depending on the migration tr
 
    > **Important — nested folder quirk:** `pac pages download --path ./mysite` creates a slug-named child folder (e.g., `./mysite/site-1---site-k5s85/website.yml`). Capture the inner folder as `<SITE_ROOT>` via `Get-ChildItem .\mysite -Directory`. Subsequent migrate, rewrite, and upload steps must use `<SITE_ROOT>` (the inner path), not `./mysite`.
    >
-   > **`--modelVersion 1`** explicitly requests SDM data. The site's activation is still SDM at this point (step 3.2 hasn't run yet), so this is the live source of truth for the baseline.
+   > **`--modelVersion 1`** explicitly requests SDM data. The site's activation is still SDM at this point (step 3.3 hasn't run yet), so this is the live source of truth for the baseline.
 
 2. **Snapshot the downloaded source**
 
@@ -732,7 +732,7 @@ This phase has **two completely different shapes** depending on the migration tr
 
    > **Why this matters:** an earlier real-world test session ran the poll as a Bash `until [ "$(pac ... | grep -oE ...)" != "" ]` loop. `pac` wasn't on the Bash `$PATH` in that environment, so the subshell silently produced empty output, the until condition stayed false, and the loop printed "Still running..." for 12+ iterations after the migration had actually completed. The user had to type "check status" to force the agent to verify via PowerShell. Using PowerShell directly with a bounded `for` loop avoids both issues — PATH consistency and runaway iteration.
 
-**Output**: Metadata moved to EDM tables; site activation still SDM until step 3.2 flips it. Newer PAC builds auto-emit `SiteCustomization*.csv` here; **older builds do not** — step 2.3 will fall back to running the explicit `--siteCustomizationReportPath` command. Don't assume the CSV exists yet.
+**Output**: Metadata moved to EDM tables; site activation still SDM until step 3.3 flips it. Newer PAC builds auto-emit `SiteCustomization*.csv` here; **older builds do not** — step 2.3 will fall back to running the explicit `--siteCustomizationReportPath` command. Don't assume the CSV exists yet.
 
 > **→ Update report:** `--clear-activity` and `--set-step 2.2 --status completed --output "Metadata migration <COMPLETED|FAILED> · mode=<MODE>"`
 
@@ -955,7 +955,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/apply-remediation.
 > **PAC CLI argument notes:**
 >
 > - `pac pages upload` does **not** accept `--webSiteId` — the site is inferred from `website.yml` inside `<SITE_ROOT>`. If you pass `--webSiteId`, PAC errors with "An unknown argument --webSiteId was passed."
-> - `--modelVersion 1` = SDM (the site's activation is still SDM at this point, since step 3.2 hasn't flipped it yet).
+> - `--modelVersion 1` = SDM (the site's activation is still SDM at this point, since step 3.3 hasn't flipped it yet).
 > - `<SITE_ROOT>` must point at the directory containing `website.yml` (not the wrapper `./mysite`).
 
 > **→ Update report (after upload completes):** `--clear-approval`. The in-phase gate is now resolved.
@@ -1134,10 +1134,10 @@ After whichever option, loop back to **step 2.1** to re-verify the site is now p
 
 ## Phase 3: Migration Execution (track-branched)
 
-Phase 3 has **two different shapes** depending on the migration track. The Authoring Track is shorter (3 sub-steps) because customization remediation already happened in Phase 2.4. The Downstream Track is longer (5 sub-steps) because customizations get scanned and remediated here (Phase 2 for the Downstream Track was just metadata verification).
+Phase 3 has **two different shapes** depending on the migration track. The Authoring Track is shorter (4 sub-steps) because customization remediation already happened in Phase 2.4. The Downstream Track is longer (6 sub-steps) because customizations get scanned and remediated here (Phase 2 for the Downstream Track was just metadata verification). **Both tracks start with the same pre-flight check (3.1):** a metadata-only SDM↔EDM diff that confirms the metadata migration in Phase 2 (Authoring) or the upstream ALM import (Downstream) landed cleanly before the irreversible refs migration runs.
 
-- [**Phase 3 — Authoring Track**](#phase-3--authoring-track) — Authoring Track (mode = `configurationData` or `all`). 3 sub-steps: migrate refs → activate → restart.
-- [**Phase 3 — Downstream Track**](#phase-3--downstream-track) — Downstream Track (mode = `configurationDataReferences`). 5 sub-steps: migrate refs → locate customization report → remediate → activate → restart.
+- [**Phase 3 — Authoring Track**](#phase-3--authoring-track) — Authoring Track (mode = `configurationData` or `all`). 4 sub-steps: verify metadata diff → migrate refs → activate → restart.
+- [**Phase 3 — Downstream Track**](#phase-3--downstream-track) — Downstream Track (mode = `configurationDataReferences`). 6 sub-steps: verify metadata diff → migrate refs → locate customization report → remediate → activate → restart.
 
 ---
 
@@ -1145,13 +1145,87 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 
 **Applies when**: state.track === 'A' (mode = `configurationData` or `all`)
 
-**Goal**: Migrate transactional references (skipped if mode=all already covered them), activate EDM, prompt user to restart. Customization handling is **not in this phase** — Phase 2.4 already cleaned things up.
+**Goal**: Verify the metadata migration succeeded via an SDM↔EDM diff, then migrate transactional references (skipped if mode=all already covered them), activate EDM, prompt user to restart. Customization handling is **not in this phase** — Phase 2.4 already cleaned things up.
 
-**Output**: Transactional refs migrated (or skip if mode=all), site activated on EDM, user has confirmed restart.
+**Output**: Metadata diff confirmed, transactional refs migrated (or skip if mode=all), site activated on EDM, user has confirmed restart.
 
 ---
 
-### 3.1 Migrate Transactional References
+### 3.1 Data Diff Validation (SDM ↔ EDM Metadata)
+
+**Goal**: Before running the irreversible refs migration, re-download the site as EDM, snapshot it, and diff against the SDM baseline captured in Phase 2.1. Surface the result so the user can decide whether to proceed with refs migration or pause to investigate. The Pages & Components card in the live report visualizes the per-category comparison.
+
+**Why pre-refs:** at this point only metadata has been migrated (Phase 2.2 for Authoring; assumed via ALM solution import for Downstream) — refs haven't run yet. Catching a metadata mismatch here means the user can fix the source and re-run without having to roll back a completed migration.
+
+**Actions**:
+
+1. **Re-download the migrated site as EDM**
+
+   ```powershell
+   pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 2 --path "./mysite-edm"
+   ```
+
+   Site root lives one level deeper than `--path` (e.g., `./mysite-edm/<slug>/website.yml`). Capture inner path as `<SITE_ROOT_EDM>` via `Get-ChildItem .\mysite-edm -Directory`.
+
+2. **Snapshot the EDM site**
+
+   ```powershell
+   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/snapshot-site.js" `
+     --site-root "<SITE_ROOT_EDM>" `
+     --output-dir "<OUTPUT_DIR>" `
+     --label edm
+   ```
+
+   Output: `<OUTPUT_DIR>/edm-snapshot.json`. The live report's **Pages & Components** card now shows `SDM → EDM` per-category pills.
+
+3. **Diff SDM vs EDM**
+
+   ```powershell
+   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/diff-snapshots.js" `
+     --sdm "<OUTPUT_DIR>/sdm-snapshot.json" `
+     --edm "<OUTPUT_DIR>/edm-snapshot.json" `
+     --output-dir "<OUTPUT_DIR>"
+   ```
+
+   Output: `<OUTPUT_DIR>/migration-data-diff.json` + console table grouped by category. Exit code: `0` for pass or warn, `1` for fail.
+
+   Per-category status:
+   - **pass** — same identity set, no differences
+   - **warn** — identity match but some records changed statecode/value, OR an SDM-only category (e.g., `tags`, `websiteBindings`) shows 0 records in EDM (expected — EDM YAML format doesn't surface those; records still in `powerpagecomponent`)
+   - **fail** — records actually missing/extra (excluding SDM-only categories)
+
+4. **Surface the diff and gate refs migration**
+
+   > **📄 Checkpoint 7 — Tell the user about the diff result.** Print in chat:
+   >
+   > ```
+   > 📄 Metadata diff complete. Review:
+   >    <OUTPUT_DIR>\migration-data-diff.json
+   >    <MIGRATION_OUTPUT_DIR>\sdm-to-edm-migration-report.html
+   >
+   > Status: <PASS | WARN | FAIL>
+   >    <N> records missing in EDM
+   >    <M> extra records in EDM
+   >    <S> records with state changes
+   > ```
+
+   Then ask:
+
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | Metadata diff status: `<PASS\|WARN\|FAIL>`. `<N>` missing, `<M>` extra, `<S>` state-changed. Refs migration (next step) is irreversible — proceed? | Pre-Refs Gate | Looks fine — proceed to refs migration, Concerning — pause so I can investigate, Cancel — stop the skill |
+
+   - **Looks fine**: proceed to step 3.2.
+   - **Concerning**: halt Phase 3 cleanly. User can fix the metadata source (re-import solution / re-run Phase 2.2 in Authoring) and re-invoke the skill from this point.
+   - **Cancel**: halt cleanly.
+
+**Output**: Metadata SDM↔EDM diff complete, user has decided whether to proceed with refs migration or pause.
+
+> **→ Update report:** `--set-step 3.1 --status completed --output "Metadata diff: <PASS|WARN|FAIL> · <N> missing · <M> extra · <S> state-changed · user chose: <choice>"`
+
+---
+
+### 3.2 Migrate Transactional References
 
 **Goal**: Run `pac pages migrate-datamodel --mode configurationDataReferences` to move transactional data references. Skip if mode was `all` in Phase 2.2.
 
@@ -1159,29 +1233,10 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 
 1. **Check whether to skip**
 
-   - If `state.mode === 'all'`: refs were already migrated in Phase 2.2. Mark this sub-step completed with output `"Skipped — refs already migrated in Phase 2.2 (mode=all)"` and proceed to step 3.2.
+   - If `state.mode === 'all'`: refs were already migrated in Phase 2.2. Mark this sub-step completed with output `"Skipped — refs already migrated in Phase 2.2 (mode=all)"` and proceed to step 3.3.
    - Otherwise: proceed with the migration command below.
 
-2. **Capture SDM source snapshot** (Downstream Track only — Authoring Track already snapshotted in step 2.1)
-
-   For the Downstream Track, before running the migration, capture the SDM source so Phase 4 has a baseline to diff against:
-
-   ```powershell
-   pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 1 --path "./mysite"
-   ```
-
-   > **Nested-folder quirk** applies — actual site root is one level deeper. Capture inner path as `<SITE_ROOT>`.
-
-   Then snapshot:
-
-   ```powershell
-   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/snapshot-site.js" `
-     --site-root "<SITE_ROOT>" `
-     --output-dir "<OUTPUT_DIR>" `
-     --label sdm
-   ```
-
-3. **Execute Migration Command**
+2. **Execute Migration Command**
 
    ```powershell
    pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --mode configurationDataReferences
@@ -1189,41 +1244,54 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 
    Newer PAC versions auto-emit `SiteCustomization*.csv` into `<OUTPUT_DIR>` or cwd.
 
-4. **Poll Status**
+3. **Poll Status with Verbose Output**
+
+   Poll every 1 minute using `-s -v` so each iteration captures the full tracker payload (status, current step, step history, per-chunk outcomes) and refreshes the live report's **Transactional References Migration** card. Up to 30 attempts (30 minutes total). **Use this exact PowerShell loop** — don't improvise a Bash equivalent (same PATH-consistency reasoning as Phase 2.2).
 
    ```powershell
-   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --checkMigrationStatus
+   $webSiteId = "<WEBSITE_ID>"
+   $outputDir = "<OUTPUT_DIR>"
+   for ($i = 1; $i -le 30; $i++) {
+     $verboseOutput = pac pages migrate-datamodel --webSiteId $webSiteId -s -v 2>&1 | Out-String
+
+     # Parse the verbose output into the --set-refs-migration JSON payload.
+     # Schema: status (NotStarted | Running | Completed | Failed | Reverted | Unknown),
+     # currentStep, createdAt / modifiedAt (ISO 8601), stepHistory (array of { step, at }
+     # filtered to entries from `ConfigurationDataReferencesStarted` onward — drop earlier
+     # metadata migration steps), runs (array of { name, chunkTotal, completed, succeeded,
+     # chunks: [{ name, runStatus, outcome, errorType, errorDetails }] }).
+     # Build the JSON and call:
+     node update-state.js --output-dir $outputDir --set-refs-migration "<PARSED_JSON>"
+     node update-state.js --output-dir $outputDir --set-activity "Polling migration status (attempt $i/30)"
+
+     if ($verboseOutput -match "Current migration status is\s*:\s*Completed") { Write-Host "Status: Completed";  break }
+     if ($verboseOutput -match "Current migration status is\s*:\s*Failed")    { Write-Host "Status: Failed";     break }
+     if ($verboseOutput -match "Current migration status is\s*:\s*Reverted")  { Write-Host "Status: Reverted";   break }
+     Write-Host "Attempt $i/30 — still running, sleeping 60s..."
+     Start-Sleep -Seconds 60
+   }
    ```
 
-   Same polling pattern as Phase 2.2 — Completed proceeds to 3.2; In Progress sets `--set-activity` and re-checks; Failed / 30-min timeout offers retry / reset / exit.
+   - **Completed**: clear activity, proceed to step 3.3. The final `--set-refs-migration` call (last loop iteration) already captured the completed payload.
+   - **In Progress (loop exited at i=30 without status change)**: surface 30-min timeout, ask user (retry / reset / exit) — same handling pattern as 1.4 in-flight branch.
+   - **Failed / Reverted**: surface error, ask user (retry / reset / exit). The Transactional References Migration card already shows the chunk-level error details from the last poll.
 
-5. **Capture Verbose Tracker Details**
+   > **PAC build compatibility:** `-s -v` works on most current builds. If your PAC errors with `An unknown argument --verbose was passed`, fall back to plain `--checkMigrationStatus` in the loop and emit a smaller `--set-refs-migration` payload (`status` + `currentStep` only) once per iteration.
 
-   Once polling exits (Completed or Failed), run the verbose variant once to capture chunk-level details for the live report's Transactional References Migration card:
-
-   ```powershell
-   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" -s -v
-   ```
-
-   Parse the output and build a JSON payload with: `status` (NotStarted | Running | Completed | Failed | Reverted | Unknown), `currentStep`, `createdAt` / `modifiedAt` (from "Created On" / "Modified On" in the Migration Tracker Summary, converted to ISO 8601), `stepHistory` (array of `{ step, at }` filtered to entries from `ConfigurationDataReferencesStarted` onward — drop earlier metadata migration steps), and `runs` (array of `{ name, chunkTotal, completed, succeeded, chunks: [{ name, runStatus, outcome, errorType, errorDetails }] }`).
-
-   > **PAC build compatibility:** `-s -v` works on most current builds. If your PAC errors with `An unknown argument --verbose was passed`, fall back to plain `--checkMigrationStatus` and emit a smaller payload (`status` + `currentStep` only).
-
-**Output**: Transactional references migrated (or step skipped because mode=all). Verbose tracker payload captured for the live report.
+**Output**: Transactional references migrated (or step skipped because mode=all). Live report's Transactional References Migration card reflected real-time progress during polling and shows the final completed/failed payload.
 
 > **→ Update report:**
 >
 > ```
 > --clear-activity
-> --set-step 3.1 --status completed --output "<Refs migrated · status=<STATUS> | Skipped — already covered by mode=all in Phase 2.2>"
-> --set-refs-migration '{"status":"<STATUS>","currentStep":"<STEP>","createdAt":"<ISO>","modifiedAt":"<ISO>","stepHistory":[{"step":"<NAME>","at":"<ISO>"}],"runs":[{"name":"<NAME>","chunkTotal":<N>,"completed":<N>,"succeeded":<N>,"chunks":[{"name":"<CHUNK>","runStatus":1,"outcome":1,"errorType":null,"errorDetails":null}]}]}'
+> --set-step 3.2 --status completed --output "<Refs migrated · status=<STATUS> | Skipped — already covered by mode=all in Phase 2.2>"
 > ```
 >
-> Skip `--set-refs-migration` when this step is skipped because mode=all.
+> The Transactional References Migration card is already up-to-date from the last loop iteration; no extra `--set-refs-migration` call needed here. Skip the whole block when this step is skipped because mode=all.
 
 ---
 
-### 3.2 Activate EDM (Update Data Model Version)
+### 3.3 Activate EDM (Update Data Model Version)
 
 **Goal**: Run `--updateDataModelVersion` to flip the site to EDM.
 
@@ -1254,11 +1322,11 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 
 2. **Confirm Activation**
 
-   Activating EDM is a one-way switch from the user's perspective — the site begins serving from EDM tables, the SDM record is deactivated, and recovering requires the explicit `--revertToStandardDataModel` rollback path in Phase 4.3. Ask explicitly before running the command, even though Phase 3 was already approved at its start:
+   Activating EDM is a one-way switch from the user's perspective — the site begins serving from EDM tables, the SDM record is deactivated, and recovering requires the explicit `--revertToStandardDataModel` rollback path in Phase 4.2. Ask explicitly before running the command, even though Phase 3 was already approved at its start:
 
    | Question | Header | Options |
    |----------|--------|---------|
-   | Ready to activate Enhanced Data Model for `<SITE_NAME>` using Portal Id `<PORTAL_ID>`? This deactivates the SDM record and the site will serve from EDM after the manual restart in step 3.3. | Activate EDM | Yes — activate now, No — pause, I want to verify something, Cancel — stop the skill |
+   | Ready to activate Enhanced Data Model for `<SITE_NAME>` using Portal Id `<PORTAL_ID>`? This deactivates the SDM record and the site will serve from EDM after the manual restart in step 3.4. | Activate EDM | Yes — activate now, No — pause, I want to verify something, Cancel — stop the skill |
 
    - **Yes**: proceed to step 3 (execute the command).
    - **No, pause**: halt cleanly; user can re-invoke later to resume from this gate.
@@ -1280,12 +1348,12 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 >
 > ```
 > --set-site '{"portalId":"<PORTAL_ID>","currentDataModel":"Enhanced EDM"}'
-> --set-step 3.2 --status completed --output "Data model flipped to EDM · Portal Id <PORTAL_ID>"
+> --set-step 3.3 --status completed --output "Data model flipped to EDM · Portal Id <PORTAL_ID>"
 > ```
 
 ---
 
-### 3.3 Restart Site (manual)
+### 3.4 Restart Site (manual)
 
 **Goal**: User must manually restart the site for the data model change to take effect at runtime. There is no PAC command for this.
 
@@ -1317,7 +1385,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 > **→ Update report (end of Phase 3 Authoring Track):**
 >
 > ```
-> --set-step 3.3 --status completed --output "Site restarted by user · live on EDM"
+> --set-step 3.4 --status completed --output "Site restarted by user · live on EDM"
 > --set-phase 3 --status completed
 > --set-approval 4 phase-start
 > ```
@@ -1340,19 +1408,21 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 
 **Applies when**: state.track === 'B' (mode = `configurationDataReferences`)
 
-**Goal**: Capture SDM snapshot (needed for Phase 4 diff), migrate transactional references, locate and remediate the auto-emitted customization report (findings here usually indicate an ALM gap), activate EDM, prompt user to restart.
+**Goal**: Capture an SDM baseline (the Downstream Track has no Phase 2 SDM capture), verify the upstream-imported metadata via SDM↔EDM diff, then migrate transactional references, locate and remediate the auto-emitted customization report (findings here usually indicate an ALM gap), activate EDM, prompt user to restart.
 
-**Output**: Transactional refs migrated, customizations handled, site activated on EDM, user has confirmed restart.
+**Output**: Metadata diff confirmed, transactional refs migrated, customizations handled, site activated on EDM, user has confirmed restart.
 
 ---
 
-### 3.1 Migrate Transactional References
+### 3.1 Data Diff Validation (SDM ↔ EDM Metadata)
 
-**Goal**: Capture the SDM snapshot first (required for Phase 4 data diff), then run the migration command. Newer PAC auto-emits a customization report as a side effect.
+**Goal**: Before running the irreversible refs migration, capture an SDM baseline (Downstream Track has no Phase 2 SDM capture), re-download the site as EDM, and diff the two. Surface the result so the user can decide whether to proceed with refs migration or pause to investigate. The Pages & Components card in the live report visualizes the per-category comparison.
+
+**Why pre-refs:** the Downstream Track assumes metadata arrived via ALM solution import — but until we diff against an SDM baseline, we have no proof that the import landed cleanly. Catching mismatches here lets the user fix the ALM source and re-import without having to roll back a completed refs migration.
 
 **Actions**:
 
-1. **Capture SDM snapshot** (Downstream Track specific — Authoring Track captures in 2.1)
+1. **Capture SDM snapshot** (Downstream Track specific — the Authoring Track captures this in 2.1)
 
    ```powershell
    pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 1 --path "./mysite"
@@ -1369,7 +1439,53 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
      --label sdm
    ```
 
-2. **Execute Migration Command**
+2. **Re-download the migrated site as EDM**
+
+   ```powershell
+   pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 2 --path "./mysite-edm"
+   ```
+
+   Site root lives one level deeper than `--path`. Capture inner path as `<SITE_ROOT_EDM>` via `Get-ChildItem .\mysite-edm -Directory`.
+
+3. **Snapshot the EDM site**
+
+   ```powershell
+   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/snapshot-site.js" `
+     --site-root "<SITE_ROOT_EDM>" `
+     --output-dir "<OUTPUT_DIR>" `
+     --label edm
+   ```
+
+   Output: `<OUTPUT_DIR>/edm-snapshot.json`. The live report's **Pages & Components** card now shows `SDM → EDM` per-category pills.
+
+4. **Diff SDM vs EDM**
+
+   ```powershell
+   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/diff-snapshots.js" `
+     --sdm "<OUTPUT_DIR>/sdm-snapshot.json" `
+     --edm "<OUTPUT_DIR>/edm-snapshot.json" `
+     --output-dir "<OUTPUT_DIR>"
+   ```
+
+   Output: `<OUTPUT_DIR>/migration-data-diff.json` + console table grouped by category. See Authoring Track 3.1 step 3 for the pass/warn/fail rubric.
+
+5. **Surface the diff and gate refs migration**
+
+   Same Checkpoint 7 chat callout and AskUserQuestion gate as Authoring Track 3.1 step 4. On "Looks fine" proceed to step 3.2; on "Concerning" halt cleanly so the user can fix the upstream ALM source and re-import; on "Cancel" halt.
+
+**Output**: SDM baseline captured, metadata SDM↔EDM diff complete, user has decided whether to proceed with refs migration.
+
+> **→ Update report:** `--set-step 3.1 --status completed --output "Metadata diff: <PASS|WARN|FAIL> · <N> missing · <M> extra · <S> state-changed · user chose: <choice>"`
+
+---
+
+### 3.2 Migrate Transactional References
+
+**Goal**: Run `pac pages migrate-datamodel --mode configurationDataReferences` to move transactional data references.
+
+**Actions**:
+
+1. **Execute Migration Command**
 
    ```powershell
    pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --mode configurationDataReferences
@@ -1377,41 +1493,46 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 
    Newer PAC versions auto-emit `SiteCustomization*.csv` into `<OUTPUT_DIR>` or cwd.
 
-3. **Poll Status**
+2. **Poll Status with Verbose Output**
+
+   Poll every 1 minute using `-s -v` so each iteration captures the full tracker payload and refreshes the live report's **Transactional References Migration** card. Same loop shape as Authoring Track 3.2 step 3 — see there for the full PowerShell snippet and JSON payload schema. The Downstream Track loop is identical apart from the schema source comment.
 
    ```powershell
-   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --checkMigrationStatus
+   $webSiteId = "<WEBSITE_ID>"
+   $outputDir = "<OUTPUT_DIR>"
+   for ($i = 1; $i -le 30; $i++) {
+     $verboseOutput = pac pages migrate-datamodel --webSiteId $webSiteId -s -v 2>&1 | Out-String
+     node update-state.js --output-dir $outputDir --set-refs-migration "<PARSED_JSON>"
+     node update-state.js --output-dir $outputDir --set-activity "Polling migration status (attempt $i/30)"
+     if ($verboseOutput -match "Current migration status is\s*:\s*Completed") { break }
+     if ($verboseOutput -match "Current migration status is\s*:\s*Failed")    { break }
+     if ($verboseOutput -match "Current migration status is\s*:\s*Reverted")  { break }
+     Start-Sleep -Seconds 60
+   }
    ```
 
-   Same polling pattern as Phase 2 Authoring Track 2.2 — Completed proceeds; In Progress sets `--set-activity` and re-checks; Failed / 30-min timeout offers retry / reset / exit.
+   - **Completed**: clear activity, proceed to step 3.3.
+   - **In Progress (30-min timeout)**: surface timeout, ask user (retry / reset / exit).
+   - **Failed / Reverted**: surface error, ask user; card already shows chunk-level errors from the last poll.
 
-4. **Capture Verbose Tracker Details**
+   > **PAC build compatibility:** `-s -v` works on most current builds. If your PAC errors with `An unknown argument --verbose was passed`, fall back to plain `--checkMigrationStatus` in the loop and emit a smaller `--set-refs-migration` payload (`status` + `currentStep` only) once per iteration.
 
-   Once polling exits (Completed or Failed), run the verbose variant once to capture chunk-level details for the live report's Transactional References Migration card:
-
-   ```powershell
-   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" -s -v
-   ```
-
-   Parse the output and build a JSON payload with: `status`, `currentStep`, `createdAt` / `modifiedAt`, `stepHistory` (filtered to entries from `ConfigurationDataReferencesStarted` onward), and `runs` (chunk totals + per-chunk outcome and errors). See Authoring Track 3.1 step 5 for the field schema.
-
-   > **PAC build compatibility:** `-s -v` works on most current builds. If your PAC errors with `An unknown argument --verbose was passed`, fall back to plain `--checkMigrationStatus` and emit a smaller payload (`status` + `currentStep` only).
-
-**Output**: SDM snapshot captured, transactional references migrated, customization CSV auto-emitted, verbose tracker payload captured.
+**Output**: Transactional references migrated, customization CSV auto-emitted. Live report's Transactional References Migration card reflected real-time progress during polling.
 
 > **→ Update report:**
 >
 > ```
 > --clear-activity
-> --set-step 3.1 --status completed --output "Refs migrated · status=<STATUS>"
-> --set-refs-migration '{"status":"<STATUS>","currentStep":"<STEP>","createdAt":"<ISO>","modifiedAt":"<ISO>","stepHistory":[{"step":"<NAME>","at":"<ISO>"}],"runs":[{"name":"<NAME>","chunkTotal":<N>,"completed":<N>,"succeeded":<N>,"chunks":[{"name":"<CHUNK>","runStatus":1,"outcome":1,"errorType":null,"errorDetails":null}]}]}'
+> --set-step 3.2 --status completed --output "Refs migrated · status=<STATUS>"
 > ```
+>
+> The Transactional References Migration card is already up-to-date from the last loop iteration; no extra `--set-refs-migration` call needed here.
 
 ---
 
-### 3.2 Locate Customization Report
+### 3.3 Locate Customization Report
 
-**Goal**: Find the CSV PAC auto-generated in step 3.1; fall back to explicit generation if missing.
+**Goal**: Find the CSV PAC auto-generated in step 3.2; fall back to explicit generation if missing.
 
 **Actions**:
 
@@ -1422,7 +1543,7 @@ Same logic as Authoring Track Phase 2.3 — glob `SiteCustomization*.csv` in `<O
 > **→ Update report:**
 >
 > ```
-> --set-step 3.2 --status completed --output "CSV: <PATH> · <N> findings total"
+> --set-step 3.3 --status completed --output "CSV: <PATH> · <N> findings total"
 > --set-customization-report '{"path":"<ABSOLUTE_PATH_TO_OUTPUT_DIR>/customization-report.html","csvPath":"<ABSOLUTE_PATH_TO_OUTPUT_DIR>/SiteCustomization.csv","totalFindings":<N>,"breakdown":{"fetchxml":<N>,"liquid":<N>,"dme":<N>,"plugins":<N>,"workflows":<N>,"relationships":<N>}}'
 > ```
 >
@@ -1430,7 +1551,7 @@ Same logic as Authoring Track Phase 2.3 — glob `SiteCustomization*.csv` in `<O
 
 ---
 
-### 3.3 Remediate Customizations
+### 3.4 Remediate Customizations
 
 **Goal**: If customizations are flagged, apply auto-rewrites + augmented prompts and upload. Findings on Prod/Test/UAT usually indicate an ALM gap, so the warning is stronger than the Authoring Track's.
 
@@ -1438,7 +1559,7 @@ Same logic as Authoring Track Phase 2.3 — glob `SiteCustomization*.csv` in `<O
 
 1. **Branch on findings**
 
-   - **Zero findings**: log "no customizations to remediate" and proceed to step 3.4.
+   - **Zero findings**: log "no customizations to remediate" and proceed to step 3.5.
    - **Has findings**: surface ALM-gap warning, ask user how to proceed.
 
 2. **Surface ALM-gap warning**
@@ -1473,31 +1594,31 @@ Same logic as Authoring Track Phase 2.3 — glob `SiteCustomization*.csv` in `<O
 
 **Output**: Customizations remediated and uploaded (or zero findings, skipped).
 
-> **→ Update report:** `--set-step 3.3 --status completed --output "<Auto-rewrites uploaded | No customizations to remediate>"`
+> **→ Update report:** `--set-step 3.4 --status completed --output "<Auto-rewrites uploaded | No customizations to remediate>"`
 
 ---
 
-### 3.4 Activate EDM (Update Data Model Version)
+### 3.5 Activate EDM (Update Data Model Version)
 
-Identical to the Authoring Track's step 3.2 — retrieve Portal ID, ask the user to confirm activation via AskUserQuestion, run `--updateDataModelVersion`, confirm switch.
+Identical to the Authoring Track's step 3.3 — retrieve Portal ID, ask the user to confirm activation via AskUserQuestion, run `--updateDataModelVersion`, confirm switch.
 
 > **→ Update report:**
 >
 > ```
 > --set-site '{"portalId":"<PORTAL_ID>","currentDataModel":"Enhanced EDM"}'
-> --set-step 3.4 --status completed --output "Data model flipped to EDM · Portal Id <PORTAL_ID>"
+> --set-step 3.5 --status completed --output "Data model flipped to EDM · Portal Id <PORTAL_ID>"
 > ```
 
 ---
 
-### 3.5 Restart Site (manual)
+### 3.6 Restart Site (manual)
 
-Identical to the Authoring Track's step 3.3 — print restart instructions, wait for user confirmation via AskUserQuestion.
+Identical to the Authoring Track's step 3.4 — print restart instructions, wait for user confirmation via AskUserQuestion.
 
 > **→ Update report (end of Phase 3 Downstream Track):**
 >
 > ```
-> --set-step 3.5 --status completed --output "Site restarted by user · live on EDM"
+> --set-step 3.6 --status completed --output "Site restarted by user · live on EDM"
 > --set-phase 3 --status completed
 > --set-approval 4 phase-start
 > ```
@@ -1525,83 +1646,11 @@ Identical to the Authoring Track's step 3.3 — print restart instructions, wait
 
 ---
 
-### 4.1 Data Diff Validation (SDM ↔ EDM)
-
-**Goal**: Re-download the migrated site as EDM, snapshot it, diff against the SDM baseline captured in Phase 2, and surface the result for the user to decide whether to continue or rollback.
-
-**Actions**:
-
-1. **Re-download the migrated site as EDM**
-
-   ```powershell
-   pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 2 --path "./mysite-edm"
-   ```
-
-   Site root lives one level deeper than `--path` (e.g., `./mysite-edm/<slug>/website.yml`). Capture inner path as `<SITE_ROOT_EDM>` via `Get-ChildItem .\mysite-edm -Directory`.
-
-2. **Snapshot the EDM site**
-
-   ```powershell
-   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/snapshot-site.js" `
-     --site-root "<SITE_ROOT_EDM>" `
-     --output-dir "<OUTPUT_DIR>" `
-     --label edm
-   ```
-
-   Output: `<OUTPUT_DIR>/edm-snapshot.json`.
-
-3. **Diff SDM vs EDM**
-
-   ```powershell
-   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/diff-snapshots.js" `
-     --sdm "<OUTPUT_DIR>/sdm-snapshot.json" `
-     --edm "<OUTPUT_DIR>/edm-snapshot.json" `
-     --output-dir "<OUTPUT_DIR>"
-   ```
-
-   Output: `<OUTPUT_DIR>/migration-data-diff.json` + console table grouped by category. Exit code: `0` for pass or warn, `1` for fail.
-
-   Per-category status:
-   - **pass** — same identity set, no differences
-   - **warn** — identity match but some records changed statecode/value, OR an SDM-only category (e.g., `tags`, `websiteBindings`) shows 0 records in EDM (expected — EDM YAML format doesn't surface those, records still in `powerpagecomponent`)
-   - **fail** — records actually missing/extra (excluding SDM-only categories)
-
-4. **Surface the diff and ask the user**
-
-   > **📄 Checkpoint 7 — Tell the user about the diff result.** Print in chat:
-   >
-   > ```
-   > 📄 Data diff complete. Review:
-   >    <OUTPUT_DIR>\migration-data-diff.json
-   >    <OUTPUT_DIR>\sdm-to-edm-migration-report.html
-   >
-   > Status: <PASS | WARN | FAIL>
-   >    <N> records missing in EDM
-   >    <M> extra records in EDM
-   >    <S> records with state changes
-   > ```
-
-   Then ask:
-
-   | Question | Header | Options |
-   |----------|--------|---------|
-   | Data diff status: `<PASS\|WARN\|FAIL>`. `<N>` missing, `<M>` extra, `<S>` state-changed. How to proceed? | Diff Decision | Looks fine — continue to runtime smoke test, Concerning — proceed to rollback, Pause — I'll investigate manually |
-
-   **If "Looks fine"**: proceed to step 4.2.
-   **If "Concerning"**: skip step 4.2 and jump to step 4.3 (rollback path).
-   **If "Pause"**: halt skill cleanly. User can re-invoke later.
-
-**Output**: SDM↔EDM data diff complete, user has decided whether to continue, rollback, or pause.
-
-> **→ Update report (end of 4.1):** `--set-step 4.1 --status completed --output "Diff: <PASS|WARN|FAIL> · <N> missing · <M> extra · <S> state-changed · user chose: <choice>"`
-
----
-
-### 4.2 Runtime Smoke Test Recommendation (/test-site)
+### 4.1 Runtime Smoke Test Recommendation (/test-site)
 
 **Goal**: Recommend that the user run `/test-site` against the live migrated site for a browser-based smoke check. This step is **explicitly a recommendation step** in the live report — it's visible as a discrete sub-step so the user understands the runtime check is a real, recommended part of Phase 4.
 
-> **Skip this sub-step if step 4.1 user chose "Concerning"** (heading to rollback) **or "Pause"**. The recommendation only makes sense when the data diff was acceptable.
+> **Skip this sub-step if Phase 3.1 (Data Diff Validation) user chose "Concerning"** — we never reached this point because Phase 3 halted. This guard is here defensively in case the agent reaches 4.1 with a degraded migration; in normal flow, only `PASS`/`WARN` diffs let execution continue past the Phase 3.1 gate.
 
 **Actions**:
 
@@ -1633,22 +1682,22 @@ Identical to the Authoring Track's step 3.3 — print restart instructions, wait
 
    | Question | Header | Options |
    |----------|--------|---------|
-   | Have you run `/test-site` against the live site? (The data diff already passed; this is the recommended runtime check before marking the migration complete.) | Runtime Check | I've run it — all passed, I've run it — issues found, I'll skip and run it later, Skip entirely |
+   | Have you run `/test-site` against the live site? (The pre-flight metadata diff already passed in Phase 3.1; this is the recommended runtime check before marking the migration complete.) | Runtime Check | I've run it — all passed, I've run it — issues found, I'll skip and run it later, Skip entirely |
 
-   - **All passed**: log success, proceed to step 4.3.
-   - **Issues found**: log details (user describes), proceed to step 4.3 (user can still pick "Validated — but rollback needed" or "Deferred").
-   - **Skip and run later**: log "deferred runtime check," proceed to step 4.3.
-   - **Skip entirely**: log "user declined runtime check," proceed to step 4.3.
+   - **All passed**: log success, proceed to step 4.2.
+   - **Issues found**: log details (user describes), proceed to step 4.2 (user can still pick "Validated — but rollback needed" or "Deferred").
+   - **Skip and run later**: log "deferred runtime check," proceed to step 4.2.
+   - **Skip entirely**: log "user declined runtime check," proceed to step 4.2.
 
 > **Why we don't auto-invoke `/test-site` from here:** the test-site skill is interactive (asks the user to log in for auth-gated sites). Invoking it programmatically from inside this skill would deny the user the chance to pick a browser session and login profile, and would block this skill on a long browser-driven run. The recommendation pattern keeps the workflows decoupled.
 
-**Output**: User has run, deferred, or declined `/test-site`. Result captured for step 4.3.
+**Output**: User has run, deferred, or declined `/test-site`. Result captured for step 4.2.
 
-> **→ Update report (end of 4.2):** `--set-step 4.2 --status completed --output "Runtime check: <passed | issues found: <details> | deferred | declined>"`
+> **→ Update report (end of 4.1):** `--set-step 4.1 --status completed --output "Runtime check: <passed | issues found: <details> | deferred | declined>"`
 
 ---
 
-### 4.3 Final Status, Optional Rollback, Summary
+### 4.2 Final Status, Optional Rollback, Summary
 
 **Goal**: Capture the user's final validation status, perform rollback if requested, and print the success/rollback summary.
 
@@ -1666,13 +1715,13 @@ Identical to the Authoring Track's step 3.3 — print restart instructions, wait
 
 2. **Rollback (if user opted for it)**
 
-   Confirm the Portal ID collected during activation (Authoring Track step 3.2 or Downstream Track step 3.4) is still correct:
+   Confirm the Portal ID collected during activation (Authoring Track step 3.3 or Downstream Track step 3.5) is still correct:
 
    | Question | Header | Options |
    |----------|--------|---------|
    | Confirm Portal ID for rollback: `<PORTAL_ID>`. Is this correct? | Confirm Portal ID | Yes, proceed with rollback, No, let me re-enter it |
 
-   If "No": ask user to paste the correct Portal ID directly (don't try to construct the site URL — same reasoning as step 3.4 / 3.4-Downstream-Track).
+   If "No": ask user to paste the correct Portal ID directly (don't try to construct the site URL — same reasoning as Authoring Track step 3.3 / Downstream Track step 3.5).
 
    ```powershell
    pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --revertToStandardDataModel --portalId "<PORTAL_ID>"
@@ -1716,7 +1765,7 @@ Identical to the Authoring Track's step 3.3 — print restart instructions, wait
 > **→ Update report (end of Phase 4):**
 >
 > ```
-> --set-step 4.3 --status completed --output "<Migration complete | Rolled back | Deferred>"
+> --set-step 4.2 --status completed --output "<Migration complete | Rolled back | Deferred>"
 > --set-phase 4 --status completed
 > ```
 >
@@ -1737,12 +1786,12 @@ Identical to the Authoring Track's step 3.3 — print restart instructions, wait
 >
 > - **Authoring Track** (mode = `configurationData` or `all`):
 >   - Phase 2 renders as "Configuration Migration & Customization Remediation" (**4 sub-steps**: Capture SDM Snapshot → Migrate Metadata → Locate Customization Report → Remediate Customizations)
->   - Phase 3 renders as "Migration Execution" (**3 sub-steps**: Migrate Refs → Activate EDM → Restart)
+>   - Phase 3 renders as "Migration Execution" (**4 sub-steps**: Data Diff Validation → Migrate Refs → Activate EDM → Restart)
 > - **Downstream Track** (mode = `configurationDataReferences`):
 >   - Phase 2 renders as "Setting Up Metadata" (3 sub-steps)
->   - Phase 3 renders as "Migration Execution" (**5 sub-steps**: Migrate Refs → Locate Report → Remediate → Activate EDM → Restart)
+>   - Phase 3 renders as "Migration Execution" (**6 sub-steps**: Data Diff Validation → Migrate Refs → Locate Report → Remediate → Activate EDM → Restart)
 >
-> **Phase 4 has 3 sub-steps in both tracks**: Data Diff Validation → Runtime Smoke Test Recommendation (`/test-site`) → Final Status & Summary.
+> **Phase 4 has 2 sub-steps in both tracks**: Runtime Smoke Test Recommendation (`/test-site`) → Final Status & Summary. The SDM↔EDM data diff that used to live in Phase 4.1 was promoted to Phase 3.1 as a pre-refs safety gate.
 >
 > **Authoring Track total = 17 sub-steps. Downstream Track total = 18 sub-steps.** The `--set-track A|B` command at end of 1.7 (where `A` = Authoring Track and `B` = Downstream Track) rebuilds Phase 2 and Phase 3 cards in the live report from the chosen blueprint.
 

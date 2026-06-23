@@ -142,7 +142,7 @@ const APPROVAL_COPY = {
     heading: 'Approve to start Phase 3: Migration Execution',
     body: [
       'Phase 2 has finished: metadata migrated to EDM tables, customizations remediated and uploaded.',
-      '<strong>Phase 3</strong> migrates transactional references via <code>pac pages migrate-datamodel --mode configurationDataReferences</code> (auto-skipped if you chose <code>--mode all</code> in Phase 2), then activates EDM via <code>--updateDataModelVersion</code>, then prompts you to restart the site.',
+      '<strong>Phase 3</strong> starts with a pre-flight <strong>SDM ↔ EDM metadata diff</strong> so you can confirm the metadata migration landed cleanly before refs are migrated (irreversible). Then it migrates transactional references via <code>pac pages migrate-datamodel --mode configurationDataReferences</code> (auto-skipped if you chose <code>--mode all</code> in Phase 2), activates EDM via <code>--updateDataModelVersion</code>, and prompts you to restart the site.',
     ],
     approve: '› Yes, start migration execution',
     cancel: '› Cancel — stop before migration',
@@ -151,7 +151,7 @@ const APPROVAL_COPY = {
     heading: 'Approve to start Phase 3: Migration Execution',
     body: [
       'Phase 2 confirmed configuration metadata is present in the target environment.',
-      '<strong>Phase 3</strong> migrates transactional references, locates the auto-generated customization report, remediates any customizations that surface (stronger warning — Prod findings usually indicate an ALM gap), activates EDM, then prompts you to restart the site.',
+      '<strong>Phase 3</strong> starts with a pre-flight <strong>SDM ↔ EDM metadata diff</strong> so you can confirm the upstream-imported metadata landed cleanly before refs are migrated (irreversible). Then it migrates transactional references, locates the auto-generated customization report, remediates any customizations that surface (stronger warning — Prod findings usually indicate an ALM gap), activates EDM, and prompts you to restart the site.',
     ],
     approve: '› Yes, start migration execution',
     cancel: '› Cancel — stop before migration',
@@ -159,8 +159,8 @@ const APPROVAL_COPY = {
   '4:phase-start': {
     heading: 'Approve to start Phase 4: Post-Migration Validation',
     body: [
-      'Migration execution is complete. The site is now on Enhanced Data Model.',
-      '<strong>Phase 4</strong> re-downloads the site as EDM, diffs against the SDM snapshot to confirm every record migrated, recommends <code>/test-site</code> for runtime smoke testing, and offers an optional rollback if validation surfaces problems.',
+      'Migration execution is complete. The site is now on Enhanced Data Model. The pre-flight SDM ↔ EDM metadata diff in Phase 3.1 already confirmed every metadata record made it across.',
+      '<strong>Phase 4</strong> recommends <code>/test-site</code> for browser-based runtime smoke testing and offers an optional rollback if validation surfaces problems.',
     ],
     approve: '› Yes, start validation',
     cancel: '› Cancel — I\'ll validate manually',
