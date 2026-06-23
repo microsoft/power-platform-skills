@@ -141,7 +141,7 @@ cwd/
 └── migration-reports/                 ← <OUTPUT_DIR> — all migration artifacts
     ├── SiteCustomization.csv          ← PAC writes here
     ├── customization-report.html      ← script writes here
-    ├── skill-execution-report.html
+    ├── sdm-to-edm-migration-report.html
     ├── remediation-staged/            ← rewriter-proposed files (mirrors <SITE_ROOT> layout)
     │   └── web-templates/
     │       └── migration-check-demo/
@@ -182,7 +182,7 @@ Test-Path .\website.yml
 | --- | --- | --- |
 | `SiteCustomization.csv` (and auto-numbered `SiteCustomization<N>.csv`) | `pac pages migrate-datamodel --siteCustomizationReportPath` | `<OUTPUT_DIR>` (PAC sometimes writes to cwd instead — step 2.1 globs for it) |
 | `customization-report.html` | `generate-migration-reports.js` | `<OUTPUT_DIR>` |
-| `skill-execution-report.html` | `generate-migration-reports.js` | `<OUTPUT_DIR>` |
+| `sdm-to-edm-migration-report.html` | `generate-migration-reports.js` | `<OUTPUT_DIR>` |
 | `remediation-staged/<rel path>` (proposed file copies) | `generate-migration-reports.js --automate-fetchxml --automate-liquid` | `<OUTPUT_DIR>/remediation-staged/` (mirrors `<SITE_ROOT>` layout; live source untouched until apply step) |
 | `remediation-diff.json` (structured per-file diff manifest) | same script | `<OUTPUT_DIR>` (consumed by live report's Remediation Diff card and by `apply-remediation.js`) |
 
@@ -256,9 +256,9 @@ The skill executes local-only analysis (no Dataverse API) for every customizatio
 - **`categorizePlugin(snippet)`** — name-prefix match on `Microsoft.*` / `Adxstudio.*` / custom; emits per-finding action including original entity and step name.
 - **`buildDataModelExtensionChecklists(items)`** — groups column findings by source `adx_*` table; produces one checklist per source table with suggested new-table name and step-by-step guidance from the migration doc.
 
-Output is rendered in `skill-execution-report.html` under the "Liquid Findings — Categorized", "Plugin Findings — Categorized", "Auto-applied Rewrites", "Data Model Extensions — Per-table Remediation Checklists", and the augmented-prompts sections.
+Output is rendered in `sdm-to-edm-migration-report.html` under the "Liquid Findings — Categorized", "Plugin Findings — Categorized", "Auto-applied Rewrites", "Data Model Extensions — Per-table Remediation Checklists", and the augmented-prompts sections.
 
-See `assets/skill-execution-report.html` for the rendered remediation guidance shown to users.
+See `assets/sdm-to-edm-migration-report.html` for the rendered remediation guidance shown to users.
 
 ---
 
@@ -272,7 +272,7 @@ Two customization categories — **custom plugins** and **Data Model Extensions*
 For both, the skill follows a **paste-ready augmented-prompt** pattern:
 
 1. The script generates a complete, self-contained prompt tailored to the user's actual findings
-2. The prompt is written to a `.txt` file in `<OUTPUT_DIR>/` and embedded in `skill-execution-report.html`
+2. The prompt is written to a `.txt` file in `<OUTPUT_DIR>/` and embedded in `sdm-to-edm-migration-report.html`
 3. The user opens a fresh Claude Code session pointed at the relevant working directory (their plugin repo for plugins; any working dir for DME)
 4. The user pastes the prompt as the first message
 5. The receiving session performs the work — refactoring plugin code OR building a Dataverse solution package — and surfaces a diff or artifact for the user to review before applying

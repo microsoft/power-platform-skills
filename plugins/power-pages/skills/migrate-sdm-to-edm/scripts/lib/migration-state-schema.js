@@ -189,6 +189,8 @@ function buildInitialState({ webSiteId, outputDir, track = DEFAULT_TRACK, starte
       plugin: null,
       dme: null,
     },
+    customizationReport: null,
+    refsMigration: null,
     currentActivity: null,
   };
 }

@@ -51,7 +51,7 @@ Generate one section per customization type found in the report. Each section sh
 - Data Model Extensions: `badge-data-model`
 - Plugins: `badge-plugin`
 
-### 2. `skill-execution-report.html`
+### 2. `sdm-to-edm-migration-report.html`
 Displays the complete migration execution workflow with PAC commands, results, and remediation guidance.
 
 **Placeholders to fill:**
@@ -197,7 +197,7 @@ During skill execution:
    - Save to output directory and share with user
 
 2. **Phase 10 (After Migration Complete):**
-   - Render `skill-execution-report.html` with all execution data
+   - Render `sdm-to-edm-migration-report.html` with all execution data
    - Include all PAC commands run and their results
    - Include remediation guidance for each customization type found
    - Save to output directory and share with user

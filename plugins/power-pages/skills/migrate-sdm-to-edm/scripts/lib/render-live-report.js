@@ -351,7 +351,7 @@ ${approvalGates.map((g) => `    <li>${escapeHtml(g)}</li>`).join('\n')}
 
 /**
  * Render the merged Pages & Components tab — single comparison view of SDM vs EDM.
- * Three states:
+ * Three states for the inventory:
  *   - No SDM yet → empty card with guidance.
  *   - SDM present, no EDM yet → "EDM pending" banner + per-row `SDM → ?` placeholder.
  *   - Both present → "X of Y matched" header + per-row `SDM → EDM ✓/⚠/✗` pills.
@@ -364,6 +364,7 @@ function renderPagesComponentsSection({ sdmSnapshot, edmSnapshot }) {
     return `<div class="section" id="tab-pages">
   <h2>Pages &amp; Components</h2>
   <p class="section-desc">Side-by-side inventory of your site's components — captured before migration (SDM) and after (EDM) so you can verify every record made it across.</p>
+
   <div class="card empty-card">
     <div class="empty-icon">○</div>
     <div class="empty-title">SDM snapshot not yet captured</div>
@@ -707,7 +708,207 @@ ${fileRows}
 </div>`;
 }
 
-// ── Phase card / sub-step rendering ────────────────────────────────────────
+// ── Customization Findings card ─────────────────────────────────
+
+function renderCustomizationSection(state) {
+  return `<div class="section" id="tab-customization">
+  <h2>Customization Findings</h2>
+  <p class="section-desc">Catalog of <code>adx_*</code> usage detected by <code>pac pages migrate-datamodel</code> — what needs review or remediation before EDM activation.</p>
+
+${renderCustomizationCard(state)}
+</div>`;
+}
+
+const CATEGORY_LABELS = {
+  fetchxml: 'FetchXML',
+  liquid: 'Liquid',
+  dme: 'Data Model Extensions',
+  plugins: 'Plugins',
+  workflows: 'Workflows',
+  relationships: 'Relationships',
+};
+
+function renderCustomizationCard(state) {
+  const report = state.customizationReport;
+
+  // State 1: not yet scanned
+  if (!report) {
+    return `<div class="card cust-card pending">
+  <div class="card-title">Customization Findings <span class="cust-card-subtitle">— catalog of <code>adx_*</code> usage detected in your site</span></div>
+  <p class="cust-blurb">Customization report will appear here after the metadata migration scans your site (Authoring Track step 2.3 / Downstream Track step 3.2). The catalog lists every FetchXML, Liquid, DME, plugin, workflow, and relationship reference that needs review before EDM activation.</p>
+</div>`;
+  }
+
+  const total = Number.isFinite(report.totalFindings) ? report.totalFindings : 0;
+  const scannedAt = report.scannedAt ? formatTimestamp(report.scannedAt) : '';
+
+  // State 2: zero findings (clean)
+  if (total === 0) {
+    return `<div class="card cust-card clean">
+  <div class="card-title">Customization Findings <span class="cust-card-subtitle">— no <code>adx_*</code> customizations detected</span></div>
+  <div class="cust-clean-row">
+    <div class="cust-clean-icon">✓</div>
+    <div class="cust-clean-text">
+      <div class="cust-clean-title">Clean scan — nothing to remediate.</div>
+      <div class="cust-clean-sub">No FetchXML, Liquid, DME, plugin, workflow, or relationship references to <code>adx_*</code> tables were found. Remediation steps will be skipped.</div>
+    </div>
+  </div>
+  ${scannedAt ? `<div class="cust-meta">Scanned at ${escapeHtml(scannedAt)}</div>` : ''}
+</div>`;
+  }
+
+  // State 3: has findings
+  const breakdown = report.breakdown || {};
+  const chips = Object.keys(breakdown)
+    .filter((k) => Number.isFinite(breakdown[k]) && breakdown[k] > 0)
+    .map((k) => {
+      const label = CATEGORY_LABELS[k] || k;
+      return `<span class="cust-chip cust-chip-${escapeHtml(k)}"><span class="cust-chip-label">${escapeHtml(label)}</span><span class="cust-chip-count">${breakdown[k]}</span></span>`;
+    })
+    .join('');
+
+  const reportLink = report.path
+    ? `<a class="cust-open-btn" href="${escapeHtml(report.path)}">
+      <span class="cust-open-icon">📄</span>
+      <span class="cust-open-text">
+        <span class="cust-open-title">Open customization-report.html</span>
+        <span class="cust-open-sub">Standalone catalog with per-finding details and remediation guidance</span>
+      </span>
+    </a>`
+    : '';
+
+  const csvLine = report.csvPath
+    ? `<div class="cust-meta">Source CSV: <code>${escapeHtml(report.csvPath)}</code></div>`
+    : '';
+
+  return `<div class="card cust-card has-findings">
+  <div class="card-title">Customization Findings <span class="cust-card-subtitle">— review before EDM activation</span></div>
+  <div class="cust-summary-row">
+    <div class="cust-total">
+      <div class="cust-total-num">${total}</div>
+      <div class="cust-total-label">finding${total === 1 ? '' : 's'} across ${Object.keys(breakdown).filter((k) => breakdown[k] > 0).length} categor${Object.keys(breakdown).filter((k) => breakdown[k] > 0).length === 1 ? 'y' : 'ies'}</div>
+    </div>
+    <div class="cust-chips">${chips}</div>
+  </div>
+  ${reportLink}
+  ${csvLine}
+  ${scannedAt ? `<div class="cust-meta">Scanned at ${escapeHtml(scannedAt)}</div>` : ''}
+</div>`;
+}
+
+// ── Transactional References Migration card ───────────────────────
+
+function renderRefsMigrationSection(state) {
+  return `<div class="section" id="tab-refs">
+  <h2>Transactional References Migration</h2>
+  <p class="section-desc">Chunk-level tracker from <code>pac pages migrate-datamodel --webSiteId &lt;ID&gt; -s -v</code> — step history, per-run totals, and any chunk-level errors.</p>
+
+${renderRefsMigrationCard(state)}
+</div>`;
+}
+
+const REFS_STATUS_META = {
+  NotStarted: { cls: 'pending', label: 'Not started' },
+  Running: { cls: 'running', label: 'Running' },
+  Completed: { cls: 'completed', label: 'Completed' },
+  Failed: { cls: 'failed', label: 'Failed' },
+  Reverted: { cls: 'warn', label: 'Reverted' },
+  Unknown: { cls: 'warn', label: 'Unknown' },
+};
+
+function formatDuration(fromIso, toIso) {
+  if (!fromIso || !toIso) return '';
+  const from = new Date(fromIso).getTime();
+  const to = new Date(toIso).getTime();
+  if (Number.isNaN(from) || Number.isNaN(to) || to < from) return '';
+  const sec = Math.floor((to - from) / 1000);
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  const remSec = sec % 60;
+  if (min < 60) return `${min}m ${remSec}s`;
+  const hr = Math.floor(min / 60);
+  const remMin = min % 60;
+  return `${hr}h ${remMin}m`;
+}
+
+function renderRefsMigrationCard(state) {
+  const r = state.refsMigration;
+
+  // State 1: not yet captured
+  if (!r) {
+    return `<div class="card refs-card pending">
+  <div class="card-title">Transactional References Migration <span class="refs-card-subtitle">— chunk-level tracker from <code>pac pages migrate-datamodel -s -v</code></span></div>
+  <p class="refs-blurb">Migration progress will appear here once the transactional references migration starts (Phase 3.1). You'll see step history, per-run chunk totals, and any chunk-level errors.</p>
+</div>`;
+  }
+
+  const meta = REFS_STATUS_META[r.status] || REFS_STATUS_META.Unknown;
+  const totalChunks = (r.runs || []).reduce((a, run) => a + (Number.isFinite(run.chunkTotal) ? run.chunkTotal : 0), 0);
+  const totalSucceeded = (r.runs || []).reduce((a, run) => a + (Number.isFinite(run.succeeded) ? run.succeeded : 0), 0);
+  const totalCompleted = (r.runs || []).reduce((a, run) => a + (Number.isFinite(run.completed) ? run.completed : 0), 0);
+  const totalFailed = totalCompleted - totalSucceeded;
+  const duration = formatDuration(r.createdAt, r.modifiedAt);
+
+  const stepHistoryRows = (r.stepHistory || []).map((s) => {
+    const stepName = escapeHtml(s.step || '');
+    const ts = s.at ? formatTimestamp(s.at) : '';
+    return `      <div class="refs-step-row"><div class="refs-step-name">${stepName}</div><div class="refs-step-ts">${escapeHtml(ts)}</div></div>`;
+  }).join('\n');
+
+  const renderRunRows = (run, idx) => {
+    const runHeader = `<div class="refs-run-header">
+        <div class="refs-run-name">${escapeHtml(run.name || `Run ${idx + 1}`)}</div>
+        <div class="refs-run-stats"><span class="refs-run-stat">${run.chunkTotal || 0} chunks</span> <span class="refs-run-stat ok">${run.succeeded || 0} succeeded</span>${(run.completed || 0) - (run.succeeded || 0) > 0 ? ` <span class="refs-run-stat fail">${(run.completed || 0) - (run.succeeded || 0)} failed</span>` : ''}</div>
+      </div>`;
+    const chunks = Array.isArray(run.chunks) ? run.chunks : [];
+    if (chunks.length === 0) return `    <div class="refs-run">${runHeader}</div>`;
+    const chunkRows = chunks.map((c) => {
+      const hasErr = c.errorType && c.errorType !== 'N/A' && c.errorType !== null;
+      const rowCls = hasErr ? ' refs-chunk-error' : '';
+      const outcomeIcon = hasErr ? '✗' : '✓';
+      const errCol = hasErr
+        ? `<div class="refs-chunk-err"><span class="refs-chunk-err-type">${escapeHtml(c.errorType)}</span>${c.errorDetails && c.errorDetails !== 'N/A' ? `<span class="refs-chunk-err-detail">${escapeHtml(c.errorDetails)}</span>` : ''}</div>`
+        : '';
+      return `        <div class="refs-chunk-row${rowCls}"><div class="refs-chunk-icon">${outcomeIcon}</div><div class="refs-chunk-name" title="${escapeHtml(c.name || '')}">${escapeHtml(c.name || '')}</div>${errCol}</div>`;
+    }).join('\n');
+    const collapse = chunks.length > 5;
+    const chunksBlock = collapse
+      ? `<details class="refs-chunks"><summary>Show ${chunks.length} chunks</summary><div class="refs-chunk-list">\n${chunkRows}\n      </div></details>`
+      : `<div class="refs-chunk-list">\n${chunkRows}\n      </div>`;
+    return `    <div class="refs-run">${runHeader}${chunksBlock}</div>`;
+  };
+
+  const runRows = (r.runs || []).map(renderRunRows).join('\n');
+  const capturedAt = r.capturedAt ? formatTimestamp(r.capturedAt) : '';
+
+  return `<div class="card refs-card ${meta.cls}">
+  <div class="card-title">Transactional References Migration <span class="refs-card-subtitle">— chunk-level tracker from <code>pac pages migrate-datamodel -s -v</code></span></div>
+  <div class="refs-summary">
+    <div class="refs-status-pill refs-${meta.cls}">${escapeHtml(meta.label)}</div>
+    <div class="refs-kvs">
+      ${r.currentStep ? `<div class="refs-kv"><div class="refs-kv-label">Current step</div><div class="refs-kv-value">${escapeHtml(r.currentStep)}</div></div>` : ''}
+      ${totalChunks > 0 ? `<div class="refs-kv"><div class="refs-kv-label">Chunks</div><div class="refs-kv-value"><span class="refs-chunks-ok">${totalSucceeded}</span> / ${totalChunks}${totalFailed > 0 ? ` <span class="refs-chunks-fail">(${totalFailed} failed)</span>` : ''}</div></div>` : ''}
+      ${duration ? `<div class="refs-kv"><div class="refs-kv-label">Duration</div><div class="refs-kv-value">${escapeHtml(duration)}</div></div>` : ''}
+    </div>
+  </div>
+
+  ${stepHistoryRows ? `<details class="refs-steps">
+    <summary>Step history (${(r.stepHistory || []).length})</summary>
+    <div class="refs-step-list">
+${stepHistoryRows}
+    </div>
+  </details>` : ''}
+
+  ${runRows ? `<div class="refs-runs-heading">Migration runs</div>
+  <div class="refs-runs-list">
+${runRows}
+  </div>` : ''}
+
+  ${capturedAt ? `<div class="refs-meta">Captured at ${escapeHtml(capturedAt)}</div>` : ''}
+</div>`;
+}
+
+// ── Phase card / sub-step rendering ────────────────────────────
 
 function phaseStatusLabel(status) {
   switch (status) {
@@ -1161,6 +1362,94 @@ details[open] > summary { margin-bottom:6px; }
 .diff-line.removed .diff-sym { color:var(--critical); }
 .diff-text { flex:1; color:var(--text-bright); white-space:pre-wrap; word-break:break-all; }
 
+/* Customization Findings card */
+.cust-card .card-title { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
+.cust-card-subtitle { font-size:12px; font-weight:500; color:var(--text-dim); }
+.cust-card-subtitle code { font-family:var(--mono); font-size:11.5px; background:var(--surface2); padding:1px 5px; border-radius:3px; color:var(--text-bright); }
+.cust-card.pending { border-left:3px solid var(--border-light); opacity:0.85; }
+.cust-card.clean { border-left:3px solid var(--pass); }
+.cust-card.has-findings { border-left:3px solid var(--warning); }
+.cust-blurb { font-size:13px; color:var(--text-dim); line-height:1.65; margin:0; }
+.cust-clean-row { display:flex; align-items:center; gap:14px; padding:6px 0; }
+.cust-clean-icon { font-size:28px; color:var(--pass); font-weight:700; min-width:30px; text-align:center; }
+.cust-clean-text { flex:1; }
+.cust-clean-title { font-size:14px; font-weight:700; color:var(--text-bright); margin-bottom:3px; }
+.cust-clean-sub { font-size:12.5px; color:var(--text); line-height:1.55; }
+.cust-clean-sub code { font-family:var(--mono); font-size:11.5px; background:var(--surface2); padding:1px 5px; border-radius:3px; color:var(--text-bright); }
+.cust-summary-row { display:flex; align-items:center; gap:18px; flex-wrap:wrap; padding:6px 0 12px; }
+.cust-total { display:flex; flex-direction:column; align-items:flex-start; padding-right:18px; border-right:1px solid var(--border); }
+.cust-total-num { font-size:32px; font-weight:700; color:var(--warning); line-height:1; font-family:var(--mono); }
+.cust-total-label { font-size:11px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px; margin-top:4px; font-weight:600; }
+.cust-chips { display:flex; flex-wrap:wrap; gap:6px; flex:1; }
+.cust-chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; background:var(--surface2); border:1px solid var(--border); border-radius:14px; font-size:11.5px; }
+.cust-chip-label { color:var(--text); font-weight:600; }
+.cust-chip-count { color:var(--warning); font-weight:700; font-family:var(--mono); background:var(--surface); padding:1px 7px; border-radius:10px; min-width:18px; text-align:center; }
+.cust-open-btn { display:inline-flex; align-items:center; gap:12px; padding:12px 18px; margin-top:4px; background:var(--accent); color:#ffffff; text-decoration:none; border-radius:var(--radius-sm); box-shadow:var(--shadow-4); transition:background 0.15s; }
+.cust-open-btn:hover { background:#106ebe; box-shadow:var(--shadow-8); }
+.cust-open-icon { font-size:22px; line-height:1; opacity:0.95; }
+.cust-open-text { display:flex; flex-direction:column; }
+.cust-open-title { font-size:13.5px; font-weight:700; }
+.cust-open-sub { font-size:11px; opacity:0.85; margin-top:2px; }
+.cust-meta { font-size:11px; color:var(--text-dim); font-family:var(--mono); margin-top:10px; }
+.cust-meta code { font-family:var(--mono); background:var(--surface2); padding:1px 5px; border-radius:3px; color:var(--text-bright); }
+
+/* Transactional References Migration card */
+.refs-card .card-title { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
+.refs-card-subtitle { font-size:12px; font-weight:500; color:var(--text-dim); }
+.refs-card-subtitle code { font-family:var(--mono); font-size:11.5px; background:var(--surface2); padding:1px 5px; border-radius:3px; color:var(--text-bright); }
+.refs-card.pending { border-left:3px solid var(--border-light); opacity:0.85; }
+.refs-card.running { border-left:3px solid var(--info); }
+.refs-card.completed { border-left:3px solid var(--pass); }
+.refs-card.failed { border-left:3px solid var(--critical); }
+.refs-card.warn { border-left:3px solid var(--warning); }
+.refs-blurb { font-size:13px; color:var(--text-dim); line-height:1.65; margin:0; }
+.refs-summary { display:flex; align-items:center; gap:18px; flex-wrap:wrap; padding:6px 0 12px; }
+.refs-status-pill { font-size:11px; font-weight:700; padding:5px 12px; border-radius:14px; text-transform:uppercase; letter-spacing:0.5px; }
+.refs-status-pill.refs-pending { color:var(--text-dim); background:var(--surface2); border:1px solid var(--border); }
+.refs-status-pill.refs-running { color:var(--info); background:var(--info-bg); border:1px solid var(--info-border); }
+.refs-status-pill.refs-completed { color:var(--pass); background:var(--pass-bg); border:1px solid var(--pass-border, var(--border)); }
+.refs-status-pill.refs-failed { color:var(--critical); background:var(--critical-bg); border:1px solid var(--border); }
+.refs-status-pill.refs-warn { color:var(--warning); background:var(--surface2); border:1px solid var(--border); }
+.refs-kvs { display:flex; flex-wrap:wrap; gap:18px; flex:1; }
+.refs-kv { display:flex; flex-direction:column; min-width:120px; }
+.refs-kv-label { font-size:10px; font-weight:600; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:3px; }
+.refs-kv-value { font-size:13px; color:var(--text-bright); font-family:var(--mono); }
+.refs-chunks-ok { color:var(--pass); font-weight:700; }
+.refs-chunks-fail { color:var(--critical); font-weight:700; }
+.refs-steps { margin-bottom:12px; }
+.refs-steps > summary { cursor:pointer; padding:8px 0; font-size:12px; font-weight:600; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px; list-style:none; }
+.refs-steps > summary::-webkit-details-marker { display:none; }
+.refs-steps > summary:hover { color:var(--text-bright); }
+.refs-steps > summary::before { content:'▸ '; display:inline-block; transition:transform 0.15s; }
+.refs-steps[open] > summary::before { content:'▾ '; }
+.refs-step-list { display:flex; flex-direction:column; gap:2px; padding:6px 0 0; border-top:1px dashed var(--border); }
+.refs-step-row { display:flex; align-items:center; gap:14px; padding:4px 0; font-size:12px; font-family:var(--mono); }
+.refs-step-name { color:var(--text-bright); flex:1; font-weight:600; }
+.refs-step-ts { color:var(--text-dim); font-size:11px; }
+.refs-runs-heading { font-size:11px; font-weight:700; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px; margin:14px 0 6px; }
+.refs-runs-list { display:flex; flex-direction:column; gap:8px; }
+.refs-run { background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 14px; }
+.refs-run-header { display:flex; align-items:center; gap:12px; margin-bottom:8px; flex-wrap:wrap; }
+.refs-run-name { font-size:12.5px; font-weight:700; color:var(--text-bright); flex:1; min-width:0; }
+.refs-run-stats { display:flex; gap:8px; font-size:11px; font-family:var(--mono); flex-wrap:wrap; }
+.refs-run-stat { color:var(--text-dim); padding:2px 7px; background:var(--surface); border:1px solid var(--border); border-radius:10px; }
+.refs-run-stat.ok { color:var(--pass); border-color:var(--pass); }
+.refs-run-stat.fail { color:var(--critical); border-color:var(--critical); }
+.refs-chunks > summary { cursor:pointer; padding:6px 0; font-size:11.5px; color:var(--text-dim); list-style:none; }
+.refs-chunks > summary::-webkit-details-marker { display:none; }
+.refs-chunks > summary::before { content:'▸ '; display:inline-block; }
+.refs-chunks[open] > summary::before { content:'▾ '; }
+.refs-chunk-list { display:flex; flex-direction:column; gap:3px; padding-top:6px; border-top:1px dashed var(--border); }
+.refs-chunk-row { display:flex; align-items:center; gap:10px; padding:3px 0; font-size:11.5px; font-family:var(--mono); }
+.refs-chunk-row.refs-chunk-error { background:var(--critical-bg); padding:6px 8px; border-radius:3px; }
+.refs-chunk-icon { color:var(--pass); font-weight:700; min-width:14px; text-align:center; }
+.refs-chunk-row.refs-chunk-error .refs-chunk-icon { color:var(--critical); }
+.refs-chunk-name { flex:1; color:var(--text-bright); min-width:0; word-break:break-all; }
+.refs-chunk-err { display:flex; flex-direction:column; gap:2px; font-size:11px; min-width:0; }
+.refs-chunk-err-type { color:var(--critical); font-weight:700; }
+.refs-chunk-err-detail { color:var(--text-dim); }
+.refs-meta { font-size:11px; color:var(--text-dim); font-family:var(--mono); margin-top:10px; }
+
 /* Footer */
 .footer { position:fixed; bottom:0; left:0; right:0; text-align:center; padding:10px; font-size:11px; color:var(--text-dim); border-top:1px solid var(--border); background:var(--surface); z-index:50; }
 
@@ -1226,6 +1515,8 @@ function renderSidebar() {
   <button class="nav-btn active" data-tab="overview"><span class="nav-icon">◉</span><span class="nav-label">Overview</span></button>
   <button class="nav-btn" data-tab="plan"><span class="nav-icon">☰</span><span class="nav-label">Plan</span></button>
   <button class="nav-btn" data-tab="pages"><span class="nav-icon">▤</span><span class="nav-label">Pages &amp; Components</span></button>
+  <button class="nav-btn" data-tab="customization"><span class="nav-icon">⚠</span><span class="nav-label">Customization Findings</span></button>
+  <button class="nav-btn" data-tab="refs"><span class="nav-icon">⇆</span><span class="nav-label">Transactional Refs</span></button>
   <button class="nav-btn" data-tab="review"><span class="nav-icon">✓</span><span class="nav-label">Migration &amp; Review</span></button>
 </div>`;
 }
@@ -1270,6 +1561,10 @@ ${renderOverviewSection(state, snapshots)}
 ${renderPlanSection(state)}
 
 ${renderPagesComponentsSection({ sdmSnapshot, edmSnapshot })}
+
+${renderCustomizationSection(state)}
+
+${renderRefsMigrationSection(state)}
 
 ${renderMigrationReviewSection(state, snapshots)}
   </div>

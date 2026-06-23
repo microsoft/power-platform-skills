@@ -42,7 +42,7 @@ Guide the user through a comprehensive migration of an existing Power Pages site
 Throughout this skill, progress is mirrored to two files inside `<OUTPUT_DIR>`:
 
 - `migration-state.json` — single source of truth for current state
-- `skill-execution-report.html` — auto-regenerated from state after every update; user opens in browser to watch progress
+- `sdm-to-edm-migration-report.html` — auto-regenerated from state after every update; user opens in browser to watch progress
 
 **Init point.** As soon as `<OUTPUT_DIR>` is resolved (end of step 1.2) AND WebSiteId is known (from `$ARGUMENTS=GUID`, `website.yml`, or step 1.3 site discovery), run once:
 
@@ -71,26 +71,26 @@ After init, each sub-step below ends with a **→ Update report** callout. Execu
 
 ### Pointing the user at the report
 
-After each major state change, **explicitly tell the user where the report is** so they can open it in a browser and verify before approving the next phase. The user shouldn't have to guess where files live. Use this pattern in the chat:
+The skill **opens the live report in the user's default browser exactly once** — right after `--init` succeeds at Checkpoint 1 (see step 1.2). On every subsequent state change, the file is rewritten in place, so the user just refreshes the already-open tab. After each major state change, **explicitly tell the user where the report is and prompt them to refresh** so they can verify before approving the next phase. The user shouldn't have to guess where files live. Use this pattern in the chat:
 
 ```
 📄 Live execution report updated:
-   <ABSOLUTE_PATH_TO>\skill-execution-report.html
+   <ABSOLUTE_PATH_TO>\sdm-to-edm-migration-report.html
 
-Please open it in your browser to review the plan/results before approving the next phase.
+Refresh the browser tab opened in Checkpoint 1 to review the plan/results before approving the next phase. (If you closed it, re-open the path above in your browser.)
 ```
 
 Surface that callout at these **7 checkpoints**:
 
 | # | Checkpoint | Files to point at |
 |---|---|---|
-| 1 | After `--init` runs (end of step 1.2) | `skill-execution-report.html` (initialized state) |
-| 2 | End of Phase 1, before Phase 2 approval | `skill-execution-report.html` (shows full Phase 1 outcomes + plan for next phase) |
+| 1 | After `--init` runs (end of step 1.3) | `sdm-to-edm-migration-report.html` (initialized state) |
+| 2 | End of Phase 1, before Phase 2 approval | `sdm-to-edm-migration-report.html` (shows full Phase 1 outcomes + plan for next phase) |
 | 3 | After step 2.3 (Authoring Track) — customization CSV parsed | `customization-report.html` (findings catalog) |
 | 4 | Mid-step 2.4 (Authoring Track) — after auto-rewrites are staged, before apply+upload approval | `remediation-diff.json` + `remediation-staged/` tree, augmented prompt files (review the **Remediation Diff** card in the live report) |
-| 5 | End of Phase 2, before Phase 3 approval | `skill-execution-report.html` (shows Phase 2 outcomes) |
-| 6 | End of Phase 3, before Phase 4 approval | `skill-execution-report.html` (shows EDM activation status) |
-| 7 | End of Phase 4 (data-diff produced) | `migration-data-diff.json` + `skill-execution-report.html` |
+| 5 | End of Phase 2, before Phase 3 approval | `sdm-to-edm-migration-report.html` (shows Phase 2 outcomes) |
+| 6 | End of Phase 3, before Phase 4 approval | `sdm-to-edm-migration-report.html` (shows EDM activation status) |
+| 7 | End of Phase 4 (data-diff produced) | `migration-data-diff.json` + `sdm-to-edm-migration-report.html` |
 
 The skill-level approval prompt that follows (via AskUserQuestion) is for the **user's substantive approval to proceed** — not Claude Code's standard command-execution permission prompt. Always print the file paths in chat first so the user knows where to look.
 
@@ -167,7 +167,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 
 1. **Resolve site location**
 
-   Run these checks in order to determine `<SITE_ROOT>` (where the site source lives or will be downloaded to) and `<OUTPUT_DIR>` (where all migration artifacts go):
+   Run these checks in order to determine `<SITE_ROOT>` (where the site source lives or will be downloaded to) and `<PARENT_OUTPUT_DIR>` (the parent directory under which step 1.3 will create a per-migration subfolder named `<env>--<slug>/` for all migration artifacts):
 
    ```powershell
    # Check A: is cwd itself a site root?
@@ -179,13 +179,13 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 
    Resolve based on results:
 
-   | Result of check A | Result of check B | `<SITE_ROOT>` | `<OUTPUT_DIR>` |
+   | Result of check A | Result of check B | `<SITE_ROOT>` | `<PARENT_OUTPUT_DIR>` |
    |---|---|---|---|
    | True (cwd is the site) | — | `.` (cwd) | `..\migration-reports` (sibling of site dir, so site source stays clean) |
    | False | Exactly one subdir | `.\<subdir>` | `.\migration-reports` (in cwd alongside the site folder) |
    | False | Zero or multiple subdirs | (will download to `.\mysite\<auto-slug>` in step 2.2) | `.\migration-reports` (in cwd) |
 
-   Capture both `<SITE_ROOT>` and `<OUTPUT_DIR>` as durable values used throughout the rest of the skill. Create `<OUTPUT_DIR>` if it doesn't exist yet.
+   Capture both `<SITE_ROOT>` and `<PARENT_OUTPUT_DIR>` as durable values. The actual per-migration subfolder `<MIGRATION_OUTPUT_DIR>` is computed in step 1.3 and is used throughout the rest of the skill. Create `<PARENT_OUTPUT_DIR>` if it doesn't exist yet.
 
 2. **Use website.yml if present**
 
@@ -214,26 +214,9 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 
    In this path, `<SITE_ROOT>` will be set to the path step 2.2 downloads to (typically `.\mysite\<auto-slug>` once `pac pages download` runs).
 
-**Output**: WebSiteId captured; `<SITE_ROOT>` and `<OUTPUT_DIR>` resolved (or marked "download in step 2.2" for `<SITE_ROOT>`)
+**Output**: WebSiteId captured; `<SITE_ROOT>` and `<PARENT_OUTPUT_DIR>` resolved (or marked "download in step 2.2" for `<SITE_ROOT>`)
 
-> **→ Initialize live report.** If WebSiteId is now known (from `$ARGUMENTS=GUID` or `website.yml`), run `--init --output-dir "<OUTPUT_DIR>" --website-id "<WEBSITE_ID>"` once. Then mark steps 1.1 and 1.2 completed:
->
-> ```
-> --set-step 1.1 --status completed --output "PAC CLI v<X> · auth <profile> · env <name>"
-> --set-step 1.2 --status completed --output "<SITE_ROOT> resolved; <OUTPUT_DIR> created"
-> ```
->
-> If WebSiteId is not yet known, defer init to the end of step 1.3.
->
-> **📄 Checkpoint 1 — Tell the user about the report.** After `--init` succeeds, print this in chat:
->
-> ```
-> 📄 Live execution report initialized:
->    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\skill-execution-report.html
->
-> Open this in your browser to follow along as the migration progresses. The report
-> refreshes automatically after each sub-step.
-> ```
+> **Live report init is deferred to the end of step 1.3.** The init command needs the environment name and the website slug to compute a per-migration subfolder; both are captured by `pac auth list` (step 1.1) and `pac pages list -v` (step 1.3) respectively. We don't write `migration-state.json` here in 1.2.
 
 ---
 
@@ -314,11 +297,38 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 
 **Output**: Target site confirmed as SDM, template confirmed by user, WebSiteId/ModelVersion/URL slug/Portal Id captured (Portal Id marked "captured" or "needs prompt")
 
-> **→ Update report.** If the live report wasn't initialized at end of 1.2, do it now (`--init` plus batched `--set-step 1.1` / `1.2` completed). Then:
+> **→ Initialize live report (per-migration subfolder).** Now that env name (from step 1.1's `pac auth list`) and website slug (from `pac pages list -v` above) are both known, initialize state. Run:
 >
 > ```
+> node update-state.js --init \
+>   --output-dir "<PARENT_OUTPUT_DIR>" \
+>   --website-id "<WEBSITE_ID>" \
+>   --env-name "<ENV_NAME>" \
+>   --slug "<URL_SLUG>"
+> ```
+>
+> The command creates a per-migration subfolder `<PARENT_OUTPUT_DIR>/<sanitized-env>--<sanitized-slug>/` and writes `migration-state.json` + `sdm-to-edm-migration-report.html` inside it. It prints the resolved subfolder path on stdout — **capture that path as `<MIGRATION_OUTPUT_DIR>` and use it as `--output-dir` for every subsequent `update-state.js` call and as the artifacts directory throughout the rest of the skill.** Pass `--force` only if you intentionally want to wipe an existing migration in the same subfolder.
+>
+> Then batch-update the steps that ran before init:
+>
+> ```
+> --set-step 1.1 --status completed --output "PAC CLI v<X> · auth <profile> · env <ENV_NAME>"
+> --set-step 1.2 --status completed --output "<SITE_ROOT> resolved; parent <PARENT_OUTPUT_DIR>"
 > --set-site '{"name":"<SITE_NAME>","slug":"<URL_SLUG>","portalId":"<PORTAL_ID_OR_NULL>","currentDataModel":"Standard SDM","template":"<TEMPLATE_NAME>","siteRoot":"<SITE_ROOT>"}'
 > --set-step 1.3 --status completed --output "Site <NAME> · ModelVersion=Standard · template <TEMPLATE>"
+> ```
+>
+> **📄 Checkpoint 1 — Open the live report in the user's default browser, then tell them.** After `--init` succeeds, open `<MIGRATION_OUTPUT_DIR>\sdm-to-edm-migration-report.html` in the user's default browser using the platform-appropriate file opener for the current environment. For example, use `open` on macOS, `xdg-open` on Linux, or the equivalent default-browser opener available on Windows (PowerShell: `Start-Process <path>`).
+>
+> Then print this in chat so the user knows where the tab they just saw came from and what to do next:
+>
+> ```
+> 📄 SDM → EDM migration report initialized and opened in your default browser:
+>    <MIGRATION_OUTPUT_DIR>\sdm-to-edm-migration-report.html
+>
+> Keep this tab open and refresh it as the migration progresses — the file is
+> regenerated in place after every sub-step. (If the tab didn't open, paste the
+> path above into your browser.)
 > ```
 
 ---
@@ -335,7 +345,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
    pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --checkMigrationStatus
    ```
 
-   > **PAC CLI build note:** `pac pages migrate-datamodel --checkMigrationStatus` does **not** accept `--verbose` on PAC 1.47.1+ — it errors with `An unknown argument --verbose was passed.` On older builds the flag returned a tracker summary with `createdOn`, `modifiedOn`, step history, and chunk errors; on current builds you only get the basic status line. Run without `--verbose`; if you need elapsed-time / per-step details for a long-running migration, query the migration tracker record directly in Dataverse via PAC data tools.
+   > **PAC CLI build note:** Verbose output (`-v` / `--verbose`) behavior varies by PAC build. On many current builds, `pac pages migrate-datamodel --webSiteId <ID> -s -v` returns a tracker summary with `Created On`, `Modified On`, current step, step history, and per-chunk outcomes — that's the payload Phase 3.1 captures into the Transactional References Migration card. On some older builds the flag errored with `An unknown argument --verbose was passed.`; if you hit that, run without `-v` and feed the simpler payload (`status` + `currentStep` only) to `--set-refs-migration`. For elapsed-time / per-step details when verbose isn't supported, query the migration tracker record directly in Dataverse via PAC data tools.
 
 2. **Parse Status**
 
@@ -579,7 +589,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
    - `configurationDataReferences`: Migrate transactional data references only. Assumes config metadata is already in EDM (typically via ALM solution import on Test/UAT/Prod).
    - `all`: Migrate metadata AND refs in one shot. **Advanced override.** Only safe if no `adx_*` customizations exist. When chosen, Phase 3.1 (Migrate Transactional References) is skipped automatically because refs are already done in Phase 2.2 — but Phase 3.4 (Activate EDM) and Phase 3.5 (Restart Site) still run.
 
-   If user picks an override that's risky for their env, show a warning:
+   If user picks an override for their env, show a warning:
    - **`all` on any env**: "Recommended only when you know there are no `adx_*` customizations. Once refs migrate, customization fixes become much harder. Proceed?"
    - **`configurationDataReferences` on Dev/Single env**: "Only safe if metadata is already in EDM (from a prior `configurationData` run or solution import). Proceed?"
 
@@ -613,7 +623,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 >
 > ```
 > 📄 Phase 1 complete. Review the plan in your browser before approving Phase 2:
->    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\skill-execution-report.html
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\sdm-to-edm-migration-report.html
 >
 > The report now shows: site context, env type, migration mode, derived track, and
 > the Phase 2 sub-steps that will run if you approve.
@@ -778,7 +788,14 @@ This phase has **two completely different shapes** depending on the migration tr
 
 **Output**: Customization report located/generated and parsed. Findings summary available.
 
-> **→ Update report:** `--set-step 2.3 --status completed --output "CSV: <PATH> · <N> findings total · <BREAKDOWN_BY_CATEGORY>"`
+> **→ Update report:**
+>
+> ```
+> --set-step 2.3 --status completed --output "CSV: <PATH> · <N> findings total · <BREAKDOWN_BY_CATEGORY>"
+> --set-customization-report '{"path":"<ABSOLUTE_PATH_TO_OUTPUT_DIR>/customization-report.html","csvPath":"<ABSOLUTE_PATH_TO_OUTPUT_DIR>/SiteCustomization.csv","totalFindings":<N>,"breakdown":{"fetchxml":<N>,"liquid":<N>,"dme":<N>,"plugins":<N>,"workflows":<N>,"relationships":<N>}}'
+> ```
+>
+> Pass absolute paths so the live report's "Open customization-report.html" link works no matter where the user opens the report from. Omit any breakdown keys with zero count.
 >
 > **📄 Checkpoint 3 — Tell the user about the customization report.** Print in chat:
 >
@@ -892,7 +909,7 @@ The script in step 3/4 also emits:
 >
 > ```
 > 📄 Auto-rewriters staged proposed changes. Review them in the live report:
->    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\skill-execution-report.html
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\sdm-to-edm-migration-report.html
 >
 > Open the "Migration & Review" tab — the Remediation Diff card shows one
 > expandable row per touched file with inline hunks. Click "Open staged file"
@@ -971,7 +988,7 @@ After auto-rewrites are uploaded (or skipped due to zero findings) and any manua
 >
 > ```
 > 📄 Phase 2 complete. Review the outcomes in your browser before approving Phase 3:
->    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\skill-execution-report.html
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\sdm-to-edm-migration-report.html
 >
 > The report shows: customization findings handled, SDM snapshot captured, and the
 > Phase 3 sub-steps that will run if you approve.
@@ -1105,7 +1122,7 @@ After whichever option, loop back to **step 2.1** to re-verify the site is now p
 >
 > ```
 > 📄 Phase 2 complete. Review the outcomes in your browser before approving Phase 3:
->    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\skill-execution-report.html
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\sdm-to-edm-migration-report.html
 >
 > The report shows: customization findings handled, SDM snapshot captured, and the
 > Phase 3 sub-steps that will run if you approve.
@@ -1180,9 +1197,29 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 
    Same polling pattern as Phase 2.2 — Completed proceeds to 3.2; In Progress sets `--set-activity` and re-checks; Failed / 30-min timeout offers retry / reset / exit.
 
-**Output**: Transactional references migrated (or step skipped because mode=all).
+5. **Capture Verbose Tracker Details**
 
-> **→ Update report:** `--clear-activity` and `--set-step 3.1 --status completed --output "<Refs migrated · status=<STATUS> | Skipped — already covered by mode=all in Phase 2.2>"`
+   Once polling exits (Completed or Failed), run the verbose variant once to capture chunk-level details for the live report's Transactional References Migration card:
+
+   ```powershell
+   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" -s -v
+   ```
+
+   Parse the output and build a JSON payload with: `status` (NotStarted | Running | Completed | Failed | Reverted | Unknown), `currentStep`, `createdAt` / `modifiedAt` (from "Created On" / "Modified On" in the Migration Tracker Summary, converted to ISO 8601), `stepHistory` (array of `{ step, at }` filtered to entries from `ConfigurationDataReferencesStarted` onward — drop earlier metadata migration steps), and `runs` (array of `{ name, chunkTotal, completed, succeeded, chunks: [{ name, runStatus, outcome, errorType, errorDetails }] }`).
+
+   > **PAC build compatibility:** `-s -v` works on most current builds. If your PAC errors with `An unknown argument --verbose was passed`, fall back to plain `--checkMigrationStatus` and emit a smaller payload (`status` + `currentStep` only).
+
+**Output**: Transactional references migrated (or step skipped because mode=all). Verbose tracker payload captured for the live report.
+
+> **→ Update report:**
+>
+> ```
+> --clear-activity
+> --set-step 3.1 --status completed --output "<Refs migrated · status=<STATUS> | Skipped — already covered by mode=all in Phase 2.2>"
+> --set-refs-migration '{"status":"<STATUS>","currentStep":"<STEP>","createdAt":"<ISO>","modifiedAt":"<ISO>","stepHistory":[{"step":"<NAME>","at":"<ISO>"}],"runs":[{"name":"<NAME>","chunkTotal":<N>,"completed":<N>,"succeeded":<N>,"chunks":[{"name":"<CHUNK>","runStatus":1,"outcome":1,"errorType":null,"errorDetails":null}]}]}'
+> ```
+>
+> Skip `--set-refs-migration` when this step is skipped because mode=all.
 
 ---
 
@@ -1215,13 +1252,25 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 
    > **Do not run the update command until Portal Id is available.** Both `--updateDataModelVersion` and `--revertToStandardDataModel` reject empty Portal Id ([PAPortalMigrateDataModelVerb.cs:214](C:/Users/ashwanikumar/source/repos/PowerPlatform-Scale-AdminTools/src/cli/bolt.module.paportal/verbs/PAPortalMigrateDataModelVerb.cs#L214)).
 
-2. **Execute Update Command**
+2. **Confirm Activation**
+
+   Activating EDM is a one-way switch from the user's perspective — the site begins serving from EDM tables, the SDM record is deactivated, and recovering requires the explicit `--revertToStandardDataModel` rollback path in Phase 4.3. Ask explicitly before running the command, even though Phase 3 was already approved at its start:
+
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | Ready to activate Enhanced Data Model for `<SITE_NAME>` using Portal Id `<PORTAL_ID>`? This deactivates the SDM record and the site will serve from EDM after the manual restart in step 3.3. | Activate EDM | Yes — activate now, No — pause, I want to verify something, Cancel — stop the skill |
+
+   - **Yes**: proceed to step 3 (execute the command).
+   - **No, pause**: halt cleanly; user can re-invoke later to resume from this gate.
+   - **Cancel**: halt cleanly.
+
+3. **Execute Update Command**
 
    ```powershell
    pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --updateDatamodelVersion --portalId "<PORTAL_ID>"
    ```
 
-3. **Confirm Switch**
+4. **Confirm Switch**
 
    Inform user: "Data model updated. Site now uses Enhanced Data Model. SDM record has been deactivated."
 
@@ -1277,7 +1326,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 >
 > ```
 > 📄 Phase 3 complete. The site is on EDM and restarted. Review before approving Phase 4:
->    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\skill-execution-report.html
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\sdm-to-edm-migration-report.html
 >
 > Phase 4 will re-download the site as EDM, snapshot it, and diff against the SDM
 > baseline to verify every record migrated.
@@ -1336,9 +1385,27 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 
    Same polling pattern as Phase 2 Authoring Track 2.2 — Completed proceeds; In Progress sets `--set-activity` and re-checks; Failed / 30-min timeout offers retry / reset / exit.
 
-**Output**: SDM snapshot captured, transactional references migrated, customization CSV auto-emitted.
+4. **Capture Verbose Tracker Details**
 
-> **→ Update report:** `--clear-activity` and `--set-step 3.1 --status completed --output "Refs migrated · status=<STATUS>"`
+   Once polling exits (Completed or Failed), run the verbose variant once to capture chunk-level details for the live report's Transactional References Migration card:
+
+   ```powershell
+   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" -s -v
+   ```
+
+   Parse the output and build a JSON payload with: `status`, `currentStep`, `createdAt` / `modifiedAt`, `stepHistory` (filtered to entries from `ConfigurationDataReferencesStarted` onward), and `runs` (chunk totals + per-chunk outcome and errors). See Authoring Track 3.1 step 5 for the field schema.
+
+   > **PAC build compatibility:** `-s -v` works on most current builds. If your PAC errors with `An unknown argument --verbose was passed`, fall back to plain `--checkMigrationStatus` and emit a smaller payload (`status` + `currentStep` only).
+
+**Output**: SDM snapshot captured, transactional references migrated, customization CSV auto-emitted, verbose tracker payload captured.
+
+> **→ Update report:**
+>
+> ```
+> --clear-activity
+> --set-step 3.1 --status completed --output "Refs migrated · status=<STATUS>"
+> --set-refs-migration '{"status":"<STATUS>","currentStep":"<STEP>","createdAt":"<ISO>","modifiedAt":"<ISO>","stepHistory":[{"step":"<NAME>","at":"<ISO>"}],"runs":[{"name":"<NAME>","chunkTotal":<N>,"completed":<N>,"succeeded":<N>,"chunks":[{"name":"<CHUNK>","runStatus":1,"outcome":1,"errorType":null,"errorDetails":null}]}]}'
+> ```
 
 ---
 
@@ -1352,7 +1419,14 @@ Same logic as Authoring Track Phase 2.3 — glob `SiteCustomization*.csv` in `<O
 
 **Output**: Customization report located and parsed.
 
-> **→ Update report:** `--set-step 3.2 --status completed --output "CSV: <PATH> · <N> findings total"`
+> **→ Update report:**
+>
+> ```
+> --set-step 3.2 --status completed --output "CSV: <PATH> · <N> findings total"
+> --set-customization-report '{"path":"<ABSOLUTE_PATH_TO_OUTPUT_DIR>/customization-report.html","csvPath":"<ABSOLUTE_PATH_TO_OUTPUT_DIR>/SiteCustomization.csv","totalFindings":<N>,"breakdown":{"fetchxml":<N>,"liquid":<N>,"dme":<N>,"plugins":<N>,"workflows":<N>,"relationships":<N>}}'
+> ```
+>
+> Pass absolute paths so the live report's "Open customization-report.html" link works no matter where the user opens the report from. Omit any breakdown keys with zero count.
 
 ---
 
@@ -1405,7 +1479,7 @@ Same logic as Authoring Track Phase 2.3 — glob `SiteCustomization*.csv` in `<O
 
 ### 3.4 Activate EDM (Update Data Model Version)
 
-Identical to the Authoring Track's step 3.2 — retrieve Portal ID, run `--updateDataModelVersion`, confirm switch.
+Identical to the Authoring Track's step 3.2 — retrieve Portal ID, ask the user to confirm activation via AskUserQuestion, run `--updateDataModelVersion`, confirm switch.
 
 > **→ Update report:**
 >
@@ -1432,7 +1506,7 @@ Identical to the Authoring Track's step 3.3 — print restart instructions, wait
 >
 > ```
 > 📄 Phase 3 complete. The site is on EDM and restarted. Review before approving Phase 4:
->    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\skill-execution-report.html
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\sdm-to-edm-migration-report.html
 >
 > Phase 4 will re-download the site as EDM, snapshot it, and diff against the SDM
 > baseline to verify every record migrated.
@@ -1499,7 +1573,7 @@ Identical to the Authoring Track's step 3.3 — print restart instructions, wait
    > ```
    > 📄 Data diff complete. Review:
    >    <OUTPUT_DIR>\migration-data-diff.json
-   >    <OUTPUT_DIR>\skill-execution-report.html
+   >    <OUTPUT_DIR>\sdm-to-edm-migration-report.html
    >
    > Status: <PASS | WARN | FAIL>
    >    <N> records missing in EDM
@@ -1624,7 +1698,7 @@ Identical to the Authoring Track's step 3.3 — print restart instructions, wait
 
    Reports in <OUTPUT_DIR>:
      migration-state.json          — single source of truth for state
-     skill-execution-report.html   — live execution timeline (this run)
+     sdm-to-edm-migration-report.html   — live execution timeline (this run)
      customization-report.html     — findings catalog (if any)
      sdm-snapshot.json             — SDM baseline
      edm-snapshot.json             — EDM result

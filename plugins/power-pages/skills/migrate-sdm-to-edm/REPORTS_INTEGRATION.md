@@ -8,7 +8,7 @@ This document explains how to integrate the HTML report templates and generation
 plugins/power-pages/skills/migrate-sdm-to-edm/
 ├── assets/
 │   ├── customization-report.html      # Template for customization report
-│   ├── skill-execution-report.html    # Template for execution report
+│   ├── sdm-to-edm-migration-report.html    # Template for execution report
 │   └── README.md                      # Template documentation
 ├── scripts/
 │   └── generate-migration-reports.js  # Utility to generate reports from data
@@ -90,7 +90,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration
   --output-dir "./migration-reports"
 
 # Share with user
-echo "Execution report: file://$(pwd)/migration-reports/skill-execution-report.html"
+echo "Execution report: file://$(pwd)/migration-reports/sdm-to-edm-migration-report.html"
 ```
 
 ## Data Structures
@@ -231,7 +231,7 @@ The execution report includes:
 - Post-migration validation checklist
 - Next steps
 
-Open the report in your browser: `file://<OUTPUT_DIR>/skill-execution-report.html`
+Open the report in your browser: `file://<OUTPUT_DIR>/sdm-to-edm-migration-report.html`
 
 ## Using `browser_navigate` to Open Reports
 
@@ -255,7 +255,7 @@ I've generated two detailed reports in the `migration-reports` folder:
    Open: file://${pwd}/migration-reports/customization-report.html
 
 2. **Execution Report**: Shows all migration steps and results
-   Open: file://${pwd}/migration-reports/skill-execution-report.html
+   Open: file://${pwd}/migration-reports/sdm-to-edm-migration-report.html
 
 You can open these files in your browser to review the details.
 ```
@@ -266,7 +266,7 @@ You can open these files in your browser to review the details.
 
 If you need to modify the templates:
 
-1. Edit `customization-report.html` or `skill-execution-report.html` in the `assets/` folder
+1. Edit `customization-report.html` or `sdm-to-edm-migration-report.html` in the `assets/` folder
 2. Update the placeholder documentation in `assets/README.md`
 3. Update the placeholder replacement logic in `generate-migration-reports.js`
 
@@ -297,7 +297,7 @@ After running the generation script:
 
 ```
 ✓ Customization report generated: C:\path\to\migration-reports\customization-report.html
-✓ Execution report generated: C:\path\to\migration-reports\skill-execution-report.html
+✓ Execution report generated: C:\path\to\migration-reports\sdm-to-edm-migration-report.html
 
 Reports generated successfully!
 Open in browser: file:///C:/path/to/migration-reports/customization-report.html

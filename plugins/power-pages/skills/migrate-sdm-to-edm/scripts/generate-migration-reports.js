@@ -502,7 +502,7 @@ function generateAugmentedPromptsSection(promptResults) {
  * Generate execution report HTML with placeholder structure
  */
 function generateExecutionReportHtml(args, remediationResults = null, customizations = {}, autoRewriteResults = {}) {
-  const templatePath = path.join(__dirname, '../assets/skill-execution-report.html');
+  const templatePath = path.join(__dirname, '../assets/sdm-to-edm-migration-report.html');
   let template = fs.readFileSync(templatePath, 'utf-8');
 
   const now = new Date();
@@ -1975,7 +1975,7 @@ function printAugmentedPromptsToConsole(promptResults) {
     console.log(`  → DME remediation prompt:    ${promptResults.dmePath}`);
   }
   console.log('');
-  console.log('Both prompts are also embedded in skill-execution-report.html.');
+  console.log('Both prompts are also embedded in sdm-to-edm-migration-report.html.');
   console.log('Paste each into a new Claude Code session pointed at the relevant');
   console.log('working directory (your plugin source repo, or any empty dir for DME).');
   console.log('');
@@ -2106,7 +2106,7 @@ async function main() {
       customizations,
       { fetchXml: fetchXmlRewriteResults, liquid: liquidRewriteResults, prompts: promptResults },
     );
-    const executionPath = path.join(args['output-dir'], 'skill-execution-report.html');
+    const executionPath = path.join(args['output-dir'], 'sdm-to-edm-migration-report.html');
     fs.writeFileSync(executionPath, executionHtml, 'utf-8');
     console.log(`✓ Execution report generated: ${executionPath}`);
 
