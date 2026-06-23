@@ -89,15 +89,35 @@ function overallPercent(state) {
 }
 
 function statusPillFor(state) {
+  // 1. A phase is actively running → "In Progress".
   const inProgress = state.phases.find((p) => p.status === PHASE_STATUS.IN_PROGRESS);
-  if (inProgress) return `In Progress · Phase ${inProgress.id} of ${state.phases.length}`;
+  if (inProgress) {
+    const gate = state.approvalGate;
+    // In-phase approval gate piggybacks on a running phase — show that explicitly.
+    if (gate && gate.kind === APPROVAL_KIND.IN_PHASE && gate.phaseId === inProgress.id) {
+      return `Awaiting Approval — Phase ${inProgress.id} (in-phase)`;
+    }
+    return `In Progress · Phase ${inProgress.id} of ${state.phases.length}`;
+  }
+
+  // 2. Phase-start gate is set and nothing is running yet → waiting for user.
   const gate = state.approvalGate;
   if (gate && gate.kind === APPROVAL_KIND.PHASE_START) {
     return `Awaiting Approval — Phase ${gate.phaseId}`;
   }
+
+  // 3. Every phase is completed → done.
   const allDone = state.phases.every((p) => p.status === PHASE_STATUS.COMPLETED);
   if (allDone) return 'Migration Complete';
-  return 'Awaiting Approval — Phase 1';
+
+  // 4. Nothing running, no gate, not done → transitional. Surface the next phase
+  //    so the user sees forward motion rather than a stale "Awaiting Approval"
+  //    pill while the agent runs the next --set-phase call.
+  const nextPending = state.phases.find((p) => p.status !== PHASE_STATUS.COMPLETED);
+  if (nextPending) return `Ready · Phase ${nextPending.id} of ${state.phases.length}`;
+
+  // 5. Defensive fallback (no phases at all).
+  return 'Migration Complete';
 }
 
 function pillSeverityClass(state) {
@@ -105,6 +125,9 @@ function pillSeverityClass(state) {
   if (inProgress) return 'in-progress';
   const allDone = state.phases.every((p) => p.status === PHASE_STATUS.COMPLETED);
   if (allDone) return 'done';
+  // Transitional "Ready" state — visually treat as in-progress so the user sees motion.
+  const gate = state.approvalGate;
+  if (!gate) return 'in-progress';
   return 'pending';
 }
 
@@ -195,16 +218,44 @@ function renderSiteCard(state) {
 ${renderSiteRow('Site name', s.name)}
 ${renderSiteRow('Website Id', s.webSiteId, true)}
 ${renderSiteRow('Portal Id', s.portalId)}
+${renderSiteRow('Portal URL', s.portalUrl)}
 ${renderSiteRow('URL slug', s.slug)}
 ${renderSiteRow('Current data model', s.currentDataModel)}
 ${renderSiteRow('Template', s.template)}
-${renderSiteRow('Environment', s.environment)}
+${renderSiteRow('Environment name', s.environmentName)}
+${renderSiteRow('Environment type', s.environment)}
 ${renderSiteRow('Migration mode', s.migrationMode)}
 ${renderSiteRow('Site root', s.siteRoot)}
 ${renderSiteRow('Output directory', s.outputDir, true)}
     <tr><td>Skill started</td><td class="known">${escapeHtml(formatTimestamp(state.skillStartedAt))}</td></tr>
   </table>
 </div>`;
+}
+
+// Categories that snapshot-site.js scans but are NOT part of the SDM→EDM
+// metadata migration scope. They're surfaced in `*-snapshot.json` for
+// completeness but excluded from the live report's Overview totals and the
+// Pages & Components groups so users don't see misleading "missing record"
+// flags for content that legitimately doesn't migrate.
+const NON_METADATA_CATEGORIES = new Set([
+  'polls',
+  'pollPlacements',
+  'ads',
+  'adPlacements',
+  'forums',
+  'blogs',
+  'ideas',
+  'websiteBindings',
+]);
+
+function sumMetadataCounts(counts) {
+  if (!counts) return 0;
+  let total = 0;
+  for (const [cat, n] of Object.entries(counts)) {
+    if (NON_METADATA_CATEGORIES.has(cat)) continue;
+    total += n || 0;
+  }
+  return total;
 }
 
 function renderConfidenceStat(sdmSnapshot, edmSnapshot) {
@@ -215,7 +266,7 @@ function renderConfidenceStat(sdmSnapshot, edmSnapshot) {
 </div>`;
   }
 
-  const sdmTotal = Object.values(sdmSnapshot.counts || {}).reduce((a, b) => a + b, 0);
+  const sdmTotal = sumMetadataCounts(sdmSnapshot.counts);
 
   if (!edmSnapshot) {
     return `<div class="card confidence-card waiting">
@@ -229,7 +280,7 @@ function renderConfidenceStat(sdmSnapshot, edmSnapshot) {
 </div>`;
   }
 
-  const edmTotal = Object.values(edmSnapshot.counts || {}).reduce((a, b) => a + b, 0);
+  const edmTotal = sumMetadataCounts(edmSnapshot.counts);
   const diff = sdmTotal - edmTotal;
   const isMatch = diff === 0;
   const statusIcon = isMatch ? '✓' : '⚠';
@@ -247,6 +298,62 @@ function renderConfidenceStat(sdmSnapshot, edmSnapshot) {
       ? 'All ' + sdmTotal + ' components migrated from SDM to EDM. Open Pages &amp; Components for the per-category breakdown.'
       : Math.abs(diff) + ' component difference — open Pages &amp; Components for the per-category breakdown.'
   }</div>
+</div>`;
+}
+
+function renderTrackExplainerCard(state) {
+  // Treat the track as confirmed only once step 1.7 has set both the track and
+  // the migration mode. Until then `state.track` is the default placeholder
+  // ('A') that buildInitialState() seeds so Phase 2/3 cards can render before
+  // 1.7 runs — it isn't a user-chosen value yet.
+  const trackConfirmed = !!(state.track && state.site.migrationMode);
+  const isAuthoring = trackConfirmed && state.track === 'A';
+  const isDownstream = trackConfirmed && state.track === 'B';
+  const isUnknown = !isAuthoring && !isDownstream;
+
+  const authoringCard = `<div class="track-card${isAuthoring ? ' active ctx-info' : ''}">
+      <div class="track-card-head">
+        <span class="track-card-name">Authoring Track</span>
+        ${isAuthoring ? '<span class="track-card-badge">Your track</span>' : ''}
+      </div>
+      <div class="track-card-desc">Metadata is migrated <strong>here</strong>. The skill runs <code>pac pages migrate-datamodel --mode configurationData</code> (or <code>--mode all</code>) locally, then handles customization remediation in Phase 2 itself before moving transactional references and activating EDM.</div>
+      <div class="track-card-when">
+        <div class="track-card-when-label">Use when</div>
+        <ul class="track-card-when-list">
+          <li><strong>Dev</strong> environment — the source-of-truth for your site source</li>
+          <li><strong>Single environment</strong> setups with no upstream ALM source</li>
+        </ul>
+      </div>
+      <div class="track-card-mode"><span class="track-card-mode-label">Mode:</span> <code>configurationData</code> · <code>all</code></div>
+    </div>`;
+
+  const downstreamCard = `<div class="track-card${isDownstream ? ' active ctx-info' : ''}">
+      <div class="track-card-head">
+        <span class="track-card-name">Downstream Track</span>
+        ${isDownstream ? '<span class="track-card-badge">Your track</span>' : ''}
+      </div>
+      <div class="track-card-desc">Metadata is <strong>assumed already in EDM</strong> via ALM solution import from an upstream Dev. The skill verifies metadata is present, then runs <code>pac pages migrate-datamodel --mode configurationDataReferences</code> to move transactional references only.</div>
+      <div class="track-card-when">
+        <div class="track-card-when-label">Use when</div>
+        <ul class="track-card-when-list">
+          <li><strong>Test / UAT</strong> environments fed by ALM from Dev</li>
+          <li><strong>Production</strong> environments fed by ALM from Dev</li>
+        </ul>
+      </div>
+      <div class="track-card-mode"><span class="track-card-mode-label">Mode:</span> <code>configurationDataReferences</code></div>
+    </div>`;
+
+  const lead = isUnknown
+    ? `<p class="track-explainer-lead">The skill derives a <strong>migration track</strong> in step 1.7 based on your environment type. The track controls the shape of Phase 2 (configuration setup) and Phase 3 (migration execution) — same end state, different path depending on whether metadata is being migrated locally or arriving via ALM.</p>`
+    : `<p class="track-explainer-lead">This migration uses the <strong>${isAuthoring ? 'Authoring' : 'Downstream'} Track</strong> (derived in step 1.7 from your environment type and migration mode). Track shapes Phase 2 and Phase 3 — same end state, different path.</p>`;
+
+  return `<div class="card track-explainer-card">
+  <div class="card-title">Migration Track</div>
+  ${lead}
+  <div class="track-cards-grid">
+    ${authoringCard}
+    ${downstreamCard}
+  </div>
 </div>`;
 }
 
@@ -271,6 +378,8 @@ function renderOverviewSection(state, snapshots) {
     <div class="stat-card"><div class="stat-num">${escapeHtml(elapsed)}</div><div class="stat-label">Elapsed</div></div>
     <div class="stat-card"><div class="stat-num">${phasesDone} / ${state.phases.length}</div><div class="stat-label">Phases done</div></div>
   </div>
+
+${renderTrackExplainerCard(state)}
 
 ${renderSiteCard(state)}
 
@@ -378,24 +487,32 @@ function renderPagesComponentsSection({ sdmSnapshot, edmSnapshot }) {
   const sdmInventory = sdmSnapshot.inventory || {};
   const edmInventory = (edmSnapshot && edmSnapshot.inventory) || {};
 
-  // Union of categories from both sides — covers SDM-only (tags, websiteBindings)
-  // and any new categories on EDM.
+  // Union of categories from both sides — covers SDM-only (tags) and any new
+  // categories on EDM. Non-metadata categories (polls, ads, forums, blogs,
+  // ideas, their placement variants, and websiteBindings) are excluded here
+  // so the grouped view stays focused on what's actually migrating.
   const allCats = new Set();
-  for (const k of Object.keys(sdmCounts)) if (sdmCounts[k] > 0) allCats.add(k);
-  for (const k of Object.keys(edmCounts)) if (edmCounts[k] > 0) allCats.add(k);
+  for (const k of Object.keys(sdmCounts)) {
+    if (sdmCounts[k] > 0 && !NON_METADATA_CATEGORIES.has(k)) allCats.add(k);
+  }
+  for (const k of Object.keys(edmCounts)) {
+    if (edmCounts[k] > 0 && !NON_METADATA_CATEGORIES.has(k)) allCats.add(k);
+  }
   const categories = [...allCats].sort();
 
   const isPending = !edmSnapshot;
-  const sdmTotal = Object.values(sdmCounts).reduce((a, b) => a + b, 0);
-  const edmTotal = Object.values(edmCounts).reduce((a, b) => a + b, 0);
+  const sdmTotal = sumMetadataCounts(sdmCounts);
+  const edmTotal = sumMetadataCounts(edmCounts);
 
+  // Per-category render produces { cat, group, sdmN, edmN, statusCls, isMatch, html }.
   let matchedCount = 0;
-  const categoryRows = categories.map((cat) => {
+  const perCategory = categories.map((cat) => {
     const sdmN = sdmCounts[cat] || 0;
     const edmN = edmCounts[cat] || 0;
-    const isSdmOnlyExpected = ['tags', 'websiteBindings'].includes(cat) && edmN === 0 && sdmN > 0;
+    const isSdmOnlyExpected = cat === 'tags' && edmN === 0 && sdmN > 0;
 
     let pillCls, icon, meta;
+    let isMatchForGroup = false;
     if (isPending) {
       pillCls = 'pending';
       icon = '';
@@ -404,11 +521,13 @@ function renderPagesComponentsSection({ sdmSnapshot, edmSnapshot }) {
       pillCls = 'warn';
       icon = '⚠';
       meta = 'SDM-only';
+      isMatchForGroup = true;
       matchedCount++; // expected difference — counts as matched
     } else if (sdmN === edmN) {
       pillCls = 'match';
       icon = '✓';
       meta = '';
+      isMatchForGroup = true;
       matchedCount++;
     } else {
       pillCls = 'mismatch';
@@ -459,16 +578,56 @@ function renderPagesComponentsSection({ sdmSnapshot, edmSnapshot }) {
 
     const desc = categoryDescription(cat);
     const descHtml = desc ? `<div class="cat-desc">${escapeHtml(desc)}</div>` : '';
-    return `    <div class="cat-row">
-      <div class="cat-head">
-        <div class="cat-meta">
-          <div class="cat-name">${escapeHtml(formatCategoryName(cat))}</div>
-          ${descHtml}
-        </div>
-        ${pill}
-      </div>${recordsBlock}
-    </div>`;
-  }).join('\n');
+    const html = `      <div class="cat-row">
+        <div class="cat-head">
+          <div class="cat-meta">
+            <div class="cat-name">${escapeHtml(formatCategoryName(cat))}</div>
+            ${descHtml}
+          </div>
+          ${pill}
+        </div>${recordsBlock}
+      </div>`;
+
+    return { cat, group: groupForCategory(cat), sdmN, edmN, isMatch: isMatchForGroup, html };
+  });
+
+  // Group the per-category results into the 5-bucket taxonomy.
+  const grouped = new Map();
+  for (const c of perCategory) {
+    if (!grouped.has(c.group)) grouped.set(c.group, []);
+    grouped.get(c.group).push(c);
+  }
+
+  const groupRows = CATEGORY_GROUP_ORDER
+    .filter((g) => grouped.has(g))
+    .map((g) => {
+      const items = grouped.get(g);
+      const groupSdmTotal = items.reduce((a, i) => a + i.sdmN, 0);
+      const groupEdmTotal = items.reduce((a, i) => a + i.edmN, 0);
+      const groupHasMismatch = items.some((i) => !i.isMatch);
+      // Default state: open if pending (so user sees full inventory), open if any
+      // mismatch in this group (problem-focused), otherwise closed (clean groups
+      // start collapsed so user lands on problems first).
+      const openByDefault = isPending || groupHasMismatch;
+      const groupStatusHtml = isPending
+        ? `<span class="cat-group-stats">${items.length} categor${items.length === 1 ? 'y' : 'ies'} · ${groupSdmTotal} SDM record${groupSdmTotal === 1 ? '' : 's'}</span>`
+        : groupHasMismatch
+          ? `<span class="cat-group-stats warn">${items.length} categor${items.length === 1 ? 'y' : 'ies'} · ${groupSdmTotal} \u2192 ${groupEdmTotal} records · needs attention <span class="cat-group-icon mismatch">⚠</span></span>`
+          : `<span class="cat-group-stats ok">${items.length} categor${items.length === 1 ? 'y' : 'ies'} · ${groupSdmTotal} \u2192 ${groupEdmTotal} records · all matched <span class="cat-group-icon match">✓</span></span>`;
+
+      return `  <details class="cat-group" ${openByDefault ? 'open' : ''}>
+    <summary class="cat-group-summary">
+      <span class="cat-group-name">${escapeHtml(g)}</span>
+      ${groupStatusHtml}
+    </summary>
+    <div class="cat-group-body">
+${items.map((i) => i.html).join('\n')}
+    </div>
+  </details>`;
+    })
+    .join('\n');
+
+  const categoryRows = groupRows;
 
   // Summary banner — pending vs final state.
   const totalCats = categories.length;
@@ -484,7 +643,7 @@ function renderPagesComponentsSection({ sdmSnapshot, edmSnapshot }) {
     <strong>${matchedCount} of ${totalCats} categories matched ${allMatched ? '✓' : '⚠'}</strong>
     ${allMatched
       ? '— every Power Pages component migrated cleanly from SDM to EDM.'
-      : `— ${unmatched} ${unmatched === 1 ? 'category needs' : 'categories need'} attention. Mismatches are flagged <span class="status-x">✗</span> with the count delta; SDM-only categories (tags, websiteBindings) are <em>expected</em> to differ and are flagged <span class="status-warn">⚠ SDM-only</span>.`}
+      : `— ${unmatched} ${unmatched === 1 ? 'category needs' : 'categories need'} attention. Mismatches are flagged <span class="status-x">✗</span> with the count delta; the SDM-only <code>tags</code> category is <em>expected</em> to differ and is flagged <span class="status-warn">⚠ SDM-only</span>.`}
   </div>`;
   }
 
@@ -519,6 +678,59 @@ function formatCategoryName(cat) {
     .trim();
 }
 
+// 5-bucket taxonomy for Pages & Components. Order here drives the render order.
+const CATEGORY_GROUP_ORDER = [
+  'Pages & Content',
+  'Forms & Lists',
+  'Navigation',
+  'Security & Access',
+  'Site Configuration',
+  'Other',
+];
+
+// Which group each Power Pages component category belongs to.
+// Categories not in this map fall into 'Other' (defensive fallback for new
+// component types that PAC may add in future releases).
+const CATEGORY_TO_GROUP = {
+  // Pages & Content — routes, files, and the text/templates that render them
+  webPages: 'Pages & Content',
+  webFiles: 'Pages & Content',
+  webTemplates: 'Pages & Content',
+  contentSnippets: 'Pages & Content',
+  pageTemplates: 'Pages & Content',
+  tags: 'Pages & Content',
+  siteMarkers: 'Pages & Content',
+  urlHistory: 'Pages & Content',
+  redirects: 'Pages & Content',
+  shortcuts: 'Pages & Content',
+
+  // Forms & Lists — data-entry surfaces backed by Dataverse tables
+  basicForms: 'Forms & Lists',
+  advancedForms: 'Forms & Lists',
+  lists: 'Forms & Lists',
+
+  // Navigation — discovery / link-out widgets
+  webLinkSets: 'Navigation',
+  webLinks: 'Navigation',
+
+  // Security & Access — authorization layer
+  webRoles: 'Security & Access',
+  webpageRules: 'Security & Access',
+  websiteAccesses: 'Security & Access',
+  tablePermissions: 'Security & Access',
+  columnPermissionProfiles: 'Security & Access',
+
+  // Site Configuration — site-wide config, channel bindings
+  siteSettings: 'Site Configuration',
+  websiteLanguages: 'Site Configuration',
+  publishingStates: 'Site Configuration',
+  cloudFlowConsumers: 'Site Configuration',
+};
+
+function groupForCategory(cat) {
+  return CATEGORY_TO_GROUP[cat] || 'Other';
+}
+
 // Short, customer-facing descriptions for the Power Pages component categories
 // that surface in SDM/EDM site snapshots. Used as the cat-desc subtitle.
 const CATEGORY_DESC = {
@@ -526,11 +738,11 @@ const CATEGORY_DESC = {
   webTemplates: 'Liquid templates that pages and components reuse to render dynamic content.',
   webFiles: 'Static assets uploaded into the site — images, CSS, JS, PDFs surfaced via notes attachments.',
   webLinkSets: 'Named navigation menus referenced from Liquid (header, footer, sidebar links).',
+  webLinks: 'Individual navigation links within web link sets — each is one entry that renders inside its parent menu.',
   webRoles: 'Authorization roles used by Web Page Access Rules and Table Permissions.',
   webpageRules: 'Web Page Access Rules — who can read/edit each page based on Web Roles.',
   websiteAccesses: 'Website-level access permissions controlling preview-mode and admin operations.',
   websiteLanguages: 'Languages enabled on the site, each with its own published localized content.',
-  websiteBindings: 'Custom hostname / portal bindings — represented differently in EDM, so a 0 count here is expected.',
   pageTemplates: 'Page layout definitions that webPages select from when rendering.',
   contentSnippets: 'Reusable inline text blobs referenced by Liquid as {{ snippets["name"] }}.',
   basicForms: 'Entity Forms — single-record create/edit/read forms backed by a Dataverse table.',
@@ -559,6 +771,10 @@ function describeRecord(rec, category) {
   // Pick a sensible label per category. Use the most identifying field available.
   if (category === 'webPages') {
     const parts = [rec.name, rec.partialUrl ? `url=${rec.partialUrl}` : null, rec.language ? `lang=${rec.language}` : null, rec.kind ? `(${rec.kind})` : null].filter(Boolean);
+    return parts.join(' · ');
+  }
+  if (category === 'webLinks') {
+    const parts = [rec.name, rec.parentSet ? `in '${rec.parentSet}'` : null, rec.language ? `lang=${rec.language}` : null].filter(Boolean);
     return parts.join(' · ');
   }
   if (rec.name && rec.language) return `${rec.name} · lang=${rec.language}`;
@@ -1112,10 +1328,21 @@ body { font-family:var(--sans); background:var(--bg); color:var(--text); font-si
 .topbar-left { display:flex; align-items:center; gap:14px; }
 .topbar-title { font-size:16px; font-weight:700; color:var(--text-bright); }
 .topbar-sub { font-size:11px; color:var(--text-dim); margin-top:1px; }
-.topbar-right { display:flex; align-items:center; gap:14px; font-size:12px; color:var(--text-dim); flex-wrap:wrap; }
-.context-item { display:flex; align-items:center; gap:6px; }
-.context-label { color:var(--text-dim); }
-.context-value { color:var(--text-bright); font-weight:600; font-family:var(--mono); font-size:12px; }
+.topbar-right { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-dim); flex-wrap:wrap; }
+.context-pill { display:inline-flex; align-items:center; gap:6px; padding:3px 9px 3px 7px; border-radius:14px; border:1px solid var(--border); background:var(--surface); font-size:11.5px; line-height:1.4; max-width:280px; }
+.context-pill .context-label { font-size:10px; font-weight:700; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px; }
+.context-pill .context-value { color:var(--text-bright); font-weight:600; font-family:var(--mono); font-size:11.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:220px; text-decoration:none; }
+.context-pill a.context-value:hover { text-decoration:underline; }
+.context-pill.ctx-info { background:var(--info-bg); border-color:var(--info-border); }
+.context-pill.ctx-info .context-value { color:var(--info); }
+.context-pill.ctx-accent { background:var(--accent-bg); border-color:var(--accent-border); }
+.context-pill.ctx-accent .context-value { color:var(--accent); }
+.context-pill.ctx-pass { background:var(--pass-bg); border-color:var(--pass-border); }
+.context-pill.ctx-pass .context-value { color:var(--pass); }
+.context-pill.ctx-warning { background:var(--warning-bg); border-color:var(--warning-border); }
+.context-pill.ctx-warning .context-value { color:var(--warning); }
+.context-pill.ctx-critical { background:var(--critical-bg); border-color:var(--critical-border); }
+.context-pill.ctx-critical .context-value { color:var(--critical); }
 .status-pill { display:inline-block; font-size:11px; font-weight:700; padding:3px 10px; border-radius:3px; font-family:var(--mono); text-transform:uppercase; letter-spacing:0.5px; }
 .status-pill.in-progress { color:var(--info); background:var(--info-bg); border:1px solid var(--info-border); }
 .status-pill.pending { color:var(--warning); background:var(--warning-bg); border:1px solid var(--warning-border); }
@@ -1147,6 +1374,32 @@ h3 { font-size:15px; font-weight:700; color:var(--text-bright); margin-top:24px;
 
 /* Summary / cards */
 .summary-box { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:20px 22px; margin-bottom:22px; font-size:14px; color:var(--text); line-height:1.7; }
+
+/* Track explainer card (Overview) */
+.track-explainer-card { }
+.track-explainer-lead { font-size:13px; color:var(--text); line-height:1.65; margin:0 0 14px; }
+.track-explainer-lead strong { color:var(--text-bright); }
+.track-cards-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+.track-card { background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; display:flex; flex-direction:column; gap:10px; opacity:0.85; }
+.track-card.active { background:var(--info-bg); border-color:var(--info-border); opacity:1; box-shadow:var(--shadow-4); }
+.track-card-head { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+.track-card-name { font-size:13.5px; font-weight:700; color:var(--text-bright); }
+.track-card.active .track-card-name { color:var(--info); }
+.track-card-badge { font-size:10px; font-weight:700; padding:2px 8px; border-radius:10px; background:var(--info); color:#fff; text-transform:uppercase; letter-spacing:0.5px; }
+.track-card-desc { font-size:12.5px; color:var(--text); line-height:1.6; }
+.track-card-desc code { font-family:var(--mono); font-size:11.5px; background:var(--surface); padding:1px 5px; border-radius:3px; color:var(--text-bright); }
+.track-card-desc strong { color:var(--text-bright); }
+.track-card-when { background:var(--surface); border:1px dashed var(--border); border-radius:var(--radius-sm); padding:8px 12px; }
+.track-card-when-label { font-size:10px; font-weight:700; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px; }
+.track-card-when-list { margin:0; padding-left:18px; font-size:12px; color:var(--text); line-height:1.55; }
+.track-card-when-list li { margin-bottom:2px; }
+.track-card-when-list strong { color:var(--text-bright); }
+.track-card-mode { font-size:11px; color:var(--text-dim); font-family:var(--mono); }
+.track-card-mode code { background:var(--surface); padding:1px 5px; border-radius:3px; color:var(--text); }
+.track-card-mode-label { font-weight:700; color:var(--text); margin-right:4px; font-family:inherit; text-transform:uppercase; font-size:10px; letter-spacing:0.5px; }
+@media (max-width:900px) {
+  .track-cards-grid { grid-template-columns:1fr; }
+}
 .card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:18px 20px; margin-bottom:16px; box-shadow:var(--shadow-4); }
 .card-title { font-size:14px; font-weight:700; color:var(--text-bright); margin-bottom:12px; }
 
@@ -1202,6 +1455,20 @@ h3 { font-size:15px; font-weight:700; color:var(--text-bright); margin-top:24px;
 /* Components sections */
 .snapshot-meta { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:18px; }
 .cat-list { display:flex; flex-direction:column; gap:8px; }
+.cat-group { background:transparent; border:none; padding:0; margin-bottom:14px; }
+.cat-group > summary { cursor:pointer; padding:10px 16px; display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap; list-style:none; background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); font-size:13.5px; user-select:none; transition:background 0.15s; }
+.cat-group > summary::-webkit-details-marker { display:none; }
+.cat-group > summary:hover { background:var(--surface3); }
+.cat-group > summary::before { content:'▸ '; color:var(--text-dim); font-family:var(--mono); font-size:12px; margin-right:4px; display:inline-block; transition:transform 0.15s; }
+.cat-group[open] > summary::before { content:'▾ '; }
+.cat-group-name { font-weight:700; color:var(--text-bright); flex:1; min-width:0; }
+.cat-group-stats { font-size:12px; color:var(--text-dim); font-family:var(--mono); display:inline-flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.cat-group-stats.ok { color:var(--pass); }
+.cat-group-stats.warn { color:var(--warning); }
+.cat-group-icon { font-weight:700; font-size:13px; }
+.cat-group-icon.match { color:var(--pass); }
+.cat-group-icon.mismatch { color:var(--warning); }
+.cat-group-body { padding:10px 4px 4px; display:flex; flex-direction:column; gap:8px; }
 .cat-row { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:14px 20px; box-shadow:var(--shadow-4); }
 .cat-head { display:flex; align-items:flex-start; gap:16px; }
 .cat-meta { flex:1; min-width:0; }
@@ -1483,15 +1750,53 @@ function renderTopbar(state) {
   const pill = statusPillFor(state);
   const pillClass = pillSeverityClass(state);
 
-  // Build context items: site name, env, mode (or placeholders).
+  // Each context entry: { label, value, cls, href? }. `cls` drives the pill
+  // background color so the user can scan the top bar at a glance.
+  // Order: Env → Site → Portal URL → Track → Env type → Template → (status pill is rendered separately, last).
+  //   - env name: accent (blue)    Dataverse environment display name
+  //   - site: accent (blue)        primary identity
+  //   - portal: accent (blue)      hyperlinked when URL is present
+  //   - track: info (blue)         Authoring/Downstream
+  //   - env type: severity-colored Dev/Single → info, Test/UAT → warning, Prod → critical
+  //   - template: pass (green)     site-defined fact
   const contextItems = [];
-  if (site.name) contextItems.push({ label: 'Site', value: site.name });
-  if (site.environment) contextItems.push({ label: 'Env', value: site.environment });
-  if (site.migrationMode) contextItems.push({ label: 'Mode', value: site.migrationMode });
 
-  const contextHtml = contextItems.map((c) =>
-    `<span class="context-item"><span class="context-label">${escapeHtml(c.label)}:</span> <span class="context-value">${escapeHtml(c.value)}</span></span>`,
-  ).join('');
+  if (site.environmentName) {
+    contextItems.push({ label: 'Env', value: site.environmentName, cls: 'ctx-accent' });
+  }
+
+  if (site.name) {
+    contextItems.push({ label: 'Site', value: site.name, cls: 'ctx-accent' });
+  }
+
+  if (site.portalUrl) {
+    contextItems.push({ label: 'Portal', value: site.portalUrl, cls: 'ctx-accent', href: site.portalUrl });
+  }
+
+  if (state.track) {
+    const trackLabel = state.track === 'A' ? 'Authoring' : state.track === 'B' ? 'Downstream' : state.track;
+    contextItems.push({ label: 'Track', value: trackLabel, cls: 'ctx-info' });
+  }
+
+  if (site.environment) {
+    // env type drives severity: Prod is highest-attention
+    const envType = String(site.environment).toLowerCase();
+    let envTypeCls = 'ctx-info';
+    if (envType === 'prod' || envType === 'production') envTypeCls = 'ctx-critical';
+    else if (envType === 'test' || envType === 'uat' || envType === 'test/uat') envTypeCls = 'ctx-warning';
+    contextItems.push({ label: 'Env type', value: site.environment, cls: envTypeCls });
+  }
+
+  if (site.template) {
+    contextItems.push({ label: 'Template', value: site.template, cls: 'ctx-pass' });
+  }
+
+  const contextHtml = contextItems.map((c) => {
+    const valueHtml = c.href
+      ? `<a class="context-value" href="${escapeHtml(c.href)}" target="_blank" rel="noopener">${escapeHtml(c.value)}</a>`
+      : `<span class="context-value">${escapeHtml(c.value)}</span>`;
+    return `<span class="context-pill ${c.cls}"><span class="context-label">${escapeHtml(c.label)}</span>${valueHtml}</span>`;
+  }).join('');
 
   return `<div class="topbar">
   <div class="topbar-left">

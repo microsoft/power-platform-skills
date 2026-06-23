@@ -33,6 +33,12 @@
  *   node update-state.js --output-dir <DIR> --set-approval 2 in-phase
  *   node update-state.js --output-dir <DIR> --clear-approval
  *
+ *   # atomically clear an approval gate and mark a phase in-progress (use this
+ *   # after the user answers an AskUserQuestion approval gate — avoids the
+ *   # transient "Awaiting Approval" pill that would otherwise appear between
+ *   # --clear-approval and --set-phase)
+ *   node update-state.js --output-dir <DIR> --approve-and-start 2
+ *
  *   # set augmented-prompt card (kind: plugin | dme)
  *   node update-state.js --output-dir <DIR> --set-prompt plugin --status ready \
  *       --path "./migration-reports/plugin-remediation-prompt.txt" \
@@ -210,6 +216,7 @@ function cmdInit(args) {
   }
 
   const state = buildInitialState({ webSiteId, outputDir });
+  state.site.environmentName = envName;
   fs.mkdirSync(outputDir, { recursive: true });
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2) + '\n', 'utf-8');
   fs.writeFileSync(reportPathFor(outputDir), renderLiveReport(state, loadRenderOpts(outputDir)), 'utf-8');
@@ -235,10 +242,12 @@ function cmdSetSite(args) {
   const allowed = [
     'name',
     'portalId',
+    'portalUrl',
     'slug',
     'currentDataModel',
     'template',
     'environment',
+    'environmentName',
     'migrationMode',
     'siteRoot',
   ];
@@ -326,6 +335,28 @@ function cmdClearApproval(args) {
   state.approvalGate = null;
   persist(state, outputDir);
   console.log('✓ Approval gate cleared');
+}
+
+// Atomic helper: clear the approval gate and mark the given phase in-progress
+// in a single persist() / render. Use this whenever the user answers an
+// AskUserQuestion approval gate; calling --clear-approval followed by
+// --set-phase would leave the live report in a transitional state between the
+// two writes (the topbar pill would briefly say "Ready · Phase N" or worse).
+function cmdApproveAndStart(args) {
+  const outputDir = args['output-dir'];
+  const phaseId = Number(args['approve-and-start']);
+  if (!outputDir) throw new Error('--approve-and-start requires --output-dir');
+  if (!Number.isFinite(phaseId)) {
+    throw new Error('--approve-and-start requires a phase id (e.g. --approve-and-start 2)');
+  }
+  const state = loadState(outputDir);
+  const phase = state.phases.find((p) => p.id === phaseId);
+  if (!phase) throw new Error(`--approve-and-start: phase ${phaseId} not found in state`);
+  state.approvalGate = null;
+  phase.status = PHASE_STATUS.IN_PROGRESS;
+  if (!phase.startedAt) phase.startedAt = new Date().toISOString();
+  persist(state, outputDir);
+  console.log(`✓ Approval cleared and phase ${phaseId} → in-progress`);
 }
 
 function cmdSetPrompt(args) {
@@ -489,6 +520,7 @@ function main() {
     if (args['set-phase'] !== undefined) return cmdSetPhase(args);
     if (args['set-approval'] !== undefined) return cmdSetApproval(args);
     if (args['clear-approval']) return cmdClearApproval(args);
+    if (args['approve-and-start'] !== undefined) return cmdApproveAndStart(args);
     if (args['set-prompt'] !== undefined) return cmdSetPrompt(args);
     if (args['set-customization-report'] !== undefined) return cmdSetCustomizationReport(args);
     if (args['set-refs-migration'] !== undefined) return cmdSetRefsMigration(args);

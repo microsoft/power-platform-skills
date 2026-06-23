@@ -58,7 +58,8 @@ After init, each sub-step below ends with a **→ Update report** callout. Execu
 | `--set-phase <n> --status <s>` | Mark phase status (`pending`/`in-progress`/`completed`/`blocked`) |
 | `--set-site '<json>'` | Update site card fields. Allowed keys: `name`, `portalId`, `slug`, `currentDataModel`, `template`, `environment`, `migrationMode`, `siteRoot` |
 | `--set-approval <phaseId> <kind>` | Show approval banner; `kind` ∈ {`phase-start`, `in-phase`} |
-| `--clear-approval` | Hide approval banner once user has approved |
+| `--clear-approval` | Hide approval banner once user has approved (use only for in-phase gates that don't advance to a new phase) |
+| `--approve-and-start <phaseId>` | Atomic: clear approval gate + mark phase in-progress in one render. Use this whenever the user answers a `phase-start` AskUserQuestion approval — avoids the transient "Awaiting Approval" pill that would otherwise flash between `--clear-approval` and `--set-phase`. |
 | `--set-prompt <plugin\|dme> --status ready --path "<file>" --summary "<text>"` | Show augmented-prompt card |
 | `--set-activity "<text>"` / `--clear-activity` | "Currently doing" text for long-running ops |
 | `--render-only` | Re-render HTML from existing state (rare) |
@@ -183,7 +184,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
    |---|---|---|---|
    | True (cwd is the site) | — | `.` (cwd) | `..\migration-reports` (sibling of site dir, so site source stays clean) |
    | False | Exactly one subdir | `.\<subdir>` | `.\migration-reports` (in cwd alongside the site folder) |
-   | False | Zero or multiple subdirs | (will download to `.\mysite\<auto-slug>` in step 2.2) | `.\migration-reports` (in cwd) |
+   | False | Zero or multiple subdirs | (will download to `<MIGRATION_OUTPUT_DIR>/site-sdm/<auto-slug>` in step 2.1) | `.\migration-reports` (in cwd) |
 
    Capture both `<SITE_ROOT>` and `<PARENT_OUTPUT_DIR>` as durable values. The actual per-migration subfolder `<MIGRATION_OUTPUT_DIR>` is computed in step 1.3 and is used throughout the rest of the skill. Create `<PARENT_OUTPUT_DIR>` if it doesn't exist yet.
 
@@ -212,7 +213,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 
    Then prompt for the actual value in the chat (do not create a single-option AskUserQuestion — that errors with "expected array to have >=2 items"; ask in plain text or use 2+ options).
 
-   In this path, `<SITE_ROOT>` will be set to the path step 2.2 downloads to (typically `.\mysite\<auto-slug>` once `pac pages download` runs).
+   In this path, `<SITE_ROOT>` will be set to the path step 2.1 downloads to (typically `<MIGRATION_OUTPUT_DIR>/site-sdm/<auto-slug>` once `pac pages download` runs). Downloading into the per-migration subfolder keeps every artifact for this site contained — multiple migrations sharing the same parent dir won't collide on the `site-sdm` / `site-edm` folder names.
 
 **Output**: WebSiteId captured; `<SITE_ROOT>` and `<PARENT_OUTPUT_DIR>` resolved (or marked "download in step 2.2" for `<SITE_ROOT>`)
 
@@ -237,6 +238,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
    Parse output to extract all available sites with:
    - WebSiteId
    - Portal Id (may render as `Unknown` if the Power Platform active-websites API failed, or `N/A` if the site is inactive — treat both as "missing" for the activation step in Phase 3, which prompts the user when Portal Id is needed)
+   - Portal Url (full site URL from the `Portal Url` column; may be empty for inactive sites — store as `null` if so)
    - Site Name (display name from Friendly Name, the part before " - ")
    - URL slug (from Friendly Name, the part after " - ")
    - Current ModelVersion (`Standard` or `Enhanced`)
@@ -314,7 +316,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 > ```
 > --set-step 1.1 --status completed --output "PAC CLI v<X> · auth <profile> · env <ENV_NAME>"
 > --set-step 1.2 --status completed --output "<SITE_ROOT> resolved; parent <PARENT_OUTPUT_DIR>"
-> --set-site '{"name":"<SITE_NAME>","slug":"<URL_SLUG>","portalId":"<PORTAL_ID_OR_NULL>","currentDataModel":"Standard SDM","template":"<TEMPLATE_NAME>","siteRoot":"<SITE_ROOT>"}'
+> --set-site '{"name":"<SITE_NAME>","slug":"<URL_SLUG>","portalId":"<PORTAL_ID_OR_NULL>","portalUrl":"<PORTAL_URL_OR_NULL>","currentDataModel":"Standard SDM","template":"<TEMPLATE_NAME>","siteRoot":"<SITE_ROOT>"}'
 > --set-step 1.3 --status completed --output "Site <NAME> · ModelVersion=Standard · template <TEMPLATE>"
 > ```
 >
@@ -629,7 +631,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 > the Phase 2 sub-steps that will run if you approve.
 > ```
 >
-> Then proceed to ask the user to approve Phase 2 via AskUserQuestion. On approval, `--clear-approval` and `--set-phase 2 --status in-progress`.
+> Then proceed to ask the user to approve Phase 2 via AskUserQuestion. On approval, run `node update-state.js --output-dir "<OUTPUT_DIR>" --approve-and-start 2` to atomically clear the approval gate and mark Phase 2 in-progress.
 
 ---
 
@@ -661,10 +663,10 @@ This phase has **two completely different shapes** depending on the migration tr
 1. **Download SDM source**
 
    ```powershell
-   pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 1 --path "./mysite"
+   pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 1 --path "<MIGRATION_OUTPUT_DIR>/site-sdm"
    ```
 
-   > **Important — nested folder quirk:** `pac pages download --path ./mysite` creates a slug-named child folder (e.g., `./mysite/site-1---site-k5s85/website.yml`). Capture the inner folder as `<SITE_ROOT>` via `Get-ChildItem .\mysite -Directory`. Subsequent migrate, rewrite, and upload steps must use `<SITE_ROOT>` (the inner path), not `./mysite`.
+   > **Important — nested folder quirk:** `pac pages download --path <MIGRATION_OUTPUT_DIR>/site-sdm` creates a slug-named child folder (e.g., `<MIGRATION_OUTPUT_DIR>/site-sdm/site-1---site-k5s85/website.yml`). Capture the inner folder as `<SITE_ROOT>` via `Get-ChildItem "<MIGRATION_OUTPUT_DIR>/site-sdm" -Directory`. Subsequent migrate, rewrite, and upload steps must use `<SITE_ROOT>` (the inner path), not the `site-sdm` wrapper.
    >
    > **`--modelVersion 1`** explicitly requests SDM data. The site's activation is still SDM at this point (step 3.3 hasn't run yet), so this is the live source of truth for the baseline.
 
@@ -956,7 +958,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/apply-remediation.
 >
 > - `pac pages upload` does **not** accept `--webSiteId` — the site is inferred from `website.yml` inside `<SITE_ROOT>`. If you pass `--webSiteId`, PAC errors with "An unknown argument --webSiteId was passed."
 > - `--modelVersion 1` = SDM (the site's activation is still SDM at this point, since step 3.3 hasn't flipped it yet).
-> - `<SITE_ROOT>` must point at the directory containing `website.yml` (not the wrapper `./mysite`).
+> - `<SITE_ROOT>` must point at the directory containing `website.yml` (not the `<MIGRATION_OUTPUT_DIR>/site-sdm` wrapper).
 
 > **→ Update report (after upload completes):** `--clear-approval`. The in-phase gate is now resolved.
 
@@ -994,7 +996,7 @@ After auto-rewrites are uploaded (or skipped due to zero findings) and any manua
 > Phase 3 sub-steps that will run if you approve.
 > ```
 >
-> Then ask the user to approve Phase 3 via AskUserQuestion. On approval, `--clear-approval` and `--set-phase 3 --status in-progress`.
+> Then ask the user to approve Phase 3 via AskUserQuestion. On approval, run `node update-state.js --output-dir "<OUTPUT_DIR>" --approve-and-start 3` to atomically clear the approval gate and mark Phase 3 in-progress.
 
 ---
 
@@ -1128,7 +1130,7 @@ After whichever option, loop back to **step 2.1** to re-verify the site is now p
 > Phase 3 sub-steps that will run if you approve.
 > ```
 >
-> Then ask the user to approve Phase 3 via AskUserQuestion. On approval, `--clear-approval` and `--set-phase 3 --status in-progress`.
+> Then ask the user to approve Phase 3 via AskUserQuestion. On approval, run `node update-state.js --output-dir "<OUTPUT_DIR>" --approve-and-start 3` to atomically clear the approval gate and mark Phase 3 in-progress.
 
 ---
 
@@ -1162,10 +1164,10 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 1. **Re-download the migrated site as EDM**
 
    ```powershell
-   pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 2 --path "./mysite-edm"
+   pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 2 --path "<MIGRATION_OUTPUT_DIR>/site-edm"
    ```
 
-   Site root lives one level deeper than `--path` (e.g., `./mysite-edm/<slug>/website.yml`). Capture inner path as `<SITE_ROOT_EDM>` via `Get-ChildItem .\mysite-edm -Directory`.
+   Site root lives one level deeper than `--path` (e.g., `<MIGRATION_OUTPUT_DIR>/site-edm/<slug>/website.yml`). Capture inner path as `<SITE_ROOT_EDM>` via `Get-ChildItem "<MIGRATION_OUTPUT_DIR>/site-edm" -Directory`.
 
 2. **Snapshot the EDM site**
 
@@ -1251,30 +1253,61 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
    ```powershell
    $webSiteId = "<WEBSITE_ID>"
    $outputDir = "<OUTPUT_DIR>"
+   $finalStatus = $null
+   $finalPayload = $null
    for ($i = 1; $i -le 30; $i++) {
      $verboseOutput = pac pages migrate-datamodel --webSiteId $webSiteId -s -v 2>&1 | Out-String
 
-     # Parse the verbose output into the --set-refs-migration JSON payload.
-     # Schema: status (NotStarted | Running | Completed | Failed | Reverted | Unknown),
-     # currentStep, createdAt / modifiedAt (ISO 8601), stepHistory (array of { step, at }
-     # filtered to entries from `ConfigurationDataReferencesStarted` onward — drop earlier
-     # metadata migration steps), runs (array of { name, chunkTotal, completed, succeeded,
-     # chunks: [{ name, runStatus, outcome, errorType, errorDetails }] }).
-     # Build the JSON and call:
-     node update-state.js --output-dir $outputDir --set-refs-migration "<PARSED_JSON>"
+     # Build the --set-refs-migration JSON payload from the verbose output.
+     # The agent (you) must parse $verboseOutput and produce a JSON STRING.
+     # Required fields:
+     #   status        — one of NotStarted | Running | Completed | Failed | Reverted | Unknown
+     #                   (from the "Current migration status is :" line)
+     #   currentStep   — from the "Current Step:" line under "Migration Step Details"
+     #   createdAt     — ISO 8601, from "Created On" in the Migration Tracker Summary
+     #   modifiedAt    — ISO 8601, from "Modified On" in the Migration Tracker Summary
+     #   stepHistory   — array of { step, at } from the "Step History" block,
+     #                   filtered to entries from `ConfigurationDataReferencesStarted` onward
+     #                   (drop earlier `ConfigurationData*` metadata steps from Phase 2)
+     #   runs          — array of { name, chunkTotal, completed, succeeded,
+     #                   chunks: [{ name, runStatus, outcome, errorType, errorDetails }] }
+     #                   parsed from the "Migration Run N" + "Chunk Details" blocks
+     #
+     # Build the object in a hashtable, then ConvertTo-Json -Compress -Depth 10.
+     # IMPORTANT: pass the resulting JSON string — NOT the literal text
+     # `<PARSED_JSON>` — to --set-refs-migration, or cmdSetRefsMigration will
+     # error with "could not parse JSON" and the card will stay empty.
+     $refsPayload = @{
+       status      = '<STATUS_FROM_OUTPUT>'
+       currentStep = '<STEP_FROM_OUTPUT>'
+       createdAt   = '<ISO_FROM_OUTPUT>'
+       modifiedAt  = '<ISO_FROM_OUTPUT>'
+       stepHistory = @( <ARRAY_OF_OBJECTS_FROM_OUTPUT> )
+       runs        = @( <ARRAY_OF_RUN_OBJECTS_FROM_OUTPUT> )
+     } | ConvertTo-Json -Compress -Depth 10
+     $finalPayload = $refsPayload
+
+     node update-state.js --output-dir $outputDir --set-refs-migration $refsPayload
      node update-state.js --output-dir $outputDir --set-activity "Polling migration status (attempt $i/30)"
 
-     if ($verboseOutput -match "Current migration status is\s*:\s*Completed") { Write-Host "Status: Completed";  break }
-     if ($verboseOutput -match "Current migration status is\s*:\s*Failed")    { Write-Host "Status: Failed";     break }
-     if ($verboseOutput -match "Current migration status is\s*:\s*Reverted")  { Write-Host "Status: Reverted";   break }
+     if ($verboseOutput -match "Current migration status is\s*:\s*Completed") { $finalStatus = 'Completed'; Write-Host 'Status: Completed'; break }
+     if ($verboseOutput -match "Current migration status is\s*:\s*Failed")    { $finalStatus = 'Failed';    Write-Host 'Status: Failed';    break }
+     if ($verboseOutput -match "Current migration status is\s*:\s*Reverted")  { $finalStatus = 'Reverted';  Write-Host 'Status: Reverted';  break }
      Write-Host "Attempt $i/30 — still running, sleeping 60s..."
      Start-Sleep -Seconds 60
    }
+
+   # Guaranteed final refresh: re-emit the last captured payload so the card
+   # reflects the terminal state even if the last in-loop call had a parsing
+   # hiccup. Safe to run — cmdSetRefsMigration is idempotent.
+   if ($finalPayload) {
+     node update-state.js --output-dir $outputDir --set-refs-migration $finalPayload
+   }
    ```
 
-   - **Completed**: clear activity, proceed to step 3.3. The final `--set-refs-migration` call (last loop iteration) already captured the completed payload.
-   - **In Progress (loop exited at i=30 without status change)**: surface 30-min timeout, ask user (retry / reset / exit) — same handling pattern as 1.4 in-flight branch.
-   - **Failed / Reverted**: surface error, ask user (retry / reset / exit). The Transactional References Migration card already shows the chunk-level error details from the last poll.
+   - **Completed**: clear activity, proceed to step 3.3. The card now shows status=Completed.
+   - **In Progress (loop exited at i=30 without status change)**: surface 30-min timeout, ask user (retry / reset / exit) — same handling pattern as 1.4 in-flight branch. The card shows the last captured running state.
+   - **Failed / Reverted**: surface error, ask user (retry / reset / exit). The card shows the failed status and chunk-level error details from the last poll.
 
    > **PAC build compatibility:** `-s -v` works on most current builds. If your PAC errors with `An unknown argument --verbose was passed`, fall back to plain `--checkMigrationStatus` in the loop and emit a smaller `--set-refs-migration` payload (`status` + `currentStep` only) once per iteration.
 
@@ -1287,7 +1320,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 > --set-step 3.2 --status completed --output "<Refs migrated · status=<STATUS> | Skipped — already covered by mode=all in Phase 2.2>"
 > ```
 >
-> The Transactional References Migration card is already up-to-date from the last loop iteration; no extra `--set-refs-migration` call needed here. Skip the whole block when this step is skipped because mode=all.
+> When this step is skipped because mode=all, also emit a minimal `--set-refs-migration '{"status":"Completed","currentStep":"Skipped — covered by mode=all in Phase 2.2"}'` so the card shows a Completed pill instead of staying empty. Otherwise the polling loop above already emitted the final payload — no extra `--set-refs-migration` call needed here.
 
 ---
 
@@ -1400,7 +1433,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 > baseline to verify every record migrated.
 > ```
 >
-> Then ask the user to approve Phase 4. On approval, `--clear-approval` and `--set-phase 4 --status in-progress`.
+> Then ask the user to approve Phase 4. On approval, run `node update-state.js --output-dir "<OUTPUT_DIR>" --approve-and-start 4` to atomically clear the approval gate and mark Phase 4 in-progress.
 
 ---
 
@@ -1425,10 +1458,10 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 1. **Capture SDM snapshot** (Downstream Track specific — the Authoring Track captures this in 2.1)
 
    ```powershell
-   pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 1 --path "./mysite"
+   pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 1 --path "<MIGRATION_OUTPUT_DIR>/site-sdm"
    ```
 
-   > **Nested-folder quirk** applies — actual site root is one level deeper. Capture inner path as `<SITE_ROOT>`.
+   > **Nested-folder quirk** applies — actual site root is one level deeper. Capture inner path as `<SITE_ROOT>` via `Get-ChildItem "<MIGRATION_OUTPUT_DIR>/site-sdm" -Directory`.
 
    Then snapshot:
 
@@ -1442,10 +1475,10 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 2. **Re-download the migrated site as EDM**
 
    ```powershell
-   pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 2 --path "./mysite-edm"
+   pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 2 --path "<MIGRATION_OUTPUT_DIR>/site-edm"
    ```
 
-   Site root lives one level deeper than `--path`. Capture inner path as `<SITE_ROOT_EDM>` via `Get-ChildItem .\mysite-edm -Directory`.
+   Site root lives one level deeper than `--path`. Capture inner path as `<SITE_ROOT_EDM>` via `Get-ChildItem "<MIGRATION_OUTPUT_DIR>/site-edm" -Directory`.
 
 3. **Snapshot the EDM site**
 
@@ -1500,20 +1533,40 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
    ```powershell
    $webSiteId = "<WEBSITE_ID>"
    $outputDir = "<OUTPUT_DIR>"
+   $finalPayload = $null
    for ($i = 1; $i -le 30; $i++) {
      $verboseOutput = pac pages migrate-datamodel --webSiteId $webSiteId -s -v 2>&1 | Out-String
-     node update-state.js --output-dir $outputDir --set-refs-migration "<PARSED_JSON>"
+
+     # Build the --set-refs-migration JSON payload — see Authoring Track 3.2
+     # step 3 for the field schema. Pass the produced JSON STRING, not the
+     # literal `<PARSED_JSON>` placeholder, or cmdSetRefsMigration will error.
+     $refsPayload = @{
+       status      = '<STATUS_FROM_OUTPUT>'
+       currentStep = '<STEP_FROM_OUTPUT>'
+       createdAt   = '<ISO_FROM_OUTPUT>'
+       modifiedAt  = '<ISO_FROM_OUTPUT>'
+       stepHistory = @( <ARRAY_OF_OBJECTS_FROM_OUTPUT> )
+       runs        = @( <ARRAY_OF_RUN_OBJECTS_FROM_OUTPUT> )
+     } | ConvertTo-Json -Compress -Depth 10
+     $finalPayload = $refsPayload
+
+     node update-state.js --output-dir $outputDir --set-refs-migration $refsPayload
      node update-state.js --output-dir $outputDir --set-activity "Polling migration status (attempt $i/30)"
      if ($verboseOutput -match "Current migration status is\s*:\s*Completed") { break }
      if ($verboseOutput -match "Current migration status is\s*:\s*Failed")    { break }
      if ($verboseOutput -match "Current migration status is\s*:\s*Reverted")  { break }
      Start-Sleep -Seconds 60
    }
+
+   # Guaranteed final refresh (safe; cmdSetRefsMigration is idempotent).
+   if ($finalPayload) {
+     node update-state.js --output-dir $outputDir --set-refs-migration $finalPayload
+   }
    ```
 
-   - **Completed**: clear activity, proceed to step 3.3.
-   - **In Progress (30-min timeout)**: surface timeout, ask user (retry / reset / exit).
-   - **Failed / Reverted**: surface error, ask user; card already shows chunk-level errors from the last poll.
+   - **Completed**: clear activity, proceed to step 3.3. The card now shows status=Completed.
+   - **In Progress (30-min timeout)**: surface timeout, ask user (retry / reset / exit). The card shows the last captured running state.
+   - **Failed / Reverted**: surface error, ask user; card shows the failed status and chunk-level errors from the last poll.
 
    > **PAC build compatibility:** `-s -v` works on most current builds. If your PAC errors with `An unknown argument --verbose was passed`, fall back to plain `--checkMigrationStatus` in the loop and emit a smaller `--set-refs-migration` payload (`status` + `currentStep` only) once per iteration.
 
@@ -1526,7 +1579,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 > --set-step 3.2 --status completed --output "Refs migrated · status=<STATUS>"
 > ```
 >
-> The Transactional References Migration card is already up-to-date from the last loop iteration; no extra `--set-refs-migration` call needed here.
+> The polling loop above already emitted the final payload; no extra `--set-refs-migration` call needed here.
 
 ---
 
@@ -1633,7 +1686,7 @@ Identical to the Authoring Track's step 3.4 — print restart instructions, wait
 > baseline to verify every record migrated.
 > ```
 >
-> Then ask the user to approve Phase 4. On approval, `--clear-approval` and `--set-phase 4 --status in-progress`.
+> Then ask the user to approve Phase 4. On approval, run `node update-state.js --output-dir "<OUTPUT_DIR>" --approve-and-start 4` to atomically clear the approval gate and mark Phase 4 in-progress.
 
 
 ## Phase 4: Post-Migration Validation
