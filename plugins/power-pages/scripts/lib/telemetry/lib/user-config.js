@@ -9,6 +9,10 @@ function configPath(configDir) {
   return path.join(configDir, CONFIG_FILE_NAME);
 }
 
+function isPlainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value);
+}
+
 // Reads the whole config object; returns {} on any error (missing/corrupt).
 function readConfig(configDir) {
   try {
@@ -16,7 +20,7 @@ function readConfig(configDir) {
     // Arrays pass `typeof === "object"` but break the merge-write: setTelemetryChoice
     // would set `.telemetry` on the array and JSON.stringify would silently drop it,
     // reporting success while persisting nothing. Treat non-plain objects as empty.
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    return isPlainObject(parsed) ? parsed : {};
   } catch {
     return {};
   }
@@ -26,7 +30,7 @@ function readConfig(configDir) {
 function readTelemetryChoice(configDir, pluginName) {
   if (!configDir || !pluginName) return null;
   const t = readConfig(configDir).telemetry;
-  if (!t || typeof t !== "object") return null;
+  if (!isPlainObject(t)) return null;
   const v = t[pluginName];
   return v === "on" || v === "off" ? v : null;
 }
@@ -78,7 +82,10 @@ function setTelemetryChoice(configDir, pluginName, choice) {
     return false;
   }
   const cfg = readConfig(configDir);
-  if (!cfg.telemetry || typeof cfg.telemetry !== "object") cfg.telemetry = {};
+  // `telemetry` itself can also be malformed, e.g. `"telemetry": []`. Assigning
+  // `cfg.telemetry[pluginName]` on an array creates a non-index property that
+  // JSON.stringify drops, so normalize any non-plain telemetry value before write.
+  if (!isPlainObject(cfg.telemetry)) cfg.telemetry = {};
   cfg.telemetry[pluginName] = choice;
   try {
     fs.writeFileSync(configPath(configDir), JSON.stringify(cfg, null, 2) + "\n", "utf8");

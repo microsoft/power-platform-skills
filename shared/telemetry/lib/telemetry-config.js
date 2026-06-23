@@ -8,9 +8,10 @@ const { setTelemetryChoice, effectiveTelemetryChoice } = require("./user-config"
 
 const ANONYMITY =
   "ℹ️  No personal data is collected. Telemetry is anonymous — it records only\n" +
-  "   things like skill name, plugin version, OS, and Node version. It never\n" +
-  "   includes file paths, prompts, tool inputs, site names, URLs, credentials,\n" +
-  "   usernames, or hostnames.";
+  "   operational fields like skill name, plugin version, OS/Node versions,\n" +
+  "   PAC CLI and agent versions, and Dataverse org/tenant IDs when available.\n" +
+  "   It never includes file paths, prompts, tool inputs, site names, URLs,\n" +
+  "   credentials, usernames, or hostnames.";
 
 function getArg(name) {
   const i = process.argv.indexOf(`--${name}`);
