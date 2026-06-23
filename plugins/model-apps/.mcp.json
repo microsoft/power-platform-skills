@@ -4,7 +4,7 @@
             "command": "node",
             "args": [
                 "-e",
-                "const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root) throw new Error('PLUGIN_ROOT is not set'); const mod=require(path.join(root,'scripts','launch-playwright-mcp.js')); if(mod&&typeof mod.launch==='function') mod.launch();"
+                "const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root) throw new Error('PLUGIN_ROOT is not set'); const mod=require(path.resolve(root,'scripts','launch-playwright-mcp.js')); if(mod&&typeof mod.launch==='function') mod.launch();"
             ]
         }
     }

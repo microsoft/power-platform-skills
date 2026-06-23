@@ -144,12 +144,19 @@ These steps assume your plugin already lives under `plugins/<your-plugin>/` with
 
 Copy `shared/telemetry/lib` into `plugins/<your-plugin>/scripts/lib/telemetry/lib`.
 
-Use a physical directory, not a Git symlink. Some Windows checkouts and plugin hosts materialize symlinks as plain link files, which makes hook-time `require()` calls fail before the dispatcher can write the local diagnostic log.
+Use a physical directory, not a Git symlink. Some Windows checkouts and plugin hosts materialize symlinks as plain link files, which makes hook-time `require()` calls fail before the dispatcher can write the local diagnostic log. Any recursive copy command is fine; examples:
 
 ```powershell
 $target = "plugins/<your-plugin>/scripts/lib/telemetry/lib"
 Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
 Copy-Item -LiteralPath "shared/telemetry/lib" -Destination $target -Recurse -Force
+```
+
+```bash
+target="plugins/<your-plugin>/scripts/lib/telemetry/lib"
+rm -rf "$target"
+mkdir -p "$(dirname "$target")"
+cp -R shared/telemetry/lib "$target"
 ```
 
 Now `scripts/lib/telemetry/lib` is self-contained inside the plugin directory. Commit the copied files together with any shared library change.
