@@ -66,6 +66,30 @@ function assertMinimalMarketplace(marketplace) {
   assert.ok(marketplace.plugins.length > 0, 'plugins must contain at least one entry');
 }
 
+function assertPluginMetadata(pluginName, manifest) {
+  // Marketplace plugin entries intentionally omit these optional override fields.
+  // Keep them in each plugin manifest instead so `plugin.json` remains the single
+  // source of truth for display/update metadata.
+  assert.equal(manifest.name, pluginName);
+  assert.match(manifest.version, /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/, 'version must be semantic');
+  assert.equal(typeof manifest.description, 'string', 'description must be a string');
+  assert.notEqual(manifest.description.trim(), '', 'description must not be empty');
+  assert.equal(typeof manifest.author?.name, 'string', 'author.name must be a string');
+  assert.notEqual(manifest.author.name.trim(), '', 'author.name must not be empty');
+  assert.equal(typeof manifest.homepage, 'string', 'homepage must be a string');
+  assert.notEqual(manifest.homepage.trim(), '', 'homepage must not be empty');
+  assert.equal(typeof manifest.repository, 'string', 'repository must be a string');
+  assert.notEqual(manifest.repository.trim(), '', 'repository must not be empty');
+  assert.equal(typeof manifest.license, 'string', 'license must be a string');
+  assert.notEqual(manifest.license.trim(), '', 'license must not be empty');
+  assert.ok(Array.isArray(manifest.keywords), 'keywords must be an array');
+  assert.ok(manifest.keywords.length > 0, 'keywords must contain at least one entry');
+  for (const [index, keyword] of manifest.keywords.entries()) {
+    assert.equal(typeof keyword, 'string', `keywords[${index}] must be a string`);
+    assert.notEqual(keyword.trim(), '', `keywords[${index}] must not be empty`);
+  }
+}
+
 const errors = [];
 
 function check(label, fn) {
@@ -113,7 +137,7 @@ if (errors.length === 0) {
 
     check(`${plugin.name} plugin manifest`, () => {
       const pluginManifest = readJson(openManifestPath);
-      assert.equal(plugin.name, pluginManifest.name);
+      assertPluginMetadata(plugin.name, pluginManifest);
     });
 
     check(relativeLegacyManifestPath, () => {
