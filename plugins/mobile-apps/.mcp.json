@@ -1,0 +1,20 @@
+{
+  "$schema": "https://modelcontextprotocol.io/schema/mcp-server.json",
+  "_comment": "Optional MCP servers shipped with the mobile-app plugin. The host (Claude Code, Copilot Chat) launches these on demand; no install step required by the user. The expo-mcp server is pointed at the default Metro dev-server URL (http://localhost:8081) so it can introspect a RUNNING app and surface runtime errors back to the agent for the dev loop. If Metro isn't running, expo-mcp gracefully degrades to static project introspection. The microsoft-learn server is a hosted HTTP MCP that returns authoritative Microsoft docs (Dataverse Web API, Power Platform CLI, connectors, Graph) — use it whenever a Microsoft-platform behavior is uncertain rather than guessing.",
+  "mcpServers": {
+    "expo": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "expo-mcp",
+        "--dev-server-url",
+        "http://localhost:8081"
+      ]
+    },
+    "microsoft-learn": {
+      "type": "http",
+      "url": "https://learn.microsoft.com/api/mcp"
+    }
+  }
+}

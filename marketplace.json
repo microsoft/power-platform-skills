@@ -127,6 +127,36 @@
                 "connectors",
                 "microsoft"
             ]
+        },
+        {
+            "name": "mobile-app",
+            "source": "./plugins/mobile-apps",
+            "description": "Build and deploy Power Apps code apps for mobile using Expo (React Native), with native device functionality and Power Platform connectors",
+            "category": "development",
+            "version": "0.1.0",
+            "license": "MIT",
+            "tags": [
+                "power platform",
+                "power apps",
+                "code apps",
+                "mobile",
+                "expo",
+                "react native",
+                "native",
+                "connectors",
+                "microsoft"
+            ],
+            "keywords": [
+                "power platform",
+                "power apps",
+                "code apps",
+                "mobile",
+                "expo",
+                "react native",
+                "native",
+                "connectors",
+                "microsoft"
+            ]
         }
     ]
 }
