@@ -20,18 +20,18 @@ Top-level orchestrator. Owns the user-visible flow; delegates planning to the `n
 
 ## Fresh-template working-directory mode
 
-This skill assumes the user already has a **fresh** `pa-wrap-tools/templates/expo-app-standalone` template materialized with `degit` in the target working directory and has already run `npm run renew` followed by `npm install` there. The skill turns that fresh template into an app; it does not clone, degit, or copy a template itself.
+This skill assumes the user already has a **fresh** `pa-wrap-tools/templates/expo-app-standalone` template materialized with `degit` in the target working directory and has already run `npm install` there. The skill turns that fresh template into an app; it does not clone, degit, or copy a template itself.
 
-**Fresh template required.** If the working directory is not a template, or if it already looks like an app created by this skill, STOP and tell the user to materialize a fresh `expo-app-standalone` template with `degit` into a new folder, run `npm run renew` and then `npm install`, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`.
+**Fresh template required.** If the working directory is not a template, or if it already looks like an app created by this skill, STOP and tell the user to materialize a fresh `expo-app-standalone` template with `degit` into a new folder, run `npm install`, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`.
 
 Use these markers:
 
 | State | Detection | Action |
 |---|---|---|
 | Fresh template | `package.json`, `app.config.js`, `auth.config.json`, `tamagui.config.ts` exist; `node_modules/expo` exists; `memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, and generated Dataverse services are absent | Proceed. |
-| Template not installed | Fresh-template files exist but `node_modules/expo` is absent | STOP: ask user to run `npm run renew` and then `npm install` in the template folder, then rerun. Do not provision ADO npm tokens here. |
+| Template not installed | Fresh-template files exist but `node_modules/expo` is absent | STOP: ask user to run `npm install` in the template folder, then rerun. Do not provision ADO npm tokens here. |
 | Already-created app | `memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts` exists | STOP: this is not a fresh create target. Ask user to materialize a fresh template folder with `degit`. |
-| Not template | Required template files are missing | STOP: ask user to materialize `pa-wrap-tools/templates/expo-app-standalone` into the working directory with `degit` and run `npm run renew` followed by `npm install`. |
+| Not template | Required template files are missing | STOP: ask user to materialize `pa-wrap-tools/templates/expo-app-standalone` into the working directory with `degit` and run `npm install`. |
 
 This gate is intentionally simple: `/create-mobile-app` creates a new app from a fresh template. It does not adopt, repair, resume, or overwrite an already-created app.
 
@@ -82,8 +82,8 @@ After the resume check, run the **fresh-template gate** from the section above. 
 
 - If `memory-bank.md` exists and the user confirms resume, resume as documented above.
 - If any already-created-app marker exists and there is no approved resume path, STOP and tell the user to materialize a fresh template into a new folder with `degit`.
-- If required template files are missing, STOP and tell the user to materialize `pa-wrap-tools/templates/expo-app-standalone` into the working directory with `degit` and run `npm run renew` followed by `npm install`.
-- If `node_modules/expo` is missing, STOP and tell the user to run `npm run renew` and then `npm install` in that template folder before rerunning this skill.
+- If required template files are missing, STOP and tell the user to materialize `pa-wrap-tools/templates/expo-app-standalone` into the working directory with `degit` and run `npm install`.
+- If `node_modules/expo` is missing, STOP and tell the user to run `npm install` in that template folder before rerunning this skill.
 
 **Do not silently copy a bundled template over the user's folder.** A fresh `pa-wrap-tools-1` template may contain placeholder `power.config.json` with an empty `environmentId`; Step 5 removes that placeholder immediately before Step 6 runs `npx power-apps init`.
 
@@ -95,7 +95,7 @@ Run all checks first — no point gathering requirements if the toolchain isn't 
 
 | What | Uses | Typical account |
 |---|---|---|
-| `npm install` private feed access | Template token renewal script (`npm run renew`) | Account with feed Reader access |
+| `npm install` private feed access | npm/Azure Artifacts auth configured outside this skill | Account with feed Reader access |
 | `npx power-apps init`, Dataverse, deploy | `npx power-apps` browser auth + `az login --tenant <env-tenant>` for Dataverse helper scripts | Power Platform environment account, often a test-tenant/admin account |
 
 Renewing npm feed auth does not sign the user into `npx power-apps`. If the Power Apps CLI prompts for browser auth later, that is expected and unrelated to the npm/ADO feed token.
@@ -116,7 +116,7 @@ git --version                                       # optional
 | Node < 22 | STOP — instruct `nvm install 22 && nvm use 22` |
 | `az` | STOP — instruct `az login` |
 
-Template-only rule: this skill no longer provisions npm feed tokens, PAT fallbacks, vendor fallbacks, or `.npmrc` rewrites. The user must run `npm run renew` and `npm install` in the fresh template folder before invoking `/create-mobile-app`.
+Template-only rule: this skill no longer provisions npm feed tokens, PAT fallbacks, vendor fallbacks, or registry rewrites. The user must run `npm install` in the fresh template folder before invoking `/create-mobile-app`.
 
 Capture target Power Platform environment for the remaining flow.
 
@@ -387,7 +387,7 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 
 ### Step 2d — Template-only mode
 
-No background scaffold pipeline is used. The template is already present in `<working_dir>` and dependencies are expected to be installed before this skill starts (`npm run renew` then `npm install`). Continue directly to Step 3.
+No background scaffold pipeline is used. The template is already present in `<working_dir>` and dependencies are expected to be installed before this skill starts (`npm install`). Continue directly to Step 3.
 
 ### Step 3 — Plan (planner agent + 4 approval gates)
 
@@ -620,10 +620,10 @@ test -d node_modules/expo
 ```
 
 If any required template file is missing, STOP:
-> "This folder is not a fresh `expo-app-standalone` template. Materialize a fresh template with `degit` into a new folder, run `npm run renew` and then `npm install`, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`."
+> "This folder is not a fresh `expo-app-standalone` template. Materialize a fresh template with `degit` into a new folder, run `npm install`, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`."
 
 If `node_modules/expo` is missing, STOP:
-> "Dependencies are not installed. Run `npm run renew` and then `npm install` in the template folder, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`."
+> "Dependencies are not installed. Run `npm install` in the template folder, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`."
 
 If already-created markers appear (`memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts`) and Step 0 did not enter the resume path, STOP:
 > "This folder already looks like a created app. For a new app, materialize a fresh `expo-app-standalone` template with `degit` into a new folder and rerun this skill there."
@@ -850,13 +850,13 @@ Verify `power.config.json` was created and `environmentId` matches Step 4. If `n
 
 ### Step 6.5 — Verify dependencies
 
-This step verifies dependencies only. The user must have run `npm run renew` and then `npm install` before invoking the skill.
+This step verifies dependencies only. The user must have run `npm install` before invoking the skill.
 
 ```bash
-[ -d "<working_dir>/node_modules/expo" ] && echo "✓ node_modules present" || echo "✗ missing — run npm run renew, then npm install in the template folder and rerun"
+[ -d "<working_dir>/node_modules/expo" ] && echo "✓ node_modules present" || echo "✗ missing — run npm install in the template folder and rerun"
 ```
 
-If `node_modules/expo` is missing, STOP. Tell the user to run `npm run renew` and then `npm install` in the template folder. Do not provision ADO tokens or run `npm install` from this skill.
+If `node_modules/expo` is missing, STOP. Tell the user to run `npm install` in the template folder. Do not provision ADO tokens or run `npm install` from this skill.
 
 ### Step 6.5b — Ensure SafeAreaProvider wraps the root layout (always runs, idempotent)
 
@@ -2056,7 +2056,7 @@ When invoking the Bash tool: set `run_in_background: true` (or the equivalent as
    - Locate the line beginning `› Metro:` — it has the form `exp+<scheme>://expo-development-client/?url=<encoded-http-url>`. Capture the full Metro URL.
    - Locate the line beginning `› Web:` — capture the Web URL (e.g. `http://localhost:<port>`).
 3. **Generate QR code PNG and present it to the user** (chat-first, deterministic fallback):
-  - Run `npx --yes qrcode -o <working_dir>/.expo/metro-qr.png "<metro-url>"` to generate the PNG. If the project's `.npmrc` requires auth and the fetch fails with `E401`, retry once with `npm_config_registry=https://registry.npmjs.org/ npm_config_always_auth=false` prefixed.
+  - Run `npx --yes qrcode -o <working_dir>/.expo/metro-qr.png "<metro-url>"` to generate the PNG. If the project's npm config requires auth and the fetch fails with `E401`, retry once with `npm_config_registry=https://registry.npmjs.org/ npm_config_always_auth=false` prefixed.
   - Verify the PNG was created: `test -f <working_dir>/.expo/metro-qr.png` (exit code 0 = success). If it fails, print the qrcode error and continue to step 4.
   - **Chat-first render (best effort):** read and base64-encode the file (`base64 <working_dir>/.expo/metro-qr.png`) and embed in markdown as a data URI (`![QR](data:image/png;base64,<data>)`) so hosts that support inline image markdown show the QR directly in chat.
   - **Guaranteed visible fallback:** if inline chat image rendering is unavailable in the host UI, open the PNG directly in the default system image viewer/browser (`open <working_dir>/.expo/metro-qr.png` on macOS, `xdg-open ...` on Linux, `start "" ...` on Windows). This fallback is required whenever chat image rendering is unavailable.

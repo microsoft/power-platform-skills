@@ -211,7 +211,7 @@ Apply these rules whenever an `az`, `npm`, `npx`, or `expo` command exits non-ze
 
 | Condition | Action |
 | --- | --- |
-| `404` for `power-apps-native-host` or `@microsoft/power-apps` | Likely an internal-feed-only package. Check `.npmrc` for the correct registry. STOP. |
+| `404` for `power-apps-native-host` or `@microsoft/power-apps` | Likely an internal-feed-only package. Check npm registry/auth configuration for the correct Azure Artifacts feed. STOP. |
 | Peer-dep mismatch from Expo SDK | Run `npx expo install --fix` once. If still failing, surface the message and STOP. |
 | Reanimated install but build fails immediately after | `react-native-reanimated/plugin` is missing or wrongly ordered in `babel.config.js`. Add it as the **last** plugin entry. |
 

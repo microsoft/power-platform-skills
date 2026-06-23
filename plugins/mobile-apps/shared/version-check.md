@@ -73,7 +73,7 @@ These are pinned in the upstream template at [`pa-wrap-tools/templates/expo-app-
 | `expo` | `55.0.26` | SDK 55 |
 | `react-native` | `0.83.6` | matched to Expo SDK 55 |
 | All `expo-*` packages | `55.x.y` | router, auth-session, secure-store, dev-client, etc. — version line tied to SDK |
-| `@microsoft/power-apps` | `1.2.2` | resolved from the Azure Artifacts registry configured in `.npmrc` |
+| `@microsoft/power-apps` | `1.2.2` | resolved from the Azure Artifacts registry configured for npm |
 | `@microsoft/power-apps-native-host` | `^0.2.20` | native runtime host, resolved from the Azure Artifacts registry |
 | `@microsoft/power-apps-native-offline` | `^0.1.7` | offline runtime package, resolved from the Azure Artifacts registry |
 | `@expo/fingerprint` | `0.16.7` | runtime fingerprint support used by `app.config.js` |

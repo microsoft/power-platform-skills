@@ -100,7 +100,7 @@ claude plugin install mobile-app@power-platform-skills --scope user
 
 Use this only if the installer cannot find or configure your Claude CLI. You can also add it to your global plugin config manually — see the [Claude Code plugin docs](https://docs.anthropic.com/claude/docs/claude-code-plugins).
 
-**Step 3 — Prepare a fresh template folder** (next section). Use `degit` to materialize `pa-wrap-tools/templates/expo-app-standalone`, run `npm run renew`, then run `npm install` in that folder. Open that folder and run `/create-mobile-app` there.
+**Step 3 — Prepare a fresh template folder** (next section). Use `degit` to materialize `pa-wrap-tools/templates/expo-app-standalone`, run `npm install` in that folder, then open that folder and run `/create-mobile-app` there.
 
 ### GitHub Copilot (VS Code) fallback
 
@@ -135,7 +135,6 @@ That's it. The Expo template is prepared before invoking `/create-mobile-app`:
 ```bash
 npx degit microsoft.ghe.com/bic/pa-wrap-tools/templates/expo-app-standalone my-mobile-app
 cd my-mobile-app
-npm run renew
 npm install
 ```
 
@@ -156,7 +155,7 @@ This skill talks to two different Microsoft systems with two different identitie
 | `npm install` from private feed | **Your corp `@microsoft.com` account** | **`az login --tenant <corp>`** (browser) — falls back to PAT for headless | Feed ACL is on your corp identity, not your test-tenant admin. |
 | Everything else (`npx power-apps init`, Dataverse, deploy, push) | **Power Platform tenant identity** (often a test-tenant admin, NOT your corp account) | `npx power-apps` browser auth + `az login --tenant <env-tenant>` for Dataverse helper scripts | Power Platform has its own AAD context, often a different tenant entirely. |
 
-The template's `npm run renew` uses your active `az` identity to refresh npm feed credentials before `npm install`. PAT setup remains a headless / CI fallback only. `npx power-apps` uses its own browser auth cache, separate from Azure CLI.
+Configure npm access to the Azure Artifacts feed before `npm install`. PAT setup remains a headless / CI fallback only. `npx power-apps` uses its own browser auth cache, separate from Azure CLI.
 
 ### 1. Tooling versions
 
@@ -172,7 +171,7 @@ Detailed matrix (and Xcode/Android Studio notes if you want local native builds)
 
 The Expo template's `package.json` depends on `@microsoft/power-apps-native-host` and sibling Microsoft packages hosted on a **private Azure Artifacts feed** — `mobile-codegen-expo` under the `msazure / OneAgile` org. Without a valid feed credential, `npm install` fails with `E401 Unauthorized`. This is the most common blocker.
 
-**Recommended: `az login` browser flow.** Sign in with the identity that has feed Reader access, then run the template's `npm run renew` before `npm install`. The `renew` script uses the Azure Artifacts credential provider flow for npm auth. No copy-paste, no PAT rotation, identity is auditable in `az account show`.
+**Recommended: `az login` browser flow.** Sign in with the identity that has feed Reader access, then make sure your npm auth configuration can access the Azure Artifacts feed before `npm install`. No copy-paste, no PAT rotation, identity is auditable in `az account show`.
 
 **Step A — Get Reader access to the feed:**
 
@@ -196,7 +195,7 @@ az account show --query user.name -o tsv
 # Should print your @microsoft.com address (NOT the Power Platform test-tenant admin)
 ```
 
-The template credential renewal picks up this identity when you run `npm run renew`. If you have multiple accounts, you can switch any time with `az account set --subscription <sub-id>` or re-run `az login`.
+If you have multiple accounts, you can switch any time with `az account set --subscription <sub-id>` or re-run `az login`.
 
 **Step C — Verify the feed is reachable:**
 
@@ -214,7 +213,7 @@ export AZURE_DEVOPS_NPM_TOKEN=<paste-the-PAT-here>
 # Persist by appending to ~/.zshrc
 ```
 
-For local setup, prefer the active `az` identity plus `npm run renew`. For headless setups, set `AZURE_DEVOPS_NPM_TOKEN` before running `npm install`.
+For local setup, prefer active `az` identity-backed npm auth. For headless setups, set `AZURE_DEVOPS_NPM_TOKEN` before running `npm install`.
 
 **Step D — Verify (skip if you ran Step C):**
 
@@ -467,7 +466,7 @@ At Step 6.75 of `/create-mobile-app`, the `/design-system` skill offers a cost p
 
 ## Known blockers
 
-1. **Fresh template preparation.** `/create-mobile-app` expects a fresh installed `expo-app-standalone` template working directory. Use `degit` to materialize `pa-wrap-tools/templates/expo-app-standalone`, run `npm run renew`, then run `npm install` in that template folder before invoking the skill there.
+1. **Fresh template preparation.** `/create-mobile-app` expects a fresh installed `expo-app-standalone` template working directory. Use `degit` to materialize `pa-wrap-tools/templates/expo-app-standalone`, then run `npm install` in that template folder before invoking the skill there.
 2. **Azure Artifacts npm token.** The template depends on `@microsoft/power-apps-native-host` from a private Azure DevOps feed. Without a valid feed token, `npm install` fails with `E401 Unauthorized`. See [Prerequisites § 2](#2-azure-artifacts-npm-token-private-feed-).
 3. ~~**Sub-agent slash-command limitation.**~~ ✅ **Resolved** — `/design-system` (Step 6.75) now runs as a top-level skill invocation by the orchestrator, not inside a sub-agent. The old `DESIGN_VIBE_REQUESTED:` handoff signal is no longer needed.
 4. ~~**Connector usage requires the player runtime.**~~ ✅ **Resolved** — `PowerAppsHostProvider` in `app/_layout.tsx` (from `power-apps-native-host`) handles all connector routing, connection resolution, disambiguation, and OAuth consent automatically. No separate executor or provider wiring needed.

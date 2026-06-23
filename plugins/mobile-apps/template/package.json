@@ -22,8 +22,7 @@
     "production:android": "cd android && ./gradlew bundleShrinkWrapRelease",
     "production:ios": "build-ios-base",
     "native-runtime:check": "native-runtime check",
-    "native-runtime:print": "native-runtime print",
-    "renew": "npm exec --yes --registry https://pkgs.dev.azure.com/artifacts-public/PublicTools/_packaging/AzureArtifacts/npm/registry/ -- @microsoft/artifacts-npm-credprovider"
+    "native-runtime:print": "native-runtime print"
   },
   "dependencies": {
     "@expo/metro-runtime": "55.0.11",
