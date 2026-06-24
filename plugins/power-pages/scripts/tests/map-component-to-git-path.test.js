@@ -5,8 +5,28 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const {
   slugifyComponentName, normalizeForMatch, buildSourceFilePath,
-  buildPathFromComponentPath, resolveSourceFilePath, siteRoot, TYPE_LAYOUT, BINARY_TYPES,
+  buildPathFromComponentPath, resolveWebFileLeaf, resolveSourceFilePath, siteRoot, TYPE_LAYOUT, BINARY_TYPES,
 } = require('../lib/map-component-to-git-path');
+
+// Fake fs + posix path for deterministic, cross-platform resolveWebFileLeaf tests.
+// tree: { '<abs posix path>': 'file' | <string[] dir entries> }
+function fakeFs(tree) {
+  const norm = (p) => String(p).replace(/\\/g, '/').replace(/\/+/g, '/');
+  return {
+    statSync(p) {
+      const t = tree[norm(p)];
+      if (t == null) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; }
+      const isDir = Array.isArray(t);
+      return { isFile: () => !isDir, isDirectory: () => isDir };
+    },
+    readdirSync(p) {
+      const t = tree[norm(p)];
+      if (Array.isArray(t)) return t.slice();
+      const e = new Error('ENOTDIR'); e.code = 'ENOTDIR'; throw e;
+    },
+  };
+}
+const posixPath = { join: (...a) => a.join('/').replace(/\/+/g, '/'), sep: '/' };
 
 function createQueuedServer(responses) {
   const queue = [...responses];
@@ -126,14 +146,91 @@ test('buildPathFromComponentPath: tolerates trailing/leading slashes on componen
   });
   assert.equal(r.path, '/solutions/RetailOS/powerpagesites/RetailOS/web-templates/Search-Results/Search-Results.webtemplate.source.html');
 });
-test('buildPathFromComponentPath: missing componentPath or unsupported type → supported:false', () => {
+test('buildPathFromComponentPath: missing componentPath → supported:false; type-3 with valid path resolves as webfile', () => {
   assert.equal(buildPathFromComponentPath({ type: 8, rootFolder: 'solutions', gitFolder: 'RetailOS' }).supported, false);
-  assert.equal(buildPathFromComponentPath({ componentPath: '/x/y', type: 3, rootFolder: 'solutions', gitFolder: 'RetailOS' }).supported, false);
+  // type 3 with a valid componentPath now resolves to a webfile path (not supported:false)
+  const r3 = buildPathFromComponentPath({ componentPath: '/powerpagesites/RetailOS/web-files/theme.css', type: 3, rootFolder: 'solutions', gitFolder: 'RetailOS' });
+  assert.equal(r3.kind, 'webfile');
+  assert.equal(r3.field, null);
+  assert.match(r3.path, /web-files\/theme\.css$/);
+  // type 3 with no componentPath still returns supported:false
+  assert.equal(buildPathFromComponentPath({ type: 3, rootFolder: 'solutions', gitFolder: 'RetailOS' }).supported, false);
 });
-test('buildSourceFilePath: web file (3) and site setting (9) are unsupported (binary in v1)', () => {
-  assert.equal(buildSourceFilePath({ type: 3, name: 'x.css', ...COORDS }).supported, false);
-  assert.equal(buildSourceFilePath({ type: 9, name: 'Auth/Foo', ...COORDS }).supported, false);
-  assert.ok(BINARY_TYPES[3] && BINARY_TYPES[9]);
+
+// ---- A1: string type names behave IDENTICALLY to numeric types ----
+test('A1 buildPathFromComponentPath: string type "webtemplate" === numeric 8', () => {
+  const args = { componentPath: '/powerpagesites/RetailOS/web-templates/Search-Results', rootFolder: 'solutions', gitFolder: 'RetailOS' };
+  const byNum = buildPathFromComponentPath({ ...args, type: 8 });
+  const byName = buildPathFromComponentPath({ ...args, type: 'webtemplate' });
+  const byLabel = buildPathFromComponentPath({ ...args, type: 'Web Template' });
+  assert.equal(byName.path, byNum.path);
+  assert.equal(byLabel.path, byNum.path);
+  assert.equal(byName.field, 'source');
+});
+test('A1 buildPathFromComponentPath: string type "webpage" === numeric 2 (with subfolder)', () => {
+  const args = { componentPath: '/powerpagesites/RetailOS/web-pages/Home', rootFolder: 'solutions', gitFolder: 'RetailOS' };
+  assert.equal(
+    buildPathFromComponentPath({ ...args, type: 'webpage' }).path,
+    buildPathFromComponentPath({ ...args, type: 2 }).path,
+  );
+});
+test('A1 buildSourceFilePath: string type "contentsnippet" === numeric 7', () => {
+  const args = { name: 'Footer', rootFolder: 'solutions', gitFolder: 'RetailOS', siteName: 'RetailOS' };
+  assert.equal(
+    buildSourceFilePath({ ...args, type: 'contentsnippet' }).path,
+    buildSourceFilePath({ ...args, type: 7 }).path,
+  );
+});
+test('A1: numeric STRING "8" also normalizes to web template', () => {
+  const r = buildPathFromComponentPath({ componentPath: '/powerpagesites/RetailOS/web-templates/Search-Results', type: '8', rootFolder: 'solutions', gitFolder: 'RetailOS' });
+  assert.equal(r.field, 'source');
+  assert.match(r.path, /Search-Results\.webtemplate\.source\.html$/);
+});
+test('buildSourceFilePath: web file (3) resolves as webfile path; site setting (9) is flat-yml selective-merge', () => {
+  const wf = buildSourceFilePath({ type: 3, name: 'theme.css', ...COORDS });
+  assert.equal(wf.kind, 'webfile');
+  assert.equal(wf.field, null);
+  assert.match(wf.path, /\/web-files\/theme\.css$/);
+  assert.equal(wf.resolvedVia, 'computed');
+  const ss = buildSourceFilePath({ type: 9, name: 'Auth/Foo', ...COORDS });
+  assert.match(ss.path, /\/site-settings\/Auth-Foo\.sitesetting\.yml$/);
+  assert.equal(ss.field, 'value');
+  assert.equal(ss.format, 'flat-yml');
+  // BINARY_TYPES is now empty — type 3 is classified 'webfile', type 9 was already removed
+  assert.ok(!BINARY_TYPES[3] && !BINARY_TYPES[9]);
+});
+test('buildPathFromComponentPath: flat-yml site setting (9) — full-file OR slug-folder componentpath', () => {
+  // (a) componentpath is the full file (website.yml style)
+  const a = buildPathFromComponentPath({ componentPath: '/powerpagesites/RetailOS/site-settings/HTTP-X-Frame-Options.sitesetting.yml', type: 9, rootFolder: 'solutions', gitFolder: 'RetailOS' });
+  assert.equal(a.field, 'value');
+  assert.equal(a.format, 'flat-yml');
+  assert.equal(a.path, '/solutions/RetailOS/powerpagesites/RetailOS/site-settings/HTTP-X-Frame-Options.sitesetting.yml');
+  // (b) componentpath is the slug folder (no suffix) → suffix appended
+  const b = buildPathFromComponentPath({ componentPath: '/powerpagesites/RetailOS/site-settings/HTTP-X-Frame-Options', type: 9, rootFolder: 'solutions', gitFolder: 'RetailOS' });
+  assert.equal(b.path, '/solutions/RetailOS/powerpagesites/RetailOS/site-settings/HTTP-X-Frame-Options.sitesetting.yml');
+  assert.equal(b.slug, 'HTTP-X-Frame-Options');
+});
+test('buildPathFromComponentPath: web file (3) from componentPath resolves to webfile path', () => {
+  const r = buildPathFromComponentPath({
+    componentPath: '/powerpagesites/RetailOS/web-files/theme.css', type: 3,
+    rootFolder: 'solutions', gitFolder: 'RetailOS',
+  });
+  assert.equal(r.path, '/solutions/RetailOS/powerpagesites/RetailOS/web-files/theme.css');
+  assert.equal(r.kind, 'webfile');
+  assert.equal(r.field, null);
+  assert.equal(r.resolvedVia, 'componentpath');
+});
+test('buildPathFromComponentPath: web file (3) string type "webfile" normalizes identically', () => {
+  const byNum = buildPathFromComponentPath({
+    componentPath: '/powerpagesites/RetailOS/web-files/logo.png', type: 3,
+    rootFolder: 'solutions', gitFolder: 'RetailOS',
+  });
+  const byName = buildPathFromComponentPath({
+    componentPath: '/powerpagesites/RetailOS/web-files/logo.png', type: 'webfile',
+    rootFolder: 'solutions', gitFolder: 'RetailOS',
+  });
+  assert.equal(byName.path, byNum.path);
+  assert.equal(byName.kind, 'webfile');
 });
 test('buildSourceFilePath: unknown type unsupported', () => {
   const r = buildSourceFilePath({ type: 999, name: 'x', ...COORDS });
@@ -197,11 +294,24 @@ test('resolveSourceFilePath: 404 type folder → computed fallback', async () =>
 });
 
 test('resolveSourceFilePath: unsupported type short-circuits before any ADO call', async () => {
+  // Web Role (type 11) is unsupported — returns supported:false without any ADO call.
   const r = await resolveSourceFilePath({
-    type: 3, name: 'x.css', ...COORDS,
+    type: 11, name: 'Authenticated', ...COORDS,
     branch: 'b', organization: 'o', project: 'p', repository: 'r', pat: 'P', baseUrl: 'http://127.0.0.1:1',
   });
   assert.equal(r.supported, false);
+});
+
+test('resolveSourceFilePath: web file (3) resolves as webfile without any ADO call', async () => {
+  // baseUrl points to an unreachable port — if any ADO call were made, the test would fail.
+  const r = await resolveSourceFilePath({
+    type: 3, name: 'theme.css', ...COORDS,
+    branch: 'b', organization: 'o', project: 'p', repository: 'r', pat: 'P', baseUrl: 'http://127.0.0.1:1',
+  });
+  assert.equal(r.kind, 'webfile');
+  assert.equal(r.field, null);
+  assert.match(r.path, /\/web-files\/theme\.css$/);
+  assert.equal(r.resolvedVia, 'computed');
 });
 
 // ---- fix #5: slug-collision safety ----
@@ -236,4 +346,57 @@ test('resolveSourceFilePath: ambiguous normalized matches (no exact) → found:f
   assert.equal(r.found, false);
   assert.equal(r.ambiguous, true);
   assert.equal(r.candidates.length, 2);
+});
+
+// ---- resolveWebFileLeaf: containerized web-file layout (EISDIR fix) ----
+test('resolveWebFileLeaf: container folder → inner same-name leaf (pac layout)', () => {
+  const tree = {
+    '/repo/solutions/RetailOS/web-files/theme.css': ['theme.css', 'theme.css.webfile.yml'],
+    '/repo/solutions/RetailOS/web-files/theme.css/theme.css': 'file',
+  };
+  const leaf = resolveWebFileLeaf({
+    repoDir: '/repo', webFilePath: '/solutions/RetailOS/web-files/theme.css',
+    fsImpl: fakeFs(tree), pathImpl: posixPath,
+  });
+  assert.equal(leaf, '/solutions/RetailOS/web-files/theme.css/theme.css');
+});
+test('resolveWebFileLeaf: legacy flat layout (path is already a file) is unchanged', () => {
+  const tree = { '/repo/solutions/RetailOS/web-files/old.css': 'file' };
+  const leaf = resolveWebFileLeaf({
+    repoDir: '/repo', webFilePath: '/solutions/RetailOS/web-files/old.css',
+    fsImpl: fakeFs(tree), pathImpl: posixPath,
+  });
+  assert.equal(leaf, '/solutions/RetailOS/web-files/old.css');
+});
+test('resolveWebFileLeaf: renamed inner leaf → the lone non-sidecar file', () => {
+  const tree = {
+    '/repo/x/web-files/foo': ['actual-bytes.bin', 'foo.webfile.yml'],
+    // note: NO same-name 'foo' leaf — statSync(.../foo/foo) throws ENOENT
+  };
+  const leaf = resolveWebFileLeaf({
+    repoDir: '/repo', webFilePath: '/x/web-files/foo',
+    fsImpl: fakeFs(tree), pathImpl: posixPath,
+  });
+  assert.equal(leaf, '/x/web-files/foo/actual-bytes.bin');
+});
+test('resolveWebFileLeaf: path not present (add/add) → deterministic container leaf', () => {
+  const leaf = resolveWebFileLeaf({
+    repoDir: '/repo', webFilePath: '/x/web-files/new.css',
+    fsImpl: fakeFs({}), pathImpl: posixPath,
+  });
+  assert.equal(leaf, '/x/web-files/new.css/new.css');
+});
+test('resolveWebFileLeaf: no repoDir → returns input unchanged', () => {
+  assert.equal(resolveWebFileLeaf({ webFilePath: '/x/web-files/a.css' }), '/x/web-files/a.css');
+  assert.equal(resolveWebFileLeaf({ repoDir: '/repo' }), undefined);
+});
+test('resolveWebFileLeaf: preserves no-leading-slash style', () => {
+  const tree = {
+    '/repo/x/web-files/a.css': ['a.css'],
+    '/repo/x/web-files/a.css/a.css': 'file',
+  };
+  const leaf = resolveWebFileLeaf({
+    repoDir: '/repo', webFilePath: 'x/web-files/a.css', fsImpl: fakeFs(tree), pathImpl: posixPath,
+  });
+  assert.equal(leaf, 'x/web-files/a.css/a.css'); // no leading slash, matching input
 });

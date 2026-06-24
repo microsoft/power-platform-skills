@@ -1,6 +1,0 @@
-node_modules/
-dist/
-out/
-out-test/
-*.vsix
-*.map

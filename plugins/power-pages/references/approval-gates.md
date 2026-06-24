@@ -586,8 +586,14 @@ The active gate definitions live in `skills/git-sync/SKILL.md` plus `skills/git-
 | `git-sync:update.plan` | gate | plan | update | Pull plan rendered: incoming updates and deletion summary. | nothing |
 | `git-sync:update.hard-delete` | gate | consent | update | User opted into destructive `DeleteDeletedComponents: true`. | nothing |
 | `git-sync:update.consent` | gate | consent | update | Final consent before `PullChangesFromGit`. | nothing |
-| `git-sync:2.conflict-decisions` | gate | progress | conflict | Per-conflict or bundled Keep/Accept decisions. | partial-decisions |
+| `git-sync:2.conflict-decisions` | gate | progress | conflict | Top-level batch choice (Selectively merge all eligible / Keep all current / Accept all incoming). The binary/scalar refinement under "Selectively merge" is **per file** via `git-sync:clone-merge.binary-matrix` — **not** a blanket binary sub-question. | partial-decisions |
 | `git-sync:2.conflict-fallback` | gate | consent | conflict | Standard conflict resolution cannot proceed safely. | no-changes |
+| `git-sync:clone-merge.resolve` | gate | pause | selective-merge | Clone merge staged/opened in VS Code; waits for maker to resolve locally. | no-changes |
+| `git-sync:clone-merge.done` | gate | pause | selective-merge | **Mandatory** "merge complete?" gate after VS Code opens — *"Yes verify now / Not yet / Cancel"*. On Yes runs `--resume` verification (auto-stages resolved files); partials re-present this gate with a plain-language remaining list. Must pass before any commit/push. | no-changes |
+| `git-sync:clone-merge.binary-matrix` | gate | progress | selective-merge | Per-file binary/scalar resolution — present a numbered roster (reusing the conflict-list serials, e.g. 9–15; web files + scalar site settings can't open in VS Code) and ask **which serials to Accept Incoming** (ADO) — comma/space/`9-11` ranges, `all`/`none` shortcuts. Parse via `parse-serial-selection.js`; on invalid/out-of-range tokens show them and **re-ask**; **echo the per-file plan and confirm** before applying. Unselected = Keep Current (env, default). Answer → `--binary-accept <serials>` / `--binary-accept-all` / `--binary-keep-mine`. | no-changes |
+| `git-sync:clone-merge.push` | gate | consent | selective-merge | Resolved local merge is about to push to ADO (fast-forward or merge branch). | no-changes |
+| `git-sync:clone-merge.pr` | gate | consent | selective-merge | Branch policy requires creating/enabling a PR for the merge branch. | branch+pr-created |
+| `git-sync:clone-merge.pull` | gate | consent | selective-merge | ADO has the merge; about to accept incoming and pull into Dataverse. | ado-has-merge-env-not-updated |
 | `git-sync:final.open-pr` | gate | final | final | Commit landed — *"Open PR now / not now"*. | nothing |
 | `git-sync:final.tag-offer` | gate | final | final | Commit landed and tag offer is available. | nothing |
 | `git-sync:final` | gate | final | final | Sync complete — route to PR, another git-sync run, or done. | nothing |

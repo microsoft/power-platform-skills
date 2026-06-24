@@ -6,9 +6,10 @@
 // Dataverse Git serializes each site component under:
 //   <rootFolder>/<gitFolder>/powerpagesites/<siteName>/<type-folder>/<slug>/[<subfolder>/]<slug><suffix>
 // and splits the editable text field into its own file (verified 2026-06-17,
-// see POC findings). The selective-merge flow needs this path to (a) fetch the
-// incoming/base versions of the field via ado-get-file.js and (b) commit the
-// merged field back via ado-commit-file.js.
+// see POC findings). The clone-based selective-merge flow needs this path to
+// read incoming/base sides from the local clone's git objects and write the
+// merged file back into the clone's working tree; there is no per-field ADO
+// fetch/commit helper anymore.
 //
 // The ADO folder/file names are a SLUGIFIED form of the component name (spaces
 // and slashes → hyphens). Because the exact slug rule is not documented, the
@@ -30,8 +31,11 @@
 
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const { createAdoClient } = require('./ado-client');
 const { resolveAdoTokenOrAcquire } = require('./resolve-ado-token');
+const { normalizeComponentType } = require('./component-type-map');
 
 // Per-type serialization layout. `primaryField` is the default merge field; the
 // `fields` map gives the filename suffix per editable field. `subfolder` (web
@@ -43,12 +47,19 @@ const TYPE_LAYOUT = Object.freeze({
        fields: { value: '.contentsnippet.value.html' }, label: 'Content Snippet' },
   8: { typeFolder: 'web-templates', primaryField: 'source',
        fields: { source: '.webtemplate.source.html' }, label: 'Web Template' },
+  // Site Setting (9): the whole flat `.sitesetting.yml` IS the merge file (only the
+  // `value:` line conflicts; metadata auto-merges). `flat` = no per-slug subfolder;
+  // `format: 'flat-yml'` tells the resolver to synthesize OURS by value-substitution.
+  9: { typeFolder: 'site-settings', primaryField: 'value', flat: true, format: 'flat-yml',
+       fields: { value: '.sitesetting.yml' }, label: 'Site Setting' },
 });
 
-// Types whose source bytes are NOT a standalone text file (handled as binary /
-// keep-accept in v1): 3 = Web File (bytes in annotation), 9 = Site Setting
-// (value embedded in the .sitesetting.yml).
-const BINARY_TYPES = Object.freeze({ 3: 'Web File', 9: 'Site Setting' });
+// Types whose source bytes are NOT a standalone text file and have no selective-merge
+// path. Site Settings (9) used to be here — now handled via flat-yml-merge.js. Web
+// Files (3) used to be here — now classified 'webfile' and routed to a runtime content
+// sniff (text-detected → 3-way merge; binary → matrix). This map remains exported so
+// callers that check it for historically-known binary types don't crash; it is now empty.
+const BINARY_TYPES = Object.freeze({});
 
 /**
  * Slugify a component name the way Dataverse Git names its folders/files:
@@ -83,6 +94,16 @@ function siteRoot({ rootFolder, gitFolder, siteName }) {
  * @returns {{ path, field, slug, typeFolder } | { supported:false, reason }}
  */
 function buildSourceFilePath({ type, name, rootFolder, gitFolder, siteName, field } = {}) {
+  // A1: accept type names ("webtemplate") identically to numbers (8).
+  const ntype = normalizeComponentType(type);
+  if (ntype != null) type = ntype;
+  // Web File (type 3): the file in the repo IS the web file itself (e.g. theme.css).
+  // No merge field — a runtime content sniff decides text vs binary at resolve time.
+  if (type === 3) {
+    const slug = slugifyComponentName(name);
+    const root = siteRoot({ rootFolder, gitFolder, siteName });
+    return { path: `${root}/web-files/${slug}`, kind: 'webfile', field: null, resolvedVia: 'computed' };
+  }
   const layout = TYPE_LAYOUT[type];
   if (!layout) {
     return { supported: false, type, reason: BINARY_TYPES[type]
@@ -96,8 +117,12 @@ function buildSourceFilePath({ type, name, rootFolder, gitFolder, siteName, fiel
   }
   const slug = slugifyComponentName(name);
   const root = siteRoot({ rootFolder, gitFolder, siteName });
-  const dir = `${root}/${layout.typeFolder}/${slug}${layout.subfolder ? '/' + layout.subfolder : ''}`;
-  return { path: `${dir}/${slug}${suffix}`, field: useField, slug, typeFolder: layout.typeFolder };
+  // Flat-YML types (site settings) live DIRECTLY in their type-folder (no per-slug
+  // subfolder): site-settings/<slug>.sitesetting.yml.
+  const dir = layout.flat
+    ? `${root}/${layout.typeFolder}`
+    : `${root}/${layout.typeFolder}/${slug}${layout.subfolder ? '/' + layout.subfolder : ''}`;
+  return { path: `${dir}/${slug}${suffix}`, field: useField, slug, typeFolder: layout.typeFolder, ...(layout.format ? { format: layout.format } : {}) };
 }
 
 /**
@@ -111,6 +136,22 @@ function buildSourceFilePath({ type, name, rootFolder, gitFolder, siteName, fiel
  * @returns {{ path, field, slug, typeFolder, resolvedVia } | { supported:false, reason }}
  */
 function buildPathFromComponentPath({ componentPath, type, field, rootFolder, gitFolder } = {}) {
+  // A1: accept type names ("webtemplate") identically to numbers (8) so a
+  // string-typed inputs.json can never silently fall through to binary.
+  const ntype = normalizeComponentType(type);
+  if (ntype != null) type = ntype;
+  // Web File (type 3): the conflict row's componentPath IS the file path
+  // (/powerpagesites/<site>/web-files/<FileName>). Full ADO path = /<root>/<git> + componentPath.
+  if (type === 3) {
+    if (!componentPath || !String(componentPath).trim()) {
+      return { supported: false, type, reason: 'No componentPath on the conflict row.' };
+    }
+    const cp = String(componentPath).replace(/^\/+|\/+$/g, '');
+    const segs = [];
+    for (const p of [rootFolder, gitFolder]) if (p != null && String(p).length) segs.push(String(p).replace(/^\/+|\/+$/g, ''));
+    for (const s of cp.split('/').filter(Boolean)) segs.push(s);
+    return { path: `/${segs.join('/')}`, kind: 'webfile', field: null, resolvedVia: 'componentpath' };
+  }
   const layout = TYPE_LAYOUT[type];
   if (!layout) {
     return { supported: false, type, reason: BINARY_TYPES[type]
@@ -124,6 +165,20 @@ function buildPathFromComponentPath({ componentPath, type, field, rootFolder, gi
   const suffix = layout.fields[useField];
   if (!suffix) {
     return { supported: false, type, reason: `Field '${useField}' is not a mergeable text field for ${layout.label}.` };
+  }
+  // Flat-YML components (site settings): the whole `.sitesetting.yml` IS the file. The
+  // conflict row's componentpath is EITHER the full file path (website.yml style:
+  // `/powerpagesites/<site>/site-settings/<Slug>.sitesetting.yml`) OR the slug folder
+  // (`/.../site-settings/<Slug>`). Normalize both to the file and prepend root/git.
+  if (layout.flat) {
+    let cp = String(componentPath).replace(/^\/+|\/+$/g, '');
+    if (!cp.toLowerCase().endsWith(suffix.toLowerCase())) cp = `${cp}${suffix}`;
+    const segs = [];
+    for (const p of [rootFolder, gitFolder]) if (p != null && String(p).length) segs.push(String(p).replace(/^\/+|\/+$/g, ''));
+    for (const s of cp.split('/').filter(Boolean)) segs.push(s);
+    const lastSeg = cp.split('/').pop();
+    const slug = lastSeg.slice(0, lastSeg.length - suffix.length);
+    return { path: `/${segs.join('/')}`, field: useField, slug, typeFolder: layout.typeFolder, format: layout.format, resolvedVia: 'componentpath' };
   }
   const cpSegs = String(componentPath).split('/').filter(Boolean);
   // Determine the slug + directory segments. For web pages the conflict row's
@@ -160,8 +215,17 @@ async function resolveSourceFilePath({
   branch, organization, project, repository,
   token = null, pat = null, tokenFile = null, apiVersion = '7.0', baseUrl = null,
 } = {}) {
+  // A1: accept type names ("webtemplate") identically to numbers (8).
+  const ntype = normalizeComponentType(type);
+  if (ntype != null) type = ntype;
   const computed = buildSourceFilePath({ type, name, rootFolder, gitFolder, siteName, field });
   if (computed.supported === false) return computed;
+
+  // Web files (kind: 'webfile') have no type-folder to list in ADO — the path IS the
+  // file itself. Return the computed path directly without making any ADO request.
+  if (computed.kind === 'webfile') {
+    return { found: null, path: computed.path, resolvedVia: 'computed', kind: 'webfile', field: null, type, typeLabel: 'Web File' };
+  }
 
   const layout = TYPE_LAYOUT[type];
   const typeLabel = layout.label;
@@ -243,7 +307,7 @@ function parseArgs(argv) {
     branch: null, organization: null, project: null, repository: null, token: null, pat: null, tokenFile: null, apiVersion: '7.0' };
   for (let i = 0; i < a.length; i++) {
     const n = a[i + 1];
-    if (a[i] === '--type' && n) o.type = parseInt(a[++i], 10);
+    if (a[i] === '--type' && n) o.type = a[++i];
     else if (a[i] === '--name' && n) o.name = a[++i];
     else if (a[i] === '--rootFolder' && n) o.rootFolder = a[++i];
     else if (a[i] === '--gitFolder' && n) o.gitFolder = a[++i];
@@ -261,10 +325,58 @@ function parseArgs(argv) {
   return o;
 }
 
+/**
+ * Resolve a Web File's path to the ACTUAL bytes file inside the containerized layout
+ * that `pac` git-integration now exports. A web file is serialized as a FOLDER:
+ *   web-files/theme.css/
+ *     theme.css              ← the real bytes (the inner "leaf")
+ *     theme.css.webfile.yml  ← metadata sidecar
+ * The mappers (buildSourceFilePath / buildPathFromComponentPath) return the FOLDER
+ * path (e.g. `.../web-files/theme.css`). Writing OURS bytes to that folder throws
+ * EISDIR. This resolves the folder → its inner leaf so staging/merge operate on a
+ * real file. fs-aware so it stays correct for BOTH the containerized layout and the
+ * legacy flat layout (where the web-file path is already the file).
+ *
+ * @param {object} args { repoDir, webFilePath, fsImpl?, pathImpl? }
+ * @returns {string} the leaf file path (same leading-slash style as the input); when
+ *   no repoDir is given or the path can't be resolved, returns webFilePath unchanged.
+ */
+function resolveWebFileLeaf({ repoDir, webFilePath, fsImpl = fs, pathImpl = path } = {}) {
+  if (!repoDir || !webFilePath) return webFilePath;
+  const hadLead = /^[/\\]/.test(String(webFilePath));
+  const rel = String(webFilePath).replace(/^[/\\]+/, '').replace(/\\/g, '/').replace(/\/+$/, '');
+  if (!rel) return webFilePath;
+  const withLead = (p) => (hadLead ? '/' + p : p);
+  const leafName = rel.split('/').filter(Boolean).pop() || '';
+  const containerLeaf = `${rel}/${leafName}`;
+  const abs = pathImpl.join(repoDir, rel.split('/').join(pathImpl.sep));
+  let st = null;
+  try { st = fsImpl.statSync(abs); } catch (_) { st = null; }
+  // Legacy flat layout: the web-file path already IS the file.
+  if (st && typeof st.isFile === 'function' && st.isFile()) return withLead(rel);
+  // Containerized layout: the path is a folder holding the bytes + a .webfile.yml.
+  if (st && typeof st.isDirectory === 'function' && st.isDirectory()) {
+    // Prefer the same-name inner leaf (the standard pac layout).
+    try {
+      const innerSt = fsImpl.statSync(pathImpl.join(abs, leafName));
+      if (innerSt && typeof innerSt.isFile === 'function' && innerSt.isFile()) return withLead(containerLeaf);
+    } catch (_) { /* fall through to a directory scan */ }
+    // Otherwise take the lone non-sidecar file in the folder (robust to a renamed leaf).
+    try {
+      const files = (fsImpl.readdirSync(abs) || []).filter((n) => !/\.webfile\.yml$/i.test(n));
+      if (files.length === 1) return withLead(`${rel}/${files[0]}`);
+    } catch (_) { /* fall through */ }
+    return withLead(containerLeaf);
+  }
+  // Path not present yet (THEIRS-only / add-add): default to the container leaf, which
+  // is the current pac git-integration export layout.
+  return withLead(containerLeaf);
+}
+
 if (require.main === module) {
   const args = parseArgs(process.argv);
-  if (!Number.isInteger(args.type) || !args.name) {
-    process.stderr.write('map-component-to-git-path: --type and --name are required\n');
+  if (normalizeComponentType(args.type) == null || !args.name) {
+    process.stderr.write('map-component-to-git-path: --type (name or number) and --name are required\n');
     process.exit(1);
   }
   resolveSourceFilePath(args)
@@ -277,6 +389,7 @@ module.exports = {
   normalizeForMatch,
   buildSourceFilePath,
   buildPathFromComponentPath,
+  resolveWebFileLeaf,
   resolveSourceFilePath,
   siteRoot,
   TYPE_LAYOUT,

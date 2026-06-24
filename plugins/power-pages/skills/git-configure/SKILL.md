@@ -57,11 +57,10 @@ model: opus
 
 When `$ARGUMENTS` contains `--non-interactive` (CI / unattended callers):
 
-1. **Never block on a prompt.** Any gate or picker that would prompt the user for missing input must instead fail-loud: print the missing input and the flag that supplies it, then exit non-zero.
-2. **Required inputs must be supplied as flags.** At minimum: `--envUrl`, the binding choice (`--binding=env|solution`), and for setup the full ADO coordinates (org/project/repo/branch/folder); for solution binding also `--solutionUniqueName`. If any is absent, list ALL missing flags at once (a required-args matrix), don't fail one at a time.
-3. **Safety gates still apply, but cannot be auto-approved.** Hard-stop gates (cross-tenant block, shared-object overlap, workspace-dirty) still fail the run — `--non-interactive` is not a consent bypass. A run that would require a destructive confirmation (disconnect/rebind) must exit non-zero with the reason rather than proceeding.
+1. **Never block on a prompt.** Fail-loud: print the missing input and the required flag, then exit non-zero.
+2. **Required inputs must be supplied as flags.** At minimum: `--envUrl`, `--binding=env|solution`, and for setup the ADO coordinates (org/project/repo/branch/folder); for solution binding also `--solutionUniqueName`. List ALL missing flags at once — don't fail one at a time.
+3. **Safety gates still apply, cannot be auto-approved.** Hard-stop gates (cross-tenant block, shared-object overlap, workspace-dirty) still fail — `--non-interactive` is not a consent bypass. Destructive confirmations (disconnect/rebind) exit non-zero with the reason.
 4. **No stack traces.** Every failure exits with a one-line `verb + reason + next-action` message (see `${CLAUDE_PLUGIN_ROOT}/references/helper-conventions.md`).
-
 
 ## Phase 0 — Mode Detection
 
@@ -541,8 +540,8 @@ Steps:
 5. For setup/env, verify the placeholder env-level commit (`sourcecontrolbranchconfigurations.branchsyncedcommitid` non-null when available) and report that zero solutions are staged until Phase 9 enables them.
 6. Update the single Git-integration manifest at `docs/inner-loop/.git-integration-manifest.json` through the manifest path helper. Do not write a project-root or env-root duplicate. For bound states, write canonical binding fields. For switch, update branch and `lastVerifiedAt`; leave `lastCommitSha` unchanged. For disconnect, mark the manifest disconnected or remove only the binding fields according to the existing manifest convention; never fabricate a bound state. The `docs/inner-loop/` folder is auto-gitignored fail-closed.
 7. Write the run marker with `gitConfigurePath(root, 'lastGitConfigure')`. Include `skill:"git-configure"`, `mode`, status, envUrl, oldBinding, newBinding, warnings, marker version, and timestamps.
-8. **Write a per-run trace (N5).** Call `write-run-trace.js` with the structured run record (mode, phase timings, gate decisions, mutations, finalState). Traces are append-only history under `docs/inner-loop/git-configure-traces/<UTC-iso>.json` with 30-day / 100-file retention. NEVER pass raw helper stdout or any token value — the helper redacts to an allow-list, but callers must supply structured fields only.
-9. **Final summary (O3 + O6).** For bound states, print the ADO browse URL **inline in the success message** (single clickable line) with `path=/<gitFolder>` (the full repo-relative solution path, or `/<rootFolder>/<gitFolder>` for env binding) so the user lands in the Dataverse-managed folder, not repo root. When the manifest's `lastCommitSha === null` (the user is seeing the post-bind state for the first time), also print the 3-commit explainer inline so they don't panic: *"You may see up to 3 commits in ADO — a placeholder commit, a README commit, and your first real commit. This is normal for a fresh binding."*
+8. **Write a per-run trace (N5).** Call `write-run-trace.js` with structured fields: mode, phase timings, gate decisions, mutations, finalState. Traces: `docs/inner-loop/git-configure-traces/<UTC-iso>.json`, 30-day/100-file retention. NEVER pass raw stdout or token values.
+9. **Final summary (O3 + O6).** For bound states, print the ADO browse URL **inline** with `path=/<gitFolder>` (or `/<rootFolder>/<gitFolder>` for env binding) — user lands in the Dataverse-managed folder, not repo root. When `lastCommitSha === null`, also print: *"You may see up to 3 commits in ADO — a placeholder commit, a README commit, and your first real commit. This is normal for a fresh binding."*
 
 **Output:** Round-trip verified, manifest updated, `last-git-configure.json` written.
 
@@ -596,13 +595,37 @@ Run only when Phase 9 enabled at least one solution.
 >
 > Consent for one solution does not cover the next. Custom message collection is data-gathering; validate non-empty and ≤250 chars. Call `commit-to-git.js` directly and continue on per-solution failures.
 
+### Set up working clone
+
+Run after binding verification, manifest write, and any placeholder or initial commit work above.
+
+<!-- gate: git-configure:9.clone-location | category=intent | cancel-leaves=nothing -->
+> 🚦 **Gate (intent · git-configure:9.clone-location):** Surface `AskUserQuestion` according to mode:
+>
+> | Mode/result | Question | Header | Options |
+> |---|---|---|---|
+> | Setup binding | What should I name the local clone folder, and where should it live? Suggested name: `<solutionUniqueName>`, placed under `<userHome>/PowerPages/`. | Local working repo | Use suggested name, Enter a custom folder name, Choose another directory, Skip local clone |
+> | Switch branch or rebind to the same repo | Use the recorded local clone for this branch? | Local working repo | Use recorded clone, Choose another directory, Skip local clone |
+> | Rebind to a new repo | What should I name the local clone folder, and where should it live? Suggested name: `<solutionUniqueName>`, placed under `<userHome>/PowerPages/`. | Local working repo | Use suggested name, Enter a custom folder name, Choose another directory, Skip local clone |
+> | Disconnect | Keep the recorded local clone on disk? | Local working repo | Keep it, Remove it, Decide later |
+>
+> When the user picks **"Enter a custom folder name"**, prompt for the folder name (validate as a single path segment — no slashes, no path separators, no `.`/`..`, not whitespace-only; re-prompt on failure), then place it under `<userHome>/PowerPages/<name>`. **"Choose another directory"** lets the user supply a full absolute path. The final `cloneDir` is `<chosenParent>/<chosenName>`. Cancel/skip leaves the binding and manifest as-is. Never remove a clone without consent.
+
+Behavior:
+
+- For setup binding, call `cloneOrUpdateRepo({ cloneDir, repoUrl, branch, token })`, then `writeCloneRecord({ projectRoot, clonePath: cloneDir, coordinates: { env, organization, project, repository, rootFolder, gitFolder, branch, solutionUniqueName } })`. Tell the user this is their local working repo, openable in VS Code, reused by `git-sync`; `<cloneDir>/repo` is the working tree.
+- For switch-branch or same-repo rebind, read the recorded clone and reuse it: fetch, checkout the target branch (create it when the switch-branch flow created a new branch), then refresh the clone record with the new coordinates.
+- For rebind to a different repo, prompt again and write a new clone record after the clone succeeds.
+- For disconnect, offer to keep or remove only the recorded clone; if the user chooses remove, delete that chosen clone directory and clear only the manifest clone block.
+- Acquire the Azure DevOps token in-process for the clone/update call and never write it to disk, logs, URLs, or command lines.
+
 ### Other mode follow-ups
 
 - **Solution binding:** report pending Changes and ask in Phase 10 whether to run `/power-pages:git-sync --commit` now. Explain that `ConnectToGit` creates at most a placeholder Readme commit; the real content commit requires `git-sync --commit`. Preserve the observed `newCommitCreated` behavior from the legacy solution-binding skill.
 - **Switch branch:** report that the binding points to the new branch but environment content may still reflect the old branch. Recommend `/power-pages:git-sync --pull` in Phase 10.
 - **Disconnect:** re-run `detect-git-binding.js` and state clearly that the env or solution is unbound. Recommend setup mode if the user wants to connect again.
 
-**Output:** Mode-specific follow-up work is completed or routed.
+**Output:** Mode-specific follow-up work is completed or routed, and the local working clone is recorded, reused, skipped, or removed by consent.
 
 ---
 
@@ -632,53 +655,28 @@ Record skill usage via `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-referenc
 
 Every legacy gate maps to one catalogued `git-configure` gate:
 
-| Legacy gate(s) | New gate | Consolidation |
-|---|---|---|
-| `setup-git-integration:1.prereq-fail`, `connect-solution-to-git:1.prereq-fail`, `branch-switch:1.no-binding` | `git-configure:1.prereq-fail` | Consolidated prerequisite/impossible-mode hard stops. |
-| Connect-solution env mismatch prompt | `git-configure:1.envurl-mismatch` | Promoted to catalogued gate. |
-| `setup-git-integration:1.managed-env-warning` plus solution warn-only behavior | `git-configure:2.managed-env-warn` | Preserves warn-not-block with binding-type route. |
-| New BYOK/CMK helper | `git-configure:2.byok-cmk-warn` | New capability. |
-| New license helper | `git-configure:2.license-warn` | New capability. |
-| `setup-git-integration:2.ado-perms-fail`, `connect-solution-to-git:3.ado-perms` | `git-configure:2.ado-perms-fail` | Same helper, fires after repo is known. |
-| `setup-git-integration:2.repo-init`, `connect-solution-to-git:3.repo-init` | `git-configure:2.repo-init` | Same auto-init safety. |
-| Legacy separate skill selection and binding reference | `git-configure:3.two-layer-explainer`, `git-configure:3.binding-type` | New in-skill strategy choice; references binding-strategy.md. |
-| `setup-git-integration:2.create-project` | `git-configure:4.create-project` | Preserved create-project flow. |
-| `setup-git-integration:2.create-repo`, `connect-solution-to-git:3.create-repo` | `git-configure:4.create-repo` | Consolidated repo creation. |
-| `setup-git-integration:2.folder-coexists` | `git-configure:4.folder-coexists` | Env-binding folder coexistence. |
-| `connect-solution-to-git:3.folder-occupied` | `git-configure:4.folder-occupied` | Solution-binding folder occupancy. |
-| `connect-solution-to-git:3.shared-object-overlap` | `git-configure:4.shared-object-overlap` | Hard-block remediation loop preserved. |
-| `branch-switch:2.workspace-dirty` | `git-configure:5.workspace-dirty` | Extended to rebind/disconnect; deleted-branch exception preserved. |
-| `setup-git-integration:4.plan`+`5.consent`, `connect-solution-to-git:4.plan`+`5.consent`, `branch-switch:4.plan`+`5.consent` | `git-configure:6.consent-setup` | Plan-render and pre-mutation consent merged into one prompt for setup/switch — closes the double-consent UX bug. |
-| New disconnect surface | `git-configure:6.consent-disconnect` | Single plan-and-consent gate for disconnect (no typed phrase, no separate plan prompt). |
-| New rebind surface | `git-configure:6.consent-rebind` | Single plan-and-consent gate for rebind (no typed phrase, no separate plan prompt). |
-| `setup-git-integration:9.enable-approach` | `git-configure:9.enable-approach` | Env-bind enable approach preserved. |
-| `setup-git-integration:9.enable-solution` | `git-configure:9.enable-solution` | Per-solution loop preserved. |
-| `setup-git-integration:10.commit-approach` | `git-configure:9.commit-approach` | Phase renumbered into merged Phase 9. |
-| `setup-git-integration:10.commit-solution` | `git-configure:9.commit-solution` | Per-solution loop preserved. |
-| `setup-git-integration:11.final`, `connect-solution-to-git:8.final`, `branch-switch:9.final` | `git-configure:10.final` | Unified final routing. |
+| Legacy gate(s) | New gate |
+|---|---|
+| `setup-git-integration:1.prereq-fail`, `connect-solution-to-git:1.prereq-fail`, `branch-switch:1.no-binding` | `git-configure:1.prereq-fail` |
+| Connect-solution env mismatch prompt | `git-configure:1.envurl-mismatch` |
+| Managed Env, BYOK/CMK, license, ADO perms, repo init | `git-configure:2.managed-env-warn`, `git-configure:2.byok-cmk-warn`, `git-configure:2.license-warn`, `git-configure:2.ado-perms-fail`, `git-configure:2.repo-init` |
+| Legacy skill/binding selection | `git-configure:3.two-layer-explainer`, `git-configure:3.binding-type` |
+| Create project/repo/branch and folder/object safety | `git-configure:4.create-project`, `git-configure:4.create-repo`, `git-configure:4.create-branch`, `git-configure:4.folder-coexists`, `git-configure:4.folder-occupied`, `git-configure:4.shared-object-overlap` |
+| `branch-switch:2.workspace-dirty` | `git-configure:5.workspace-dirty` |
+| Legacy plan + consent prompts | `git-configure:6.consent-setup`, `git-configure:6.consent-disconnect`, `git-configure:6.consent-rebind` |
+| Env-bind enable and commit loops | `git-configure:9.enable-approach`, `git-configure:9.enable-solution`, `git-configure:9.commit-approach`, `git-configure:9.commit-solution` |
+| Local clone setup | `git-configure:9.clone-location` |
+| Legacy finals | `git-configure:10.final` |
 
-Non-gate legacy safety checks also preserved:
-
-- In-process ADO token acquisition prevents JWT exposure and persistence.
-- PAC/env URL match check prevents wrong-env mutation.
-- Env-bound vs solution-bound mutual exclusion remains enforced.
-- Unmanaged/system solution filtering remains enforced.
-- Shared-object overlap remains a hard block with `remove-solution-component.js` remediation.
-- Folder-format warnings reject path-like folder values before `ConnectToGit`.
-- Repo initialization prevents empty-repo `ConnectToGit` failures.
-- ADO tenant cross-check prevents unsupported cross-tenant binding.
-- Workspace-clean hard stop prevents losing Changes/Updates/Conflicts on branch changes, rebind, or disconnect.
-- Deleted-source-branch recovery bypasses dirty-workspace blocking only when the old branch is gone.
-- ConnectToGit timeout handling treats helper post-verified binding as success and verifies asynchronously.
-- Post-bind branch-specific behavior distinguishes env-binding placeholder commit from solution staging.
-- ADO browse URL always points to the Git folder path, not repo root.
-- Manifest and run markers are written only after round-trip verification.
+Non-gate safety checks remain: in-process token acquisition, PAC/env match, env-vs-solution exclusivity, filtering, shared-object remediation, folder validation, repo init, same-tenant check, workspace-clean stop, deleted-branch recovery, timeout post-verify, correct browse URL, and verified manifest/marker writes.
 
 ## Artifacts written
 
 | Artifact | Location | Modes | Purpose |
 |---|---|---|---|
 | `docs/inner-loop/.git-integration-manifest.json` | `docs/inner-loop/` (auto-gitignored) | setup, switch, rebind, disconnect | Load-bearing current binding manifest; single local-only copy. |
+| Manifest `clone` block | `docs/inner-loop/.git-integration-manifest.json` | setup, switch, rebind, disconnect | Records the chosen local clone directory for reuse by `git-sync`; managed through `clone-record.js`. |
+| Local working clone | `<cloneDir>/repo` with scratch at `<cloneDir>/.pp-merge` | setup, switch, rebind | User-openable working repo reused by `git-sync`; token is never persisted. |
 | `last-git-configure.json` | `gitConfigurePath(root, 'lastGitConfigure')` | mutating modes | Skill-run marker for validator and routing. |
 | `.git-configure-plan-data.json` | `gitConfigurePath(root, 'gitConfigurePlanData')` | all modes except early prereq fail | Audit copy of the approved plan. |
 
@@ -695,7 +693,7 @@ Non-gate legacy safety checks also preserved:
 | Render plan + consent | Rendering plan and getting consent | Write plan data and fire ONE mode-appropriate consent gate (setup/switch, disconnect, or rebind). |
 | Execute configuration | Executing configuration | Dispatch to connect, switch, rebind, or disconnect helper (no gates). |
 | Verify and write markers | Verifying configuration | Re-query binding, update manifest, write marker. |
-| Run follow-up | Running follow-up | Enable/commit loops, sync suggestion, commit suggestion, or disconnect confirmation. |
+| Run follow-up | Running follow-up | Enable/commit loops, local clone gate, sync suggestion, commit suggestion, or disconnect clone choice. |
 | Final route | Finalising | Final gate and skill tracking. |
 
 ## Key decision points
@@ -713,7 +711,7 @@ Non-gate legacy safety checks also preserved:
 11. Phase 5: workspace dirty hard stop.
 12. Phase 6: single mode-appropriate consent — `git-configure:6.consent-setup` (setup/switch) OR `git-configure:6.consent-disconnect` OR `git-configure:6.consent-rebind`. Plan-render is rolled into the same prompt; Phase 7 has no gates.
 13. Phase 7: pure execution and partial-failure reporting (no gates).
-14. Phase 9: env-bind solution enable and initial commit loops.
+14. Phase 9: env-bind solution enable and initial commit loops; local working clone (`git-configure:9.clone-location`).
 15. Phase 10: final routing.
 
 **Begin with Phase 0: Mode Detection.**

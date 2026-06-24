@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-// Creates an annotated git tag in Azure DevOps. Used by commit-to-git Phase 9
-// to offer a "tag this release" choice after a successful commit lands on the
-// repo's default branch (typically a release-cut commit).
+// Creates an annotated git tag in Azure DevOps. Intended as the helper for
+// git-sync's final.tag-offer gate after a successful sync lands on the repo's
+// configured branch; the gate exists but is not currently wired to this script.
 //
 // API reference:
 //   https://learn.microsoft.com/en-us/rest/api/azure/devops/git/annotated-tags/create
@@ -34,7 +34,7 @@
 //       --repository   <repo>
 //       --name         <tag>          # see TAG_NAME_REGEX below
 //       --commitSha    <sha>
-//       [--message     <annotated message>]   # default: "Tagged via commit-to-git"
+//       [--message     <annotated message>]   # default: script default message
 //       [--pat <PAT>] | [--token <bearer>]
 //       [--apiVersion  <ver>]         # default 7.0
 

@@ -83,7 +83,7 @@ function buildAuthHeader(token) {
  * @param {string} [options.token]
  * @returns {Promise<object>}
  */
-async function verifyAdoPermissions({ organization, project, repository, token, tokenFile } = {}) {
+async function verifyAdoPermissions({ organization, project, repository, token, tokenFile, adoBaseUrl, requestImpl } = {}) {
   if (!organization) return { error: '--organization is required' };
   if (!project) return { error: '--project is required' };
   if (!repository) return { error: '--repository is required' };
@@ -96,19 +96,23 @@ async function verifyAdoPermissions({ organization, project, repository, token, 
   }
 
   const { header: authHeader, tokenType } = buildAuthHeader(tokenResult.token);
-  const adoBase = `https://dev.azure.com/${encodeURIComponent(organization)}`;
+  const adoBase = adoBaseUrl || `https://dev.azure.com/${encodeURIComponent(organization)}`;
   const apiVersion = '7.1-preview.1';
+  const request = requestImpl || makeRequest;
 
   // Step 1 — GET repository metadata (Read scope check)
   const repoUrl =
     `${adoBase}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repository)}` +
     `?api-version=${apiVersion}`;
 
-  const repoRes = await makeRequest({
+  const repoRes = await request({
     url: repoUrl,
     method: 'GET',
     headers: { Authorization: authHeader, Accept: 'application/json' },
   });
+  if (repoRes.error) {
+    return { error: `ADO repository check failed: ${repoRes.error}` };
+  }
 
   const canRead = repoRes.statusCode === 200;
   let repoId = null;
@@ -139,12 +143,16 @@ async function verifyAdoPermissions({ organization, project, repository, token, 
     const refsUrl =
       `${adoBase}/${encodeURIComponent(project)}/_apis/git/repositories/${repoId}/refs` +
       `?filter=heads&api-version=${apiVersion}&$top=1`;
-    const refsRes = await makeRequest({
+    const refsRes = await request({
       url: refsUrl,
       method: 'GET',
       headers: { Authorization: authHeader, Accept: 'application/json' },
     });
-    canReadRefs = refsRes.statusCode === 200;
+    if (refsRes.error) {
+      hint = `ADO refs check failed: ${refsRes.error}`;
+    } else {
+      canReadRefs = refsRes.statusCode === 200;
+    }
   }
 
   return {

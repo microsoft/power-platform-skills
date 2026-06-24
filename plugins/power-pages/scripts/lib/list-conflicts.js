@@ -36,6 +36,10 @@
 
 const { getAuthToken, getEnvironmentUrl, makeRequest } = require('./validation-helpers');
 const { listSourceControlComponents } = require('./list-source-control-components');
+const {
+  normalizeComponentType, typeFromComponentName, mergeStrategyForType,
+  isEligibleForSelectiveMerge, labelForType,
+} = require('./component-type-map');
 
 function parseArgs(argv) {
   const args = argv.slice(2);
@@ -50,6 +54,47 @@ function parseArgs(argv) {
 }
 
 const CHANGE_TYPE_LABEL = Object.freeze({ 0: 'Add', 1: 'Modify', 2: 'Delete' });
+
+// A4: enrich a raw row with the RESOLVED numeric ppc type + merge classification so
+// callers never infer eligibility from name suffixes. The sourcecontrolcomponent
+// `componentType` is the solution sub-type (e.g. 10429), NOT the ppc type — so we
+// derive the real type from the serialized componentName (".webtemplate", etc.),
+// falling back to the componentPath type-folder. Adds: ppcType (numeric|null),
+// ppcTypeLabel, mergeStrategy ('text'|'scalar'|'binary'|'unsupported'),
+// eligibleForSelectiveMerge (boolean).
+function enrichConflictRow(item) {
+  const ppcType =
+    normalizeComponentType(item.componentName) != null ? normalizeComponentType(item.componentName)
+    : typeFromComponentName(item.componentPath || '');
+  const mergeStrategy = ppcType != null ? mergeStrategyForType(ppcType) : 'unsupported';
+  return {
+    ...item,
+    ppcType: ppcType != null ? ppcType : null,
+    ppcTypeLabel: ppcType != null ? labelForType(ppcType) : null,
+    mergeStrategy,
+    eligibleForSelectiveMerge: ppcType != null ? isEligibleForSelectiveMerge(ppcType) : false,
+  };
+}
+
+// Map one sourcecontrolcomponent row → the enriched conflict item shape.
+function sccToItem(r) {
+  return enrichConflictRow({
+    conflictId:         r.sourceControlComponentId || null,
+    componentId:        r.componentId || null,
+    componentName:      r.componentName || null,
+    componentPath:      r.componentPath || null,
+    componentType:      r.componentType || null,
+    partitionId:        r.partitionId || null,
+    gitHashId:          r.gitHashId || null,
+    lastSyncHashId:     r.lastSyncHashId || null,
+    envHashId:          r.envHashId || null,
+    localChangeType:    null,
+    incomingChangeType: null,
+    localCommitSha:     null,
+    incomingCommitSha:  null,
+    resolutionRequired: true,
+  });
+}
 
 /**
  * @param {object} options
@@ -74,22 +119,7 @@ async function listConflicts({ envUrl, token, solutionUniqueName, solutionId } =
       envUrl: url, token: tok, solutionId, solutionUniqueName, action: 3, userAction: 0,
     });
     if (!scc.error) {
-      const items = scc.items.map((r) => ({
-        conflictId:         r.sourceControlComponentId || null,
-        componentId:        r.componentId || null,
-        componentName:      r.componentName || null,
-        componentPath:      r.componentPath || null,
-        componentType:      r.componentType || null,
-        partitionId:        r.partitionId || null,
-        gitHashId:          r.gitHashId || null,
-        lastSyncHashId:     r.lastSyncHashId || null,
-        envHashId:          r.envHashId || null,
-        localChangeType:    null,
-        incomingChangeType: null,
-        localCommitSha:     null,
-        incomingCommitSha:  null,
-        resolutionRequired: true,
-      }));
+      const items = scc.items.map(sccToItem);
       return { count: items.length, items, via: 'sourcecontrolcomponent' };
     }
     // On a hard error (not a clean empty), fall through to the legacy entity.
@@ -126,22 +156,7 @@ async function listConflicts({ envUrl, token, solutionUniqueName, solutionId } =
       envUrl: url, token: tok, solutionId, solutionUniqueName, action: 3, userAction: 0,
     });
     if (fallback.error) return { error: fallback.error, statusCode: fallback.statusCode, hint };
-    const items = fallback.items.map((r) => ({
-      conflictId:         r.sourceControlComponentId || null,
-      componentId:        r.componentId || null,
-      componentName:      r.componentName || null,
-      componentPath:      r.componentPath || null,
-      componentType:      r.componentType || null,
-      partitionId:        r.partitionId || null,
-      gitHashId:          r.gitHashId || null,
-      lastSyncHashId:     r.lastSyncHashId || null,
-      envHashId:          r.envHashId || null,
-      localChangeType:    null,
-      incomingChangeType: null,
-      localCommitSha:     null,
-      incomingCommitSha:  null,
-      resolutionRequired: true,
-    }));
+    const items = fallback.items.map(sccToItem);
     return { count: items.length, items, via: 'sourcecontrolcomponent', hint };
   }
   if (res.statusCode !== 200) {
@@ -155,7 +170,7 @@ async function listConflicts({ envUrl, token, solutionUniqueName, solutionId } =
     return { error: 'Failed to parse response: ' + e.message };
   }
 
-  const items = (rows || []).map((r) => ({
+  const items = (rows || []).map((r) => enrichConflictRow({
     conflictId:         r.gitconflictfileid || null,
     componentName:      r.componentname || null,
     componentType:      r.componenttype || null,
@@ -179,4 +194,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { listConflicts, CHANGE_TYPE_LABEL };
+module.exports = { listConflicts, CHANGE_TYPE_LABEL, enrichConflictRow };

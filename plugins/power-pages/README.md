@@ -363,13 +363,13 @@ Read-only orchestrator that detects current binding + pending changes + incoming
 
 > "Connect my env or solution to ADO" — or "switch branches", "rebind", "disconnect", or "validate my Git setup"
 
-Unified Git configuration skill for Dataverse Git integration. Detects the code site, solution, environment, and current binding; runs auth, Managed Env, system-admin, tenant, BYOK/CMK, license, ADO permission, and repo-init preflights; explains environment vs solution binding; then connects, switches branch, rebinds, disconnects, or validates without mutation.
+Unified Git configuration skill for Dataverse Git integration. Detects the code site, solution, environment, and current binding; runs auth, Managed Env, system-admin, tenant, BYOK/CMK, license, ADO permission, and repo-init preflights; explains environment vs solution binding; then connects, switches branch, rebinds, disconnects, or validates without mutation. On setup/rebind/switch, it records a user-chosen flat clone directory for the inner loop.
 
 #### `/git-sync`
 
 > "Sync my Dataverse Git workspace" — push Changes, pull Updates, or resolve Conflicts
 
-Unified per-cycle inner-loop skill. Detects Changes / Updates / Conflicts, renders one readable config-vs-bundle-churn summary, previews incoming updates, explains conflicts semantically, then runs the right flow with gates: commit (`CommitToGit`), pull (`RefreshChangesFromGit` + `PullChangesFromGit`), or conflict resolution. Conflicts can be resolved by **keep current**, **accept incoming**, or **selectively merge** — a real 3-way merge in VS Code (BASE/OURS/THEIRS, AI-assisted) that the portal doesn't offer; the merged file is committed to ADO and pulled back into the environment. Selective merge uses the companion **Power Pages Selective Merge** VS Code extension (`vscode-extension/`).
+Unified per-cycle inner-loop skill. Detects Changes / Updates / Conflicts, renders one readable config-vs-bundle-churn summary, previews incoming updates, explains conflicts semantically, then runs the right flow with gates: commit (`CommitToGit`), pull (`RefreshChangesFromGit` + `PullChangesFromGit`), or conflict resolution. Conflicts can be resolved by **keep current**, **accept incoming**, or **selectively merge** — a real Git merge opened in native VS Code (BASE/OURS/THEIRS) from the flat clone recorded by `git-configure`; the resolved merge is safely pushed or PR'd, then pulled back into the environment.
 
 **Modes:**
 - `--dry-run` / `--dry-run --json` — commit pre-flight only; writes `last-validation.json`; no mutation.

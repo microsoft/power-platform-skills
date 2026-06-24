@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('http');
-const { listConflicts, CHANGE_TYPE_LABEL } = require('../lib/list-conflicts');
+const { listConflicts, CHANGE_TYPE_LABEL, enrichConflictRow } = require('../lib/list-conflicts');
 
 function createTestServer(statusCode, body) {
   return new Promise((resolve) => {
@@ -36,6 +36,43 @@ function closeQueuedServer(s) { return new Promise((resolve) => s.server.close(r
 test('CHANGE_TYPE_LABEL shared constant is frozen and has 3 entries', () => {
   assert.equal(Object.keys(CHANGE_TYPE_LABEL).length, 3);
   assert.throws(() => { CHANGE_TYPE_LABEL[3] = 'Rename'; }, /read.?only|assign|cannot/i);
+});
+
+// ---- A4: conflict enrichment drives eligibility from helper output ----
+test('A4 enrichConflictRow: resolves numeric ppc type + mergeStrategy + eligibility from componentName suffix', () => {
+  const mixed = [
+    { componentName: 'Search Results.webtemplate', componentPath: '/powerpagesites/RetailOS/web-templates/Search-Results' },
+    { componentName: 'Access Denied.webpage', componentPath: '/powerpagesites/RetailOS/web-pages/Access-Denied' },
+    { componentName: 'Footer.contentsnippet', componentPath: '/powerpagesites/RetailOS/content-snippets/Footer' },
+    { componentName: 'Cat-PC.png.webfile', componentPath: '/powerpagesites/RetailOS/web-files/Cat-PC.png' },
+    { componentName: 'HTTP/X-Frame-Options.sitesetting', componentPath: '/powerpagesites/RetailOS/site-settings/HTTP-X-Frame-Options' },
+  ].map(enrichConflictRow);
+
+  assert.deepEqual(mixed.map((m) => m.ppcType), [8, 2, 7, 3, 9]);
+  assert.deepEqual(mixed.map((m) => m.mergeStrategy), ['text', 'text', 'text', 'webfile', 'scalar']);
+  // Site setting (9) is selective-merge-eligible via the whole-.sitesetting.yml flat-yml merge.
+  // Web file (3) uses 'webfile' strategy — runtime sniff decides text vs binary path — and IS eligible.
+  assert.deepEqual(mixed.map((m) => m.eligibleForSelectiveMerge), [true, true, true, true, true]);
+  assert.equal(mixed[0].ppcTypeLabel, 'Web Template');
+});
+
+test('A4 enrichConflictRow: falls back to componentPath type-folder when name lacks a suffix', () => {
+  const r = enrichConflictRow({ componentName: 'Some Name', componentPath: '/powerpagesites/RetailOS/web-templates/Some-Name' });
+  assert.equal(r.ppcType, 8);
+  assert.equal(r.eligibleForSelectiveMerge, true);
+});
+
+test('A4 enrichConflictRow: unresolvable type → ppcType null, unsupported, not eligible', () => {
+  const r = enrichConflictRow({ componentName: 'mystery', componentPath: '/nowhere' });
+  assert.equal(r.ppcType, null);
+  assert.equal(r.mergeStrategy, 'unsupported');
+  assert.equal(r.eligibleForSelectiveMerge, false);
+});
+
+test('A4 enrichConflictRow: preserves the raw SCC componentType (10429) untouched', () => {
+  const r = enrichConflictRow({ componentName: 'Footer.contentsnippet', componentType: 10429 });
+  assert.equal(r.componentType, 10429); // raw sub-type preserved
+  assert.equal(r.ppcType, 7);           // resolved ppc type added alongside
 });
 
 test('returns error when server is unreachable', async () => {

@@ -1,4 +1,4 @@
-# Conflict Reference — Resolution Flow
+﻿# Conflict Reference — Resolution Flow
 
 Follow this FIRST when the `git-sync` dispatcher detects **Conflicted** state (`Conflicts > 0`); conflicts gate both commit and pull.
 
@@ -126,8 +126,8 @@ If only IDs/change types are available, render those fields and state that field
 **Goal:** Capture the resolution strategy with a SINGLE question, then auto-assign it — never ask once per conflict (that does not scale to large conflict sets).
 
 First, **partition the roster** by selective-merge eligibility:
-- **Eligible (text-mergeable):** web template `source`, content snippet `value`, web page `copy`/`summary`.
-- **Not eligible (binary-only):** web files, scalar/credential site settings, and components deleted in Git.
+- **Eligible (text-mergeable):** web template `source`, content snippet `value`, web page `copy`/`summary`, **site settings (type `9`)** as the whole flat `.sitesetting.yml` (metadata identical; only the `value:` line conflicts), and **web files type `3` whose annotation `documentbody` bytes are detected as text by the runtime content sniff**. Web-file eligibility is byte-based, not extension-based.
+- **Not eligible (binary/scalar):** web files type `3` whose `documentbody` bytes are truly binary or ambiguous, components deleted in Git, and site settings whose `value` is **multi-line** (can't be safely substituted into a single yml line → keep/accept). The web-file sniff fails closed to binary on any ambiguity (NUL byte, invalid UTF-8, or high control-character ratio).
 
 Show a compact Markdown roster in chat (number, component, type, eligibility, semantic explanation). Point the user to `docs/inner-loop/conflicts.html` for the side-by-side report.
 
@@ -140,18 +140,21 @@ Show a compact Markdown roster in chat (number, component, type, eligibility, se
 
 **Apply the single answer to the whole batch — no per-component prompts:**
 
-- **Selectively merge all eligible** → assign `strategy: "selective-merge"` to **every** eligible (text-mergeable) conflict automatically. If any binary-only conflicts remain, ask **one** follow-up question for *that subset only* (`Keep all current` / `Accept all incoming`) and apply it to all of them. Never ask per component.
+- **Selectively merge all eligible** → assign `strategy: "selective-merge"` to **every** eligible (text-mergeable) conflict automatically. **Binary/scalar conflicts are resolved per file**, not as a blanket subset: route them through the resolver's `binaryMatrix` exactly as documented in **`references/selective-merge-reference.md` → Phase 3a** (numbered roster → ask which serials to **Accept Incoming** → `parse-serial-selection.js` → echo-and-confirm → resume with `--binary-accept`). Do **not** define a competing `Keep all` / `Accept all` question for the binary subset here. Never ask per text component.
 - **Keep all current changes** → assign `strategy: "keep-current"` to every conflict.
 - **Accept all incoming changes** → assign `strategy: "accept-incoming"` to every conflict.
 
 > Only drop to a per-component question if the user **explicitly** asks to decide individual components differently. The default is always the single blanket choice above.
 
-Normalize decisions as one entry per conflict (the strategy is filled in from the blanket choice, not asked again):
+> **Binary/scalar-only conflict sets.** When `eligibleCount` (text-mergeable) is `0` but binary/scalar conflicts exist, **"Selectively merge all eligible" still applies** — choosing it invokes `clone-merge-resolver.js`, which surfaces the `binaryMatrix` (with empty `textUnits`) and takes the user straight to the per-file Phase 3a matrix. The user keeps per-file control; never collapse to a blanket keep/accept just because there is no text to merge. When `eligibleCount` is `0`, phrase that first option as **"Decide binary/scalar per file"** so it reads clearly.
+
+Normalize decisions as one entry per conflict. Text-mergeable conflicts take `strategy: "selective-merge"`; **binary/scalar conflicts derive their own `strategy` (`accept-incoming` | `keep-current`) per file from the Phase 3a matrix pick** — they are never forced to one shared value, so a single run can mix both:
 
 ```json
 [
-  { "conflictId": "<guid>", "componentName": "<display name>", "componentType": "<type>", "strategy": "selective-merge" },
-  { "conflictId": "<guid>", "componentName": "<display name>", "componentType": "<type>", "strategy": "accept-incoming" }
+  { "conflictId": "<guid>", "componentName": "Search Results", "componentType": "8", "strategy": "selective-merge" },
+  { "conflictId": "<guid>", "componentName": "Cat-PC.png", "componentType": "3", "strategy": "accept-incoming" },
+  { "conflictId": "<guid>", "componentName": "HTTP/X-Frame-Options", "componentType": "9", "strategy": "keep-current" }
 ]
 ```
 
@@ -159,11 +162,11 @@ Decision meanings:
 
 | Option | Strategy | Helper | After resolution |
 |---|---|---|---|
-| Selectively merge | `selective-merge` | `references/selective-merge-reference.md` | Merged file committed to ADO, then accepted + pulled into the environment. |
+| Selectively merge | `selective-merge` | `references/selective-merge-reference.md` | Clone-based native VS Code merge, safe push/PR, then accept + pull into the environment. |
 | Keep current changes | `keep-current` | `resolve-conflict-keep.js` | Component moves to **Changes** and must later be committed. |
 | Accept incoming changes | `accept-incoming` | `resolve-conflict-accept.js` | Component moves to **Updates** and must later be pulled. |
 
-**Output:** `decisions[]` has exactly one entry for each `conflicts.items[]` entry, every `strategy` filled from the blanket choice (or the single binary-subset follow-up).
+**Output:** `decisions[]` has exactly one entry for each `conflicts.items[]` entry — text-mergeable strategies from the blanket choice, binary/scalar strategies from the per-file Phase 3a matrix (which may mix `accept-incoming` and `keep-current` in the same run).
 
 ## Step 4 — Apply resolutions
 
@@ -171,7 +174,17 @@ Decision meanings:
 
 Process decisions one at a time. Do not run conflict helpers in parallel.
 
-**Dispatch `selective-merge` first.** For every component whose strategy is `selective-merge`, **read and follow `references/selective-merge-reference.md`** — that flow assembles BASE/OURS/THEIRS, runs the VS Code merge, commits the merged file to ADO, and accepts + pulls it into the environment. Do **not** call the keep/accept helpers for those components. Apply the remaining `keep-current` / `accept-incoming` decisions below.
+**Dispatch `selective-merge` first.** For every component whose strategy is `selective-merge`, **read and follow `references/selective-merge-reference.md`**. That flow runs `clone-merge-resolver.js`, reuses the flat clone recorded by `git-configure`, stages a real Git merge in `<cloneDir>/repo`, opens native VS Code Source Control / Merge Editor on the actual files, verifies the resolved merge, safely pushes or creates a PR, then accepts + pulls it into the environment. Do **not** call the keep/accept helpers for those components. The binary/scalar picks ride **into the same resolver run** (single reconcile/commit, A7/A8) — they are not applied separately.
+
+> **Worked example — passing the per-file matrix answer through verbatim.** The Phase 3a matrix offered serials `2, 4, 6` and the user answered `2,6`. Carry that answer straight into the `--resume` call:
+>
+> ```bash
+> node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/clone-merge-resolver.js" --input <inputs.json> --apply --resume --binary-accept "2,6"
+> ```
+>
+> → serials **#2 and #6 become `accept-incoming` (Git wins)**; every other binary/scalar (here #4) defaults to **`keep-current` (env wins)**. Pass the serials **verbatim** — do not re-map or pre-expand ranges; the resolver validates them against `binaryMatrix` and re-asks on bad tokens. Map the shortcuts exactly: user answered `all` → `--binary-accept-all`; user answered `none` → `--binary-keep-mine` (or omit the flag).
+>
+> **Different branch — top-level blanket choices.** This matrix path exists **only** under "Selectively merge all eligible". When the **top-level** choice was "Keep all current" or "Accept all incoming", there is **no resolver and no matrix** — apply those blanket decisions with the standalone `resolve-git-conflict-useraction.js` keep/accept path below (one component at a time). Don't conflate the two branches.
 
 ### The primary (IL-015-proof) mechanism: `useraction` PATCH
 
@@ -346,12 +359,13 @@ Fallback walkthrough:
 
 ## Selective 3-way merge — IMPLEMENTED
 
-The VS Code selective 3-way merge is **built**. When the user picks **"Selectively merge (recommended)"** for a text-mergeable component, follow **`references/selective-merge-reference.md`**:
+When the user picks **"Selectively merge (recommended)"** for text-mergeable conflicts, follow **`references/selective-merge-reference.md`**. That reference is the canonical path for selective merge in `git-sync`.
 
-- **BASE** = the source file at `upstreamBranchSyncedCommitId`; **OURS** = the live Dataverse content field; **THEIRS** = the Azure DevOps source file at the branch tip.
-- A deterministic diff3 auto-merges non-overlapping hunks and writes a git-style **working file** (`merged.<ext>`) with `<<<<<<< Dataverse / ======= / >>>>>>> Azure DevOps` markers for the overlapping hunks. **No AI/Copilot proposes the merge** — the human resolves the markers in VS Code's native 3-way Merge Editor. A result that still contains `<<<<<<<` markers is never committed.
-- Security-sensitive components (auth/secret site settings, server logic, plug-ins) stay binary-only and are excluded from this flow.
-- The merged file is committed to ADO, then accepted + pulled into the environment; OURS is snapshotted first for reversibility.
-- Non-VS-Code fallback: edit `merged.<ext>` (alongside `base.<ext>` / `dataverse.<ext>` / `ado.<ext>`) directly under the secure run store path the helper prints (`runDir`), removing every `<<<<<<<` marker; artifacts are owner-only and wiped on completion/cancel.
+- The entry point is `clone-merge-resolver.js` with the phased dry-run / apply / resume flow documented there.
+- The resolver reuses the flat clone recorded by `git-configure` (`<cloneDir>/repo`, with `<cloneDir>/.pp-merge` for merge scratch), stages a real Git merge, and opens VS Code on the clone so native Source Control, the 3-way Merge Editor, and CodeLens work on the actual files. If the clone record is missing, `git-sync` prompts for a clone directory as a graceful fallback before continuing.
+- The helper verifies there are no unmerged paths and no remaining `<<<<<<<` markers before any shared-state mutation.
+- It then safely fast-forwards the bound branch when allowed, or creates a `pp-merge/<user>/<branch>-<timestamp>` branch and PR with auto-complete. It never force-pushes.
+- After ADO is landed, it runs the existing Dataverse round-trip: refresh, accept incoming via `useraction=2`, pull, verify `Conflicts=0`, and content-verify with EOL-normalized byte comparison. For text-detected web files, content-verify re-reads annotation `documentbody` bytes and, if the pull did not update them, falls back to PATCHing `documentbody` with the resolved base64 before re-reading and verifying again.
+- Web files type `3` are routed by content sniff: text-detected bytes go through the VS Code 3-way editor, while truly-binary or ambiguous bytes remain on the binary keep/accept path. Scalar site settings type `9`, credential/auth-classified settings, and deleted-in-Git components also remain on keep/accept.
 
-This selective-merge step is dispatched from Step 4 (per-component) while preserving dispatcher hand-back and marker semantics (`strategy: "selective-merge"`).
+This selective-merge step is dispatched from Step 4 while preserving dispatcher hand-back and marker semantics (`strategy: "selective-merge"`).

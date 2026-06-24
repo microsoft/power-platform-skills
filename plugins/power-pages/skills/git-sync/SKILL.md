@@ -23,7 +23,7 @@ model: opus
 
 - `commit-to-git` → **commit** flow (Changes → `CommitToGit`). Full detail: `references/changes-reference.md`.
 - `sync-from-git` → **pull** flow (Updates → `RefreshChangesFromGit` + `PullChangesFromGit`). Full detail: `references/update-reference.md`.
-- `resolve-conflicts` → **conflict** flow (Conflicts → resolve). Full detail: `references/conflict-reference.md` (incl. VS Code **selective merge**: `references/selective-merge-reference.md`).
+- `resolve-conflicts` → **conflict** flow (Conflicts → resolve). Full detail: `references/conflict-reference.md` (incl. native VS Code clone-based **selective merge**: `references/selective-merge-reference.md`).
 
 **Initial request:** $ARGUMENTS
 
@@ -94,8 +94,8 @@ Steps:
 
 Steps:
 
-1. Verify PAC and Azure CLI authentication (plain `az login` guidance if missing).
-2. Run `detect-git-binding.js`; if unbound, route to `git-configure`.
+1. Verify PAC, Git, and Azure CLI authentication (plain `az login` guidance if missing). Git must be installed for the clone-based selective-merge resolver.
+2. Confirm the active environment with `pac env who`; if the friendly environment name is needed for selective merge cache paths, use `pac env list` to match it. Run `detect-git-binding.js`; if unbound, route to `git-configure`.
 
 <!-- gate: git-sync:1.no-binding | category=intent | cancel-leaves=nothing -->
 > 🚦 **Gate (intent · git-sync:1.no-binding):** Fires when the env is not bound to Git. Surface `AskUserQuestion`:
@@ -239,7 +239,7 @@ Steps:
 
 1. Phase 1: no binding (`git-sync:1.no-binding`); stale manifest (`git-sync:1.manifest-stale`).
 2. Phase 3: conflicts gate (`git-sync:2.conflicts`); Mixed ordering (`git-sync:3.mixed-order`).
-3. Per-flow gates live in the reference docs: `changes.*` (`references/changes-reference.md`), `update.*` (`references/update-reference.md`), `2.conflict-*` (`references/conflict-reference.md`).
+3. Per-flow gates live in the reference docs: `changes.*` (`references/changes-reference.md`), `update.*` (`references/update-reference.md`), `2.conflict-*` (`references/conflict-reference.md`), and `clone-merge.*` (`references/selective-merge-reference.md`).
 4. Phase 4: open-pr (`git-sync:final.open-pr`), tag (`git-sync:final.tag-offer`), final routing (`git-sync:final`).
 
 **Begin with Phase 0: Detect Direction.**
