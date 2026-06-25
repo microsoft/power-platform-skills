@@ -13,7 +13,7 @@ The `docs/inner-loop/.git-integration-manifest.json` file is the single local re
 | `gitFolder` / `rootFolder` | Folder inside the repo that Dataverse writes to. |
 | `solutionUniqueName` | Bound solution (solution binding only). |
 | `gitIntegrationId` | Server-side binding id; the strongest identity signal. |
-| `artifactRoot` *(optional)* | Where inner-loop artifacts are written (added by `git-configure` U5 when the selected artifact root differs from the default). |
+| `artifactRoot` *(optional)* | The user-confirmed project **workspace** root. Inner-loop artifacts live at `<artifactRoot>/docs/inner-loop/` and the working clone at `<artifactRoot>/clone/` (siblings). Set by `git-configure` (U5); later inner-loop skills reuse it instead of re-asking. Never a `pp-merge-clones` clone-cache path. |
 | `lastCommitSha` *(optional)* | Last commit pushed by `commit-to-git`. |
 | `lastVerifiedAt` | Timestamp of the last successful round-trip verify. |
 

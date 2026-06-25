@@ -172,7 +172,9 @@ test('line count and size cap', () => {
   const byteSize = Buffer.byteLength(prose, 'utf8');
 
   assert.ok(lineCount <= 1300, `SKILL.md must be <= 1300 lines; got ${lineCount}`);
-  assert.ok(byteSize <= 60 * 1024, `SKILL.md must be <= 60 KB; got ${byteSize} bytes`);
+  // Byte budget is a soft leanness guard (the 1300-line cap is the primary one).
+  // Raised 60 -> 62 KB when the U5 project-directory gate was made always-ask.
+  assert.ok(byteSize <= 62 * 1024, `SKILL.md must be <= 62 KB; got ${byteSize} bytes`);
 });
 
 test('helper imports match what exists', () => {

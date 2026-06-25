@@ -111,7 +111,7 @@ Steps:
 
    3. Fire the env-confirm gate below.
 
-   The *suggested default* is resolved in order — explicit argument → `powerpages.config.json` → `detect-project-context.js` → PAC active env — but the suggestion never bypasses the confirm prompt. Skip the picker (confirm silently) only for `--non-interactive` runs where `--envUrl` is supplied.
+   The *suggested default* resolves in order (explicit arg → `powerpages.config.json` → `detect-project-context.js` → PAC active env) but never bypasses the confirm prompt; skip the picker (confirm silently) only under `--non-interactive` with `--envUrl`.
 
 <!-- gate: git-configure:1.env-confirm | category=intent | cancel-leaves=nothing -->
 > 🚦 **Gate (intent · git-configure:1.env-confirm):** Fires in every interactive run, before any preflight or mutation, to confirm the target environment. Surface `AskUserQuestion`:
@@ -137,16 +137,16 @@ Steps:
 >
 > Cancellation leaves nothing; no Dataverse or ADO mutation has happened.
 
-4. **Artifact-path choice (U5).** Inner-loop artifacts default to `<projectRoot>/docs/inner-loop/`. Only prompt when `<projectRoot>` is a pac-managed code-site folder (detected via `powerpages.config.json`), because writing artifacts into a pac download/upload root disturbs it.
+4. **Project workspace (U5 — always confirm; one folder for clone + artifacts).** Pick ONE workspace directory for this binding. `<workspace>` is `<projectRoot>` and holds both the working clone (`<workspace>/clone/` → `repo/` + `.pp-merge/`, created in Phase 9) and the durable run artifacts (`<workspace>/docs/inner-loop/` → manifest, markers, reports) as siblings — so there is never a second "mystery" location. **Always confirm `<workspace>` before writing into it**; never auto-create it or derive it from the `git-sync` clone cache (`…/pp-merge-clones/…`) or a stored convention. Phase 9 reuses this same workspace for the clone — it does not ask again. Artifacts live OUTSIDE `clone/`, so a clone re-fetch or wipe never erases the manifest.
 
 <!-- gate: git-configure:1.artifact-path | category=plan | cancel-leaves=nothing -->
-> 🚦 **Gate (plan · git-configure:1.artifact-path):** Fires only when `<projectRoot>` is a pac-managed code-site root. Surface `AskUserQuestion`:
+> 🚦 **Gate (plan · git-configure:1.artifact-path):** Fires whenever `<workspace>` is not an explicit `--project-root`, a persisted `artifactRoot`, or a non-pac code-site root you are inside — fresh / home-directory runs and pac-managed roots both prompt. Surface `AskUserQuestion`:
 >
 > | Question | Header | Options |
 > |---|---|---|
-> | `{projectRoot}` looks like a pac-managed Power Pages site. Writing run artifacts there can disturb pac. Where should inner-loop artifacts live? | Artifact path | Use a sibling folder `{projectRoot}/../{solution}-inner-loop` (recommended), Use `{projectRoot}/docs/inner-loop` anyway, Specify another path |
+> | Where should this project's workspace live? Both the working clone (`<chosen>/clone/`) and run artifacts (`<chosen>/docs/inner-loop/`) live here. | Project workspace | Use `{suggestedRoot}` (recommended), Choose another directory |
 >
-> Persist the chosen root into `docs/inner-loop/.git-integration-manifest.json` as `artifactRoot` so later inner-loop skills don't re-ask. The `docs/inner-loop/` folder is auto-gitignored fail-closed. Default (non-pac-managed roots) needs no prompt.
+> `{suggestedRoot}` is short and user-owned (e.g. `<userHome>/<envFriendlyName>/<solutionUniqueName>`, or the code-site root when inside one) — **never a `pp-merge-clones` path**. Persist `<workspace>` as manifest `artifactRoot`; the clone block records `<workspace>/clone`. `--non-interactive` requires `--project-root`.
 
 5. Compare explicit `<envUrl>` with `pac env who --json` `OrgUrl` when both exist. Normalize case and trailing slash only.
 
@@ -600,22 +600,21 @@ Run only when Phase 9 enabled at least one solution.
 Run after binding verification, manifest write, and any placeholder or initial commit work above.
 
 <!-- gate: git-configure:9.clone-location | category=intent | cancel-leaves=nothing -->
-> 🚦 **Gate (intent · git-configure:9.clone-location):** Surface `AskUserQuestion` according to mode:
+> 🚦 **Gate (intent · git-configure:9.clone-location):** The clone defaults INTO the Phase 1 workspace — do not re-ask for a fresh parent. Surface `AskUserQuestion` according to mode:
 >
 > | Mode/result | Question | Header | Options |
 > |---|---|---|---|
-> | Setup binding | What should I name the local clone folder, and where should it live? Suggested name: `<solutionUniqueName>`, placed under `<userHome>/PowerPages/`. | Local working repo | Use suggested name, Enter a custom folder name, Choose another directory, Skip local clone |
+> | Setup binding / rebind to a new repo | I'll put the working clone inside your workspace at `<workspace>/clone` (beside `docs/inner-loop/`), openable in VS Code and reused by git-sync. Use that? | Local working repo | Use workspace clone (recommended), Choose another directory, Skip local clone |
 > | Switch branch or rebind to the same repo | Use the recorded local clone for this branch? | Local working repo | Use recorded clone, Choose another directory, Skip local clone |
-> | Rebind to a new repo | What should I name the local clone folder, and where should it live? Suggested name: `<solutionUniqueName>`, placed under `<userHome>/PowerPages/`. | Local working repo | Use suggested name, Enter a custom folder name, Choose another directory, Skip local clone |
 > | Disconnect | Keep the recorded local clone on disk? | Local working repo | Keep it, Remove it, Decide later |
 >
-> When the user picks **"Enter a custom folder name"**, prompt for the folder name (validate as a single path segment — no slashes, no path separators, no `.`/`..`, not whitespace-only; re-prompt on failure), then place it under `<userHome>/PowerPages/<name>`. **"Choose another directory"** lets the user supply a full absolute path. The final `cloneDir` is `<chosenParent>/<chosenName>`. Cancel/skip leaves the binding and manifest as-is. Never remove a clone without consent.
+> Default `cloneDir = <workspace>/clone`, so the clone (`repo/` + `.pp-merge/`) sits beside `docs/inner-loop/` under one user-owned workspace and a clone wipe can never touch the manifest. **"Choose another directory"** lets a power user supply a different absolute `cloneDir` (e.g. a faster disk); the artifacts still stay in the Phase 1 workspace. Cancel/skip leaves the binding and manifest as-is. Never remove a clone without consent.
 
 Behavior:
 
-- For setup binding, call `cloneOrUpdateRepo({ cloneDir, repoUrl, branch, token })`, then `writeCloneRecord({ projectRoot, clonePath: cloneDir, coordinates: { env, organization, project, repository, rootFolder, gitFolder, branch, solutionUniqueName } })`. Tell the user this is their local working repo, openable in VS Code, reused by `git-sync`; `<cloneDir>/repo` is the working tree.
+- For setup binding, default `cloneDir = <workspace>/clone` (the Phase 1 workspace); call `cloneOrUpdateRepo({ cloneDir, repoUrl, branch, token })`, then `writeCloneRecord({ projectRoot: <workspace>, clonePath: cloneDir, coordinates: { env, organization, project, repository, rootFolder, gitFolder, branch, solutionUniqueName } })`. Tell the user their workspace now holds `clone/repo` (the working tree, openable in VS Code, reused by `git-sync`) beside `docs/inner-loop/`.
 - For switch-branch or same-repo rebind, read the recorded clone and reuse it: fetch, checkout the target branch (create it when the switch-branch flow created a new branch), then refresh the clone record with the new coordinates.
-- For rebind to a different repo, prompt again and write a new clone record after the clone succeeds.
+- For rebind to a different repo, default the new clone to `<workspace>/clone` as well and write a new clone record after the clone succeeds.
 - For disconnect, offer to keep or remove only the recorded clone; if the user chooses remove, delete that chosen clone directory and clear only the manifest clone block.
 - Acquire the Azure DevOps token in-process for the clone/update call and never write it to disk, logs, URLs, or command lines.
 
@@ -625,7 +624,7 @@ Behavior:
 - **Switch branch:** report that the binding points to the new branch but environment content may still reflect the old branch. Recommend `/power-pages:git-sync --pull` in Phase 10.
 - **Disconnect:** re-run `detect-git-binding.js` and state clearly that the env or solution is unbound. Recommend setup mode if the user wants to connect again.
 
-**Output:** Mode-specific follow-up work is completed or routed, and the local working clone is recorded, reused, skipped, or removed by consent.
+**Output:** Mode-specific follow-up work is completed or routed, and the local working clone is recorded (inside the Phase 1 workspace), reused, skipped, or removed by consent.
 
 ---
 
@@ -676,7 +675,7 @@ Non-gate safety checks remain: in-process token acquisition, PAC/env match, env-
 |---|---|---|---|
 | `docs/inner-loop/.git-integration-manifest.json` | `docs/inner-loop/` (auto-gitignored) | setup, switch, rebind, disconnect | Load-bearing current binding manifest; single local-only copy. |
 | Manifest `clone` block | `docs/inner-loop/.git-integration-manifest.json` | setup, switch, rebind, disconnect | Records the chosen local clone directory for reuse by `git-sync`; managed through `clone-record.js`. |
-| Local working clone | `<cloneDir>/repo` with scratch at `<cloneDir>/.pp-merge` | setup, switch, rebind | User-openable working repo reused by `git-sync`; token is never persisted. |
+| Local working clone | `<workspace>/clone/repo` with scratch at `<workspace>/clone/.pp-merge` | setup, switch, rebind | User-openable working repo beside `docs/inner-loop/`, reused by `git-sync`; token is never persisted. |
 | `last-git-configure.json` | `gitConfigurePath(root, 'lastGitConfigure')` | mutating modes | Skill-run marker for validator and routing. |
 | `.git-configure-plan-data.json` | `gitConfigurePath(root, 'gitConfigurePlanData')` | all modes except early prereq fail | Audit copy of the approved plan. |
 
