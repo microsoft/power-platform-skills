@@ -130,9 +130,29 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
  * subcommands reject it as an unrecognized argument), so it must not be passed
  * here. Accounts without a subscription can still mint AAD-scoped tokens after
  * signing in via `az login --allow-no-subscriptions`.
- * @returns {string|null} Access token, or null if unavailable
+ *
+ * Optionally pin the token to a specific tenant. When `tenantId` is provided
+ * the token is minted against that tenant rather than Azure CLI's default
+ * subscription — useful when PAC and Azure CLI defaults point at different
+ * tenants. Falls back to the no-tenant call if the tenant-scoped one fails,
+ * so existing single-tenant callers behave the same.
+ *
+ * @param {string} resourceUrl - The Azure AD resource / audience.
+ * @param {string} [tenantId]  - Optional tenant id to pin the token to.
+ * @returns {string|null} Access token, or null if unavailable.
  */
-function getAuthToken(resourceUrl) {
+function getAuthToken(resourceUrl, tenantId) {
+  if (tenantId) {
+    try {
+      return execSync(
+        `az account get-access-token --resource "${resourceUrl}" --tenant "${tenantId}" --query accessToken -o tsv`,
+        { encoding: 'utf8', timeout: 15000 }
+      ).trim();
+    } catch {
+      // Tenant-scoped call failed (tenant not in Azure CLI session, etc.).
+      // Fall through to the default call so legacy single-tenant flows still work.
+    }
+  }
   try {
     return execSync(
       `az account get-access-token --resource "${resourceUrl}" --query accessToken -o tsv`,
@@ -158,18 +178,23 @@ function getEnvironmentUrl() {
 }
 
 /**
- * Gets PAC CLI auth info (environment ID and cloud).
- * @returns {{ environmentId: string, cloud: string }|null}
+ * Gets PAC CLI auth info (environment ID, cloud, tenant ID).
+ * `tenantId` is null on older PAC builds whose `pac auth who` output omits the
+ * "Tenant Id:" line — callers should treat null as "tenant unknown" and not
+ * pin tokens to a specific tenant.
+ * @returns {{ environmentId: string, cloud: string, tenantId: string|null }|null}
  */
 function getPacAuthInfo() {
   try {
     const output = execSync('pac auth who', { encoding: 'utf8', timeout: 15000 });
     const envMatch = output.match(/Environment ID:\s*([0-9a-fA-F-]+)/i);
     const cloudMatch = output.match(/Cloud:\s*(\S+)/i);
+    const tenantMatch = output.match(/Tenant Id:\s*([0-9a-fA-F-]+)/i);
     if (!envMatch) return null;
     return {
       environmentId: envMatch[1],
       cloud: cloudMatch ? cloudMatch[1] : 'Public',
+      tenantId: tenantMatch ? tenantMatch[1] : null,
     };
   } catch {
     return null;
@@ -226,6 +251,8 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
 /** Cloud → Power Platform API base URL mapping */
 const CLOUD_TO_API = {
   'Public': 'https://api.powerplatform.com',
+  // TEMP (manage-governance test): remove before merging.
+  'Preprod': 'https://api.preprod.powerplatform.com',
   'UsGov': 'https://api.gov.powerplatform.microsoft.us',
   'UsGovHigh': 'https://api.high.powerplatform.microsoft.us',
   'UsGovDod': 'https://api.appsplatform.us',

@@ -1,0 +1,171 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "governance-mapping.json",
+  "version": "5.0.0",
+  "policyModes": {
+    "uniformGovernance": [
+      {
+        "policyValue": "All",
+        "userIntent": "Enable the Governance Setting on every site in the environment.",
+        "apiBehavior": {
+          "applyTo": "AllSites",
+          "enabled": true,
+          "inclusionList": [],
+          "exclusionList": []
+        }
+      },
+      {
+        "policyValue": "Include",
+        "userIntent": "Enable the Governance Setting only on the listed sites.",
+        "apiBehavior": {
+          "applyTo": "IncludedSites",
+          "enabled": true,
+          "siteList": ["site1", "site2"]
+        }
+      },
+      {
+        "policyValue": "None",
+        "userIntent": "Disable the Governance Setting on every site in the environment.",
+        "apiBehavior": {
+          "applyTo": "AllSites",
+          "enabled": false,
+          "inclusionList": [],
+          "exclusionList": []
+        }
+      },
+      {
+        "policyValue": "Exclude",
+        "userIntent": "Disable the Governance Setting only on the listed sites.",
+        "apiBehavior": {
+          "applyTo": "AllSitesExceptExcluded",
+          "enabled": true,
+          "siteList": ["site1", "site2"]
+        }
+      }
+    ]
+  },
+
+  "policies": [
+    {
+      "policyName": "PowerPages_DisableAuthenticationOpenIdConnect",
+      "policyMode": "uniformGovernance",
+      "displayName": "Disable the OpenId Connect Protocol",
+      "subject": "OpenID Connect sign-in",
+      "summaryLabel": "OpenID Connect block rule",
+      "userShorthands": ["OpenID Connect", "OIDC", "OpenIdConnect", "OpenID"],
+      "stateParaphrase": {
+        "Enabled": "OIDC Protocol sign-in Enabled",
+        "Disabled": "OIDC Protocol sign-in Blocked"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": ["All", "Include"],
+        "message": "Any users currently signed in via OpenID Connect on the affected sites will be signed out and won't be able to sign back in via this method."
+      }
+    },
+    {
+      "policyName": "PowerPages_DisableAuthenticationSAML20",
+      "policyMode": "uniformGovernance",
+      "displayName": "Disable the SAML 2.0 Protocol",
+      "subject": "SAML 2.0 sign-in",
+      "summaryLabel": "SAML 2.0 block rule",
+      "userShorthands": ["SAML", "SAML 2.0", "SAML20", "SAML2", "SAML2.0"],
+      "stateParaphrase": {
+        "Enabled": "SAML Protocol sign-in Enabled",
+        "Disabled": "SAML Protocol sign-in Blocked"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": ["All", "Include"],
+        "message": "Any users currently signed in via SAML on the affected sites will be signed out and won't be able to sign back in via this method."
+      }
+    }
+  ],
+
+  "intentToPolicyValue": [
+    {
+      "intentDirection": "enable",
+      "scope": "all",
+      "policyValue": "All",
+      "toBeAdded": "empty",
+      "scopeQualifiers": ["for all portals", "everywhere", "across the env", "for live portals", "for running portals"]
+    },
+    {
+      "intentDirection": "enable",
+      "scope": "specific",
+      "policyValue": "Include",
+      "toBeAdded": "pickedIds",
+      "scopeQualifiers": ["only X", "for X and Y", "specific sites", "just X", "for X"]
+    },
+    {
+      "intentDirection": "disable",
+      "scope": "all",
+      "policyValue": "None",
+      "toBeAdded": "empty",
+      "scopeQualifiers": ["for all portals", "everywhere", "across the env", "for no portals", "clear the policy"]
+    },
+    {
+      "intentDirection": "disable",
+      "scope": "specific",
+      "policyValue": "Exclude",
+      "toBeAdded": "pickedIds",
+      "scopeQualifiers": ["only X", "for X and Y", "specific sites"]
+    }
+  ],
+
+  "siteStateRules": [
+    { "envBody": "All",     "inInclusionList": null,  "inExclusionList": null,  "siteState": "Enabled" },
+    { "envBody": "None",    "inInclusionList": null,  "inExclusionList": null,  "siteState": "Disabled" },
+    { "envBody": "Include", "inInclusionList": true,  "inExclusionList": null,  "siteState": "Enabled" },
+    { "envBody": "Include", "inInclusionList": false, "inExclusionList": null,  "siteState": "Disabled" },
+    { "envBody": "Exclude", "inInclusionList": null,  "inExclusionList": true,  "siteState": "Disabled" },
+    { "envBody": "Exclude", "inInclusionList": null,  "inExclusionList": false, "siteState": "Enabled" }
+  ],
+
+  "ambiguousPhrasings": [
+    {
+      "phrase": "everywhere except X",
+      "rephrasePrompt": "Please re-phrase as either 'Enable for X' or 'Disable for X' so the uniform mapping applies cleanly."
+    },
+    {
+      "phrase": "all except X",
+      "rephrasePrompt": "Please re-phrase as either 'Enable for X' or 'Disable for X'."
+    }
+  ],
+
+  "effectLineTemplates": [
+    { "intentDirection": "enable",  "scope": "all",      "template": "{Subject} will be enabled on all portals in {EnvDisplay}." },
+    { "intentDirection": "enable",  "scope": "specific", "template": "{Subject} will be enabled on the listed portals in {EnvDisplay}: {SiteNameList}." },
+    { "intentDirection": "disable", "scope": "all",      "template": "{Subject} will be disabled on all portals in {EnvDisplay}." },
+    { "intentDirection": "disable", "scope": "specific", "template": "{Subject} will be disabled on the listed portals in {EnvDisplay}: {SiteNameList}." }
+  ],
+
+  "scopePicker": [
+    {
+      "label": "All portals in environment",
+      "description": "Apply the chosen Enable/Disable action to every site in the env. Clears any inclusion / exclusion list.",
+      "policyValueForEnable": "All",
+      "policyValueForDisable": "None",
+      "toBeAdded": "empty"
+    },
+    {
+      "label": "Specific portals",
+      "description": "I'll list the sites; you reply with the names or IDs (comma-separated).",
+      "policyValueForEnable": "Include",
+      "policyValueForDisable": "Exclude",
+      "toBeAdded": "pickedIds"
+    }
+  ],
+
+  "consentGate": {
+    "requiredRows": ["Action", "Environment", "Scope", "After-state site table", "API mapping", "Effect"],
+    "neverShowToUser": ["policyValue", "InclusionList", "ExclusionList", "Include", "Exclude"],
+    "rules": [
+      "Rows where the per-site state changes MUST be marked '<- CHANGED'.",
+      "When the env state transition would flip sites that aren't the user's target, surface a 'Side effect:' line with the count and the affected sites."
+    ]
+  },
+
+  "uiConstants": {
+    "envList":  { "columns": ["#", "Environment Name", "Environment ID"], "excludedFields": ["envUrl", "type", "region", "domain"] },
+    "siteList": { "columns": ["#", "Name", "URL", "Portal ID"] }
+  }
+}

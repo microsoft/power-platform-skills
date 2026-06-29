@@ -9,7 +9,6 @@
 const SUPPORTED_POLICIES = Object.freeze([
   'PowerPages_DisableAuthenticationOpenIdConnect',
   'PowerPages_DisableAuthenticationSAML20',
-  'PowerPages_AllowMakerCopilotsForExistingSites',
 ]);
 
 // Terminal status values the polling helpers treat as "done". The Power Pages
