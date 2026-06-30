@@ -105,7 +105,7 @@ Then run the checks:
 ```bash
 node --version                                      # v22+
 npm  --version                                      # v10+
-az account show --query "user.name" -o tsv          # Azure CLI logged in (needed if /set-app-registration-native runs later)
+az account show --query "user.name" -o tsv          # Azure CLI logged in (needed for Dataverse helper scripts)
 git --version                                       # optional
 ```
 
@@ -1040,9 +1040,7 @@ If the user picks Yes, invoke `/setup-offline-profile` as a sub-skill. It reads 
 **Print before starting:**
 > "→ [Step 7/13] Configuring app authentication (Entra ID app registration)…"
 
-The template ships `auth.config.json` with a hardcoded **shared test registration** (a placeholder `clientId` and `tenantId`). These defaults work only if the user's Power Platform environment happens to be in the same tenant as the template's registration. For any other tenant the runtime app will reject sign-in on first launch.
-
-So the decision is purely **tenant-match**: compare the template `tenantId` to the selected environment tenant. If they differ, the default action is to **create a new Entra app registration** via `/set-app-registration-native`. Providing an existing client ID is an alternative the user can choose.
+The template ships `auth.config.json` with blank `msal.clientId` and `msal.tenantId`. There are no baked-in registration IDs to reuse. Always use the selected Power Platform environment tenant resolved earlier in the flow, then ask the user how they want to provide the Entra app registration client ID.
 
 `auth.config.json` may also contain a non-secret sibling `environment` object written by `scripts/resolve-environment.js`:
 
@@ -1062,6 +1060,8 @@ Keep this block when editing `auth.config.json`. It lets later skills avoid re-r
 
 #### 7.1 Resolve selected Power Platform tenant
 
+Use the environment selected in Step 4. Prefer `$ACTIVE_TENANT_ID`, then `.resolved-environment.json`, then the cached `auth.config.json.environment.tenantId`. Do not use the old `msal.tenantId` as an authority source; it may be blank or stale from a previous registration.
+
 ```bash
 TENANT_ID="$ACTIVE_TENANT_ID"
 if [ -z "$TENANT_ID" ]; then
@@ -1073,103 +1073,75 @@ fi
 echo "$TENANT_ID"
 ```
 
-Three outcomes:
+If `TENANT_ID` is empty, rerun `scripts/resolve-environment.js` using the environment ID in `power.config.json`:
 
-| Outcome | Capture as | Action |
-|---|---|---|
-| Returns the same `tenantId` already in `auth.config.json` AND the user did not request a custom app reg | `TENANT_MATCH=template` | Silent default path (7.2) |
-| Returns any other GUID | `TENANT_MATCH=mismatch` | Create a new app registration by default (7.3) |
-| Empty / non-zero | `TENANT_MATCH=unknown` | Prompt user (7.4) |
+```bash
+ENV_ID=$(node -e "console.log(require('./power.config.json').environmentId || '')")
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$ENV_ID" > .resolved-environment.json
+TENANT_ID=$(node -e "const j=require('./.resolved-environment.json'); console.log(j.tenantId || '')")
+```
 
-#### 7.2 TENANT_MATCH=template — silent default
+If `TENANT_ID` is still empty, STOP and ask the user to fix environment resolution before continuing. Do not guess the tenant and do not copy `msal.tenantId` from `auth.config.json`.
 
-The selected Power Platform environment tenant matches the `tenantId` already in `auth.config.json`. The template registration will work as-is. Leave `auth.config.json` untouched.
+#### 7.2 Choose app registration path
+
+Ask one question, using the resolved tenant:
+
+> "This app needs an Entra ID app registration in tenant `<tenant-guid>` to sign in.
+>
+> Choose one:
+> (a) Paste an existing app registration client ID
+> (b) Create a new app registration from the Power Apps Wrap page, then paste its client ID
+> (c) Skip for now — configure auth later"
+
+Do not default to any option silently. The user must choose because app registration ownership varies by tenant/admin role.
+
+- **(a) Paste existing** — run the client-ID write path in 7.3.
+- **(b) Create new manually** — print the portal URL and checklist in 7.4, then ask for the client ID and run 7.3. If the user cannot finish creation, allow `skip` and follow 7.5.
+- **(c) Skip** — run the skip path in 7.5.
+
+#### 7.3 Write client ID into `auth.config.json`
+
+Ask:
+> "Paste the Entra ID app registration client ID for tenant `<tenant-guid>` (GUID format), or type `skip` to configure auth later:"
+
+If the user types `skip`, run 7.5. Otherwise validate UUID format. Write `auth.config.json` using `Edit`:
+- Replace `msal.clientId` with the user's value
+- Replace `msal.tenantId` with `<tenant-guid>` from 7.1
+- Preserve the existing top-level `environment` block if present. If it is missing but `.resolved-environment.json` exists, add that JSON as top-level `environment`.
+
+Do not create or modify the registration from this skill. The user owns it. Just wire the IDs into `auth.config.json`.
 
 Print:
-> `→ Selected Power Platform tenant matches the template registration. No app reg setup needed.`
+> "→ Wired app registration into auth.config.json.
+> Client ID: `<id>`
+> Tenant: `<tenant-guid>`"
 
 Jump to Step 8.
 
-#### 7.3 TENANT_MATCH=mismatch — create or wire app registration
+#### 7.4 Create a new app registration manually
 
-The selected Power Platform environment tenant differs from the `tenantId` in `auth.config.json`. Sign-in would fail with the current registration. A new Entra app registration must be configured for the correct tenant.
+Resolve the selected Power Platform environment ID from `$ACTIVE_ENV_ID`, then `power.config.json`. Print the public Power Apps Wrap URL:
+
+> "Open the Power Apps Wrap app-registration page for the selected environment:
+> https://make.powerapps.com/environments/<environment-id>/wraps#create-app-registration
+>
+> Create/register the app, then copy the Application (client) ID and paste it here.
+> If you cannot create it now, type `skip` and run `/set-app-registration-native` later."
+
+Tell the user the registration must be created/configured from the Power Apps Wrap page for the selected environment.
+
+After the user creates the registration, run 7.3 to capture and write the client ID.
+
+#### 7.5 Skip auth for later
+
+Write `auth.config.json` using `Edit`:
+- Set `msal.tenantId` to `<tenant-guid>` from 7.1
+- Leave `msal.clientId` as `""`
+- Preserve or add the top-level `environment` block from `.resolved-environment.json` if available
 
 Print:
-> `→ Selected Power Platform tenant <tenant-guid> differs from the current auth.config.json. Setting up an Entra app registration for this tenant.`
-
-Ask (single question, **default is create new**):
-  > "The app needs an Entra ID app registration in tenant `<tenant-guid>` to authenticate.
-  >
-  > What would you like to do?
-  > (a) Create a new app registration automatically (default)
-  > (b) Use an existing app registration — I already have a client ID
-  > (c) Skip for now — configure auth later"
-
-Default to **(a)** so empty input proceeds to create.
-
-- **(a) Create new (default)** — invoke `/set-app-registration-native` with the app display name from Step 2:
-
-  ```
-  Invoke skill: /set-app-registration-native
-
-  Arguments:
-    --name "<app display name from Step 2>"
-    --working-dir <working_dir>
-  ```
-
-  The skill creates the registration, writes `clientId` and `tenantId` into `auth.config.json`, and returns. Also update `tenantId` to `$TENANT_ID` from 7.1. Preserve the existing top-level `environment` block if present.
-
-  Print the redirect/permission checklist shown in 7.5, then continue to Step 8.
-
-- **(b) Use existing** — run the existing-registration path in 7.5 with known tenant `$TENANT_ID` from 7.1, then continue to Step 8.
-
-- **(c) Skip** — leave `auth.config.json` untouched, print:
-  > `⚠️ Auth is not configured. The app will fail to sign in. Run /set-app-registration-native after the scaffold to fix this.`
-
-  Jump to Step 8.
-
-#### 7.4 TENANT_MATCH=unknown — selected tenant unavailable
-
-Can't determine the selected Power Platform environment tenant. Prompt:
-
-> "I couldn't determine the Power Platform tenant ID from `resolve-environment.js`. Three options:
-> (a) Provide the Dataverse environment URL directly, then I'll auto-detect the tenant.
-> (b) Use the current auth.config.json defaults as-is (may cause sign-in failures if the tenant doesn't match).
-> (c) Paste tenant ID manually — I'll ask for tenant ID once, then the app registration client ID.
->
-> Pick (a), (b), or (c):"
-
-- **(a)** → ask for environment URL and re-run `scripts/resolve-environment.js <env-url>`, then re-evaluate from 7.1 (recursion ends after one re-check; if still unknown, fall to (b)/(c))
-- **(b)** → leave `auth.config.json` untouched, print a yellow warning that sign-in may fail if the tenant doesn't match, jump to Step 8
-- **(c)** → wire in existing (see 7.5 below)
-
-#### 7.5 Existing registration path
-
-Use this from 7.3 (known tenant) or 7.4 (manual tenant). If `$TENANT_ID` is already known, ask only for the client ID. If it is unknown, first ask:
-  > "Paste the tenant ID for your selected Power Platform environment (GUID format):"
-
-Validate UUID format, set `<tenant-guid>`, then ask:
-  > "Paste your existing Entra ID app registration client ID (GUID format):"
-
-Validate UUID format. Write `auth.config.json` using `Edit`:
-- Replace `clientId` with the user's value
-- Replace `tenantId` with `<tenant-guid>` (`$TENANT_ID` from 7.1 when known, otherwise the manually entered tenant)
-- Preserve the existing top-level `environment` block if present. If it is missing but `.resolved-environment.json` exists, add that JSON as top-level `environment`.
-
-**Do NOT run `az ad app create` or modify the registration** — the user owns it. Just wire the IDs into `auth.config.json`.
-
-Print:
-> "→ Wired existing registration into auth.config.json.
-> Client ID: `<id>`
-> Tenant: `<tenant-guid>`
->
-> ⚠️ Make sure the registration has these redirect URIs configured:
->   • `msauth.<ios.bundleIdentifier>://auth`              (iOS native MSAL)
->   • `msauth://<android.package>/<urldecoded-hash>`     (Android native MSAL, if shipping Android)
->   • `http://localhost`                                  (localhost PKCE redirect)
->   • `<scheme>://oauth-callback`                         (connector OAuth deep-link)
-> And the full Wrap permission set: Dynamics CRM, Azure API Connections, Microsoft Graph User.Read, Power Apps Service, Mobile Management, Power BI.
-> Run `/set-app-registration-native --update <client-id>` to apply all of this idempotently to your existing registration."
+> `⚠️ Auth client ID is not configured. The app will fail to sign in until you add one. Run /set-app-registration-native later, or paste an app registration client ID into auth.config.json for tenant <tenant-guid>.`
 
 Do NOT touch `src/playerConfig.ts` — auth identifiers live in `auth.config.json` only.
 
@@ -2163,7 +2135,8 @@ What now?
 1. Preview screens in browser  (/preview-screens)
 2. Deploy to tenant            (/deploy)
 3. Edit the app                (/edit-app)
-4. Add more capabilities       (/add-dataverse, /add-connector, /add-native, /set-app-registration-native)
+4. Add more capabilities       (/add-dataverse, /add-connector, /add-native)
+5. Configure auth later        (/set-app-registration-native)
 
 Which option? (or "none — I'll keep iterating locally")
 ```

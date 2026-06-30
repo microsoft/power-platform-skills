@@ -155,7 +155,7 @@ The skill checks these in Step 1 (Prerequisites) and stops with a clear error if
 | Tool | Min version | How to install / check |
 |---|---|---|
 | Node.js | **22.x** | `node -v` — install via [nvm](https://github.com/nvm-sh/nvm) (`nvm install 22 && nvm use 22`) |
-| `az` (Azure CLI) | **2.60+** | `az --version` — needed for Dataverse helper scripts and advanced `/set-app-registration-native` scenarios. Install via Homebrew: `brew install azure-cli` |
+| `az` (Azure CLI) | **2.60+** | `az --version` — needed for Dataverse helper scripts. Install via Homebrew: `brew install azure-cli` |
 | `git` | any recent | required for upstream template clone |
 
 Detailed matrix (and Xcode/Android Studio notes if you want local native builds): [`shared/version-check.md`](shared/version-check.md).
@@ -335,8 +335,8 @@ At Step 6.75 of `/create-mobile-app`, the `/design-system` skill offers a cost p
 
 | Command | Status | Description |
 | --- | --- | --- |
-| `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder, gates planning, runs `npx power-apps init`, asks for an existing app registration client ID, wires `auth.config.json`, applies data/native/connectors, builds screens, starts dev server |
-| `/set-app-registration-native` | ✅ advanced | Tenant-admin utility to create/update a native Wrap Entra app registration and permissions. Not used by the default create flow. Normal users paste an existing client ID during `/create-mobile-app`. |
+| `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder, gates planning, runs `npx power-apps init`, resolves the selected environment tenant, lets the user paste an app registration client ID, create one in the portal and paste it, or skip auth for later, then applies data/native/connectors, builds screens, starts dev server |
+| `/set-app-registration-native` | ✅ v0 | Manual auth helper — opens the Power Apps Wrap app-registration page for the selected environment, captures the pasted client ID, and writes `auth.config.json`. |
 | `/add-dataverse` | ✅ v0 | Add Dataverse — connect to existing tables, or create / extend tables in Tier 0 → N order via the Dataverse Web API, then generate TS services. Accepts ER diagrams via image / Mermaid / text, or spawns the data-model-architect agent. |
 | `/setup-datamodel` | ✅ v0 | Discoverable alias for `/add-dataverse` optimized for the design-first entry point ("how do I plan my Dataverse schema?"). Same workflow under a more searchable name. |
 | `/add-connector` | ✅ v0 | Generic connector — runs `npx power-apps add-data-source` for any first-party or custom connector |
@@ -383,7 +383,7 @@ At Step 6.75 of `/create-mobile-app`, the `/design-system` skill offers a cost p
 | File | Purpose |
 | --- | --- |
 | [`shared/shared-instructions.md`](shared/shared-instructions.md) | **Read first by every skill.** Cross-cutting safety rules, memory-bank protocol, preferred-environment policy, connector-first rule, OS-aware CLI invocation, command-failure handling, prompt-injection guard, sub-skill invocation, execution style. |
-| [`shared/version-check.md`](shared/version-check.md) | Single source of truth for minimum tool versions. Always-required: Node 22+, npm 10+. Conditional: `az` 2.60+ for ADO npm token setup, `/add-dataverse` token acquisition, and advanced `/set-app-registration-native`. Xcode/JDK/Android Studio are documented but **not gated by any skill** — user-managed if they want local native builds. |
+| [`shared/version-check.md`](shared/version-check.md) | Single source of truth for minimum tool versions. Always-required: Node 22+, npm 10+. Conditional: `az` 2.60+ for ADO npm token setup and `/add-dataverse` token acquisition. Xcode/JDK/Android Studio are documented but **not gated by any skill** — user-managed if they want local native builds. |
 | [`shared/preferred-environment.md`](shared/preferred-environment.md) | Environment selection priority: `power.config.json` → memory-bank → explicit environment URL/ID. Never silent switches. |
 | [`shared/connector-reference.md`](shared/connector-reference.md) | Connection ID workflow, common API names, dataset/table discovery, Grep-not-Read pattern for large generated files. |
 | [`shared/references/expo-mcp.md`](shared/references/expo-mcp.md) | **Opt-in MCP server** — the plugin's [`.mcp.json`](.mcp.json) registers `expo-mcp` (MIT, free, local-only) pointed at the Metro dev server (`http://localhost:8081`). Skills prefer 5 structured `expo.*` tools (project info, SDK-matched installs, plugin effects preview, build with parsed errors, doctor diagnostics) when the host advertises them; shell fallback otherwise. **Dev loop**: while `npm run dev` is running, the agent reads live runtime errors via MCP, fixes code, and Metro hot-reloads. No EAS/cloud calls. |

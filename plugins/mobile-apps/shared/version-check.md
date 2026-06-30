@@ -45,7 +45,7 @@ If `/add-native` adds `expo-camera`, the only changes that get committed are: `p
 
 | Tool | Required by | Min version | Check |
 |---|---|---|---|
-| Azure CLI (`az`) | ADO npm token setup, `/add-dataverse` token acquisition, advanced `/set-app-registration-native` | `2.60.0` | `az --version` |
+| Azure CLI (`az`) | ADO npm token setup, `/add-dataverse` token acquisition | `2.60.0` | `az --version` |
 
 If the user is just editing screens or running web, `az` does not need to be installed.
 
@@ -93,7 +93,7 @@ Most skills only need the always-required tier. Copy this into Step 1.
 node --version          # expect v22+
 
 # Conditionally required — only if THIS skill needs it
-# az account show                            # for /add-dataverse and advanced /set-app-registration-native
+# az account show                            # for /add-dataverse
 
 # Project-local (only if inside a project)
 test -f power.config.json && echo "OK: code app project"

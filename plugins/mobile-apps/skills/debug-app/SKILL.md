@@ -217,7 +217,7 @@ Use the `[TRACE` lines to walk the chain:
 
 6. **Auth state** (`src/playerConfig.ts`, `app.config.js`, `auth.config.json`, `useAuth()` hook)
    - 401 from the service wrapped as `{ error }` — the `[TRACE service-response]` log surfaces the error string.
-   - **OAuth deeplink handoff**: verify `app.config.js` → `expo.scheme` matches `src/playerConfig.ts` → `connectorOAuthRedirectUri`, AND the same redirect URI is in `auth.config.json` and the Entra ID registration. Cross-reference [skills/set-app-registration-native/SKILL.md](${CLAUDE_SKILL_DIR}/../../skills/set-app-registration-native/SKILL.md).
+   - **OAuth deeplink handoff**: verify `app.config.js` → `expo.scheme` matches `src/playerConfig.ts` → `connectorOAuthRedirectUri`, AND the same redirect URI is in `auth.config.json` and the Entra ID registration. If the app registration is missing, route the user to the Power Apps Wrap page via `/set-app-registration-native`.
 
 **Classify the `[TRACE` output:**
 
@@ -429,7 +429,7 @@ Read the relevant source file(s). Identify:
 | `src/hooks/`, `src/services/` | Inline edit via `Edit` tool |
 | `src/generated/` | **Do not edit.** Fix the upstream query or schema and run `npm run generate-schemas` |
 | Dataverse schema (column/table missing) | **Hand-off:** route user to `/add-dataverse`. Do not auto-edit. Read [skills/add-dataverse/references/dataverse-reference.md](${CLAUDE_SKILL_DIR}/../../skills/add-dataverse/references/dataverse-reference.md) before suggesting changes. |
-| Auth / MSAL (`AADSTS65001`, `AADSTS50011`) | **Hand-off:** route user to `/set-app-registration-native` (consent or redirect URI issue). Do not auto-edit. |
+| Auth / MSAL (`AADSTS65001`, `AADSTS50011`) | **Hand-off:** route user to the Power Apps Wrap page via `/set-app-registration-native`. Do not auto-edit registrations. |
 | Connection / connector reference missing | **Hand-off:** route user to `/list-connections` or `/add-connector`. |
 | Native module, `app.config.js`, `app.plugin.js`, `Podfile`, `build.gradle` | **Inform the user.** Do NOT auto-edit native config — print the error + suggested action and skip to next issue. |
 | Unrecognized error pattern | **Best-effort autonomous fix** — see D3.2 below. The skill attempts a single named hypothesis instead of stopping; the existing 2-attempt escalation rule is the safety net. |
