@@ -63,7 +63,7 @@ Look for `power.config.json` in the working directory:
 If present, read the `environmentId` field and resolve it with `scripts/resolve-environment.js`. Otherwise, ask the orchestrator for the target environment URL or ID from context and resolve that:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-environment.js" <environment-id-or-url>
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" <environment-id-or-url>
 ```
 
 Capture the **Environment URL** (e.g., `https://orgXXXXX.crm.dynamics.com`), **Environment ID**, and **Tenant ID** from the output. Use the URL as `<envUrl>` for subsequent script calls.
@@ -75,7 +75,7 @@ If resolution fails (not authenticated or environment not visible to the logged-
 `resolve-environment.js` only resolves environment metadata; it does not prove Dataverse user access. Verify access before metadata discovery:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
+node "${PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
 ```
 
 If it fails, prepend a "Dataverse access failed — `az login` required" note and skip Steps 3.
@@ -88,14 +88,14 @@ If it fails, prepend a "Dataverse access failed — `az login` required" note an
 Query custom tables only (standard tables are well-known):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions?\$select=LogicalName,DisplayName,Description&\$filter=IsCustomEntity eq true"
 ```
 
 For the relevant tables, fetch their user-defined columns in a single call (system columns like `createdon`, `modifiedby`, `statecode`, `ownerid`, `versionnumber` are filtered out automatically):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/list-table-columns.js" <envUrl> <table1> <table2> ...
+node "${PLUGIN_ROOT}/scripts/list-table-columns.js" <envUrl> <table1> <table2> ...
 ```
 
 Output is a clean JSON map of `{ tableName: [{ name, type, required }, ...] }`. Pass multiple tables in one invocation.
@@ -165,7 +165,7 @@ Build a table:
 
 ## Step 6 — Build Dependency Tiers
 
-Order new tables so foreign keys can resolve. From [data-architecture-reference.md](${CLAUDE_PLUGIN_ROOT}/skills/add-dataverse/references/data-architecture-reference.md):
+Order new tables so foreign keys can resolve. From [data-architecture-reference.md](${PLUGIN_ROOT}/skills/add-dataverse/references/data-architecture-reference.md):
 
 - **Tier 0** — reference tables (no lookups out)
 - **Tier 1** — primary entities (lookups to Tier 0)
@@ -181,7 +181,7 @@ Order new tables so foreign keys can resolve. From [data-architecture-reference.
 
 When `mode: cross-entity-audit`, the orchestrator's prompt also includes the path to the existing `_dm_section.md` so you can append (do NOT regenerate it from scratch — Steps 1–6 are skipped in this mode).
 
-This step exists because of the runtime constraint documented at [`shared/references/data-performance.md` § Cross-entity Reads](${CLAUDE_PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads) — the SDK has no `$expand`, so cross-entity fields on hot paths (lists, dashboards) MUST be denormalized via calculated columns at the data-model layer. This step proposes those calc columns based on the screen plan; `/setup-datamodel` (or `/add-dataverse`) Phase 6.1b creates them.
+This step exists because of the runtime constraint documented at [`shared/references/data-performance.md` § Cross-entity Reads](${PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads) — the SDK has no `$expand`, so cross-entity fields on hot paths (lists, dashboards) MUST be denormalized via calculated columns at the data-model layer. This step proposes those calc columns based on the screen plan; `/setup-datamodel` (or `/add-dataverse`) Phase 6.1b creates them.
 
 **Algorithm:**
 

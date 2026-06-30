@@ -259,7 +259,7 @@ Use alternate keys for unique business identifiers such as QR Code Value, SKU, a
 **Use the table `Keys` navigation collection. Do not use `CreateEntityKey`.** The reliable route is:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "EntityDefinitions(LogicalName='<table>')/Keys" \
   --body '<entity-key-json>' \
   --solution '<solution-uniquename>'
@@ -279,7 +279,7 @@ Body shape:
 Pre-flight and re-run check:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions(LogicalName='<table>')?\$select=LogicalName&\$expand=Keys(\$select=SchemaName,KeyAttributes,EntityKeyIndexStatus)"
 ```
 

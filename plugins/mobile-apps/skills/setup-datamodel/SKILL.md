@@ -140,7 +140,7 @@ Arguments:
 
 `/add-dataverse` creates tables in tier order, runs `npx power-apps add-data-source --api-id dataverse --org-url <envUrl> --resource-name <name>` per table from the app root, publishes customizations, writes `.datamodel-manifest.json`, and type-checks. Wait for it to return before Phase 6.
 
-**Calculated columns from the screen plan** — if `## Data Model` in the plan includes a `### Cross-entity Reads (auto-derived from screen plan)` subsection (the `data-model-architect`'s Step 6a addendum, approved at the Gate 1 addendum during planning), `/add-dataverse` Step 5c creates each row as a calculated column on the parent table via `scripts/create-calculated-column.js`. No additional action needed in this skill — `/add-dataverse` handles it. If the subsection is absent, Step 5c is silently skipped. See [`shared/references/data-performance.md` § Cross-entity Reads](${CLAUDE_PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads) for why this matters.
+**Calculated columns from the screen plan** — if `## Data Model` in the plan includes a `### Cross-entity Reads (auto-derived from screen plan)` subsection (the `data-model-architect`'s Step 6a addendum, approved at the Gate 1 addendum during planning), `/add-dataverse` Step 5c creates each row as a calculated column on the parent table via `scripts/create-calculated-column.js`. No additional action needed in this skill — `/add-dataverse` handles it. If the subsection is absent, Step 5c is silently skipped. See [`shared/references/data-performance.md` § Cross-entity Reads](${PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads) for why this matters.
 
 Skip if Phase 2 chose Path C (no Dataverse).
 

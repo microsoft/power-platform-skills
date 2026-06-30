@@ -412,7 +412,7 @@ If a tier fails partway and you need to retry, **do NOT write a hand-rolled `see
 1. **Re-query parent GUIDs by a stable business key.** For every parent table referenced in the failed tier's `@odata.bind` values, run a fresh GET filtered by the row's natural identifier (name, tail-number, code — whatever you used as the primary name when seeding). Example:
 
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
+   node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
      "<parentEntitySet>?\$select=<parentIdColumn>,<naturalKey>&\$filter=startswith(<naturalKey>,'<seed prefix>')&\$top=50"
    ```
 

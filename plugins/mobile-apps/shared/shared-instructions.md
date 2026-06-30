@@ -25,7 +25,7 @@ Per-project notebook persisted at `<working_dir>/memory-bank.md`. Every skill MU
 3. **Update at end** — append to the relevant section after a successful step. Use ISO dates. One-line entries. Never delete — mark `~~superseded~~`.
 4. **Resume on failure** — if a previous run died partway, the bank is the only record of where. Resume from the first incomplete step rather than re-running everything.
 
-If the bank doesn't exist yet, `/create-mobile-app` is responsible for copying the template (`${CLAUDE_PLUGIN_ROOT}/shared/memory-bank.md`) into the working directory at Step 6 (right after `npx power-apps init` succeeds).
+If the bank doesn't exist yet, `/create-mobile-app` is responsible for copying the template (`${PLUGIN_ROOT}/shared/memory-bank.md`) into the working directory at Step 6 (right after `npx power-apps init` succeeds).
 
 ---
 

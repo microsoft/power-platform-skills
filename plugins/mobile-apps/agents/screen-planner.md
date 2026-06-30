@@ -95,7 +95,7 @@ These are pure progress signals — never block on or check echo output. Use a s
 
 ### Step 0 — Load Industry Patterns
 
-If the planner's prompt includes an industry (from `## Design`), read `${CLAUDE_PLUGIN_ROOT}/shared/references/universal-patterns.md` and note which sections apply per the "When to Use This Document" table at the bottom. Incorporate relevant patterns into per-screen specs in Step 5 (e.g., sparklines in finance stat cards, offline sync bar for field apps, circular progress for health goals). Do NOT add patterns that don't match the app's purpose — only use what the industry mapping recommends.
+If the planner's prompt includes an industry (from `## Design`), read `${PLUGIN_ROOT}/shared/references/universal-patterns.md` and note which sections apply per the "When to Use This Document" table at the bottom. Incorporate relevant patterns into per-screen specs in Step 5 (e.g., sparklines in finance stat cards, offline sync bar for field apps, circular progress for health goals). Do NOT add patterns that don't match the app's purpose — only use what the industry mapping recommends.
 
 ### Step 0b — Load Design Direction (if present)
 
@@ -137,7 +137,7 @@ Default for a typical CRUD app: **Tabs + Stack**.
 **Print before starting:**
 > "→ Listing screens by archetype (List / Detail / Form / Auth / Tab-root / Modal-Sheet / Onboarding)…"
 
-Every user-facing screen must map to one of seven **screen archetypes** defined in `${CLAUDE_PLUGIN_ROOT}/shared/references/screen-templates.md`:
+Every user-facing screen must map to one of seven **screen archetypes** defined in `${PLUGIN_ROOT}/shared/references/screen-templates.md`:
 
 | Archetype | When to use | Required elements |
 |---|---|---|
@@ -175,7 +175,7 @@ The large title collapses on scroll (iOS Settings / Mail / App Store convention)
 
 ### List interaction defaults
 
-When a List spec includes destructive actions, multi-select, or refresh, default to native gesture patterns. The screen-builder follows recipes in [`shared/references/mobile-gesture-recipes.md`](${CLAUDE_PLUGIN_ROOT}/shared/references/mobile-gesture-recipes.md). Tag the per-screen spec so the builder knows which recipes apply:
+When a List spec includes destructive actions, multi-select, or refresh, default to native gesture patterns. The screen-builder follows recipes in [`shared/references/mobile-gesture-recipes.md`](${PLUGIN_ROOT}/shared/references/mobile-gesture-recipes.md). Tag the per-screen spec so the builder knows which recipes apply:
 
 | Interaction | Default pattern | Spec note to include |
 |---|---|---|
@@ -301,7 +301,7 @@ Pick a layout strategy per screen based on target platform:
 |  | Capabilities: `expo-camera`, `expo-document-picker`, `expo-print`, `expo-secure-store`, `expo-file-system`, `expo-sharing`, `@microsoft/extension-native-pdf-viewer`, `@microsoft/extension-pen-input`, `@microsoft/powerapps-geolocation-control` when allowlisted by the plan (see AGENTS.md §2) |
 |  | Calendar management views: `react-native-calendars` (`Calendar`, `CalendarList`, `Agenda`, `ExpandableCalendar`, `AgendaList`) when present in package.json |
 
-Reference `${CLAUDE_PLUGIN_ROOT}/shared/samples/_layout.tsx` for existing navigation layout patterns (tab structure, safe-area, stack options).
+Reference `${PLUGIN_ROOT}/shared/samples/_layout.tsx` for existing navigation layout patterns (tab structure, safe-area, stack options).
 
 ## Step 4 — Per-Screen Spec
 
@@ -327,7 +327,7 @@ Write these three answers as a `**Domain layout decisions:**` block at the top o
 
 ### Catalogue keys (resolve in the screen-templates reference, do NOT inline descriptions)
 
-The full descriptions for row styles, hero types, and operational patterns live in [`${CLAUDE_PLUGIN_ROOT}/shared/references/screen-templates.md`](../shared/references/screen-templates.md) under "Catalogue keys". Per-screen specs reference them by key only — never paste the description into the plan. Both you AND the screen-builder resolve the description from the reference at read time.
+The full descriptions for row styles, hero types, and operational patterns live in [`${PLUGIN_ROOT}/shared/references/screen-templates.md`](../shared/references/screen-templates.md) under "Catalogue keys". Per-screen specs reference them by key only — never paste the description into the plan. Both you AND the screen-builder resolve the description from the reference at read time.
 
 - **Row style keys** (List screens): `status-stripe-card` · `avatar-row` · `stat-card` · `media-tile` · `sentence-row` · `timeline-row` · `checklist-row`
 - **Hero type keys** (Detail screens): `status-header-band` · `stat-grid` · `image-hero` · `identity-block` · `summary-card` · `timeline-header` · `minimal-header`
@@ -378,7 +378,7 @@ For each screen the user adds, provide this compact shape:
 
   **`archetype_class` mapping from `Archetype`:** `List` → `list`; `Tab-root` → `tab-root` (or `dashboard` if `Operational pattern: home-dashboard` / `assignment-dashboard`); `Detail` → `detail`; `Form` / `Modal-Sheet` / `Auth` / `Empty-onboarding` → `detail` (cold path, single-record context).
 
-  Full reference: [`shared/references/data-performance.md` § Cross-entity Reads](${CLAUDE_PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads).
+  Full reference: [`shared/references/data-performance.md` § Cross-entity Reads](${PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads).
 
   Worked example for the inspections list screen (primary entity `cr3e9_inspection`):
 
@@ -680,7 +680,7 @@ Then append the markdown block to the Step 5 write target (`plan_path` in `phase
 
 After writing `_screens_section.md`, generate a `preview.html` from the plan specs — before any TSX exists. This gives the planner a visual to show the user at Gate 4.
 
-Load the phone frame template from `${CLAUDE_PLUGIN_ROOT}/shared/references/tamagui-html-mapping.md` Section 4. Then for each screen in the Screen Map (excluding baseline screens marked "keep"), synthesize representative HTML using the per-screen spec:
+Load the phone frame template from `${PLUGIN_ROOT}/shared/references/tamagui-html-mapping.md` Section 4. Then for each screen in the Screen Map (excluding baseline screens marked "keep"), synthesize representative HTML using the per-screen spec:
 
 - **Layout:** translate the `YStack`/`XStack`/`Card`/`Button` structure described in the spec to HTML/CSS using the component mapping (Section 1) and token tables (Section 2).
 - **Data:** for list screens, generate 3–4 plausible placeholder items based on the entity name (e.g. "Inspection #1042", "Inspection #1043"). For detail screens, populate fields with one representative placeholder record.

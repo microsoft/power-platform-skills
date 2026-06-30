@@ -25,7 +25,7 @@ connector wiring.
 2. Install the mobile-app skill from the Power Platform skills plugin:
 
 	```text
-	https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/plugin.json
+	https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/.plugin/plugin.json
 	```
 
 3. Open the template folder in VS Code and run the skill from Copilot Chat:

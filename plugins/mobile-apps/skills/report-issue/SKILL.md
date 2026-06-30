@@ -114,7 +114,7 @@ Print this block — user copies into a new issue:
 | | |
 |---|---|
 | Plugin | mobile-app |
-| Plugin version | <from .claude-plugin/plugin.json or "unknown"> |
+| Plugin version | <from .plugin/plugin.json, or legacy .claude-plugin/plugin.json fallback, or "unknown"> |
 | OS | <uname output> |
 | Node | <version> |
 | npm | <version> |

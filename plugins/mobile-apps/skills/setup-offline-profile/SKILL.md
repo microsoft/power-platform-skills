@@ -152,7 +152,7 @@ Spawn via `Task`:
 agent: mobile-app:offline-profile-architect
 prompt:
   Working directory: <workdir>
-  Plugin root: ${CLAUDE_PLUGIN_ROOT}
+  Plugin root: ${PLUGIN_ROOT}
   Environment URL: <envUrl>
   Publisher prefix: <prefix>
   Mode: default

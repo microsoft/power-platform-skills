@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/validate-write-safety.js\"",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','validate-write-safety.js'));\"",
             "timeout": 10
           }
         ]
@@ -15,11 +15,11 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Skill",
+        "matcher": "Skill|skill",
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-skill-posttool-validation.js\"",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','run-skill-posttool-validation.js'));\"",
             "timeout": 30
           }
         ]
@@ -29,42 +29,42 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/validate-icon-imports.js\"",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','validate-icon-imports.js'));\"",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/validate-screen-quality.js\"",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','validate-screen-quality.js'));\"",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/validate-color-contrast.js\"",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','validate-color-contrast.js'));\"",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/validate-connector-first.js\"",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','validate-connector-first.js'));\"",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/validate-package-deps.js\"",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','validate-package-deps.js'));\"",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/validate-dataverse-payload.js\"",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','validate-dataverse-payload.js'));\"",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/validate-dataverse-heavy-lists.js\"",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','validate-dataverse-heavy-lists.js'));\"",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/validate-navigation-idempotency.js\"",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','validate-navigation-idempotency.js'));\"",
             "timeout": 10
           }
         ]

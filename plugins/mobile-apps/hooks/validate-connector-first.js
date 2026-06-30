@@ -59,7 +59,8 @@ function isWatched(fp) {
   if (typeof fp !== 'string' || !WATCHED_EXT.test(fp)) return false;
 
   const resolved = path.resolve(fp);
-  const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT ? path.resolve(process.env.CLAUDE_PLUGIN_ROOT) : null;
+  const pluginRootValue = process.env.PLUGIN_ROOT || process.env.CLAUDE_PLUGIN_ROOT;
+  const pluginRoot = pluginRootValue ? path.resolve(pluginRootValue) : null;
   if (pluginRoot && (resolved === pluginRoot || resolved.startsWith(pluginRoot + path.sep))) return false;
 
   const norm = fp.replace(/\\/g, '/');

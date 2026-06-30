@@ -68,19 +68,19 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   **Verification (post-scaffold):** the doctor `node scripts/check-routes.js` parses every `router.push` / `router.replace` / `<Link href=>` and every `useLocalSearchParams<{}>` across `app/` and reports drift. Run it after any hand-edit. Wired into `package.json` as `npm run check-routes`.
 - **Your layout comes from your spec + design fields — NOT from the samples.** The sample files (`screen-list.tsx`, `screen-detail.tsx`, `screen-form.tsx`) exist to show you correct Tamagui API, import patterns, and TypeScript idioms. Read them for *how to write code*, not *what to build*. Every screen's structure, density, hierarchy, and visual emphasis must come from Step 1 (spec) + Steps 1a–1c (design fields). A screen that looks like the sample with a different entity name is a failure — even if it compiles and passes the quality checklist.
 - **Required reading before writing any TSX.** You MUST load these from the plugin root:
-  - `${CLAUDE_PLUGIN_ROOT}/shared/references/mobile-design-philosophy.md` — visual hierarchy, spacing rhythm, touch zones, quality bar (read FIRST — this shapes all decisions)
-  - `${CLAUDE_PLUGIN_ROOT}/shared/references/mobile-ui-patterns.md` — archetype rules, required states, lists/forms patterns
-  - `${CLAUDE_PLUGIN_ROOT}/shared/references/screen-templates.md` — long-form archetype details for the archetype your spec declares
-  - `${CLAUDE_PLUGIN_ROOT}/shared/references/accessibility-checklist.md` — universal a11y rules
+  - `${PLUGIN_ROOT}/shared/references/mobile-design-philosophy.md` — visual hierarchy, spacing rhythm, touch zones, quality bar (read FIRST — this shapes all decisions)
+  - `${PLUGIN_ROOT}/shared/references/mobile-ui-patterns.md` — archetype rules, required states, lists/forms patterns
+  - `${PLUGIN_ROOT}/shared/references/screen-templates.md` — long-form archetype details for the archetype your spec declares
+  - `${PLUGIN_ROOT}/shared/references/accessibility-checklist.md` — universal a11y rules
   - The matching sample for your archetype — **read for code patterns and API only, not as a layout template**:
-    - List → `${CLAUDE_PLUGIN_ROOT}/shared/samples/screen-list.tsx`
-    - Detail → `${CLAUDE_PLUGIN_ROOT}/shared/samples/screen-detail.tsx`
-    - Form → `${CLAUDE_PLUGIN_ROOT}/shared/samples/screen-form.tsx`
-  - For component snippets: `${CLAUDE_PLUGIN_ROOT}/shared/references/tamagui-component-recipes.md`
-  - **If the plan's `## Design` section names an industry**, also read `${CLAUDE_PLUGIN_ROOT}/shared/references/universal-patterns.md` and apply the relevant sections per the "When to Use This Document" table at the bottom. For example: finance → Sections 2, 3, 5, 6, 7, 19, 20; field/ops → Sections 8, 9, 10, 14, 15, 23, 24. Skip this file only if the plan says "Industry: productivity" with no further industry signal.
+    - List → `${PLUGIN_ROOT}/shared/samples/screen-list.tsx`
+    - Detail → `${PLUGIN_ROOT}/shared/samples/screen-detail.tsx`
+    - Form → `${PLUGIN_ROOT}/shared/samples/screen-form.tsx`
+  - For component snippets: `${PLUGIN_ROOT}/shared/references/tamagui-component-recipes.md`
+  - **If the plan's `## Design` section names an industry**, also read `${PLUGIN_ROOT}/shared/references/universal-patterns.md` and apply the relevant sections per the "When to Use This Document" table at the bottom. For example: finance → Sections 2, 3, 5, 6, 7, 19, 20; field/ops → Sections 8, 9, 10, 14, 15, 23, 24. Skip this file only if the plan says "Industry: productivity" with no further industry signal.
   - **If the plan's `## Design` section specifies a non-default font pairing or non-Professional copy tone**, also read:
-    - `${CLAUDE_PLUGIN_ROOT}/shared/references/typography-and-tone.md` — font pairing configs, tone profiles with example copy per archetype
-    - `${CLAUDE_PLUGIN_ROOT}/shared/references/color-palette-architecture.md` — named palette model, dark mode inversion rules (only if plan specifies custom palette)
+    - `${PLUGIN_ROOT}/shared/references/typography-and-tone.md` — font pairing configs, tone profiles with example copy per archetype
+    - `${PLUGIN_ROOT}/shared/references/color-palette-architecture.md` — named palette model, dark mode inversion rules (only if plan specifies custom palette)
 - **The Tamagui × Expo scope rule** (apply mechanically, no judgment calls):
 
   | Use **Tamagui** for | Use **Expo Router / Expo skill / RN** for |
@@ -111,7 +111,7 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   ```
 
   For lookup labels, select the real `_<lookup>_value` field in your `$select` and read with `lookupName(record, '<lookupLogicalName>')`. For choice / status / boolean / datetime / money labels, read with `formattedValue(record, '<columnLogicalName>')` or fall back to the generated option const. On bounded lists that use `useSearchFilter(...)`, fields MUST be real string properties from generated types; never add an inferred display-name field just to make search prettier. Cursor lists do not use `useSearchFilter`; they push search into the service `filter` option.
-- **HARD RULE — Cross-entity Field Resolution.** Before writing the screen's `select: [...]` or load step, walk every UI field your spec displays. For each field that sources data from an entity OTHER than the screen's primary fetch target, follow this algorithm exactly. The full reference (with cost-profile rationale, calc-column naming, and pattern examples) is at [`shared/references/data-performance.md` § Cross-entity Reads](${CLAUDE_PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads). The screen-builder MUST apply the rule mechanically — do NOT invent your own resolution.
+- **HARD RULE — Cross-entity Field Resolution.** Before writing the screen's `select: [...]` or load step, walk every UI field your spec displays. For each field that sources data from an entity OTHER than the screen's primary fetch target, follow this algorithm exactly. The full reference (with cost-profile rationale, calc-column naming, and pattern examples) is at [`shared/references/data-performance.md` § Cross-entity Reads](${PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads). The screen-builder MUST apply the rule mechanically — do NOT invent your own resolution.
 
   1. **Calc column check first.** Open `src/generated/models/<PrimaryEntity>Model.ts` and search for a column matching `<prefix>_<field>_calc` (or any `_calc`-suffixed column resolving the field you need). If present, add it to your `select: [...]` and render directly. Done — no chained fetch needed.
   2. **No calc column? Branch on screen archetype × cardinality** (archetype is in your spec under `**Archetype:**`):
@@ -186,10 +186,10 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   - **Finding the right names:**
     - **Schema name** (left of `@odata.bind`): the lookup column's PascalCase logical name, usually exposed in the generated model file (`src/generated/models/<Entity>Model.ts`). Often differs from the `_value` read property by case + dropped underscore (read `_cr3e9_project_value`, write `cr3e9_Project@odata.bind`).
     - **Entity set name** (inside `/(...)`): always the **plural** logical collection name — `cr3e9_projects`, not `cr3e9_project`. Use `pluralName` from the model file or check the generated service filename (`Cr3e9_projectsService.ts` ⇒ entity set is `cr3e9_projects`).
-    - When in doubt, grep `@odata.bind` in `src/generated/services/` for an existing example, or ask the `microsoft-learn` MCP server. Full reference: [`skills/add-dataverse/references/dataverse-reference.md` § Setting Lookups](${CLAUDE_PLUGIN_ROOT}/skills/add-dataverse/references/dataverse-reference.md#setting-lookups-creatingupdating-records).
+    - When in doubt, grep `@odata.bind` in `src/generated/services/` for an existing example, or ask the `microsoft-learn` MCP server. Full reference: [`skills/add-dataverse/references/dataverse-reference.md` § Setting Lookups](${PLUGIN_ROOT}/skills/add-dataverse/references/dataverse-reference.md#setting-lookups-creatingupdating-records).
 
   - **Form picker UI** — when the form's spec calls for a parent picker (e.g., "select Project"), the picker stores the selected record's `id` (GUID string), and the submit handler converts it to the bind string at write time. Never store the bind string in component state — only in the API payload.
-- **Pagination rule:** If your spec says `pagination: cursor`, do NOT use `useListData` or `useSearchFilter`. Use the skeleton's `useCursorListData` call, React Query's `useInfiniteQuery`, or an app-specific `use<Entity>CursorList` hook with FlatList `onEndReached` per the pattern in [`data-performance.md`](${CLAUDE_PLUGIN_ROOT}/shared/references/data-performance.md). Never fetch all records at once, and never treat `top: 50` as pagination. Real generated Dataverse services use SDK `maxPageSize` for page size and return `IOperationResult.skipToken` for the next page; pass that value back as `skipToken`. Always include deterministic `orderBy` with a unique key and `select` in the service call. Push search/filter into Dataverse with `filter`. If the generated service in the app does not expose `maxPageSize`/`skipToken` for an unbounded table, return `BLOCKED [<screen_name>]: generated service does not expose cursor paging for <Service>; do not downgrade to useListData`.
+- **Pagination rule:** If your spec says `pagination: cursor`, do NOT use `useListData` or `useSearchFilter`. Use the skeleton's `useCursorListData` call, React Query's `useInfiniteQuery`, or an app-specific `use<Entity>CursorList` hook with FlatList `onEndReached` per the pattern in [`data-performance.md`](${PLUGIN_ROOT}/shared/references/data-performance.md). Never fetch all records at once, and never treat `top: 50` as pagination. Real generated Dataverse services use SDK `maxPageSize` for page size and return `IOperationResult.skipToken` for the next page; pass that value back as `skipToken`. Always include deterministic `orderBy` with a unique key and `select` in the service call. Push search/filter into Dataverse with `filter`. If the generated service in the app does not expose `maxPageSize`/`skipToken` for an unbounded table, return `BLOCKED [<screen_name>]: generated service does not expose cursor paging for <Service>; do not downgrade to useListData`.
 - **Dataverse file/image column controls — use `power-apps-native-host` components, NOT raw Expo modules.** When a form field binds to a Dataverse **File** column (`FileAttributeMetadata`), render `<FilePicker>` from `power-apps-native-host`; persist via generated `Service.upload(...)` after the normal create/update, and use `Service.downloadFile(...)` for read/view actions. When it binds to a Dataverse **Image** column (`ImageAttributeMetadata`), render `<ImagePicker>` from `power-apps-native-host`; capture `PickedImageInfo` via `onImageChange`, persist via generated `Service.upload(...)`, and use `Service.downloadImage(...)` for read/view actions. Do not persist picker-selected image/file content with `Service.update(...)`. Both controls adopt brand colors from the nearest `ThemeProvider` (provided by `PowerAppsProvider`). Do not hand-roll Dataverse file/image UI with `expo-document-picker`, `expo-image-picker`, `expo-file-system`, or `expo-sharing`. The full usage pattern and native-wrapper boundary live in [`skills/add-native/SKILL.md`](../skills/add-native/SKILL.md#fileimage-picker-ownership).
 
 - **Custom camera URI uploads to Dataverse Image columns use base64 update, not File/Blob upload.** For `takePhoto()` / `pickImage()` URI flows in native screens, read the local URI as base64 (Expo file APIs) and call `Service.update(recordId, { [imageColumnName]: base64 })`. Do not coerce RN camera URIs into browser-style `File`/`Blob` upload payloads for this path.
@@ -670,7 +670,7 @@ Grep pattern="async <MethodName>" path="<working_dir>/src/generated/services/<Se
 
 If the service file does not exist (neither in the plan table nor on disk), still write the screen with the correct expected import path and method shape from the plan. Add a `// TODO(connector-not-yet-added): run /add-dataverse to generate <ServiceName>` comment at the import. Do NOT rename the service to one that does exist — that hides the problem.
 
-**If your screen will use any gesture from `react-native-gesture-handler`** (Recipes A or B in [`mobile-gesture-recipes.md`](${CLAUDE_PLUGIN_ROOT}/shared/references/mobile-gesture-recipes.md)), verify `<GestureHandlerRootView>` wraps the app in `app/_layout.tsx`:
+**If your screen will use any gesture from `react-native-gesture-handler`** (Recipes A or B in [`mobile-gesture-recipes.md`](${PLUGIN_ROOT}/shared/references/mobile-gesture-recipes.md)), verify `<GestureHandlerRootView>` wraps the app in `app/_layout.tsx`:
 
 ```text
 Grep pattern="GestureHandlerRootView" path="<working_dir>/app/_layout.tsx"
@@ -977,7 +977,7 @@ Apply these to every generated screen unless the per-screen spec explicitly over
 
 ### Native interaction rules (back button + gestures)
 
-Follow these whenever the spec touches navigation, list rows, or modals. Recipes referenced below live in [`shared/references/mobile-gesture-recipes.md`](${CLAUDE_PLUGIN_ROOT}/shared/references/mobile-gesture-recipes.md).
+Follow these whenever the spec touches navigation, list rows, or modals. Recipes referenced below live in [`shared/references/mobile-gesture-recipes.md`](${PLUGIN_ROOT}/shared/references/mobile-gesture-recipes.md).
 
 31. **Android hardware back button — dirty-state guard.** For any `Form`, `Detail`-with-edits, or `Modal` screen that holds unsaved state, register a `BackHandler` listener inside `useFocusEffect`. If the screen is dirty, intercept the event and show the discard-confirm dialog; otherwise return `false` and let RN pop the stack. List and read-only Detail screens do NOT need this rule — the default pop is correct.
 
@@ -999,7 +999,7 @@ Follow these whenever the spec touches navigation, list rows, or modals. Recipes
     }, [formState.isDirty]));
     ```
 
-    Reference implementation: [`shared/samples/screen-form.tsx`](${CLAUDE_PLUGIN_ROOT}/shared/samples/screen-form.tsx) `<CancelButton>` + the `useFocusEffect` block. Without this rule, Android users hit hardware back to dismiss the keyboard and lose their entire form with no warning.
+    Reference implementation: [`shared/samples/screen-form.tsx`](${PLUGIN_ROOT}/shared/samples/screen-form.tsx) `<CancelButton>` + the `useFocusEffect` block. Without this rule, Android users hit hardware back to dismiss the keyboard and lose their entire form with no warning.
 
 32. **iOS swipe-back gesture — disable only when it conflicts.** Stack screens get edge-swipe back for free. DISABLE the gesture only on screens with horizontal content (image carousel, swipe-to-delete row, image pan/zoom) where the system back-swipe would conflict:
 
@@ -1009,11 +1009,11 @@ Follow these whenever the spec touches navigation, list rows, or modals. Recipes
 
     When you disable it, the header back button MUST remain visible — iOS users still need a back path. Never disable globally; only on the specific conflicting screen.
 
-33. **Swipe-to-delete on list rows.** When the spec mentions "swipe to delete" or any list-row destructive action, follow Recipe A in [`mobile-gesture-recipes.md`](${CLAUDE_PLUGIN_ROOT}/shared/references/mobile-gesture-recipes.md). Use `Swipeable` from `react-native-gesture-handler` with `rightThreshold: 80` and `overshootRight: false`. Destructive actions require a SECOND tap on the revealed `Delete` button — never trigger on swipe-release alone. Provide an accessible overflow action in the row as a secondary path.
+33. **Swipe-to-delete on list rows.** When the spec mentions "swipe to delete" or any list-row destructive action, follow Recipe A in [`mobile-gesture-recipes.md`](${PLUGIN_ROOT}/shared/references/mobile-gesture-recipes.md). Use `Swipeable` from `react-native-gesture-handler` with `rightThreshold: 80` and `overshootRight: false`. Destructive actions require a SECOND tap on the revealed `Delete` button — never trigger on swipe-release alone. Provide an accessible overflow action in the row as a secondary path.
 
   Do NOT render a header trash icon as the only delete path. Header trash is acceptable as an accessibility fallback, but the swipe IS the gesture.
 
-34. **Long-press for multi-select / context menus.** When the spec mentions "long press to select", "bulk operations", or "contextual menu", follow Recipe B in [`mobile-gesture-recipes.md`](${CLAUDE_PLUGIN_ROOT}/shared/references/mobile-gesture-recipes.md). Use `delayLongPress: 400` (matches iOS, not RN's 500 default) and pair the trigger with a visible state change (selection-mode toolbar, highlighted row, action sheet). Never use long-press for primary actions — it is undiscoverable.
+34. **Long-press for multi-select / context menus.** When the spec mentions "long press to select", "bulk operations", or "contextual menu", follow Recipe B in [`mobile-gesture-recipes.md`](${PLUGIN_ROOT}/shared/references/mobile-gesture-recipes.md). Use `delayLongPress: 400` (matches iOS, not RN's 500 default) and pair the trigger with a visible state change (selection-mode toolbar, highlighted row, action sheet). Never use long-press for primary actions — it is undiscoverable.
 
 36. **`<GestureHandlerRootView>` at app root.** All `react-native-gesture-handler` primitives (`Swipeable`, `LongPressGestureHandler`, etc.) require a `<GestureHandlerRootView style={{ flex: 1 }}>` wrapping the entire app in `app/_layout.tsx`. Without it, gestures silently no-op on Android. Verify during Step 2 (Inspect Available Services); if missing, add it as a one-line fix — this is a template hole, not a per-screen concern, but every gesture-using screen depends on it.
 
@@ -1055,7 +1055,7 @@ Follow these whenever the spec touches navigation, list rows, or modals. Recipes
 
     Without `react-hook-form` (e.g. a Detail screen calling a mutation directly), gate on the mutation's pending state — `useMutation`'s `isPending`, `useState` + `try/finally`, etc. The rule is the *behavior*, not the source of the flag.
 
-    Reference: [`shared/samples/screen-form.tsx:183-185`](${CLAUDE_PLUGIN_ROOT}/shared/samples/screen-form.tsx). Without this rule users double-tap when the network is slow, which fires duplicate writes and leaves orphaned records.
+    Reference: [`shared/samples/screen-form.tsx:183-185`](${PLUGIN_ROOT}/shared/samples/screen-form.tsx). Without this rule users double-tap when the network is slow, which fires duplicate writes and leaves orphaned records.
 
 ### Native chrome + connectivity rules
 

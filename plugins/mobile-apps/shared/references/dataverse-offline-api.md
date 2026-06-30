@@ -15,7 +15,7 @@ Field semantics are in [offline-profile-schema.md](./offline-profile-schema.md).
 **Why not `dataverse-request.js`:** the PUT needs the `MSCRM.MergeLabels: true` header to preserve display labels, and the generic script does not accept arbitrary headers. Use the purpose-built helper instead:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/update-entity-offline-flags.js" <envUrl> \
+node "${PLUGIN_ROOT}/scripts/update-entity-offline-flags.js" <envUrl> \
   --table <table_logical_name> \
   --offline true \
   --tracking true
@@ -41,7 +41,7 @@ After all PUTs land, publish customizations once at the end of Step 5 (see §2 b
 **Use case:** End of `/enable-tables-offline` Step 5 (after EntityMetadata PUTs), end of `/setup-offline-profile` Step 8 (after profile creation).
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "PublishAllXml" --body '{}'
 ```
 
@@ -59,7 +59,7 @@ If publish fails (rare — usually a transient server lock):
 **Use case:** `/setup-offline-profile` Step 5.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "mobileofflineprofiles" \
   --body '{
     "name": "<App Name> Offline Profile",
@@ -79,7 +79,7 @@ Expected: `204 No Content` with body `{ ... }` plus `headers["odata-entityid"]: 
 **Use case:** `/setup-offline-profile` Step 6. Issue one POST per table in the profile, sequentially.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "mobileofflineprofileitems" \
   --body '{
     "name": "<Table Display Name>",
@@ -115,10 +115,10 @@ Expected: `204` with `OData-EntityId` → capture `mobileofflineprofileitemid`.
 Two queries cover both directions of N:1 / 1:N from a parent table:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions(LogicalName='<table>')/ManyToOneRelationships?\$select=MetadataId,SchemaName,ReferencingEntity,ReferencedEntity"
 
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions(LogicalName='<table>')/OneToManyRelationships?\$select=MetadataId,SchemaName,ReferencingEntity,ReferencedEntity"
 ```
 
@@ -133,7 +133,7 @@ Cache the lookup per parent table — re-querying for each association adds sign
 File and Image columns participate in offline sync as relationships from the parent table to the image attribute. Discover via:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions(LogicalName='<table>')/Attributes?\$filter=AttributeType eq 'Image' or AttributeType eq 'File'&\$select=MetadataId,LogicalName,SchemaName,AttributeType"
 ```
 
@@ -144,7 +144,7 @@ Each result is added as an association exactly like a relationship — `Metadata
 The maker portal queries via FetchXML (joins through the parent profile item to filter by profile):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "mobileofflineprofileitemassociations?fetchXml=<URL-ENCODED-FETCH>"
 ```
 
@@ -177,7 +177,7 @@ Returns the existing associations across all items in the profile. Use this for 
 **Use case:** `/setup-offline-profile` Step 7a, or `/add-table-to-offline-profile` after adding a new table. Issue one POST per (parent-item, relationship) pair — best inside a `$batch` changeset so a partial failure rolls back all of them (see §6a below).
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "mobileofflineprofileitemassociations" \
   --body '{
     "name": "<relationship-schema-name>",
@@ -257,7 +257,7 @@ The skill should:
 **Use case:** `/setup-offline-profile` Step 7b. After Gate 3 captures user-confirmed column lists and sync frequency edits, PATCH each item.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> PATCH \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> PATCH \
   "mobileofflineprofileitems(<itemId>)" \
   --body '{
     "selectedcolumns": "{\"Columns\":[\"cr123_title\",\"cr123_body\",\"modifiedon\",\"statecode\"]}",
@@ -285,7 +285,7 @@ Expected: `204 No Content`.
 **Recommended (the maker portal's pattern, empirical 2026-05-24):** targeted `PublishXml` — publishes ONLY the specific profile, not the entire org's customizations. Avoids the rate-limit storms `PublishAllXml` triggers on shared envs.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "PublishXml" --body '{
     "ParameterXml": "<publish><mobileofflineprofiles><mobileofflineprofile><profileId></mobileofflineprofile></mobileofflineprofiles></publish>"
   }'
@@ -298,7 +298,7 @@ Expected: `204 No Content`. The maker portal makes this call inside a `$batch` c
 **Fallback — `PublishAllXml`:** the v0.1 skill used this. It works but rate-limits aggressively on shared envs (empirical: 4-retry 429 backoff → client timeout twice on chanel-rm + offline-demo-fixture demos). Useful as a last resort if the targeted publish fails:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "PublishAllXml" --body '{}'
 ```
 
@@ -315,7 +315,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
 After publish, re-GET the profile and assert state:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "mobileofflineprofiles(<profileId>)?\$select=publishedon,componentstate,isvalidated"
 ```
 
@@ -329,11 +329,11 @@ Expected post-publish: `componentstate=0` (Published), `publishedon=<iso8601>` (
 
 ```bash
 # List
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "mobileofflineprofiles?\$select=mobileofflineprofileid,name,description,publishedon,createdon"
 
 # Detail (with items + associations)
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "mobileofflineprofiles(<profileId>)?\$expand=MobileOfflineProfile_MobileOfflineProfileItem(\$select=mobileofflineprofileitemid,selectedentitytypecode,recorddistributioncriteria,recordsownedbyme,recordsownedbymyteam,recordsownedbymybusinessunit,syncintervalinminutes,selectedcolumns;\$expand=MobileOfflineProfileItem_MobileOfflineProfileItemAssociation(\$select=mobileofflineprofileitemassociationid,relationshipid,relationshipname))"
 ```
 
@@ -346,7 +346,7 @@ The second query is the canonical "read full profile state" call — also used b
 **Use case:** `/setup-offline-profile` Step 1b. If a prior session left a half-built profile in `memory-bank.md` with `status: in-progress`, and the user picks "start fresh".
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> DELETE \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> DELETE \
   "mobileofflineprofiles(<profileId>)"
 ```
 
@@ -363,7 +363,7 @@ Cascade-deletes via the `MobileOfflineProfile_MobileOfflineProfileItem` and `Mob
 ### User membership
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "usermobileofflineprofilememberships" \
   --body '{
     "MobileOfflineProfileId@odata.bind": "/mobileofflineprofiles(<profileId>)",
@@ -375,7 +375,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
 ### Team membership
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "teammobileofflineprofilememberships" \
   --body '{
     "MobileOfflineProfileId@odata.bind": "/mobileofflineprofiles(<profileId>)",
@@ -387,10 +387,10 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
 ### Listing existing memberships (for idempotency)
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "usermobileofflineprofilememberships?\$filter=_mobileofflineprofileid_value eq <profileId>&\$expand=systemuserid_systemuser(\$select=domainname)"
 
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "teammobileofflineprofilememberships?\$filter=_mobileofflineprofileid_value eq <profileId>&\$expand=teamid_team(\$select=name)"
 ```
 
@@ -401,7 +401,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
 ### DELETE (unassign)
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> DELETE \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> DELETE \
   "usermobileofflineprofilememberships(<membershipid>)"
 ```
 

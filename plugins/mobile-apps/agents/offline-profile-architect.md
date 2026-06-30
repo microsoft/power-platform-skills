@@ -83,7 +83,7 @@ tables:
 For each table in your list, query:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions(LogicalName='<table>')?\$select=IsAvailableOffline,ChangeTrackingEnabled,OwnershipType"
 ```
 
@@ -101,7 +101,7 @@ Also capture `OwnershipType` per table:
 > "→ Listing existing mobile offline profiles in the environment…"
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "mobileofflineprofiles?\$select=name,description,publishedon,createdon&\$expand=MobileOfflineProfile_MobileOfflineProfileItem(\$select=selectedentitytypecode,recorddistributioncriteria)"
 ```
 
@@ -155,7 +155,7 @@ A table qualifies as "pure child" (criterion #3) when:
 **Row count probe:**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "<entitysetname>?\$count=true&\$top=0"
 ```
 
@@ -193,7 +193,7 @@ This audit is what makes the agent deterministic and reviewable — the orchestr
 For each table T in the profile that is a candidate **parent** (could have children referencing it), query:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions(LogicalName='<T>')/OneToManyRelationships?\$select=MetadataId,SchemaName,ReferencingEntity,ReferencedEntity,ReferencingAttribute"
 ```
 

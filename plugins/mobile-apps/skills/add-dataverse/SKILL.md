@@ -554,7 +554,7 @@ After all mutations, re-run the existing-tables query (Step 4) to confirm everyt
 
 **Run condition:** the planner / data-model-architect emits a `### Cross-entity Reads (auto-derived from screen plan)` subsection inside `## Data Model` of `native-app-plan.md` when the screen plan reads any field from a related entity. Parse that subsection. If absent or empty, **skip Step 5c entirely** — proceed to Step 6.
 
-This step exists because of the runtime constraint documented at [`shared/references/data-performance.md` § Cross-entity Reads](${CLAUDE_PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads): the SDK has no `$expand`, so cross-entity fields on hot paths (lists, dashboards, tab roots) MUST be denormalized via calculated columns at the data-model layer. The `### Chained-fetch fields (informational)` subsection (if present) is documentation only — the screen-builder handles those at scaffold time, no schema change.
+This step exists because of the runtime constraint documented at [`shared/references/data-performance.md` § Cross-entity Reads](${PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads): the SDK has no `$expand`, so cross-entity fields on hot paths (lists, dashboards, tab roots) MUST be denormalized via calculated columns at the data-model layer. The `### Chained-fetch fields (informational)` subsection (if present) is documentation only — the screen-builder handles those at scaffold time, no schema change.
 
 **Algorithm:**
 
@@ -563,7 +563,7 @@ This step exists because of the runtime constraint documented at [`shared/refere
 3. **Per row**, invoke the helper:
 
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/create-calculated-column.js" <envUrl> \
+   node "${PLUGIN_ROOT}/scripts/create-calculated-column.js" <envUrl> \
      --table <on-table> \
      --column <calc-column-logical-name> \
      --type <Type column verbatim: string|datetime|decimal|integer|boolean> \

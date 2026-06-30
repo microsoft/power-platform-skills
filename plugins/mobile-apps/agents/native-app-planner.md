@@ -23,7 +23,7 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
 - The user's app requirements (`$ARGUMENTS`)
 - Wizard answers collected by the skill (target users + device, target platforms, aesthetic, features)
 - The working directory where `native-app-plan.md` should be written
-- The plugin root directory (`${CLAUDE_PLUGIN_ROOT}`)
+- The plugin root directory (`${PLUGIN_ROOT}`)
 
 ## Hard Rules
 
@@ -59,10 +59,10 @@ The orchestrator's Step 3 has a documented inline-gate fallback for exactly this
 
 Read these references once before doing anything else:
 
-- `${CLAUDE_PLUGIN_ROOT}/AGENTS.md` — plugin conventions
-- `${CLAUDE_PLUGIN_ROOT}/template/package.json` — **the native-capability allowlist**. The set of native modules in this file is fixed by the rewrap pipeline; you may NEVER propose a capability whose module is not present here. See Step 3 for how this list is enforced.
+- `${PLUGIN_ROOT}/AGENTS.md` — plugin conventions
+- `${PLUGIN_ROOT}/template/package.json` — **the native-capability allowlist**. The set of native modules in this file is fixed by the rewrap pipeline; you may NEVER propose a capability whose module is not present here. See Step 3 for how this list is enforced.
 
-Do NOT attempt to read `app.config.js` from the working directory — scaffolding has not run yet. Reading `template/package.json` from `${CLAUDE_PLUGIN_ROOT}` IS allowed and IS required.
+Do NOT attempt to read `app.config.js` from the working directory — scaffolding has not run yet. Reading `template/package.json` from `${PLUGIN_ROOT}` IS allowed and IS required.
 
 From the planner prompt extract:
 - **Target platforms** — iOS + Android by default. If the user picked just one platform, native modules need `Platform.OS` branching notes in the screen plan.
@@ -88,7 +88,7 @@ While the architect runs, complete Steps 3, 3b, and 3c inline. By the time you f
 > Wizard answers: [target users & device, aesthetic, features]
 > Target environment: read from `power.config.json` if it exists in the working directory, otherwise use the environment URL or ID provided by the orchestrator and resolve it with `scripts/resolve-environment.js`.
 > Working directory: [absolute path]
-> Plugin root: ${CLAUDE_PLUGIN_ROOT}
+> Plugin root: ${PLUGIN_ROOT}
 >
 > Follow the instructions in your agent file. You are read-only — do NOT create tables. Return a markdown `## Data Model` section ready to embed in native-app-plan.md, including a Mermaid ER diagram, a reuse/extend/create table, and dependency-tier ordering. Return per AGENTS.md rule #10: literal first line is `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:`, then a blank line, then your summary.
 > If requirements mention generated PDFs, report exports, evidence packets, signatures, sign-off, pen/ink, drawings, or uploaded PDFs/documents, include the artifact storage target in the data model: on-device/share-only, Dataverse Image column, Dataverse File column, or child Evidence/Attachment table. Retained PDF content must use a File column, not long text/base64.
@@ -111,12 +111,12 @@ Build the native capabilities matrix yourself (this is a small enough surface to
 
 ### Step 3.0 — Build the allowlist (MANDATORY, before any cap is proposed)
 
-The set of native modules the rewrap pipeline supports is FIXED by `${CLAUDE_PLUGIN_ROOT}/template/package.json`. You may NEVER propose a capability whose underlying module is not present there — the customer's binary is built from a pre-built base, not from their `package.json`. Adding a module to the plan that's not shipped means a downstream `/add-native` call WILL stop, and the orchestrator's whole flow stalls at Step 9.
+The set of native modules the rewrap pipeline supports is FIXED by `${PLUGIN_ROOT}/template/package.json`. You may NEVER propose a capability whose underlying module is not present there — the customer's binary is built from a pre-built base, not from their `package.json`. Adding a module to the plan that's not shipped means a downstream `/add-native` call WILL stop, and the orchestrator's whole flow stalls at Step 9.
 
 Read the template's `package.json`:
 
 ```bash
-node -e "const p = require('${CLAUDE_PLUGIN_ROOT}/template/package.json'); const deps = Object.keys({...p.dependencies, ...p.devDependencies}); console.log(deps.filter(d => d.startsWith('expo-') || d.startsWith('react-native-') || d.startsWith('@react-native-community/') || d.startsWith('@microsoft/extension-') || d === '@microsoft/powerapps-geolocation-control').join('\n'));"
+node -e "const p = require('${PLUGIN_ROOT}/template/package.json'); const deps = Object.keys({...p.dependencies, ...p.devDependencies}); console.log(deps.filter(d => d.startsWith('expo-') || d.startsWith('react-native-') || d.startsWith('@react-native-community/') || d.startsWith('@microsoft/extension-') || d === '@microsoft/powerapps-geolocation-control').join('\n'));"
 ```
 
 Map each shipped module to a user-facing capability slug. Use this known mapping table, but still gate every row against the live allowlist output; a listed capability is supported only when its exact package appears in `template/package.json` and is not runtime-banned.
@@ -172,7 +172,7 @@ PDF/pen inference rules:
 
 ### Calendar management view capability
 
-If requirements mention calendar management, scheduling, appointment calendars, personal/team/POS calendar views, month/week/day views, agenda, availability, visits, routes by date, or field-service schedules, propose `calendar-management-view` when `react-native-calendars` is present in `${CLAUDE_PLUGIN_ROOT}/template/package.json`. This is a UI library capability, not an Expo permission capability: it needs no `/add-native` wrapper, no `app.config.js` permission changes, and no native skill invocation.
+If requirements mention calendar management, scheduling, appointment calendars, personal/team/POS calendar views, month/week/day views, agenda, availability, visits, routes by date, or field-service schedules, propose `calendar-management-view` when `react-native-calendars` is present in `${PLUGIN_ROOT}/template/package.json`. This is a UI library capability, not an Expo permission capability: it needs no `/add-native` wrapper, no `app.config.js` permission changes, and no native skill invocation.
 
 The native-capability matrix row MUST use:
 
@@ -214,7 +214,7 @@ If the app needs zero allowlisted native capabilities, include a `## Native Capa
 **Print before starting:**
 > "→ Inferring design direction from industry signals (no gate — design is reviewed visually at Gate 4)…"
 
-Follow [`shared/references/design-planning.md`](${CLAUDE_PLUGIN_ROOT}/shared/references/design-planning.md) exactly. The three steps are:
+Follow [`shared/references/design-planning.md`](${PLUGIN_ROOT}/shared/references/design-planning.md) exactly. The three steps are:
 
 1. **Detect** — scan requirements and wizard aesthetic answer for design keywords. Detect the industry and build a list of design decisions (even if all of them match the default stack).
 2. **Decide** — map the detected industry to its aesthetic direction, palette, copy tone, and visual language using the tables in `design-planning.md`. Always produce a full `## Design` section — never write just "default (Clean + Professional)".
@@ -242,7 +242,7 @@ INDUSTRY_CONFIRM_REQUESTED: <inferred-industry>|<reason-code>|<top-3-alternative
 Where:
 - `<inferred-industry>` — what you would have picked (e.g. `productivity`, `field-ops`)
 - `<reason-code>` — one of `no-keywords` / `ambiguous-match` / `wizard-conflict`
-- `<top-3-alternatives-comma-sep>` — the most plausible 3 other industries from the [`design-planning.md`](${CLAUDE_PLUGIN_ROOT}/shared/references/design-planning.md) table, ordered by relevance (e.g. `field-ops,healthcare,e-commerce`)
+- `<top-3-alternatives-comma-sep>` — the most plausible 3 other industries from the [`design-planning.md`](${PLUGIN_ROOT}/shared/references/design-planning.md) table, ordered by relevance (e.g. `field-ops,healthcare,e-commerce`)
 
 Example signals:
 ```
@@ -257,7 +257,7 @@ The orchestrator will surface a one-question picker, write the chosen industry i
 **Print before starting:**
 > "→ [3/4] Inferring connector needs from requirements…"
 
-Follow [`shared/references/connector-planning.md`](${CLAUDE_PLUGIN_ROOT}/shared/references/connector-planning.md) exactly. The three steps are:
+Follow [`shared/references/connector-planning.md`](${PLUGIN_ROOT}/shared/references/connector-planning.md) exactly. The three steps are:
 
 1. **Infer** — scan requirements and wizard answers for connector keywords. Build a candidate list without asking the user yet.
 2. **Confirm** — present the inferred list via `AskUserQuestion`. Let the user add, remove, or confirm. If nothing was inferred, ask cold ("Does your app need any external services?").
@@ -396,7 +396,7 @@ phase: graph
 Requirements: [paste $ARGUMENTS]
 Wizard answers: [target users & device, target platforms, aesthetic, features]
 Working directory: [absolute path]
-Plugin root: ${CLAUDE_PLUGIN_ROOT}
+Plugin root: ${PLUGIN_ROOT}
 
 Approved data model:
 [paste ## Data Model section verbatim]
@@ -449,7 +449,7 @@ Approved data model: [paste ## Data Model section verbatim]
 Approved design: [paste ## Design section verbatim]
 Approved connectors: [paste ## Connectors section verbatim]
 Working directory: [absolute path]
-Plugin root: ${CLAUDE_PLUGIN_ROOT}
+Plugin root: ${PLUGIN_ROOT}
 
 Expand each screen in the locked graph into a compact delta spec. Do NOT repeat values already present in Shared Conventions, Design Direction, brand/design-system.md, or universal builder rules. Write Standard Imports ONCE near the top. Per-spec Resolved Imports list only entity-specific additions. Cap Open Questions at 3.
 
@@ -513,7 +513,7 @@ Reject loop = re-spawn `screen-planner` with the user's feedback (layout, screen
 
 **Detection (cheap):** before spawning, `Grep` the locked plan for `related_entity_fields:` in `<working_dir>/native-app-plan.md`. Zero matches → skip Step 5c entirely, mark `[x]` and proceed to Step 6. One or more matches → spawn the audit pass below.
 
-This step exists because of the runtime constraint documented at [`shared/references/data-performance.md` § Cross-entity Reads](${CLAUDE_PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads) — the SDK has no `$expand`, so cross-entity fields on hot paths (lists, dashboards) MUST be denormalized via calculated columns at the data-model layer. The screen-planner emits `related_entity_fields` per screen; this step turns those into calc-column proposals.
+This step exists because of the runtime constraint documented at [`shared/references/data-performance.md` § Cross-entity Reads](${PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads) — the SDK has no `$expand`, so cross-entity fields on hot paths (lists, dashboards) MUST be denormalized via calculated columns at the data-model layer. The screen-planner emits `related_entity_fields` per screen; this step turns those into calc-column proposals.
 
 #### 5c.1 — Spawn `data-model-architect` in `cross-entity-audit` mode
 
@@ -525,7 +525,7 @@ mode: cross-entity-audit
 The data model from Round 1 is already locked at <working_dir>/_dm_section.md (and embedded in <working_dir>/native-app-plan.md → ## Data Model). The screen plan from Gate 4b is at <working_dir>/native-app-plan.md → ## Screens. Read both. Run ONLY Step 6a (Cross-entity Read Audit) — skip Steps 1–6 (the data model is already done) and skip Step 7 (the section is already written; you append a new ### Cross-entity Reads subsection to it instead).
 
 Working directory: [absolute path]
-Plugin root: ${CLAUDE_PLUGIN_ROOT}
+Plugin root: ${PLUGIN_ROOT}
 Publisher prefix: [paste prefix from Round 1 prompt — must match the original]
 
 Follow your agent file's Step 6a algorithm verbatim. Append a `### Cross-entity Reads (auto-derived from screen plan)` subsection to `_dm_section.md` (and mirror into `## Data Model` of `native-app-plan.md`). If no `related_entity_fields` blocks exist, return `DONE` with a one-line note "no cross-entity reads required" — do NOT write an empty subsection.
