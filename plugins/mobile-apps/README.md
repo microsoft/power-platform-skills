@@ -131,7 +131,7 @@ Add the extracted folder to VS Code's `settings.json`:
 Create a new app from the template and install dependencies before invoking `/create-mobile-app`:
 
 ```bash
-npx degit https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/template#main my-mobile-app
+npx degit microsoft/power-platform-skills/plugins/mobile-apps/template#main my-mobile-app
 cd my-mobile-app
 npm install
 ```

@@ -17,15 +17,30 @@ connector wiring.
 1. Create a new app from the template and install dependencies:
 
 	```sh
-	npx degit https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/template#main my-mobile-app
+	npx degit microsoft/power-platform-skills/plugins/mobile-apps/template#main my-mobile-app
 	cd my-mobile-app
 	npm install
 	```
 
-2. Install the mobile-app skill from the Power Platform skills plugin:
+2. Install the mobile-app skill from the Power Platform Skills plugin.
 
-	```text
-	https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/.plugin/plugin.json
+	For GitHub Copilot in VS Code:
+
+	1. Open the Command Palette.
+	2. Run **Chat: Install Plugin From Source**.
+	3. Paste the mobile-app plugin manifest URL:
+
+		```text
+		https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/.plugin/plugin.json
+		```
+
+	4. Reload VS Code if prompted, then open Copilot Chat in Agent mode.
+
+	For Claude CLI:
+
+	```sh
+	claude plugin marketplace add microsoft/power-platform-skills
+	claude plugin install mobile-app@power-platform-skills --scope user
 	```
 
 3. Open the template folder in VS Code and run the skill from Copilot Chat:
@@ -38,27 +53,19 @@ connector wiring.
 	runtime dependencies. The skill updates the app in place as it designs and
 	generates the mobile experience.
 
-4. Configure your app identity as needed:
+4. Start mobile app:
 
-	```bash
-	APP_DISPLAY_NAME="Contoso Field App" \
-	APP_SLUG="contoso-field-app" \
-	APP_SCHEME="contoso-field-app" \
-	ANDROID_PACKAGE="com.contoso.fieldapp" \
-	IOS_BUNDLE_IDENTIFIER="com.contoso.fieldapp" \
-	npm run dev
-	```
-
-5. Start Expo:
+	Run the above command in a new terminal from the app directory.
 
 	```bash
 	npm run dev
 	```
 
-## Supported Public Scripts
+5. Preview the app using the Power Apps Developer app
 
-- `npm run dev`: starts Expo. The `predev` hook regenerates connector schemas first.
-- `npm run generate-schemas`: regenerates `src/generated/connectorSchemas.ts` from `.power/schemas`.
+	App store: https://apps.apple.com/us/app/power-apps-developer/id6753083462
+	Play store: (coming soon)
+	App center: https://install.appcenter.ms/orgs/appmagic-player-x6ys/apps/rn-dev-player-preview/distribution_groups/public_distribution/releases
 
 ## License and notices
 
