@@ -672,7 +672,7 @@ New skill introduced by PR #144. Orchestrates AI summarization API integration a
 
 ### Cross-plugin shared skills — out of catalog scope
 
-`report-issue` — The power-pages SKILL.md wrapper at `plugins/power-pages/skills/report-issue/SKILL.md` is a thin re-export that contains no prompts. The actual workflow with `AskUserQuestion` calls lives in `shared/skills/report-issue/report-issue-workflow.md`, which is consumed by every plugin (not just power-pages). The shared workflow lies outside the per-plugin lint scope (`plugins/power-pages/skills/`), so its prompts are not catalogued here. If the shared workflow is ever ported into per-plugin SKILL.md files, add a `report-issue:*` section to this catalog.
+`report-issue` — Its prompts are cross-plugin, not power-pages-specific, so they are not catalogued here. If the shared workflow is ever governed by per-plugin approval-gate linting, add a `report-issue:*` section to this catalog.
 
 ---
 
@@ -715,7 +715,7 @@ These need explicit confirmation from the reviewer before SKILL.md edits land. R
 - Markers added to all non-ALM SKILL.md files (HTML comment + 🚦 block per gate; `not-a-gate` comment per data-gathering prompt or meta-mention).
 - `scripts/lint-skills-alm.js` warn-only branch removed — all skills now hard-fail.
 - `AGENTS.md` Key Patterns updated — Approval Gate convention applies plugin-wide; new skills must extend §6 in the same PR they introduce a prompt.
-- `report-issue` excluded from the catalog (cross-plugin shared workflow lives outside the per-plugin lint scope). **Cross-plugin TODO:** the `AskUserQuestion` calls in `shared/skills/report-issue/report-issue-workflow.md` are not caught by any per-plugin lint today. A future cross-plugin sweep should either (a) define a `shared:*` namespace in the catalog and add markers in the shared workflow, or (b) duplicate the workflow into each plugin so the per-plugin lint covers it.
+- `report-issue` excluded from the catalog because its `AskUserQuestion` calls come from a cross-plugin shared workflow. **Cross-plugin TODO:** those shared prompts are not caught by any per-plugin lint today. A future cross-plugin sweep should define a `shared:*` namespace in the catalog or explicitly opt each plugin copy into per-plugin lint coverage.
 - v3 lint changes: removed warn-only branch; tightened `m <= promptLine` to strict `m <`; relaxed `CATALOG_GATE_ID_PATTERN` to case-insensitive on the skill-name segment; added two new rules — `CATALOG-row-must-have-marker` (reverse check — catalog rows of `kind: gate` must have a matching SKILL.md marker; prevents the orphan-row class of bug v3 closed by hand) and `GATE-prose-block-required` (every marker must be followed within 10 lines by a 🚦 sentinel; minimum-viable check against prose-block deletion). Field rename: `Blast radius if skipped:` → `Why we ask:` across all ~60 prose blocks plus §4.1 template.
 
 ---

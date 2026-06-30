@@ -93,6 +93,23 @@ test("an array config.json is ignored — setTelemetryChoice still persists", ()
   assert.deepEqual(readRaw(dir), { telemetry: { "power-pages": "off" } });
 });
 
+test("an array telemetry value is normalized before writing", () => {
+  const dir = mkTmp();
+  // JSON arrays accept arbitrary JS properties at runtime, but JSON.stringify
+  // serializes only numeric indices. Without normalizing this nested value,
+  // setTelemetryChoice would return true while persisting none of the choice.
+  fs.writeFileSync(
+    path.join(dir, CONFIG_FILE_NAME),
+    JSON.stringify({ schemaVersion: 1, telemetry: [] })
+  );
+  assert.equal(readTelemetryChoice(dir, "power-pages"), null);
+  assert.equal(setTelemetryChoice(dir, "power-pages", "off"), true);
+  assert.deepEqual(readRaw(dir), {
+    schemaVersion: 1,
+    telemetry: { "power-pages": "off" },
+  });
+});
+
 test("setTelemetryChoice fails safe (returns false) when the dir cannot be created", () => {
   const dir = mkTmp();
   const blocker = path.join(dir, "blocker");

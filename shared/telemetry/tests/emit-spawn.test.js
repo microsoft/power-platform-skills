@@ -76,11 +76,11 @@ test("dispatcher child receives the event and writes the probe", async () => {
 });
 
 test("opts.ikeyJsonPath points the dispatcher at the caller's ikey.json (no env override)", async () => {
-  // Regression guard: the dispatcher lives in shared/telemetry/lib, so its
-  // __dirname default resolves to shared/'s placeholder (disabled:true). When
-  // lib/ is shared via symlink or relative require, the spawner must forward
-  // the plugin's real ikey.json via opts.ikeyJsonPath. With NO env override
-  // set, an enabled ikey.json passed this way must still produce a probe.
+  // Regression guard: shared-source tests execute the dispatcher from
+  // shared/telemetry/lib, so its __dirname default resolves to shared/'s
+  // placeholder (disabled:true). The spawner must forward the plugin's real
+  // ikey.json via opts.ikeyJsonPath. With NO env override set, an enabled
+  // ikey.json passed this way must still produce a probe.
   const tmp = mkTmp();
   const probe = path.join(tmp, "probe.json");
   const ikeyJsonPath = path.join(tmp, "ikey.json");

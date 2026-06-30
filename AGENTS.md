@@ -63,15 +63,15 @@ Skills that apply to all plugins live in `shared/skills/<skill-name>/`. The work
 - `shared/skills/<skill-name>/<workflow>.md` — Full workflow (phases, instructions, field definitions)
 - `shared/skills/<skill-name>/SKILL.template.md` — Template SKILL.md (frontmatter + reference to workflow); supports `{{PLUGIN_NAME}}` placeholder
 - `plugins/<plugin>/skills/<skill-name>/SKILL.md` — Per-plugin wrapper generated from the template above
-- `plugins/<plugin>/skills/<skill-name>/<workflow>.md` — Symlink to the shared workflow when the plugin must work after installing only its own plugin directory
+- `plugins/<plugin>/skills/<skill-name>/<workflow>.md` — Copied workflow file bundled with the plugin so it works after installing only its own plugin directory
 
-This keeps the skill discoverable in each plugin while preserving install-time portability. Marketplace installs copy only the plugin directory, so per-plugin wrappers must not reference repo-root `shared/` paths at runtime. Instead, point the wrapper at `${PLUGIN_ROOT}/skills/<skill-name>/<workflow>.md` and keep a symlink from that per-plugin path to the repo-root shared workflow; marketplace installers dereference same-marketplace symlinks into the installed plugin cache. When updating a shared skill, edit the workflow file and/or `SKILL.template.md` in `shared/`, then update the per-plugin wrappers (frontmatter + bundled workflow reference, with `{{PLUGIN_NAME}}` substituted) and ensure any per-plugin symlinks still resolve under `plugins/<plugin>/skills/<skill-name>/`. Commit the shared source and per-plugin symlinks together.
+This keeps the skill discoverable in each plugin while preserving install-time portability. Marketplace installs copy only the plugin directory, so per-plugin wrappers must not reference repo-root `shared/` paths at runtime. Instead, point the wrapper at `${PLUGIN_ROOT}/skills/<skill-name>/<workflow>.md` and keep a physical copy of the shared workflow at that per-plugin path. Do not use Git symlinks for shared content; Windows and plugin-host installs can materialize them as plain link files. When updating a shared skill, edit the workflow file and/or `SKILL.template.md` in `shared/`, then refresh the per-plugin wrappers (frontmatter + bundled workflow reference, with `{{PLUGIN_NAME}}` substituted) and copy the workflow content into each adopting plugin. Commit the shared source and per-plugin copies together.
 
 ## Shared Telemetry
 
-1DS telemetry code for all plugins lives at `shared/telemetry/`. Each adopting plugin **symlinks** the library into its own tree — `plugins/<plugin>/scripts/lib/telemetry/lib` is a symlink to `shared/telemetry/lib`. The marketplace installer dereferences that symlink into the installed plugin at install time, so the shared code ships without copying it into each plugin. Each plugin keeps its own real `ikey.json` next to the symlink.
+1DS telemetry code for all plugins lives at `shared/telemetry/`. Each adopting plugin keeps a physical copy of the library in its own tree at `plugins/<plugin>/scripts/lib/telemetry/lib`, alongside that plugin's real `ikey.json`. Do not use Git symlinks for this copy; plugin hosts may not dereference them reliably.
 
-Edit `shared/telemetry/` directly — the symlink makes changes live for every adopting plugin immediately; there is nothing to re-sync.
+Edit `shared/telemetry/` first, then refresh every adopting plugin's copied `scripts/lib/telemetry/lib` directory in the same change so the canonical source and bundled plugin content stay in sync.
 
 Per-plugin iKey/collector routing is pluggable via a `resolver.js` placed next to the plugin's `ikey.json` (implementing the `resolve`/`isProvisioned` contract); the shared library ships only that contract plus a static-key fallback, not any routing logic. A per-plugin opt-out env var `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT` (derived as the uppercased plugin name with non-alphanumerics collapsed to `_`, suffixed `_OPTOUT`) disables transmission for automation when set to `1`/`true` (dotnet `*_TELEMETRY_OPTOUT` convention); it has the **highest precedence**, overriding both the persisted `config.json` choice and `/<plugin>:telemetry on`.
 
@@ -98,12 +98,15 @@ Current adopters: `power-pages`. Others adopt on demand.
 
 Keep the root `.claude-plugin/marketplace.json` and each plugin's
 `.claude-plugin/plugin.json` as JSON mirrors of their Open Plugins counterparts.
-The shared root marketplace must stay dual-compatible: use repository-root-relative
-plugin `source` paths and preserve legacy `category`/`tags` fields alongside Open
-Plugins metadata. Existing marketplace subscriptions may still resolve the legacy
-paths during auto-update, so removing or drifting these files can force users to
-reinstall. Because mirrors are committed files (not symlinks), update both source
-and legacy copies together, then run
+The shared root marketplace must stay dual-compatible while keeping per-plugin
+entries minimal: each plugin entry should include only the required `name` and
+repository-root-relative `source` fields. Keep marketplace-level `owner` and
+`metadata` because they describe the collection, but store per-plugin display/update
+metadata (description, version, license, keywords, etc.) in each `.plugin/plugin.json`
+instead of duplicating or overriding it in the marketplace index. Existing marketplace
+subscriptions may still resolve the legacy paths during auto-update, so removing or
+drifting these files can force users to reinstall. Because mirrors are committed
+files (not symlinks), update both source and legacy copies together, then run
 `node scripts/validate-legacy-compatibility.js` after metadata changes.
 
 ## Code Conventions

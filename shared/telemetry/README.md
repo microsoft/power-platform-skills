@@ -1,8 +1,8 @@
 # Shared 1DS Telemetry Library
 
-Canonical source for 1DS telemetry used by plugins in this repo. Each adopting plugin **symlinks** this library into its own tree: `plugins/<plugin>/scripts/lib/telemetry/lib` is a symlink to `shared/telemetry/lib`, so there is a single source of truth and no copy to keep in sync.
+Canonical source for 1DS telemetry used by plugins in this repo. Each adopting plugin keeps a physical copy of this library in its own tree at `plugins/<plugin>/scripts/lib/telemetry/lib`, so plugin-host installs and Windows checkouts never depend on symlink behavior.
 
-`shared/telemetry/lib` is the **only** copy of the library. The marketplace installer dereferences the per-plugin symlink into the installed plugin at install time, so the library ships without a per-plugin copy. Each plugin keeps its own real `ikey.json` next to the symlink.
+`shared/telemetry/lib` is the canonical source. Per-plugin copies must be refreshed from it whenever the shared library changes. Each plugin keeps its own real `ikey.json` next to the copied library.
 
 Zero npm dependencies. Node stdlib only.
 
@@ -140,29 +140,33 @@ shared/telemetry/
 
 These steps assume your plugin already lives under `plugins/<your-plugin>/` with a `.claude-plugin/plugin.json` and `hooks/hooks.json`.
 
-### 1. Link the library
+### 1. Copy the library
 
-Create a git symlink at `plugins/<your-plugin>/scripts/lib/telemetry/lib` pointing at the relative path to `shared/telemetry/lib`. From the `telemetry` directory that target is `../../../../../shared/telemetry/lib` (five levels up to the repo root).
+Copy `shared/telemetry/lib` into `plugins/<your-plugin>/scripts/lib/telemetry/lib`.
 
-Create it as a mode-`120000` blob so it works on every checkout regardless of local symlink privileges (the same way the skill-workflow symlinks under `skills/*/` were made):
+Use a physical directory, not a Git symlink. Some Windows checkouts and plugin hosts materialize symlinks as plain link files, which makes hook-time `require()` calls fail before the dispatcher can write the local diagnostic log. Any recursive copy command is fine; examples:
 
-```bash
-# from the repo root
-TARGET=plugins/<your-plugin>/scripts/lib/telemetry
-mkdir -p "$TARGET"
-hash=$(printf '../../../../../shared/telemetry/lib' | git hash-object -w --stdin)
-git update-index --add --cacheinfo 120000,$hash,"$TARGET/lib"
-git checkout -- "$TARGET/lib"
+```powershell
+$target = "plugins/<your-plugin>/scripts/lib/telemetry/lib"
+Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
+Copy-Item -LiteralPath "shared/telemetry/lib" -Destination $target -Recurse -Force
 ```
 
-Now `scripts/lib/telemetry/lib` resolves to the shared library — there is no copy to keep in sync.
+```bash
+target="plugins/<your-plugin>/scripts/lib/telemetry/lib"
+rm -rf "$target"
+mkdir -p "$(dirname "$target")"
+cp -R shared/telemetry/lib "$target"
+```
+
+Now `scripts/lib/telemetry/lib` is self-contained inside the plugin directory. Commit the copied files together with any shared library change.
 
 ### 2. Configure `ikey.json`
 
-Create `plugins/<your-plugin>/scripts/lib/telemetry/ikey.json` — a **real file, not symlinked** (it carries this plugin's config, distinct from `shared/`'s placeholder).
+Create `plugins/<your-plugin>/scripts/lib/telemetry/ikey.json` as a real file (it carries this plugin's config, distinct from `shared/`'s placeholder).
 
 **Tier 1 — one static key (no routing).** Create a flat
-`plugins/<your-plugin>/scripts/lib/telemetry/ikey.json` (a real file, not symlinked):
+`plugins/<your-plugin>/scripts/lib/telemetry/ikey.json`:
 
 ```json
 {
@@ -208,11 +212,11 @@ Then invoke one of your tracked skills with `disabled: true` and confirm via Cla
 
 ## Updating the shared library
 
-Edit `shared/telemetry/lib/` directly. Because each adopting plugin's `scripts/lib/telemetry/lib` is a **symlink** to this directory, the change is live for every plugin immediately — there is no copy to re-sync and nothing to propagate per-plugin.
+Edit `shared/telemetry/lib/` directly, then refresh each adopting plugin's copied `scripts/lib/telemetry/lib` directory from it in the same change.
 
-Each plugin's `ikey.json` is a separate real file (not symlinked), so editing the shared library never touches a plugin's provisioned key.
+Each plugin's `ikey.json` is separate, so refreshing the copied library must not overwrite a plugin's provisioned key.
 
-If you change the wire-level shape (envelope, transport, allowlist), it applies to every adopting plugin at once — bump and validate accordingly.
+If you change the wire-level shape (envelope, transport, allowlist), refresh every adopting plugin copy, bump as needed, and validate accordingly.
 
 ## Strict allowlist
 
