@@ -61,7 +61,7 @@ connector wiring.
 	npm run dev
 	```
 
-5. Preview the app using the Power Apps Developer app
+5. Preview the app by scanning the QR code with the Power Apps Developer app
 
 	App store: https://apps.apple.com/us/app/power-apps-developer/id6753083462
 	Play store: (coming soon)
