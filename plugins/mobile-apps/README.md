@@ -2,11 +2,9 @@
 
 Claude Code / Copilot plugin for building **Power Apps code apps for mobile** using Expo + React Native + TypeScript.
 
-> **Marketplace:** `power-platform-skills`, plugin `mobile-app`, stored in `plugins/mobile-apps`. This was migrated from the standalone `rn-app-skils` / `mobile-app-skills` preview repo; the plugin name remains `mobile-app` so existing agent namespaces keep working.
->
-> **What:** Build mobile Power Apps with Expo + RN + TS (iOS & Android).  
-> **Who:** Microsoft-internal teams currently — requires Azure Artifacts feed access (see Prerequisites §2).  
-> **Status:** preview / v0.
+> **Marketplace:** `power-platform-skills`, plugin `mobile-app`, stored in `plugins/mobile-apps`.
+> **What:** Build mobile Power Apps with Expo + RN + TS (iOS & Android).
+> **Status:** public preview / v0.
 
 ---
 
@@ -100,7 +98,7 @@ claude plugin install mobile-app@power-platform-skills --scope user
 
 Use this only if the installer cannot find or configure your Claude CLI. You can also add it to your global plugin config manually — see the [Claude Code plugin docs](https://docs.anthropic.com/claude/docs/claude-code-plugins).
 
-**Step 3 — Prepare a fresh template folder** (next section). Use `degit` to materialize `pa-wrap-tools/templates/expo-app-standalone`, run `npm install` in that folder, then open that folder and run `/create-mobile-app` there.
+**Step 3 — Prepare a fresh template folder** (next section). Use `degit` to materialize the public template from this repository, run `npm install` in that folder, then open that folder and run `/create-mobile-app` there.
 
 ### GitHub Copilot (VS Code) fallback
 
@@ -130,15 +128,21 @@ Add the extracted folder to VS Code's `settings.json`:
 
 > **Note:** `EnterPlanMode` / `ExitPlanMode` are Claude Code-only directives. Copilot approximates plan mode by restricting itself to read-only operations during the planning phase — the workflow still proceeds correctly.
 
-That's it. The Expo template is prepared before invoking `/create-mobile-app`:
+Create a new app from the template and install dependencies before invoking `/create-mobile-app`:
 
 ```bash
-npx degit microsoft.ghe.com/bic/pa-wrap-tools/templates/expo-app-standalone my-mobile-app
+npx degit https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/template#main my-mobile-app
 cd my-mobile-app
 npm install
 ```
 
-Then open `my-mobile-app` and run `/create-mobile-app` there. A local `template/` copy exists in the plugin for reference and local testing only.
+Then open `my-mobile-app` and run `/create-mobile-app` there. The skill assumes the current working directory is this fresh installed template folder.
+
+Install the mobile-app skill from the Power Platform Skills plugin:
+
+```text
+https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/.plugin/plugin.json
+```
 
 ---
 
@@ -146,92 +150,17 @@ Then open `my-mobile-app` and run `/create-mobile-app` there. A local `template/
 
 The skill checks these in Step 1 (Prerequisites) and stops with a clear error if any are missing. Get them ready up front to avoid mid-flow blocks.
 
-### ⚠️ Two identities, two auth mechanisms (read this first)
-
-This skill talks to two different Microsoft systems with two different identities. Mixing them up is the #1 cause of failed runs.
-
-| What | Identity | Auth mechanism | Why separate |
-|---|---|---|---|
-| `npm install` from private feed | **Your corp `@microsoft.com` account** | **`az login --tenant <corp>`** (browser) — falls back to PAT for headless | Feed ACL is on your corp identity, not your test-tenant admin. |
-| Everything else (`npx power-apps init`, Dataverse, deploy, push) | **Power Platform tenant identity** (often a test-tenant admin, NOT your corp account) | `npx power-apps` browser auth + `az login --tenant <env-tenant>` for Dataverse helper scripts | Power Platform has its own AAD context, often a different tenant entirely. |
-
-Configure npm access to the Azure Artifacts feed before `npm install`. PAT setup remains a headless / CI fallback only. `npx power-apps` uses its own browser auth cache, separate from Azure CLI.
-
 ### 1. Tooling versions
 
 | Tool | Min version | How to install / check |
 |---|---|---|
 | Node.js | **22.x** | `node -v` — install via [nvm](https://github.com/nvm-sh/nvm) (`nvm install 22 && nvm use 22`) |
-| `az` (Azure CLI) | **2.60+** | `az --version` — needed for ADO npm token setup and advanced `/set-app-registration-native` scenarios. Install via Homebrew: `brew install azure-cli` |
+| `az` (Azure CLI) | **2.60+** | `az --version` — needed for Dataverse helper scripts and advanced `/set-app-registration-native` scenarios. Install via Homebrew: `brew install azure-cli` |
 | `git` | any recent | required for upstream template clone |
 
 Detailed matrix (and Xcode/Android Studio notes if you want local native builds): [`shared/version-check.md`](shared/version-check.md).
 
-### 2. Azure Artifacts npm token (private feed) ⚠️
-
-The Expo template's `package.json` depends on `@microsoft/power-apps-native-host` and sibling Microsoft packages hosted on a **private Azure Artifacts feed** — `mobile-codegen-expo` under the `msazure / OneAgile` org. Without a valid feed credential, `npm install` fails with `E401 Unauthorized`. This is the most common blocker.
-
-**Recommended: `az login` browser flow.** Sign in with the identity that has feed Reader access, then make sure your npm auth configuration can access the Azure Artifacts feed before `npm install`. No copy-paste, no PAT rotation, identity is auditable in `az account show`.
-
-**Step A — Get Reader access to the feed:**
-
-Before any auth flow works, your Azure DevOps account needs **Reader** access to the `mobile-codegen-expo` feed:
-
-1. Go to <https://msazure.visualstudio.com/OneAgile/_artifacts/feed/mobile-codegen-expo>
-2. If you see `403 Forbidden` or the feed doesn't load, request Reader membership from the team's Teams channel or feed owners
-3. Once you can view the feed page, proceed to Step B
-
-**Step B — Sign in with `az login` (one-time):**
-
-```bash
-# Sign in to your Microsoft corp tenant. This opens a browser; pick your @microsoft.com account.
-az login --allow-no-subscriptions
-# Browser opens — sign in and pick the tenant that owns the msazure Azure DevOps org
-# (for Microsoft FTEs that's your corp @microsoft.com account).
-# If you're on SSH/WSL/headless, add --use-device-code to get a paste-the-code prompt instead.
-
-# Verify the right identity is active
-az account show --query user.name -o tsv
-# Should print your @microsoft.com address (NOT the Power Platform test-tenant admin)
-```
-
-If you have multiple accounts, you can switch any time with `az account set --subscription <sub-id>` or re-run `az login`.
-
-**Step C — Verify the feed is reachable:**
-
-```bash
-TOKEN=$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv)
-curl -s -o /dev/null -w 'HTTP %{http_code}\n' -u ":$TOKEN" \
-  "https://pkgs.dev.azure.com/msazure/OneAgile/_packaging/mobile-codegen-expo/npm/registry/power-apps-native-host"
-# Expected: HTTP 200. If 401 → re-run `az login`. If 403 → re-do Step A (no Reader access).
-```
-
-**Headless / CI fallback (advanced):** If you can't run a browser (CI runners, locked-down hosts), set `AZURE_DEVOPS_NPM_TOKEN` to a PAT instead. Create one at <https://dev.azure.com/msazure/_usersSettings/tokens> with `Packaging: Read` scope (90-day max), then:
-
-```bash
-export AZURE_DEVOPS_NPM_TOKEN=<paste-the-PAT-here>
-# Persist by appending to ~/.zshrc
-```
-
-For local setup, prefer active `az` identity-backed npm auth. For headless setups, set `AZURE_DEVOPS_NPM_TOKEN` before running `npm install`.
-
-**Step D — Verify (skip if you ran Step C):**
-
-```bash
-# Confirm the env var is set
-echo "$AZURE_DEVOPS_NPM_TOKEN" | head -c 6 && echo …  # should print the first 6 chars + …
-
-# Confirm the PAT actually works against the feed before running npm install
-curl -s -o /dev/null -w 'HTTP %{http_code}\n' -u ":${AZURE_DEVOPS_NPM_TOKEN}" \
-  "https://pkgs.dev.azure.com/msazure/OneAgile/_packaging/mobile-codegen-expo/npm/registry/power-apps-native-host"
-# Expected: HTTP 200. If 401 → bad PAT, redo Step B. If 403 → redo Step A (no Reader access).
-```
-
-**If `npm install` fails with `E401`:** Your token is missing or expired. Re-run Step B.
-
-**If `npm install` fails with `E403`:** Your token is valid but your account doesn't have feed access. Go back to Step A and request Reader membership.
-
-### 3. Power Platform environment
+### 2. Power Platform environment
 
 You'll need an environment to deploy into. `/create-mobile-app` runs `npx power-apps init`, then reads the generated `power.config.json`, resolves the Dataverse URL and tenant through `resolve-environment.js`, and continues. The resolver calls the BAP admin environments endpoint (`api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/<environment-id>`). If the signed-in Azure CLI account cannot read that environment through BAP, provide the Dataverse environment URL directly.
 
@@ -245,23 +174,22 @@ Requirements:
 
 If environment resolution cannot get a Dataverse token during the skill, run `az login --tenant <env-tenant>` and retry.
 
-### 4. (Optional) Companion plugins
+### 3. (Optional) Companion plugins
 
 - **`expo/skills`** — see the next section. Strongly recommended for native UI patterns.
 
 ### Quick sanity check
 
-Before you run `/create-mobile-app`, paste this one-liner — it touches every prereq AND verifies the PAT works against the feed. Exits 0 only if all are good:
+Before you run `/create-mobile-app`, paste this one-liner from the fresh template folder. It touches the required local tooling and verifies the template dependencies are installed:
 
 ```bash
 node -v && \
 npx --yes degit --help >/dev/null && \
-[ -n "$AZURE_DEVOPS_NPM_TOKEN" ] && \
-[ "$(curl -s -o /dev/null -w '%{http_code}' -u ":${AZURE_DEVOPS_NPM_TOKEN}" 'https://pkgs.dev.azure.com/msazure/OneAgile/_packaging/mobile-codegen-expo/npm/registry/power-apps-native-host')" = "200" ] && \
+npm install --package-lock-only --ignore-scripts && \
 echo "✅ all prereqs OK"
 ```
 
-If any line fails, fix that one before starting the skill. Most common failure is the curl line returning 401 (bad PAT) or 403 (no feed Reader access) — see Section 2.
+If any line fails, fix that one before starting the skill. The most common failures are an older Node.js version or running the command outside the fresh template folder.
 
 ---
 
@@ -289,7 +217,7 @@ After deploy, use `/open-wrap-url --app-id <app-id> --env-id <env-id>` to jump s
 
 ## What you get
 
-- **Expo standalone template** prepared with `degit` from [`pa-wrap-tools/templates/expo-app-standalone`](https://microsoft.ghe.com/bic/pa-wrap-tools/tree/main/templates/expo-app-standalone) (internal). The plugin bundles the latest template snapshot under `template/`, while `/create-mobile-app` expects the user to run from a fresh installed template working directory and applies the app identity / connector preparation edits there.
+- **Expo standalone template** prepared with `degit` from [`plugins/mobile-apps/template`](https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/template). The plugin bundles the latest template snapshot under `template/`, while `/create-mobile-app` expects the user to run from a fresh installed template working directory and applies the app identity / connector preparation edits there.
 - **Same `npx power-apps add-data-source` workflow** across this plugin's skills — generated services in `src/generated/services/` work consistently
 - **Auth pre-wired** via the Power Apps CLI first-party Entra app — no custom Azure registration required
 - **Two platforms** in one codebase: iOS, Android
@@ -466,10 +394,9 @@ At Step 6.75 of `/create-mobile-app`, the `/design-system` skill offers a cost p
 
 ## Known blockers
 
-1. **Fresh template preparation.** `/create-mobile-app` expects a fresh installed `expo-app-standalone` template working directory. Use `degit` to materialize `pa-wrap-tools/templates/expo-app-standalone`, then run `npm install` in that template folder before invoking the skill there.
-2. **Azure Artifacts npm token.** The template depends on `@microsoft/power-apps-native-host` from a private Azure DevOps feed. Without a valid feed token, `npm install` fails with `E401 Unauthorized`. See [Prerequisites § 2](#2-azure-artifacts-npm-token-private-feed-).
-3. ~~**Sub-agent slash-command limitation.**~~ ✅ **Resolved** — `/design-system` (Step 6.75) now runs as a top-level skill invocation by the orchestrator, not inside a sub-agent. The old `DESIGN_VIBE_REQUESTED:` handoff signal is no longer needed.
-4. ~~**Connector usage requires the player runtime.**~~ ✅ **Resolved** — `PowerAppsHostProvider` in `app/_layout.tsx` (from `power-apps-native-host`) handles all connector routing, connection resolution, disambiguation, and OAuth consent automatically. No separate executor or provider wiring needed.
+1. **Fresh template preparation.** `/create-mobile-app` expects a fresh installed `expo-app-standalone` template working directory. Use `degit` to materialize [`plugins/mobile-apps/template`](https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/template), then run `npm install` in that template folder before invoking the skill there.
+2. ~~**Sub-agent slash-command limitation.**~~ ✅ **Resolved** — `/design-system` (Step 6.75) now runs as a top-level skill invocation by the orchestrator, not inside a sub-agent. The old `DESIGN_VIBE_REQUESTED:` handoff signal is no longer needed.
+3. ~~**Connector usage requires the player runtime.**~~ ✅ **Resolved** — `PowerAppsHostProvider` in `app/_layout.tsx` (from `power-apps-native-host`) handles all connector routing, connection resolution, disambiguation, and OAuth consent automatically. No separate executor or provider wiring needed.
 
 ## Local Zip Install
 
@@ -484,7 +411,6 @@ To install only this plugin, register the repository root as a marketplace and i
 
 ## See also
 
-- [`pa-wrap-tools/templates/expo-app-standalone`](https://microsoft.ghe.com/bic/pa-wrap-tools/tree/main/templates/expo-app-standalone) (internal) — upstream template source for the bundled `template/` snapshot and fresh-template working directory
-- [`pa-wrap-tools/native-app.md`](https://microsoft.ghe.com/bic/pa-wrap-tools) (internal) — full architecture spec
+- [`plugins/mobile-apps/template`](https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/template) — bundled Expo standalone template and fresh-template working directory source
 - [Expo docs](https://docs.expo.dev/)
 - [Power Apps developer docs](https://learn.microsoft.com/en-us/power-apps/developer/)

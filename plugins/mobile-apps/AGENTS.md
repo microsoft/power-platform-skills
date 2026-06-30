@@ -8,7 +8,7 @@ This file provides guidance to AI Agents when working with the **mobile-app** pl
 
 A plugin for building and deploying **Power Apps code apps that run as native mobile + web apps** using Expo + React Native + TypeScript. Connects to Power Platform via connectors using the standard `npx power-apps add-data-source` workflow.
 
-The Expo template snapshot is synced from [`pa-wrap-tools/templates/expo-app-standalone`](https://microsoft.ghe.com/bic/pa-wrap-tools/tree/main/templates/expo-app-standalone) and distributed with this plugin under `template/`. `/create-mobile-app` runs in fresh-template working-directory mode: the user starts in an installed template folder, then the skill validates and prepares it.
+The Expo template snapshot is distributed with this plugin under `template/` and published from [`plugins/mobile-apps/template`](https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/template). `/create-mobile-app` runs in fresh-template working-directory mode: the user starts in an installed template folder, then the skill validates and prepares it.
 
 ## Local Development
 

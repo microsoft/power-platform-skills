@@ -17,7 +17,7 @@ connector wiring.
 1. Create a new app from the template and install dependencies:
 
 	```sh
-	npx degit microsoft/power-platform-skills/plugins/mobile-apps/template#main my-mobile-app
+	npx degit https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/template#main my-mobile-app
 	cd my-mobile-app
 	npm install
 	```

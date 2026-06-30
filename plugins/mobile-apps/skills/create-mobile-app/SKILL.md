@@ -835,7 +835,7 @@ Key points:
 
 Do not run `npm install` inside Step 5 — in template-only mode dependencies must already be installed before the skill starts.
 
-> **Postinstall note (current template):** The template's `postinstall.js` only patches the React Native Gradle plugin to disable the Foojay toolchain resolver. It does NOT read `power.config.json` anymore. The Step 6 → Step 6.5 ordering is therefore not strictly required by postinstall; keep the linear setup order for predictable checkpoints, but do not run `npm run generate-schemas` during initial scaffold.
+> **Install note (current template):** The template does not read `power.config.json` during `npm install`. The Step 6 → Step 6.5 ordering is kept for predictable checkpoints, but do not run `npm run generate-schemas` during initial scaffold.
 
 ### Step 6 — Initialize
 

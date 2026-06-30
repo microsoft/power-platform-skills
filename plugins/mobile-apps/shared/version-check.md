@@ -66,16 +66,16 @@ If the user asks how to run on a real device or simulator: point them at the Exp
 
 ## Required SDKs (in `package.json`)
 
-These are pinned in the upstream template at [`pa-wrap-tools/templates/expo-app-standalone/package.json`](https://microsoft.ghe.com/bic/pa-wrap-tools/blob/main/templates/expo-app-standalone/package.json) and mirrored in this plugin's bundled `template/package.json`. If a skill upgrades one, file an upstream PR — do NOT patch the generated app copy in-project. Note: under Expo SDK 55, **all `expo-*` packages share the `55.x.y` version line** — that's how Expo guarantees compatibility. Don't list `expo-router`/`expo-auth-session`/`expo-secure-store` as if they're independently versioned.
+These are pinned in the bundled template at [`plugins/mobile-apps/template/package.json`](https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/template/package.json). If a skill upgrades one, update the bundled template first — do NOT patch the generated app copy in-project. Note: under Expo SDK 55, **all `expo-*` packages share the `55.x.y` version line** — that's how Expo guarantees compatibility. Don't list `expo-router`/`expo-auth-session`/`expo-secure-store` as if they're independently versioned.
 
 | Package | Pinned version | Notes |
 |---|---|---|
 | `expo` | `55.0.26` | SDK 55 |
 | `react-native` | `0.83.6` | matched to Expo SDK 55 |
 | All `expo-*` packages | `55.x.y` | router, auth-session, secure-store, dev-client, etc. — version line tied to SDK |
-| `@microsoft/power-apps` | `1.2.2` | resolved from the Azure Artifacts registry configured for npm |
-| `@microsoft/power-apps-native-host` | `^0.2.20` | native runtime host, resolved from the Azure Artifacts registry |
-| `@microsoft/power-apps-native-offline` | `^0.1.7` | offline runtime package, resolved from the Azure Artifacts registry |
+| `@microsoft/power-apps` | `1.2.2` | Power Apps code app SDK |
+| `@microsoft/power-apps-native-host` | `^0.2.20` | native runtime host |
+| `@microsoft/power-apps-native-offline` | `^0.1.7` | offline runtime package |
 | `@expo/fingerprint` | `0.16.7` | runtime fingerprint support used by `app.config.js` |
 | `@microsoft/power-apps-cli` | `0.9.1` | provides local schema/runtime helper commands such as `generate-connector-schemas` and `native-runtime` |
 | `tamagui`, `@tamagui/*` | `1.144.4` | design system primitives, all `@tamagui/*` packages tracked together |
@@ -93,7 +93,7 @@ Most skills only need the always-required tier. Copy this into Step 1.
 node --version          # expect v22+
 
 # Conditionally required — only if THIS skill needs it
-# az account show                            # for ADO npm token setup, /add-dataverse, advanced /set-app-registration-native
+# az account show                            # for /add-dataverse and advanced /set-app-registration-native
 
 # Project-local (only if inside a project)
 test -f power.config.json && echo "OK: code app project"
@@ -115,6 +115,6 @@ node -e "console.log(JSON.stringify(require('./app.json').expo, null, 2))" 2>/de
 ## When to update this file
 
 - New skill needs a tool not listed → add it here, then reference from the skill (don't hard-code in the skill).
-- An SDK pin changes in [`pa-wrap-tools/templates/expo-app-standalone/package.json`](https://microsoft.ghe.com/bic/pa-wrap-tools/blob/main/templates/expo-app-standalone/package.json) → update the SDK table here.
+- An SDK pin changes in [`plugins/mobile-apps/template/package.json`](https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/template/package.json) → update the SDK table here.
 - A new Power Platform CLI feature requires a newer minimum → bump the table, surface a one-line warning in the affected skills.
 
