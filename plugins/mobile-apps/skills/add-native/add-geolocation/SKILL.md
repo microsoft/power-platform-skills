@@ -1,6 +1,6 @@
 ---
 name: add-geolocation
-description: Internal implementation skill invoked by /add-native for native background GPS tracking with durable storage and Dataverse sync using @microsoft/powerapps-geolocation-control.
+description: Internal implementation skill invoked by /add-native for native background GPS tracking with durable storage and Dataverse sync using @microsoft/power-apps-native-bglocation.
 user-invocable: false
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
@@ -10,7 +10,7 @@ model: sonnet
 
 # Add Geolocation
 
-Internal helper for `/add-native geolocation`, `/add-native location-tracking`, `/add-native background-location`, `/add-native gps-tracking`, and `/add-native @microsoft/powerapps-geolocation-control`.
+Internal helper for `/add-native geolocation`, `/add-native location-tracking`, `/add-native background-location`, `/add-native gps-tracking`, and `/add-native @microsoft/power-apps-native-bglocation`.
 
 Use this only for continuous/background GPS tracking with native durable storage and inline Dataverse upload. For a single foreground coordinate read, use `/add-native location` (`expo-location`) instead.
 
@@ -25,7 +25,7 @@ Hard rules:
 
 ```bash
 test -f app.config.js && test -f power.config.json && test -f package.json && test -d src
-node -e "const p=require('./package.json'); const m='@microsoft/powerapps-geolocation-control'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m); process.exit(1); } console.log('OK: geolocation package present');"
+node -e "const p=require('./package.json'); const m='@microsoft/power-apps-native-bglocation'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m); process.exit(1); } console.log('OK: geolocation package present');"
 ```
 
 If either check fails, stop. The template/app must already ship the native package.
@@ -85,14 +85,14 @@ import {
   BgLocationClient,
   AuthMethod,
   ConnectionType,
-} from '@microsoft/powerapps-geolocation-control';
+} from '@microsoft/power-apps-native-bglocation';
 import type {
   DataverseDataSource,
   LocationData,
   PermissionStatus,
-} from '@microsoft/powerapps-geolocation-control';
+} from '@microsoft/power-apps-native-bglocation';
 
-export type { LocationData, PermissionStatus } from '@microsoft/powerapps-geolocation-control';
+export type { LocationData, PermissionStatus } from '@microsoft/power-apps-native-bglocation';
 
 export type GeoTrackingTarget = Omit<DataverseDataSource, 'authMethod' | 'connectionType'>;
 
@@ -202,7 +202,7 @@ Only after table + columns are verified and TypeScript passes, report:
 
 ```text
 Geolocation status : READY
-Package present    : @microsoft/powerapps-geolocation-control
+Package present    : @microsoft/power-apps-native-bglocation
 Wrapper            : src/native/geolocation.ts
 Required config    : connectionUrl, trackInBackground, persistAcrossRestarts
 Auth               : MSAL only

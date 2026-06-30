@@ -1,6 +1,6 @@
 ---
 name: add-pdf-viewer
-description: Internal implementation skill invoked by /add-native for native PDF control workflows. Handles HTTPS-only PDF viewing with @microsoft/extension-native-pdf-viewer.
+description: Internal implementation skill invoked by /add-native for native PDF control workflows. Handles HTTPS-only PDF viewing with @microsoft/power-apps-native-pdf-viewer.
 user-invocable: false
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
@@ -10,7 +10,7 @@ model: sonnet
 
 # Add PDF Viewer
 
-**Internal helper.** Users should invoke `/add-native pdf-viewer`, `/add-native pdf-control`, or `/add-native @microsoft/extension-native-pdf-viewer`; `/add-native` routes here after resolving the capability.
+**Internal helper.** Users should invoke `/add-native pdf-viewer`, `/add-native pdf-control`, or `/add-native @microsoft/power-apps-native-pdf-viewer`; `/add-native` routes here after resolving the capability.
 
 Generate or verify the native PDF viewer wrapper and show how to call its **native React Native API**. This skill supports HTTPS PDF URLs only. Do not use the HostingSDK / PCF path from the package README; that is for a different use case.
 
@@ -27,7 +27,7 @@ If this fails, tell the user to run `/create-mobile-app` first and STOP.
 ### 2. Verify package is already present
 
 ```bash
-node -e "const p=require('./package.json'); const m='@microsoft/extension-native-pdf-viewer'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m + ' is not in package.json. The template/app must already ship this native extension. This skill will not install it or edit native config.'); process.exit(1); } console.log('OK: native PDF viewer package present');"
+node -e "const p=require('./package.json'); const m='@microsoft/power-apps-native-pdf-viewer'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m + ' is not in package.json. The template/app must already ship this native extension. This skill will not install it or edit native config.'); process.exit(1); } console.log('OK: native PDF viewer package present');"
 ```
 
 If the check fails, STOP. Do not run `npm install`, `npx expo install`, `pod install`, or edit `app.config.js`. This package contains native iOS/Android code and must already be part of the app's native build.
@@ -47,7 +47,7 @@ The wrapper MUST:
 
 ```ts
 // src/native/pdfViewer.ts
-import { NativePdfViewer } from '@microsoft/extension-native-pdf-viewer';
+import { NativePdfViewer } from '@microsoft/power-apps-native-pdf-viewer';
 
 export type PdfViewerResult =
   | { ok: true; action?: 'shared' | 'printed' | 'dismissed' }
@@ -120,7 +120,7 @@ if (response.ok) {
 
 Notes:
 - URLs must be `https://`. Local `file://`, `content://`, and `blob:` URIs are not supported by this skill.
-- Use `@microsoft/extension-native-pdf-viewer` only for this native HTTPS PDF viewing use case.
+- Use `@microsoft/power-apps-native-pdf-viewer` only for this native HTTPS PDF viewing use case.
 - Use `expo-document-picker` for picking/importing/uploading a local PDF or document.
 - Use `/add-native pdf-report` for generated local PDFs. That helper requires `expo-print` and adds local share/open behavior only when `expo-sharing` is already present.
 - Generated local PDFs from `expo-print` must either open through the `pdfReport` share wrapper when `expo-sharing` is present, or be uploaded to Dataverse File storage first and viewed later through a supported HTTPS URL if one is available.
@@ -144,7 +144,7 @@ This skill does not install native code. If the package was just added outside t
 Do not import or register:
 
 ```ts
-import NativePdfViewerExtension from "@microsoft/extension-native-pdf-viewer";
+import NativePdfViewerExtension from "@microsoft/power-apps-native-pdf-viewer";
 ```
 
 Do not wire Companion PCF or `NativePdfViewerExtension`. In Power Apps native code apps, use the native React Native API above.
@@ -155,7 +155,7 @@ Tell the user:
 
 ```text
 PDF viewer added
-Package present   : @microsoft/extension-native-pdf-viewer
+Package present   : @microsoft/power-apps-native-pdf-viewer
 Wrapper           : src/native/pdfViewer.ts
 URL support       : HTTPS only
 Type-check        : PASS
@@ -167,5 +167,5 @@ HostingSDK / PCF  : not used
 Update `memory-bank.md` under `Controls`:
 
 ```text
-- PDF viewer added — @microsoft/extension-native-pdf-viewer (<ISO date>)
+- PDF viewer added — @microsoft/power-apps-native-pdf-viewer (<ISO date>)
 ```
