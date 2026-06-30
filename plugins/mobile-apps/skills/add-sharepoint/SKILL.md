@@ -94,17 +94,17 @@ Get explicit confirmation before creating. Use safe functions from [list-managem
 
 ### Step 6: Get Connection ID
 
-Find the SharePoint Online connection ID (see [connector-reference.md](${CLAUDE_SKILL_DIR}/../../shared/connector-reference.md)):
+Get the SharePoint Online connection ID (see [connector-reference.md](${CLAUDE_SKILL_DIR}/../../shared/connector-reference.md)):
 
 ```bash
-npx power-apps list-connections --search sharepoint --json
+npx power-apps create-connection --api-id shared_sharepointonline --json
 ```
 
-Capture the **`apiId`** (e.g., `shared_sharepointonline`) and **`connectionId`** columns from the output. Use these exact values in the commands below.
+Use **`shared_sharepointonline`** as the `apiId` and capture **`connectionId`** from the output. Use these exact values in the commands below.
 
-Find the **SharePoint Online** connection. If none exists, direct the user to create one:
+If `create-connection` cannot complete because browser-based connection creation is disabled or the connector needs interactive auth, direct the user to create one:
 
-> Open `https://make.powerapps.com/environments/<environment-id>/connections` → **+ New connection** → search "SharePoint" → Create. Then re-run `/list-connections sharepoint`.
+> Open `https://make.powerapps.com/environments/<environment-id>/connections` → **+ New connection** → search "SharePoint" → Create. Then provide the connection ID or rerun `/list-connections shared_sharepointonline`.
 
 ### Step 7: Discover Sites
 

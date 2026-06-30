@@ -138,7 +138,7 @@ Extract three signals from the user's text:
 |---|---|
 | **Affected screen** | Match keywords against route filenames in `app/` (e.g., `"todos"` → `app/(tabs)/todos.tsx`, `app/todos/index.tsx`, `app/(tabs)/index.tsx`). Use `Glob` to enumerate `app/**/*.tsx`; pick the closest substring match. If multiple, ask once. |
 | **Affected entity / service** | Same keyword against `src/generated/services/*Service.ts` and `src/generated/models/*Model.ts` (e.g., `"todos"` → `TodosService`, `Todo` model). Use `Glob`. |
-| **Symptom class** | Map the text to one of: `empty-list`, `blank-screen`, `wrong-data`, `unresponsive-control`, `stale-data`, `wrong-navigation`, `crash`, `pdf-viewer`, `pdf-report`, `pen-input`, `dataverse-upload`. Default for "PDF won't open / preview PDF fails": `pdf-viewer`. Default for "report PDF not generated / print report fails": `pdf-report`. Default for "signature / pen / ink fails": `pen-input`. Default for "signature/report saved but missing": `dataverse-upload`. Default for "not appearing / not showing / nothing here / missing": `empty-list`. Default for "doesn't load / freezes / spinner forever": `blank-screen`. |
+| **Symptom class** | Map the text to one of: `empty-list`, `blank-screen`, `wrong-data`, `unresponsive-control`, `stale-data`, `wrong-navigation`, `crash`, `pdf-viewer`, `pdf-report`, `pen-input`, `geolocation`, `dataverse-upload`. Default for "PDF won't open / preview PDF fails": `pdf-viewer`. Default for "report PDF not generated / print report fails": `pdf-report`. Default for "signature / pen / ink fails": `pen-input`. Default for "location not tracking / GPS not updating / background location stopped / breadcrumb gaps / route not consistent": `geolocation`. Default for "signature/report saved but missing", or "location rows not reaching Dataverse": `dataverse-upload`. Default for "not appearing / not showing / nothing here / missing": `empty-list`. Default for "doesn't load / freezes / spinner forever": `blank-screen`. |
 
 Append to `fixes.md`:
 ```
@@ -319,6 +319,7 @@ Apply the 8-category table. Treat each unique stack trace / error message as one
 | Critical | `SyntaxError`, `Unexpected token`, `transform failed` (multi-line block from Metro terminal, primary mode only) | Import / Bundle |
 | Critical | `Cannot read properties of undefined`, `is not a function` | JS Runtime |
 | High | `NATIVE_MODULE_MISSING` from `pdfViewer` or `penInput` wrapper | Native |
+| High | `NATIVE_MODULE_MISSING`, `PERMISSION_DENIED`, or `TRACKING_FAILED` from `geolocation` wrapper | Native |
 | High | `INVALID_URL` from `pdfViewer`, or logs mentioning `file://`, `content://`, `blob:`, or `http://` PDF viewer input | JS Runtime |
 | High | `VIEWER_FAILED` or `CAPTURE_FAILED` from PDF/pen wrapper | Native |
 | High | `ERROR` level runtime log | JS Runtime |
@@ -433,10 +434,11 @@ Read the relevant source file(s). Identify:
 | Native module, `app.config.js`, `app.plugin.js`, `Podfile`, `build.gradle` | **Inform the user.** Do NOT auto-edit native config — print the error + suggested action and skip to next issue. |
 | Unrecognized error pattern | **Best-effort autonomous fix** — see D3.2 below. The skill attempts a single named hypothesis instead of stopping; the existing 2-attempt escalation rule is the safety net. |
 
-PDF/pen-specific routing:
+PDF/pen/geolocation-specific routing:
 - `INVALID_URL` for PDF viewer input is an inline screen/wrapper fix. Enforce `https://` before dispatch. Never add support for `file://`, `content://`, `blob:`, or `http://` in the native viewer path.
 - A generated PDF local URI must be handled through `src/native/pdfReport.ts` sharing only when `expo-sharing` is present, or uploaded to Dataverse File storage first and viewed only through a supported HTTPS URL if the app has one.
 - `NATIVE_MODULE_MISSING` for PDF viewer or pen input means the native extension is not in the running build. Do not install packages or edit native config from debug; route to `/add-native pdf-viewer` or `/add-native pen-input` to verify wrapper/package state, then tell the user a native rebuild/template update is needed if the package is absent from the app build.
+- For `geolocation`, debug the actual failure dimension: can tracking start (`startTracking`, permissions, native module), are rows reaching Dataverse (default `msdyn_locationrecords` exists, native upload/auth errors, no JS upload path), and does behavior match the user expectation (background, restart persistence, breadcrumb/route continuity). Fix visible screen handling inline; if the native module/table is missing, block use and route to the relevant geolocation setup path, not `/add-dataverse`.
 - `USER_CANCELLED` from pen input is not a bug unless the screen renders it as an error. Inline fix screens that show cancellation as failure.
 - Dataverse artifact writes are local app fixes only when the schema/service already exists. If File/Image columns are missing, route to `/add-dataverse`.
 

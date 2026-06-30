@@ -14,6 +14,8 @@ Scan the user's description and wizard answers for these signals, then confirm i
 | "generate PDF", "export report", "print report", "evidence packet", "certificate PDF" | PDF-report capability + optional Dataverse File column when retained |
 | "view PDF", "open PDF", "preview PDF" | Native PDF viewer capability for HTTPS PDF URLs only |
 | "signature", "sign", "sign off", "approval", "pen", "ink", "draw" | Pen-input capability + Dataverse Image/File storage target |
+| "track location", "background location", "GPS tracking", "follow route", "breadcrumb", "field worker location" | Geolocation capability (`@microsoft/powerapps-geolocation-control`) + Dataverse location table (default `msdyn_locationrecords`) |
+| "current location", "where am I", "tag with coordinates", "one-shot location" | One-shot location capability (`expo-location`) |
 | "share", "send to", "export" | Sharing capability |
 | "secure", "credentials", "token", "PIN" | Secure-store capability |
 | "assign", "technician", "manager" | Multiple user types |
@@ -26,10 +28,11 @@ Do not infer capabilities the template does not ship. Resolve every native signa
 
 PDF/pen rules:
 - Do not infer `document-picker` from generic "PDF" alone; use the specific signal rows above.
-- Native PDF viewing supports HTTPS URLs only and requires `@powerapps/extension-native-pdf-viewer`.
+- Native PDF viewing supports HTTPS URLs only and requires `@microsoft/extension-native-pdf-viewer`.
 - Local generated PDFs require `expo-print`; share/open behavior also requires `expo-sharing`.
 - Retained generated PDFs require a Dataverse File column or child Evidence/Attachment table.
 - Signature/ink capture must record a Dataverse target in `native-app-plan.md`: Image column, File column, or child Evidence/Signature table.
+- Background/continuous location tracking uses the `geolocation` capability (`@microsoft/powerapps-geolocation-control`, MSAL-only) and requires an existing Dataverse target table (default entity set `msdyn_locationrecords`, or a custom `tableName` whose `fieldMap` columns exist). `/add-native geolocation` must verify that table; if it is missing, do not allow the control to be used. The missing control table is not created through `/add-dataverse`; use the geolocation-control table provisioning/setup mechanism, then re-run `/add-native geolocation`. Use one-shot `location` (`expo-location`) for a single foreground coordinate read; do not conflate the two.
 
 ## Ask Shape
 

@@ -238,6 +238,7 @@ Before writing, scan the requirements for artifact signals and encode the storag
 | Generated PDF, export report, print report, evidence packet, certificate PDF | Ask/preserve whether it is retained. Retained PDFs use a File column on the parent or a child Evidence/Attachment table. Transient PDFs need no Dataverse column. |
 | Upload PDF, attach file, import document | Use a File column or child Attachment table with lookup to the parent |
 | View/open PDF | Only model a durable HTTPS URL when the app has one; native PDF viewer does not support local `file://`, `content://`, or `blob:` URIs |
+| Track location, background GPS, follow route, breadcrumb, field-worker location | Do not model an app-owned Dataverse table for the control. Record only the prerequisite: the geolocation control's Dataverse target table must already exist before the control is used. Default entity set is `msdyn_locationrecords` with the `msdyn_*` field map; for a custom table, every column named in the wrapper's `fieldMap` must exist. If the table or mapped columns are missing, block `geolocation` until the geolocation-control table provisioning/setup mechanism has created them; do not model File/Image columns for this control. |
 
 Never model retained PDF bytes as long text/base64. File columns store PDF content. Signature PNGs may use Image columns when the generated service supports image payloads; otherwise use File columns or child Evidence rows.
 

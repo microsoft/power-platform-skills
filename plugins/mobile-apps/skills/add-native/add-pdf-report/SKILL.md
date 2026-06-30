@@ -21,10 +21,10 @@ Generate or verify a local PDF report wrapper for app-owned PDFs created from re
 | Generate/export/print a report from app data | This helper: `expo-print` -> local PDF URI |
 | Share/open the generated local PDF from the device | Add share method only if `expo-sharing` is already in `package.json` |
 | Retain the generated PDF in Dataverse | Create/update parent row first, then upload to a Dataverse File column with generated services |
-| Open an existing HTTPS PDF URL in the Power Apps native viewer | `/add-native pdf-viewer`, only if `@powerapps/extension-native-pdf-viewer` is already present |
+| Open an existing HTTPS PDF URL in the Power Apps native viewer | `/add-native pdf-viewer`, only if `@microsoft/extension-native-pdf-viewer` is already present |
 | Pick/import/upload a user-selected PDF | `/add-native document-picker` or host `<FilePicker>` for Dataverse File columns |
 
-Local generated PDFs are usually `file://` URIs. They are not valid input for `openHttpsPdf(...)` and must not be passed to `@powerapps/extension-native-pdf-viewer`.
+Local generated PDFs are usually `file://` URIs. They are not valid input for `openHttpsPdf(...)` and must not be passed to `@microsoft/extension-native-pdf-viewer`.
 
 ## Steps
 
@@ -63,7 +63,7 @@ The wrapper MUST:
 - Import `expo-sharing` only when Step 2 confirms it is present.
 - Return discriminated unions and never throw.
 - Treat generated local PDFs as local files for share/upload only.
-- Never call `openHttpsPdf(...)` or import `@powerapps/extension-native-pdf-viewer`.
+- Never call `openHttpsPdf(...)` or import `@microsoft/extension-native-pdf-viewer`.
 - Keep HTML generation deterministic and app-owned; do not fetch remote HTML inside the wrapper.
 
 Base wrapper when `expo-sharing` is present:

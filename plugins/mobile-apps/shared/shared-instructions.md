@@ -87,7 +87,7 @@ Note on `az`: on Windows where it is installed as a `.cmd` shim and not on the b
 
 **📋 [connector-reference.md](./connector-reference.md)**
 
-All non-Dataverse connectors require a connection ID before `npx power-apps add-data-source`. Read this before any `/add-*` connector skill. Always run `/list-connections` first to find or surface missing connections.
+All non-Dataverse connectors require a connection ID or connection reference before `npx power-apps add-data-source`. Read this before any `/add-*` connector skill. Always run `/list-connections` first to create a supported connection, reuse a caller-provided connection ID, or resolve a solution connection reference.
 
 ---
 
@@ -146,19 +146,20 @@ Typical commands:
 ```bash
 npx power-apps init --display-name '<name>' --environment-id <id> --non-interactive
 npx power-apps add-data-source --api-id <api> --connection-id <connection-id>
-npx power-apps list-connections --search '<connector-name>' --json
+npx power-apps create-connection --api-id <api> --json
+npx power-apps list-connection-references --solution-id <solution-id> --json
 node scripts/resolve-environment.js [environment-id-or-url]
 ```
 
 **Power Apps CLI required-argument rule:** when a skill invokes `npx power-apps`, pass every value the skill already knows and run app-root verbs from the directory that contains `power.config.json`. In practice:
 
 - `init` and pre-project discovery commands can use `--environment-id` because there is no `power.config.json` yet.
-- After `power.config.json` exists, do **not** pass `--environment-id` to app-root verbs (`add-data-source`, `push`, `list-datasets`, `list-tables`, `list-connections`, `add-flow`, `refresh-data-source`, etc.). The CLI reads the environment and region from `power.config.json`; extra unregistered flags can fail command parsing.
-- Use `--non-interactive` only on commands whose required values are completely supplied and whose options are marked optional where appropriate (`init`, `push`, `add-flow --flow-id`, `remove-flow --flow-id`, `refresh-data-source --data-source-name`, `delete-data-source --api-id --data-source-name --force`). For `add-data-source`, prefer passing the connector-specific required flags and let the action layer request only the options it needs.
+- After `power.config.json` exists, do **not** pass `--environment-id` to app-root verbs (`add-data-source`, `push`, `list-datasets`, `list-tables`, `list-connection-references`, `add-flow`, `remove-flow`, etc.). The CLI reads the environment and region from `power.config.json`; extra unregistered flags can fail command parsing.
+- Use `--non-interactive` only on commands whose required values are completely supplied and whose implementation supports non-interactive execution (`init`, `push`, `add-flow --flow-id`, `remove-flow --flow-id`, `create-connection --api-id` for SSO-eligible connectors, `delete-data-source --api-id --data-source-name`). For `add-data-source`, prefer passing the connector-specific required flags and let the action layer request only the options it needs.
 - Prefer `--json` on list/discovery commands so downstream parsing is stable.
 - For Dataverse table generation, pass `--api-id dataverse`, `--resource-name <table-logical-name>`, and `--org-url <environment-url>`.
-- For non-Dataverse connectors, pass `--api-id`, plus either `--connection-id` or `--connection-ref`; table-based connectors also need `--dataset` and `--resource-name`.
-- Use `refresh-data-source` after schema drift or regeneration needs instead of re-adding the same data source.
+- For non-Dataverse connectors, pass `--api-id`, plus either `--connection-id` from `create-connection` or `--connection-ref` from `list-connection-references`; table-based connectors also need `--dataset` and `--resource-name`.
+- For existing raw connection IDs, use a caller-provided value or create a new connection with `create-connection`. Dataverse actions/functions can be discovered with `find-dataverse-api`; this plugin only adds Dataverse table CRUD through `/add-dataverse`.
 
 **Standalone `npx power-apps` auth:** the CLI uses its own MSAL cache at `~/.powerapps-cli/cache/auth/msal_cache.json`; `az login` / `az account set` will not switch the account used by `npx power-apps`. Auth commands do **not** require `--environment-id`. Use this triage order when auth fails or the wrong user is active:
 
@@ -202,7 +203,7 @@ Apply these rules whenever an `az`, `npm`, `npx`, or `expo` command exits non-ze
 | Condition | Action |
 | --- | --- |
 | Wrong Power Apps CLI user, `Multiple accounts found`, or standalone CLI auth loop | Run `npx power-apps auth-status --json` to see cached accounts. If the right account is cached, run `npx power-apps auth-switch --account <email>`. If not cached, run `npx power-apps login [--account <email>]`. Do not use `az account set` to switch this CLI. |
-| `connectionId not found` or empty `-c` | Run `/list-connections` to find the right ID, then retry with `--connection-id`. |
+| `connectionId not found` or empty `-c` | Create a connection with `npx power-apps create-connection --api-id <api-id> --json`, use a caller-provided existing connection ID, or use `list-connection-references --solution-id <solution-id> --json` and retry with `--connection-ref`. |
 | Missing `orgUrl`, `resourceName`, `apiId`, or `environmentId` | Re-run with the full long-form command for that connector shape; do not fall back to interactive prompts. |
 | `environment not set` | Confirm `power.config.json` has `environmentId`; if missing, rerun `npx power-apps init --display-name '<name>' --environment-id <id> --non-interactive`. |
 | Non-zero exit for any other reason | Report exact stderr. STOP. |

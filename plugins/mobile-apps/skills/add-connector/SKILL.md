@@ -76,9 +76,9 @@ After `add-flow`, continue at Step 4 and inspect the generated service/model fil
 
 ### Step 3 — Add Connector
 
-**First, find the connection ID** (see [connector-reference.md](${CLAUDE_SKILL_DIR}/../../shared/connector-reference.md)):
+**First, get the connection ID or connection reference** (see [connector-reference.md](${CLAUDE_SKILL_DIR}/../../shared/connector-reference.md)):
 
-Run the `/list-connections` skill. Find the connector in the output. Capture the exact `apiId` and `connectionId` values. If none exists, direct the user to create one using the environment-specific Connections URL — construct it from the active environment ID in context (from `power.config.json` `environmentId` or a prior step):
+Run the `/list-connections` skill with the connector API ID (for example `shared_office365users`). Capture the exact `connectionId` from `create-connection`, or the `connectionRef` from `list-connection-references` if the caller is solution-aware. If creation cannot complete in the CLI, direct the user to create one using the environment-specific Connections URL — construct it from the active environment ID in context (from `power.config.json` `environmentId` or a prior step):
 `https://make.powerapps.com/environments/<environment-id>/connections` → **+ New connection** → search for the connector → Create.
 
 **Classify the connector before running `add-data-source`:**
@@ -118,19 +118,20 @@ npx power-apps list-sqlStoredProcedures --connection-id <connectionId> --dataset
 npx power-apps add-data-source --api-id shared_sql --connection-id <connectionId> --dataset '<database>' --sql-stored-procedure '<procedure>'
 ```
 
-**For Dataverse actions/functions rather than tables, discover the API operation first:**
+**For Dataverse actions/functions rather than tables, discovery is available but this plugin only adds Dataverse table CRUD:**
 
 ```bash
 npx power-apps find-dataverse-api --search '<operation-name>' --json
-npx power-apps add-dataverse-api --api-name '<operation-name>' --non-interactive
 ```
+
+Surface the matching operation metadata and STOP with a clear note that this plugin can add Dataverse table CRUD through `/add-dataverse`, but does not add Dataverse actions/functions.
 
 If the user actually needs Dataverse table CRUD, stop and delegate to `/add-dataverse`; do not add Dataverse tables from this generic connector skill.
 
 **Parameter reference:**
 
-- `--api-id` / `-a` — connector API ID from `/list-connections` (often `shared_<connector>`, e.g., `shared_office365users`). Use the exact value from the connection list when available.
-- `--connection-id` / `-c` — **required** for all non-Dataverse connectors. Get from `/list-connections`.
+- `--api-id` / `-a` — connector API ID (often `shared_<connector>`, e.g., `shared_office365users`). Use the exact value provided by the caller or connector docs.
+- `--connection-id` / `-c` — required for non-Dataverse connectors unless using `--connection-ref`. Get from `create-connection`, the maker portal, or caller context.
 - `--connection-ref` / `-cr` — optional connection reference name when adding into a solution-aware app.
 - `--dataset` / `-d` — required for table-based datasources (for example SharePoint site URL, Excel file/location, SQL database).
 - `--resource-name` / `-t` — table/list/resource name for table-based datasources.
@@ -185,12 +186,12 @@ Update `memory-bank.md` with: connector added, configured operations, build stat
 If the user asks to remove a connector/table/stored procedure that this skill added, use the matching Power Apps CLI command with explicit arguments:
 
 ```bash
-npx power-apps delete-data-source --api-id <apiId> --data-source-name '<data-source-or-table-name>' --force --non-interactive
-npx power-apps delete-data-source --api-id shared_sql --data-source-name '<procedure>' --sql-stored-procedure '<procedure>' --force --non-interactive
+npx power-apps delete-data-source --api-id <apiId> --data-source-name '<data-source-or-table-name>' --non-interactive
+npx power-apps delete-data-source --api-id shared_sql --data-source-name '<procedure>' --sql-stored-procedure '<procedure>' --non-interactive
 npx power-apps remove-flow --flow-id <flow-guid> --non-interactive
 ```
 
-Then run `npx power-apps refresh-data-source --non-interactive`, `npm run generate-schemas`, and `npx tsc --noEmit` before reporting success.
+Then run `npm run generate-schemas` and `npx tsc --noEmit` before reporting success.
 
 ## Runtime connector handling
 

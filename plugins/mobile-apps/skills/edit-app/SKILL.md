@@ -211,7 +211,7 @@ For PDF/signature requests, map the change to every affected section instead of 
 | Store signed approval as Dataverse image | Data Model: Image column; Screens: normalize `data:image/png;base64,...` before update; Native Capabilities: `pen-input` if capture is in-app |
 | Generate/export/print evidence PDF | Native Capabilities: `pdf-report` only when `expo-print` is present, plus `sharing` only when local share is needed and `expo-sharing` is present; Data Model: File column only if retained; Screens: generation pending/failed/success states |
 | Persist generated PDFs | Data Model: Dataverse File column or child Attachment table; Screens: create/update row first, then upload File bytes; Native Capabilities: `pdf-report` |
-| View/open/preview PDF | Native Capabilities: `native-pdf-viewer` only for HTTPS PDF URLs and only when `@powerapps/extension-native-pdf-viewer` is present; Screens: invalid URL and viewer failed states |
+| View/open/preview PDF | Native Capabilities: `native-pdf-viewer` only for HTTPS PDF URLs and only when `@microsoft/extension-native-pdf-viewer` is present; Screens: invalid URL and viewer failed states |
 
 If a single PDF/signature request requires multiple plan sections, say so and run the edit loop section-by-section. Do not write a native capability entry that references a Dataverse column or screen state that remains absent from the plan.
 

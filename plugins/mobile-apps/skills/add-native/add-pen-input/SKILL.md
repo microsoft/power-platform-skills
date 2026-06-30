@@ -1,6 +1,6 @@
 ---
 name: add-pen-input
-description: Internal implementation skill invoked by /add-native for pen, signature, ink, drawing, and handwriting capture workflows using @powerapps/extension-pen-input.
+description: Internal implementation skill invoked by /add-native for pen, signature, ink, drawing, and handwriting capture workflows using @microsoft/extension-pen-input.
 user-invocable: false
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
@@ -10,7 +10,7 @@ model: sonnet
 
 # Add Pen Input
 
-**Internal helper.** Users should invoke `/add-native pen-input`, `/add-native signature`, or `/add-native @powerapps/extension-pen-input`; `/add-native` routes here after resolving the capability.
+**Internal helper.** Users should invoke `/add-native pen-input`, `/add-native signature`, or `/add-native @microsoft/extension-pen-input`; `/add-native` routes here after resolving the capability.
 
 Generate or verify the native pen input wrapper and show how to call its **native React Native API**. Do not use the HostingSDK / PCF path from the package README; that is for a different use case.
 
@@ -27,7 +27,7 @@ If this fails, tell the user to run `/create-mobile-app` first and STOP.
 ### 2. Verify package is already present
 
 ```bash
-node -e "const p=require('./package.json'); const m='@powerapps/extension-pen-input'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m + ' is not in package.json. The template/app must already ship this native extension. This skill will not install it or edit native config.'); process.exit(1); } console.log('OK: pen input package present');"
+node -e "const p=require('./package.json'); const m='@microsoft/extension-pen-input'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m + ' is not in package.json. The template/app must already ship this native extension. This skill will not install it or edit native config.'); process.exit(1); } console.log('OK: pen input package present');"
 ```
 
 If the check fails, STOP. Do not run `npm install`, `npx expo install`, `pod install`, or edit `app.config.js`. This package contains native iOS/Android code and must already be part of the app's native build.
@@ -49,7 +49,7 @@ import {
   PenInputNative,
   PenInputStatus,
   PenInputErrorCode,
-} from '@powerapps/extension-pen-input';
+} from '@microsoft/extension-pen-input';
 
 export type PenInputResult =
   | { ok: true; dataUri: string }
@@ -129,7 +129,7 @@ Notes:
 - The result is a PNG data URI: `data:image/png;base64,...`.
 - Color inputs support `#RGB` and `#RRGGBB`.
 - Cancel is normal and returns `USER_CANCELLED`; screens should leave current state unchanged and avoid failure banners.
-- Use `@powerapps/extension-pen-input` only for native freehand drawing, ink, handwriting, and signature capture. For unrelated native use cases, use the relevant Expo module or other dependency already present in `package.json`.
+- Use `@microsoft/extension-pen-input` only for native freehand drawing, ink, handwriting, and signature capture. For unrelated native use cases, use the relevant Expo module or other dependency already present in `package.json`.
 
 ### 5. Optional Dataverse save
 
@@ -171,7 +171,7 @@ This skill does not install native code. If the package was just added outside t
 Do not import or register:
 
 ```ts
-import { PenInputExtension } from "@powerapps/extension-pen-input";
+import { PenInputExtension } from "@microsoft/extension-pen-input";
 ```
 
 Do not wire Companion PCF or `PenInputExtension`. In Power Apps native code apps, use the native React Native API above.
@@ -182,7 +182,7 @@ Tell the user:
 
 ```text
 Pen input added
-Package present   : @powerapps/extension-pen-input
+Package present   : @microsoft/extension-pen-input
 Wrapper           : src/native/penInput.ts
 Output            : PNG data URI
 Type-check        : PASS
@@ -194,5 +194,5 @@ HostingSDK / PCF  : not used
 Update `memory-bank.md` under `Controls`:
 
 ```text
-- Pen input added — @powerapps/extension-pen-input (<ISO date>)
+- Pen input added — @microsoft/extension-pen-input (<ISO date>)
 ```
