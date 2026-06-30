@@ -630,7 +630,7 @@ If already-created markers appear (`memory-bank.md`, `native-app-plan.md`, `.dat
 
 Then apply these **safe idempotent** prep steps:
 
-1. Update app identity in `app.config.js` from Step 2 answers (`name`, `slug`) using targeted string replacements only.
+1. Update app identity in `app.config.js` and `package.json` from Step 2 answers (`displayName`, `slug`) using targeted string replacements only.
 2. Ensure `src/generated/index.ts` exists with the empty generated barrel if no generated services exist.
 3. Ensure `src/components/`, `src/hooks/`, `src/utils/`, `src/tokens/`, and `src/native/` directories exist.
 4. Copy shared helper files from plugin samples only when the destination file is missing. Do not overwrite user-edited files.
@@ -642,14 +642,15 @@ Do **not** preserve placeholder `power.config.json` from the template. Keeping i
 
 After preparation, continue to Step 6.
 
-**Fix 1 — App identity in `app.config.js`**
+**Fix 1 — App identity in `app.config.js` and `package.json`**
 
 Substitute the hardcoded template values with wizard answers from Step 2:
 
 | Find | Replace with |
 |---|---|
-| `name: 'Power Apps Dev Player'` | `name: '<displayName>'` |
-| `slug: 'powerapps-dev-player'` | `slug: '<slug>'` |
+| `const APP_NAME = process.env.APP_DISPLAY_NAME || 'Power Apps Standalone App';` | `const APP_NAME = process.env.APP_DISPLAY_NAME || '<displayName>';` |
+| `const APP_SLUG = process.env.APP_SLUG || 'powerapps-standalone-app';` | `const APP_SLUG = process.env.APP_SLUG || '<slug>';` |
+| `"name": "powerapps-standalone-app"` | `"name": "<slug>"` |
 
 Bundle ID and scheme are left as template defaults — they are fixed across all dev builds and patched by the wrap pipeline at release time.
 

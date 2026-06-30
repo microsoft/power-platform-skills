@@ -4,6 +4,7 @@ import {
   Text,
   YStack,
 } from 'tamagui';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Redirect } from 'expo-router';
 import { useAuth } from '@microsoft/power-apps-native-host';
 
@@ -24,25 +25,24 @@ export default function LoginScreen() {
       backgroundColor="$background"
       gap="$4"
     >
-      {/* Logo / icon */}
       <YStack
-        width={80}
-        height={80}
-        borderRadius={20}
+        width={72}
+        height={72}
+        borderRadius={18}
         backgroundColor="$blue10"
         alignItems="center"
         justifyContent="center"
         marginBottom="$2"
       >
-        <Text fontSize={40}>⚡</Text>
+        <MaterialCommunityIcons name="microsoft-powerpoint" size={34} color="white" />
       </YStack>
 
       <Text fontSize="$8" fontWeight="700" color="$color12" textAlign="center">
-        Power Apps
+        Power Apps Standalone
       </Text>
 
       <Text fontSize="$4" color="$color10" textAlign="center" lineHeight="$5">
-        Sign in with your Microsoft account to access Power Platform data
+        Sign in to connect this app to Power Platform data.
       </Text>
 
 
@@ -63,7 +63,7 @@ export default function LoginScreen() {
         icon={busy ? <Spinner size="small" color="white" /> : undefined}
         pressStyle={{ opacity: 0.85 }}
       >
-        {isLoading ? 'Signing in…' : !isAuthReady ? 'Loading…' : 'Sign in with Microsoft'}
+        {isLoading ? 'Signing in...' : !isAuthReady ? 'Loading...' : 'Sign in with Microsoft'}
       </Button>
     </YStack>
   );

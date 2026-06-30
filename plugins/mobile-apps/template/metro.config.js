@@ -3,9 +3,6 @@ const { getDefaultConfig } = require('expo/metro-config');
 const config = getDefaultConfig(__dirname);
 
 config.resolver.sourceExts = [...config.resolver.sourceExts, 'mjs'];
-
-// Expose a well-known probe endpoint so the Power Apps Dev Player can confirm
-// it is connecting to a PA-Wrap app and not an arbitrary Expo/RN Metro server.
 config.server = {
   ...config.server,
   enhanceMiddleware: (middleware) => (req, res, next) => {
