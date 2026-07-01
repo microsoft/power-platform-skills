@@ -4,7 +4,7 @@ This template is an Expo, React Native, and TypeScript starter for building a st
 
 ## Requirements
 
-- Node.js 20 LTS.
+- Node.js 22 LTS.
 - npm 10 or newer.
 - The Power Apps Developer app from the Apple App Store or Google Play.
 

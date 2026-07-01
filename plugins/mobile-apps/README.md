@@ -1,12 +1,99 @@
-# Mobile Apps Plugin (Code Apps Native, Preview)
+# Power Apps Standalone App Template
 
-Claude Code / Copilot plugin for building **Power Apps code apps for mobile** using Expo + React Native + TypeScript.
+This template is an Expo, React Native, and TypeScript starter for building a standalone mobile app that connects to Power Platform data through `@microsoft/power-apps-native-host`.
 
-> **Marketplace:** `power-platform-skills`, plugin `mobile-app`, stored in `plugins/mobile-apps`.
-> **What:** Build mobile Power Apps with Expo + RN + TS (iOS & Android).
-> **Status:** public preview / v0.
+## Requirements
 
----
+- Node.js 22 LTS.
+- npm 10 or newer.
+- The Power Apps Developer app from the Apple App Store or Google Play.
+
+## Setup
+
+Start from the Power Platform mobile app template, then use the mobile-app
+skill to generate the app plan, data model, screens, native capabilities, and
+connector wiring.
+
+1. Create a new app from the template and install dependencies:
+
+    ```sh
+    npx degit microsoft/power-platform-skills/plugins/mobile-apps/template#main my-mobile-app
+    cd my-mobile-app
+    npm install
+    ```
+
+2. Install the mobile-app skill from the Power Platform Skills plugin.
+
+    For GitHub Copilot in VS Code:
+
+    1. Open the Command Palette.
+    2. Run **Chat: Install Plugin From Source**.
+    3. Paste the mobile-app plugin manifest URL:
+
+        ```text
+        https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/.plugin/plugin.json
+        ```
+
+    4. Reload VS Code if prompted, then open Copilot Chat in Agent mode.
+
+    For Claude CLI:
+
+    ```sh
+    claude plugin marketplace add microsoft/power-platform-skills
+    claude plugin install mobile-app@power-platform-skills --scope user
+    ```
+
+3. Open the template folder in VS Code and run the skill from Copilot Chat:
+
+    ```text
+    /create-mobile-app
+    ```
+
+    The template includes this host package and the required Expo / React Native
+    runtime dependencies. The skill updates the app in place as it designs and
+    generates the mobile experience.
+
+    When prompted to sign in, use credentials for the tenant where the Dataverse
+    environment belongs.
+
+4. Create a Microsoft Entra app registration and grant admin consent.
+
+    Create a native/public client app registration for the mobile app, then add
+    the following redirect URIs:
+
+    ```text
+    https://login.microsoftonline.com/common/oauth2/nativeclient
+    msauth.com.microsoft.PreviewApp://auth
+    ```
+
+    Add delegated API permissions for these APIs, then grant admin consent for
+    the tenant:
+
+    - Dynamics CRM
+    - Power Platform API
+    - Azure API Connections
+
+5. Start mobile app:
+
+    Run the above command in a new terminal from the app directory.
+
+    ```bash
+    npm run dev
+    ```
+
+6. Preview the app by scanning the QR code with the Power Apps Developer app
+
+    App store: https://apps.apple.com/us/app/power-apps-developer/id6753083462
+    Play store: (coming soon)
+    App center: https://install.appcenter.ms/orgs/appmagic-player-x6ys/apps/rn-dev-player-preview/distribution_groups/public_distribution/releases
+
+## License and notices
+
+This template is provided under the license in `LICENSE`.
+
+## Plugin reference
+
+The mobile-app plugin is stored in `plugins/mobile-apps` in the `power-platform-skills` marketplace. It works with GitHub Copilot in VS Code and Claude Code.
 
 <a id="glossary"></a>
 ### Glossary
@@ -19,8 +106,6 @@ Claude Code / Copilot plugin for building **Power Apps code apps for mobile** us
 | **Memory bank** | `memory-bank.md` per project — source of truth for resume across sessions |
 | **Brief** | Confirmed feature description (4–8 bullets) the planner consumes |
 
----
-
 ### Repo layout
 
 ```
@@ -31,121 +116,6 @@ shared/       — cross-cutting refs (memory-bank, version-check, MCP, …)
 AGENTS.md     — agent contract
 ```
 
----
-
-## Install
-
-The plugin works with **Claude Code** and **GitHub Copilot in VS Code**. Both use the same plugin directory — no separate distributions.
-
-### Marketplace install
-
-After adding the Power Platform Skills marketplace, install the mobile app plugin:
-
-```bash
-/plugin marketplace add microsoft/power-platform-skills
-/plugin install mobile-app@power-platform-skills
-```
-
-The repository root installer also installs this plugin along with the rest of the marketplace:
-
-```bash
-node scripts/install.js
-```
-
-### Local checkout install
-
-After cloning this marketplace, use the repository root installer when you want all marketplace plugins installed:
-
-```bash
-cd /path/to/power-platform-skills
-node scripts/install.js
-```
-
-To install only this plugin from a local checkout, register the repository root as the marketplace and install `mobile-app` directly:
-
-```bash
-claude plugin marketplace add /path/to/power-platform-skills
-claude plugin install mobile-app@power-platform-skills --scope user
-```
-
-For GitHub Copilot CLI, use the same marketplace root with `copilot plugin marketplace add` and `copilot plugin install mobile-app@power-platform-skills`. Reload VS Code or restart Claude after installation so the slash-command registry refreshes.
-
-### Existing installs / rename migration
-
-If you already had the preview installed and your slash menu still shows the old namespace, uninstall the old local preview plugin and marketplace, then install `mobile-app@power-platform-skills`:
-
-```bash
-claude plugin uninstall "code-apps-native@code-apps-native-local" --scope user
-claude plugin marketplace remove code-apps-native-local
-```
-
-Use the equivalent `copilot plugin uninstall "code-apps-native@code-apps-native-local"` and `copilot plugin marketplace remove code-apps-native-local` commands if your old preview install was in Copilot. Reload VS Code or restart Claude after cleanup so the slash-command registry refreshes.
-
-### Claude Code fallback
-
-**Step 1 — Clone the marketplace anywhere.**
-
-```bash
-git clone https://github.com/microsoft/power-platform-skills.git
-```
-
-**Step 2 — Register the local marketplace.**
-
-```bash
-claude plugin marketplace add /path/to/power-platform-skills
-claude plugin install mobile-app@power-platform-skills --scope user
-```
-
-Use this only if the installer cannot find or configure your Claude CLI. You can also add it to your global plugin config manually — see the [Claude Code plugin docs](https://docs.anthropic.com/claude/docs/claude-code-plugins).
-
-**Step 3 — Prepare a fresh template folder** (next section). Use `degit` to materialize the public template from this repository, run `npm install` in that folder, then open that folder and run `/create-mobile-app` there.
-
-### GitHub Copilot (VS Code) fallback
-
-Use this only if the installer cannot configure your Copilot CLI or VS Code plugin state.
-
-**Option A — Install from the git URL:**
-
-1. Open the Command Palette (`⇧⌘P`) and run **Chat: Install Plugin From Source**
-2. Enter the repository URL (`https://github.com/microsoft/power-platform-skills`) and press Enter
-3. VS Code clones and activates the plugin — skills appear under `/` in Copilot Chat
-
-**Option B — Register a local directory:**
-
-Add the extracted folder to VS Code's `settings.json`:
-
-```json
-"chat.pluginLocations": {
-  "/Users/you/power-platform-skills/plugins/mobile-apps": true
-}
-```
-
-**Using the plugin in Copilot:**
-
-- In the Copilot Chat panel, switch to **Agent mode**
-- Type `/` to see available skills (`/create-mobile-app`, `/add-dataverse`, etc.)
-- Skills run with the same tool access and instructions as in Claude Code
-
-> **Note:** `EnterPlanMode` / `ExitPlanMode` are Claude Code-only directives. Copilot approximates plan mode by restricting itself to read-only operations during the planning phase — the workflow still proceeds correctly.
-
-Create a new app from the template and install dependencies before invoking `/create-mobile-app`:
-
-```bash
-npx degit microsoft/power-platform-skills/plugins/mobile-apps/template#main my-mobile-app
-cd my-mobile-app
-npm install
-```
-
-Then open `my-mobile-app` and run `/create-mobile-app` there. The skill assumes the current working directory is this fresh installed template folder.
-
-Install the mobile-app skill from the Power Platform Skills plugin:
-
-```text
-https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/.plugin/plugin.json
-```
-
----
-
 ## Prerequisites — what you must set up before `/create-mobile-app`
 
 The skill checks these in Step 1 (Prerequisites) and stops with a clear error if any are missing. Get them ready up front to avoid mid-flow blocks.
@@ -154,7 +124,7 @@ The skill checks these in Step 1 (Prerequisites) and stops with a clear error if
 
 | Tool | Min version | How to install / check |
 |---|---|---|
-| Node.js | **22.x** | `node -v` — install via [nvm](https://github.com/nvm-sh/nvm) (`nvm install 22 && nvm use 22`) |
+| Node.js | **20 LTS** | `node -v` — install via [nvm](https://github.com/nvm-sh/nvm) (`nvm install 20 && nvm use 20`) |
 | `az` (Azure CLI) | **2.60+** | `az --version` — needed for Dataverse helper scripts. Install via Homebrew: `brew install azure-cli` |
 | `git` | any recent | required for upstream template clone |
 
@@ -219,7 +189,7 @@ After deploy, use `/open-wrap-url --app-id <app-id> --env-id <env-id>` to jump s
 
 - **Expo standalone template** prepared with `degit` from [`plugins/mobile-apps/template`](https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/template). The plugin bundles the latest template snapshot under `template/`, while `/create-mobile-app` expects the user to run from a fresh installed template working directory and applies the app identity / connector preparation edits there.
 - **Same `npx power-apps add-data-source` workflow** across this plugin's skills — generated services in `src/generated/services/` work consistently
-- **Auth pre-wired** via the Power Apps CLI first-party Entra app — no custom Azure registration required
+- **Auth configuration** through the Microsoft Entra app registration created during setup
 - **Two platforms** in one codebase: iOS, Android
 - **Deploy = `npm run build` + `npx power-apps push`** — local native compile (platform-specific native run commands) is the user's choice and is **out of scope**; users run those directly when they want them.
 - **Local dev = `npm run dev`** — the user runs this directly. The plugin doesn't start Metro.
@@ -394,20 +364,6 @@ At Step 6.75 of `/create-mobile-app`, the `/design-system` skill offers a cost p
 
 ## Known blockers
 
-1. **Fresh template preparation.** `/create-mobile-app` expects a fresh installed `expo-app-standalone` template working directory. Use `degit` to materialize [`plugins/mobile-apps/template`](https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/template), then run `npm install` in that template folder before invoking the skill there.
-2. ~~**Sub-agent slash-command limitation.**~~ ✅ **Resolved** — `/design-system` (Step 6.75) now runs as a top-level skill invocation by the orchestrator, not inside a sub-agent. The old `DESIGN_VIBE_REQUESTED:` handoff signal is no longer needed.
-3. ~~**Connector usage requires the player runtime.**~~ ✅ **Resolved** — `PowerAppsHostProvider` in `app/_layout.tsx` (from `power-apps-native-host`) handles all connector routing, connection resolution, disambiguation, and OAuth consent automatically. No separate executor or provider wiring needed.
-
-## Local Zip Install
-
-For a local checkout, install from the marketplace repository root:
-
-```bash
-cd /path/to/power-platform-skills
-node scripts/install.js
-```
-
-To install only this plugin, register the repository root as a marketplace and install `mobile-app@power-platform-skills` directly with the Claude or Copilot plugin CLI.
 
 ## See also
 
