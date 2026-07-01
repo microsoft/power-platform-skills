@@ -124,7 +124,7 @@ The skill checks these in Step 1 (Prerequisites) and stops with a clear error if
 
 | Tool | Min version | How to install / check |
 |---|---|---|
-| Node.js | **20 LTS** | `node -v` — install via [nvm](https://github.com/nvm-sh/nvm) (`nvm install 20 && nvm use 20`) |
+| Node.js | **22 LTS** | `node -v` — install via [nvm](https://github.com/nvm-sh/nvm) (`nvm install 22 && nvm use 22`) |
 | `az` (Azure CLI) | **2.60+** | `az --version` — needed for Dataverse helper scripts. Install via Homebrew: `brew install azure-cli` |
 | `git` | any recent | required for upstream template clone |
 
