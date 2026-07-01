@@ -21,6 +21,8 @@ jobs:
               with:
                   app-id: 3189942
                   private-key: ${{ secrets.POWER_PLATFORM_SKILLS_APP_PRIVATE_KEY }}
+                  permission-administration: read
+                  permission-contents: write
 
             - name: run-ghrs
               # Use latest release.
