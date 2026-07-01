@@ -14,7 +14,7 @@ Top-level orchestrator. Owns the user-visible flow; delegates planning to the `n
 
 ## Workflow
 
-0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 3. Plan (planner agent + 4 gates) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 11.5 Dev smoke test → 12. Start dev server (`npx expo start`) → 13. Summary
+0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 3. Plan (planner agent + 4 gates) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npx expo start`) → 12.5 Optional debug handoff → 13. Summary
 
 ---
 
@@ -1720,7 +1720,7 @@ Delete the marker immediately after the last screen wave's final TypeScript gate
 rm -f <working_dir>/.tmp/defer-style-hooks
 ```
 
-Never leave this marker in place for Step 11.4, Step 11.5, or Step 12. Report mode ignores the marker and should always scan the generated screens.
+Never leave this marker in place for Step 11.4 or Step 12. Report mode ignores the marker and should always scan the generated screens.
 
 **Print before spawning** (substitute computed values; `<W>` = total waves = `ceil(N/5)`):
 > "→ [Step 11/13] Building <N> screens in <W> wave(s) of up to 5 concurrent.
@@ -1763,7 +1763,7 @@ After the wave's TypeScript gate passes, and only then, print the next wave star
 **After each wave returns, run the Step 3.0 status switch on every builder's first line.** Branch per builder:
 
 - `DONE` → continue.
-- `DONE_WITH_CONCERNS: <list>` (typical case: a `// TODO(connector-not-yet-added)` stub was emitted because the referenced service is not in the Generated Services table) → batch concerns across all builders, surface the consolidated list to the user once at the end of the wave (not per-builder — that would be noise), and ask whether to fix any pending connectors via `/add-connector` before continuing to Step 11.5. Record in `memory-bank.md`.
+- `DONE_WITH_CONCERNS: <list>` (typical case: a `// TODO(connector-not-yet-added)` stub was emitted because the referenced service is not in the Generated Services table) → batch concerns across all builders, surface the consolidated list to the user once at the end of the wave (not per-builder — that would be noise), and ask whether to fix any pending connectors via `/add-connector` before continuing to Step 12. Record in `memory-bank.md`.
 - `NEEDS_CONTEXT: <missing>` → re-spawn that one builder with the missing context appended to its prompt (cap 2 retries per screen, then `BLOCKED`). Print `↻ [K/N] <name> — retrying (missing: <missing>)` so the user understands the wave isn't fully clean yet.
 - `BLOCKED: <reason>` → STOP for that screen, print `✗ [K/N] <name> — BLOCKED (<reason>)` and ask the user whether to (1) fix and retry, (2) skip the screen and continue with a placeholder, or (3) abort the whole flow.
 
@@ -1783,13 +1783,13 @@ Common wave-gate repair classes to batch instead of fixing line-by-line:
 - Dataverse create/update payload typing: prefer typed helper wrappers; if generated base types require server-owned fields, isolate any `as any` at the helper boundary, not throughout screen JSX.
 - Stale connector TODOs: remove `TODO(connector-not-yet-added)` when the service exists in the Generated Services snapshot.
 
-**After all waves return and the last wave gate is clean**, run one final `npx tsc --noEmit` before Step 11.5 to catch cross-screen issues that only appear when all screens exist. If it fails, use the same consolidated batch-repair flow.
+**After all waves return and the last wave gate is clean**, run one final `npx tsc --noEmit` before Step 12 to catch cross-screen issues that only appear when all screens exist. If it fails, use the same consolidated batch-repair flow.
 
 **Sticky tsc/build error policy (run-level).** The first time a `tsc` or `npm run build` failure surfaces in this run, ask the user once:
 
 > "tsc found <N> error(s) in <files>. Patch + continue, or stop and let me investigate?"
 
-Record the answer in `memory-bank.md` under `## Policies` as `tsc_error_policy: patch_continue` or `tsc_error_policy: stop_for_review`. **For every subsequent tsc/build error of the same class in the same run** (e.g., another screen failing typecheck after a builder retry, the cross-screen `tsc` after Step 11.5 fixes), apply the recorded policy automatically:
+Record the answer in `memory-bank.md` under `## Policies` as `tsc_error_policy: patch_continue` or `tsc_error_policy: stop_for_review`. **For every subsequent tsc/build error of the same class in the same run** (e.g., another screen failing typecheck after a builder retry, the cross-screen `tsc` after Step 11.4 fixes), apply the recorded policy automatically:
 
 - `patch_continue` → re-spawn the matching builder with the error appended (or auto-patch in inline mode), respecting the 2-retry cap. Do not re-prompt the user.
 - `stop_for_review` → STOP and surface the new error.
@@ -1800,7 +1800,7 @@ This sticky policy controls **how to handle a failed gate**, not whether the gat
 
 ### Step 11.4 — Stylistic fix sweep (parallel)
 
-Run one controlled stylistic debt sweep after all screen-builder waves and TypeScript gates are clean, before preview/smoke. This keeps screen-builder retries focused on critical compile/data/route issues, then fixes visual and accessibility quality across the full screen set in batches.
+Run one controlled stylistic debt sweep after all screen-builder waves and TypeScript gates are clean, before preview or dev-server launch. This keeps screen-builder retries focused on critical compile/data/route issues, then fixes visual and accessibility quality across the full screen set in batches.
 
 Before running any report, assert the Step 11 fast-wave marker is gone:
 
@@ -1848,9 +1848,9 @@ DONE_WITH_CONCERNS: Step 11.4 left <N> stylistic issue(s) for review: <file:line
 
 Then continue only if TypeScript is clean. Step 11.4 may leave concerns, but it may not leave the app in a broken TypeScript state.
 
-#### Optional static preview (before smoke test)
+#### Optional static preview
 
-After `tsc` passes, offer a static HTML preview. The live app is seconds away (Step 12), so default is skip:
+After `tsc` passes, offer a static HTML preview. The dev server starts next (Step 12), so default is skip:
 
 > "→ N screens built and type-checked. The live app starts next.
 >
@@ -1858,144 +1858,20 @@ After `tsc` passes, offer a static HTML preview. The live app is seconds away (S
 >
 > (a) Preview all screens — HTML phone frames for every screen
 > (b) Preview key screens — List + Form + Detail archetypes only
-> (c) Skip — go to build (see the real app on device/simulator)
+> (c) Skip preview
 >
 > [default: c]"
 
 - **(a)** → invoke `/preview-screens` (all screens)
 - **(b)** → invoke `/preview-screens` with only List + Form + Detail screen files (skip Login, Splash, Profile, OAuth)
-- **(c)** → proceed directly to Step 11.5
-
-### Step 11.5 — Dev smoke test
-
-Run a live screen-by-screen smoke test before deploying. The goal: catch runtime errors from generated screens while Metro is hot, fix them in place, and verify before the bundle is built.
-
-**Tell the user:**
-> "All screens are generated. Run `npx expo start` and keep it running — I'll walk through each screen automatically and fix any errors."
-
-**Detect Metro automatically — do NOT prompt up-front.** Resolve `$METRO_TERMINAL_ID` from `memory-bank.md` (Step 12 writes it), then read output via `BashOutput($METRO_TERMINAL_ID)`.
-
-- If Metro output is present (banner, bundle, or runtime lines), proceed.
-- If the terminal id is missing/stale or output is empty, print **once**:
-
-> "→ Waiting for Metro… start `npx expo start` in another terminal. I'll detect it automatically."
-
-Then poll `BashOutput($METRO_TERMINAL_ID)` every 10s for up to 2 minutes. As soon as Metro output appears, proceed. After 2 min with no output, fall back to a single `AskUserQuestion`: "Is Metro running?" with options "yes — proceed / no — abort smoke test."
-
-Never ask "Metro running?" up-front — terminal output is the primary signal.
+- **(c)** → proceed directly to Step 12
 
 ---
 
-#### 11.5a — Startup check
-
-Collect Metro output immediately after Metro connects:
-
-```
-BashOutput($METRO_TERMINAL_ID)
-```
-
-If logs contain any `ERROR` or uncaught exception:
-- Identify the file and line from the stack trace
-- Edit the file
-- Metro hot-reloads automatically (~1 second)
-- Collect logs again to confirm clean
-
-#### 11.5b — Per-screen walk
-
-Read the `## Screens` section from `native-app-plan.md`. Build an ordered list of new screens (exclude baseline screens marked "keep" — Login, OAuth callback, Splash).
-
-For each screen in the list:
-
-1. **Navigate** — ask the user to navigate to the screen from its parent (tab bar button, list row, or nav button as described in the screen spec's Navigation field).
-
-  If the screen requires navigating into a detail (e.g. list → detail), ask the user to tap a list row first.
-
-2. **Visual check** — ask the user to confirm what they see on the device/simulator and evaluate against two tiers:
-
-   **Tier 1 — Crash / broken (fix immediately):**
-   - Red error overlay (Metro error boundary) → read the error, identify the source file, fix, reload, screenshot again
-   - Blank / white screen → check logs for a silent throw; fix, reload, screenshot again
-   - Layout overflow / elements clipping outside phone frame → fix, reload, screenshot again
-
-   **Tier 2 — Visual quality (flag for fix, same retry loop):**
-   - Loading state shows a centered `<Spinner />` instead of skeleton rows → find the loading branch, replace spinner with skeleton shapes matching the real layout
-   - **Stale data after navigating back from a create/edit child screen** (e.g. add a record on a form, pop back, list still shows old data) → the parent screen is using `React.useEffect` for its data load. Replace with `useFocusEffect` from `expo-router` wrapped in `React.useCallback`. See screen-builder.md "Refresh on focus" rule for the exact pattern.
-   - Empty state is bare text with no icon and no CTA → add `<Ionicons>` + explanation + primary action button
-   - Error state uses an `Alert.alert()` or floating toast instead of inline actionable text → move error inline, add retry button
-   - Touch targets look smaller than 44pt (icon-only buttons, dense list rows) → add `hitSlop` or increase `size` prop
-  - Header/title clipped under phone status bar → add `SafeAreaView` edges or `paddingTop={insets.top}` to every state branch
-  - FAB or sticky CTA too close to tab bar/home indicator → offset with `bottom={insets.bottom + 16}` or `BottomActionBar` inside `SafeAreaView edges={['top', 'bottom']}`
-  - Inactive tab labels/icons, metadata, helper text, modal body copy, or picker affordances look pale → use `$color10`/`theme.color10?.val` or stronger; never `$color8` or weaker for readable text/icons
-  - Yellow/orange status badge has white text → change to tinted fill plus dark status text (`$yellow3` + `$yellow11`) or a tested dark fill
-  - Status row uses both a left colored stripe and a filled pill → keep one strong cue plus the status label
-  - Fail/detail header is a large red block that dominates the screen → use a compact status band or tinted summary with structured details below
-  - Icon-only button/FAB/back/share/delete/picker affordance lacks `accessibilityLabel` or role → add `accessibilityLabel`, and add `accessibilityRole="button"` for custom pressables
-  - Form uses the default text keyboard for numeric, phone, email, URL, date, or search fields → add the right `keyboardType`/`inputMode`/native picker and preserve entered values on validation or network failure
-  - Text breaks or controls overlap at large system text size / small phone width → allow wrapping/truncation intentionally; never set `allowFontScaling={false}` to hide the problem
-  - Primary action is only in the top-right corner and hard to reach → move the frequent action to a bottom CTA/native bottom chrome or add an accessible row/menu path
-   - List rows have no spacing rhythm — everything jammed or overly padded relative to the plan's density mode → adjust padding to the density scale from Step 1b
-   - Dark mode inversion is raw: pure `#000` background, pure `#fff` text, accent color unchanged → replace with themed surface tokens
-   - Long titles not truncated — text wraps unexpectedly across 3+ lines → add `numberOfLines={1}` or `numberOfLines={2}`
-   - Primary action is not visually obvious — no `theme="active"`, multiple equal-weight buttons, no clear CTA → apply button hierarchy from the quality checklist
-   - Skeleton showing but no data → expected; connectors not yet wired — pass
-
-3. **Collect logs** after navigating to confirm no silent errors:
-
-   ```
-  BashOutput($METRO_TERMINAL_ID)
-   ```
-
-   Treat any of the following as a **failure for this screen** — fix inline before moving on. These cover the silent-pass failure modes that don't show as a red overlay:
-
-   | Log pattern | Why it matters |
-   |---|---|
-   | `ERROR` (any) | Uncaught exception |
-   | `Possible Unhandled Promise Rejection` | Silent fetch / mutation failure — user sees stale or no data, no error UI |
-   | `Text strings must be rendered within a <Text> component` | Tamagui footgun — raw string inside `<XStack>` / `<YStack>`. Wrap in `<Text>` or `<Paragraph>` |
-   | `Each child in a list should have a unique "key" prop` | Stable list IDs missing — re-render glitches, wrong row animations |
-   | `Encountered two children with the same key` | Duplicate keys — list flicker, lost state |
-   | `VirtualizedLists should never be nested` | `FlatList` inside `ScrollView` — silent perf cliff on long lists |
-   | `Cannot update a component … while rendering a different component` | State update during render — common cause of infinite re-renders |
-   | `Image source "..." doesn't have a numeric URI` | `expo-image` source mis-shape — image renders blank, no error |
-   | `Animated: useNativeDriver was not specified` | Animation runs on JS thread on Android — janky scroll / transitions |
-
-  For each match: identify the file from the stack, fix, let Metro hot-reload, then re-run `BashOutput($METRO_TERMINAL_ID)` to confirm the warning is gone before continuing to the next screen.
-
-4. **Record result** — track pass/fail per screen. A screen passes when: no Tier 1 issues, no Tier 2 issues, and logs are clean. Tier 2 issues are failures — "recognisable layout" is not the bar; the bar is the visual quality checklist above.
-
-**Fix loop rules:**
-- Fix one file at a time. Don't batch fixes across screens — Metro hot-reloads per save, verify each fix before moving to the next screen.
-- Cap retries at **3 per screen**. If a screen still fails after 3 fix attempts, record it as `NEEDS ATTENTION`, note the last error, and continue to the next screen. Surface all `NEEDS ATTENTION` screens in the Step 13 summary.
-- Never edit `_layout.tsx`, `login.tsx`, or `oauth-callback.tsx` during this step — those are baseline screens and changes there affect all routes.
-
-#### 11.5c — Report
-
-After all screens are walked, print a compact table before proceeding to Step 12:
-
-```
-Screen smoke test complete.
-
-Screen                  Result
-──────────────────────────────────────
-Home                    ✅ pass
-Inspections list        ✅ pass
-Inspection detail       ✅ pass
-Capture photo           ⚠️  NEEDS ATTENTION — red overlay: "Cannot read property 'id' of undefined"
-Profile                 ✅ pass
-```
-
-If any screen is `NEEDS ATTENTION`, **auto-continue with placeholder, no prompt** — surface the failure prominently in the Step 13 summary so the user can act on it post-hoc. Forward progress is almost always what users want; the placeholder just means the screen renders an "implementation pending" view, and `/edit-app` can re-target the broken screen later.
-
-Print:
-
-> `→ <K> screen(s) marked NEEDS ATTENTION — continuing with placeholders. Final summary will list them; re-run /edit-app <screen> to fix.`
-
----
-
-### Step 12 — Start dev server (background, agent-monitored)
+### Step 12 — Start dev server (background)
 
 **Print before starting:**
-> "→ [Step 12/13] Launching Metro dev server in the background so you can scan the QR and I can read logs to debug live."
+> "→ [Step 12/13] Launching Metro dev server in the background so you can scan the QR."
 
 This skill **launches** Metro in an async/background terminal so:
 
@@ -2025,26 +1901,24 @@ When invoking the Bash tool: set `run_in_background: true` (or the equivalent as
 **After launch, wait ≤8s for the "Metro waiting on" line, then:**
 
 1. Read the terminal output once (`BashOutput` with the captured id).
-2. **Extract Metro and Web URLs** from the terminal output:
+2. **Extract the native Metro URL** from the terminal output:
    - Locate the line beginning `› Metro:` — it has the form `exp+<scheme>://expo-development-client/?url=<encoded-http-url>`. Capture the full Metro URL.
-   - Locate the line beginning `› Web:` — capture the Web URL (e.g. `http://localhost:<port>`).
 3. **Generate QR code PNG and present it to the user** (chat-first, deterministic fallback):
   - Run `npx --yes qrcode -o <working_dir>/.expo/metro-qr.png "<metro-url>"` to generate the PNG. If the project's npm config requires auth and the fetch fails with `E401`, retry once with `npm_config_registry=https://registry.npmjs.org/ npm_config_always_auth=false` prefixed.
   - Verify the PNG was created: `test -f <working_dir>/.expo/metro-qr.png` (exit code 0 = success). If it fails, print the qrcode error and continue to step 4.
   - **Chat-first render (best effort):** read and base64-encode the file (`base64 <working_dir>/.expo/metro-qr.png`) and embed in markdown as a data URI (`![QR](data:image/png;base64,<data>)`) so hosts that support inline image markdown show the QR directly in chat.
   - **Guaranteed visible fallback:** if inline chat image rendering is unavailable in the host UI, open the PNG directly in the default system image viewer/browser (`open <working_dir>/.expo/metro-qr.png` on macOS, `xdg-open ...` on Linux, `start "" ...` on Windows). This fallback is required whenever chat image rendering is unavailable.
-  - Surface the Metro and Web URLs as clickable text links immediately after the image/fallback message.
+  - Surface only the native Metro URL immediately after the image/fallback message.
 4. **Optional: ASCII terminal QR for power users.** Extract and print the terminal's ASCII QR banner as a secondary/backup option:
    - Locate the first line composed of unicode block glyphs (`▀ ▄ █`) — that is the top of the QR.
-   - Print every line from that line through the first line that starts with `› Web:` (or, if web is disabled, through the `› Metro:` line). This block is typically ~21 lines.
+  - Print every line from that line through the `› Metro:` line.
    - Cap at 30 lines as a safety net. Print as-is inside a fenced code block so terminal renderers preserve glyph alignment.
   - If the ASCII QR banner is not yet in the output, re-read `BashOutput` once more after another 4s before giving up. If still absent, skip the ASCII QR — PNG delivery from step 3 is the primary path.
 5. Follow with:
 
    > "✓ Metro is running in background terminal `<id>`.
-  > 📱 Scan the QR code shown above (or opened from `<working_dir>/.expo/metro-qr.png`) with your dev client to load the app. Metro URL: `<metro-url>` | Web: `<web-url>`
-   > 🔄 Edits hot-reload automatically.
-   > 🩺 If the app misbehaves, just tell me what you see — I can read Metro logs and console.logs you add to screens."
+  > 📱 Scan the QR code shown above (or opened from `<working_dir>/.expo/metro-qr.png`) with your native dev client to load the app. Metro URL: `<metro-url>`
+  > 🔄 Edits hot-reload automatically."
 
 **Persist the terminal id to memory bank** so resumed sessions and downstream skills (`/preview-screens`, `/edit-app`, `/add-*`) can find it:
 
@@ -2055,47 +1929,17 @@ When invoking the Bash tool: set `run_in_background: true` (or the equivalent as
 - Metro launch cmd: cd <working_dir> && npx expo start
 ```
 
-**Hard rules for live-debug loop:**
+This skill stops after Step 12 so the user can iterate locally. Production build + tenant push is a separate, explicit user action via the `/deploy` skill.
 
-- Before running ANY native build/prebuild command, `npm run build`, or anything else that needs an exclusive lock on Metro — **kill the Metro terminal first** (`KillShell` / equivalent on `$METRO_TERMINAL_ID`). Restart it after.
-- When the user reports a UI/data issue, **first action is `BashOutput` on `$METRO_TERMINAL_ID`** — not file inspection. The runtime log usually pinpoints the cause in one read.
-- If `$METRO_TERMINAL_ID` is no longer alive (user killed it manually, OS reaped it), re-launch with the same `npx expo start` command and update the id in memory-bank.
-- If Metro fails to start (TS errors, missing module, port `8081` in use), surface the file + line from the terminal output and STOP. Common TS6133 (unused import) errors can be auto-fixed once.
+### Step 12.5 — Optional debug handoff
 
-### Step 12.5 — Auto-monitor runtime via `/debug-app`
+Do not perform screen-by-screen runtime verification. Do not crawl routes, open browser targets, use React Native Web, or call Metro HTTP endpoints directly.
 
-After Metro is running (Step 12), the app still has to be **loaded on a simulator or device** for runtime monitoring to work. This step waits for the user to load the app, then auto-invokes the `/debug-app` workflow inline so runtime errors get fixed before the summary.
+After Metro is running and the QR has been presented, offer a single optional debug handoff:
 
-**Print to user:**
+> "If the app shows an error or a workflow looks wrong after you load it in the native dev client, tell me the symptom and I can run `/debug-app "<symptom>"` using the Metro terminal logs."
 
-> "→ [Step 12.5/13] Metro is running. Now load the app on a simulator or device:
-> - Scan the QR code with your dev client, or
-> - Launch your target device/simulator using your preferred native run workflow
->
-> When the app is open and you can interact with it, type `ready` and I'll start monitoring for runtime errors."
-
-**Wait for user input.** Accept any of: `ready`, `loaded`, `go`, `yes`, `done`. If the user types `skip`, skip directly to Step 13 (summary) and document this in the summary as "Runtime verification skipped — run `/debug-app` later to verify."
-
-**On `ready`:**
-
-1. Read `${CLAUDE_SKILL_DIR}/../../skills/debug-app/SKILL.md` and follow it inline as a sub-workflow:
-  - Phase 0 (startup check) — resolve `$METRO_TERMINAL_ID` from `memory-bank.md`, then read Metro output via `BashOutput($METRO_TERMINAL_ID)` as the only log source.
-  - If Metro is up but no app has connected yet (banner present, no recent bundle/activity), ask the user to open the app and retry once. If still no app/runtime activity, document in the summary as "Runtime verification skipped — app not detected." and skip to Step 13.
-  - Capture baseline terminal state in `.claude/debug-app/fixes.md` and continue.
-   - Enter the monitor loop. Apply the 8-category classification, fix policy, verification cycle, and 3-clean-cycle exit exactly as documented in the `/debug-app` skill.
-
-2. The monitor loop runs until one of:
-   - 3 consecutive clean polls — exits cleanly, prints `"App is running cleanly — no errors detected across 3 consecutive log checks."`
-   - Escalation rule trips (same error after 2 fix attempts) — prints the escalation block and waits for user.
-   - User types `stop` — exits with state preserved at `.claude/debug-app/`.
-
-3. Capture the count of fixes applied and unresolved issues for the Step 13 summary block:
-   - `<N>` errors fixed
-   - `<M>` errors escalated to `.claude/debug-app/unresolved.md`
-
-**After /debug-app exits**, proceed to Step 13.
-
-This skill stops at the end of Step 12.5 so the user can iterate on the now-verified screens. Production build + tenant push is a separate, explicit user action via the `/deploy` skill.
+Only invoke `/debug-app` if the user asks for debugging or gives a concrete symptom. `/debug-app` must use the captured Metro terminal output as its diagnostic source; it must not probe `localhost`, request a bundle URL, or run any React Native Web setup. If the user gives no symptom, proceed directly to Step 13.
 
 When the user is ready to deploy:
 
@@ -2117,15 +1961,12 @@ Data model    : <N tables — M reuse, K extend, L create>
 Native caps   : <list>
 Connectors    : <list>
 Screens       : <N total — M from template, K built in parallel>
-Smoke test    : <N passed, K needs attention>
 Dev server    : npx expo start — running in background terminal <id>
-                (scan QR there; tell me if anything looks wrong, I can read its logs)
-Runtime check : <N fixed, M unresolved> via /debug-app
-                (full audit at .claude/debug-app/fixes.md)
+                (scan QR there when you want to run locally)
 ─────────────────────────────────────────────
 ```
 
-If Step 1 emitted warnings or Step 11.5 flagged screens, list them in one line each under the block (no decoration). If Step 12.5 had unresolved errors, list each one with its routing hint (e.g., "→ run /add-dataverse to add `sla_priority` column").
+If Step 1 emitted warnings, list them in one line each under the block (no decoration).
 
 Then present exactly these 4 options:
 

@@ -222,7 +222,6 @@ After deploy, use `/open-wrap-url --app-id <app-id> --env-id <env-id>` to jump s
 - **Auth pre-wired** via the Power Apps CLI first-party Entra app — no custom Azure registration required
 - **Two platforms** in one codebase: iOS, Android
 - **Deploy = `npm run build` + `npx power-apps push`** — local native compile (platform-specific native run commands) is the user's choice and is **out of scope**; users run those directly when they want them.
-- **Local dev = `npm run dev`** — the user runs this directly. The plugin doesn't start Metro.
 
 ## Hello world — your first run
 
@@ -324,7 +323,7 @@ Example edit flows:
 | `/edit-app "Add loading, empty and error states to the list screen"` | Which list screen, unless only one exists; whether to improve existing states or add missing ones | Existing screen inspection, screen spec update if needed, targeted TSX rebuild, `tsc`, screen validators |
 | `/edit-app "Add a detail screen for the selected record"` | Source list/search screen, table/service, fields/actions, route style | Screen-plan delta, route/layout update, Generated Services snapshot, detail skeleton, detail + source screen builders, route check |
 | `/edit-app "Add a form to create a new record in Dataverse"` | Table, required/editable fields, launch point, after-save behavior, lookup/file/image fields | Data-model update via `/add-dataverse` if needed, schema generation, form skeleton, form + parent screen builders, create-payload validation |
-| `/edit-app "Add barcode scanning and use the scanned value to search records"` | Scanner location, scanned value meaning, table/service/field to search, no/multiple-match behavior | `/add-native barcode-scanner`, data-model update if target field is missing, scanner/search screen rebuild, native/runtime checks |
+| `/edit-app "Add barcode scanning and use the scanned value to search records"` | Scanner location, scanned value meaning, table/service/field to search, no/multiple-match behavior | `/add-native barcode-scanner`, data-model update if target field is missing, scanner/search screen rebuild, static gates, optional `/debug-app` handoff if you report a symptom |
 | `/edit-app "Update the design to better match company branding"` | Brand source and scope: palette, typography, components/density, or full reskin | `/design-system --refresh` or `--reskin`, affected screen rebuild when layout grammar changes, style sweep, preview |
 
 ### Prefer browser-free / token-budget mode?
@@ -386,7 +385,6 @@ At Step 6.75 of `/create-mobile-app`, the `/design-system` skill offers a cost p
 | [`shared/version-check.md`](shared/version-check.md) | Single source of truth for minimum tool versions. Always-required: Node 22+, npm 10+. Conditional: `az` 2.60+ for ADO npm token setup and `/add-dataverse` token acquisition. Xcode/JDK/Android Studio are documented but **not gated by any skill** — user-managed if they want local native builds. |
 | [`shared/preferred-environment.md`](shared/preferred-environment.md) | Environment selection priority: `power.config.json` → memory-bank → explicit environment URL/ID. Never silent switches. |
 | [`shared/connector-reference.md`](shared/connector-reference.md) | Connection ID workflow, common API names, dataset/table discovery, Grep-not-Read pattern for large generated files. |
-| [`shared/references/expo-mcp.md`](shared/references/expo-mcp.md) | **Opt-in MCP server** — the plugin's [`.mcp.json`](.mcp.json) registers `expo-mcp` (MIT, free, local-only) pointed at the Metro dev server (`http://localhost:8081`). Skills prefer 5 structured `expo.*` tools (project info, SDK-matched installs, plugin effects preview, build with parsed errors, doctor diagnostics) when the host advertises them; shell fallback otherwise. **Dev loop**: while `npm run dev` is running, the agent reads live runtime errors via MCP, fixes code, and Metro hot-reloads. No EAS/cloud calls. |
 | [`shared/memory-bank.md`](shared/memory-bank.md) | Per-project notebook template — copied into the working directory by `/create-mobile-app` Step 6. Tracks data-model decisions, connectors bound, screens built, build history. Read at start of every skill, updated after each successful step, enables resume on failure. |
 | [`hooks/`](hooks/) | PostToolUse validator hook — runs per-skill validators after a Skill tool call (currently scaffolded; v0 ships with no validators yet). |
 | [`shared/references/offline-profile-schema.md`](shared/references/offline-profile-schema.md) | Canonical Dataverse entity field map for the three Mobile Offline Profile entities (`mobileofflineprofile`, `mobileofflineprofileitem`, `mobileofflineprofileitemassociation`) + the per-table `EntityMetadata` prereqs. Source of truth for POST body shapes. |

@@ -76,9 +76,7 @@ echo "ANDROID_HOME=$ANDROID_HOME"
 
 ### Step 3 — Collect diagnostics
 
-**Prefer MCP if available** — call `expo.runDoctor()` to get categorized SDK / dep / plugin issues as JSON. See [`shared/references/expo-mcp.md`](${CLAUDE_SKILL_DIR}/../../shared/references/expo-mcp.md). Cleaner snapshot than parsing CLI text.
-
-**Shell fallback** — if `expo.*` tools aren't available, run `npx expo doctor` and capture the text output verbatim.
+Run `npx expo doctor` and capture the text output verbatim.
 
 If the user pasted an error, capture verbatim. Otherwise look for recent failure signals:
 

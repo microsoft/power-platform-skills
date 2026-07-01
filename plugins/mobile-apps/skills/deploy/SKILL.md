@@ -41,10 +41,6 @@ If absent, continue — the project may have been created without the plugin. Re
 **Print before starting:**
 > "→ Building production web bundle via `npm run build` (= `expo export --platform web`). ~30–90 seconds."
 
-**Prefer MCP if available** — call `expo.runScript("build")`. It returns structured `{ success, errors, warnings }` with parsed Metro / TS errors instead of raw stderr text, which lets the skill match failure recipes more reliably. See [`shared/references/expo-mcp.md`](${CLAUDE_SKILL_DIR}/../../shared/references/expo-mcp.md).
-
-**Shell fallback** — if `expo.*` tools are not available:
-
 First regenerate `connectorSchemas.ts` so `app/_layout.tsx`'s `schemaMap` import reflects every connector currently in `.power/schemas/`. The npm `prestart`/`preandroid`/`preios` hooks cover dev runs, but `npm run build` does **not** — if a connector was added since the last `npm run dev`, the bundled JS would ship a stale schema map. Always regenerate before build:
 
 ```bash
@@ -127,7 +123,7 @@ Environment   : <env-name>
 App URL       : <url or "see make.powerapps.com">
 Bundle path   : dist/
 
-Local dev:    npm run dev          (= expo start, web preview + QR)
+Local dev:    npm run dev          (= expo start, QR for native dev clients)
 Re-deploy:    /deploy
 List conns:   /list-connections
 ─────────────────────────────────────────────
@@ -140,18 +136,17 @@ List conns:   /list-connections
 When the user wants to iterate locally, they run **directly**:
 
 ```bash
-npm run dev          # = expo start  →  Metro + web preview + QR for native dev clients
+npm run dev          # = expo start  →  Metro + QR for native dev clients
 ```
 
 This launches Metro and prints a QR code. They can:
 
-- Press `w` for web preview in browser
 - Scan the QR with the installed native dev client
 - Press `r` to reload, `j` to open the debugger, `m` for the dev menu
 
-**Dev loop with expo-mcp:** when Metro is running, the agent can call `expo.runDoctor()` to read live runtime errors from the connected app, edit the offending code, and Metro hot-reloads automatically. The user owns the Metro process; the agent never starts or stops it. See [`shared/references/expo-mcp.md`](${CLAUDE_SKILL_DIR}/../../shared/references/expo-mcp.md).
+Runtime debugging for this plugin uses `/debug-app` with native dev-client sessions and Metro terminal logs. Do not use React Native Web, browser automation, direct Metro/localhost HTTP probes, or screen-by-screen runtime checks.
 
-If they want to compile a native binary locally, they run the platform-specific native command directly. Native capabilities and mobile UX must be validated in a native dev client on device/simulator.
+If they want to compile a native binary locally, they run the platform-specific native command directly. Local native compile and manual device testing are user-owned and are not deployment gates for this skill.
 
 ## Reference
 

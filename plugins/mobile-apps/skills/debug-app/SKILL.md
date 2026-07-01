@@ -1,6 +1,6 @@
 ---
 name: debug-app
-description: Use when the user has finished building a mobile app, started it with `npm run dev`, and wants the running app monitored for runtime errors AND silent failures (empty lists, blank screens, swallowed network errors) and fixed autonomously. Accepts a free-text symptom (e.g., `/debug-app "todos not appearing on home screen"`) to drive targeted verification — injects temporary console.log statements at data-path boundaries, reads Metro terminal output, and cleans up logs after the root cause is fixed. Otherwise polls the Metro terminal every 5s, classifies errors using an 8-category table, fixes inline or routes to the right skill, verifies each fix, and exits after 3 consecutive clean polls. Foreground loop — blocks the conversation while running. Run only after the app is loaded.
+description: Use when the user has finished building a mobile app, started it with `npm run dev`, and wants the running app monitored for runtime errors AND silent failures (empty lists, blank screens, swallowed network errors) and fixed autonomously. Accepts a free-text symptom (e.g., `/debug-app "todos not appearing on home screen"`) to drive terminal-log diagnostics — injects temporary console.log statements at data-path boundaries, reads Metro terminal output, and cleans up logs after the root cause is fixed. Otherwise polls the Metro terminal every 5s, classifies errors using an 8-category table, fixes inline or routes to the right skill, verifies each fix from terminal output, and exits after 3 consecutive clean polls. Foreground loop — blocks the conversation while running. Run only after the app is loaded.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, WebFetch
 model: sonnet
@@ -18,8 +18,8 @@ Monitor the running app by reading the Metro dev-server terminal output, detect 
 
 | Form | Behavior |
 |---|---|
-| `/debug-app` (no args) | **Default — terminal log-driven mode.** Run Phase 0 (startup check), enter monitor loop. Log source is the Metro terminal (`BashOutput` on the `$METRO_TERMINAL_ID` recorded in `memory-bank.md` by `/create-mobile-app` Step 12). One read covers Metro bundler errors, app/runtime log lines (including host diagnostics), red-box stack traces, and Metro's per-request HTTP lines. If the terminal ID is not in `memory-bank.md`, ask the user which terminal is running `npm run dev` before starting. |
-| `/debug-app "<symptom text>"` | **Symptom-driven mode** (recommended when there's a user-visible problem). Free-text symptom such as `"todos not appearing on home screen"`, `"login button does nothing"`, `"list empty after refresh"`. Run Phase 0 → Phase 0.5 (parse symptom → navigate → verify rendered tree → walk data path) → enter monitor loop. Catches silent failures (empty lists, blank screens, swallowed errors) that pure log polling misses. |
+| `/debug-app` (no args) | **Default — terminal log-driven mode.** Run Phase 0 (startup check), enter monitor loop. Log source is the Metro terminal (`BashOutput` on the `$METRO_TERMINAL_ID` recorded in `memory-bank.md` by `/create-mobile-app` Step 12). One read covers Metro bundler errors, app/runtime log lines (including host diagnostics), and red-box stack traces. If the terminal ID is not in `memory-bank.md`, ask the user which terminal is running `npm run dev` before starting. |
+| `/debug-app "<symptom text>"` | **Symptom-driven mode** (recommended when there's a user-visible problem). Free-text symptom such as `"todos not appearing on home screen"`, `"login button does nothing"`, `"list empty after refresh"`. Run Phase 0 → Phase 0.5 (parse symptom → ask the user to reproduce/navigate → walk the likely data path from terminal traces) → enter monitor loop. Catches silent failures (empty lists, blank screens, swallowed errors) that pure log polling misses. |
 | `/debug-app status` | Print current state (last poll, fixes applied this session, unresolved errors). Do NOT enter loop. |
 | `/debug-app stop` | If a loop is in progress, the user can type "stop" or this command to exit. State files preserved at `.claude/debug-app/`. |
 
@@ -31,6 +31,9 @@ Monitor the running app by reading the Metro dev-server terminal output, detect 
 
 - **Foreground autonomous loop** — Once started, this skill owns the conversation until 3 consecutive clean polls confirm the app is healthy, the user types `stop`, or the escalation rule trips. **Do not run other skills concurrently** — they'll queue behind the loop.
 - **Run AFTER the app is loaded** — `npm run dev` must be running and the simulator/device must have the app open. Phase 0 verifies this; the skill stops cleanly if no app is detected.
+- **Native-only runtime target** — The app must be loaded in a native dev client on a device or simulator; Metro terminal output is the log source for that native session.
+- **No web or direct Metro probes** — Do not use React Native Web, browser automation, `curl`, `fetch`, `WebFetch`, or any direct request to a Metro/localhost endpoint for runtime diagnosis. Read only the Metro terminal and source files.
+- **No screen-by-screen verification** — Do not crawl routes or validate every screen. In symptom mode, focus only on the user-reported workflow and the terminal/source evidence needed to diagnose it.
 - **One fix at a time** — Fully resolve one issue (context → fix → type-check → reload → re-poll) before starting the next. No batching.
 - **Working-dir state** — All session state lives in `.claude/debug-app/` (gitignored): `fixes.md` for audit log, `unresolved.md` for escalations, `injected-logs.md` for tracking injected console.log statements. Survives across runs.
 - **Reference resolution order** — For unfamiliar errors: in-repo references first ([skills/add-dataverse/references/dataverse-reference.md](${CLAUDE_SKILL_DIR}/../../skills/add-dataverse/references/dataverse-reference.md), etc.), then `mcp__microsoft-learn__microsoft_docs_search`, then general web search.
@@ -98,8 +101,8 @@ Branch on the source resolved in 0.0.
 Call `BashOutput` on it once and scan the captured Metro output:
 
 - Most recent error-class line is `SyntaxError`, `Unable to resolve module`, `transform failed`, or `error: Bundling failed` → bundle is broken. Treat as a Step B "Import / Bundle" critical error and route through Step D immediately. Do NOT enter the steady-state loop until the bundle is healthy.
-- Output contains `Bundling complete` / `iOS Bundled` / `Android Bundled` / `Web Bundled` with no later error-class line → Metro is healthy. Proceed.
-- Output contains a Metro banner (`Metro waiting on`, `Logs for your project`, `Web is waiting on`) but no `Bundled` / `bundling` lines yet → Metro is up but no client has connected. Tell the user:
+- Output contains `Bundling complete` / `iOS Bundled` / `Android Bundled` with no later error-class line → Metro is healthy. Proceed.
+- Output contains a Metro banner (`Metro waiting on`, `Logs for your project`) but no native `Bundled` / `bundling` lines yet → Metro is up but no native client has connected. Tell the user:
   > **Metro is running but no app is connected yet.** Open the app on a device or simulator, then re-run `/debug-app`.
   Stop here.
 - Output is empty, OR contains no Metro banner at all → the recorded shell is alive but Metro isn't running in it (the user repurposed the terminal). Tell the user:
@@ -115,7 +118,7 @@ Wait for the user to reply. Set `$METRO_TERMINAL_ID` to the provided ID, call `B
 
 ### 0.3 Capture baseline
 
-Read the latest output from `BashOutput($METRO_TERMINAL_ID)`. Note the most recently bundled platform (iOS / Android / web) and any recent runtime log lines. Append to `fixes.md`:
+Read the latest output from `BashOutput($METRO_TERMINAL_ID)`. Note the most recently bundled native platform (iOS / Android) and any recent runtime log lines. Append to `fixes.md`:
 ```
 [<HH:MM:SS>] Baseline — last Metro activity: <1-line summary of most recent lines>
 ```
@@ -282,7 +285,7 @@ In the new output, surface as classifiable signal:
 - Stack frames (`at <fn> (<file>:<line>:<col>)`)
 - Bundle-class errors (`Unable to resolve module`, `SyntaxError`, `transform failed`) — re-classify as Step B "Import / Bundle" Critical and route through Step D
 - HTTP method + status from Metro's request log (e.g., `"GET /index.bundle?platform=ios&dev=true ..." 500 -`) — non-200 on `.bundle` is a bundle/transform failure; non-2xx on connector / Dataverse hosts feeds Step B "Network / API"
-- Lines containing `Bundling complete` / `iOS Bundled` / `Android Bundled` / `Web Bundled` are informational — log to `fixes.md` at debug volume but do NOT classify as an issue
+- Lines containing `Bundling complete` / `iOS Bundled` / `Android Bundled` are informational — log to `fixes.md` at debug volume but do NOT classify as an issue
 - `[TRACE` prefixed lines from injected trace statements — classify under the symptom walk (Phase 0.5.4), not as errors
 
 Interpretation rule for host diagnostic lines:
@@ -533,7 +536,7 @@ After the fix is applied:
 
 2. **Wait for Metro to re-bundle (Import/Bundle fix only):**
    For inline edits applied via D3.1, Metro auto-watches the file and triggers a re-bundle on save — no manual reload needed. Poll `BashOutput($METRO_TERMINAL_ID)` every 2s for up to 30s, watching for one of:
-   - `Bundling complete` / `iOS Bundled` / `Android Bundled` / `Web Bundled` → success, proceed to step 4.
+   - `Bundling complete` / `iOS Bundled` / `Android Bundled` → success, proceed to step 4.
    - A new bundle error block (different file:line, or different message) → treat as a NEW issue and return to Step B.
    - Same error repeats → the fix didn't take. Treat as fix attempt #2 against the same error (Escalation rule applies after 2).
    - 30s elapsed with no bundling activity → Metro may be paused/wedged; surface to user, do NOT auto-restart Metro (Constraints).

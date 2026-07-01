@@ -101,11 +101,7 @@ npx power-apps add-flow --flow-id <flow-guid> --non-interactive
 npx power-apps remove-flow --flow-id <flow-guid> --non-interactive
 ```
 
-For local Power Apps player testing after the Expo web server is running, use `run` from the app root. It serves `power.config.json` and prints a play URL with local app and connection configuration:
-
-```bash
-npx power-apps run --local-app-url http://localhost:<expo-web-port> --port 8080
-```
+Do not use local Expo web-player testing from mobile-app skills. Mobile-app runtime diagnosis uses the native dev-client flow and `/debug-app` reading Metro terminal output.
 
 ## Inspecting large generated files
 

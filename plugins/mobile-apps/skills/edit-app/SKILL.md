@@ -40,7 +40,7 @@ Use `--plan-only` only when the user explicitly asks to update planning docs wit
 
 ## Workflow
 
-0. Locate app + health/drift probe → 1. Discover intent + inspect existing app → 1.5 Impact preview → 2. Re-plan affected sections → 3. Gate intent, plan + mutation preview → 4. Write plan diff → 5. Apply app mutations → 6. Rebuild affected screens → 7. Verify + quality sweep → 7.5 Targeted runtime smoke/debug → 8. Preview + memory-bank update
+0. Locate app + health/drift probe → 1. Discover intent + inspect existing app → 1.5 Impact preview → 2. Re-plan affected sections → 3. Gate intent, plan + mutation preview → 4. Write plan diff → 5. Apply app mutations → 6. Rebuild affected screens → 7. Verify + quality sweep → 8. Preview + memory-bank update + optional debug handoff
 
 ---
 
@@ -58,8 +58,7 @@ This is a focused edit workflow, not a lighter quality bar. Reuse `/create-mobil
 | New screen | Shared scaffold gate, skeleton gate, screen-builder wave gate, style-quality sweep, route check, final `tsc` |
 | Existing screen TSX | Screen edit gate, style-quality sweep, route check when navigation changed, final `tsc` |
 | Native capability | Native allowlist gate, wrapper existence gate, final `tsc` |
-| Design/component/density | Design-system gate, affected-screen style sweep, preview |
-| Runtime behavior | Targeted smoke/debug gate when Metro is running or user requested runtime verification |
+| Design/component/density | Design-system gate, affected-screen style sweep, final `tsc`, preview |
 
 **When a gate fails:** capture full output once, classify by root cause, repair in a batch, rerun the same gate once. Do not make line-by-line fixes with `tsc` after every tiny edit. Continue only when the gate is clean or record a `BLOCKED:` / `DONE_WITH_CONCERNS:` entry in `memory-bank.md`.
 
@@ -224,8 +223,8 @@ Compute:
 - **Cost tier:** Cheap (single existing screen), Medium (new route/form/detail or one data source), Heavy (multi-screen/nav/design/data/native), Major (reskin or broad screen rebuild).
 - **Likely plan sections:** Data Model, Native Capabilities, Connectors/Data Sources, Design, Screens.
 - **Likely files:** exact screen/layout/native/brand/generated/memory files when known.
-- **Likely skills/agents:** `mobile-app:data-model-architect`, `mobile-app:screen-planner`, `mobile-app:screen-builder`, `/add-datasource`, `/add-dataverse`, `/add-sharepoint`, `/add-connector`, `/add-native`, `/design-system`, `/preview-screens`, `/debug-app`.
-- **Verification gates:** schema, generated services, route contracts, screen validators, runtime smoke/debug, preview.
+- **Likely skills/agents:** `mobile-app:data-model-architect`, `mobile-app:screen-planner`, `mobile-app:screen-builder`, `/add-datasource`, `/add-dataverse`, `/add-sharepoint`, `/add-connector`, `/add-native`, `/design-system`, `/preview-screens`, optional `/debug-app` only when the user gives a concrete runtime symptom.
+- **Verification gates:** schema, generated services, route contracts, screen validators, preview.
 - **Main risks:** environment drift, unsupported native package, generated service missing, navigation contract change, broad design churn, stale installed plugin cache.
 
 Print:
@@ -534,36 +533,13 @@ If auto-fixable issues remain after retries, record `DONE_WITH_CONCERNS` in `mem
 
 If verification fails because the edit exposed stale generated services, rerun the relevant data-source regeneration once before changing screens by hand. If failures are unrelated pre-existing issues, report them separately and do not hide them as successful edit results.
 
-### Step 7.5 — Targeted runtime smoke/debug
-
-Run runtime verification for changed screens when Metro is already running, when the user asked for runtime behavior, or when the edit affects navigation, create/update flows, scanner/camera/PDF/pen interactions, or data-loading behavior.
-
-Preferred path:
-
-1. If `/debug-app` applies and the app is loaded, invoke `/debug-app "<symptom or changed workflow>"` with the changed screen/workflow as the symptom.
-2. If Expo MCP tools/log collection are available, walk only the changed screens and their source/destination routes.
-3. If Metro is not running and runtime smoke was not explicitly requested, record `runtime_smoke: skipped (Metro not running)` in memory and final summary.
-
-Targeted smoke checks copied from `/create-mobile-app` Step 11.5:
-
-- Red error overlay, blank/white screen, layout overflow, clipped controls.
-- Unhandled promise rejection, `ERROR`, duplicate list keys, nested VirtualizedLists, raw string outside `<Text>`, render-time state updates.
-- Loading branch renders skeleton/structured loading instead of a lonely spinner when list content is expected.
-- Empty state has icon/context/CTA when user action is possible.
-- Error state is inline and actionable with retry, not only `Alert.alert()` or toast.
-- Create/edit child returns refresh parent list/detail via `useFocusEffect` or equivalent.
-- Scanner callback is locked/paused, handles no match and multiple matches, and resets on focus.
-- Dynamic route IDs are normalized before service calls.
-
-Fix loop:
-
-- Fix one changed screen/workflow at a time.
-- Cap runtime retries at 3 per screen/workflow.
-- If unresolved, mark that screen `NEEDS ATTENTION`, record the last error/visual issue, and continue only if TypeScript and route gates remain clean.
-
 ### Step 8 — Preview + memory-bank update
 
+Before Step 8, `npx tsc --noEmit` must be clean after all code edits from this `/edit-app` run. If any code was written after Step 7's `tsc`, rerun `npx tsc --noEmit`, batch-fix root causes, and continue only when TypeScript is error-free.
+
 If any UI, design, navigation, native interaction, or visible data state changed — or if the user explicitly asked for a preview — read and execute `/preview-screens` after verification. This regenerates `preview.html` and opens it according to the project's `visual_companion` setting.
+
+If the user gives a concrete runtime symptom and Metro is already running from the native dev-client flow, you may invoke `/debug-app "<symptom>"` after the static verification and preview steps. This is an optional symptom-debug handoff, not a verification gate: do not run screen-by-screen runtime checks, do not crawl routes, do not use React Native Web, and do not call Metro HTTP endpoints directly.
 
 Append an edit entry to `memory-bank.md`:
 
@@ -576,12 +552,12 @@ Append an edit entry to `memory-bank.md`:
 - Plan sections changed: <Data Model / Native Capabilities / Screens / Design / Connectors>
 - App changes: <screens/routes/native wrappers/data sources>
 - Verification: <commands/gates + pass/fail/skipped with reason>
-- Runtime smoke: <passed / skipped with reason / needs attention>
 - Preview: <preview.html path or not generated>
+- Debug handoff: <not requested / /debug-app "<symptom>" invoked>
 - Blocks/concerns: <none or list>
 ```
 
-Final summary must say what changed in the app, what verification ran, what runtime smoke did or why it was skipped, and where the preview is. Do not end by saying the codebase was not changed unless this was explicitly `--plan-only`.
+Final summary must say what changed in the app, what verification ran, where the preview is, and whether a symptom-debug handoff was requested. Do not end by saying the codebase was not changed unless this was explicitly `--plan-only`.
 
 ## Notes
 

@@ -7,7 +7,7 @@ Single source of truth for minimum tool versions. Every skill should reference t
 This plugin uses scope-aware checks based on the mobile workflow:
 
 - **Deploy** = `npm run build` + `npx power-apps push`. No local Xcode / Android Studio involvement.
-- **Local dev** = the user runs `npm run dev` (= `expo start`) directly. Metro starts, web preview + QR appear, the user picks where to open it (browser or a native dev client they've installed).
+- **Local dev** = the user runs `npm run dev` (= `expo start`) directly. Metro starts and prints a QR for native dev clients.
 - **Local native compile** (platform-specific native run commands) is the user's choice and lives **outside** this plugin's skills. Not a prerequisite, not validated, not driven.
 
 Result: the only required tooling is what Node/npm, `npx power-apps`, and the relevant helper scripts need. Xcode/JDK/Android Studio are explicitly out of scope.
@@ -84,9 +84,7 @@ These are pinned in the bundled template at [`plugins/mobile-apps/template/packa
 
 Most skills only need the always-required tier. Copy this into Step 1.
 
-**Prefer MCP if available** — call `expo.getProjectInfo()` to get SDK version, plugins, and native module list as a single JSON blob. See [`references/expo-mcp.md`](./references/expo-mcp.md).
-
-**Shell fallback** — use this if `expo.*` tools are not registered in the host:
+Use shell/project-file checks directly:
 
 ```bash
 # Always required
@@ -97,7 +95,7 @@ node --version          # expect v22+
 
 # Project-local (only if inside a project)
 test -f power.config.json && echo "OK: code app project"
-node -e "console.log(JSON.stringify(require('./app.json').expo, null, 2))" 2>/dev/null   # SDK + plugins (fallback for expo.getProjectInfo)
+node -e "console.log(JSON.stringify(require('./app.json').expo, null, 2))" 2>/dev/null   # SDK + plugins
 ```
 
 **Do NOT call `xcodebuild`, `java -version`, or check for Android Studio in any skill.** Local native compile is the user's choice, not a plugin concern.
