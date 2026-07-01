@@ -86,16 +86,12 @@ function sanitizeData(data) {
 }
 
 // Build the CS4.0 envelope from a pre-sanitized payload + timestamp. `sanitized`
-// is shared with the local mirror so the on-disk record and the wire envelope
-// carry byte-identical `data` and `time` for every OTHER field, but `eventInfo`
-// is re-serialized to a JSON string just for the wire: the tenant-side
-// Interchange/LogAnalytics field mapping flattens `data.<key>` to a single
-// `data_<key>` leaf token, and that flattening does not recurse into nested
-// object values, so a raw `eventInfo` object never produces the `data_eventInfo`
-// token the mapping expects. Stringifying keeps `eventInfo` a scalar leaf that
-// matches the existing mapping; the Kusto side reads it back with
-// `parse_json(EventInfo)` / `todynamic(EventInfo)`. The local mirror keeps the
-// real object so `events.jsonl` stays human-readable for local diagnostics.
+// is shared with the local mirror so `data`/`time` stay byte-identical for
+// every field except `eventInfo`: the tenant-side field mapping flattens
+// `data.<key>` to a single `data_<key>` leaf and doesn't recurse into nested
+// objects, so `eventInfo` is stringified just for the wire to survive that
+// flattening. Kusto reads it back with `parse_json()`/`todynamic()`; the
+// local mirror keeps the real object for human readability.
 function buildEnvelope(eventName, time, sanitized, resolvedIKey, eventStreamName) {
   const wireData = { ...sanitized };
   if (wireData.eventInfo !== undefined) {
@@ -150,10 +146,8 @@ process.stdin.on("end", async () => {
   }
 
   // Compute the sanitized payload + timestamp ONCE. The sanitized data is
-  // exactly what lands in Kusto (its field names ARE the Kusto column names)
-  // for every field except `eventInfo`, which buildEnvelope() re-serializes
-  // to a JSON string just for the wire (see buildEnvelope comment) — the
-  // local mirror below keeps the real object.
+  // exactly what lands in Kusto (its field names ARE the Kusto column names),
+  // except `eventInfo` which buildEnvelope() re-serializes for the wire only.
   const time = new Date().toISOString();
   const sanitized = sanitizeData(event.data);
   const localRecord = { time, name: event.name, data: sanitized };
