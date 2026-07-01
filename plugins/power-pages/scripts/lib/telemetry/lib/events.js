@@ -10,7 +10,10 @@
 //                  or negative values clamp to 0. Sent as number, not string.
 //   "object"     — Kusto column type `dynamic` (JSON). Plain objects and
 //                  arrays pass through; primitives, Date, RegExp, etc. are
-//                  dropped to avoid Kusto type confusion.
+//                  dropped to avoid Kusto type confusion. Validated here as a
+//                  real object; emit-dispatcher.js re-serializes it to a JSON
+//                  string just before it hits the wire (see buildEnvelope),
+//                  so the Kusto side must `parse_json()` / `todynamic()` it.
 //   "enum:a|b|c" — Kusto column type `string`. Only the listed values are
 //                  accepted; anything else is dropped.
 //

@@ -155,6 +155,51 @@ test("dispatcher writes a probe file when fake-https points to one (happy path)"
   assert.deepEqual(body.data, fakeEvent.data);
 });
 
+test("dispatcher stringifies eventInfo on the wire but keeps it an object in the local mirror", () => {
+  const tmp = mkTmp();
+  const probePath = path.join(tmp, "probe.json");
+  const eventWithInfo = {
+    name: "PowerPagesPluginEvent",
+    data: {
+      ...fakeEvent.data,
+      eventInfo: { aadObjectId: "11111111-2222-3333-4444-555555555555" },
+    },
+  };
+  const { status } = runDispatcher({
+    event: eventWithInfo,
+    env: {
+      configDir: tmp,
+      iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
+      collectorUrl: "https://example.invalid/OneCollector/1.0/",
+      fakeProbe: probePath,
+    },
+  });
+  assert.equal(status, 0);
+
+  const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
+  const body = JSON.parse(probe.body);
+  assert.equal(
+    typeof body.data.eventInfo,
+    "string",
+    "wire envelope must carry eventInfo as a JSON string leaf"
+  );
+  assert.deepEqual(JSON.parse(body.data.eventInfo), eventWithInfo.data.eventInfo);
+
+  const mirrorPath = path.join(tmp, "events.jsonl");
+  const mirrorLine = fs
+    .readFileSync(mirrorPath, "utf8")
+    .trim()
+    .split("\n")
+    .pop();
+  const mirrorRecord = JSON.parse(mirrorLine);
+  assert.equal(
+    typeof mirrorRecord.data.eventInfo,
+    "object",
+    "local mirror must keep eventInfo as a real object"
+  );
+  assert.deepEqual(mirrorRecord.data.eventInfo, eventWithInfo.data.eventInfo);
+});
+
 test("dispatcher strips unknown fields from event.data (defense-in-depth)", () => {
   const tmp = mkTmp();
   const probePath = path.join(tmp, "probe.json");
