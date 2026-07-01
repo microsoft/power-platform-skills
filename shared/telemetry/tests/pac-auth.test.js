@@ -30,7 +30,19 @@ test("returns { orgId, tenantId } parsed from `pac auth who` output", () => {
     orgId: "33333333-3333-3333-3333-333333333333",
     tenantId: "11111111-1111-1111-1111-111111111111",
     cloud: "Public",
+    objectId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
   });
+});
+
+test("returns objectId: '' when the Entra ID Object Id line is missing", () => {
+  pacAuth._resetCache();
+  const result = pacAuth.readPacAuth({
+    _exec: () =>
+      "Cloud: Public\n" +
+      "Tenant Id: 11111111-1111-1111-1111-111111111111\n" +
+      "Organization Id: 33333333-3333-3333-3333-333333333333\n",
+  });
+  assert.equal(result.objectId, "");
 });
 
 test("returns { orgId: '', tenantId } when only Tenant Id line present", () => {
@@ -43,6 +55,7 @@ test("returns { orgId: '', tenantId } when only Tenant Id line present", () => {
     orgId: "",
     tenantId: "11111111-1111-1111-1111-111111111111",
     cloud: "Public",
+    objectId: "",
   });
 });
 
@@ -56,6 +69,7 @@ test("returns { tenantId: '', orgId } when only Organization Id line present", (
     orgId: "33333333-3333-3333-3333-333333333333",
     tenantId: "",
     cloud: "Public",
+    objectId: "",
   });
 });
 
@@ -143,6 +157,7 @@ test("parses values with extra whitespace and mixed casing in label", () => {
     orgId: "33333333-3333-3333-3333-333333333333",
     tenantId: "11111111-1111-1111-1111-111111111111",
     cloud: "",
+    objectId: "",
   });
 });
 

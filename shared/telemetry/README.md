@@ -86,7 +86,7 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 **Per-event:**
 
 - `skillName` (on every event)
-- `eventInfo` — caller-supplied JSON object (dynamic Kusto column). The caller is responsible for not putting PII in this payload.
+- `eventInfo` — caller-supplied JSON object (dynamic Kusto column). The caller is responsible for not putting PII in this payload. Power Pages populates it with `aadObjectId` (the signed-in user's Entra ID / AAD directory object id, parsed from `pac auth who`) when available; the field is omitted when `pac auth who` doesn't surface an object id.
 
 ## What is NEVER sent
 

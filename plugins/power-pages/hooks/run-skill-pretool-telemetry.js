@@ -144,6 +144,7 @@ function readStdin() {
   };
   if (pacAuth && pacAuth.orgId) fields.orgId = pacAuth.orgId;
   if (pacAuth && pacAuth.tenantId) fields.tenantId = pacAuth.tenantId;
+  if (pacAuth && pacAuth.objectId) fields.eventInfo = { aadObjectId: pacAuth.objectId };
   if (agentInfo.aiAgentName) fields.aiAgentName = agentInfo.aiAgentName;
   if (agentInfo.aiAgentVersion) fields.aiAgentVersion = agentInfo.aiAgentVersion;
   if (agentInfo.pacCliVersion) fields.pacCliVersion = agentInfo.pacCliVersion;
