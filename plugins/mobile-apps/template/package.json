@@ -23,6 +23,7 @@
     "@tamagui/portal": "1.144.4",
     "@tamagui/toast": "1.144.4",
     "@tanstack/react-query": "5.62.0",
+    "burnt": "0.12.2",
     "expo": "55.0.26",
     "expo-application": "55.0.15",
     "expo-asset": "55.0.17",
