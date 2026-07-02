@@ -73,16 +73,28 @@ connector wiring.
     msauth.com.microsoft.PreviewApp://auth
     ```
 
-    Add delegated API permissions for these APIs, then grant admin consent for
-    the tenant:
+    Add these API permissions as **Delegated** permissions, then grant admin
+    consent for the tenant:
 
-    - Dynamics CRM
-    - Power Platform API
     - Azure API Connections
+        - `Runtime.All`
+    - Dynamics CRM
+        - `user_impersonation`
+    - Microsoft Graph
+        - `User.Read`
+    - Microsoft Mobile Application Management
+    - Power BI Service
+    - Power Platform API
+        - `Connectivity.Connections.Read`
+        - `Connectivity.Connections.Write`
+        - `Connectivity.Connectors.Read`
+        - `PowerApps.Apps.Read`
+    - PowerApps Service
+        - `User`
 
 5. Start mobile app:
 
-    Run the above command in a new terminal from the app directory.
+	Run the below command in a new terminal from the app directory.
 
     ```bash
     npm run dev
@@ -90,9 +102,9 @@ connector wiring.
 
 6. Preview the app by scanning the QR code with the Power Apps Developer app
 
-    App store: https://apps.apple.com/us/app/power-apps-developer/id6753083462
-    Play store: (coming soon)
-    App center: https://install.appcenter.ms/orgs/appmagic-player-x6ys/apps/rn-dev-player-preview/distribution_groups/public_distribution/releases
+    - App store: https://apps.apple.com/us/app/power-apps-developer/id6753083462
+    - Play store: (coming soon)
+    - App center: https://install.appcenter.ms/orgs/appmagic-player-x6ys/apps/rn-dev-player-preview/distribution_groups/public_distribution/releases
 
 ## License and notices
 

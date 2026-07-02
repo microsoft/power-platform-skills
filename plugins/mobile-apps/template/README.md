@@ -60,19 +60,51 @@ connector wiring.
 	runtime dependencies. The skill updates the app in place as it designs and
 	generates the mobile experience.
 
-4. Start mobile app:
+	When prompted to sign in, use credentials for the tenant where the Dataverse
+	environment belongs.
 
-	Run the above command in a new terminal from the app directory.
+4. Create a Microsoft Entra app registration and grant admin consent. (simplified experience coming soon)
+
+	Create a native/public client app registration for the mobile app, then add
+	the following redirect URIs:
+
+	```text
+	https://login.microsoftonline.com/common/oauth2/nativeclient
+	msauth.com.microsoft.PreviewApp://auth
+	```
+
+	Add these API permissions as **Delegated** permissions, then grant admin
+	consent for the tenant:
+
+	- Azure API Connections
+		- `Runtime.All`
+	- Dynamics CRM
+		- `user_impersonation`
+	- Microsoft Graph
+		- `User.Read`
+	- Microsoft Mobile Application Management
+	- Power BI Service
+	- Power Platform API
+		- `Connectivity.Connections.Read`
+		- `Connectivity.Connections.Write`
+		- `Connectivity.Connectors.Read`
+		- `PowerApps.Apps.Read`
+	- PowerApps Service
+		- `User`
+
+5. Start mobile app:
+
+	Run the below command in a new terminal from the app directory.
 
 	```bash
 	npm run dev
 	```
 
-5. Preview the app by scanning the QR code with the Power Apps Developer app
+6. Preview the app by scanning the QR code with the Power Apps Developer app
 
-	App store: https://apps.apple.com/us/app/power-apps-developer/id6753083462
-	Play store: (coming soon)
-	App center: https://install.appcenter.ms/orgs/appmagic-player-x6ys/apps/rn-dev-player-preview/distribution_groups/public_distribution/releases
+	- App store: https://apps.apple.com/us/app/power-apps-developer/id6753083462
+	- Play store: (coming soon)
+	- App center: https://install.appcenter.ms/orgs/appmagic-player-x6ys/apps/rn-dev-player-preview/distribution_groups/public_distribution/releases
 
 ## License and notices
 
