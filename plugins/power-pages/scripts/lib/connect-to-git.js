@@ -155,7 +155,7 @@ async function connectToGit({
       result.verifiedAt = new Date().toISOString();
     } else {
       result.verifyWarning = 'ConnectToGit returned 2xx but detect-git-binding did not see a binding. ' +
-        'The platform may take a few seconds to propagate; re-check via plan-inner-loop.';
+        'The platform may take a few seconds to propagate; re-check via /power-pages:git-sync.';
     }
   }
 

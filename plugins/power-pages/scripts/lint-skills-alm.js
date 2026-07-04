@@ -209,13 +209,8 @@ const ALM_SKILLS = new Set([
 // ALM_SKILLS — these skills are fully catalogued in approval-gates.md §6A,
 // so any gate-rule violation is a regression rather than work-in-progress.
 const INNER_LOOP_SKILLS = new Set([
-  'plan-inner-loop',
   'git-configure',
   'git-sync',
-  'revert-workspace',
-  'revert-branch',
-  'open-pr',
-  'diagnose-git-integration',
 ]);
 
 // `category=intent` markers must be backed by a real helper invocation.
@@ -232,7 +227,6 @@ const INTENT_HELPERS = [
   'list-pending-changes.js',
   'list-incoming-updates.js',
   'list-conflicts.js',
-  'inner-loop-plan-state.js',
 ];
 
 // Normalized vocabulary for the `cancel-leaves=` marker field. Any value

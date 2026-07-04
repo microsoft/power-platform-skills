@@ -1,6 +1,6 @@
 # Inner-Loop Error Catalog
 
-Known failure patterns for Dataverse Git integration (Connect-to-Git). Used by the `diagnose-git-integration` skill to pattern-match symptoms against root causes and propose auto-fixes.
+Known failure patterns for Dataverse Git integration (Connect-to-Git). Used by `git-sync` and `git-configure` to pattern-match symptoms against root causes and propose auto-fixes.
 
 For greppable validator finding codes (`IL-<DOMAIN>-<NNN>`), see [`error-codes.md`](error-codes.md).
 
@@ -187,7 +187,7 @@ Each pattern includes: detection signal, root cause, severity, whether an auto-f
 
 **Auto-fix available:** Partial — we can dispatch `resolve-conflicts`
 
-**Fix procedure:** `sync-from-git` already handles this by branching to `resolve-conflicts` mid-flow. If `diagnose-git-integration` catches this standalone, dispatch `resolve-conflicts` after user confirms.
+**Fix procedure:** `git-sync --pull` already handles this by branching to its conflict flow mid-pull. When this surfaces, run `git-sync` and resolve via keep-current / accept-incoming / selective merge.
 
 ---
 
@@ -303,7 +303,7 @@ Each pattern includes: detection signal, root cause, severity, whether an auto-f
    - A note that `PublishAllXml`, `RefreshChangesFromGit`, and disconnecting+reconnecting to git all do NOT clear the condition.
    - The histogram of failing-solution component types (the count of `componenttype = 10429` rows is the critical signal).
    - Tag the ticket as "Power Platform Pipelines / Git Integration / SourceControl plugin metadata resolver".
-4. **Until resolved:** instruct the user to remove `PullChangesFromGit` from their inner-loop workflow on this env for any solution containing `powerpagecomponent` records. The git-sync commit half of the loop (`/power-pages:git-sync --commit`, `/power-pages:open-pr`, `/power-pages:git-configure` switch mode) still works — use those to snapshot dev changes to ADO. For pulling changes INTO this env, use `/power-pages:import-solution` with a zip exported from the source env instead.
+4. **Until resolved:** instruct the user to remove `PullChangesFromGit` from their inner-loop workflow on this env for any solution containing `powerpagecomponent` records. The git-sync commit half of the loop (`/power-pages:git-sync --commit`, `/power-pages:git-configure` switch mode) still works — use those to snapshot dev changes to ADO. For pulling changes INTO this env, use `/power-pages:import-solution` with a zip exported from the source env instead.
 
 ---
 
@@ -498,7 +498,7 @@ When adding a new pattern, follow the same shape:
 1. ...
 ```
 
-Then add the pattern ID to `scripts/parse-deployment-errors.js`'s pattern table (or the inner-loop equivalent if a separate parser exists) so `diagnose-git-integration` picks it up.
+Then add the pattern ID to `scripts/parse-deployment-errors.js`'s pattern table (or the inner-loop equivalent if a separate parser exists) so `git-sync` / `git-configure` pick it up.
 
 ---
 

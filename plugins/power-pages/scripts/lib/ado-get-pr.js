@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-// Gets the status of an existing Azure DevOps Pull Request. Used by the
-// `open-pr` skill after creating a PR (verify-after-create) and by
-// `diagnose-git-integration` to check whether a known PR is still open.
+// Gets the status of an existing Azure DevOps Pull Request. Used by git-sync's
+// inline PR offer (verify-after-create) and by the clone-merge resolver to check
+// whether an awaiting-PR run's PR has merged.
 //
 // API reference:
 //   https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-requests/get-pull-request

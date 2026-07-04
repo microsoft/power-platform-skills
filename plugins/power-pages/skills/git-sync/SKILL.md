@@ -82,7 +82,7 @@ Steps:
    ```
 
    Trust its shape: `{ mode, ordering, requiresConflictFirst, state, reason, explicitOverride }` where `mode ∈ {commit, pull, both, conflicts-first, clean}`. (Add `--commit` / `--pull` to force an explicit direction.)
-6. Announce the state and mode. If `mode = clean`, report "You're up to date" (offer open-pr) and exit.
+6. Announce the state and mode. If `mode = clean`, report "You're up to date" (offer to open a PR inline) and exit.
 
 **Output:** `envUrl`, `solutionUniqueName`, `mode`, `ordering`, and `requiresConflictFirst` are known.
 
@@ -182,14 +182,37 @@ Then dispatch on `mode`:
 
 Steps:
 
-1. After a successful commit, offer to open a PR.
+1. After a successful commit, offer to open a PR — and open it **inline** (this skill owns the PR step; it does not dispatch a separate skill).
 
 <!-- gate: git-sync:final.open-pr | category=final | cancel-leaves=nothing -->
 > 🚦 **Gate (final · git-sync:final.open-pr):** Commit path only. Surface `AskUserQuestion`:
 >
 > | Question | Header | Options |
 > |---|---|---|
-> | Commit `{shortSha}` landed on `{branch}`. Open a pull request now? | Open PR | Run /power-pages:open-pr, Not now |
+> | Commit `{shortSha}` landed on `{branch}`. Open a pull request now? | Open PR | Open PR (inline), Not now |
+
+   On **Open PR (inline)**, create the PR without leaving this skill, reusing the shared ADO helpers:
+
+   1. Resolve the target branch (default `main`; confirm with the user if they want a different target). Fetch the repo GUID + default branch:
+
+      ```bash
+      node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/ado-get-default-branch.js" --organization "<organization>" --project "<project>" --repository "<repository>"
+      ```
+
+   2. Render a maker-friendly PR description from the commits ahead of the target:
+
+      ```bash
+      node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/ado-list-commits.js" --organization "<organization>" --project "<project>" --repository "<repository>" --branch "<branch>" --top 20 --token "<adoToken>"
+      node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/ado-render-pr-description.js" --stdin
+      ```
+
+   3. Create the PR from the bound `<branch>` to the target:
+
+      ```bash
+      node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/ado-create-pr.js" --organization "<organization>" --project "<project>" --repository "<repository>" --source "<branch>" --target "<target>" --title "<title>" --description-file "<renderedDescriptionPath>"
+      ```
+
+   Error handling: `ado-create-pr.js` 400 "active pull request already exists" → surface the existing PR URL as success (idempotent); 403 → ADO PAT lacks `Pull request contributor` / `Code (write)` scope, surface the remediation from `${CLAUDE_PLUGIN_ROOT}/references/git-integration-prerequisites.md`; 5xx → retry once, then surface verbatim. ADO tokens are minted in-process and never written to disk or the command line.
 
 2. Optionally offer a tag.
 
@@ -207,7 +230,7 @@ Steps:
 >
 > | Question | Header | Options |
 > |---|---|---|
-> | Sync complete (`{summary}`). What next? | Next step | Run /power-pages:open-pr, Run /power-pages:git-sync again, Done |
+> | Sync complete (`{summary}`). What next? | Next step | Open PR (inline), Run /power-pages:git-sync again, Done |
 
 4. Record skill usage via `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md` with skill name `GitSync`.
 
@@ -233,13 +256,13 @@ Steps:
 | Check binding | Checking binding | Auth, binding, manifest reconcile. |
 | Summarise state | Summarising state | Refresh + config-vs-churn split + incoming preview + conflict explanation. |
 | Dispatch flow | Dispatching flow | Follow changes/update/conflict reference doc per state. |
-| Finalise | Finalising | Final gate, open-pr offer, skill tracking. |
+| Finalise | Finalising | Final gate, inline PR offer, skill tracking. |
 
 ## Key Decision Points (Wait for User)
 
 1. Phase 1: no binding (`git-sync:1.no-binding`); stale manifest (`git-sync:1.manifest-stale`).
 2. Phase 3: conflicts gate (`git-sync:2.conflicts`); Mixed ordering (`git-sync:3.mixed-order`).
 3. Per-flow gates live in the reference docs: `changes.*` (`references/changes-reference.md`), `update.*` (`references/update-reference.md`), `2.conflict-*` (`references/conflict-reference.md`), and `clone-merge.*` (`references/selective-merge-reference.md`).
-4. Phase 4: open-pr (`git-sync:final.open-pr`), tag (`git-sync:final.tag-offer`), final routing (`git-sync:final`).
+4. Phase 4: inline PR offer (`git-sync:final.open-pr`), tag (`git-sync:final.tag-offer`), final routing (`git-sync:final`).
 
 **Begin with Phase 0: Detect Direction.**

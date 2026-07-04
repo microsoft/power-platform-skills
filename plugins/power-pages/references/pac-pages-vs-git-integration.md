@@ -64,7 +64,7 @@ If a dev runs `pac pages upload-code-site` **while there are already pending Cha
 
 1. `commit-to-git` Phase 4 (plan rendering) **always lists each component by name** before asking for the commit message — so even commingled changes are visible to the user.
 2. `commit-to-git --dry-run` warns if it detects a mix of `mspp_webfile` (likely from PAC upload) AND other component types (maker-portal edits) AND the list is large (> 20 items): *"Looks like a code-site upload commingled with maker-portal edits. Consider committing one batch at a time for cleaner history. Continue, or split?"*
-3. `plan-inner-loop` surfaces this as Pattern IL-012 in `inner-loop-error-catalog.md` if a deployment-time failure traces back to it.
+3. `git-sync` surfaces this as Pattern IL-012 in `inner-loop-error-catalog.md` if a deployment-time failure traces back to it.
 
 ---
 
@@ -74,13 +74,13 @@ When using both PAC and Git integration in the same project:
 
 | Step | Why |
 |---|---|
-| 1. `plan-inner-loop` → confirm `Connected & Clean` | Don't start an upload on top of pending state |
+| 1. `/power-pages:git-sync` → confirm `Connected & Clean` | Don't start an upload on top of pending state |
 | 2. `npm run build` | Build outside the agent so failures surface early |
 | 3. `/power-pages:deploy-site` (runs `pac pages upload-code-site`) | Uploads the build to Dataverse |
-| 4. `plan-inner-loop` → expect `Dirty` now | Confirm the upload landed |
+| 4. `/power-pages:git-sync` → expect `Dirty` now | Confirm the upload landed |
 | 5. `/power-pages:git-sync --dry-run` | Pre-flight check (file sizes, supported types) |
 | 6. `/power-pages:git-sync --commit` with a meaningful message | Captures *what* was deployed in Git audit trail |
-| 7. (Optional) `/power-pages:open-pr` | Code review of the upload before it merges to `main` |
+| 7. (Optional) accept the git-sync inline PR offer | Code review of the upload before it merges to `main` |
 
 This is the **same number of total commands** as the manual workflow today, but each step is automated, verified, and recoverable.
 
@@ -88,8 +88,8 @@ This is the **same number of total commands** as the manual workflow today, but 
 
 ## 6. What the user must NOT do
 
-- ❌ Don't run `pac pages upload-code-site` to "preview your design" without intending to commit. The upload is durable in Dataverse; it will be in the next commit unless you `revert-workspace` it.
-- ❌ Don't manually delete `mspp_webfile` rows in Dataverse to "clean up" pending Changes — that creates a "deleted in env" entry that propagates to Git on next commit. Use `revert-workspace` instead.
+- ❌ Don't run `pac pages upload-code-site` to "preview your design" without intending to commit. The upload is durable in Dataverse; it will be in the next commit unless you discard it via the Maker Portal Source-control tab (Revert).
+- ❌ Don't manually delete `mspp_webfile` rows in Dataverse to "clean up" pending Changes — that creates a "deleted in env" entry that propagates to Git on next commit. Discard via the Maker Portal Source-control tab (Revert) instead.
 - ❌ Don't run `pac pages download-code-site` to "reset" — that re-syncs the local working copy from the env, which is correct, but does NOT clear pending Changes in Dataverse.
 
 ---

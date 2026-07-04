@@ -2,12 +2,11 @@
 
 // Translates a Connect-to-Git pending-changes diff (the items[] array from
 // list-pending-changes.js) into a human-readable Markdown PR description for
-// the ado-create-pr skill (Skill 10 open-pr).
+// git-sync's inline PR offer.
 //
 // Why this lives in `lib/`: the rendering logic is the same regardless of
-// where the PR is opened from (the open-pr skill, the plan-inner-loop summary,
-// or a future bulk-PR tool). Decoupling rendering from posting also makes
-// the output deterministically testable.
+// where the PR is opened from (git-sync's inline PR, or a future bulk-PR tool).
+// Decoupling rendering from posting also makes the output deterministically testable.
 //
 // PURE function — no HTTP, no I/O unless `--items-file` / `--stdin` is used.
 //

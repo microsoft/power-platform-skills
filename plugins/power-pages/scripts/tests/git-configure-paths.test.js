@@ -23,7 +23,9 @@ function makeTmp(t) {
 test('GIT_CONFIGURE_DIR co-locates git-configure artifacts under docs/inner-loop', () => {
   // git-configure IS an inner-loop skill; it just owns its own subset of files.
   // Sharing the directory means existing tooling that points at docs/inner-loop
-  // (e.g. plan-inner-loop's HTML page, refresh-inner-loop-plan-data) keeps
+  // git-configure IS an inner-loop skill; it just owns its own subset of files.
+  // Sharing the directory means all inner-loop tooling that points at
+  // docs/inner-loop (git-configure + git-sync markers and reports) keeps
   // working without changes.
   assert.equal(GIT_CONFIGURE_DIR, 'docs/inner-loop');
 });

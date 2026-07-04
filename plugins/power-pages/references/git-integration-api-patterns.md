@@ -186,7 +186,7 @@ All five actions return errors in the standard OData v4 error envelope:
 }
 ```
 
-Helpers should propagate `code` + `message` to the caller. The `diagnose-git-integration` skill pattern-matches on these codes against `inner-loop-error-catalog.md`.
+Helpers should propagate `code` + `message` to the caller. `git-sync` and `git-configure` pattern-match on these codes against `inner-loop-error-catalog.md`.
 
 ---
 

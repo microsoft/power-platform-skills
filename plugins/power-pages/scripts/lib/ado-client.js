@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Shared client utilities for Azure DevOps REST API calls used by the
-// inner-loop ADO helpers (create-pr, get-pr, list-commits, revert-branch).
+// inner-loop ADO helpers (create-pr, get-pr, list-commits, branch policies).
 //
 // Responsibilities:
 //   - Auth header construction (delegates to verify-ado-permissions.buildAuthHeader

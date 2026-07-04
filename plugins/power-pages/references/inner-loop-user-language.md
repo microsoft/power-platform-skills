@@ -1,6 +1,6 @@
 # Inner-Loop User-Language Style
 
-**Audience:** Authors of inner-loop SKILL.md files (`git-configure`, `git-sync`, `plan-inner-loop`, `diagnose-git-integration`, `revert-branch`, `revert-workspace`, `open-pr`) and the agent narrating their execution.
+**Audience:** Authors of inner-loop SKILL.md files (`git-configure`, `git-sync`) and the agent narrating their execution.
 
 **Goal:** Inner-loop skills speak to **end users**, not to developers reading API docs. The user should see **what's happening**, not **how the helpers do it**. This file is the single source of truth for that voice — every inner-loop SKILL.md links here instead of restating the rules.
 

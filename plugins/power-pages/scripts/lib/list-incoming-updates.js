@@ -5,7 +5,7 @@
 //
 // Important: `RefreshChangesFromGit` MUST be called before this helper so
 // Dataverse has queried ADO and populated the incoming-updates entity.
-// Callers (sync-from-git, plan-inner-loop) are responsible for running
+// Callers (git-sync) are responsible for running
 // refresh-changes-from-git.js first.
 //
 // Output (JSON to stdout):

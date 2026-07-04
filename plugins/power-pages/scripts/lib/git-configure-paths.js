@@ -47,7 +47,7 @@ const FILE_NAMES = Object.freeze({
   //     repository, oldBranch?, newBranch?, gitFolder, solutionUniqueName?,
   //     bindingType, status: 'ok' | 'failed', error? }
   // Consumed by `validate-git-configure.js` PostToolUse hook AND by
-  // `plan-inner-loop` to recommend a next step.
+  // `git-sync` when it detects state on entry.
   lastGitConfigure:            'last-git-configure.json',
 
   // Snapshot of the chosen plan (ADO coords, mode, headless flag, picked

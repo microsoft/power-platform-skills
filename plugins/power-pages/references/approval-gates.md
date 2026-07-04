@@ -2,7 +2,7 @@
 
 > **Status: DRAFT v2.** Addresses review feedback on v1, extended with the 12 inner-loop skills in §6A.
 >
-> **Scope: ALM + inner-loop skills.** §6 enumerates every `AskUserQuestion` in the 12 ALM (outer-loop) skills (`plan-alm`, `setup-solution`, `setup-pipeline`, `deploy-pipeline`, `export-solution`, `import-solution`, `configure-env-variables`, `ensure-pipelines-host`, `force-link-environment`, `activate-site`, `test-site`, `diagnose-deployment`). §6A enumerates the 11 inner-loop (Git integration) skills (`plan-inner-loop`, `setup-git-integration`, `connect-solution-to-git`, `commit-to-git`, `sync-from-git`, `resolve-conflicts`, `branch-switch`, `revert-workspace`, `revert-branch`, `open-pr`, `diagnose-git-integration`). (The previously separate `validate-pending-changes` skill was merged into `commit-to-git --dry-run` — see §6A.7.) Non-ALM, non-inner-loop skills (`create-site`, `deploy-site`, `add-cloud-flow`, `add-server-logic`, `add-seo`, `add-sample-data`, `audit-permissions`, `create-webroles`, `integrate-backend`, `integrate-webapi`, `setup-auth`, `setup-datamodel`) are intentionally **deferred** — see §8. Catalog completeness is asserted only for ALM and inner-loop.
+> **Scope: ALM + inner-loop skills.** §6 enumerates every `AskUserQuestion` in the 12 ALM (outer-loop) skills (`plan-alm`, `setup-solution`, `setup-pipeline`, `deploy-pipeline`, `export-solution`, `import-solution`, `configure-env-variables`, `ensure-pipelines-host`, `force-link-environment`, `activate-site`, `test-site`, `diagnose-deployment`). §6A enumerates the 2 inner-loop (Git integration) skills (`git-configure`, `git-sync`); the standalone commit / pull / conflict / branch / revert / open-pr / diagnose skills were merged into those two, so their pre-declared rows are retained as historical context only. Non-ALM, non-inner-loop skills (`create-site`, `deploy-site`, `add-cloud-flow`, `add-server-logic`, `add-seo`, `add-sample-data`, `audit-permissions`, `create-webroles`, `integrate-backend`, `integrate-webapi`, `setup-auth`, `setup-datamodel`) are intentionally **deferred** — see §8. Catalog completeness is asserted only for ALM and inner-loop.
 >
 > **Not yet applied to SKILL.md files.** This document defines terminology + marker + lint design. The follow-up PR will add the markers to each ALM SKILL.md and ship the lint rule. Run the decisions in §9 first.
 
@@ -455,22 +455,9 @@ The single `AskUserQuestion` template fires once per Error finding with `autoFix
 
 ## 6A. The inner-loop-skill catalog
 
-Same shape as §6. Phase numbers reference the SKILL.md as the 12 inner-loop skills are landed in milestones M6 – M10 (see project `plan.md`). Catalog rows are pre-declared so SKILL.md authors can anchor markers as they write each skill.
+Same shape as §6. Covers the 2 inner-loop skills (`git-configure`, `git-sync`). Pre-declared rows for the standalone commit / pull / conflict / branch / revert / open-pr / diagnose skills are retained below as historical context only — those skills were merged into `git-configure` + `git-sync`.
 
-> **Lint scope.** Inner-loop skills use the same ALM-strictness lint rule (hard-fail) per §9 decision #4. The lint regex matcher in `scripts/lint-skills-alm.js` (or successor `lint-skills-inner-loop.js`) must include the 12 inner-loop skill names in its allow-list.
-
----
-
-### 6A.1 `plan-inner-loop` (orchestrator / front door — projected 6 calls)
-
-| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
-|---|---|---|---|---|---|
-| `plan-inner-loop:0.stale-plan` | gate | intent | 0 | `inner-loop-plan-state.js` returned `stale-heartbeat:true` — *"Re-detect state / use cached / cancel"* | nothing |
-| `plan-inner-loop:1.manifest-stale` | gate | intent | 1 | `reconcileManifest({ manifest, serverBinding })` returned `aligned:false` — choose helper option (`overwrite-from-server` / `rebind-old-coords` / `clear-local`) or cancel. | nothing |
-| `plan-inner-loop:1.broken` | gate | intent | 1 | State classified as `Broken` (persistent API failure) — *"Run diagnose-git-integration / continue anyway / cancel"* | nothing |
-| `plan-inner-loop:4.review` | gate | plan | 4 | Status page rendered — *"Run recommended skill / pick different skill / exit"* | nothing |
-| `plan-inner-loop:5.mixed-state` | gate | plan | 5 | State = `Mixed` (Changes + Updates, no conflicts) — *"Pull first / commit first / cancel"* | nothing |
-| `plan-inner-loop:6.dispatch` | gate | consent | 6 | About to dispatch downstream skill — *"Dispatch now / let me run manually / cancel"* | nothing |
+> **Lint scope.** Inner-loop skills use the same ALM-strictness lint rule (hard-fail) per §9 decision #4. The lint matcher in `scripts/lint-skills-alm.js` includes `git-configure` and `git-sync` in `INNER_LOOP_SKILLS`.
 
 ---
 
@@ -626,51 +613,25 @@ See §6A.7 (`git-sync`) for the canonical gate inventory.
 
 ### 6A.10 `revert-workspace` (projected 4 calls — typed-confirmation pattern)
 
-| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
-|---|---|---|---|---|---|
-| `revert-workspace:1.manifest-stale` | gate | intent | 1 | `reconcileManifest({ manifest, serverBinding })` returned `aligned:false` — choose helper option (`overwrite-from-server` / `rebind-old-coords` / `clear-local`) or cancel. | nothing |
-| `revert-workspace:1.no-binding-or-empty` | gate | intent | 1 | No binding OR Changes = 0 — *"Nothing to revert; exit"* | nothing |
-| `revert-workspace:4.typed-consent` | gate | consent | 4 | Typed-confirmation: user must type `REVERT WORKSPACE` to proceed. Cancel leaves all N Changes intact. | nothing |
-| `revert-workspace:6.final` | gate | final | 6 | Revert verified; Changes tab now empty — *"Done"* | nothing |
+_Removed — `revert-workspace` skill deleted. Discarding pending Changes is now a Maker Portal Source-control tab (Revert) operation._
 
 ---
 
 ### 6A.11 `revert-branch` (projected 4 calls — typed-confirmation, blast-radius warning)
 
-| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
-|---|---|---|---|---|---|
-| `revert-branch:1.manifest-stale` | gate | intent | 1 | `reconcileManifest({ manifest, serverBinding })` returned `aligned:false` — choose helper option (`overwrite-from-server` / `rebind-old-coords` / `clear-local`) or cancel. | nothing |
-| `revert-branch:1.no-binding` | gate | intent | 1 | No binding — *"Run setup-git-integration / cancel"* | nothing |
-| `revert-branch:5.typed-consent` | gate | consent | 5 | Typed-confirmation: user must type `REVERT BRANCH {sha}` after seeing the impact analysis ("Will affect N other envs bound to this branch"). | nothing |
-| `revert-branch:8.final` | gate | final | 8 | Branch HEAD verified at target SHA — *"Done / I'll tell my team to sync-from-git"* | nothing |
-| `revert-branch:3.target-sha` | not-a-gate | — | 3 | Free-text or list-pick target commit SHA — data-gathering | — |
+_Removed — `revert-branch` skill deleted. Branch rollback is a manual ADO / Maker Portal operation._
 
 ---
 
 ### 6A.12 `open-pr` (projected 5 calls + 2 not-a-gate)
 
-| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
-|---|---|---|---|---|---|
-| `open-pr:1.manifest-stale` | gate | intent | 1 | `reconcileManifest({ manifest, serverBinding })` returned `aligned:false` — choose helper option (`overwrite-from-server` / `rebind-old-coords` / `clear-local`) or cancel. | nothing |
-| `open-pr:1.no-binding` | gate | intent | 1 | No binding — *"Run setup-git-integration / cancel"* | nothing |
-| `open-pr:1.nothing-to-pr` | gate | intent | 1 | Bound branch has no commits ahead of target branch — *"Nothing to PR; exit"* | nothing |
-| `open-pr:5.plan` | gate | plan | 5 | Auto-generated PR description rendered — *"Use as-is / edit / cancel"* | nothing |
-| `open-pr:6.consent` | gate | consent | 6 | Final consent before `ado-create-pr.js` — *"Create PR now / cancel"* | nothing |
-| `open-pr:9.final` | gate | final | 9 | PR created; URL displayed — *"Open in browser / done"* | nothing |
-| `open-pr:4.pr-title` | not-a-gate | — | 4 | Free-text PR title — data-gathering | — |
-| `open-pr:4.reviewers` | not-a-gate | — | 4 | Free-text or list-pick reviewers — data-gathering | — |
+_Removed — standalone `open-pr` skill deleted; PR creation is now `git-sync`'s inline PR offer (`git-sync:final.open-pr`)._
 
 ---
 
 ### 6A.13 `diagnose-git-integration` (projected 3 gates — loop-style auto-fix mirrors `diagnose-deployment`)
 
-| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
-|---|---|---|---|---|---|
-| `diagnose-git-integration:1.symptoms` | gate | intent | 1 | *"What's broken? Paste error / I'll describe / run full scan"* | nothing |
-| `diagnose-git-integration:1.manifest-stale` | gate | intent | 1 | `reconcileManifest({ manifest, serverBinding })` returned `aligned:false` — choose helper option (`overwrite-from-server` / `rebind-old-coords` / `clear-local`) or cancel. | nothing |
-| `diagnose-git-integration:5.auto-fix` | gate | consent | 5 | Per-finding: each auto-fixable Error pattern from `inner-loop-error-catalog.md` (IL-003, IL-008, IL-010, IL-011, etc.) loops through this same prompt template. Answer Yes / No / Skip-all per finding. | varies by fix |
-
-Same loop-style pattern as `diagnose-deployment:6.auto-fix`. One marker covers all per-pattern loops; the catalog of patterns themselves lives in `references/inner-loop-error-catalog.md`.
+_Removed — `diagnose-git-integration` skill deleted; `git-configure` and `git-sync` run their own checks and surface errors verbatim._
 
 ---
 
@@ -698,12 +659,12 @@ Same loop-style pattern as `diagnose-deployment:6.auto-fix`. One marker covers a
 | `git-configure:4.folder-coexists` | gate | consent | 4 | Env-binding only; selected existing folder is non-empty. | Folder `/{folder}/` already exists in `{repo}` and contains content. Dataverse will write env-bound solution files into that folder. | Use this folder; Go back and pick another loops to folder selection. | nothing |
 | `git-configure:4.folder-occupied` | gate | consent | 4 | Solution-binding only; `check-ado-folder-exists.js` reports `itemCount > 0`. | Folder `/{gitFolder}/` on `{branch}` already contains `{itemCount}` item(s). `ConnectToGit` will co-locate Dataverse-managed files there. | Pick a different gitFolder; Pick a different repo; Proceed anyway and preserve `preBindFolderOccupancy` in plan data; Cancel. | nothing |
 | `git-configure:4.shared-object-overlap` | gate | plan | 4 | Solution-binding only; HARD BLOCK when target solution shares components with already-bound solution(s). | Solution `{name}` shares `{count}` component(s) with already-bound solution(s) `{otherNames}`. The first `CommitToGit` will fail until overlap is removed. How should this be resolved? | Remove shared components from `{name}`; Remove them from `{otherNames}`. Either removal calls `remove-solution-component.js` for every component and re-queries until zero overlap. Cancel. Do not proceed unresolved. | nothing |
-| `git-configure:5.workspace-dirty` | gate | intent | 5 | Switch-branch, rebind, or disconnect when Changes/Updates/Conflicts are non-zero. | Git configuration requires a clean workspace, but found Changes=`{C}`, Updates=`{U}`, Conflicts=`{X}`. Continuing would discard in-flight state. | Run `/power-pages:git-sync --commit`; Run `/power-pages:git-sync --pull`; Run `/power-pages:revert-workspace`; Run `/power-pages:git-sync`; Cancel. Do not proceed unless counts are zero or deleted-source-branch recovery exception applies. | nothing |
+| `git-configure:5.workspace-dirty` | gate | intent | 5 | Switch-branch, rebind, or disconnect when Changes/Updates/Conflicts are non-zero. | Git configuration requires a clean workspace, but found Changes=`{C}`, Updates=`{U}`, Conflicts=`{X}`. Continuing would discard in-flight state. | Run `/power-pages:git-sync --commit`; Run `/power-pages:git-sync --pull`; Run `/power-pages:git-sync`; Cancel. Do not proceed unless counts are zero or deleted-source-branch recovery exception applies. | nothing |
 | `git-configure:6.plan` | gate | plan | 6 | Git configuration plan has been rendered and plan data written. | Review the Git configuration plan above. Proceed to final consent? | Yes — proceed to consent; Change a field loops back to Phase 3 for binding type or Phase 4 for ADO coordinates, depending on what changed; Cancel. | nothing |
 | `git-configure:7.consent` | gate | consent | 7 | Setup and switch-branch. | Final consent — execute `{mode}` on `{envHost}` now? | Execute now calls `connect-to-git.js` for setup/env, `connect-solution-to-git.js` for setup/solution, or `switch-branch.js` for switch-branch; Cancel. | nothing |
 | `git-configure:7.disconnect-consent` | gate | consent | 7 | Disconnect mode only. Plain choice-selection consent (no typed phrase). | Disconnect Git from `{envHost}`? This removes the current binding to `{org}/{project}/{repo}@{branch}` and drops the Source-control connection until setup/rebind runs again. | Disconnect now calls `disconnect-from-git.js`; Cancel leaves the binding unchanged. | nothing |
 | `git-configure:7.rebind-consent` | gate | consent | 7 | Rebind mode only. Plain choice-selection consent (no typed phrase). | Rebind Git on `{envHost}` from `{oldOrg}/{oldRepo}@{oldBranch}` to `{org}/{project}/{repo}@{branch}`? Disconnects then reconnects; if reconnect fails after disconnect, the env may be left disconnected. | Rebind now proceeds to execution (disconnect then reconnect); Cancel leaves the current binding unchanged. | nothing |
-| `git-configure:8.recovery` | gate | intent | 8 | `reconcileManifest` reports `aligned:false` after the Phase 7 mutation (mutation half-applied: server ⊕ manifest). | The Git binding half-applied: `{summary}`. Server and local manifest disagree on `{divergedFields}`. How should I recover? | Fix manifest from server truth (rewrite from detect-git-binding); Re-execute the Phase 7 mutation; Cancel and diagnose (points at `/power-pages:diagnose-git-integration`). | nothing |
+| `git-configure:8.recovery` | gate | intent | 8 | `reconcileManifest` reports `aligned:false` after the Phase 7 mutation (mutation half-applied: server ⊕ manifest). | The Git binding half-applied: `{summary}`. Server and local manifest disagree on `{divergedFields}`. How should I recover? | Fix manifest from server truth (rewrite from detect-git-binding); Re-execute the Phase 7 mutation; Cancel (surface divergence verbatim and re-run `/power-pages:git-configure` to re-detect + reconcile). | nothing |
 | `git-configure:9.enable-approach` | gate | plan | 9 | Env-bind follow-up finds unmanaged solutions that can be enabled for source control. | Found `{count}` unmanaged solutions that can be enabled for source control. How should I proceed? | Enable all loops all candidates; Pick individually fires `git-configure:9.enable-solution` for each candidate; Skip leaves binding intact and proceeds. | nothing |
 | `git-configure:9.enable-solution` | gate | consent | 9 | Env-bind only; PER LOOP ITERATION for each candidate in individual-pick loop. | Enable solution `{uniqueName}` (`{friendlyName}` v`{version}`) for source control? | Enable this one calls `enable-solution-source-control.js --poll`; Skip this one. Consent for one solution does not cover the next; continue on per-solution failure and summarize. | nothing |
 | `git-configure:9.commit-approach` | gate | plan | 9 | Env-bind follow-up after one or more solutions were enabled. | `{enabledCount}` solution(s) were enabled and have staged Changes. Push initial commits now? | Commit all with default messages loops all enabled solutions; Commit one-by-one fires `git-configure:9.commit-solution`; Skip. | nothing |

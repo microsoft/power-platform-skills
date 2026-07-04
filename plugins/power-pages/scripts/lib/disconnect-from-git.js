@@ -111,7 +111,7 @@ async function disconnectFromGit({ envUrl, token, solutionUniqueName = null, ver
     } else {
       result.verifiedUnbound = false;
       result.verifyWarning = 'DisconnectFromGit returned 2xx but detect-git-binding still sees a binding. ' +
-        'For solution disconnect this may mean OTHER solutions remain bound; check via plan-inner-loop.';
+        'For solution disconnect this may mean OTHER solutions remain bound; check via /power-pages:git-sync.';
     }
   }
 

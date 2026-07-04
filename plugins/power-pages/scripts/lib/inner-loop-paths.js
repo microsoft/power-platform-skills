@@ -51,10 +51,6 @@ const INNER_LOOP_GITIGNORE =
   '!.gitignore\n';
 
 const FILE_NAMES = Object.freeze({
-  // Orchestrator state (written by plan-inner-loop)
-  plan:                      'inner-loop-plan.json',
-  planHtml:                  'inner-loop-plan.html',
-
   // Skill-run markers (written when a skill completes)
   // NOTE: `git-configure` (which merged setup-git-integration + connect-solution-to-git +
   // branch-switch) writes its own marker via `git-configure-paths.js` (last-git-configure.json

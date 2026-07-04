@@ -54,13 +54,8 @@ If the tracking script creates or updates site setting YAML files, include those
 | deploy-pipeline | DeployPipeline | Site/AI/Skills/DeployPipeline |
 | ensure-pipelines-host | EnsurePipelinesHost | Site/AI/Skills/EnsurePipelinesHost |
 | force-link-environment | ForceLinkEnvironment | Site/AI/Skills/ForceLinkEnvironment |
-| plan-inner-loop | PlanInnerLoop | Site/AI/Skills/PlanInnerLoop |
 | git-configure | GitConfigure | Site/AI/Skills/GitConfigure |
 | git-sync | GitSync | Site/AI/Skills/GitSync |
-| revert-workspace | RevertWorkspace | Site/AI/Skills/RevertWorkspace |
-| revert-branch | RevertBranch | Site/AI/Skills/RevertBranch |
-| open-pr | OpenPr | Site/AI/Skills/OpenPr |
-| diagnose-git-integration | DiagnoseGitIntegration | Site/AI/Skills/DiagnoseGitIntegration |
 
 ## YAML Format
 

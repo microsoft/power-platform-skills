@@ -335,7 +335,7 @@ async function commitToGit({
   result.polled = poll;
   if (!poll.reached) {
     result.pollWarning = 'CommitToGit returned 200 but pending Changes did not drop to 0 within the timeout. ' +
-      'The commit may still be processing — re-check via plan-inner-loop.';
+      'The commit may still be processing — re-check via /power-pages:git-sync.';
   }
   return result;
 }

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 // Lists recent commits on a branch in Azure DevOps. Used by:
-//   - revert-branch skill UI (to let the user pick a target commit to reset to)
-//   - diagnose-git-integration (to show recent CommitToGit / merge history)
+//   - git-sync commit flow (recent-commit context + inline PR description)
+//   - git-sync pull flow (verify a candidate branch exists)
 //
 // API reference:
 //   https://learn.microsoft.com/en-us/rest/api/azure/devops/git/commits/get-commits

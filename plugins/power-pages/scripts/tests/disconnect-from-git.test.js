@@ -116,7 +116,7 @@ test('--verify: warns when post-disconnect a binding is still visible (solution-
     assert.equal(r.disconnected, true);
     assert.equal(r.verifiedUnbound, false);
     assert.ok(r.verifyWarning);
-    assert.match(r.verifyWarning, /OTHER solutions|plan-inner-loop/);
+    assert.match(r.verifyWarning, /OTHER solutions|git-sync/);
   } finally { server.close(); }
 });
 

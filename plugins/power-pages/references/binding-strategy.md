@@ -1,6 +1,6 @@
 # Binding Strategy — Environment vs Solution
 
-Decision reference for `plan-inner-loop` and `git-configure`. Helps the user (and the agent) pick **environment binding** or **solution binding** when first connecting to Git.
+Decision reference for `git-configure`. Helps the user (and the agent) pick **environment binding** or **solution binding** when first connecting to Git.
 
 > Built from [Microsoft Learn: Dataverse Git integration setup](https://learn.microsoft.com/power-platform/alm/git-integration/connecting-to-git) §"Connect to Git" and the [Git API reference](https://learn.microsoft.com/power-platform/alm/git-integration/git-api).
 
@@ -60,7 +60,7 @@ Are you using one dev env (shared OR per-dev with same publisher)?
           No  → ENVIRONMENT BINDING (you'll likely consolidate later anyway).
 ```
 
-`plan-inner-loop` should render this tree as a question with 2 options (Environment / Solution) + a "Help me decide" expand that shows the table in §1 + the trade-offs in §3.
+`git-configure` should render this tree as a question with 2 options (Environment / Solution) + a "Help me decide" expand that shows the table in §1 + the trade-offs in §3.
 
 ---
 
@@ -68,7 +68,7 @@ Are you using one dev env (shared OR per-dev with same publisher)?
 
 > ⚠️ **`Default Solution` and `Common Data Service Default Solution` CANNOT be bound to Git** — neither in environment binding (they're excluded automatically) nor in solution binding (the Connect dialog rejects them).
 
-If `plan-inner-loop` detects that the user's work is currently in the Default solution:
+If `git-configure` detects that the user's work is currently in the Default solution:
 1. Surface a hard-stop with remediation: *"Your changes are in the Default Solution, which Git integration won't track. Create a custom solution first (try `/power-pages:setup-solution`), move the components into it, then re-run."*
 2. Do **not** auto-create the solution silently — that's `setup-solution`'s job.
 
@@ -100,7 +100,7 @@ This is **not directly supported**. The flow:
 2. Confirm `detect-git-binding.js` returns `null` for every solution.
 3. `ConnectToGit` with the new `ConnectionType` and per-solution params.
 
-`git-configure` switch-branch mode does not handle this by itself — it only switches the branch within the same binding type. Switching binding type is a deliberate, rare operation; `plan-inner-loop` should ask the user to confirm with a `consent` gate (typed phrase: `SWITCH BINDING TYPE`) before invoking the disconnect/rebind flow.
+`git-configure` switch-branch mode does not handle this by itself — it only switches the branch within the same binding type. Switching binding type is a deliberate, rare operation; `git-configure` should ask the user to confirm with a `consent` gate (typed phrase: `SWITCH BINDING TYPE`) before invoking the disconnect/rebind flow.
 
 ---
 

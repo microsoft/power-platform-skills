@@ -80,7 +80,7 @@
 //     signal) so a "Clean" answer means there are zero unflushed rows of any
 //     kind, not just unflushed rows for currently-enabled solutions.
 //
-// Callers (e.g. plan-inner-loop Phase 2) SHOULD inspect `multipleSolutionsBound`
+// Callers (e.g. git-sync's detect phase) SHOULD inspect `multipleSolutionsBound`
 // and, if true, iterate `boundSolutions[]` to surface per-solution state to the
 // user instead of treating the env as a single binding.
 //
@@ -236,7 +236,7 @@ async function detectViaSourceControlEntities(tok, base, solutionUniqueName) {
 
   // 4b. ALWAYS enumerate Git-bound solutions on the env, even when no
   //     --solutionUniqueName filter was provided. This lets callers
-  //     (especially plan-inner-loop) know whether multiple solutions are
+  //     (especially git-sync) know whether multiple solutions are
   //     bound and reach a meaningful Clean/Dirty answer at env scope.
   //     Without this, a multi-solution-bound env returns cleanState='Unknown'
   //     because the per-solution count cannot be computed from a single

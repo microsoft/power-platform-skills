@@ -1,6 +1,6 @@
 # Git Integration Prerequisites
 
-Shared prerequisite reference for **inner-loop** skills that interact with Dataverse Git integration (Connect-to-Git). Used by `plan-inner-loop`, `git-configure`, `commit-to-git`, `sync-from-git`, `resolve-conflicts`, `revert-workspace`, `revert-branch`, `open-pr`, `diagnose-git-integration`.
+Shared prerequisite reference for **inner-loop** skills that interact with Dataverse Git integration (Connect-to-Git). Used by `git-configure` and `git-sync`.
 
 > **Source of truth.** This document mirrors the Microsoft Learn page [Dataverse Git integration setup](https://learn.microsoft.com/power-platform/alm/git-integration/connecting-to-git) and the [Git API reference](https://learn.microsoft.com/power-platform/alm/git-integration/git-api). If those pages move, update this doc.
 

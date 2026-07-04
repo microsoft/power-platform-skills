@@ -78,15 +78,18 @@ test('force-link-environment is wired into TRACKED_SKILLS with its validator', (
 });
 
 test('detectTrackedSkill recognizes the Inner Dev Loop skills', () => {
-  assert.equal(detectTrackedSkill('/power-pages:plan-inner-loop'), 'plan-inner-loop');
   assert.equal(detectTrackedSkill('/power-pages:git-configure'), 'git-configure');
   // 'commit-to-git', 'sync-from-git', and 'resolve-conflicts' were merged into
   // 'git-sync' (one mode-aware validator). Their slugs no longer route.
   assert.equal(detectTrackedSkill('/power-pages:git-sync'), 'git-sync');
-  assert.equal(detectTrackedSkill('/power-pages:revert-workspace'), 'revert-workspace');
-  assert.equal(detectTrackedSkill('/power-pages:revert-branch'), 'revert-branch');
-  assert.equal(detectTrackedSkill('/power-pages:open-pr'), 'open-pr');
-  assert.equal(detectTrackedSkill('/power-pages:diagnose-git-integration'), 'diagnose-git-integration');
+  // plan-inner-loop, revert-workspace, revert-branch, open-pr, and
+  // diagnose-git-integration were removed — git-configure + git-sync are the
+  // entire inner-loop surface. Their slugs no longer route.
+  assert.equal(detectTrackedSkill('/power-pages:plan-inner-loop'), null);
+  assert.equal(detectTrackedSkill('/power-pages:revert-workspace'), null);
+  assert.equal(detectTrackedSkill('/power-pages:revert-branch'), null);
+  assert.equal(detectTrackedSkill('/power-pages:open-pr'), null);
+  assert.equal(detectTrackedSkill('/power-pages:diagnose-git-integration'), null);
   assert.equal(detectTrackedSkill('/power-pages:setup-git-integration'), null);
   assert.equal(detectTrackedSkill('/power-pages:connect-solution-to-git'), null);
   assert.equal(detectTrackedSkill('/power-pages:branch-switch'), null);
@@ -98,17 +101,17 @@ test('detectTrackedSkill recognizes the Inner Dev Loop skills', () => {
 });
 
 test('every Inner Dev Loop skill resolves to its validator script', () => {
-  // All inner-loop skills MUST be registered with command-backed validators
-  // — they all write markers under docs/inner-loop/ that the PostToolUse hook
-  // checks. commit-to-git + sync-from-git + resolve-conflicts were merged into
-  // git-sync (one validator).
-  assert.match(getValidatorScript('plan-inner-loop'), /validate-plan-inner-loop\.js$/);
+  // git-configure + git-sync are the only inner-loop skills; both write markers
+  // under docs/inner-loop/ that the PostToolUse hook checks. commit-to-git +
+  // sync-from-git + resolve-conflicts were merged into git-sync (one validator).
   assert.match(getValidatorScript('git-configure'), /validate-git-configure\.js$/);
   assert.match(getValidatorScript('git-sync'), /validate-git-sync\.js$/);
-  assert.match(getValidatorScript('revert-workspace'), /validate-revert-workspace\.js$/);
-  assert.match(getValidatorScript('revert-branch'), /validate-revert-branch\.js$/);
-  assert.match(getValidatorScript('open-pr'), /validate-open-pr\.js$/);
-  assert.match(getValidatorScript('diagnose-git-integration'), /validate-diagnose-git-integration\.js$/);
+  // Removed inner-loop skills must NOT resolve to validators.
+  assert.equal(getValidatorScript('plan-inner-loop'), null);
+  assert.equal(getValidatorScript('revert-workspace'), null);
+  assert.equal(getValidatorScript('revert-branch'), null);
+  assert.equal(getValidatorScript('open-pr'), null);
+  assert.equal(getValidatorScript('diagnose-git-integration'), null);
   assert.equal(getValidatorScript('setup-git-integration'), null);
   assert.equal(getValidatorScript('connect-solution-to-git'), null);
   assert.equal(getValidatorScript('branch-switch'), null);

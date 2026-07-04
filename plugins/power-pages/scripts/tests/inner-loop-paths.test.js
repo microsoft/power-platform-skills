@@ -32,7 +32,6 @@ test('INNER_LOOP_DIR is the canonical docs/inner-loop folder (sibling of docs/al
 test('FILE_NAMES exposes the inner-loop artifact keys and uses kebab-case file names', () => {
   // Snapshot test: lock the key set so a careless rename or missing key is loud.
   const expected = [
-    'plan', 'planHtml',
     'lastCommit', 'lastSync', 'lastValidation',
     'lastConflictResolution', 'lastRevert',
     'lastBranchRevert', 'lastPr', 'lastDiagnosis',
@@ -68,8 +67,8 @@ test('innerLoopDir throws when projectRoot is missing', () => {
 test('innerLoopPath returns a stable absolute path for known keys', () => {
   const root = path.join(path.sep, 'tmp', 'project');
   assert.equal(
-    innerLoopPath(root, 'plan'),
-    path.join(root, 'docs', 'inner-loop', 'inner-loop-plan.json'),
+    innerLoopPath(root, 'lastConflictResolution'),
+    path.join(root, 'docs', 'inner-loop', 'last-conflict-resolution.json'),
   );
   assert.equal(
     innerLoopPath(root, 'lastCommit'),

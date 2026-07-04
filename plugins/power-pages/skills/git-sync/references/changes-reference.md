@@ -346,7 +346,7 @@ Append `--workItemId "<workItemId>"` to the helper command only when the user su
 
 1. Re-detect the three counts if the dispatcher needs post-commit routing for Mixed/Both.
 2. Return `commitId`, `shortSha`, ADO verification URL if available, poll warning if any, and marker path to the dispatcher.
-3. Do not offer PR creation or tags here. The dispatcher's final gate handles open-pr and optional tag follow-ups after this reference completes.
+3. Do not offer PR creation or tags here. The dispatcher's final gate handles the inline PR offer and optional tag follow-ups after this reference completes.
 
 **Output:** Commit flow is complete and control returns to `git-sync`.
 

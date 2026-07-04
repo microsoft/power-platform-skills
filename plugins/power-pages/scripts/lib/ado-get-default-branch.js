@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 
 // Fetches the *default branch* configured on an Azure DevOps repository.
-// Used by commit-to-git Phase 9 to detect the "PR-to-self" case (when the
-// bound branch IS the repo default) — there is no point offering an open-pr
-// gate in that case.
+// Used by git-sync to detect the "PR-to-self" case (when the bound branch IS
+// the repo default) — there is no point offering an inline PR in that case.
 //
 // API reference:
 //   https://learn.microsoft.com/en-us/rest/api/azure/devops/git/repositories/get-repository

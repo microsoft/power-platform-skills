@@ -38,7 +38,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 36 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, the daily Dataverse Git inner loop, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 31 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, the daily Dataverse Git inner loop, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
 
 ### Site scaffolding and deployment
 
@@ -351,25 +351,19 @@ Surfaces PAC CLI upload errors and Dataverse async operation errors, pattern-mat
 
 ### Inner Dev Loop (Dataverse Git integration)
 
-A 7-skill family that automates the [Connect-to-Git](https://learn.microsoft.com/power-platform/alm/git-integration/overview) workflow: configure Dataverse Git binding, run the per-cycle git-sync loop, switch branches, recover from mistakes, and open PRs. Every skill writes a marker file under `docs/inner-loop/` for audit and inter-skill state.
-
-#### `/plan-inner-loop`
-
-> "Where am I in the git loop?"
-
-Read-only orchestrator that detects current binding + pending changes + incoming updates + conflicts, classifies state (Disconnected / Clean / Dirty / Stale / Mixed / Conflicted / Broken), renders a visual `docs/inner-loop/inner-loop-plan.html` status page, and recommends the next skill. Front door of the inner loop.
+A 2-skill family that automates the [Connect-to-Git](https://learn.microsoft.com/power-platform/alm/git-integration/overview) workflow: `git-configure` binds/rebinds/switches/onboards a Dataverse Git binding, and `git-sync` runs the per-cycle commit / pull / conflict-resolution loop (including an inline PR offer after a commit). Both write marker files under `docs/inner-loop/` for audit and inter-skill state.
 
 #### `/git-configure`
 
 > "Connect my env or solution to ADO" — or "switch branches", "rebind", "disconnect", or "validate my Git setup"
 
-Unified Git configuration skill for Dataverse Git integration. Detects the code site, solution, environment, and current binding; runs auth, Managed Env, system-admin, tenant, BYOK/CMK, license, ADO permission, and repo-init preflights; explains environment vs solution binding; then connects, switches branch, rebinds, disconnects, or validates without mutation. On setup/rebind/switch, it records a user-chosen flat clone directory for the inner loop.
+Unified Git configuration skill for Dataverse Git integration. Detects the code site, solution, environment, and current binding; runs auth, Managed Env, system-admin, tenant, BYOK/CMK, license, ADO permission, and repo-init preflights; explains environment vs solution binding; then connects, switches branch, rebinds, disconnects, onboards, or validates without mutation. On setup/rebind/switch, it records a user-chosen flat clone directory for the inner loop.
 
 #### `/git-sync`
 
 > "Sync my Dataverse Git workspace" — push Changes, pull Updates, or resolve Conflicts
 
-Unified per-cycle inner-loop skill. Detects Changes / Updates / Conflicts, renders one readable config-vs-bundle-churn summary, previews incoming updates, explains conflicts semantically, then runs the right flow with gates: commit (`CommitToGit`), pull (`RefreshChangesFromGit` + `PullChangesFromGit`), or conflict resolution. Conflicts can be resolved by **keep current**, **accept incoming**, or **selectively merge** — a real Git merge opened in native VS Code (BASE/OURS/THEIRS) from the flat clone recorded by `git-configure`; the resolved merge is safely pushed or PR'd, then pulled back into the environment.
+Unified per-cycle inner-loop skill. Detects Changes / Updates / Conflicts, renders one readable config-vs-bundle-churn summary, previews incoming updates, explains conflicts semantically, then runs the right flow with gates: commit (`CommitToGit`), pull (`RefreshChangesFromGit` + `PullChangesFromGit`), or conflict resolution. Conflicts can be resolved by **keep current**, **accept incoming**, or **selectively merge** — a real Git merge opened in native VS Code (BASE/OURS/THEIRS) from the flat clone recorded by `git-configure`; the resolved merge is safely pushed or PR'd, then pulled back into the environment. After a successful commit it offers to open a pull request **inline** (no separate skill).
 
 **Modes:**
 - `--dry-run` / `--dry-run --json` — commit pre-flight only; writes `last-validation.json`; no mutation.
@@ -377,31 +371,6 @@ Unified per-cycle inner-loop skill. Detects Changes / Updates / Conflicts, rende
 - `--pull` — force the pull flow for incoming Updates.
 - `--background` — commit fire-and-forget polling.
 - `--hard-delete` — pull with destructive deletion handling; always gated.
-
-
-#### `/revert-workspace`
-
-> "Throw away my pending changes"
-
-Calls `RevertGitWorkspace` to roll the env back to the last sync point. All in-flight edits are permanently lost — the consent gate is a typed-confirmation pattern (user must type `REVERT WORKSPACE`).
-
-#### `/revert-branch`
-
-> "Roll the branch back to a previous commit"
-
-Force-updates the bound ADO branch to an earlier SHA. Branch-wide and destructive — typed-confirmation gate `REVERT BRANCH {sha}` after an impact analysis ("Will affect N other envs bound to this branch").
-
-#### `/open-pr`
-
-> "Open a PR for my changes"
-
-Creates an ADO pull request from the bound branch with an auto-generated Power-Pages-friendly description ("Updated Web Template 'Header'", "Added Web Page 'Pricing'") instead of raw commit messages.
-
-#### `/diagnose-git-integration`
-
-> "Something's broken with git"
-
-Pattern-matches symptoms against 13 known failure patterns from the inner-loop error catalog. Three modes: paste an error, describe symptoms from a checklist, or run a full 13-pattern scan. Per-finding auto-fix consent for fixable errors.
 
 ### Polish
 

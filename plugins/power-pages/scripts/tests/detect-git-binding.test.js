@@ -505,7 +505,8 @@ test('E10 scenario 4: mixed â€” 1 live solution + 1 stale solution + 1 env row â
 // bug blocked detect-git-binding on every modern tenant (verified live on
 // org5ba33a19/v9.2, 2026-06-11) and cascaded through every git skill that
 // calls detect-git-binding for verification (disconnect-from-git --verify,
-// list-pending-changes prereq probe, plan-inner-loop status check). Source-
+// calls detect-git-binding for verification (disconnect-from-git --verify,
+// list-pending-changes prereq probe, git-sync status check). Source-
 // grep this line so the bad field cannot creep back into the URL.
 test('detect-git-binding: $select must NOT include _partitionid_value (regression for the 4936f62 HTTP 400 bug)', () => {
   const fs = require('node:fs');

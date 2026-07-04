@@ -60,32 +60,17 @@ const TRACKED_SKILLS = {
   'test-site': {},
 
   // ───── Inner Dev Loop skills (Dataverse Git integration) ─────
-  // Family that automates the Connect-to-Git workflow. Validators live
-  // alongside each skill and write markers to `docs/inner-loop/`.
-  // `git-configure` handles setup, switch-branch, rebind, and disconnect modes.
-  // `git-sync` is the merged per-cycle skill (commit + pull + resolve-conflicts)
-  // — one mode-aware validator accepts last-commit.json / last-validation.json
-  // (dry-run) / last-sync.json / last-conflict-resolution.json markers.
-  'plan-inner-loop': {
-    validatorScript: 'skills/plan-inner-loop/scripts/validate-plan-inner-loop.js',
-  },
+  // Two self-contained skills automate the Connect-to-Git workflow. Validators
+  // live alongside each skill and write markers to `docs/inner-loop/`.
+  // `git-configure` handles setup, switch-branch, rebind, disconnect, and
+  // onboard modes. `git-sync` is the merged per-cycle skill (commit + pull +
+  // resolve-conflicts) — one mode-aware validator accepts last-commit.json /
+  // last-validation.json (dry-run) / last-sync.json / last-conflict-resolution.json markers.
   'git-configure': {
     validatorScript: 'skills/git-configure/scripts/validate-git-configure.js',
   },
   'git-sync': {
     validatorScript: 'skills/git-sync/scripts/validate-git-sync.js',
-  },
-  'revert-workspace': {
-    validatorScript: 'skills/revert-workspace/scripts/validate-revert-workspace.js',
-  },
-  'revert-branch': {
-    validatorScript: 'skills/revert-branch/scripts/validate-revert-branch.js',
-  },
-  'open-pr': {
-    validatorScript: 'skills/open-pr/scripts/validate-open-pr.js',
-  },
-  'diagnose-git-integration': {
-    validatorScript: 'skills/diagnose-git-integration/scripts/validate-diagnose-git-integration.js',
   },
 };
 

@@ -1,6 +1,6 @@
 # Inner-Loop Flow — State Machine & Orchestration
 
-The canonical state machine for Dataverse Git integration as understood by `plan-inner-loop` and used by every inner-loop skill for routing.
+The canonical state machine for Dataverse Git integration, used by `git-configure` and `git-sync` for state detection and routing.
 
 > Built from the architecture doc §4.2 + Microsoft Learn [Source control repository operations](https://learn.microsoft.com/power-platform/alm/git-integration/source-control-operations).
 
@@ -23,7 +23,7 @@ Plus one error state:
 
 | State | Detection | Recommended action |
 |---|---|---|
-| **Broken** | Any API call fails consistently, or binding metadata is internally inconsistent | `diagnose-git-integration` |
+| **Broken** | Any API call fails consistently, or binding metadata is internally inconsistent | Surface the error verbatim; re-run `git-configure` (re-detects + reconciles the manifest on entry) or `git-sync` (re-detects state) once reviewed |
 
 ---
 
@@ -69,14 +69,14 @@ Plus one error state:
    └─────────────────────────────────────────┘
 
    Any state ──→ Broken (on persistent API failure)
-   Broken     ──→ diagnose-git-integration ──→ (back to detected state)
+   Broken     ──→ re-run git-configure / git-sync (surface error verbatim) ──→ (back to detected state)
 ```
 
 ---
 
 ## 3. Detection signals (deterministic, no LLM guessing)
 
-`plan-inner-loop` Phase 1 calls these helpers in order:
+`git-configure` and `git-sync` call these helpers in their initial detect phase:
 
 ```
 1. node scripts/lib/detect-git-binding.js --envUrl <url>
@@ -98,25 +98,25 @@ Plus one error state:
 4. If any helper failed with persistent error → Broken
 ```
 
-This classification is encoded in `inner-loop-plan-state.js` (mirrors `check-alm-plan.js`).
+Each skill classifies state inline from the three counts above — there is no separate classification helper.
 
 ---
 
-## 4. Orchestrator (`plan-inner-loop`) routing
+## 4. State → recommended flow
 
-Given a detected state, `plan-inner-loop` recommends:
+Both `git-configure` and `git-sync` detect state in their initial phase and route based on it:
 
-| Detected state | Default recommendation | Alternative offered |
+| Detected state | Recommended flow | Alternative offered |
 |---|---|---|
 | Disconnected | `git-configure` (env binding setup) | `git-configure` (per-solution setup) |
 | Connected & Clean | "You're idle. Make a change in the env to start a commit, or close." | n/a |
-| Dirty | `commit-to-git --dry-run` then `commit-to-git` | Skip pre-flight if user knows pending changes are safe |
-| Stale | `sync-from-git` | n/a |
-| Mixed | **Gate the user**: "Commit local changes first" OR "Pull incoming first" | If conflicts surface mid-pull, `resolve-conflicts` runs anyway |
-| Conflicted | `resolve-conflicts` | n/a |
-| Broken | `diagnose-git-integration` | n/a |
+| Dirty | `git-sync --dry-run` then `git-sync --commit` | Skip pre-flight if user knows pending changes are safe |
+| Stale | `git-sync --pull` | n/a |
+| Mixed | **Gate the user**: "Commit local changes first" OR "Pull incoming first" | If conflicts surface mid-pull, `git-sync` runs the conflict flow anyway |
+| Conflicted | `git-sync` (conflict flow) | n/a |
+| Broken | Surface error verbatim; re-run `git-configure` / `git-sync` to re-detect | n/a |
 
-The recommendation is rendered in the HTML status page (`docs/inner-loop/inner-loop-plan.html`) and surfaced via an `intent`-category `AskUserQuestion` gate: *"You're in `<state>`. I recommend `<skill>`. Run it now, run a different inner-loop skill, or exit?"*
+`git-sync` surfaces this recommendation via an `intent`-category `AskUserQuestion` gate when the detected state contradicts the invoked flow.
 
 ---
 
@@ -135,29 +135,18 @@ The orchestrator must **not** auto-pick. It must surface a `plan`-category gate 
 
 ## 6. Re-entry semantics
 
-Every inner-loop skill is **idempotent for state classification** — running `plan-inner-loop` twice with no changes returns the same state.
+State classification is **idempotent** — running detection twice with no changes returns the same state.
 
-But the **action** skills (commit, sync, resolve) move the state machine, so they should:
+But the mutating flows (commit, pull, conflict resolution in `git-sync`) move the state machine, so each skill should:
 
-1. Detect state in Phase 1.
-2. **If the state contradicts what the skill was invoked for** (e.g., user invoked `commit-to-git` but state is now `Conflicted` because a teammate just pushed), surface a `progress` gate before proceeding: *"State has changed since you invoked this skill. Now: Conflicted. Switch to `resolve-conflicts`, or continue (commit will fail)?"*
-3. Re-classify after any mutating call and update the orchestrator's `docs/inner-loop/inner-loop-plan.json` via `refresh-inner-loop-plan-data.js`.
-
----
-
-## 7. Heartbeat / freshness
-
-Mirrors `check-alm-plan.js`'s heartbeat model.
-
-- `docs/inner-loop/inner-loop-plan.json` stores `lastInvocationAt`.
-- `inner-loop-plan-state.js` refreshes this on every call.
-- If `lastInvocationAt` is **> 60 minutes ago**, classify the plan as `stale-heartbeat` and re-run detection rather than trusting the cached state.
+1. Detect state in its initial phase.
+2. **If the state contradicts what the flow was invoked for** (e.g., user ran `git-sync --commit` but state is now `Conflicted` because a teammate just pushed), surface a `progress` gate before proceeding: *"State has changed since you invoked this flow. Now: Conflicted. Switch to the conflict flow, or continue (commit will fail)?"*
+3. Re-detect after any mutating call so the summary reflects the settled state.
 
 ---
 
-## 8. References
+## 7. References
 
 - [Source control repository operations](https://learn.microsoft.com/power-platform/alm/git-integration/source-control-operations)
 - Architecture doc §4.2 (this project's spec source)
-- This repo: `scripts/lib/check-alm-plan.js` for the heartbeat pattern we're mirroring
 - This repo: `references/inner-loop-error-catalog.md` for the Broken-state pattern map

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Creates a Pull Request in Azure DevOps from a source branch into a target
-// branch. Used by the `open-pr` skill (architecture doc §5 Skill 10).
+// branch. Used by git-sync's inline PR offer and by the clone-merge push/PR path.
 //
 // API reference: ADO Git Pull Requests REST API
 //   https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-requests/create

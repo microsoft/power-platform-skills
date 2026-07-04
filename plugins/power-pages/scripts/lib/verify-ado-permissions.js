@@ -3,8 +3,8 @@
 // Verifies that the ADO PAT or OAuth token has sufficient permissions
 // (at minimum: "Code - Read & Write" / Contribute) on the target repository.
 //
-// Used by git-configure (Phase 2 ado-perms-fail gate, git-configure:2.ado-perms-fail),
-// open-pr (Phase 1), and diagnose-git-integration to surface the
+// Used by git-configure (Phase 2 ado-perms-fail gate, git-configure:2.ado-perms-fail)
+// and git-sync's inline PR offer to surface the
 // "ADO auth insufficient" root cause (IL-002) before attempting any writes.
 //
 // The check makes a lightweight ADO REST API call (GET repository metadata)

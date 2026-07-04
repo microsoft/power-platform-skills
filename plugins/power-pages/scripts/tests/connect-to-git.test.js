@@ -185,7 +185,7 @@ test('--verify: warns when post-connect detect-git-binding sees nothing', async 
     assert.equal(r.bound, true);
     assert.equal(r.verifiedBindingId, null);
     assert.ok(r.verifyWarning);
-    assert.match(r.verifyWarning, /propagate|plan-inner-loop/i);
+    assert.match(r.verifyWarning, /propagate|git-sync/i);
   } finally { server.close(); }
 });
 

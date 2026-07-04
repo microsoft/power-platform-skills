@@ -137,7 +137,7 @@ async function pullChangesFromGit({
   result.polled = poll;
   if (!poll.reached) {
     result.pollWarning = 'PullChangesFromGit returned 2xx but Updates did not drop to 0 within the timeout. ' +
-      'The pull may still be processing; re-check via plan-inner-loop.';
+      'The pull may still be processing; re-check via /power-pages:git-sync.';
   }
   return result;
 }
