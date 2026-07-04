@@ -9,7 +9,10 @@ const {
   mergeStrategyForType,
   isEligibleForSelectiveMerge,
   isWebFileType,
+  isSourceFileType,
+  isSourceFileComponent,
   labelForType,
+  SOURCEFILE_TYPE,
 } = require('../lib/component-type-map');
 
 test('normalizeComponentType: numbers and numeric strings pass through when known', () => {
@@ -130,4 +133,52 @@ test('isWebFileType: true only for type 3 Web File', () => {
   assert.equal(isWebFileType(9), false);
   assert.equal(isWebFileType('webtemplate'), false);
   assert.equal(isWebFileType(null), false);
+});
+
+// ── Bug 1: code-site source files are first-class text-mergeable units ──────────
+test('normalizeComponentType: .sourcefile suffix → SOURCEFILE_TYPE sentinel', () => {
+  assert.equal(normalizeComponentType('Home.tsx.sourcefile'), SOURCEFILE_TYPE);
+  assert.equal(normalizeComponentType('styles/app.css.sourcefile'), SOURCEFILE_TYPE);
+  assert.equal(normalizeComponentType('sourcefile'), SOURCEFILE_TYPE);
+});
+
+test('normalizeComponentType: /powerpagescodesites/<site>/src/ path → SOURCEFILE_TYPE', () => {
+  assert.equal(normalizeComponentType('/powerpagescodesites/QuickFix/src/pages/Home.tsx'), SOURCEFILE_TYPE);
+  // path without the code-site src marker is NOT a source file
+  assert.equal(normalizeComponentType('/powerpagesites/QuickFix/web-templates/Foo'), 8);
+});
+
+test('typeFromComponentName: source file by name and by path', () => {
+  assert.equal(typeFromComponentName('Home.tsx.sourcefile'), SOURCEFILE_TYPE);
+  assert.equal(typeFromComponentName('/powerpagescodesites/QuickFix/src/components/App.tsx'), SOURCEFILE_TYPE);
+});
+
+test('mergeStrategyForType / eligibility: source files are text-mergeable', () => {
+  assert.equal(mergeStrategyForType(SOURCEFILE_TYPE), 'text');
+  assert.equal(mergeStrategyForType('Home.tsx.sourcefile'), 'text');
+  assert.equal(isEligibleForSelectiveMerge(SOURCEFILE_TYPE), true);
+  assert.equal(isEligibleForSelectiveMerge('/powerpagescodesites/QuickFix/src/pages/Home.tsx'), true);
+  // a source file is NOT a web file (different env-side byte source)
+  assert.equal(isWebFileType(SOURCEFILE_TYPE), false);
+});
+
+test('labelForType + isSourceFileType: friendly label and predicate', () => {
+  assert.equal(labelForType(SOURCEFILE_TYPE), 'Code Site Source File');
+  assert.equal(labelForType('Home.tsx.sourcefile'), 'Code Site Source File');
+  assert.equal(isSourceFileType('Home.tsx.sourcefile'), true);
+  assert.equal(isSourceFileType('/powerpagescodesites/QuickFix/src/pages/Home.tsx'), true);
+  assert.equal(isSourceFileType(8), false);
+  assert.equal(isSourceFileType(3), false);
+});
+
+test('isSourceFileComponent: recognizes by name OR path, rejects other components', () => {
+  assert.equal(isSourceFileComponent({ componentName: 'Home.tsx.sourcefile', componentPath: '/powerpagescodesites/QuickFix/src/pages/Home.tsx' }), true);
+  assert.equal(isSourceFileComponent({ componentName: 'Home.tsx', componentPath: '/powerpagescodesites/QuickFix/src/pages/Home.tsx' }), true);
+  assert.equal(isSourceFileComponent({ componentName: 'Search Results.webtemplate', componentPath: '/powerpagesites/QuickFix/web-templates/Search-Results' }), false);
+});
+
+test('stripSerializedSuffix / primaryFieldForType: source file handling', () => {
+  const { stripSerializedSuffix, primaryFieldForType } = require('../lib/component-type-map');
+  assert.equal(stripSerializedSuffix('Home.tsx.sourcefile'), 'Home.tsx');
+  assert.equal(primaryFieldForType(SOURCEFILE_TYPE), null);
 });

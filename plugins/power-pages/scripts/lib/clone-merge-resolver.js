@@ -24,7 +24,7 @@ const fs = require('fs');
 
 const gitExec = require('./git-exec');
 const runStateMod = require('./merge-run-state');
-const { isEligibleForSelectiveMerge, isWebFileType, labelForType } = require('./component-type-map');
+const { isEligibleForSelectiveMerge, isWebFileType, isSourceFileType, labelForType } = require('./component-type-map');
 const { extractYamlValue } = require('./flat-yml-merge');
 const { matchShape } = require('./eol-bom');
 
@@ -40,7 +40,6 @@ const defaultDeps = () => ({
   cloneDirLayout: require('./resolve-clone-path').cloneDirLayout,
   cloneOrUpdateRepo: require('./clone-or-update-repo').cloneOrUpdateRepo,
   stageGitMerge: require('./stage-git-merge').stageGitMerge,
-  extractMergeStages: require('./stage-git-merge').extractMergeStages,
   detectMergeState: require('./detect-merge-state').detectMergeState,
   matchesRoster: require('./detect-merge-state').matchesRoster,
   openMergeFolder: require('./open-merge-folder').openMergeFolder,
@@ -49,6 +48,7 @@ const defaultDeps = () => ({
   recordMergeMetrics: safeRequire('./record-merge-metrics', 'recordMergeMetrics'),
   getPr: safeRequire('./ado-get-pr', 'getPullRequest'),
   readWebFileBytes: safeRequire('./read-web-file-bytes', 'readWebFileBytes'),
+  readSourceFileContent: safeRequire('./read-source-file-content', 'readSourceFileContent'),
   sniffTextOrBinary: safeRequire('./detect-text-or-binary', 'sniffTextOrBinary'),
   git: gitExec,
   runState: runStateMod,
@@ -95,12 +95,16 @@ async function resolveUnits({ conflicts, binding, envUrl, dvToken, deps }) {
     // is NEVER an error — so they must never appear in eligibleButNotText regardless
     // of whether the path builder succeeded or not.
     const isWebFile = isWebFileType(c.type);
+    // Code-site source files (powerpagessourcefile): bytes from filecontent are
+    // sniffed to decide text (3-way merge) vs binary (matrix) — routing to binary is
+    // NEVER an error, so (like web files) they never count as eligibleButNotText.
+    const isSourceFile = isSourceFileType(c.type);
     const pathRes = deps.buildAdoPath({
       componentPath: c.componentPath, type: c.type, field: c.field,
       rootFolder: binding.rootFolder, gitFolder: binding.gitFolder,
     });
     if (!pathRes || pathRes.supported === false || !pathRes.path) {
-      if (typeEligible && !isWebFile) eligibleButNotText.push({ name: c.name, type: c.type, reason: (pathRes && pathRes.reason) || 'no source-file path' });
+      if (typeEligible && !isWebFile && !isSourceFile) eligibleButNotText.push({ name: c.name, type: c.type, reason: (pathRes && pathRes.reason) || 'no source-file path' });
       binaryUnits.push({ ...c, serial, reason: (pathRes && pathRes.reason) || 'no source-file path', route: 'keep-accept' });
       continue;
     }
@@ -136,6 +140,47 @@ async function resolveUnits({ conflicts, binding, envUrl, dvToken, deps }) {
       const oursContent = matchShape(rawText, { eol: webFileRead.eol || '\n', bom: !!webFileRead.bom });
       textUnits.push({
         webfile: true,
+        adoPath: pathRes.path,
+        oursContent,
+        field: null,
+        type: c.type,
+        conflictId: c.conflictId,
+        componentId: c.componentId,
+        name: c.name,
+        serial,
+      });
+      continue;
+    }
+
+    // Code-site source file (powerpagessourcefile): read the env bytes from
+    // filecontent via the dedicated reader (componentId == powerpagessourcefileid),
+    // sniff text/binary, and route TEXT to the 3-way merge editor (sourcefile:true).
+    // BINARY or read-error → keep/accept matrix (fail closed), never eligibleButNotText.
+    if (isSourceFile) {
+      if (typeof deps.readSourceFileContent !== 'function' || typeof deps.sniffTextOrBinary !== 'function') {
+        binaryUnits.push({ ...c, serial, adoPath: pathRes.path, route: 'keep-accept', reason: 'readSourceFileContent/sniffTextOrBinary not available' });
+        continue;
+      }
+      let srcRead;
+      try {
+        srcRead = await deps.readSourceFileContent({ envUrl, componentId: c.componentId, token: dvToken });
+      } catch (e) {
+        binaryUnits.push({ ...c, serial, adoPath: pathRes.path, route: 'keep-accept', reason: `readSourceFileContent failed: ${e.message}` });
+        continue;
+      }
+      if (!srcRead || srcRead.error) {
+        binaryUnits.push({ ...c, serial, adoPath: pathRes.path, route: 'keep-accept', reason: (srcRead && srcRead.error) || 'readSourceFileContent failed' });
+        continue;
+      }
+      if (!srcRead.isText) {
+        binaryUnits.push({ ...c, serial, adoPath: pathRes.path, route: 'keep-accept', reason: 'binary content' });
+        continue;
+      }
+      // Decode env bytes to text; stage-git-merge re-shapes EOL/BOM to the repo file,
+      // so we pass the plain decoded text here (utf16le handled; everything else utf8).
+      const oursContent = srcRead.bytes.toString(srcRead.encoding === 'utf16le' ? 'utf16le' : 'utf8');
+      textUnits.push({
+        sourcefile: true,
         adoPath: pathRes.path,
         oursContent,
         field: null,
@@ -423,17 +468,11 @@ async function runCloneMerge(opts = {}) {
   if (!resumingResolved && !cleanMerge) {
     const resumingStaged = resume && prior && RS.isAtOrBeyond(prior.phase, 'staged');
     if (!resumingStaged) {
-      // Task 1/3: extract the first conflict's 3 index stages (env=:2, ado=:3, base=:1)
-      // so VS Code opens the 3-way MERGE EDITOR with Env on the LEFT and ADO on the
-      // RIGHT (via `code --merge <env> <ado> <base> <result>`), not a blank Explorer.
-      let mergeEditor = null;
-      if (conflictedPaths.length && typeof deps.extractMergeStages === 'function') {
-        try {
-          const st = deps.extractMergeStages({ repoDir, relPath: conflictedPaths[0], outDir: path.join(ppMergeDir, 'merge-stages'), gitImpl: git, fsImpl });
-          if (st && !st.error) mergeEditor = { left: st.left, right: st.right, base: st.base, result: st.result };
-        } catch (_) { /* fall back to folder + first file */ }
-      }
-      const openInfo = deps.openMergeFolder({ repoDir, conflictedPaths, mergeEditor });
+      // Open the clone folder + first conflicted file in VS Code's NATIVE 3-way merge
+      // editor (openMergeFolder writes git.mergeEditor:true). Every conflict uses that
+      // same native editor via the Source Control "Merge Changes" list — consistent
+      // Incoming/Current labels, no per-file custom `code --merge` view.
+      const openInfo = deps.openMergeFolder({ repoDir, conflictedPaths });
       if (pauseForResolution) {
         // CLI/skill model: open the native merge UI and PAUSE. The agent asks the
         // user "done?" then re-invokes with --resume to verify + finalize.
@@ -446,7 +485,7 @@ async function runCloneMerge(opts = {}) {
           ...(addAddPaths.length ? { warning: `No common base for ${addAddPaths.length} file(s); the merge editor will show the whole file. Affected: ${addAddPaths.join(', ')}.`, addAddPaths } : {}),
           ...(openInfo && openInfo.panelLabels ? { panelLabels: openInfo.panelLabels } : {}),
           ...(openInfo && openInfo.scmPointer ? { scmPointer: openInfo.scmPointer } : {}),
-          ...(openInfo && openInfo.mergeCommand ? { mergeEditorOpened: true } : {}),
+          ...(openInfo && openInfo.opened ? { mergeEditorOpened: true } : {}),
           // Binary/scalar files can't open in VS Code → the agent presents this
           // numbered matrix and asks which to ACCEPT INCOMING (rest KEEP CURRENT).
           ...(binaryMatrix.length ? { binaryMatrix } : {}),

@@ -29,10 +29,13 @@
 //   node list-incoming-updates.js [--envUrl <url>] [--token <token>]
 //                                 [--solutionUniqueName <name> | --solutionId <guid>]
 //
-// TODO: HAR-verify — entity name for the Updates tab. Candidates:
-// `gitupdatefiles`, `gitincomingupdates`, `msdyn_gitupdates`. Using
-// `gitupdatefiles` as a working assumption. Also verify that the entity is
-// populated by `RefreshChangesFromGit` and clears after `PullChangesFromGit`.
+// SOURCE (Bug 10): the PRIMARY, reliable path is `sourcecontrolcomponents` (the same
+// entity the portal Updates tab uses), partitioned by solutionId — it does NOT depend
+// on the unverified `gitupdatefiles` entity, which 404s on real tenants (it was only a
+// `// TODO: HAR-verify` working assumption). The Updates set = pure incoming
+// (`action eq 2`) PLUS maker-accepted-incoming-not-yet-pulled (`action eq 3 AND
+// useraction eq 2`). `gitupdatefiles` remains only as a last-ditch fallback for the
+// no-solution case (still 404s on most tenants).
 
 'use strict';
 
@@ -58,6 +61,29 @@ const UPDATE_TYPE_LABEL = Object.freeze({
   2: 'Delete',
 });
 
+// Merge + de-dupe pure-incoming (action 2) and accepted-incoming-pending-pull
+// (action 3 + useraction 2) source-control rows into the Updates output shape.
+function sccRowsToItems(pure, acceptedPendingPull) {
+  const seen = new Set();
+  const items = [];
+  for (const r of [...(pure.items || []), ...(acceptedPendingPull.items || [])]) {
+    const key = r.sourceControlComponentId || r.componentId;
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    items.push({
+      componentId:   r.componentId || null,
+      updateId:      r.sourceControlComponentId || null,
+      componentName: r.componentName || null,
+      componentPath: r.componentPath || null,
+      componentType: r.componentType || null,
+      updateType:    r.action === 3 ? 'AcceptedPendingPull' : null,
+      commitSha:     null,
+      commitMessage: null,
+    });
+  }
+  return items;
+}
+
 /**
  * @param {object} options
  * @param {string} [options.envUrl]
@@ -73,7 +99,27 @@ async function listIncomingUpdates({ envUrl, token, solutionUniqueName, solution
   if (!tok) return { error: 'Could not acquire auth token.' };
   const base = url.replace(/\/+$/, '');
 
-  // TODO: HAR-verify entity name.
+  // PRIMARY (Bug 10): the portal "Updates" tab = rows that need to be PULLED into the
+  // env — BOTH pure incoming updates (action eq 2) AND conflicts the maker resolved as
+  // "accept incoming" that have not been pulled yet (action eq 3 AND useraction eq 2),
+  // keyed on partitionId = solutionId. This is the reliable path and does NOT touch
+  // the unverified `gitupdatefiles` entity (which 404s on real tenants). Querying only
+  // action eq 2 SILENTLY UNDER-REPORTS the accepted-incoming rows (verified live
+  // 2026-06-19, sri-alm-dev-1).
+  if (solutionId || solutionUniqueName) {
+    const [pure, acceptedPendingPull] = await Promise.all([
+      listSourceControlComponents({ envUrl: url, token: tok, solutionId, solutionUniqueName, action: 2 }),
+      listSourceControlComponents({ envUrl: url, token: tok, solutionId, solutionUniqueName, action: 3, userAction: 2 }),
+    ]);
+    if (!pure.error && !acceptedPendingPull.error) {
+      const items = sccRowsToItems(pure, acceptedPendingPull);
+      return { count: items.length, items, via: 'sourcecontrolcomponent' };
+    }
+    // On a hard error (not a clean empty), fall through to the legacy entity below.
+  }
+
+  // FALLBACK / no-solution: the legacy `gitupdatefiles` entity (404s on most tenants;
+  // unverified). Only reached when no solution is known, or the primary path errored.
   let filterExpr = '';
   if (solutionUniqueName) {
     filterExpr = `&$filter=solutionuniquename eq '${solutionUniqueName}'`;
@@ -97,40 +143,8 @@ async function listIncomingUpdates({ envUrl, token, solutionUniqueName, solution
 
   if (res.error) return { error: res.error };
   if (res.statusCode === 404) {
-    const hint = 'gitupdatefiles 404 — entity name may differ; run RefreshChangesFromGit first.';
-    if (!solutionId && !solutionUniqueName) return { count: 0, items: [], hint };
-    // The portal "Updates" tab = rows that need to be PULLED into the env. That is
-    // BOTH pure incoming updates (action eq 2) AND conflicts the maker resolved as
-    // "accept incoming" that have not been pulled yet (action eq 3 AND useraction eq 2).
-    // Querying only action eq 2 SILENTLY UNDER-REPORTS the latter (verified live
-    // 2026-06-19, sri-alm-dev-1: portal showed Updates(1) for an accepted-incoming
-    // site setting while this helper returned 0). Missing it also breaks the
-    // conflict flow's "accept-incoming → route to pull" hand-off (the dispatcher
-    // would see nothing to pull and the accepted change would never land).
-    const [pure, acceptedPendingPull] = await Promise.all([
-      listSourceControlComponents({ envUrl: url, token: tok, solutionId, solutionUniqueName, action: 2 }),
-      listSourceControlComponents({ envUrl: url, token: tok, solutionId, solutionUniqueName, action: 3, userAction: 2 }),
-    ]);
-    if (pure.error) return { error: pure.error, statusCode: pure.statusCode, hint };
-    if (acceptedPendingPull.error) return { error: acceptedPendingPull.error, statusCode: acceptedPendingPull.statusCode, hint };
-    const seen = new Set();
-    const items = [];
-    for (const r of [...(pure.items || []), ...(acceptedPendingPull.items || [])]) {
-      const key = r.sourceControlComponentId || r.componentId;
-      if (key && seen.has(key)) continue;
-      if (key) seen.add(key);
-      items.push({
-        componentId:   r.componentId || null,
-        updateId:      r.sourceControlComponentId || null,
-        componentName: r.componentName || null,
-        componentPath: r.componentPath || null,
-        componentType: r.componentType || null,
-        updateType:    r.action === 3 ? 'AcceptedPendingPull' : null,
-        commitSha:     null,
-        commitMessage: null,
-      });
-    }
-    return { count: items.length, items, via: 'sourcecontrolcomponent', hint };
+    const hint = 'gitupdatefiles 404 — entity not present on this tenant; pass a solution so the sourcecontrolcomponent path can be used.';
+    return { count: 0, items: [], hint };
   }
   if (res.statusCode !== 200) {
     let msg = `HTTP ${res.statusCode}`;
@@ -152,7 +166,7 @@ async function listIncomingUpdates({ envUrl, token, solutionUniqueName, solution
     commitMessage: r.commitmessage || null,
   }));
 
-  return { count: items.length, items };
+  return { count: items.length, items, via: 'gitupdatefiles' };
 }
 
 if (require.main === module) {

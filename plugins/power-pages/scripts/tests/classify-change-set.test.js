@@ -114,3 +114,44 @@ test('accepts the full list-pending-changes envelope shape (probes filePath)', (
   const r = classifyChangeSet(items);
   assert.equal(r.summary.churnCount, 1);
 });
+
+// ===== Bug 11: churn detected under the generic "Site Component" type =====
+
+test('Bug 11: hashed bundle web file reported as generic "Site Component" → churn', () => {
+  // list-pending-changes returns componentType "Site Component" for everything, and
+  // the serialized name carries the `.webfile` suffix. The hashed bundle must be
+  // flagged as churn despite the generic type.
+  const items = [
+    { componentId: 'b1', componentName: 'index-a1b2c3d4.js.webfile', componentType: 'Site Component', filePath: '/powerpagesites/QuickFix/web-files/index-a1b2c3d4.js' },
+    { componentId: 'b2', componentName: 'styles-9ab12cd3.css.webfile', componentType: 'Site Component', filePath: '/powerpagesites/QuickFix/web-files/styles-9ab12cd3.css' },
+    { componentId: 'b3', componentName: 'app.4f3a9c12.js.map.webfile', componentType: 'Site Component', filePath: '/powerpagesites/QuickFix/web-files/app.4f3a9c12.js.map' },
+  ];
+  const r = classifyChangeSet(items);
+  assert.equal(r.summary.churnCount, 3);
+  assert.equal(r.summary.configCount, 0);
+});
+
+test('Bug 11: hashed bundle detected from componentName alone (no filePath, "Site Component")', () => {
+  const items = [{ componentId: 'b', componentName: 'index-a1b2c3d4.js.webfile', componentType: 'Site Component' }];
+  const r = classifyChangeSet(items);
+  assert.equal(r.summary.churnCount, 1);
+});
+
+test('Bug 11: a web page reported as generic "Site Component" → config (no false churn)', () => {
+  const items = [
+    { componentId: 'p', componentName: 'Home', componentType: 'Site Component', filePath: '/powerpagesites/QuickFix/web-pages/Home' },
+    { componentId: 't', componentName: 'Header.webtemplate', componentType: 'Site Component', filePath: '/powerpagesites/QuickFix/web-templates/Header/Header.webtemplate.source.html' },
+  ];
+  const r = classifyChangeSet(items);
+  assert.equal(r.summary.configCount, 2);
+  assert.equal(r.summary.churnCount, 0);
+});
+
+test('Bug 11: code-site source file is config even with a build-ish path (never hidden)', () => {
+  const items = [
+    { componentId: 's', componentName: 'Home.tsx.sourcefile', componentType: 'Site Component', filePath: '/powerpagescodesites/QuickFix/src/assets/Home.tsx' },
+  ];
+  const r = classifyChangeSet(items);
+  assert.equal(r.summary.configCount, 1, 'source files are protected as config');
+  assert.equal(r.summary.churnCount, 0);
+});

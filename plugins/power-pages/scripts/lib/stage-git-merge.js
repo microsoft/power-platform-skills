@@ -158,13 +158,48 @@ function stageGitMerge({ repoDir, baseCommit, baseCandidates = null, theirsRef, 
   const git = (args, extra = {}) => gitImpl.runGit({ cwd: repoDir, args, ...extra });
   const ensureOk = (res, what) => { if (!res || !res.ok) throw new Error(`${what} failed: ${res ? res.stderr || res.code : 'no result'}`); return res; };
 
+  // Bug 5/6: during staging we must (a) preserve bytes so a pure EOL/BOM skew can't
+  // turn the whole file into one false conflict, and (b) emit STANDARD conflict
+  // markers (<<<<<<< / ======= / >>>>>>>) so VS Code's 3-way merge editor opens its
+  // one-click Accept controls instead of dropping into "Manual Resolution". We set
+  // these on the clone's LOCAL config (scoped to staging) and restore the prior
+  // values in `finally` so a reused clone is never left mutated:
+  //   core.autocrlf=false   → git never re-normalizes line endings on add/checkout
+  //                           (core.eol is only consulted for `text`-attr'd paths,
+  //                            which we deliberately don't force; autocrlf=false is
+  //                            the byte-preserving switch).
+  //   merge.conflictStyle=merge → standard 3-part markers (no diff3 |||||| base
+  //                               section that confuses the merge editor).
+  const cfgGet = (k) => { const r = git(['config', '--local', '--get', k]); return r && r.ok ? String(r.stdout || '').trim() : null; };
+  const cfgSet = (k, v) => git(['config', '--local', k, v]);
+  const cfgUnset = (k) => git(['config', '--local', '--unset', k]);
+  const cfgRestore = (k, prior) => { if (prior == null || prior === '') cfgUnset(k); else cfgSet(k, prior); };
+  let priorCfg = null;
+
   try {
+    priorCfg = { autocrlf: cfgGet('core.autocrlf'), conflictStyle: cfgGet('merge.conflictStyle') };
+    cfgSet('core.autocrlf', 'false');
+    cfgSet('merge.conflictStyle', 'merge');
+
     const relPaths = textUnits.map((u) => relPath(u.adoPath));
     const candidates = Array.isArray(baseCandidates) && baseCandidates.length ? baseCandidates : (baseCommit ? [baseCommit] : []);
     // A2: pass the THEIRS ref so pickBaseCommit can auto-discover a containing base
     // when the supplied candidates miss the conflicted files (prevents add/add).
     const effectiveBase = pickBaseCommit({ candidates, relPaths, git, discoverRef: theirsRef });
     const baseUsed = effectiveBase ? 'commit' : 'empty';
+
+    // Bug 3: resolve the INCOMING tip from the fetched ref (origin/<branch>), never
+    // the local checkout. The resolver passes theirsRef = the post-fetch origin tip;
+    // we resolve it to a SHA so the merge is provably against the advanced ADO tip,
+    // and surface base+incoming SHAs in the result (and a DEBUG log) for traceability.
+    const incRes = git(['rev-parse', '--verify', '--quiet', `${theirsRef}^{commit}`]);
+    const incomingSha = incRes && incRes.ok ? String(incRes.stdout || '').trim() : null;
+    if (process.env.DEBUG) {
+      const note = (effectiveBase && incomingSha && effectiveBase === incomingSha)
+        ? ' WARNING: base == incoming tip (clone may be stale — incoming would be a no-op)'
+        : '';
+      process.stderr.write(`[stage-git-merge] base=${effectiveBase || 'empty'} incoming=${incomingSha || theirsRef} ref=${theirsRef}${note}\n`);
+    }
 
     // 1) Create/reset the Dataverse branch at BASE (-B forces, so a prior run's
     //    branch is reset cleanly) or an orphan for empty BASE (add/add).
@@ -233,7 +268,8 @@ function stageGitMerge({ repoDir, baseCommit, baseCandidates = null, theirsRef, 
       // Clean, non-overlapping merge — git auto-committed. Nothing to resolve.
       const head = gitImpl.revParse({ cwd: repoDir, rev: 'HEAD' });
       return {
-        ok: true, dataverseBranch: DATAVERSE_BRANCH, theirsBranch: THEIRS_BRANCH, baseUsed, wrote,
+        ok: true, dataverseBranch: DATAVERSE_BRANCH, theirsBranch: THEIRS_BRANCH, baseUsed,
+        baseCommit: effectiveBase || null, incomingRef: theirsRef, incomingSha, wrote,
         merge: { clean: true, conflicted: false, conflictedPaths: [] },
         mergeCommit: head && head.ok ? head.stdout.trim() : null,
       };
@@ -244,69 +280,27 @@ function stageGitMerge({ repoDir, baseCommit, baseCandidates = null, theirsRef, 
     const conflictedPaths = parseUnmergedPaths(status && status.stdout);
     if (conflictedPaths.length === 0) {
       // Exit != 0 but no unmerged paths ⇒ a genuine merge failure (not a conflict).
-      return { ok: false, error: `git merge failed: ${mergeRes ? mergeRes.stderr || mergeRes.code : 'unknown'}`, dataverseBranch: DATAVERSE_BRANCH, baseUsed, wrote, merge: { clean: false, conflicted: false, conflictedPaths: [] }, mergeCommit: null };
+      return { ok: false, error: `git merge failed: ${mergeRes ? mergeRes.stderr || mergeRes.code : 'unknown'}`, dataverseBranch: DATAVERSE_BRANCH, baseUsed, incomingRef: theirsRef, incomingSha, wrote, merge: { clean: false, conflicted: false, conflictedPaths: [] }, mergeCommit: null };
     }
     // A2(c): flag add/add degradation (conflicted paths with no base stage). With a
     // real base this should be empty; a non-empty list means the merge editor will
     // show whole-file conflicts (no base) — surfaced so the orchestrator can warn.
     const addAddPaths = detectAddAddPaths(git);
     return {
-      ok: true, dataverseBranch: DATAVERSE_BRANCH, theirsBranch: THEIRS_BRANCH, baseUsed, baseCommit: effectiveBase || null, wrote,
+      ok: true, dataverseBranch: DATAVERSE_BRANCH, theirsBranch: THEIRS_BRANCH, baseUsed, baseCommit: effectiveBase || null, incomingRef: theirsRef, incomingSha, wrote,
       merge: { clean: false, conflicted: true, conflictedPaths, addAddPaths, hasBaseStage: addAddPaths.length === 0 },
       mergeCommit: null, // left unmerged for the human to resolve; orchestrator commits after the done-gate
     };
   } catch (e) {
     return { ok: false, error: e.message, dataverseBranch: DATAVERSE_BRANCH, merge: { clean: false, conflicted: false, conflictedPaths: [] }, mergeCommit: null };
+  } finally {
+    // Bug 5/6: restore the clone's prior EOL/conflict-style config so a reused clone
+    // is never left mutated (best-effort; never throws).
+    if (priorCfg) {
+      try { cfgRestore('core.autocrlf', priorCfg.autocrlf); } catch (_) { /* best-effort */ }
+      try { cfgRestore('merge.conflictStyle', priorCfg.conflictStyle); } catch (_) { /* best-effort */ }
+    }
   }
 }
 
-module.exports = { stageGitMerge, pickBaseCommit, discoverBaseCommit, detectAddAddPaths, commitContainsAll, parseUnmergedPaths, extractMergeStages, DATAVERSE_BRANCH, THEIRS_BRANCH, EMPTY_TREE };
-
-// Task 1 + Task 3: extract the three index stages of a conflicted file to temp files
-// so the orchestrator can launch VS Code's 3-way merge editor with EXPLICIT side
-// control via `code --merge <left> <right> <base> <result>`. Because staging is
-// Current=Dataverse(env)=stage 2 and Incoming=ADO=stage 3, we map:
-//   left  = ENV  (stage :2:)  → Env on the LEFT input panel   (Task 3 target)
-//   right = ADO  (stage :3:)  → ADO on the RIGHT input panel
-//   base  = stage :1: (common ancestor; an empty file for add/add)
-//   result= the actual worktree file (where the resolved output is written)
-// This achieves Env-left/ADO-right WITHOUT changing git staging, the merged tree,
-// base correctness, or the reconcile contract.
-//
-// @param {object} args { repoDir, relPath, outDir, gitImpl?, fsImpl?, pathImpl? }
-// @returns {{ left, right, base, result, hasBase } | { error }}
-function extractMergeStages({ repoDir, relPath: rel, outDir, gitImpl = gitExec, fsImpl = fs, pathImpl = path } = {}) {
-  if (!repoDir) return { error: 'extractMergeStages: repoDir is required' };
-  if (!rel) return { error: 'extractMergeStages: relPath is required' };
-  const cleanRel = relPath(rel);
-  const result = pathImpl.join(repoDir, cleanRel);
-  const safe = cleanRel.replace(/[^a-z0-9._-]+/gi, '_');
-  // VS Code's 3-way merge editor titles each input panel with the BASENAME of the file
-  // it was handed. To spare the maker the long flattened path (e.g.
-  // `solutions_..._Footer.contentsnippet.value.html.LEFT.env`), give the three temp
-  // files friendly, simple basenames — "Dataverse", "ADO", "Base" — while KEEPING the
-  // real extension so the panels still get correct syntax highlighting. Each conflict
-  // gets its OWN sub-dir (keyed by the flattened path) so those three short names never
-  // collide across files. Stay OUT of the worktree (os tmpdir default) so these
-  // read-only stage files can never be picked up by the orchestrator's `git add -A`;
-  // the orchestrator passes an explicit out-of-worktree `.pp-merge/merge-stages` dir.
-  const ext = pathImpl.extname(cleanRel); // '.html' / '.css' / '.yml' … ('' if none)
-  const dir = pathImpl.join(outDir || pathImpl.join(require('os').tmpdir(), 'pp-merge-stages'), safe);
-  fsImpl.mkdirSync(dir, { recursive: true });
-  const showStage = (stage) => {
-    const r = gitImpl.runGit({ cwd: repoDir, args: ['show', `:${stage}:${cleanRel}`] });
-    return r && r.ok ? r.stdout : null;
-  };
-  const writeTmp = (label, content) => {
-    const p = pathImpl.join(dir, `${label}${ext}`); // basename = the panel title in VS Code
-    fsImpl.writeFileSync(p, content != null ? content : '', 'utf8');
-    return p;
-  };
-  const envContent = showStage(2);   // OURS = Dataverse (env)  → LEFT
-  const adoContent = showStage(3);   // THEIRS = Azure DevOps   → RIGHT
-  const baseContent = showStage(1);  // common ancestor; null for add/add
-  const left = writeTmp('Dataverse', envContent);  // panel title: "Dataverse<ext>"
-  const right = writeTmp('ADO', adoContent);       // panel title: "ADO<ext>"
-  const base = writeTmp('Base', baseContent);      // panel title: "Base<ext>" (empty when add/add)
-  return { left, right, base, result, hasBase: baseContent != null };
-}
+module.exports = { stageGitMerge, pickBaseCommit, discoverBaseCommit, detectAddAddPaths, commitContainsAll, parseUnmergedPaths, DATAVERSE_BRANCH, THEIRS_BRANCH, EMPTY_TREE };

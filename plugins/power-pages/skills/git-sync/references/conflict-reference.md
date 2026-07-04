@@ -55,6 +55,8 @@ The dispatcher owns the top-level routing gate. This reference starts after the 
 3. If `count === 0`, stop this reference and hand back to the dispatcher for re-detection. The state changed since routing.
 4. If the helper fails with a transient 5xx, retry once. If it still fails, report the error and do not apply any resolution.
 
+> **`action=3` is a broad bucket — only `useraction=0` are active conflicts (Bug 14).** `list-conflicts` queries `sourcecontrolcomponents` with the portal-faithful predicate **`action eq 3 AND useraction eq 0`** (Conflict, unresolved), partitioned by `solutionId`. On a real tenant `action eq 3` alone returns the **whole baseline** (e.g. ~90 rows); the ~87 `useraction=1` rows are the **already-synced baseline** and must be excluded — only `useraction=0` rows need resolution. Source-file conflicts (componentName `…​.sourcefile`, path under `/powerpagescodesites/<site>/src/…`) surface here as **`eligibleForSelectiveMerge: true`** with `ppcType: "sourcefile"`.
+
 **Output:** `conflicts.items[]` with stable `conflictId` values.
 
 ## Step 2 — Render the conflict diff
@@ -247,6 +249,10 @@ Fallback walkthrough:
 ## Step 5 — Verify conflicts cleared and write marker
 
 **Goal:** Confirm the Conflicts count is zero and persist the resolution record.
+
+> **Do NOT run `RefreshChangesFromGit` between resolve and verify (Bug 14).** A refresh **resets `useraction` to 0** and re-surfaces the rows you just resolved (the "phantom conflict" loop). Verify by **re-listing conflicts** (and content-equality), not by re-refreshing and not by the pull's `updatesCount`.
+>
+> **When env == ADO, resolve with `keep-current` (Bug 4).** After a selective merge is pushed, the env and the bound branch are byte-identical. `accept-incoming` (`useraction=2`) then never clears `action=3` (pull returns `updatesCount: 0`, baseline never advances, a later refresh re-surfaces it). For such **converged** components — including **code-site source files** (env bytes from `powerpagessourcefile.filecontent` vs the branch source file) — resolve with **`keep-current` (`useraction=1`)**, which clears the conflict permanently. `reconcile-dataverse.js` detects convergence automatically (`decideConflictResolution`) and flips the decision.
 
 1. Re-list conflicts:
 

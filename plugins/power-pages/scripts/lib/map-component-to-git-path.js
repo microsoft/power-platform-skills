@@ -35,7 +35,7 @@ const fs = require('fs');
 const path = require('path');
 const { createAdoClient } = require('./ado-client');
 const { resolveAdoTokenOrAcquire } = require('./resolve-ado-token');
-const { normalizeComponentType } = require('./component-type-map');
+const { normalizeComponentType, SOURCEFILE_TYPE } = require('./component-type-map');
 
 // Per-type serialization layout. `primaryField` is the default merge field; the
 // `fields` map gives the filename suffix per editable field. `subfolder` (web
@@ -140,6 +140,21 @@ function buildPathFromComponentPath({ componentPath, type, field, rootFolder, gi
   // string-typed inputs.json can never silently fall through to binary.
   const ntype = normalizeComponentType(type);
   if (ntype != null) type = ntype;
+  // Code-site source file (SOURCEFILE_TYPE): the conflict row's componentPath IS the
+  // repo file path under /powerpagescodesites/<site>/src/... — the file in the bound
+  // repo is the plain .tsx/.ts/.css/etc. itself (no serialized suffix, no container).
+  // Full ADO path = /<rootFolder>/<gitFolder> + componentPath. Mirrors the web-file
+  // branch (the path comes straight from Dataverse — no slug-guessing, no ADO listing).
+  if (type === SOURCEFILE_TYPE) {
+    if (!componentPath || !String(componentPath).trim()) {
+      return { supported: false, type, reason: 'No componentPath on the source-file conflict row.' };
+    }
+    const cp = String(componentPath).replace(/^\/+|\/+$/g, '');
+    const segs = [];
+    for (const p of [rootFolder, gitFolder]) if (p != null && String(p).length) segs.push(String(p).replace(/^\/+|\/+$/g, ''));
+    for (const s of cp.split('/').filter(Boolean)) segs.push(s);
+    return { path: `/${segs.join('/')}`, kind: 'sourcefile', field: null, resolvedVia: 'componentpath' };
+  }
   // Web File (type 3): the conflict row's componentPath IS the file path
   // (/powerpagesites/<site>/web-files/<FileName>). Full ADO path = /<root>/<git> + componentPath.
   if (type === 3) {

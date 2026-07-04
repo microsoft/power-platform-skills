@@ -41,16 +41,24 @@
 
 const { getAuthToken, getEnvironmentUrl, makeRequest } = require('./validation-helpers');
 const { PPC_TYPE_LABELS } = require('./discover-site-components');
+const { SOURCEFILE_TYPE } = require('./component-type-map');
 
 // Editable text field(s) per powerpagecomponenttype. Order matters: the first
 // present field is the "primary" merge unit. Empty array ⇒ no text field ⇒
 // binary/keep-accept routing (e.g. web files, whose bytes live elsewhere).
+//
+// NOTE: code-site source files (SOURCEFILE_TYPE) are NOT powerpagecomponents — their
+// bytes live in `powerpagessourcefile.filecontent` and are read by the dedicated
+// read-source-file-content.js reader, NOT this module. The sentinel is mapped to an
+// empty field list here only so an accidental envelope read fails closed to binary
+// instead of throwing.
 const MERGE_FIELDS_BY_TYPE = Object.freeze({
   2: ['copy'],     // Web Page
   3: [],           // Web File — bytes in annotation, not the content envelope
   7: ['value'],    // Content Snippet
   8: ['source'],   // Web Template
   9: ['value'],    // Site Setting
+  [SOURCEFILE_TYPE]: [], // Code-site source file — bytes in powerpagessourcefile.filecontent
 });
 
 const COMPONENT_TYPE_LABEL = PPC_TYPE_LABELS;

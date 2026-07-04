@@ -183,6 +183,26 @@ test('empty BASE uses an orphan branch + --allow-unrelated-histories (add/add)',
   assert.ok(orphanIndex > deleteIndex, 'expected orphan checkout after dataverse delete');
 });
 
+// ---- Bug 3/5/6: byte-preserving + standard-marker staging config; incoming from fetched tip ----
+test('Bug 3/5/6: sets autocrlf=false + conflictStyle=merge during staging, restores after, surfaces incoming ref/sha', () => {
+  const { gitImpl, fsImpl, calls } = makeMocks({ mergeOk: false, theirs: 'a\r\nb\r\nc\r\n', porcelain: `UU ${REL}\n` });
+  const res = stageGitMerge({
+    repoDir: '/clone/repo', baseCommit: 'basesha', theirsRef: 'origin/main',
+    textUnits: [{ adoPath: '/' + REL, oursContent: 'a\nb-mine\nc\n' }],
+    gitImpl, fsImpl,
+  });
+  // Bug 3: incoming resolved from the fetched ref (origin/main), not the local checkout.
+  assert.strictEqual(res.incomingRef, 'origin/main');
+  assert.strictEqual(res.incomingSha, 'resolvedsha');
+  // Bug 5: autocrlf disabled so a pure EOL/BOM skew can't become a whole-file conflict.
+  assert.ok(calls.some((a) => a.join(' ') === 'config --local core.autocrlf false'), 'should set core.autocrlf=false');
+  // Bug 6: standard 3-part conflict markers for the VS Code merge editor (no diff3).
+  assert.ok(calls.some((a) => a.join(' ') === 'config --local merge.conflictStyle merge'), 'should set merge.conflictStyle=merge');
+  // restored afterward (mock reports no prior value → unset)
+  assert.ok(calls.some((a) => a.join(' ') === 'config --local --unset core.autocrlf'), 'should restore core.autocrlf');
+  assert.ok(calls.some((a) => a.join(' ') === 'config --local --unset merge.conflictStyle'), 'should restore merge.conflictStyle');
+});
+
 test('merge failure with no unmerged paths is a real error, not a conflict', () => {
   const { gitImpl, fsImpl } = makeMocks({ mergeOk: false, porcelain: '' });
   const res = stageGitMerge({
@@ -198,56 +218,11 @@ test('throws on missing required inputs', () => {
   assert.throws(() => stageGitMerge({ repoDir: '/r', textUnits: [] }), /theirsRef is required/);
 });
 
-// ---- Task 1/3: extractMergeStages — stage→side mapping (Env left, ADO right) ----
-test('Task 3 extractMergeStages: left=ENV(:2), right=ADO(:3), base=:1, result=worktree file', () => {
-  const { extractMergeStages } = require('../lib/stage-git-merge');
-  const writes = new Map();
-  const shown = {};
-  const gitImpl = {
-    runGit({ cwd, args }) {
-      // args = ['show', ':<stage>:<rel>']
-      const m = String(args[1]).match(/^:([123]):(.+)$/);
-      if (m) { shown[m[1]] = true; return { ok: true, stdout: `STAGE${m[1]}-content`, stderr: '' }; }
-      return { ok: false };
-    },
-  };
-  const fsImpl = { mkdirSync() {}, writeFileSync(p, c) { writes.set(String(p).replace(/\\/g, '/'), c); } };
-  const r = extractMergeStages({ repoDir: 'C:/clone/repo', relPath: 'site/page.html', outDir: 'C:/clone/.pp-merge/stages', gitImpl, fsImpl });
-  assert.equal(r.error, undefined);
-  // result is the actual worktree file (resolved output written there)
-  assert.equal(String(r.result).replace(/\\/g, '/'), 'C:/clone/repo/site/page.html');
-  // LEFT carries the ENV (stage 2) content; RIGHT carries the ADO (stage 3) content
-  assert.equal(writes.get(String(r.left).replace(/\\/g, '/')), 'STAGE2-content');
-  assert.equal(writes.get(String(r.right).replace(/\\/g, '/')), 'STAGE3-content');
-  assert.equal(writes.get(String(r.base).replace(/\\/g, '/')), 'STAGE1-content');
-  // Friendly merge-editor panel titles: Dataverse / ADO / Base (real ext kept for highlighting)
-  assert.match(String(r.left), /[\\/]Dataverse\.html$/);
-  assert.match(String(r.right), /[\\/]ADO\.html$/);
-  assert.match(String(r.base), /[\\/]Base\.html$/);
-  assert.equal(r.hasBase, true);
-});
 
-test('Task 3 extractMergeStages: add/add (no stage 1) → empty base file, hasBase=false', () => {
-  const { extractMergeStages } = require('../lib/stage-git-merge');
-  const writes = new Map();
-  const gitImpl = {
-    runGit({ args }) {
-      const m = String(args[1]).match(/^:([123]):/);
-      if (m && m[1] === '1') return { ok: false }; // no base stage (add/add)
-      if (m) return { ok: true, stdout: `s${m[1]}`, stderr: '' };
-      return { ok: false };
-    },
-  };
-  const fsImpl = { mkdirSync() {}, writeFileSync(p, c) { writes.set(String(p).replace(/\\/g, '/'), c); } };
-  const r = extractMergeStages({ repoDir: 'C:/r', relPath: 'a/b.html', gitImpl, fsImpl });
-  assert.equal(r.hasBase, false);
-  assert.equal(writes.get(String(r.base).replace(/\\/g, '/')), ''); // empty base file
-});
-
-test('Task 3 invariance: stageGitMerge still stages Current=Dataverse(HEAD) — extract maps it to LEFT, no staging swap', () => {
-  // Asserts the side-order is achieved purely by extract mapping, NOT by changing
-  // which branch is HEAD. The merge construction is unchanged → pushed tree/base
-  // correctness/reconcile contract are untouched.
+test('stageGitMerge stages Current=Dataverse(HEAD); native editor labels it "Current" (no staging swap)', () => {
+  // Asserts Current=Dataverse is achieved by making the dataverse branch HEAD (checkout -B),
+  // NOT by swapping git stages. VS Code's native merge editor labels HEAD as "Current".
+  // The merge construction is unchanged → pushed tree/base correctness/reconcile contract untouched.
   const { gitImpl, fsImpl, calls } = makeMocks({ mergeOk: false, theirs: 'a\r\nb\r\nc\r\n', porcelain: `UU ${REL}\n` });
   const res = stageGitMerge({
     repoDir: '/clone/repo', baseCommit: 'basesha', theirsRef: 'origin/main',

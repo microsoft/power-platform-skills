@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { reconcileDataverse, isActionAbsent } = require('../lib/reconcile-dataverse');
+const { reconcileDataverse, isActionAbsent, decideConflictResolution } = require('../lib/reconcile-dataverse');
 
 const COMPONENTS = [{
   conflictId: 'g1',
@@ -125,6 +125,77 @@ test('A5 NOT converged: env != branch → stays accept-incoming', async () => {
     components: COMPONENTS, envUrl: 'https://e', solutionUniqueName: 'RetailOS', solutionId: 'sol', apply: true, deps: d,
   });
   assert.equal(decisionUsed, 'accept-incoming');
+});
+
+// ---- Bug 4: keep-current vs accept-incoming decision (pure helper) ----
+test('Bug 4 decideConflictResolution: env == ADO → keep-current; env != ADO → accept-incoming', () => {
+  assert.equal(decideConflictResolution('SAME\n', 'SAME\r\n'), 'keep-current'); // EOL-insensitive
+  assert.equal(decideConflictResolution('\uFEFFSAME\n', 'SAME\n'), 'keep-current'); // BOM-insensitive
+  assert.equal(decideConflictResolution('ENV', 'ADO'), 'accept-incoming');
+  assert.equal(decideConflictResolution(null, 'ADO'), 'accept-incoming'); // unknown side → pull
+  assert.equal(decideConflictResolution('ENV', null), 'accept-incoming');
+});
+
+// ---- Bug 4 + Bug 2/7: source files converge / verify via filecontent reader ----
+const SRC_COMPONENT = {
+  conflictId: 'gs', componentId: 'ppsf-1', name: 'Home.tsx', type: 'sourcefile', sourcefile: true,
+  adoPath: '/solutions/QuickFix/powerpagescodesites/QuickFix/src/pages/Home.tsx',
+  mergedContent: 'export const x = 1;\n',
+};
+
+test('Bug 4 source file converged: env filecontent == bound branch → keep-current (survives later refresh)', async () => {
+  let decisionUsed = null;
+  const d = deps({
+    // env bytes (from powerpagessourcefile.filecontent) equal the branch file (LF/BOM-insensitive)
+    readSourceFileContent: async () => ({ id: 'ppsf-1', bytes: Buffer.from('export const x = 1;\r\n', 'utf8'), isText: true, encoding: 'utf8', mergeStrategy: 'text' }),
+    readBranchContent: async () => 'export const x = 1;\n',
+    resolveGitConflictUserAction: async ({ decision }) => { decisionUsed = decision; return { ok: true, useraction: decision === 'keep-current' ? 1 : 2 }; },
+  });
+  const r = await reconcileDataverse({
+    components: [SRC_COMPONENT], envUrl: 'https://e', solutionUniqueName: 'QuickFix', solutionId: 'sol', apply: true, deps: d,
+  });
+  assert.equal(decisionUsed, 'keep-current');
+  const dc = r.steps.find((s) => s.step === 'detect-converged');
+  assert.ok(dc && dc.converged.includes('Home.tsx'));
+});
+
+test('Bug 2/7 source file content-verify: accept-incoming verifies via readSourceFileContent', async () => {
+  const d = deps({
+    // env != branch so it stays accept-incoming; after pull the env bytes equal mergedContent
+    readSourceFileContent: async () => ({ id: 'ppsf-1', bytes: Buffer.from('export const x = 1;\n', 'utf8'), isText: true, encoding: 'utf8' }),
+    readBranchContent: async () => 'export const x = 999;\n',
+  });
+  const r = await reconcileDataverse({
+    components: [SRC_COMPONENT], envUrl: 'https://e', solutionUniqueName: 'QuickFix', solutionId: 'sol', apply: true, deps: d,
+  });
+  const cv = r.steps.find((s) => s.step === 'content-verify');
+  assert.ok(cv);
+  const check = cv.checks.find((x) => x.name === 'Home.tsx');
+  assert.equal(check.result, 'verified');
+  assert.equal(r.status, 'success');
+});
+
+// ---- Bug 14: RefreshChangesFromGit must NOT run between resolve and verify ----
+test('Bug 14: refresh runs ONCE before accept; never between resolve(accept) and verify', async () => {
+  const order = [];
+  let refreshCount = 0;
+  const d = deps({
+    refreshChangesFromGit: async () => { refreshCount += 1; order.push('refresh'); return { ok: true }; },
+    resolveGitConflictUserAction: async ({ decision }) => { order.push(`accept:${decision}`); return { ok: true, useraction: decision === 'keep-current' ? 1 : 2 }; },
+    pullChangesFromGit: async () => { order.push('pull'); return { ok: true }; },
+    listConflicts: async () => { order.push('verify'); return { count: 0, items: [] }; },
+  });
+  await reconcileDataverse({
+    components: COMPONENTS, envUrl: 'https://e', solutionUniqueName: 'RetailOS', solutionId: 'sol', apply: true, deps: d,
+  });
+  // Exactly one refresh, and it precedes the accept. There is NO refresh after accept
+  // (a refresh between resolve and verify would reset useraction=0 and re-surface conflicts).
+  assert.equal(refreshCount, 1);
+  const acceptIdx = order.findIndex((s) => s.startsWith('accept:'));
+  const verifyIdx = order.indexOf('verify');
+  const refreshIdx = order.indexOf('refresh');
+  assert.ok(refreshIdx >= 0 && refreshIdx < acceptIdx, 'refresh runs before accept');
+  assert.equal(order.slice(acceptIdx, verifyIdx + 1).includes('refresh'), false, 'no refresh between resolve and verify');
 });
 
 test('A5 bounded retry: persistent conflict → flip strategy once → pull → verify clears', async () => {

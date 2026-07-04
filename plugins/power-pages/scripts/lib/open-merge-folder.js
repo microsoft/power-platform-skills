@@ -25,6 +25,16 @@ const PANEL_LABELS = Object.freeze({
   base: 'Common ancestor',
 });
 
+// Bug 6: plain-language guidance the skill relays so a maker can always reach the
+// one-click Accept controls — and recover when a hunk drops into "Manual Resolution".
+const MERGE_EDITOR_TIPS = Object.freeze([
+  'Accept a whole side: click the "✓✓ Accept all" icon in a pane header (Incoming = Azure DevOps, Current = Dataverse).',
+  'Accept one hunk: hover the conflict block in an input pane to reveal its checkbox, then tick the side you want.',
+  'If a hunk went to "Manual Resolution" (one-click options vanished): use the hunk\'s "Reset to base" (or Undo) to restore Accept Current / Accept Incoming / Accept Both.',
+  'Last resort: edit the bottom "Result" pane directly — type the exact final text and save.',
+  'A file is resolved when no <<<<<<< / ======= / >>>>>>> markers remain and it is saved.',
+]);
+
 function quoteArg(p) {
   return `"${String(p).replace(/"/g, '""')}"`;
 }
@@ -54,7 +64,6 @@ function openMergeFolder({
   repoDir,
   conflictedPaths,
   firstConflictedFile,
-  mergeEditor,        // Task 1/3: { left, right, base, result } → `code --merge` with Env-left/ADO-right
   spawnImpl = spawnSync,
   fsImpl = fs,
 } = {}) {
@@ -63,43 +72,36 @@ function openMergeFolder({
   const excludeResult = ensureVsCodeExcludedFromGit({ repoDir, fsImpl });
   const settingsResult = writeVsCodeMergeSettings({ repoDir, fsImpl });
 
-  // Task 1: open the FOLDER (so the Source Control "Merge Changes" list is one click
-  // away) AND, when stage files are provided, launch straight into the 3-way MERGE
-  // EDITOR for the first conflict via `code --merge`. `code` has no flag to focus the
-  // SCM viewlet, so dropping the user directly into the merge editor is the most
-  // reliable way to avoid landing on a blank Explorer/Welcome.
+  // Open the FOLDER (so the Source Control "Merge Changes" list is one click away) AND
+  // the first conflicted file. With `git.mergeEditor: true` (written above), opening a
+  // conflicted file drops the user straight into VS Code's NATIVE 3-way merge editor —
+  // avoiding a blank Explorer/Welcome — and EVERY conflict then uses that same native
+  // editor (consistent Incoming/Current labels), not a per-file custom `code --merge`.
   const folderCommand = `${codeBin} ${quoteArg(repoDir)}`;
-  const me = mergeEditor && mergeEditor.left && mergeEditor.right && mergeEditor.base && mergeEditor.result ? mergeEditor : null;
-  // Task 3: `--merge <left> <right> <base> <result>` → left=Env(Dataverse), right=ADO.
-  const mergeCommand = me
-    ? `${codeBin} --merge ${quoteArg(me.left)} ${quoteArg(me.right)} ${quoteArg(me.base)} ${quoteArg(me.result)} --reuse-window`
-    : null;
-  // Without stage files, fall back to opening the first conflicted file in the folder.
-  const command = mergeCommand || `${folderCommand}${openedFile ? ` ${quoteArg(openedFile)}` : ''}`;
+  const command = `${folderCommand}${openedFile ? ` ${quoteArg(openedFile)}` : ''}`;
 
-  const scmPointer = `Open Source Control (Ctrl/Cmd+Shift+G) — ${(conflictedPaths || []).length || 'the'} conflicted file(s) are listed under "Merge Changes". The first conflict opens directly in the 3-way merge editor (Dataverse on the LEFT, Azure DevOps on the RIGHT).`;
+  // The native merge editor labels the sides Incoming/Current (VS Code's fixed order:
+  // Incoming on the LEFT, Current on the RIGHT). Relay what those map to so the generic
+  // labels are never ambiguous — makers resolve by LABEL, not by screen position.
+  const scmPointer = `Open Source Control (Ctrl/Cmd+Shift+G) — ${(conflictedPaths || []).length || 'the'} conflicted file(s) are listed under "Merge Changes"; the first is already open. In the 3-way merge editor, "Current" = Dataverse (your environment) and "Incoming" = Azure DevOps — resolve by label, not by which side of the screen it is on.`;
 
   const launchDetails = {
     command,
     folderCommand,
-    mergeCommand,
     openedFile,
-    mergeEditor: me ? { left: me.left, right: me.right, base: me.base, result: me.result } : null,
     scmPointer,
     wroteSettings: settingsResult.wroteSettings,
     settingsPath: settingsResult.settingsPath,
     excludedFromGit: excludeResult.excludedFromGit,
     excludePath: excludeResult.excludePath,
-    // Task 3: Env (Dataverse) LEFT, Azure DevOps RIGHT, base at the bottom — driven by
-    // the `--merge <left=env> <right=ado>` argument order, not a git-staging swap.
+    // What VS Code's native "Current"/"Incoming" labels map to (resolve by label, not side).
     panelLabels: PANEL_LABELS,
+    // Bug 6: relay these so the maker can always reach the Accept controls.
+    mergeEditorTips: MERGE_EDITOR_TIPS,
   };
 
-  // Open the folder first (best-effort), then the merge editor (reuse window).
-  let folderResult = null;
   let result;
   try {
-    if (me) folderResult = spawnImpl(folderCommand, { encoding: 'utf8', shell: true });
     result = spawnImpl(command, { encoding: 'utf8', shell: true });
   } catch {
     return fallback(repoDir, launchDetails);
@@ -109,7 +111,7 @@ function openMergeFolder({
     return fallback(repoDir, launchDetails);
   }
 
-  return { opened: true, launched: true, path: repoDir, openedFolder: !!folderResult, ...launchDetails };
+  return { opened: true, launched: true, path: repoDir, ...launchDetails };
 }
 
-module.exports = { openMergeFolder, quoteArg, PANEL_LABELS };
+module.exports = { openMergeFolder, quoteArg, PANEL_LABELS, MERGE_EDITOR_TIPS };

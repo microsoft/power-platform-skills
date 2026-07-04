@@ -73,6 +73,15 @@ function reconcileManifest({ manifest, serverBinding } = {}) {
   // Build the divergence list across the identity fields. When neither side is
   // bound, only `bound` matters (the other fields are meaningless).
   const divergences = [];
+  // Bug 9: `solutionUniqueName` corroboration. detect-git-binding may surface a
+  // top-level `solutionUniqueName: null` (e.g. multiple bound solutions, or output
+  // produced before the single-bound fallback) while `boundSolutions[]` DOES carry
+  // the manifest's value. That is NOT a real divergence — treat it as aligned when
+  // the server's boundSolutions corroborate the local manifest value. This removes
+  // the false "stale manifest" gate (local "QuickFix" vs server null).
+  const boundNames = Array.isArray(server.boundSolutions)
+    ? server.boundSolutions.map((s) => s && s.uniqueName).filter(Boolean)
+    : [];
   for (const field of COMPARED_FIELDS) {
     // Only compare coordinate fields when at least one side claims a binding;
     // when both are unbound, the coordinates are meaningless.
@@ -80,6 +89,10 @@ function reconcileManifest({ manifest, serverBinding } = {}) {
     const lv = norm(local[field]);
     const sv = norm(server[field]);
     if (lv === sv) continue;
+    if (field === 'solutionUniqueName' && sv == null && lv != null && boundNames.includes(lv)) {
+      // server top-level is null but boundSolutions corroborates the manifest → aligned.
+      continue;
+    }
     divergences.push({ field, local: lv, server: sv });
   }
 
@@ -119,4 +132,69 @@ function reconcileManifest({ manifest, serverBinding } = {}) {
   return { aligned, divergences, options, summary };
 }
 
-module.exports = { reconcileManifest, COMPARED_FIELDS };
+// ── Bug 8: CLI (the module used to be a library with NO CLI — invoking it with
+// flags was a silent no-op). The pure `reconcileManifest` export above is unchanged;
+// this block only wires it up for command-line use. Logic is factored into
+// `runReconcileManifestCli` with injectable deps so it is unit-testable without live
+// Dataverse/filesystem access.
+
+function parseArgs(argv) {
+  const a = argv.slice(2);
+  const out = { manifest: null, projectRoot: null, envUrl: null, token: null, solutionUniqueName: null };
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] === '--manifest' && a[i + 1]) out.manifest = a[++i];
+    else if (a[i] === '--project-root' && a[i + 1]) out.projectRoot = a[++i];
+    else if (a[i] === '--projectRoot' && a[i + 1]) out.projectRoot = a[++i];
+    else if (a[i] === '--envUrl' && a[i + 1]) out.envUrl = a[++i];
+    else if (a[i] === '--token' && a[i + 1]) out.token = a[++i];
+    else if (a[i] === '--solutionUniqueName' && a[i + 1]) out.solutionUniqueName = a[++i];
+  }
+  return out;
+}
+
+/**
+ * Run the reconcile-manifest CLI: read the local manifest (via inner-loop-paths or
+ * an explicit --manifest path), call detect-git-binding (NORMALIZED — see Bug 9),
+ * reconcile, and return the JSON result. Pure dependency injection so tests need no
+ * live calls or filesystem.
+ *
+ * @param {object} opts
+ * @param {string[]} [opts.argv]
+ * @param {object} [opts.deps]  { readFileSync, gitIntegrationManifestPath, detectGitBinding }
+ * @returns {Promise<object>} reconcile result + { manifestPath, server }
+ */
+async function runReconcileManifestCli({ argv = process.argv, deps = {} } = {}) {
+  const args = parseArgs(argv);
+  const readFileSync = deps.readFileSync || require('fs').readFileSync;
+  const gitIntegrationManifestPath = deps.gitIntegrationManifestPath ||
+    require('./inner-loop-paths').gitIntegrationManifestPath;
+  const detectGitBinding = deps.detectGitBinding ||
+    require('./detect-git-binding').detectGitBinding;
+
+  const manifestPath = args.manifest ||
+    gitIntegrationManifestPath(args.projectRoot || process.cwd());
+
+  let manifest = null;
+  let manifestError = null;
+  try { manifest = JSON.parse(readFileSync(manifestPath, 'utf8')); }
+  catch (e) { manifestError = e.message; }
+
+  // detect-git-binding resolves the server truth (and, post-Bug-9, surfaces the
+  // single-bound solutionUniqueName at the top level).
+  const server = await detectGitBinding({
+    envUrl: args.envUrl,
+    token: args.token,
+    solutionUniqueName: args.solutionUniqueName || (manifest && manifest.solutionUniqueName) || undefined,
+  });
+
+  const result = reconcileManifest({ manifest, serverBinding: server });
+  return { ...result, manifestPath, server, ...(manifestError ? { manifestError } : {}) };
+}
+
+if (require.main === module) {
+  runReconcileManifestCli({ argv: process.argv })
+    .then((r) => { process.stdout.write(JSON.stringify(r, null, 2) + '\n'); })
+    .catch((e) => { process.stderr.write('reconcile-manifest: ' + e.message + '\n'); process.exit(1); });
+}
+
+module.exports = { reconcileManifest, runReconcileManifestCli, parseArgs, COMPARED_FIELDS };

@@ -105,6 +105,18 @@ test('returns panelLabels with Dataverse current and Azure DevOps incoming wordi
   assert.match(result.panelLabels.base, /Common ancestor/);
 });
 
+// ---- Bug 6: relay the merge-editor Accept-controls guidance ----
+test('Bug 6: surfaces mergeEditorTips (Accept-all, hover checkbox, Reset to base, edit Result)', () => {
+  const { MERGE_EDITOR_TIPS } = require('../lib/open-merge-folder');
+  const result = openMergeFolder({ repoDir: 'C:\\repo', fsImpl: fakeFs(), spawnImpl: () => ({ status: 0 }) });
+  assert.deepEqual(result.mergeEditorTips, MERGE_EDITOR_TIPS);
+  const joined = MERGE_EDITOR_TIPS.join(' ');
+  assert.match(joined, /Accept all/i);
+  assert.match(joined, /hover/i);
+  assert.match(joined, /Reset to base/i);
+  assert.match(joined, /Result/);
+});
+
 test('ENOENT throw: returns fallback and does not throw', () => {
   const repoDir = 'C:\\missing-code\\repo';
   const result = openMergeFolder({
@@ -158,57 +170,37 @@ test('quoteArg quotes a path containing spaces', () => {
   assert.equal(quoteArg('C:\\Users\\Test User\\repo folder'), '"C:\\Users\\Test User\\repo folder"');
 });
 
-// ---- Task 1/3: code --merge launcher (Env LEFT / ADO RIGHT) ----
-test('Task 1/3: mergeEditor → `code --merge <env> <ado> <base> <result>` (Env left, ADO right) + opens folder', () => {
+// ---- Native-only editor: the custom `code --merge` launcher was removed ----
+test('single spawn opens folder + first file (no --merge); legacy mergeEditor arg is ignored', () => {
   const calls = [];
   const repoDir = 'C:\\clone\\repo';
-  const mergeEditor = { left: 'C:\\stages\\x\\Dataverse.html', right: 'C:\\stages\\x\\ADO.html', base: 'C:\\stages\\x\\Base.html', result: 'C:\\clone\\repo\\site\\f.html' };
   const result = openMergeFolder({
     repoDir,
     conflictedPaths: ['site\\f.html', 'site\\g.html'],
-    mergeEditor,
-    fsImpl: fakeFs(),
-    spawnImpl: (command, options) => { calls.push(command); return { status: 0 }; },
-  });
-  assert.equal(result.launched, true);
-  assert.equal(result.openedFolder, true);
-  // two spawns: open folder, then the merge editor
-  assert.equal(calls.length, 2);
-  assert.match(calls[0], /^code(\.cmd)? "C:\\clone\\repo"$/); // folder first
-  // merge editor: left=env, right=ado, base, result — IN THAT ORDER (Env left, ADO right)
-  assert.match(calls[1], /--merge "C:\\stages\\x\\Dataverse\.html" "C:\\stages\\x\\ADO\.html" "C:\\stages\\x\\Base\.html" "C:\\clone\\repo\\site\\f\.html"/);
-  assert.match(calls[1], /--reuse-window/);
-  assert.equal(result.mergeCommand, calls[1]);
-  // panel labels + SCM pointer surfaced
-  assert.equal(result.panelLabels.current, PANEL_LABELS.current);
-  assert.match(result.scmPointer, /Source Control/);
-  assert.match(result.scmPointer, /Dataverse on the LEFT, Azure DevOps on the RIGHT/);
-});
-
-test('Task 1: incomplete mergeEditor → falls back to folder + first file (no --merge)', () => {
-  const calls = [];
-  const repoDir = 'C:\\clone\\repo';
-  const result = openMergeFolder({
-    repoDir,
-    conflictedPaths: ['site\\f.html'],
-    mergeEditor: { left: 'x' }, // missing right/base/result
+    // legacy arg must now be IGNORED — the per-file custom launcher was removed
+    mergeEditor: { left: 'C:\\stages\\x\\Dataverse.html', right: 'C:\\stages\\x\\ADO.html', base: 'C:\\stages\\x\\Base.html', result: 'C:\\clone\\repo\\site\\f.html' },
     fsImpl: fakeFs(),
     spawnImpl: (command) => { calls.push(command); return { status: 0 }; },
   });
-  assert.equal(result.mergeCommand, null);
+  assert.equal(result.launched, true);
+  // exactly ONE spawn: folder + first conflicted file (native 3-way editor)
   assert.equal(calls.length, 1);
+  assert.match(calls[0], /^code(\.cmd)? "C:\\clone\\repo" "C:\\clone\\repo\\site\\f\.html"$/);
   assert.doesNotMatch(calls[0], /--merge/);
+  // no custom-view fields leak into the result
+  assert.equal(result.mergeCommand, undefined);
+  assert.equal(result.mergeEditor, undefined);
 });
 
-test('Task 1: code unavailable with mergeEditor → fallback carries the SCM pointer', () => {
-  const repoDir = 'C:\\clone\\repo';
+test('scmPointer relays the native label mapping (Current = Dataverse, Incoming = Azure DevOps)', () => {
   const result = openMergeFolder({
-    repoDir,
+    repoDir: 'C:\\clone\\repo',
     conflictedPaths: ['site\\f.html'],
-    mergeEditor: { left: 'a', right: 'b', base: 'c', result: 'd' },
     fsImpl: fakeFs(),
-    spawnImpl: () => ({ status: 1, error: { code: 'ENOENT' } }),
+    spawnImpl: () => ({ status: 0 }),
   });
-  assert.equal(result.fallback, true);
   assert.match(result.scmPointer, /Source Control/);
+  assert.match(result.scmPointer, /Current.*Dataverse/i);
+  assert.match(result.scmPointer, /Incoming.*Azure DevOps/i);
+  assert.doesNotMatch(result.scmPointer, /on the LEFT, Azure DevOps on the RIGHT/);
 });

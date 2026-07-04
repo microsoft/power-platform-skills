@@ -418,7 +418,11 @@ async function detectViaSourceControlEntities(tok, base, solutionUniqueName) {
     branch: row.branchname || null,
     gitFolder: gitFolder || null,
     rootFolder: rootFolder || null,
-    solutionUniqueName: solutionUniqueName || null,
+    // Bug 9: when no explicit --solutionUniqueName filter was given but EXACTLY ONE
+    // solution is bound, surface its uniqueName at the top level so every consumer
+    // (e.g. reconcile-manifest) sees a consistent value instead of a null that looks
+    // like a divergence from the local manifest. boundSolutions[] is the source of truth.
+    solutionUniqueName: solutionUniqueName || (boundSolutions.length === 1 ? boundSolutions[0].uniqueName : null),
     branchSyncedCommitId: row.branchsyncedcommitid || null,
     upstreamBranchSyncedCommitId: row.upstreambranchsyncedcommitid || null,
     sourceControlSyncStatus: solRow ? solRow.sourcecontrolsyncstatus : null,
@@ -533,7 +537,9 @@ async function detectGitBinding({ envUrl, token, solutionUniqueName } = {}) {
     branch: row.branchname || null,
     gitFolder: row.gitfolder || null,
     rootFolder: row.rootfolder || null,
-    solutionUniqueName: row.solutionuniquename || null,
+    // Bug 9: fall back to the single-bound solution's uniqueName (mirrors the
+    // sourcecontrol-entities path) so the top-level value is never a spurious null.
+    solutionUniqueName: row.solutionuniquename || (boundSolutionsLegacy.length === 1 ? boundSolutionsLegacy[0].uniqueName : null),
     connectionStatus: row.connectionstatus || null,
     gitIntegrationId: row.gitintegrationid || null,
     boundSolutions: boundSolutionsLegacy,

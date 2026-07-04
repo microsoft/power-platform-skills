@@ -232,6 +232,33 @@ test('buildPathFromComponentPath: web file (3) string type "webfile" normalizes 
   assert.equal(byName.path, byNum.path);
   assert.equal(byName.kind, 'webfile');
 });
+
+// ---- Bug 2: code-site source files resolve to their plain repo path ----
+test('buildPathFromComponentPath: code-site source file resolves to /<root>/<git> + componentPath', () => {
+  const r = buildPathFromComponentPath({
+    componentPath: '/powerpagescodesites/QuickFix/src/pages/Home.tsx', type: 'sourcefile',
+    rootFolder: 'solutions', gitFolder: 'QuickFix',
+  });
+  assert.equal(r.path, '/solutions/QuickFix/powerpagescodesites/QuickFix/src/pages/Home.tsx');
+  assert.equal(r.kind, 'sourcefile');
+  assert.equal(r.field, null);
+  assert.equal(r.resolvedVia, 'componentpath');
+});
+
+test('buildPathFromComponentPath: source file detected from .sourcefile component NAME via type sentinel', () => {
+  // The resolver passes the enriched ppcType ('sourcefile'); the path comes from the row.
+  const r = buildPathFromComponentPath({
+    componentPath: '/powerpagescodesites/QuickFix/src/styles/app.css', type: 'sourcefile',
+    rootFolder: 'solutions', gitFolder: 'QuickFix',
+  });
+  assert.equal(r.path, '/solutions/QuickFix/powerpagescodesites/QuickFix/src/styles/app.css');
+  assert.equal(r.kind, 'sourcefile');
+});
+
+test('buildPathFromComponentPath: source file with no componentPath → unsupported (fail closed)', () => {
+  const r = buildPathFromComponentPath({ type: 'sourcefile', rootFolder: 'solutions', gitFolder: 'QuickFix' });
+  assert.equal(r.supported, false);
+});
 test('buildSourceFilePath: unknown type unsupported', () => {
   const r = buildSourceFilePath({ type: 999, name: 'x', ...COORDS });
   assert.equal(r.supported, false);

@@ -50,6 +50,7 @@ function makeDeps({
   mergeState = { inProgressMerge: false, unmergedPaths: [], markerFiles: [], clean: true },
   branchResolvable = true,
   revParseGitDirOk = true,
+  behindCount = null,
 } = {}) {
   const calls = [];
   const deps = {
@@ -95,6 +96,7 @@ function makeDeps({
         if (joined === 'config core.longpaths true') return ok();
         if (joined === 'rev-parse origin/main') return ok('branch-tip-sha\n');
         if (joined === 'rev-parse HEAD') return ok('head-sha\n');
+        if (joined === 'rev-list --count HEAD..origin/main') return behindCount == null ? fail('no behind info') : ok(`${behindCount}\n`);
         return fail(`unexpected git args: ${joined}`);
       },
     },
@@ -163,6 +165,39 @@ test('existing valid clean clone fetches and resets to origin branch', async () 
   assert.ok(calls.some((c) => c[0] === 'fetch' && c[1].cwd === REPO_DIR && c[1].remote === 'origin' && c[1].token === TOKEN));
   assert.ok(calls.some((c) => c[0] === 'runGit' && c[1].args.join(' ') === 'reset --hard origin/main'));
   assert.ok(calls.some((c) => c[0] === 'runGit' && c[1].args.join(' ') === 'clean -fd'));
+});
+
+// ---- Bug 3: incoming tip + stale-checkout guard ----
+test('Bug 3: reused clone surfaces incomingRef/incomingSha = origin/<branch> tip', async () => {
+  const fsImpl = fakeFs({ gitDir: true });
+  const { deps } = makeDeps({ fsImpl });
+  const result = await cloneOrUpdateRepo(baseArgs(deps, fsImpl));
+  assert.equal(result.incomingRef, 'origin/main');
+  assert.equal(result.incomingSha, 'branch-tip-sha');
+  assert.equal(result.branchTip, 'branch-tip-sha');
+});
+
+test('Bug 3: reused clone fails loudly when local checkout is behind origin/<branch> after sync', async () => {
+  const fsImpl = fakeFs({ gitDir: true });
+  const { deps } = makeDeps({ fsImpl, behindCount: 2 });
+  await assert.rejects(
+    () => cloneOrUpdateRepo(baseArgs(deps, fsImpl)),
+    /2 commit\(s\) behind origin\/main/,
+  );
+});
+
+test('Bug 3: behind-count == 0 does not block (clone is at the fetched tip)', async () => {
+  const fsImpl = fakeFs({ gitDir: true });
+  const { deps } = makeDeps({ fsImpl, behindCount: 0 });
+  const result = await cloneOrUpdateRepo(baseArgs(deps, fsImpl));
+  assert.equal(result.reused, true);
+});
+
+test('Bug 3 computeBehindCount: parses rev-list count; null when undeterminable', async () => {
+  const { computeBehindCount } = require('../lib/clone-or-update-repo');
+  assert.equal(await computeBehindCount({ repoDir: '/r', branch: 'main', git: { runGit: async () => ({ ok: true, stdout: '3\n' }) } }), 3);
+  assert.equal(await computeBehindCount({ repoDir: '/r', branch: 'main', git: { runGit: async () => ({ ok: true, stdout: '0\n' }) } }), 0);
+  assert.equal(await computeBehindCount({ repoDir: '/r', branch: 'main', git: { runGit: async () => ({ ok: false }) } }), null);
 });
 
 test('existing in-progress merge returns without fetch or reset', async () => {

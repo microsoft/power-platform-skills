@@ -20,7 +20,13 @@ No force-push is allowed. No token, component source, or merged content is writt
 
 ## Scope
 
-Text-mergeable units use the clone flow: web template `source`, content snippet `value`, web page `copy` / `summary`, flat-yml site settings, and **web files type `3` whose Dataverse annotation `documentbody` bytes are detected as text by the runtime content sniff**. Web-file eligibility is based on bytes, not extension, so any extension can open in the 3-way editor when the sniff says text.
+Text-mergeable units use the clone flow: web template `source`, content snippet `value`, web page `copy` / `summary`, flat-yml site settings, **web files type `3` whose Dataverse annotation `documentbody` bytes are detected as text by the runtime content sniff**, and **code-site source files** (see below). Web-file eligibility is based on bytes, not extension, so any extension can open in the 3-way editor when the sniff says text.
+
+**Code-site source files are first-class text-mergeable units.** Power Pages code sites store each source file (`.tsx`/`.ts`/`.css`/`.json`/`.html`/`.scss` …) as a row in the `powerpagessourcefile` table (entity set `powerpagessourcefiles`), **not** as a `powerpagecomponent`. They are recognized by a serialized component name ending in `.sourcefile` and/or a `componentPath` under `/powerpagescodesites/<site>/src/...`, and classified with a dedicated `SOURCEFILE_TYPE` sentinel (strategy `text`, eligible). Three facts matter:
+
+- The Git-integration conflict **`componentId` equals the `powerpagessourcefileid` primary key** — **not** `componentidunique`. The reader uses it directly as the record key.
+- The env **bytes live in the `filecontent` File column**, read via `GET /api/data/v9.2/powerpagessourcefiles(<id>)/filecontent/$value` (binary-safe). The `content` Memo column is **only** a `{ "filename", "mimetype", "partialurl" }` envelope and never holds the bytes.
+- They route to the **same clone-based 3-way merge** as web templates/pages via the `read-source-file-content.js` reader (OURS side), with the content sniff failing closed to binary on ambiguity.
 
 Binary/scalar units are **not** text-merged. Truly-binary or ambiguous web files type `3`, scalar site settings type `9`, and deleted-in-Git components are resolved **per file** via the numbered matrix in Phase 3a — the user picks which to **Accept Incoming**; the rest **Keep Current**. Credential/auth-classified settings stay out of selective merge.
 
@@ -47,7 +53,7 @@ The orchestrator CLI is the only entry point:
 node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/clone-merge-resolver.js" --input <inputs.json> [--apply] [--resume] [--allow-push] [--allow-pull] [--allow-restart] [--binary-accept <serials>] [--binary-accept-all] [--binary-keep-mine] [--no-pause]
 ```
 
-**Flat-YML site settings (type `9`) are text-merged.** A site setting serializes to a single flat `.sitesetting.yml` (metadata + one `value:` line). The resolver merges the **whole yml** as a normal text unit: it synthesizes OURS by substituting the environment's value into the yml skeleton, so OURS and the ADO side differ **only on the `value:` line** (metadata is identical → git auto-merges it). The setting therefore opens in the **3-way merge editor** like any html unit (`Dataverse.yml` / `ADO.yml` / `Base.yml`), and the reconcile compares/pulls the `value:` field. Only a site setting whose value is **multi-line** falls back to the keep/accept matrix below.
+**Flat-YML site settings (type `9`) are text-merged.** A site setting serializes to a single flat `.sitesetting.yml` (metadata + one `value:` line). The resolver merges the **whole yml** as a normal text unit: it synthesizes OURS by substituting the environment's value into the yml skeleton, so OURS and the ADO side differ **only on the `value:` line** (metadata is identical → git auto-merges it). The setting therefore opens in the **native 3-way merge editor** like any html unit, and the reconcile compares/pulls the `value:` field. Only a site setting whose value is **multi-line** falls back to the keep/accept matrix below.
 
 **Per-file binary/scalar resolution (matrix).** Binary units (truly-binary or ambiguity-routed web files type `3`, plus any **multi-line** site-setting value that can't be flat-yml merged) can't open in VS Code, so they are resolved **per file**, not with one blanket choice. The resolver returns a numbered `binaryMatrix` (serial, name, type); the agent presents it as a table and asks **which files to Accept Incoming** (take the ADO version). Everything the user does **not** pick **Keeps Current** (the environment's value). Pass the selection on resume:
 
@@ -125,9 +131,13 @@ On approval, run:
 node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/clone-merge-resolver.js" --input <inputs.json> --apply
 ```
 
-Expected status: `awaiting-resolution`. The helper clones/fetches, checks out `dataverse` at BASE (or an empty/orphan add-add base when BASE is null), writes OURS for only the conflicted files with EOL/BOM shaped to match repo bytes, commits `Current=Dataverse`, merges the ADO tip as `Incoming=Azure DevOps`, then **launches VS Code straight into the 3-way Merge Editor** for the first conflict via `code --merge <env> <ado> <base> <result>` (Task 1) — and also opens the folder so the Source Control "Merge Changes" list is one click away. The result carries `scmPointer` (a plain-language "Open Source Control (Ctrl/Cmd+Shift+G)…" hint to relay) and a `binaryMatrix` (when there are binary/scalar conflicts) for the matrix gate below.
+Expected status: `awaiting-resolution`. The helper clones/fetches, checks out `dataverse` at BASE (or an empty/orphan add-add base when BASE is null), writes OURS for only the conflicted files with EOL/BOM shaped to match repo bytes, commits `Current=Dataverse`, merges the ADO tip as `Incoming=Azure DevOps`, then **opens the clone folder + the first conflicted file in VS Code** — dropping the maker into the **native 3-way Merge Editor** (Task 1) with the Source Control "Merge Changes" list holding the rest. The result carries `scmPointer` (a plain-language "Open Source Control (Ctrl/Cmd+Shift+G)…" hint that also relays the label mapping — `Current` = Dataverse, `Incoming` = Azure DevOps) and a `binaryMatrix` (when there are binary/scalar conflicts) for the matrix gate below.
 
-> **Task 1 — never land on a blank Explorer.** The `code` CLI has no flag to focus the SCM viewlet, so the resolver opens the first conflict **directly in the merge editor** (`--merge`). Relay `scmPointer` so the maker can reach the remaining conflicts from the "Merge Changes" list.
+> **Always merge against the FETCHED tip (Bug 3).** Before staging, `cloneOrUpdateRepo` runs `git fetch origin` and **resets the working tree to `origin/<branch>`**, and the incoming side is resolved from the remote-tracking ref `origin/<branch>` — never the clone's local checkout. If the local checkout is somehow still **behind** `origin/<branch>` after the fetch+reset, the helper **fails loudly** rather than stage a merge against a stale tip (which would make "incoming" actually the base and silently drop the advanced ADO edits). `stageGitMerge` returns the resolved `incomingRef`/`incomingSha` (and, under `DEBUG`, logs `base=… incoming=… ref=…`) so the base/incoming SHAs are auditable. `stage-git-merge.pickBaseCommit` always picks the base **relative to that fetched tip**.
+
+> **Byte-preserving staging + standard markers (Bug 5/6).** During staging the resolver sets the clone's `core.autocrlf=false` (restored afterward) so git never re-normalizes line endings — combined with the EOL/BOM-matched OURS write, a pure CRLF↔LF or BOM skew can **never** turn the whole file into one false conflict; only **real content hunks** conflict. It also sets `merge.conflictStyle=merge` so git writes **standard 3-part conflict markers** (`<<<<<<< / ======= / >>>>>>>`, no diff3 `|||||||` base section), which keeps VS Code's merge editor in its one-click-Accept mode instead of dropping into "Manual Resolution".
+
+> **Task 1 — never land on a blank Explorer.** The `code` CLI has no flag to focus the SCM viewlet, so the resolver opens the clone folder **and the first conflicted file** — which, with `git.mergeEditor: true`, drops straight into VS Code's native 3-way Merge Editor. Relay `scmPointer` so the maker reaches the remaining conflicts from the "Merge Changes" list.
 
 ### Phase 3a — Binary/scalar matrix (per-file Accept Incoming vs Keep Current)
 
@@ -150,9 +160,16 @@ Carry the answer into the resume call as `--binary-accept <serials/ranges>` (e.g
 
 ### Phase 3 — Wait for VS Code resolution (mandatory pause gate B5)
 
-VS Code opens directly in the 3-way **Merge Editor** for the first conflict (Task 1); the "Merge Changes" list (Source Control, Ctrl/Cmd+Shift+G) holds the rest. A `.vscode/settings.json` (written into the clone, git-excluded so it never reaches ADO) keeps the base panel visible.
+VS Code opens the clone folder + the first conflict, landing in the native 3-way **Merge Editor** (Task 1); the "Merge Changes" list (Source Control, Ctrl/Cmd+Shift+G) holds the rest — **every** conflict uses that same native editor. A `.vscode/settings.json` (written into the clone, git-excluded so it never reaches ADO) enables the merge editor (`git.mergeEditor: true`) and keeps the base panel visible.
 
-> **Task 3 — Env LEFT, ADO RIGHT.** The merge editor the resolver opens shows **Dataverse (your environment) in the LEFT input** and **Azure DevOps (incoming) in the RIGHT input**, base at the bottom — driven by the `code --merge <env> <ado> <base> <result>` argument order (left=env, right=ado). The three input files are named **`Dataverse.<ext>`**, **`ADO.<ext>`** and **`Base.<ext>`** (real extension kept for syntax highlighting), so each panel title reads clearly instead of the long flattened repo path. This is **presentation only**: git staging, the merged tree pushed to ADO, base correctness, and the reconcile contract (`accept-incoming = ADO`, `keep-current = env`) are unchanged. (This supersedes the earlier B4 "never swap sides" caution — sides are now explicitly Env-left/ADO-right via `--merge`, not by swapping git stages.) Files opened by clicking the SCM "Merge Changes" list use VS Code's fixed incoming-left/current-right order; resolving through the merge editor the resolver opens gives the Env-left/ADO-right layout.
+> **Native labels — resolve by label, not side.** Every conflict opens in VS Code's **native** Merge Editor, which labels the sides **`Incoming` (Azure DevOps) on the LEFT** and **`Current` (Dataverse, your environment) on the RIGHT**, with the base panel between them — VS Code's fixed order. There is **no** custom `code --merge` layout anymore, so the presentation is **consistent across every conflicted file**. Relay the mapping so the generic labels are never ambiguous: **`Current` = Dataverse (your environment), `Incoming` = Azure DevOps** — makers accept by **label, not by which side of the screen it is on**. The contract is unchanged: `keep-current = env`, `accept-incoming = ADO`; git staging, the merged tree pushed to ADO, and base correctness are all untouched (`stageGitMerge` still makes the `dataverse` branch HEAD → `Current`).
+
+> **Bug 6 — using the Merge Editor controls (relay this to the maker).** The resolver writes **standard conflict markers**, so VS Code shows its one-click controls. If a hunk looks "stuck" or the editor says **Manual Resolution**, these are the ways out:
+> - **Accept-all per side:** each input pane (**Incoming** = Azure DevOps / **Current** = Dataverse) has a **`✓✓` "Accept all …" icon in its pane header** — one click takes every hunk from that side.
+> - **Per-hunk checkbox:** **hover a conflict block** in an input pane to reveal its **checkbox / "Accept" lens**; tick the side you want for that hunk. You can mix sides hunk-by-hunk.
+> - **"Reset to base":** if a hunk has gone to **Manual Resolution** (the one-click options disappeared because you edited it), use the hunk's **"Reset to base"** action (or **Undo**) to restore the Accept Current / Accept Incoming / Accept Both choices.
+> - **Edit the Result pane directly:** the bottom **Result** pane is fully editable — type the exact final text there for any hunk the buttons can't express, then save. The Result pane is the source of truth the resolver verifies.
+> Whatever path is used, the file is "resolved" when **no `<<<<<<<` / `=======` / `>>>>>>>` markers remain** and it is saved.
 
 You **must** surface this blocking gate after opening VS Code — a fast model must not skip it:
 
@@ -242,11 +259,15 @@ Expected successful final status: `success`.
 
 The final phase reuses the existing Dataverse path:
 
-1. `RefreshChangesFromGit`.
-2. Accept incoming with `useraction=2` PATCH (`resolve-git-conflict-useraction`), which is IL-015-proof.
+1. `RefreshChangesFromGit` — **once, BEFORE accept** (it populates the conflict rows).
+2. Accept incoming with `useraction=2` PATCH (`resolve-git-conflict-useraction`), which is IL-015-proof — **unless the component has converged (env == ADO), in which case resolve with `keep-current` (`useraction=1`)** (Bug 4, below).
 3. `PullChangesFromGit`.
-4. Verify `Conflicts=0`.
-5. Content-verify: re-read OURS, normalize EOL, byte-compare against the resolved content. For source-field text units, a mismatch returns `partial` with positional metadata only; never include raw source in diagnostics. Text-detected web files get the `documentbody` fallback below before `partial`.
+4. Verify `Conflicts=0` by **re-listing conflicts** (`list-conflicts`, `action eq 3 AND useraction eq 0`) — **not** by the pull's `updatesCount` (which is `0` when env == ADO even though the resolution succeeded).
+5. Content-verify: re-read OURS, normalize EOL, byte-compare against the resolved content. For source-field text units, a mismatch returns `partial` with positional metadata only; never include raw source in diagnostics. Text-detected web files get the `documentbody` fallback below before `partial`. **Code-site source files** are re-read via `read-source-file-content.js` (`filecontent/$value`) for the same byte-compare.
+
+> **Bug 4 — keep-current when env == ADO (platform behavior).** After the merged result is pushed, env and ADO are **byte-identical** for that file. On the platform, `accept-incoming` (`useraction=2`) + `PullChangesFromGit` then returns `updatesCount: 0`, `branchSyncedCommitId` never advances, and a subsequent `RefreshChangesFromGit` **resets `useraction` to 0** → the conflict re-surfaces forever (the "phantom conflict" loop). The reconcile therefore **detects convergence up front** — comparing the env value/bytes against the bound-branch file (EOL/BOM-insensitive via `decideConflictResolution`) — and resolves those with **`keep-current` (`useraction=1`)**, which clears `action=3` for good. This now covers **code-site source files** too (env bytes from `powerpagessourcefile.filecontent` vs the branch source file). Success is proven by **`Conflicts=0` on re-list + content-equality**, and it **survives a later `RefreshChangesFromGit`**.
+
+> **Bug 14 — never refresh between resolve and verify.** `RefreshChangesFromGit` runs **once, before accept**. It is **never** run again between resolve (accept / keep-current) and verify, because it resets `useraction` to `0` and re-surfaces the rows we just resolved. Note `action=3` is a **broad bucket** — on a real tenant it returns the whole baseline (e.g. ~90 rows); only the **`useraction=0`** subset are **active** conflicts (the ~87 `useraction=1` rows are the already-synced baseline and are excluded by the query predicate).
 
 For text-detected web files, the write-back still rides the same push → accept incoming (`useraction=2`) → `PullChangesFromGit` round-trip, but the bytes live in the annotation `documentbody` rather than the component `content` envelope. After pull, re-read OURS `documentbody`, base64-decode, normalize EOL, and compare to the resolved bytes. If the pull did not update the bytes, PATCH the annotation `documentbody` with the resolved base64 as a fallback, then re-read and verify again.
 
@@ -278,13 +299,14 @@ Pause statuses are `awaiting-resolution` and `awaiting-pr`. Resume with `--resum
 |---|---|
 | `git-exec.js` | Git CLI wrapper; passes ADO tokens via `http.extraHeader`. |
 | `clone-record.js` | Read/write the per-project manifest `clone` block and validate coordinate matches. |
-| `clone-or-update-repo.js` | Full clone or fetch/reset with smart reuse. |
+| `clone-or-update-repo.js` | Full clone or fetch/reset with smart reuse; resolves the incoming tip from `origin/<branch>` and fails loudly if the local checkout is behind it (Bug 3). |
 | `eol-bom.js` | Match repo file EOL/BOM when writing OURS. |
 | `detect-merge-state.js` | Detect in-progress merge, unmerged paths, markers, and roster. |
-| `stage-git-merge.js` | Stage the real Git merge. |
+| `stage-git-merge.js` | Stage the real Git merge; sets `core.autocrlf=false` + `merge.conflictStyle=merge` for byte-preserving, standard-marker staging (Bug 5/6); surfaces `incomingRef`/`incomingSha`. |
+| `read-source-file-content.js` | Read a code-site source file's env bytes from `powerpagessourcefile.filecontent` (componentId == powerpagessourcefileid) — the OURS side for source-file conflicts (Bug 2/7). |
 | `open-merge-folder.js` | Run `code <path>` with fallback instructions. |
 | `push-or-pr.js` | Fast-forward push or branch + PR with auto-complete. |
-| `reconcile-dataverse.js` | Refresh → accept → pull → verify → content-verify. |
+| `reconcile-dataverse.js` | Refresh → accept/keep-current → pull → verify → content-verify; keep-current when env == ADO (Bug 4); no refresh between resolve and verify (Bug 14). |
 | `merge-run-state.js` | Resumable run-state in `.pp-merge`. |
 | `clone-merge-resolver.js` | Orchestrator and CLI. |
 

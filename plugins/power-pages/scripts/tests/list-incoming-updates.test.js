@@ -120,7 +120,7 @@ test('returns 404 hint on 404 response', async () => {
   } finally { server.close(); }
 });
 
-test('falls back to sourcecontrolcomponents when gitupdatefiles returns 404', async () => {
+test('Bug 10: sourcecontrolcomponents is the PRIMARY path when a solution is known (no gitupdatefiles dependency)', async () => {
   const decoded = (u) => decodeURIComponent(u);
   const server = await createRoutingServer((u) => {
     if (u.includes('gitupdatefiles')) return { status: 404, body: {} };
@@ -137,6 +137,7 @@ test('falls back to sourcecontrolcomponents when gitupdatefiles returns 404', as
   });
   try {
     const result = await listIncomingUpdates({ envUrl: queuedServerUrl(server), token: 'tok', solutionId: 'sol-1' });
+    // Non-zero count is reported via the reliable source-control path...
     assert.equal(result.count, 1);
     assert.equal(result.via, 'sourcecontrolcomponent');
     assert.equal(result.items[0].componentId, 'ppc-2');
@@ -144,7 +145,8 @@ test('falls back to sourcecontrolcomponents when gitupdatefiles returns 404', as
     assert.equal(result.items[0].componentName, 'Pricing');
     assert.equal(result.items[0].componentPath, 'web-pages/pricing');
     assert.equal(result.items[0].componentType, 'mspp_webpage');
-    assert.ok(server.received.some((r) => /gitupdatefiles/.test(r.url)));
+    // ...and the unverified `gitupdatefiles` entity is NEVER queried (Bug 10).
+    assert.ok(!server.received.some((r) => /gitupdatefiles/.test(r.url)), 'must not depend on gitupdatefiles');
     assert.ok(server.received.some((r) => /sourcecontrolcomponents/.test(r.url) && /action eq 2/.test(decoded(r.url))));
     assert.ok(server.received.some((r) => /action eq 3 and useraction eq 2/.test(decoded(r.url))), 'also queries accepted-incoming-pending-pull');
     assert.ok(!server.received.some((r) => /iscommitted/.test(decoded(r.url))));
@@ -173,6 +175,25 @@ test('Updates includes conflicts accepted as incoming and pending pull (action=3
     assert.equal(result.count, 1);
     assert.equal(result.items[0].componentName, 'Authentication/LoginTrackingEnabled.sitesetting');
     assert.equal(result.items[0].updateType, 'AcceptedPendingPull');
+  } finally { await closeQueuedServer(server); }
+});
+
+// ---- Bug 10: merge pure-incoming + accepted-incoming-pending-pull (non-zero count) ----
+test('Bug 10: merges action=2 and action=3/useraction=2 rows and reports a non-zero count', async () => {
+  const decoded = (u) => decodeURIComponent(u);
+  const server = await createRoutingServer((u) => {
+    if (u.includes('gitupdatefiles')) return { status: 404, body: {} };
+    if (/action eq 3/.test(decoded(u))) {
+      return { status: 200, body: { value: [{ sourcecontrolcomponentid: 'scc-a', componentid: 'c-a', componentdisplayname: 'Accepted', action: 3, useraction: 2 }] } };
+    }
+    return { status: 200, body: { value: [{ sourcecontrolcomponentid: 'scc-p', componentid: 'c-p', componentdisplayname: 'PureUpdate', componenttype: 'mspp_webpage', action: 2, useraction: 0 }] } };
+  });
+  try {
+    const result = await listIncomingUpdates({ envUrl: queuedServerUrl(server), token: 'tok', solutionId: 'sol-1' });
+    assert.equal(result.via, 'sourcecontrolcomponent');
+    assert.equal(result.count, 2, 'reports BOTH pure-incoming and accepted-incoming-pending-pull');
+    const names = result.items.map((i) => i.componentName).sort();
+    assert.deepEqual(names, ['Accepted', 'PureUpdate']);
   } finally { await closeQueuedServer(server); }
 });
 

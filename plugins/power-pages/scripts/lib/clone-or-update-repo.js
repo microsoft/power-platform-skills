@@ -137,6 +137,18 @@ async function resolveBranchTip({ repoDir, branch, token, git }) {
   return trimOutput(head);
 }
 
+// Bug 3: how many commits the local checkout (HEAD) is BEHIND origin/<branch>.
+// Returns null when it can't be determined (shallow / odd state) so callers can
+// skip the guard rather than block. After a fetch + `reset --hard origin/<branch>`
+// this is 0; a positive value means the working tree would stage a merge against a
+// STALE tip (the bug where "incoming" was actually the base) → fail loudly.
+async function computeBehindCount({ repoDir, branch, token, git }) {
+  const r = await git.runGit({ cwd: repoDir, args: ['rev-list', '--count', `HEAD..origin/${branch}`], token });
+  if (!r || !r.ok) return null;
+  const n = parseInt(String((r && r.stdout) || '').trim(), 10);
+  return Number.isFinite(n) ? n : null;
+}
+
 /**
  * Ensures the full git clone at <cloneDir>/repo is present, points at the
  * expected remote, and is reset to the tip of `branch`.
@@ -230,6 +242,13 @@ async function cloneOrUpdateRepo({
         ensureOk('git checkout branch', await git.runGit({ cwd: repoDir, args: ['checkout', '-B', branch, `origin/${branch}`], token }), token, git);
         ensureOk('git reset --hard', await git.runGit({ cwd: repoDir, args: ['reset', '--hard', `origin/${branch}`], token }), token, git);
         ensureOk('git clean -fd', await git.runGit({ cwd: repoDir, args: ['clean', '-fd'], token }), token, git);
+        // Bug 3: after fetch + reset the local checkout must be at the fetched tip.
+        // If it is somehow still BEHIND origin/<branch>, fail loudly rather than stage
+        // a merge against a stale tip (which would silently drop the advanced ADO edits).
+        const behind = await computeBehindCount({ repoDir, branch, token, git });
+        if (behind != null && behind > 0) {
+          throw new Error(`local checkout is ${behind} commit(s) behind origin/${branch} after fetch+reset — refusing to stage a merge against a stale tip`);
+        }
         reused = true;
       }
     }
@@ -251,6 +270,11 @@ async function cloneOrUpdateRepo({
       reCloned,
       inProgressMerge: false,
       branchTip,
+      // Bug 3: the INCOMING tip is always origin/<branch> (the fetched remote-tracking
+      // ref), never the local checkout. Surfaced explicitly so the resolver/staging
+      // can prove the merge is against the advanced ADO tip.
+      incomingRef: `origin/${branch}`,
+      incomingSha: branchTip,
       locked: false,
       ...(mergeStateResult ? { mergeState: mergeStateResult } : {}),
     };
@@ -265,4 +289,5 @@ async function cloneOrUpdateRepo({
 module.exports = {
   cloneOrUpdateRepo,
   normalizeRepoUrl,
+  computeBehindCount,
 };

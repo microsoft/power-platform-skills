@@ -41,18 +41,17 @@ function baseOpts(overrides = {}) {
   return { opts: { ...opts, ...overrides }, phases, calls, deps, confirm };
 }
 
-test('Task 1: orchestrator extracts stages for the first conflict and passes mergeEditor to the launcher', async () => {
+test('orchestrator opens the native merge editor via openMergeFolder (no custom mergeEditor arg)', async () => {
   const { opts } = baseOpts();
-  opts.deps.extractMergeStages = ({ repoDir, relPath }) => ({ left: repoDir + '/stages/x/Dataverse.html', right: repoDir + '/stages/x/ADO.html', base: repoDir + '/stages/x/Base.html', result: repoDir + '/' + relPath, hasBase: true });
   let openArgs = null;
-  opts.deps.openMergeFolder = (a) => { openArgs = a; return { opened: true, mergeCommand: 'code --merge ...', scmPointer: 'Open Source Control', panelLabels: { current: 'Dataverse (your environment)' } }; };
+  opts.deps.openMergeFolder = (a) => { openArgs = a; return { opened: true, scmPointer: 'Open Source Control — "Current" = Dataverse, "Incoming" = Azure DevOps', panelLabels: { current: 'Dataverse (your environment)' } }; };
   // pause so we capture the awaiting-resolution return
   opts.pauseForResolution = true;
   const res = await runCloneMerge(opts);
   assert.strictEqual(res.status, 'awaiting-resolution');
-  assert.ok(openArgs.mergeEditor, 'mergeEditor passed to launcher');
-  assert.match(openArgs.mergeEditor.left, /Dataverse\.html$/);   // Env → left
-  assert.match(openArgs.mergeEditor.right, /ADO\.html$/);        // ADO → right
+  assert.ok(openArgs, 'openMergeFolder called');
+  assert.strictEqual(openArgs.mergeEditor, undefined, 'no custom mergeEditor arg passed (native editor only)');
+  assert.ok(Array.isArray(openArgs.conflictedPaths), 'conflictedPaths passed to launcher');
   assert.strictEqual(res.mergeEditorOpened, true);
   assert.match(res.scmPointer, /Source Control/);
 });
@@ -551,6 +550,61 @@ test('resolveUnits: BINARY web file (sniff → binary) goes to binaryUnits (matr
   assert.strictEqual(binaryUnits.length, 1, 'binary web file must be in binaryUnits');
   assert.strictEqual(binaryUnits[0].name, 'Logo.png');
   assert.strictEqual(binaryUnits[0].route, 'keep-accept');
+});
+
+// ---- Bug 2/7: code-site source files route to the 3-way merge via the dedicated reader ----
+test('resolveUnits: TEXT source file → textUnit with sourcefile:true, field:null, OURS from filecontent', async () => {
+  let readArgs = null;
+  const deps = {
+    buildAdoPath: ({ type, componentPath }) =>
+      type === 'sourcefile' ? { path: '/solutions/QuickFix/powerpagescodesites/QuickFix/src/pages/Home.tsx', kind: 'sourcefile', field: null }
+                            : { path: '/' + REL, field: 'source' },
+    readSourceFileContent: async (a) => { readArgs = a; return { id: 'ppsf-1', bytes: Buffer.from('export const x = 1;\n'), isText: true, encoding: 'utf8' }; },
+    sniffTextOrBinary: () => ({ isText: true }),
+  };
+  const { textUnits, binaryUnits } = await resolveUnits({
+    conflicts: [{ conflictId: 'sf1', componentId: 'ppsf-1', name: 'Home.tsx.sourcefile', type: 'sourcefile', componentPath: '/powerpagescodesites/QuickFix/src/pages/Home.tsx' }],
+    binding: { rootFolder: 'solutions', gitFolder: 'QuickFix' }, envUrl: 'u', dvToken: 't', deps,
+  });
+  assert.strictEqual(textUnits.length, 1, 'text source file should be a text unit');
+  assert.strictEqual(textUnits[0].sourcefile, true, 'sourcefile flag must be true');
+  assert.strictEqual(textUnits[0].field, null);
+  assert.strictEqual(textUnits[0].adoPath, '/solutions/QuickFix/powerpagescodesites/QuickFix/src/pages/Home.tsx');
+  assert.ok(textUnits[0].oursContent.includes('export const x'), 'OURS must be the decoded filecontent bytes');
+  assert.strictEqual(binaryUnits.length, 0);
+  // componentId (== powerpagessourcefileid) is passed to the reader, NOT componentidunique
+  assert.strictEqual(readArgs.componentId, 'ppsf-1');
+});
+
+test('resolveUnits: BINARY-sniffed source file → binaryUnits (fail closed), not eligibleButNotText', async () => {
+  const deps = {
+    buildAdoPath: () => ({ path: '/solutions/QuickFix/powerpagescodesites/QuickFix/src/assets/logo.bin', kind: 'sourcefile', field: null }),
+    readSourceFileContent: async () => ({ id: 'ppsf-2', bytes: Buffer.from([0x00, 0x01, 0x02]), isText: false, encoding: null }),
+    sniffTextOrBinary: () => ({ isText: false }),
+  };
+  const { textUnits, binaryUnits, eligibleButNotText } = await resolveUnits({
+    conflicts: [{ conflictId: 'sf2', componentId: 'ppsf-2', name: 'logo.bin.sourcefile', type: 'sourcefile', componentPath: '/powerpagescodesites/QuickFix/src/assets/logo.bin' }],
+    binding: { rootFolder: 'solutions', gitFolder: 'QuickFix' }, envUrl: 'u', dvToken: 't', deps,
+  });
+  assert.strictEqual(textUnits.length, 0);
+  assert.strictEqual(binaryUnits.length, 1);
+  assert.strictEqual(binaryUnits[0].route, 'keep-accept');
+  assert.strictEqual((eligibleButNotText || []).length, 0, 'source files must never be eligibleButNotText (sniff-routed)');
+});
+
+test('resolveUnits: source-file reader error → binary fallback (not an abort)', async () => {
+  const deps = {
+    buildAdoPath: () => ({ path: '/solutions/QuickFix/powerpagescodesites/QuickFix/src/pages/Home.tsx', kind: 'sourcefile', field: null }),
+    readSourceFileContent: async () => ({ error: 'Dataverse 403', statusCode: 403 }),
+    sniffTextOrBinary: () => ({ isText: true }),
+  };
+  const { textUnits, binaryUnits, eligibleButNotText } = await resolveUnits({
+    conflicts: [{ conflictId: 'sf3', componentId: 'ppsf-3', name: 'Home.tsx.sourcefile', type: 'sourcefile', componentPath: '/powerpagescodesites/QuickFix/src/pages/Home.tsx' }],
+    binding: { rootFolder: 'solutions', gitFolder: 'QuickFix' }, envUrl: 'u', dvToken: 't', deps,
+  });
+  assert.strictEqual(textUnits.length, 0);
+  assert.strictEqual(binaryUnits.length, 1);
+  assert.strictEqual((eligibleButNotText || []).length, 0);
 });
 
 test('resolveUnits: readWebFileBytes error → binary (safe fallback, not an abort)', async () => {

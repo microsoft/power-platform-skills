@@ -28,13 +28,38 @@
 //               binary types.
 //   'unsupported' — any other ppc type (no selective-merge handling in v1).
 //
+// CODE-SITE SOURCE FILES (first-class, NOT a powerpagecomponent type 1–35):
+//   Power Pages code sites store each source file (`.tsx`/`.ts`/`.css`/`.json`/
+//   `.html` …) as a row in the `powerpagessourcefile` table (entity set
+//   `powerpagessourcefiles`). The Git-integration conflict `componentId` for these
+//   rows equals the `powerpagessourcefileid` PRIMARY KEY (NOT `componentidunique`),
+//   the serialized component NAME ends in `.sourcefile`, and the componentPath sits
+//   under `/powerpagescodesites/<site>/src/...`. These files are plain text and are
+//   fully diffable/mergeable, so they get a DEDICATED sentinel type
+//   `SOURCEFILE_TYPE` ('sourcefile') classified as text-mergeable (strategy 'text',
+//   eligibleForSelectiveMerge). The sentinel is intentionally a STRING so it can
+//   never collide with a numeric ppc type and existing `n === 3 || n === 9`
+//   numeric checks stay correct.
+//
 // Usage (CLI, mainly for debugging):
 //   node component-type-map.js --type webtemplate
 //   node component-type-map.js --name "Search Results.webtemplate"
+//   node component-type-map.js --name "Home.tsx.sourcefile"
 
 'use strict';
 
 const { PPC_TYPE_LABELS } = require('./discover-site-components');
+
+// First-class sentinel for code-site source files. A string (not a number) so it
+// can never be mistaken for a numeric powerpagecomponenttype (1–35) and the
+// numeric guards elsewhere (`n === 3`, `n === 9`) are unaffected.
+const SOURCEFILE_TYPE = 'sourcefile';
+const SOURCEFILE_LABEL = 'Code Site Source File';
+
+// A code-site source file is recognized by EITHER its serialized `.sourcefile`
+// suffix OR a componentPath under `/powerpagescodesites/<site>/src/...`. The path
+// form is what list-conflicts exposes (the suffix lives on the component NAME).
+const SOURCEFILE_PATH_RE = /(^|\/)powerpagescodesites\/[^/]+\/src\//i;
 
 // Canonical merge strategy per ppc type. Only the types the selective-merge flow
 // reasons about appear here; everything else is 'unsupported'.
@@ -44,6 +69,7 @@ const TYPE_MERGE_STRATEGY = Object.freeze({
   8: 'text',    // Web Template    → source
   9: 'scalar',  // Site Setting    → value (short scalar)
   3: 'webfile', // Web File        — text-or-binary decided by a runtime content sniff, not hard-binary
+  [SOURCEFILE_TYPE]: 'text', // Code-site source file (powerpagessourcefile) — plain text, 3-way mergeable
 });
 
 // Serialized-name / file suffix → numeric type. list-conflicts' componentName is
@@ -66,6 +92,7 @@ const SUFFIX_TO_TYPE = Object.freeze({
   list: 17,
   tablepermission: 18,
   redirect: 30,
+  sourcefile: SOURCEFILE_TYPE, // code-site source file → sentinel (not a numeric ppc type)
 });
 
 // Build a normalized-name → numeric type map from the authoritative labels
@@ -133,10 +160,15 @@ function normalizeComponentType(input) {
  */
 function typeFromComponentName(name) {
   const s = String(name == null ? '' : name);
-  // 1) Anchored: the trailing dot-segment (serialized leaf suffix) wins.
+  // 1) Anchored: the trailing dot-segment (serialized leaf suffix) wins. This
+  //    catches `Home.tsx.sourcefile` → SOURCEFILE_TYPE as well as the ppc suffixes.
   const lastSegKey = normalizeKey(s.split('.').pop());
   if (SUFFIX_TO_TYPE[lastSegKey] != null) return SUFFIX_TO_TYPE[lastSegKey];
-  // 2) Fallback (paths / no clean suffix): longest type token appearing anywhere.
+  // 2) Code-site source file by PATH: list-conflicts exposes the componentPath
+  //    (e.g. /powerpagescodesites/QuickFix/src/pages/Home.tsx) without a
+  //    `.sourcefile` suffix — recognize it structurally.
+  if (SOURCEFILE_PATH_RE.test(s)) return SOURCEFILE_TYPE;
+  // 3) Fallback (paths / no clean suffix): longest type token appearing anywhere.
   const norm = normalizeKey(s);
   if (!norm) return null;
   let best = null;
@@ -191,7 +223,32 @@ function isWebFileType(type) {
  */
 function labelForType(type) {
   const n = normalizeComponentType(type);
+  if (n === SOURCEFILE_TYPE) return SOURCEFILE_LABEL;
   return (n != null && PPC_TYPE_LABELS[n]) || `Unknown (${type})`;
+}
+
+/**
+ * @param {number|string} type
+ * @returns {boolean} true iff the normalized type is the code-site source-file sentinel.
+ */
+function isSourceFileType(type) {
+  return normalizeComponentType(type) === SOURCEFILE_TYPE;
+}
+
+/**
+ * Recognize a code-site source file from a conflict row's NAME and/or PATH —
+ * the serialized name ends in `.sourcefile` OR the path sits under
+ * `/powerpagescodesites/<site>/src/...`. Used by callers that have the raw row
+ * (name + path) rather than a resolved type.
+ * @param {{ componentName?: string, componentPath?: string, name?: string, path?: string }} row
+ * @returns {boolean}
+ */
+function isSourceFileComponent(row = {}) {
+  const name = row.componentName || row.name || '';
+  const p = row.componentPath || row.path || '';
+  if (typeFromComponentName(name) === SOURCEFILE_TYPE) return true;
+  if (p && SOURCEFILE_PATH_RE.test(String(p))) return true;
+  return false;
 }
 
 function parseArgs(argv) {
@@ -227,6 +284,7 @@ const PRIMARY_FIELD_BY_TYPE = Object.freeze({
   7: 'value',  // Content Snippet
   8: 'source', // Web Template
   9: 'value',  // Site Setting
+  [SOURCEFILE_TYPE]: null, // Code-site source file — bytes in powerpagessourcefile.filecontent, no envelope field
 });
 
 /**
@@ -260,10 +318,15 @@ module.exports = {
   mergeStrategyForType,
   isEligibleForSelectiveMerge,
   isWebFileType,
+  isSourceFileType,
+  isSourceFileComponent,
   labelForType,
   primaryFieldForType,
   stripSerializedSuffix,
   TYPE_MERGE_STRATEGY,
   SUFFIX_TO_TYPE,
   PRIMARY_FIELD_BY_TYPE,
+  SOURCEFILE_TYPE,
+  SOURCEFILE_LABEL,
+  SOURCEFILE_PATH_RE,
 };

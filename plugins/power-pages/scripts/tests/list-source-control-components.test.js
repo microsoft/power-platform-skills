@@ -181,3 +181,23 @@ test('listSourceControlComponents returns error envelopes for API failures', asy
     assert.equal(result.statusCode, 500);
   } finally { await closeServer(s); }
 });
+
+// ---- Bug 14: the active-conflicts predicate excludes the resolved baseline ----
+test('Bug 14: conflicts query is action eq 3 AND useraction eq 0 — excludes the useraction=1 baseline', async () => {
+  // action=3 is a BROAD bucket: on a real tenant it returns the whole baseline
+  // (e.g. 90 rows). Only the useraction=0 subset are ACTIVE conflicts; the ~87
+  // useraction=1 rows are the already-synced baseline and MUST be excluded. The
+  // exclusion is server-side via the OData predicate, so the regression proves the
+  // query carries `useraction eq 0` and never widens to useraction 1/2.
+  const s = await createQueuedServer([
+    { status: 200, body: { value: [{ sourcecontrolcomponentid: 'scc-active', action: 3, useraction: 0, componentdisplayname: 'Active' }] } },
+  ]);
+  try {
+    const result = await listSourceControlComponents({ envUrl: serverUrl(s), token: 'tok', solutionId: 'sol-1', action: 3, userAction: 0 });
+    assert.equal(result.count, 1);
+    const filter = decodeURIComponent(s.received[0].url);
+    assert.match(filter, /action eq 3 and useraction eq 0/);
+    assert.doesNotMatch(filter, /useraction eq 1/);
+    assert.doesNotMatch(filter, /useraction eq 2/);
+  } finally { await closeServer(s); }
+});

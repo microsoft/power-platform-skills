@@ -315,6 +315,10 @@ test('single-solution-bound env (no --solutionUniqueName) returns boundSolutions
     assert.equal(result.nonCommittedRootCount, 0, 'when both are 0 the env-wide and aggregate counts agree');
     assert.equal(result.cleanState, 'Clean');
     assert.equal(result.boundSolutions[0].uniqueName, 'SolA');
+    // Bug 9: with exactly one bound solution and no explicit filter, the top-level
+    // solutionUniqueName is populated from boundSolutions[0] (not a spurious null) so
+    // reconcile-manifest never reports a false "stale manifest" divergence.
+    assert.equal(result.solutionUniqueName, 'SolA');
   } finally { server.close(); }
 });
 

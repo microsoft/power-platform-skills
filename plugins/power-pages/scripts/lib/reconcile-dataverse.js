@@ -9,6 +9,7 @@
 
 const { toLF, stripBom } = require('./eol-bom');
 const { extractYamlValue, isFlatYmlUnit } = require('./flat-yml-merge');
+const { isSourceFileType } = require('./component-type-map');
 
 const defaultDeps = {
   refreshChangesFromGit: require('./refresh-changes-from-git').refreshChangesFromGit,
@@ -21,6 +22,7 @@ const defaultDeps = {
   runState: require('./merge-run-state'),
   readWebFileBytes: (() => { try { return require('./read-web-file-bytes').readWebFileBytes; } catch (_) { return null; } })(),
   patchWebFileBytes: (() => { try { return require('./read-web-file-bytes').patchWebFileBytes; } catch (_) { return null; } })(),
+  readSourceFileContent: (() => { try { return require('./read-source-file-content').readSourceFileContent; } catch (_) { return null; } })(),
 };
 
 const ABSENT_ACTION_HINT = /Resource not found for the segment 'ResolveGitConflict'|ResolveGitConflict/i;
@@ -51,6 +53,48 @@ function firstDivergence(want, got) {
   while (i < n && want[i] === got[i]) i++;
   if (i === n && want.length === got.length) return null;
   return { index: i, line: want.slice(0, i).split('\n').length };
+}
+
+// Normalize for EOL/BOM-insensitive content comparison (never leaks bytes).
+function normContent(s) {
+  return toLF(stripBom(String(s == null ? '' : s)));
+}
+
+/**
+ * Bug 4 — the keep-current vs accept-incoming decision, as a PURE function.
+ *
+ * After the merged result is pushed, env and ADO are byte-identical for that file.
+ * On the platform, accept-incoming (useraction=2) + PullChangesFromGit then returns
+ * `updatesCount: 0`, `branchSyncedCommitId` never advances, and a subsequent
+ * RefreshChangesFromGit RESETS `useraction` to 0 → the conflict re-surfaces forever.
+ * keep-current (useraction=1) clears it. So: env == ADO ⇒ keep-current; env != ADO ⇒
+ * accept-incoming (pull the incoming/merged bytes). Comparison is EOL/BOM-insensitive.
+ *
+ * @param {string|null} envContent  the environment's current bytes/value
+ * @param {string|null} adoContent  the bound-branch (ADO) bytes/value
+ * @returns {'keep-current'|'accept-incoming'}
+ */
+function decideConflictResolution(envContent, adoContent) {
+  if (envContent == null || adoContent == null) return 'accept-incoming';
+  return normContent(envContent) === normContent(adoContent) ? 'keep-current' : 'accept-incoming';
+}
+
+// Read the environment-side comparable string for a converged/verify check,
+// dispatching code-site source files (bytes in powerpagessourcefile.filecontent) to
+// the dedicated reader and everything else to the powerpagecomponent envelope.
+// Returns the string value, or null when it cannot be read.
+async function readEnvComparable(c, { envUrl, dvToken, deps }) {
+  if ((c.sourcefile === true || isSourceFileType(c.type)) && typeof deps.readSourceFileContent === 'function') {
+    const sr = await deps.readSourceFileContent({ envUrl, componentId: c.componentId, token: dvToken });
+    if (!sr || sr.error || !sr.bytes) return null;
+    return sr.bytes.toString(sr.encoding === 'utf16le' ? 'utf16le' : 'utf8');
+  }
+  if (typeof deps.readComponentContent !== 'function') return null;
+  const envRead = await deps.readComponentContent({ envUrl, token: dvToken, componentId: c.componentId, componentType: c.type, name: c.name });
+  if (!envRead || envRead.error) return null;
+  const field = c.field || (envRead.mergeFields && envRead.mergeFields[0] && envRead.mergeFields[0].key);
+  const mf = (envRead.mergeFields || []).find((f) => f.key === field) || (envRead.mergeFields || [])[0];
+  return mf ? mf.value : null;
 }
 
 async function reconcileDataverse({
@@ -134,25 +178,29 @@ async function reconcileDataverse({
   // keep-current. Requires the injected clone-backed `readBranchContent`; when it's
   // absent (older callers / unit tests) detection is skipped and behavior is
   // unchanged. (Live-found on sri-alm-dev-1: two site settings looped indefinitely.)
-  const norm = (s) => toLF(stripBom(String(s == null ? '' : s)));
+  //
+  // Bug 4: this is the env==ADO ⇒ keep-current decision (see decideConflictResolution).
+  // It now ALSO covers code-site source files — their env bytes come from
+  // powerpagessourcefile.filecontent (via readSourceFileContent), and the branch file
+  // is the plain source file — so a source file that converged after the push is
+  // resolved with keep-current and survives a later RefreshChangesFromGit.
   const decisionByComponent = new Map(); // componentId → overridden decision
   const convergedNames = [];
-  if (typeof deps.readBranchContent === 'function' && typeof deps.readComponentContent === 'function' && !resuming('accepted')) {
+  const canReadEnv = typeof deps.readComponentContent === 'function' || typeof deps.readSourceFileContent === 'function';
+  if (typeof deps.readBranchContent === 'function' && canReadEnv && !resuming('accepted')) {
     for (const c of components) {
       if (!c.componentId || !c.adoPath) continue;
       try {
         // eslint-disable-next-line no-await-in-loop
-        const envRead = await deps.readComponentContent({ envUrl, token: dvToken, componentId: c.componentId, componentType: c.type, name: c.name });
+        const envVal = await readEnvComparable(c, { envUrl, dvToken, deps });
         // eslint-disable-next-line no-await-in-loop
         const branch = await deps.readBranchContent({ adoPath: c.adoPath });
-        if (!envRead || envRead.error || branch == null) continue;
-        const field = c.field || (envRead.mergeFields && envRead.mergeFields[0] && envRead.mergeFields[0].key);
-        const mf = (envRead.mergeFields || []).find((f) => f.key === field) || (envRead.mergeFields || [])[0];
-        const envVal = mf ? mf.value : null;
+        if (envVal == null || branch == null) continue;
         // Flat-YML site setting: the branch file is the whole .sitesetting.yml, but the
-        // env value is the scalar — compare against the branch's `value:` line.
+        // env value is the scalar — compare against the branch's `value:` line. Source
+        // files and other text fields compare against the whole branch file.
         const branchCmp = isFlatYmlUnit(c) ? extractYamlValue(branch) : branch;
-        if (envVal != null && branchCmp != null && norm(envVal) === norm(branchCmp)) {
+        if (branchCmp != null && decideConflictResolution(envVal, branchCmp) === 'keep-current') {
           decisionByComponent.set(c.componentId, 'keep-current');
           convergedNames.push(c.name);
         }
@@ -271,13 +319,39 @@ async function reconcileDataverse({
   }
 
   const contentVerify = [];
-  const canVerify = typeof deps.readComponentContent === 'function' || typeof deps.readWebFileBytes === 'function';
+  const canVerify = typeof deps.readComponentContent === 'function' || typeof deps.readWebFileBytes === 'function' || typeof deps.readSourceFileContent === 'function';
   if (canVerify) {
     for (const c of components) {
       if (decisionFor(c) === 'keep-current') {
         // keep-mine: the env value is intentionally retained, so there is nothing
         // to verify against the merged/incoming content.
         contentVerify.push({ name: c.name, result: 'skipped', reason: 'keep-current (env value retained)' });
+        continue;
+      }
+
+      // Code-site source file: bytes live in powerpagessourcefile.filecontent, so
+      // re-read via readSourceFileContent (not readComponentContent / readWebFileBytes)
+      // and compare the merged result EOL/BOM-insensitively.
+      if (c.sourcefile === true || isSourceFileType(c.type)) {
+        if (!c.componentId || typeof c.mergedContent !== 'string') {
+          contentVerify.push({ name: c.name, result: 'skipped', reason: 'missing componentId/mergedContent' });
+          continue;
+        }
+        if (typeof deps.readSourceFileContent !== 'function') {
+          contentVerify.push({ name: c.name, result: 'skipped', reason: 'readSourceFileContent not available' });
+          continue;
+        }
+        // eslint-disable-next-line no-await-in-loop
+        const re = await deps.readSourceFileContent({ envUrl, componentId: c.componentId, token: dvToken });
+        if (!re || re.error || !re.bytes) {
+          contentVerify.push({ name: c.name, result: 'unverified', reason: (re && re.error) || 'read failed' });
+          continue;
+        }
+        const gotText = toLF(stripBom(re.bytes.toString(re.encoding === 'utf16le' ? 'utf16le' : 'utf8')));
+        const wantText = toLF(stripBom(c.mergedContent));
+        if (gotText === wantText) { contentVerify.push({ name: c.name, result: 'verified' }); continue; }
+        const at = firstDivergence(wantText, gotText);
+        contentVerify.push({ name: c.name, result: 'mismatch', ...(at ? { divergedAtLine: at.line, divergedAtIndex: at.index } : {}) });
         continue;
       }
 
@@ -378,4 +452,4 @@ function buildResult({ status, plan, steps, id, accepted, conflictsRemaining, co
   };
 }
 
-module.exports = { reconcileDataverse, isActionAbsent };
+module.exports = { reconcileDataverse, isActionAbsent, decideConflictResolution };

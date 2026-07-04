@@ -62,6 +62,15 @@ const CHANGE_TYPE_LABEL = Object.freeze({ 0: 'Add', 1: 'Modify', 2: 'Delete' });
 // falling back to the componentPath type-folder. Adds: ppcType (numeric|null),
 // ppcTypeLabel, mergeStrategy ('text'|'scalar'|'binary'|'unsupported'),
 // eligibleForSelectiveMerge (boolean).
+//
+// CODE-SITE SOURCE FILES (Bug 1): rows whose componentName ends in `.sourcefile`
+// OR whose componentPath sits under `/powerpagescodesites/<site>/src/...` resolve to
+// the first-class SOURCEFILE_TYPE sentinel (string, not a numeric ppc type). These
+// are plain text → mergeStrategy 'text', eligibleForSelectiveMerge true, routed to
+// the same clone-based 3-way merge as web templates/pages. The env bytes are read
+// from `powerpagessourcefile.filecontent` (componentId == powerpagessourcefileid),
+// NOT from a powerpagecomponent envelope. We keep fail-toward-config/binary on
+// ambiguity: an unresolvable type stays unsupported/ineligible.
 function enrichConflictRow(item) {
   const ppcType =
     normalizeComponentType(item.componentName) != null ? normalizeComponentType(item.componentName)

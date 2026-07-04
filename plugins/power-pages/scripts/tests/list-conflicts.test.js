@@ -69,6 +69,63 @@ test('A4 enrichConflictRow: unresolvable type → ppcType null, unsupported, not
   assert.equal(r.eligibleForSelectiveMerge, false);
 });
 
+// ---- Bug 1: code-site source-file conflict rows are eligible (text-mergeable) ----
+test('Bug 1 enrichConflictRow: .sourcefile name → SOURCEFILE_TYPE, text, eligible', () => {
+  const r = enrichConflictRow({
+    conflictId: 'scc-src-1',
+    componentId: 'ppsf-1', // == powerpagessourcefileid (NOT componentidunique)
+    componentName: 'Home.tsx.sourcefile',
+    componentPath: '/powerpagescodesites/QuickFix/src/pages/Home.tsx',
+    componentType: 10429,
+  });
+  assert.equal(r.ppcType, 'sourcefile');
+  assert.equal(r.ppcTypeLabel, 'Code Site Source File');
+  assert.equal(r.mergeStrategy, 'text');
+  assert.equal(r.eligibleForSelectiveMerge, true);
+  assert.equal(r.componentType, 10429); // raw SCC sub-type preserved
+});
+
+test('Bug 1 enrichConflictRow: code-site src PATH alone (no .sourcefile suffix) is still eligible', () => {
+  const r = enrichConflictRow({
+    componentName: 'Home.tsx',
+    componentPath: '/powerpagescodesites/QuickFix/src/pages/Home.tsx',
+  });
+  assert.equal(r.ppcType, 'sourcefile');
+  assert.equal(r.mergeStrategy, 'text');
+  assert.equal(r.eligibleForSelectiveMerge, true);
+});
+
+test('Bug 1 listConflicts: a powerpagessourcefile conflict row surfaces eligible via sourcecontrolcomponent', async () => {
+  const server = await createQueuedServer([
+    {
+      status: 200,
+      body: {
+        value: [{
+          sourcecontrolcomponentid: 'scc-src-9',
+          componentid: 'ppsf-9', // powerpagessourcefileid
+          componentdisplayname: 'App.tsx.sourcefile',
+          componentpath: '/powerpagescodesites/QuickFix/src/components/App.tsx',
+          componenttype: 10429,
+          partitionid: 'sol-1',
+          githashid: 'g9', lastsynchashid: 'b9', envhashid: 'e9',
+          action: 3,
+          useraction: 0,
+        }],
+      },
+    },
+  ]);
+  try {
+    const result = await listConflicts({ envUrl: queuedServerUrl(server), token: 'tok', solutionId: 'sol-1' });
+    assert.equal(result.count, 1);
+    assert.equal(result.via, 'sourcecontrolcomponent');
+    const item = result.items[0];
+    assert.equal(item.ppcType, 'sourcefile');
+    assert.equal(item.mergeStrategy, 'text');
+    assert.equal(item.eligibleForSelectiveMerge, true);
+    assert.equal(item.componentId, 'ppsf-9');
+  } finally { await closeQueuedServer(server); }
+});
+
 test('A4 enrichConflictRow: preserves the raw SCC componentType (10429) untouched', () => {
   const r = enrichConflictRow({ componentName: 'Footer.contentsnippet', componentType: 10429 });
   assert.equal(r.componentType, 10429); // raw sub-type preserved
