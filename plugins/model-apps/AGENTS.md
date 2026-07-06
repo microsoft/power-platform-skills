@@ -113,8 +113,7 @@ scripts/
   check-auth.js                ← Pre-flight: az present + logged in, pac identity, WhoAmI, identity match
   dataverse-request.js         ← General Dataverse Web API wrapper (escape hatch)
   provision-entities.js        ← CLI wrapper for entity provisioning (solution + data-model + sample-data)
-  create-solution.js           ← Creates a Dataverse solution with env's Default Publisher
-  add-to-solution.js           ← Adds an existing component to a solution
+  provision-solution.js        ← Creates a Dataverse solution via the SDK
   generate-page-manifest.js    ← Phase 0.5: writes working-dir package.json + genpage.d.ts
   capture-fixture.js           ← Copies /genpage working dir into an eval fixture and runs both runners
   lib/

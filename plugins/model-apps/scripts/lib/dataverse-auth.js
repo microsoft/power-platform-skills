@@ -2,7 +2,7 @@
 
 // Shared helpers for talking to the Dataverse Web API from model-apps scripts.
 // Uses Azure CLI (`az account get-access-token`) for auth — same MSAL cache that pac CLI uses.
-// All operation scripts (provision-entities.js, create-solution.js, add-to-solution.js, etc.) import from this module.
+// All operation scripts (provision-entities.js, provision-solution.js, etc.) import from this module.
 
 const { execFileSync } = require('child_process');
 

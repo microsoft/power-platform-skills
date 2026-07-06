@@ -28,7 +28,7 @@ behavioral specs, see `AGENTS.md`.
             │      │  scripts/ (Node CLIs)  │                 │
             │      │  check-auth.js         │                 │
             │      │  provision-entities.js │                 │
-            │      │  create-solution.js    │                 │
+            │      │ provision-solution.js  │                 │
             │      │  dataverse-request.js  │                 │
             │      │  lib/entity-provision  │                 │
             │      │  lib/provision-input   │                 │
@@ -139,11 +139,11 @@ plugins/model-apps/
     ├── check-auth.js                  <-- pre-flight: az + pac + WhoAmI
     ├── dataverse-request.js           <-- generic Web API wrapper
     ├── provision-entities.js          <-- entity provisioning CLI (solution + data-model + sample-data)
-    ├── create-solution.js
-    ├── add-to-solution.js
+    ├── provision-solution.js          <-- creates a Dataverse solution via the SDK
     ├── generate-page-manifest.js      <-- v2.2: writes package.json + genpage.d.ts
     ├── regenerate-verified-icons.js
     ├── launch-playwright-mcp.js
+    ├── capture-fixture.js
     ├── lib/
     │   ├── entity-provision.js        <-- shared entity-provisioning core
     │   ├── provision-input.js         <-- input validation for entity provisioning

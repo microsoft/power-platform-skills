@@ -291,7 +291,7 @@ in the plan's `## Environment`. Specifics:
   ```bash
   PUB=$(node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
     "publishers?\$select=uniquename&\$filter=customizationprefix eq '<prefix>'&\$top=1")
-  node "${CLAUDE_PLUGIN_ROOT}/scripts/create-solution.js" "$ENV_URL" \
+  node "${CLAUDE_PLUGIN_ROOT}/scripts/provision-solution.js" "$ENV_URL" \
     "<UniqueName>" "<Friendly Name>" --publisher "<publisherUniqueName>"
   ```
   Omit `--publisher` to use the env's Default Publisher (prefix `new`).
