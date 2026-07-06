@@ -112,18 +112,18 @@ scripts/
   regenerate-verified-icons.js ← Regenerates references/verified-icons.txt from npm
   check-auth.js                ← Pre-flight: az present + logged in, pac identity, WhoAmI, identity match
   dataverse-request.js         ← General Dataverse Web API wrapper (escape hatch)
-  create-table.js              ← Creates a Dataverse custom table
-  add-column.js                ← Adds a column to an existing table
-  create-relationship.js       ← Creates 1:N (lookup) or N:N relationships
-  create-record.js             ← Creates one or many records (auto-batches via $batch)
+  provision-entities.js        ← CLI wrapper for entity provisioning (solution + data-model + sample-data)
   create-solution.js           ← Creates a Dataverse solution with env's Default Publisher
   add-to-solution.js           ← Adds an existing component to a solution
   generate-page-manifest.js    ← Phase 0.5: writes working-dir package.json + genpage.d.ts
   capture-fixture.js           ← Copies /genpage working dir into an eval fixture and runs both runners
   lib/
+    entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data)
+    provision-input.js         ← Input validation for entity provisioning
     dataverse-auth.js          ← Shared auth + HTTP helpers (uses `az account get-access-token`)
     supported-dependencies.js  ← Single source of truth for runtime + dev deps versions
   tests/                       ← node --test coverage for the scripts above
+  ⊘ Superseded: create-table.js, add-column.js, create-relationship.js, create-record.js (removed in Task 11)
 skills/
   genpage/
     SKILL.md                   ← Orchestrator skill (delegates to agents)
@@ -144,7 +144,7 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 | Agent | Invoked By | Description |
 |-------|-----------|-------------|
 | `genpage-planner` | `genpage` (create flow) | Validates prereqs, gathers requirements, detects entity/app existence, presents plan for approval, writes `genpage-plan.md` |
-| `genpage-entity-builder` | `genpage` (create flow) | Creates Dataverse tables, columns, relationships, choices, and sample data via the plugin's Node.js Web API scripts (`scripts/`). Bulk inserts use OData `$batch`. Writes a transactional log for recovery |
+| `genpage-entity-builder` | `genpage` (create flow) | Provisions Dataverse tables, columns, relationships, choices, and sample data via `scripts/provision-entities.js` (the shared SDK-backed core). Bulk inserts use OData `$batch`. Writes a transactional log for recovery. |
 | `genpage-page-builder` | `genpage` (create flow) | Generates one complete `.tsx` page from the plan and schema; runs in parallel with other builders for multi-page requests |
 | `genpage-edit-planner` | `genpage` (edit flow) | Reads the downloaded page artifacts (page.tsx, config.json, prompt.txt), gathers change requirements, presents edit plan, writes `genpage-edit-plan.md`. The orchestrator applies the edit inline. |
 

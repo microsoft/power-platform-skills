@@ -61,6 +61,8 @@ Downstream consumers honour them:
 | [Name] | [name].tsx | [description] | [entity logical names, comma-separated, OR "mock data"] |
 
 ## Entity Creation Required
+The entity-builder provisions this entire section in one pass via `scripts/provision-entities.js` (SDK-backed, idempotent); the section contract (suffix-only names) is unchanged.
+
 [If NO entities need creating, the value is exactly:]
 No entity creation required — all entities already exist.
 
