@@ -527,9 +527,11 @@ inputs, site names, URLs, credentials, usernames, or hostnames.
 ```
 
 When **off**, nothing leaves your machine. A local diagnostic copy of each event
-is still written to `~/.power-platform-skills/events.jsonl` so you can see exactly
-what would have been sent; delete it anytime. The setting is stored at
-`~/.power-platform-skills/config.json`
+is still written under
+`~/.power-platform-skills/telemetry/power-pages/sessions/<sessionId>/events.jsonl`
+so you can see exactly what would have been sent; delete it anytime. Run
+`/power-pages:telemetry status` to see the logs directory and the most recent
+session file. The setting is stored at `~/.power-platform-skills/config.json`
 (`{ "telemetry": { "power-pages": "off" } }`).
 
 For automation / CI, set the per-plugin opt-out environment variable instead of
@@ -542,7 +544,7 @@ POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT=1   # stop sending telemetry
 Set it to `1` or `true` (dotnet `*_TELEMETRY_OPTOUT` convention). This opt-out has
 the **highest precedence** — it overrides a saved `/power-pages:telemetry` choice
 and even `/power-pages:telemetry on`. Like `off` from the command, it suppresses
-transmission only — the local `events.jsonl` mirror is still written.
+transmission only — the local per-session `events.jsonl` mirror is still written.
 
 ## License
 

@@ -166,7 +166,9 @@ test("env-var opt-out suppresses the POST through the real spawn chain (mirror s
   // The local mirror is written BEFORE the opt-out gate, so wait on it to know
   // the detached child actually ran and reached the gate (rather than asserting
   // absence against a child that simply hadn't started yet).
-  const mirror = path.join(tmp, "events.jsonl");
+  // The event carries pluginName "power-pages" and no sessionId, so the local
+  // mirror lands under the per-session layout at the "nosession" fallback.
+  const mirror = path.join(tmp, "telemetry", "power-pages", "sessions", "nosession", "events.jsonl");
   for (let i = 0; i < 30; i++) {
     if (fs.existsSync(mirror)) break;
     await new Promise((r) => setTimeout(r, 100));
