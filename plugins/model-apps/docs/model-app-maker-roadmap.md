@@ -20,7 +20,7 @@ tracked in [`model-app-maker-todo.md`](./model-app-maker-todo.md).**
 - ✅ Live narration (`[n/total]`), `BuildHalt` gate, dry-run default, `--sample-data` / `--publish` opt-in.
 - ✅ Perf: bounded-concurrency `mapLimit` for independent ops; one publish round-trip per entity + the app.
 - ✅ Headless vendored SDK bundle + `az`-token HttpClient with transient (429/5xx) retry.
-- ✅ Lint guardrail (`spec-lint.js`) + hard validator (`app-spec.js`); 207 tests green.
+- ✅ Lint guardrail (`spec-lint.js`) + hard validator (`app-spec.js`); 241 tests green.
 
 ### Tier 1 — complete data model
 - ✅ All column types: Text · Memo · Choice · MultiChoice · Boolean · Money · DateTime · Integer · BigInt · Decimal · Double · File · Image · AutoNumber · Customer, with per-type options.
@@ -80,6 +80,20 @@ not runtime phase selection or re-run state):
   and an idempotent `--only data-model` re-run (alt-key + status reason both `⊘ exists`, no halt/dup).
   Built 22/22, verified via Web API, torn down clean.
 
+### Teardown (2026-07-06) — first-class, classifier-safe cleanup
+- ✅ **Teardown command** — `scripts/teardown-model-app.js` → `scripts/lib/sdk-teardown.js` deletes
+  exactly the artifacts a given App Spec declares, in dependency-safe order (**app → dashboards →
+  commands → web-resources → tables [reverse-topological, children-first] → solution**). Deleting a
+  table cascades its forms/views/charts/relationships/columns; the empty solution container goes last.
+  **Classifier-safe:** every id is resolved from a spec-declared name/logical/uniquename via an
+  exact-match OData filter, so it can never wildcard-scan an org. **Dry-run by default** (`--apply`
+  writes); best-effort continue (a failed step is recorded, teardown proceeds so nothing is stranded);
+  handles the EntityDefinitions **cosmetic 404** (confirms deletion with a follow-up GET) and the
+  appaction **cascade 404**. `--clear-workspace` prunes the local `.maker-workspace/` after a clean
+  apply. Reuses `appUniqueName`/`commandsByEntity`/`topoOrderEntities` from the build engine (DRY).
+  Phase-grouped `[n/total]` narration + summary, mirroring the builder. 19 tests
+  (`sdk-teardown.test.js`, `teardown-model-app.test.js`).
+
 ### Authoring UX (2026-06-20)
 - ✅ **Form wireframe preview** — `scripts/preview-form.js` renders each form as an ASCII wireframe (tabs, sections, fields + widget hints, Notes/timeline, sub-grids, form JS) so the user can *see* a form during authoring before approving.
 - ✅ **Build steps broken down with status** — the build log is phase-grouped (`▶ phase`) with a per-step status glyph (`✓` created / `⊘` skipped / `✗` failed) and a closing summary; dry-run lists the same plan with a `▢` marker.
@@ -105,7 +119,7 @@ not runtime phase selection or re-run state):
 
 ### P1 — edit flow + lifecycle
 - 🔲 **Edit flow** — spec-diff against a deployed app; apply only the delta. Leverage SDK `updateColumn`/`deleteColumn`/`updateTable`/`deleteRelationship`/`updateWebResource`, `fetchArtifact` snapshots, and `diffArtifact`. Handles "edit existing form/view", "add column to existing table", "rewire an event handler".
-- 🔲 **Teardown command** — delete session-created artifacts in dependency order (app 80 / sitemap 62 / forms 60 / charts 59 / views 26 / web resources 61 / relationships / columns / tables), via `RetrieveDependenciesForDelete`. (One-off teardown recipe already proven manually; make it a first-class, classifier-safe command.)
+- ✅ **Teardown command** — `scripts/teardown-model-app.js` deletes the artifacts an App Spec declares in dependency order (**app → dashboards → commands → web-resources → tables [children-first] → solution**); a table delete cascades its forms/views/charts/relationships/columns. Name-scoped (classifier-safe), dry-run by default, best-effort continue, cosmetic-404 aware. See the Complete section for detail.
 - 🔲 **Form events on existing forms** — current wiring assumes a freshly built form; the edit flow should fetch an existing form, add/replace handlers, and publish.
 
 ### SDK uptake (2026-06-21) — in progress (user approved all four)

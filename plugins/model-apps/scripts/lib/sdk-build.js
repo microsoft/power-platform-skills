@@ -387,9 +387,17 @@ function formDef(spec, f) {
   return { entityLogicalName: entityLogical, name: f.name || `${f.entity} form`, formType, status: 'Active', tabs };
 }
 
+// The app module's uniquename, derived deterministically from the publisher prefix + app name
+// (same rule the builder writes with). Shared with the teardown engine so it can resolve the
+// deployed app by uniquename rather than a collision-prone display name.
+function appUniqueName(spec) {
+  const sol = spec.solution;
+  return `${sol.publisherPrefix}_${spec.app.name}`.replace(/[^a-z0-9_]/gi, '').toLowerCase();
+}
+
 function appDef(spec, result) {
   const sol = spec.solution;
-  const uniqueName = `${sol.publisherPrefix}_${spec.app.name}`.replace(/[^a-z0-9_]/gi, '').toLowerCase();
+  const uniqueName = appUniqueName(spec);
   // A subarea is an Entity (table) by default, a DashBoard (a built dashboard, by name — the SDK
   // auto-pins its dashboardId as an app component so the nav actually includes it), or a URL.
   const subAreaJson = (s, id) => {
@@ -755,4 +763,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, chartDef, formDef, appDef, webResourceOpts, formEventOpts, WEB_RESOURCE_KINDS, FORM_EVENTS };
+module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, chartDef, formDef, appDef, appUniqueName, commandsByEntity, webResourceOpts, formEventOpts, WEB_RESOURCE_KINDS, FORM_EVENTS };

@@ -68,6 +68,7 @@ live shakeout (define a rollup/calculated column, confirm it computes).
 ---
 
 ## Larger roadmap items (not blocked — see roadmap for detail)
-Edit flow (spec-diff), first-class teardown command, quick-create/quick-view richer layouts, standard
-system views, multi-area sitemaps, security roles, solution export/import hand-off. These are scoped in
+Edit flow (spec-diff), quick-create/quick-view richer layouts, standard system views, multi-area
+sitemaps, security roles, solution export/import hand-off. These are scoped in
 [`model-app-maker-roadmap.md`](./model-app-maker-roadmap.md) — they're sequencing decisions, not blockers.
+(The **first-class teardown command** shipped 2026-07-06 — `scripts/teardown-model-app.js`.)

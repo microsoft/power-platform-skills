@@ -97,6 +97,18 @@ then re-run. Everything is scoped to a dedicated unmanaged solution; `--publish`
 ### Phase 3 — Verify & iterate
 Open the app in the browser. Refine `app-spec.json` and re-run Phase 2 to iterate.
 
+**Teardown (cleanup).** To remove everything an App Spec built — e.g. a live-verification probe or a
+failed build — run the classifier-safe teardown. It deletes only the artifacts the spec declares, in
+dependency order (**app → dashboards → commands → web-resources → tables [children-first] → solution**;
+a table delete cascades its forms/views/charts/relationships/columns). **Dry-run by default** — it
+lists what it would delete and touches nothing; add `--apply` to actually delete (add
+`--clear-workspace` to also prune `.maker-workspace/`):
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/teardown-model-app.js" \
+  --env <envUrl> --spec @<working-dir>/app-spec.json [--apply] [--clear-workspace]
+```
+
 ---
 
 ## What the builder does (in order)

@@ -49,6 +49,17 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   selectable with `--only`/`--skip`/`--from`/`--to`; independent ops run with bounded parallelism.
   Emits `[n/total]` events the orchestrator narrates + a `BuildHalt` it gates on. Dry-run by
   default; `--apply` writes, `--sample-data` / `--publish` opt-in.
+- **`scripts/teardown-model-app.js` → `scripts/lib/sdk-teardown.js`** — the first-class, **classifier-safe**
+  teardown (reverse of the build), for cleaning up live-verification probes or a failed build. Deletes
+  exactly the artifacts a given App Spec declares, in dependency-safe order (**app → dashboards →
+  commands → web-resources → tables [reverse-topological, children-first] → solution**); a table delete
+  cascades its forms/views/charts/relationships/columns and the empty solution container goes last. Every
+  id is resolved from a spec-declared name/logical/uniquename via an exact-match OData filter, so it can
+  never wildcard-scan an org. **Dry-run by default** (`--apply` writes); best-effort continue (a failed
+  step is recorded, teardown proceeds), and it absorbs the EntityDefinitions **cosmetic 404** (confirms
+  via a follow-up GET) + the appaction **cascade 404**. `--clear-workspace` prunes `.maker-workspace/`
+  after a clean apply. `planTeardown(spec)` is pure (dry-run + unit-test surface); reuses
+  `appUniqueName`/`commandsByEntity`/`topoOrderEntities` from the build engine (DRY).
 - **`scripts/preview-form.js` → `scripts/lib/form-preview.js`** — renders an ASCII **form
   wireframe** (tabs, sections, fields with widget hints, the Notes/timeline block, sub-grids, form
   JS) from the App Spec, so the user can review a form visually during authoring before approving.
@@ -61,7 +72,7 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
 Flow: Phase 0 (working dir) → Phase 1 (author the spec interactively, **in the main loop**,
 per `references/authoring-flow.md`) → Phase 2 (narrated SDK build) → Phase 3 (verify & iterate).
 **Upcoming:** an **edit flow** (spec-diff against a deployed app); shippable-defaults
-provisioning (security role / quick-create / standard views); teardown.
+provisioning (security role / quick-create / standard views).
 
 ## Local Development
 
