@@ -27,12 +27,11 @@ behavioral specs, see `AGENTS.md`.
             │      ┌────────────────────────┐                 │
             │      │  scripts/ (Node CLIs)  │                 │
             │      │  check-auth.js         │                 │
-            │      │  create-table.js       │                 │
-            │      │  add-column.js         │                 │
-            │      │  create-relationship.js│                 │
-            │      │  create-record.js      │                 │
+            │      │  provision-entities.js │                 │
             │      │  create-solution.js    │                 │
             │      │  dataverse-request.js  │                 │
+            │      │  lib/entity-provision  │                 │
+            │      │  lib/provision-input   │                 │
             │      └─────────────┬──────────┘                 │
             │                    │                            │
             │                    v                            │
@@ -139,16 +138,15 @@ plugins/model-apps/
 └── scripts/
     ├── check-auth.js                  <-- pre-flight: az + pac + WhoAmI
     ├── dataverse-request.js           <-- generic Web API wrapper
-    ├── create-table.js
-    ├── add-column.js
-    ├── create-relationship.js
-    ├── create-record.js
+    ├── provision-entities.js          <-- entity provisioning CLI (solution + data-model + sample-data)
     ├── create-solution.js
     ├── add-to-solution.js
     ├── generate-page-manifest.js      <-- v2.2: writes package.json + genpage.d.ts
     ├── regenerate-verified-icons.js
     ├── launch-playwright-mcp.js
     ├── lib/
+    │   ├── entity-provision.js        <-- shared entity-provisioning core
+    │   ├── provision-input.js         <-- input validation for entity provisioning
     │   ├── dataverse-auth.js          <-- shared az auth + HTTP helpers
     │   └── supported-dependencies.js  <-- v2.2: deps single source of truth
     └── tests/                         <-- node --test coverage

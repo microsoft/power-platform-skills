@@ -123,7 +123,6 @@ scripts/
     dataverse-auth.js          ← Shared auth + HTTP helpers (uses `az account get-access-token`)
     supported-dependencies.js  ← Single source of truth for runtime + dev deps versions
   tests/                       ← node --test coverage for the scripts above
-  ⊘ Superseded: create-table.js, add-column.js, create-relationship.js, create-record.js (removed in Task 11)
 skills/
   genpage/
     SKILL.md                   ← Orchestrator skill (delegates to agents)

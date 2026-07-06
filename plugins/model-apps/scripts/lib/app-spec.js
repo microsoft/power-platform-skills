@@ -81,7 +81,7 @@ function relationshipFor(spec, parentEntity, childEntity) {
   );
 }
 
-// The 1:N relationship's SCHEMA name (used for create-relationship.js and the
+// The 1:N relationship's SCHEMA name (used for entity provisioning and the
 // sub-grid RelationshipName). This MUST be distinct from the lookup attribute's
 // schema name — Dataverse rejects a relationship whose name collides with the
 // lookup column on the referencing table. Defaults to `<referenced>_<referencing>`

@@ -2,8 +2,7 @@
 
 // General-purpose Dataverse OData Web API wrapper with built-in auth + retry.
 // Use this as an escape hatch when a higher-level operation script
-// (create-table.js / add-column.js / create-relationship.js / create-record.js /
-//  add-to-solution.js) does not cover what you need.
+// (provision-entities.js / add-to-solution.js / create-solution.js) does not cover what you need.
 //
 // Usage:
 //   node dataverse-request.js <envUrl> <method> <apiPath> [--body <json|@path>] [--include-headers]
