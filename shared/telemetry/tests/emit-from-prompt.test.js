@@ -141,6 +141,48 @@ test("populates orgId/tenantId when PAC auth is present", () => {
   assert.equal(captured.event.data.tenantId, "11111111-1111-1111-1111-111111111111");
 });
 
+test("puts the Entra objectId into eventInfo.aadObjectId when present", () => {
+  const telemetryDir = mkTelemetryDir({
+    instrumentationKey: "x",
+    collectorUrl: "https://x",
+    eventStreamName: "PowerPagesPluginEvent",
+  });
+  const captured = {};
+  callWithStub({
+    promptText: "/power-pages:add-seo",
+    telemetryDir,
+    captured,
+    pacAuth: {
+      orgId: "22222222-2222-2222-2222-222222222222",
+      tenantId: "11111111-1111-1111-1111-111111111111",
+      objectId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    },
+  });
+  assert.deepEqual(captured.event.data.eventInfo, {
+    aadObjectId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+  });
+});
+
+test("omits eventInfo when the Entra objectId is absent", () => {
+  const telemetryDir = mkTelemetryDir({
+    instrumentationKey: "x",
+    collectorUrl: "https://x",
+    eventStreamName: "PowerPagesPluginEvent",
+  });
+  const captured = {};
+  callWithStub({
+    promptText: "/power-pages:add-seo",
+    telemetryDir,
+    captured,
+    pacAuth: {
+      orgId: "22222222-2222-2222-2222-222222222222",
+      tenantId: "11111111-1111-1111-1111-111111111111",
+      objectId: "",
+    },
+  });
+  assert.equal(captured.event.data.eventInfo, undefined);
+});
+
 test("populates aiAgentName/aiAgentVersion/pacCliVersion when agentInfo is present", () => {
   const telemetryDir = mkTelemetryDir({
     instrumentationKey: "x",

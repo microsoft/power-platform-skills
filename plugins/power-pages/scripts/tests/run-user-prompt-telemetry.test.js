@@ -26,6 +26,9 @@ function runHook({ prompt, configDir, fakeProbe, ikeyPath }) {
       POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
       POWER_PLATFORM_SKILLS_FAKE_HTTPS: fakeProbe || "",
       POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath || "",
+      // Clear the workflow-wide opt-out backstop (set in power-pages-script-tests.yml)
+      // so the emit-detection test still exercises the real path to its probe.
+      POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "",
     },
     // The enabled path shells out to `pac auth who` + `pac --version`, each
     // capped at 8s (see lib/pac-auth.js). The hook's documented budget is ~30s;
@@ -50,7 +53,7 @@ function waitForFile(filePath, timeoutMs) {
   return fs.existsSync(filePath);
 }
 
-test("hook emits PagesPluginEvent with top-level fields for tracked slash command", () => {
+test("hook emits PagesAIPluginEvent with top-level fields for tracked slash command", () => {
   const configDir = mkConfigDir();
   const probePath = path.join(configDir, "probe.json");
   // Point the hook at a temp ikey.json via the override seam instead of
@@ -60,7 +63,7 @@ test("hook emits PagesPluginEvent with top-level fields for tracked slash comman
   fs.writeFileSync(
     ikeyPath,
     JSON.stringify({
-      event_stream_name: "PagesPluginEvent",
+      event_stream_name: "PagesAIPluginEvent",
       disabled: false,
       default_region: "us",
       regions: {
@@ -98,7 +101,7 @@ test("hook emits PagesPluginEvent with top-level fields for tracked slash comman
   assert.ok(probe.body.endsWith("\n"), "body must be newline-terminated");
   const body = JSON.parse(probe.body);
   assert.deepEqual(Object.keys(body).sort(), ["data", "iKey", "name", "time", "ver"]);
-  assert.equal(body.name, "PagesPluginEvent");
+  assert.equal(body.name, "PagesAIPluginEvent");
   assert.equal(body.ver, "4.0");
   assert.match(body.iKey, /^o:/);
   assert.equal(body.data.eventName, "skill_started");

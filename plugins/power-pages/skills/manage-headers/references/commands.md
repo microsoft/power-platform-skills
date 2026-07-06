@@ -12,7 +12,7 @@
 Use the shared script to create new `HTTP/*` site-setting YAML files:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<project-root>" --name "<setting-name>" --value "<value>" --description "<description>"
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<project-root>" --name "<setting-name>" --value "<value>" --description "<description>"
 ```
 
 The script generates a UUID, checks for duplicates, and writes the YAML file to `.powerpages-site/site-settings/`.
@@ -37,7 +37,7 @@ Reads every `HTTP/*` site-setting YAML in `.powerpages-site/site-settings/` and 
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-headers/scripts/transform-headers.js" --projectRoot "<project-root>" [--annotations "<path>"]
+node "${PLUGIN_ROOT}/skills/manage-headers/scripts/transform-headers.js" --projectRoot "<project-root>" [--annotations "<path>"]
 ```
 
 ### Parameters

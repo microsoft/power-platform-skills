@@ -70,12 +70,12 @@ Each skill's SKILL.md should embed a phase block like this (substitute the per-s
 ```markdown
 ### Phase 1.5 — Ground in current ALM documentation
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/alm-docs-grounding.md`
+> Reference: `${PLUGIN_ROOT}/references/alm-docs-grounding.md`
 
 Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line note and continue — this skill must remain runnable offline.
 
 1. Run `microsoft_docs_search` with the query: `<skill-specific query from the reference>`.
 2. Fetch the canonical anchor page (`<anchor URL>`) and at most one sister page that matches the current scope, in parallel via `microsoft_docs_fetch`.
-3. Extract a one-paragraph summary of what the docs say today — flag any breaking changes vs. the HAR-confirmed patterns in `${CLAUDE_PLUGIN_ROOT}/references/<solution-api-patterns | cicd-pipeline-patterns>.md`.
+3. Extract a one-paragraph summary of what the docs say today — flag any breaking changes vs. the HAR-confirmed patterns in `${PLUGIN_ROOT}/references/<solution-api-patterns | cicd-pipeline-patterns>.md`.
 4. Use the summary to inform Phase 2+ decisions. Do not silently change skill behavior — surface any divergence to the user as a soft warning.
 ```

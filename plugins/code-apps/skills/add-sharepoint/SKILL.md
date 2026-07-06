@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, LSP, TaskCreate, TaskUpdate,
 model: opus
 ---
 
-**📋 Shared Instructions: [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns.
+**📋 Shared Instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns.
 
 **References:**
 
@@ -26,7 +26,7 @@ Two paths: **existing lists** (skip to Step 6) or **new lists** (full workflow).
 
 ### Step 1: Check Memory Bank
 
-Check for `memory-bank.md` per [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md).
+Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md).
 
 ### Step 2: Plan
 
@@ -84,7 +84,7 @@ Get explicit confirmation before creating. Use safe functions from [list-managem
 
 ### Step 6: Get Connection ID
 
-Find the SharePoint Online connection ID (see [connector-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/connector-reference.md)):
+Find the SharePoint Online connection ID (see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md)):
 
 Run the `/list-connections` skill. Find the SharePoint Online connection in the output. If none exists, direct the user to create one using the environment-specific Connections URL — construct it from the active environment ID in context (from `power.config.json` or a prior step): `https://make.powerapps.com/environments/<environment-id>/connections` → **+ New connection** → search for the connector → Create.
 
@@ -173,7 +173,7 @@ const content = await SharePointOnlineService.GetFileContent({
 - Document library operations use folder/file IDs or server-relative URLs
 - Choice columns use **string values**, not integer picklist codes (unlike Dataverse)
 
-Use `Grep` to find specific methods in `src/generated/services/SharePointOnlineService.ts` (generated files can be very large -- see [connector-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/connector-reference.md#inspecting-large-generated-files)).
+Use `Grep` to find specific methods in `src/generated/services/SharePointOnlineService.ts` (generated files can be very large -- see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#inspecting-large-generated-files)).
 
 ### Step 11: Build
 

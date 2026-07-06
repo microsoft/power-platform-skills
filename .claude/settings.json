@@ -21,9 +21,7 @@
       "Bash(dir:*)",
       "Read",
       "Write",
-      "Edit",
-      "mcp__playwright__*",
-      "mcp__*__browser_*"
+      "Edit"
     ]
   }
 }

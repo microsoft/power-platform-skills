@@ -16,7 +16,7 @@
         "Dev server is started in background via 'npm run dev' and the localhost URL is shared with the user",
         "Playwright browser_navigate and browser_snapshot are used to verify the scaffold loads (no screenshots taken)",
         "Component planning asks for features (context-aware options for an external company portal), aesthetic direction (Bold & Vibrant selected), and mood",
-        "Design aesthetics reference is read from ${CLAUDE_PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md",
+        "Design aesthetics reference is read from ${PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md",
         "A component plan table is presented showing pages, shared components, design elements, and routes",
         "Color palette is determined with 6 CSS variables (--color-primary, --color-secondary, --color-bg, --color-surface, --color-text, --color-text-muted)",
         "Implementation plan is presented with Section A (Design & Pages) and Section B (Review & Deployment) and user approval is requested",

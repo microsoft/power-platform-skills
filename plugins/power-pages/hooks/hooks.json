@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-skill-pretool-telemetry.js\"",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','run-skill-pretool-telemetry.js'));\"",
             "timeout": 30
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-skill-posttool-validation.js\"",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','run-skill-posttool-validation.js'));\"",
             "timeout": 30
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-user-prompt-telemetry.js\"",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','run-user-prompt-telemetry.js'));\"",
             "timeout": 30
           }
         ]

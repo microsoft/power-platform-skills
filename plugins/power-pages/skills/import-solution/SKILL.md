@@ -11,7 +11,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, Task
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # import-solution
 
@@ -42,7 +42,7 @@ When `inExecution.status` is anything other than `"active"` (`"not-running"`, `"
 **Step 1 — Run the gate helper.**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" --projectRoot "."
+node "${PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" --projectRoot "."
 ```
 
 The helper returns JSON with `{ exists, deferred, stale, staleness: { reason, detail }, generatedAt, planStatus, ... }`. Pass `--envUrl`, `--token`, `--solutionId` once Phase 1 has acquired them if you also want a freshness check; otherwise the helper does an existence-only check, which is sufficient for the gate decision below.
@@ -116,17 +116,17 @@ Steps:
 
 > **Important**: Confirm the target environment with the user — importing to the wrong environment can be disruptive.
 
-If any check fails, stop (reference `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md`).
+If any check fails, stop (reference `${PLUGIN_ROOT}/references/dataverse-prerequisites.md`).
 
 ### Phase 1.5 — Ground in current ALM documentation
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/alm-docs-grounding.md`
+> Reference: `${PLUGIN_ROOT}/references/alm-docs-grounding.md`
 
 Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line note and continue — this skill must remain runnable offline.
 
 1. Run `microsoft_docs_search` with the query: `Power Pages solution import staging missing dependencies ImportSolutionAsync ALM`.
 2. Fetch `https://learn.microsoft.com/en-us/power-platform/alm/solution-concepts-alm` (and at most one sister page on staged imports or dependency handling) in parallel via `microsoft_docs_fetch`.
-3. Extract a one-paragraph summary of what Microsoft Learn currently says about staging vs direct import, dependency resolution, and component-level error handling. Compare against `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` and flag any divergence in `ImportSolutionAsync` / `StageSolution` signatures.
+3. Extract a one-paragraph summary of what Microsoft Learn currently says about staging vs direct import, dependency resolution, and component-level error handling. Compare against `${PLUGIN_ROOT}/references/solution-api-patterns.md` and flag any divergence in `ImportSolutionAsync` / `StageSolution` signatures.
 4. Use the summary to inform Phase 2+ decisions. Do not silently change skill behavior — surface any divergence to the user as a soft warning before Phase 4 (the actual import).
 
 ### Phase 2 — Locate Solution File
@@ -197,7 +197,7 @@ Before asking the user about staged/direct import, query the target environment 
    Critical: **do not compare version strings with raw `>` / `<` / `===`** — Dataverse versions are 4-segment integer tuples (`1.0.0.9` vs `1.0.0.10`) and lexical comparison reports `1.0.0.10` as **lower than** `1.0.0.9`, flipping the skew gate on the 10th deploy of the day. Use the canonical helper instead:
 
    ```bash
-   node -e "console.log(require('${CLAUDE_PLUGIN_ROOT}/scripts/lib/bump-solution-version').compareVersions('{ZIP_SOLUTION_VERSION}', '{INSTALLED.version}'))"
+   node -e "console.log(require('${PLUGIN_ROOT}/scripts/lib/bump-solution-version').compareVersions('{ZIP_SOLUTION_VERSION}', '{INSTALLED.version}'))"
    ```
 
    The helper returns `-1` when ZIP < INSTALLED, `0` when equal, `1` when ZIP > INSTALLED. Same segment-wise integer rules as `bumpPatchSegment` (pad-with-zero, max-4-segments, reject non-integer). Capture stdout, trim, and store the integer as `VERSION_CMP`. If the helper throws (malformed version on either side), surface the stderr to the user and stop — the version comparison is a precondition for safe import.
@@ -251,11 +251,11 @@ Also ask:
 
 Only run this phase if the user chose staged import in Phase 3.
 
-Refer to `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` Section 5a.
+Refer to `${PLUGIN_ROOT}/references/solution-api-patterns.md` Section 5a.
 
 1. Base64-encode the zip file:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/encode-solution-file.js" --zipPath "{zipPath}"
+   node "${PLUGIN_ROOT}/scripts/encode-solution-file.js" --zipPath "{zipPath}"
    ```
 2. `POST {envUrl}/api/data/v9.2/StageSolution` with `CustomizationFile: {base64}`
 3. Parse `StageSolutionResults`:
@@ -269,10 +269,10 @@ Refer to `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` Section 5a.
 
 ### Phase 5 — Import Solution
 
-Refer to `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` Section 5b.
+Refer to `${PLUGIN_ROOT}/references/solution-api-patterns.md` Section 5b.
 
 1. Prepare request body (always use `CustomizationFile` — `ImportSolutionAsync` does not accept `StageSolutionUploadId`):
-   - Encode the zip: `node "${CLAUDE_PLUGIN_ROOT}/scripts/encode-solution-file.js" --zipPath "{zipPath}"`
+   - Encode the zip: `node "${PLUGIN_ROOT}/scripts/encode-solution-file.js" --zipPath "{zipPath}"`
    - Use `{ CustomizationFile: "{base64}", OverwriteUnmanagedCustomizations: {choice}, PublishWorkflows: {choice} }`
 
 2. `POST {envUrl}/api/data/v9.2/ImportSolutionAsync`
@@ -281,7 +281,7 @@ Refer to `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` Section 5b.
 
 Run `scripts/poll-async-operation.js`:
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/poll-async-operation.js" \
+node "${PLUGIN_ROOT}/scripts/poll-async-operation.js" \
   --asyncJobId "{AsyncOperationId}" \
   --envUrl "{envUrl}" \
   --token "{token}" \
@@ -436,7 +436,7 @@ If the user skips all values: inform them the site may not function correctly un
 **6b.verify — Confirm values landed.** After the per-variable POSTs complete, verify each `environmentvariablevalues` record actually exists on the target. The shared helper `scripts/lib/verify-env-var-values.js` does this read-only check and returns a structured JSON result per schema (`landed` / `missing-value-record` / `missing-definition` / `value-mismatch` / `query-error`):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-env-var-values.js" \
+node "${PLUGIN_ROOT}/scripts/lib/verify-env-var-values.js" \
   --envUrl "{targetEnvUrl}" \
   --schemaNames "{comma-separated schema names that the user supplied values for}"
 ```
@@ -492,7 +492,7 @@ If no componentType 10374 records found, skip this phase entirely.
 If found, run the shared activation status check (PAC CLI is already authenticated to the target environment):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "."
+node "${PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "."
 ```
 
 Evaluate the result:
@@ -530,14 +530,14 @@ Display a summary table:
 
 ### Record Skill Usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "ImportSolution"`.
 
 ### Refresh the ALM plan (if one exists)
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --projectRoot "." \
   --phase import-solution \
   --stageName "{targetLabel}" \

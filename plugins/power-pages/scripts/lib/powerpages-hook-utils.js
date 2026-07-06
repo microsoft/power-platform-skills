@@ -105,9 +105,42 @@ function getValidatorScript(skillName) {
   return TRACKED_SKILLS[skillName]?.validatorScript ?? null;
 }
 
+// Skills that write a `docs/alm/last-*.json` marker or otherwise consume the ALM
+// plan. After any of these completes, the PostToolUse hook runs a plan reconcile
+// (auto-heal) — so a refresh step skipped by ONE skill is caught when the NEXT
+// ALM skill completes (covers manual/cross-session execution).
+const ALM_PLAN_SKILLS = new Set([
+  'setup-solution',
+  'setup-pipeline',
+  'deploy-pipeline',
+  'export-solution',
+  'import-solution',
+  'configure-env-variables',
+  'activate-site',
+  'test-site',
+  'ensure-pipelines-host',
+  'force-link-environment',
+]);
+
+/**
+ * True when `value` (a raw skill name, `/skill`, or `power-pages:skill`) resolves
+ * to an ALM plan skill. Normalizes via `detectTrackedSkill`, so it also confirms
+ * the skill actually exists in this plugin.
+ * Accepts any value — non-strings (including null/undefined) resolve to false
+ * via detectTrackedSkill, so callers may pass an unvalidated skill name.
+ * @param {*} value
+ * @returns {boolean}
+ */
+function isAlmPlanSkill(value) {
+  const name = detectTrackedSkill(value);
+  return name != null && ALM_PLAN_SKILLS.has(name);
+}
+
 module.exports = {
   TRACKED_SKILLS,
+  ALM_PLAN_SKILLS,
   detectTrackedSkill,
   getTrackedSkillFromToolInput,
   getValidatorScript,
+  isAlmPlanSkill,
 };

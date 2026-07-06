@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const { almDir, almPath, ensureAlmDir, FILE_NAMES, ALM_DIR } = require('../lib/alm-paths');
+const { almDir, almPath, ensureAlmDir, FILE_NAMES, ALM_DIR, planDataPath, planHtmlPath } = require('../lib/alm-paths');
 
 function makeTmp(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'alm-paths-'));
@@ -71,6 +71,23 @@ test('ensureAlmDir is idempotent when docs/alm/ already exists', (t) => {
   ensureAlmDir(root);
   // Sentinel file must still be there — recursive mkdir on existing dir is a no-op
   assert.equal(fs.readFileSync(path.join(root, 'docs', 'alm', 'sentinel.txt'), 'utf8'), 'pre-existing');
+});
+
+test('planDataPath / planHtmlPath resolve to the docs/ ROOT, not docs/alm/', () => {
+  const root = path.join(path.sep, 'tmp', 'project');
+  // The rendered plan + backing JSON intentionally live at docs/ (NOT docs/alm/).
+  assert.equal(planDataPath(root), path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planHtmlPath(root), path.join(root, 'docs', 'alm-plan.html'));
+  // Guard the dotfile + non-alm-subdir invariant the helpers exist to centralize.
+  assert.ok(planDataPath(root).endsWith(path.join('docs', '.alm-plan-data.json')));
+  assert.ok(!planDataPath(root).includes(path.join('docs', 'alm', '')), 'plan data must NOT be under docs/alm/');
+});
+
+test('planDataPath / planHtmlPath throw when projectRoot is missing', () => {
+  assert.throws(() => planDataPath(undefined), /projectRoot is required/);
+  assert.throws(() => planDataPath(''), /projectRoot is required/);
+  assert.throws(() => planHtmlPath(undefined), /projectRoot is required/);
+  assert.throws(() => planHtmlPath(''), /projectRoot is required/);
 });
 
 test('every FILE_NAMES entry resolves via almPath without error', () => {

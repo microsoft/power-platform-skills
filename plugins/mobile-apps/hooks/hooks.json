@@ -1,0 +1,74 @@
+{
+  "_comment": "PreToolUse write safety is enabled. It blocks Write/Edit/MultiEdit paths outside the active project working directory to prevent accidental cross-repo writes. Plugin location can be anywhere; run the host from the target template/app folder (or pass that folder as the current working directory).",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','validate-write-safety.js'));\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Skill|skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','run-skill-posttool-validation.js'));\"",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','validate-icon-imports.js'));\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','validate-screen-quality.js'));\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','validate-color-contrast.js'));\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','validate-connector-first.js'));\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','validate-package-deps.js'));\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','validate-dataverse-payload.js'));\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','validate-dataverse-heavy-lists.js'));\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','validate-navigation-idempotency.js'));\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

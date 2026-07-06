@@ -146,7 +146,7 @@ Extract the `Environment URL` value (e.g., `https://org12345.crm.dynamics.com`).
 Verify Dataverse access and obtain an auth token:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
+node "${PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
 ```
 
 This outputs JSON with `token`, `userId`, `organizationId`, and `tenantId`. The token is used automatically by the `dataverse-request.js` script below.
@@ -156,7 +156,7 @@ This outputs JSON with `token`, `userId`, `organizationId`, and `tenantId`. The 
 Get the actual OData entity set name from Dataverse (do not guess from pluralization):
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_logical_name>')?\$select=EntitySetName,PrimaryIdAttribute,PrimaryNameAttribute"
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_logical_name>')?\$select=EntitySetName,PrimaryIdAttribute,PrimaryNameAttribute"
 ```
 
 The script outputs JSON: `{ "status": <code>, "data": { "EntitySetName": "...", "PrimaryIdAttribute": "...", "PrimaryNameAttribute": "..." } }`.
@@ -168,7 +168,7 @@ Use the returned `EntitySetName` for all `/_api/` URLs. Use `PrimaryIdAttribute`
 Fetch actual column logical names, display names, and types:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_logical_name>')/Attributes?\$select=LogicalName,DisplayName,AttributeType,IsPrimaryId&\$filter=IsCustomAttribute eq true or IsPrimaryId eq true"
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_logical_name>')/Attributes?\$select=LogicalName,DisplayName,AttributeType,IsPrimaryId&\$filter=IsCustomAttribute eq true or IsPrimaryId eq true"
 ```
 
 The script outputs JSON: `{ "status": <code>, "data": { "value": [...] } }`. Each entry in `value` contains `LogicalName`, `DisplayName`, `AttributeType`, and `IsPrimaryId`.
@@ -184,7 +184,7 @@ This returns the **real** column logical names. Cross-reference against the mani
 If the table has lookup columns, fetch relationship metadata to get the correct Navigation Property names (case-sensitive, needed for `$expand` and `@odata.bind`):
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_logical_name>')/ManyToOneRelationships?\$select=SchemaName,ReferencedEntity,ReferencingAttribute,ReferencingEntityNavigationPropertyName"
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_logical_name>')/ManyToOneRelationships?\$select=SchemaName,ReferencedEntity,ReferencingAttribute,ReferencingEntityNavigationPropertyName"
 ```
 
 The script outputs JSON: `{ "status": <code>, "data": { "value": [...] } }`. Each entry in `value` contains `ReferencingEntityNavigationPropertyName`, `ReferencedEntity`, `ReferencingAttribute`, and `SchemaName`.
@@ -196,7 +196,7 @@ Use `ReferencingEntityNavigationPropertyName` as the Navigation Property name in
 If the table has one-to-many relationships (e.g., order → order lines, account → contacts), fetch the relationship metadata to get the correct collection-valued navigation property names:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_logical_name>')/OneToManyRelationships?$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute,ReferencedEntityNavigationPropertyName"
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_logical_name>')/OneToManyRelationships?$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute,ReferencedEntityNavigationPropertyName"
 ```
 
 The script outputs JSON: `{ "status": <code>, "data": { "value": [...] } }`. Each entry contains `ReferencedEntityNavigationPropertyName` (the collection-valued navigation property on the parent entity), `ReferencingEntity` (the child table), and `ReferencingAttribute` (the foreign key column on the child table).
@@ -221,7 +221,7 @@ Create `src/shared/powerPagesApi.ts` — a centralized fetch wrapper shared by a
 
 Read the complete file template:
 
-Reference: `${CLAUDE_PLUGIN_ROOT}/references/webapi-core-client.md`
+Reference: `${PLUGIN_ROOT}/references/webapi-core-client.md`
 
 ---
 
@@ -229,7 +229,7 @@ Reference: `${CLAUDE_PLUGIN_ROOT}/references/webapi-core-client.md`
 
 Create TypeScript type definitions for the target table. Place them following existing project conventions. If no convention exists, use `src/types/<tableName>.ts`. Define the raw OData entity interface, clean domain type, option set constants, create/update input types, and an entity-to-domain mapper function. Follow the lookup property rules for retrieval (`_value` GUID property in `$select`, Navigation Property in `$expand`) vs mutation (`@odata.bind` on Navigation Property).
 
-Reference: `${CLAUDE_PLUGIN_ROOT}/references/webapi-service-patterns.md` — see "Entity Types (Step 4)" section. If the table has one-to-many relationships that will be expanded, also define interfaces for the related entity types and include them as properties on the parent entity interface — see "Related Entities ($expand)" section.
+Reference: `${PLUGIN_ROOT}/references/webapi-service-patterns.md` — see "Entity Types (Step 4)" section. If the table has one-to-many relationships that will be expanded, also define interfaces for the related entity types and include them as properties on the parent entity interface — see "Related Entities ($expand)" section.
 
 ---
 
@@ -237,7 +237,7 @@ Reference: `${CLAUDE_PLUGIN_ROOT}/references/webapi-service-patterns.md` — see
 
 Create a service module with CRUD operations for the target table. Place it following project conventions. Default: `src/shared/services/<tableName>Service.ts`. Implement list (paginated with `Prefer: odata.maxpagesize=N` + `@odata.nextLink`), get by ID, create (POST with `Prefer: return=representation` + Location header fallback), update (PATCH with `If-Match: *`), delete, and optionally M:N sync, count, aggregation, and file/image column operations.
 
-Reference: `${CLAUDE_PLUGIN_ROOT}/references/webapi-service-patterns.md` — see "Service Layer (Step 5)" section. If the table has lookup or one-to-many relationships, implement `$expand` using the `buildExpandClause` helper from the core API client — see "Related Entities ($expand)" section for expand patterns, nested expand, collection paging, and when to fetch related records separately.
+Reference: `${PLUGIN_ROOT}/references/webapi-service-patterns.md` — see "Service Layer (Step 5)" section. If the table has lookup or one-to-many relationships, implement `$expand` using the `buildExpandClause` helper from the core API client — see "Related Entities ($expand)" section for expand patterns, nested expand, collection paging, and when to fetch related records separately.
 
 ---
 
@@ -245,7 +245,7 @@ Reference: `${CLAUDE_PLUGIN_ROOT}/references/webapi-service-patterns.md` — see
 
 Create framework-specific reactive data-fetching wrappers based on the detected framework: React custom hooks (+ DataverseImage component for image columns), Vue composables, Angular injectable services, or Astro direct imports.
 
-Reference: `${CLAUDE_PLUGIN_ROOT}/references/webapi-service-patterns.md` — see "Framework Hooks (Step 6)" section.
+Reference: `${PLUGIN_ROOT}/references/webapi-service-patterns.md` — see "Framework Hooks (Step 6)" section.
 
 ---
 

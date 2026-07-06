@@ -10,7 +10,7 @@ allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Task, TaskC
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Integrate Web API
 
@@ -64,7 +64,7 @@ Read `powerpages.config.json` to get the site name.
 
 ### 1.3 Detect Framework
 
-Read `package.json` to determine the framework (React, Vue, Angular, or Astro). See `${CLAUDE_PLUGIN_ROOT}/references/framework-conventions.md` for the full framework detection mapping.
+Read `package.json` to determine the framework (React, Vue, Angular, or Astro). See `${PLUGIN_ROOT}/references/framework-conventions.md` for the full framework detection mapping.
 
 ### 1.4 Check for Data Model
 
@@ -214,7 +214,7 @@ If the user selects specific tables or adds more, update the integration manifes
 
 ### 4.1 Invoke Agent Per Table
 
-For each table, use the `Task` tool to invoke the `webapi-integration` agent at `${CLAUDE_PLUGIN_ROOT}/agents/webapi-integration.md`:
+For each table, use the `Task` tool to invoke the `webapi-integration` agent at `${PLUGIN_ROOT}/agents/webapi-integration.md`:
 
 **Prompt template for the agent:**
 
@@ -425,7 +425,7 @@ These two agents are **independent** — invoke them in parallel using two `Task
 
 #### Table Permissions Agent
 
-Use the `Task` tool to invoke the `table-permissions-architect` agent at `${CLAUDE_PLUGIN_ROOT}/agents/table-permissions-architect.md`:
+Use the `Task` tool to invoke the `table-permissions-architect` agent at `${PLUGIN_ROOT}/agents/table-permissions-architect.md`:
 
 **Prompt (default — full CRUD):**
 
@@ -449,7 +449,7 @@ The agent will:
 
 #### Web API Settings Agent
 
-Use the `Task` tool to invoke the `webapi-settings-architect` agent at `${CLAUDE_PLUGIN_ROOT}/agents/webapi-settings-architect.md`:
+Use the `Task` tool to invoke the `webapi-settings-architect` agent at `${PLUGIN_ROOT}/agents/webapi-settings-architect.md`:
 
 **Prompt (default — full CRUD):**
 
@@ -485,7 +485,7 @@ After parsing the user's diagram, create the YAML files using the deterministic 
 If the plan requires new web roles that don't already exist, create them first (their UUIDs are needed for table permissions):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/create-webroles/scripts/create-web-role.js" --projectRoot "<PROJECT_ROOT>" --name "<Role Name>" [--anonymous] [--authenticated]
+node "${PLUGIN_ROOT}/skills/create-webroles/scripts/create-web-role.js" --projectRoot "<PROJECT_ROOT>" --name "<Role Name>" [--anonymous] [--authenticated]
 ```
 
 Capture the JSON output (`{ "id": "<uuid>", "filePath": "<path>" }`) — use the `id` as the `--webRoleIds` value when creating table permissions.
@@ -499,16 +499,16 @@ For each table permission in the plan. Process **parent permissions before child
 **For Global/Contact/Account/Self scope:**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "Global" [--read] [--create] [--write] [--delete] [--append] [--appendto]
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "Contact" --contactRelationshipName "<lookup_to_contact>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "Account" --accountRelationshipName "<lookup_to_account>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "Self" [--read] [--create] [--write] [--delete] [--append] [--appendto]
+node "${PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "Global" [--read] [--create] [--write] [--delete] [--append] [--appendto]
+node "${PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "Contact" --contactRelationshipName "<lookup_to_contact>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
+node "${PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "Account" --accountRelationshipName "<lookup_to_account>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
+node "${PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "Self" [--read] [--create] [--write] [--delete] [--append] [--appendto]
 ```
 
 **For Parent scope** (requires parent permission UUID and relationship name):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1>" --scope "Parent" --parentPermissionId "<parent-uuid>" --parentRelationshipName "<relationship_name>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
+node "${PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1>" --scope "Parent" --parentPermissionId "<parent-uuid>" --parentRelationshipName "<relationship_name>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
 ```
 
 Each invocation outputs `{ "id": "<uuid>", "filePath": "<path>" }`. Use the `id` as `--parentPermissionId` for child permissions.
@@ -520,19 +520,19 @@ For each site setting in the plan:
 **Enabled setting (boolean):**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table>/enabled" --value "true" --description "Enable Web API access for <table> table" --type "boolean"
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table>/enabled" --value "true" --description "Enable Web API access for <table> table" --type "boolean"
 ```
 
 **Fields setting (string — use the validated column names from the diagram):**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table>/fields" --value "<comma-separated-validated-columns>" --description "Allowed fields for <table> Web API access"
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table>/fields" --value "<comma-separated-validated-columns>" --description "Allowed fields for <table> Web API access"
 ```
 
 **Inner error setting (boolean, optional for debugging):**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/error/innererror" --value "true" --description "Enable detailed error messages for debugging" --type "boolean"
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/error/innererror" --value "true" --description "Enable detailed error messages for debugging" --type "boolean"
 ```
 
 **Important**: The `--value` for fields settings MUST use exact Dataverse LogicalNames (case-sensitive, all lowercase) for normal CRUD/read scenarios. Using incorrect casing causes 403 Forbidden errors.
@@ -572,7 +572,7 @@ git commit -m "Add table permissions and Web API site settings for [table names]
 
 ### 7.1 Record Skill Usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "IntegrateWebApi"`.
 

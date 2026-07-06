@@ -76,7 +76,7 @@ definition" in their editor. Versions come from
 `scripts/lib/supported-dependencies.js`).
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/generate-page-manifest.js" <working-dir> <kebab-slug>
+node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" <working-dir> <kebab-slug>
 ```
 
 - `<kebab-slug>` is the same slug used for the working directory.
@@ -129,7 +129,7 @@ Pass a prompt that includes:
 
 - The user's requirements: `$ARGUMENTS`
 - The working directory (absolute path from Phase 0)
-- The plugin root path: `${CLAUDE_PLUGIN_ROOT}`
+- The plugin root path: `${PLUGIN_ROOT}`
 
 Example:
 
@@ -138,7 +138,7 @@ Example:
 > [paste $ARGUMENTS here verbatim, or "no arguments provided — gather from user"]
 >
 > Working directory: [absolute path from Phase 0]
-> Plugin root: ${CLAUDE_PLUGIN_ROOT}
+> Plugin root: ${PLUGIN_ROOT}
 >
 > Follow the instructions in your agent file. Validate prereqs, confirm auth, ask
 > the new/edit question via AskUserQuestion, then proceed accordingly. Write
@@ -162,7 +162,7 @@ auth, and the `az` and `pac` identities should normally match. Run the
 consolidated pre-flight:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/check-auth.js"
+node "${PLUGIN_ROOT}/scripts/check-auth.js"
 ```
 
 It returns a single JSON object:
@@ -195,7 +195,7 @@ Capture `envUrl` from the result — Phase 2b passes it to the entity-builder.
 Invoke the `genpage-entity-builder` agent via the `Task` tool. Pass in the prompt:
 - Path to `genpage-plan.md`
 - Working directory (absolute path)
-- Plugin root: `${CLAUDE_PLUGIN_ROOT}`
+- Plugin root: `${PLUGIN_ROOT}`
 - Dataverse env URL (from `pac org who`)
 
 The entity-builder reads `Solution` and `Publisher Prefix` directly from the
@@ -260,24 +260,24 @@ Before invoking any builders, verify:
   rewrite the plan appending `-1`, `-2`, etc. before dispatch. Duplicate filenames
   cause silent last-writer-wins data loss under parallel execution.
 
-See `${CLAUDE_PLUGIN_ROOT}/references/plan-schema.md` for the full contract.
+See `${PLUGIN_ROOT}/references/plan-schema.md` for the full contract.
 
 #### 5b. Single-page fast path (skip Task dispatch when N=1)
 
 **If the plan's Pages table contains exactly one row**, do NOT dispatch a Task
 subagent. Inline the page-builder workflow directly in the orchestrator:
 
-1. Read `${CLAUDE_PLUGIN_ROOT}/references/rules.md`
+1. Read `${PLUGIN_ROOT}/references/rules.md`
 2. Read the sample listed in the plan's `## Relevant Samples`
 3. If the plan's Per-Page Specification has `Needs caching: true`, also read
-   `${CLAUDE_PLUGIN_ROOT}/references/data-caching.md`
+   `${PLUGIN_ROOT}/references/data-caching.md`
 4. If the plan's `## Environment` indicates non-English languages, also read
-   `${CLAUDE_PLUGIN_ROOT}/references/localization.md`
+   `${PLUGIN_ROOT}/references/localization.md`
 5. Read `genpage-plan.md` (already in working directory) and `RuntimeTypes.ts`
    if Data mode is dataverse
 6. Write the `.tsx` file to `<working-dir>/<filename>.tsx` following all rules
 7. After writing, Grep every named import from `@fluentui/react-icons` against
-   `${CLAUDE_PLUGIN_ROOT}/references/verified-icons.txt` (one Grep per name).
+   `${PLUGIN_ROOT}/references/verified-icons.txt` (one Grep per name).
    Rewrite any unverified names with the closest verified alternative; do not
    load the full icon list into context
 8. Proceed to Phase 6
@@ -298,7 +298,7 @@ For each page, pass a prompt that includes:
 - Absolute path to `genpage-plan.md`
 - Data mode (see below) — either a RuntimeTypes path or an explicit mock flag
 - Working directory
-- Plugin root: `${CLAUDE_PLUGIN_ROOT}`
+- Plugin root: `${PLUGIN_ROOT}`
 
 **For Dataverse pages**, include the RuntimeTypes line:
 
@@ -309,7 +309,7 @@ For each page, pass a prompt that includes:
 > - Data mode: **dataverse**
 > - RuntimeTypes: [absolute path to RuntimeTypes.ts]
 > - Working directory: [absolute path from Phase 0]
-> - Plugin root: ${CLAUDE_PLUGIN_ROOT}
+> - Plugin root: ${PLUGIN_ROOT}
 >
 > Follow the instructions in your agent file. Write [filename].tsx and return your
 > result when done.
@@ -322,7 +322,7 @@ For each page, pass a prompt that includes:
 > - Plan document: [absolute path to genpage-plan.md]
 > - Data mode: **mock**
 > - Working directory: [absolute path from Phase 0]
-> - Plugin root: ${CLAUDE_PLUGIN_ROOT}
+> - Plugin root: ${PLUGIN_ROOT}
 >
 > Follow the instructions in your agent file. Write [filename].tsx and return your
 > result when done.
@@ -428,7 +428,7 @@ After successful deployment, ask the user via `AskUserQuestion`:
 Options: **Yes, verify in browser** / **Skip verification**
 
 - If the user picks **Skip verification** → jump to Phase 8.
-- If the user picks **Yes** → read `${CLAUDE_PLUGIN_ROOT}/skills/genpage/verify-flow.md`
+- If the user picks **Yes** → read `${PLUGIN_ROOT}/skills/genpage/verify-flow.md`
   for the full Playwright verification workflow (navigate, structural
   verification including below-the-fold, interactive testing, screenshots,
   fix-and-redeploy). The orchestrator only loads that file on demand to keep

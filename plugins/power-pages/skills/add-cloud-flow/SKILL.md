@@ -11,7 +11,7 @@ allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Skill, Task
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Add Cloud Flow
 
@@ -108,7 +108,7 @@ Store these as the **already-registered flows** list. These flows already have m
 
 ### 1.6 Detect Frontend Framework
 
-Read `package.json` to detect the framework (React, Vue, Angular, Astro). Note the framework and its conventions for Phase 7. See `${CLAUDE_PLUGIN_ROOT}/references/framework-conventions.md` for the detection mapping.
+Read `package.json` to detect the framework (React, Vue, Angular, Astro). Note the framework and its conventions for Phase 7. See `${PLUGIN_ROOT}/references/framework-conventions.md` for the detection mapping.
 
 **Output**: Project root, site name, framework, available web roles, already-registered flows (with processid, name, and web roles)
 
@@ -123,7 +123,7 @@ Read `package.json` to detect the framework (React, Vue, Angular, Astro). Note t
 Run the list-cloud-flows script (reads environment from `pac auth who` internally):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/add-cloud-flow/scripts/list-cloud-flows.js"
+node "${PLUGIN_ROOT}/skills/add-cloud-flow/scripts/list-cloud-flows.js"
 ```
 
 This calls the **Power Automate Flow RP API** with the filter `properties/definitionSummary/triggers/any(t: t/kind eq 'powerpages')`. Results include:
@@ -347,7 +347,7 @@ For **`integration-only`** flows, `webRoles` should reflect the existing roles f
 ### 5.2 Render HTML Plan
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/render-cloudflow-plan.js" \
+node "${PLUGIN_ROOT}/scripts/render-cloudflow-plan.js" \
   --output "<PROJECT_ROOT>/docs/cloud-flow-plan.html" \
   --data-inline '<json>'
 ```
@@ -410,7 +410,7 @@ Repeat steps 6.3–6.4 for every **`new`** flow in the approved plan.
 ### 6.4 Run the Create Metadata Script
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/add-cloud-flow/scripts/create-cloud-flow-metadata.js" \
+node "${PLUGIN_ROOT}/skills/add-cloud-flow/scripts/create-cloud-flow-metadata.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --fileSlug "<url-safe-slug>" \
   --flowName "<flow-display-name>" \
@@ -589,7 +589,7 @@ If any check fails, fix the issue in the service file or UI before continuing.
 
 ### 8.2 Record Skill Usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Use `--skillName "AddCloudFlow"`.
 

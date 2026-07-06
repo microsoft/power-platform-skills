@@ -66,5 +66,5 @@ When upstream confirms versions or a runtime upgrade lands:
 1. Edit `scripts/lib/supported-dependencies.js` — change the `version` field and (if applicable) flip `confidence` from `compatible` to `pinned`.
 2. Re-run `node --test plugins/model-apps/scripts/tests/generate-page-manifest.test.js` — the tests assert the generated manifest's dependency map, feature-flag handling, and `--force` behavior.
 3. Update this doc to reflect the new versions (the table is hand-maintained from the JS module — a small sync script could automate it later).
-4. Bump the plugin minor or patch version in `.claude-plugin/plugin.json`.
+4. Bump the plugin minor or patch version in `.plugin/plugin.json`.
 5. CHANGELOG entry under the appropriate version section.

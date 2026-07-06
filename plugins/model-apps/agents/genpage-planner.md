@@ -30,7 +30,7 @@ You will be invoked by the `/genpage` skill with a prompt that includes:
 
 - The user's requirements (`$ARGUMENTS`)
 - The working directory (absolute path where artifacts should be written)
-- The plugin root directory (`${CLAUDE_PLUGIN_ROOT}`)
+- The plugin root directory (`${PLUGIN_ROOT}`)
 
 ---
 
@@ -197,7 +197,7 @@ If any entities need creating, note that entity creation requires:
 - A target solution (the planner asks you to pick one in the next step)
 
 Detection uses `pac model list-tables` natively; creation runs through the
-plugin's own Web API scripts under `${CLAUDE_PLUGIN_ROOT}/scripts/`.
+plugin's own Web API scripts under `${PLUGIN_ROOT}/scripts/`.
 
 ### App Detection
 
@@ -241,7 +241,7 @@ Query the env for non-managed solutions (excluding the always-present "Default" 
 "Active"):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
   "solutions?\$select=uniquename,friendlyname&\$expand=publisherid(\$select=customizationprefix)&\$filter=ismanaged eq false and uniquename ne 'Default' and uniquename ne 'Active' and isvisible eq true&\$top=10"
 ```
 
@@ -289,9 +289,9 @@ in the plan's `## Environment`. Specifics:
 - **Existing solution** → use it directly; capture its prefix from the Step 2 query.
 - **Create new under publisher `<prefix>`** → resolve publisher uniquename, then create:
   ```bash
-  PUB=$(node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
+  PUB=$(node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
     "publishers?\$select=uniquename&\$filter=customizationprefix eq '<prefix>'&\$top=1")
-  node "${CLAUDE_PLUGIN_ROOT}/scripts/create-solution.js" "$ENV_URL" \
+  node "${PLUGIN_ROOT}/scripts/create-solution.js" "$ENV_URL" \
     "<UniqueName>" "<Friendly Name>" --publisher "<publisherUniqueName>"
   ```
   Omit `--publisher` to use the env's Default Publisher (prefix `new`).
@@ -357,7 +357,7 @@ of truth** for all downstream agents. It must be fully self-contained.
 downstream agents parse by name. See:
 
 ```
-${CLAUDE_PLUGIN_ROOT}/references/plan-schema.md
+${PLUGIN_ROOT}/references/plan-schema.md
 ```
 
 Read that file before writing the plan. Every required section must be present with
@@ -391,7 +391,7 @@ single-visit dashboards, or mock-data pages. The page-builder reads this field
 to decide whether to load `references/data-caching.md`.
 
 For the `## Relevant Samples` section: pick the most structurally relevant sample
-from `${CLAUDE_PLUGIN_ROOT}/samples/` (e.g., 7-responsive-cards.tsx for card
+from `${PLUGIN_ROOT}/samples/` (e.g., 7-responsive-cards.tsx for card
 layouts, 2-wizard-multi-step.tsx for wizards, 12-dialog-form-overlay.tsx for any
 page with a modal/dialog — create/edit forms, confirm-delete, detail-in-a-dialog).
 Do NOT list reference docs as samples — only files under `samples/`.

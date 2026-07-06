@@ -19,7 +19,7 @@ claude --plugin-dir /path/to/plugins/canvas-apps
 ## Architecture
 
 ```
-.claude-plugin/plugin.json     ← Plugin metadata (name, version, keywords)
+.plugin/plugin.json            ← Open Plugins metadata (name, version, keywords)
 .mcp.json                      ← MCP server config (canvas-authoring, auto-registered)
 AGENTS.md                      ← Plugin guidance for AI agents (this file)
 CLAUDE.md                      ← Symlink → AGENTS.md

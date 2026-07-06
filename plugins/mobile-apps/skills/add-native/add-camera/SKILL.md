@@ -1,0 +1,501 @@
+---
+name: add-camera
+description: Internal implementation skill invoked by /add-native for camera, image picker, barcode scanner, QR scanner, and camera/gallery Dataverse artifact workflows.
+user-invocable: false
+allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
+model: sonnet
+---
+
+**Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../../shared/shared-instructions.md)** — read first.
+
+**References:**
+
+- [dataverse-reference.md](${CLAUDE_SKILL_DIR}/../../add-dataverse/references/dataverse-reference.md) — File/image column upload patterns (Step 7–8)
+
+# Add Camera
+
+**Internal helper.** Users should invoke `/add-native camera`, `/add-native image-picker`, `/add-native barcode-scanner`, or `/add-native qr-scanner`; `/add-native` routes here after resolving the capability.
+
+Generate typed camera + image-picker wrappers, an optional barcode/QR scanner control, and optional custom-upload guidance for Dataverse image/file workflows.
+
+This skill **only writes JS files under `src/native/`**. It does not install modules and does not touch `package.json` or `app.config.js` — the underlying Expo modules (`expo-camera`, `expo-image-picker`) and their config plugins must already be shipped by the upstream `pa-wrap-tools/templates/expo-app-standalone` template. If they're missing, STOP and tell the user the template doesn't ship them yet.
+
+Why: customer binaries are built from a pre-built rewrap base, not from the customer's `package.json`. Adding a native module here would compile against modules the binary doesn't actually contain, causing runtime crashes after rewrap. See [`/add-native`](../SKILL.md) for the same hard rules.
+
+Two modules are required (must already be in `package.json`):
+- **`expo-camera`** — live viewfinder, barcode scanning
+- **`expo-image-picker`** — gallery selection + quick camera capture (simpler API, no viewfinder)
+
+**Dataverse File/Image boundary:** for normal Dataverse File/Image form fields, screens should use `FilePicker` / `ImagePicker` from `power-apps-native-host` (see [`/add-native` File/Image Picker Ownership](../SKILL.md#fileimage-picker-ownership)). `/add-native camera` owns custom camera/gallery/scanner workflows, such as a dedicated evidence-capture screen, barcode/QR scan gate, or gallery-selected image that is transformed before saving.
+
+**Pen/signature boundary:** signature, sign-off, ink, drawing, or pen capture belongs to `/add-native pen-input` (which routes internally to the pen helper). Both camera photos and pen signatures can persist to Dataverse Image/File columns, but the capture wrappers are separate.
+
+## Workflow
+
+1. Verify project → 2. Verify modules are template-shipped → 3. Write camera wrapper → 3b. Write scanner control if requested → 4. Detect Dataverse columns → 5. Write upload helper only for custom capture flows → 6. Type-check → 7. Summary
+
+---
+
+### Step 1 — Verify project
+
+```bash
+test -f app.config.js && test -f power.config.json && test -f package.json
+```
+
+If any file is missing, report and STOP — this skill requires an initialized Power Apps mobile app.
+
+### Step 2 — Verify modules are template-shipped
+
+Both `expo-camera` and `expo-image-picker` must already be in `package.json`. Do **not** install them — if they're missing, the upstream template hasn't shipped them yet, and this skill STOPs.
+
+```bash
+node -e "const p = require('./package.json'); const need = ['expo-camera','expo-image-picker']; const missing = need.filter(m => !p.dependencies?.[m]); if (missing.length) { console.error('MISSING from package.json: ' + missing.join(', ') + '. The upstream template must ship these for /add-native camera to run. Do NOT install them yourself — file an issue at the template repo (pa-wrap-tools/templates/expo-app-standalone) instead.'); process.exit(1); } console.log('OK: both modules present');"
+```
+
+If the check fails, STOP. Print the error verbatim. Do not run `npx expo install`. Do not edit `app.config.js`. Tell the user the template version they scaffolded from doesn't include the camera modules — they need to wait for a newer template release or open a request upstream.
+
+Also check if the wrapper already exists:
+
+```bash
+test -f src/native/camera.ts && echo "exists" || echo "missing"
+```
+
+If the wrapper exists, skip Step 3 — do NOT overwrite. Continue to Step 3b / Step 4 as needed.
+
+Detect whether barcode/QR scanning is requested by checking `$ARGUMENTS` and `native-app-plan.md` for `barcode`, `bar code`, `QR`, `scanner`, `scan gate`, `SKU scan`, or `inventory scan`. If present, set `SCANNER_NEEDED=yes`; otherwise skip Step 3b unless the user explicitly asks for scanner support.
+
+### Step 3 — Write camera wrapper
+
+**Print before starting:**
+> "→ Writing src/native/camera.ts wrapper (takePhoto + pickImage with discriminated-union results)…"
+
+Create `src/native/camera.ts`. If the file already exists, **do NOT overwrite** — append a comment noting "regenerated by /add-native camera" and STOP this step.
+
+```typescript
+// src/native/camera.ts
+// Camera capture and image picker wrapper for Power Apps mobile apps.
+// Uses expo-image-picker for both camera capture and gallery selection.
+// All functions return discriminated-union results — never throw.
+
+import * as ImagePicker from 'expo-image-picker';
+
+// --- Result types ---
+
+export type PhotoResult =
+  | { ok: true; uri: string; width: number; height: number; mimeType?: string; fileSize?: number }
+  | { ok: false; reason: 'permission-denied' | 'cancelled' | 'unsupported' | 'error'; message?: string };
+
+// --- Permission ---
+
+export async function requestCameraPermission(): Promise<boolean> {
+  const { status } = await ImagePicker.requestCameraPermissionsAsync();
+  return status === 'granted';
+}
+
+export async function requestMediaLibraryPermission(): Promise<boolean> {
+  const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+  return status === 'granted';
+}
+
+// --- Capture ---
+
+/**
+ * Launch the device camera and capture a photo.
+ * Returns `{ ok: false, reason: 'unsupported' }` when native camera capture is unavailable.
+ */
+export async function takePhoto(options?: {
+  quality?: number;
+  allowsEditing?: boolean;
+}): Promise<PhotoResult> {
+  const granted = await requestCameraPermission();
+  if (!granted) return { ok: false, reason: 'permission-denied' };
+
+  try {
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ['images'],
+      quality: options?.quality ?? 0.8,
+      allowsEditing: options?.allowsEditing ?? false,
+      exif: false,
+    });
+
+    if (result.canceled) return { ok: false, reason: 'cancelled' };
+
+    const asset = result.assets[0];
+    return {
+      ok: true,
+      uri: asset.uri,
+      width: asset.width ?? 0,
+      height: asset.height ?? 0,
+      mimeType: asset.mimeType ?? undefined,
+      fileSize: asset.fileSize ?? undefined,
+    };
+  } catch (e: any) {
+    return { ok: false, reason: 'error', message: e?.message };
+  }
+}
+
+/**
+ * Open the device photo gallery and pick an image.
+ * Works on all platforms including web (uses native file picker).
+ */
+export async function pickImage(options?: {
+  quality?: number;
+  allowsEditing?: boolean;
+  allowsMultipleSelection?: boolean;
+}): Promise<PhotoResult> {
+  const granted = await requestMediaLibraryPermission();
+  if (!granted) return { ok: false, reason: 'permission-denied' };
+
+  try {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: options?.quality ?? 0.8,
+      allowsEditing: options?.allowsEditing ?? false,
+      allowsMultipleSelection: options?.allowsMultipleSelection ?? false,
+      exif: false,
+    });
+
+    if (result.canceled) return { ok: false, reason: 'cancelled' };
+
+    const asset = result.assets[0];
+    return {
+      ok: true,
+      uri: asset.uri,
+      width: asset.width ?? 0,
+      height: asset.height ?? 0,
+      mimeType: asset.mimeType ?? undefined,
+      fileSize: asset.fileSize ?? undefined,
+    };
+  } catch (e: any) {
+    return { ok: false, reason: 'error', message: e?.message };
+  }
+}
+```
+
+### Step 3b — Write barcode/QR scanner control when requested
+
+**Skip this step unless `SCANNER_NEEDED=yes`.** Photo-only and gallery-only flows do not need a live `CameraView`.
+
+**Print before starting:**
+> "→ Writing src/native/barcodeScanner.tsx (CameraView barcode/QR scanner control)…"
+
+Create `src/native/barcodeScanner.tsx`. If it already exists, do not overwrite.
+
+```tsx
+// src/native/barcodeScanner.tsx
+// Barcode / QR scanner control for Power Apps mobile apps.
+// Uses expo-camera CameraView. Never throws; permission state is rendered inline.
+
+import React from 'react';
+import { StyleProp, StyleSheet, Text, View, ViewStyle } from 'react-native';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import type { BarcodeScanningResult, BarcodeType } from 'expo-camera';
+
+export type ScannerResult = {
+  ok: true;
+  data: string;
+  type: string;
+  raw: BarcodeScanningResult;
+};
+
+export type BarcodeScannerViewProps = {
+  onScanned: (result: ScannerResult) => void;
+  paused?: boolean;
+  resetKey?: unknown;
+  barcodeTypes?: BarcodeType[];
+  style?: StyleProp<ViewStyle>;
+  overlay?: React.ReactNode;
+  children?: React.ReactNode;
+};
+
+const DEFAULT_BARCODE_TYPES = [
+  'aztec',
+  'qr',
+  'ean13',
+  'ean8',
+  'upc_a',
+  'upc_e',
+  'datamatrix',
+  'code39',
+  'code93',
+  'code128',
+  'pdf417',
+  'itf14',
+  'codabar',
+] as BarcodeType[];
+
+export function BarcodeScannerView({
+  onScanned,
+  paused = false,
+  resetKey,
+  barcodeTypes = DEFAULT_BARCODE_TYPES,
+  style,
+  overlay,
+  children,
+}: BarcodeScannerViewProps) {
+  const [permission, requestPermission] = useCameraPermissions();
+  const scanLockedRef = React.useRef(false);
+
+  React.useEffect(() => {
+    if (permission && !permission.granted && permission.canAskAgain) {
+      requestPermission();
+    }
+  }, [permission, requestPermission]);
+
+  React.useEffect(() => {
+    if (!paused) {
+      scanLockedRef.current = false;
+    }
+  }, [paused, resetKey]);
+
+  const handleBarcodeScanned = React.useCallback((event: BarcodeScanningResult) => {
+    if (paused || scanLockedRef.current) return;
+    scanLockedRef.current = true;
+    onScanned({ ok: true, data: event.data, type: event.type, raw: event });
+  }, [onScanned, paused]);
+
+  if (!permission) {
+    return <View style={[styles.fallback, style]}><Text>Checking camera permission...</Text></View>;
+  }
+
+  if (!permission.granted) {
+    return <View style={[styles.fallback, style]}><Text>Camera permission is required to scan codes.</Text></View>;
+  }
+
+  return (
+    <View style={[styles.container, style]}>
+      <CameraView
+        style={StyleSheet.absoluteFill}
+        facing="back"
+        active={!paused}
+        barcodeScannerSettings={{ barcodeTypes }}
+        onBarcodeScanned={paused ? undefined : handleBarcodeScanned}
+      />
+      {overlay || children ? <View pointerEvents="box-none" style={styles.overlay}>{overlay ?? children}</View> : null}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, overflow: 'hidden', position: 'relative' },
+  overlay: { ...StyleSheet.absoluteFillObject },
+  fallback: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 16 },
+});
+```
+
+Scanner rendering rule: do **not** put overlay UI as `CameraView` children. Expo Camera can render incorrectly when React children are nested inside the native camera preview. The generated control renders the camera as one layer and renders `overlay` / `children` as a sibling absolute layer above it.
+
+Scan mutation rule: the generated control has an internal one-shot scan lock so rapid `onBarcodeScanned` callbacks cannot double-submit. Screens should still set `paused=true` before navigating or mutating data, then reset `paused=false` and change `resetKey` when the screen regains focus. This makes returning to the scanner reliable after a successful scan.
+
+Scan-gate business rule: for QR lookup flows, resolve the scanned code against the target entity first (for example, `Test Item`). If the lookup misses, show a clear inline `Item does not exist` message and keep scanner flow in-place. Do not auto-create `Unknown` scan rows unless the approved plan explicitly requires that fallback behavior.
+
+Scanner loading UI rule: when scan processing takes time (lookup/create mutation), render a spinner-only overlay inside the scanner preview via the `overlay` prop. Do not render a separate loading card/panel above the camera preview.
+
+### Step 4 — Detect Dataverse image/file columns
+
+Check if the project has generated services with file or image upload support:
+
+```text
+Grep pattern="ImageColumnName|FileColumnName|UploadColumnName" path="src/generated/"
+```
+
+**If matches found:** note the table names and column types. Continue to Step 5 only when the plan explicitly requires a custom camera/gallery capture flow outside the host `ImagePicker` / `FilePicker` controls.
+
+File/Image host-control safety: this skill does not replace normal Dataverse form controls. Keep host `ImagePicker` / `FilePicker` for standard Dataverse form-bound Image/File fields.
+
+**If no matches (or `src/generated/` doesn't exist):** skip Step 5. The camera wrapper (Step 3) and scanner control (Step 3b, when requested) are still useful standalone — screens can display photos or scan codes without uploading to Dataverse. Mention in the summary that Dataverse file/image form fields should use host controls after running `/add-dataverse` with image/file columns.
+
+### Step 5 — Write image upload helper
+
+**Print before starting:**
+> "→ Writing src/native/cameraUpload.ts (Dataverse image column base64 patch helper)…"
+
+Create `src/native/cameraUpload.ts`. If the file already exists, **do NOT overwrite**.
+
+Do **not** generate this helper for normal Dataverse File/Image form fields. Those use host `FilePicker` / `ImagePicker` controls. Generate it only when the approved screen plan needs a custom camera/gallery capture flow.
+
+This helper does not change host `ImagePicker` / `FilePicker` behavior. It only covers custom photo-capture flows where the app receives a camera URI and then updates a Dataverse Image column explicitly.
+
+This helper is for **Dataverse Image columns** in native apps. It reads the local photo URI using Expo file APIs, converts it to base64, then calls the generated service `update()` with `{ [imageColumnName]: base64 }`.
+
+Do **not** convert camera URIs into browser-style `File` / `Blob` objects for this path. That pattern is fragile in RN/Expo runtimes and causes upload failures like `arrayBuffer is not a function`.
+
+```typescript
+// src/native/cameraUpload.ts
+// Bridges camera/gallery photo output to Dataverse Image column updates.
+// Reads local image URI as base64 and PATCHes the image column via service.update().
+
+import * as FileSystem from 'expo-file-system';
+
+export type UploadResult =
+  | { ok: true }
+  | { ok: false; reason: 'read-failed' | 'update-failed' | 'error'; message?: string };
+
+export type ImageUpdateService = {
+  update: (id: string, body: any) => Promise<{ success: boolean; error?: { message?: string } }>;
+};
+
+/**
+ * Upload a photo from takePhoto() / pickImage() to a Dataverse Image column.
+ *
+ * @param uri             - Photo URI from the camera wrapper result
+ * @param service         - Generated Dataverse service with update()
+ * @param recordId        - The Dataverse record GUID to patch
+ * @param imageColumnName - Dataverse Image column logical name
+ */
+export async function uploadPhotoToImageColumn(
+  uri: string,
+  service: ImageUpdateService,
+  recordId: string,
+  imageColumnName: string,
+): Promise<UploadResult> {
+  try {
+    const base64 = await readUriAsBase64(uri);
+    if (!base64) {
+      return { ok: false, reason: 'read-failed', message: 'Could not read the image URI as base64.' };
+    }
+
+    // Dataverse Image columns expect base64 payload value (without data URI prefix).
+    const result = await service.update(recordId, { [imageColumnName]: base64 });
+
+    if (!result.success || result.error) {
+      return { ok: false, reason: 'update-failed', message: result.error?.message ?? 'Dataverse image update failed.' };
+    }
+
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: 'error', message: error instanceof Error ? error.message : 'Unable to upload image.' };
+  }
+}
+
+/**
+ * Read a local photo URI to a base64 string using Expo file APIs.
+ */
+async function readUriAsBase64(uri: string): Promise<string | null> {
+  try {
+    const fsAny = FileSystem as any;
+    if (typeof fsAny.readAsStringAsync !== 'function') {
+      return null;
+    }
+
+    const normalizedUri = uri.startsWith('file://') ? uri : `file://${uri}`;
+    const base64 = await fsAny.readAsStringAsync(normalizedUri, {
+      encoding: fsAny.EncodingType?.Base64 ?? 'base64',
+    });
+    if (typeof base64 !== 'string' || base64.length === 0) {
+      return null;
+    }
+
+    return base64;
+  } catch {
+    return null;
+  }
+}
+```
+
+**Important:** The `service` parameter is typed loosely (`ImageUpdateService`) so it works with any generated service that has `update()`. The caller passes the concrete service — this avoids importing a specific generated service in the helper.
+
+**Write contract:** the helper must treat any non-truthy `result.success` as failure even when `result.error` is missing. Generated services return `IOperationResult`, and native app screens must not show success or navigate after any Dataverse write unless `success` is truthy.
+
+**Template/API note:** if `readAsStringAsync` is not available from `expo-file-system` in your template version, import from `expo-file-system/legacy` and keep the same base64 behavior.
+
+### Step 6 — Type-check
+
+**Print before starting:**
+> "→ Running tsc to verify camera + upload helper compile (~10–20 seconds)."
+
+```bash
+npx tsc --noEmit
+```
+
+Fix any errors. Common issues:
+- `readAsStringAsync` not found on `expo-file-system` — switch import to `expo-file-system/legacy` for this helper.
+- Import path mismatches — verify `src/native/` is reachable from screen components.
+
+### Step 7 — Summary
+
+```
+Camera + image picker wrappers generated
+---
+Modules (template-shipped) : expo-camera, expo-image-picker
+package.json               : unchanged ✓
+app.config.js              : unchanged ✓
+Camera wrapper             : src/native/camera.ts
+Scanner control            : src/native/barcodeScanner.tsx (or "skipped — no barcode/QR workflow requested")
+Upload helper              : src/native/cameraUpload.ts  (or "skipped — no Dataverse image columns found")
+
+Type-check: PASS
+
+Sample usage (capture + upload to Dataverse):
+
+  import { takePhoto } from '../native/camera';
+  import { uploadPhotoToImageColumn } from '../native/cameraUpload';
+  import { Cr123_inspectionService } from '../generated/services/Cr123_inspectionService';
+
+  const result = await takePhoto();
+  if (result.ok) {
+    const upload = await uploadPhotoToImageColumn(
+      result.uri,
+      Cr123_inspectionService,
+      recordId,
+      'cr123_sitephoto'  // Dataverse Image column logical name
+    );
+    if (upload.ok) {
+      showToast('Photo attached to record');
+    }
+  }
+
+Sample usage (gallery pick, no Dataverse):
+
+  import { pickImage } from '../native/camera';
+
+  const result = await pickImage();
+  if (result.ok) {
+    setPreviewUri(result.uri);
+  }
+
+Sample usage (QR/barcode scan gate):
+
+  import { BarcodeScannerView } from '../native/barcodeScanner';
+  import { useFocusEffect } from 'expo-router';
+
+  const [paused, setPaused] = useState(false);
+  const [scanResetKey, setScanResetKey] = useState(0);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      setPaused(false);
+      setScanResetKey((value) => value + 1);
+      return () => setPaused(true);
+    }, [])
+  );
+
+  <BarcodeScannerView
+    paused={paused}
+    resetKey={scanResetKey}
+    barcodeTypes={['qr', 'ean13', 'code128']}
+    overlay={
+      <>
+        <ScannerFrame />
+        {isScanning ? <ScannerOverlaySpinner /> : null}
+      </>
+    }
+    onScanned={({ data, type }) => {
+      setPaused(true);
+      handleCode(data, type);
+    }}
+  />
+
+Note: Camera changes need a native rebuild to take effect:
+  run the platform-specific native command for your target device/simulator
+  Metro hot-reload alone is not enough for permission changes.
+---
+```
+
+## Notes
+
+- This skill never modifies `src/playerConfig.ts`, `src/generated/`, or any screen file.
+- `takePhoto()` returns `{ ok: false, reason: 'unsupported' }` when native camera capture is unavailable.
+- Barcode/QR scanning is handled here via `src/native/barcodeScanner.tsx` when requested. Use it for scan gates and lookup flows; do not use it as a replacement for Dataverse File/Image host controls.
+- `cameraUpload.ts` in this skill targets custom Dataverse Image-column capture flows only. It does not replace host `ImagePicker` / `FilePicker` controls for standard Dataverse forms.
+- If Dataverse tables are added later (via `/add-dataverse`), re-run `/add-native camera` — it will skip module install and wrapper creation, and only write `cameraUpload.ts` when image columns are detected for custom capture flows.

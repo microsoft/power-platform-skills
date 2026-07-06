@@ -14,7 +14,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, Task
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # deploy-pipeline
 
@@ -22,7 +22,7 @@ Triggers a **Power Platform Pipeline** deployment run. Reads the existing pipeli
 
 > **Prerequisite**: Run `/power-pages:setup-pipeline` first to create the pipeline configuration.
 
-> Refer to `${CLAUDE_PLUGIN_ROOT}/references/cicd-pipeline-patterns.md` for all HAR-confirmed API patterns used in this skill.
+> Refer to `${PLUGIN_ROOT}/references/cicd-pipeline-patterns.md` for all HAR-confirmed API patterns used in this skill.
 
 ## Prerequisites
 
@@ -52,7 +52,7 @@ When `inExecution.status` is anything other than `"active"` (`"not-running"`, `"
 **Step 1 — Run the gate helper.**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" \
+node "${PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" \
   --projectRoot "." \
   --envUrl "{devEnvUrl}" \
   --token "{token}" \
@@ -121,15 +121,25 @@ Tasks to create:
 
 Steps:
 
-1. Run `verify-alm-prerequisites.js` to confirm PAC CLI auth, acquire a token, and verify API access:
+1. **Resolve the project's configured environment URL first, then assert PAC is actually connected to it.** `verify-alm-prerequisites.js` resolves the env from PAC's *ambient org context* (`pac env who`), which is **not** guaranteed to match the project. If PAC has drifted to another environment (duplicate active `pac auth` profiles, or an external process flipping the active env), the skill would silently run discovery — and later `pac pipeline deploy` — against the **wrong** environment (potentially PROD). Assert the match and **hard-stop** on mismatch rather than pinning `--envUrl`: pinning would correct only the Dataverse-API calls while later PAC-CLI operations still follow the drifted context, so asserting that PAC itself is on the right env is the safer gate.
+
+   Read the project's recorded env URL (first match wins): `.solution-manifest.json` → top-level `environmentUrl`, else `powerpages.config.json` → `environmentUrl`. Store as `CONFIGURED_ENV_URL`. (Both fields are top-level `environmentUrl` strings; declarative/EDM sites have no `powerpages.config.json`, so the manifest is the source there.)
+
+   **Pass `--expectedEnvUrl` only when `CONFIGURED_ENV_URL` actually resolved to a URL.** Use the first form when a recorded env URL exists, the second when neither file records one — do **not** pass an empty or unresolved `--expectedEnvUrl "{CONFIGURED_ENV_URL}"`:
+
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --require-manifest
+   # CONFIGURED_ENV_URL resolved (recorded in manifest/config) — assert PAC is on it:
+   node "${PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --require-manifest --expectedEnvUrl "{CONFIGURED_ENV_URL}"
+
+   # Neither file records an env URL — omit the flag, fall back to the pac-context default:
+   node "${PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --require-manifest
    ```
-   Capture output as JSON; extract `.envUrl` (store as `devEnvUrl`) and `.token` (store as `DEV_TOKEN`). If the script exits non-zero, stop and surface the error — it will indicate whether `az login`, `pac auth`, or WhoAmI failed.
+
+   `--expectedEnvUrl` makes the helper compare PAC's resolved env (origin-only) against `CONFIGURED_ENV_URL` and exit non-zero with an *"Environment mismatch: PAC CLI is connected to {X} but this project targets {Y} — run `pac env select …`"* error on mismatch. (As a safety net the helper skips the assertion if the value isn't a parseable env URL — an empty string or an unsubstituted placeholder won't hard-stop — but prefer omitting the flag outright when there's no recorded URL.) Capture output as JSON; extract `.envUrl` (store as `devEnvUrl`) and `.token` (store as `DEV_TOKEN`). If the script exits non-zero, stop and surface the error — it indicates an env mismatch, or that `az login` / `pac auth` / WhoAmI failed.
 
 2. Run `detect-project-context.js` to read project config and solution manifest:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/detect-project-context.js"
+   node "${PLUGIN_ROOT}/scripts/lib/detect-project-context.js"
    ```
    Capture output as JSON; extract `.solutionManifest` (store as `solutionManifest`), `.siteName` (store as `siteName`), and `.websiteRecordId`. If `solutionManifest` is null, continue — the manifest is not strictly required at this step (solution info will come from `docs/alm/last-pipeline.json`).
 
@@ -156,13 +166,13 @@ Steps:
 
 ### Phase 1.5 — Ground in current Pipelines deployment documentation
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/alm-docs-grounding.md`
+> Reference: `${PLUGIN_ROOT}/references/alm-docs-grounding.md`
 
 Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line note and continue — this skill must remain runnable offline.
 
 1. Run `microsoft_docs_search` with the query: `Power Platform Pipelines stage run validation ValidatePackageAsync DeployPackageAsync approval`.
 2. Fetch `https://learn.microsoft.com/en-us/power-platform/alm/pipelines` (and at most one sister page on stage runs, validation, or approval gates) in parallel via `microsoft_docs_fetch`.
-3. Extract a one-paragraph summary of what Microsoft Learn currently says about stage-run lifecycle, validation outcomes, approval-gate workflow, and `deploymentsettingsjson` overrides. Compare against `${CLAUDE_PLUGIN_ROOT}/references/cicd-pipeline-patterns.md` and flag any divergence (new status codes, changed `stagerunstatus` terminal values, new approval-gate API).
+3. Extract a one-paragraph summary of what Microsoft Learn currently says about stage-run lifecycle, validation outcomes, approval-gate workflow, and `deploymentsettingsjson` overrides. Compare against `${PLUGIN_ROOT}/references/cicd-pipeline-patterns.md` and flag any divergence (new status codes, changed `stagerunstatus` terminal values, new approval-gate API).
 4. Use the summary to inform Phase 2+ decisions. Do not silently change skill behavior — surface any divergence to the user as a soft warning before Phase 4 (Create Stage Run + Validate Package).
 
 ### Phase 2 — Select Target Stage
@@ -227,7 +237,7 @@ Power Pages code-site solutions almost always contain `.js` bundle chunks (Vite/
 
 2. Run the helper in dry-run mode to detect the current state:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/fix-blocked-attachments.js" \
+   node "${PLUGIN_ROOT}/scripts/lib/fix-blocked-attachments.js" \
      --envUrl "{SELECTED_STAGE.targetEnvironmentUrl}" \
      --extensions js,css \
      --dry-run
@@ -288,6 +298,8 @@ Use `solutionId` from `.solution-manifest.json` as `ARTIFACT_SOLUTION_ID` and `u
 > GET {hostEnvUrl}/api/data/v9.1/deploymentpipelines({pipelineId})/deploymentpipeline_deploymentenvironment?$select=deploymentenvironmentid,name,environmenttype
 > ```
 > Filter for `environmenttype = 200000000` to get the source record. Use `deploymentenvironmentid` as the `sourceDeploymentEnvironmentId`. For the artifact/solution list, use `sourceDeploymentEnvironmentId` from `docs/alm/last-pipeline.json` and `solutionName` from `.solution-manifest.json` as fallbacks. Set a flag `VALIDATE_PACKAGE_UNAVAILABLE = true` to skip Phase 4.2–4.3 and use the PAC CLI path in Phase 6.
+>
+> **If `RetrieveDeploymentPipelineInfo` returns a NON-404 error (e.g. 400/4xx/5xx)** — observed: some Pipelines packages return **400** for this call even though `ValidatePackageAsync` works fine — do **NOT** set `VALIDATE_PACKAGE_UNAVAILABLE`. The 404 branch above is specifically for older packages that lack the OData validation API; a 400 is just this metadata call failing, not the validation API being absent. Instead, fall back to `sourceDeploymentEnvironmentId` from `docs/alm/last-pipeline.json` (and `solutionName` from `.solution-manifest.json`) and **continue the normal `ValidatePackageAsync` flow** (Phase 4 onward). If `docs/alm/last-pipeline.json` is somehow missing `sourceDeploymentEnvironmentId`, use the same `deploymentpipeline_deploymentenvironment` navigation-property GET shown in the 404 branch above to recover it (still **without** setting `VALIDATE_PACKAGE_UNAVAILABLE`). Only a genuine 404 — or a later `ValidatePackageAsync` 404 (Phase 4.2) — routes to the PAC-CLI path.
 
 ### Phase 3.5 — Pre-deploy Completeness Check
 
@@ -296,11 +308,12 @@ A pipeline's `ValidatePackageAsync` confirms the solution zip is importable on t
 Run the shared site-inventory helper against the **source (dev) environment**:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
+node "${PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
   --envUrl "{devEnvUrl}" --token "{DEV_TOKEN}" \
   --siteId "{websiteRecordId from .solution-manifest.json}" \
   --publisherPrefix "{publisherPrefix from .solution-manifest.json}" \
-  --solutionId "{solutionId from .solution-manifest.json}"
+  --solutionId "{solutionId from .solution-manifest.json}" \
+  --projectRoot "."
 ```
 
 Parse stdout and evaluate `missing.*`. **Before doing anything else**, capture the **pre-sync state** so a post-sync re-confirmation gate can show what changed:
@@ -381,7 +394,7 @@ Where `{{VALIDATION_SPECS}}` is the array `[{ solutionUniqueName, solutionId }, 
 **3.6.2 Run the batch validator.**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/validate-stage-runs-batch.js" \
+node "${PLUGIN_ROOT}/scripts/lib/validate-stage-runs-batch.js" \
   --hostEnvUrl "{hostEnvUrl}" \
   --token "{HOST_TOKEN}" \
   --pipelineId "{pipelineId}" \
@@ -425,7 +438,7 @@ Surface the affected solutions in a single message (not per-solution) and pause.
   Build a tmp file with only the previously-pending entries (carry `stageRunId` from the original batch result):
   ```bash
   node -e "require('fs').writeFileSync('./docs/alm/.repoll-batch.json', JSON.stringify({{PENDING_SPECS_WITH_STAGERUNIDS}}))"
-  node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/validate-stage-runs-batch.js" \
+  node "${PLUGIN_ROOT}/scripts/lib/validate-stage-runs-batch.js" \
     --hostEnvUrl "{hostEnvUrl}" \
     --token "{HOST_TOKEN}" \
     --rePoll \
@@ -492,7 +505,7 @@ Use Node.js `https` module for all Dataverse calls (curl has encoding issues on 
 **4.1 Create stage run** using `create-stage-run.js`:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-stage-run.js" \
+node "${PLUGIN_ROOT}/scripts/lib/create-stage-run.js" \
   --hostEnvUrl "{hostEnvUrl}" \
   --token "{HOST_TOKEN}" \
   --pipelineId "{pipelineId}" \
@@ -527,7 +540,7 @@ Treat HTTP 204 as success.
 **4.3 Poll validation** using `poll-validation-status.js`:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/poll-validation-status.js" \
+node "${PLUGIN_ROOT}/scripts/lib/poll-validation-status.js" \
   --hostEnvUrl "{hostEnvUrl}" \
   --token "{HOST_TOKEN}" \
   --stageRunId "{STAGE_RUN_ID}" \
@@ -649,7 +662,7 @@ Skip this step entirely when `ENV_VAR_OVERRIDES` is empty AND `deployment-settin
 Otherwise, run the shared helper:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/validate-deployment-settings.js" \
+node "${PLUGIN_ROOT}/scripts/lib/validate-deployment-settings.js" \
   --settingsFile "./deployment-settings.json" \
   --envUrl "{sourceEnvUrl}" \
   --stageLabel "{SELECTED_STAGE.name}"
@@ -771,7 +784,7 @@ Authorization: Bearer {HOST_TOKEN}
 **6.2 Poll stagerunstatus until terminal** using `poll-deployment-status.js`:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/poll-deployment-status.js" \
+node "${PLUGIN_ROOT}/scripts/lib/poll-deployment-status.js" \
   --hostEnvUrl "{hostEnvUrl}" \
   --token "{HOST_TOKEN}" \
   --stageRunId "{STAGE_RUN_ID}" \
@@ -881,7 +894,7 @@ Create `docs/deploy-history/` if it does not already exist:
 mkdir -p docs/deploy-history
 ```
 
-Read the template at `${CLAUDE_PLUGIN_ROOT}/skills/deploy-pipeline/assets/deploy-history-template.html` and replace the following `__PLACEHOLDER__` tokens:
+Read the template at `${PLUGIN_ROOT}/skills/deploy-pipeline/assets/deploy-history-template.html` and replace the following `__PLACEHOLDER__` tokens:
 
 **Overview tab:**
 
@@ -929,14 +942,14 @@ If git is not initialized in the project root (i.e., `git rev-parse --git-dir` f
 
 **7.5 Record skill usage:**
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "DeployPipeline"`.
 
 **7.5b Refresh the ALM plan (if one exists):**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --projectRoot "." \
   --phase deploy-pipeline \
   --render
@@ -994,7 +1007,7 @@ Parse `errordetails` and `validationresults` as JSON / text. Check for these pat
 1. Switch PAC CLI to the **target** environment so the helper queries the right env's settings, then identify which file types are blocked. By default the helper checks `js`; pass `--extensions` if the error mentions other types (e.g. `js,css`):
    ```bash
    pac env select --environment "{TARGET_ENV_URL}"
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/fix-blocked-attachments.js" \
+   node "${PLUGIN_ROOT}/scripts/lib/fix-blocked-attachments.js" \
      --envUrl "{TARGET_ENV_URL}" \
      --extensions js \
      --dry-run
@@ -1053,7 +1066,7 @@ Steps:
 
 1. **Identify which schema(s) have the bad value.** Run `validate-deployment-settings.js` against the current file (same helper as Phase 5.1b) to surface every invalid entry:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/validate-deployment-settings.js" \
+   node "${PLUGIN_ROOT}/scripts/lib/validate-deployment-settings.js" \
      --settingsFile "./deployment-settings.json" \
      --envUrl "{sourceEnvUrl}" \
      --stageLabel "{SELECTED_STAGE.name}"
@@ -1078,7 +1091,7 @@ Steps:
    - **Yes — strip and retry**: invoke the file-mutation helper, then re-PATCH the stage run with the corrected `deploymentsettingsjson`, then call `RetryFailedDeploymentAsync` and resume polling from Phase 6.2.
 
      ```bash
-     node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/strip-invalid-secret-values.js" \
+     node "${PLUGIN_ROOT}/scripts/lib/strip-invalid-secret-values.js" \
        --settingsFile "./deployment-settings.json" \
        --schemaNames "{comma-separated schema names from step 1}" \
        --stageLabel "{SELECTED_STAGE.name}"
@@ -1120,7 +1133,7 @@ Even when the stage run reports success, the Power Platform Pipelines handler do
 Use the shared helper `scripts/lib/verify-env-var-values.js`. It reads schema names + per-stage expected values from `deployment-settings.json` and returns a structured JSON result per schema (`landed` / `missing-value-record` / `missing-definition` / `value-mismatch` / `query-error`):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-env-var-values.js" \
+node "${PLUGIN_ROOT}/scripts/lib/verify-env-var-values.js" \
   --envUrl "{targetEnvUrl}" \
   --settingsFile "./deployment-settings.json" \
   --stageLabel "{SELECTED_STAGE.name}"
@@ -1158,7 +1171,7 @@ pac env select --environment "{SELECTED_STAGE.targetEnvironmentUrl}"
 
 Run the activation check:
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "."
+node "${PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "."
 ```
 
 Then switch PAC CLI back to the source (dev) environment regardless of the result:
@@ -1187,6 +1200,17 @@ Evaluate the result and take action based on the outcome. In all cases, **after 
 **After activation outcome is resolved**, patch `docs/alm/last-deploy.json` (in-place `Edit`) with the actual values:
 - `"activationStatus": "{ACTIVATION_OUTCOME.status}"` (or keep `null` if `ACTIVATION_OUTCOME` is null)
 - `"siteUrl": "{ACTIVATION_OUTCOME.siteUrl}"` (or keep `null`)
+
+**Re-refresh the ALM plan so the activation outcome reaches it.** The Phase 7.5b refresh ran *before* activation was resolved, so the plan's "Activate site in {stage}" step is still pending even though `last-deploy.json` now records `activationStatus`. Re-run the refresh now that the marker is patched — the `deploy-pipeline` phase auto-completes the activate step when `activationStatus` is `"Activated"` (a deferred `"Pending"` correctly leaves it pending):
+
+```bash
+node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase deploy-pipeline \
+  --render
+```
+
+(Soft no-op when no ALM plan exists — `refresh-alm-plan-data.js` returns `ok:false` when `docs/.alm-plan-data.json` is absent.)
 
 Then update the deploy history HTML file (in-place `Edit`) — replace `__ACTIVATION_SECTION__` with the appropriate HTML:
 
@@ -1283,7 +1307,7 @@ Authorization: Bearer {HOST_TOKEN}
 
 | Task subject | activeForm | Description |
 |---|---|---|
-| Verify prerequisites | Verifying prerequisites | Run verify-alm-prerequisites.js (--require-manifest) for PAC/az/WhoAmI; run detect-project-context.js for solutionManifest/siteName; read docs/alm/last-pipeline.json for pipelineId/stages; acquire host env token |
+| Verify prerequisites | Verifying prerequisites | Run verify-alm-prerequisites.js (--require-manifest --expectedEnvUrl from project config; hard-stops on PAC env drift) for PAC/az/WhoAmI; run detect-project-context.js for solutionManifest/siteName; read docs/alm/last-pipeline.json for pipelineId/stages; acquire host env token |
 | Select target stage | Selecting target stage | Show available stages from docs/alm/last-pipeline.json; ask user to select target; warn if last deploy to this stage failed |
 | Resolve pipeline info | Resolving pipeline info | Call RetrieveDeploymentPipelineInfo (v9.1) to get SourceDeploymentEnvironmentId and DeployableArtifacts; match solution |
 | Validate package | Validating package | **`MULTI_RUN_MODE`**: run Phase 3.6 once (parallel batch) — `validate-stage-runs-batch.js` fans out create-stage-run + ValidatePackageAsync + poll-validation-status for all non-skipped solutions concurrently; halts the deploy on any failure or pending-approval batch; persists per-solution stageRunIds for the serial deploy loop to reuse. **Single-solution / legacy v2**: Phase 4 inline — POST deploymentstageruns (→ 201 or 204+header); POST ValidatePackageAsync top-level action (204); poll stagerunstatus until not 200000006; JSON.parse validationresults twice; fetch aigenerateddeploymentnotes; PATCH artifactversion + deploymentnotes + deploymentsettingsjson (from deployment-settings.json) |

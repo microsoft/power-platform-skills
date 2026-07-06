@@ -9,7 +9,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate,
 model: sonnet
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Add Sample Data
 
@@ -32,7 +32,7 @@ Populate Dataverse tables with sample records via OData API so users can test an
 **Actions**:
 
 1. Create todo list with all 6 phases (see [Progress Tracking](#progress-tracking) table)
-2. Follow the prerequisite steps in `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md` to verify PAC CLI auth, acquire an Azure CLI token, and confirm API access. Note the environment URL as `<envUrl>` for subsequent script calls.
+2. Follow the prerequisite steps in `${PLUGIN_ROOT}/references/dataverse-prerequisites.md` to verify PAC CLI auth, acquire an Azure CLI token, and confirm API access. Note the environment URL as `<envUrl>` for subsequent script calls.
 
 **Output**: Authenticated session with valid token and confirmed API access
 
@@ -48,20 +48,20 @@ Populate Dataverse tables with sample records via OData API so users can test an
 
 Check if `.datamodel-manifest.json` exists in the project root (written by the `setup-datamodel` skill). If it exists, read it -- it already contains table logical names, display names, and column info.
 
-See `${CLAUDE_PLUGIN_ROOT}/references/datamodel-manifest-schema.md` for the full manifest schema.
+See `${PLUGIN_ROOT}/references/datamodel-manifest-schema.md` for the full manifest schema.
 
 ### Path B: Query OData API (Fallback)
 
 If no manifest exists, discover custom tables via OData:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions?\$select=LogicalName,DisplayName,EntitySetName&\$filter=IsCustomEntity eq true"
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions?\$select=LogicalName,DisplayName,EntitySetName&\$filter=IsCustomEntity eq true"
 ```
 
 For each discovered table, fetch its custom columns:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table>')/Attributes?\$select=LogicalName,DisplayName,AttributeType,RequiredLevel&\$filter=IsCustomAttribute eq true"
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table>')/Attributes?\$select=LogicalName,DisplayName,AttributeType,RequiredLevel&\$filter=IsCustomAttribute eq true"
 ```
 
 ### 2.1 Present Available Tables
@@ -174,7 +174,7 @@ Refer to `references/odata-record-patterns.md` for full patterns.
 For each table, get the entity set name (needed for the API URL):
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table>')?\$select=EntitySetName"
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table>')?\$select=EntitySetName"
 ```
 
 ### 5.2 Get Picklist Options
@@ -182,7 +182,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDe
 For any picklist/choice columns, query valid option values before insertion:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table>')/Attributes(LogicalName='<column>')/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?\$expand=OptionSet"
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table>')/Attributes(LogicalName='<column>')/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?\$expand=OptionSet"
 ```
 
 Use the actual `Value` integers from the option set in your sample data.
@@ -192,7 +192,7 @@ Use the actual `Value` integers from the option set in your sample data.
 Insert records into parent/referenced tables first to capture their IDs:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "<EntitySetName>" --body '{"cr123_name":"Sample Record","cr123_description":"A sample record for testing"}' --include-headers
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "<EntitySetName>" --body '{"cr123_name":"Sample Record","cr123_description":"A sample record for testing"}' --include-headers
 ```
 
 The `--include-headers` flag includes the `OData-EntityId` response header, which contains the created record ID. Parse the GUID from the response to use in child table lookups.
@@ -204,7 +204,7 @@ Store parent record IDs for use in child table lookups.
 For child/referencing tables, use `@odata.bind` syntax to set lookup fields:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "<ChildEntitySetName>" --body '{"cr123_name":"Child Record","cr123_ParentId@odata.bind":"/<ParentEntitySetName>(<parent_guid>)"}' --include-headers
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "<ChildEntitySetName>" --body '{"cr123_name":"Child Record","cr123_ParentId@odata.bind":"/<ParentEntitySetName>(<parent_guid>)"}' --include-headers
 ```
 
 ### 5.5 Track Progress
@@ -220,7 +220,7 @@ Track each insertion attempt:
 The `dataverse-request.js` script handles 401 token refresh internally. For long-running operations (many records), periodically re-run `verify-dataverse-access.js` to confirm the session is still valid:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
+node "${PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
 ```
 
 **Output**: All approved records inserted with parent-child relationships established
@@ -238,14 +238,14 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
 For each table that was populated, query the record count:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "<EntitySetName>?\$count=true&\$top=0"
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "<EntitySetName>?\$count=true&\$top=0"
 ```
 
 The `@odata.count` field in the response gives the total record count.
 
 ### 6.2 Record Skill Usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "AddSampleData"`.
 
