@@ -209,14 +209,14 @@ test('plan-schema: pass when all headings present', () => {
 // ---------- check-auth before entity-builder ----------
 
 test('check-auth gating: skip when no entity work', () => {
-  const check = WORKFLOW_ASSERTIONS.get('Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked; on ok:false the orchestrator surfaces the message to the user and halts');
+  const check = WORKFLOW_ASSERTIONS.get('Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked (provision-entities.js, or legacy create-table.js/add-column.js/create-relationship.js/create-record.js); on ok:false the orchestrator surfaces the message to the user and halts');
   const plan = `## Entity Creation Required\nNo entity creation required — all entities already exist.\n`;
   const result = check({ fixture: fix({ workflowLog: 'something', genpagePlan: plan }), eval: evalStub() });
   assert.equal(result.status, 'skip');
 });
 
 test('check-auth gating: pass when check-auth precedes the first entity script', () => {
-  const check = WORKFLOW_ASSERTIONS.get('Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked; on ok:false the orchestrator surfaces the message to the user and halts');
+  const check = WORKFLOW_ASSERTIONS.get('Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked (provision-entities.js, or legacy create-table.js/add-column.js/create-relationship.js/create-record.js); on ok:false the orchestrator surfaces the message to the user and halts');
   const log = `node check-auth.js → ok: true
 node create-table.js widget --solution Default`;
   const plan = `## Entity Creation Required\n| Table | Suffix |\n| widget | widget |\n`;
@@ -225,7 +225,7 @@ node create-table.js widget --solution Default`;
 });
 
 test('check-auth gating: fail when an entity script runs before check-auth', () => {
-  const check = WORKFLOW_ASSERTIONS.get('Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked; on ok:false the orchestrator surfaces the message to the user and halts');
+  const check = WORKFLOW_ASSERTIONS.get('Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked (provision-entities.js, or legacy create-table.js/add-column.js/create-relationship.js/create-record.js); on ok:false the orchestrator surfaces the message to the user and halts');
   const log = `node create-table.js widget --solution Default
 node check-auth.js → ok: true`;
   const plan = `## Entity Creation Required\n| Table | Suffix |\n| widget | widget |\n`;
@@ -237,7 +237,7 @@ test('check-auth gating: pass when builder agent name appears before check-auth 
   // This is the meta-list scenario: "## Agents Invoked\n- entity-builder\n##
   // Commands Executed\n- check-auth.js\n- create-table.js". The runner must
   // not treat the agent NAME mention as an actual invocation.
-  const check = WORKFLOW_ASSERTIONS.get('Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked; on ok:false the orchestrator surfaces the message to the user and halts');
+  const check = WORKFLOW_ASSERTIONS.get('Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked (provision-entities.js, or legacy create-table.js/add-column.js/create-relationship.js/create-record.js); on ok:false the orchestrator surfaces the message to the user and halts');
   const log = `## Agents Invoked
 - genpage-entity-builder: invoked per workflow
 
@@ -250,7 +250,7 @@ node create-table.js widget --solution Default`;
 });
 
 test('check-auth gating (new flow): pass when check-auth precedes provision-entities.js', () => {
-  const check = WORKFLOW_ASSERTIONS.get('Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked; on ok:false the orchestrator surfaces the message to the user and halts');
+  const check = WORKFLOW_ASSERTIONS.get('Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked (provision-entities.js, or legacy create-table.js/add-column.js/create-relationship.js/create-record.js); on ok:false the orchestrator surfaces the message to the user and halts');
   const log = `node check-auth.js → ok: true
 node provision-entities.js --env "$ENV_URL" --input @provision-input.json --apply`;
   const plan = `## Entity Creation Required\n| Table | Suffix |\n| widget | widget |\n`;
@@ -259,7 +259,7 @@ node provision-entities.js --env "$ENV_URL" --input @provision-input.json --appl
 });
 
 test('check-auth gating (new flow): fail when provision-entities.js runs before check-auth', () => {
-  const check = WORKFLOW_ASSERTIONS.get('Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked; on ok:false the orchestrator surfaces the message to the user and halts');
+  const check = WORKFLOW_ASSERTIONS.get('Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked (provision-entities.js, or legacy create-table.js/add-column.js/create-relationship.js/create-record.js); on ok:false the orchestrator surfaces the message to the user and halts');
   const log = `node provision-entities.js --env "$ENV_URL" --input @provision-input.json --apply
 node check-auth.js → ok: true`;
   const plan = `## Entity Creation Required\n| Table | Suffix |\n| widget | widget |\n`;
