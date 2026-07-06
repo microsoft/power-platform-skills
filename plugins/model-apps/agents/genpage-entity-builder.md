@@ -316,7 +316,7 @@ Under `## Created Tables`, add a subsection for each created table:
 ### Player Result
 - Schema Name: crb2b_PlayerResult
 - Resolved Full Name: crb2b_playerresult
-- Metadata ID: n/a
+- Metadata ID: n/a (SDK does not surface metadata ids)
 ```
 
 The `- Resolved Full Name: <logicalName>` and `- Schema Name: <schemaName>` lines
@@ -393,22 +393,34 @@ First, extend `<working-dir>/provision-input.json` with a `sampleData` section:
   "entities": [ ... ],
   "relationships": [ ... ],
   "sampleData": {
-    "<prefix>_<tableSuffix>": [
+    "<prefix>_<parentTable>": [
       {
         "<prefix>_name": "Project Alpha",
         "<prefix>_startdate": "2026-01-15",
-        "<prefix>_status": 100000000
+        "<prefix>_status": "Active"
       },
       {
         "<prefix>_name": "Project Beta",
         "<prefix>_startdate": "2026-03-01",
-        "<prefix>_status": 100000001
+        "<prefix>_status": "Inactive"
       }
     ],
-    "<prefix>_<childTableSuffix>": [
+    "<prefix>_<childTable>": [
       {
         "<prefix>_title": "Milestone 1",
-        "<prefix>_ParentLookup@odata.bind": "/<prefix>_<parentPlural>(PARENT_RECORD_ID)"
+        "<prefix>_duedate": "2026-02-01",
+        "$parent": {
+          "entity": "<prefix>_<parentTable>",
+          "match": { "<prefix>_name": "Project Alpha" }
+        }
+      },
+      {
+        "<prefix>_title": "Milestone 2",
+        "<prefix>_duedate": "2026-04-01",
+        "$parent": {
+          "entity": "<prefix>_<parentTable>",
+          "match": { "<prefix>_name": "Project Beta" }
+        }
       }
     ]
   }
@@ -419,9 +431,24 @@ First, extend `<working-dir>/provision-input.json` with a `sampleData` section:
 
 - Generate realistic records (real names, plausible dates/numbers — not "Test1", "Lorem ipsum")
 - Respect column types and constraints (no nulls in required columns)
-- Use defined option **values** for Choice columns (e.g., `100000000`), not labels
-- For lookups, use placeholder IDs or descriptive keys — the CLI will resolve them
-- The CLI handles dependency order (creates parent records before children)
+- **Choice columns:** Use the option **label** string (e.g., `"Active"`, `"Inactive"`), not raw integer values. The SDK core maps labels to option values (`100000000 + index`).
+- **Lookup relationships (1:N):** Use the `$parent` convention:
+  ```json
+  "$parent": {
+    "entity": "<prefix>_<parentTableLogicalName>",
+    "match": { "<prefix>_<uniqueField>": "<parent row value>" }
+  }
+  ```
+  The SDK finds the already-created parent record whose fields match the `match` object and wires the lookup automatically.
+- **N:N relationships:** Use the `$parents` array (plural):
+  ```json
+  "$parents": [
+    { "entity": "<prefix>_<entity1>", "match": { "<prefix>_name": "Row 1" } },
+    { "entity": "<prefix>_<entity2>", "match": { "<prefix>_name": "Row A" } }
+  ]
+  ```
+- **Custom status reasons (if any):** Set `"statusReason": "<label>"` on a row; the SDK resolves it to statecode + statuscode.
+- The SDK handles dependency order (creates parent records before children).
 
 Run the provisioning command with the `--sample-data` flag:
 
