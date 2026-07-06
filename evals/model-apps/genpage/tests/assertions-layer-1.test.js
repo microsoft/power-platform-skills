@@ -249,6 +249,24 @@ node create-table.js widget --solution Default`;
   assert.equal(result.status, 'pass');
 });
 
+test('check-auth gating (new flow): pass when check-auth precedes provision-entities.js', () => {
+  const check = WORKFLOW_ASSERTIONS.get('Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked; on ok:false the orchestrator surfaces the message to the user and halts');
+  const log = `node check-auth.js → ok: true
+node provision-entities.js --env "$ENV_URL" --input @provision-input.json --apply`;
+  const plan = `## Entity Creation Required\n| Table | Suffix |\n| widget | widget |\n`;
+  const result = check({ fixture: fix({ workflowLog: log, genpagePlan: plan }), eval: evalStub() });
+  assert.equal(result.status, 'pass');
+});
+
+test('check-auth gating (new flow): fail when provision-entities.js runs before check-auth', () => {
+  const check = WORKFLOW_ASSERTIONS.get('Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked; on ok:false the orchestrator surfaces the message to the user and halts');
+  const log = `node provision-entities.js --env "$ENV_URL" --input @provision-input.json --apply
+node check-auth.js → ok: true`;
+  const plan = `## Entity Creation Required\n| Table | Suffix |\n| widget | widget |\n`;
+  const result = check({ fixture: fix({ workflowLog: log, genpagePlan: plan }), eval: evalStub() });
+  assert.equal(result.status, 'fail');
+});
+
 // ---------- prefix discipline plan format ----------
 
 test('prefix discipline plan format: pass on suffix-only names', () => {
@@ -401,7 +419,7 @@ test('Edit Phase 6 page-id: pass when --page-id and no --add-to-sitemap', () => 
 // ---------- entity-builder --solution always ----------
 
 test('Entity scripts --solution: pass when every call has --solution', () => {
-  const check = PHASE_EXPECTATIONS.get('Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> (always — \'Default\' is a valid value, never omitted)');
+  const check = PHASE_EXPECTATIONS.get('Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> (always — \'Default\' is a valid value, never omitted); provision-entities.js flow specifies solution via input JSON, verified through ## Environment → Solution: declaration');
   const log = `- node create-table.js --name widget --solution Default
 - node add-column.js --table widget --name foo --type string --solution Default`;
   const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
@@ -409,10 +427,34 @@ test('Entity scripts --solution: pass when every call has --solution', () => {
 });
 
 test('Entity scripts --solution: fail when a call missing --solution', () => {
-  const check = PHASE_EXPECTATIONS.get('Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> (always — \'Default\' is a valid value, never omitted)');
+  const check = PHASE_EXPECTATIONS.get('Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> (always — \'Default\' is a valid value, never omitted); provision-entities.js flow specifies solution via input JSON, verified through ## Environment → Solution: declaration');
   const log = `- node create-table.js --name widget
 - node add-column.js --table widget --name foo --solution Default`;
   const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
   assert.equal(result.status, 'fail');
   assert.match(result.reason, /create-table\.js/);
+});
+
+test('Entity scripts --solution (new flow): pass when provision-entities.js used and Solution: in plan', () => {
+  const check = PHASE_EXPECTATIONS.get('Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> (always — \'Default\' is a valid value, never omitted); provision-entities.js flow specifies solution via input JSON, verified through ## Environment → Solution: declaration');
+  const log = `node provision-entities.js --env "$ENV_URL" --input @provision-input.json --apply`;
+  const plan = `## Environment\nSolution: Default\nPublisher Prefix: new\n`;
+  const result = check({ fixture: fix({ workflowLog: log, genpagePlan: plan }), eval: evalStub() });
+  assert.equal(result.status, 'pass');
+});
+
+test('Entity scripts --solution (new flow): fail when provision-entities.js used but NO Solution: in plan or log', () => {
+  const check = PHASE_EXPECTATIONS.get('Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> (always — \'Default\' is a valid value, never omitted); provision-entities.js flow specifies solution via input JSON, verified through ## Environment → Solution: declaration');
+  const log = `node provision-entities.js --env "$ENV_URL" --input @provision-input.json --apply`;
+  const plan = `## Environment\nPublisher Prefix: new\n`;
+  const result = check({ fixture: fix({ workflowLog: log, genpagePlan: plan }), eval: evalStub() });
+  assert.equal(result.status, 'fail');
+});
+
+test('Entity scripts --solution (new flow): pass when provision-entities.js used and Solution: in entity-creation-log', () => {
+  const check = PHASE_EXPECTATIONS.get('Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> (always — \'Default\' is a valid value, never omitted); provision-entities.js flow specifies solution via input JSON, verified through ## Environment → Solution: declaration');
+  const log = `node provision-entities.js --env "$ENV_URL" --input @provision-input.json --apply`;
+  const elog = `## Environment\n- Solution: Default\n`;
+  const result = check({ fixture: fix({ workflowLog: log, entityCreationLog: elog }), eval: evalStub() });
+  assert.equal(result.status, 'pass');
 });

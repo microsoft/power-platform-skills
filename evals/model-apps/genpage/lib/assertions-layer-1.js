@@ -247,7 +247,7 @@ WORKFLOW_ASSERTIONS.set(
     // against a meta-list mention of the entity-builder agent name. Meta-lists
     // like "## Agents Invoked" can name the agent before the actual commands.
     const idxCheck = log.search(/check-auth\.js/);
-    const idxFirstScript = log.search(/\b(create-table\.js|add-column\.js|create-relationship\.js|create-record\.js)\b/);
+    const idxFirstScript = log.search(/\b(provision-entities\.js|create-table\.js|add-column\.js|create-relationship\.js|create-record\.js)\b/);
     if (idxFirstScript !== -1 && idxFirstScript < idxCheck) {
       return fail('entity creation script invoked before check-auth.js');
     }
@@ -624,16 +624,34 @@ PHASE_EXPECTATIONS.set(
 );
 
 PHASE_EXPECTATIONS.set(
-  'Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> (always — \'Default\' is a valid value, never omitted)',
+  'Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> (always — \'Default\' is a valid value, never omitted); provision-entities.js flow specifies solution via input JSON, verified through ## Environment → Solution: declaration',
   ({ fixture }) => {
     const log = fixture.entityCreationLog || fixture.workflowLog;
     if (!log) return fail('no entity-creation-log.md or workflow-log.md');
-    const matches = allMatches(/(create-table\.js|add-column\.js|create-relationship\.js)([^\n]*)/g, log);
+    
+    // Check legacy flow: old-script calls must have --solution
+    const legacyMatches = allMatches(/(create-table\.js|add-column\.js|create-relationship\.js)([^\n]*)/g, log);
     const offenders = [];
-    for (const m of matches) {
+    for (const m of legacyMatches) {
       if (!/--solution\b/.test(m[2])) offenders.push(m[1]);
     }
     if (offenders.length > 0) return fail(`${offenders.length} call(s) missing --solution: ${offenders.slice(0,3).join(', ')}`);
+    
+    // Check new flow: provision-entities.js must have Solution: declared in plan or log
+    // Check for provision-entities.js in both workflowLog and entityCreationLog
+    const usesNewFlow = /\bprovision-entities\.js\b/.test(fixture.workflowLog || '') || /\bprovision-entities\.js\b/.test(fixture.entityCreationLog || '');
+    if (usesNewFlow) {
+      // Solution must be declared in ## Environment section (plan or entity-creation-log)
+      const planEnv = planSection(fixture.genpagePlan, 'Environment');
+      const logEnv = planSection(fixture.entityCreationLog, 'Environment');
+      const solutionPattern = /^\s*[-*]?\s*Solution:\s*(\S+)/m;
+      const hasSolution = (planEnv && solutionPattern.test(planEnv)) || (logEnv && solutionPattern.test(logEnv));
+      if (!hasSolution) return fail('provision-entities.js used but no Solution: declaration in ## Environment');
+    }
+    
+    // Skip if no entity provisioning detected
+    if (legacyMatches.length === 0 && !usesNewFlow) return skip('no entity provisioning detected');
+    
     return pass();
   }
 );
