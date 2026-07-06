@@ -23,40 +23,18 @@ const {
   manyToManySchemaName,
 } = require('./app-spec.js');
 const { topoOrderEntities } = require('./_graph.js');
+const {
+  makeRunner,
+  provisionSolution,
+  provisionDataModel,
+  provisionSampleData,
+  BuildHalt: _BuildHalt,
+  SDK_COLUMN_TYPE: _SDK_COLUMN_TYPE,
+} = require('./entity-provision.js');
 
-// App Spec column type -> SDK ColumnType. Lookup is omitted (side effect of a OneToMany
-// relationship); Customer is handled specially (createCustomerColumn).
-const SDK_COLUMN_TYPE = {
-  Text: 'string', Memo: 'memo', Choice: 'choice', MultiChoice: 'multiChoice',
-  Boolean: 'boolean', Money: 'money', DateTime: 'dateTime',
-  Integer: 'integer', BigInt: 'bigint', Decimal: 'decimal', Double: 'double',
-  File: 'file', Image: 'image', AutoNumber: 'autonumber',
-};
-const REQUIRED = (c) => (c.required === true ? 'ApplicationRequired' : c.required === 'recommended' ? 'Recommended' : 'None');
-
-// Map an App Spec column to SDK CreateColumnOptions. `globalChoiceIds` maps a global-choice
-// name -> its metadataId (so a column can bind to a shared option set).
-function columnOptions(c, globalChoiceIds) {
-  const o = { schemaName: c.schemaName, displayName: c.displayName || c.schemaName, type: SDK_COLUMN_TYPE[c.type || 'Text'], required: REQUIRED(c) };
-  switch (c.type) {
-    case 'Text': if (c.maxLength) o.maxLength = c.maxLength; if (c.format) o.stringFormat = c.format; break;
-    case 'Memo': if (c.maxLength) o.maxLength = c.maxLength; break;
-    case 'Integer': case 'BigInt': case 'Decimal': case 'Double': case 'Money':
-      if (c.minValue !== undefined) o.minValue = c.minValue;
-      if (c.maxValue !== undefined) o.maxValue = c.maxValue;
-      if (c.precision !== undefined) o.precision = c.precision; break;
-    case 'DateTime': if (c.dateFormat) o.dateFormat = c.dateFormat; break;
-    case 'Boolean': if (c.trueLabel) o.trueLabel = c.trueLabel; if (c.falseLabel) o.falseLabel = c.falseLabel; break;
-    case 'Choice': case 'MultiChoice':
-      if (c.globalChoice && globalChoiceIds[c.globalChoice]) o.globalChoiceMetadataId = globalChoiceIds[c.globalChoice];
-      else o.options = choiceOptions(c); break;
-    case 'File': case 'Image': if (c.maxSizeKb) o.maxSizeKb = c.maxSizeKb; if (c.type === 'Image' && c.isPrimaryImage) o.isPrimaryImage = true; break;
-    case 'AutoNumber': if (c.autoNumberFormat) o.autoNumberFormat = c.autoNumberFormat; break;
-  }
-  if (c.source === 'Calculated' || c.source === 'Rollup') { o.sourceType = c.source; if (c.formula) o.formulaDefinition = c.formula; }
-  return o;
-}
-const STATE_CODE = { Active: 0, Inactive: 1 };
+// Re-export from entity-provision so the export surface stays unchanged
+const BuildHalt = _BuildHalt;
+const SDK_COLUMN_TYPE = _SDK_COLUMN_TYPE;
 
 // Standard field control classId (Dataverse picks the widget by attribute type) and the
 // classic Notes/timeline control classId.
@@ -150,30 +128,6 @@ function commandsByEntity(spec) {
   return byEntity;
 }
 
-class BuildHalt extends Error {
-  constructor(message, { phase, code, recoverable = false, cause } = {}) {
-    super(message);
-    this.name = 'BuildHalt';
-    this.phase = phase;
-    this.code = code;
-    this.recoverable = recoverable;
-    this.cause = cause;
-  }
-}
-
-// A metadata create that fails because the component already exists (the classic re-run
-// case). Dataverse answers 409, or 400 with a duplicate-name message. Used to make
-// otherwise non-idempotent creates (e.g. alternate keys — the SDK has no key lister) safe
-// to re-run: the build skips instead of halting. Kept deliberately narrow so a genuine
-// failure (bad key attribute, etc.) still surfaces.
-function isAlreadyExists(err) {
-  if (!err) return false;
-  const status = err.statusCode || err.status || (err.cause && (err.cause.statusCode || err.cause.status));
-  if (status === 409) return true;
-  const msg = String((err && err.message) || '').toLowerCase();
-  return /already exists|duplicate|with the (?:specified|same) name|a key with/.test(msg);
-}
-
 /** Resolve --only/--skip/--from/--to into the ordered set of phases to run. */
 function resolvePhases({ only, skip, from, to } = {}) {
   let active = PHASES.slice();
@@ -184,24 +138,6 @@ function resolvePhases({ only, skip, from, to } = {}) {
   return active.filter((p) => (!onlySet || onlySet.has(p)) && (!skipSet || !skipSet.has(p)));
 }
 
-// Bounded-concurrency map — parallelize independent ops without flooding Dataverse (which
-// raises SQL-deadlock risk). Preserves input order in the result.
-async function mapLimit(items, limit, fn) {
-  const out = new Array(items.length);
-  let i = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (i < items.length) {
-      const idx = i++;
-      out[idx] = await fn(items[idx], idx);
-    }
-  });
-  await Promise.all(workers);
-  return out;
-}
-
-function choiceOptions(col) {
-  return (col.options || []).map((label, i) => ({ value: 100000000 + i, label }));
-}
 // Resolve a view-filter value: a Choice/MultiChoice label becomes its option int; everything
 // else (raw ints, strings, ISO dates) passes through. No-value operators omit the value entirely.
 function resolveFilterValue(spec, entityLogical, attr, val) {
@@ -437,131 +373,30 @@ async function runSdkBuild(spec, opts = {}) {
   }
 
   const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, commands: {}, dashboards: {}, app: null } };
-  const total = plan.length;
-  let n = 0;
-  const run = async (phase, label, fn, { recoverable = false, skipIf } = {}) => {
-    const myN = (n += 1);
-    emit({ phase, status: 'start', label, n: myN, total });
-    try {
-      const out = await fn();
-      emit({ phase, status: 'ok', label, n: myN, total });
-      return out;
-    } catch (err) {
-      // Idempotency escape hatch: a create that fails only because the component already
-      // exists is a skip, not a halt (used where the SDK offers no check-first lister).
-      if (skipIf && skipIf(err)) { emit({ phase, status: 'skip', label: `${label} (exists)`, n: myN, total }); return undefined; }
-      emit({ phase, status: 'error', label, n: myN, total, detail: String((err && err.message) || err) });
-      throw new BuildHalt(`${phase} failed: ${(err && err.message) || err}`, { phase, code: (err && err.code) || 'sdk-error', recoverable, cause: err });
-    }
-  };
+  const runner = makeRunner({ emit, total: plan.length });
   const sol = spec.solution;
 
   // 1. Solution (idempotent; header-less provisioning client).
-  if (has('solution')) {
-    await run('solution', `solution ${sol.uniqueName}`, async () => {
-      const existing = await provision.queryRecords('solution', { select: ['solutionid'], filter: `uniquename eq '${sol.uniqueName}'`, top: 1 });
-      if (existing && existing[0]) return;
-      let publisherId;
-      const pubs = await provision.queryRecords('publisher', { select: ['publisherid'], filter: `customizationprefix eq '${sol.publisherPrefix}'`, top: 1 });
-      if (pubs && pubs[0] && pubs[0].publisherid) publisherId = pubs[0].publisherid;
-      else publisherId = (await provision.createPublisher({ uniqueName: `${sol.publisherPrefix}publisher`, friendlyName: `${sol.publisherPrefix} publisher`, prefix: sol.publisherPrefix })).id;
-      await provision.createSolution({ uniqueName: sol.uniqueName, friendlyName: sol.displayName || sol.uniqueName, publisherId });
-    }, { recoverable: true });
-  }
+  if (has('solution')) await provisionSolution({ sdk, provision, runner, solution: sol });
 
   // 2. Data model — idempotent. Discover existing tables/columns/relationships via the SDK
   //    (find*/fetch*), then create only what's missing. Captures entitySetName for every
   //    entity (fresh -> createTable result, existing -> findTables hit).
-  const globalChoiceIds = {};
-  const statusReasonValues = {}; // { entityLogical: { label: { value, stateCode } } } — captured for sample data
+  let dataModel = { entities: {}, globalChoiceIds: {}, statusReasonValues: {} };
   if (has('data-model')) {
-    // 2a. Global option sets (shared choices) — built before columns that bind to them.
-    for (const gc of spec.globalChoices || []) {
-      await run('data-model', `global choice ${gc.name}`, async () => {
-        try {
-          const r = await sdk.createGlobalOptionSet({ name: gc.name, displayName: gc.displayName || gc.name, options: (gc.options || []).map((label, i) => ({ value: 100000000 + i, label })) });
-          globalChoiceIds[gc.name] = r.metadataId;
-        } catch (e) { /* already exists — a fresh column binding falls back to inline options (idempotent global-choice lookup is a follow-up SDK method) */ }
-      });
-    }
-    // 2b. Tables -> columns (all types + customer) -> status reasons -> alternate keys.
-    for (const e of spec.entities) {
-      const logical = e.schemaName.toLowerCase();
-      const hits = await provision.findTables(e.schemaName, { top: 50 });
-      const existingTable = (hits || []).find((t) => t.logicalName === logical);
-      let existingCols = new Set();
-      if (existingTable) {
-        emit({ phase: 'data-model', status: 'skip', label: `table ${e.schemaName} (exists — reuse)`, n: (n += 1), total });
-        result.created.entities[e.schemaName] = { logicalName: logical, entitySetName: existingTable.entitySetName };
-        existingCols = new Set(((await provision.findColumns(logical)) || []).map((c) => c.logicalName));
-      } else {
-        await run('data-model', `table ${e.schemaName}`, async () => {
-          const createOpts = { schemaName: e.schemaName, displayName: e.displayName, pluralName: e.pluralName || `${e.displayName}s`,
-            primaryColumnSchemaName: e.primaryAttribute.schemaName, primaryColumnDisplayName: e.primaryAttribute.displayName || 'Name', hasNotes: e.hasNotes === true };
-          // AutoNumber the primary/title column when requested (the order number IS the identity).
-          if (e.primaryAttribute.autoNumberFormat) createOpts.primaryColumnAutoNumberFormat = e.primaryAttribute.autoNumberFormat;
-          const t = await sdk.createTable(createOpts);
-          result.created.entities[e.schemaName] = { logicalName: (t.logicalName || logical), entitySetName: t.entitySetName };
-        }, { recoverable: true });
-      }
-      // columns: every buildable column (all scalar types + Customer; Lookup comes from a
-      // relationship). Existing ones emit a skip; missing ones are created (parallel, bounded).
-      const buildable = (e.columns || []).filter((c) => SDK_COLUMN_TYPE[c.type || 'Text'] || c.type === 'Customer');
-      for (const c of buildable) if (existingCols.has(c.schemaName.toLowerCase())) emit({ phase: 'data-model', status: 'skip', label: `column ${e.schemaName}.${c.schemaName} (exists)`, n: (n += 1), total });
-      const toCreate = buildable.filter((c) => !existingCols.has(c.schemaName.toLowerCase()));
-      await mapLimit(toCreate, concurrency, (c) => run('data-model', `column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})`,
-        () => c.type === 'Customer'
-          ? sdk.createCustomerColumn(logical, { schemaName: c.schemaName, displayName: c.displayName || c.schemaName, required: REQUIRED(c) })
-          : sdk.createColumn(logical, columnOptions(c, globalChoiceIds))));
-      // custom status reasons — capture the option value so sample data can set them. IDEMPOTENT:
-      // insertStatusValue itself is not (with no explicit Value, Dataverse auto-assigns a NEW value
-      // every call, duplicating the reason on a data-model re-run). So we PIN a deterministic value
-      // (publisher range 100000000+i, matching how the engine assigns choice/global option values;
-      // authors may override via sr.value) and pass it explicitly: a re-run then hits an already-exists
-      // error that skipIf turns into a skip (no duplicate), while the value stays captured for sample
-      // data. On a fresh insert we overwrite with the server-returned value (authoritative).
-      let srIdx = 0;
-      for (const sr of e.statusReasons || []) {
-        const stateCode = STATE_CODE[sr.state] !== undefined ? STATE_CODE[sr.state] : 0;
-        const pinned = typeof sr.value === 'number' ? sr.value : 100000000 + srIdx;
-        srIdx += 1;
-        (statusReasonValues[logical] = statusReasonValues[logical] || {})[sr.label] = { value: pinned, stateCode };
-        await run('data-model', `status reason ${e.schemaName}: ${sr.label}`, async () => {
-          const v = await sdk.insertStatusValue(logical, { label: sr.label, stateCode, color: sr.color, value: pinned });
-          statusReasonValues[logical][sr.label] = { value: typeof v === 'number' ? v : pinned, stateCode };
-        }, { recoverable: true, skipIf: isAlreadyExists });
-      }
-      // alternate keys — idempotent: the SDK has no key lister, so a re-run that hits an
-      // already-exists error is treated as a skip (not a halt) via skipIf.
-      for (const k of e.alternateKeys || []) {
-        await run('data-model', `alt key ${e.schemaName}.${k.schemaName}`,
-          () => sdk.createAlternateKey(logical, { schemaName: k.schemaName, displayName: k.displayName || k.schemaName, keyAttributes: (k.columns || []).map((x) => x.toLowerCase()) }),
-          { recoverable: true, skipIf: isAlreadyExists });
-      }
-    }
-    // 2c. Relationships — 1:N and N:N; skip those already present.
-    for (const rel of spec.relationships || []) {
-      if (rel.type === 'OneToMany') {
-        const schema = relationshipSchemaName(rel);
-        let exists = false;
-        try { exists = ((await provision.fetchEntityMetadata(rel.referenced.toLowerCase())).relationships || []).some((r) => r.schemaName.toLowerCase() === schema.toLowerCase()); } catch { /* just created */ }
-        if (exists) { emit({ phase: 'data-model', status: 'skip', label: `relationship ${schema} (exists)`, n: (n += 1), total }); continue; }
-        await run('data-model', `relationship 1:N ${rel.referenced}->${rel.referencing}`, () => sdk.createRelationship({ type: 'OneToMany', schemaName: schema, referencedEntity: rel.referenced.toLowerCase(), referencingEntity: rel.referencing.toLowerCase(), lookupSchemaName: rel.lookup.schemaName, lookupDisplayName: rel.lookup.displayName }));
-      } else if (rel.type === 'ManyToMany') {
-        const schema = rel.schemaName || `${rel.entity1.toLowerCase()}_${rel.entity2.toLowerCase()}`;
-        let exists = false;
-        try { exists = ((await provision.fetchEntityMetadata(rel.entity1.toLowerCase())).relationships || []).some((r) => r.schemaName.toLowerCase() === schema.toLowerCase()); } catch { /* just created */ }
-        if (exists) { emit({ phase: 'data-model', status: 'skip', label: `relationship ${schema} (exists)`, n: (n += 1), total }); continue; }
-        await run('data-model', `relationship N:N ${rel.entity1}<->${rel.entity2}`, () => sdk.createRelationship({ type: 'ManyToMany', schemaName: schema, entity1: rel.entity1.toLowerCase(), entity2: rel.entity2.toLowerCase(), intersectEntityName: rel.intersectEntityName }));
-      }
-    }
+    dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply, concurrency });
+    Object.assign(result.created.entities, dataModel.entities);
   }
 
   // entity-set resolver: fresh tables cached above; existing ones via fetchEntityMetadata.
   const entitySetCache = {};
   const entitySetFor = async (logical) => {
+    const entityByLogical = (spec, logical) => {
+      const l = String(logical).toLowerCase();
+      return (spec.entities || []).find((e) => e.schemaName.toLowerCase() === l);
+    };
     const ent = entityByLogical(spec, logical);
-    const cached = ent && result.created.entities[ent.schemaName] && result.created.entities[ent.schemaName].entitySetName;
+    const cached = ent && dataModel.entities[ent.schemaName] && dataModel.entities[ent.schemaName].entitySetName;
     if (cached) return cached;
     if (!entitySetCache[logical]) entitySetCache[logical] = (await provision.fetchEntityMetadata(logical)).entitySetName;
     return entitySetCache[logical];
@@ -569,45 +404,8 @@ async function runSdkBuild(spec, opts = {}) {
 
   // 3. Sample data (opt-in): topological, $parent -> @odata.bind on the lookup nav prop.
   if (has('sample-data') && sampleData) {
-    const createdByEntity = {};
-    for (const e of topoOrderEntities(spec)) {
-      const records = sampleRecordsFor(spec, e);
-      if (!records.length) continue;
-      await run('sample-data', `${records.length} record(s) -> ${e.schemaName}`, async () => {
-        const entityLogical = e.schemaName.toLowerCase();
-        const resolved = resolveSampleRecords(e, records, spec);
-        const bodies = [];
-        const matchHit = (parentLogical, match) => (createdByEntity[parentLogical] || []).find((h) => Object.entries(match).every(([k, val]) => { const rk = Object.keys(h.raw).find((x) => x.toLowerCase() === k.toLowerCase()); return rk !== undefined && h.raw[rk] === val; }));
-        for (let i = 0; i < resolved.length; i++) {
-          const raw = records[i];
-          const body = Object.assign({}, resolved[i]);
-          delete body.$parent; delete body.$parents; delete body.statusReason;
-          // Parent lookups — one (`$parent`) or many (`$parents`, e.g. a junction row binding
-          // both sides). Each is bound to its relationship's lookup nav property via @odata.bind.
-          const parents = [].concat(raw && raw.$parent ? [raw.$parent] : [], (raw && raw.$parents) || []);
-          for (const parent of parents) {
-            if (!parent || !parent.entity || !parent.match) continue;
-            const parentLogical = parent.entity.toLowerCase();
-            const hit = matchHit(parentLogical, parent.match);
-            const rel = relationshipFor(spec, parent.entity, e.schemaName);
-            if (hit && hit.id && rel) body[`${rel.lookup.schemaName}@odata.bind`] = `/${await entitySetFor(parentLogical)}(${hit.id})`;
-          }
-          // Custom status reason -> statecode + the captured statuscode option value. The
-          // value is captured during the data-model phase (insertStatusValue); if that phase
-          // was skipped this run, the value is unknown — halt loudly instead of silently
-          // inserting the record with a default status (the live foot-gun behind this guard).
-          if (raw && raw.statusReason) {
-            const sv = (statusReasonValues[e.schemaName.toLowerCase()] || {})[raw.statusReason];
-            if (!sv) throw new Error(`record sets statusReason '${raw.statusReason}' on ${e.schemaName}, but its status value wasn't captured — include the data-model phase (don't --skip data-model) so the custom status reason is created and its option value captured`);
-            body.statuscode = sv.value; body.statecode = sv.stateCode;
-          }
-          bodies.push(body);
-        }
-        const ids = await sdk.createRecordsBulk(entityLogical, bodies);
-        result.created.records[e.schemaName] = ids;
-        createdByEntity[entityLogical] = records.map((raw, i) => ({ raw, id: ids[i] })).filter((p) => p.id != null);
-      });
-    }
+    const sd = await provisionSampleData({ sdk, provision, runner, spec, dataModel });
+    Object.assign(result.created.records, sd.records);
   }
 
   // 3b. Web resources (opt-in via spec.webResources) — JS/HTML/CSS shipped for form logic.
@@ -618,10 +416,10 @@ async function runSdkBuild(spec, opts = {}) {
       const existing = await provision.queryRecords('webresource', { select: ['webresourceid'], filter: `name eq '${wr.name}'`, top: 1 });
       if (existing && existing[0] && existing[0].webresourceid) {
         result.created.webResources[wr.name] = existing[0].webresourceid;
-        emit({ phase: 'web-resources', status: 'skip', label: `web resource ${wr.name} (exists — reuse)`, n: (n += 1), total });
+        runner.skip('web-resources', `web resource ${wr.name} (exists — reuse)`);
         continue;
       }
-      await run('web-resources', `web resource ${wr.name} (${wr.type || 'js'})`, async () => {
+      await runner.run('web-resources', `web resource ${wr.name} (${wr.type || 'js'})`, async () => {
         const r = await provision.createWebResource(webResourceOpts(wr, opts.appDir));
         result.created.webResources[wr.name] = r.id;
         await provision.addSolutionComponent({ componentId: r.id, componentType: COMPONENT_TYPE.webResource, solutionUniqueName: sol.uniqueName });
@@ -630,7 +428,7 @@ async function runSdkBuild(spec, opts = {}) {
   }
 
   // helper: create an artifact header-less, push, add to the solution.
-  const buildArtifact = (type, def) => run(type === 'app' ? 'app-shell' : `${type}s`, `${type} "${def.name}"`, async () => {
+  const buildArtifact = (type, def) => runner.run(type === 'app' ? 'app-shell' : `${type}s`, `${type} "${def.name}"`, async () => {
     const art = provision.createArtifact(type, def);
     if (type === 'form' && def.__subgrids) for (const sg of def.__subgrids) provision.addSubGrid(art.id, sg);
     const pushed = await provision.pushArtifact(type, art.id);
@@ -640,14 +438,14 @@ async function runSdkBuild(spec, opts = {}) {
 
   // 4. Views (independent -> parallel).
   if (has('views')) {
-    const ids = await mapLimit(spec.views, concurrency, (v) => buildArtifact('view', viewDef(spec, v)));
+    const ids = await runner.mapLimit(spec.views, concurrency, (v) => buildArtifact('view', viewDef(spec, v)));
     spec.views.forEach((v, i) => { result.created.views[v.name] = ids[i]; });
   }
 
   // 5. Charts (independent -> parallel; built before forms so a form could reference one).
   if (has('charts')) {
     const charts = spec.charts || [];
-    const ids = await mapLimit(charts, concurrency, (c) => buildArtifact('chart', chartDef(spec, c)));
+    const ids = await runner.mapLimit(charts, concurrency, (c) => buildArtifact('chart', chartDef(spec, c)));
     charts.forEach((c, i) => { result.created.charts[c.name] = ids[i]; });
   }
 
@@ -670,11 +468,11 @@ async function runSdkBuild(spec, opts = {}) {
       }).filter(Boolean);
       return { f, def };
     });
-    const ids = await mapLimit(defs, concurrency, async (d) => {
+    const ids = await runner.mapLimit(defs, concurrency, async (d) => {
       const id = await buildArtifact('form', d.def);
       const events = (d.f.events || []).filter((ev) => FORM_EVENTS.has(ev.event) && ev.library && ev.function);
       if (events.length) {
-        await run('forms', `wire ${events.length} event handler(s) on ${d.f.entity}`, async () => {
+        await runner.run('forms', `wire ${events.length} event handler(s) on ${d.f.entity}`, async () => {
           await provision.fetchArtifact('form', id);
           for (const ev of events) provision.addFormEventHandler(id, formEventOpts(ev));
           await provision.pushArtifact('form', id);
@@ -697,7 +495,7 @@ async function runSdkBuild(spec, opts = {}) {
       const qvs = (f.quickViews || []).filter((q) => q && q.lookup && q.targetEntity && q.form);
       if (!qvs.length) continue;
       const hostId = ids[i];
-      await run('forms', `place ${qvs.length} quick-view(s) on ${f.entity}`, async () => {
+      await runner.run('forms', `place ${qvs.length} quick-view(s) on ${f.entity}`, async () => {
         await provision.fetchArtifact('form', hostId);
         for (const qv of qvs) {
           const qvFormId = formIdByName[qv.form];
@@ -717,7 +515,7 @@ async function runSdkBuild(spec, opts = {}) {
   //     on the entity's command bar in the app regardless).
   if (has('commands')) {
     for (const [entityLogical, cmds] of Object.entries(commandsByEntity(spec))) {
-      await run('commands', `command bar for ${entityLogical} (${cmds.length} button(s))`, async () => {
+      await runner.run('commands', `command bar for ${entityLogical} (${cmds.length} button(s))`, async () => {
         const def = commandDef(entityLogical, cmds, result.created.webResources);
         const art = provision.createArtifact('command', def);
         const pushed = await provision.pushArtifact('command', art.id);
@@ -732,7 +530,7 @@ async function runSdkBuild(spec, opts = {}) {
   //     the app sitemap is manual for now.
   if (has('dashboards')) {
     for (const dash of spec.dashboards || []) {
-      await run('dashboards', `dashboard "${dash.name}" (${(dash.tiles || []).length} tile(s))`, async () => {
+      await runner.run('dashboards', `dashboard "${dash.name}" (${(dash.tiles || []).length} tile(s))`, async () => {
         const art = provision.createArtifact('dashboard', { name: dash.name });
         for (const tile of dash.tiles || []) provision.addDashboardTile(art.id, dashboardTileOpts(spec, tile, result));
         const pushed = await provision.pushArtifact('dashboard', art.id);
@@ -750,12 +548,12 @@ async function runSdkBuild(spec, opts = {}) {
   // 8. Publish (opt-in). Publish ONE artifact per entity (covers that entity's customizations)
   //    + the app — far fewer PublishXml round-trips than publishing every artifact.
   if (has('publish') && publish) {
-    await run('publish', 'publish customizations', async () => {
+    await runner.run('publish', 'publish customizations', async () => {
       const seen = new Set();
       const perEntity = []; // [type, id] — first artifact found per entity
       for (const f of spec.forms) { const id = result.created.forms[f.entity.toLowerCase()]; if (id && !seen.has(f.entity.toLowerCase())) { seen.add(f.entity.toLowerCase()); perEntity.push(['form', id]); } }
       for (const v of spec.views) { const k = v.entity.toLowerCase(); if (result.created.views[v.name] && !seen.has(k)) { seen.add(k); perEntity.push(['view', result.created.views[v.name]]); } }
-      await mapLimit(perEntity, concurrency, ([type, id]) => provision.publishArtifact(type, id));
+      await runner.mapLimit(perEntity, concurrency, ([type, id]) => provision.publishArtifact(type, id));
       if (result.created.app) await provision.publishArtifact('app', result.created.app);
     });
   }

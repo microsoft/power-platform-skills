@@ -568,6 +568,21 @@ test('formDef honors explicit tabs/sections/columns', () => {
   assert.strictEqual(sec.rows[0].cells[0].control.fieldName, 'new_name');
 });
 
+test('data-model + sample-data emit a stable phase/label sequence (parity anchor)', async () => {
+  const { sdk } = mockSdk();
+  const events = [];
+  const desk = makeSpec();
+  await runSdkBuild(desk, { sdk, apply: true, sampleData: true, emit: (e) => events.push(e) });
+  const terminal = events.filter((e) => e.status !== 'start');
+  // one monotonic counter across all phases
+  const ns = terminal.map((e) => e.n);
+  assert.deepStrictEqual(ns, [...ns].sort((a, b) => a - b));
+  assert.strictEqual(new Set(ns).size, ns.length);
+  // data-model creates the three tables + their columns; sample-data creates 3 record steps
+  assert.ok(terminal.some((e) => e.phase === 'data-model' && /table new_ticket/.test(e.label)));
+  assert.ok(terminal.filter((e) => e.phase === 'sample-data').length >= 1);
+});
+
 test('formDef auto lays out primary + columns; adds Notes when the entity has notes', () => {
   const spec = makeSpec();
   spec.entities[0].hasNotes = true;
