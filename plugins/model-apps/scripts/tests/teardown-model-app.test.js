@@ -10,43 +10,54 @@ const { teardownModelApp } = require(path.join(__dirname, '..', 'teardown-model-
 
 const desk = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.support-desk.json'), 'utf8'));
 
-// A request that reports every artifact as present (one id each) so apply performs deletes.
-// Stateful for tables so the EntityDefinitions cosmetic-404 flow confirms "gone" on the follow-up
-// GET (delete records the logical name; the confirm GET then answers 404 for it).
-function presentRequest() {
+// An SDK that reports every artifact as present (one id each) so apply performs deletes.
+// Stateful for tables so the table delete flow simulates the SDK cosmetic-404 (deleteTable
+// throws 404 even on success).
+function presentSdk() {
   const calls = [];
   const deletedTables = new Set();
-  const logicalOf = (p) => { const m = p.match(/LogicalName='([^']*)'/); return m && m[1]; };
-  const request = async (method, apiPath, body) => {
-    calls.push({ method, apiPath, body });
-    if (method === 'GET') {
-      if (apiPath.startsWith('EntityDefinitions(')) {
-        const l = logicalOf(apiPath);
-        return deletedTables.has(l) ? { status: 404, data: { error: { message: 'does not exist' } } } : { status: 200, data: { LogicalName: l } };
-      }
-      return { status: 200, data: { value: [{ appmoduleid: 'id', formid: 'id', appactionid: 'id', webresourceid: 'id', solutionid: 'id' }] } };
-    }
-    if (method === 'DELETE' && apiPath.startsWith('EntityDefinitions(')) {
-      deletedTables.add(logicalOf(apiPath));
-      return { status: 404, data: { error: { message: 'cosmetic' } } };
-    }
-    return { status: 204, data: null };
+  const queryRecords = async (logical, opts) => {
+    calls.push({ method: 'queryRecords', logical, opts });
+    if (logical === 'appmodule') return [{ appmoduleid: 'id1', name: 'App' }];
+    if (logical === 'systemform') return [{ formid: 'id2', name: 'Dash' }];
+    if (logical === 'appaction') return [{ appactionid: 'id3', buttonlabeltext: 'Btn' }];
+    if (logical === 'webresource') return [{ webresourceid: 'id4', name: 'wr' }];
+    if (logical === 'solution') return [{ solutionid: 'id5', uniquename: 'Sol' }];
+    return [];
   };
-  return { request, calls };
+  const deleteRemoteArtifact = async (type, id) => {
+    calls.push({ method: 'deleteRemoteArtifact', type, id });
+  };
+  const deleteWebResource = async (id) => {
+    calls.push({ method: 'deleteWebResource', id });
+  };
+  const deleteTable = async (logical) => {
+    calls.push({ method: 'deleteTable', logical });
+    deletedTables.add(logical);
+    // SDK deleteTable throws not-found even on success
+    const err = new Error('Could not find an entity with specified id');
+    err.statusCode = 404;
+    throw err;
+  };
+  const deleteSolution = async (id) => {
+    calls.push({ method: 'deleteSolution', id });
+  };
+  return { queryRecords, deleteRemoteArtifact, deleteWebResource, deleteTable, deleteSolution, calls };
 }
+
 const logCapture = () => { const logs = []; return { log: (m) => logs.push(m), logs }; };
 
 test('rejects an invalid spec before any teardown', async () => {
-  const { request, calls } = presentRequest();
-  const r = await teardownModelApp({ entities: [] }, { apply: true }, { request });
+  const sdk = presentSdk();
+  const r = await teardownModelApp({ entities: [] }, { apply: true }, { sdk });
   assert.strictEqual(r.ok, false);
   assert.ok(Array.isArray(r.errors) && r.errors.length);
-  assert.strictEqual(calls.length, 0, 'no Web API calls on a bad spec');
+  assert.strictEqual(sdk.calls.length, 0, 'no SDK calls on a bad spec');
 });
 
-test('dry-run returns the plan and never touches the network', async () => {
-  const throwing = () => { throw new Error('dry-run must not call the API'); };
-  const r = await teardownModelApp(desk, { apply: false }, { request: throwing });
+test('dry-run returns the plan and never touches the SDK', async () => {
+  const throwing = { queryRecords: () => { throw new Error('dry-run must not call the SDK'); } };
+  const r = await teardownModelApp(desk, { apply: false }, { sdk: throwing });
   assert.strictEqual(r.dryRun, true);
   assert.ok(r.plan.some((p) => /app module/.test(p)));
   assert.ok(r.plan.some((p) => /^table /.test(p)));
@@ -54,18 +65,18 @@ test('dry-run returns the plan and never touches the network', async () => {
 });
 
 test('apply threads through to the engine (deletes issued) and returns ok', async () => {
-  const { request, calls } = presentRequest();
-  const r = await teardownModelApp(desk, { apply: true }, { request });
+  const sdk = presentSdk();
+  const r = await teardownModelApp(desk, { apply: true }, { sdk });
   assert.strictEqual(r.ok, true);
-  assert.ok(calls.some((c) => c.method === 'DELETE' && /appmodules\(/.test(c.apiPath)));
-  assert.ok(calls.some((c) => c.method === 'DELETE' && /EntityDefinitions\(/.test(c.apiPath)));
-  assert.ok(calls.some((c) => c.method === 'DELETE' && /solutions\(/.test(c.apiPath)));
+  assert.ok(sdk.calls.some((c) => c.method === 'deleteRemoteArtifact' && c.type === 'app'));
+  assert.ok(sdk.calls.some((c) => c.method === 'deleteTable'));
+  assert.ok(sdk.calls.some((c) => c.method === 'deleteSolution'));
 });
 
 test('apply emits status-marked [n/total] lines under phase headers + a summary', async () => {
-  const { request } = presentRequest();
+  const sdk = presentSdk();
   const cap = logCapture();
-  await teardownModelApp(desk, { apply: true }, { request, log: cap.log });
+  await teardownModelApp(desk, { apply: true }, { sdk, log: cap.log });
   const lines = cap.logs.filter((l) => /\[\d+\/\d+\]/.test(l));
   assert.ok(lines.length >= 4);
   const totals = new Set(lines.map((l) => Number(l.match(/\[\d+\/(\d+)\]/)[1])));
@@ -76,9 +87,9 @@ test('apply emits status-marked [n/total] lines under phase headers + a summary'
 });
 
 test('dry-run lists the plan with a ▢ marker and no summary', async () => {
-  const throwing = () => { throw new Error('no network'); };
+  const throwing = { queryRecords: () => { throw new Error('no SDK'); } };
   const cap = logCapture();
-  await teardownModelApp(desk, { apply: false }, { request: throwing, log: cap.log });
+  await teardownModelApp(desk, { apply: false }, { sdk: throwing, log: cap.log });
   assert.ok(cap.logs.some((l) => /\[\d+\/\d+\] ▢ /.test(l)), 'plan items use the ▢ marker');
   assert.ok(!cap.logs.some((l) => /teardown complete/.test(l)), 'no summary on a dry-run');
 });

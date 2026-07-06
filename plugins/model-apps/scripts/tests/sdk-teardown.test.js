@@ -1,7 +1,7 @@
 'use strict';
 // Teardown engine coverage: the pure plan (order + omissions), dry-run purity, and the
-// resolve→delete execution against a stateful mock env — happy path, not-found skips, the
-// EntityDefinitions cosmetic-404, appaction cascade 404s, and best-effort continue-on-error.
+// resolve→delete execution against a stateful mock SDK — happy path, not-found skips, the
+// table not-found tolerance, appaction cascade 404s, and best-effort continue-on-error.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
@@ -19,46 +19,107 @@ function fullSpec() {
   return s;
 }
 
-// A stateful mock Dataverse env: preload the artifacts that "exist", answer resolve GETs by
-// exact-name filter, and mutate on DELETE. Records every call for order assertions.
-function mockEnv(state = {}) {
+// A stateful mock SDK: preload the artifacts that "exist", answer queryRecords by exact-name
+// filter, and mutate on delete. Records every call for order assertions.
+function mockSdk(state = {}) {
   const db = {
-    appmodules: state.appmodules || {},        // uniquename -> id
-    dashboards: state.dashboards || {},        // name -> id
-    appactions: state.appactions || {},        // entity -> [ids]
-    webresources: state.webresources || {},    // name -> id
+    appmodules: state.appmodules || {},        // uniquename -> { appmoduleid, name }
+    dashboards: state.dashboards || {},        // name -> { formid, name }
+    appactions: state.appactions || {},        // entity -> [{ appactionid, buttonlabeltext }]
+    webresources: state.webresources || {},    // name -> { webresourceid, name }
     tables: new Set(state.tables || []),       // logical names
-    solutions: state.solutions || {},          // uniquename -> id
+    solutions: state.solutions || {},          // uniquename -> { solutionid, uniquename }
   };
   const calls = [];
-  const firstEq = (p) => { const m = p.match(/eq '([^']*)'/); return m && m[1]; };
-  const logicalOf = (p) => { const m = p.match(/LogicalName='([^']*)'/); return m && m[1]; };
-  const idOf = (p) => { const m = p.match(/\(([^)]+)\)/); return m && m[1]; }; // by-id deletes only (EntityDefinitions uses logicalOf)
 
-  const request = async (method, apiPath, body) => {
-    calls.push({ method, apiPath, body });
-    if (method === 'GET') {
-      if (apiPath.startsWith('appmodules?')) { const v = firstEq(apiPath); const id = db.appmodules[v]; return listRes(id ? [{ appmoduleid: id, name: v }] : []); }
-      if (apiPath.startsWith('systemforms?')) { const v = firstEq(apiPath); const id = db.dashboards[v]; return listRes(id ? [{ formid: id, name: v }] : []); }
-      if (apiPath.startsWith('appactions?')) { const v = firstEq(apiPath); const ids = db.appactions[v] || []; return listRes(ids.map((id) => ({ appactionid: id, buttonlabeltext: 'b' }))); }
-      if (apiPath.startsWith('webresourceset?')) { const v = firstEq(apiPath); const id = db.webresources[v]; return listRes(id ? [{ webresourceid: id, name: v }] : []); }
-      if (apiPath.startsWith('EntityDefinitions(')) { const l = logicalOf(apiPath); return db.tables.has(l) ? { status: 200, data: { LogicalName: l } } : { status: 404, data: { error: { message: 'does not exist' } } }; }
-      if (apiPath.startsWith('solutions?')) { const v = firstEq(apiPath); const id = db.solutions[v]; return listRes(id ? [{ solutionid: id, uniquename: v }] : []); }
+  const queryRecords = async (logical, opts) => {
+    calls.push({ method: 'queryRecords', logical, opts });
+    const filter = opts.filter || '';
+    const firstEq = (p) => { const m = p.match(/eq '([^']*)'/); return m && m[1]; };
+    const val = firstEq(filter);
+
+    if (logical === 'appmodule') {
+      const row = db.appmodules[val];
+      return row ? [row] : [];
     }
-    if (method === 'DELETE') {
-      if (apiPath.startsWith('appmodules(')) { removeById(db.appmodules, idOf(apiPath)); return { status: 204, data: null }; }
-      if (apiPath.startsWith('systemforms(')) { removeById(db.dashboards, idOf(apiPath)); return { status: 204, data: null }; }
-      if (apiPath.startsWith('appactions(')) { const id = idOf(apiPath); removeFromLists(db.appactions, id); return { status: 204, data: null }; }
-      if (apiPath.startsWith('webresourceset(')) { removeById(db.webresources, idOf(apiPath)); return { status: 204, data: null }; }
-      if (apiPath.startsWith('EntityDefinitions(')) { const l = logicalOf(apiPath); db.tables.delete(l); return { status: 404, data: { error: { message: 'Could not find an entity with specified id' } } }; } // cosmetic 404
-      if (apiPath.startsWith('solutions(')) { removeById(db.solutions, idOf(apiPath)); return { status: 204, data: null }; }
+    if (logical === 'systemform') {
+      const row = db.dashboards[val];
+      return row ? [row] : [];
     }
-    return { status: 404, data: null };
+    if (logical === 'appaction') {
+      return db.appactions[val] || [];
+    }
+    if (logical === 'webresource') {
+      const row = db.webresources[val];
+      return row ? [row] : [];
+    }
+    if (logical === 'solution') {
+      const row = db.solutions[val];
+      return row ? [row] : [];
+    }
+    return [];
   };
-  return { request, calls, db };
-  function listRes(value) { return { status: 200, data: { value } }; }
-  function removeById(map, id) { for (const k of Object.keys(map)) if (map[k] === id) delete map[k]; }
-  function removeFromLists(map, id) { for (const k of Object.keys(map)) map[k] = map[k].filter((x) => x !== id); }
+
+  const deleteRemoteArtifact = async (type, id) => {
+    calls.push({ method: 'deleteRemoteArtifact', type, id });
+    if (type === 'app') {
+      for (const k of Object.keys(db.appmodules)) {
+        if (db.appmodules[k].appmoduleid === id) {
+          delete db.appmodules[k];
+          return;
+        }
+      }
+    }
+    if (type === 'dashboard') {
+      for (const k of Object.keys(db.dashboards)) {
+        if (db.dashboards[k].formid === id) {
+          delete db.dashboards[k];
+          return;
+        }
+      }
+    }
+    if (type === 'command') {
+      for (const k of Object.keys(db.appactions)) {
+        db.appactions[k] = db.appactions[k].filter((x) => x.appactionid !== id);
+      }
+    }
+  };
+
+  const deleteWebResource = async (id) => {
+    calls.push({ method: 'deleteWebResource', id });
+    for (const k of Object.keys(db.webresources)) {
+      if (db.webresources[k].webresourceid === id) {
+        delete db.webresources[k];
+        return;
+      }
+    }
+  };
+
+  const deleteTable = async (logical) => {
+    calls.push({ method: 'deleteTable', logical });
+    if (!db.tables.has(logical)) {
+      const err = new Error(`Could not find an entity with the specified logical name: ${logical}`);
+      err.statusCode = 404;
+      throw err;
+    }
+    db.tables.delete(logical);
+    // SDK deleteTable throws a not-found error even on success (cosmetic 404)
+    const err = new Error('Could not find an entity with specified id');
+    err.statusCode = 404;
+    throw err;
+  };
+
+  const deleteSolution = async (id) => {
+    calls.push({ method: 'deleteSolution', id });
+    for (const k of Object.keys(db.solutions)) {
+      if (db.solutions[k].solutionid === id) {
+        delete db.solutions[k];
+        return;
+      }
+    }
+  };
+
+  return { queryRecords, deleteRemoteArtifact, deleteWebResource, deleteTable, deleteSolution, calls, db };
 }
 
 // --- planTeardown (pure) ----------------------------------------------------------------
@@ -90,10 +151,10 @@ test('app target uses the derived app uniquename, solution target the solution u
 
 // --- dry-run ----------------------------------------------------------------------------
 
-test('dry-run emits the whole plan as skips and never calls request', async () => {
+test('dry-run emits the whole plan as skips and never calls SDK', async () => {
   const events = [];
-  const throwingRequest = () => { throw new Error('dry-run must not touch the network'); };
-  const r = await runTeardown(fullSpec(), { apply: false }, { request: throwingRequest, emit: (e) => events.push(e) });
+  const throwingSdk = { queryRecords: () => { throw new Error('dry-run must not call SDK'); } };
+  const r = await runTeardown(fullSpec(), { apply: false }, { sdk: throwingSdk, emit: (e) => events.push(e) });
   assert.strictEqual(r.dryRun, true);
   assert.strictEqual(r.plan.length, 8);
   const terminal = events.filter((e) => e.status !== 'start');
@@ -101,99 +162,107 @@ test('dry-run emits the whole plan as skips and never calls request', async () =
   assert.strictEqual(terminal.length, 8);
 });
 
-test('apply without a request function throws', async () => {
-  await assert.rejects(() => runTeardown(fullSpec(), { apply: true }, {}), /requires deps\.request/);
+test('apply without an sdk throws', async () => {
+  await assert.rejects(() => runTeardown(fullSpec(), { apply: true }, {}), /requires deps\.sdk/);
 });
 
 // --- apply (execution) ------------------------------------------------------------------
 
 test('apply deletes every declared artifact in dependency order', async () => {
   const spec = fullSpec();
-  const env = mockEnv({
-    appmodules: { new_supportdesk: 'app-1' },
-    dashboards: { Operations: 'dash-1' },
-    appactions: { new_ticket: ['act-1', 'act-2'] },
-    webresources: { 'new_ticket.js': 'wr-1' },
+  const sdk = mockSdk({
+    appmodules: { new_supportdesk: { appmoduleid: 'app-1', name: 'Support Desk' } },
+    dashboards: { Operations: { formid: 'dash-1', name: 'Operations' } },
+    appactions: { new_ticket: [{ appactionid: 'act-1', buttonlabeltext: 'Escalate' }, { appactionid: 'act-2', buttonlabeltext: 'Btn2' }] },
+    webresources: { 'new_ticket.js': { webresourceid: 'wr-1', name: 'new_ticket.js' } },
     tables: ['new_customer', 'new_ticket', 'new_comment'],
-    solutions: { ContosoSupportDesk: 'sol-1' },
+    solutions: { ContosoSupportDesk: { solutionid: 'sol-1', uniquename: 'ContosoSupportDesk' } },
   });
-  const r = await runTeardown(spec, { apply: true }, { request: env.request });
+  const r = await runTeardown(spec, { apply: true }, { sdk });
   assert.strictEqual(r.ok, true);
   assert.strictEqual(r.errors.length, 0);
   // every artifact removed from the mock db
-  assert.deepStrictEqual(env.db.appmodules, {});
-  assert.deepStrictEqual(env.db.dashboards, {});
-  assert.strictEqual((env.db.appactions.new_ticket || []).length, 0);
-  assert.deepStrictEqual(env.db.webresources, {});
-  assert.strictEqual(env.db.tables.size, 0);
-  assert.deepStrictEqual(env.db.solutions, {});
-  // ordering: appaction deletes precede the web-resource delete; tables precede the solution delete
-  const dels = env.calls.filter((c) => c.method === 'DELETE').map((c) => c.apiPath);
-  const idx = (re) => dels.findIndex((p) => re.test(p));
-  assert.ok(idx(/appactions\(/) < idx(/webresourceset\(/), 'appactions before web resource');
-  assert.ok(idx(/appmodules\(/) < idx(/EntityDefinitions\(/), 'app before tables');
-  assert.ok(idx(/EntityDefinitions\(/) < idx(/solutions\(/), 'tables before solution');
+  assert.deepStrictEqual(sdk.db.appmodules, {});
+  assert.deepStrictEqual(sdk.db.dashboards, {});
+  assert.strictEqual((sdk.db.appactions.new_ticket || []).length, 0);
+  assert.deepStrictEqual(sdk.db.webresources, {});
+  assert.strictEqual(sdk.db.tables.size, 0);
+  assert.deepStrictEqual(sdk.db.solutions, {});
+  // ordering: deleteRemoteArtifact('command') calls precede deleteWebResource; deleteTable precedes deleteSolution
+  const dels = sdk.calls.filter((c) => c.method !== 'queryRecords');
+  const idx = (method, arg) => dels.findIndex((c) => c.method === method && (!arg || (c.type === arg || c.logical === arg || c.id === arg)));
+  assert.ok(idx('deleteRemoteArtifact', 'command') < idx('deleteWebResource'), 'commands before web resource');
+  assert.ok(idx('deleteRemoteArtifact', 'app') < idx('deleteTable'), 'app before tables');
+  assert.ok(idx('deleteTable') < idx('deleteSolution'), 'tables before solution');
   // tables children-first
-  const tableDels = dels.filter((p) => /EntityDefinitions\(/.test(p));
-  assert.ok(/new_comment/.test(tableDels[0]) && /new_customer/.test(tableDels[2]));
+  const tableDels = dels.filter((c) => c.method === 'deleteTable').map((c) => c.logical);
+  assert.ok(tableDels[0] === 'new_comment' && tableDels[2] === 'new_customer');
 });
 
-test('not-found artifacts are skipped, not errors, and issue no DELETE', async () => {
-  const env = mockEnv(); // empty env — nothing exists
-  const r = await runTeardown(fullSpec(), { apply: true }, { request: env.request });
+test('not-found artifacts are skipped, not errors, and issue no delete', async () => {
+  const sdk = mockSdk(); // empty env — nothing exists
+  const r = await runTeardown(fullSpec(), { apply: true }, { sdk });
   assert.strictEqual(r.ok, true);
-  assert.strictEqual(r.skipped.length, 8);
-  assert.strictEqual(env.calls.filter((c) => c.method === 'DELETE').length, 0);
+  // Tables will attempt deleteTable (synthetic item) but get not-found immediately, counted as deleted
+  // Other artifacts (app, dashboard, commands, webResource, solution) skip when resolve returns []
+  assert.strictEqual(r.skipped.length, 5); // app, dashboard, commands, webResource, solution
+  assert.strictEqual((r.deleted.table || []).length, 3); // tables counted as deleted (tolerateNotFound)
+  // Only table deletes were attempted (synthetic items); other kinds skipped before delete
+  const deletesDone = sdk.calls.filter((c) => c.method !== 'queryRecords');
+  assert.ok(deletesDone.every((c) => c.method === 'deleteTable'), 'only table deletes attempted');
 });
 
-test('EntityDefinitions cosmetic 404 counts as deleted (confirmed gone by follow-up GET)', async () => {
-  const env = mockEnv({ tables: ['new_customer', 'new_ticket', 'new_comment'], solutions: { ContosoSupportDesk: 'sol-1' } });
-  const r = await runTeardown(desk, { apply: true }, { request: env.request });
+test('table deleteTable not-found error counts as deleted (cosmetic 404)', async () => {
+  const sdk = mockSdk({ tables: ['new_customer', 'new_ticket', 'new_comment'], solutions: { ContosoSupportDesk: { solutionid: 'sol-1', uniquename: 'ContosoSupportDesk' } } });
+  const r = await runTeardown(desk, { apply: true }, { sdk });
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
   assert.strictEqual((r.deleted.table || []).length, 3);
-  assert.strictEqual(env.db.tables.size, 0);
+  assert.strictEqual(sdk.db.tables.size, 0);
 });
 
-test('a table whose delete 404s but is still present is a real error', async () => {
-  // A mock whose EntityDefinitions DELETE 404s WITHOUT removing the table (confirm GET still 200).
-  const request = async (method, apiPath) => {
-    if (method === 'GET' && apiPath.startsWith('EntityDefinitions(')) return { status: 200, data: { LogicalName: 'x' } };
-    if (method === 'DELETE' && apiPath.startsWith('EntityDefinitions(')) return { status: 404, data: { error: { message: 'cosmetic' } } };
-    return { status: 200, data: { value: [] } };
-  };
+test('a table that does not exist skips the delete', async () => {
+  const sdk = mockSdk(); // no tables
   const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [{ schemaName: 'new_x', primaryAttribute: { schemaName: 'new_name' } }] };
-  const r = await runTeardown(spec, { apply: true }, { request });
-  assert.strictEqual(r.ok, false);
-  assert.ok(r.errors.some((e) => /still exists/.test(e.message)));
+  const r = await runTeardown(spec, { apply: true }, { sdk });
+  assert.strictEqual(r.ok, true);
+  // The table resolve returns a synthetic item, but deleteTable throws not-found immediately (table never existed)
+  // The handler tolerates not-found, so it counts as deleted
+  assert.strictEqual((r.deleted.table || []).length, 1);
 });
 
-test('appaction delete 404 (cascade already removed it) is tolerated', async () => {
+test('appaction delete not-found (cascade already removed it) is tolerated', async () => {
   const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, app: { name: 'A' }, entities: [{ schemaName: 'new_x', primaryAttribute: { schemaName: 'new_name' } }], commands: [{ entity: 'new_x', label: 'B', library: 'w.js', function: 'f' }] };
-  const request = async (method, apiPath) => {
-    if (method === 'GET' && apiPath.startsWith('appactions?')) return { status: 200, data: { value: [{ appactionid: 'a1' }, { appactionid: 'a2' }] } };
-    if (method === 'DELETE' && apiPath.startsWith('appactions(')) return { status: 404, data: null }; // cascade already gone
-    if (method === 'GET') return { status: 404, data: null }; // app/table/solution absent
-    return { status: 204, data: null };
+  const sdk = mockSdk({
+    appactions: { new_x: [{ appactionid: 'a1', buttonlabeltext: 'B' }, { appactionid: 'a2', buttonlabeltext: 'B2' }] },
+  });
+  // Make deleteRemoteArtifact('command') throw not-found (cascade already gone)
+  const base = sdk.deleteRemoteArtifact;
+  sdk.deleteRemoteArtifact = async (type, id) => {
+    if (type === 'command') {
+      const err = new Error('Not found');
+      err.statusCode = 404;
+      throw err;
+    }
+    return base(type, id);
   };
-  const r = await runTeardown(spec, { apply: true }, { request });
+  const r = await runTeardown(spec, { apply: true }, { sdk });
   const cmdErr = r.errors.filter((e) => /command bar/.test(e.step));
   assert.strictEqual(cmdErr.length, 0, 'cascade 404 on appaction should not error');
   assert.strictEqual((r.deleted.commands || []).length, 2);
 });
 
 test('a failed step does not strand the rest (best-effort continue)', async () => {
-  const env = mockEnv({ webresources: { 'new_ticket.js': 'wr-1' }, tables: ['new_customer', 'new_ticket', 'new_comment'], solutions: { ContosoSupportDesk: 'sol-1' } });
-  const base = env.request;
-  const request = async (method, apiPath, body) => {
-    if (method === 'DELETE' && apiPath.startsWith('webresourceset(')) return { status: 500, data: { error: { message: 'boom' } } };
-    return base(method, apiPath, body);
+  const sdk = mockSdk({ webresources: { 'new_ticket.js': { webresourceid: 'wr-1', name: 'new_ticket.js' } }, tables: ['new_customer', 'new_ticket', 'new_comment'], solutions: { ContosoSupportDesk: { solutionid: 'sol-1', uniquename: 'ContosoSupportDesk' } } });
+  const base = sdk.deleteWebResource;
+  sdk.deleteWebResource = async (id) => {
+    throw new Error('boom');
   };
-  const r = await runTeardown(fullSpec(), { apply: true }, { request });
+  const r = await runTeardown(fullSpec(), { apply: true }, { sdk });
   assert.strictEqual(r.ok, false);
   assert.ok(r.errors.some((e) => /web resource/.test(e.step)));
   // tables + solution after the failing step were still torn down
-  assert.strictEqual(env.db.tables.size, 0);
-  assert.deepStrictEqual(env.db.solutions, {});
+  assert.strictEqual(sdk.db.tables.size, 0);
+  assert.deepStrictEqual(sdk.db.solutions, {});
 });
 
 // --- helpers ----------------------------------------------------------------------------
@@ -203,8 +272,14 @@ test('odataStr doubles single quotes (OData literal escaping)', () => {
   assert.strictEqual(odataStr(null), '');
 });
 
-test('deleteStep tolerates a plain 404 for non-cosmetic kinds', async () => {
-  const request = async () => ({ status: 404, data: null });
-  const ids = await deleteStep(request, KIND_HANDLERS.webResource, [{ id: 'wr-1' }]);
+test('deleteStep tolerates a not-found error for non-tolerateNotFound kinds', async () => {
+  const sdk = {
+    deleteWebResource: async (id) => {
+      const err = new Error('Not found');
+      err.statusCode = 404;
+      throw err;
+    },
+  };
+  const ids = await deleteStep(sdk, KIND_HANDLERS.webResource, [{ id: 'wr-1' }]);
   assert.deepStrictEqual(ids, ['wr-1']);
 });

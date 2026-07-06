@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // model-app-maker teardown: delete exactly the artifacts an App Spec declares, in
-// dependency-safe order, via the Dataverse Web API — the first-class, classifier-safe
+// dependency-safe order, via the SDK's delete methods — the first-class, classifier-safe
 // counterpart to `build-model-app.js`. Auth is the caller's az token (same as the rest of
 // the plugin). DRY-RUN BY DEFAULT — it lists what would be deleted and touches nothing; only
 // `--apply` performs deletes. It removes ONLY artifacts whose identity is resolved from a
@@ -13,9 +13,26 @@
 // Order: app -> dashboards -> commands -> web-resources -> tables (reverse-topo) -> solution.
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const { validateAppSpec } = require('./lib/app-spec.js');
 const { runTeardown } = require('./lib/sdk-teardown.js');
-const { dataverseRequest, parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
+const { createAzHttpClient } = require('./lib/sdk-http-client.js');
+const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
+
+// Build an SDK client for teardown. Uses the same az-token HttpClient as build-model-app.js.
+function makeSdk(env) {
+  const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
+  const httpClient = createAzHttpClient(env);
+  // Teardown uses a minimal SDK client (no workspace, no solution header) — just queryRecords
+  // and delete methods. Use a throw-away temp dir since initWorkspace is mandatory.
+  const sdk = createMakerSdk({
+    workspacePath: fs.mkdtempSync(path.join(os.tmpdir(), 'teardown-')),
+    instanceUrl: env,
+    httpClient,
+  });
+  sdk.initWorkspace();
+  return sdk;
+}
 
 // Turn engine progress events into a phase-grouped, status-marked teardown log — the same shape
 // build-model-app.js uses: ▶ <phase>, then per step [n/total] with ✓ (deleted) / ⊘ (not found) /
@@ -42,7 +59,7 @@ async function teardownModelApp(spec, opts, deps) {
   const log = deps.log || (() => undefined);
   const counts = { ok: 0, skip: 0, error: 0 };
   const emit = deps.emit || cliEmit(log, { apply: opts.apply, counts });
-  const r = await runTeardown(spec, { apply: opts.apply }, { request: deps.request, emit });
+  const r = await runTeardown(spec, { apply: opts.apply }, { sdk: deps.sdk, emit });
   if (opts.apply && r && !r.dryRun) {
     log(`\n${r.ok ? '✓' : '✗'} teardown ${r.ok ? 'complete' : 'finished with errors'} — ${counts.ok} deleted, ${counts.skip} not found, ${counts.error} failed (${counts.ok + counts.skip + counts.error} steps)`);
   }
@@ -62,8 +79,8 @@ async function main() {
   const specPath = path.resolve(typeof specArg === 'string' && specArg.startsWith('@') ? specArg.slice(1) : specArg);
   const spec = readJsonArg('@' + specPath);
   const apply = flags.apply === true;
-  const request = (method, apiPath, body) => dataverseRequest(env, method, apiPath, body);
-  const deps = { log: (m) => process.stderr.write(m + '\n'), request };
+  const sdk = makeSdk(env);
+  const deps = { log: (m) => process.stderr.write(m + '\n'), sdk };
   const r = await teardownModelApp(spec, { apply }, deps);
 
   // Clear the local workspace only after a clean apply — stale metadata there would make a
