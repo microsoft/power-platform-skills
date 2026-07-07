@@ -1,7 +1,7 @@
 ---
 name: model-app-maker
 version: 0.6.0
-description: Builds and edits a model-driven Power Apps app from a natural-language intent — tables, columns, relationships, adaptive forms with sub-grids, views, Choice-column charts, generative pages (genpage-first) for overview/dashboard surfaces, and an app module + sitemap — via the headless cds-maker-sdk. Runs an interactive, multi-turn authoring flow (env selection, App Spec authoring, guardrail lint, plan-mode approval) and a narrated build, and can download a deployed app back into an editable spec to change it. Use when the user says "build an app for X", "create a model-driven app", "make me an app to manage Y", or "edit/add to my app". For a standalone generative page that is not part of an app, use /genpage.
+description: (Preview) Builds and edits a model-driven Power Apps app from a natural-language intent — tables, columns, relationships, adaptive forms with sub-grids, views, Choice-column charts, generative pages (genpage-first) for overview/dashboard surfaces, and an app module + sitemap — via the headless cds-maker-sdk. Runs an interactive, multi-turn authoring flow (env selection, App Spec authoring, guardrail lint, plan-mode approval) and a narrated build, and can download a deployed app back into an editable spec to change it. Use when the user says "build an app for X", "create a model-driven app", "make me an app to manage Y", or "edit/add to my app". For a standalone generative page that is not part of an app, use /genpage.
 author: Microsoft Corporation
 argument-hint: "<app description>"
 user-invocable: true
@@ -9,6 +9,10 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, EnterPlanMo
 ---
 
 # model-app-maker — intent → model-driven app
+
+> ⚠️ **Preview.** This skill is in preview — its App Spec shape, flags, and build behavior may change
+> between versions. Review the plan-mode summary before applying, and prefer a non-production
+> environment while it stabilizes.
 
 Turn a natural-language intent into a deployed model-driven app. You author a reviewable
 **App Spec** (JSON) with the user across confirmed turns, then a deterministic engine
