@@ -38,8 +38,26 @@ const SKIP_DIRS = new Set(['node_modules', '.git']);
 // is "PluginEventStreamPlaceholder". A freshly-adopted, not-yet-provisioned
 // plugin legitimately still carries these, so they must never count as a
 // cross-plugin collision. Empty strings are also unprovisioned placeholders.
+//
+// Match ONLY the known template sentinels (and angle-bracket template strings
+// like "<your 1DS instrumentation key>" from the README's Tier 1 example), not
+// any string merely containing the substring "placeholder". A broad substring
+// test would silently skip a legitimate key or event_stream_name that happened
+// to include that word, letting a real cross-plugin collision slip through.
+const TEMPLATE_SENTINELS = new Set([
+  'PLACEHOLDER_REPLACE_BEFORE_SHIPPING', // shared/telemetry/ikey.json region keys
+  'PluginEventStreamPlaceholder', // shared/telemetry/ikey.json event_stream_name
+]);
+
 function isPlaceholder(value) {
-  return typeof value !== 'string' || value.trim() === '' || /placeholder/i.test(value);
+  if (typeof value !== 'string') return true;
+  const trimmed = value.trim();
+  if (trimmed === '') return true;
+  if (TEMPLATE_SENTINELS.has(trimmed)) return true;
+  // Angle-bracket template strings copied verbatim from the docs, e.g.
+  // "<your 1DS instrumentation key>" or "<region>".
+  if (trimmed.startsWith('<') && trimmed.endsWith('>')) return true;
+  return false;
 }
 
 function toPosix(relativePath) {
@@ -159,7 +177,7 @@ collectCollisions(keyOwners, 'Instrumentation key', redactKey);
 collectCollisions(streamOwners, 'event_stream_name', null);
 
 if (errors.length > 0) {
-  console.log('Found telemetry configuration shared across plugins:');
+  console.log('Telemetry ikey.json validation failed:');
   for (const error of errors) {
     console.log(`- ${error}`);
   }
