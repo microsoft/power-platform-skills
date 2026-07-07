@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { runSdkBuild, planFor, resolvePhases, formDef, viewDef, appDef, PHASES } = require('../lib/sdk-build.js');
+const { runSdkBuild, planFor, resolvePhases, formDef, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, PHASES } = require('../lib/sdk-build.js');
 
 // Customer 1:N Tickets: a Choice column, sample data with $parent, a view, a Choice chart,
 // and a parent form with a child sub-grid.
@@ -57,6 +57,7 @@ function mockSdk(opts = {}) {
     createRecordsBulk: async (e, rows) => { calls.push({ name: 'createRecordsBulk', args: [e, rows] }); return rows.map((_, i) => `${e}-${i}`); },
     createArtifact: (t, def) => { calls.push({ name: 'createArtifact', args: [t, def] }); return Object.assign({ id: `${t}-${++idc}` }, def); },
     pushArtifact: async (t, id) => { calls.push({ name: 'pushArtifact', args: [t, id] }); return { type: t, id, success: true }; },
+    setViewColumns: (id, cols) => { calls.push({ name: 'setViewColumns', args: [id, cols] }); return { id }; },
     addSubGrid: (formId, o) => { calls.push({ name: 'addSubGrid', args: [formId, o] }); return {}; },
     addQuickViewControl: (formId, o) => { calls.push({ name: 'addQuickViewControl', args: [formId, o] }); return {}; },
     addDashboardTile: (id, o) => { calls.push({ name: 'addDashboardTile', args: [id, o] }); return {}; },
@@ -578,6 +579,54 @@ test('app-shell: threads icon/vectorIcon on area and subarea (icon web-resource 
   assert.strictEqual(area.vectorIcon, 'Home');
   assert.strictEqual(sub.icon, 'new_subicon.png');
   assert.strictEqual(sub.vectorIcon, 'Grid');
+});
+
+test('defaultViewColumns: primary first (wide) + declared columns, capped at 7, skipping wide types', () => {
+  const entity = {
+    schemaName: 'new_ticket',
+    primaryAttribute: { schemaName: 'new_subject', displayName: 'Subject' },
+    columns: [
+      { schemaName: 'new_priority', type: 'Choice' },
+      { schemaName: 'new_notes', type: 'Memo' },
+      { schemaName: 'new_a', type: 'Text' }, { schemaName: 'new_b', type: 'Text' },
+      { schemaName: 'new_c', type: 'Text' }, { schemaName: 'new_d', type: 'Text' },
+      { schemaName: 'new_e', type: 'Text' }, { schemaName: 'new_f', type: 'Text' },
+    ],
+  };
+  const cols = defaultViewColumns({}, entity);
+  assert.strictEqual(cols[0].name, 'new_subject');
+  assert.strictEqual(cols[0].width, 300);
+  assert.ok(!cols.some((c) => c.name === 'new_notes'), 'Memo skipped');
+  assert.ok(cols.length <= 7, 'capped at 7 total');
+  assert.deepStrictEqual(cols.map((c) => c.order), cols.map((_, i) => i));
+});
+
+test('enrichesDefaultViews: needs a non-primary column and honors the opt-out', () => {
+  const bare = { schemaName: 'new_x', primaryAttribute: { schemaName: 'new_name' }, columns: [] };
+  assert.strictEqual(enrichesDefaultViews({}, bare), false);
+  const rich = { schemaName: 'new_y', primaryAttribute: { schemaName: 'new_name' }, columns: [{ schemaName: 'new_p', type: 'Choice' }] };
+  assert.strictEqual(enrichesDefaultViews({}, rich), true);
+  assert.strictEqual(enrichesDefaultViews({}, { ...rich, enrichDefaultViews: false }), false);
+});
+
+test('views phase enriches default views (fetch -> setViewColumns -> push -> publish)', async () => {
+  const spec = makeSpec();
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'views'] });
+  const setCalls = find(calls, 'setViewColumns');
+  assert.ok(setCalls.length >= 2, 'a default view enriched per entity');
+  const custCall = setCalls.find((c) => Array.isArray(c.args[1]) && c.args[1][0].name === 'new_name');
+  assert.ok(custCall, 'customer default view enriched starting with the primary column');
+  assert.ok(custCall.args[1].some((col) => col.name === 'new_tier'), 'includes the declared column');
+  assert.ok(find(calls, 'publishArtifact').some((c) => c.args[0] === 'view'), 'entity published after enrichment');
+});
+
+test('views phase skips default-view enrichment when opted out (enrichDefaultViews:false)', async () => {
+  const spec = makeSpec();
+  spec.entities.forEach((e) => { e.enrichDefaultViews = false; });
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'views'] });
+  assert.strictEqual(find(calls, 'setViewColumns').length, 0, 'no enrichment when opted out');
 });
 
 test('alt-key creation still halts on a genuine (non-duplicate) error', async () => {

@@ -142,6 +142,12 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   Choice **labels** in `value`/`values` resolve to option ints. This is what "My Open Orders"
   (`ownerid eq-userid` + `new_status not-in [Completed, Cancelled]`) and "Completed This Week"
   (`new_status eq Completed` + `modifiedon this-week`) need — no post-build FetchXML patching.
+- **Default-view enrichment (automatic):** the auto-generated **"Active &lt;Entity&gt;"** and
+  **"Inactive &lt;Entity&gt;"** system views ship with only the primary column. The build enriches
+  them with the primary column plus up to 6 meaningful declared columns (in declared order, skipping
+  wide/opaque types like MultilineText). This runs by default for every table that has extra columns;
+  opt a table out with **`"enrichDefaultViews": false`** on its `entities[]` entry. Author-declared
+  `views[]` are separate and always win.
 
 ## charts[]
 ```jsonc

@@ -204,6 +204,7 @@ function planFor(spec, opts) {
   }
   if (has('web-resources')) for (const wr of spec.webResources || []) items.push({ phase: 'web-resources', label: `web resource ${wr.name} (${wr.type || 'js'})` });
   if (has('views')) for (const v of spec.views) items.push({ phase: 'views', label: `view "${v.name}" for ${v.entity}` });
+  if (has('views')) for (const e of spec.entities || []) if (enrichesDefaultViews(spec, e)) items.push({ phase: 'views', label: `enrich default views for ${e.schemaName.toLowerCase()}` });
   if (has('charts')) for (const c of spec.charts || []) items.push({ phase: 'charts', label: `chart "${c.name}" (${c.chartType}) for ${c.entity}` });
   if (has('forms')) for (const f of spec.forms) {
     const ft = f.formType || 'Main';
@@ -266,8 +267,31 @@ function viewDef(spec, v) {
     sort: (v.sort || []).map((s) => ({ attribute: String(s.attr).toLowerCase(), descending: s.dir === 'desc' })) };
 }
 
-function chartDef(spec, ch) {
-  const entityLogical = ch.entity.toLowerCase();
+// Pick a "good" default-view column set: the primary name column plus up to DEFAULT_VIEW_MAX_EXTRA
+// meaningful declared columns (in declared order), skipping wide/opaque types that read poorly in a
+// grid. Used to enrich the auto-generated "Active/Inactive <Entity>" views (which ship with only
+// the primary column).
+const DEFAULT_VIEW_MAX_EXTRA = 6;
+const DEFAULT_VIEW_SKIP_TYPES = new Set(['Memo', 'File', 'Image']);
+function defaultViewColumns(spec, entity) {
+  const primary = entity.primaryAttribute.schemaName.toLowerCase();
+  const picked = [{ name: primary, width: 300, order: 0 }];
+  for (const c of entity.columns || []) {
+    if (picked.length > DEFAULT_VIEW_MAX_EXTRA) break;
+    const logical = c.schemaName.toLowerCase();
+    if (logical === primary) continue;
+    if (DEFAULT_VIEW_SKIP_TYPES.has(c.type)) continue;
+    picked.push({ name: logical, width: 150, order: picked.length });
+  }
+  return picked;
+}
+// True when a table has enough declared columns to make enriching its default views worthwhile
+// (opt out per-entity with enrichDefaultViews:false).
+function enrichesDefaultViews(spec, entity) {
+  return !!entity && entity.enrichDefaultViews !== false && defaultViewColumns(spec, entity).length >= 2;
+}
+
+function chartDef(spec, ch) {  const entityLogical = ch.entity.toLowerCase();
   return { name: ch.name, description: '', entityLogicalName: entityLogical, chartType: ch.chartType, isDefault: false,
     series: [{ attribute: `${entityLogical}id`, aggregate: ch.measure || 'count' }],
     categories: [{ attribute: String(ch.groupBy).toLowerCase() }], presentation: { showLegend: true, title: ch.name } };
@@ -456,6 +480,34 @@ async function runSdkBuild(spec, opts = {}) {
     spec.views.forEach((v, i) => { result.created.views[v.name] = ids[i]; });
   }
 
+  // 4b. Enrich the auto-generated default "Active/Inactive <Entity>" system views (Dataverse ships
+  // them with only the primary column). One step per enrichable entity; opt out per-entity with
+  // enrichDefaultViews:false. Author-declared views (also querytype 0) are excluded by id; the
+  // Active/Inactive naming match assumes English (LCID 1033) default-view names.
+  if (has('views')) {
+    const authorViewIds = new Set(Object.values(result.created.views || {}).filter(Boolean));
+    for (const e of spec.entities || []) {
+      if (!enrichesDefaultViews(spec, e)) continue;
+      const logical = e.schemaName.toLowerCase();
+      const cols = defaultViewColumns(spec, e);
+      await runner.run('views', `enrich default views for ${logical}`, async () => {
+        const rows = await provision.queryRecords('savedquery', {
+          select: ['savedqueryid', 'name', 'isdefault'],
+          filter: `returnedtypecode eq '${logical}' and querytype eq 0`,
+          top: 50,
+        });
+        const defaults = (rows || []).filter((r) => !authorViewIds.has(r.savedqueryid) && (r.isdefault || /^(Active|Inactive)\b/i.test(r.name || '')));
+        for (const dv of defaults) {
+          await provision.fetchArtifact('view', dv.savedqueryid);
+          provision.setViewColumns(dv.savedqueryid, cols);
+          await provision.pushArtifact('view', dv.savedqueryid);
+        }
+        if (defaults.length) await provision.publishArtifact('view', defaults[0].savedqueryid);
+        return defaults.map((d) => d.savedqueryid);
+      });
+    }
+  }
+
   // 5. Charts (independent -> parallel; built before forms so a form could reference one).
   if (has('charts')) {
     const charts = spec.charts || [];
@@ -580,4 +632,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, chartDef, formDef, appDef, appUniqueName, commandsByEntity, webResourceOpts, formEventOpts, WEB_RESOURCE_KINDS, FORM_EVENTS };
+module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, enrichesDefaultViews, chartDef, formDef, appDef, appUniqueName, commandsByEntity, webResourceOpts, formEventOpts, WEB_RESOURCE_KINDS, FORM_EVENTS };
