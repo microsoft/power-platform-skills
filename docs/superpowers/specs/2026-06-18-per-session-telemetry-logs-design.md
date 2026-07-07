@@ -35,8 +35,6 @@ share for a given problem is obvious and self-contained.**
 ```
 ~/.power-platform-skills/
 ├── config.json                                   # unchanged — opt-out choices live here
-├── events.jsonl                                  # LEGACY flat file — left in place, no longer written
-├── events.<stamp>.old                            # LEGACY rotations — left in place
 └── telemetry/
     └── <pluginName>/                             # e.g. power-pages
         └── sessions/
@@ -44,6 +42,10 @@ share for a given problem is obvious and self-contained.**
                 ├── events.jsonl                  # this session's events (always this name)
                 └── events.<stamp>.old            # only if this session exceeded the size cap (rare)
 ```
+
+> The pre-per-session flat `events.jsonl` (and its `events.<stamp>.old` rotations),
+> which sat directly at the config root, are **deleted** best-effort on the first
+> write after this ships. See *Backward compatibility*.
 
 - The log file is **always** `events.jsonl`; the session identity is carried by the **directory
   name**, not the filename.
@@ -79,6 +81,7 @@ unchanged; the module derives the rest.
    appending.
 6. Append `JSON.stringify(record) + "\n"` to `logFile`.
 7. **Retention sweep** (best-effort): see below.
+8. **Legacy cleanup** (best-effort): `removeLegacyFlatLog(configDir)` — see below.
 
 The path is **deterministic** — no directory scan to find "this session's file". This also removes
 the multi-process race that a glob-by-session approach would have (the dispatcher runs as a fresh,
@@ -105,8 +108,14 @@ most-recently-modified session directory, or `null` when there are none. "Most r
 `events.jsonl` mtime (falls back to directory mtime when the file is absent). Used by the telemetry
 skill's `status` output. Read-only; returns `null` on any error.
 
+**`removeLegacyFlatLog(configDir)`** — best-effort one-time cleanup of the pre-per-session layout.
+Deletes `<configDir>/events.jsonl` and any `<configDir>/events.<stamp>.old` rotations that sit at the
+config **root**. The new layout's `.old` files live under `telemetry/**`, so matching only the root
+listing can never delete a current per-session rotation. Entirely wrapped in try/catch; never throws.
+Runs on every `appendLocal` after the retention sweep.
+
 **Exports:** `appendLocal`, `pluginLogDir`, `latestSessionLog`, `pruneOldSessions`,
-`LOG_FILE_NAME`, `ROTATE_BYTES`, `MAX_LOG_AGE_DAYS`.
+`removeLegacyFlatLog`, `LOG_FILE_NAME`, `ROTATE_BYTES`, `MAX_LOG_AGE_DAYS`.
 
 ### `shared/telemetry/lib/emit-dispatcher.js` (no behavioral change)
 
@@ -141,9 +150,11 @@ call `pluginLogDir` / `latestSessionLog`. The local `logPath()` helper is remove
 
 ## Backward compatibility
 
-- The legacy `~/.power-platform-skills/events.jsonl` (and its `.old` rotations) are **not migrated
-  and not deleted**. They are ephemeral diagnostic data; no code reads them. They simply stop
-  growing once this ships.
+- The legacy `~/.power-platform-skills/events.jsonl` (and its `events.<stamp>.old` rotations) are
+  **deleted** by a best-effort one-time cleanup (`removeLegacyFlatLog`) that `appendLocal` runs after
+  each write. Only files at the config **root** are removed, so the new per-session tree under
+  `telemetry/` is never touched. No code ever read the legacy file; removing it just reclaims the
+  stale diagnostic data.
 - No config schema change. `config.json` and the opt-out env var are untouched.
 
 ## Testing

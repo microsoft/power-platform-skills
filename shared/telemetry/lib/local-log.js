@@ -70,6 +70,38 @@ function rotateIfNeeded(dir, logFile) {
   }
 }
 
+// One-time cleanup of the pre-per-session layout. Before this feature the mirror
+// was a single flat <configDir>/events.jsonl (rotated to <configDir>/events.<stamp>.old
+// directly in the config root). Those files are never written again, so delete
+// them on the first write we do — they only sit at the config ROOT, so this can
+// never touch the new per-session tree under <configDir>/telemetry/. Best-effort
+// and never throws: a leftover diagnostic file must not break a skill run.
+function removeLegacyFlatLog(configDir) {
+  try {
+    fs.rmSync(path.join(configDir, LOG_FILE_NAME), { force: true });
+  } catch {
+    // ignore — the legacy file may not exist or may be locked
+  }
+  let entries;
+  try {
+    entries = fs.readdirSync(configDir);
+  } catch {
+    return; // config dir unreadable — nothing more to clean
+  }
+  for (const name of entries) {
+    // Legacy rotations were named events.<UTCstamp>.old at the config root. The
+    // new layout's .old files live inside telemetry/**, so matching on this
+    // root listing only cannot delete a current per-session rotation.
+    if (name.startsWith("events.") && name.endsWith(".old")) {
+      try {
+        fs.rmSync(path.join(configDir, name), { force: true });
+      } catch {
+        // best effort per file
+      }
+    }
+  }
+}
+
 function appendLocal(record, { configDir } = {}) {
   if (!configDir) return;
   const data = (record && record.data) || {};
@@ -90,6 +122,7 @@ function appendLocal(record, { configDir } = {}) {
     // swallow — fail closed; telemetry must never break a skill run
   }
   pruneOldSessions(configDir, data.pluginName);
+  removeLegacyFlatLog(configDir);
 }
 
 // Best-effort age-based retention — the primary cleanup mechanism. Walk the
@@ -167,6 +200,7 @@ module.exports = {
   pluginLogDir,
   latestSessionLog,
   pruneOldSessions,
+  removeLegacyFlatLog,
   sanitizeSegment,
   LOG_FILE_NAME,
   ROTATE_BYTES,
