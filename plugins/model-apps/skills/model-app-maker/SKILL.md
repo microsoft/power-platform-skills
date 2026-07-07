@@ -185,6 +185,12 @@ existing tables idempotently), the icon web resources, and the solution. Then:
    write never drops them).
 4. **Verify** (Phase 3) to confirm only the intended change landed.
 
+> **Edit-flow limitation (Preview):** classic `dashboards[]` and their sitemap subareas are **not yet
+> round-tripped** by `download-model-app.js` — it prints a `WARNING: N sitemap subarea(s) could not be
+> round-tripped` and a rebuild would drop them from the nav. If the app has a classic dashboard, **re-add
+> it to the downloaded spec before rebuilding**. (Genpage, entity, URL subareas + icons round-trip
+> losslessly.) Prefer generative pages over classic dashboards per the genpage-first policy.
+
 ---
 
 ## What the builder does (in order)

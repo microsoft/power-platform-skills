@@ -69,7 +69,9 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   generative page via `pac model genpage download`, referenced entities, icon web resources, solution).
   Edit the downloaded spec and re-run the build (idempotent) — create and edit share one path. Always
   pull fresh at the start of an edit session (the build reads an etag; a write against an artifact
-  changed in Maker throws a version conflict → re-pull, never clobber).
+  changed in Maker throws a version conflict → re-pull, never clobber). **Limitation (Preview):** classic
+  DashBoard subareas are not yet round-tripped — download prints a `WARNING` and a rebuild drops them, so
+  re-add a classic dashboard to the spec before rebuilding (genpage/entity/URL subareas round-trip losslessly).
 - **`scripts/verify-model-app.js` → `scripts/lib/verify-spec.js`** — read-only reconcile of the App Spec
   against what actually deployed (entities/columns/views/charts/forms + sitemap subareas + icons); exits
   non-zero and lists anything missing, catching silent partial builds.
