@@ -57,8 +57,7 @@ test('apply threads through to the SDK engine (solution + tables created)', asyn
   const { sdk, calls } = mockSdk();
   const r = await buildModelApp(desk, { apply: true, env: 'https://x' }, { sdk });
   assert.strictEqual(r.ok, true);
-  assert.ok(calls.some((c) => c[0] === 'createSolution'));
-  assert.ok(calls.filter((c) => c[0] === 'createTable').length >= 1);
+  assert.ok(calls.some((c) => c[0] === 'createSolution'));  assert.ok(calls.filter((c) => c[0] === 'createTable').length >= 1);
 });
 
 test('apply emits one status-marked [n/total] line per step, with phase headers + a summary', async () => {
@@ -96,4 +95,24 @@ test('--sample-data threads through (records created); without it, none', async 
   const without = mockSdk();
   await buildModelApp(desk, { apply: true, env: 'https://x' }, { sdk: without.sdk });
   assert.ok(!without.calls.some((c) => c[0] === 'createRecordsBulk'), 'no records without --sample-data');
+});
+
+test('build journal: tees step events and closes with a completion summary', async () => {
+  const { sdk } = mockSdk();
+  const events = [];
+  let closed = null;
+  const journal = { path: 'x', record: (e) => events.push(e), close: (s) => { closed = s; } };
+  await buildModelApp(desk, { apply: true, env: 'https://x' }, { sdk, journal });
+  assert.ok(events.some((e) => e.status === 'ok'), 'ok steps journaled');
+  assert.ok(closed && closed.status === 'complete', 'journal closed with a completion summary');
+});
+
+test('build journal: records a halt (with the failing phase) when the build throws', async () => {
+  const { sdk } = mockSdk();
+  sdk.createTable = async () => { throw new Error('boom'); };
+  let closed = null;
+  const journal = { path: 'x', record: () => {}, close: (s) => { closed = s; } };
+  await assert.rejects(buildModelApp(desk, { apply: true, env: 'https://x' }, { sdk, journal }));
+  assert.ok(closed && closed.status === 'halt', 'journal closed with a halt record');
+  assert.strictEqual(closed.phase, 'data-model', 'halt records the failing phase');
 });

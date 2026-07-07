@@ -94,6 +94,13 @@ Narrate progress as it runs. If the build **halts** (`BuildHalt`) on an unrecove
 surface it and ask the user how to proceed via `AskUserQuestion` (adjust the spec / cancel),
 then re-run. Everything is scoped to a dedicated unmanaged solution; `--publish` is opt-in.
 
+**Resuming a failed build:** each `--apply` run appends a durable journal to
+`<working-dir>/.maker-workspace/build-log.jsonl` (one line per step + a terminal `run-end`
+record carrying the halt `phase`/`code` or the completion counts). To resume, inspect the last
+record for where it stopped, then **re-run the exact same command** — the build is idempotent, so
+it reuses every artifact already created and only fills the gaps (or use `--from <phase>` to skip
+ahead). Resume is a re-run, not a replayed checkpoint; the journal is the diagnostic record.
+
 ### Phase 3 — Verify & iterate
 Open the app in the browser. Refine `app-spec.json` and re-run Phase 2 to iterate.
 

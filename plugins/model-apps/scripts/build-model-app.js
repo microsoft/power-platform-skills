@@ -17,6 +17,7 @@ const { validateAppSpec } = require('./lib/app-spec.js');
 const { runSdkBuild, planFor, resolvePhases } = require('./lib/sdk-build.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
+const { openJournal } = require('./lib/build-journal.js');
 
 // Construct the SDK against the vendored bundle + an az-token HttpClient. Two clients:
 //   sdk          — carries solutionUniqueName (metadata + record writes auto-join the
@@ -72,19 +73,33 @@ async function buildModelApp(spec, opts, deps) {
   }
   const log = deps.log || (() => undefined);
   const counts = { ok: 0, skip: 0, error: 0 };
-  const emit = deps.emit || cliEmit(log, { apply: opts.apply, counts });
-  const r = await runSdkBuild(spec, {
-    sdk: deps.sdk,
-    provisionSdk: deps.provisionSdk,
-    apply: opts.apply,
-    sampleData: opts.sampleData,
-    publish: opts.publish,
-    phases: opts.phases,
-    appDir: opts.appDir, // resolves web-resource `contentPath` relative to the app folder
-    emit,
-  });
+  const journal = deps.journal;
+  // Tee the engine's progress events into the durable journal without touching the pure engine.
+  const baseEmit = deps.emit || cliEmit(log, { apply: opts.apply, counts });
+  const emit = journal ? (e) => { baseEmit(e); journal.record(e); } : baseEmit;
+  let r;
+  try {
+    r = await runSdkBuild(spec, {
+      sdk: deps.sdk,
+      provisionSdk: deps.provisionSdk,
+      apply: opts.apply,
+      sampleData: opts.sampleData,
+      publish: opts.publish,
+      phases: opts.phases,
+      appDir: opts.appDir, // resolves web-resource `contentPath` relative to the app folder
+      emit,
+    });
+  } catch (err) {
+    // A BuildHalt (or any error) — journal where/why it stopped, then propagate. Resume by
+    // re-running the same command (idempotent) or with --from <phase>.
+    if (journal) journal.close({ status: 'halt', phase: err && err.phase, code: err && err.code, recoverable: !!(err && err.recoverable), message: String((err && err.message) || err), ...counts });
+    throw err;
+  }
   if (opts.apply && r && r.ok && !r.dryRun) {
     log(`\n✓ build complete — ${counts.ok} created, ${counts.skip} skipped, ${counts.error} failed (${counts.ok + counts.skip + counts.error} steps)`);
+    if (journal) journal.close({ status: 'complete', ...counts, appId: r.created && r.created.app });
+  } else if (journal) {
+    journal.close({ status: r && r.dryRun ? 'dry-run' : 'done', ...counts });
   }
   return r;
 }
@@ -117,8 +132,13 @@ async function main() {
   // Construct for both dry-run and apply: proves the vendored bundle + adapter wire up
   // (offline), and apply needs it. A spec validation error short-circuits before any write.
   const { sdk, provisionSdk, cleanup } = makeSdk(env, spec, workspaceDir);
+  // Durable build journal (apply runs only): a per-run record of steps + where a run halted,
+  // written to <workspace>/build-log.jsonl. Resume = re-run the same command (idempotent).
+  const journal = opts.apply
+    ? openJournal(workspaceDir, { app: spec.app && spec.app.name, solution: spec.solution && spec.solution.uniqueName, apply: true, phases: opts.phases })
+    : null;
   try {
-    const deps = { log: (m) => process.stderr.write(m + '\n'), sdk, provisionSdk };
+    const deps = { log: (m) => process.stderr.write(m + '\n'), sdk, provisionSdk, journal };
     const r = await buildModelApp(spec, opts, deps);
     emitResult(r.ok, r);
   } finally {
