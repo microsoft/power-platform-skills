@@ -56,6 +56,18 @@ function createAzHttpClient(orgUrl, deps = {}) {
   async function call(method, url, body, options) {
     const hasBody = body !== undefined && body !== null;
     const bodyStr = hasBody ? (typeof body === 'string' ? body : JSON.stringify(body)) : null;
+    // DELETE retry policy splits by endpoint, because the two kinds fail oppositely:
+    //  - METADATA deletes (EntityDefinitions / RelationshipDefinitions / GlobalOptionSetDefinitions)
+    //    are async-idempotent: a slow one client-times-out while completing server-side, and a retry
+    //    just gets the cosmetic 404 (tolerated as deleted). These KEEP retry — otherwise a slow
+    //    table/relationship delete surfaces a false "timed out" failure.
+    //  - RECORD deletes (webresourceset, appmodule, savedquery, appaction, solutions, …) must NOT
+    //    retry: Dataverse's "More than one concurrent Delete requests detected" guard PERMANENTLY
+    //    wedges the record when a retry races the still-in-flight first delete (web-resource deletes
+    //    SQL-time-out under load and trip exactly this). One delete keeps the failure re-runnable.
+    const method_ = String(method).toUpperCase();
+    const isMetadataDelete = /\/(EntityDefinitions|RelationshipDefinitions|GlobalOptionSetDefinitions)\b/i.test(url);
+    const noRetry = method_ === 'DELETE' && !isMetadataDelete;
 
     // Retry: refresh the token once on 401 (no backoff); back off on transient 5xx/429.
     // 6 attempts with capped jittered backoff rides out a per-entity customization lock that
@@ -76,7 +88,7 @@ function createAzHttpClient(orgUrl, deps = {}) {
 
       const res = await request({ url, method, headers, body: bodyStr, includeHeaders: true });
       if (res.error) {
-        if (last) throw new Error(`Request failed: ${res.error}`);
+        if (last || noRetry) throw new Error(`Request failed: ${res.error}`);
         await sleep(backoffMs(attempt));
         continue;
       }
@@ -84,7 +96,7 @@ function createAzHttpClient(orgUrl, deps = {}) {
         token = null; // force a token refresh and retry immediately
         continue;
       }
-      if (TRANSIENT.has(res.statusCode) && !last) {
+      if (TRANSIENT.has(res.statusCode) && !last && !noRetry) {
         await sleep(backoffMs(attempt));
         continue;
       }

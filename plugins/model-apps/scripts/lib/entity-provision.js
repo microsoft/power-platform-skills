@@ -79,7 +79,9 @@ function isAlreadyExists(err) {
   const status = err.statusCode || err.status || (err.cause && (err.cause.statusCode || err.cause.status));
   if (status === 409) return true;
   const msg = String((err && err.message) || '').toLowerCase();
-  return /already exists|duplicate|with the (?:specified|same) name|a key with/.test(msg);
+  // "already exist" (no trailing 's') also catches the plural table-create message
+  // "Entities already exist: <name>" that Dataverse returns on a transient-retry duplicate.
+  return /already exist|duplicate|with the (?:specified|same) name|a key with/.test(msg);
 }
 
 // Bounded-concurrency map — parallelize independent ops without flooding Dataverse (which

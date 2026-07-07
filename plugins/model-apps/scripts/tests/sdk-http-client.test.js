@@ -110,6 +110,32 @@ test('applies jittered, capped backoff on transient retries (de-syncs lockstep c
   assert.deepStrictEqual(slept, [1125, 2250, 4500, 9000, 9000]);
 });
 
+test('does NOT retry a RECORD delete on a transient status (avoids the async concurrent-delete wedge)', async () => {
+  const { request, calls } = fakeTransport({ statusCode: 503, headers: {}, body: '' });
+  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request, sleep: async () => {} });
+  const res = await http.delete('https://org/api/data/v9.0/webresourceset(1)');
+  assert.strictEqual(res.status, 503, 'the transient status surfaces instead of being retried');
+  assert.strictEqual(calls.length, 1, 'exactly one record DELETE was sent (no retry)');
+});
+
+test('does NOT retry a RECORD delete on a network error either (single delete, no wedge)', async () => {
+  let calls = 0;
+  const request = async () => { calls += 1; return { error: 'ETIMEDOUT' }; };
+  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request, sleep: async () => {} });
+  await assert.rejects(() => http.delete('https://org/api/data/v9.0/webresourceset(1)'), /Request failed: ETIMEDOUT/);
+  assert.strictEqual(calls, 1, 'exactly one record DELETE was sent (no network-error retry)');
+});
+
+test('DOES retry a METADATA delete (EntityDefinitions) on a network error — async-idempotent, gets cosmetic 404', async () => {
+  const { request, calls } = fakeTransport(() =>
+    calls.length <= 1 ? { error: 'ETIMEDOUT' } : { statusCode: 404, headers: {}, body: '' }
+  );
+  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request, sleep: async () => {} });
+  const res = await http.delete("https://org/api/data/v9.0/EntityDefinitions(LogicalName='new_x')");
+  assert.strictEqual(res.status, 404, 'a slow metadata delete is retried rather than surfacing a false timeout');
+  assert.strictEqual(calls.length, 2);
+});
+
 test('throws only when no token is available', async () => {
   const { request } = fakeTransport({ statusCode: 200, headers: {}, body: '{}' });
   const http = createAzHttpClient('https://org', { getToken: () => null, request });

@@ -57,7 +57,7 @@ test('provisionDataModel skips an existing table (idempotent)', async () => {
 test('provisionDataModel recovers from createTable already-exists error and rediscovers entitySetName', async () => {
   const m = mockSdk();
   // createTable throws an already-exists error
-  m.sdk.createTable = async () => { 
+  m.sdk.createTable = async () => {
     const err = new Error('Entity with the specified name already exists');
     err.statusCode = 409;
     throw err;
@@ -74,6 +74,25 @@ test('provisionDataModel recovers from createTable already-exists error and redi
   assert.ok(dm.entities['new_ticket'], 'new_ticket entity present');
   assert.strictEqual(dm.entities['new_ticket'].entitySetName, 'new_tickets_custom', 'entitySetName recovered from findTables');
   assert.strictEqual(dm.entities['new_ticket'].logicalName, 'new_ticket', 'logicalName captured');
+});
+
+test('provisionDataModel recovers from a transient-retry table duplicate ("Entities already exist" 400)', async () => {
+  const m = mockSdk();
+  // A transient network retry can leave the table created server-side; the retried POST then
+  // gets Dataverse's plural 400 message "Entities already exist: <name>" (note: "exist", no 's').
+  m.sdk.createTable = async () => {
+    const err = new Error('Entities already exist: new_ticket');
+    err.statusCode = 400;
+    throw err;
+  };
+  m.provision.findTables = async (s) => [{ logicalName: s.toLowerCase(), entitySetName: `${s.toLowerCase()}s` }];
+  const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [
+    { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' }, columns: [] },
+  ], relationships: [] };
+  const runner = makeRunner({ emit: () => {}, total: 10 });
+  const dm = await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true });
+  assert.ok(dm.entities['new_ticket'], 'recovered — table not re-created, entitySetName rediscovered');
+  assert.strictEqual(dm.entities['new_ticket'].entitySetName, 'new_tickets');
 });
 
 test('provisionDataModel recovers from createColumn already-exists error', async () => {
