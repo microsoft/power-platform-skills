@@ -17,27 +17,51 @@ if (!fs.existsSync(SDK_ENTRY)) {
   process.exit(2);
 }
 
-// Transitive shell deps that read browser globals at import / break esbuild named-export
-// resolution. The SDK itself injects auth via HttpClient and uses an xmldom DOM shim, so these
-// are dead weight for our headless serialize/push path — stub them to chainable no-ops.
-const STUB_RE = /^@maker-studio\/(shell-authentication|authentication)(\/|$)/;
+// Transitive deps that are pulled in by the cds-* designer packages (which the headless SDK DOES
+// use for form/app/command serialization) but that are themselves pure UI / routing / telemetry /
+// localization infra never executed on our headless serialize/push path. They read browser globals
+// at import, bloat the bundle by ~10x, and (via shell-icm-info / shell-telemetry) embed an internal
+// team→owner-email + VSTS-work-item ownership table that must not ship in a public repo. Stub them
+// to chainable no-ops (same mechanism the shell-auth stub always used). The cds-* designer packages,
+// powerapps-apis, power-platform-environment, graphql, lodash, axios, uuid, crypto-js and xmldom are
+// deliberately NOT stubbed — the headless path genuinely uses them.
+const STUB_PACKAGES = [
+  '@maker-studio/shell-authentication', '@maker-studio/authentication',
+  '@maker-studio/powerapps-ui-common', '@maker-studio/shell-telemetry',
+  '@maker-studio/shell-icm-info', '@maker-studio/shell-localization',
+  '@maker-studio/shell-embedding', '@maker-studio/shell-persistent-storage',
+  '@maker-studio/shell-storage', '@maker-studio/ppux-telemetry-api',
+  '@tanstack/react-query', '@tanstack/query-core', '@skype/ecsclient',
+  'react', 'react-dom', 'react-is', 'react-fast-compare', 'react-helmet',
+  'react-router', 'react-router-dom', 'react-side-effect', 'prop-types',
+  'i18next', 'react-i18next',
+];
+const STUB_RE = new RegExp(
+  '^(' + STUB_PACKAGES.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')(/|$)'
+);
 const stubPlugin = {
   name: 'stub-shell-auth',
   setup(build) {
     build.onResolve({ filter: STUB_RE }, (a) => ({ path: a.path, namespace: 'stub' }));
     build.onLoad({ filter: /.*/, namespace: 'stub' }, () => ({
-      // A chainable no-op that is callable (identity HOC), constructable, and returns
-      // itself for any property. Exposed via a *prototype* Proxy so esbuild's __toESM /
-      // __copyProps resolves ANY named import (withUserInfo, withHttpClient, …) — a bare
-      // Proxy on module.exports has no own keys and yields `undefined` for named imports.
+      // A chainable no-op that satisfies EVERY import interop esbuild emits for a stubbed module:
+      //   const x = require('pkg'); x.foo; x(); new x();            (CJS require + property access)
+      //   import x from 'pkg'; new x.default();                     (esbuild __toESM default interop)
+      //   import { named } from 'pkg';                              (esbuild __copyProps named interop)
+      // `chain` is a callable+constructable Proxy that returns itself for any property. The module's
+      // export is a *function* whose [[Prototype]] is `chain`, so (a) it is itself callable/
+      // constructable and (b) any property access — including on __toESM's prototype-inheriting
+      // target — resolves through `chain`. `.default` (= the module export) stays constructable, so
+      // `new x.default()` no longer throws "not a constructor".
       contents: `
         var chain = new Proxy(function () { return chain; }, {
           get: function (_t, k) { if (k === '__esModule') return false; if (k === Symbol.toPrimitive) return function () { return ''; }; return chain; },
           apply: function () { return chain; },
           construct: function () { return {}; }
         });
-        var catchAll = new Proxy({}, { get: function (_t, k) { if (k === '__esModule') return false; return chain; } });
-        module.exports = Object.create(catchAll);
+        var mod = function () { return chain; };
+        Object.setPrototypeOf(mod, chain);
+        module.exports = mod;
       `,
       loader: 'js',
     }));
@@ -53,7 +77,10 @@ esbuild
     target: 'node18',
     outfile: OUTFILE,
     logLevel: 'info',
-    legalComments: 'none',
+    minify: true,
+    // Preserve OSS license notices (MIT/BSD/Apache require it on redistribution) in a sidecar
+    // .LEGAL.txt next to the bundle, linked from the minified output.
+    legalComments: 'linked',
     plugins: process.env.NOSTUB ? [] : [stubPlugin],
     banner: {
       // Headless browser-global shim for transitive shell-* deps that touch `window`
