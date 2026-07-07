@@ -78,15 +78,23 @@ esbuild
     outfile: OUTFILE,
     logLevel: 'info',
     minify: true,
-    // Preserve OSS license notices (MIT/BSD/Apache require it on redistribution) in a sidecar
-    // .LEGAL.txt next to the bundle, linked from the minified output.
-    legalComments: 'linked',
+    // The bundle is entirely Microsoft's cds-maker-sdk + its designer packages; esbuild's extracted
+    // legal comments were 100% redundant Microsoft copyright headers (no third-party notices — the
+    // bundled OSS deps ship pre-stripped), so we drop the sidecar and carry a single copyright banner
+    // (below) instead. NOTE: bundled third-party OSS (lodash/axios/uuid/crypto-js/graphql/xmldom) still
+    // warrants a THIRD-PARTY-NOTICES file for a public release — an OSS-review follow-up, not captured here.
+    legalComments: 'none',
     plugins: process.env.NOSTUB ? [] : [stubPlugin],
     banner: {
-      // Headless browser-global shim for transitive shell-* deps that touch `window`
-      // at import (e.g. shell-telemetry's ErrorHandler). The SDK's own xmldom DOM shim
-      // (installDomShim) handles DOMParser/XMLSerializer separately.
-      js: `(function(){
+      // Copyright banner (kept verbatim through minify) + a headless browser-global shim for the
+      // transitive shell-* deps that touch `window` at import (e.g. shell-telemetry's ErrorHandler).
+      // The SDK's own xmldom DOM shim (installDomShim) handles DOMParser/XMLSerializer separately.
+      js: `/*!
+ * Copyright (C) Microsoft Corporation. All rights reserved.
+ * Vendored, headless build of @maker-studio/cds-maker-sdk. Generated — do not edit by hand;
+ * rebuild via scripts/_vendor-build/build.js.
+ */
+(function(){
         var noop=function(){};
         if(typeof globalThis.window==="undefined"){
           globalThis.window={
