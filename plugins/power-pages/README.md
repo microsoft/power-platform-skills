@@ -38,7 +38,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 30 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 31 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
 
 ### Site scaffolding and deployment
 
@@ -221,6 +221,16 @@ Runs a security scan on a deployed Power Pages site, fetches the latest scan rep
 - Fetches and explains the latest scan report
 - Surfaces issues grouped by severity
 
+#### `/scan-code`
+
+> "Check my source code and dependencies for security issues"
+
+Scans a Power Pages site project's source files and dependencies for security problems — static analysis of the code plus dependency, secret, and license scanning — then surfaces findings in plain language.
+
+- Runs static analysis (opengrep) and dependency/secret/license scanning (trivy)
+- Groups findings by category — code patterns, vulnerable packages, secrets, licenses
+- Offers a manual agent-driven review fallback when the scanning tools are not installed
+
 #### `/manage-firewall`
 
 > "Block traffic from a specific country and add a rate limit to /login"
@@ -247,7 +257,7 @@ Inspects and configures the security headers a Power Pages site sends to browser
 
 Runs a guided, end-to-end security review of a Power Pages site and consolidates every finding into one HTML report covering the live site, browser headers, firewall, authentication, and role-based permissions.
 
-- Orchestrates `/scan-site`, `/manage-headers`, `/manage-firewall`, `/audit-permissions`, and auth checks
+- Orchestrates `/scan-code`, `/scan-site`, `/manage-headers`, `/manage-firewall`, `/audit-permissions`, and auth checks
 - Consolidates findings into a single HTML report
 - Suitable for release-readiness or live-site monitoring
 
