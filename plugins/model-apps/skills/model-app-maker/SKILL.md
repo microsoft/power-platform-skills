@@ -104,7 +104,15 @@ it reuses every artifact already created and only fills the gaps (or use `--from
 ahead). Resume is a re-run, not a replayed checkpoint; the journal is the diagnostic record.
 
 ### Phase 3 — Verify & iterate
-Open the app in the browser. Refine `app-spec.json` and re-run Phase 2 to iterate.
+**Reconcile the spec against what actually deployed** — catch silent partial builds — with the
+read-only verifier (exits non-zero and lists anything missing: entities/columns/views/charts/forms
+and sitemap subareas + icons):
+
+```bash
+node "${PLUGIN_ROOT}/scripts/verify-model-app.js" --env <envUrl> --spec @<working-dir>/app-spec.json
+```
+
+Then open the app in the browser. Refine `app-spec.json` and re-run Phase 2 to iterate.
 
 **Teardown (cleanup).** To remove everything an App Spec built — e.g. a live-verification probe or a
 failed build — run the classifier-safe teardown. It deletes only the artifacts the spec declares, in
