@@ -188,6 +188,18 @@ is never touched. (Power-pages is the reference example: see
 **Ship with `disabled: true`** until the tenant-side annotation, Kusto table, and
 FieldNameMappings are provisioned. The committed `ikey.json` must stay `disabled: true`.
 
+**Provision a fresh key — never copy another plugin's.** Your `ikey.json` must carry
+this plugin's own instrumentation key(s) and `event_stream_name`. Do not lift another
+adopter's `ikey.json` (e.g. power-pages') wholesale — that mis-attributes your events to
+their Kusto stream. This is CI-enforced by `scripts/validate-telemetry-ikeys.js` (run in
+the `validate-repository-metadata` workflow), which fails if the same key or
+`event_stream_name` appears under two different plugins. Run it locally after editing
+`ikey.json`:
+
+```bash
+node scripts/validate-telemetry-ikeys.js
+```
+
 ### 3. Register hooks
 
 In `plugins/<your-plugin>/hooks/hooks.json`, register the three hook scripts that ship with this library pattern. The Power Pages plugin's `hooks.json` is the reference example. Copy these three hook entry points into your `hooks/` directory:
