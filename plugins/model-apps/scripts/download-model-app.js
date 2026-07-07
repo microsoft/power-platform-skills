@@ -102,17 +102,24 @@ async function main() {
   const app = await sdk.fetchArtifact('app', appId);
   const { entities: entityLogicals, icons } = collectSitemap(app);
 
-  // Pages (all — incl. Maker-authored).
+  // Pages (all — incl. Maker-authored). Page names come from the sitemap's GenPage subarea titles
+  // (authoritative — they equal the page --name), keyed by genPageId.
   const genpageCli = makeGenpageCli(env);
+  const nameById = new Map();
+  for (const a of (app.siteMap && app.siteMap.areas) || []) {
+    for (const g of a.groups || []) {
+      for (const sa of g.subAreas || []) if (sa.type === 'GenPage' && sa.genPageId) nameById.set(String(sa.genPageId).toLowerCase(), sa.title);
+    }
+  }
   let pages = [];
-  try {
-    const listed = await genpageCli.list({ appId });
-    const nameById = new Map((listed || []).filter((p) => p.pageId).map((p) => [String(p.pageId).toLowerCase(), p.name]));
-    const pagesRoot = path.join(outDir, 'pages');
-    fs.mkdirSync(pagesRoot, { recursive: true });
-    if (listed && listed.length) await genpageCli.download({ appId, outputDir: pagesRoot });
-    pages = parseDownloadedPages(pagesRoot, outDir, nameById);
-  } catch (e) { process.stderr.write(`(pages download skipped: ${e.message})\n`); }
+  if (nameById.size) {
+    try {
+      const pagesRoot = path.join(outDir, 'pages');
+      fs.mkdirSync(pagesRoot, { recursive: true });
+      await genpageCli.download({ appId, outputDir: pagesRoot });
+      pages = parseDownloadedPages(pagesRoot, outDir, nameById);
+    } catch (e) { process.stderr.write(`(pages download skipped: ${e.message})\n`); }
+  }
 
   // Entities (minimal).
   const entities = [];

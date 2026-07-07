@@ -23,15 +23,19 @@ function parsePageId(out) {
   return m ? m[1] : null;
 }
 
-// Best-effort parse of `pac model genpage list` — pull each GUID and the surrounding label. The
-// exact tabular format is pac-version-specific; this tolerantly maps guid -> name for name-matching.
+// Parse `pac model genpage list` output. The layout is a page-name line followed by an indented
+// "Page ID: <guid>" line (and a Description line), e.g.:
+//   Overview
+//     Page ID: 5d29d8ce-...
+// So the name is the last non-metadata line seen before a "Page ID:" line.
 function parseList(out) {
   const pages = [];
-  for (const line of String(out || '').split('\n')) {
-    const m = /([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/.exec(line);
-    if (!m) continue;
-    const name = line.replace(m[1], '').replace(/\s{2,}/g, ' ').trim();
-    pages.push({ pageId: m[1], name: name || undefined });
+  let lastName = null;
+  for (const raw of String(out || '').split('\n')) {
+    const line = raw.trim();
+    const idm = /Page ID:\s*([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/.exec(line);
+    if (idm) { pages.push({ pageId: idm[1], name: lastName || undefined }); lastName = null; continue; }
+    if (line && !/^(Description|Connected|Retrieving|Found|Page ID)\b/i.test(line) && !/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}/.test(line)) lastName = line;
   }
   return pages;
 }

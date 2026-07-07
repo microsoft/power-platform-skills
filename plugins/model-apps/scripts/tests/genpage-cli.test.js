@@ -17,11 +17,12 @@ test('parsePageId extracts the guid from upload output', () => {
   assert.strictEqual(parsePageId('no id here'), null);
 });
 
-test('parseList maps guids to names', () => {
-  const pages = parseList(`Overview   ${GUID}\nDashboard  11111111-2222-3333-4444-555555555555`);
+test('parseList maps names to guids (name line precedes the "Page ID:" line)', () => {
+  const out = `Found 1 generated page(s):\n\n  Overview\n    Page ID: ${GUID}\n    Description: Created: 2026-07-07\n\n  Dashboard\n    Page ID: 11111111-2222-3333-4444-555555555555`;
+  const pages = parseList(out);
   assert.strictEqual(pages.length, 2);
-  assert.strictEqual(pages[0].pageId, GUID);
-  assert.strictEqual(pages[0].name, 'Overview');
+  assert.deepStrictEqual(pages[0], { pageId: GUID, name: 'Overview' });
+  assert.strictEqual(pages[1].name, 'Dashboard');
 });
 
 test('upload builds pac args WITHOUT --add-to-sitemap and returns the pageId', async () => {
