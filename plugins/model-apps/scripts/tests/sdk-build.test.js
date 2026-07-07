@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { runSdkBuild, planFor, resolvePhases, formDef, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, PHASES } = require('../lib/sdk-build.js');
+const { runSdkBuild, planFor, resolvePhases, formDef, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, PHASES } = require('../lib/sdk-build.js');
 
 // Customer 1:N Tickets: a Choice column, sample data with $parent, a view, a Choice chart,
 // and a parent form with a child sub-grid.
@@ -33,7 +33,28 @@ function mockSdk(opts = {}) {
   let idc = 0;
   const ex = opts.existingTables || {};
   const sdk = {
-    queryRecords: async (e, o) => { calls.push({ name: 'queryRecords', args: [e, o] }); if (e === 'solution') return opts.solutionExists ? [{ solutionid: 's' }] : []; if (e === 'webresource') return opts.existingWebResource ? [{ webresourceid: 'wr-existing' }] : []; if (e === 'savedquery') return [{ savedqueryid: `defview-${(o && o.filter || '').match(/'([^']+)'/)?.[1] || 'x'}`, isdefault: true }]; return opts.noPublisher ? [] : [{ publisherid: 'pub-1' }]; },
+    queryRecords: async (e, o) => {
+      calls.push({ name: 'queryRecords', args: [e, o] });
+      const filter = (o && o.filter) || '';
+      if (e === 'solution') return opts.solutionExists ? [{ solutionid: 's' }] : [];
+      if (e === 'webresource') return opts.existingWebResource ? [{ webresourceid: 'wr-existing' }] : [];
+      if (e === 'savedquery') {
+        // Artifact idempotency lookup (filters by name): reuse only when opts.artifactsExist.
+        if (/name eq/i.test(filter)) return opts.artifactsExist ? [{ savedqueryid: 'view-existing' }] : [];
+        // Default-view / subgrid default lookup (filters by querytype): a default view exists.
+        return [{ savedqueryid: `defview-${filter.match(/'([^']+)'/)?.[1] || 'x'}`, isdefault: true }];
+      }
+      if (e === 'savedqueryvisualization') return opts.artifactsExist ? [{ savedqueryvisualizationid: 'chart-existing' }] : [];
+      if (e === 'systemform') return opts.artifactsExist ? [{ formid: 'form-existing' }] : [];
+      if (e === 'appmodule') return opts.artifactsExist ? [{ appmoduleid: 'app-existing' }] : [];
+      // Sample-data idempotency lookup (entity-set query: [primary, <logical>id] + `<primary> eq '...'`).
+      if (opts.sampleDataExists && ((o && o.select) || []).length === 2 && /id$/.test((o.select || [])[1]) && /eq '/.test(filter)) {
+        const [primaryField, idField] = o.select;
+        const names = [...filter.matchAll(/eq '([^']+)'/g)].map((m) => m[1]);
+        return names.map((n, i) => ({ [primaryField]: n, [idField]: `${idField}-existing-${i}` }));
+      }
+      return opts.noPublisher ? [] : [{ publisherid: 'pub-1' }];
+    },
     createWebResource: async (o) => { calls.push({ name: 'createWebResource', args: [o] }); return { id: `wr-${++idc}`, name: o.name }; },
     fetchArtifact: async (t, id) => { calls.push({ name: 'fetchArtifact', args: [t, id] }); return { id }; },
     addFormEventHandler: (id, o) => { calls.push({ name: 'addFormEventHandler', args: [id, o] }); return {}; },
@@ -627,6 +648,50 @@ test('views phase skips default-view enrichment when opted out (enrichDefaultVie
   const { sdk, calls } = mockSdk();
   await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'views'] });
   assert.strictEqual(find(calls, 'setViewColumns').length, 0, 'no enrichment when opted out');
+});
+
+test('artifactIdentityQuery: view/chart/form use (entity, name); others null', () => {
+  assert.match(artifactIdentityQuery('view', { name: 'V', entityLogicalName: 'new_t' }).filter, /returnedtypecode eq 'new_t' and name eq 'V'/);
+  assert.strictEqual(artifactIdentityQuery('view', { name: 'V', entityLogicalName: 'new_t' }).set, 'savedquery');
+  assert.match(artifactIdentityQuery('chart', { name: 'C', entityLogicalName: 'new_t' }).filter, /primaryentitytypecode eq 'new_t' and name eq 'C'/);
+  assert.match(artifactIdentityQuery('form', { name: "O'Brien", entityLogicalName: 'new_t' }).filter, /name eq 'O''Brien'/);
+  assert.match(artifactIdentityQuery('app', { name: 'A', uniqueName: 'new_a' }).filter, /uniquename eq 'new_a'/);
+  assert.strictEqual(artifactIdentityQuery('command', { name: 'X' }), null);
+});
+
+test('idempotency: existing view/chart/form/app are reused, not re-created (no duplicates on re-run)', async () => {
+  const spec = makeSpec();
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'views', 'charts', 'forms', 'app-shell'] });
+  const created = find(calls, 'createArtifact').map((c) => c.args[0]);
+  assert.ok(!created.includes('view'), 'existing view reused (no createArtifact view)');
+  assert.ok(!created.includes('chart'), 'existing chart reused');
+  assert.ok(!created.includes('form'), 'existing form reused');
+  assert.ok(!created.includes('app'), 'existing app reused');
+});
+
+test('idempotency: absent artifacts are created as normal', async () => {
+  const spec = makeSpec();
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'views', 'charts', 'forms'] });
+  const created = find(calls, 'createArtifact').map((c) => c.args[0]);
+  assert.ok(created.includes('view') && created.includes('chart') && created.includes('form'), 'artifacts created when absent');
+});
+
+test('idempotency: sample rows that already exist are not re-inserted', async () => {
+  const spec = makeSpec();
+  const { sdk, calls } = mockSdk({ sampleDataExists: true });
+  await runSdkBuild(spec, { sdk, apply: true, sampleData: true, phases: ['solution', 'data-model', 'sample-data'] });
+  const totalCreated = find(calls, 'createRecordsBulk').reduce((n, c) => n + c.args[1].length, 0);
+  assert.strictEqual(totalCreated, 0, 'no sample rows re-inserted when they already exist');
+});
+
+test('idempotency: sample rows are inserted when absent', async () => {
+  const spec = makeSpec();
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true, sampleData: true, phases: ['solution', 'data-model', 'sample-data'] });
+  const totalCreated = find(calls, 'createRecordsBulk').reduce((n, c) => n + c.args[1].length, 0);
+  assert.strictEqual(totalCreated, 2, 'both sample rows inserted when absent');
 });
 
 test('alt-key creation still halts on a genuine (non-duplicate) error', async () => {

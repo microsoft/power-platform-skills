@@ -13,6 +13,9 @@ const {
 } = require('./app-spec.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 
+// OData single-quote escape for $filter string literals (used by sample-data idempotency lookups).
+const odataLit = (v) => String(v == null ? '' : v).replace(/'/g, "''");
+
 // App Spec column type -> SDK ColumnType. Lookup is omitted (side effect of a OneToMany
 // relationship); Customer is handled specially (createCustomerColumn).
 const SDK_COLUMN_TYPE = {
@@ -328,7 +331,28 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
         }
         bodies.push(body);
       }
-      const ids = await sdk.createRecordsBulk(entityLogical, bodies);
+      // Idempotency: don't re-insert sample rows that already exist (a re-run or a retry after a
+      // partial failure otherwise duplicates every record). Resolve each row by its primary-name
+      // value: reuse the existing record's id, create only the missing ones. Rows without a
+      // primary-name value can't be deduped and are always created.
+      const primary = e.primaryAttribute.schemaName.toLowerCase();
+      const nameOf = (b) => (b[primary] != null ? String(b[primary]) : null);
+      const uniqNames = [...new Set(bodies.map(nameOf).filter(Boolean))];
+      const existingByName = new Map();
+      if (uniqNames.length) {
+        const filter = uniqNames.map((n) => `${primary} eq '${odataLit(n)}'`).join(' or ');
+        const rows = await provision.queryRecords(entityLogical, { select: [primary, `${entityLogical}id`], filter, top: 5000 });
+        for (const r of rows || []) if (r[primary] != null) existingByName.set(String(r[primary]).toLowerCase(), r[`${entityLogical}id`]);
+      }
+      const missingIdx = [];
+      const missingBodies = [];
+      bodies.forEach((b, i) => { const nm = nameOf(b); if (!nm || !existingByName.has(nm.toLowerCase())) { missingIdx.push(i); missingBodies.push(b); } });
+      const createdIds = missingBodies.length ? await sdk.createRecordsBulk(entityLogical, missingBodies) : [];
+      const ids = bodies.map((b, i) => {
+        const nm = nameOf(b);
+        if (nm && existingByName.has(nm.toLowerCase())) return existingByName.get(nm.toLowerCase());
+        return createdIds[missingIdx.indexOf(i)];
+      });
       result.records[e.schemaName] = ids;
       createdByEntity[entityLogical] = records.map((raw, i) => ({ raw, id: ids[i] })).filter((p) => p.id != null);
     });

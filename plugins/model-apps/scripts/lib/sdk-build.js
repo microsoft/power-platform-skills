@@ -203,10 +203,10 @@ function planFor(spec, opts) {
     for (const e of spec.entities) { const n = sampleRecordsFor(spec, e).length; if (n) items.push({ phase: 'sample-data', label: `${n} sample record(s) -> ${e.schemaName}` }); }
   }
   if (has('web-resources')) for (const wr of spec.webResources || []) items.push({ phase: 'web-resources', label: `web resource ${wr.name} (${wr.type || 'js'})` });
-  if (has('views')) for (const v of spec.views) items.push({ phase: 'views', label: `view "${v.name}" for ${v.entity}` });
+  if (has('views')) for (const v of spec.views || []) items.push({ phase: 'views', label: `view "${v.name}" for ${v.entity}` });
   if (has('views')) for (const e of spec.entities || []) if (enrichesDefaultViews(spec, e)) items.push({ phase: 'views', label: `enrich default views for ${e.schemaName.toLowerCase()}` });
   if (has('charts')) for (const c of spec.charts || []) items.push({ phase: 'charts', label: `chart "${c.name}" (${c.chartType}) for ${c.entity}` });
-  if (has('forms')) for (const f of spec.forms) {
+  if (has('forms')) for (const f of spec.forms || []) {
     const ft = f.formType || 'Main';
     const subs = (f.subgrids || []).map((s) => s.childEntity).join(', ');
     items.push({ phase: 'forms', label: `${ft === 'Main' ? 'form' : `${ft} form`} for ${f.entity}${subs ? ` (sub-grids: ${subs})` : ''}` });
@@ -289,6 +289,28 @@ function defaultViewColumns(spec, entity) {
 // (opt out per-entity with enrichDefaultViews:false).
 function enrichesDefaultViews(spec, entity) {
   return !!entity && entity.enrichDefaultViews !== false && defaultViewColumns(spec, entity).length >= 2;
+}
+
+// OData single-quote escape for $filter string literals.
+function odataLit(v) { return String(v == null ? '' : v).replace(/'/g, "''"); }
+
+// The (entity, name) identity query that finds an already-built artifact so a re-run or a
+// retry-after-partial-failure REUSES it instead of creating a duplicate. These artifact types
+// (savedquery/savedqueryvisualization/systemform) are otherwise always-create — the root of the
+// "16 copies of everything" duplication. Returns null for types without a stable identity query.
+function artifactIdentityQuery(type, def) {
+  const name = odataLit(def.name);
+  const entity = odataLit(def.entityLogicalName);
+  switch (type) {
+    case 'view': return { set: 'savedquery', idField: 'savedqueryid', filter: `returnedtypecode eq '${entity}' and name eq '${name}'` };
+    case 'chart': return { set: 'savedqueryvisualization', idField: 'savedqueryvisualizationid', filter: `primaryentitytypecode eq '${entity}' and name eq '${name}'` };
+    case 'form': return { set: 'systemform', idField: 'formid', filter: `objecttypecode eq '${entity}' and name eq '${name}'` };
+    // The app is keyed by its (deterministic) unique name. Reusing it on a re-run avoids a duplicate
+    // appmodule (Dataverse 400s on a duplicate uniquename). NOTE: reuse does not re-push the sitemap,
+    // so a genuine app EDIT must go through the download->hydrate->update flow, not a bare re-run.
+    case 'app': return { set: 'appmodule', idField: 'appmoduleid', filter: `uniquename eq '${odataLit(def.uniqueName)}'` };
+    default: return null;
+  }
 }
 
 function chartDef(spec, ch) {  const entityLogical = ch.entity.toLowerCase();
@@ -467,6 +489,13 @@ async function runSdkBuild(spec, opts = {}) {
 
   // helper: create an artifact header-less, push, add to the solution.
   const buildArtifact = (type, def) => runner.run(type === 'app' ? 'app-shell' : `${type}s`, `${type} "${def.name}"`, async () => {
+    // Idempotency: if an artifact with this (entity, name) identity already exists (a re-run or a
+    // retry after a partial failure), reuse it instead of creating a duplicate.
+    const idq = artifactIdentityQuery(type, def);
+    if (idq) {
+      const rows = await provision.queryRecords(idq.set, { select: [idq.idField], filter: idq.filter, top: 1 });
+      if (rows && rows[0] && rows[0][idq.idField]) return rows[0][idq.idField];
+    }
     const art = provision.createArtifact(type, def);
     if (type === 'form' && def.__subgrids) for (const sg of def.__subgrids) provision.addSubGrid(art.id, sg);
     const pushed = await provision.pushArtifact(type, art.id);
@@ -476,8 +505,8 @@ async function runSdkBuild(spec, opts = {}) {
 
   // 4. Views (independent -> parallel).
   if (has('views')) {
-    const ids = await runner.mapLimit(spec.views, concurrency, (v) => buildArtifact('view', viewDef(spec, v)));
-    spec.views.forEach((v, i) => { result.created.views[v.name] = ids[i]; });
+    const ids = await runner.mapLimit(spec.views || [], concurrency, (v) => buildArtifact('view', viewDef(spec, v)));
+    (spec.views || []).forEach((v, i) => { result.created.views[v.name] = ids[i]; });
   }
 
   // 4b. Enrich the auto-generated default "Active/Inactive <Entity>" system views (Dataverse ships
@@ -519,7 +548,7 @@ async function runSdkBuild(spec, opts = {}) {
   //    A form with `events[]` then gets its JS handlers wired: fetch the pushed form (to
   //    retain its formxml), inject onload/onsave/onchange handlers, push + publish.
   if (has('forms')) {
-    const defs = await Promise.all(spec.forms.map(async (f) => {
+    const defs = await Promise.all((spec.forms || []).map(async (f) => {
       const def = formDef(spec, f);
       const subs = [];
       for (const sg of (f.subgrids || [])) {
@@ -622,8 +651,8 @@ async function runSdkBuild(spec, opts = {}) {
     await runner.run('publish', 'publish customizations', async () => {
       const seen = new Set();
       const perEntity = []; // [type, id] — first artifact found per entity
-      for (const f of spec.forms) { const id = result.created.forms[f.entity.toLowerCase()]; if (id && !seen.has(f.entity.toLowerCase())) { seen.add(f.entity.toLowerCase()); perEntity.push(['form', id]); } }
-      for (const v of spec.views) { const k = v.entity.toLowerCase(); if (result.created.views[v.name] && !seen.has(k)) { seen.add(k); perEntity.push(['view', result.created.views[v.name]]); } }
+      for (const f of spec.forms || []) { const id = result.created.forms[f.entity.toLowerCase()]; if (id && !seen.has(f.entity.toLowerCase())) { seen.add(f.entity.toLowerCase()); perEntity.push(['form', id]); } }
+      for (const v of spec.views || []) { const k = v.entity.toLowerCase(); if (result.created.views[v.name] && !seen.has(k)) { seen.add(k); perEntity.push(['view', result.created.views[v.name]]); } }
       await runner.mapLimit(perEntity, concurrency, ([type, id]) => provision.publishArtifact(type, id));
       if (result.created.app) await provision.publishArtifact('app', result.created.app);
     });
@@ -632,4 +661,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, enrichesDefaultViews, chartDef, formDef, appDef, appUniqueName, commandsByEntity, webResourceOpts, formEventOpts, WEB_RESOURCE_KINDS, FORM_EVENTS };
+module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, chartDef, formDef, appDef, appUniqueName, commandsByEntity, webResourceOpts, formEventOpts, WEB_RESOURCE_KINDS, FORM_EVENTS };
