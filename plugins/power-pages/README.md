@@ -229,7 +229,7 @@ Scans a Power Pages site project's source files and dependencies for security pr
 
 - Runs static analysis (opengrep) and dependency/secret/license scanning (trivy)
 - Groups findings by category — code patterns, vulnerable packages, secrets, licenses
-- Offers a manual agent-driven review fallback when the scanning tools are not installed
+- Offers an agent-driven review fallback when the scanning tools are not installed
 
 #### `/manage-firewall`
 
