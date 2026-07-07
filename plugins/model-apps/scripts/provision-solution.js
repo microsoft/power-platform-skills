@@ -48,14 +48,18 @@ async function findPublisher(sdk, publisherUniqueName) {
   }
 
   // No publisher specified → resolve the env's default publisher via the
-  // organization record (authoritative; doesn't depend on friendly-name format
-  // or env hostname). The organization table has exactly one row.
+  // **Default solution's** publisher. This is authoritative and portable: the
+  // `Default` solution always exists and its publisher IS the environment's
+  // default publisher. (The organization record does NOT expose a usable
+  // `_defaultpublisherid_value` in every API version — it 400s on some envs —
+  // so we resolve through the Default solution instead.)
   try {
-    const orgRows = await sdk.queryRecords('organization', {
-      select: ['_defaultpublisherid_value'],
+    const solRows = await sdk.queryRecords('solution', {
+      select: ['_publisherid_value'],
+      filter: "uniquename eq 'Default'",
       top: 1,
     });
-    const defaultPublisherId = orgRows && orgRows.length > 0 ? orgRows[0]._defaultpublisherid_value : null;
+    const defaultPublisherId = solRows && solRows.length > 0 ? solRows[0]._publisherid_value : null;
     if (defaultPublisherId) {
       const pubRows = await sdk.queryRecords('publisher', {
         select: ['publisherid', 'uniquename', 'customizationprefix'],
@@ -67,7 +71,7 @@ async function findPublisher(sdk, publisherUniqueName) {
       }
     }
   } catch {
-    // Fall through to the broad fallback below if the organization probe fails.
+    // Fall through to the broad fallback below if the Default-solution probe fails.
   }
 
   // Last-resort fallback — any non-readonly publisher. Used only if the

@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const { runProvisionSolution, findPublisher, odataEscape } = require('../provision-solution.js');
 
 // Mock SDK for tests
-function mockSdk({ publishers = [], organization = [], createSolutionResult = null, createSolutionError = null }) {
+function mockSdk({ publishers = [], solution = [], createSolutionResult = null, createSolutionError = null }) {
   const calls = [];
   return {
     queryRecords: async (entityLogicalName, options) => {
@@ -28,8 +28,9 @@ function mockSdk({ publishers = [], organization = [], createSolutionResult = nu
           return false;
         });
       }
-      if (entityLogicalName === 'organization') {
-        return organization;
+      // The default-publisher path queries the `Default` solution for its publisher.
+      if (entityLogicalName === 'solution') {
+        return solution;
       }
       return [];
     },
@@ -76,9 +77,9 @@ test('findPublisher: explicit publisher not found', async () => {
   assert.equal(result, null);
 });
 
-test('findPublisher: default publisher via organization', async () => {
+test('findPublisher: default publisher via Default solution', async () => {
   const sdk = mockSdk({
-    organization: [{ _defaultpublisherid_value: 'default-pub-id' }],
+    solution: [{ _publisherid_value: 'default-pub-id' }],
     publishers: [
       { publisherid: 'default-pub-id', uniquename: 'defaultpub', customizationprefix: 'new' },
       { publisherid: 'other-pub', uniquename: 'otherpub', customizationprefix: 'oth' },
@@ -90,15 +91,16 @@ test('findPublisher: default publisher via organization', async () => {
   assert.equal(result.uniquename, 'defaultpub');
   assert.equal(result.customizationprefix, 'new');
 
-  // Verify organization was queried first
-  const orgCall = sdk.calls.find((c) => c.entity === 'organization');
-  assert.ok(orgCall);
-  assert.deepEqual(orgCall.options.select, ['_defaultpublisherid_value']);
+  // Verify the Default solution was queried for its publisher
+  const solCall = sdk.calls.find((c) => c.entity === 'solution');
+  assert.ok(solCall);
+  assert.deepEqual(solCall.options.select, ['_publisherid_value']);
+  assert.match(solCall.options.filter, /uniquename eq 'Default'/);
 });
 
 test('findPublisher: fallback to non-readonly publisher', async () => {
   const sdk = mockSdk({
-    organization: [],
+    solution: [],
     publishers: [
       { publisherid: 'fallback-pub', uniquename: 'fallbackpub', customizationprefix: 'fbk', isreadonly: false },
     ],
@@ -146,7 +148,7 @@ test('runProvisionSolution: explicit publisher found', async () => {
 
 test('runProvisionSolution: default publisher', async () => {
   const sdk = mockSdk({
-    organization: [{ _defaultpublisherid_value: 'default-pub' }],
+    solution: [{ _publisherid_value: 'default-pub' }],
     publishers: [{ publisherid: 'default-pub', uniquename: 'defaultpub', customizationprefix: 'new' }],
     createSolutionResult: { id: 'sol-456', uniqueName: 'AnotherSolution' },
   });
