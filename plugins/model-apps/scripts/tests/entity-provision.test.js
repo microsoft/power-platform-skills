@@ -53,3 +53,100 @@ test('provisionDataModel skips an existing table (idempotent)', async () => {
   await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true, concurrency: 2 });
   assert.ok(!m.calls.some((c) => c[0] === 'createTable'), 'existing table not re-created');
 });
+
+test('provisionDataModel recovers from createTable already-exists error and rediscovers entitySetName', async () => {
+  const m = mockSdk();
+  // createTable throws an already-exists error
+  m.sdk.createTable = async () => { 
+    const err = new Error('Entity with the specified name already exists');
+    err.statusCode = 409;
+    throw err;
+  };
+  // findTables returns the existing table with entitySetName
+  m.provision.findTables = async (s) => [{ logicalName: s.toLowerCase(), entitySetName: `${s.toLowerCase()}s_custom` }];
+  
+  const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [
+    { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' }, columns: [] },
+  ], relationships: [] };
+  const runner = makeRunner({ emit: () => {}, total: 10 });
+  const dm = await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true, concurrency: 2 });
+  
+  assert.ok(dm.entities['new_ticket'], 'new_ticket entity present');
+  assert.strictEqual(dm.entities['new_ticket'].entitySetName, 'new_tickets_custom', 'entitySetName recovered from findTables');
+  assert.strictEqual(dm.entities['new_ticket'].logicalName, 'new_ticket', 'logicalName captured');
+});
+
+test('provisionDataModel recovers from createColumn already-exists error', async () => {
+  const m = mockSdk();
+  // createColumn throws an already-exists error
+  m.sdk.createColumn = async () => { 
+    const err = new Error('Column already exists');
+    err.statusCode = 409;
+    throw err;
+  };
+  
+  const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [
+    { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' },
+      columns: [{ schemaName: 'new_priority', type: 'Text' }] },
+  ], relationships: [] };
+  const runner = makeRunner({ emit: () => {}, total: 10 });
+  
+  // Should not throw - column create should skip on already-exists
+  const dm = await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true, concurrency: 2 });
+  
+  assert.ok(dm.entities['new_ticket'], 'table created despite column error');
+  // Column not captured because skipIf returned undefined
+  assert.ok(!dm.columns['new_ticket'] || dm.columns['new_ticket'].length === 0, 'column not captured on skip');
+});
+
+test('provisionDataModel still throws on NON-already-exists createTable error', async () => {
+  const m = mockSdk();
+  // createTable throws a different error (bad request, not already-exists)
+  m.sdk.createTable = async () => { 
+    const err = new Error('Invalid schema name');
+    err.statusCode = 400;
+    throw err;
+  };
+  
+  const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [
+    { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' }, columns: [] },
+  ], relationships: [] };
+  const runner = makeRunner({ emit: () => {}, total: 10 });
+  
+  // Should throw - this is NOT an already-exists error
+  await assert.rejects(
+    async () => await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true, concurrency: 2 }),
+    /Invalid schema name/,
+    'non-already-exists error should still halt'
+  );
+});
+
+test('provisionDataModel recovers from createRelationship already-exists error (1:N)', async () => {
+  const m = mockSdk({ new_ticket: true, new_customer: true });
+  // createRelationship throws an already-exists error
+  m.sdk.createRelationship = async () => { 
+    const err = new Error('Relationship with the same name already exists');
+    err.statusCode = 409;
+    throw err;
+  };
+  
+  const spec = { 
+    solution: { uniqueName: 'S', publisherPrefix: 'new' }, 
+    entities: [
+      { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' }, columns: [] },
+      { schemaName: 'new_customer', displayName: 'Customer', primaryAttribute: { schemaName: 'new_name' }, columns: [] }
+    ],
+    relationships: [
+      { type: 'OneToMany', referenced: 'new_customer', referencing: 'new_ticket', 
+        lookup: { schemaName: 'new_customerId', displayName: 'Customer' } }
+    ]
+  };
+  const runner = makeRunner({ emit: () => {}, total: 10 });
+  
+  // Should not throw - relationship create should skip on already-exists
+  const dm = await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true, concurrency: 2 });
+  
+  assert.ok(dm.entities['new_ticket'], 'tables created despite relationship error');
+  // Relationship not captured because skipIf returned undefined
+  assert.strictEqual(dm.relationships.length, 0, 'relationship not captured on skip');
+});

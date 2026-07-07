@@ -162,8 +162,18 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, concurr
           primaryColumnSchemaName: e.primaryAttribute.schemaName, primaryColumnDisplayName: e.primaryAttribute.displayName || 'Name', hasNotes: e.hasNotes === true };
         // AutoNumber the primary/title column when requested (the order number IS the identity).
         if (e.primaryAttribute.autoNumberFormat) createOpts.primaryColumnAutoNumberFormat = e.primaryAttribute.autoNumberFormat;
-        const t = await sdk.createTable(createOpts);
-        result.entities[e.schemaName] = { logicalName: (t.logicalName || logical), entitySetName: t.entitySetName, metadataId: t.metadataId };
+        try {
+          const t = await sdk.createTable(createOpts);
+          result.entities[e.schemaName] = { logicalName: (t.logicalName || logical), entitySetName: t.entitySetName, metadataId: t.metadataId };
+        } catch (err) {
+          if (!isAlreadyExists(err)) throw err;
+          // First POST likely succeeded server-side; a transient-network retry hit "already exists".
+          // Rediscover to capture entitySetName (required by later phases).
+          const rehits = await provision.findTables(e.schemaName, { top: 50 });
+          const found = (rehits || []).find((x) => x.logicalName === logical);
+          if (!found) throw err;
+          result.entities[e.schemaName] = { logicalName: logical, entitySetName: found.entitySetName };
+        }
       }, { recoverable: true });
     }
     // columns: every buildable column (all scalar types + Customer; Lookup comes from a
@@ -174,7 +184,8 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, concurr
     const colResults = await runner.mapLimit(toCreate, concurrency, (c) => runner.run('data-model', `column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})`,
       () => c.type === 'Customer'
         ? sdk.createCustomerColumn(logical, { schemaName: c.schemaName, displayName: c.displayName || c.schemaName, required: REQUIRED(c) })
-        : sdk.createColumn(logical, columnOptions(c, globalChoiceIds))));
+        : sdk.createColumn(logical, columnOptions(c, globalChoiceIds)),
+      { skipIf: isAlreadyExists }));
     // Capture real column results (logicalName + metadataId)
     toCreate.forEach((c, i) => {
       const res = colResults[i];
@@ -228,7 +239,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, concurr
           kind: '1n',
           lookupLogicalName: res.lookupLogicalName
         });
-      });
+      }, { skipIf: isAlreadyExists });
     } else if (rel.type === 'ManyToMany') {
       const schema = rel.schemaName || `${rel.entity1.toLowerCase()}_${rel.entity2.toLowerCase()}`;
       let exists = false;
@@ -241,7 +252,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, concurr
           metadataId: res.metadataId,
           kind: 'nn'
         });
-      });
+      }, { skipIf: isAlreadyExists });
     }
   }
   
