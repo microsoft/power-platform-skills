@@ -53,7 +53,7 @@ Create tasks in three groups. Mark each `in_progress` when starting, `completed`
 
 ### 1.1 Locate the project, detect review mode
 
-Use `Glob` to find `**/powerpages.config.json`. If `$ARGUMENTS` contains `--review <out-dir>`, remember the output directory — Step 2 is skipped (run all checks at default depth), and Step 4 writes JSON only.
+Use `Glob` to find `**/powerpages.config.json`. If `$ARGUMENTS` contains `--review <out-dir>`, remember the output directory — Step 2 is skipped (run all checks at Advanced depth), and Step 4 writes JSON only.
 
 ### 1.2 Check tool availability
 

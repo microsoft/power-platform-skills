@@ -68,7 +68,11 @@ function relativize(filePath, projectRoot) {
   const normalized = filePath.replace(/\\/g, '/');
   if (!projectRoot) return normalized;
   const root = projectRoot.replace(/\\/g, '/');
-  return normalized.startsWith(root) ? path.posix.relative(root, normalized) : normalized;
+  // Path boundary so "/repo/app2" isn't treated as under root "/repo/app".
+  const rootWithSep = root.endsWith('/') ? root : root + '/';
+  return normalized === root || normalized.startsWith(rootWithSep)
+    ? path.posix.relative(root, normalized)
+    : normalized;
 }
 
 // Opengrep result shape (per opengrep1-4.json samples):
@@ -78,7 +82,9 @@ function relativize(filePath, projectRoot) {
 // Locations are aggregated; the rule's shared message is shown once.
 function transformOpengrep(raw, projectRoot) {
   const byCheckId = new Map();
-  for (const r of raw.results) {
+  // Tolerate missing `results` (run-opengrep.js "{}" fallback) — treat as no findings.
+  const results = Array.isArray(raw?.results) ? raw.results : [];
+  for (const r of results) {
     if (!byCheckId.has(r.check_id)) byCheckId.set(r.check_id, []);
     byCheckId.get(r.check_id).push(r);
   }
@@ -87,10 +93,12 @@ function transformOpengrep(raw, projectRoot) {
   let counter = 1;
   for (const [checkId, occurrences] of byCheckId) {
     const first = occurrences[0];
-    const vulnClass = first.extra.metadata.vulnerability_class;
+    // Some rules omit metadata/references; read defensively to avoid throwing.
+    const metadata = first.extra.metadata || {};
+    const vulnClass = metadata.vulnerability_class;
     const title = Array.isArray(vulnClass) && vulnClass.length > 0 ? vulnClass[0] : checkId;
     const locations = occurrences.map(r => `${relativize(r.path, projectRoot)}:${r.start.line}`);
-    const references = first.extra.metadata.references;
+    const references = Array.isArray(metadata.references) ? metadata.references : [];
 
     const detailLines = [first.extra.message];
     detailLines.push('', `${occurrences.length} occurrence${occurrences.length === 1 ? '' : 's'}:`);
@@ -103,8 +111,8 @@ function transformOpengrep(raw, projectRoot) {
     findings.push({
       id: `opengrep-${counter++}`,
       severity: OPENGREP_SEVERITY_TO_BUCKET[first.extra.severity],
-      category: first.extra.metadata.category,
-      confidence: first.extra.metadata.confidence,
+      category: metadata.category,
+      confidence: metadata.confidence,
       title,
       tag: checkId,
       location: locations[0],
@@ -122,7 +130,9 @@ function transformOpengrep(raw, projectRoot) {
 function transformTrivy(raw, projectRoot) {
   const findings = [];
   let counter = 1;
-  for (const target of raw.Results) {
+  // Tolerate missing `Results` (run-trivy.js "{}" fallback) — treat as no findings.
+  const results = Array.isArray(raw?.Results) ? raw.Results : [];
+  for (const target of results) {
     const targetPath = relativize(target.Target, projectRoot);
 
     if (target.Vulnerabilities) {

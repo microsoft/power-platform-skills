@@ -255,7 +255,7 @@ Inspects and configures the security headers a Power Pages site sends to browser
 
 > "Do a full security review before we ship"
 
-Runs a guided, end-to-end security review of a Power Pages site and consolidates every finding into one HTML report covering the live site, browser headers, firewall, authentication, and role-based permissions.
+Runs a guided, end-to-end security review of a Power Pages site and consolidates every finding into one HTML report covering source code and dependencies, the live site, browser headers, firewall, authentication, and role-based permissions.
 
 - Orchestrates `/scan-code`, `/scan-site`, `/manage-headers`, `/manage-firewall`, `/audit-permissions`, and auth checks
 - Consolidates findings into a single HTML report
