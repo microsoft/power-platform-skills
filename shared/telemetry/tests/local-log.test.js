@@ -201,6 +201,26 @@ test("latestSessionLog returns the most-recently-written session's log", () => {
   assert.equal(latestSessionLog(root, "power-pages"), sessionLog(root, "power-pages", "new"));
 });
 
+test("latestSessionLog skips session dirs that have no events.jsonl", () => {
+  const root = mkTmp();
+  // A real session that actually wrote a log.
+  appendLocal({ name: "A", data: { pluginName: "power-pages", sessionId: "real" } }, { configDir: root });
+
+  // An orphaned session dir with no events.jsonl (e.g. mkdir succeeded but the
+  // process died before the first append). Make it NEWER than the real one so a
+  // naive dir-mtime scan would wrongly prefer it — the returned path must still
+  // be the real log, because status surfaces this path for the user to share.
+  const orphanDir = path.join(pluginLogDir(root, "power-pages"), "orphan");
+  fs.mkdirSync(orphanDir, { recursive: true });
+
+  assert.equal(latestSessionLog(root, "power-pages"), sessionLog(root, "power-pages", "real"));
+});
+
+test("latestSessionLog returns null when every session dir lacks a log", () => {
+  const root = mkTmp();
+  fs.mkdirSync(path.join(pluginLogDir(root, "power-pages"), "orphan"), { recursive: true });
+  assert.equal(latestSessionLog(root, "power-pages"), null);
+});
 test("appendLocal deletes the legacy flat events.jsonl and its .old rotations", () => {
   const root = mkTmp();
   // Simulate a config dir left over from the pre-per-session layout.

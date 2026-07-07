@@ -17,7 +17,7 @@ const MAX_LOG_AGE_MS = MAX_LOG_AGE_DAYS * 24 * 60 * 60 * 1000;
 // is then passed through an allowlist of [A-Za-z0-9_-]; any other char —
 // including "." and "/" — collapses to "_". Dots are intentionally NOT in the
 // allowlist so an input like "../evil" cannot leave a leading ".." fragment in
-// the resulting segment (it becomes "__evil"). An input that reduces to empty
+// the resulting segment (it becomes "___evil"). An input that reduces to empty
 // falls back to the sentinel.
 function sanitizeSegment(value, fallback) {
   if (typeof value !== "string") return fallback;
@@ -161,9 +161,11 @@ function pruneOldSessions(configDir, pluginName, now = Date.now()) {
 
 // Absolute path to the events.jsonl in the most-recently-written session dir
 // for a plugin, or null when there are none. "Most recent" = highest
-// events.jsonl mtime (directory mtime when the file is absent). Read-only;
-// the telemetry skill's status output uses this so a user can grab the log for
-// the session they just hit a problem in.
+// events.jsonl mtime. Session dirs without a readable events.jsonl are skipped,
+// so the returned path always points at a file that exists — the telemetry
+// skill's status output surfaces this path for the user to share, and returning
+// a phantom path (e.g. an orphaned/interrupted session dir with no log yet)
+// would tell them to grab a file that isn't there. Read-only.
 function latestSessionLog(configDir, pluginName) {
   const sessionsRoot = pluginLogDir(configDir, pluginName);
   let entries;
@@ -179,13 +181,11 @@ function latestSessionLog(configDir, pluginName) {
     const logFile = path.join(sessionsRoot, entry.name, LOG_FILE_NAME);
     let mtimeMs;
     try {
+      // Only sessions with a readable events.jsonl are candidates; a dir without
+      // one is skipped so `best` can never point at a non-existent file.
       mtimeMs = fs.statSync(logFile).mtimeMs;
     } catch {
-      try {
-        mtimeMs = fs.statSync(path.join(sessionsRoot, entry.name)).mtimeMs;
-      } catch {
-        continue;
-      }
+      continue;
     }
     if (mtimeMs > bestMtime) {
       bestMtime = mtimeMs;

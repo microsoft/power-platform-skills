@@ -20,9 +20,9 @@
 - **Modify** `shared/telemetry/tests/telemetry-config.test.js` — assert the new `status`/`off` output (logs directory line, "No local logs yet", and naming an existing session log).
 - **Modify** `shared/telemetry/tests/emit-dispatcher.test.js` — local-mirror path assertions move to the new per-session path (`nosession` fallback, since `fakeEvent` has no `sessionId`).
 
-**No change** to `emit-dispatcher.js` (it already calls `appendLocal(localRecord, { configDir: localConfigDir() })` with the config root and a record whose `data` carries `pluginName` + `sessionId`). The legacy `events.jsonl` is left in place, unmigrated.
+**No change** to `emit-dispatcher.js` (it already calls `appendLocal(localRecord, { configDir: localConfigDir() })` with the config root and a record whose `data` carries `pluginName` + `sessionId`). The legacy flat `events.jsonl` (and its `.old` rotations) is deleted best-effort via `removeLegacyFlatLog(configDir)` on the first `appendLocal` after this ships.
 
-> **Note on the symlink:** `plugins/power-pages/scripts/lib/telemetry/lib` is a symlink to `shared/telemetry/lib`. Edit the files under `shared/telemetry/` only — the change is live for the plugin immediately. `telemetry-config.js` requiring `./local-log` resolves correctly through the symlinked dir.
+> **Note on the plugin copy:** `plugins/power-pages/scripts/lib/telemetry/lib` is a **mirrored physical copy** of `shared/telemetry/lib` (not a symlink — plugin hosts don't reliably dereference symlinks). Edit the files under `shared/telemetry/` first, then re-sync the copied files under `plugins/power-pages/scripts/lib/telemetry/lib` in the same change.
 
 > **Test command (important):** Run a single test file with the explicit `*.test.js` path, e.g. `node --test shared/telemetry/tests/local-log.test.js`. Do NOT use `node --test shared/telemetry/tests/` (directory form) — it flakes on local Node 22.
 
@@ -817,7 +817,7 @@ git commit -m "telemetry: finalize per-session local log layout"
 
 ## Notes for the implementer
 
-- **Edit `shared/telemetry/` only.** The `power-pages` plugin sees the change live through its `scripts/lib/telemetry/lib` symlink — there is nothing to copy or re-sync.
-- **Do not migrate or delete** the legacy `~/.power-platform-skills/events.jsonl`. It is ephemeral diagnostic data; it simply stops growing.
+- **Edit `shared/telemetry/` first, then re-sync the plugin copy.** `power-pages` bundles a **mirrored physical copy** at `scripts/lib/telemetry/lib` (not a symlink), so the same change must refresh both trees.
+- **Delete the legacy flat log best-effort.** `appendLocal` calls `removeLegacyFlatLog(configDir)`, which removes the pre-per-session `~/.power-platform-skills/events.jsonl` (and its `.old` rotations) on the first write after this ships. Its contents are not migrated — it is ephemeral diagnostic data.
 - **Out of scope:** no `share`/`export` command and no change to the `report-issue` skill. (Future option, not in this plan: `report-issue` could call `latestSessionLog` to point the user at the file to attach.)
 - After all tasks, update the telemetry prose in `plugins/power-pages/CLAUDE.md` and `shared/telemetry/README.md` if they name the old `events.jsonl` path — check with: search those two files for `events.jsonl`. (Documentation-only; do it as a final docs commit if matches are found.)

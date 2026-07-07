@@ -69,9 +69,11 @@ unchanged; the module derives the rest.
 `writeLocalLog`. New behavior:
 
 1. Derive identity from the record: `plugin = record.data.pluginName`, `session = record.data.sessionId`.
-2. **Sanitize** both with `sanitizeSegment()` — collapse anything outside `[A-Za-z0-9._-]` to `_`,
-   and reject `.`/`..`/empty → fallbacks `unknown` (plugin) and `nosession` (session). These values
-   become **directory names**, so this is a path-safety requirement, not cosmetic.
+2. **Sanitize** both with `sanitizeSegment()` — collapse anything outside `[A-Za-z0-9_-]` to `_`
+   (dots are intentionally **not** in the allowlist, so a raw `../evil` cannot leave a `..` fragment
+   behind — it collapses to `___evil`), and reject exact `.`/`..`/empty → fallbacks `unknown` (plugin)
+   and `nosession` (session). These values become **directory names**, so this is a path-safety
+   requirement, not cosmetic.
 3. Resolve `sessionDir = <configDir>/telemetry/<plugin>/sessions/<session>` and `mkdir -p`.
    (`mkdir` failure → return silently, as today.)
 4. `logFile = sessionDir/events.jsonl`.
