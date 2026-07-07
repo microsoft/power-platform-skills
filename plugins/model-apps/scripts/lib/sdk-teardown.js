@@ -77,10 +77,38 @@ function isUndeletable(err) {
 const KIND_HANDLERS = {
   app: {
     async resolve(sdk, target) {
-      const rows = await sdk.queryRecords('appmodule', { select: ['appmoduleid', 'name'], filter: `uniquename eq '${odataStr(target.uniqueName)}'`, top: 1 });
-      return (rows || []).map((x) => ({ id: x.appmoduleid, name: x.name }));
+      const rows = await sdk.queryRecords('appmodule', { select: ['appmoduleid', 'name', 'appmoduleidunique'], filter: `uniquename eq '${odataStr(target.uniqueName)}'`, top: 1 });
+      const app = rows && rows[0];
+      if (!app) return [];
+      // Resolve the sitemap + its generative pages NOW (while the app still exists): deleting the
+      // appmodule leaves the sitemap row orphaned, and a genpage can't be deleted while a sitemap
+      // references it (a published componenttype-62 dependency).
+      let sitemapId = null;
+      const genPageIds = [];
+      try {
+        const comps = await sdk.queryRecords('appmodulecomponent', { select: ['objectid', 'componenttype'], filter: `_appmoduleidunique_value eq ${app.appmoduleidunique} and componenttype eq 62`, top: 1 });
+        sitemapId = comps && comps[0] && comps[0].objectid;
+        if (sitemapId) {
+          const sm = await sdk.queryRecords('sitemap', { select: ['sitemapxml'], filter: `sitemapid eq ${sitemapId}`, top: 1 });
+          const xml = (sm && sm[0] && sm[0].sitemapxml) || '';
+          for (const m of String(xml).matchAll(/GenPageId="([0-9a-fA-F-]{36})"/g)) genPageIds.push(m[1]);
+        }
+      } catch { /* best-effort — fall back to the plain app delete */ }
+      return [{ id: app.appmoduleid, name: app.name, sitemapId, genPageIds }];
     },
-    del: (sdk, item) => sdk.deleteRemoteArtifact('app', item.id),
+    async del(sdk, item) {
+      await sdk.deleteRemoteArtifact('app', item.id);
+      // The appmodule delete leaves an orphaned sitemap row; delete it so any GenPage dependency
+      // releases, then delete each generative page (child files first, then the uxagentproject row).
+      if (item.sitemapId && sdk.deleteRecord) { try { await sdk.deleteRecord('sitemap', item.sitemapId); } catch { /* may already be gone */ } }
+      for (const gp of item.genPageIds || []) {
+        try {
+          const files = await sdk.queryRecords('uxagentprojectfile', { select: ['uxagentprojectfileid'], filter: `_uxagentprojectid_value eq ${gp}`, top: 100 });
+          for (const f of files || []) { try { await sdk.deleteRecord('uxagentprojectfile', f.uxagentprojectfileid); } catch { /* ignore */ } }
+          await sdk.deleteRecord('uxagentproject', gp);
+        } catch { /* best-effort */ }
+      }
+    },
   },
   dashboard: {
     async resolve(sdk, target) {

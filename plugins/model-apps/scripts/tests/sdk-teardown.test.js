@@ -284,6 +284,48 @@ test('app target uses the derived app uniquename, solution target the solution u
   assert.strictEqual(sol.target.uniqueName, 'ContosoSupportDesk');
 });
 
+// --- genpage teardown (app -> orphaned sitemap -> uxagentproject chain) --------------------
+
+test('app teardown deletes the app, its orphaned sitemap, and each genpage (files then row)', async () => {
+  const deletes = [];
+  const sdk = {
+    queryRecords: async (logical) => {
+      if (logical === 'appmodule') return [{ appmoduleid: 'app-1', name: 'A', appmoduleidunique: 'u-1' }];
+      if (logical === 'appmodulecomponent') return [{ objectid: 'sm-1', componenttype: 62 }];
+      if (logical === 'sitemap') return [{ sitemapxml: '<SiteMap><SubArea GenPageId="1512fe17-e4c6-4726-b08e-767a9eba8b9e"/></SiteMap>' }];
+      if (logical === 'uxagentprojectfile') return [{ uxagentprojectfileid: 'file-1' }, { uxagentprojectfileid: 'file-2' }];
+      return [];
+    },
+    deleteRemoteArtifact: async (kind, id) => { deletes.push(`${kind}:${id}`); },
+    deleteRecord: async (logical, id) => { deletes.push(`${logical}:${id}`); },
+  };
+  const h = KIND_HANDLERS.app;
+  const items = await h.resolve(sdk, { uniqueName: 'new_a' });
+  assert.strictEqual(items[0].sitemapId, 'sm-1');
+  assert.deepStrictEqual(items[0].genPageIds, ['1512fe17-e4c6-4726-b08e-767a9eba8b9e']);
+  await h.del(sdk, items[0]);
+  assert.ok(deletes.includes('app:app-1'), 'app deleted');
+  assert.ok(deletes.includes('sitemap:sm-1'), 'orphaned sitemap deleted');
+  assert.ok(deletes.includes('uxagentprojectfile:file-1') && deletes.includes('uxagentprojectfile:file-2'), 'child files deleted');
+  assert.ok(deletes.includes('uxagentproject:1512fe17-e4c6-4726-b08e-767a9eba8b9e'), 'genpage row deleted');
+  assert.ok(deletes.indexOf('app:app-1') < deletes.indexOf('sitemap:sm-1'), 'app before sitemap');
+  assert.ok(deletes.indexOf('sitemap:sm-1') < deletes.indexOf('uxagentproject:1512fe17-e4c6-4726-b08e-767a9eba8b9e'), 'sitemap before genpage row');
+});
+
+test('app teardown without genpages just deletes the app (no uxagentproject deletes)', async () => {
+  const deletes = [];
+  const sdk = {
+    queryRecords: async (logical) => (logical === 'appmodule' ? [{ appmoduleid: 'app-1', name: 'A', appmoduleidunique: 'u-1' }] : []),
+    deleteRemoteArtifact: async (kind, id) => { deletes.push(`${kind}:${id}`); },
+    deleteRecord: async (logical, id) => { deletes.push(`${logical}:${id}`); },
+  };
+  const h = KIND_HANDLERS.app;
+  const items = await h.resolve(sdk, { uniqueName: 'new_a' });
+  await h.del(sdk, items[0]);
+  assert.ok(deletes.includes('app:app-1'));
+  assert.ok(!deletes.some((d) => d.startsWith('uxagentproject:')), 'no genpage deletes when the app has none');
+});
+
 // --- dry-run ----------------------------------------------------------------------------
 
 test('dry-run emits the whole plan as skips and never calls SDK', async () => {
