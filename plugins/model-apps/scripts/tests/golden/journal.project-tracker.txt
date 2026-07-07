@@ -1,0 +1,16 @@
+solution	start	solution ContosoProjects
+solution	ok	solution ContosoProjects
+data-model	start	table new_project
+data-model	ok	table new_project
+data-model	start	column new_project.new_budget (Money)
+data-model	ok	column new_project.new_budget (Money)
+data-model	start	column new_project.new_status (Choice)
+data-model	ok	column new_project.new_status (Choice)
+views	start	view "Active Projects"
+views	ok	view "Active Projects"
+views	start	enrich default views for new_project
+views	ok	enrich default views for new_project
+forms	start	form "Project"
+forms	ok	form "Project"
+app-shell	start	app "Project Tracker"
+app-shell	ok	app "Project Tracker"

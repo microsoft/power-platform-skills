@@ -1,0 +1,60 @@
+solution	start	solution ContosoSupportDesk
+solution	ok	solution ContosoSupportDesk
+data-model	start	table new_customer
+data-model	ok	table new_customer
+data-model	start	column new_customer.new_segment (Choice)
+data-model	ok	column new_customer.new_segment (Choice)
+data-model	start	column new_customer.new_accountmanager (Text)
+data-model	ok	column new_customer.new_accountmanager (Text)
+data-model	start	table new_ticket
+data-model	ok	table new_ticket
+data-model	start	column new_ticket.new_priority (Choice)
+data-model	ok	column new_ticket.new_priority (Choice)
+data-model	start	column new_ticket.new_status (Choice)
+data-model	ok	column new_ticket.new_status (Choice)
+data-model	start	column new_ticket.new_duedate (DateTime)
+data-model	ok	column new_ticket.new_duedate (DateTime)
+data-model	start	column new_ticket.new_description (Memo)
+data-model	ok	column new_ticket.new_description (Memo)
+data-model	start	table new_comment
+data-model	ok	table new_comment
+data-model	start	column new_comment.new_body (Memo)
+data-model	ok	column new_comment.new_body (Memo)
+data-model	start	column new_comment.new_author (Text)
+data-model	ok	column new_comment.new_author (Text)
+data-model	start	column new_comment.new_postedon (DateTime)
+data-model	ok	column new_comment.new_postedon (DateTime)
+data-model	start	relationship 1:N new_customer->new_ticket
+data-model	ok	relationship 1:N new_customer->new_ticket
+data-model	start	relationship 1:N new_ticket->new_comment
+data-model	ok	relationship 1:N new_ticket->new_comment
+sample-data	start	3 record(s) -> new_customer
+sample-data	ok	3 record(s) -> new_customer
+sample-data	start	4 record(s) -> new_ticket
+sample-data	ok	4 record(s) -> new_ticket
+sample-data	start	3 record(s) -> new_comment
+sample-data	ok	3 record(s) -> new_comment
+views	start	view "Active Customers"
+views	start	view "Active Tickets"
+views	start	view "Active Comments"
+views	ok	view "Active Customers"
+views	ok	view "Active Tickets"
+views	ok	view "Active Comments"
+views	start	enrich default views for new_customer
+views	ok	enrich default views for new_customer
+views	start	enrich default views for new_ticket
+views	ok	enrich default views for new_ticket
+views	start	enrich default views for new_comment
+views	ok	enrich default views for new_comment
+charts	start	chart "Tickets by Priority"
+charts	start	chart "Tickets by Status"
+charts	ok	chart "Tickets by Priority"
+charts	ok	chart "Tickets by Status"
+forms	start	form "Customer"
+forms	start	form "Ticket"
+forms	start	form "Comment"
+forms	ok	form "Customer"
+forms	ok	form "Ticket"
+forms	ok	form "Comment"
+app-shell	start	app "Support Desk"
+app-shell	ok	app "Support Desk"

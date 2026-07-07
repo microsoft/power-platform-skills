@@ -1,0 +1,31 @@
+solution	solution ContosoSupportDesk (publisher new)
+data-model	table new_customer ("Customer")
+data-model	column new_customer.new_segment (Choice)
+data-model	column new_customer.new_accountmanager (Text)
+data-model	table new_ticket ("Ticket")
+data-model	column new_ticket.new_priority (Choice)
+data-model	column new_ticket.new_status (Choice)
+data-model	column new_ticket.new_duedate (DateTime)
+data-model	column new_ticket.new_description (Memo)
+data-model	table new_comment ("Comment")
+data-model	column new_comment.new_body (Memo)
+data-model	column new_comment.new_author (Text)
+data-model	column new_comment.new_postedon (DateTime)
+data-model	relationship 1:N new_customer->new_ticket
+data-model	relationship 1:N new_ticket->new_comment
+sample-data	3 sample record(s) -> new_customer
+sample-data	4 sample record(s) -> new_ticket
+sample-data	3 sample record(s) -> new_comment
+views	view "Active Customers" for new_customer
+views	view "Active Tickets" for new_ticket
+views	view "Active Comments" for new_comment
+views	enrich default views for new_customer
+views	enrich default views for new_ticket
+views	enrich default views for new_comment
+charts	chart "Tickets by Priority" (Pie) for new_ticket
+charts	chart "Tickets by Status" (Column) for new_ticket
+forms	form for new_customer (sub-grids: new_ticket)
+forms	form for new_ticket (sub-grids: new_comment)
+forms	form for new_comment
+app-shell	app module "Support Desk" + sitemap
+publish	publish customizations
