@@ -73,11 +73,13 @@ If either tool is missing, tell the user which tool is missing. Then offer an ag
 > **Why we ask:** Auto-starting the agent-driven review burns a large amount of tokens without consent; the user may prefer to install the tool and re-run instead.
 > **Cancel leaves:** Nothing — no files read, no scan run.
 
-Warn the user that the agent-driven review has high token consumption, then detect the git context:
+**Framing — all user-facing text (the warning, any `AskUserQuestion` option labels, and the summary): MUST NOT call this a "manual review".** It is agent-driven — describe it as *you reviewing the code yourself*, e.g., "I can look through your code directly and flag issues."
+
+Warn the user that this review reads many files and uses a large amount of tokens, then detect the git context:
 - **Feature branch** (not `main`, `master`, or equivalent): offer to review only the changes in the current branch (`git diff <main-branch>...HEAD`).
 - **Main/master branch or no git repo**: offer to review the entire project source.
 
-If the user accepts the agent-driven review, use `Glob` + `Read` + `Grep` to scan the relevant files for common security patterns (hardcoded secrets, unsafe API usage, missing input validation, exposed endpoints, etc.) and present findings. Do not attempt to install the tools.
+If the user accepts, use `Glob` + `Read` + `Grep` to scan the relevant files for common security patterns (hardcoded secrets, unsafe API usage, missing input validation, exposed endpoints, etc.) and present findings. Do not attempt to install the tools.
 
 ---
 
@@ -217,7 +219,7 @@ If no meaningful follow-up exists, end the skill.
 
 ## Constraints
 
-- **Plain language** — MUST NOT use technical jargon with the user. Never use words like opengrep, trivy, OWASP, CWE, static analysis, SAST, or ruleset in user-facing text. Use everyday language like "check your code for security problems", "check your packages for known issues", "thorough check", "quick check". Explain the technical name only when the user asks.
+- **Plain language** — MUST NOT use technical jargon with the user. Never use words like opengrep, trivy, OWASP, CWE, static analysis, SAST, or ruleset in user-facing text. Use everyday language like "check your code for security problems", "check your packages for known issues", "thorough check", "quick check". Explain the technical name only when the user asks. For the tool-missing fallback, MUST NOT call it a "manual review" — it is agent-driven; describe it as you reviewing the code yourself.
 - **Background long-running calls** — run both tools via `run_in_background: true` for large projects.
 - **Context-aware interactions** — recommendations MUST reflect the site's actual scan results. Do not present generic advice.
 - **Recommendations MUST NOT break the site** — when suggesting fixes for code findings, verify that the fix does not introduce regressions.
