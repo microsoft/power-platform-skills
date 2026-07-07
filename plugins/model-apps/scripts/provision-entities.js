@@ -150,7 +150,6 @@ async function provisionEntities(input, opts = {}, deps = {}) {
     runner,
     spec,
     apply: true,
-    concurrency: 5,
   });
   
   // Provision sample data (if requested)

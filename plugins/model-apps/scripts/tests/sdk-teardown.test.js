@@ -33,6 +33,7 @@ function mockSdk(state = {}) {
     webresources: state.webresources || {},    // name -> { webresourceid, name }
     tables: new Set(state.tables || []),       // logical names
     solutions: state.solutions || {},          // uniquename -> { solutionid, uniquename }
+    globalchoices: new Set(state.globalchoices || []), // option set names
   };
   const calls = [];
 
@@ -114,9 +115,9 @@ function mockSdk(state = {}) {
       }
     }
     if (type === 'command') {
-      for (const k of Object.keys(db.appactions)) {
-        db.appactions[k] = db.appactions[k].filter((x) => x.appactionid !== id);
-      }
+      // The command api's delete is keyed by ENTITY logical name — it removes every appaction
+      // for that entity's command bar in one call (id === entity logical name).
+      delete db.appactions[id];
     }
     if (type === 'form') {
       for (const k of Object.keys(db.forms)) {
@@ -188,7 +189,17 @@ function mockSdk(state = {}) {
     }
   };
 
-  return { queryRecords, deleteRemoteArtifact, deleteRelationship, deleteWebResource, deleteTable, deleteSolution, calls, db };
+  const deleteGlobalOptionSet = async (name) => {
+    calls.push({ method: 'deleteGlobalOptionSet', name });
+    if (!db.globalchoices.has(name)) {
+      const err = new Error(`Could not find global option set: ${name}`);
+      err.statusCode = 404;
+      throw err;
+    }
+    db.globalchoices.delete(name);
+  };
+
+  return { queryRecords, deleteRemoteArtifact, deleteRelationship, deleteWebResource, deleteTable, deleteSolution, deleteGlobalOptionSet, calls, db };
 }
 
 // --- planTeardown (pure) ----------------------------------------------------------------
@@ -197,6 +208,61 @@ test('plan is ordered app -> dashboards -> commands -> forms -> charts -> views 
   const steps = planTeardown(fullSpec());
   const kinds = steps.map((s) => s.kind);
   assert.deepStrictEqual(kinds, ['app', 'dashboard', 'commands', 'form', 'form', 'form', 'chart', 'chart', 'view', 'view', 'view', 'relationship', 'relationship', 'webResource', 'table', 'table', 'table', 'solution']);
+});
+
+test('plan places global choices after tables and before the solution container', () => {
+  const s = fullSpec();
+  s.globalChoices = [{ name: 'new_severity', displayName: 'Severity', options: ['Low', 'High'] }];
+  const kinds = planTeardown(s).map((x) => x.kind);
+  const lastTable = kinds.lastIndexOf('table');
+  const gc = kinds.indexOf('globalChoice');
+  const sol = kinds.indexOf('solution');
+  assert.ok(gc > lastTable, 'global choice deleted after the last table (no column still binds it)');
+  assert.ok(sol > gc, 'solution container removed after its global choices');
+});
+
+test('runTeardown deletes declared global choices by name (tolerating an already-gone one)', async () => {
+  const s = { solution: { uniqueName: 'S' }, entities: [], relationships: [],
+    globalChoices: [{ name: 'new_present', options: ['a'] }, { name: 'new_absent', options: ['b'] }] };
+  const sdk = mockSdk({ solutions: { S: { solutionid: 'sol-1', uniquename: 'S' } }, globalchoices: ['new_present'] });
+  const res = await runTeardown(s, { apply: true }, { sdk, emit: () => {} });
+  assert.strictEqual(res.ok, true, 'a missing global choice is tolerated (not a failure)');
+  const gcCalls = sdk.calls.filter((c) => c.method === 'deleteGlobalOptionSet').map((c) => c.name);
+  assert.deepStrictEqual(gcCalls, ['new_present', 'new_absent'], 'both declared choices attempted');
+  assert.strictEqual(sdk.db.globalchoices.has('new_present'), false, 'present choice deleted');
+});
+
+test('deleteStep skips a system view that cannot be deleted (best-effort, no throw)', async () => {
+  const sdk = { deleteRemoteArtifact: async () => { const e = new Error('System-defined views cannot be deleted. SavedQuery Active X cannot be deleted.'); e.statusCode = 400; throw e; } };
+  const deleted = await deleteStep(sdk, KIND_HANDLERS.view, [{ id: 'v1', name: 'Active X' }]);
+  assert.deepStrictEqual(deleted, [], 'undeletable system view is skipped, not counted as deleted, and does not throw');
+});
+
+test('deleteStep does NOT swallow a dependency block ("referenced by N components") — it surfaces', async () => {
+  const sdk = { deleteWebResource: async () => { const e = new Error('The WebResource component cannot be deleted because it is referenced by 3 other components.'); e.statusCode = 400; throw e; } };
+  await assert.rejects(
+    () => deleteStep(sdk, KIND_HANDLERS.webResource, [{ id: 'wr1', name: 'x.js' }]),
+    /referenced by 3 other components/,
+    'a real dependency failure must not be silently tolerated as "undeletable"'
+  );
+});
+
+test('runTeardown tolerates a 400 "entity not found in MetadataCache" when resolving forms for an uncreated table', async () => {
+  const sdk = {
+    queryRecords: async (logical) => {
+      if (logical === 'systemform') { const e = new Error("The entity with a name = 'new_ghost' was not found in the MetadataCache"); e.statusCode = 400; throw e; }
+      if (logical === 'solution') return [{ solutionid: 'sol-1', uniquename: 'S' }];
+      return [];
+    },
+    deleteSolution: async () => {},
+    deleteTable: async () => { const e = new Error('Could not find an entity'); e.statusCode = 404; throw e; },
+  };
+  const spec = { solution: { uniqueName: 'S' },
+    entities: [{ schemaName: 'new_ghost', displayName: 'Ghost', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
+    forms: [{ entity: 'new_ghost', name: 'Ghost Form' }], relationships: [] };
+  const res = await runTeardown(spec, { apply: true }, { sdk, emit: () => {} });
+  assert.strictEqual(res.ok, true, 'entity-not-found during resolve is tolerated, not a failure');
+  assert.ok(res.skipped.includes('form "Ghost Form" (new_ghost)'), 'the form step was skipped');
 });
 
 test('tables are torn down children-first (reverse topological order)', () => {
@@ -342,7 +408,7 @@ test('appaction delete not-found (cascade already removed it) is tolerated', asy
   const r = await runTeardown(spec, { apply: true }, { sdk });
   const cmdErr = r.errors.filter((e) => /command bar/.test(e.step));
   assert.strictEqual(cmdErr.length, 0, 'cascade 404 on appaction should not error');
-  assert.strictEqual((r.deleted.commands || []).length, 2);
+  assert.strictEqual((r.deleted.commands || []).length, 1); // one entity-keyed command delete (not per-appaction)
 });
 
 test('a failed step does not strand the rest (best-effort continue)', async () => {

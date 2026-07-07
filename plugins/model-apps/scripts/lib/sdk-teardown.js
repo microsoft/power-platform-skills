@@ -9,18 +9,22 @@
 // Order (each the mirror of the build's create order — dependents before their dependencies):
 //   1. app          — the app module (references the sitemap + dashboard/form/view/chart components)
 //   2. dashboards    — systemform (type 0) rows, pinned as app components
-//   3. commands      — appactions per entity (they reference the web-resource JS; delete first)
+//   3. commands      — appactions per entity (they reference the web-resource JS; delete first).
+//                      The SDK's command delete is ENTITY-keyed (removes every appaction on that
+//                      entity's bar in one call), so this passes the entity logical name, not an id.
 //   4. forms         — systemform rows per entity (forms reference views/web-resources; deleted before tables)
 //   5. charts        — savedqueryvisualization rows per entity (deleted before tables)
 //   6. views         — savedquery rows per entity (deleted before tables)
 //   7. relationships — OneToMany/ManyToMany relationships (deleted before tables)
-//   8. web-resources — webresourceset rows (the form/command JS)
+//   8. web-resources — webresourceset rows (the form/command JS) — deletable only once the
+//                      commands/forms above that reference them are gone.
 //   9. tables        — EntityDefinitions in REVERSE-topological order (a child's lookup references
 //                      its parent, so children/referencing tables delete first). Deleting a table
 //                      does NOT cascade forms/views/charts/relationships when cross-references exist
 //                      (e.g. a form subgrid references another table's view), so teardown deletes
 //                      them explicitly first.
-//  10. solution      — the (now-empty) solution container, deleted last.
+//  10. global-choices — shared option sets, deleted after the tables whose columns bound them.
+//  11. solution      — the (now-empty) solution container, deleted last.
 //
 // planTeardown(spec) is pure (no I/O) — the dry-run plan + the unit-test surface. runTeardown
 // executes it via an injected SDK client and emits the same { phase, status, label, n, total,
@@ -53,6 +57,18 @@ function isNotFound(err) {
   return /not found|does not exist|could not find/.test(msg);
 }
 
+// Detect a system/managed artifact that Dataverse refuses to delete (e.g. the auto-generated
+// "Active <Entity>" view whose name a spec view may reuse). It is not ours to remove, so a
+// teardown skips it instead of failing — the same best-effort spirit as isNotFound. Deliberately
+// NARROW: it must NOT match a dependency block ("...cannot be deleted because it is referenced by
+// N other components"), which is a genuine leftover the teardown must surface, not swallow.
+function isUndeletable(err) {
+  if (!err) return false;
+  const msg = String((err && err.message) || '').toLowerCase();
+  if (/referenced by/.test(msg)) return false; // dependency block — a real failure, not a system artifact
+  return /system-defined|system managed|system-managed/.test(msg);
+}
+
 // Per-kind resolve (read-only id lookup, exact-name filtered) + delete handlers via SDK methods.
 // `resolve` returns the concrete artifacts to delete ([] when nothing matches — already gone /
 // never built). `del` deletes one. A not-found error on delete is tolerated as "already gone"
@@ -75,11 +91,14 @@ const KIND_HANDLERS = {
     del: (sdk, item) => sdk.deleteRemoteArtifact('dashboard', item.id),
   },
   commands: {
+    // The SDK's command delete is keyed by ENTITY — one call removes every appaction on that
+    // entity's command bar. Resolve to a single synthetic item carrying the entity logical name
+    // (present only when the entity actually has commands, so an empty bar still reports "skip").
     async resolve(sdk, target) {
-      const rows = await sdk.queryRecords('appaction', { select: ['appactionid', 'buttonlabeltext'], filter: `contextvalue eq '${odataStr(target.entity)}'`, top: 100 });
-      return (rows || []).map((x) => ({ id: x.appactionid, name: x.buttonlabeltext }));
+      const rows = await sdk.queryRecords('appaction', { select: ['appactionid', 'buttonlabeltext'], filter: `contextvalue eq '${odataStr(target.entity)}'`, top: 1 });
+      return (rows && rows.length) ? [{ id: target.entity, entity: target.entity }] : [];
     },
-    del: (sdk, item) => sdk.deleteRemoteArtifact('command', item.id),
+    del: (sdk, item) => sdk.deleteRemoteArtifact('command', item.entity),
   },
   form: {
     async resolve(sdk, target) {
@@ -127,6 +146,15 @@ const KIND_HANDLERS = {
     // deleteTable throws a not-found error even on success; treat any not-found as gone.
     tolerateNotFound: true,
   },
+  globalChoice: {
+    // Deleted by name (the SDK has no id lister); a synthetic item drives deleteStep, mirroring
+    // the table/relationship handlers. Runs AFTER tables so no column still binds the option set.
+    async resolve(sdk, target) {
+      return [{ id: target.name, name: target.name }];
+    },
+    del: (sdk, item) => sdk.deleteGlobalOptionSet(item.name),
+    tolerateNotFound: true, // absent, or a shared choice already removed, is "gone"
+  },
   solution: {
     async resolve(sdk, target) {
       const rows = await sdk.queryRecords('solution', { select: ['solutionid', 'uniquename'], filter: `uniquename eq '${odataStr(target.uniqueName)}'`, top: 1 });
@@ -172,6 +200,11 @@ function planTeardown(spec) {
   for (const e of topoOrderEntities(spec).slice().reverse()) {
     steps.push({ kind: 'table', phase: 'tables', label: `table ${e.schemaName}`, target: { logical: e.schemaName.toLowerCase(), schemaName: e.schemaName } });
   }
+  // Global option sets last (before the solution container): every column that bound one lives
+  // on a table deleted above, so the shared choice now has no dependents blocking its delete.
+  for (const gc of spec.globalChoices || []) {
+    steps.push({ kind: 'globalChoice', phase: 'global-choices', label: `global choice ${gc.name}`, target: { name: gc.name } });
+  }
   if (spec.solution) {
     steps.push({ kind: 'solution', phase: 'solution', label: `solution ${spec.solution.uniqueName}`, target: { uniqueName: spec.solution.uniqueName } });
   }
@@ -196,6 +229,11 @@ async function deleteStep(sdk, handler, items) {
       if (isNotFound(err)) {
         // Already gone (e.g. cascade) — tolerate
         deletedIds.push(item.id);
+        continue;
+      }
+      if (isUndeletable(err)) {
+        // A system/managed artifact (e.g. an auto-generated "Active <Entity>" view that shares
+        // the spec view's name) — not ours to remove. Skip it without failing the teardown.
         continue;
       }
       throw err;
@@ -230,7 +268,15 @@ async function runTeardown(spec, opts = {}, deps = {}) {
     emit({ phase: step.phase, status: 'start', label: step.label, n: myN, total });
     const handler = KIND_HANDLERS[step.kind];
     try {
-      const items = await handler.resolve(sdk, step.target);
+      let items;
+      try {
+        items = await handler.resolve(sdk, step.target);
+      } catch (resolveErr) {
+        // Resolving forms/charts/views filters by an entity's typecode; if that entity was never
+        // created (partial build) or is already gone, Dataverse answers 400 "entity ... not found
+        // in the MetadataCache". There is nothing to delete — treat it as an empty resolution.
+        if (isNotFound(resolveErr)) { items = []; } else { throw resolveErr; }
+      }
       if (!items.length) {
         result.skipped.push(step.label);
         emit({ phase: step.phase, status: 'skip', label: `${step.label} (not found)`, n: myN, total });

@@ -82,7 +82,32 @@ test('gives up after max attempts on a persistent 500 — surfaces it (no throw)
   const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request, sleep: async () => {} });
   const res = await http.get('https://org/x');
   assert.strictEqual(res.status, 500); // the SDK decides what to do with it
-  assert.strictEqual(calls.length, 4);
+  assert.strictEqual(calls.length, 6);
+});
+
+test('retries a 429 EntityCustomization lock and eventually succeeds', async () => {
+  const { request, calls } = fakeTransport(() =>
+    calls.length <= 4
+      ? { statusCode: 429, headers: {}, body: 'Cannot start another [EntityCustomization]' }
+      : { statusCode: 200, headers: {}, body: '{"ok":true}' }
+  );
+  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request, sleep: async () => {} });
+  const res = await http.post('https://org/x', { a: 1 });
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(calls.length, 5); // 429 x4, then 200 — needs the extra attempts (>4)
+});
+
+test('applies jittered, capped backoff on transient retries (de-syncs lockstep collisions)', async () => {
+  const slept = [];
+  // random() = 0.5 -> +12.5% jitter; caps exponential at 8000ms.
+  const { request } = fakeTransport({ statusCode: 503, headers: {}, body: '' });
+  const http = createAzHttpClient('https://org', {
+    getToken: () => 'TOK', request, random: () => 0.5,
+    sleep: async (ms) => { slept.push(ms); },
+  });
+  await http.get('https://org/x');
+  // 5 sleeps before the 6th (final) attempt: base 1s,2s,4s,8s,8s each + 12.5% jitter.
+  assert.deepStrictEqual(slept, [1125, 2250, 4500, 9000, 9000]);
 });
 
 test('throws only when no token is available', async () => {

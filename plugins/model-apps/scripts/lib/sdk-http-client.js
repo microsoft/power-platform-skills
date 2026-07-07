@@ -20,9 +20,17 @@ function createAzHttpClient(orgUrl, deps = {}) {
   const getToken = deps.getToken || ((u) => getAuthToken(u));
   const request = deps.request || makeRequest;
   const sleep = deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const random = deps.random || Math.random;
   // Transient HTTP statuses worth retrying with backoff — throttling, gateway hiccups, and
   // SQL deadlocks (Dataverse surfaces deadlock 1205 as a 500 from PublishXml under load).
   const TRANSIENT = new Set([429, 500, 502, 503, 504]);
+  // Jittered, capped exponential backoff. Metadata customizations serialize on a per-entity
+  // lock; when several artifacts (forms/views/charts) for the same table retry concurrently,
+  // a fixed schedule wakes them in lockstep so they re-collide forever. Jitter de-syncs them.
+  const backoffMs = (attempt) => {
+    const base = Math.min(1000 * 2 ** attempt, 8000); // 1s,2s,4s,8s,8s (capped)
+    return base + Math.floor(random() * base * 0.25); // + up to 25% jitter
+  };
 
   let token = null;
   function ensureToken() {
@@ -50,7 +58,9 @@ function createAzHttpClient(orgUrl, deps = {}) {
     const bodyStr = hasBody ? (typeof body === 'string' ? body : JSON.stringify(body)) : null;
 
     // Retry: refresh the token once on 401 (no backoff); back off on transient 5xx/429.
-    const maxAttempts = 4;
+    // 6 attempts with capped jittered backoff rides out a per-entity customization lock that
+    // can stay held for ~20s while a prior metadata op or publish settles.
+    const maxAttempts = 6;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const last = attempt === maxAttempts - 1;
       const headers = {
@@ -67,7 +77,7 @@ function createAzHttpClient(orgUrl, deps = {}) {
       const res = await request({ url, method, headers, body: bodyStr, includeHeaders: true });
       if (res.error) {
         if (last) throw new Error(`Request failed: ${res.error}`);
-        await sleep(1000 * 2 ** attempt);
+        await sleep(backoffMs(attempt));
         continue;
       }
       if (res.statusCode === 401 && !last) {
@@ -75,7 +85,7 @@ function createAzHttpClient(orgUrl, deps = {}) {
         continue;
       }
       if (TRANSIENT.has(res.statusCode) && !last) {
-        await sleep(1000 * 2 ** attempt); // 1s, 2s, 4s
+        await sleep(backoffMs(attempt));
         continue;
       }
       return { status: res.statusCode, headers: res.headers || {}, body: parseBody(res.body) };

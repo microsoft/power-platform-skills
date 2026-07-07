@@ -223,6 +223,25 @@ function planFor(spec, opts) {
 // Build a saved-query def. `v.filters[]` adds rich conditions ({ attr, op, value?/values? });
 // no-value operators (eq-userid, this-week, null, …) omit the value, and in/not-in expand to a
 // nested or/and group of eq/ne (the SDK's filter serializer is single-value per condition).
+// Resolve the savedquery id a form sub-grid should embed. Preference order:
+//   1. the view the sub-grid explicitly names (a custom view we built),
+//   2. any custom view we built for the child entity,
+//   3. the child entity's DEFAULT public view (Dataverse auto-creates one per table) — this is
+//      what makes a sub-grid on an entity with no bespoke view (a common N:N case) work.
+// Returns undefined only when even the default view can't be found (caller then skips the grid).
+async function subgridViewId(provision, createdViews, spec, sg, childLogical) {
+  if (sg.view && createdViews[sg.view]) return createdViews[sg.view];
+  const cv = (spec.views || []).find((v) => v.entity.toLowerCase() === childLogical);
+  if (cv && createdViews[cv.name]) return createdViews[cv.name];
+  const rows = await provision.queryRecords('savedquery', {
+    select: ['savedqueryid', 'isdefault'],
+    filter: `returnedtypecode eq '${childLogical}' and querytype eq 0`,
+    top: 20,
+  });
+  const def = (rows || []).find((r) => r.isdefault) || (rows || [])[0];
+  return def && def.savedqueryid;
+}
+
 function viewDef(spec, v) {
   const entityLogical = v.entity.toLowerCase();
   const cols = (v.columns && v.columns.length ? v.columns : [primaryNameOf(spec, entityLogical)]).map((name, i) => ({ name: String(name).toLowerCase(), width: 100, order: i }));
@@ -288,6 +307,10 @@ function formDef(spec, f) {
   };
 
   let tabs;
+  const formType = f.formType || 'Main';
+  // Quick Create forms must use single-column sections — Dataverse rejects a multi-column
+  // (columns="11"/"111") quick-create section with "Columns in a section must be set to '1'".
+  const maxCols = formType === 'QuickCreate' ? 1 : 4;
   const explicit = Array.isArray(f.tabs) || f.layout === 'explicit';
   if (explicit && Array.isArray(f.tabs)) {
     // Honor the authored layout verbatim.
@@ -295,7 +318,8 @@ function formDef(spec, f) {
       name: t.name || `tab_${ti}`, label: t.label || 'General', expanded: true, visible: true,
       sections: (t.sections || []).map((s, si) => {
         const cells = (s.fields || []).map((fl) => { const lg = String(fl).toLowerCase(); return fieldCell(lg, labelFor(lg), requiredFor(lg)); });
-        return { name: s.name || `section_${ti}_${si}`, label: s.label || 'Details', visible: true, showLabel: s.showLabel !== false, columns: s.columns || 1, rows: rowsFromCells(cells, s.columns || 1) };
+        const secCols = Math.min(s.columns || 1, maxCols);
+        return { name: s.name || `section_${ti}_${si}`, label: s.label || 'Details', visible: true, showLabel: s.showLabel !== false, columns: secCols, rows: rowsFromCells(cells, secCols) };
       }),
     }));
   } else {
@@ -305,12 +329,11 @@ function formDef(spec, f) {
       cells.push(fieldCell(entity.primaryAttribute.schemaName.toLowerCase(), entity.primaryAttribute.displayName || 'Name', true));
       for (const c of entity.columns || []) { if (!SDK_COLUMN_TYPE[c.type || 'Text']) continue; cells.push(fieldCell(c.schemaName.toLowerCase(), c.displayName || c.schemaName, c.required === true)); }
     }
-    const columns = cells.length > 6 ? 2 : 1;
+    const columns = Math.min(cells.length > 6 ? 2 : 1, maxCols);
     tabs = [{ name: 'tab_general', label: 'General', expanded: true, visible: true,
       sections: [{ name: 'section_general', label: 'General', visible: true, showLabel: false, columns, rows: rowsFromCells(cells, columns) }] }];
   }
 
-  const formType = f.formType || 'Main';
   // Notes section (opt-in: form.notes or entity.hasNotes) — Main forms only; quick-create /
   // quick-view forms don't host the activity timeline.
   const wantNotes = formType === 'Main' && (f.notes === true || (entity && entity.hasNotes === true));
@@ -382,7 +405,7 @@ async function runSdkBuild(spec, opts = {}) {
   //    entity (fresh -> createTable result, existing -> findTables hit).
   let dataModel = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [] };
   if (has('data-model')) {
-    dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply, concurrency });
+    dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply });
     Object.assign(result.created.entities, dataModel.entities);
   }
 
@@ -440,21 +463,26 @@ async function runSdkBuild(spec, opts = {}) {
   //    A form with `events[]` then gets its JS handlers wired: fetch the pushed form (to
   //    retain its formxml), inject onload/onsave/onchange handlers, push + publish.
   if (has('forms')) {
-    const defs = spec.forms.map((f) => {
+    const defs = await Promise.all(spec.forms.map(async (f) => {
       const def = formDef(spec, f);
-      def.__subgrids = (f.subgrids || []).map((sg) => {
+      const subs = [];
+      for (const sg of (f.subgrids || [])) {
         // A sub-grid can hang off a 1:N (child has the lookup) or an N:N (intersect) relationship.
         const oneToMany = relationshipFor(spec, f.entity, sg.childEntity);
         const nn = oneToMany ? null : manyToManyFor(spec, f.entity, sg.childEntity);
-        if (!oneToMany && !nn) return null;
+        if (!oneToMany && !nn) continue;
         const relationshipName = oneToMany ? relationshipSchemaName(oneToMany) : manyToManySchemaName(nn);
         const childLogical = sg.childEntity.toLowerCase();
-        let viewId = sg.view && result.created.views[sg.view];
-        if (!viewId) { const cv = (spec.views || []).find((v) => v.entity.toLowerCase() === childLogical); viewId = cv && result.created.views[cv.name]; }
-        return { entity: childLogical, relationshipName, viewId, label: sg.label || sg.childEntity };
-      }).filter(Boolean);
+        const viewId = await subgridViewId(provision, result.created.views, spec, sg, childLogical);
+        // Every sub-grid needs a concrete view id (the SDK embeds it in the control XML). If the
+        // child entity has neither an explicit nor a built view AND no default public view can be
+        // found, skip the sub-grid rather than crash the whole forms phase.
+        if (!viewId) { runner.skip('forms', `sub-grid ${sg.label || sg.childEntity} on ${f.entity} (no resolvable view — skipped)`); continue; }
+        subs.push({ entity: childLogical, relationshipName, viewId, label: sg.label || sg.childEntity });
+      }
+      def.__subgrids = subs;
       return { f, def };
-    });
+    }));
     const ids = await runner.mapLimit(defs, concurrency, async (d) => {
       const id = await buildArtifact('form', d.def);
       const events = (d.f.events || []).filter((ev) => FORM_EVENTS.has(ev.event) && ev.library && ev.function);

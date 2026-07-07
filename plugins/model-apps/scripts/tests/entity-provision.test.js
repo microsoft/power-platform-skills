@@ -99,6 +99,55 @@ test('provisionDataModel recovers from createColumn already-exists error', async
   assert.ok(!dm.columns['new_ticket'] || dm.columns['new_ticket'].length === 0, 'column not captured on skip');
 });
 
+test('provisionDataModel serializes column creation within an entity (per-entity EntityCustomization lock)', async () => {
+  const m = mockSdk();
+  let inFlight = 0;
+  let maxInFlight = 0;
+  m.sdk.createColumn = async (l, o) => {
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise((r) => setTimeout(r, 5));
+    inFlight -= 1;
+    m.calls.push(['createColumn', l, o.schemaName]);
+    return { logicalName: o.schemaName.toLowerCase(), metadataId: `col-${o.schemaName}` };
+  };
+  const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [
+    { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' },
+      columns: [{ schemaName: 'new_a', type: 'Text' }, { schemaName: 'new_b', type: 'Text' }, { schemaName: 'new_c', type: 'Text' }] },
+  ], relationships: [] };
+  const runner = makeRunner({ emit: () => {}, total: 10 });
+  await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true });
+  assert.strictEqual(maxInFlight, 1, 'never more than one column create in flight per entity');
+  assert.strictEqual(m.calls.filter((c) => c[0] === 'createColumn').length, 3, 'all three columns created');
+});
+
+test('provisionDataModel falls back to global-choice options when the option set pre-exists (idempotent re-run)', async () => {
+  const m = mockSdk();
+  // The global option set already exists: createGlobalOptionSet throws already-exists, so its
+  // metadataId is never captured (the SDK has no reader). A globalChoice column must still build.
+  m.sdk.createGlobalOptionSet = async () => { const e = new Error('already exists'); e.statusCode = 409; throw e; };
+  const seen = {};
+  m.sdk.createColumn = async (l, o) => { seen[o.schemaName] = o; return { logicalName: o.schemaName.toLowerCase(), metadataId: `col-${o.schemaName}` }; };
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    globalChoices: [{ name: 'new_sev', displayName: 'Sev', options: ['Low', 'High', 'Critical'] }],
+    entities: [
+      { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' },
+        columns: [{ schemaName: 'new_severity', type: 'Choice', globalChoice: 'new_sev' }] },
+    ],
+    relationships: [],
+  };
+  const runner = makeRunner({ emit: () => {}, total: 10 });
+  await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true });
+  assert.ok(seen['new_severity'], 'severity column still created (no crash on pre-existing global choice)');
+  assert.ok(!seen['new_severity'].globalChoiceMetadataId, 'no metadataId bound (option set was not captured)');
+  assert.deepStrictEqual(
+    seen['new_severity'].options.map((o) => o.label),
+    ['Low', 'High', 'Critical'],
+    'fell back to the global choice declared options, not the column empty list'
+  );
+});
+
 test('provisionDataModel still throws on NON-already-exists createTable error', async () => {
   const m = mockSdk();
   // createTable throws a different error (bad request, not already-exists)

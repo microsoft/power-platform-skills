@@ -25,7 +25,7 @@ const REQUIRED = (c) => (c.required === true ? 'ApplicationRequired' : c.require
 
 // Map an App Spec column to SDK CreateColumnOptions. `globalChoiceIds` maps a global-choice
 // name -> its metadataId (so a column can bind to a shared option set).
-function columnOptions(c, globalChoiceIds) {
+function columnOptions(c, globalChoiceIds, globalChoices) {
   const o = { schemaName: c.schemaName, displayName: c.displayName || c.schemaName, type: SDK_COLUMN_TYPE[c.type || 'Text'], required: REQUIRED(c) };
   switch (c.type) {
     case 'Text': if (c.maxLength) o.maxLength = c.maxLength; if (c.format) o.stringFormat = c.format; break;
@@ -37,7 +37,13 @@ function columnOptions(c, globalChoiceIds) {
     case 'DateTime': if (c.dateFormat) o.dateFormat = c.dateFormat; break;
     case 'Boolean': if (c.trueLabel) o.trueLabel = c.trueLabel; if (c.falseLabel) o.falseLabel = c.falseLabel; break;
     case 'Choice': case 'MultiChoice':
-      if (c.globalChoice && globalChoiceIds[c.globalChoice]) o.globalChoiceMetadataId = globalChoiceIds[c.globalChoice];
+      if (c.globalChoice && globalChoiceIds[c.globalChoice]) { o.globalChoiceMetadataId = globalChoiceIds[c.globalChoice]; }
+      // The global choice exists but its metadataId wasn't captured — happens on an idempotent
+      // re-run where the option set already existed (the SDK has no global-choice reader). A
+      // globalChoice column carries no inline options of its own, so fall back to the global
+      // choice's DECLARED options (same values the engine assigns) rather than the column's
+      // empty list, so the column still builds instead of failing the whole data-model phase.
+      else if (c.globalChoice) { const gc = (globalChoices || []).find((g) => g.name === c.globalChoice); o.options = choiceOptions(gc ? { options: gc.options } : c); }
       else o.options = choiceOptions(c); break;
     case 'File': case 'Image': if (c.maxSizeKb) o.maxSizeKb = c.maxSizeKb; if (c.type === 'Image' && c.isPrimaryImage) o.isPrimaryImage = true; break;
     case 'AutoNumber': if (c.autoNumberFormat) o.autoNumberFormat = c.autoNumberFormat; break;
@@ -130,7 +136,7 @@ async function provisionSolution({ sdk, provision, runner, solution }) {
 
 // Discover-then-create global choices, tables, columns, status reasons, alternate keys,
 // and relationships (idempotent). Returns captured maps used by sample data + later phases.
-async function provisionDataModel({ sdk, provision, runner, spec, apply, concurrency }) {
+async function provisionDataModel({ sdk, provision, runner, spec, apply }) {
   const result = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [] };
   
   const globalChoiceIds = result.globalChoiceIds;
@@ -177,14 +183,18 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, concurr
       }, { recoverable: true });
     }
     // columns: every buildable column (all scalar types + Customer; Lookup comes from a
-    // relationship). Existing ones emit a skip; missing ones are created (parallel, bounded).
+    // relationship). Existing ones emit a skip; missing ones are created SERIALLY: Dataverse
+    // takes a per-entity exclusive [EntityCustomization] lock, so two Attribute POSTs on the
+    // same table collide with HTTP 429 ("Cannot start another [EntityCustomization]..."). The
+    // outer entity loop is already sequential, so serial columns here means one metadata
+    // customization is in flight per entity at a time — the only order Dataverse permits.
     const buildable = (e.columns || []).filter((c) => SDK_COLUMN_TYPE[c.type || 'Text'] || c.type === 'Customer');
     for (const c of buildable) if (existingCols.has(c.schemaName.toLowerCase())) runner.skip('data-model', `column ${e.schemaName}.${c.schemaName} (exists)`);
     const toCreate = buildable.filter((c) => !existingCols.has(c.schemaName.toLowerCase()));
-    const colResults = await runner.mapLimit(toCreate, concurrency, (c) => runner.run('data-model', `column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})`,
+    const colResults = await runner.mapLimit(toCreate, 1, (c) => runner.run('data-model', `column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})`,
       () => c.type === 'Customer'
         ? sdk.createCustomerColumn(logical, { schemaName: c.schemaName, displayName: c.displayName || c.schemaName, required: REQUIRED(c) })
-        : sdk.createColumn(logical, columnOptions(c, globalChoiceIds)),
+        : sdk.createColumn(logical, columnOptions(c, globalChoiceIds, spec.globalChoices)),
       { skipIf: isAlreadyExists }));
     // Capture real column results (logicalName + metadataId)
     toCreate.forEach((c, i) => {

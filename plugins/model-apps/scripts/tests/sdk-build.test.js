@@ -33,7 +33,7 @@ function mockSdk(opts = {}) {
   let idc = 0;
   const ex = opts.existingTables || {};
   const sdk = {
-    queryRecords: async (e, o) => { calls.push({ name: 'queryRecords', args: [e, o] }); if (e === 'solution') return opts.solutionExists ? [{ solutionid: 's' }] : []; if (e === 'webresource') return opts.existingWebResource ? [{ webresourceid: 'wr-existing' }] : []; return opts.noPublisher ? [] : [{ publisherid: 'pub-1' }]; },
+    queryRecords: async (e, o) => { calls.push({ name: 'queryRecords', args: [e, o] }); if (e === 'solution') return opts.solutionExists ? [{ solutionid: 's' }] : []; if (e === 'webresource') return opts.existingWebResource ? [{ webresourceid: 'wr-existing' }] : []; if (e === 'savedquery') return [{ savedqueryid: `defview-${(o && o.filter || '').match(/'([^']+)'/)?.[1] || 'x'}`, isdefault: true }]; return opts.noPublisher ? [] : [{ publisherid: 'pub-1' }]; },
     createWebResource: async (o) => { calls.push({ name: 'createWebResource', args: [o] }); return { id: `wr-${++idc}`, name: o.name }; },
     fetchArtifact: async (t, id) => { calls.push({ name: 'fetchArtifact', args: [t, id] }); return { id }; },
     addFormEventHandler: (id, o) => { calls.push({ name: 'addFormEventHandler', args: [id, o] }); return {}; },
@@ -266,6 +266,23 @@ test('AutoNumber primary column flows to createTable.primaryColumnAutoNumberForm
   assert.strictEqual(other.args[0].primaryColumnAutoNumberFormat, undefined);
 });
 
+test('formDef forces single-column sections for a field-heavy QuickCreate form', () => {
+  const spec = makeSpec();
+  const cust = spec.entities.find((e) => e.schemaName === 'new_customer');
+  cust.columns = Array.from({ length: 8 }, (_, i) => ({ schemaName: `new_c${i}`, displayName: `C${i}`, type: 'Text' }));
+  const main = formDef(spec, { entity: 'new_customer', name: 'M', formType: 'Main', layout: 'auto' });
+  const qc = formDef(spec, { entity: 'new_customer', name: 'QC', formType: 'QuickCreate', layout: 'auto' });
+  assert.strictEqual(main.tabs[0].sections[0].columns, 2, 'Main form is 2-column when field-heavy (>6 fields)');
+  assert.strictEqual(qc.tabs[0].sections[0].columns, 1, 'QuickCreate form is forced to a single column');
+});
+
+test('formDef clamps an explicitly authored multi-column section to 1 for QuickCreate', () => {
+  const spec = makeSpec();
+  const qc = formDef(spec, { entity: 'new_customer', name: 'QC', formType: 'QuickCreate',
+    tabs: [{ label: 'G', sections: [{ label: 'S', columns: 3, fields: ['new_name', 'new_tier'] }] }] });
+  assert.strictEqual(qc.tabs[0].sections[0].columns, 1, 'authored 3-column section clamped to 1 on a QuickCreate form');
+});
+
 test('an N:N sub-grid uses the ManyToMany relationship schema name', async () => {
   const spec = makeSpec();
   spec.entities.push({ schemaName: 'new_tag', displayName: 'Tag', primaryAttribute: { schemaName: 'new_label', displayName: 'Label' }, columns: [] });
@@ -277,6 +294,34 @@ test('an N:N sub-grid uses the ManyToMany relationship schema name', async () =>
   const sub = find(calls, 'addSubGrid').map((c) => c.args[1]).find((s) => s.entity === 'new_tag');
   assert.ok(sub, 'N:N sub-grid is placed on the form');
   assert.strictEqual(sub.relationshipName, 'new_customer_new_tag');
+});
+
+test('a sub-grid with no explicit or built view falls back to the child default public view', async () => {
+  const spec = makeSpec();
+  // A child entity with NO custom view (common for a plain N:N target).
+  spec.entities.push({ schemaName: 'new_tag', displayName: 'Tag', primaryAttribute: { schemaName: 'new_label', displayName: 'Label' }, columns: [] });
+  spec.relationships.push({ type: 'ManyToMany', entity1: 'new_customer', entity2: 'new_tag' });
+  spec.forms[0].subgrids.push({ childEntity: 'new_tag', label: 'Tags' }); // no `view`
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true });
+  const sub = find(calls, 'addSubGrid').map((c) => c.args[1]).find((s) => s.entity === 'new_tag');
+  assert.ok(sub, 'sub-grid still placed (not skipped)');
+  assert.ok(sub.viewId, 'a view id was resolved from the default public view');
+  assert.ok(has(calls, 'queryRecords'), 'the child default view was looked up');
+});
+
+test('a sub-grid whose child has no resolvable view at all is skipped, not fatal', async () => {
+  const spec = makeSpec();
+  spec.entities.push({ schemaName: 'new_tag', displayName: 'Tag', primaryAttribute: { schemaName: 'new_label', displayName: 'Label' }, columns: [] });
+  spec.relationships.push({ type: 'ManyToMany', entity1: 'new_customer', entity2: 'new_tag' });
+  spec.forms[0].subgrids.push({ childEntity: 'new_tag', label: 'Tags' });
+  const { sdk, calls } = mockSdk();
+  sdk.queryRecords = async () => []; // no default view exists
+  const events = [];
+  await runSdkBuild(spec, { sdk, apply: true, emit: (e) => events.push(e) });
+  const sub = find(calls, 'addSubGrid').map((c) => c.args[1]).find((s) => s.entity === 'new_tag');
+  assert.strictEqual(sub, undefined, 'unresolvable sub-grid is dropped');
+  assert.ok(events.some((e) => e.status === 'skip' && /sub-grid Tags/.test(e.label)), 'a skip was emitted for it');
 });
 
 test('a junction sample row binds multiple parents via $parents', async () => {
