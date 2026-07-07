@@ -43,9 +43,13 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   buttons** (`commands[]` — functional JS on-click + static hidden/disabled, incl. **flyout/split-button
   menus** via `type`+`children[]`), and **dashboards** (`dashboards[]` — chart/list/iframe/webresource
   tiles) with **sitemap placement** (a `dashboard` subarea auto-pins the dashboard as an app component).
+  Following a **genpage-first policy**, overview/dashboard/analytics surfaces are authored as **generative
+  pages** (`pages[]`) rather than classic dashboards — the build's `pages` phase uploads each via
+  `pac model genpage upload` (no `--add-to-sitemap`) and the SDK finalizes the sitemap with `GenPage`
+  subareas; classic `dashboards[]` are opt-in.
   **All Dataverse access is via the SDK**, so metadata is persisted under
   `<app-folder>/.maker-workspace/` for reuse/edits. Phases
-  (`solution·data-model·sample-data·web-resources·views·charts·forms·commands·dashboards·app-shell·publish`) are
+  (`solution·data-model·sample-data·web-resources·views·charts·forms·commands·dashboards·app-shell·pages·publish`) are
   selectable with `--only`/`--skip`/`--from`/`--to`; independent ops run with bounded parallelism.
   Emits `[n/total]` events the orchestrator narrates + a `BuildHalt` it gates on. Dry-run by
   default; `--apply` writes, `--sample-data` / `--publish` opt-in.
@@ -60,6 +64,15 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   via a follow-up GET) + the appaction **cascade 404**. `--clear-workspace` prunes `.maker-workspace/`
   after a clean apply. `planTeardown(spec)` is pure (dry-run + unit-test surface); reuses
   `appUniqueName`/`commandsByEntity`/`topoOrderEntities` from the build engine (DRY).
+- **`scripts/download-model-app.js` → `scripts/lib/hydrate-spec.js`** — the **edit flow**: pulls a
+  *deployed* app back into a complete App Spec + page code (sitemap → `appShell` with icons, **every**
+  generative page via `pac model genpage download`, referenced entities, icon web resources, solution).
+  Edit the downloaded spec and re-run the build (idempotent) — create and edit share one path. Always
+  pull fresh at the start of an edit session (the build reads an etag; a write against an artifact
+  changed in Maker throws a version conflict → re-pull, never clobber).
+- **`scripts/verify-model-app.js` → `scripts/lib/verify-spec.js`** — read-only reconcile of the App Spec
+  against what actually deployed (entities/columns/views/charts/forms + sitemap subareas + icons); exits
+  non-zero and lists anything missing, catching silent partial builds.
 - **`scripts/preview-form.js` → `scripts/lib/form-preview.js`** — renders an ASCII **form
   wireframe** (tabs, sections, fields with widget hints, the Notes/timeline block, sub-grids, form
   JS) from the App Spec, so the user can review a form visually during authoring before approving.
@@ -71,7 +84,9 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
 
 Flow: Phase 0 (working dir) → Phase 1 (author the spec interactively, **in the main loop**,
 per `references/authoring-flow.md`) → Phase 2 (narrated SDK build) → Phase 3 (verify & iterate).
-**Upcoming:** an **edit flow** (spec-diff against a deployed app); shippable-defaults
+**Edit** an existing app the same way: `scripts/download-model-app.js` pulls a deployed app back into a
+complete spec (+ page code); edit it and re-run Phase 2 (idempotent — reuses the app/tables, updates pages
+in place, preserves `GenPage` subareas). **Upcoming:** shippable-defaults
 provisioning (security role / quick-create / standard views).
 
 ## Local Development
@@ -114,6 +129,13 @@ scripts/
   dataverse-request.js         ← General Dataverse Web API wrapper (escape hatch)
   provision-entities.js        ← CLI wrapper for entity provisioning (solution + data-model + sample-data)
   provision-solution.js        ← Creates a Dataverse solution via the SDK
+  build-model-app.js           ← model-app-maker: narrated, idempotent SDK build (dry-run default)
+  download-model-app.js        ← model-app-maker: pull a deployed app into an editable spec (edit flow)
+  teardown-model-app.js        ← model-app-maker: classifier-safe reverse-of-build teardown
+  verify-model-app.js          ← model-app-maker: reconcile the spec against the deployed app
+  preview-form.js              ← model-app-maker: ASCII form wireframe for authoring review
+  run-tests.js                 ← one-command plugin + SDK regression runner
+  smoke-eval.js                ← scripted live smoke eval (build → assert → teardown)
   generate-page-manifest.js    ← Phase 0.5: writes working-dir package.json + genpage.d.ts
   capture-fixture.js           ← Copies /genpage working dir into an eval fixture and runs both runners
   lib/
@@ -121,8 +143,22 @@ scripts/
     provision-input.js         ← Input validation for entity provisioning
     dataverse-auth.js          ← Shared auth + HTTP helpers (uses `az account get-access-token`)
     supported-dependencies.js  ← Single source of truth for runtime + dev deps versions
+    sdk-build.js               ← model-app-maker build engine (idempotent; incl. the pages phase)
+    sdk-teardown.js            ← model-app-maker teardown engine (planTeardown is pure)
+    sdk-http-client.js         ← az-token HttpClient for the vendored SDK
+    spec-lint.js / app-spec.js ← App Spec guardrail lint + validation
+    genpage-cli.js             ← pac model genpage upload/list/download wrapper
+    hydrate-spec.js            ← reconstruct an App Spec from a deployed app (edit flow)
+    verify-spec.js             ← spec-vs-deployed reconciliation core
+    build-journal.js           ← durable JSONL build journal (resume diagnostics)
+    form-preview.js            ← form wireframe renderer
+    _graph.js                  ← entity topological ordering (shared by build + teardown)
+  vendor/cds-maker-sdk.cjs     ← headless vendored SDK bundle (rebuilt via _vendor-build/)
+  _vendor-build/               ← esbuild vendoring tooling (build.js + pinned deps)
   tests/                       ← node --test coverage for the scripts above
 skills/
+  model-app-maker/
+    SKILL.md                   ← intent → model-driven app (create + edit); **Preview**
   genpage/
     SKILL.md                   ← Orchestrator skill (delegates to agents)
     edit-flow.md               ← Edit flow steps (loaded only on edit path)

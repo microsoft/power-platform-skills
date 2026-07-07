@@ -4,10 +4,20 @@ All notable changes to the **model-apps** plugin.
 
 ## [Unreleased] — 2.2.0
 
-Local-dev ergonomics, sample coverage, and an automated eval suite with
+A new **`/model-app-maker`** skill (Preview) that builds and edits whole model-driven apps,
+plus local-dev ergonomics, sample coverage, and an automated eval suite with
 real and synthetic fixtures. Builds on v2.1; no breaking changes.
 
 ### Added
+- **`/model-app-maker` skill (Preview).** Turns a natural-language intent into a deployed
+  **model-driven app** — tables/columns/relationships, sample data, views (with enriched default
+  Active/Inactive columns), Choice-column charts, adaptive forms with sub-grids, quick-create/quick-view
+  forms, modern command-bar buttons, dashboards, sitemap icons, and — genpage-first — **generative pages**
+  for overview/dashboard surfaces. Deterministic, **idempotent** build via the vendored headless
+  `cds-maker-sdk` (`scripts/build-model-app.js`); interactive two-level authoring + `spec-lint` guardrail +
+  plan-mode gate. **Create and edit share one path** (`scripts/download-model-app.js` pulls a deployed app
+  back into an editable spec); read-only `scripts/verify-model-app.js` reconciles spec vs deployed;
+  classifier-safe `scripts/teardown-model-app.js`. Durable build journal + transient auto-retry.
 - **Phase 0.5 — local-dev manifest.** Working dirs now get `package.json`
   and `genpage.d.ts` so `npm install` + editor IntelliSense work after
   generation. Versions in `references/supported-dependencies.md`.
@@ -27,6 +37,13 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   dialogs — so a modal can't escape the preview and cover the designer /
   coding-agent panel.
 
+### Removed
+- **Consolidated the standalone entity/solution scripts into the SDK.** `create-table.js`,
+  `add-column.js`, `create-relationship.js`, `create-record.js`, `create-solution.js`, and
+  `add-to-solution.js` (added in 2.1.0) are removed — both `/genpage` and `/model-app-maker` now
+  provision Dataverse through the shared SDK-backed `scripts/lib/entity-provision.js` core (via
+  `provision-entities.js` / the build engine), eliminating duplicate metadata logic.
+
 ### Changed
 - Spec tightening so workflow-logs are command-verbatim and `pageInput`
   destructure is required even on mock pages (planner, page-builder,
@@ -45,7 +62,9 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   file calling `dataApi.queryTable` must access `.rows` somewhere.
 
 ### Tests
-- 215 passing across `scripts/tests/` + `evals/.../tests/`.
+- **317 passing** across `scripts/tests/` (unit + golden snapshots + journal evals) plus the genpage
+  eval suites; the vendored `cds-maker-sdk` ships its own Jest suite. `scripts/run-tests.js
+  --with-sdk <ppux>` runs both in one command.
 
 ## 2.1.0 — 2026-05-13
 
