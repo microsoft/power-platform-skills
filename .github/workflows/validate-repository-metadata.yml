@@ -27,3 +27,6 @@ jobs:
 
             - name: validate-skill-descriptions
               run: node scripts/validate-skill-descriptions.js
+
+            - name: validate-telemetry-ikeys
+              run: node scripts/validate-telemetry-ikeys.js
