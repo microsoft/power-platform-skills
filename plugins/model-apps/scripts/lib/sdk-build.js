@@ -22,9 +22,10 @@ const {
   manyToManyFor,
   manyToManySchemaName,
 } = require('./app-spec.js');
-const { topoOrderEntities } = require('./_graph.js');
+const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 const {
   makeRunner,
+  makeEntitySetResolver,
   provisionSolution,
   provisionDataModel,
   provisionSampleData,
@@ -150,10 +151,7 @@ function resolveFilterValue(spec, entityLogical, attr, val) {
   }
   return val;
 }
-function entityByLogical(spec, logical) {
-  const l = String(logical).toLowerCase();
-  return (spec.entities || []).find((e) => e.schemaName.toLowerCase() === l);
-}
+
 function primaryNameOf(spec, logical) {
   const e = entityByLogical(spec, logical);
   return e ? e.primaryAttribute.schemaName.toLowerCase() : `${String(logical).toLowerCase()}name`;
@@ -382,25 +380,14 @@ async function runSdkBuild(spec, opts = {}) {
   // 2. Data model — idempotent. Discover existing tables/columns/relationships via the SDK
   //    (find*/fetch*), then create only what's missing. Captures entitySetName for every
   //    entity (fresh -> createTable result, existing -> findTables hit).
-  let dataModel = { entities: {}, globalChoiceIds: {}, statusReasonValues: {} };
+  let dataModel = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [] };
   if (has('data-model')) {
     dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply, concurrency });
     Object.assign(result.created.entities, dataModel.entities);
   }
 
   // entity-set resolver: fresh tables cached above; existing ones via fetchEntityMetadata.
-  const entitySetCache = {};
-  const entitySetFor = async (logical) => {
-    const entityByLogical = (spec, logical) => {
-      const l = String(logical).toLowerCase();
-      return (spec.entities || []).find((e) => e.schemaName.toLowerCase() === l);
-    };
-    const ent = entityByLogical(spec, logical);
-    const cached = ent && dataModel.entities[ent.schemaName] && dataModel.entities[ent.schemaName].entitySetName;
-    if (cached) return cached;
-    if (!entitySetCache[logical]) entitySetCache[logical] = (await provision.fetchEntityMetadata(logical)).entitySetName;
-    return entitySetCache[logical];
-  };
+  const entitySetFor = makeEntitySetResolver({ spec, entities: dataModel.entities, provision });
 
   // 3. Sample data (opt-in): topological, $parent -> @odata.bind on the lookup nav prop.
   if (has('sample-data') && sampleData) {

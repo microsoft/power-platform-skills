@@ -166,47 +166,82 @@ async function provisionEntities(input, opts = {}, deps = {}) {
   }
   
   // 4. Assemble the structured result from the captured maps.
-  // dataModel.entities is { [schemaName]: { logicalName, entitySetName } }
-  // We need to convert to the array shape: [{ schemaName, logicalName, entitySetName }]
+  // dataModel.entities is { [schemaName]: { logicalName, entitySetName, metadataId? } }
+  // We need to convert to the array shape: [{ schemaName, logicalName, entitySetName, metadataId? }]
   const entities = Object.entries(dataModel.entities || {}).map(([schemaName, data]) => ({
     schemaName,
     logicalName: data.logicalName,
     entitySetName: data.entitySetName,
-    // metadataId not currently surfaced by the shared core's return maps
+    metadataId: data.metadataId,
   }));
   
-  // Build columns array from input (the shared core doesn't return a column map yet)
+  // Build columns array from dataModel.columns (real captured values) with fallback to input-derived
   const columns = [];
   for (const e of spec.entities) {
+    const capturedCols = dataModel.columns[e.schemaName] || [];
+    const capturedMap = new Map(capturedCols.map((c) => [c.schemaName, c]));
     for (const c of e.columns || []) {
       if (c.type !== 'Lookup') {
-        columns.push({
-          table: e.schemaName.toLowerCase(),
-          schemaName: c.schemaName,
-          logicalName: c.schemaName.toLowerCase(),
-          // metadataId not currently surfaced
-        });
+        const captured = capturedMap.get(c.schemaName);
+        if (captured) {
+          columns.push({
+            table: e.schemaName.toLowerCase(),
+            schemaName: c.schemaName,
+            logicalName: captured.logicalName,
+            metadataId: captured.metadataId,
+          });
+        } else {
+          // Fallback for existing/uncaptured columns
+          columns.push({
+            table: e.schemaName.toLowerCase(),
+            schemaName: c.schemaName,
+            logicalName: c.schemaName.toLowerCase(),
+          });
+        }
       }
     }
   }
   
-  // Build relationships array from input
-  const relationships = (spec.relationships || []).map((r) => {
+  // Build relationships array from dataModel.relationships (real captured values) with fallback to input-derived
+  const relationships = [];
+  const capturedRelMap = new Map(dataModel.relationships.map((r) => [r.schemaName.toLowerCase(), r]));
+  for (const r of spec.relationships || []) {
+    let schema;
     if (r.type === 'OneToMany') {
-      return {
-        kind: '1n',
-        schemaName: r.schemaName || `${r.referenced}_${r.referencing}`,
-        // metadataId not currently surfaced
-      };
+      schema = r.schemaName || `${r.referenced}_${r.referencing}`;
+      const captured = capturedRelMap.get(schema.toLowerCase());
+      if (captured) {
+        relationships.push({
+          kind: '1n',
+          schemaName: captured.schemaName,
+          metadataId: captured.metadataId,
+          lookupLogicalName: captured.lookupLogicalName,
+        });
+      } else {
+        // Fallback for existing/uncaptured relationships
+        relationships.push({
+          kind: '1n',
+          schemaName: schema,
+        });
+      }
     } else if (r.type === 'ManyToMany') {
-      return {
-        kind: 'nn',
-        schemaName: r.schemaName || `${r.entity1}_${r.entity2}`,
-        // metadataId not currently surfaced
-      };
+      schema = r.schemaName || `${r.entity1}_${r.entity2}`;
+      const captured = capturedRelMap.get(schema.toLowerCase());
+      if (captured) {
+        relationships.push({
+          kind: 'nn',
+          schemaName: captured.schemaName,
+          metadataId: captured.metadataId,
+        });
+      } else {
+        // Fallback for existing/uncaptured relationships
+        relationships.push({
+          kind: 'nn',
+          schemaName: schema,
+        });
+      }
     }
-    return null;
-  }).filter(Boolean);
+  }
   
   return {
     ok: true,

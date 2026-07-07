@@ -46,4 +46,12 @@ function topoOrderEntities(spec) {
   return ordered;
 }
 
-module.exports = { topoOrderEntities };
+// Find an entity by its logical name (case-insensitive). Used by entity-set resolver
+// and sample-data parent-lookup. Exported to eliminate duplication (was defined inline
+// in both entity-provision.js and sdk-build.js).
+function entityByLogical(spec, logical) {
+  const l = String(logical).toLowerCase();
+  return (spec.entities || []).find((e) => e.schemaName.toLowerCase() === l);
+}
+
+module.exports = { topoOrderEntities, entityByLogical };

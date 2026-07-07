@@ -11,7 +11,7 @@ const {
   relationshipFor,
   relationshipSchemaName,
 } = require('./app-spec.js');
-const { topoOrderEntities } = require('./_graph.js');
+const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 
 // App Spec column type -> SDK ColumnType. Lookup is omitted (side effect of a OneToMany
 // relationship); Customer is handled specially (createCustomerColumn).
@@ -131,7 +131,7 @@ async function provisionSolution({ sdk, provision, runner, solution }) {
 // Discover-then-create global choices, tables, columns, status reasons, alternate keys,
 // and relationships (idempotent). Returns captured maps used by sample data + later phases.
 async function provisionDataModel({ sdk, provision, runner, spec, apply, concurrency }) {
-  const result = { entities: {}, globalChoiceIds: {}, statusReasonValues: {} };
+  const result = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [] };
   
   const globalChoiceIds = result.globalChoiceIds;
   const statusReasonValues = result.statusReasonValues;
@@ -163,7 +163,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, concurr
         // AutoNumber the primary/title column when requested (the order number IS the identity).
         if (e.primaryAttribute.autoNumberFormat) createOpts.primaryColumnAutoNumberFormat = e.primaryAttribute.autoNumberFormat;
         const t = await sdk.createTable(createOpts);
-        result.entities[e.schemaName] = { logicalName: (t.logicalName || logical), entitySetName: t.entitySetName };
+        result.entities[e.schemaName] = { logicalName: (t.logicalName || logical), entitySetName: t.entitySetName, metadataId: t.metadataId };
       }, { recoverable: true });
     }
     // columns: every buildable column (all scalar types + Customer; Lookup comes from a
@@ -171,10 +171,21 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, concurr
     const buildable = (e.columns || []).filter((c) => SDK_COLUMN_TYPE[c.type || 'Text'] || c.type === 'Customer');
     for (const c of buildable) if (existingCols.has(c.schemaName.toLowerCase())) runner.skip('data-model', `column ${e.schemaName}.${c.schemaName} (exists)`);
     const toCreate = buildable.filter((c) => !existingCols.has(c.schemaName.toLowerCase()));
-    await runner.mapLimit(toCreate, concurrency, (c) => runner.run('data-model', `column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})`,
+    const colResults = await runner.mapLimit(toCreate, concurrency, (c) => runner.run('data-model', `column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})`,
       () => c.type === 'Customer'
         ? sdk.createCustomerColumn(logical, { schemaName: c.schemaName, displayName: c.displayName || c.schemaName, required: REQUIRED(c) })
         : sdk.createColumn(logical, columnOptions(c, globalChoiceIds))));
+    // Capture real column results (logicalName + metadataId)
+    toCreate.forEach((c, i) => {
+      const res = colResults[i];
+      if (res) {
+        (result.columns[e.schemaName] = result.columns[e.schemaName] || []).push({
+          schemaName: c.schemaName,
+          logicalName: res.logicalName || c.schemaName.toLowerCase(),
+          metadataId: res.metadataId
+        });
+      }
+    });
     // custom status reasons — capture the option value so sample data can set them. IDEMPOTENT:
     // insertStatusValue itself is not (with no explicit Value, Dataverse auto-assigns a NEW value
     // every call, duplicating the reason on a data-model re-run). So we PIN a deterministic value
@@ -209,17 +220,45 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, concurr
       let exists = false;
       try { exists = ((await provision.fetchEntityMetadata(rel.referenced.toLowerCase())).relationships || []).some((r) => r.schemaName.toLowerCase() === schema.toLowerCase()); } catch { /* just created */ }
       if (exists) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
-      await runner.run('data-model', `relationship 1:N ${rel.referenced}->${rel.referencing}`, () => sdk.createRelationship({ type: 'OneToMany', schemaName: schema, referencedEntity: rel.referenced.toLowerCase(), referencingEntity: rel.referencing.toLowerCase(), lookupSchemaName: rel.lookup.schemaName, lookupDisplayName: rel.lookup.displayName }));
+      await runner.run('data-model', `relationship 1:N ${rel.referenced}->${rel.referencing}`, async () => {
+        const res = await sdk.createRelationship({ type: 'OneToMany', schemaName: schema, referencedEntity: rel.referenced.toLowerCase(), referencingEntity: rel.referencing.toLowerCase(), lookupSchemaName: rel.lookup.schemaName, lookupDisplayName: rel.lookup.displayName });
+        result.relationships.push({
+          schemaName: res.schemaName || schema,
+          metadataId: res.metadataId,
+          kind: '1n',
+          lookupLogicalName: res.lookupLogicalName
+        });
+      });
     } else if (rel.type === 'ManyToMany') {
       const schema = rel.schemaName || `${rel.entity1.toLowerCase()}_${rel.entity2.toLowerCase()}`;
       let exists = false;
       try { exists = ((await provision.fetchEntityMetadata(rel.entity1.toLowerCase())).relationships || []).some((r) => r.schemaName.toLowerCase() === schema.toLowerCase()); } catch { /* just created */ }
       if (exists) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
-      await runner.run('data-model', `relationship N:N ${rel.entity1}<->${rel.entity2}`, () => sdk.createRelationship({ type: 'ManyToMany', schemaName: schema, entity1: rel.entity1.toLowerCase(), entity2: rel.entity2.toLowerCase(), intersectEntityName: rel.intersectEntityName }));
+      await runner.run('data-model', `relationship N:N ${rel.entity1}<->${rel.entity2}`, async () => {
+        const res = await sdk.createRelationship({ type: 'ManyToMany', schemaName: schema, entity1: rel.entity1.toLowerCase(), entity2: rel.entity2.toLowerCase(), intersectEntityName: rel.intersectEntityName });
+        result.relationships.push({
+          schemaName: res.schemaName || schema,
+          metadataId: res.metadataId,
+          kind: 'nn'
+        });
+      });
     }
   }
   
   return result;
+}
+
+// Factory for entity-set resolver: fresh tables cached in `entities` (from data-model
+// phase); existing ones via fetchEntityMetadata. Returns async (logical) => entitySetName.
+function makeEntitySetResolver({ spec, entities, provision }) {
+  const entitySetCache = {};
+  return async (logical) => {
+    const ent = entityByLogical(spec, logical);
+    const cached = ent && entities[ent.schemaName] && entities[ent.schemaName].entitySetName;
+    if (cached) return cached;
+    if (!entitySetCache[logical]) entitySetCache[logical] = (await provision.fetchEntityMetadata(logical)).entitySetName;
+    return entitySetCache[logical];
+  };
 }
 
 // Create sample rows topologically, binding $parent/$parents via @odata.bind. Needs the
@@ -230,18 +269,7 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   const statusReasonValues = dataModel.statusReasonValues;
   
   // entity-set resolver: fresh tables cached above; existing ones via fetchEntityMetadata.
-  const entitySetCache = {};
-  const entitySetFor = async (logical) => {
-    const entityByLogical = (spec, logical) => {
-      const l = String(logical).toLowerCase();
-      return (spec.entities || []).find((e) => e.schemaName.toLowerCase() === l);
-    };
-    const ent = entityByLogical(spec, logical);
-    const cached = ent && entities[ent.schemaName] && entities[ent.schemaName].entitySetName;
-    if (cached) return cached;
-    if (!entitySetCache[logical]) entitySetCache[logical] = (await provision.fetchEntityMetadata(logical)).entitySetName;
-    return entitySetCache[logical];
-  };
+  const entitySetFor = makeEntitySetResolver({ spec, entities, provision });
   
   const createdByEntity = {};
   for (const e of topoOrderEntities(spec)) {
@@ -287,4 +315,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, provisionSolution, provisionDataModel, provisionSampleData, BuildHalt, SDK_COLUMN_TYPE };
+module.exports = { makeRunner, makeEntitySetResolver, provisionSolution, provisionDataModel, provisionSampleData, BuildHalt, SDK_COLUMN_TYPE };

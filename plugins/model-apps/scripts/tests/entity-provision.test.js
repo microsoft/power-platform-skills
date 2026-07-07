@@ -9,10 +9,10 @@ function mockSdk(existing = {}) {
   return {
     calls,
     sdk: {
-      createTable: async (o) => { calls.push(['createTable', o.schemaName]); return { logicalName: o.schemaName.toLowerCase(), entitySetName: `${o.schemaName.toLowerCase()}s` }; },
-      createColumn: async (l, o) => { calls.push(['createColumn', l, o.schemaName]); return { logicalName: o.schemaName.toLowerCase() }; },
-      createCustomerColumn: async () => ({}),
-      createRelationship: async (o) => { calls.push(['createRelationship', o.schemaName]); return { schemaName: o.schemaName }; },
+      createTable: async (o) => { calls.push(['createTable', o.schemaName]); return { logicalName: o.schemaName.toLowerCase(), entitySetName: `${o.schemaName.toLowerCase()}s`, metadataId: `tbl-${o.schemaName}` }; },
+      createColumn: async (l, o) => { calls.push(['createColumn', l, o.schemaName]); return { logicalName: o.schemaName.toLowerCase(), metadataId: `col-${o.schemaName}` }; },
+      createCustomerColumn: async (l, o) => { calls.push(['createCustomerColumn', l, o.schemaName]); return { logicalName: o.schemaName.toLowerCase(), metadataId: `col-${o.schemaName}` }; },
+      createRelationship: async (o) => { calls.push(['createRelationship', o.schemaName]); return { schemaName: o.schemaName, metadataId: `rel-${o.schemaName}`, lookupLogicalName: o.lookupSchemaName ? o.lookupSchemaName.toLowerCase() : undefined }; },
       createGlobalOptionSet: async (o) => { calls.push(['createGlobalOptionSet', o.name]); return { metadataId: `gc-${o.name}` }; },
       insertStatusValue: async () => 100000000,
       createAlternateKey: async () => ({}),
@@ -35,8 +35,13 @@ test('provisionDataModel creates missing tables + columns and captures entitySet
   const dm = await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true, concurrency: 2 });
   assert.ok(dm.entities['new_ticket'], 'new_ticket entity present');
   assert.strictEqual(dm.entities['new_ticket'].entitySetName, 'new_tickets');
+  assert.strictEqual(dm.entities['new_ticket'].metadataId, 'tbl-new_ticket', 'table metadataId captured');
   assert.ok(m.calls.some((c) => c[0] === 'createTable' && c[1] === 'new_ticket'), 'createTable called');
   assert.ok(m.calls.some((c) => c[0] === 'createColumn' && c[2] === 'new_priority'), 'createColumn called');
+  assert.ok(Array.isArray(dm.columns['new_ticket']), 'columns captured as array');
+  assert.strictEqual(dm.columns['new_ticket'][0].schemaName, 'new_priority', 'column schemaName captured');
+  assert.strictEqual(dm.columns['new_ticket'][0].logicalName, 'new_priority', 'column logicalName captured');
+  assert.strictEqual(dm.columns['new_ticket'][0].metadataId, 'col-new_priority', 'column metadataId captured');
 });
 
 test('provisionDataModel skips an existing table (idempotent)', async () => {

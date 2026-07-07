@@ -12,10 +12,12 @@ function mockDeps() {
   const calls = [];
   const sdk = {
     queryRecords: async () => [{ solutionid: 's' }], createPublisher: async () => ({ id: 'p' }), createSolution: async () => ({ id: 's' }),
-    createTable: async (o) => { calls.push('createTable'); return { logicalName: o.schemaName.toLowerCase(), entitySetName: `${o.schemaName.toLowerCase()}s` }; },
-    createColumn: async () => { calls.push('createColumn'); return { logicalName: 'cr_status' }; },
-    createGlobalOptionSet: async () => ({ metadataId: 'g' }), insertStatusValue: async () => 1, createAlternateKey: async () => ({}), createCustomerColumn: async () => ({}),
+    createTable: async (o) => { calls.push('createTable'); return { logicalName: o.schemaName.toLowerCase(), entitySetName: `${o.schemaName.toLowerCase()}s`, metadataId: `tbl-${o.schemaName}` }; },
+    createColumn: async (l, o) => { calls.push('createColumn'); return { logicalName: o.schemaName.toLowerCase(), metadataId: `col-${o.schemaName}` }; },
+    createGlobalOptionSet: async () => ({ metadataId: 'g' }), insertStatusValue: async () => 1, createAlternateKey: async () => ({}), 
+    createCustomerColumn: async (l, o) => ({ logicalName: o.schemaName.toLowerCase(), metadataId: `col-${o.schemaName}` }),
     createRecordsBulk: async (e, rows) => rows.map((_, i) => `${e}-${i}`),
+    createRelationship: async (o) => ({ schemaName: o.schemaName, metadataId: `rel-${o.schemaName}` }),
   };
   const provision = { findTables: async () => [], findColumns: async () => [], fetchEntityMetadata: async (l) => ({ logicalName: l, entitySetName: `${l}s`, relationships: [] }), queryRecords: async () => [{ solutionid: 's' }] };
   return { sdk, provision, calls };
@@ -35,6 +37,10 @@ test('apply provisions and returns resolved names', async () => {
   assert.ok(d.calls.includes('createTable'));
   assert.strictEqual(r.entities[0].logicalName, 'cr_candidate');
   assert.strictEqual(r.entities[0].entitySetName, 'cr_candidates');
+  assert.strictEqual(r.entities[0].metadataId, 'tbl-cr_candidate', 'entity metadataId surfaced');
+  assert.ok(r.columns.length > 0, 'columns returned');
+  assert.strictEqual(r.columns[0].logicalName, 'cr_status', 'column logicalName is real SDK value');
+  assert.strictEqual(r.columns[0].metadataId, 'col-cr_status', 'column metadataId surfaced');
 });
 
 test('rejects an invalid input before any write', async () => {
