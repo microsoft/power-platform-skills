@@ -358,7 +358,9 @@ function appDef(spec, result) {
   // A subarea is an Entity (table) by default, a DashBoard (a built dashboard, by name — the SDK
   // auto-pins its dashboardId as an app component so the nav actually includes it), or a URL.
   const subAreaJson = (s, id) => {
-    const base = { id, title: s.title };
+    const base = { id, title: s.title,
+      ...(s.icon ? { icon: String(s.icon).toLowerCase() } : {}),
+      ...(s.vectorIcon ? { vectorIcon: s.vectorIcon } : {}) };
     if (s.dashboard) {
       const dashboardId = (result.dashboards || {})[s.dashboard];
       if (!dashboardId) throw new Error(`sitemap subarea "${s.title}" references dashboard '${s.dashboard}' which wasn't built — declare it in dashboards[] and don't skip the dashboards phase`);
@@ -368,6 +370,8 @@ function appDef(spec, result) {
     return { ...base, type: 'Entity', entity: s.entity && s.entity.toLowerCase() };
   };
   const areas = (spec.appShell.areas || []).map((a, ai) => ({ id: `area_${ai}`, title: a.label,
+    ...(a.icon ? { icon: String(a.icon).toLowerCase() } : {}),
+    ...(a.vectorIcon ? { vectorIcon: a.vectorIcon } : {}),
     groups: (a.groups || []).map((g, gi) => ({ id: `group_${ai}_${gi}`, title: g.label,
       subAreas: (g.subAreas || []).map((s, si) => subAreaJson(s, `sub_${ai}_${gi}_${si}`)) })) }));
   return { name: spec.app.name, uniqueName, description: spec.app.description || '', siteMap: { areas },

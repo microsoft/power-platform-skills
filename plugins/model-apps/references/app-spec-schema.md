@@ -233,14 +233,18 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 
 ## appShell
 ```jsonc
-{ "areas": [ { "label": "Main", "groups": [ { "label": "Records", "subAreas": [
-  { "entity": "new_customer", "title": "Customers" },     // a table
-  { "dashboard": "Operations", "title": "Overview" },     // a built dashboard (by name)
-  { "url": "https://…",       "title": "Help" }           // an external link
+{ "areas": [ { "label": "Main", "icon": "new_areaicon.svg", "groups": [ { "label": "Records", "subAreas": [
+  { "entity": "new_customer", "title": "Customers", "icon": "new_customer.svg" },  // a table (+ nav icon)
+  { "dashboard": "Operations", "title": "Overview", "vectorIcon": "Home" },        // a built dashboard (by name)
+  { "url": "https://…",       "title": "Help" }                                    // an external link
 ] } ] } ] }
 ```
 - A subarea names exactly **one** target (lint-enforced): `entity` (a table), `dashboard` (the **name**
   of a `dashboards[]` entry — auto-pinned as an app component so the app includes it), or `url`.
+- Any area or subarea may set **`icon`** (a declared image `webResources[]` entry — png/jpg/gif/svg/ico)
+  and/or **`vectorIcon`** (a Fluent icon token, e.g. `"Home"`). Icons are **chrome, not a target** — they
+  don't count toward the "exactly one target" rule. `icon` must reference a declared **image** web resource
+  (validated); `vectorIcon` is a free-form token (lint warns if it looks like a filename).
 
 ## sampleData (optional)
 Keyed by entity `schemaName`. Choice values are **labels** (resolved to ints) — for **both** inline

@@ -17,6 +17,33 @@ test('validateAppSpec accepts the sample', () => {
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });
 
+test('validateAppSpec accepts a sitemap icon referencing a declared image web resource', () => {
+  const s = JSON.parse(JSON.stringify(sample));
+  s.webResources = (s.webResources || []).concat([{ name: 'new_ic.png', type: 'png', contentBase64: 'AAAA' }]);
+  s.appShell.areas[0].groups[0].subAreas[0].icon = 'new_ic.png';
+  s.appShell.areas[0].groups[0].subAreas[0].vectorIcon = 'Home';
+  s.appShell.areas[0].icon = 'new_ic.png';
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('validateAppSpec rejects a sitemap icon referencing an undeclared web resource', () => {
+  const s = JSON.parse(JSON.stringify(sample));
+  s.appShell.areas[0].groups[0].subAreas[0].icon = 'new_missing.png';
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /icon 'new_missing\.png' is not a declared web resource/.test(e)), JSON.stringify(r.errors));
+});
+
+test('validateAppSpec rejects a sitemap icon referencing a non-image web resource', () => {
+  const s = JSON.parse(JSON.stringify(sample));
+  s.webResources = (s.webResources || []).concat([{ name: 'new_logic.js', type: 'js', content: 'x' }]);
+  s.appShell.areas[0].groups[0].subAreas[0].icon = 'new_logic.js';
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /must be an image web resource/.test(e)), JSON.stringify(r.errors));
+});
+
 test('validateAppSpec rejects a form referencing an unknown entity', () => {
   const bad = JSON.parse(JSON.stringify(sample));
   bad.forms[0].entity = 'new_missing';

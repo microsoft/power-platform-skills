@@ -183,7 +183,10 @@ function lintAppSpec(spec) {
   // Sitemap subareas — each names exactly one target (entity/dashboard/url). A DashBoard subarea
   // surfaces a built dashboard in the app nav (and auto-pins it as an app component).
   const dashNames = new Set((spec.dashboards || []).map((d) => d && d.name).filter(Boolean));
+  // `icon` is a web-resource image; `vectorIcon` is a Fluent icon token. Warn on the common mixup.
+  const looksLikeFile = (v) => v && /\.(png|jpe?g|gif|svg|ico)$/i.test(String(v));
   for (const a of (spec.appShell && spec.appShell.areas) || []) {
+    if (looksLikeFile(a.vectorIcon)) W(`Sitemap area "${a.label || ''}": vectorIcon '${a.vectorIcon}' looks like a file — use "icon" for a web-resource image and "vectorIcon" for a Fluent icon token`);
     for (const g of a.groups || []) {
       for (const sa of g.subAreas || []) {
         const targets = ['entity', 'dashboard', 'url'].filter((k) => sa[k]);
@@ -191,6 +194,7 @@ function lintAppSpec(spec) {
         else if (targets.length > 1) E(`Sitemap subarea "${sa.title || ''}" sets multiple targets (${targets.join(', ')}) — pick one`);
         if (sa.entity && !entityNames.has(lc(sa.entity))) E(`Sitemap subarea references unknown entity '${sa.entity}'`);
         if (sa.dashboard && !dashNames.has(sa.dashboard)) E(`Sitemap subarea references unknown dashboard '${sa.dashboard}' — declare it in dashboards[]`);
+        if (looksLikeFile(sa.vectorIcon)) W(`Sitemap subarea "${sa.title || ''}": vectorIcon '${sa.vectorIcon}' looks like a file — use "icon" for a web-resource image and "vectorIcon" for a Fluent icon token`);
       }
     }
   }

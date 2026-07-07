@@ -20,6 +20,15 @@ test('a clean spec passes with no errors', () => {
   assert.strictEqual(r.errors.length, 0);
 });
 
+test('warns when a sitemap vectorIcon looks like an image filename (probably meant icon)', () => {
+  const s = base();
+  s.appShell = { areas: [{ label: 'Main', groups: [{ label: 'Records', subAreas: [
+    { entity: 'new_customer', title: 'Customers', vectorIcon: 'my.svg' },
+  ] }] }] };
+  const r = lintAppSpec(s);
+  assert.ok(r.warnings.some((w) => /vectorIcon 'my\.svg' looks like a file/.test(w)), JSON.stringify(r.warnings));
+});
+
 test('flags the relationship-name vs lookup-name collision (the live bug)', () => {
   const s = base();
   s.relationships[0].lookup.schemaName = 'new_customer_new_ticket';

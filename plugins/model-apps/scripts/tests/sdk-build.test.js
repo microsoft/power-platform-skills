@@ -565,6 +565,21 @@ test('app-shell: a DashBoard subarea for an unbuilt dashboard throws a clear err
   assert.throws(() => appDef(spec, { forms: {}, views: {}, charts: {}, dashboards: {} }), /references dashboard 'Missing' which wasn't built/);
 });
 
+test('app-shell: threads icon/vectorIcon on area and subarea (icon web-resource name lowercased)', () => {
+  const spec = makeSpec();
+  spec.appShell.areas[0].icon = 'New_AreaIcon.png';
+  spec.appShell.areas[0].vectorIcon = 'Home';
+  spec.appShell.areas[0].groups[0].subAreas[0].icon = 'New_SubIcon.png';
+  spec.appShell.areas[0].groups[0].subAreas[0].vectorIcon = 'Grid';
+  const def = appDef(spec, { forms: {}, views: {}, charts: {}, dashboards: {} });
+  const area = def.siteMap.areas[0];
+  const sub = area.groups[0].subAreas[0];
+  assert.strictEqual(area.icon, 'new_areaicon.png');
+  assert.strictEqual(area.vectorIcon, 'Home');
+  assert.strictEqual(sub.icon, 'new_subicon.png');
+  assert.strictEqual(sub.vectorIcon, 'Grid');
+});
+
 test('alt-key creation still halts on a genuine (non-duplicate) error', async () => {
   const spec = makeSpec();
   spec.entities[0].alternateKeys = [{ schemaName: 'new_namekey', displayName: 'Name Key', columns: ['new_name'] }];

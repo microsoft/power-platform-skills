@@ -194,9 +194,12 @@ function validateAppSpec(spec) {
   const WEB_RESOURCE_KINDS = new Set(['js', 'html', 'css', 'xml', 'png', 'jpg', 'gif', 'xsl', 'ico', 'svg', 'resx']);
   const FORM_EVENTS = new Set(['onload', 'onsave', 'onchange']);
   const webResourceNames = new Set();
+  const IMAGE_WR_TYPES = new Set(['png', 'jpg', 'gif', 'svg', 'ico']);
+  const imageWebResourceNames = new Set();
   for (const wr of spec.webResources || []) {
     if (!wr || !wr.name) { errors.push('a webResource is missing a name'); continue; }
     webResourceNames.add(wr.name.toLowerCase());
+    if (IMAGE_WR_TYPES.has(String(wr.type || '').toLowerCase())) imageWebResourceNames.add(wr.name.toLowerCase());
     if (!WEB_RESOURCE_KINDS.has(String(wr.type || 'js').toLowerCase())) {
       errors.push(`webResource ${wr.name}: type must be one of ${[...WEB_RESOURCE_KINDS].join('|')}`);
     }
@@ -337,7 +340,16 @@ function validateAppSpec(spec) {
     }
   }
   const dashNamesSet = new Set((spec.dashboards || []).map((d) => d && d.name).filter(Boolean));
+  // Icons are chrome, not a target: a web-resource `icon` must reference a declared IMAGE web
+  // resource; `vectorIcon` is a free-form Fluent token (no web resource, not validated here).
+  const checkIcon = (icon, label) => {
+    if (!icon) return;
+    const ic = String(icon).toLowerCase();
+    if (!webResourceNames.has(ic)) errors.push(`${label}: icon '${icon}' is not a declared web resource`);
+    else if (!imageWebResourceNames.has(ic)) errors.push(`${label}: icon '${icon}' must be an image web resource (png/jpg/gif/svg/ico)`);
+  };
   for (const a of (spec.appShell && spec.appShell.areas) || []) {
+    checkIcon(a.icon, `sitemap area "${a.label || ''}"`);
     for (const g of a.groups || []) {
       for (const sa of g.subAreas || []) {
         const targets = ['entity', 'dashboard', 'url'].filter((k) => sa[k]);
@@ -345,6 +357,7 @@ function validateAppSpec(spec) {
         else if (targets.length > 1) errors.push(`sitemap subArea "${sa.title || ''}" sets multiple targets (${targets.join(', ')}) — pick one`);
         if (sa.entity && !entityNames.has(sa.entity)) errors.push(`sitemap subArea references unknown entity '${sa.entity}'`);
         if (sa.dashboard && !dashNamesSet.has(sa.dashboard)) errors.push(`sitemap subArea references unknown dashboard '${sa.dashboard}' (declare it in dashboards[])`);
+        checkIcon(sa.icon, `sitemap subArea "${sa.title || ''}"`);
       }
     }
   }
