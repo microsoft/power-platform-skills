@@ -90,9 +90,11 @@ node "${PLUGIN_ROOT}/scripts/build-model-app.js" \
 E.g. when all tables already exist: `--apply --skip data-model`. SDK metadata is persisted under
 `<working-dir>/.maker-workspace/` (override with `--workspace`), so edits can reuse it.
 
-Narrate progress as it runs. If the build **halts** (`BuildHalt`) on an unrecoverable error,
-surface it and ask the user how to proceed via `AskUserQuestion` (adjust the spec / cancel),
-then re-run. Everything is scoped to a dedicated unmanaged solution; `--publish` is opt-in.
+Narrate progress as it runs. Transient env errors (429 customization-lock, 503 SQL-timeout,
+concurrent-op guards) are **auto-retried** with backoff on `--apply` (the build is idempotent, so a
+retry reuses what's already created). If the build still **halts** (`BuildHalt`) on an
+unrecoverable error, surface it and ask the user how to proceed via `AskUserQuestion` (adjust the
+spec / cancel), then re-run. Everything is scoped to a dedicated unmanaged solution; `--publish` is opt-in.
 
 **Resuming a failed build:** each `--apply` run appends a durable journal to
 `<working-dir>/.maker-workspace/build-log.jsonl` (one line per step + a terminal `run-end`

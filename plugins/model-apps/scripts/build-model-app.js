@@ -77,23 +77,39 @@ async function buildModelApp(spec, opts, deps) {
   // Tee the engine's progress events into the durable journal without touching the pure engine.
   const baseEmit = deps.emit || cliEmit(log, { apply: opts.apply, counts });
   const emit = journal ? (e) => { baseEmit(e); journal.record(e); } : baseEmit;
+  const sleep = deps.sleep || ((ms) => new Promise((res) => setTimeout(res, ms)));
+  // Transient env errors (429 EntityCustomization lock, 503 SQL timeout, concurrent-op guards) are
+  // retried automatically on --apply: the build is idempotent, so a retry reuses everything already
+  // created. Non-transient halts (e.g. a bad spec / genuine 400) are NOT retried.
+  const maxRetries = opts.maxRetries != null ? opts.maxRetries : (opts.apply ? 3 : 0);
   let r;
-  try {
-    r = await runSdkBuild(spec, {
-      sdk: deps.sdk,
-      provisionSdk: deps.provisionSdk,
-      apply: opts.apply,
-      sampleData: opts.sampleData,
-      publish: opts.publish,
-      phases: opts.phases,
-      appDir: opts.appDir, // resolves web-resource `contentPath` relative to the app folder
-      emit,
-    });
-  } catch (err) {
-    // A BuildHalt (or any error) — journal where/why it stopped, then propagate. Resume by
-    // re-running the same command (idempotent) or with --from <phase>.
-    if (journal) journal.close({ status: 'halt', phase: err && err.phase, code: err && err.code, recoverable: !!(err && err.recoverable), message: String((err && err.message) || err), ...counts });
-    throw err;
+  for (let attempt = 1; ; attempt++) {
+    counts.ok = counts.skip = counts.error = 0; // summary reflects the final (successful) attempt
+    try {
+      r = await runSdkBuild(spec, {
+        sdk: deps.sdk,
+        provisionSdk: deps.provisionSdk,
+        apply: opts.apply,
+        sampleData: opts.sampleData,
+        publish: opts.publish,
+        phases: opts.phases,
+        appDir: opts.appDir, // resolves web-resource `contentPath` relative to the app folder
+        emit,
+      });
+      break;
+    } catch (err) {
+      if (attempt <= maxRetries && isTransientHalt(err)) {
+        const delay = opts.retryDelayMs != null ? opts.retryDelayMs : backoffMs(attempt);
+        if (journal) journal.record({ phase: err && err.phase, status: 'retry', label: `transient error (attempt ${attempt}/${maxRetries}) — retrying in ${delay}ms`, detail: String((err && err.message) || err) });
+        log(`\n⟳ transient error in ${err && err.phase} — retrying (attempt ${attempt}/${maxRetries}) after ${delay}ms…`);
+        await sleep(delay);
+        continue;
+      }
+      // A non-transient (or retries-exhausted) halt — journal where/why it stopped, then propagate.
+      // Resume by re-running the same command (idempotent) or with --from <phase>.
+      if (journal) journal.close({ status: 'halt', phase: err && err.phase, code: err && err.code, recoverable: !!(err && err.recoverable), message: String((err && err.message) || err), ...counts });
+      throw err;
+    }
   }
   if (opts.apply && r && r.ok && !r.dryRun) {
     log(`\n✓ build complete — ${counts.ok} created, ${counts.skip} skipped, ${counts.error} failed (${counts.ok + counts.skip + counts.error} steps)`);
@@ -102,6 +118,26 @@ async function buildModelApp(spec, opts, deps) {
     journal.close({ status: r && r.dryRun ? 'dry-run' : 'done', ...counts });
   }
   return r;
+}
+
+// A halt is transient (safe to auto-retry, since the build is idempotent) when the underlying HTTP
+// status is 429/503, or the message names a known transient server condition (customization lock,
+// concurrent-op guard, SQL timeout, "try again later"). NOTE: the engine's `recoverable` flag means
+// "re-runnable phase", NOT "transient error", so it is deliberately NOT used here.
+function isTransientHalt(err) {
+  if (!err) return false;
+  const status = (err.cause && err.cause.statusCode) || err.statusCode;
+  const msg = String((err.message || '') + ' ' + ((err.cause && err.cause.message) || ''));
+  return (
+    status === 429 ||
+    status === 503 ||
+    /CustomizationLockException|another solution (install|removal)|try again later|SQL timeout|concurrent [dD]elete/i.test(msg)
+  );
+}
+
+// Exponential backoff with jitter: ~3s, 6s, 12s (capped at 30s).
+function backoffMs(attempt) {
+  return Math.min(30000, 3000 * Math.pow(2, attempt - 1)) + Math.floor(Math.random() * 1000);
 }
 
 function list(v) {
@@ -149,4 +185,4 @@ async function main() {
 if (require.main === module) {
   main();
 }
-module.exports = { buildModelApp, planFor };
+module.exports = { buildModelApp, planFor, isTransientHalt };

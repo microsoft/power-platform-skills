@@ -6,7 +6,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
-const { buildModelApp } = require(path.join(__dirname, '..', 'build-model-app.js'));
+const { buildModelApp, isTransientHalt } = require(path.join(__dirname, '..', 'build-model-app.js'));
 
 const desk = JSON.parse(
   fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.support-desk.json'), 'utf8')
@@ -115,4 +115,46 @@ test('build journal: records a halt (with the failing phase) when the build thro
   await assert.rejects(buildModelApp(desk, { apply: true, env: 'https://x' }, { sdk, journal }));
   assert.ok(closed && closed.status === 'halt', 'journal closed with a halt record');
   assert.strictEqual(closed.phase, 'data-model', 'halt records the failing phase');
+});
+
+test('isTransientHalt classifies lock/timeout/429/503 as transient, others not', () => {
+  assert.ok(isTransientHalt({ cause: { statusCode: 429 } }));
+  assert.ok(isTransientHalt({ cause: { statusCode: 503 } }));
+  assert.ok(isTransientHalt({ message: 'Microsoft.Crm.ObjectModel.CustomizationLockException: ...' }));
+  assert.ok(isTransientHalt({ cause: { message: 'SQL timeout expired' } }));
+  assert.ok(isTransientHalt({ message: 'More than one concurrent Delete requests detected' }));
+  // recoverable is a re-runnable-phase flag, NOT a transient signal — must not trigger a retry alone.
+  assert.ok(!isTransientHalt({ recoverable: true }));
+  assert.ok(!isTransientHalt({ message: 'validation failed', cause: { statusCode: 400 } }));
+  assert.ok(!isTransientHalt(null));
+});
+
+test('transient auto-retry: a transient halt is retried and then succeeds', async () => {
+  const { sdk, calls } = mockSdk();
+  let firstTable = true;
+  const realCreateTable = sdk.createTable;
+  sdk.createTable = async (o) => {
+    if (firstTable) { firstTable = false; const e = new Error('CustomizationLockException: try again later'); e.recoverable = true; throw e; }
+    return realCreateTable(o);
+  };
+  const events = [];
+  const journal = { path: 'x', record: (e) => events.push(e), close: () => {} };
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, journal });
+  assert.strictEqual(r.ok, true, 'build succeeded after a retry');
+  assert.ok(events.some((e) => e.status === 'retry'), 'a retry was journaled');
+  assert.ok(calls.some((c) => c[0] === 'createSolution'), 'the build ran to completion');
+});
+
+test('transient auto-retry: a non-transient halt is NOT retried', async () => {
+  const { sdk } = mockSdk();
+  let attempts = 0;
+  sdk.createTable = async () => { attempts += 1; const e = new Error('bad request'); e.recoverable = false; throw e; };
+  await assert.rejects(buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk }));
+  assert.strictEqual(attempts, 1, 'no retry on a non-transient error');
+});
+
+test('transient auto-retry: no retries in dry-run', async () => {
+  const { sdk } = mockSdk();
+  const r = await buildModelApp(desk, { apply: false, env: 'https://x' }, { sdk });
+  assert.strictEqual(r.dryRun, true);
 });
