@@ -85,6 +85,28 @@ function entityFromMetadata(meta, logical) {
   };
 }
 
+// Fetch the icon web resources referenced by the sitemap, looked up by NAME (the sitemap stores the
+// web-resource name, not its id — sdk.getWebResource keys by id and 400s on a name). Returns
+// app-spec webResources[] entries with the content as base64.
+async function iconWebResources(sdk, icons) {
+  const out = [];
+  for (const name of icons || []) {
+    try {
+      const rows = await sdk.queryRecords('webresource', { select: ['name', 'webresourcetype', 'content'], filter: `name eq '${String(name).replace(/'/g, "''")}'`, top: 1 });
+      const wr = rows && rows[0];
+      if (wr && wr.content) out.push({ name, type: WR_TYPE[wr.webresourcetype] || 'png', contentBase64: wr.content });
+    } catch { /* skip a web resource we can't read */ }
+  }
+  return out;
+}
+
+// Count sitemap subareas hydrateSpec could not round-trip (present in the deployed sitemap but not in
+// the reconstructed spec — e.g. classic DashBoard subareas). A rebuild from the spec drops these.
+function droppedSubareaCount(app, spec) {
+  const countSub = (areas) => (areas || []).reduce((n, a) => n + (a.groups || []).reduce((m, g) => m + (g.subAreas || []).length, 0), 0);
+  return countSub(app && app.siteMap && app.siteMap.areas) - countSub(spec && spec.appShell && spec.appShell.areas);
+}
+
 async function main() {
   const { positional, flags } = parseArgs(process.argv.slice(2));
   const env = flags.env;
@@ -127,14 +149,8 @@ async function main() {
     try { entities.push(entityFromMetadata(await sdk.fetchEntityMetadata(logical), logical)); } catch { /* skip */ }
   }
 
-  // Icon web resources.
-  const webResources = [];
-  for (const name of icons) {
-    try {
-      const wr = await sdk.getWebResource(name);
-      if (wr && (wr.content || wr.contentbase64)) webResources.push({ name, type: WR_TYPE[wr.webresourcetype] || 'png', contentBase64: wr.content || wr.contentbase64 });
-    } catch { /* skip */ }
-  }
+  // Icon web resources — looked up by NAME (see iconWebResources).
+  const webResources = await iconWebResources(sdk, icons);
 
   // Solution (best-effort): the unmanaged solution the appmodule belongs to.
   let solution = { uniqueName: 'Default', publisherPrefix: 'new' };
@@ -155,13 +171,20 @@ async function main() {
     solution: async () => solution,
   };
   const spec = await hydrateSpec(read);
+  // Warn about any sitemap subareas the edit flow can't yet round-trip (classic DashBoard / CustomPage
+  // subareas are not hydrated) — a rebuild from this spec would drop them from the sitemap, so the
+  // caller must re-add them after editing. Entity/GenPage/URL subareas round-trip losslessly.
+  const droppedSubareas = droppedSubareaCount(app, spec);
+  if (droppedSubareas > 0) {
+    process.stderr.write(`WARNING: ${droppedSubareas} sitemap subarea(s) could not be round-tripped (e.g. classic dashboards) — a rebuild from this spec will DROP them from the app nav. Re-add them after editing.\n`);
+  }
   const specPath = path.join(outDir, 'app-spec.json');
   fs.writeFileSync(specPath, JSON.stringify(spec, null, 2));
-  emitResult(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length });
+  emitResult(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas });
 }
 
 if (require.main === module) {
   main();
 }
 
-module.exports = { resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata };
+module.exports = { resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, iconWebResources, droppedSubareaCount };

@@ -5,9 +5,12 @@
 const { spawnSync } = require('node:child_process');
 
 // Quote an arg for a Windows/POSIX shell command line (needed because pac resolves as pac.cmd on
-// Windows, which requires shell:true — and shell:true does not quote an args array).
+// Windows, which requires shell:true — and shell:true does not quote an args array). Embedded
+// newlines terminate the command line (pac then sees a truncated command and dumps its help), so
+// collapse them to spaces first — downloaded page prompts are multi-line ("Conversation with N
+// prompts:\r\n1. …\r\n2. …") and would otherwise break the upload on an edit-rebuild.
 function quoteArg(a) {
-  const s = String(a);
+  const s = String(a).replace(/\r\n|[\r\n]/g, ' ');
   return /[\s"'&|<>^()]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
@@ -42,27 +45,52 @@ function parseList(out) {
 
 function makeGenpageCli(env, deps = {}) {
   const run = deps.run || runPac;
+  const sleep = deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const attempts = deps.attempts || 3; // pac genpage upload/list flake intermittently (transient help-dump exits)
   const lastLine = (r) => String(r.stderr || r.stdout || '').trim().split('\n').filter(Boolean).pop() || '';
+
+  // List the pages already in the app (parsed from its sitemap by pac). Returns [{ pageId, name }].
+  async function listPages(appId) {
+    const r = await run(['model', 'genpage', 'list', '--environment', env, '--app-id', appId]);
+    return r.status === 0 ? parseList(r.stdout) : [];
+  }
+
   return {
-    // Create (no pageId) or update (with pageId) a page's content. Returns { pageId }.
+    // Create (no pageId) or update (with pageId) a page's content. Returns { pageId }. Retries transient
+    // pac failures; before retrying a CREATE it re-resolves the page by name so a retry UPDATES in place
+    // (a partial first attempt that pushed the page never yields a duplicate).
     async upload({ appId, pageId, codeFile, name, prompt, agentMessage, dataSources }) {
-      const args = ['model', 'genpage', 'upload', '--environment', env, '--app-id', appId, '--code-file', codeFile];
-      if (pageId) args.push('--page-id', pageId);
-      if (name) args.push('--name', name);
-      // pac requires BOTH --prompt and --agent-message for a new page.
-      args.push('--prompt', prompt && String(prompt).trim() ? String(prompt) : `Generative page ${name || ''}`.trim());
-      args.push('--agent-message', agentMessage && String(agentMessage).trim() ? String(agentMessage) : 'Authored by model-app-maker');
-      if (dataSources && dataSources.length) args.push('--data-sources', dataSources.join(','));
-      const r = await run(args);
-      if (r.status !== 0) throw new Error(`pac genpage upload failed for '${name}': ${lastLine(r)}`);
-      const id = parsePageId(r.stdout);
-      if (!id) throw new Error(`pac genpage upload for '${name}' returned no Page ID: ${lastLine(r)}`);
-      return { pageId: id };
+      const once = async (pid) => {
+        const args = ['model', 'genpage', 'upload', '--environment', env, '--app-id', appId, '--code-file', codeFile];
+        if (pid) args.push('--page-id', pid);
+        if (name) args.push('--name', name);
+        // pac requires BOTH --prompt and --agent-message for a new page.
+        args.push('--prompt', prompt && String(prompt).trim() ? String(prompt) : `Generative page ${name || ''}`.trim());
+        args.push('--agent-message', agentMessage && String(agentMessage).trim() ? String(agentMessage) : 'Authored by model-app-maker');
+        if (dataSources && dataSources.length) args.push('--data-sources', dataSources.join(','));
+        return run(args);
+      };
+      let pid = pageId;
+      let lastErr = '';
+      for (let i = 0; i < attempts; i += 1) {
+        const r = await once(pid);
+        if (r.status === 0) {
+          const id = parsePageId(r.stdout);
+          if (id) return { pageId: id };
+          lastErr = `returned no Page ID: ${lastLine(r)}`;
+        } else {
+          lastErr = lastLine(r);
+        }
+        // Before a retry, if this was a CREATE, resolve the page by name so the retry updates in place.
+        if (!pid && name) {
+          try { const found = (await listPages(appId)).find((p) => p.name === name); if (found) pid = found.pageId; } catch { /* keep create path */ }
+        }
+        if (i < attempts - 1) await sleep(500 * (i + 1));
+      }
+      throw new Error(`pac genpage upload failed for '${name}' after ${attempts} attempt(s): ${lastErr}`);
     },
-    // List the pages already in the app (parsed from its sitemap by pac). Returns [{ pageId, name }].
-    async list({ appId }) {
-      const r = await run(['model', 'genpage', 'list', '--environment', env, '--app-id', appId]);
-      return r.status === 0 ? parseList(r.stdout) : [];
+    list({ appId }) {
+      return listPages(appId);
     },
     // Download every page of the app into `outputDir/<pageId>/{page.tsx,page.js,config.json,prompt.txt}`.
     async download({ appId, outputDir }) {

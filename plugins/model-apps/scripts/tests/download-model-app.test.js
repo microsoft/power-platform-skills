@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata } = require('../download-model-app.js');
+const { resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, iconWebResources, droppedSubareaCount } = require('../download-model-app.js');
 
 test('resolveAppId returns a guid as-is, else resolves by uniquename', async () => {
   const guid = '11111111-2222-3333-4444-555555555555';
@@ -46,4 +46,33 @@ test('entityFromMetadata builds a minimal (reuse-friendly) entity spec', () => {
   assert.strictEqual(e.schemaName, 'new_order');
   assert.strictEqual(e.primaryAttribute.schemaName, 'new_name');
   assert.deepStrictEqual(e.columns, []);
+});
+
+test('iconWebResources looks up web resources by NAME (not id) and maps type from webresourcetype', async () => {
+  const calls = [];
+  const sdk = {
+    queryRecords: async (logical, opts) => {
+      calls.push({ logical, filter: opts.filter });
+      // svg web resource (webresourcetype 11) with base64 content
+      if (/new_rgicon\.svg/.test(opts.filter)) return [{ name: 'new_rgicon.svg', webresourcetype: 11, content: 'BASE64SVG' }];
+      return []; // an icon with no matching web resource
+    },
+  };
+  const out = await iconWebResources(sdk, ['new_rgicon.svg', 'missing.png']);
+  assert.strictEqual(calls[0].logical, 'webresource', 'queries the webresource logical name');
+  assert.match(calls[0].filter, /name eq 'new_rgicon\.svg'/, 'filters by name, not id');
+  assert.deepStrictEqual(out, [{ name: 'new_rgicon.svg', type: 'svg', contentBase64: 'BASE64SVG' }]);
+});
+
+test('iconWebResources skips a web resource it cannot read (no throw)', async () => {
+  const sdk = { queryRecords: async () => { throw new Error('boom'); } };
+  assert.deepStrictEqual(await iconWebResources(sdk, ['x.png']), []);
+});
+
+test('droppedSubareaCount counts subareas the spec could not round-trip (e.g. dashboards)', () => {
+  const app = { siteMap: { areas: [{ groups: [{ subAreas: [{}, {}, {}, {}] }] }] } }; // 4 deployed
+  const spec = { appShell: { areas: [{ groups: [{ subAreas: [{}, {}, {}] }] }] } };    // 3 hydrated
+  assert.strictEqual(droppedSubareaCount(app, spec), 1);
+  const same = { appShell: { areas: [{ groups: [{ subAreas: [{}, {}, {}, {}] }] }] } };
+  assert.strictEqual(droppedSubareaCount(app, same), 0);
 });

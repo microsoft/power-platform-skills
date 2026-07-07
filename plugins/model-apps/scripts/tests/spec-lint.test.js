@@ -128,6 +128,16 @@ test('sitemap: a DashBoard subarea must reference a declared dashboard', () => {
   assert.ok(r2.ok, JSON.stringify(r2.errors));
 });
 
+test('sitemap: a page subarea must reference a declared page', () => {
+  const s = base();
+  s.appShell = { areas: [{ label: 'Main', groups: [{ label: 'G', subAreas: [{ page: 'Overview', title: 'Overview' }] }] }] };
+  const r = lintAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((m) => /unknown page 'Overview'/i.test(m)), JSON.stringify(r.errors));
+  s.pages = [{ name: 'Overview', codeFile: 'overview.tsx' }];
+  const r2 = lintAppSpec(s);
+  assert.ok(r2.ok, JSON.stringify(r2.errors));
+});
+
 test('sitemap: a subarea with two targets is rejected', () => {
   const s = base();
   s.appShell = { areas: [{ label: 'Main', groups: [{ label: 'G', subAreas: [{ entity: 'new_customer', url: 'https://x', title: 'Both' }] }] }] };

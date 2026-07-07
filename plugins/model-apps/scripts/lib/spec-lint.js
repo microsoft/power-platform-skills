@@ -180,9 +180,11 @@ function lintAppSpec(spec) {
     }
   }
 
-  // Sitemap subareas — each names exactly one target (entity/dashboard/url). A DashBoard subarea
-  // surfaces a built dashboard in the app nav (and auto-pins it as an app component).
+  // Sitemap subareas — each names exactly one target (entity/dashboard/url/page). A DashBoard subarea
+  // surfaces a built dashboard in the app nav (and auto-pins it as an app component); a page subarea
+  // surfaces a generative page (declared in pages[]) as a GenPage subarea.
   const dashNames = new Set((spec.dashboards || []).map((d) => d && d.name).filter(Boolean));
+  const pageNames = new Set((spec.pages || []).map((p) => p && p.name).filter(Boolean));
   // Genpage data sources that aren't declared entities are likely standard tables (fine) or a typo.
   const entityLowerSet = new Set((spec.entities || []).map((e) => lc(e.schemaName)));
   for (const p of spec.pages || []) {
@@ -196,11 +198,12 @@ function lintAppSpec(spec) {
     if (looksLikeFile(a.vectorIcon)) W(`Sitemap area "${a.label || ''}": vectorIcon '${a.vectorIcon}' looks like a file — use "icon" for a web-resource image and "vectorIcon" for a Fluent icon token`);
     for (const g of a.groups || []) {
       for (const sa of g.subAreas || []) {
-        const targets = ['entity', 'dashboard', 'url'].filter((k) => sa[k]);
-        if (targets.length === 0) E(`Sitemap subarea "${sa.title || ''}" needs an entity, dashboard, or url`);
+        const targets = ['entity', 'dashboard', 'url', 'page'].filter((k) => sa[k]);
+        if (targets.length === 0) E(`Sitemap subarea "${sa.title || ''}" needs an entity, dashboard, url, or page`);
         else if (targets.length > 1) E(`Sitemap subarea "${sa.title || ''}" sets multiple targets (${targets.join(', ')}) — pick one`);
         if (sa.entity && !entityNames.has(lc(sa.entity))) E(`Sitemap subarea references unknown entity '${sa.entity}'`);
         if (sa.dashboard && !dashNames.has(sa.dashboard)) E(`Sitemap subarea references unknown dashboard '${sa.dashboard}' — declare it in dashboards[]`);
+        if (sa.page && !pageNames.has(sa.page)) E(`Sitemap subarea references unknown page '${sa.page}' — declare it in pages[]`);
         if (looksLikeFile(sa.vectorIcon)) W(`Sitemap subarea "${sa.title || ''}": vectorIcon '${sa.vectorIcon}' looks like a file — use "icon" for a web-resource image and "vectorIcon" for a Fluent icon token`);
       }
     }

@@ -12,6 +12,12 @@ test('quoteArg quotes args with spaces/specials, leaves plain args', () => {
   assert.strictEqual(quoteArg('https://x'), 'https://x');
 });
 
+test('quoteArg collapses newlines to spaces (a multi-line prompt must not break the command line)', () => {
+  assert.strictEqual(quoteArg('Conversation with 2 prompts:\r\n1. A\r\n2. B'), '"Conversation with 2 prompts: 1. A 2. B"');
+  assert.strictEqual(quoteArg('line1\nline2'), '"line1 line2"');
+  assert.ok(!quoteArg('a\r\nb').includes('\n'), 'no raw newline survives into the command line');
+});
+
 test('parsePageId extracts the guid from upload output', () => {
   assert.strictEqual(parsePageId(`Successfully pushed page. Page ID: ${GUID}\n`), GUID);
   assert.strictEqual(parsePageId('no id here'), null);
@@ -52,9 +58,33 @@ test('upload with a pageId updates in place (adds --page-id)', async () => {
   assert.ok(calls[0].includes('--page-id') && calls[0].includes('existing'));
 });
 
-test('upload throws on a pac failure', async () => {
-  const run = async () => ({ status: 1, stdout: '', stderr: 'boom' });
-  await assert.rejects(makeGenpageCli('https://x', { run }).upload({ appId: 'a', codeFile: 'o.tsx', name: 'X' }), /pac genpage upload failed/);
+test('upload retries a transient pac failure then succeeds', async () => {
+  let n = 0;
+  const run = async () => { n += 1; return n === 1 ? { status: 1, stdout: '', stderr: 'flaky help dump' } : { status: 0, stdout: `Page ID: ${GUID}`, stderr: '' }; };
+  const r = await makeGenpageCli('https://x', { run, sleep: async () => {} }).upload({ appId: 'a', pageId: 'existing', codeFile: 'o.tsx', name: 'Overview' });
+  assert.strictEqual(r.pageId, GUID);
+  assert.ok(n >= 2, 'retried after the transient failure');
+});
+
+test('upload converts a failed CREATE to an UPDATE on retry (resolve by name, no duplicate)', async () => {
+  const uploadArgs = [];
+  let up = 0;
+  const run = async (args) => {
+    if (args[2] === 'list') return { status: 0, stdout: `  Overview\n    Page ID: ${GUID}`, stderr: '' };
+    up += 1; uploadArgs.push(args);
+    return up === 1 ? { status: 1, stdout: '', stderr: 'flaky' } : { status: 0, stdout: `Page ID: ${GUID}`, stderr: '' };
+  };
+  const r = await makeGenpageCli('https://x', { run, sleep: async () => {} }).upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview' });
+  assert.strictEqual(r.pageId, GUID);
+  assert.ok(!uploadArgs[0].includes('--page-id'), 'first attempt was a create (no page-id)');
+  assert.ok(uploadArgs[1].includes('--page-id') && uploadArgs[1].includes(GUID), 'retry updates in place via the resolved page id (never duplicates)');
+});
+
+test('upload throws after exhausting retries on a persistent pac failure', async () => {
+  let n = 0;
+  const run = async (args) => { if (args[2] === 'list') return { status: 1, stdout: '', stderr: '' }; n += 1; return { status: 1, stdout: '', stderr: 'boom' }; };
+  await assert.rejects(makeGenpageCli('https://x', { run, sleep: async () => {} }).upload({ appId: 'a', codeFile: 'o.tsx', name: 'X' }), /pac genpage upload failed for 'X' after 3 attempt\(s\)/);
+  assert.strictEqual(n, 3, 'tried the configured number of attempts');
 });
 
 test('list returns [] when pac fails', async () => {
