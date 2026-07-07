@@ -32,6 +32,7 @@ const {
   BuildHalt: _BuildHalt,
   SDK_COLUMN_TYPE: _SDK_COLUMN_TYPE,
 } = require('./entity-provision.js');
+const { makeGenpageCli } = require('./genpage-cli.js');
 
 // Re-export from entity-provision so the export surface stays unchanged
 const BuildHalt = _BuildHalt;
@@ -49,7 +50,7 @@ const WEB_RESOURCE_KINDS = new Set(['js', 'html', 'css', 'xml', 'png', 'jpg', 'g
 // Form-event kinds the SDK can wire (addFormEventHandler).
 const FORM_EVENTS = new Set(['onload', 'onsave', 'onchange']);
 
-const PHASES = ['solution', 'data-model', 'sample-data', 'web-resources', 'views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell', 'publish'];
+const PHASES = ['solution', 'data-model', 'sample-data', 'web-resources', 'views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell', 'pages', 'publish'];
 
 // Map a dashboard tile (App Spec) to the SDK's AddDashboardTileOptions. chart/list tiles resolve
 // the underlying view (savedqueryid) — and the chart its visualization id — from what the build
@@ -216,6 +217,8 @@ function planFor(spec, opts) {
   if (has('commands')) for (const [entity, cmds] of Object.entries(commandsByEntity(spec))) items.push({ phase: 'commands', label: `command bar for ${entity} (${cmds.length} button(s))` });
   if (has('dashboards')) for (const d of spec.dashboards || []) items.push({ phase: 'dashboards', label: `dashboard "${d.name}" (${(d.tiles || []).length} tile(s))` });
   if (has('app-shell')) items.push({ phase: 'app-shell', label: `app module "${spec.app.name}" + sitemap` });
+  if (has('pages')) for (const p of spec.pages || []) items.push({ phase: 'pages', label: `page "${p.name}"` });
+  if (has('pages') && (spec.pages || []).length && appHasPageSubareas(spec)) items.push({ phase: 'pages', label: 'finalize sitemap (genpage subareas)' });
   if (has('publish') && opts.publish) items.push({ phase: 'publish', label: 'publish customizations' });
   return items;
 }
@@ -398,7 +401,18 @@ function appUniqueName(spec) {
   return `${sol.publisherPrefix}_${spec.app.name}`.replace(/[^a-z0-9_]/gi, '').toLowerCase();
 }
 
-function appDef(spec, result) {
+// True when any sitemap subarea targets a generative page — the app must then be created first
+// (app_early) and its sitemap rewritten after the pages phase resolves the genPageIds.
+function appHasPageSubareas(spec) {
+  for (const a of (spec.appShell && spec.appShell.areas) || []) {
+    for (const g of a.groups || []) {
+      for (const s of g.subAreas || []) if (s && s.page) return true;
+    }
+  }
+  return false;
+}
+
+function appDef(spec, result, opts = {}) {
   const sol = spec.solution;
   const uniqueName = appUniqueName(spec);
   // A subarea is an Entity (table) by default, a DashBoard (a built dashboard, by name — the SDK
@@ -414,7 +428,13 @@ function appDef(spec, result) {
     }
     if (s.page) {
       const genPageId = (result.pages || {})[s.page];
-      if (!genPageId) throw new Error(`sitemap subarea "${s.title}" references page '${s.page}' which wasn't built — declare it in pages[] and don't skip the pages phase`);
+      if (!genPageId) {
+        // During the initial app-create (app_early) pages aren't uploaded yet — omit the subarea;
+        // the pages phase rewrites the sitemap once the genPageIds exist. A genuinely-missing page
+        // (finalize/edit time) still throws.
+        if (opts.omitUnbuiltPages) return null;
+        throw new Error(`sitemap subarea "${s.title}" references page '${s.page}' which wasn't built — declare it in pages[] and don't skip the pages phase`);
+      }
       return { ...base, type: 'GenPage', genPageId };
     }
     if (s.url) return { ...base, type: 'URL', url: s.url };
@@ -424,7 +444,7 @@ function appDef(spec, result) {
     ...(a.icon ? { icon: String(a.icon).toLowerCase() } : {}),
     ...(a.vectorIcon ? { vectorIcon: a.vectorIcon } : {}),
     groups: (a.groups || []).map((g, gi) => ({ id: `group_${ai}_${gi}`, title: g.label,
-      subAreas: (g.subAreas || []).map((s, si) => subAreaJson(s, `sub_${ai}_${gi}_${si}`)) })) }));
+      subAreas: (g.subAreas || []).map((s, si) => subAreaJson(s, `sub_${ai}_${gi}_${si}`)).filter(Boolean) })) }));
   return { name: spec.app.name, uniqueName, description: spec.app.description || '', siteMap: { areas },
     components: { forms: Object.values(result.forms || {}).filter(Boolean), views: Object.values(result.views || {}).filter(Boolean), charts: Object.values(result.charts || {}).filter(Boolean) } };
 }
@@ -645,9 +665,40 @@ async function runSdkBuild(spec, opts = {}) {
     }
   }
 
-  // 7. App module + sitemap.
+  // 7. App module + sitemap. When the app has generative-page subareas, create it WITHOUT them
+  //    (they can't resolve until pages upload); the pages phase then rewrites the sitemap.
   if (has('app-shell')) {
-    result.created.app = await buildArtifact('app', appDef(spec, result.created));
+    result.created.app = await buildArtifact('app', appDef(spec, result.created, { omitUnbuiltPages: true }));
+  }
+
+  // 7b. Pages (generative pages). The app now exists, so upload each page's content via pac
+  //     (WITHOUT --add-to-sitemap — the SDK owns the sitemap), then rewrite the app's sitemap once
+  //     to include the GenPage subareas. Existing pages (matched by name) update in place.
+  if (has('pages') && (spec.pages || []).length) {
+    const genpageCli = opts.genpageCli || makeGenpageCli(opts.env);
+    let existingByName = new Map();
+    try {
+      const existing = await genpageCli.list({ appId: result.created.app });
+      existingByName = new Map((existing || []).filter((p) => p.name).map((p) => [p.name, p.pageId]));
+    } catch { existingByName = new Map(); }
+    for (const p of spec.pages) {
+      await runner.run('pages', `page "${p.name}"`, async () => {
+        const codeFile = path.resolve(opts.appDir || '.', p.codeFile);
+        const up = await genpageCli.upload({ appId: result.created.app, pageId: existingByName.get(p.name), codeFile, name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources });
+        result.created.pages[p.name] = up.pageId;
+        return up.pageId;
+      });
+    }
+    if (appHasPageSubareas(spec)) {
+      await runner.run('pages', 'finalize sitemap (genpage subareas)', async () => {
+        await provision.fetchArtifact('app', result.created.app);
+        const full = appDef(spec, result.created);
+        provision.setAppDefinition(result.created.app, { siteMap: full.siteMap, components: full.components });
+        await provision.pushArtifact('app', result.created.app);
+        await provision.publishArtifact('app', result.created.app);
+        return result.created.app;
+      });
+    }
   }
 
   // 8. Publish (opt-in). Publish ONE artifact per entity (covers that entity's customizations)

@@ -84,6 +84,7 @@ function mockSdk(opts = {}) {
     addDashboardTile: (id, o) => { calls.push({ name: 'addDashboardTile', args: [id, o] }); return {}; },
     addSolutionComponent: async (o) => { calls.push({ name: 'addSolutionComponent', args: [o] }); },
     publishArtifact: async (t, id) => { calls.push({ name: 'publishArtifact', args: [t, id] }); },
+    setAppDefinition: (id, def) => { calls.push({ name: 'setAppDefinition', args: [id, def] }); return { id }; },
   };
   return { sdk, calls };
 }
@@ -618,6 +619,45 @@ test('app-shell: a page subarea for an unbuilt page throws a clear error', () =>
   assert.throws(() => appDef(spec, { forms: {}, views: {}, charts: {}, dashboards: {}, pages: {} }), /references page 'Missing' which wasn't built/);
 });
 
+test('pages phase uploads each page (no --add-to-sitemap) then finalizes the sitemap with GenPage subareas', async () => {
+  const spec = makeSpec();
+  spec.pages = [{ name: 'Overview', codeFile: 'o.tsx', prompt: 'kpis', dataSources: ['new_customer'] }];
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
+  const { sdk, calls } = mockSdk();
+  const uploads = [];
+  const genpageCli = { list: async () => [], upload: async (o) => { uploads.push(o); return { pageId: 'gp-1' }; } };
+  await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir: process.cwd(), genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+  assert.strictEqual(uploads.length, 1, 'one page uploaded');
+  assert.strictEqual(uploads[0].name, 'Overview');
+  const setDef = find(calls, 'setAppDefinition')[0];
+  assert.ok(setDef, 'sitemap finalized via setAppDefinition');
+  const subs = setDef.args[1].siteMap.areas[0].groups[0].subAreas;
+  assert.ok(subs.some((s) => s.type === 'GenPage' && s.genPageId === 'gp-1'), 'GenPage subarea in the finalized sitemap');
+});
+
+test('app-shell creates the app WITHOUT unbuilt page subareas (app_early ordering)', async () => {
+  const spec = makeSpec();
+  spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }];
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
+  const { sdk, calls } = mockSdk();
+  const genpageCli = { list: async () => [], upload: async () => ({ pageId: 'gp-1' }) };
+  await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir: process.cwd(), genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+  const appCreate = find(calls, 'createArtifact').find((c) => c.args[0] === 'app');
+  const subs = appCreate.args[1].siteMap.areas[0].groups[0].subAreas;
+  assert.ok(!subs.some((s) => s.type === 'GenPage'), 'no GenPage subarea at app-create time');
+  assert.ok(subs.some((s) => s.type === 'Entity'), 'entity subarea present at create');
+});
+
+test('pages phase updates an existing page in place (matched by name -> --page-id)', async () => {
+  const spec = makeSpec();
+  spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }];
+  const { sdk } = mockSdk();
+  const uploads = [];
+  const genpageCli = { list: async () => [{ pageId: 'gp-existing', name: 'Overview' }], upload: async (o) => { uploads.push(o); return { pageId: 'gp-existing' }; } };
+  await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir: process.cwd(), genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+  assert.strictEqual(uploads[0].pageId, 'gp-existing', 'existing page updated via --page-id, not duplicated');
+});
+
 test('defaultViewColumns: primary first (wide) + declared columns, capped at 7, skipping wide types', () => {
   const entity = {
     schemaName: 'new_ticket',
@@ -792,8 +832,8 @@ test('publish (opt-in) publishes one artifact per entity + the app', async () =>
 
 test('resolvePhases honors only/skip/from/to', () => {
   assert.deepStrictEqual(resolvePhases({ only: ['views', 'charts'] }), ['views', 'charts']);
-  assert.deepStrictEqual(resolvePhases({ skip: ['data-model', 'sample-data', 'publish'] }), ['solution', 'web-resources', 'views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell']);
-  assert.deepStrictEqual(resolvePhases({ from: 'views' }), ['views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell', 'publish']);
+  assert.deepStrictEqual(resolvePhases({ skip: ['data-model', 'sample-data', 'publish'] }), ['solution', 'web-resources', 'views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell', 'pages']);
+  assert.deepStrictEqual(resolvePhases({ from: 'views' }), ['views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell', 'pages', 'publish']);
   assert.deepStrictEqual(resolvePhases({ to: 'data-model' }), ['solution', 'data-model']);
 });
 

@@ -128,6 +128,8 @@ async function buildModelApp(spec, opts, deps) {
         publish: opts.publish,
         phases: opts.phases,
         appDir: opts.appDir, // resolves web-resource `contentPath` relative to the app folder
+        env: opts.env, // for the pages phase (pac model genpage upload --environment)
+        genpageCli: deps.genpageCli, // injectable seam for tests; else constructed from env
         emit,
       });
       break;
