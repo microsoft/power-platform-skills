@@ -14,7 +14,7 @@ const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { validateAppSpec } = require('./lib/app-spec.js');
-const { runSdkBuild, planFor, resolvePhases } = require('./lib/sdk-build.js');
+const { runSdkBuild, planFor, resolvePhases, appUniqueName } = require('./lib/sdk-build.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
@@ -66,6 +66,28 @@ function cliEmit(log, opts = {}) {
   };
 }
 
+// Pre-flight collision check: does an app (by deterministic unique name) or the solution already
+// exist? A match is NOT an error — the build idempotently UPDATES it — but the user should know they
+// are editing an existing app, not creating a fresh one. Best-effort (reads only). `provision` is
+// the header-less SDK client. Returns { appExists, solutionExists, appUnique, solutionName }.
+async function checkCollisions(spec, provision) {
+  const odataLit = (v) => String(v == null ? '' : v).replace(/'/g, "''");
+  const solutionName = spec.solution && spec.solution.uniqueName;
+  const appUnique = appUniqueName(spec);
+  const [sol, app] = await Promise.all([
+    solutionName
+      ? provision.queryRecords('solution', { select: ['solutionid'], filter: `uniquename eq '${odataLit(solutionName)}'`, top: 1 })
+      : Promise.resolve([]),
+    provision.queryRecords('appmodule', { select: ['appmoduleid'], filter: `uniquename eq '${odataLit(appUnique)}'`, top: 1 }),
+  ]);
+  return {
+    appExists: !!(app && app[0] && app[0].appmoduleid),
+    solutionExists: !!(sol && sol[0] && sol[0].solutionid),
+    appUnique,
+    solutionName,
+  };
+}
+
 async function buildModelApp(spec, opts, deps) {
   const v = validateAppSpec(spec);
   if (!v.ok) {
@@ -78,6 +100,18 @@ async function buildModelApp(spec, opts, deps) {
   const baseEmit = deps.emit || cliEmit(log, { apply: opts.apply, counts });
   const emit = journal ? (e) => { baseEmit(e); journal.record(e); } : baseEmit;
   const sleep = deps.sleep || ((ms) => new Promise((res) => setTimeout(res, ms)));
+
+  // Pre-flight collision warning (apply only; best-effort — never fails the build).
+  if (opts.apply && deps.provisionSdk && opts.checkCollisions !== false) {
+    try {
+      const c = await checkCollisions(spec, deps.provisionSdk);
+      if (c.appExists || c.solutionExists) {
+        const which = [c.appExists ? `app '${c.appUnique}'` : null, c.solutionExists ? `solution '${c.solutionName}'` : null].filter(Boolean).join(' and ');
+        log(`\n⚠ ${which} already exist(s) — this build will UPDATE the existing app (idempotent reuse), not create a fresh one. Use a different name for a new app.`);
+        if (journal) journal.record({ phase: 'preflight', status: 'collision', label: which, detail: JSON.stringify({ appExists: c.appExists, solutionExists: c.solutionExists }) });
+      }
+    } catch { /* best-effort */ }
+  }
   // Transient env errors (429 EntityCustomization lock, 503 SQL timeout, concurrent-op guards) are
   // retried automatically on --apply: the build is idempotent, so a retry reuses everything already
   // created. Non-transient halts (e.g. a bad spec / genuine 400) are NOT retried.
@@ -185,4 +219,4 @@ async function main() {
 if (require.main === module) {
   main();
 }
-module.exports = { buildModelApp, planFor, isTransientHalt };
+module.exports = { buildModelApp, planFor, isTransientHalt, checkCollisions };

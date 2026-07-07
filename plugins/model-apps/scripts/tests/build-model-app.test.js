@@ -158,3 +158,21 @@ test('transient auto-retry: no retries in dry-run', async () => {
   const r = await buildModelApp(desk, { apply: false, env: 'https://x' }, { sdk });
   assert.strictEqual(r.dryRun, true);
 });
+
+test('collision preflight: warns and journals when the app already exists', async () => {
+  const { sdk } = mockSdk();
+  sdk.queryRecords = async (set) => (set === 'appmodule' ? [{ appmoduleid: 'app-x' }] : set === 'solution' ? [] : [{ publisherid: 'pub-1' }]);
+  const logs = [];
+  const events = [];
+  const journal = { path: 'x', record: (e) => events.push(e), close: () => {} };
+  await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, journal, log: (m) => logs.push(m) });
+  assert.ok(logs.some((l) => /already exist/.test(l)), 'collision warning logged');
+  assert.ok(events.some((e) => e.status === 'collision'), 'collision journaled');
+});
+
+test('collision preflight: silent when nothing collides', async () => {
+  const { sdk } = mockSdk();
+  const logs = [];
+  await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, log: (m) => logs.push(m) });
+  assert.ok(!logs.some((l) => /already exist/.test(l)), 'no false-positive collision warning');
+});
