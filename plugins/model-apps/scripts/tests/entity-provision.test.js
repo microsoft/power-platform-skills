@@ -33,9 +33,10 @@ test('provisionDataModel creates missing tables + columns and captures entitySet
   ], relationships: [] };
   const runner = makeRunner({ emit: () => {}, total: 10 });
   const dm = await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true, concurrency: 2 });
+  assert.ok(dm.entities['new_ticket'], 'new_ticket entity present');
   assert.strictEqual(dm.entities['new_ticket'].entitySetName, 'new_tickets');
-  assert.ok(m.calls.some((c) => c[0] === 'createTable' && c[1] === 'new_ticket'));
-  assert.ok(m.calls.some((c) => c[0] === 'createColumn' && c[2] === 'new_priority'));
+  assert.ok(m.calls.some((c) => c[0] === 'createTable' && c[1] === 'new_ticket'), 'createTable called');
+  assert.ok(m.calls.some((c) => c[0] === 'createColumn' && c[2] === 'new_priority'), 'createColumn called');
 });
 
 test('provisionDataModel skips an existing table (idempotent)', async () => {

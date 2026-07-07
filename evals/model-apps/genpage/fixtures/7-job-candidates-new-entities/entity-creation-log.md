@@ -37,5 +37,5 @@
 
 ```powershell
 node check-auth.js  # ok: true
-node provision-entities.js --env https://aurorabapenv4ab3f.crm10.dynamics.com --input @job-candidates/provision-input.json --apply --sample-data
+node provision-entities.js --env "$ENV_URL" --input @job-candidates/provision-input.json --apply --sample-data
 ```

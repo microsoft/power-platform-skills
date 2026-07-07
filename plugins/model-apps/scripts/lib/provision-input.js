@@ -181,6 +181,4 @@ function validateProvisionInput(input) {
   return { ok: errors.length === 0, errors };
 }
 
-module.exports = {
-  validateProvisionInput,
-};
+module.exports = { validateProvisionInput };

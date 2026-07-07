@@ -25,13 +25,17 @@ function makeSdk(env) {
   const httpClient = createAzHttpClient(env);
   // Teardown uses a minimal SDK client (no workspace, no solution header) — just queryRecords
   // and delete methods. Use a throw-away temp dir since initWorkspace is mandatory.
+  const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teardown-'));
   const sdk = createMakerSdk({
-    workspacePath: fs.mkdtempSync(path.join(os.tmpdir(), 'teardown-')),
+    workspacePath: sdkTempDir,
     instanceUrl: env,
     httpClient,
   });
   sdk.initWorkspace();
-  return sdk;
+  const cleanup = () => {
+    fs.rmSync(sdkTempDir, { recursive: true, force: true });
+  };
+  return { sdk, cleanup };
 }
 
 // Turn engine progress events into a phase-grouped, status-marked teardown log — the same shape
@@ -79,20 +83,24 @@ async function main() {
   const specPath = path.resolve(typeof specArg === 'string' && specArg.startsWith('@') ? specArg.slice(1) : specArg);
   const spec = readJsonArg('@' + specPath);
   const apply = flags.apply === true;
-  const sdk = makeSdk(env);
-  const deps = { log: (m) => process.stderr.write(m + '\n'), sdk };
-  const r = await teardownModelApp(spec, { apply }, deps);
+  const { sdk, cleanup } = makeSdk(env);
+  try {
+    const deps = { log: (m) => process.stderr.write(m + '\n'), sdk };
+    const r = await teardownModelApp(spec, { apply }, deps);
 
-  // Clear the local workspace only after a clean apply — stale metadata there would make a
-  // subsequent rebuild skip tables that no longer exist. Filesystem-local, opt-in.
-  if (apply && flags['clear-workspace'] && r && r.ok && !r.dryRun) {
-    const workspaceDir = flags.workspace || path.join(path.dirname(specPath), '.maker-workspace');
-    if (fs.existsSync(workspaceDir)) {
-      fs.rmSync(workspaceDir, { recursive: true, force: true });
-      process.stderr.write(`\ncleared workspace ${workspaceDir}\n`);
+    // Clear the local workspace only after a clean apply — stale metadata there would make a
+    // subsequent rebuild skip tables that no longer exist. Filesystem-local, opt-in.
+    if (apply && flags['clear-workspace'] && r && r.ok && !r.dryRun) {
+      const workspaceDir = flags.workspace || path.join(path.dirname(specPath), '.maker-workspace');
+      if (fs.existsSync(workspaceDir)) {
+        fs.rmSync(workspaceDir, { recursive: true, force: true });
+        process.stderr.write(`\ncleared workspace ${workspaceDir}\n`);
+      }
     }
+    emitResult(r.ok, r);
+  } finally {
+    cleanup();
   }
-  emitResult(r.ok, r);
 }
 
 if (require.main === module) {

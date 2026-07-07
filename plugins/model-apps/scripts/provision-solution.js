@@ -140,16 +140,16 @@ async function main() {
   }
   const [envUrl, uniqueName, friendlyName] = positional;
 
-  try {
-    // Build SDK client (same pattern as build-model-app.js)
-    const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
-    const httpClient = createAzHttpClient(envUrl);
-    const sdk = createMakerSdk({
-      workspacePath: require('os').tmpdir(), // unused workspace (no metadata persistence needed)
-      instanceUrl: envUrl,
-      httpClient,
-    });
+  const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
+  const httpClient = createAzHttpClient(envUrl);
+  const sdkTempDir = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'provision-solution-'));
+  const sdk = createMakerSdk({
+    workspacePath: sdkTempDir, // unused workspace (no metadata persistence needed)
+    instanceUrl: envUrl,
+    httpClient,
+  });
 
+  try {
     const result = await runProvisionSolution(
       {
         envUrl,
@@ -169,6 +169,8 @@ async function main() {
     }
   } catch (e) {
     emitResult(false, e);
+  } finally {
+    require('fs').rmSync(sdkTempDir, { recursive: true, force: true });
   }
 }
 

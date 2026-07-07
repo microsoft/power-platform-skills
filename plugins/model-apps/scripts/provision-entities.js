@@ -21,14 +21,20 @@ const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js'
 function makeSdk(env, input) {
   const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
   const httpClient = createAzHttpClient(env);
+  const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-'));
+  const provisionTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-'));
   const sdk = createMakerSdk({
-    workspacePath: fs.mkdtempSync(path.join(os.tmpdir(), 'provision-')),
+    workspacePath: sdkTempDir,
     instanceUrl: env,
     httpClient,
     solutionUniqueName: input.solution.uniqueName,
   });
-  const provision = createMakerSdk({ workspacePath: fs.mkdtempSync(path.join(os.tmpdir(), 'provision-')), instanceUrl: env, httpClient });
-  return { sdk, provision };
+  const provision = createMakerSdk({ workspacePath: provisionTempDir, instanceUrl: env, httpClient });
+  const cleanup = () => {
+    fs.rmSync(sdkTempDir, { recursive: true, force: true });
+    fs.rmSync(provisionTempDir, { recursive: true, force: true });
+  };
+  return { sdk, provision, cleanup };
 }
 
 // Count the total steps in the plan for makeRunner's [n/total] narration.
@@ -233,16 +239,20 @@ async function main() {
   };
   
   // Construct SDK clients (offline until first call)
-  const { sdk, provision } = makeSdk(env, input);
+  const { sdk, provision, cleanup } = makeSdk(env, input);
   
-  const deps = {
-    log: (m) => process.stderr.write(m + '\n'),
-    sdk,
-    provision,
-  };
-  
-  const r = await provisionEntities(input, opts, deps);
-  emitResult(r.ok, r);
+  try {
+    const deps = {
+      log: (m) => process.stderr.write(m + '\n'),
+      sdk,
+      provision,
+    };
+    
+    const r = await provisionEntities(input, opts, deps);
+    emitResult(r.ok, r);
+  } finally {
+    cleanup();
+  }
 }
 
 if (require.main === module) {

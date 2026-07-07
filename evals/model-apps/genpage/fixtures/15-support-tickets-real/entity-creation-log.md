@@ -28,7 +28,7 @@
 
 ```powershell
 node check-auth.js  # ok: true
-node provision-entities.js --env https://aurorabapenv610b3.crmtest.dynamics.com --input @D:/temp/support-tickets/provision-input.json --apply --sample-data
+node provision-entities.js --env "$ENV_URL" --input @support-tickets/provision-input.json --apply --sample-data
 ```
 
 ## Created Record IDs (cr_ticket)

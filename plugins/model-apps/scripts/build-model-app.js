@@ -28,8 +28,9 @@ const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js'
 function makeSdk(env, spec, workspaceDir) {
   const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
   const httpClient = createAzHttpClient(env);
+  const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-app-'));
   const sdk = createMakerSdk({
-    workspacePath: fs.mkdtempSync(path.join(os.tmpdir(), 'model-app-')), // unused (no workspace ops)
+    workspacePath: sdkTempDir, // unused (no workspace ops)
     instanceUrl: env,
     httpClient,
     solutionUniqueName: spec.solution.uniqueName,
@@ -37,7 +38,10 @@ function makeSdk(env, spec, workspaceDir) {
   fs.mkdirSync(workspaceDir, { recursive: true });
   const provisionSdk = createMakerSdk({ workspacePath: workspaceDir, instanceUrl: env, httpClient });
   provisionSdk.initWorkspace();
-  return { sdk, provisionSdk };
+  const cleanup = () => {
+    fs.rmSync(sdkTempDir, { recursive: true, force: true });
+  };
+  return { sdk, provisionSdk, cleanup };
 }
 
 // Turn engine progress events into a phase-grouped, status-marked build log:
@@ -112,10 +116,14 @@ async function main() {
   };
   // Construct for both dry-run and apply: proves the vendored bundle + adapter wire up
   // (offline), and apply needs it. A spec validation error short-circuits before any write.
-  const { sdk, provisionSdk } = makeSdk(env, spec, workspaceDir);
-  const deps = { log: (m) => process.stderr.write(m + '\n'), sdk, provisionSdk };
-  const r = await buildModelApp(spec, opts, deps);
-  emitResult(r.ok, r);
+  const { sdk, provisionSdk, cleanup } = makeSdk(env, spec, workspaceDir);
+  try {
+    const deps = { log: (m) => process.stderr.write(m + '\n'), sdk, provisionSdk };
+    const r = await buildModelApp(spec, opts, deps);
+    emitResult(r.ok, r);
+  } finally {
+    cleanup();
+  }
 }
 
 if (require.main === module) {
