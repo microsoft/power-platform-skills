@@ -183,6 +183,13 @@ function lintAppSpec(spec) {
   // Sitemap subareas — each names exactly one target (entity/dashboard/url). A DashBoard subarea
   // surfaces a built dashboard in the app nav (and auto-pins it as an app component).
   const dashNames = new Set((spec.dashboards || []).map((d) => d && d.name).filter(Boolean));
+  // Genpage data sources that aren't declared entities are likely standard tables (fine) or a typo.
+  const entityLowerSet = new Set((spec.entities || []).map((e) => lc(e.schemaName)));
+  for (const p of spec.pages || []) {
+    for (const ds of p.dataSources || []) {
+      if (!entityLowerSet.has(lc(ds))) W(`Page '${p.name}' data source '${ds}' isn't a declared entity — ok if it's a standard table, otherwise a likely typo`);
+    }
+  }
   // `icon` is a web-resource image; `vectorIcon` is a Fluent icon token. Warn on the common mixup.
   const looksLikeFile = (v) => v && /\.(png|jpe?g|gif|svg|ico)$/i.test(String(v));
   for (const a of (spec.appShell && spec.appShell.areas) || []) {

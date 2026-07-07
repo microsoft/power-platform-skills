@@ -237,6 +237,20 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   and added to the solution. To surface it in the app nav, add a `dashboard` sitemap subarea (below) —
   that also auto-pins it as an app component.
 
+## pages[] (optional — generative pages / genux)
+```jsonc
+[ { "name": "Overview", "dataSources": ["new_order", "new_customer"],
+    "prompt": "A KPI overview with recent orders", "codeFile": "overview.tsx" } ]
+```
+- **Genpage-first policy:** model-driven forms/views are the default for record surfaces; use a
+  generative `page` for overviews/dashboards/analytics/landing surfaces. Each page needs a `name` and
+  a **`codeFile`** (the `.tsx` the build uploads via `pac model genpage upload`, no `--add-to-sitemap`
+  — the SDK owns the sitemap). `dataSources` (tables the page reads) are passed to pac and lint-warned
+  if they aren't declared entities (standard tables are fine). `prompt` is retained on the page.
+- Surface a page in the nav with a **`page`** sitemap subarea (below) — it becomes a `GenPage` subarea
+  keyed by the deployed page's id. Traditional `dashboards[]` remain available for explicit classic
+  dashboards.
+
 ## appShell
 ```jsonc
 { "areas": [ { "label": "Main", "icon": "new_areaicon.svg", "groups": [ { "label": "Records", "subAreas": [
@@ -246,7 +260,8 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 ] } ] } ] }
 ```
 - A subarea names exactly **one** target (lint-enforced): `entity` (a table), `dashboard` (the **name**
-  of a `dashboards[]` entry — auto-pinned as an app component so the app includes it), or `url`.
+  of a `dashboards[]` entry — auto-pinned as an app component so the app includes it), `url`, or
+  `page` (the **name** of a `pages[]` generative page — surfaced as a `GenPage` sitemap subarea).
 - Any area or subarea may set **`icon`** (a declared image `webResources[]` entry — png/jpg/gif/svg/ico)
   and/or **`vectorIcon`** (a Fluent icon token, e.g. `"Home"`). Icons are **chrome, not a target** — they
   don't count toward the "exactly one target" rule. `icon` must reference a declared **image** web resource

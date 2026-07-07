@@ -602,6 +602,22 @@ test('app-shell: threads icon/vectorIcon on area and subarea (icon web-resource 
   assert.strictEqual(sub.vectorIcon, 'Grid');
 });
 
+test('app-shell: a page subarea resolves to a GenPage subarea with the built genPageId', () => {
+  const spec = makeSpec();
+  spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }];
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
+  const def = appDef(spec, { forms: {}, views: {}, charts: {}, dashboards: {}, pages: { Overview: 'gp-1' } });
+  const sub = def.siteMap.areas[0].groups[0].subAreas.find((s) => s.type === 'GenPage');
+  assert.ok(sub, 'GenPage subarea emitted');
+  assert.strictEqual(sub.genPageId, 'gp-1');
+});
+
+test('app-shell: a page subarea for an unbuilt page throws a clear error', () => {
+  const spec = makeSpec();
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'Missing', title: 'X' });
+  assert.throws(() => appDef(spec, { forms: {}, views: {}, charts: {}, dashboards: {}, pages: {} }), /references page 'Missing' which wasn't built/);
+});
+
 test('defaultViewColumns: primary first (wide) + declared columns, capped at 7, skipping wide types', () => {
   const entity = {
     schemaName: 'new_ticket',

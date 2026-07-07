@@ -412,6 +412,11 @@ function appDef(spec, result) {
       if (!dashboardId) throw new Error(`sitemap subarea "${s.title}" references dashboard '${s.dashboard}' which wasn't built — declare it in dashboards[] and don't skip the dashboards phase`);
       return { ...base, type: 'DashBoard', dashboardId };
     }
+    if (s.page) {
+      const genPageId = (result.pages || {})[s.page];
+      if (!genPageId) throw new Error(`sitemap subarea "${s.title}" references page '${s.page}' which wasn't built — declare it in pages[] and don't skip the pages phase`);
+      return { ...base, type: 'GenPage', genPageId };
+    }
     if (s.url) return { ...base, type: 'URL', url: s.url };
     return { ...base, type: 'Entity', entity: s.entity && s.entity.toLowerCase() };
   };
@@ -443,7 +448,7 @@ async function runSdkBuild(spec, opts = {}) {
     return { ok: true, dryRun: true, plan: plan.map((p) => p.label) };
   }
 
-  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, commands: {}, dashboards: {}, app: null } };
+  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, commands: {}, dashboards: {}, pages: {}, app: null } };
   const runner = makeRunner({ emit, total: plan.length });
   const sol = spec.solution;
 

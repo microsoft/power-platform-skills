@@ -340,6 +340,15 @@ function validateAppSpec(spec) {
     }
   }
   const dashNamesSet = new Set((spec.dashboards || []).map((d) => d && d.name).filter(Boolean));
+  // Generative pages: each needs a name + a codeFile (the .tsx the build uploads via pac). dataSources
+  // are informational (passed to pac --data-sources) and may reference standard tables, so they are
+  // lint-warned (not hard-validated) against declared entities.
+  const pageNamesSet = new Set();
+  for (const p of spec.pages || []) {
+    if (!p || !p.name) { errors.push('a page is missing a name'); continue; }
+    pageNamesSet.add(p.name);
+    if (!p.codeFile || typeof p.codeFile !== 'string') errors.push(`page '${p.name}': needs a codeFile (path to the .tsx to upload)`);
+  }
   // Icons are chrome, not a target: a web-resource `icon` must reference a declared IMAGE web
   // resource; `vectorIcon` is a free-form Fluent token (no web resource, not validated here).
   const checkIcon = (icon, label) => {
@@ -352,11 +361,12 @@ function validateAppSpec(spec) {
     checkIcon(a.icon, `sitemap area "${a.label || ''}"`);
     for (const g of a.groups || []) {
       for (const sa of g.subAreas || []) {
-        const targets = ['entity', 'dashboard', 'url'].filter((k) => sa[k]);
-        if (targets.length === 0) errors.push(`sitemap subArea "${sa.title || ''}" needs an entity, dashboard, or url`);
+        const targets = ['entity', 'dashboard', 'url', 'page'].filter((k) => sa[k]);
+        if (targets.length === 0) errors.push(`sitemap subArea "${sa.title || ''}" needs an entity, dashboard, url, or page`);
         else if (targets.length > 1) errors.push(`sitemap subArea "${sa.title || ''}" sets multiple targets (${targets.join(', ')}) — pick one`);
         if (sa.entity && !entityNames.has(sa.entity)) errors.push(`sitemap subArea references unknown entity '${sa.entity}'`);
         if (sa.dashboard && !dashNamesSet.has(sa.dashboard)) errors.push(`sitemap subArea references unknown dashboard '${sa.dashboard}' (declare it in dashboards[])`);
+        if (sa.page && !pageNamesSet.has(sa.page)) errors.push(`sitemap subArea references unknown page '${sa.page}' (declare it in pages[])`);
         checkIcon(sa.icon, `sitemap subArea "${sa.title || ''}"`);
       }
     }

@@ -44,6 +44,33 @@ test('validateAppSpec rejects a sitemap icon referencing a non-image web resourc
   assert.ok(r.errors.some((e) => /must be an image web resource/.test(e)), JSON.stringify(r.errors));
 });
 
+test('validateAppSpec accepts pages[] + a page sitemap subarea', () => {
+  const s = JSON.parse(JSON.stringify(sample));
+  s.pages = [{ name: 'Overview', dataSources: ['new_project'], prompt: 'kpis', codeFile: 'overview.tsx' }];
+  s.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('validateAppSpec rejects a page missing codeFile and a subarea referencing an unknown page', () => {
+  const s = JSON.parse(JSON.stringify(sample));
+  s.pages = [{ name: 'Overview' }];
+  s.appShell.areas[0].groups[0].subAreas.push({ page: 'Missing', title: 'X' });
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /page 'Overview': needs a codeFile/.test(e)), JSON.stringify(r.errors));
+  assert.ok(r.errors.some((e) => /unknown page 'Missing'/.test(e)), JSON.stringify(r.errors));
+});
+
+test('validateAppSpec rejects a subarea that sets both an entity and a page', () => {
+  const s = JSON.parse(JSON.stringify(sample));
+  s.pages = [{ name: 'Overview', codeFile: 'o.tsx' }];
+  s.appShell.areas[0].groups[0].subAreas.push({ entity: 'new_project', page: 'Overview', title: 'Both' });
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /sets multiple targets/.test(e)), JSON.stringify(r.errors));
+});
+
 test('validateAppSpec rejects a form referencing an unknown entity', () => {
   const bad = JSON.parse(JSON.stringify(sample));
   bad.forms[0].entity = 'new_missing';
