@@ -4,8 +4,16 @@
 // the SDK owns the sitemap (it writes the GenPage subareas). Real impl spawns pac; tests inject `run`.
 const { spawnSync } = require('node:child_process');
 
+// Quote an arg for a Windows/POSIX shell command line (needed because pac resolves as pac.cmd on
+// Windows, which requires shell:true — and shell:true does not quote an args array).
+function quoteArg(a) {
+  const s = String(a);
+  return /[\s"'&|<>^()]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
 function runPac(args) {
-  const r = spawnSync('pac', args, { encoding: 'utf8', shell: true });
+  const line = 'pac ' + args.map(quoteArg).join(' ');
+  const r = spawnSync(line, { encoding: 'utf8', shell: true });
   return { status: r.status == null ? 1 : r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
 
@@ -55,4 +63,4 @@ function makeGenpageCli(env, deps = {}) {
   };
 }
 
-module.exports = { makeGenpageCli, parsePageId, parseList, runPac };
+module.exports = { makeGenpageCli, parsePageId, parseList, quoteArg, runPac };

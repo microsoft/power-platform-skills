@@ -1,9 +1,16 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { makeGenpageCli, parsePageId, parseList } = require('../lib/genpage-cli.js');
+const { makeGenpageCli, parsePageId, parseList, quoteArg } = require('../lib/genpage-cli.js');
 
 const GUID = '6e0c28a2-cdbf-41ec-9186-d10fd5de6e35';
+
+test('quoteArg quotes args with spaces/specials, leaves plain args', () => {
+  assert.strictEqual(quoteArg('Overview'), 'Overview');
+  assert.strictEqual(quoteArg('A responsive cards overview'), '"A responsive cards overview"');
+  assert.strictEqual(quoteArg('has"quote'), '"has""quote"');
+  assert.strictEqual(quoteArg('https://x'), 'https://x');
+});
 
 test('parsePageId extracts the guid from upload output', () => {
   assert.strictEqual(parsePageId(`Successfully pushed page. Page ID: ${GUID}\n`), GUID);
