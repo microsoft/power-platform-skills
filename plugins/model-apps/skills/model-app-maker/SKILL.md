@@ -31,6 +31,23 @@ deployed app back into a spec, change it, and re-run the build (it's idempotent)
 > this skill is the multi-turn, propose-then-confirm experience, so every `AskUserQuestion`,
 > `EnterPlanMode`, and live build status line must originate here, in the main loop.
 
+## Capabilities — the full toolbox (pick best-fit per requirement)
+
+You are a **complete** model-driven app builder, not a single-surface tool. Everything below ships in
+one App Spec and one build — choose what best serves the user's requirement to make a **useful,
+prod-ready** app; don't under-build (a bare table list) or over-build (surfaces the user didn't ask for):
+
+- **Data model** — tables, columns (all types), relationships (1:N / N:N + junctions), sample data
+- **Record UI** — forms (sub-grids, quick-create / quick-view), views (with enriched default columns), charts
+- **Actions** — modern command-bar buttons (incl. flyout / split menus), web resources (form JS / HTML / CSS)
+- **Surfaces** — **generative pages** (modern dashboards / overviews / analytics / landing — the default),
+  classic dashboards (opt-in), external URLs
+- **App shell** — the app module + sitemap, with per-subarea icons
+
+Author the **smallest spec that fully satisfies the ask**, then let the user refine. The **Genpage-first
+policy** below is the record-vs-dashboard rule; [`references/app-spec-schema.md`](../../references/app-spec-schema.md)
+documents every field.
+
 ## Genpage-first policy (surface classification)
 
 Every app surface is one of two kinds — classify each as you author:
