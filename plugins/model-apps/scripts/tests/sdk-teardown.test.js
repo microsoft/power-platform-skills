@@ -26,6 +26,10 @@ function mockSdk(state = {}) {
     appmodules: state.appmodules || {},        // uniquename -> { appmoduleid, name }
     dashboards: state.dashboards || {},        // name -> { formid, name }
     appactions: state.appactions || {},        // entity -> [{ appactionid, buttonlabeltext }]
+    forms: state.forms || {},                  // `${entity}:${name}` -> { formid, name }
+    charts: state.charts || {},                // `${entity}:${name}` -> { savedqueryvisualizationid, name }
+    views: state.views || {},                  // `${entity}:${name}` -> { savedqueryid, name }
+    relationships: new Set(state.relationships || []), // schemaNames
     webresources: state.webresources || {},    // name -> { webresourceid, name }
     tables: new Set(state.tables || []),       // logical names
     solutions: state.solutions || {},          // uniquename -> { solutionid, uniquename }
@@ -36,24 +40,55 @@ function mockSdk(state = {}) {
     calls.push({ method: 'queryRecords', logical, opts });
     const filter = opts.filter || '';
     const firstEq = (p) => { const m = p.match(/eq '([^']*)'/); return m && m[1]; };
-    const val = firstEq(filter);
+    const allEq = (p) => { const matches = [...p.matchAll(/eq '([^']*)'/g)]; return matches.map((m) => m[1]); };
 
     if (logical === 'appmodule') {
+      const val = firstEq(filter);
       const row = db.appmodules[val];
       return row ? [row] : [];
     }
     if (logical === 'systemform') {
-      const row = db.dashboards[val];
+      // Could be dashboard (type eq 0) or form (objecttypecode eq ...)
+      if (/type eq 0/.test(filter)) {
+        const val = firstEq(filter);
+        const row = db.dashboards[val];
+        return row ? [row] : [];
+      } else {
+        const vals = allEq(filter);
+        const name = vals[0];
+        const entity = vals[1];
+        const key = `${entity}:${name}`;
+        const row = db.forms[key];
+        return row ? [row] : [];
+      }
+    }
+    if (logical === 'savedqueryvisualization') {
+      const vals = allEq(filter);
+      const name = vals[0];
+      const entity = vals[1];
+      const key = `${entity}:${name}`;
+      const row = db.charts[key];
+      return row ? [row] : [];
+    }
+    if (logical === 'savedquery') {
+      const vals = allEq(filter);
+      const name = vals[0];
+      const entity = vals[1];
+      const key = `${entity}:${name}`;
+      const row = db.views[key];
       return row ? [row] : [];
     }
     if (logical === 'appaction') {
+      const val = firstEq(filter);
       return db.appactions[val] || [];
     }
     if (logical === 'webresource') {
+      const val = firstEq(filter);
       const row = db.webresources[val];
       return row ? [row] : [];
     }
     if (logical === 'solution') {
+      const val = firstEq(filter);
       const row = db.solutions[val];
       return row ? [row] : [];
     }
@@ -83,6 +118,40 @@ function mockSdk(state = {}) {
         db.appactions[k] = db.appactions[k].filter((x) => x.appactionid !== id);
       }
     }
+    if (type === 'form') {
+      for (const k of Object.keys(db.forms)) {
+        if (db.forms[k].formid === id) {
+          delete db.forms[k];
+          return;
+        }
+      }
+    }
+    if (type === 'chart') {
+      for (const k of Object.keys(db.charts)) {
+        if (db.charts[k].savedqueryvisualizationid === id) {
+          delete db.charts[k];
+          return;
+        }
+      }
+    }
+    if (type === 'view') {
+      for (const k of Object.keys(db.views)) {
+        if (db.views[k].savedqueryid === id) {
+          delete db.views[k];
+          return;
+        }
+      }
+    }
+  };
+
+  const deleteRelationship = async (schemaName) => {
+    calls.push({ method: 'deleteRelationship', schemaName });
+    if (!db.relationships.has(schemaName)) {
+      const err = new Error(`Relationship ${schemaName} not found`);
+      err.statusCode = 404;
+      throw err;
+    }
+    db.relationships.delete(schemaName);
   };
 
   const deleteWebResource = async (id) => {
@@ -119,15 +188,15 @@ function mockSdk(state = {}) {
     }
   };
 
-  return { queryRecords, deleteRemoteArtifact, deleteWebResource, deleteTable, deleteSolution, calls, db };
+  return { queryRecords, deleteRemoteArtifact, deleteRelationship, deleteWebResource, deleteTable, deleteSolution, calls, db };
 }
 
 // --- planTeardown (pure) ----------------------------------------------------------------
 
-test('plan is ordered app -> dashboards -> commands -> web-resources -> tables -> solution', () => {
+test('plan is ordered app -> dashboards -> commands -> forms -> charts -> views -> relationships -> web-resources -> tables -> solution', () => {
   const steps = planTeardown(fullSpec());
   const kinds = steps.map((s) => s.kind);
-  assert.deepStrictEqual(kinds, ['app', 'dashboard', 'commands', 'webResource', 'table', 'table', 'table', 'solution']);
+  assert.deepStrictEqual(kinds, ['app', 'dashboard', 'commands', 'form', 'form', 'form', 'chart', 'chart', 'view', 'view', 'view', 'relationship', 'relationship', 'webResource', 'table', 'table', 'table', 'solution']);
 });
 
 test('tables are torn down children-first (reverse topological order)', () => {
@@ -156,10 +225,10 @@ test('dry-run emits the whole plan as skips and never calls SDK', async () => {
   const throwingSdk = { queryRecords: () => { throw new Error('dry-run must not call SDK'); } };
   const r = await runTeardown(fullSpec(), { apply: false }, { sdk: throwingSdk, emit: (e) => events.push(e) });
   assert.strictEqual(r.dryRun, true);
-  assert.strictEqual(r.plan.length, 8);
+  assert.strictEqual(r.plan.length, 18);
   const terminal = events.filter((e) => e.status !== 'start');
   assert.ok(terminal.every((e) => e.status === 'skip'));
-  assert.strictEqual(terminal.length, 8);
+  assert.strictEqual(terminal.length, 18);
 });
 
 test('apply without an sdk throws', async () => {
@@ -174,6 +243,21 @@ test('apply deletes every declared artifact in dependency order', async () => {
     appmodules: { new_supportdesk: { appmoduleid: 'app-1', name: 'Support Desk' } },
     dashboards: { Operations: { formid: 'dash-1', name: 'Operations' } },
     appactions: { new_ticket: [{ appactionid: 'act-1', buttonlabeltext: 'Escalate' }, { appactionid: 'act-2', buttonlabeltext: 'Btn2' }] },
+    forms: {
+      'new_customer:Customer': { formid: 'form-1', name: 'Customer' },
+      'new_ticket:Ticket': { formid: 'form-2', name: 'Ticket' },
+      'new_comment:Comment': { formid: 'form-3', name: 'Comment' },
+    },
+    charts: {
+      'new_ticket:Tickets by Priority': { savedqueryvisualizationid: 'chart-1', name: 'Tickets by Priority' },
+      'new_ticket:Tickets by Status': { savedqueryvisualizationid: 'chart-2', name: 'Tickets by Status' },
+    },
+    views: {
+      'new_customer:Active Customers': { savedqueryid: 'view-1', name: 'Active Customers' },
+      'new_ticket:Active Tickets': { savedqueryid: 'view-2', name: 'Active Tickets' },
+      'new_comment:Active Comments': { savedqueryid: 'view-3', name: 'Active Comments' },
+    },
+    relationships: ['new_customer_new_ticket', 'new_ticket_new_comment'],
     webresources: { 'new_ticket.js': { webresourceid: 'wr-1', name: 'new_ticket.js' } },
     tables: ['new_customer', 'new_ticket', 'new_comment'],
     solutions: { ContosoSupportDesk: { solutionid: 'sol-1', uniquename: 'ContosoSupportDesk' } },
@@ -185,14 +269,22 @@ test('apply deletes every declared artifact in dependency order', async () => {
   assert.deepStrictEqual(sdk.db.appmodules, {});
   assert.deepStrictEqual(sdk.db.dashboards, {});
   assert.strictEqual((sdk.db.appactions.new_ticket || []).length, 0);
+  assert.deepStrictEqual(sdk.db.forms, {});
+  assert.deepStrictEqual(sdk.db.charts, {});
+  assert.deepStrictEqual(sdk.db.views, {});
+  assert.strictEqual(sdk.db.relationships.size, 0);
   assert.deepStrictEqual(sdk.db.webresources, {});
   assert.strictEqual(sdk.db.tables.size, 0);
   assert.deepStrictEqual(sdk.db.solutions, {});
-  // ordering: deleteRemoteArtifact('command') calls precede deleteWebResource; deleteTable precedes deleteSolution
+  // ordering: forms/charts/views/relationships before tables; deleteRemoteArtifact('command') calls precede deleteWebResource; deleteTable precedes deleteSolution
   const dels = sdk.calls.filter((c) => c.method !== 'queryRecords');
-  const idx = (method, arg) => dels.findIndex((c) => c.method === method && (!arg || (c.type === arg || c.logical === arg || c.id === arg)));
+  const idx = (method, arg) => dels.findIndex((c) => c.method === method && (!arg || (c.type === arg || c.logical === arg || c.id === arg || c.schemaName === arg)));
   assert.ok(idx('deleteRemoteArtifact', 'command') < idx('deleteWebResource'), 'commands before web resource');
   assert.ok(idx('deleteRemoteArtifact', 'app') < idx('deleteTable'), 'app before tables');
+  assert.ok(idx('deleteRemoteArtifact', 'form') < idx('deleteTable'), 'forms before tables');
+  assert.ok(idx('deleteRemoteArtifact', 'chart') < idx('deleteTable'), 'charts before tables');
+  assert.ok(idx('deleteRemoteArtifact', 'view') < idx('deleteTable'), 'views before tables');
+  assert.ok(idx('deleteRelationship') < idx('deleteTable'), 'relationships before tables');
   assert.ok(idx('deleteTable') < idx('deleteSolution'), 'tables before solution');
   // tables children-first
   const tableDels = dels.filter((c) => c.method === 'deleteTable').map((c) => c.logical);
@@ -204,12 +296,14 @@ test('not-found artifacts are skipped, not errors, and issue no delete', async (
   const r = await runTeardown(fullSpec(), { apply: true }, { sdk });
   assert.strictEqual(r.ok, true);
   // Tables will attempt deleteTable (synthetic item) but get not-found immediately, counted as deleted
-  // Other artifacts (app, dashboard, commands, webResource, solution) skip when resolve returns []
-  assert.strictEqual(r.skipped.length, 5); // app, dashboard, commands, webResource, solution
+  // Relationships will attempt deleteRelationship but get not-found, counted as deleted (tolerateNotFound)
+  // Other artifacts (app, dashboard, commands, forms, charts, views, webResource, solution) skip when resolve returns []
+  assert.strictEqual(r.skipped.length, 13); // app, dashboard, commands, 3 forms, 2 charts, 3 views, webResource, solution
   assert.strictEqual((r.deleted.table || []).length, 3); // tables counted as deleted (tolerateNotFound)
-  // Only table deletes were attempted (synthetic items); other kinds skipped before delete
+  assert.strictEqual((r.deleted.relationship || []).length, 2); // relationships counted as deleted (tolerateNotFound)
+  // Only table/relationship deletes were attempted (synthetic items); other kinds skipped before delete
   const deletesDone = sdk.calls.filter((c) => c.method !== 'queryRecords');
-  assert.ok(deletesDone.every((c) => c.method === 'deleteTable'), 'only table deletes attempted');
+  assert.ok(deletesDone.every((c) => c.method === 'deleteTable' || c.method === 'deleteRelationship'), 'only table/relationship deletes attempted');
 });
 
 test('table deleteTable not-found error counts as deleted (cosmetic 404)', async () => {
@@ -263,6 +357,22 @@ test('a failed step does not strand the rest (best-effort continue)', async () =
   // tables + solution after the failing step were still torn down
   assert.strictEqual(sdk.db.tables.size, 0);
   assert.deepStrictEqual(sdk.db.solutions, {});
+});
+
+test('forms without names are skipped (cannot be resolved)', () => {
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'A' },
+    entities: [{ schemaName: 'new_x', primaryAttribute: { schemaName: 'new_name' } }],
+    forms: [
+      { entity: 'new_x', type: 'main', name: 'MyForm' }, // named, included
+      { entity: 'new_x', type: 'main' }, // no name, skipped
+    ],
+  };
+  const steps = planTeardown(spec);
+  const formSteps = steps.filter((s) => s.kind === 'form');
+  assert.strictEqual(formSteps.length, 1);
+  assert.strictEqual(formSteps[0].label, 'form "MyForm" (new_x)');
 });
 
 // --- helpers ----------------------------------------------------------------------------

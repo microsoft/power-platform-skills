@@ -16,10 +16,20 @@ const desk = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'sample
 function presentSdk() {
   const calls = [];
   const deletedTables = new Set();
+  const deletedRelationships = new Set();
   const queryRecords = async (logical, opts) => {
     calls.push({ method: 'queryRecords', logical, opts });
     if (logical === 'appmodule') return [{ appmoduleid: 'id1', name: 'App' }];
-    if (logical === 'systemform') return [{ formid: 'id2', name: 'Dash' }];
+    if (logical === 'systemform') {
+      // Could be dashboard (type eq 0) or form
+      if (/type eq 0/.test(opts.filter || '')) {
+        return [{ formid: 'id2', name: 'Dash' }];
+      } else {
+        return [{ formid: 'id-form', name: 'Form' }];
+      }
+    }
+    if (logical === 'savedqueryvisualization') return [{ savedqueryvisualizationid: 'id-chart', name: 'Chart' }];
+    if (logical === 'savedquery') return [{ savedqueryid: 'id-view', name: 'View' }];
     if (logical === 'appaction') return [{ appactionid: 'id3', buttonlabeltext: 'Btn' }];
     if (logical === 'webresource') return [{ webresourceid: 'id4', name: 'wr' }];
     if (logical === 'solution') return [{ solutionid: 'id5', uniquename: 'Sol' }];
@@ -27,6 +37,10 @@ function presentSdk() {
   };
   const deleteRemoteArtifact = async (type, id) => {
     calls.push({ method: 'deleteRemoteArtifact', type, id });
+  };
+  const deleteRelationship = async (schemaName) => {
+    calls.push({ method: 'deleteRelationship', schemaName });
+    deletedRelationships.add(schemaName);
   };
   const deleteWebResource = async (id) => {
     calls.push({ method: 'deleteWebResource', id });
@@ -42,7 +56,7 @@ function presentSdk() {
   const deleteSolution = async (id) => {
     calls.push({ method: 'deleteSolution', id });
   };
-  return { queryRecords, deleteRemoteArtifact, deleteWebResource, deleteTable, deleteSolution, calls };
+  return { queryRecords, deleteRemoteArtifact, deleteRelationship, deleteWebResource, deleteTable, deleteSolution, calls };
 }
 
 const logCapture = () => { const logs = []; return { log: (m) => logs.push(m), logs }; };

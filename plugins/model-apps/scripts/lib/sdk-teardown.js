@@ -10,11 +10,17 @@
 //   1. app          — the app module (references the sitemap + dashboard/form/view/chart components)
 //   2. dashboards    — systemform (type 0) rows, pinned as app components
 //   3. commands      — appactions per entity (they reference the web-resource JS; delete first)
-//   4. web-resources — webresourceset rows (the form/command JS)
-//   5. tables        — EntityDefinitions in REVERSE-topological order (a child's lookup references
+//   4. forms         — systemform rows per entity (forms reference views/web-resources; deleted before tables)
+//   5. charts        — savedqueryvisualization rows per entity (deleted before tables)
+//   6. views         — savedquery rows per entity (deleted before tables)
+//   7. relationships — OneToMany/ManyToMany relationships (deleted before tables)
+//   8. web-resources — webresourceset rows (the form/command JS)
+//   9. tables        — EntityDefinitions in REVERSE-topological order (a child's lookup references
 //                      its parent, so children/referencing tables delete first). Deleting a table
-//                      cascades its forms/views/charts/relationships/columns.
-//   6. solution      — the (now-empty) solution container, deleted last.
+//                      does NOT cascade forms/views/charts/relationships when cross-references exist
+//                      (e.g. a form subgrid references another table's view), so teardown deletes
+//                      them explicitly first.
+//  10. solution      — the (now-empty) solution container, deleted last.
 //
 // planTeardown(spec) is pure (no I/O) — the dry-run plan + the unit-test surface. runTeardown
 // executes it via an injected SDK client and emits the same { phase, status, label, n, total,
@@ -23,6 +29,7 @@
 
 const { topoOrderEntities } = require('./_graph.js');
 const { appUniqueName, commandsByEntity } = require('./sdk-build.js');
+const { relationshipSchemaName, manyToManySchemaName } = require('./app-spec.js');
 
 // OData v4 string-literal escaping: a single quote inside a literal is doubled.
 function odataStr(v) {
@@ -74,6 +81,35 @@ const KIND_HANDLERS = {
     },
     del: (sdk, item) => sdk.deleteRemoteArtifact('command', item.id),
   },
+  form: {
+    async resolve(sdk, target) {
+      const rows = await sdk.queryRecords('systemform', { select: ['formid', 'name'], filter: `name eq '${odataStr(target.name)}' and objecttypecode eq '${odataStr(target.entity)}'`, top: 10 });
+      return (rows || []).map((x) => ({ id: x.formid, name: x.name }));
+    },
+    del: (sdk, item) => sdk.deleteRemoteArtifact('form', item.id),
+  },
+  chart: {
+    async resolve(sdk, target) {
+      const rows = await sdk.queryRecords('savedqueryvisualization', { select: ['savedqueryvisualizationid', 'name'], filter: `name eq '${odataStr(target.name)}' and primaryentitytypecode eq '${odataStr(target.entity)}'`, top: 10 });
+      return (rows || []).map((x) => ({ id: x.savedqueryvisualizationid, name: x.name }));
+    },
+    del: (sdk, item) => sdk.deleteRemoteArtifact('chart', item.id),
+  },
+  view: {
+    async resolve(sdk, target) {
+      const rows = await sdk.queryRecords('savedquery', { select: ['savedqueryid', 'name'], filter: `name eq '${odataStr(target.name)}' and returnedtypecode eq '${odataStr(target.entity)}'`, top: 10 });
+      return (rows || []).map((x) => ({ id: x.savedqueryid, name: x.name }));
+    },
+    del: (sdk, item) => sdk.deleteRemoteArtifact('view', item.id),
+  },
+  relationship: {
+    // No pre-resolve: delete by schema name directly (like the table handler's synthetic item).
+    async resolve(sdk, target) {
+      return [{ id: target.schemaName, schemaName: target.schemaName }];
+    },
+    del: (sdk, item) => sdk.deleteRelationship(item.schemaName),
+    tolerateNotFound: true, // a relationship already removed (e.g. by a prior table delete) is "gone"
+  },
   webResource: {
     async resolve(sdk, target) {
       const rows = await sdk.queryRecords('webresource', { select: ['webresourceid', 'name'], filter: `name eq '${odataStr(target.name)}'`, top: 1 });
@@ -113,6 +149,20 @@ function planTeardown(spec) {
   }
   for (const entity of Object.keys(commandsByEntity(spec))) {
     steps.push({ kind: 'commands', phase: 'commands', label: `command bar for ${entity}`, target: { entity } });
+  }
+  for (const f of spec.forms || []) {
+    if (!f.name) continue; // only forms the spec named can be resolved
+    steps.push({ kind: 'form', phase: 'forms', label: `form "${f.name}" (${f.entity})`, target: { name: f.name, entity: String(f.entity).toLowerCase() } });
+  }
+  for (const c of spec.charts || []) {
+    steps.push({ kind: 'chart', phase: 'charts', label: `chart "${c.name}" (${c.entity})`, target: { name: c.name, entity: String(c.entity).toLowerCase() } });
+  }
+  for (const v of spec.views || []) {
+    steps.push({ kind: 'view', phase: 'views', label: `view "${v.name}" (${v.entity})`, target: { name: v.name, entity: String(v.entity).toLowerCase() } });
+  }
+  for (const r of spec.relationships || []) {
+    const schema = r.type === 'ManyToMany' ? manyToManySchemaName(r) : relationshipSchemaName(r);
+    steps.push({ kind: 'relationship', phase: 'relationships', label: `relationship ${schema}`, target: { schemaName: schema } });
   }
   for (const wr of spec.webResources || []) {
     steps.push({ kind: 'webResource', phase: 'web-resources', label: `web resource ${wr.name}`, target: { name: wr.name } });
