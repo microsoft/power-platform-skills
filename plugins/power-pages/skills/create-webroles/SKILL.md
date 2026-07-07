@@ -9,7 +9,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate,
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Create Web Roles
 
@@ -18,7 +18,7 @@ Create web roles for a Power Pages code site. Web roles define the permissions a
 ## Core Principles
 
 - **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
-- **Always use the UUID script**: Never generate UUIDs manually — always use `${CLAUDE_PLUGIN_ROOT}/scripts/generate-uuid.js` to produce valid UUID v4 values for each web role.
+- **Always use the UUID script**: Never generate UUIDs manually — always use `${PLUGIN_ROOT}/scripts/generate-uuid.js` to produce valid UUID v4 values for each web role.
 - **Preserve uniqueness constraints**: Only one role can have `anonymoususersrole: true` and only one can have `authenticatedusersrole: true`. Always check existing roles before setting these flags.
 - **Caller-suppress mode is opt-in**: When invoked by another skill (e.g. `/add-ai-webapi`) with the `[CALLED-BY-PARENT-SKILL]` sentinel in `$ARGUMENTS`, suppress this skill's deploy prompts (Phase 1's missing-deploy ask, Phase 6's deploy ask (step 3), and the closing reminder) and return as soon as roles are created. The caller batches the deploy at end-of-orchestration. Human invocations never trigger this mode. See Phase 0 below for parsing.
 
@@ -168,7 +168,7 @@ For each new web role the user approved, create a YAML file in `.powerpages-site
 For each role, generate a UUID using the Node script. **NEVER generate UUIDs yourself — always use the script.**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/generate-uuid.js"
+node "${PLUGIN_ROOT}/scripts/generate-uuid.js"
 ```
 
 ### 4.2 Create the YAML File
@@ -228,7 +228,7 @@ name: <Role Name>
 
 1. Record skill usage:
 
-   > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+   > Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
    Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "CreateWebroles"`.
 

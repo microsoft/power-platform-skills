@@ -1,0 +1,25 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "moduleResolution": "bundler",
+    "baseUrl": ".",
+    "paths": {
+      "react-native": ["node_modules/react-native"],
+      "expo-auth-session": ["node_modules/expo-auth-session"],
+      "expo-secure-store": ["node_modules/expo-secure-store"],
+      "expo-web-browser": ["node_modules/expo-web-browser"]
+    }
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    ".expo/types/**/*.d.ts",
+    "expo-env.d.ts",
+    ".expo/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "src/native-player"
+  ]
+}

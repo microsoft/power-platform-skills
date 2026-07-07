@@ -90,7 +90,7 @@ Extract the environment URL (e.g., `https://org12345.crm.dynamics.com`). Use thi
 Verify Dataverse access and obtain authentication details using the shared script:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
+node "${PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
 ```
 
 This outputs JSON with `token`, `userId`, `organizationId`, and `tenantId`. If it fails, inform the user that Azure CLI login is required (`az login --allow-no-subscriptions` — works whether or not the user has an Azure subscription).
@@ -100,7 +100,7 @@ This outputs JSON with `token`, `userId`, `organizationId`, and `tenantId`. If i
 Fetch custom tables from Dataverse:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions?$select=LogicalName,DisplayName,Description&$filter=IsCustomEntity eq true"
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions?$select=LogicalName,DisplayName,Description&$filter=IsCustomEntity eq true"
 ```
 
 The script outputs JSON with `status` and `data`. Parse `data.value` to list each table's `LogicalName`, `DisplayName.UserLocalizedLabel.Label`, and `Description.UserLocalizedLabel.Label`.
@@ -110,7 +110,7 @@ The script outputs JSON with `status` and `data`. Parse `data.value` to list eac
 For each relevant table, fetch its columns:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_name>')/Attributes?$select=LogicalName,DisplayName,AttributeType,RequiredLevel"
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_name>')/Attributes?$select=LogicalName,DisplayName,AttributeType,RequiredLevel"
 ```
 
 Parse `data.value` to list each column's `LogicalName`, `DisplayName.UserLocalizedLabel.Label`, `AttributeType`, and `RequiredLevel.Value`.
@@ -120,7 +120,7 @@ Parse `data.value` to list each column's `LogicalName`, `DisplayName.UserLocaliz
 Fetch relationships for relevant tables:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_name>')/OneToManyRelationships?$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute"
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_name>')/OneToManyRelationships?$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute"
 ```
 
 Parse `data.value` to list each relationship's `SchemaName`, `ReferencedEntity`, `ReferencingEntity`, and `ReferencingAttribute`.
@@ -130,7 +130,7 @@ Parse `data.value` to list each relationship's `SchemaName`, `ReferencedEntity`,
 Query the `CDS Default Publisher` to get the customization prefix used for new tables and columns:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "publishers?$filter=friendlyname eq 'CDS Default Publisher'&$select=customizationprefix"
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "publishers?$filter=friendlyname eq 'CDS Default Publisher'&$select=customizationprefix"
 ```
 
 Parse `data.value[0].customizationprefix` to get the prefix (e.g., `cr123`). All new table logical names must be prefixed with `{prefix}_` (e.g., `cr123_project`) and all new custom column logical names must also use this prefix (e.g., `cr123_projectname`). This ensures new entities are created under the environment's default publisher.
@@ -138,7 +138,7 @@ Parse `data.value[0].customizationprefix` to get the prefix (e.g., `cr123`). All
 If the query returns no results, try querying all publishers and pick the first non-Microsoft one:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "publishers?$select=friendlyname,customizationprefix"
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "publishers?$select=friendlyname,customizationprefix"
 ```
 
 If still unable to determine the prefix, use `cr` as a placeholder and note in the proposal that the user should confirm their publisher prefix.
@@ -255,7 +255,7 @@ Follow these conventions:
 
 **Do this BEFORE entering plan mode.** Render the complete data model plan — including tables, columns, rationale, and the ER diagram — as an interactive HTML page in the browser.
 
-The HTML template is at `${CLAUDE_PLUGIN_ROOT}/agents/assets/data-model-plan.html`. It uses placeholder tokens that you replace with actual data.
+The HTML template is at `${PLUGIN_ROOT}/agents/assets/data-model-plan.html`. It uses placeholder tokens that you replace with actual data.
 
 #### 4.5.1 Prepare the Data
 
@@ -332,7 +332,7 @@ Include these rationale categories:
 2. Run the render script:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/render-data-model-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
+node "${PLUGIN_ROOT}/scripts/render-data-model-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
 ```
 
 The render script refuses to overwrite existing files. Before calling it, check if the default output path (`<PROJECT_ROOT>/docs/data-model-plan.html`) already exists. If it does, choose a new descriptive filename based on context — e.g., `data-model-plan-support-tables.html`, `data-model-plan-apr-2026.html`. Pass the chosen name via `--output`.

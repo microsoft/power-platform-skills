@@ -9,7 +9,7 @@ allowed-tools: Read, Write, Edit, Grep, Glob, Bash, AskUserQuestion, Task, TaskC
 model: sonnet
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Add SEO
 
@@ -55,7 +55,7 @@ Read `powerpages.config.json` to get the site name and config.
 
 #### 1.3 Detect Framework & Discover Routes
 
-Read `package.json` to determine the framework and locate key files. See `${CLAUDE_PLUGIN_ROOT}/references/framework-conventions.md` for the full framework → public directory → index HTML mapping and route discovery patterns.
+Read `package.json` to determine the framework and locate key files. See `${PLUGIN_ROOT}/references/framework-conventions.md` for the full framework → public directory → index HTML mapping and route discovery patterns.
 
 Build a list of all routes (e.g., `/`, `/about`, `/contact`, `/blog`).
 
@@ -308,7 +308,7 @@ If a dev server is running (or start one):
 
 #### 7.3 Record Skill Usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "AddSeo"`.
 

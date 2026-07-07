@@ -52,12 +52,12 @@ running every prompt yourself via `AskUserQuestion`. In short:
    `app-spec.json` after each level so the user can hand-edit between turns. Forms default to
    `layout: "auto"`; use explicit `tabs`/`sections`/`columns` when the user wants real grouping
    (see the schema). **Show the form wireframe** so the user can see the layout + Notes before
-   approving: `node "${CLAUDE_PLUGIN_ROOT}/scripts/preview-form.js" --spec @<working-dir>/app-spec.json`.
+   approving: `node "${PLUGIN_ROOT}/scripts/preview-form.js" --spec @<working-dir>/app-spec.json`.
    **Don't pre-create tables/columns** during authoring — the build does it idempotently (adds
    only what's missing).
 5. **Guardrail lint (hard gate)** — run `spec-lint.js`; **errors block**, warnings teach:
    ```bash
-   node -e "const{lintAppSpec}=require('${CLAUDE_PLUGIN_ROOT}/scripts/lib/spec-lint.js');const s=require('<working-dir>/app-spec.json');const r=lintAppSpec(s);console.log(JSON.stringify(r,null,2));process.exit(r.ok?0:1)"
+   node -e "const{lintAppSpec}=require('${PLUGIN_ROOT}/scripts/lib/spec-lint.js');const s=require('<working-dir>/app-spec.json');const r=lintAppSpec(s);console.log(JSON.stringify(r,null,2));process.exit(r.ok?0:1)"
    ```
 6. **Plan-mode approval** — present the plan (`EnterPlanMode`), then `ExitPlanMode` to get the
    user's go-ahead. Write `model-app-plan.md`.
@@ -71,7 +71,7 @@ running every prompt yourself via `AskUserQuestion`. In short:
 **Dry-run first** (no `--apply` → prints the ordered plan grouped by phase, writes nothing):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/build-model-app.js" --env <envUrl> --spec @<working-dir>/app-spec.json
+node "${PLUGIN_ROOT}/scripts/build-model-app.js" --env <envUrl> --spec @<working-dir>/app-spec.json
 ```
 
 The output is the broken-down build plan — phases as `▶ <phase>` headers, each step as
@@ -80,7 +80,7 @@ status live (`[n/total] ✓ created` / `⊘ skipped` / `✗ failed — <error>`)
 `✓ build complete — X created, Y skipped, Z failed` summary:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/build-model-app.js" \
+node "${PLUGIN_ROOT}/scripts/build-model-app.js" \
   --env <envUrl> --spec @<working-dir>/app-spec.json --apply [--sample-data] [--publish]
 ```
 
@@ -105,7 +105,7 @@ lists what it would delete and touches nothing; add `--apply` to actually delete
 `--clear-workspace` to also prune `.maker-workspace/`):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/teardown-model-app.js" \
+node "${PLUGIN_ROOT}/scripts/teardown-model-app.js" \
   --env <envUrl> --spec @<working-dir>/app-spec.json [--apply] [--clear-workspace]
 ```
 

@@ -6,10 +6,26 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { startMock } = require('./mock-dataverse');
 const {
   discoverSiteComponents,
 } = require('../../lib/discover-site-components');
+
+// Temp site root whose table permissions reference the given entities — the
+// site-referenced scoping signal that replaced the publisher-prefix table dump.
+function makeSiteRoot(entityLogicalNames) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsc-int-'));
+  const dir = path.join(root, '.powerpages-site', 'table-permissions');
+  fs.mkdirSync(dir, { recursive: true });
+  entityLogicalNames.forEach((entity, i) => {
+    fs.writeFileSync(path.join(dir, `perm-${i}.tablepermission.yml`),
+      `adx_entitypermission_webrole:\n- ad89f5ee-8665-f111-a826-6045bd00fdda\nentitylogicalname: ${entity}\nentityname: Perm ${i}\nid: f03fefed-8665-f111-a826-000d3a597e6a\nscope: 756150000\n`);
+  });
+  return root;
+}
 
 test('integration: discover follows @odata.nextLink pagination against a real HTTP server', async () => {
   let mockBase = null;
@@ -217,23 +233,30 @@ test('integration: discover with publisherPrefix queries env vars + tables endpo
             LogicalName: 'contoso_account',
             SchemaName: 'contoso_Account',
             DisplayName: { UserLocalizedLabel: { Label: 'Account' } },
+            IsCustomEntity: true,
+            IsManaged: false,
           },
           {
             MetadataId: 'meta-2',
             LogicalName: 'other_widget',
             SchemaName: 'other_Widget',
             DisplayName: { UserLocalizedLabel: { Label: 'Widget' } },
+            IsCustomEntity: true,
+            IsManaged: false,
           },
         ],
       },
     },
   ]);
+  // Site references contoso_account only -> other_widget is dropped (unreferenced).
+  const projectRoot = makeSiteRoot(['contoso_account']);
   try {
     const result = await discoverSiteComponents({
       envUrl: mock.baseUrl,
       token: 'x',
       siteId: 'site-42',
       publisherPrefix: 'contoso',
+      projectRoot,
     });
     assert.equal(result.envVars.length, 1);
     assert.equal(result.envVars[0].schemaName, 'contoso_FeatureFlag');
@@ -246,5 +269,6 @@ test('integration: discover with publisherPrefix queries env vars + tables endpo
     assert.equal(edCalls.length, 1);
   } finally {
     await mock.close();
+    fs.rmSync(projectRoot, { recursive: true, force: true });
   }
 });

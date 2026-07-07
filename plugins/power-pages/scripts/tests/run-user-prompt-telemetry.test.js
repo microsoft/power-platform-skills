@@ -10,10 +10,10 @@ const { spawnSync } = require("node:child_process");
 const PLUGIN_ROOT = path.resolve(__dirname, "..", "..");
 const HOOK = path.join(PLUGIN_ROOT, "hooks", "run-user-prompt-telemetry.js");
 
-// The live telemetry gates are the per-plugin opt-out in config.json and the
-// `disabled` flag in ikey.json — no consent file is read. So this just needs
-// to hand back an isolated tmpdir for the probe / ikey override.
 function mkConfigDir() {
+  // An isolated config dir. Emission is NOT gated by any telemetry.json here —
+  // the per-plugin opt-out is a config.json with telemetry[plugin] = "off"
+  // (see user-config.js); tests that need opt-out write that file explicitly.
   return fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-upt-"));
 }
 
@@ -26,6 +26,9 @@ function runHook({ prompt, configDir, fakeProbe, ikeyPath }) {
       POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
       POWER_PLATFORM_SKILLS_FAKE_HTTPS: fakeProbe || "",
       POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath || "",
+      // Clear the workflow-wide opt-out backstop (set in power-pages-script-tests.yml)
+      // so the emit-detection test still exercises the real path to its probe.
+      POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "",
     },
     // The enabled path shells out to `pac auth who` + `pac --version`, each
     // capped at 8s (see lib/pac-auth.js). The hook's documented budget is ~30s;
@@ -50,7 +53,7 @@ function waitForFile(filePath, timeoutMs) {
   return fs.existsSync(filePath);
 }
 
-test("hook emits PagesPluginEvent with top-level fields for tracked slash command", () => {
+test("hook emits PagesAIPluginEvent with top-level fields for tracked slash command", () => {
   const configDir = mkConfigDir();
   const probePath = path.join(configDir, "probe.json");
   // Point the hook at a temp ikey.json via the override seam instead of
@@ -60,11 +63,30 @@ test("hook emits PagesPluginEvent with top-level fields for tracked slash comman
   fs.writeFileSync(
     ikeyPath,
     JSON.stringify({
-      instrumentationKey: "test-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
-      collector_url: "https://example.invalid/OneCollector/1.0/",
-      event_stream_name: "PagesPluginEvent",
+      event_stream_name: "PagesAIPluginEvent",
       disabled: false,
+      default_region: "us",
+      regions: {
+        us: {
+          instrumentation_key: "test-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
+          collector_url: "https://example.invalid/OneCollector/1.0/",
+        },
+      },
     })
+  );
+  // The dispatcher discovers region routing via a resolver.js next to ikey.json.
+  // Mirror the shipped plugin layout by dropping one beside the temp config that
+  // re-exports the real region resolver from scripts/lib/telemetry/resolver.js.
+  const shippedResolver = path.join(
+    PLUGIN_ROOT,
+    "scripts",
+    "lib",
+    "telemetry",
+    "resolver.js"
+  );
+  fs.writeFileSync(
+    path.join(configDir, "resolver.js"),
+    `module.exports = require(${JSON.stringify(shippedResolver)});\n`
   );
 
   const { status } = runHook({
@@ -79,7 +101,7 @@ test("hook emits PagesPluginEvent with top-level fields for tracked slash comman
   assert.ok(probe.body.endsWith("\n"), "body must be newline-terminated");
   const body = JSON.parse(probe.body);
   assert.deepEqual(Object.keys(body).sort(), ["data", "iKey", "name", "time", "ver"]);
-  assert.equal(body.name, "PagesPluginEvent");
+  assert.equal(body.name, "PagesAIPluginEvent");
   assert.equal(body.ver, "4.0");
   assert.match(body.iKey, /^o:/);
   assert.equal(body.data.eventName, "skill_started");

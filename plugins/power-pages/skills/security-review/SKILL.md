@@ -16,7 +16,7 @@ allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskU
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Review Security
 
@@ -229,7 +229,7 @@ Tell the user that all checks are running in parallel. As each subagent complete
 Write up to four plain-language next-step recommendations as a JSON string array to `<SYSTEM_TEMP>/security-review/next-steps.json`. Compose a 2–4 sentence plain-language `summary` of the overall state.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/build-review-data.js" \
+node "${PLUGIN_ROOT}/scripts/build-review-data.js" \
   --reportName "Security Review" \
   --inputDir "<SYSTEM_TEMP>/security-review/" \
   --siteName "<SITE_NAME>" \
@@ -243,7 +243,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/build-review-data.js" \
 ### 4.2 Render the master HTML
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/render-review.js" \
+node "${PLUGIN_ROOT}/scripts/render-review.js" \
   --output "<DOCS_PATH>" \
   --data "<SYSTEM_TEMP>/security-review/security-review-data.json"
 ```
@@ -258,7 +258,7 @@ Open `<DOCS_PATH>` in the user's default browser.
 
 ### 5.2 Record skill usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 >
 > Use `--skillName "SecurityReview"`.
 
@@ -297,7 +297,7 @@ If the cleanup fails (file lock, permission), warn the user and continue — the
 - **Plain language with users** — never lead with technical terms.
 - **Parallel subagent delegation** — every selected skill runs as a parallel subagent via the `Agent` tool, launched in a single message. Perform the inline read-only `setup-auth` check while subagents work. Use the staggered launch (§ 3.1 fallback) only if the harness rejects the parallel-batch call.
 - **Single consolidated HTML** — never produce per-skill HTML reports during this run. Skills run in `--review` mode.
-- **Same look and feel** — rendering goes through the shared template at `${CLAUDE_PLUGIN_ROOT}/scripts/lib/templates/security-review-report.html` via `scripts/render-review.js`. Do not author per-skill HTML or duplicate the template; the generated report must match the existing audit-permissions report visually.
+- **Same look and feel** — rendering goes through the shared template at `${PLUGIN_ROOT}/scripts/lib/templates/security-review-report.html` via `scripts/render-review.js`. Do not author per-skill HTML or duplicate the template; the generated report must match the existing audit-permissions report visually.
 - **Cleanup is mandatory** — the cleanup step is not optional. Failing to clean up is treated as a non-fatal warning, but the skill always tries.
 - **Never run destructive sub-actions automatically** — skills that propose changes (e.g., editing site settings, deleting WAF rules) must operate in read-only `--review` mode during this orchestration. Apply changes only via the explicit "walk me through fixes" follow-up, after the user picks an action.
 

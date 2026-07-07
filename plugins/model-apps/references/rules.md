@@ -14,7 +14,7 @@ Comprehensive rules for generating generative page code. Read this file during c
 6. **Entity Logical Names**: Use singular lowercase (e.g., `"account"` not `"accounts"`)
 7. **Styling**: Use `makeStyles` with tokens; avoid inline styles except for dynamic values
 8. **Responsive Design**: Use flexbox and relative units; NEVER use `100vh`/`100vw`
-9. **Icons — verified names only**: Import from `@fluentui/react-icons`; use unsized variants only (e.g., `AddRegular` not `Add24Regular`). Icon names are frequently hallucinated — names like `MedicalRegular`, `PawRegular`, `AnimalRabbitRegular`, `BirdRegular` do not exist. **Always Read `${CLAUDE_PLUGIN_ROOT}/references/verified-icons.txt`** (~5000 names) and cross-check every icon import against that list. After writing, Grep your own output for `from "@fluentui/react-icons"` and verify each named import. If an icon you want is not in the list, pick the closest semantic substitute that is. Never guess a name.
+9. **Icons — verified names only**: Import from `@fluentui/react-icons`; use unsized variants only (e.g., `AddRegular` not `Add24Regular`). Icon names are frequently hallucinated — names like `MedicalRegular`, `PawRegular`, `AnimalRabbitRegular`, `BirdRegular` do not exist. **Always Read `${PLUGIN_ROOT}/references/verified-icons.txt`** (~5000 names) and cross-check every icon import against that list. After writing, Grep your own output for `from "@fluentui/react-icons"` and verify each named import. If an icon you want is not in the list, pick the closest semantic substitute that is. Never guess a name.
 10. **No External Libraries**: No routing libraries (React Router) or assumptions of implicit dependencies
 11. **No FluentProvider**: Already provided at root — adding another causes a double-render flicker in React 17. For dark mode/theme overrides, use the `themeToVars` two-div pattern in **Special Patterns > Dark Mode Toggle**.
 12. **Forbidden Functions**: Don't use `createTheme`, `mergeThemes`, `useTheme` (don't exist in Fluent UI V9)
@@ -170,7 +170,7 @@ Localization guidance has been moved to a separate reference that is loaded
 configured languages OR any non-English language. For English-only environments,
 skip this entirely.
 
-See: `${CLAUDE_PLUGIN_ROOT}/references/localization.md`
+See: `${PLUGIN_ROOT}/references/localization.md`
 
 
 ---

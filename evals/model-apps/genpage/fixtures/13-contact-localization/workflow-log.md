@@ -52,8 +52,8 @@
 - Plan has 1 page → fast path taken (inlined build, no Task subagent dispatched)
 - Data mode: dataverse
 - Read sample: plugins/model-apps/samples/9-list-with-caching.tsx (Dataverse list pattern)
-- Read ${CLAUDE_PLUGIN_ROOT}/references/localization.md (multi-language + RTL pattern)
-- Read ${CLAUDE_PLUGIN_ROOT}/references/verified-icons.txt
+- Read ${PLUGIN_ROOT}/references/localization.md (multi-language + RTL pattern)
+- Read ${PLUGIN_ROOT}/references/verified-icons.txt
 - Wrote page.tsx with:
   - Xrm.Utility.getGlobalContext().userSettings.languageId for language detection
   - LOCALE_MAP for 1033/1025/1036 → BCP-47 + isRtl

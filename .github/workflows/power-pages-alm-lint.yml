@@ -17,6 +17,12 @@ jobs:
     alm-lint:
         name: alm-lint
         runs-on: ubuntu-latest
+        # Consistency backstop: keep all power-pages CI opted out of telemetry
+        # transmission. This job runs only the linter today (no emission), so the
+        # var is inert here — it guarantees no transmission if an emitting step is
+        # ever added to this workflow.
+        env:
+            POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "1"
         steps:
             - name: checkout
               uses: actions/checkout@v4

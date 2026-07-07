@@ -29,7 +29,7 @@ You will be invoked with a prompt that includes:
 - **Data mode** — either `dataverse` or `mock`
 - **RuntimeTypes path** — absolute path to `RuntimeTypes.ts` (present only when Data mode is `dataverse`)
 - **Working directory** — where to write the `.tsx` file
-- **Plugin root** — `${CLAUDE_PLUGIN_ROOT}` for reading references and samples
+- **Plugin root** — `${PLUGIN_ROOT}` for reading references and samples
 
 The **Data mode** flag is authoritative — use it to decide whether to perform Step 2
 (read RuntimeTypes.ts) or skip it. Do not infer data mode from the plan document.
@@ -39,7 +39,7 @@ The **Data mode** flag is authoritative — use it to decide whether to perform 
 Read `genpage-plan.md` at the path provided in your invocation prompt.
 
 The plan document follows a strict schema. See
-`${CLAUDE_PLUGIN_ROOT}/references/plan-schema.md` for the full contract.
+`${PLUGIN_ROOT}/references/plan-schema.md` for the full contract.
 
 Locate and extract:
 
@@ -70,7 +70,7 @@ For **mock data pages:** Skip this step. Generate realistic sample data inline.
 ## Step 2.5 — Icon-name validation (Grep-based)
 
 The plugin ships a verified icon list at
-`${CLAUDE_PLUGIN_ROOT}/references/verified-icons.txt` (~5000 names from
+`${PLUGIN_ROOT}/references/verified-icons.txt` (~5000 names from
 `@fluentui/react-icons`). **Do NOT load the full file into context** — it's
 ~26K tokens of dead weight. Instead, use `Grep` to validate names on demand.
 
@@ -96,13 +96,13 @@ import has been Grep-validated against the verified list.
 Read the code generation rules reference:
 
 ```
-${CLAUDE_PLUGIN_ROOT}/references/rules.md
+${PLUGIN_ROOT}/references/rules.md
 ```
 
 Read the relevant sample file identified in the plan:
 
 ```
-${CLAUDE_PLUGIN_ROOT}/samples/[sample-name].tsx
+${PLUGIN_ROOT}/samples/[sample-name].tsx
 ```
 
 If **Data mode** is `dataverse` AND the page fits the "list / detail / pages
@@ -110,7 +110,7 @@ the user navigates back to" profile (per the plan's Per-Page Specification),
 also read the data caching reference:
 
 ```
-${CLAUDE_PLUGIN_ROOT}/references/data-caching.md
+${PLUGIN_ROOT}/references/data-caching.md
 ```
 
 Skip the caching reference for forms, single-visit dashboards, mock-data pages,
@@ -250,7 +250,7 @@ pattern (translation dictionary, RTL support, formatting helpers, usersettings
 fetch):
 
 ```
-${CLAUDE_PLUGIN_ROOT}/references/localization.md
+${PLUGIN_ROOT}/references/localization.md
 ```
 
 For English-only environments, skip this entirely — do not load the reference

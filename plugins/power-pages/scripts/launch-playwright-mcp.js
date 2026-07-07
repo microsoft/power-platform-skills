@@ -28,6 +28,7 @@ function buildMcpArgs(browser, {
   platform = process.platform,
 } = {}) {
   return [
+    '-y',
     '@playwright/mcp@latest',
     '--browser',
     browser,

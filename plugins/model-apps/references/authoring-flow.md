@@ -15,7 +15,7 @@ Inputs you already have in the main loop:
 
 - The user's requirements (`$ARGUMENTS`)
 - The working directory (absolute path where artifacts should be written)
-- The plugin root directory (`${CLAUDE_PLUGIN_ROOT}`)
+- The plugin root directory (`${PLUGIN_ROOT}`)
 
 ---
 
@@ -175,7 +175,7 @@ The user-facing **question** about which solution to use is conditional:
 Query the env for non-managed solutions:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
   "solutions?\$select=uniquename,friendlyname&\$expand=publisherid(\$select=customizationprefix)&\$filter=ismanaged eq false and uniquename ne 'Default' and uniquename ne 'Active' and isvisible eq true&\$top=10"
 ```
 
@@ -309,7 +309,7 @@ ASCII wireframe so the user can *see* each form's tabs, sections, fields, the No
 sub-grids before approving — then ask for changes:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/preview-form.js" --spec @<working-dir>/app-spec.json [--entity <schemaName>]
+node "${PLUGIN_ROOT}/scripts/preview-form.js" --spec @<working-dir>/app-spec.json [--entity <schemaName>]
 ```
 
 Include the wireframe in the same turn as the forms/views/charts proposal (it's the visual
@@ -407,7 +407,7 @@ Persist the fully agreed spec to `<working-dir>/app-spec.json` before Step 5.
 Before entering plan mode, run the lint on the agreed spec:
 
 ```bash
-node -e "const{lintAppSpec}=require('${CLAUDE_PLUGIN_ROOT}/scripts/lib/spec-lint.js');const s=require('<abs-path-to-app-spec.json>');const r=lintAppSpec(s);console.log(JSON.stringify(r,null,2));"
+node -e "const{lintAppSpec}=require('${PLUGIN_ROOT}/scripts/lib/spec-lint.js');const s=require('<abs-path-to-app-spec.json>');const r=lintAppSpec(s);console.log(JSON.stringify(r,null,2));"
 ```
 
 Replace `<abs-path-to-app-spec.json>` with the actual absolute path to

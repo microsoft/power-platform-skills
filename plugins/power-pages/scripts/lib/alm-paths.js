@@ -83,10 +83,31 @@ function ensureAlmDir(projectRoot) {
   return dir;
 }
 
+// The rendered plan + its backing JSON live at the `docs/` ROOT (NOT under
+// `docs/alm/`): `docs/alm-plan.html` and `docs/.alm-plan-data.json`. Centralized
+// here so the PostToolUse hook, check-alm-plan.js, and refresh-alm-plan-data.js
+// can't drift on the path.
+const PLAN_DATA_FILE = '.alm-plan-data.json';
+const PLAN_HTML_FILE = 'alm-plan.html';
+
+function planDataPath(projectRoot) {
+  if (!projectRoot) throw new Error('planDataPath: projectRoot is required');
+  return path.join(projectRoot, 'docs', PLAN_DATA_FILE);
+}
+
+function planHtmlPath(projectRoot) {
+  if (!projectRoot) throw new Error('planHtmlPath: projectRoot is required');
+  return path.join(projectRoot, 'docs', PLAN_HTML_FILE);
+}
+
 module.exports = {
   ALM_DIR,
   FILE_NAMES,
+  PLAN_DATA_FILE,
+  PLAN_HTML_FILE,
   almDir,
   almPath,
   ensureAlmDir,
+  planDataPath,
+  planHtmlPath,
 };

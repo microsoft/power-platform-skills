@@ -21,7 +21,7 @@ All requests require the following headers:
 To verify access and obtain a token:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
+node "${PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
 ```
 
 This outputs JSON with `token`, `userId`, `organizationId`, and `tenantId`.
@@ -29,7 +29,7 @@ This outputs JSON with `token`, `userId`, `organizationId`, and `tenantId`.
 For making requests, use `dataverse-request.js` which handles authentication headers automatically:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET /api/data/v9.2/entities
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET /api/data/v9.2/entities
 ```
 
 ### Token Refresh
@@ -37,7 +37,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET /api/data
 Azure CLI tokens expire after ~60 minutes. The `dataverse-request.js` script handles 401 token refresh automatically. For long-running operations (many records or multiple tables), re-run `verify-dataverse-access.js` periodically (every ~20 records or 3-4 tables) to confirm access is still valid:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
+node "${PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
 ```
 
 ---
@@ -90,7 +90,7 @@ The `dataverse-request.js` script handles retries internally:
 No manual retry logic is needed. Simply call the script and check the returned status code:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST /api/data/v9.2/cr123_projects --body "{\"cr123_name\":\"My Project\"}"
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST /api/data/v9.2/cr123_projects --body "{\"cr123_name\":\"My Project\"}"
 ```
 
 The output is JSON: `{ "status": <code>, "data": {...} }`. If the request fails after retries, inspect `status` and `data.error.message` to determine the appropriate action from the error tables above.

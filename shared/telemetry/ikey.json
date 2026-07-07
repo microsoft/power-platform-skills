@@ -1,6 +1,35 @@
 {
-  "instrumentationKey": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
-  "collector_url": "",
   "event_stream_name": "PluginEventStreamPlaceholder",
-  "disabled": true
+  "disabled": true,
+  "default_region": "us",
+  "regions": {
+    "internal": {
+      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "collector_url": ""
+    },
+    "us": {
+      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "collector_url": ""
+    },
+    "eu": {
+      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "collector_url": ""
+    },
+    "gov": {
+      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "collector_url": ""
+    },
+    "high": {
+      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "collector_url": ""
+    },
+    "dod": {
+      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "collector_url": ""
+    },
+    "mooncake": {
+      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "collector_url": ""
+    }
+  }
 }

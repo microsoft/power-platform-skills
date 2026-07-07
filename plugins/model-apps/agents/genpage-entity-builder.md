@@ -26,7 +26,7 @@ You will be invoked by the `/genpage` skill with a prompt that includes:
 
 - Path to `genpage-plan.md`
 - The working directory (where to write logs and intermediate JSON)
-- The plugin root (`${CLAUDE_PLUGIN_ROOT}`) — where the JS scripts live
+- The plugin root (`${PLUGIN_ROOT}`) — where the JS scripts live
 - The Dataverse environment URL (e.g. `https://aurorabapenv4ab3f.crmtest.dynamics.com`)
 
 The **Solution unique name** and **Publisher Prefix** are read directly from the
@@ -38,7 +38,7 @@ The solution membership is passed via the input JSON to `provision-entities.js`
 the env's built-in Default Solution.
 
 You operate through the SDK-backed `provision-entities.js` CLI under
-`${CLAUDE_PLUGIN_ROOT}/scripts/`. **There is no MCP server. There is no Python. There
+`${PLUGIN_ROOT}/scripts/`. **There is no MCP server. There is no Python. There
 is no Dataverse Skills plugin dependency.**
 
 ---
@@ -48,7 +48,7 @@ is no Dataverse Skills plugin dependency.**
 Read `genpage-plan.md` at the path provided in your invocation prompt.
 
 The plan document follows a strict schema. See
-`${CLAUDE_PLUGIN_ROOT}/references/plan-schema.md` for the full contract,
+`${PLUGIN_ROOT}/references/plan-schema.md` for the full contract,
 especially the `## Entity Creation Required` section.
 
 Extract from the **`## Environment`** section:
@@ -108,7 +108,7 @@ You still re-probe defensively in case the orchestrator's check went stale
 (e.g., the user revoked auth mid-run):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/check-auth.js" <envUrl>
+node "${PLUGIN_ROOT}/scripts/check-auth.js" <envUrl>
 ```
 
 Parse the JSON output. If `ok: false`, **abort and surface the `message` field
@@ -263,7 +263,7 @@ Create a `TaskCreate` task: "Provision entities to Dataverse".
 Run the single provisioning command:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/provision-entities.js" \
+node "${PLUGIN_ROOT}/scripts/provision-entities.js" \
   --env "$ENV_URL" \
   --input "@<working-dir>/provision-input.json" \
   --apply
@@ -359,7 +359,7 @@ Under `## Commands`, record the provisioning command:
 ## Commands
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/provision-entities.js" --env "$ENV_URL" --input @<working-dir>/provision-input.json --apply
+node "${PLUGIN_ROOT}/scripts/provision-entities.js" --env "$ENV_URL" --input @<working-dir>/provision-input.json --apply
 ```
 ```
 
@@ -453,7 +453,7 @@ First, extend `<working-dir>/provision-input.json` with a `sampleData` section:
 Run the provisioning command with the `--sample-data` flag:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/provision-entities.js" \
+node "${PLUGIN_ROOT}/scripts/provision-entities.js" \
   --env "$ENV_URL" \
   --input "@<working-dir>/provision-input.json" \
   --apply \
@@ -482,7 +482,7 @@ Update the `## Commands` section in `entity-creation-log.md` to reflect the
 ## Commands
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/provision-entities.js" --env "$ENV_URL" --input @<working-dir>/provision-input.json --apply --sample-data
+node "${PLUGIN_ROOT}/scripts/provision-entities.js" --env "$ENV_URL" --input @<working-dir>/provision-input.json --apply --sample-data
 ```
 ```
 

@@ -351,19 +351,19 @@ Step 6 so the "Create Files" step knows which action to take.
 **Master toggle:**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Summarization/Data/Enable" --value "true" --description "Enable the Power Pages data summarization API" --type "boolean"
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Summarization/Data/Enable" --value "true" --description "Enable the Power Pages data summarization API" --type "boolean"
 ```
 
 **Prompt setting (one per identifier):**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Summarization/prompt/<identifier>" --value "<prompt text>" --description "<short description of what this prompt does>"
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Summarization/prompt/<identifier>" --value "<prompt text>" --description "<short description of what this prompt does>"
 ```
 
 **Content-size override:**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Summarization/Data/ContentSizeLimit" --value "<integer>" --description "Override the default 100000-character summarization input cap"
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Summarization/Data/ContentSizeLimit" --value "<integer>" --description "Override the default 100000-character summarization input cap"
 ```
 
 Include this setting in the plan whenever:
