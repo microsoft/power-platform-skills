@@ -60,6 +60,12 @@ function makeGenpageCli(env, deps = {}) {
       const r = await run(['model', 'genpage', 'list', '--environment', env, '--app-id', appId]);
       return r.status === 0 ? parseList(r.stdout) : [];
     },
+    // Download every page of the app into `outputDir/<pageId>/{page.tsx,page.js,config.json,prompt.txt}`.
+    async download({ appId, outputDir }) {
+      const r = await run(['model', 'genpage', 'download', '--environment', env, '--app-id', appId, '--output-directory', outputDir]);
+      if (r.status !== 0) throw new Error(`pac genpage download failed: ${lastLine(r)}`);
+      return true;
+    },
   };
 }
 
