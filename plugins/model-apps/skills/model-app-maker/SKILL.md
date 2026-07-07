@@ -1,7 +1,7 @@
 ---
 name: model-app-maker
-version: 0.5.0
-description: Builds a model-driven Power Apps app from a natural-language intent — tables, columns, relationships, adaptive forms with sub-grids, views, Choice-column charts, and an app module + sitemap — via the headless cds-maker-sdk. Runs an interactive, multi-turn authoring flow (env selection, App Spec authoring, guardrail lint, plan-mode approval) and a narrated build. Use when the user says "build an app for X", "create a model-driven app", or "make me an app to manage Y". For generative PAGES use /genpage.
+version: 0.6.0
+description: Builds and edits a model-driven Power Apps app from a natural-language intent — tables, columns, relationships, adaptive forms with sub-grids, views, Choice-column charts, generative pages (genpage-first) for overview/dashboard surfaces, and an app module + sitemap — via the headless cds-maker-sdk. Runs an interactive, multi-turn authoring flow (env selection, App Spec authoring, guardrail lint, plan-mode approval) and a narrated build, and can download a deployed app back into an editable spec to change it. Use when the user says "build an app for X", "create a model-driven app", "make me an app to manage Y", or "edit/add to my app". For a standalone generative page that is not part of an app, use /genpage.
 author: Microsoft Corporation
 argument-hint: "<app description>"
 user-invocable: true
@@ -13,7 +13,9 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, EnterPlanMo
 Turn a natural-language intent into a deployed model-driven app. You author a reviewable
 **App Spec** (JSON) with the user across confirmed turns, then a deterministic engine
 (`cds-maker-sdk`, vendored) builds it — tables/columns/relationships, sample data, views,
-Choice-column charts, adaptive forms with sub-grids, and the app module + sitemap.
+Choice-column charts, adaptive forms with sub-grids, **generative pages** for overview/dashboard
+surfaces, and the app module + sitemap. The **same spec drives create and edit**: download a
+deployed app back into a spec, change it, and re-run the build (it's idempotent).
 
 ## CRITICAL — run the interactive flow in THIS conversation (the main loop)
 
@@ -24,6 +26,28 @@ Choice-column charts, adaptive forms with sub-grids, and the app module + sitema
 > inside one (a `Task` subagent's only output is its final message). The whole point of
 > this skill is the multi-turn, propose-then-confirm experience, so every `AskUserQuestion`,
 > `EnterPlanMode`, and live build status line must originate here, in the main loop.
+
+## Genpage-first policy (surface classification)
+
+Every app surface is one of two kinds — classify each as you author:
+
+- **Record surfaces** (create/read/update/list a table's rows) → a **model-driven form + view**. This
+  is the default for anything that edits or lists records.
+- **Overview / dashboard / analytics / landing surfaces** → a **generative page** (`pages[]`), **not** a
+  classic dashboard. This is the default for any non-record, at-a-glance or composite surface.
+
+Rules:
+
+- **Prefer generative pages** for overviews/dashboards by default. Propose a Home/overview genpage when
+  the app benefits from one — never force-add it.
+- A **traditional `dashboards[]`** is emitted **only on explicit request** (e.g. "use a classic dashboard").
+- Each generative page needs a **`codeFile`** (its `.tsx`). You author that page code **here, at the skill
+  layer**, before the build — a page always resolves to a concrete `codeFile`. Follow the generative-page
+  code rules in [`references/rules.md`](../../references/rules.md).
+- The build's `pages` phase uploads each page via `pac model genpage upload` **without `--add-to-sitemap`** —
+  the SDK is the **single sitemap writer**, so a page's nav entry comes from a `page` subarea in `appShell`,
+  which the SDK surfaces as a `GenPage` sitemap subarea. See
+  [`references/app-spec-schema.md`](../../references/app-spec-schema.md) → `pages[]` for the field shape.
 
 ## Workflow
 
@@ -48,7 +72,11 @@ running every prompt yourself via `AskUserQuestion`. In short:
    [`references/app-spec-schema.md`](../../references/app-spec-schema.md) and the worked sample
    [`samples/app-spec.support-desk.json`](../../samples/app-spec.support-desk.json). Then propose
    the **data model** (entities, columns, relationships); confirm via `AskUserQuestion` before
-   moving on. Then propose **forms + views + charts + sample data** together; confirm. Persist
+   moving on. Then propose **forms + views + charts + sample data** together; confirm. **Classify each surface per the
+   genpage-first policy above** — record CRUD → a model-driven form/view; overview/dashboard/analytics/
+   landing → a generative `page` in `pages[]` (author its `.tsx` `codeFile` following
+   [`references/rules.md`](../../references/rules.md)); emit a classic `dashboards[]` only on explicit
+   request. Persist
    `app-spec.json` after each level so the user can hand-edit between turns. Forms default to
    `layout: "auto"`; use explicit `tabs`/`sections`/`columns` when the user wants real grouping
    (see the schema). **Show the form wireframe** so the user can see the layout + Notes before
@@ -86,7 +114,7 @@ node "${PLUGIN_ROOT}/scripts/build-model-app.js" \
 
 **Run only what's needed** with phase selectors (the agent decides from detect-existing):
 `--only <phases>` · `--skip <phases>` · `--from <phase>` · `--to <phase>`
-(phases: `solution,data-model,sample-data,web-resources,views,charts,forms,commands,dashboards,app-shell,publish`).
+(phases: `solution,data-model,sample-data,web-resources,views,charts,forms,commands,dashboards,app-shell,pages,publish`).
 E.g. when all tables already exist: `--apply --skip data-model`. SDK metadata is persisted under
 `<working-dir>/.maker-workspace/` (override with `--workspace`), so edits can reuse it.
 
@@ -116,7 +144,7 @@ Then open the app in the browser. Refine `app-spec.json` and re-run Phase 2 to i
 
 **Teardown (cleanup).** To remove everything an App Spec built — e.g. a live-verification probe or a
 failed build — run the classifier-safe teardown. It deletes only the artifacts the spec declares, in
-dependency order (**app → dashboards → commands → web-resources → tables [children-first] → solution**;
+dependency order (**app [+ its generative pages and the orphaned sitemap] → dashboards → commands → web-resources → tables [children-first] → solution**;
 a table delete cascades its forms/views/charts/relationships/columns). **Dry-run by default** — it
 lists what it would delete and touches nothing; add `--apply` to actually delete (add
 `--clear-workspace` to also prune `.maker-workspace/`):
@@ -128,6 +156,33 @@ node "${PLUGIN_ROOT}/scripts/teardown-model-app.js" \
 
 ---
 
+## Editing a deployed app (download → edit → rebuild)
+
+The **same App Spec drives edit** — there is no separate edit path. When the user wants to change an
+existing app (add a field/view/page, edit a page's code, retitle/reorder nav, swap an icon), **pull the
+deployed app fresh into a spec first**, then edit that spec and re-run Phase 2:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/download-model-app.js" --env <envUrl> --app <appId|uniqueName> --out <working-dir>
+```
+
+This reconstructs the **complete** app into `<working-dir>/app-spec.json`: the sitemap → `appShell` (all
+subareas + icons), **every** generative page (downloaded via `pac model genpage download`; page names come
+from the sitemap's `GenPage` subarea titles, so Maker-added pages are included too) into `pages[]` + their `.tsx` `codeFile`s, the referenced entities (minimal — the build reuses
+existing tables idempotently), the icon web resources, and the solution. Then:
+
+1. **Always pull fresh at the start of an edit session** — someone may have changed the app in Maker. The
+   build reads an etag when it hydrates, so a write against an artifact changed since the pull throws a
+   version conflict → **re-pull and retry**, never clobber.
+2. Edit `app-spec.json` (and any page `.tsx`) for the requested change.
+3. Re-run the **build** (Phase 2). It's idempotent: it reuses the existing app/tables/views, **updates each
+   page in place** (matched by name → `--page-id`, so no duplicate pages), and **preserves the existing
+   `GenPage` subareas** (the download enumerated them into `pages[]`/`appShell`, so the full-replace sitemap
+   write never drops them).
+4. **Verify** (Phase 3) to confirm only the intended change landed.
+
+---
+
 ## What the builder does (in order)
 
 solution (idempotent) → data model — **discover** existing tables/columns/relationships via the
@@ -136,7 +191,10 @@ SDK (`findTables` / `findColumns` / `fetchEntityMetadata`) and create only what'
 topological, `$parent`→`@odata.bind` using the entity-set name) → **web resources** (opt-in;
 `createWebResource` for form JS/HTML/CSS) → **views** → **charts** → **forms** (primary + columns
 laid out, explicit `tabs` honored, `addSubGrid` per sub-grid, `addFormEventHandler` per `events[]`)
-→ **app module + sitemap** → publish (opt-in). All Dataverse access goes through the SDK, so the
+→ **app module + sitemap** → **generative pages** (upload each `pages[]` page via `pac model genpage upload`,
+no `--add-to-sitemap`; then the SDK rewrites the sitemap once to add the `GenPage` subareas) → publish
+(opt-in). When the app has generative-page subareas the app module is created first WITHOUT them (they can't
+resolve until the pages upload), then the pages phase rewrites the sitemap. All Dataverse access goes through the SDK, so the
 downloaded metadata lands in `.maker-workspace/`. Independent ops (columns, views/charts/forms)
 run with bounded parallelism; publish is one round-trip per entity + the app. Views/charts build
 **before** forms so a sub-grid can reference the child view id. Each step emits `[n/total]`.
@@ -158,7 +216,9 @@ run with bounded parallelism; publish is one round-trip per entity + the app. Vi
   adaptive main forms with **1:N / N:N sub-grids**; **quick-create / quick-view forms** (`formType`) +
   **quick-view placement** (`forms[].quickViews[]` — embed a QuickView form via a lookup); Choice-column
   charts; **dashboards** (`dashboards[]` — chart/list/iframe/webresource tiles) + **dashboard sitemap
-  placement** (a `dashboard` subarea, auto-pinned); **modern command-bar buttons** (`commands[]` — JS
+  placement** (a `dashboard` subarea, auto-pinned); **generative pages** (`pages[]` — the genpage-first
+  default for overview/dashboard surfaces, uploaded via `pac model genpage upload` and surfaced as `GenPage`
+  sitemap subareas; full **create + edit** round-trip via `download-model-app.js`); **modern command-bar buttons** (`commands[]` — JS
   on-click + static hidden/disabled) incl. **flyout / split-button menus** (`type` + `children[]`);
   **rich view filters** (`eq-userid`/`this-week`/`in`/`not-in`); web resources + form JS event
   handlers; sample data with **multi-parent `$parents`** + **`statusReason`** (Choice/MultiChoice labels

@@ -584,7 +584,10 @@ Mark the "Write app-spec.json and model-app-plan.md" task complete.
 - **Do NOT hand-write metadata XML or solution ZIP files.** The build engine
   (`build-model-app.js` → `lib/sdk-build.js`) produces all FormXml/FetchXml/sitemap and Web API
   writes via the SDK.
-- **Do NOT generate page code (.tsx files).** Generative pages are a separate skill (`/genpage`).
+- **Generative pages ARE authored here** for overview/dashboard surfaces (the genpage-first policy):
+  propose a `pages[]` entry and author its `.tsx` `codeFile` following the generative-page code rules in
+  [`rules.md`](rules.md); the build's `pages` phase uploads each page. (A **standalone** page that is not
+  part of an app is the separate `/genpage` skill.)
 - **Interaction points are limited to:**
   1. Step 2 — environment selection (if multiple auth profiles).
   2. Step 3 — app selection and solution selection.
