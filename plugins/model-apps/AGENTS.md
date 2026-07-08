@@ -23,6 +23,22 @@ shared, vendored SDK (`scripts/vendor/cds-maker-sdk.cjs`) — see `## Building &
 
 No Dataverse Skills plugin or Python dependency.
 
+## Documentation Map
+
+Keep these in sync — **update the relevant doc(s) in the same PR as the change** (a reviewer should be
+able to tell what moved from the docs alone):
+
+| Doc | What it holds | Update when… |
+|-----|---------------|--------------|
+| `AGENTS.md` (this file — `CLAUDE.md` symlinks to it) | Per-component behavioral specs, the canonical file tree, conventions, build/test | You add/rename a script, change a component's behavior, or change how to build/test |
+| [`docs/architecture.md`](docs/architecture.md) | Wiring / flow **diagrams** for both skills (`/genpage` + `/model-app-maker`) | You change the orchestration, phase pipeline, or how the pieces connect |
+| [`docs/model-app-maker-roadmap.md`](docs/model-app-maker-roadmap.md) | `/model-app-maker` **roadmap / TODO** (Complete + Pending by priority) | You ship or reprioritize a model-app-maker capability |
+| [`CHANGELOG.md`](CHANGELOG.md) | Keep-a-Changelog — concise bullets (detail lives in PRs/docs) | Any user-visible change |
+| [`references/app-spec-schema.md`](references/app-spec-schema.md) | The App Spec contract | You change the App Spec shape or validation |
+
+Don't duplicate content across these — **cross-link instead** (a second copy only drifts, as the file
+tree and teardown order both did before).
+
 ## model-app-maker — intent → model-driven app
 
 A second skill (`/model-app-maker`) builds a whole **model-driven app** (tables, columns,
@@ -108,12 +124,11 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
 - The build log is **phase-grouped with per-step status** (`▶ phase` / `[n/total] ✓ created` /
   `⊘ skipped` / `✗ failed`) + a closing summary; dry-run lists the same plan with a `▢` marker.
 
-Flow: Phase 0 (working dir) → Phase 1 (author the spec interactively, **in the main loop**,
-per `references/authoring-flow.md`) → Phase 2 (narrated SDK build) → Phase 3 (verify & iterate).
-**Edit** an existing app the same way: `scripts/download-model-app.js` pulls a deployed app back into a
-complete spec (+ page code); edit it and re-run Phase 2 (idempotent — reuses the app/tables, updates pages
-in place, preserves `GenPage` subareas). **Upcoming:** shippable-defaults
-provisioning (security role / quick-create / standard views).
+The end-to-end flow (Phase 0 working dir → Phase 1 author **in the main loop** per
+`references/authoring-flow.md` → Phase 2 narrated SDK build → Phase 3 verify & iterate; **edit** an
+existing app via the same path — `download-model-app.js` pulls it back into a spec, then re-run Phase 2
+idempotently) is diagrammed in [`docs/architecture.md`](docs/architecture.md) → *`/model-app-maker` —
+build pipeline*. **Upcoming:** shippable-defaults provisioning (security role / quick-create / standard views).
 
 ## Local Development
 
@@ -123,7 +138,10 @@ Test this plugin locally:
 claude --plugin-dir /path/to/plugins/model-apps
 ```
 
-## Architecture
+## File Tree
+
+The canonical layout of the plugin (architecture **diagrams** live in
+[`docs/architecture.md`](docs/architecture.md)):
 
 ```
 .plugin/plugin.json            ← Open Plugins metadata (name, version, keywords)
@@ -133,7 +151,8 @@ CLAUDE.md                      ← Symlink → AGENTS.md
 README.md                      ← User-facing intro and prereqs
 CHANGELOG.md                   ← Keep-a-Changelog
 docs/
-  architecture.md              ← One-page architecture overview with diagrams
+  architecture.md              ← Wiring/flow diagrams for BOTH skills (/genpage + /model-app-maker)
+  model-app-maker-roadmap.md   ← /model-app-maker roadmap / TODO (Complete + Pending by priority)
 agents/                        ← Agent definitions (invoked by skills via Task tool)
   genpage-planner.md           ← Requirements, discovery, plan doc, user approval (create flow)
   genpage-entity-builder.md    ← DV entity creation via plugin's Web API scripts (create flow)
