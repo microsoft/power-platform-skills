@@ -34,7 +34,6 @@ function validateProvisionInput(input) {
     return { ok: false, errors };
   }
 
-  const entityNames = new Set();
   const entityByLower = new Map();
 
   // Entity schemaName pattern: prefix_suffix (lowercase prefix, underscore, then a letter-led suffix)
@@ -57,7 +56,6 @@ function validateProvisionInput(input) {
       continue;
     }
 
-    entityNames.add(e.schemaName);
     entityByLower.set(e.schemaName.toLowerCase(), e);
 
     // Validate primaryAttribute
