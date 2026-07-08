@@ -71,6 +71,14 @@ test('createWebResource posts base64 content + the right webresourcetype (Tier 2
   assert.strictEqual(Buffer.from(post.body.content, 'base64').toString('utf8'), 'function f(){return 1;}');
 });
 
+test('vendored SDK exposes the AI methods', () => {
+  const { createMakerSdk } = require(BUNDLE);
+  const sdk = createMakerSdk({ workspacePath: require('os').tmpdir(), instanceUrl: 'https://x/', httpClient: { get: async () => ({}), post: async () => ({}), patch: async () => ({}), delete: async () => ({}), put: async () => ({}) } });
+  for (const m of ['retrieveSetting', 'saveSettingValue', 'getAiReadiness', 'setAppAiFeatures', 'configureRowSummary', 'removeRowSummary']) {
+    assert.strictEqual(typeof sdk[m], 'function', `sdk.${m} should be a function`);
+  }
+});
+
 test('addFormEventHandler injects a handler into the retained FormXML headlessly (Tier 2)', () => {
   const { createMakerSdk } = require(BUNDLE);
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'sdk-evt-'));
