@@ -13,9 +13,7 @@ const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { verifySpec } = require('./lib/verify-spec.js');
 const { appUniqueName } = require('./lib/sdk-build.js');
 const { validateAppSpec } = require('./lib/app-spec.js');
-
-// Escape single quotes for OData filter string literals (double them per OData convention).
-const odataEscape = (v) => String(v == null ? '' : v).replace(/'/g, "''");
+const { odataLit } = require('./lib/odata.js');
 
 function makeProvision(env, workspaceDir) {
   const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
@@ -29,7 +27,7 @@ function makeProvision(env, workspaceDir) {
 // Resolve the app's sitemap XML: appmodule (by unique name) -> appmodulecomponents (type 62) ->
 // sitemaps. Returns '' when the app / sitemap can't be found.
 async function sitemapXmlFor(sdk, appUnique) {
-  const apps = await sdk.queryRecords('appmodule', { select: ['appmoduleid', 'appmoduleidunique'], filter: `uniquename eq '${odataEscape(appUnique)}'`, top: 1 });
+  const apps = await sdk.queryRecords('appmodule', { select: ['appmoduleid', 'appmoduleidunique'], filter: `uniquename eq '${odataLit(appUnique)}'`, top: 1 });
   const app = apps && apps[0];
   if (!app) return '';
   const comps = await sdk.queryRecords('appmodulecomponent', { select: ['objectid', 'componenttype'], filter: `_appmoduleidunique_value eq ${app.appmoduleidunique} and componenttype eq 62`, top: 1 });

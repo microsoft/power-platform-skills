@@ -36,10 +36,10 @@ const { appUniqueName, commandsByEntity } = require('./sdk-build.js');
 const { relationshipSchemaName, manyToManySchemaName } = require('./app-spec.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
 
-// OData v4 string-literal escaping: a single quote inside a literal is doubled.
-function odataStr(v) {
-  return String(v == null ? '' : v).replace(/'/g, "''");
-}
+// OData v4 string-literal escaping lives in ./odata.js. `odataStr` is kept as a backward-compatible
+// alias because it is part of this module's exported (and unit-tested) surface.
+const { odataLit } = require('./odata.js');
+const odataStr = odataLit;
 
 // Extract a readable error message from an SDK error or exception.
 function errMsg(err) {

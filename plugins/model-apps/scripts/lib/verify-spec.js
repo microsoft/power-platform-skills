@@ -4,7 +4,7 @@
 // partial builds. Pure/testable: `read` provides the server lookups; `verifySpec` returns
 // { ok, checks:[{kind,name,present,detail}], missing:[…] }.
 
-const odataLit = (v) => String(v == null ? '' : v).replace(/'/g, "''");
+const { odataLit } = require('./odata.js');
 
 async function verifySpec(spec, read) {
   const checks = [];

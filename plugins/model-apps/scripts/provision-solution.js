@@ -18,15 +18,7 @@
 
 const { parseArgs, emitResult } = require('./lib/dataverse-auth');
 const { createAzHttpClient } = require('./lib/sdk-http-client');
-
-/**
- * Escapes single quotes for OData filter string literals (OData convention: double single quotes).
- * @param {string} str
- * @returns {string}
- */
-function odataEscape(str) {
-  return String(str).replace(/'/g, "''");
-}
+const { odataLit } = require('./lib/odata.js');
 
 /**
  * Finds the publisher to use for the solution:
@@ -43,7 +35,7 @@ async function findPublisher(sdk, publisherUniqueName) {
   if (publisherUniqueName) {
     const rows = await sdk.queryRecords('publisher', {
       select: ['publisherid', 'uniquename', 'customizationprefix'],
-      filter: `uniquename eq '${odataEscape(publisherUniqueName)}'`,
+      filter: `uniquename eq '${odataLit(publisherUniqueName)}'`,
       top: 1,
     });
     return rows && rows.length > 0 ? rows[0] : null;
@@ -186,4 +178,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { runProvisionSolution, findPublisher, odataEscape };
+module.exports = { runProvisionSolution, findPublisher, odataEscape: odataLit };
