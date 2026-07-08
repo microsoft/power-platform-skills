@@ -179,3 +179,69 @@ test('collision preflight: silent when nothing collides', async () => {
   await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, log: (m) => logs.push(m) });
   assert.ok(!logs.some((l) => /already exist/.test(l)), 'no false-positive collision warning');
 });
+
+// U2 DoD #3 — dry-run for a headless spec emits `▶ ` phase headers ONLY for the reduced set
+// (solution, data-model, app-shell). No `▶ views/charts/forms/commands/dashboards/pages/
+// ai-features/web-resources` lines — regardless of what --only/--from/--to would otherwise
+// admit. Mirrors the existing dry-run pattern at build-model-app.test.js:66-88.
+const headlessFixture = JSON.parse(
+  fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.headless-task-tracker.json'), 'utf8')
+);
+
+test('headless dry-run: phase headers are exactly the reduced set (no UI phases)', async () => {
+  const { sdk } = mockSdk();
+  const cap = logCapture();
+  await buildModelApp(headlessFixture, { apply: false, env: 'https://x' }, { sdk, log: cap.log });
+  const phaseHeaders = cap.logs.filter((l) => /^\s*▶ /.test(l)).map((l) => l.trim());
+  // Present: solution, data-model, app-shell.
+  assert.ok(phaseHeaders.includes('▶ solution'), `expected ▶ solution; got ${JSON.stringify(phaseHeaders)}`);
+  assert.ok(phaseHeaders.includes('▶ data-model'), `expected ▶ data-model; got ${JSON.stringify(phaseHeaders)}`);
+  assert.ok(phaseHeaders.includes('▶ app-shell'), `expected ▶ app-shell; got ${JSON.stringify(phaseHeaders)}`);
+  // Absent: every UI/publish/pages/ai phase — spec.headless=true drops them all.
+  for (const forbidden of ['views', 'charts', 'forms', 'commands', 'dashboards', 'pages', 'ai-features', 'web-resources']) {
+    assert.ok(!phaseHeaders.includes(`▶ ${forbidden}`), `headless dry-run must NOT emit ▶ ${forbidden}; got ${JSON.stringify(phaseHeaders)}`);
+  }
+});
+
+test('headless apply: SDK never gets form/view/chart/dashboard/webresource createArtifact calls', async () => {
+  const { sdk, calls } = mockSdk();
+  // Deliberately construct a spec that DECLARES UI artifacts alongside headless=true (bypasses
+  // lint, which normally forbids this — see spec-lint.js FORBIDDEN_ON_HEADLESS). The allowlist
+  // is defense-in-depth: even a lint-bypassed spec must not produce UI artifacts once headless
+  // is set. Without headlessPhaseAllowlist wiring the createArtifact calls for form/view/chart
+  // WOULD land, so this test genuinely exercises the wiring in build-model-app.js.
+  const spec = {
+    ...headlessFixture,
+    forms: [{ entity: 'new_project', name: 'Project', formType: 'Main', layout: 'auto' }],
+    views: [{ entity: 'new_project', name: 'Active Projects', columns: ['new_name', 'new_status'] }],
+    charts: [{ entity: 'new_project', name: 'By Status', groupBy: 'new_status', measure: 'count', chartType: 'Column' }],
+  };
+  const r = await buildModelApp(spec, { apply: true, env: 'https://x' }, { sdk });
+  assert.strictEqual(r.ok, true, `headless build should succeed; got ${JSON.stringify(r.errors || r)}`);
+  const artifactKinds = calls.filter((c) => c[0] === 'createArtifact').map((c) => c[1]);
+  for (const forbidden of ['form', 'view', 'chart', 'dashboard', 'webresource']) {
+    assert.ok(!artifactKinds.includes(forbidden), `headless build must not create '${forbidden}' artifact even when spec declares it; saw kinds=${JSON.stringify(artifactKinds)}`);
+  }
+  assert.ok(calls.some((c) => c[0] === 'createSolution'), 'solution phase still runs');
+  assert.ok(calls.some((c) => c[0] === 'createTable'), 'data-model phase still runs');
+  assert.ok(artifactKinds.includes('app'), `headless build should still create the 'app' artifact; kinds=${JSON.stringify(artifactKinds)}`);
+});
+
+test('headless apply: --only cannot smuggle a UI phase past the headless allowlist', async () => {
+  const { sdk, calls } = mockSdk();
+  const { resolvePhases } = require(path.join(__dirname, '..', 'lib', 'sdk-build.js'));
+  // Spec declares forms + views, headless=true. --only forces those phases into the resolved set;
+  // the headless allowlist must intersect them AWAY before runSdkBuild sees them.
+  const spec = {
+    ...headlessFixture,
+    forms: [{ entity: 'new_project', name: 'Project', formType: 'Main', layout: 'auto' }],
+    views: [{ entity: 'new_project', name: 'Active Projects', columns: ['new_name'] }],
+  };
+  const smuggled = resolvePhases({ only: ['forms', 'views', 'app-shell'] });
+  const r = await buildModelApp(spec, { apply: true, env: 'https://x', phases: smuggled }, { sdk });
+  assert.strictEqual(r.ok, true);
+  const artifactKinds = calls.filter((c) => c[0] === 'createArtifact').map((c) => c[1]);
+  for (const forbidden of ['form', 'view']) {
+    assert.ok(!artifactKinds.includes(forbidden), `--only should NOT smuggle '${forbidden}' into a headless build; kinds=${JSON.stringify(artifactKinds)}`);
+  }
+});

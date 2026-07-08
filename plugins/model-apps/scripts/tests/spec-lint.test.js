@@ -1,7 +1,10 @@
 // plugins/model-apps/scripts/tests/spec-lint.test.js
 const { test } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 const { lintAppSpec } = require('../lib/spec-lint.js');
+const { validateAppSpec } = require('../lib/app-spec.js');
 
 const base = () => ({
   solution: { uniqueName: 'X', publisherPrefix: 'new' },
@@ -358,4 +361,19 @@ test('lint does not apply headless rules when headless is false or absent (popul
     assert.ok(!r.errors.some((m) => /headless/i.test(m)),
       `no headless-rule error should fire when headless is ${s.headless}; got ${JSON.stringify(r.errors)}`);
   }
+});
+
+
+// U2 DoD #4 — the canonical headless fixture at samples/app-spec.headless-task-tracker.json
+// validates + lints clean. Guards against fixture drift (spec-lint changes accidentally
+// invalidating the shipping example).
+test('samples/app-spec.headless-task-tracker.json validates + lints clean', () => {
+  const p = path.join(__dirname, '..', '..', 'samples', 'app-spec.headless-task-tracker.json');
+  const spec = JSON.parse(fs.readFileSync(p, 'utf8'));
+  assert.strictEqual(spec.headless, true, 'fixture must declare headless: true');
+  const v = validateAppSpec(spec);
+  assert.strictEqual(v.ok, true, `validateAppSpec must pass on the headless fixture; errors=${JSON.stringify(v.errors)}`);
+  const r = lintAppSpec(spec);
+  assert.strictEqual(r.ok, true, `lintAppSpec must pass; errors=${JSON.stringify(r.errors)}`);
+  assert.strictEqual((r.errors || []).length, 0, 'no errors');
 });

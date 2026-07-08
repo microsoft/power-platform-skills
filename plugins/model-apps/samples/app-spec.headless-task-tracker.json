@@ -1,0 +1,47 @@
+{
+  "headless": true,
+  "solution": { "uniqueName": "ContosoHeadlessTaskTracker", "displayName": "Contoso Headless Task Tracker", "publisherPrefix": "new" },
+  "app": { "name": "Headless Task Tracker", "description": "Headless model-driven app scaffold: solution + tables + sitemap only (no forms/views/charts/dashboards). Designed as a foundation on which MCP servers, bots, and AI skills can be attached later." },
+  "entities": [
+    {
+      "schemaName": "new_project",
+      "displayName": "Project",
+      "pluralName": "Projects",
+      "primaryAttribute": { "schemaName": "new_name", "displayName": "Project Name" },
+      "columns": [
+        { "schemaName": "new_description", "displayName": "Description", "type": "Memo" },
+        { "schemaName": "new_status", "displayName": "Status", "type": "Choice", "options": ["Planned", "Active", "OnHold", "Completed"] }
+      ]
+    },
+    {
+      "schemaName": "new_task",
+      "displayName": "Task",
+      "pluralName": "Tasks",
+      "primaryAttribute": { "schemaName": "new_name", "displayName": "Task Title" },
+      "columns": [
+        { "schemaName": "new_priority", "displayName": "Priority", "type": "Choice", "options": ["Low", "Medium", "High"] },
+        { "schemaName": "new_duedate", "displayName": "Due Date", "type": "DateTime" }
+      ]
+    }
+  ],
+  "relationships": [
+    { "type": "OneToMany", "referenced": "new_project", "referencing": "new_task",
+      "lookup": { "schemaName": "new_ProjectId", "displayName": "Project" } }
+  ],
+  "appShell": {
+    "areas": [
+      {
+        "label": "Work",
+        "groups": [
+          {
+            "label": "Records",
+            "subAreas": [
+              { "entity": "new_project", "title": "Projects" },
+              { "entity": "new_task",    "title": "Tasks" }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

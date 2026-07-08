@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { runSdkBuild, planFor, resolvePhases, formDef, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, dashboardTileOpts, PHASES } = require('../lib/sdk-build.js');
+const { runSdkBuild, planFor, resolvePhases, headlessPhaseAllowlist, formDef, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, dashboardTileOpts, PHASES } = require('../lib/sdk-build.js');
 
 // Customer 1:N Tickets: a Choice column, sample data with $parent, a view, a Choice chart,
 // and a parent form with a child sub-grid.
@@ -947,4 +947,77 @@ test('dashboardTileOpts name-based still resolves from result.created (author-de
   assert.strictEqual(chart.viewId, 'view-id');
   assert.strictEqual(chart.visualizationId, 'chart-id');
   assert.strictEqual(chart.targetEntity, 'new_ohproject');
+});
+
+// U2 — headless build wiring. `headlessPhaseAllowlist` is the pure filter that constrains the
+// phase set for a headless spec (solution + data-model + app-shell, plus sample-data/publish
+// gated by opts). Non-headless specs get PHASES back unchanged (pass-through), so the caller's
+// filter-against-allow is a no-op. Mirrors the resolvePhases test pattern at sdk-build.test.js:857.
+test('headlessPhaseAllowlist honors spec.headless + opts.sampleData/publish', () => {
+  // Non-headless → pass-through (returns the full PHASES list; caller's intersection is a no-op).
+  assert.deepStrictEqual(headlessPhaseAllowlist({}, {}), PHASES.slice());
+  assert.deepStrictEqual(headlessPhaseAllowlist({ headless: false }, { sampleData: true, publish: true }), PHASES.slice());
+  assert.deepStrictEqual(headlessPhaseAllowlist(null, {}), PHASES.slice());
+  // Headless base — no sample-data, no publish.
+  assert.deepStrictEqual(headlessPhaseAllowlist({ headless: true }, {}), ['solution', 'data-model', 'app-shell']);
+  // Headless + --sample-data appends sample-data.
+  assert.deepStrictEqual(headlessPhaseAllowlist({ headless: true }, { sampleData: true }), ['solution', 'data-model', 'app-shell', 'sample-data']);
+  // Headless + --publish appends publish.
+  assert.deepStrictEqual(headlessPhaseAllowlist({ headless: true }, { publish: true }), ['solution', 'data-model', 'app-shell', 'publish']);
+  // Headless + both flags appends both.
+  assert.deepStrictEqual(headlessPhaseAllowlist({ headless: true }, { sampleData: true, publish: true }), ['solution', 'data-model', 'app-shell', 'sample-data', 'publish']);
+  // Only strict `=== true` counts (truthy but non-true values do NOT enable optional phases —
+  // matches the `apply === true` / `sampleData === true` pattern used elsewhere in the CLI).
+  assert.deepStrictEqual(headlessPhaseAllowlist({ headless: true }, { sampleData: 1, publish: 'yes' }), ['solution', 'data-model', 'app-shell']);
+  assert.deepStrictEqual(headlessPhaseAllowlist({ headless: 'true' }, {}), PHASES.slice()); // string, not boolean → non-headless
+});
+
+// U2 DoD #5 — runSdkBuild on a headless spec (with a pre-filtered headless phase set) MUST NOT
+// create form/view/chart/dashboard/webresource artifacts, MUST emit exactly one Entity subarea
+// per declared table in the app-shell sitemap, and MUST return an appDef that JSON-round-trips
+// (proxy for the tester persona's live "app opens in Dataverse" check).
+function makeHeadlessSpec() {
+  return {
+    headless: true,
+    solution: { uniqueName: 'ContosoHeadless', displayName: 'Contoso Headless', publisherPrefix: 'new' },
+    app: { name: 'Headless App', description: 'headless test' },
+    entities: [
+      { schemaName: 'new_alpha', displayName: 'Alpha', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] },
+      { schemaName: 'new_beta', displayName: 'Beta', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] },
+    ],
+    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Records', subAreas: [
+      { entity: 'new_alpha', title: 'Alphas' },
+      { entity: 'new_beta', title: 'Betas' },
+    ] }] }] },
+  };
+}
+
+test('headless build: runSdkBuild creates ZERO form/view/chart/dashboard/webresource artifacts', async () => {
+  const { sdk, calls } = mockSdk();
+  const spec = makeHeadlessSpec();
+  const phases = headlessPhaseAllowlist(spec, {});
+  await runSdkBuild(spec, { sdk, apply: true, phases });
+  const artifactKinds = find(calls, 'createArtifact').map((c) => c.args[0]);
+  for (const forbidden of ['form', 'view', 'chart', 'dashboard', 'webresource']) {
+    assert.ok(!artifactKinds.includes(forbidden), `headless build must not create '${forbidden}' artifact; saw kinds=${JSON.stringify(artifactKinds)}`);
+  }
+  // The 'app' artifact is the app-shell output — must be present (headless still ships an app module).
+  assert.ok(artifactKinds.includes('app'), `headless build should still create the 'app' artifact; kinds=${JSON.stringify(artifactKinds)}`);
+});
+
+test('headless appDef: one Entity subarea per declared table + JSON-serializable', () => {
+  const spec = makeHeadlessSpec();
+  // Simulate the state after data-model + app-shell phases (no forms/views/charts created).
+  const result = { forms: {}, views: {}, charts: {}, dashboards: {}, pages: {}, created: {} };
+  const def = appDef(spec, result);
+  // Exactly one Entity subarea per declared table, matching entity logical names.
+  const subs = def.siteMap.areas.flatMap((a) => a.groups.flatMap((g) => g.subAreas));
+  assert.strictEqual(subs.length, spec.entities.length, 'one subarea per declared table');
+  for (const s of subs) assert.strictEqual(s.type, 'Entity', `subarea type should be Entity, got ${s.type}`);
+  const entLogicals = subs.map((s) => s.entity).sort();
+  assert.deepStrictEqual(entLogicals, ['new_alpha', 'new_beta']);
+  // JSON round-trip: def.siteMap.Areas[].Groups[].SubAreas[] is a plain, JSON-serializable object.
+  // Proxy for "the built app opens in Dataverse" — verified live by the tester persona per skill doctrine.
+  const roundTripped = JSON.parse(JSON.stringify(def));
+  assert.deepStrictEqual(roundTripped, def, 'appDef must be pure JSON (no functions, no cycles, no undefineds)');
 });
