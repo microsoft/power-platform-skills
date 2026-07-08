@@ -23,6 +23,15 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
 - **SDK AI + artifact-resolve methods.** `cds-maker-sdk` now exposes `RetrieveSetting`,
   `SaveSettingValue`, `AIModelPublish`, and `aiskillconfigs` CRUD — used by the `ai-features`
   phase — plus new artifact-resolve helpers used internally by the build engine.
+- **SDK owns sample-data seeding + default-view enrichment.** `cds-maker-sdk` now exposes
+  `seedRecordGraph` (spec-agnostic record-graph seeding: parent binds → `@odata.bind`, idempotent
+  resolve-by-name, ids index-aligned per group) and `enrichDefaultViews` (resolve + column-enrich
+  an entity's default Active/Inactive views). The plugin keeps the App-Spec judgment (choice/status
+  resolution, `$parent`/`$parents` → bind translation, candidate selection) and delegates the
+  Dataverse mechanics to these helpers. Behavior-identical to the prior inline implementation.
+- **NL grid search is environment-gated, not per-app.** `nlSearch` is enabled org-wide via the
+  `EnableNLGridSearch` admin gate (the `NLGridSearchSetting` app setting is not overridable);
+  `setAppAiFeatures` reports it applied when the gate is on without an ineffective per-app write.
 - **`scripts/ai-preflight.js`**, **`scripts/lib/ai-candidates.js`**, **`scripts/lib/ai-prompt.js`**
   — standalone preflight reporter, candidate-table selector, and tailored-prompt generator for the
   AI-first features.

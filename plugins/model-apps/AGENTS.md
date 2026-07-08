@@ -34,7 +34,9 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
 - **`scripts/build-model-app.js` → `scripts/lib/sdk-build.js`** — the deterministic, **idempotent**
   build engine, run after approval. Discovers existing tables/columns/relationships via the SDK
   (`findTables`/`findColumns`/`fetchEntityMetadata`) and creates only what's missing
-  (`createSolution`/`createTable`/`createColumn`/`createRelationship`/`createRecordsBulk`, then
+  (`createSolution`/`createTable`/`createColumn`/`createRelationship`), seeds sample data via
+  `seedRecordGraph` (SDK-owned parent-bind + resolve-by-name idempotency), enriches default
+  Active/Inactive views via `enrichDefaultViews`, then
   `createWebResource` for form JS, `createArtifact`+`pushArtifact` for views/charts/forms/app,
   `addSubGrid` for sub-grids, `addFormEventHandler` for form events) — so new, existing, and mixed
   envs all work. The data model is **complete** (all column types, global choices, status reasons,
