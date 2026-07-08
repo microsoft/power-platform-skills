@@ -70,7 +70,7 @@ function isUndeletable(err) {
   return /system-defined|system managed|system-managed/.test(msg);
 }
 
-// Per-kind resolve (read-only id lookup, exact-name filtered) + delete handlers via SDK methods.
+// Per-kind resolve (id lookup via sdk.resolveArtifact) + delete handlers via SDK methods.
 // `resolve` returns the concrete artifacts to delete ([] when nothing matches — already gone /
 // never built). `del` deletes one. A not-found error on delete is tolerated as "already gone"
 // (e.g. a flyout appaction cascade removes its child buttons) — except for tables, whose
@@ -78,75 +78,50 @@ function isUndeletable(err) {
 const KIND_HANDLERS = {
   app: {
     async resolve(sdk, target) {
-      const rows = await sdk.queryRecords('appmodule', { select: ['appmoduleid', 'name', 'appmoduleidunique'], filter: `uniquename eq '${odataStr(target.uniqueName)}'`, top: 1 });
-      const app = rows && rows[0];
-      if (!app) return [];
-      // Resolve the sitemap + its generative pages NOW (while the app still exists): deleting the
-      // appmodule leaves the sitemap row orphaned, and a genpage can't be deleted while a sitemap
-      // references it (a published componenttype-62 dependency).
-      let sitemapId = null;
-      const genPageIds = [];
-      try {
-        const comps = await sdk.queryRecords('appmodulecomponent', { select: ['objectid', 'componenttype'], filter: `_appmoduleidunique_value eq ${app.appmoduleidunique} and componenttype eq 62`, top: 1 });
-        sitemapId = comps && comps[0] && comps[0].objectid;
-        if (sitemapId) {
-          const sm = await sdk.queryRecords('sitemap', { select: ['sitemapxml'], filter: `sitemapid eq ${sitemapId}`, top: 1 });
-          const xml = (sm && sm[0] && sm[0].sitemapxml) || '';
-          for (const m of String(xml).matchAll(/GenPageId="([0-9a-fA-F-]{36})"/g)) genPageIds.push(m[1]);
-        }
-      } catch { /* best-effort — fall back to the plain app delete */ }
-      return [{ id: app.appmoduleid, name: app.name, sitemapId, genPageIds }];
+      const items = await sdk.resolveArtifact('app', { uniqueName: target.uniqueName });
+      return (items || []).map((x) => ({ id: x.id, name: x.name, appModuleIdUnique: x.appModuleIdUnique }));
     },
+    // deleteAppCascade handles the app module + orphaned sitemap + genpage rows internally,
+    // preserving the same best-effort cascade behavior as the prior manual chain.
     async del(sdk, item) {
-      await sdk.deleteRemoteArtifact('app', item.id);
-      // The appmodule delete leaves an orphaned sitemap row; delete it so any GenPage dependency
-      // releases, then delete each generative page (child files first, then the uxagentproject row).
-      if (item.sitemapId && sdk.deleteRecord) { try { await sdk.deleteRecord('sitemap', item.sitemapId); } catch { /* may already be gone */ } }
-      for (const gp of item.genPageIds || []) {
-        try {
-          const files = await sdk.queryRecords('uxagentprojectfile', { select: ['uxagentprojectfileid'], filter: `_uxagentprojectid_value eq ${gp}`, top: 100 });
-          for (const f of files || []) { try { await sdk.deleteRecord('uxagentprojectfile', f.uxagentprojectfileid); } catch { /* ignore */ } }
-          await sdk.deleteRecord('uxagentproject', gp);
-        } catch { /* best-effort */ }
-      }
+      await sdk.deleteAppCascade(item.id, item.appModuleIdUnique);
     },
   },
   dashboard: {
     async resolve(sdk, target) {
-      // Dashboards are systemform rows (type 0); the name filter disambiguates them from forms.
-      const rows = await sdk.queryRecords('systemform', { select: ['formid', 'name'], filter: `name eq '${odataStr(target.name)}' and type eq 0`, top: 10 });
-      return (rows || []).map((x) => ({ id: x.formid, name: x.name }));
+      const items = await sdk.resolveArtifact('dashboard', { name: target.name });
+      return (items || []).map((x) => ({ id: x.id, name: x.name }));
     },
     del: (sdk, item) => sdk.deleteRemoteArtifact('dashboard', item.id),
   },
   commands: {
     // The SDK's command delete is keyed by ENTITY — one call removes every appaction on that
-    // entity's command bar. Resolve to a single synthetic item carrying the entity logical name
-    // (present only when the entity actually has commands, so an empty bar still reports "skip").
+    // entity's command bar. resolveArtifact returns items when commands exist; map to a single
+    // entity-keyed item so del removes the whole bar in one call.
     async resolve(sdk, target) {
-      const rows = await sdk.queryRecords('appaction', { select: ['appactionid', 'buttonlabeltext'], filter: `contextvalue eq '${odataStr(target.entity)}'`, top: 1 });
-      return (rows && rows.length) ? [{ id: target.entity, entity: target.entity }] : [];
+      const items = await sdk.resolveArtifact('command', { entity: target.entity });
+      return (items || []).map((x) => ({ id: x.id, entity: x.entity || target.entity }));
     },
     del: (sdk, item) => sdk.deleteRemoteArtifact('command', item.entity),
   },
   form: {
     async resolve(sdk, target) {
-      const rows = await sdk.queryRecords('systemform', { select: ['formid', 'name'], filter: `name eq '${odataStr(target.name)}' and objecttypecode eq '${odataStr(target.entity)}'`, top: 10 });
-      return (rows || []).map((x) => ({ id: x.formid, name: x.name }));
+      const items = await sdk.resolveArtifact('form', { name: target.name, entity: target.entity });
+      return (items || []).map((x) => ({ id: x.id, name: x.name }));
     },
     del: (sdk, item) => sdk.deleteRemoteArtifact('form', item.id),
   },
   chart: {
     async resolve(sdk, target) {
-      const rows = await sdk.queryRecords('savedqueryvisualization', { select: ['savedqueryvisualizationid', 'name'], filter: `name eq '${odataStr(target.name)}' and primaryentitytypecode eq '${odataStr(target.entity)}'`, top: 10 });
-      return (rows || []).map((x) => ({ id: x.savedqueryvisualizationid, name: x.name }));
+      const items = await sdk.resolveArtifact('chart', { name: target.name, entity: target.entity });
+      return (items || []).map((x) => ({ id: x.id, name: x.name }));
     },
     del: (sdk, item) => sdk.deleteRemoteArtifact('chart', item.id),
   },
   view: {
     async resolve(sdk, target) {
-      const rows = await sdk.queryRecords('savedquery', { select: ['savedqueryid', 'name'], filter: `name eq '${odataStr(target.name)}' and returnedtypecode eq '${odataStr(target.entity)}'`, top: 10 });
-      return (rows || []).map((x) => ({ id: x.savedqueryid, name: x.name }));
+      const items = await sdk.resolveArtifact('view', { name: target.name, entity: target.entity });
+      return (items || []).map((x) => ({ id: x.id, name: x.name }));
     },
     del: (sdk, item) => sdk.deleteRemoteArtifact('view', item.id),
   },
@@ -160,8 +135,8 @@ const KIND_HANDLERS = {
   },
   webResource: {
     async resolve(sdk, target) {
-      const rows = await sdk.queryRecords('webresource', { select: ['webresourceid', 'name'], filter: `name eq '${odataStr(target.name)}'`, top: 1 });
-      return (rows || []).map((x) => ({ id: x.webresourceid, name: x.name }));
+      const items = await sdk.resolveArtifact('webResource', { name: target.name });
+      return (items || []).map((x) => ({ id: x.id, name: x.name }));
     },
     del: (sdk, item) => sdk.deleteWebResource(item.id),
   },
@@ -198,8 +173,8 @@ const KIND_HANDLERS = {
   },
   solution: {
     async resolve(sdk, target) {
-      const rows = await sdk.queryRecords('solution', { select: ['solutionid', 'uniquename'], filter: `uniquename eq '${odataStr(target.uniqueName)}'`, top: 1 });
-      return (rows || []).map((x) => ({ id: x.solutionid, name: x.uniquename }));
+      const items = await sdk.resolveArtifact('solution', { uniqueName: target.uniqueName });
+      return (items || []).map((x) => ({ id: x.id, name: x.name }));
     },
     del: (sdk, item) => sdk.deleteSolution(item.id),
   },
@@ -306,7 +281,7 @@ async function runTeardown(spec, opts = {}, deps = {}) {
     plan.forEach((p, i) => emit({ phase: p.phase, status: 'skip', label: p.label, n: i + 1, total }));
     return { ok: true, dryRun: true, plan: plan.map((p) => p.label) };
   }
-  if (!sdk || typeof sdk.queryRecords !== 'function') {
+  if (!sdk || typeof sdk.resolveArtifact !== 'function') {
     throw new Error('runTeardown requires deps.sdk when apply is true');
   }
 

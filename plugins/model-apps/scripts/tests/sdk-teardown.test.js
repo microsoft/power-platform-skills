@@ -19,11 +19,11 @@ function fullSpec() {
   return s;
 }
 
-// A stateful mock SDK: preload the artifacts that "exist", answer queryRecords by exact-name
-// filter, and mutate on delete. Records every call for order assertions.
+// A stateful mock SDK: preload the artifacts that "exist", answer resolveArtifact by kind/identity,
+// and mutate on delete. Records every call for order assertions.
 function mockSdk(state = {}) {
   const db = {
-    appmodules: state.appmodules || {},        // uniquename -> { appmoduleid, name }
+    appmodules: state.appmodules || {},        // uniquename -> { appmoduleid, name, appModuleIdUnique? }
     dashboards: state.dashboards || {},        // name -> { formid, name }
     appactions: state.appactions || {},        // entity -> [{ appactionid, buttonlabeltext }]
     forms: state.forms || {},                  // `${entity}:${name}` -> { formid, name }
@@ -37,75 +37,58 @@ function mockSdk(state = {}) {
   };
   const calls = [];
 
-  const queryRecords = async (logical, opts) => {
-    calls.push({ method: 'queryRecords', logical, opts });
-    const filter = opts.filter || '';
-    const firstEq = (p) => { const m = p.match(/eq '([^']*)'/); return m && m[1]; };
-    const allEq = (p) => { const matches = [...p.matchAll(/eq '([^']*)'/g)]; return matches.map((m) => m[1]); };
-
-    if (logical === 'appmodule') {
-      const val = firstEq(filter);
-      const row = db.appmodules[val];
-      return row ? [row] : [];
+  const resolveArtifact = async (kind, identity) => {
+    calls.push({ method: 'resolveArtifact', kind, identity });
+    if (kind === 'app') {
+      const row = db.appmodules[identity.uniqueName];
+      return row ? [{ id: row.appmoduleid, name: row.name, appModuleIdUnique: row.appModuleIdUnique || row.appmoduleidunique }] : [];
     }
-    if (logical === 'systemform') {
-      // Could be dashboard (type eq 0) or form (objecttypecode eq ...)
-      if (/type eq 0/.test(filter)) {
-        const val = firstEq(filter);
-        const row = db.dashboards[val];
-        return row ? [row] : [];
-      } else {
-        const vals = allEq(filter);
-        const name = vals[0];
-        const entity = vals[1];
-        const key = `${entity}:${name}`;
-        const row = db.forms[key];
-        return row ? [row] : [];
-      }
+    if (kind === 'dashboard') {
+      const row = db.dashboards[identity.name];
+      return row ? [{ id: row.formid, name: row.name }] : [];
     }
-    if (logical === 'savedqueryvisualization') {
-      const vals = allEq(filter);
-      const name = vals[0];
-      const entity = vals[1];
-      const key = `${entity}:${name}`;
+    if (kind === 'command') {
+      const acts = db.appactions[identity.entity];
+      return (acts && acts.length) ? [{ id: identity.entity, entity: identity.entity }] : [];
+    }
+    if (kind === 'form') {
+      const key = `${identity.entity}:${identity.name}`;
+      const row = db.forms[key];
+      return row ? [{ id: row.formid, name: row.name }] : [];
+    }
+    if (kind === 'chart') {
+      const key = `${identity.entity}:${identity.name}`;
       const row = db.charts[key];
-      return row ? [row] : [];
+      return row ? [{ id: row.savedqueryvisualizationid, name: row.name }] : [];
     }
-    if (logical === 'savedquery') {
-      const vals = allEq(filter);
-      const name = vals[0];
-      const entity = vals[1];
-      const key = `${entity}:${name}`;
+    if (kind === 'view') {
+      const key = `${identity.entity}:${identity.name}`;
       const row = db.views[key];
-      return row ? [row] : [];
+      return row ? [{ id: row.savedqueryid, name: row.name }] : [];
     }
-    if (logical === 'appaction') {
-      const val = firstEq(filter);
-      return db.appactions[val] || [];
+    if (kind === 'webResource') {
+      const row = db.webresources[identity.name];
+      return row ? [{ id: row.webresourceid, name: row.name }] : [];
     }
-    if (logical === 'webresource') {
-      const val = firstEq(filter);
-      const row = db.webresources[val];
-      return row ? [row] : [];
-    }
-    if (logical === 'solution') {
-      const val = firstEq(filter);
-      const row = db.solutions[val];
-      return row ? [row] : [];
+    if (kind === 'solution') {
+      const row = db.solutions[identity.uniqueName];
+      return row ? [{ id: row.solutionid, name: row.uniquename }] : [];
     }
     return [];
   };
 
-  const deleteRemoteArtifact = async (type, id) => {
-    calls.push({ method: 'deleteRemoteArtifact', type, id });
-    if (type === 'app') {
-      for (const k of Object.keys(db.appmodules)) {
-        if (db.appmodules[k].appmoduleid === id) {
-          delete db.appmodules[k];
-          return;
-        }
+  const deleteAppCascade = async (appModuleId, appModuleIdUnique) => {
+    calls.push({ method: 'deleteAppCascade', appModuleId, appModuleIdUnique });
+    for (const k of Object.keys(db.appmodules)) {
+      if (db.appmodules[k].appmoduleid === appModuleId) {
+        delete db.appmodules[k];
+        return;
       }
     }
+  };
+
+  const deleteRemoteArtifact = async (type, id) => {
+    calls.push({ method: 'deleteRemoteArtifact', type, id });
     if (type === 'dashboard') {
       for (const k of Object.keys(db.dashboards)) {
         if (db.dashboards[k].formid === id) {
@@ -199,7 +182,7 @@ function mockSdk(state = {}) {
     db.globalchoices.delete(name);
   };
 
-  return { queryRecords, deleteRemoteArtifact, deleteRelationship, deleteWebResource, deleteTable, deleteSolution, deleteGlobalOptionSet, calls, db };
+  return { resolveArtifact, deleteAppCascade, deleteRemoteArtifact, deleteRelationship, deleteWebResource, deleteTable, deleteSolution, deleteGlobalOptionSet, calls, db };
 }
 
 // --- planTeardown (pure) ----------------------------------------------------------------
@@ -249,9 +232,9 @@ test('deleteStep does NOT swallow a dependency block ("referenced by N component
 
 test('runTeardown tolerates a 400 "entity not found in MetadataCache" when resolving forms for an uncreated table', async () => {
   const sdk = {
-    queryRecords: async (logical) => {
-      if (logical === 'systemform') { const e = new Error("The entity with a name = 'new_ghost' was not found in the MetadataCache"); e.statusCode = 400; throw e; }
-      if (logical === 'solution') return [{ solutionid: 'sol-1', uniquename: 'S' }];
+    resolveArtifact: async (kind, identity) => {
+      if (kind === 'form') { const e = new Error("The entity with a name = 'new_ghost' was not found in the MetadataCache"); e.statusCode = 400; throw e; }
+      if (kind === 'solution') return [{ id: 'sol-1', name: 'S' }];
       return [];
     },
     deleteSolution: async () => {},
@@ -284,46 +267,38 @@ test('app target uses the derived app uniquename, solution target the solution u
   assert.strictEqual(sol.target.uniqueName, 'ContosoSupportDesk');
 });
 
-// --- genpage teardown (app -> orphaned sitemap -> uxagentproject chain) --------------------
+// --- app teardown (via resolveArtifact + deleteAppCascade) ------------------------------
 
-test('app teardown deletes the app, its orphaned sitemap, and each genpage (files then row)', async () => {
-  const deletes = [];
+test('app teardown resolves via resolveArtifact and delegates the full cascade to deleteAppCascade', async () => {
+  const cascadeCalls = [];
   const sdk = {
-    queryRecords: async (logical) => {
-      if (logical === 'appmodule') return [{ appmoduleid: 'app-1', name: 'A', appmoduleidunique: 'u-1' }];
-      if (logical === 'appmodulecomponent') return [{ objectid: 'sm-1', componenttype: 62 }];
-      if (logical === 'sitemap') return [{ sitemapxml: '<SiteMap><SubArea GenPageId="1512fe17-e4c6-4726-b08e-767a9eba8b9e"/></SiteMap>' }];
-      if (logical === 'uxagentprojectfile') return [{ uxagentprojectfileid: 'file-1' }, { uxagentprojectfileid: 'file-2' }];
+    resolveArtifact: async (kind, identity) => {
+      if (kind === 'app') return [{ id: 'app-1', name: 'A', appModuleIdUnique: 'u-1' }];
       return [];
     },
-    deleteRemoteArtifact: async (kind, id) => { deletes.push(`${kind}:${id}`); },
-    deleteRecord: async (logical, id) => { deletes.push(`${logical}:${id}`); },
+    deleteAppCascade: async (appModuleId, appModuleIdUnique) => { cascadeCalls.push({ appModuleId, appModuleIdUnique }); },
   };
   const h = KIND_HANDLERS.app;
   const items = await h.resolve(sdk, { uniqueName: 'new_a' });
-  assert.strictEqual(items[0].sitemapId, 'sm-1');
-  assert.deepStrictEqual(items[0].genPageIds, ['1512fe17-e4c6-4726-b08e-767a9eba8b9e']);
+  assert.strictEqual(items.length, 1);
+  assert.strictEqual(items[0].id, 'app-1');
+  assert.strictEqual(items[0].appModuleIdUnique, 'u-1');
   await h.del(sdk, items[0]);
-  assert.ok(deletes.includes('app:app-1'), 'app deleted');
-  assert.ok(deletes.includes('sitemap:sm-1'), 'orphaned sitemap deleted');
-  assert.ok(deletes.includes('uxagentprojectfile:file-1') && deletes.includes('uxagentprojectfile:file-2'), 'child files deleted');
-  assert.ok(deletes.includes('uxagentproject:1512fe17-e4c6-4726-b08e-767a9eba8b9e'), 'genpage row deleted');
-  assert.ok(deletes.indexOf('app:app-1') < deletes.indexOf('sitemap:sm-1'), 'app before sitemap');
-  assert.ok(deletes.indexOf('sitemap:sm-1') < deletes.indexOf('uxagentproject:1512fe17-e4c6-4726-b08e-767a9eba8b9e'), 'sitemap before genpage row');
+  assert.strictEqual(cascadeCalls.length, 1, 'deleteAppCascade called once');
+  assert.strictEqual(cascadeCalls[0].appModuleId, 'app-1', 'app module id passed');
+  assert.strictEqual(cascadeCalls[0].appModuleIdUnique, 'u-1', 'unique id passed (deleteAppCascade handles sitemap + genpage internally)');
 });
 
-test('app teardown without genpages just deletes the app (no uxagentproject deletes)', async () => {
-  const deletes = [];
+test('app teardown skips when app not found (resolve returns [])', async () => {
+  const cascadeCalls = [];
   const sdk = {
-    queryRecords: async (logical) => (logical === 'appmodule' ? [{ appmoduleid: 'app-1', name: 'A', appmoduleidunique: 'u-1' }] : []),
-    deleteRemoteArtifact: async (kind, id) => { deletes.push(`${kind}:${id}`); },
-    deleteRecord: async (logical, id) => { deletes.push(`${logical}:${id}`); },
+    resolveArtifact: async () => [],
+    deleteAppCascade: async (...args) => { cascadeCalls.push(args); },
   };
   const h = KIND_HANDLERS.app;
   const items = await h.resolve(sdk, { uniqueName: 'new_a' });
-  await h.del(sdk, items[0]);
-  assert.ok(deletes.includes('app:app-1'));
-  assert.ok(!deletes.some((d) => d.startsWith('uxagentproject:')), 'no genpage deletes when the app has none');
+  assert.strictEqual(items.length, 0, 'empty resolve when app not found');
+  assert.strictEqual(cascadeCalls.length, 0, 'no cascade when resolve returns []');
 });
 
 // --- dry-run ----------------------------------------------------------------------------
@@ -348,7 +323,7 @@ test('apply without an sdk throws', async () => {
 test('apply deletes every declared artifact in dependency order', async () => {
   const spec = fullSpec();
   const sdk = mockSdk({
-    appmodules: { new_supportdesk: { appmoduleid: 'app-1', name: 'Support Desk' } },
+    appmodules: { new_supportdesk: { appmoduleid: 'app-1', name: 'Support Desk', appModuleIdUnique: 'u-app-1' } },
     dashboards: { Operations: { formid: 'dash-1', name: 'Operations' } },
     appactions: { new_ticket: [{ appactionid: 'act-1', buttonlabeltext: 'Escalate' }, { appactionid: 'act-2', buttonlabeltext: 'Btn2' }] },
     forms: {
@@ -385,10 +360,10 @@ test('apply deletes every declared artifact in dependency order', async () => {
   assert.strictEqual(sdk.db.tables.size, 0);
   assert.deepStrictEqual(sdk.db.solutions, {});
   // ordering: forms/charts/views/relationships before tables; deleteRemoteArtifact('command') calls precede deleteWebResource; deleteTable precedes deleteSolution
-  const dels = sdk.calls.filter((c) => c.method !== 'queryRecords');
+  const dels = sdk.calls.filter((c) => c.method !== 'resolveArtifact' && c.method !== 'queryRecords');
   const idx = (method, arg) => dels.findIndex((c) => c.method === method && (!arg || (c.type === arg || c.logical === arg || c.id === arg || c.schemaName === arg)));
   assert.ok(idx('deleteRemoteArtifact', 'command') < idx('deleteWebResource'), 'commands before web resource');
-  assert.ok(idx('deleteRemoteArtifact', 'app') < idx('deleteTable'), 'app before tables');
+  assert.ok(idx('deleteAppCascade') < idx('deleteTable'), 'app before tables');
   assert.ok(idx('deleteRemoteArtifact', 'form') < idx('deleteTable'), 'forms before tables');
   assert.ok(idx('deleteRemoteArtifact', 'chart') < idx('deleteTable'), 'charts before tables');
   assert.ok(idx('deleteRemoteArtifact', 'view') < idx('deleteTable'), 'views before tables');
@@ -410,7 +385,7 @@ test('not-found artifacts are skipped, not errors, and issue no delete', async (
   assert.strictEqual((r.deleted.table || []).length, 3); // tables counted as deleted (tolerateNotFound)
   assert.strictEqual((r.deleted.relationship || []).length, 2); // relationships counted as deleted (tolerateNotFound)
   // Only table/relationship deletes were attempted (synthetic items); other kinds skipped before delete
-  const deletesDone = sdk.calls.filter((c) => c.method !== 'queryRecords');
+  const deletesDone = sdk.calls.filter((c) => c.method !== 'resolveArtifact' && c.method !== 'queryRecords');
   assert.ok(deletesDone.every((c) => c.method === 'deleteTable' || c.method === 'deleteRelationship'), 'only table/relationship deletes attempted');
 });
 
@@ -532,9 +507,9 @@ test('teardown plans an ai-summaries step (before tables) for each candidate and
   // Run with a mock sdk that records removeRowSummary calls
   const removeCalls = [];
   const sdk = {
-    queryRecords: async (logical, opts) => {
-      if (logical === 'appmodule') return [];
-      if (logical === 'solution') return [{ solutionid: 'sol-1', uniquename: 'AiTest' }];
+    resolveArtifact: async (kind, identity) => {
+      if (kind === 'app') return [];
+      if (kind === 'solution') return [{ id: 'sol-1', name: 'AiTest' }];
       return [];
     },
     removeRowSummary: async (args) => { removeCalls.push(args); },

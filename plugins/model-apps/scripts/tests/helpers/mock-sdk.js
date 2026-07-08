@@ -33,6 +33,11 @@ function makeSimpleMockSdk() {
     getAiReadiness: async (opts) => { calls.push(['getAiReadiness', opts]); return { enabled: true }; },
     setAppAiFeatures: async (appUnique, flags, opts) => { calls.push(['setAppAiFeatures', appUnique, flags, opts]); return { applied: Object.keys(flags).filter((k) => flags[k]), skipped: [] }; },
     configureRowSummary: async (promptSpec, opts) => { calls.push(['configureRowSummary', promptSpec, opts]); return { modelId: 'model-' + promptSpec.entityLogicalName, aiSkillConfigId: 'skill-' + promptSpec.entityLogicalName }; },
+    // Task 15: teardown SDK methods
+    resolveArtifact: async (kind, identity) => { calls.push(['resolveArtifact', kind, identity]); return []; },
+    deleteAppCascade: async (appModuleId, appModuleIdUnique) => { calls.push(['deleteAppCascade', appModuleId, appModuleIdUnique]); },
+    // Task 17: build idempotency SDK method
+    findArtifact: async (kind, identity) => { calls.push(['findArtifact', kind, identity]); return null; },
   };
   return { sdk, calls };
 }

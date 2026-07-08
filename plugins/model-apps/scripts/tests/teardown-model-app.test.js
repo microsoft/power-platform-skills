@@ -17,23 +17,20 @@ function presentSdk() {
   const calls = [];
   const deletedTables = new Set();
   const deletedRelationships = new Set();
-  const queryRecords = async (logical, opts) => {
-    calls.push({ method: 'queryRecords', logical, opts });
-    if (logical === 'appmodule') return [{ appmoduleid: 'id1', name: 'App' }];
-    if (logical === 'systemform') {
-      // Could be dashboard (type eq 0) or form
-      if (/type eq 0/.test(opts.filter || '')) {
-        return [{ formid: 'id2', name: 'Dash' }];
-      } else {
-        return [{ formid: 'id-form', name: 'Form' }];
-      }
-    }
-    if (logical === 'savedqueryvisualization') return [{ savedqueryvisualizationid: 'id-chart', name: 'Chart' }];
-    if (logical === 'savedquery') return [{ savedqueryid: 'id-view', name: 'View' }];
-    if (logical === 'appaction') return [{ appactionid: 'id3', buttonlabeltext: 'Btn' }];
-    if (logical === 'webresource') return [{ webresourceid: 'id4', name: 'wr' }];
-    if (logical === 'solution') return [{ solutionid: 'id5', uniquename: 'Sol' }];
+  const resolveArtifact = async (kind, identity) => {
+    calls.push({ method: 'resolveArtifact', kind, identity });
+    if (kind === 'app') return [{ id: 'id1', name: 'App', appModuleIdUnique: 'unique-id1' }];
+    if (kind === 'dashboard') return [{ id: 'id2', name: 'Dash' }];
+    if (kind === 'form') return [{ id: 'id-form', name: 'Form' }];
+    if (kind === 'chart') return [{ id: 'id-chart', name: 'Chart' }];
+    if (kind === 'view') return [{ id: 'id-view', name: 'View' }];
+    if (kind === 'command') return [{ id: identity.entity, entity: identity.entity }];
+    if (kind === 'webResource') return [{ id: 'id4', name: 'wr' }];
+    if (kind === 'solution') return [{ id: 'id5', name: 'Sol' }];
     return [];
+  };
+  const deleteAppCascade = async (appModuleId, appModuleIdUnique) => {
+    calls.push({ method: 'deleteAppCascade', appModuleId, appModuleIdUnique });
   };
   const deleteRemoteArtifact = async (type, id) => {
     calls.push({ method: 'deleteRemoteArtifact', type, id });
@@ -56,7 +53,7 @@ function presentSdk() {
   const deleteSolution = async (id) => {
     calls.push({ method: 'deleteSolution', id });
   };
-  return { queryRecords, deleteRemoteArtifact, deleteRelationship, deleteWebResource, deleteTable, deleteSolution, calls };
+  return { resolveArtifact, deleteAppCascade, deleteRemoteArtifact, deleteRelationship, deleteWebResource, deleteTable, deleteSolution, calls };
 }
 
 const logCapture = () => { const logs = []; return { log: (m) => logs.push(m), logs }; };
@@ -82,7 +79,7 @@ test('apply threads through to the engine (deletes issued) and returns ok', asyn
   const sdk = presentSdk();
   const r = await teardownModelApp(desk, { apply: true }, { sdk });
   assert.strictEqual(r.ok, true);
-  assert.ok(sdk.calls.some((c) => c.method === 'deleteRemoteArtifact' && c.type === 'app'));
+  assert.ok(sdk.calls.some((c) => c.method === 'deleteAppCascade'), 'app deleted via deleteAppCascade');
   assert.ok(sdk.calls.some((c) => c.method === 'deleteTable'));
   assert.ok(sdk.calls.some((c) => c.method === 'deleteSolution'));
 });
