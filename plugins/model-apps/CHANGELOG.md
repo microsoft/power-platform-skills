@@ -45,6 +45,14 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   local enum mapping, etc.) — no rule loosening.
 
 ### Fixed
+- **Classic DashBoard sitemap subareas now round-trip through download/edit
+  (`download-model-app.js` / `hydrate-spec.js`).** Previously `download` dropped
+  them (a rebuild lost the dashboard from the app nav). The dashboard is now
+  reconstructed into `dashboards[]` with **id-passthrough tiles** (each tile
+  carries the deployed view/chart ids), so a rebuild recreates it against the
+  existing views/charts without re-declaring them.
+- **Dashboard tiles render in a 2-column grid** instead of one stacked
+  full-width column (charts were oversized). SDK `DashboardAdapter`.
 - **AI row summaries errored on every record (`ai-prompt.js`):** the
   `GptDynamicPrompt` data filter used the entity's primary **name** column
   (`primaryAttribute`, e.g. `new_name`) as the record key, so it filtered

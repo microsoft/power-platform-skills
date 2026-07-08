@@ -39,7 +39,7 @@ are in [`architecture.md`](architecture.md).
 ### App shell & navigation — ✅ verified live
 - App module + sitemap; **multi-area sitemaps** — every `appShell.areas[]` maps to its own `<Area>` (icon + groups + subareas; order follows array order).
 - Generative pages (**genpage-first**) for overview / dashboard surfaces — uploaded via `pac model genpage upload`; the SDK finalizes the sitemap with `GenPage` subareas.
-- Dashboards (chart / list / iframe / webresource tiles) with **sitemap placement** (auto-pinned as an app component).
+- Dashboards (chart / list / iframe / webresource tiles) with **sitemap placement** (auto-pinned as an app component). Tiles render in a **multi-column grid** (2-wide) rather than one stacked full-width column.
 - Modern command-bar buttons — functional **JS on-click** + static hidden/disabled, incl. **flyout / split-button menus**.
 - Web resources (JS / HTML / CSS) shipped + added to the solution; idempotent (reuse by name).
 
@@ -48,10 +48,9 @@ are in [`architecture.md`](architecture.md).
 - **Admin-gated**: preflights each setting (`RetrieveSetting`), skips/warns when off, never fails the build. NL grid search is **environment-gated** (`EnableNLGridSearch`), not per-app. Standalone reporter `scripts/ai-preflight.js`.
 
 ### Edit flow (download → edit → rebuild) — ✅ verified live
-- `download-model-app.js` pulls a **deployed app** back into a complete App Spec (+ page code, icons, referenced entities, solution); edit the spec and re-run the idempotent build — **create and edit share one path** (reuses app/tables, updates pages in place, keeps `GenPage` subareas).
+- `download-model-app.js` pulls a **deployed app** back into a complete App Spec (+ page code, icons, referenced entities, solution); edit the spec and re-run the idempotent build — **create and edit share one path** (reuses app/tables, updates pages in place, keeps `GenPage` subareas). **Classic DashBoard subareas round-trip** too: the dashboard is reconstructed into `dashboards[]` with **id-passthrough tiles** (each tile carries the deployed view/chart ids), so a rebuild recreates it against the existing views/charts without re-declaring them.
 - Live regression on the edit path found + fixed **4 bugs**, then re-verified clean.
 - `verify-model-app.js` — read-only reconcile of spec vs deployed (exits non-zero on anything missing). Sitemap checks are **element-scoped**: an area/subarea icon is matched on its own `<Area>`/`<SubArea>` element, and a **dashboard subarea** is verified by resolving the dashboard id (systemform type 0, by name) and matching the sitemap's `DefaultDashboard` — so a value reused elsewhere can't produce a false pass. **Multi-area sitemaps** and the dashboard-subarea path were re-verified live (positive + negative).
-- **Limitation (Preview):** classic DashBoard subareas aren't round-tripped yet — download prints a warning; re-add a classic dashboard to the spec before rebuilding (genpage / entity / URL subareas round-trip losslessly).
 
 ### Teardown — ✅ verified live
 - `teardown-model-app.js` deletes exactly what an App Spec declares, in dependency-safe order (dashboards → commands → forms → charts → views → relationships → web-resources → AI row summaries → tables [children-first] → global choices → solution). Forms/charts/views/relationships are removed **before** tables (a table delete doesn't reliably cascade cross-references).
@@ -68,7 +67,6 @@ are in [`architecture.md`](architecture.md).
 ### Phase: Edit & lifecycle
 - 🔲 **Delta / diff-based edit** — spec-diff against a deployed app and apply only the *changed* delta (SDK `updateColumn`/`deleteColumn`/`updateTable`/`deleteRelationship`/`updateWebResource`, `fetchArtifact` snapshots, `diffArtifact`) instead of a full idempotent re-apply.
 - 🔲 **Form events on existing forms** — fetch an existing form, add/replace handlers, publish (current wiring assumes a freshly built form).
-- 🔲 **Round-trip classic DashBoard subareas** in the edit flow (see the edit-flow limitation above).
 - 🔲 **`--dry-run` diff view** — show the spec-vs-deployed delta before apply (precursor to delta-based edit).
 
 ### Phase: Governance & breadth (Tier 3)
