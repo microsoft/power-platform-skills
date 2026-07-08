@@ -71,8 +71,11 @@ function appendLocal(record, { configDir } = {}) {
   // the many short-lived dispatcher processes that may write the same session
   // concurrently cannot race on "find this session's file".
   const dir = sessionDir(configDir, data.pluginName, data.sessionId);
+  let created;
   try {
-    fs.mkdirSync(dir, { recursive: true });
+    // mkdirSync(recursive) returns the first path it created, or undefined if the
+    // dir already existed — a free "is this a brand-new session?" signal.
+    created = fs.mkdirSync(dir, { recursive: true });
   } catch {
     return;
   }
@@ -83,7 +86,9 @@ function appendLocal(record, { configDir } = {}) {
   } catch {
     // swallow — fail closed; telemetry must never break a skill run
   }
-  pruneOldSessions(configDir, data.pluginName);
+  // The retention sweep scans every session dir, so run it only on a session's
+  // first event (when we just created its dir), not on every append.
+  if (created) pruneOldSessions(configDir, data.pluginName);
 }
 
 // Best-effort age-based retention — the primary cleanup mechanism. Remove any

@@ -160,6 +160,22 @@ test("appendLocal prunes session dirs older than 14 days, keeps recent ones", ()
   assert.ok(fs.existsSync(sessionLog(root, "power-pages", "new")), "new session kept");
 });
 
+test("appendLocal does NOT prune on a repeat append to an existing session", () => {
+  const root = mkTmp();
+  // Establish an existing session, then age a second session's log past the window.
+  appendLocal({ name: "keep", data: { pluginName: "power-pages", sessionId: "keep" } }, { configDir: root });
+  appendLocal({ name: "old", data: { pluginName: "power-pages", sessionId: "old" } }, { configDir: root });
+  const oldLog = sessionLog(root, "power-pages", "old");
+  const fifteenDaysAgo = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(oldLog, fifteenDaysAgo, fifteenDaysAgo);
+
+  // A second append to the EXISTING "keep" session must not create a dir, so the
+  // sweep is skipped and the aged "old" session survives until a new session starts.
+  appendLocal({ name: "keep2", data: { pluginName: "power-pages", sessionId: "keep" } }, { configDir: root });
+
+  assert.ok(fs.existsSync(path.dirname(oldLog)), "old session dir kept — no sweep on repeat append");
+});
+
 test("pruneOldSessions removes an orphan dir only when its own mtime is past the window", () => {
   const root = mkTmp();
   const sessionsRoot = pluginLogDir(root, "power-pages");
