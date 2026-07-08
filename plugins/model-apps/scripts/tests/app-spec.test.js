@@ -309,3 +309,55 @@ test('validateAppSpec rejects $parent with an empty match', () => {
   assert.strictEqual(r.ok, false);
   assert.ok(r.errors.some((e) => /match must be a non-empty object/.test(e)));
 });
+
+// --- ai block validation -----------------------------------------------------------------
+
+test('validateAppSpec accepts a well-formed ai block', () => {
+  const s = cloneDesk();
+  s.ai = {
+    appFeatures: { formFill: true, nlSearch: true },
+    summaries: { default: 'auto', tables: { new_ticket: { enabled: true, columns: ['new_status'] } } },
+  };
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('validateAppSpec rejects an ai summaries table not in entities', () => {
+  const s = cloneDesk();
+  s.ai = { summaries: { tables: { not_a_table: { enabled: true } } } };
+  const r = validateAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((e) => /unknown table 'not_a_table'/i.test(e)));
+});
+
+test('validateAppSpec rejects an unknown ai.appFeatures key', () => {
+  const s = cloneDesk();
+  s.ai = { appFeatures: { formFill: true, copilot: true } };
+  const r = validateAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((e) => /unknown key 'copilot'/i.test(e)));
+});
+
+test('validateAppSpec rejects a non-boolean ai.appFeatures value', () => {
+  const s = cloneDesk();
+  s.ai = { appFeatures: { nlSearch: 'yes' } };
+  const r = validateAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((e) => /must be a boolean/i.test(e)));
+});
+
+test('validateAppSpec rejects ai.summaries.default with an invalid value', () => {
+  const s = cloneDesk();
+  s.ai = { summaries: { default: 'on' } };
+  const r = validateAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((e) => /auto.*off|off.*auto/i.test(e)));
+});
+
+test('validateAppSpec rejects an unknown column in ai.summaries.tables columns[]', () => {
+  const s = cloneDesk();
+  s.ai = { summaries: { tables: { new_ticket: { columns: ['new_missing_col'] } } } };
+  const r = validateAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((e) => /unknown column 'new_missing_col'/i.test(e)));
+});
+
+test('validateAppSpec passes when ai is absent (no regression)', () => {
+  const r = validateAppSpec(cloneDesk());
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});

@@ -219,3 +219,48 @@ test('accepts sampleData Choice values that match a declared label (inline or gl
   const r = lintAppSpec(s);
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });
+
+// --- ai block lint guardrails -----------------------------------------------------------
+
+test('lint warns on a summary configured for a D365-owned table', () => {
+  const s = base();
+  s.ai = { summaries: { tables: { incident: { enabled: true } } } };
+  const r = lintAppSpec(s);
+  assert.ok(r.warnings.some((w) => /Dynamics 365|own summaries/i.test(w)));
+});
+
+test('lint warns on lead and opportunity D365-owned tables', () => {
+  const s = base();
+  s.ai = { summaries: { tables: { lead: { enabled: true }, opportunity: { enabled: true } } } };
+  const r = lintAppSpec(s);
+  assert.ok(r.warnings.some((w) => /lead/i.test(w) && /Dynamics 365/i.test(w)));
+  assert.ok(r.warnings.some((w) => /opportunity/i.test(w) && /Dynamics 365/i.test(w)));
+});
+
+test('lint warns when a summary table has no descriptive columns', () => {
+  const s = base();
+  // new_customer has no columns at all in base() — should warn
+  s.ai = { summaries: { tables: { new_customer: { enabled: true } } } };
+  const r = lintAppSpec(s);
+  assert.ok(r.warnings.some((w) => /no descriptive columns/i.test(w)));
+});
+
+test('lint errors when a configured columns[] entry is not declared on the entity', () => {
+  const s = base();
+  s.ai = { summaries: { tables: { new_ticket: { columns: ['new_nonexistent'] } } } };
+  const r = lintAppSpec(s);
+  assert.ok(!r.ok && r.errors.some((m) => /unknown column 'new_nonexistent'/i.test(m)));
+});
+
+test('lint passes a well-formed ai block and raises no ai errors', () => {
+  const s = base();
+  s.ai = { appFeatures: { formFill: true }, summaries: { default: 'auto', tables: { new_ticket: { enabled: true, columns: ['new_priority'] } } } };
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('lint does not warn/error on specs with no ai block (no regression)', () => {
+  const r = lintAppSpec(base());
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.errors.length, 0);
+});

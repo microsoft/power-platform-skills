@@ -404,6 +404,69 @@ function validateAppSpec(spec) {
       }
     }
   }
+  // ai block (optional) — validates appFeatures flags and summaries table references.
+  if (spec.ai !== undefined) {
+    if (!spec.ai || typeof spec.ai !== 'object' || Array.isArray(spec.ai)) {
+      errors.push('ai must be an object');
+    } else {
+      const AI_FEATURE_KEYS = new Set(['formFill', 'nlSearch', 'nlChart', 'm365']);
+      if (spec.ai.appFeatures !== undefined) {
+        if (!spec.ai.appFeatures || typeof spec.ai.appFeatures !== 'object' || Array.isArray(spec.ai.appFeatures)) {
+          errors.push('ai.appFeatures must be an object');
+        } else {
+          for (const [k, v] of Object.entries(spec.ai.appFeatures)) {
+            if (!AI_FEATURE_KEYS.has(k)) errors.push(`ai.appFeatures: unknown key '${k}' (allowed: formFill, nlSearch, nlChart, m365)`);
+            if (typeof v !== 'boolean') errors.push(`ai.appFeatures.${k}: must be a boolean`);
+          }
+        }
+      }
+      if (spec.ai.summaries !== undefined) {
+        if (!spec.ai.summaries || typeof spec.ai.summaries !== 'object' || Array.isArray(spec.ai.summaries)) {
+          errors.push('ai.summaries must be an object');
+        } else {
+          if (spec.ai.summaries.default !== undefined && !['auto', 'off'].includes(spec.ai.summaries.default)) {
+            errors.push(`ai.summaries.default must be 'auto' or 'off'`);
+          }
+          if (spec.ai.summaries.tables !== undefined) {
+            if (!spec.ai.summaries.tables || typeof spec.ai.summaries.tables !== 'object' || Array.isArray(spec.ai.summaries.tables)) {
+              errors.push('ai.summaries.tables must be an object');
+            } else {
+              for (const [k, v] of Object.entries(spec.ai.summaries.tables)) {
+                const ent = entityByLower.get(k.toLowerCase());
+                if (!ent) {
+                  errors.push(`ai.summaries.tables: unknown table '${k}'`);
+                  continue;
+                }
+                if (!v || typeof v !== 'object' || Array.isArray(v)) {
+                  errors.push(`ai.summaries.tables['${k}']: must be an object`);
+                  continue;
+                }
+                if (v.enabled !== undefined && typeof v.enabled !== 'boolean') errors.push(`ai.summaries.tables['${k}'].enabled: must be a boolean`);
+                if (v.instruction !== undefined && typeof v.instruction !== 'string') errors.push(`ai.summaries.tables['${k}'].instruction: must be a string`);
+                if (v.columns !== undefined) {
+                  if (!Array.isArray(v.columns)) {
+                    errors.push(`ai.summaries.tables['${k}'].columns: must be an array`);
+                  } else {
+                    const entCols = new Set([
+                      ...(ent.columns || []).map((c) => c.schemaName.toLowerCase()),
+                      ...(ent.primaryAttribute && ent.primaryAttribute.schemaName ? [ent.primaryAttribute.schemaName.toLowerCase()] : []),
+                    ]);
+                    for (const c of v.columns) {
+                      if (typeof c !== 'string') {
+                        errors.push(`ai.summaries.tables['${k}'].columns: each entry must be a string`);
+                      } else if (!entCols.has(c.toLowerCase())) {
+                        errors.push(`ai.summaries.tables['${k}'].columns: unknown column '${c}'`);
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
   return { ok: errors.length === 0, errors };
 }
 

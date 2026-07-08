@@ -261,6 +261,35 @@ function lintAppSpec(spec) {
     }
   }
 
+  // ai block — row-summary guardrails.
+  const D365_OWNED_SUMMARY_TABLES = new Set(['incident', 'lead', 'opportunity']);
+  const DESCRIPTIVE_TYPES = new Set(['Text', 'Memo', 'Choice', 'MultiChoice', 'DateTime', 'Money', 'Integer', 'Decimal', 'Double', 'Boolean']);
+  if (spec.ai && spec.ai.summaries && spec.ai.summaries.tables && typeof spec.ai.summaries.tables === 'object') {
+    for (const [k, v] of Object.entries(spec.ai.summaries.tables)) {
+      if (D365_OWNED_SUMMARY_TABLES.has(lc(k))) {
+        W(`Summary table '${k}' is a Dynamics 365 app table (Case/Lead/Opportunity) — it provides its own summaries; the row-summary feature isn't available for it`);
+      }
+      const ent = (spec.entities || []).find((e) => lc(e.schemaName) === lc(k));
+      if (ent) {
+        const descriptiveCols = (ent.columns || []).filter((c) => DESCRIPTIVE_TYPES.has(c.type));
+        if (descriptiveCols.length === 0) {
+          W(`Summary table '${k}' has no descriptive columns — a row summary may not be useful`);
+        }
+        if (v && Array.isArray(v.columns)) {
+          const entCols = new Set([
+            ...(ent.columns || []).map((c) => lc(c.schemaName)),
+            ...(ent.primaryAttribute && ent.primaryAttribute.schemaName ? [lc(ent.primaryAttribute.schemaName)] : []),
+          ]);
+          for (const c of v.columns) {
+            if (typeof c === 'string' && !entCols.has(lc(c))) {
+              E(`ai.summaries.tables['${k}'].columns: unknown column '${c}'`);
+            }
+          }
+        }
+      }
+    }
+  }
+
   dupWarn((spec.views || []).map((v) => v.name), 'view', W);
   dupWarn((spec.charts || []).map((c) => c.name), 'chart', W);
   dupWarn((spec.forms || []).map((f) => f.name).filter(Boolean), 'form', W);

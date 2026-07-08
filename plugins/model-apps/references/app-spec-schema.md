@@ -49,7 +49,8 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   "charts":        [ /* Choice-column charts */ ],
   "forms":         [ /* main forms — may wire JS event handlers */ ],
   "appShell":      { "areas": [ /* sitemap */ ] },
-  "sampleData":    { /* optional, keyed by entity schemaName */ }
+  "sampleData":    { /* optional, keyed by entity schemaName */ },
+  "ai":            { /* optional — AI feature flags + row-summary config */ }
 }
 ```
 
@@ -295,3 +296,45 @@ set a custom status with `statusReason`. All are topologically inserted and boun
   duplicating it.
 - **MultiChoice** sample values are a comma-separated string of option **labels** (`"A,C"`) or ints
   (`"100000000,100000002"`) — each known label token is resolved.
+
+## ai (optional — AI feature flags and row-summary configuration)
+
+Controls AI-powered features that the platform activates at the app/table level. The block is
+entirely optional; omitting it leaves every AI feature at its platform default.
+
+```jsonc
+"ai": {
+  // appFeatures: opt specific AI features in or out for this app (all optional booleans).
+  "appFeatures": {
+    "formFill":  true,   // Copilot-assisted form fill
+    "nlSearch":  true,   // natural-language search
+    "nlChart":   true,   // natural-language chart generation
+    "m365":      false   // M365 Copilot integration
+  },
+  // summaries: configure the row-summary (Copilot summary card) feature per table.
+  "summaries": {
+    "default": "auto",   // "auto" (default) | "off" — the app-level default for all tables
+    "tables": {
+      // per-table overrides; keys are entity schemaNames (case-insensitive, must be declared
+      // in entities[]).
+      "new_ticket": {
+        "enabled":     true,
+        "instruction": "Summarise the ticket status, priority and latest comment in two sentences.",
+        "columns":     ["new_status", "new_priority", "new_description"]
+        // columns[] constrains which fields the summary reads; each entry must be a declared
+        // column schemaName on that entity (validation-enforced).
+      },
+      "new_customer": { "enabled": false }   // opt this table out
+    }
+  }
+}
+```
+
+**Validation rules** (`validateAppSpec` / `lintAppSpec`):
+- `ai.appFeatures` keys must be one of `formFill · nlSearch · nlChart · m365`; values must be booleans (hard error).
+- `ai.summaries.default` must be `"auto"` or `"off"` (hard error).
+- `ai.summaries.tables` keys must match a declared entity `schemaName` (case-insensitive, hard error).
+- `columns[]` entries must be declared column `schemaName` values on that entity (hard error in both validate and lint).
+- **Lint warnings:**
+  - `incident`, `lead`, and `opportunity` are Dynamics 365 app tables (Case / Lead / Opportunity) that provide their own row summaries — configuring one as a summary table warns, because the row-summary feature is not available for them.
+  - A table with no descriptive columns (only lookups / system fields) warns that a row summary may not be useful.
