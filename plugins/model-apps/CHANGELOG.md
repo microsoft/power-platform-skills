@@ -9,61 +9,25 @@ plus local-dev ergonomics, sample coverage, and an automated eval suite with
 real and synthetic fixtures. Builds on v2.1; no breaking changes.
 
 ### Added
-- **`/model-app-maker` AI-first features.** The new `ai-features` build phase (runs after
-  `app-shell`/`pages`, before `publish`) activates AI capabilities declared in the App Spec's
-  `ai` block. App-level features: **form-fill assist** (data entry), **natural-language grid/view
-  search** (data exploration), **NL chart / AI data visualization**, and **M365 Copilot** (opt-in,
-  defaults off). **Per-table Copilot row summaries** (Insight Cards) with tailored prompts —
-  auto-selected for good-candidate tables (`default: "auto"`) and skipping lookup-only / config /
-  junction tables and the D365-owned `incident`/`lead`/`opportunity`. All features are
-  **admin-gated**: the phase preflights via `RetrieveSetting` (SDK) and skips/warns for anything
-  the environment admin has not enabled — never fails the build. Standalone preflight:
-  `scripts/ai-preflight.js` (prints on/off status + exact admin action for each feature). Teardown
-  removes AI records (`AIModelPublish` + `aiskillconfigs`) created by the phase.
-- **SDK AI + artifact-resolve methods.** `cds-maker-sdk` now exposes `RetrieveSetting`,
-  `SaveSettingValue`, `AIModelPublish`, and `aiskillconfigs` CRUD — used by the `ai-features`
-  phase — plus new artifact-resolve helpers used internally by the build engine.
-- **SDK owns sample-data seeding + default-view enrichment.** `cds-maker-sdk` now exposes
-  `seedRecordGraph` (spec-agnostic record-graph seeding: parent binds → `@odata.bind`, idempotent
-  resolve-by-name, ids index-aligned per group) and `enrichDefaultViews` (resolve + column-enrich
-  an entity's default Active/Inactive views). The plugin keeps the App-Spec judgment (choice/status
-  resolution, `$parent`/`$parents` → bind translation, candidate selection) and delegates the
-  Dataverse mechanics to these helpers. Behavior-identical to the prior inline implementation.
-- **NL grid search is environment-gated, not per-app.** `nlSearch` is enabled org-wide via the
-  `EnableNLGridSearch` admin gate (the `NLGridSearchSetting` app setting is not overridable);
-  `setAppAiFeatures` reports it applied when the gate is on without an ineffective per-app write.
-- **`scripts/ai-preflight.js`**, **`scripts/lib/ai-candidates.js`**, **`scripts/lib/ai-prompt.js`**
-  — standalone preflight reporter, candidate-table selector, and tailored-prompt generator for the
-  AI-first features.
-- **`ai` block documented** in `references/app-spec-schema.md`: full `appFeatures` + `summaries`
-  shape, admin-gate notes, candidate-skip policy, and prompt authoring guidelines.
-- **`/model-app-maker` skill (Preview).** Turns a natural-language intent into a deployed
-  **model-driven app** — tables/columns/relationships, sample data, views (with enriched default
-  Active/Inactive columns), Choice-column charts, adaptive forms with sub-grids, quick-create/quick-view
-  forms, modern command-bar buttons, dashboards, sitemap icons, and — genpage-first — **generative pages**
-  for overview/dashboard surfaces. Deterministic, **idempotent** build via the vendored headless
-  `cds-maker-sdk` (`scripts/build-model-app.js`); interactive two-level authoring + `spec-lint` guardrail +
-  plan-mode gate. **Create and edit share one path** (`scripts/download-model-app.js` pulls a deployed app
-  back into an editable spec); read-only `scripts/verify-model-app.js` reconciles spec vs deployed;
-  classifier-safe `scripts/teardown-model-app.js`. Durable build journal + transient auto-retry.
-- **Phase 0.5 — local-dev manifest.** Working dirs now get `package.json`
-  and `genpage.d.ts` so `npm install` + editor IntelliSense work after
-  generation. Versions in `references/supported-dependencies.md`.
-- **Eval suite runners.** `run-layer-1.js` (workflow assertions) and
-  `run-layer-2.js` (code assertions) emit TAP v13. `EVAL_GUIDE.md` covers
-  types, tiers, capture flow.
-- **10 fixtures** under `evals/.../fixtures/` (6 synthetic + 4 real
-  captures; all green under the tightened v2.2 spec).
-- `scripts/capture-fixture.js` — copies `/genpage` working dirs into
-  fixtures and runs both layers.
-- `samples/11-kanban-with-dnd.tsx` — native HTML5 drag-and-drop sample.
-- `samples/12-dialog-form-overlay.tsx` + **Dialogs and Overlays** guidance
-  (rules.md rules 16–18 and Special Patterns section, plus a troubleshooting
-  entry): confine portalled Fluent surfaces (`Dialog`, `Popover`, `Menu`,
-  `Tooltip`, `Combobox`/`Dropdown`) to the page via `mountNode` +
-  `contain: layout`, default dialogs to `modalType="non-modal"`, and never nest
-  dialogs — so a modal can't escape the preview and cover the designer /
-  coding-agent panel.
+- **`/model-app-maker` skill (Preview)** — natural-language intent → deployed model-driven app:
+  tables/columns/relationships, adaptive forms + sub-grids, views (with enriched default columns),
+  Choice-column charts, modern command bars, dashboards, sitemap icons, genpage-first pages, and
+  sample data. Deterministic **idempotent** build via the vendored headless `cds-maker-sdk`;
+  interactive authoring + `spec-lint` guardrail + plan-mode gate. Create and edit share one path
+  (`download-model-app.js` → editable spec); read-only `verify-model-app.js`; classifier-safe
+  `teardown-model-app.js`. See `SKILL.md` + `references/app-spec-schema.md`.
+- **AI-first features** (`ai` block → `ai-features` phase) — form-fill, NL search, NL charts, M365
+  Copilot, and per-table Copilot row summaries with tailored prompts. **Admin-gated** (preflighted
+  via `RetrieveSetting`, skips/warns when off, never fails); NL search is environment-gated
+  (`EnableNLGridSearch`), not per-app. Standalone reporter `scripts/ai-preflight.js`; helpers
+  `lib/ai-candidates.js` + `lib/ai-prompt.js`. Teardown removes the AI records it created.
+- **SDK consolidation** — `cds-maker-sdk` now owns the Dataverse mechanics: AI settings/row-summaries,
+  `seedRecordGraph` (record-graph seeding: `@odata.bind` parent binds + resolve-by-name idempotency),
+  `enrichDefaultViews`, and artifact resolve/find/cascade. Both skills provision through the shared
+  `scripts/lib/entity-provision.js` core; the plugin keeps App-Spec judgment.
+- **genpage eval suite** — Layer 1/2 TAP runners + `EVAL_GUIDE.md`, 10 fixtures (6 synthetic + 4 real),
+  `capture-fixture.js`; local-dev manifest (`package.json` + `genpage.d.ts`) in working dirs; new
+  dialog/overlay samples (11, 12) + Dialogs-and-Overlays guidance.
 
 ### Removed
 - **Consolidated the standalone entity/solution scripts into the SDK.** `create-table.js`,
@@ -90,9 +54,9 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   file calling `dataApi.queryTable` must access `.rows` somewhere.
 
 ### Tests
-- **317 passing** across `scripts/tests/` (unit + golden snapshots + journal evals) plus the genpage
-  eval suites; the vendored `cds-maker-sdk` ships its own Jest suite. `scripts/run-tests.js
-  --with-sdk <ppux>` runs both in one command.
+- Full `scripts/tests/` suite (unit + golden snapshots + journal evals) plus the genpage eval suites
+  and the vendored `cds-maker-sdk` Jest suite — all green. `node scripts/run-tests.js --with-sdk <ppux>`
+  runs the plugin + SDK suites in one command.
 
 ## 2.1.0 — 2026-05-13
 

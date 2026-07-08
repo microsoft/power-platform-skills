@@ -100,26 +100,38 @@ not runtime phase selection or re-run state):
 - ✅ Adaptive main forms (auto + explicit tabs/sections), related-record sub-grids, Notes section.
 - ✅ Views (active-records), Choice-column charts, app module + sitemap.
 
+### AI-first features + SDK consolidation (2026-07-07) — **live-verified on AuroraBAPEnv03468**
+- ✅ **AI-first features** (`ai` block → `ai-features` phase) — form-fill, NL search, NL charts, M365
+  Copilot, and per-table Copilot **row summaries** with tailored `GptDynamicPrompt-2` prompts
+  (auto-selected candidate tables; skips lookup/config/junction + D365-owned incident/lead/opportunity).
+  **Admin-gated**: preflights via `RetrieveSetting`, skips/warns when off, never fails the build.
+  Standalone reporter `scripts/ai-preflight.js`; helpers `lib/ai-candidates.js` + `lib/ai-prompt.js`.
+  Teardown removes the AI records (`AIModelPublish` model + `aiskillconfigs`) before tables.
+  **Live:** app-scope form-fill/NL-chart set; row summary created + idempotent re-run; torn down clean.
+- ✅ **NL grid search is environment-gated** (`EnableNLGridSearch`), not per-app — `setAppAiFeatures`
+  reports it applied when the org gate is on without an ineffective `NLGridSearchSetting` write.
+- ✅ **SDK consolidation** — the SDK now owns the Dataverse mechanics: AI settings/row-summaries,
+  `seedRecordGraph` (record-graph seeding: `@odata.bind` parent binds + resolve-by-name idempotency),
+  `enrichDefaultViews`, and artifact `resolveArtifact`/`findArtifact`/`deleteAppCascade`. The plugin
+  keeps App-Spec judgment (choice/status resolution, `$parent`→bind translation, candidate selection).
+  Behavior-identical; **live-verified** (binds, choice ints, view enrichment, idempotency).
+- ✅ **PR review pass** — GUID OData filters unquoted, OData-literal escaping, `findTable`
+  case-normalization, unknown-relationship-type rejection, undeletable-artifact reporting in teardown,
+  portable `run-tests.js`, and teardown-order/phase docs synced to the engine.
+
 ---
 
 ## 🔜 Pending — by priority
 
 ### P0 — finish Tier 2 (UI + logic)
-- 🔲 **Dashboards** (`dashboards[]` → `createArtifact('dashboard')`). ⚠ **Design note:** the SDK's
-  dashboard adapter is **overlay-oriented** (fetch → edit existing cells → push); `createDefault`
-  seeds a single empty cell and `overlayComponents` only touches cells that already contain a
-  `<control>`. So **from-scratch** multi-tile dashboards need a **FormXML generator** that emits
-  chart/list control cells (control classId `{E7A81278-8635-4D9E-8D4D-59480B391C5B}`; `ChartGridMode`
-  = `Chart` for a chart tile, list otherwise; parameters `TargetEntityType` + `ViewId` / chart
-  `VisualizationId`), then inject it as the artifact's `$meta.formxml` before push. Component type
-  60 (SystemForm). Plan: tile-grid generator referencing the views/charts already built; **needs
-  live verification** before shipping.
-- 🔲 **Commands / ribbon buttons** (`commands[]` → `createArtifact('command')`). ✅ live-verified in the SDK. New phase + spec section + lint + tests.
+- ✅ **Dashboards** and **commands / ribbon buttons** shipped + live-verified — see *SDK uptake*
+  (2026-06-21 / 06-22) below: chart/list/iframe/webresource dashboard tiles with sitemap placement,
+  and functional JS on-click command buttons with flyout/split menus.
 - 🔲 **Business rules** (`businessRules[]` → `createArtifact('businessRule')`). ⚠ org-gated; not live-verifiable on Aurora. Build behind a capability flag; condition/action spec shape + lint + tests.
 
 ### P1 — edit flow + lifecycle
 - 🔲 **Edit flow** — spec-diff against a deployed app; apply only the delta. Leverage SDK `updateColumn`/`deleteColumn`/`updateTable`/`deleteRelationship`/`updateWebResource`, `fetchArtifact` snapshots, and `diffArtifact`. Handles "edit existing form/view", "add column to existing table", "rewire an event handler".
-- ✅ **Teardown command** — `scripts/teardown-model-app.js` deletes the artifacts an App Spec declares in dependency order (**app → dashboards → commands → web-resources → tables [children-first] → solution**); a table delete cascades its forms/views/charts/relationships/columns. Name-scoped (classifier-safe), dry-run by default, best-effort continue, cosmetic-404 aware. See the Complete section for detail.
+- ✅ **Teardown command** — `scripts/teardown-model-app.js` deletes the artifacts an App Spec declares in dependency order (**app → dashboards → commands → forms → charts → views → relationships → web-resources → AI row summaries → tables [children-first] → global choices → solution**); forms/charts/views/relationships are deleted explicitly **before** tables (a table delete does not reliably cascade cross-references; it does remove the table's own columns). Name-scoped (classifier-safe), dry-run by default, best-effort continue, not-found aware, undeletable artifacts recorded as skipped. See the Complete section for detail.
 - 🔲 **Form events on existing forms** — current wiring assumes a freshly built form; the edit flow should fetch an existing form, add/replace handlers, and publish.
 
 ### SDK uptake (2026-06-21) — in progress (user approved all four)
@@ -170,7 +182,9 @@ clean. Tests 207 → **222**.
 
 ### P2 — shippable defaults + breadth
 - 🔲 **Standard system views** (All Records, Active, Inactive, Lookup, Associated) auto-generated per table.
-- 🔲 **Multi-area sitemaps** + richer app-shell (multiple areas/groups, icons, ordering).
+- ✅ **Multi-area sitemaps** — `appShell.areas[]` maps every area to a distinct `<Area>` (own icon +
+  groups + subareas; order follows array order); the SDK serializes the full `siteMap.areas[]`.
+  Richer ordering knobs (explicit sort keys) remain a possible future refinement.
 - 🔲 **Tier 3 — governance:** security roles, environment variables, connection references.
 - 🔲 **Solution packaging** — `exportSolution`/`importSolution` for hand-off / source control (managed/unmanaged).
 

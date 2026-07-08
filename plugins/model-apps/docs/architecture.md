@@ -1,7 +1,13 @@
 # Model Apps Plugin — Architecture
 
-How `/genpage` is wired together. One page, ASCII diagrams. For per-component
-behavioral specs, see `AGENTS.md`.
+The plugin ships two skills. **This document covers how `/genpage` is wired together** (one page,
+ASCII diagrams). The **`/model-app-maker`** skill (intent → whole model-driven app via the headless
+`cds-maker-sdk`) has its architecture — the build engine, phase pipeline, teardown, and SDK
+consolidation (AI settings/row-summaries, `seedRecordGraph`, `enrichDefaultViews`, artifact
+resolve/cascade) — documented in [`../AGENTS.md`](../AGENTS.md) (`## Architecture`, `## Building &
+Testing`) and its skill at [`../skills/model-app-maker/SKILL.md`](../skills/model-app-maker/SKILL.md);
+the App Spec contract is [`../references/app-spec-schema.md`](../references/app-spec-schema.md). For
+per-component behavioral specs, see `AGENTS.md`.
 
 ## High-level flow
 
@@ -108,49 +114,9 @@ full skill.
 
 ## Where the plugin lives
 
-```
-plugins/model-apps/
-├── .plugin/plugin.json                <-- version, name, keywords
-├── AGENTS.md / CLAUDE.md              <-- agent guidance (this is the source)
-├── README.md                          <-- user-facing intro
-├── CHANGELOG.md                       <-- Keep-a-Changelog
-├── docs/
-│   └── architecture.md                <-- this file
-├── skills/
-│   └── genpage/
-│       ├── SKILL.md                   <-- orchestrator phases (always loaded)
-│       ├── edit-flow.md               <-- conditional: edit path
-│       └── verify-flow.md             <-- conditional: browser verify path
-├── agents/
-│   ├── genpage-planner.md
-│   ├── genpage-entity-builder.md
-│   ├── genpage-page-builder.md
-│   └── genpage-edit-planner.md
-├── references/                        <-- read on demand by agents
-│   ├── rules.md                       <-- code-gen rules (page-builder hot path)
-│   ├── plan-schema.md                 <-- plan doc contract
-│   ├── data-caching.md                <-- Rule 15 list/detail pattern
-│   ├── localization.md                <-- multi-language + RTL pattern
-│   ├── supported-dependencies.md      <-- v2.2: package.json input list
-│   ├── troubleshooting.md             <-- deploy / runtime / env issues
-│   └── verified-icons.txt             <-- ~5000 Fluent icon names
-├── samples/                           <-- 11 sample .tsx files (1-11)
-└── scripts/
-    ├── check-auth.js                  <-- pre-flight: az + pac + WhoAmI
-    ├── dataverse-request.js           <-- generic Web API wrapper
-    ├── provision-entities.js          <-- entity provisioning CLI (solution + data-model + sample-data)
-    ├── provision-solution.js          <-- creates a Dataverse solution via the SDK
-    ├── generate-page-manifest.js      <-- v2.2: writes package.json + genpage.d.ts
-    ├── regenerate-verified-icons.js
-    ├── launch-playwright-mcp.js
-    ├── capture-fixture.js
-    ├── lib/
-    │   ├── entity-provision.js        <-- shared entity-provisioning core
-    │   ├── provision-input.js         <-- input validation for entity provisioning
-    │   ├── dataverse-auth.js          <-- shared az auth + HTTP helpers
-    │   └── supported-dependencies.js  <-- v2.2: deps single source of truth
-    └── tests/                         <-- node --test coverage
-```
+The canonical file/directory tree lives in [`../AGENTS.md`](../AGENTS.md) (`## Architecture`) — the
+single source of truth for both skills' scripts, agents, references, and the vendored SDK. It is not
+duplicated here (a second copy only drifts).
 
 ## The plan document as a contract
 

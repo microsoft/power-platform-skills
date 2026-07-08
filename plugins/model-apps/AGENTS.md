@@ -4,13 +4,22 @@ This file provides guidance to AI Agents when working with the **model-apps** pl
 
 ## What This Plugin Is
 
-A plugin for building and deploying Power Apps generative pages (genux) for model-driven apps. Uses React 17 + TypeScript + Fluent UI V9 single-file components, deployed via PAC CLI.
+A plugin for building Power Apps for **model-driven apps**, via two user-invocable skills:
 
-The `/genpage` skill orchestrates specialist agents: a planner (requirements + plan approval), an optional entity builder (Dataverse entity creation via the plugin's own Node.js Web API scripts), and parallel page builders (code generation).
+- **`/genpage`** — build and deploy standalone **generative pages** (genux): React 17 + TypeScript +
+  Fluent UI V9 single-file components, deployed via PAC CLI. Orchestrates specialist agents (planner,
+  optional entity builder, parallel page builders).
+- **`/model-app-maker`** *(Preview)* — build and edit a **whole model-driven app** (tables, columns,
+  relationships, adaptive forms, views, charts, generative pages, app + sitemap, sample data, and
+  admin-gated AI features) from a natural-language intent, via the vendored headless `cds-maker-sdk`.
+
+Plus **`/report-issue`** to file bugs against this repo. All Dataverse mutation flows through the
+shared, vendored SDK (`scripts/vendor/cds-maker-sdk.cjs`) — see `## Building & Testing`.
 
 **Requirements:**
-- **PAC CLI ≥ 2.7.0** — for app and page deploy operations
-- **Azure CLI (`az`)** — used by entity-builder for Dataverse Web API auth; must be logged in with the same identity as the active `pac` profile
+- **PAC CLI ≥ 2.7.0** — for app and generative-page deploy operations
+- **Azure CLI (`az`)** — Dataverse Web API auth (SDK + entity builder); must be logged in with the
+  same identity as the active `pac` profile
 
 No Dataverse Skills plugin or Python dependency.
 
@@ -190,6 +199,8 @@ skills/
 | Skill | Description |
 |-------|-------------|
 | `/genpage` | Build and deploy generative pages for a model-driven Power App |
+| `/model-app-maker` | **(Preview)** Build and edit a whole model-driven app — tables, columns, relationships, adaptive forms, views, Choice-column charts, generative pages, app + sitemap, sample data, and admin-gated AI features — from a natural-language intent, via the vendored `cds-maker-sdk` |
+| `/report-issue` | File a bug/issue about the model-apps plugin to the GitHub repository |
 
 ## Agents
 
