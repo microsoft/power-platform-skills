@@ -32,7 +32,7 @@ able to tell what moved from the docs alone):
 |-----|---------------|--------------|
 | `AGENTS.md` (this file — `CLAUDE.md` symlinks to it) | Per-component behavioral specs, the canonical file tree, conventions, build/test | You add/rename a script, change a component's behavior, or change how to build/test |
 | [`docs/architecture.md`](docs/architecture.md) | Wiring / flow **diagrams** for both skills (`/genpage` + `/model-app-maker`) | You change the orchestration, phase pipeline, or how the pieces connect |
-| [`docs/model-app-maker-roadmap.md`](docs/model-app-maker-roadmap.md) | `/model-app-maker` **roadmap / TODO** (Complete + Pending by priority) | You ship or reprioritize a model-app-maker capability |
+| [`docs/model-app-maker-roadmap.md`](docs/model-app-maker-roadmap.md) | `/model-app-maker` **roadmap / TODO** (Complete + Pending by phase) | You ship or reprioritize a model-app-maker capability |
 | [`CHANGELOG.md`](CHANGELOG.md) | Keep-a-Changelog — concise bullets (detail lives in PRs/docs) | Any user-visible change |
 | [`references/app-spec-schema.md`](references/app-spec-schema.md) | The App Spec contract | You change the App Spec shape or validation |
 
@@ -152,7 +152,7 @@ README.md                      ← User-facing intro and prereqs
 CHANGELOG.md                   ← Keep-a-Changelog
 docs/
   architecture.md              ← Wiring/flow diagrams for BOTH skills (/genpage + /model-app-maker)
-  model-app-maker-roadmap.md   ← /model-app-maker roadmap / TODO (Complete + Pending by priority)
+  model-app-maker-roadmap.md   ← /model-app-maker roadmap / TODO (Complete + Pending by phase)
 agents/                        ← Agent definitions (invoked by skills via Task tool)
   genpage-planner.md           ← Requirements, discovery, plan doc, user approval (create flow)
   genpage-entity-builder.md    ← DV entity creation via plugin's Web API scripts (create flow)
