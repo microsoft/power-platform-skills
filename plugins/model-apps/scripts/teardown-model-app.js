@@ -54,7 +54,7 @@ function cliEmit(log, opts = {}) {
     if (!opts.apply) { log(`  [${e.n}/${e.total}] ▢ ${e.label}`); return; }
     if (counts) counts[e.status] = (counts[e.status] || 0) + 1;
     const glyph = e.status === 'ok' ? '✓' : e.status === 'skip' ? '⊘' : '✗';
-    const tail = e.status === 'error' ? ` — ${e.detail || ''}` : '';
+    const tail = e.status === 'error' && e.detail ? ` — ${e.detail}` : '';
     log(`  [${e.n}/${e.total}] ${glyph} ${e.label}${tail}`);
   };
 }
@@ -88,9 +88,10 @@ async function main() {
   const spec = readJsonArg('@' + specPath);
   const apply = flags.apply === true;
   const { sdk, cleanup } = makeSdk(env);
+  let r;
   try {
     const deps = { log: (m) => process.stderr.write(m + '\n'), sdk };
-    const r = await teardownModelApp(spec, { apply }, deps);
+    r = await teardownModelApp(spec, { apply }, deps);
 
     // Clear the local workspace only after a clean apply — stale metadata there would make a
     // subsequent rebuild skip tables that no longer exist. Filesystem-local, opt-in.
@@ -101,13 +102,14 @@ async function main() {
         process.stderr.write(`\ncleared workspace ${workspaceDir}\n`);
       }
     }
-    emitResult(r.ok, r);
   } finally {
     cleanup();
   }
+  // emitResult() calls process.exit(), so emit AFTER cleanup() has run.
+  emitResult(r.ok, r);
 }
 
 if (require.main === module) {
-  main();
+  main().catch((err) => emitResult(false, err));
 }
 module.exports = { teardownModelApp, cliEmit };

@@ -57,7 +57,7 @@ async function runSmokeAssertions(spec, appId, read) {
   results.push({ name: 'default view enriched (has new_status column)', ok: enriched, detail: `${views.length} querytype-0 views` });
 
   const xml = (await read.sitemapXml(appId)) || '';
-  results.push({ name: `sitemap subarea carries Icon="${iconName}"`, ok: new RegExp(`Icon="${iconName}"`, 'i').test(xml), detail: '' });
+  results.push({ name: `sitemap subarea carries Icon="${iconName}"`, ok: xml.toLowerCase().includes(`icon="${iconName}"`), detail: '' });
   results.push({ name: 'sitemap subarea carries VectorIcon="Grid"', ok: /VectorIcon="Grid"/.test(xml), detail: '' });
 
   results.push({ name: 'app module was created', ok: !!appId, detail: appId || '(none)' });

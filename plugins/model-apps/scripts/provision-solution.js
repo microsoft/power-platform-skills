@@ -10,9 +10,9 @@
 //     [--version 1.0.0.0]
 //     [--publisher <uniqueName>]    (default: env's Default Publisher)
 //
-// uniqueName must be alphanumeric (camelCase or PascalCase), starting with a letter.
-// No hyphens, no spaces, no underscores at the start. Returns lower-case in API
-// responses regardless of what you submit.
+// uniqueName must start with a letter, then letters, digits, or underscores
+// (no hyphens, no spaces). Returns lower-case in API responses regardless of
+// what you submit.
 //
 // Output: { "ok": true, "solutionId": "...", "uniqueName": "...", "publisherUniqueName": "...", "publisherPrefix": "..." }
 
@@ -156,8 +156,10 @@ async function main() {
   });
   sdk.initWorkspace(); // consistent with other entrypoints; harmless for the Dataverse-only ops here
 
+  let result;
+  let error;
   try {
-    const result = await runProvisionSolution(
+    result = await runProvisionSolution(
       {
         envUrl,
         uniqueName,
@@ -168,21 +170,20 @@ async function main() {
       },
       { sdk }
     );
-
-    if (result.ok) {
-      emitResult(true, result);
-    } else {
-      emitResult(false, new Error(result.error));
-    }
   } catch (e) {
-    emitResult(false, e);
+    error = e;
   } finally {
+    // emitResult() calls process.exit(), so remove the temp workspace BEFORE emitting.
     require('fs').rmSync(sdkTempDir, { recursive: true, force: true });
   }
+
+  if (error) emitResult(false, error);
+  else if (result.ok) emitResult(true, result);
+  else emitResult(false, new Error(result.error));
 }
 
 if (require.main === module) {
-  main();
+  main().catch((err) => emitResult(false, err));
 }
 
 module.exports = { runProvisionSolution, findPublisher, odataEscape };

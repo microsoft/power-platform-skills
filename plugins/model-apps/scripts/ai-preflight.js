@@ -2,7 +2,8 @@
 'use strict';
 // ai-preflight: read-only AI readiness report for a Power Platform environment.
 // Calls sdk.getAiReadiness and prints a per-feature on/off summary plus admin actions
-// for any disabled features. Exit 0 always (informational).
+// for any disabled features. Never fails on a disabled feature (informational); exits
+// non-zero only on a usage error (missing --env) or an unexpected failure.
 //
 // Usage: node ai-preflight.js --env <orgUrl> [--app <uniqueName>]
 
@@ -76,10 +77,11 @@ async function main() {
   const sdk = createMakerSdk({ workspacePath: workspaceDir, instanceUrl: env, httpClient });
   sdk.initWorkspace();
 
+  let report;
   try {
     const readinessOpts = app ? { appUniqueName: app } : {};
     const readiness = await sdk.getAiReadiness(readinessOpts);
-    const report = runPreflight(readiness);
+    report = runPreflight(readiness);
 
     process.stderr.write('\nAI Feature Readiness\n');
     process.stderr.write('====================\n');
@@ -94,11 +96,12 @@ async function main() {
     } else {
       process.stderr.write('\nAll AI features are enabled.\n');
     }
-
-    emitResult(true, { ok: true, ...report });
   } finally {
+    // emitResult() calls process.exit(), so clean up the throwaway workspace BEFORE emitting.
     fs.rmSync(workspaceDir, { recursive: true, force: true });
   }
+
+  emitResult(true, { ok: true, ...report });
 }
 
 module.exports = { runPreflight };

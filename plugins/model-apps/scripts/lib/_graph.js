@@ -1,3 +1,4 @@
+'use strict';
 // Order the entities so that any entity referenced by a OneToMany relationship is
 // inserted before the entity that references it (parents before children). A simple
 // Kahn topological sort over the relationship edges; entities not in any relationship

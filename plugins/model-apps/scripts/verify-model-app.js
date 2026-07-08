@@ -12,6 +12,7 @@ const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js'
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { verifySpec } = require('./lib/verify-spec.js');
 const { appUniqueName } = require('./lib/sdk-build.js');
+const { validateAppSpec } = require('./lib/app-spec.js');
 
 // Escape single quotes for OData filter string literals (double them per OData convention).
 const odataEscape = (v) => String(v == null ? '' : v).replace(/'/g, "''");
@@ -57,16 +58,22 @@ async function main() {
   }
   const specPath = path.resolve(typeof specArg === 'string' && specArg.startsWith('@') ? specArg.slice(1) : specArg);
   const spec = readJsonArg('@' + specPath);
+  // Validate the spec up front (consistent with teardown) so malformed input yields a structured
+  // error instead of a later throw when dereferencing spec.entities / schemaName.
+  const v = validateAppSpec(spec);
+  if (!v.ok) { emitResult(false, { ok: false, errors: v.errors }); return; }
   const workspaceDir = flags.workspace || path.join(path.dirname(specPath), '.maker-workspace');
   const sdk = makeProvision(env, workspaceDir);
   const r = await verifySpec(spec, readerFor(sdk, appUniqueName(spec)));
   for (const c of r.checks) process.stderr.write(`  ${c.present ? '✓' : '✗'} ${c.kind}: ${c.name}\n`);
   process.stderr.write(`\n${r.ok ? '✓ verify PASS' : `✗ verify FAIL — ${r.missing.length} missing`} (${r.checks.length - r.missing.length}/${r.checks.length} present)\n`);
-  emitResult(r.ok, { ok: r.ok, present: r.checks.length - r.missing.length, total: r.checks.length, missing: r.missing.map((m) => `${m.kind}:${m.name}`) });
+  // Include `errors` (alias of missing) so emitResult's failure note reports an accurate count.
+  const missing = r.missing.map((m) => `${m.kind}:${m.name}`);
+  emitResult(r.ok, { ok: r.ok, present: r.checks.length - r.missing.length, total: r.checks.length, missing, errors: missing });
 }
 
 if (require.main === module) {
-  main();
+  main().catch((err) => emitResult(false, err));
 }
 
 module.exports = { sitemapXmlFor, readerFor };

@@ -6,7 +6,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
-const { teardownModelApp } = require(path.join(__dirname, '..', 'teardown-model-app.js'));
+const { teardownModelApp, cliEmit } = require(path.join(__dirname, '..', 'teardown-model-app.js'));
 
 const desk = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.support-desk.json'), 'utf8'));
 
@@ -103,4 +103,15 @@ test('dry-run lists the plan with a ▢ marker and no summary', async () => {
   await teardownModelApp(desk, { apply: false }, { sdk: throwing, log: cap.log });
   assert.ok(cap.logs.some((l) => /\[\d+\/\d+\] ▢ /.test(l)), 'plan items use the ▢ marker');
   assert.ok(!cap.logs.some((l) => /teardown complete/.test(l)), 'no summary on a dry-run');
+});
+
+test('cliEmit: an error event with no detail has no dangling separator', () => {
+  const logs = [];
+  const emit = cliEmit((m) => logs.push(m), { apply: true, counts: {} });
+  emit({ phase: 'p', status: 'error', label: 'thing', n: 1, total: 2 }); // no detail
+  emit({ phase: 'p', status: 'error', label: 'thing2', detail: 'boom', n: 2, total: 2 });
+  const noDetail = logs.find((l) => /thing(?!2)/.test(l));
+  const withDetail = logs.find((l) => /thing2/.test(l));
+  assert.ok(!/—\s*$/.test(noDetail) && !noDetail.includes(' — '), `no dangling separator: ${JSON.stringify(noDetail)}`);
+  assert.ok(withDetail.includes(' — boom'), 'detail still rendered with separator');
 });

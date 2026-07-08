@@ -35,6 +35,10 @@ function validateProvisionInput(input) {
   }
 
   const entityByLower = new Map();
+  // Entity schema prefixes must match the solution's publisher prefix (Dataverse provisions custom
+  // tables under that prefix — a mismatch like publisherPrefix "new" + entity "cr_x" provisions into
+  // the wrong publisher context and confuses later phases).
+  const publisherPrefix = input.solution && typeof input.solution.publisherPrefix === 'string' ? input.solution.publisherPrefix.trim().toLowerCase() : '';
 
   // Entity schemaName pattern: prefix_suffix — lowercase publisher prefix, underscore, then a
   // letter-led name that may itself contain underscores (junction/config tables like new_ticket_tag).
@@ -55,6 +59,10 @@ function validateProvisionInput(input) {
     if (!SCHEMA_NAME_PATTERN.test(e.schemaName)) {
       errors.push(`entity '${e.schemaName}': schemaName must match pattern prefix_suffix (e.g., cr_candidate or new_ticket_tag)`);
       continue;
+    }
+
+    if (publisherPrefix && !e.schemaName.toLowerCase().startsWith(`${publisherPrefix}_`)) {
+      errors.push(`entity '${e.schemaName}': schemaName must start with the solution publisher prefix '${publisherPrefix}_'`);
     }
 
     entityByLower.set(e.schemaName.toLowerCase(), e);

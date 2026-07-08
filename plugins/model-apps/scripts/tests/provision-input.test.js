@@ -10,6 +10,13 @@ test('accepts a minimal valid input', () => {
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });
 
+test('rejects an entity whose schemaName prefix does not match the solution publisher prefix', () => {
+  const r = validateProvisionInput({ solution: { uniqueName: 'Default', publisherPrefix: 'new' },
+    entities: [{ schemaName: 'cr_candidate', displayName: 'C', primaryAttribute: { schemaName: 'cr_name' }, columns: [] }], relationships: [] });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /must start with the solution publisher prefix 'new_'/.test(e)));
+});
+
 test('rejects a missing solution.publisherPrefix', () => {
   const r = validateProvisionInput({ solution: { uniqueName: 'Default' }, entities: [], relationships: [] });
   assert.strictEqual(r.ok, false);
