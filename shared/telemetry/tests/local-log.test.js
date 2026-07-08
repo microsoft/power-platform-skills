@@ -183,9 +183,19 @@ test("pruneOldSessions never throws when the sessions dir does not exist", () =>
   pruneOldSessions(root, "never-used-plugin"); // must be a silent no-op
 });
 
+test("pruneOldSessions is a silent no-op when configDir is missing", () => {
+  // Documented contract is "never throws"; a falsy configDir must not reach path.join.
+  pruneOldSessions(undefined, "power-pages");
+});
+
 test("latestSessionLog returns null when no sessions exist", () => {
   const root = mkTmp();
   assert.equal(latestSessionLog(root, "power-pages"), null);
+});
+
+test("latestSessionLog returns null when configDir is missing", () => {
+  // User-facing status path must fail closed rather than throw from path.join.
+  assert.equal(latestSessionLog(undefined, "power-pages"), null);
 });
 
 test("latestSessionLog returns the most-recently-written session's log", () => {

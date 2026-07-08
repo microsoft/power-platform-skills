@@ -91,6 +91,7 @@ function appendLocal(record, { configDir } = {}) {
 // a dir with no readable log is judged by its OWN mtime, so a just-created dir from
 // a concurrent dispatcher isn't deleted out from under it. Never throws.
 function pruneOldSessions(configDir, pluginName, now = Date.now()) {
+  if (!configDir) return; // fail closed: pluginLogDir -> path.join would throw on undefined
   const sessionsRoot = pluginLogDir(configDir, pluginName);
   let entries;
   try {
@@ -124,6 +125,7 @@ function pruneOldSessions(configDir, pluginName, now = Date.now()) {
 // status surfaces it for the user to share, and a phantom path would point them at
 // a file that isn't there. Read-only.
 function latestSessionLog(configDir, pluginName) {
+  if (!configDir) return null; // fail closed: pluginLogDir -> path.join would throw on undefined
   const sessionsRoot = pluginLogDir(configDir, pluginName);
   let entries;
   try {
