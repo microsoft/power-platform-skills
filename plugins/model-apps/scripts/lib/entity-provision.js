@@ -13,9 +13,6 @@ const {
 } = require('./app-spec.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 
-// OData single-quote escape for $filter string literals (used by sample-data idempotency lookups).
-const odataLit = (v) => String(v == null ? '' : v).replace(/'/g, "''");
-
 // App Spec column type -> SDK ColumnType. Lookup is omitted (side effect of a OneToMany
 // relationship); Customer is handled specially (createCustomerColumn).
 const SDK_COLUMN_TYPE = {
@@ -287,79 +284,81 @@ function makeEntitySetResolver({ spec, entities, provision }) {
   };
 }
 
-// Create sample rows topologically, binding $parent/$parents via @odata.bind. Needs the
-// captured maps from provisionDataModel.
+// Case-insensitive key/value match of a parent sample record against a $parent.match criteria.
+function matchesRecord(rec, match) {
+  return Object.entries(match).every(([k, val]) => {
+    const rk = Object.keys(rec).find((x) => x.toLowerCase() === k.toLowerCase());
+    return rk !== undefined && rec[rk] === val;
+  });
+}
+
+// Translate an entity's author-friendly sample records into a seedRecordGraph group: resolve
+// choice labels to option ints (resolveSampleRecords), strip the $parent/$parents/statusReason
+// sentinels from the body, translate each $parent/$parents.match into a parentIndex bind on the
+// relationship's lookup nav property, and resolve a custom statusReason into statuscode/statecode
+// (halting if its option value wasn't captured during the data-model phase). The SDK's
+// seedRecordGraph owns the @odata.bind URL formation and resolve-by-name idempotency.
+function buildSeedGroup({ spec, e, records, statusReasonValues }) {
+  const resolved = resolveSampleRecords(e, records, spec);
+  const primary = e.primaryAttribute.schemaName.toLowerCase();
+  const seedRecords = [];
+  for (let i = 0; i < resolved.length; i++) {
+    const raw = records[i];
+    const body = Object.assign({}, resolved[i]);
+    delete body.$parent; delete body.$parents; delete body.statusReason;
+    // Parent lookups — one (`$parent`) or many (`$parents`, e.g. a junction row binding both
+    // sides). Each resolves to the parent's index within its own sample-record list; the SDK maps
+    // that index to the created id and emits `<lookup>@odata.bind`.
+    const binds = [];
+    const parents = [].concat(raw && raw.$parent ? [raw.$parent] : [], (raw && raw.$parents) || []);
+    for (const parent of parents) {
+      if (!parent || !parent.entity || !parent.match) continue;
+      const rel = relationshipFor(spec, parent.entity, e.schemaName);
+      const parentEntity = entityByLogical(spec, parent.entity);
+      if (!rel || !parentEntity) continue;
+      const parentIndex = sampleRecordsFor(spec, parentEntity).findIndex((pr) => matchesRecord(pr, parent.match));
+      if (parentIndex < 0) continue;
+      binds.push({ navProperty: rel.lookup.schemaName, parentEntity: parent.entity.toLowerCase(), parentIndex });
+    }
+    // Custom status reason -> statecode + the captured statuscode option value. The value is
+    // captured during the data-model phase (insertStatusValue); if that phase was skipped this run
+    // the value is unknown — halt loudly instead of silently inserting a default status.
+    if (raw && raw.statusReason) {
+      const sv = (statusReasonValues[e.schemaName.toLowerCase()] || {})[raw.statusReason];
+      if (!sv) throw new Error(`record sets statusReason '${raw.statusReason}' on ${e.schemaName}, but its status value wasn't captured — include the data-model phase (don't --skip data-model) so the custom status reason is created and its option value captured`);
+      body.statuscode = sv.value; body.statecode = sv.stateCode;
+    }
+    seedRecords.push({ body, binds });
+  }
+  return { entityLogical: e.schemaName.toLowerCase(), primaryAttribute: primary, records: seedRecords };
+}
+
+// Create sample rows topologically via the SDK's record-graph seeder. The plugin owns the App
+// Spec translation (buildSeedGroup); the SDK owns @odata.bind formation and resolve-by-name
+// idempotency. Groups are seeded one entity at a time (preserving the per-entity progress emit),
+// with the accumulated createdIds threaded through so a child can bind to an already-seeded parent.
 async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) {
   const result = { records: {} };
   const entities = dataModel.entities;
   const statusReasonValues = dataModel.statusReasonValues;
-  
+
   // entity-set resolver: fresh tables cached above; existing ones via fetchEntityMetadata.
   const entitySetFor = makeEntitySetResolver({ spec, entities, provision });
-  
-  const createdByEntity = {};
+
+  const createdIds = {}; // logical -> ids (accumulator across entities for parent-bind resolution)
   for (const e of topoOrderEntities(spec)) {
     const records = sampleRecordsFor(spec, e);
     if (!records.length) continue;
     await runner.run('sample-data', `${records.length} record(s) -> ${e.schemaName}`, async () => {
-      const entityLogical = e.schemaName.toLowerCase();
-      const resolved = resolveSampleRecords(e, records, spec);
-      const bodies = [];
-      const matchHit = (parentLogical, match) => (createdByEntity[parentLogical] || []).find((h) => Object.entries(match).every(([k, val]) => { const rk = Object.keys(h.raw).find((x) => x.toLowerCase() === k.toLowerCase()); return rk !== undefined && h.raw[rk] === val; }));
-      for (let i = 0; i < resolved.length; i++) {
-        const raw = records[i];
-        const body = Object.assign({}, resolved[i]);
-        delete body.$parent; delete body.$parents; delete body.statusReason;
-        // Parent lookups — one (`$parent`) or many (`$parents`, e.g. a junction row binding
-        // both sides). Each is bound to its relationship's lookup nav property via @odata.bind.
-        const parents = [].concat(raw && raw.$parent ? [raw.$parent] : [], (raw && raw.$parents) || []);
-        for (const parent of parents) {
-          if (!parent || !parent.entity || !parent.match) continue;
-          const parentLogical = parent.entity.toLowerCase();
-          const hit = matchHit(parentLogical, parent.match);
-          const rel = relationshipFor(spec, parent.entity, e.schemaName);
-          if (hit && hit.id && rel) body[`${rel.lookup.schemaName}@odata.bind`] = `/${await entitySetFor(parentLogical)}(${hit.id})`;
-        }
-        // Custom status reason -> statecode + the captured statuscode option value. The
-        // value is captured during the data-model phase (insertStatusValue); if that phase
-        // was skipped this run, the value is unknown — halt loudly instead of silently
-        // inserting the record with a default status (the live foot-gun behind this guard).
-        if (raw && raw.statusReason) {
-          const sv = (statusReasonValues[e.schemaName.toLowerCase()] || {})[raw.statusReason];
-          if (!sv) throw new Error(`record sets statusReason '${raw.statusReason}' on ${e.schemaName}, but its status value wasn't captured — include the data-model phase (don't --skip data-model) so the custom status reason is created and its option value captured`);
-          body.statuscode = sv.value; body.statecode = sv.stateCode;
-        }
-        bodies.push(body);
-      }
-      // Idempotency: don't re-insert sample rows that already exist (a re-run or a retry after a
-      // partial failure otherwise duplicates every record). Resolve each row by its primary-name
-      // value: reuse the existing record's id, create only the missing ones. Rows without a
-      // primary-name value can't be deduped and are always created.
-      const primary = e.primaryAttribute.schemaName.toLowerCase();
-      const nameOf = (b) => (b[primary] != null ? String(b[primary]) : null);
-      const uniqNames = [...new Set(bodies.map(nameOf).filter(Boolean))];
-      const existingByName = new Map();
-      if (uniqNames.length) {
-        const filter = uniqNames.map((n) => `${primary} eq '${odataLit(n)}'`).join(' or ');
-        const rows = await provision.queryRecords(entityLogical, { select: [primary, `${entityLogical}id`], filter, top: 5000 });
-        for (const r of rows || []) if (r[primary] != null) existingByName.set(String(r[primary]).toLowerCase(), r[`${entityLogical}id`]);
-      }
-      const missingIdx = [];
-      const missingBodies = [];
-      bodies.forEach((b, i) => { const nm = nameOf(b); if (!nm || !existingByName.has(nm.toLowerCase())) { missingIdx.push(i); missingBodies.push(b); } });
-      const createdIds = missingBodies.length ? await sdk.createRecordsBulk(entityLogical, missingBodies) : [];
-      const ids = bodies.map((b, i) => {
-        const nm = nameOf(b);
-        if (nm && existingByName.has(nm.toLowerCase())) return existingByName.get(nm.toLowerCase());
-        return createdIds[missingIdx.indexOf(i)];
-      });
-      result.records[e.schemaName] = ids;
-      createdByEntity[entityLogical] = records.map((raw, i) => ({ raw, id: ids[i] })).filter((p) => p.id != null);
+      const group = buildSeedGroup({ spec, e, records, statusReasonValues });
+      const { createdIds: made } = await sdk.seedRecordGraph([group], { entitySetFor, createdIds });
+      Object.assign(createdIds, made);
+      result.records[e.schemaName] = made[e.schemaName.toLowerCase()];
     });
   }
-  
+
   // Return entitySetFor closure so later phases can resolve entity-set names
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, makeEntitySetResolver, provisionSolution, provisionDataModel, provisionSampleData, BuildHalt, SDK_COLUMN_TYPE };
+module.exports = { makeRunner, makeEntitySetResolver, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE };

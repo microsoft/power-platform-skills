@@ -549,28 +549,17 @@ async function runSdkBuild(spec, opts = {}) {
 
   // 4b. Enrich the auto-generated default "Active/Inactive <Entity>" system views (Dataverse ships
   // them with only the primary column). One step per enrichable entity; opt out per-entity with
-  // enrichDefaultViews:false. Author-declared views (also querytype 0) are excluded by id; the
-  // Active/Inactive naming match assumes English (LCID 1033) default-view names.
+  // enrichDefaultViews:false. Author-declared views (also querytype 0) are excluded by id; the SDK
+  // owns the default-view resolution + fetch/setViewColumns/push/publish mechanics.
   if (has('views')) {
-    const authorViewIds = new Set(Object.values(result.created.views || {}).filter(Boolean));
+    const authorViewIds = Object.values(result.created.views || {}).filter(Boolean);
     for (const e of spec.entities || []) {
       if (!enrichesDefaultViews(spec, e)) continue;
       const logical = e.schemaName.toLowerCase();
       const cols = defaultViewColumns(spec, e);
       await runner.run('views', `enrich default views for ${logical}`, async () => {
-        const rows = await provision.queryRecords('savedquery', {
-          select: ['savedqueryid', 'name', 'isdefault'],
-          filter: `returnedtypecode eq '${logical}' and querytype eq 0`,
-          top: 50,
-        });
-        const defaults = (rows || []).filter((r) => !authorViewIds.has(r.savedqueryid) && (r.isdefault || /^(Active|Inactive)\b/i.test(r.name || '')));
-        for (const dv of defaults) {
-          await provision.fetchArtifact('view', dv.savedqueryid);
-          provision.setViewColumns(dv.savedqueryid, cols);
-          await provision.pushArtifact('view', dv.savedqueryid);
-        }
-        if (defaults.length) await provision.publishArtifact('view', defaults[0].savedqueryid);
-        return defaults.map((d) => d.savedqueryid);
+        const { updated } = await provision.enrichDefaultViews(logical, cols, { excludeViewIds: authorViewIds });
+        return updated;
       });
     }
   }

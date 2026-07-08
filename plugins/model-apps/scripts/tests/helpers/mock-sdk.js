@@ -20,6 +20,13 @@ function makeSimpleMockSdk() {
     findColumns: async () => [],
     fetchEntityMetadata: async (l) => ({ logicalName: l, displayName: l, entitySetName: `${l}s`, attributes: [], relationships: [] }),
     createRecordsBulk: async (e, rows) => rows.map((_, i) => `${e}-${i}`),
+    seedRecordGraph: async (groups, opts) => {
+      calls.push(['seedRecordGraph', groups, opts]);
+      const createdIds = {};
+      for (const g of groups) createdIds[g.entityLogical] = g.records.map((_, i) => `${g.entityLogical}-${i}`);
+      return { createdIds };
+    },
+    enrichDefaultViews: async (logical, cols, opts) => { calls.push(['enrichDefaultViews', logical, cols, opts]); return { updated: [`defview-${logical}`] }; },
     createArtifact: (t, def) => { calls.push(['createArtifact', t]); return Object.assign({ id: `${t}-${++idc}` }, def); },
     pushArtifact: async (t, id) => ({ type: t, id, success: true }),
     setViewColumns: () => ({}),

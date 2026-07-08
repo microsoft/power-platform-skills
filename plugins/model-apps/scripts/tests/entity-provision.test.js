@@ -2,7 +2,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
-const { makeRunner, provisionDataModel } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
+const { makeRunner, provisionDataModel, buildSeedGroup } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
 
 function mockSdk(existing = {}) {
   const calls = [];
@@ -217,4 +217,57 @@ test('provisionDataModel recovers from createRelationship already-exists error (
   assert.ok(dm.entities['new_ticket'], 'tables created despite relationship error');
   // Relationship not captured because skipIf returned undefined
   assert.strictEqual(dm.relationships.length, 0, 'relationship not captured on skip');
+});
+
+// --- buildSeedGroup: App Spec -> seedRecordGraph group translation -----------------------------
+
+const seedSpec = () => ({
+  solution: { uniqueName: 'S', publisherPrefix: 'new' },
+  entities: [
+    { schemaName: 'new_customer', displayName: 'Customer', primaryAttribute: { schemaName: 'new_name' }, columns: [{ schemaName: 'new_tier', type: 'Choice', options: ['Free', 'Pro'] }] },
+    { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' }, columns: [] },
+  ],
+  relationships: [
+    { type: 'OneToMany', referenced: 'new_customer', referencing: 'new_ticket', lookup: { schemaName: 'new_CustomerId', displayName: 'Customer' } },
+  ],
+  sampleData: {
+    new_customer: [{ new_name: 'Acme', new_tier: 'Pro' }],
+    new_ticket: [{ new_name: 'T1', $parent: { entity: 'new_customer', match: { new_name: 'Acme' } } }],
+  },
+});
+
+test('buildSeedGroup resolves choice labels to option ints in the body', () => {
+  const spec = seedSpec();
+  const group = buildSeedGroup({ spec, e: spec.entities[0], records: spec.sampleData.new_customer, statusReasonValues: {} });
+  assert.strictEqual(group.entityLogical, 'new_customer');
+  assert.strictEqual(group.primaryAttribute, 'new_name');
+  assert.strictEqual(group.records[0].body.new_tier, 100000001, 'Pro -> 100000001');
+  assert.deepStrictEqual(group.records[0].binds, []);
+});
+
+test('buildSeedGroup translates $parent.match into a lookup bind (parentIndex) and strips the sentinel', () => {
+  const spec = seedSpec();
+  const group = buildSeedGroup({ spec, e: spec.entities[1], records: spec.sampleData.new_ticket, statusReasonValues: {} });
+  assert.deepStrictEqual(group.records[0].binds, [{ navProperty: 'new_CustomerId', parentEntity: 'new_customer', parentIndex: 0 }]);
+  assert.strictEqual(group.records[0].body.$parent, undefined, 'sentinel stripped from body');
+  assert.strictEqual(group.records[0].body['new_CustomerId@odata.bind'], undefined, 'no @odata.bind baked in (SDK forms it)');
+});
+
+test('buildSeedGroup resolves a custom statusReason to statuscode/statecode', () => {
+  const spec = seedSpec();
+  spec.sampleData.new_ticket[0].statusReason = 'Escalated';
+  const statusReasonValues = { new_ticket: { Escalated: { value: 100000005, stateCode: 0 } } };
+  const group = buildSeedGroup({ spec, e: spec.entities[1], records: spec.sampleData.new_ticket, statusReasonValues });
+  assert.strictEqual(group.records[0].body.statuscode, 100000005);
+  assert.strictEqual(group.records[0].body.statecode, 0);
+  assert.strictEqual(group.records[0].body.statusReason, undefined, 'sentinel stripped');
+});
+
+test('buildSeedGroup halts when a statusReason value was not captured (data-model phase skipped)', () => {
+  const spec = seedSpec();
+  spec.sampleData.new_ticket[0].statusReason = 'Escalated';
+  assert.throws(
+    () => buildSeedGroup({ spec, e: spec.entities[1], records: spec.sampleData.new_ticket, statusReasonValues: {} }),
+    /status value wasn't captured/
+  );
 });

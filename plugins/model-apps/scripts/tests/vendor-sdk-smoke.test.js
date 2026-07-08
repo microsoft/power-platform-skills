@@ -82,7 +82,7 @@ test('vendored SDK exposes the AI methods', () => {
 test('vendored SDK exposes the consolidation methods', () => {
   const { createMakerSdk } = require('../vendor/cds-maker-sdk.cjs');
   const sdk = createMakerSdk({ workspacePath: require('os').tmpdir(), instanceUrl: 'https://x/', httpClient: { get: async () => ({}), post: async () => ({}), patch: async () => ({}), delete: async () => ({}), put: async () => ({}) } });
-  for (const m of ['resolveArtifact', 'findArtifact', 'deleteAppCascade']) {
+  for (const m of ['resolveArtifact', 'findArtifact', 'deleteAppCascade', 'seedRecordGraph', 'enrichDefaultViews']) {
     assert.strictEqual(typeof sdk[m], 'function', `sdk.${m} should be a function`);
   }
 });

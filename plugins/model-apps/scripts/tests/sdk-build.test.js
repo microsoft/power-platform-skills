@@ -82,6 +82,13 @@ function mockSdk(opts = {}) {
       return { logicalName: o.schemaName.toLowerCase() };
     },
     createRecordsBulk: async (e, rows) => { calls.push({ name: 'createRecordsBulk', args: [e, rows] }); return rows.map((_, i) => `${e}-${i}`); },
+    seedRecordGraph: async (groups, opts) => {
+      calls.push({ name: 'seedRecordGraph', args: [groups, opts] });
+      const createdIds = {};
+      for (const g of groups) createdIds[g.entityLogical] = g.records.map((_, i) => `${g.entityLogical}-${i}`);
+      return { createdIds };
+    },
+    enrichDefaultViews: async (logical, cols, o2) => { calls.push({ name: 'enrichDefaultViews', args: [logical, cols, o2] }); return { updated: [`defview-${logical}`] }; },
     createArtifact: (t, def) => { calls.push({ name: 'createArtifact', args: [t, def] }); return Object.assign({ id: `${t}-${++idc}` }, def); },
     pushArtifact: async (t, id) => { calls.push({ name: 'pushArtifact', args: [t, id] }); return { type: t, id, success: true }; },
     setViewColumns: (id, cols) => { calls.push({ name: 'setViewColumns', args: [id, cols] }); return { id }; },
@@ -124,7 +131,7 @@ test('fresh build runs phases in order and creates everything', async () => {
   assert.ok(has(calls, 'createSolution'));
   assert.strictEqual(find(calls, 'createTable').length, 2);
   assert.strictEqual(find(calls, 'createRelationship').length, 1);
-  assert.strictEqual(find(calls, 'createRecordsBulk').length, 2);
+  assert.strictEqual(find(calls, 'seedRecordGraph').length, 2);
   assert.ok(find(calls, 'createArtifact').length >= 4); // 1 view + 1 chart + 1 form + 1 app
 });
 
@@ -146,14 +153,16 @@ test('relationship schema name differs from the lookup column name', async () =>
   assert.strictEqual(rel.schemaName, 'new_customer_new_ticket');
 });
 
-test('sample data binds $parent via @odata.bind using the entity-set name', async () => {
+test('sample data translates $parent into a lookup bind (entity-set resolved via the SDK)', async () => {
   const { sdk, calls } = mockSdk();
   await runSdkBuild(makeSpec(), { sdk, apply: true, sampleData: true });
-  const ticketBulk = find(calls, 'createRecordsBulk').find((c) => c.args[0] === 'new_ticket');
-  const body = ticketBulk.args[1][0];
-  assert.strictEqual(body['new_CustomerId@odata.bind'], '/new_customers(new_customer-0)');
-  assert.strictEqual(body.$parent, undefined);
-  assert.strictEqual(body.new_priority, 100000001);
+  const call = find(calls, 'seedRecordGraph').find((c) => c.args[0][0].entityLogical === 'new_ticket');
+  const rec = call.args[0][0].records[0];
+  assert.deepStrictEqual(rec.binds, [{ navProperty: 'new_CustomerId', parentEntity: 'new_customer', parentIndex: 0 }]);
+  assert.strictEqual(rec.body['new_CustomerId@odata.bind'], undefined, 'the bind URL is formed by the SDK, not baked into the body');
+  assert.strictEqual(rec.body.$parent, undefined);
+  assert.strictEqual(rec.body.new_priority, 100000001);
+  assert.strictEqual(await call.args[1].entitySetFor('new_customer'), 'new_customers');
 });
 
 test('form sub-grid references the child view id and relationship name', async () => {
@@ -184,8 +193,8 @@ test('idempotent: an existing relationship is skipped', async () => {
 test('existing-table entity-set name comes from findTables (sample-data binding works)', async () => {
   const { sdk, calls } = mockSdk({ existingTables: { new_customer: { entitySetName: 'new_customerset', columns: ['new_name', 'new_tier'], relationships: [] } } });
   await runSdkBuild(makeSpec(), { sdk, apply: true, sampleData: true });
-  const ticketBulk = find(calls, 'createRecordsBulk').find((c) => c.args[0] === 'new_ticket');
-  assert.strictEqual(ticketBulk.args[1][0]['new_CustomerId@odata.bind'], '/new_customerset(new_customer-0)');
+  const call = find(calls, 'seedRecordGraph').find((c) => c.args[0][0].entityLogical === 'new_ticket');
+  assert.strictEqual(await call.args[1].entitySetFor('new_customer'), 'new_customerset', 'existing-table entity-set resolved for the SDK bind');
 });
 
 test('artifacts added to the solution by component type (view 26 / chart 59 / form 60 / app 80)', async () => {
@@ -376,10 +385,13 @@ test('a junction sample row binds multiple parents via $parents', async () => {
   };
   const { sdk, calls } = mockSdk();
   await runSdkBuild(spec, { sdk, apply: true, sampleData: true });
-  const body = find(calls, 'createRecordsBulk').find((c) => c.args[0] === 'new_assign').args[1][0];
-  assert.strictEqual(body['new_woid@odata.bind'], '/new_wos(new_wo-0)');
-  assert.strictEqual(body['new_techid@odata.bind'], '/new_techs(new_tech-0)');
-  assert.strictEqual(body.$parents, undefined);
+  const call = find(calls, 'seedRecordGraph').find((c) => c.args[0][0].entityLogical === 'new_assign');
+  const rec = call.args[0][0].records[0];
+  assert.deepStrictEqual(rec.binds, [
+    { navProperty: 'new_woid', parentEntity: 'new_wo', parentIndex: 0 },
+    { navProperty: 'new_techid', parentEntity: 'new_tech', parentIndex: 0 },
+  ]);
+  assert.strictEqual(rec.body.$parents, undefined);
 });
 
 test('a sample row sets a custom status reason (statecode + captured statuscode value)', async () => {
@@ -388,10 +400,10 @@ test('a sample row sets a custom status reason (statecode + captured statuscode 
   spec.sampleData.new_ticket[0].statusReason = 'Escalated';
   const { sdk, calls } = mockSdk();
   await runSdkBuild(spec, { sdk, apply: true, sampleData: true });
-  const body = find(calls, 'createRecordsBulk').find((c) => c.args[0] === 'new_ticket').args[1][0];
-  assert.strictEqual(body.statuscode, 100000001, 'value captured from insertStatusValue');
-  assert.strictEqual(body.statecode, 0, 'Active state');
-  assert.strictEqual(body.statusReason, undefined, 'sentinel stripped from the body');
+  const rec = find(calls, 'seedRecordGraph').find((c) => c.args[0][0].entityLogical === 'new_ticket').args[0][0].records[0];
+  assert.strictEqual(rec.body.statuscode, 100000001, 'value captured from insertStatusValue');
+  assert.strictEqual(rec.body.statecode, 0, 'Active state');
+  assert.strictEqual(rec.body.statusReason, undefined, 'sentinel stripped from the body');
 });
 
 // --- Live-build hardening: global-choice sample labels, alt-key idempotency, status guard ---
@@ -404,8 +416,8 @@ test('a global-choice sample value is resolved from its label to the option int'
   spec.sampleData.new_customer[0].new_tier = 'Silver';
   const { sdk, calls } = mockSdk();
   await runSdkBuild(spec, { sdk, apply: true, sampleData: true });
-  const body = find(calls, 'createRecordsBulk').find((c) => c.args[0] === 'new_customer').args[1][0];
-  assert.strictEqual(body.new_tier, 100000002, 'global-choice label resolved to 100000000+index');
+  const rec = find(calls, 'seedRecordGraph').find((c) => c.args[0][0].entityLogical === 'new_customer').args[0][0].records[0];
+  assert.strictEqual(rec.body.new_tier, 100000002, 'global-choice label resolved to 100000000+index');
 });
 
 test('alt-key creation is idempotent: an already-exists error is a skip, not a halt', async () => {
@@ -427,9 +439,9 @@ test('status reasons are idempotent: an already-exists insert is skipped (no hal
   const events = [];
   await runSdkBuild(spec, { sdk, apply: true, sampleData: true, emit: (e) => events.push(e) }); // must NOT throw
   assert.ok(events.some((e) => e.status === 'skip' && /status reason new_ticket: Escalated \(exists\)/.test(e.label)), 'duplicate status reason emits a skip');
-  const body = find(calls, 'createRecordsBulk').find((c) => c.args[0] === 'new_ticket').args[1][0];
-  assert.strictEqual(body.statuscode, 100000000, 'pinned value captured even when the insert was skipped');
-  assert.strictEqual(body.statecode, 0);
+  const rec = find(calls, 'seedRecordGraph').find((c) => c.args[0][0].entityLogical === 'new_ticket').args[0][0].records[0];
+  assert.strictEqual(rec.body.statuscode, 100000000, 'pinned value captured even when the insert was skipped');
+  assert.strictEqual(rec.body.statecode, 0);
 });
 
 test('status reasons pin a deterministic value (passed explicitly so re-runs are idempotent)', async () => {
@@ -695,16 +707,16 @@ test('enrichesDefaultViews: needs a non-primary column and honors the opt-out', 
   assert.strictEqual(enrichesDefaultViews({}, { ...rich, enrichDefaultViews: false }), false);
 });
 
-test('views phase enriches default views (fetch -> setViewColumns -> push -> publish)', async () => {
+test('views phase enriches default views via the SDK (one call per enrichable entity)', async () => {
   const spec = makeSpec();
   const { sdk, calls } = mockSdk();
   await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'views'] });
-  const setCalls = find(calls, 'setViewColumns');
-  assert.ok(setCalls.length >= 2, 'a default view enriched per entity');
-  const custCall = setCalls.find((c) => Array.isArray(c.args[1]) && c.args[1][0].name === 'new_name');
-  assert.ok(custCall, 'customer default view enriched starting with the primary column');
+  const enrichCalls = find(calls, 'enrichDefaultViews');
+  assert.ok(enrichCalls.length >= 2, 'a default view enriched per entity');
+  const custCall = enrichCalls.find((c) => c.args[0] === 'new_customer');
+  assert.ok(custCall, 'customer default views enriched');
+  assert.strictEqual(custCall.args[1][0].name, 'new_name', 'columns start with the primary column');
   assert.ok(custCall.args[1].some((col) => col.name === 'new_tier'), 'includes the declared column');
-  assert.ok(find(calls, 'publishArtifact').some((c) => c.args[0] === 'view'), 'entity published after enrichment');
 });
 
 test('views phase skips default-view enrichment when opted out (enrichDefaultViews:false)', async () => {
@@ -712,7 +724,7 @@ test('views phase skips default-view enrichment when opted out (enrichDefaultVie
   spec.entities.forEach((e) => { e.enrichDefaultViews = false; });
   const { sdk, calls } = mockSdk();
   await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'views'] });
-  assert.strictEqual(find(calls, 'setViewColumns').length, 0, 'no enrichment when opted out');
+  assert.strictEqual(find(calls, 'enrichDefaultViews').length, 0, 'no enrichment when opted out');
 });
 
 test('artifactIdentityQuery: view/chart/form use (entity, name); others null', () => {
@@ -743,20 +755,23 @@ test('idempotency: absent artifacts are created as normal', async () => {
   assert.ok(created.includes('view') && created.includes('chart') && created.includes('form'), 'artifacts created when absent');
 });
 
-test('idempotency: sample rows that already exist are not re-inserted', async () => {
-  const spec = makeSpec();
-  const { sdk, calls } = mockSdk({ sampleDataExists: true });
-  await runSdkBuild(spec, { sdk, apply: true, sampleData: true, phases: ['solution', 'data-model', 'sample-data'] });
-  const totalCreated = find(calls, 'createRecordsBulk').reduce((n, c) => n + c.args[1].length, 0);
-  assert.strictEqual(totalCreated, 0, 'no sample rows re-inserted when they already exist');
-});
-
-test('idempotency: sample rows are inserted when absent', async () => {
+test('sample-data seeding is delegated to the SDK record-graph seeder', async () => {
   const spec = makeSpec();
   const { sdk, calls } = mockSdk();
   await runSdkBuild(spec, { sdk, apply: true, sampleData: true, phases: ['solution', 'data-model', 'sample-data'] });
-  const totalCreated = find(calls, 'createRecordsBulk').reduce((n, c) => n + c.args[1].length, 0);
-  assert.strictEqual(totalCreated, 2, 'both sample rows inserted when absent');
+  const seeded = find(calls, 'seedRecordGraph');
+  const totalRecords = seeded.reduce((n, c) => n + c.args[0].reduce((m, g) => m + g.records.length, 0), 0);
+  assert.strictEqual(totalRecords, 2, 'both sample rows handed to seedRecordGraph');
+  // Resolve-by-name idempotency (reuse of existing rows) is enforced inside the SDK
+  // (cds-maker-sdk RecordGraphApi.test.ts), not in the plugin.
+});
+
+test('sample-data groups are seeded parents-before-children (topological order)', async () => {
+  const spec = makeSpec();
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true, sampleData: true, phases: ['solution', 'data-model', 'sample-data'] });
+  const order = find(calls, 'seedRecordGraph').map((c) => c.args[0][0].entityLogical);
+  assert.ok(order.indexOf('new_customer') < order.indexOf('new_ticket'), 'parent seeded before child');
 });
 
 test('alt-key creation still halts on a genuine (non-duplicate) error', async () => {

@@ -26,6 +26,8 @@ function mockSdk() {
     findColumns: async () => [],
     fetchEntityMetadata: async (l) => ({ logicalName: l, displayName: l, entitySetName: `${l}s`, attributes: [], relationships: [] }),
     createRecordsBulk: async (e, rows) => { calls.push(['createRecordsBulk', e]); return rows.map((_, i) => `${e}-${i}`); },
+    seedRecordGraph: async (groups) => { calls.push(['seedRecordGraph', groups]); const createdIds = {}; for (const g of groups) createdIds[g.entityLogical] = g.records.map((_, i) => `${g.entityLogical}-${i}`); return { createdIds }; },
+    enrichDefaultViews: async (logical) => { calls.push(['enrichDefaultViews', logical]); return { updated: [`defview-${logical}`] }; },
     createArtifact: (t, def) => { calls.push(['createArtifact', t]); return Object.assign({ id: `${t}-${++idc}` }, def); },
     pushArtifact: async (t, id) => ({ type: t, id, success: true }),
     addSubGrid: () => ({}),
@@ -91,11 +93,11 @@ test('dry-run lists the plan grouped by phase with a ▢ marker (no summary)', a
 test('--sample-data threads through (records created); without it, none', async () => {
   const withSd = mockSdk();
   await buildModelApp(desk, { apply: true, sampleData: true, env: 'https://x' }, { sdk: withSd.sdk });
-  assert.ok(withSd.calls.some((c) => c[0] === 'createRecordsBulk'), 'records created with --sample-data');
+  assert.ok(withSd.calls.some((c) => c[0] === 'seedRecordGraph'), 'records seeded with --sample-data');
 
   const without = mockSdk();
   await buildModelApp(desk, { apply: true, env: 'https://x' }, { sdk: without.sdk });
-  assert.ok(!without.calls.some((c) => c[0] === 'createRecordsBulk'), 'no records without --sample-data');
+  assert.ok(!without.calls.some((c) => c[0] === 'seedRecordGraph'), 'no records without --sample-data');
 });
 
 test('build journal: tees step events and closes with a completion summary', async () => {
