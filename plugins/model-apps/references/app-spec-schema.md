@@ -302,14 +302,25 @@ set a custom status with `statusReason`. All are topologically inserted and boun
 Controls AI-powered features that the platform activates at the app/table level. The block is
 entirely optional; omitting it leaves every AI feature at its platform default.
 
+> **Admin-gated.** AI features turn on only where the environment administrator has enabled them
+> in Power Platform Admin Center (Environments → Settings → Product → Features). The `ai-features`
+> build phase preflights each setting (`RetrieveSetting` via the SDK) and **skips / warns** for
+> anything off — it never fails the build and cannot flip admin or tenant switches.
+>
+> **Standalone preflight:**
+> ```bash
+> node "${PLUGIN_ROOT}/scripts/ai-preflight.js" --env <envUrl> [--app <uniqueName>]
+> ```
+> Prints each feature's on/off status and the exact admin action needed for anything off. Never fails.
+
 ```jsonc
 "ai": {
   // appFeatures: opt specific AI features in or out for this app (all optional booleans).
   "appFeatures": {
-    "formFill":  true,   // Copilot-assisted form fill
-    "nlSearch":  true,   // natural-language search
-    "nlChart":   true,   // natural-language chart generation
-    "m365":      false   // M365 Copilot integration
+    "formFill":  true,   // Copilot-assisted form fill (data entry)
+    "nlSearch":  true,   // natural-language grid/view search (data exploration)
+    "nlChart":   true,   // natural-language chart / AI data visualization
+    "m365":      false   // M365 Copilot integration (opt-in; defaults false)
   },
   // summaries: configure the row-summary (Copilot summary card) feature per table.
   "summaries": {
@@ -329,6 +340,22 @@ entirely optional; omitting it leaves every AI feature at its platform default.
   }
 }
 ```
+
+**`summaries.default: "auto"` candidate policy.** When `default` is `"auto"`, the skill
+auto-selects tables that are good row-summary candidates and skips those that aren't:
+- **Skipped automatically:** lookup-only tables (no descriptive columns), config/reference
+  tables, and junction/intersect entities.
+- **Always skipped:** the Dynamics 365 app-owned tables `incident` (Case), `lead`, and
+  `opportunity` — they provide their own summaries and the feature is not available for them.
+  Explicitly setting `enabled: true` for one of these in `summaries.tables` produces a lint
+  warning.
+
+**Prompt authoring guidelines** (for `instruction`):
+- Write for **meaningful insights**, not field/value repetition.
+- **No record GUIDs** in the output.
+- Pull in **recent activity** where relevant.
+- Use **audience-appropriate tone** (e.g. internal ops vs. customer-facing).
+- State an **explicit output shape**: a short paragraph is the recommended default.
 
 **Validation rules** (`validateAppSpec` / `lintAppSpec`):
 - `ai.appFeatures` keys must be one of `formFill · nlSearch · nlChart · m365`; values must be booleans (hard error).

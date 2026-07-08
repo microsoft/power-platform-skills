@@ -9,6 +9,25 @@ plus local-dev ergonomics, sample coverage, and an automated eval suite with
 real and synthetic fixtures. Builds on v2.1; no breaking changes.
 
 ### Added
+- **`/model-app-maker` AI-first features.** The new `ai-features` build phase (runs after
+  `app-shell`/`pages`, before `publish`) activates AI capabilities declared in the App Spec's
+  `ai` block. App-level features: **form-fill assist** (data entry), **natural-language grid/view
+  search** (data exploration), **NL chart / AI data visualization**, and **M365 Copilot** (opt-in,
+  defaults off). **Per-table Copilot row summaries** (Insight Cards) with tailored prompts —
+  auto-selected for good-candidate tables (`default: "auto"`) and skipping lookup-only / config /
+  junction tables and the D365-owned `incident`/`lead`/`opportunity`. All features are
+  **admin-gated**: the phase preflights via `RetrieveSetting` (SDK) and skips/warns for anything
+  the environment admin has not enabled — never fails the build. Standalone preflight:
+  `scripts/ai-preflight.js` (prints on/off status + exact admin action for each feature). Teardown
+  removes AI records (`AIModelPublish` + `aiskillconfigs`) created by the phase.
+- **SDK AI + artifact-resolve methods.** `cds-maker-sdk` now exposes `RetrieveSetting`,
+  `SaveSettingValue`, `AIModelPublish`, and `aiskillconfigs` CRUD — used by the `ai-features`
+  phase — plus new artifact-resolve helpers used internally by the build engine.
+- **`scripts/ai-preflight.js`**, **`scripts/lib/ai-candidates.js`**, **`scripts/lib/ai-prompt.js`**
+  — standalone preflight reporter, candidate-table selector, and tailored-prompt generator for the
+  AI-first features.
+- **`ai` block documented** in `references/app-spec-schema.md`: full `appFeatures` + `summaries`
+  shape, admin-gate notes, candidate-skip policy, and prompt authoring guidelines.
 - **`/model-app-maker` skill (Preview).** Turns a natural-language intent into a deployed
   **model-driven app** — tables/columns/relationships, sample data, views (with enriched default
   Active/Inactive columns), Choice-column charts, adaptive forms with sub-grids, quick-create/quick-view

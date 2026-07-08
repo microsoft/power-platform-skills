@@ -49,7 +49,7 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   subareas; classic `dashboards[]` are opt-in.
   **All Dataverse access is via the SDK**, so metadata is persisted under
   `<app-folder>/.maker-workspace/` for reuse/edits. Phases
-  (`solution·data-model·sample-data·web-resources·views·charts·forms·commands·dashboards·app-shell·pages·publish`) are
+  (`solution·data-model·sample-data·web-resources·views·charts·forms·commands·dashboards·app-shell·pages·ai-features·publish`) are
   selectable with `--only`/`--skip`/`--from`/`--to`; independent ops run with bounded parallelism.
   Emits `[n/total]` events the orchestrator narrates + a `BuildHalt` it gates on. Dry-run by
   default; `--apply` writes, `--sample-data` / `--publish` opt-in.
@@ -75,6 +75,15 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
 - **`scripts/verify-model-app.js` → `scripts/lib/verify-spec.js`** — read-only reconcile of the App Spec
   against what actually deployed (entities/columns/views/charts/forms + sitemap subareas + icons); exits
   non-zero and lists anything missing, catching silent partial builds.
+- **`scripts/ai-preflight.js`** — standalone preflight report: prints each AI feature's on/off status
+  and the exact admin action needed (Power Platform Admin Center → Environments → Settings → Product →
+  Features) for anything off. Never fails. The `ai-features` build phase calls this logic internally and
+  uses `RetrieveSetting`/`SaveSettingValue` (SDK) for app-level feature flags and `AIModelPublish` +
+  `aiskillconfigs` for per-table row summaries. All AI features are **admin-gated**: the skill preflights
+  and skips/warns; it cannot flip admin or tenant switches. `scripts/lib/ai-candidates.js` selects
+  good-candidate tables for auto row-summary mode; `scripts/lib/ai-prompt.js` generates tailored summary
+  prompts. The `ai` block in the App Spec configures the full set; see
+  [`references/app-spec-schema.md`](../../references/app-spec-schema.md) → `## ai`.
 - **`scripts/preview-form.js` → `scripts/lib/form-preview.js`** — renders an ASCII **form
   wireframe** (tabs, sections, fields with widget hints, the Notes/timeline block, sub-grids, form
   JS) from the App Spec, so the user can review a form visually during authoring before approving.
@@ -136,6 +145,7 @@ scripts/
   teardown-model-app.js        ← model-app-maker: classifier-safe reverse-of-build teardown
   verify-model-app.js          ← model-app-maker: reconcile the spec against the deployed app
   preview-form.js              ← model-app-maker: ASCII form wireframe for authoring review
+  ai-preflight.js              ← model-app-maker: preflight AI feature availability (admin-gate report)
   run-tests.js                 ← one-command plugin + SDK regression runner
   smoke-eval.js                ← scripted live smoke eval (build → assert → teardown)
   generate-page-manifest.js    ← Phase 0.5: writes working-dir package.json + genpage.d.ts
@@ -154,6 +164,8 @@ scripts/
     verify-spec.js             ← spec-vs-deployed reconciliation core
     build-journal.js           ← durable JSONL build journal (resume diagnostics)
     form-preview.js            ← form wireframe renderer
+    ai-candidates.js           ← selects good-candidate tables for auto row-summary mode
+    ai-prompt.js               ← generates tailored Copilot row-summary prompts
     _graph.js                  ← entity topological ordering (shared by build + teardown)
   vendor/cds-maker-sdk.cjs     ← headless vendored SDK bundle (rebuilt via _vendor-build/)
   _vendor-build/               ← esbuild vendoring tooling (build.js + pinned deps)

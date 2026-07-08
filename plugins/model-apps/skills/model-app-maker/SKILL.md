@@ -43,6 +43,9 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
 - **Surfaces** — **generative pages** (modern dashboards / overviews / analytics / landing — the default),
   classic dashboards (opt-in), external URLs
 - **App shell** — the app module + sitemap, with per-subarea icons
+- **AI-first features** (admin-gated) — form-fill assist (data entry), natural-language grid/view
+  search (data exploration), NL chart / AI data visualization, M365 Copilot (opt-in); per-table
+  Copilot row summaries (Insight Cards) with tailored prompts, auto-selected for good-candidate tables
 
 Author the **smallest spec that fully satisfies the ask**, then let the user refine. The **Genpage-first
 policy** below is the record-vs-dashboard rule; [`references/app-spec-schema.md`](../../references/app-spec-schema.md)
@@ -135,7 +138,7 @@ node "${PLUGIN_ROOT}/scripts/build-model-app.js" \
 
 **Run only what's needed** with phase selectors (the agent decides from detect-existing):
 `--only <phases>` · `--skip <phases>` · `--from <phase>` · `--to <phase>`
-(phases: `solution,data-model,sample-data,web-resources,views,charts,forms,commands,dashboards,app-shell,pages,publish`).
+(phases: `solution,data-model,sample-data,web-resources,views,charts,forms,commands,dashboards,app-shell,pages,ai-features,publish`).
 E.g. when all tables already exist: `--apply --skip data-model`. SDK metadata is persisted under
 `<working-dir>/.maker-workspace/` (override with `--workspace`), so edits can reuse it.
 
@@ -174,6 +177,45 @@ lists what it would delete and touches nothing; add `--apply` to actually delete
 node "${PLUGIN_ROOT}/scripts/teardown-model-app.js" \
   --env <envUrl> --spec @<working-dir>/app-spec.json [--apply] [--clear-workspace]
 ```
+
+### AI-first features
+
+The `ai` block in the App Spec controls four app-level features and per-table Copilot row
+summaries. All features are **admin-gated**: they are enabled only where the environment
+administrator has turned them on in Power Platform Admin Center (Environments → Settings →
+Product → Features). The `ai-features` build phase preflights each setting via the SDK
+(`RetrieveSetting`) and, for anything off, **skips it with a warning** — it never fails the
+build and cannot flip admin or tenant switches itself.
+
+**Preflight (standalone):**
+```bash
+node "${PLUGIN_ROOT}/scripts/ai-preflight.js" --env <envUrl> [--app <uniqueName>]
+```
+Prints each feature's on/off status and the exact admin action required for anything that is off.
+Never fails.
+
+**App-level features** (`ai.appFeatures`):
+- `formFill` — Copilot-assisted form fill (data entry)
+- `nlSearch` — natural-language grid/view search (data exploration)
+- `nlChart` — NL chart / AI data visualization
+- `m365` — M365 Copilot integration (opt-in; defaults to `false`)
+
+All default to `true` except `m365`. Set any to `false` to explicitly opt out.
+
+**Per-table row summaries** (`ai.summaries`):
+- `default: "auto"` — the skill auto-selects good-candidate tables (skips lookup-only / config /
+  junction tables and the Dynamics 365-owned `incident`, `lead`, `opportunity`).
+- `default: "off"` — summaries disabled unless a table opts in explicitly.
+- Per-table overrides in `summaries.tables`: set `enabled`, a tailored `instruction`, and
+  `columns[]` (the fields the summary reads). A `{ "enabled": false }` entry opts a specific
+  table out.
+
+**Prompt authoring guidelines** (for `instruction`): write for meaningful insights — not field/value
+repetition; never include record GUIDs; pull in recent activity where relevant; use
+audience-appropriate tone; aim for an explicit output shape (a short paragraph).
+
+**Teardown** removes the AI records created by the `ai-features` phase (summary config rows and
+published AI models) in addition to the standard artifacts.
 
 ---
 
