@@ -80,6 +80,27 @@ test('hasElement scopes attribute matching to the named element start-tag', () =
   assert.strictEqual(hasElement(xml, 'SubArea', { Entity: 'new_o', Icon: 'a.png' }), false, 'icon lives on the Area, not this SubArea');
 });
 
+test('verifySpec: dashboard subarea resolves the dashboard id and matches the sitemap DefaultDashboard', async () => {
+  const DASH = 'AAaa1111-2222-3333-4444-555566667777';
+  const spec = {
+    entities: [], views: [], charts: [], forms: [],
+    appShell: { areas: [{ groups: [{ subAreas: [{ dashboard: 'Ops', title: 'Ops' }] }] }] },
+  };
+  const present = {
+    findTable: async () => null, findColumns: async () => [],
+    queryRecords: async (set, opts) => (set === 'systemform' && /name eq 'Ops'/.test(opts.filter) ? [{ formid: DASH }] : []),
+    // Sitemap points a SubArea at the resolved dashboard id (Dataverse upper-cases + brace-wraps it).
+    sitemapXml: async () => `<SiteMap><Area><SubArea Id="s" DefaultDashboard="{${DASH.toUpperCase()}}"/></Area></SiteMap>`,
+  };
+  const ok = await verifySpec(spec, present);
+  assert.ok(ok.checks.some((c) => c.kind === 'subarea' && c.present), 'dashboard subarea matched by resolved id (brace/case-insensitive)');
+
+  // A different dashboard id in the sitemap must NOT satisfy the check.
+  const wrong = { ...present, sitemapXml: async () => '<SiteMap><Area><SubArea Id="s" DefaultDashboard="99999999-0000-0000-0000-000000000000"/></Area></SiteMap>' };
+  const bad = await verifySpec(spec, wrong);
+  assert.ok(bad.missing.some((m) => m.kind === 'subarea'), 'a different dashboard id does not satisfy the check');
+});
+
 test('sitemapXmlFor resolves appmodule -> component 62 -> sitemap', async () => {
   const sdk = {
     queryRecords: async (set) => {

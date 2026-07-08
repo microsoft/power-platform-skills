@@ -28,8 +28,11 @@ function createAzHttpClient(orgUrl, deps = {}) {
   // lock; when several artifacts (forms/views/charts) for the same table retry concurrently,
   // a fixed schedule wakes them in lockstep so they re-collide forever. Jitter de-syncs them.
   const backoffMs = (attempt) => {
-    const base = Math.min(1000 * 2 ** attempt, 8000); // 1s,2s,4s,8s,8s (capped)
-    return base + Math.floor(random() * base * 0.25); // + up to 25% jitter
+    // The BASE is capped at 8000ms (1s,2s,4s,8s,8s); the returned delay then adds up to +25% jitter
+    // on top, so the actual sleep can exceed 8000ms (e.g. ~9000ms). The cap is on the base, not the
+    // final sleep — jitter is intentionally allowed to push past it to de-sync lockstep collisions.
+    const base = Math.min(1000 * 2 ** attempt, 8000);
+    return base + Math.floor(random() * base * 0.25);
   };
 
   let token = null;

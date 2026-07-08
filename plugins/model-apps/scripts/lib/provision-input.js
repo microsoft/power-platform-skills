@@ -36,8 +36,9 @@ function validateProvisionInput(input) {
 
   const entityByLower = new Map();
 
-  // Entity schemaName pattern: prefix_suffix (lowercase prefix, underscore, then a letter-led suffix)
-  const SCHEMA_NAME_PATTERN = /^[a-z][a-z0-9]+_[A-Za-z][A-Za-z0-9]+$/;
+  // Entity schemaName pattern: prefix_suffix — lowercase publisher prefix, underscore, then a
+  // letter-led name that may itself contain underscores (junction/config tables like new_ticket_tag).
+  const SCHEMA_NAME_PATTERN = /^[a-z][a-z0-9]+_[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)*$/;
 
   for (const e of input.entities) {
     if (!e || typeof e !== 'object') {
@@ -52,7 +53,7 @@ function validateProvisionInput(input) {
     }
 
     if (!SCHEMA_NAME_PATTERN.test(e.schemaName)) {
-      errors.push(`entity '${e.schemaName}': schemaName must match pattern prefix_suffix (e.g., cr_candidate)`);
+      errors.push(`entity '${e.schemaName}': schemaName must match pattern prefix_suffix (e.g., cr_candidate or new_ticket_tag)`);
       continue;
     }
 

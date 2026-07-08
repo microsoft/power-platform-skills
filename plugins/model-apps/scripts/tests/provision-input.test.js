@@ -16,6 +16,12 @@ test('rejects a missing solution.publisherPrefix', () => {
   assert.ok(r.errors.some((e) => /publisherPrefix/i.test(e)));
 });
 
+test('accepts an entity schemaName with underscores in the suffix (junction/config tables)', () => {
+  const r = validateProvisionInput({ solution: { uniqueName: 'Default', publisherPrefix: 'new' },
+    entities: [{ schemaName: 'new_ticket_tag', displayName: 'Ticket Tag', primaryAttribute: { schemaName: 'new_name' }, columns: [] }], relationships: [] });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
 test('rejects an entity whose schemaName lacks a prefix', () => {
   const r = validateProvisionInput({ solution: { uniqueName: 'Default', publisherPrefix: 'cr' },
     entities: [{ schemaName: 'candidate', displayName: 'C', primaryAttribute: { schemaName: 'cr_name' }, columns: [] }], relationships: [] });

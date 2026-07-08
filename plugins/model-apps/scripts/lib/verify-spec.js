@@ -45,7 +45,14 @@ async function verifySpec(spec, read) {
     for (const g of a.groups || []) {
       for (const sa of g.subAreas || []) {
         if (sa.entity) add('subarea', sa.title || sa.entity, hasElement(xml, 'SubArea', { Entity: sa.entity }));
-        if (sa.dashboard) add('subarea', sa.title || sa.dashboard, /DefaultDashboard=/.test(xml));
+        if (sa.dashboard) {
+          // Resolve the declared dashboard (a system dashboard = systemform type 0) by name, then
+          // confirm the sitemap points a SubArea at THAT dashboard id — not just that some dashboard
+          // subarea exists. Missing/unresolvable dashboard => not present.
+          const rows = await read.queryRecords('systemform', { select: ['formid'], filter: `type eq 0 and name eq '${odataLit(sa.dashboard)}'`, top: 1 });
+          const dashId = rows && rows[0] && rows[0].formid;
+          add('subarea', sa.title || sa.dashboard, dashId ? subareaHasDashboard(xml, dashId) : false);
+        }
         if (sa.icon) {
           // Prefer matching the icon on the SubArea that also declares this entity; fall back to any
           // SubArea carrying the icon when the subarea has no entity identity.
@@ -78,4 +85,15 @@ function hasElement(xml, tag, attrs) {
   return false;
 }
 
-module.exports = { verifySpec, hasElement };
+// True when some `<SubArea ... DefaultDashboard="...">` in the sitemap points at `dashId`. Dataverse
+// may store the GUID with braces and/or upper-cased, so compare normalized (braces stripped, lower).
+function subareaHasDashboard(xml, dashId) {
+  const norm = (s) => String(s).replace(/[{}]/g, '').toLowerCase();
+  const target = norm(dashId);
+  const re = /<SubArea\b[^>]*\bDefaultDashboard="([^"]*)"[^>]*>/gi;
+  let m;
+  while ((m = re.exec(xml)) !== null) if (norm(m[1]) === target) return true;
+  return false;
+}
+
+module.exports = { verifySpec, hasElement, subareaHasDashboard };
