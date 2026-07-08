@@ -79,6 +79,14 @@ test('vendored SDK exposes the AI methods', () => {
   }
 });
 
+test('vendored SDK exposes the consolidation methods', () => {
+  const { createMakerSdk } = require('../vendor/cds-maker-sdk.cjs');
+  const sdk = createMakerSdk({ workspacePath: require('os').tmpdir(), instanceUrl: 'https://x/', httpClient: { get: async () => ({}), post: async () => ({}), patch: async () => ({}), delete: async () => ({}), put: async () => ({}) } });
+  for (const m of ['resolveArtifact', 'findArtifact', 'deleteAppCascade']) {
+    assert.strictEqual(typeof sdk[m], 'function', `sdk.${m} should be a function`);
+  }
+});
+
 test('addFormEventHandler injects a handler into the retained FormXML headlessly (Tier 2)', () => {
   const { createMakerSdk } = require(BUNDLE);
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'sdk-evt-'));
