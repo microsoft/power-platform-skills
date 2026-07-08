@@ -264,3 +264,84 @@ test('lint does not warn/error on specs with no ai block (no regression)', () =>
   assert.strictEqual(r.ok, true);
   assert.strictEqual(r.errors.length, 0);
 });
+
+// --- headless spec lint guardrails ------------------------------------------------------
+// A headless model app is an entity-only shell: solution + entities + an appShell that
+// points at entities. Classic UI artifacts (forms/views/charts/dashboards/pages/commands/
+// webResources) are forbidden — the mutual-exclusion rule keeps the shell honest so the
+// build won't quietly emit them. See U1 contract in units.json for run20260708headless01.
+
+// Build a minimally-viable headless spec: entities + an appShell whose subarea points
+// at an entity. Kept local so headless tests can mutate freely.
+const headlessBase = () => {
+  const s = base();
+  s.headless = true;
+  s.appShell = { areas: [{ label: 'Main', groups: [{ label: 'Records', subAreas: [
+    { entity: 'new_customer', title: 'Customers' },
+  ] }] }] };
+  return s;
+};
+
+test('lint passes a clean headless spec (entities + entity subarea, no classic UI)', () => {
+  const r = lintAppSpec(headlessBase());
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('lint fails a headless spec that declares non-empty forms[] with a mutual-exclusion error naming headless', () => {
+  const s = headlessBase();
+  s.forms = [{ entity: 'new_ticket', layout: 'auto' }];
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((m) => /headless/i.test(m) && /forms/i.test(m)),
+    `expected an error mentioning both 'headless' and 'forms'; got ${JSON.stringify(r.errors)}`);
+});
+
+test('lint tolerates empty classic UI arrays on a headless spec (forms:[], views:[], etc.)', () => {
+  const s = headlessBase();
+  s.forms = []; s.views = []; s.charts = []; s.dashboards = []; s.pages = []; s.commands = []; s.webResources = [];
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('lint fails a headless spec that also declares non-empty views/charts/dashboards/pages/commands/webResources', () => {
+  for (const key of ['views', 'charts', 'dashboards', 'pages', 'commands', 'webResources']) {
+    const s = headlessBase();
+    // shape doesn't matter — mutual-exclusion is structural (non-empty array).
+    s[key] = [{ name: 'x', entity: 'new_ticket', chartType: 'Column', groupBy: 'new_priority' }];
+    const r = lintAppSpec(s);
+    assert.strictEqual(r.ok, false, `expected ${key} on headless spec to fail; got ok=true`);
+    assert.ok(r.errors.some((m) => /headless/i.test(m) && new RegExp(key, 'i').test(m)),
+      `expected an error mentioning both 'headless' and '${key}'; got ${JSON.stringify(r.errors)}`);
+  }
+});
+
+test('lint fails a headless spec with no entities', () => {
+  const s = headlessBase();
+  s.entities = [];
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((m) => /headless/i.test(m) && /entit/i.test(m)),
+    `expected an error mentioning both 'headless' and 'entities'; got ${JSON.stringify(r.errors)}`);
+});
+
+test('lint fails a headless spec whose appShell has no Entity-typed subareas', () => {
+  const s = headlessBase();
+  // Replace the entity subarea with a URL subarea so no Entity subareas remain.
+  s.appShell.areas[0].groups[0].subAreas = [{ url: 'https://example.com', title: 'Docs' }];
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((m) => /headless/i.test(m) && /(entity|subarea|sitemap)/i.test(m)),
+    `expected an error mentioning 'headless' and the missing entity subarea; got ${JSON.stringify(r.errors)}`);
+});
+
+test('lint does not apply headless rules when headless is false or absent (no regression)', () => {
+  // headless:false — classic UI arrays should NOT be flagged by the headless rule.
+  const s1 = base();
+  s1.headless = false;
+  s1.forms = []; // still no forms — base is a clean minimal spec
+  assert.strictEqual(lintAppSpec(s1).ok, true);
+
+  // headless absent — plain base() already covered above but re-assert here.
+  const s2 = base();
+  assert.strictEqual(lintAppSpec(s2).ok, true);
+});

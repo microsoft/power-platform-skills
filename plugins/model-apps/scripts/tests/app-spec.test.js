@@ -381,3 +381,26 @@ test('validateAppSpec passes when ai is absent (no regression)', () => {
   const r = validateAppSpec(cloneDesk());
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });
+
+// --- headless flag structural validation ---------------------------------------------------
+// Mirrors the shape used for `spec.ai` (optional top-level, structural check only).
+// Semantic rules (mutual exclusion, minimum viability) live in spec-lint.js.
+
+test('validateAppSpec accepts a spec with headless:true', () => {
+  const s = cloneDesk();
+  s.headless = true;
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  assert.ok(!r.errors.some((e) => /headless/i.test(e)), 'no error should mention headless when the value is a valid boolean');
+});
+
+test('validateAppSpec rejects headless set to a non-boolean value', () => {
+  for (const bad of ['yes', 1, [], {}]) {
+    const s = cloneDesk();
+    s.headless = bad;
+    const r = validateAppSpec(s);
+    assert.strictEqual(r.ok, false, `expected rejection for headless=${JSON.stringify(bad)}`);
+    assert.ok(r.errors.some((e) => /headless/i.test(e) && /boolean/i.test(e)),
+      `expected an error naming 'headless' and 'boolean' for value ${JSON.stringify(bad)}; got ${JSON.stringify(r.errors)}`);
+  }
+});
