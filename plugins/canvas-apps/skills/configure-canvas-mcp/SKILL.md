@@ -75,7 +75,7 @@ mcp__canvas-authoring__connect(
 - `login_hint`: Pass the user's UPN or email **only if** they have indicated they want to connect as a specific/different user (e.g. "log in as alice@contoso.com"). These values cannot be derived from the maker portal URL — never guess. Omit otherwise to use the first signed-in user.
 - `auth_flow`: Pass `"browser"` or `"broker"` **only if** the user has explicitly stated a preferred auth flow (e.g. "use browser sign-in"). Omit otherwise to use the default.
 
-If the call fails, run the following command to check if the MCP server failed to start due to a missing .NET 10 SDK:
+If the `mcp__canvas-authoring__connect` tool is **not available** (the MCP server did not start), run the following command to check whether the server failed to launch due to a missing .NET 10 SDK:
 
 ```bash
 dotnet --list-sdks
@@ -85,7 +85,7 @@ If a version 10.x.y or higher is **not** listed, tell the user:
 
 > ⚠️ .NET 10 SDK is required to run the Canvas Authoring MCP server. It looks like you don't have it installed. Please install it from https://dotnet.microsoft.com/download/dotnet/10.0 and then try again.
 
-Otherwise, report the original error and suggest checking that:
+If the tool is available but the call returns an error, report the error and suggest checking that:
 
 1. The studio URL is correct and the browser tab is still open
 2. Coauthoring is enabled in the app settings
