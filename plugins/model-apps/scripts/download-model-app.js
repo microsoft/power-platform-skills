@@ -224,7 +224,7 @@ async function main() {
 }
 
 if (require.main === module) {
-  main();
+  main().catch((err) => emitResult(false, err));
 }
 
 module.exports = { resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount };

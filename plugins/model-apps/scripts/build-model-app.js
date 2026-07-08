@@ -34,7 +34,7 @@ function makeSdk(env, spec, workspaceDir) {
     workspacePath: sdkTempDir, // unused (no workspace ops)
     instanceUrl: env,
     httpClient,
-    solutionUniqueName: spec.solution.uniqueName,
+    solutionUniqueName: spec.solution && spec.solution.uniqueName,
   });
   fs.mkdirSync(workspaceDir, { recursive: true });
   const provisionSdk = createMakerSdk({ workspacePath: workspaceDir, instanceUrl: env, httpClient });
@@ -209,16 +209,18 @@ async function main() {
   const journal = opts.apply
     ? openJournal(workspaceDir, { app: spec.app && spec.app.name, solution: spec.solution && spec.solution.uniqueName, apply: true, phases: opts.phases })
     : null;
+  let r;
   try {
     const deps = { log: (m) => process.stderr.write(m + '\n'), sdk, provisionSdk, journal };
-    const r = await buildModelApp(spec, opts, deps);
-    emitResult(r.ok, r);
+    r = await buildModelApp(spec, opts, deps);
   } finally {
     cleanup();
   }
+  // emitResult() calls process.exit(), so emit AFTER cleanup() has run.
+  emitResult(r.ok, r);
 }
 
 if (require.main === module) {
-  main();
+  main().catch((err) => emitResult(false, err));
 }
 module.exports = { buildModelApp, planFor, isTransientHalt, checkCollisions };

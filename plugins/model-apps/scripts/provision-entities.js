@@ -27,7 +27,7 @@ function makeSdk(env, input) {
     workspacePath: sdkTempDir,
     instanceUrl: env,
     httpClient,
-    solutionUniqueName: input.solution.uniqueName,
+    solutionUniqueName: input.solution && input.solution.uniqueName,
   });
   sdk.initWorkspace();
   const provision = createMakerSdk({ workspacePath: provisionTempDir, instanceUrl: env, httpClient });
@@ -276,23 +276,25 @@ async function main() {
   
   // Construct SDK clients (offline until first call)
   const { sdk, provision, cleanup } = makeSdk(env, input);
-  
+
+  let r;
   try {
     const deps = {
       log: (m) => process.stderr.write(m + '\n'),
       sdk,
       provision,
     };
-    
-    const r = await provisionEntities(input, opts, deps);
-    emitResult(r.ok, r);
+
+    r = await provisionEntities(input, opts, deps);
   } finally {
     cleanup();
   }
+  // emitResult() calls process.exit(), so emit AFTER cleanup() has run.
+  emitResult(r.ok, r);
 }
 
 if (require.main === module) {
-  main();
+  main().catch((err) => emitResult(false, err));
 }
 
 module.exports = { provisionEntities };
