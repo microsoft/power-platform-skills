@@ -256,3 +256,35 @@ test('headless apply: --only cannot smuggle a UI phase past the headless allowli
     assert.ok(!artifactKinds.includes(forbidden), `--only should NOT smuggle '${forbidden}' into a headless build; kinds=${JSON.stringify(artifactKinds)}`);
   }
 });
+
+// Edge cases — U2 defense-in-depth boundaries.
+
+test('non-headless classic build is unchanged: allow-list is a pass-through, all classic phases run', async () => {
+  // Regression guard on the buildModelApp wiring — the headless intersection MUST be an
+  // idempotent no-op for a classic spec (headless flag absent). Any artifact the classic
+  // support-desk spec would produce without the U2 change must still be produced with it.
+  const { sdk, calls } = mockSdk();
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x' }, { sdk });
+  assert.strictEqual(r.ok, true);
+  const artifactKinds = calls.filter((c) => c[0] === 'createArtifact').map((c) => c[1]);
+  // Classic support-desk fixture declares forms/views/charts + the app module — ALL should build.
+  assert.ok(artifactKinds.includes('form'),  `classic build must still create forms; kinds=${JSON.stringify(artifactKinds)}`);
+  assert.ok(artifactKinds.includes('view'),  `classic build must still create views; kinds=${JSON.stringify(artifactKinds)}`);
+  assert.ok(artifactKinds.includes('chart'), `classic build must still create charts; kinds=${JSON.stringify(artifactKinds)}`);
+  assert.ok(artifactKinds.includes('app'),   `classic build must still create the app; kinds=${JSON.stringify(artifactKinds)}`);
+});
+
+test('headless apply with an explicitly empty opts.phases short-circuits without artifact writes', async () => {
+  // Documents intentional behavior: if the caller passes phases:[] (perhaps via --only naming
+  // phases fully outside the allow-list), the intersection stays [] and runSdkBuild runs no
+  // phases. The build reports ok:true (it did what was asked — nothing) but no writes land.
+  // A follow-up "empty-phase-set diagnostic" is out of scope for U2 (deferred low-priority
+  // finding from high-risk-reviewer).
+  const { sdk, calls } = mockSdk();
+  const r = await buildModelApp(headlessFixture, { apply: true, env: 'https://x', phases: [] }, { sdk });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(calls.filter((c) => c[0] === 'createArtifact').length, 0, 'no createArtifact writes for phases:[]');
+  assert.strictEqual(calls.filter((c) => c[0] === 'createSolution').length, 0, 'no createSolution for phases:[]');
+});
+
+
