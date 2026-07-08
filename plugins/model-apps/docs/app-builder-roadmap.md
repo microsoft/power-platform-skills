@@ -1,6 +1,6 @@
-# model-app-maker — Roadmap
+# app-builder — Roadmap
 
-What the `/model-app-maker` skill can do today, what's still pending (grouped by phase), and what's
+What the `/app-builder` skill can do today, what's still pending (grouped by phase), and what's
 intentionally deferred (with the *why*). The build engine is `scripts/lib/sdk-build.js`; the App Spec
 contract is [`../references/app-spec-schema.md`](../references/app-spec-schema.md); the wiring diagrams
 are in [`architecture.md`](architecture.md).
@@ -88,7 +88,7 @@ are in [`architecture.md`](architecture.md).
 - 🔲 **Spec templates** — domain starters (support desk, CRM, asset tracking) as one-shot scaffolds.
 
 ### Phase: Quality & docs
-- 🔲 **model-app-maker eval fixtures** — extend the eval suite with spec → expected-plan/calls cases.
+- 🔲 **app-builder eval fixtures** — extend the eval suite with spec → expected-plan/calls cases.
 - 🔲 **Workspace reuse** — load `.maker-workspace/` metadata to skip re-discovery on iterative runs.
 - 🔲 **Worked samples** — a Form-JS spec (web resource + onchange handler) and a dashboard spec in `samples/`.
 - 🔲 **Refresh `authoring-flow.md`** Level (a) column-type list (still shows the pre-Tier-1 short list).

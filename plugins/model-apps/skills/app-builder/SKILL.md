@@ -1,5 +1,5 @@
 ---
-name: model-app-maker
+name: app-builder
 version: 0.6.0
 description: (Preview) Builds and edits a model-driven Power Apps app from a natural-language intent — tables, columns, relationships, adaptive forms with sub-grids, views, Choice-column charts, generative pages (genpage-first) for overview/dashboard surfaces, and an app module + sitemap — via the headless cds-maker-sdk. Runs an interactive, multi-turn authoring flow (env selection, App Spec authoring, guardrail lint, plan-mode approval) and a narrated build, and can download a deployed app back into an editable spec to change it. Use when the user says "build an app for X", "create a model-driven app", "make me an app to manage Y", or "edit/add to my app". For a standalone generative page that is not part of an app, use /genpage.
 author: Microsoft Corporation
@@ -8,7 +8,7 @@ user-invocable: true
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, EnterPlanMode, ExitPlanMode, TaskCreate, TaskUpdate, TaskList
 ---
 
-# model-app-maker — intent → model-driven app
+# app-builder — intent → model-driven app
 
 > ⚠️ **Preview.** This skill is in preview — its App Spec shape, flags, and build behavior may change
 > between versions. Review the plan-mode summary before applying, and prefer a non-production
@@ -294,6 +294,6 @@ run with bounded parallelism; publish is one round-trip per entity + the app. Vi
   **rich view filters** (`eq-userid`/`this-week`/`in`/`not-in`); web resources + form JS event
   handlers; sample data with **multi-parent `$parents`** + **`statusReason`** (Choice/MultiChoice labels
   auto-resolve).) See
-  [`docs/model-app-maker-roadmap.md`](../../docs/model-app-maker-roadmap.md) and the one-page
+  [`docs/app-builder-roadmap.md`](../../docs/app-builder-roadmap.md) and the one-page
   [`references/app-spec-schema.md`](../../references/app-spec-schema.md) — author from that **single**
   doc; you should not need to read the SDK, lint, or engine to write a spec.

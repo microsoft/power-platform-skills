@@ -1,7 +1,7 @@
 # Authoring Flow — the App Spec playbook (run in the main loop)
 
-This is the **authoring playbook** the `/model-app-maker` skill executes **itself, in the main
-conversation** — Phase 1 of `skills/model-app-maker/SKILL.md`. It is **not** a subagent: a
+This is the **authoring playbook** the `/app-builder` skill executes **itself, in the main
+conversation** — Phase 1 of `skills/app-builder/SKILL.md`. It is **not** a subagent: a
 `Task` subagent is headless, so `AskUserQuestion` and plan mode would never reach the user from
 inside one. Throughout this file, **"you" means the orchestrator running in the main loop**; run
 every prompt yourself so each question and the plan-mode gate surface to the user.
@@ -538,7 +538,7 @@ is for the user's reference — it does not need to be machine-parseable. Includ
 - **Artifacts:** form/view/chart counts
 - **Sample data:** record counts per entity
 - **Lint status:** clean / warnings acknowledged
-- **Next step:** "Run the model-app-maker build step to apply this spec."
+- **Next step:** "Run the app-builder build step to apply this spec."
 
 ### Complete the workflow log
 

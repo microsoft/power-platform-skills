@@ -1,5 +1,5 @@
 'use strict';
-// Append-only JSONL build journal for model-app-maker. DIAGNOSTIC ONLY: it records what a build
+// Append-only JSONL build journal for app-builder. DIAGNOSTIC ONLY: it records what a build
 // run did and where it halted, so a crashed/failed run leaves a durable trace. It is NOT a replayed
 // checkpoint — resume is "re-run the same command" (the build is idempotent: it reuses everything
 // already created). Every fs op is guarded so journaling can NEVER throw into (and fail) a build.

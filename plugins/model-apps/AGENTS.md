@@ -9,7 +9,7 @@ A plugin for building Power Apps for **model-driven apps**, via two user-invocab
 - **`/genpage`** — build and deploy standalone **generative pages** (genux): React 17 + TypeScript +
   Fluent UI V9 single-file components, deployed via PAC CLI. Orchestrates specialist agents (planner,
   optional entity builder, parallel page builders).
-- **`/model-app-maker`** *(Preview)* — build and edit a **whole model-driven app** (tables, columns,
+- **`/app-builder`** *(Preview)* — build and edit a **whole model-driven app** (tables, columns,
   relationships, adaptive forms, views, charts, generative pages, app + sitemap, sample data, and
   admin-gated AI features) from a natural-language intent, via the vendored headless `cds-maker-sdk`.
 
@@ -31,17 +31,17 @@ able to tell what moved from the docs alone):
 | Doc | What it holds | Update when… |
 |-----|---------------|--------------|
 | `AGENTS.md` (this file — `CLAUDE.md` symlinks to it) | Per-component behavioral specs, the canonical file tree, conventions, build/test | You add/rename a script, change a component's behavior, or change how to build/test |
-| [`docs/architecture.md`](docs/architecture.md) | Wiring / flow **diagrams** for both skills (`/genpage` + `/model-app-maker`) | You change the orchestration, phase pipeline, or how the pieces connect |
-| [`docs/model-app-maker-roadmap.md`](docs/model-app-maker-roadmap.md) | `/model-app-maker` **roadmap / TODO** (Complete + Pending by phase) | You ship or reprioritize a model-app-maker capability |
+| [`docs/architecture.md`](docs/architecture.md) | Wiring / flow **diagrams** for both skills (`/genpage` + `/app-builder`) | You change the orchestration, phase pipeline, or how the pieces connect |
+| [`docs/app-builder-roadmap.md`](docs/app-builder-roadmap.md) | `/app-builder` **roadmap / TODO** (Complete + Pending by phase) | You ship or reprioritize an app-builder capability |
 | [`CHANGELOG.md`](CHANGELOG.md) | Keep-a-Changelog — concise bullets (detail lives in PRs/docs) | Any user-visible change |
 | [`references/app-spec-schema.md`](references/app-spec-schema.md) | The App Spec contract | You change the App Spec shape or validation |
 
 Don't duplicate content across these — **cross-link instead** (a second copy only drifts, as the file
 tree and teardown order both did before).
 
-## model-app-maker — intent → model-driven app
+## app-builder — intent → model-driven app
 
-A second skill (`/model-app-maker`) builds a whole **model-driven app** (tables, columns,
+A second skill (`/app-builder`) builds a whole **model-driven app** (tables, columns,
 relationships, adaptive forms with sub-grids, views, Choice-column charts, app module +
 sitemap) from a natural-language intent — distinct from `/genpage`, which builds generative
 *pages*. The **entire flow runs in the main conversation loop** (not via a `Task` subagent):
@@ -127,7 +127,7 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
 The end-to-end flow (Phase 0 working dir → Phase 1 author **in the main loop** per
 `references/authoring-flow.md` → Phase 2 narrated SDK build → Phase 3 verify & iterate; **edit** an
 existing app via the same path — `download-model-app.js` pulls it back into a spec, then re-run Phase 2
-idempotently) is diagrammed in [`docs/architecture.md`](docs/architecture.md) → *`/model-app-maker` —
+idempotently) is diagrammed in [`docs/architecture.md`](docs/architecture.md) → *`/app-builder` —
 build pipeline*. **Upcoming:** shippable-defaults provisioning (security role / quick-create / standard views).
 
 ## Local Development
@@ -151,8 +151,8 @@ CLAUDE.md                      ← Symlink → AGENTS.md
 README.md                      ← User-facing intro and prereqs
 CHANGELOG.md                   ← Keep-a-Changelog
 docs/
-  architecture.md              ← Wiring/flow diagrams for BOTH skills (/genpage + /model-app-maker)
-  model-app-maker-roadmap.md   ← /model-app-maker roadmap / TODO (Complete + Pending by phase)
+  architecture.md              ← Wiring/flow diagrams for BOTH skills (/genpage + /app-builder)
+  app-builder-roadmap.md   ← /app-builder roadmap / TODO (Complete + Pending by phase)
 agents/                        ← Agent definitions (invoked by skills via Task tool)
   genpage-planner.md           ← Requirements, discovery, plan doc, user approval (create flow)
   genpage-entity-builder.md    ← DV entity creation via plugin's Web API scripts (create flow)
@@ -174,12 +174,12 @@ scripts/
   dataverse-request.js         ← General Dataverse Web API wrapper (escape hatch)
   provision-entities.js        ← CLI wrapper for entity provisioning (solution + data-model + sample-data)
   provision-solution.js        ← Creates a Dataverse solution via the SDK
-  build-model-app.js           ← model-app-maker: narrated, idempotent SDK build (dry-run default)
-  download-model-app.js        ← model-app-maker: pull a deployed app into an editable spec (edit flow)
-  teardown-model-app.js        ← model-app-maker: classifier-safe reverse-of-build teardown
-  verify-model-app.js          ← model-app-maker: reconcile the spec against the deployed app
-  preview-form.js              ← model-app-maker: ASCII form wireframe for authoring review
-  ai-preflight.js              ← model-app-maker: preflight AI feature availability (admin-gate report)
+  build-model-app.js           ← app-builder: narrated, idempotent SDK build (dry-run default)
+  download-model-app.js        ← app-builder: pull a deployed app into an editable spec (edit flow)
+  teardown-model-app.js        ← app-builder: classifier-safe reverse-of-build teardown
+  verify-model-app.js          ← app-builder: reconcile the spec against the deployed app
+  preview-form.js              ← app-builder: ASCII form wireframe for authoring review
+  ai-preflight.js              ← app-builder: preflight AI feature availability (admin-gate report)
   run-tests.js                 ← one-command plugin + SDK regression runner
   smoke-eval.js                ← scripted live smoke eval (build → assert → teardown)
   generate-page-manifest.js    ← Phase 0.5: writes working-dir package.json + genpage.d.ts
@@ -189,8 +189,8 @@ scripts/
     provision-input.js         ← Input validation for entity provisioning
     dataverse-auth.js          ← Shared auth + HTTP helpers (uses `az account get-access-token`)
     supported-dependencies.js  ← Single source of truth for runtime + dev deps versions
-    sdk-build.js               ← model-app-maker build engine (idempotent; incl. the pages phase)
-    sdk-teardown.js            ← model-app-maker teardown engine (planTeardown is pure)
+    sdk-build.js               ← app-builder build engine (idempotent; incl. the pages phase)
+    sdk-teardown.js            ← app-builder teardown engine (planTeardown is pure)
     sdk-http-client.js         ← az-token HttpClient for the vendored SDK
     spec-lint.js / app-spec.js ← App Spec guardrail lint + validation
     genpage-cli.js             ← pac model genpage upload/list/download wrapper
@@ -205,7 +205,7 @@ scripts/
   _vendor-build/               ← esbuild vendoring tooling (build.js + pinned deps)
   tests/                       ← node --test coverage for the scripts above
 skills/
-  model-app-maker/
+  app-builder/
     SKILL.md                   ← intent → model-driven app (create + edit); **Preview**
   genpage/
     SKILL.md                   ← Orchestrator skill (delegates to agents)
@@ -218,7 +218,7 @@ skills/
 | Skill | Description |
 |-------|-------------|
 | `/genpage` | Build and deploy generative pages for a model-driven Power App |
-| `/model-app-maker` | **(Preview)** Build and edit a whole model-driven app — tables, columns, relationships, adaptive forms, views, Choice-column charts, generative pages, app + sitemap, sample data, and admin-gated AI features — from a natural-language intent, via the vendored `cds-maker-sdk` |
+| `/app-builder` | **(Preview)** Build and edit a whole model-driven app — tables, columns, relationships, adaptive forms, views, Choice-column charts, generative pages, app + sitemap, sample data, and admin-gated AI features — from a natural-language intent, via the vendored `cds-maker-sdk` |
 | `/report-issue` | File a bug/issue about the model-apps plugin to the GitHub repository |
 
 ## Agents
@@ -305,7 +305,7 @@ Only the SDK `src/` is committed in the SDK repo (`lib/` is gitignored). A type-
 edit produces a byte-identical `lib/*.js`, so the bundle only needs rebuilding when SDK **runtime**
 changes.
 
-**Live end-to-end (model-app-maker — writes to a real Dataverse env; optional).** All build/verify/
+**Live end-to-end (app-builder — writes to a real Dataverse env; optional).** All build/verify/
 teardown scripts are **dry-run by default**; add `--apply` to write.
 
 ```bash
@@ -320,7 +320,7 @@ AI features are **admin-gated** — preflight readiness with `node scripts/ai-pr
 Prefer a scratch env; always tear down probes (`teardown-model-app.js --apply`) to leave 0 leftovers.
 
 **After modifying the plugin also:** run `claude --debug` to confirm the plugin loads, exercise the
-skill (`/genpage` or `/model-app-maker`), and for genpage verify Playwright browser checks
+skill (`/genpage` or `/app-builder`), and for genpage verify Playwright browser checks
 (navigate/snapshot/click/screenshot).
 
 ## Eval Suite

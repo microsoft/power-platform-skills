@@ -1,5 +1,5 @@
 'use strict';
-// Teardown engine: reverse the model-app-maker build — delete exactly the artifacts a given
+// Teardown engine: reverse the app-builder build — delete exactly the artifacts a given
 // App Spec declares, in dependency-safe order, via the SDK's delete methods. This is the
 // first-class, classifier-safe counterpart to the manual delete recipe used during live
 // verification: it only ever touches artifacts whose identity is resolved from a name/logical/

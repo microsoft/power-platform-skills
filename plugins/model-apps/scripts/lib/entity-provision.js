@@ -1,6 +1,6 @@
 'use strict';
 // Shared entity-provisioning core: solution + data-model + sample-data phase logic
-// extracted from sdk-build.js for reuse by /genpage and /model-app-maker.
+// extracted from sdk-build.js for reuse by /genpage and /app-builder.
 //
 // makeRunner() owns the emit/counter/BuildHalt machinery so both consumers produce
 // identical { phase, status, label, n, total } event streams.

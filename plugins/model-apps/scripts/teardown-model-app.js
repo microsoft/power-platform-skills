@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// model-app-maker teardown: delete exactly the artifacts an App Spec declares, in
+// app-builder teardown: delete exactly the artifacts an App Spec declares, in
 // dependency-safe order, via the SDK's delete methods — the first-class, classifier-safe
 // counterpart to `build-model-app.js`. Auth is the caller's az token (same as the rest of
 // the plugin). DRY-RUN BY DEFAULT — it lists what would be deleted and touches nothing; only

@@ -1,4 +1,4 @@
-# App Spec schema (model-app-maker)
+# App Spec schema (app-builder)
 
 The **App Spec** is the reviewable JSON contract between the interactive authoring flow and the
 deterministic builder (`scripts/build-model-app.js`). Author it to this shape, lint it

@@ -81,7 +81,7 @@ function makeGenpageCli(env, deps = {}) {
         if (name) args.push('--name', name);
         // pac requires BOTH --prompt and --agent-message for a new page.
         args.push('--prompt', prompt && String(prompt).trim() ? String(prompt) : `Generative page ${name || ''}`.trim());
-        args.push('--agent-message', agentMessage && String(agentMessage).trim() ? String(agentMessage) : 'Authored by model-app-maker');
+        args.push('--agent-message', agentMessage && String(agentMessage).trim() ? String(agentMessage) : 'Authored by app-builder');
         if (dataSources && dataSources.length) args.push('--data-sources', dataSources.join(','));
         return run(args);
       };

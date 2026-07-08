@@ -4,12 +4,12 @@ All notable changes to the **model-apps** plugin.
 
 ## [Unreleased] — 2.2.0
 
-A new **`/model-app-maker`** skill (Preview) that builds and edits whole model-driven apps,
+A new **`/app-builder`** skill (Preview) that builds and edits whole model-driven apps,
 plus local-dev ergonomics, sample coverage, and an automated eval suite with
 real and synthetic fixtures. Builds on v2.1; no breaking changes.
 
 ### Added
-- **`/model-app-maker` skill (Preview)** — natural-language intent → deployed model-driven app:
+- **`/app-builder` skill (Preview)** — natural-language intent → deployed model-driven app:
   tables/columns/relationships, adaptive forms + sub-grids, views (with enriched default columns),
   Choice-column charts, modern command bars, dashboards, sitemap icons, genpage-first pages, and
   sample data. Deterministic **idempotent** build via the vendored headless `cds-maker-sdk`;
@@ -32,7 +32,7 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
 ### Removed
 - **Consolidated the standalone entity/solution scripts into the SDK.** `create-table.js`,
   `add-column.js`, `create-relationship.js`, `create-record.js`, `create-solution.js`, and
-  `add-to-solution.js` (added in 2.1.0) are removed — both `/genpage` and `/model-app-maker` now
+  `add-to-solution.js` (added in 2.1.0) are removed — both `/genpage` and `/app-builder` now
   provision Dataverse through the shared SDK-backed `scripts/lib/entity-provision.js` core (via
   `provision-entities.js` / the build engine), eliminating duplicate metadata logic.
 
@@ -59,7 +59,7 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   `new_name eq <record-GUID>` — which matches no rows and the Copilot summary
   card shows an error. Now uses the entity's primary **key** (`<entity>id`).
   Live-verified: removed + rebuilt the row summaries on the test app.
-- **PR review round 2–3 (model-app-maker):** sitemap `verify` checks are now
+- **PR review round 2–3 (app-builder):** sitemap `verify` checks are now
   element-scoped (`<Area>`/`<SubArea>`) and a dashboard subarea is verified by
   resolving the dashboard id (systemform type 0) and matching the sitemap's
   `DefaultDashboard` — no more false passes from a value reused elsewhere.

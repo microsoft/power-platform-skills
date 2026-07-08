@@ -1,5 +1,5 @@
 // App Spec schema + validator. The App Spec is the reviewable contract between
-// the model-app-maker's LLM proposal and the deterministic builder.
+// the app-builder's LLM proposal and the deterministic builder.
 
 // App Spec column type -> { dv: Dataverse attribute type name }. (The SDK build engine
 // maps App Spec types to the SDK's own ColumnType in lib/sdk-build.js.)

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// model-app-maker builder: turn a validated App Spec into a model-driven app via the
+// app-builder builder: turn a validated App Spec into a model-driven app via the
 // headless @maker-studio/cds-maker-sdk (vendored, self-contained — see scripts/vendor/).
 // Auth is the caller's: an az-token HttpClient is injected into the SDK. Idempotent — new,
 // existing, and mixed environments all work. Dry-run by default; --apply writes.

@@ -1,12 +1,12 @@
 # Model Apps Plugin — Architecture
 
 The **wiring / flow reference** for both skills, as one page of ASCII diagrams: `/genpage`
-(page generation) first, then `/model-app-maker` (intent → whole model-driven app via the headless
+(page generation) first, then `/app-builder` (intent → whole model-driven app via the headless
 `cds-maker-sdk`). For **per-component behavioral specs**, the canonical file tree, conventions, and
 build/test, see [`../AGENTS.md`](../AGENTS.md). The App Spec contract is
-[`../references/app-spec-schema.md`](../references/app-spec-schema.md); the model-app-maker skill is
-[`../skills/model-app-maker/SKILL.md`](../skills/model-app-maker/SKILL.md); the roadmap/TODO is
-[`model-app-maker-roadmap.md`](model-app-maker-roadmap.md).
+[`../references/app-spec-schema.md`](../references/app-spec-schema.md); the app-builder skill is
+[`../skills/app-builder/SKILL.md`](../skills/app-builder/SKILL.md); the roadmap/TODO is
+[`app-builder-roadmap.md`](app-builder-roadmap.md).
 
 ## /genpage — high-level flow
 
@@ -131,14 +131,14 @@ Key sections the orchestrator and other agents rely on:
 The schema is enforced by `references/plan-schema.md` and validated by
 `evals/model-apps/genpage/run-layer-1.js`.
 
-## /model-app-maker — build pipeline
+## /app-builder — build pipeline
 
 Intent → deployed model-driven app. The **authoring flow runs in the main conversation loop** (not a
 `Task` subagent — headless agents can't reach the user for `AskUserQuestion` / plan mode), then a
 deterministic, idempotent, narrated SDK build. Create and **edit share one path**.
 
 ```
-                     User invokes /model-app-maker
+                     User invokes /app-builder
                               │
                               v
               ┌────────────────────────────┐   runs in the MAIN loop
