@@ -43,12 +43,11 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
 - **Surfaces** — **generative pages** (modern dashboards / overviews / analytics / landing — the default),
   classic dashboards (opt-in), external URLs
 - **App shell** — the app module + sitemap, with per-subarea icons
-- **Headless (opt-in)** — a **table + sitemap only** shell (no forms/views/charts/dashboards);
-  the foundation for future attachment of MCP servers, bots, code-apps, and AI skills to
-  Dataverse data. Author `"headless": true` at the top level when the user asks for a data
-  foundation without classic UI, or when the app will be primarily driven by a code-app or
-  agent surface. Lint enforces mutual exclusion with UI sections; the builder restricts the
-  phase set. See [`app-spec-schema.md#headless`](../../references/app-spec-schema.md).
+- **Headless (opt-in)** — a **table + sitemap only** shell (no forms/views/charts/dashboards),
+  the foundation for attaching MCP servers, bots, code-apps, and AI skills to Dataverse data.
+  When the user asks for a headless app (or a data foundation without classic UI), **read
+  [`references/headless-apps.md`](../../references/headless-apps.md)** for the `headless` flag,
+  its lint rules, and the reduced build pipeline.
 - **AI-first features** (admin-gated) — form-fill assist (data entry), natural-language grid/view
   search (data exploration), NL chart / AI data visualization, M365 Copilot (opt-in); per-table
   Copilot row summaries (Insight Cards) with tailored prompts, auto-selected for good-candidate tables

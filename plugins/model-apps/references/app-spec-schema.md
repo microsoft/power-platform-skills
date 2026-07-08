@@ -41,7 +41,7 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
 {
   "solution": { "uniqueName": "ContosoSupportDesk", "displayName": "Contoso Support Desk", "publisherPrefix": "new" },
   "app":      { "name": "Support Desk", "description": "Track tickets" },
-  "headless":  false,           // optional — see the `headless` section below (default: false)
+  "headless":  false,           // optional — table+sitemap-only shell; see references/headless-apps.md (default: false)
   "entities":      [ /* tables — see below */ ],
   "relationships": [ /* 1:N links — see below */ ],
   "globalChoices": [ /* optional shared option sets */ ],
@@ -57,28 +57,11 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
 
 ## headless (optional — entity-only app shell)
 
-Set `"headless": true` at the top level to build a **table + sitemap only** app: no forms,
-views, charts, dashboards, pages, commands, or web resources are provisioned. The intended
-use is as a foundation on which MCP servers, bots, code-apps, and AI skills attach later —
-scenarios where classic Dataverse UI artifacts are counter-productive.
-
-**Mutual exclusion (lint-enforced).** A headless spec must not declare non-empty
-`forms` / `views` / `charts` / `dashboards` / `pages` / `commands` / `webResources`
-sections; empty arrays are tolerated so you can flip a spec to headless without deleting
-sections. See `plugins/model-apps/scripts/lib/spec-lint.js::lintAppSpec`.
-
-**Minimum viability (lint-enforced).** A headless spec still needs `>=1` entity AND at
-least one `appShell` subarea that targets an entity — otherwise the built app has an empty
-sitemap.
-
-**Reduced phase set (builder-enforced).** The builder intersects the requested phases with
-a headless allow-list (`solution`, `data-model`, `app-shell`, plus `sample-data` when
-`--sample-data` and `publish` when `--publish`); UI phases are dropped even if
-`--only`/`--from`/`--to` would otherwise admit them. See
-`plugins/model-apps/scripts/lib/sdk-build.js::headlessPhaseAllowlist` for the pure rule
-and `build-model-app.js::buildModelApp` for the wiring.
-
-**Sample fixture:** [`plugins/model-apps/samples/app-spec.headless-task-tracker.json`](../samples/app-spec.headless-task-tracker.json).
+Set `"headless": true` to build a **table + sitemap only** app (no forms / views / charts /
+dashboards / pages / commands / web resources) — a foundation for attaching MCP servers, bots,
+code-apps, and AI skills. The flag is lint-enforced (mutual exclusion with UI sections + minimum
+viability) and restricts the build to a reduced phase set. Full contract, lint rules, and the
+sample fixture: [`headless-apps.md`](./headless-apps.md).
 
 ## entities[]
 ```jsonc

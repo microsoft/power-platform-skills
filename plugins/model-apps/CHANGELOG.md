@@ -29,6 +29,12 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   `capture-fixture.js`; local-dev manifest (`package.json` + `genpage.d.ts`) in working dirs; new
   dialog/overlay samples (11, 12) + Dialogs-and-Overlays guidance.
 
+- **Headless app-shell mode** (`"headless": true`) — build a **table + sitemap only** app (no
+  forms/views/charts/dashboards/pages/commands/web resources) as a foundation for attaching MCP
+  servers, bots, code-apps, and AI skills. Lint-enforced mutual exclusion + minimum viability;
+  builder restricts to a reduced phase set. Sample `samples/app-spec.headless-task-tracker.json`;
+  see `references/headless-apps.md`.
+
 ### Removed
 - **Consolidated the standalone entity/solution scripts into the SDK.** `create-table.js`,
   `add-column.js`, `create-relationship.js`, `create-record.js`, `create-solution.js`, and
