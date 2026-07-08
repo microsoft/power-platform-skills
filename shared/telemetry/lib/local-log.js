@@ -8,17 +8,11 @@ const ROTATE_BYTES = 10 * 1024 * 1024; // 10 MB per-session size safety cap
 const MAX_LOG_AGE_DAYS = 14;
 const MAX_LOG_AGE_MS = MAX_LOG_AGE_DAYS * 24 * 60 * 60 * 1000;
 
-// pluginName and sessionId become DIRECTORY names on disk, so each must be
-// reduced to a single safe path segment. This is a path-safety requirement — a
-// malformed event record must never write outside telemetry/.
-//
-// The "." and ".." path-traversal segments are rejected on the RAW value up
-// front (they must map to the sentinel, not to a mangled name). Everything else
-// is then passed through an allowlist of [A-Za-z0-9_-]; any other char —
-// including "." and "/" — collapses to "_". Dots are intentionally NOT in the
-// allowlist so an input like "../evil" cannot leave a leading ".." fragment in
-// the resulting segment (it becomes "___evil"). An input that reduces to empty
-// falls back to the sentinel.
+// pluginName and sessionId become DIRECTORY names, so each is reduced to one safe
+// path segment — a malformed record must never write outside telemetry/. Reject
+// "." / ".." outright, then collapse anything outside [A-Za-z0-9_-] to "_". Dots
+// are excluded so "../evil" can't leave a ".." fragment (it becomes "___evil");
+// an empty result falls back to the sentinel.
 function sanitizeSegment(value, fallback) {
   if (typeof value !== "string") return fallback;
   if (value === "." || value === "..") return fallback;
@@ -92,12 +86,10 @@ function appendLocal(record, { configDir } = {}) {
   pruneOldSessions(configDir, data.pluginName);
 }
 
-// Best-effort age-based retention — the primary cleanup mechanism. Walk the
-// plugin's session dirs and remove any whose events.jsonl was last written more
-// than MAX_LOG_AGE_DAYS ago. A dir with no readable events.jsonl is judged by
-// its OWN mtime, so a just-created-but-not-yet-written dir from a concurrent
-// dispatcher process is not deleted out from under it. Never throws — telemetry
-// cleanup must not affect a skill run.
+// Best-effort age-based retention — the primary cleanup mechanism. Remove any
+// session dir whose events.jsonl was last written more than MAX_LOG_AGE_DAYS ago;
+// a dir with no readable log is judged by its OWN mtime, so a just-created dir from
+// a concurrent dispatcher isn't deleted out from under it. Never throws.
 function pruneOldSessions(configDir, pluginName, now = Date.now()) {
   const sessionsRoot = pluginLogDir(configDir, pluginName);
   let entries;
@@ -126,13 +118,11 @@ function pruneOldSessions(configDir, pluginName, now = Date.now()) {
   }
 }
 
-// Absolute path to the events.jsonl in the most-recently-written session dir
-// for a plugin, or null when there are none. "Most recent" = highest
-// events.jsonl mtime. Session dirs without a readable events.jsonl are skipped,
-// so the returned path always points at a file that exists — the telemetry
-// skill's status output surfaces this path for the user to share, and returning
-// a phantom path (e.g. an orphaned/interrupted session dir with no log yet)
-// would tell them to grab a file that isn't there. Read-only.
+// Absolute path to the most-recently-written session's events.jsonl for a plugin,
+// or null when there are none ("most recent" = highest events.jsonl mtime). Dirs
+// without a readable events.jsonl are skipped so the returned path always exists —
+// status surfaces it for the user to share, and a phantom path would point them at
+// a file that isn't there. Read-only.
 function latestSessionLog(configDir, pluginName) {
   const sessionsRoot = pluginLogDir(configDir, pluginName);
   let entries;
@@ -148,8 +138,7 @@ function latestSessionLog(configDir, pluginName) {
     const logFile = path.join(sessionsRoot, entry.name, LOG_FILE_NAME);
     let mtimeMs;
     try {
-      // Only sessions with a readable events.jsonl are candidates; a dir without
-      // one is skipped so `best` can never point at a non-existent file.
+      // Skip dirs without a readable events.jsonl so `best` can't point at a missing file.
       mtimeMs = fs.statSync(logFile).mtimeMs;
     } catch {
       continue;
