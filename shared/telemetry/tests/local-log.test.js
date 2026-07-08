@@ -11,7 +11,6 @@ const {
   pluginLogDir,
   latestSessionLog,
   pruneOldSessions,
-  removeLegacyFlatLog,
   sanitizeSegment,
   LOG_FILE_NAME,
   ROTATE_BYTES,
@@ -220,41 +219,4 @@ test("latestSessionLog returns null when every session dir lacks a log", () => {
   const root = mkTmp();
   fs.mkdirSync(path.join(pluginLogDir(root, "power-pages"), "orphan"), { recursive: true });
   assert.equal(latestSessionLog(root, "power-pages"), null);
-});
-test("appendLocal deletes the legacy flat events.jsonl and its .old rotations", () => {
-  const root = mkTmp();
-  // Simulate a config dir left over from the pre-per-session layout.
-  fs.writeFileSync(path.join(root, "events.jsonl"), "{}\n");
-  fs.writeFileSync(path.join(root, "events.20250101000000.old"), "{}\n");
-  fs.writeFileSync(path.join(root, "events.20250102000000.old"), "{}\n");
-
-  appendLocal({ name: "A", data: { pluginName: "power-pages", sessionId: "s1" } }, { configDir: root });
-
-  assert.ok(!fs.existsSync(path.join(root, "events.jsonl")), "legacy flat file removed");
-  assert.ok(!fs.existsSync(path.join(root, "events.20250101000000.old")), "legacy rotation removed");
-  assert.ok(!fs.existsSync(path.join(root, "events.20250102000000.old")), "legacy rotation removed");
-  // The new per-session log was still written.
-  assert.ok(fs.existsSync(sessionLog(root, "power-pages", "s1")));
-});
-
-test("removeLegacyFlatLog leaves unrelated files and the telemetry tree intact", () => {
-  const root = mkTmp();
-  fs.writeFileSync(path.join(root, "events.jsonl"), "{}\n");
-  fs.writeFileSync(path.join(root, "config.json"), "{}");
-  // A current per-session rotation must NOT be touched — it lives under telemetry/.
-  const sess = path.join(root, "telemetry", "power-pages", "sessions", "s1");
-  fs.mkdirSync(sess, { recursive: true });
-  fs.writeFileSync(path.join(sess, "events.20250101000000.old"), "{}\n");
-  fs.writeFileSync(path.join(sess, LOG_FILE_NAME), "{}\n");
-
-  removeLegacyFlatLog(root);
-
-  assert.ok(!fs.existsSync(path.join(root, "events.jsonl")), "legacy flat file removed");
-  assert.ok(fs.existsSync(path.join(root, "config.json")), "config.json kept");
-  assert.ok(fs.existsSync(path.join(sess, "events.20250101000000.old")), "per-session rotation kept");
-  assert.ok(fs.existsSync(path.join(sess, LOG_FILE_NAME)), "per-session log kept");
-});
-
-test("removeLegacyFlatLog never throws when the config dir is missing", () => {
-  removeLegacyFlatLog(path.join(mkTmp(), "does-not-exist"));
 });
