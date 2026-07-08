@@ -37,7 +37,7 @@ function validateProvisionInput(input) {
   const entityNames = new Set();
   const entityByLower = new Map();
 
-  // Entity schemaName pattern: prefix_Suffix (lowercase prefix, underscore, capitalized suffix)
+  // Entity schemaName pattern: prefix_suffix (lowercase prefix, underscore, then a letter-led suffix)
   const SCHEMA_NAME_PATTERN = /^[a-z][a-z0-9]+_[A-Za-z][A-Za-z0-9]+$/;
 
   for (const e of input.entities) {
@@ -53,7 +53,7 @@ function validateProvisionInput(input) {
     }
 
     if (!SCHEMA_NAME_PATTERN.test(e.schemaName)) {
-      errors.push(`entity '${e.schemaName}': schemaName must match pattern prefix_Suffix (e.g., cr_Candidate)`);
+      errors.push(`entity '${e.schemaName}': schemaName must match pattern prefix_suffix (e.g., cr_candidate)`);
       continue;
     }
 
@@ -98,6 +98,13 @@ function validateProvisionInput(input) {
     for (const r of input.relationships) {
       if (!r || typeof r !== 'object') {
         errors.push('each relationship must be an object');
+        continue;
+      }
+
+      // Reject unknown relationship types up front — otherwise a typo'd/unsupported type would pass
+      // validation silently and fail later in provisioning with a much less actionable error.
+      if (r.type !== 'OneToMany' && r.type !== 'ManyToMany') {
+        errors.push(`relationship: type must be 'OneToMany' or 'ManyToMany' (got ${r.type === undefined ? 'undefined' : `'${r.type}'`})`);
         continue;
       }
 

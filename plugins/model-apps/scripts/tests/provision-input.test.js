@@ -32,6 +32,19 @@ test('rejects a relationship referencing an unknown entity', () => {
   assert.ok(r.errors.some((e) => /not found in entities/i.test(e)));
 });
 
+test('rejects a relationship with an unknown type', () => {
+  const r = validateProvisionInput({
+    solution: { uniqueName: 'Default', publisherPrefix: 'cr' },
+    entities: [
+      { schemaName: 'cr_candidate', displayName: 'Candidate', primaryAttribute: { schemaName: 'cr_name' }, columns: [] },
+      { schemaName: 'cr_job', displayName: 'Job', primaryAttribute: { schemaName: 'cr_name' }, columns: [] },
+    ],
+    relationships: [{ type: 'OneToOne', referenced: 'cr_job', referencing: 'cr_candidate', lookup: { schemaName: 'cr_jobid' } }],
+  });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /type must be 'OneToMany' or 'ManyToMany'/.test(e)));
+});
+
 test('rejects a column with an unknown type', () => {
   const r = validateProvisionInput({ 
     solution: { uniqueName: 'Default', publisherPrefix: 'cr' },

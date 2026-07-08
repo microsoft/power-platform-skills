@@ -18,8 +18,9 @@ function mockSdk({ publishers = [], solution = [], createSolutionResult = null, 
             const match = options.filter.match(/uniquename eq '([^']*)'/);
             return match && p.uniquename === match[1];
           }
-          if (options.filter.includes(`publisherid eq '`)) {
-            const match = options.filter.match(/publisherid eq '([^']*)'/);
+          if (options.filter.includes('publisherid eq ')) {
+            // GUID literals are unquoted in Dataverse OData; tolerate an optional quote for the test.
+            const match = options.filter.match(/publisherid eq '?([^'\s]+)'?/);
             return match && p.publisherid === match[1];
           }
           if (options.filter.includes('isreadonly eq false')) {
@@ -208,7 +209,7 @@ test('runProvisionSolution: invalid uniqueName (starts with digit)', async () =>
   );
 
   assert.equal(result.ok, false);
-  assert.ok(result.error.includes('must be alphanumeric'));
+  assert.ok(result.error.includes('must start with a letter'));
 
   // No SDK calls should have been made
   assert.equal(sdk.calls.length, 0);
@@ -227,7 +228,7 @@ test('runProvisionSolution: invalid uniqueName (contains hyphen)', async () => {
   );
 
   assert.equal(result.ok, false);
-  assert.ok(result.error.includes('must be alphanumeric'));
+  assert.ok(result.error.includes('must start with a letter'));
   assert.equal(sdk.calls.length, 0);
 });
 

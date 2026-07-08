@@ -14,7 +14,9 @@ const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const DEFAULT_NODE20_BIN = 'C:/Users/akmaloo/AppData/Local/nvm/v20.18.2';
+// Node-20 bin dir for the SDK Jest suite (its canvas native module is built for the Node-20 ABI).
+// Portable: set NODE20_BIN=<dir-containing-node20> or pass nothing to skip the SDK suite.
+const NODE20_BIN = process.env.NODE20_BIN || null;
 
 // The plugin test files to run, as repo-relative paths (sorted, stable order).
 function pluginTestFiles(testsDir) {
@@ -32,7 +34,7 @@ function sdkTestSpec(sdkPath, node20Bin) {
     pkgDir,
     pkgExists: !!pkgDir && fs.existsSync(pkgDir),
     node20Bin,
-    node20Exists: fs.existsSync(node20Bin),
+    node20Exists: !!node20Bin && fs.existsSync(node20Bin),
   };
 }
 
@@ -51,12 +53,12 @@ function main(argv) {
 
   // 2) SDK Jest suite (opt-in, Node 20).
   if (sdkPath) {
-    const node20Bin = process.env.NODE20_BIN || DEFAULT_NODE20_BIN;
+    const node20Bin = process.env.NODE20_BIN || NODE20_BIN;
     const spec = sdkTestSpec(sdkPath, node20Bin);
     if (!spec.pkgExists) {
       process.stdout.write(`\n(skipping SDK tests — ${spec.pkgDir} not found)\n`);
     } else if (!spec.node20Exists) {
-      process.stdout.write(`\n(skipping SDK tests — Node 20 bin not found at ${node20Bin}; set NODE20_BIN)\n`);
+      process.stdout.write(`\n(skipping SDK tests — set NODE20_BIN to a Node-20 bin dir${node20Bin ? ` (not found at ${node20Bin})` : ''})\n`);
       results.push({ name: 'cds-maker-sdk Jest', ok: false, skipped: 'no Node 20' });
     } else {
       process.stdout.write('\n=== cds-maker-sdk Jest (Node 20) ===\n');

@@ -10,7 +10,11 @@
 //   node teardown-model-app.js --env <orgUrl> --spec @<app-folder>/app-spec.json [--apply]
 //        [--clear-workspace] [--workspace <dir>]
 //
-// Order: app -> dashboards -> commands -> web-resources -> tables (reverse-topo) -> solution.
+// Order: app -> dashboards -> commands -> forms -> charts -> views -> relationships ->
+//   web-resources -> ai-summaries -> tables (reverse-topo) -> global-choices -> solution.
+//   Forms/charts/views/relationships are deleted explicitly BEFORE tables (a table delete does
+//   not reliably cascade cross-references). Command teardown removes the whole command bar for an
+//   entity the spec authored commands on (the SDK models a command bar per entity, not per button).
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');

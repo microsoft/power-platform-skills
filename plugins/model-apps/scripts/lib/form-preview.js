@@ -60,7 +60,7 @@ function rule(label) {
 }
 function topBorder(title) {
   const tag = `─ ${title} `;
-  return `┌${tag}${'─'.repeat(Math.max(0, INNER + 2 - tag.length))}┐`;
+  return `┌${tag}${'─'.repeat(Math.max(0, INNER + 2 - vwidth(tag)))}┐`;
 }
 const BOTTOM = `└${'─'.repeat(INNER + 2)}┘`;
 

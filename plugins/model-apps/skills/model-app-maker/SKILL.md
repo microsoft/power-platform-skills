@@ -168,8 +168,10 @@ Then open the app in the browser. Refine `app-spec.json` and re-run Phase 2 to i
 
 **Teardown (cleanup).** To remove everything an App Spec built — e.g. a live-verification probe or a
 failed build — run the classifier-safe teardown. It deletes only the artifacts the spec declares, in
-dependency order (**app [+ its generative pages and the orphaned sitemap] → dashboards → commands → web-resources → tables [children-first] → solution**;
-a table delete cascades its forms/views/charts/relationships/columns). **Dry-run by default** — it
+dependency order (**app [+ its generative pages and the orphaned sitemap] → dashboards → commands → forms → charts → views → relationships → web-resources → AI row summaries → tables [children-first] → global choices → solution**).
+Forms/charts/views/relationships are deleted **explicitly before tables** (a table delete does not
+reliably cascade cross-references; it does remove the table's own columns). Command teardown removes
+the whole command bar for any entity the spec authored commands on. **Dry-run by default** — it
 lists what it would delete and touches nothing; add `--apply` to actually delete (add
 `--clear-workspace` to also prune `.maker-workspace/`):
 

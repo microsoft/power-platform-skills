@@ -58,14 +58,18 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
 - **`scripts/teardown-model-app.js` → `scripts/lib/sdk-teardown.js`** — the first-class, **classifier-safe**
   teardown (reverse of the build), for cleaning up live-verification probes or a failed build. Deletes
   exactly the artifacts a given App Spec declares, in dependency-safe order (**app → dashboards →
-  commands → web-resources → tables [reverse-topological, children-first] → solution**); a table delete
-  cascades its forms/views/charts/relationships/columns and the empty solution container goes last. Every
-  id is resolved from a spec-declared name/logical/uniquename via an exact-match OData filter, so it can
-  never wildcard-scan an org. **Dry-run by default** (`--apply` writes); best-effort continue (a failed
-  step is recorded, teardown proceeds), and it absorbs the EntityDefinitions **cosmetic 404** (confirms
-  via a follow-up GET) + the appaction **cascade 404**. `--clear-workspace` prunes `.maker-workspace/`
-  after a clean apply. `planTeardown(spec)` is pure (dry-run + unit-test surface); reuses
-  `appUniqueName`/`commandsByEntity`/`topoOrderEntities` from the build engine (DRY).
+  commands → forms → charts → views → relationships → web-resources → AI row summaries → tables
+  [reverse-topological, children-first] → global choices → solution**). Forms/charts/views/relationships
+  are deleted **explicitly before tables** (a table delete does not reliably cascade cross-references; it
+  does remove the table's own columns), and the empty solution container goes last. Command teardown
+  removes the whole command bar for an entity the spec authored commands on (the SDK models a command bar
+  per entity, not per button). Every id is resolved from a spec-declared name/logical/uniquename via an
+  exact-match OData filter, so it can never wildcard-scan an org. **Dry-run by default** (`--apply`
+  writes); best-effort continue (a failed step is recorded, teardown proceeds). A not-found (already-gone)
+  error is treated as deleted, the table delete's **not-found-on-success** is tolerated (`tolerateNotFound`),
+  and system/managed artifacts that cannot be deleted are recorded as `skipped` rather than failing.
+  `--clear-workspace` prunes `.maker-workspace/` after a clean apply. `planTeardown(spec)` is pure (dry-run +
+  unit-test surface); reuses `appUniqueName`/`commandsByEntity`/`topoOrderEntities` from the build engine (DRY).
 - **`scripts/download-model-app.js` → `scripts/lib/hydrate-spec.js`** — the **edit flow**: pulls a
   *deployed* app back into a complete App Spec + page code (sitemap → `appShell` with icons, **every**
   generative page via `pac model genpage download`, referenced entities, icon web resources, solution).

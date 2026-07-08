@@ -217,8 +217,9 @@ test('runTeardown deletes declared global choices by name (tolerating an already
 
 test('deleteStep skips a system view that cannot be deleted (best-effort, no throw)', async () => {
   const sdk = { deleteRemoteArtifact: async () => { const e = new Error('System-defined views cannot be deleted. SavedQuery Active X cannot be deleted.'); e.statusCode = 400; throw e; } };
-  const deleted = await deleteStep(sdk, KIND_HANDLERS.view, [{ id: 'v1', name: 'Active X' }]);
-  assert.deepStrictEqual(deleted, [], 'undeletable system view is skipped, not counted as deleted, and does not throw');
+  const { deletedIds, skippedIds } = await deleteStep(sdk, KIND_HANDLERS.view, [{ id: 'v1', name: 'Active X' }]);
+  assert.deepStrictEqual(deletedIds, [], 'undeletable system view is not counted as deleted and does not throw');
+  assert.deepStrictEqual(skippedIds, ['v1'], 'undeletable system view is recorded as skipped');
 });
 
 test('deleteStep does NOT swallow a dependency block ("referenced by N components") — it surfaces', async () => {
@@ -473,8 +474,8 @@ test('deleteStep tolerates a not-found error for non-tolerateNotFound kinds', as
       throw err;
     },
   };
-  const ids = await deleteStep(sdk, KIND_HANDLERS.webResource, [{ id: 'wr-1' }]);
-  assert.deepStrictEqual(ids, ['wr-1']);
+  const { deletedIds } = await deleteStep(sdk, KIND_HANDLERS.webResource, [{ id: 'wr-1' }]);
+  assert.deepStrictEqual(deletedIds, ['wr-1']);
 });
 
 // --- Task 22: aiSummary teardown --------------------------------------------------------

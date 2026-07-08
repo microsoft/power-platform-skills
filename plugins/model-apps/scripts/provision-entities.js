@@ -29,7 +29,9 @@ function makeSdk(env, input) {
     httpClient,
     solutionUniqueName: input.solution.uniqueName,
   });
+  sdk.initWorkspace();
   const provision = createMakerSdk({ workspacePath: provisionTempDir, instanceUrl: env, httpClient });
+  provision.initWorkspace();
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
     fs.rmSync(provisionTempDir, { recursive: true, force: true });

@@ -20,7 +20,7 @@ const { parseArgs, emitResult } = require('./lib/dataverse-auth');
 const { createAzHttpClient } = require('./lib/sdk-http-client');
 
 /**
- * Escapes single quotes for OData filters (RFC 4627 / OData convention: double single quotes).
+ * Escapes single quotes for OData filter string literals (OData convention: double single quotes).
  * @param {string} str
  * @returns {string}
  */
@@ -31,7 +31,9 @@ function odataEscape(str) {
 /**
  * Finds the publisher to use for the solution:
  * - If publisherUniqueName is provided, looks up by uniquename
- * - Otherwise, resolves the environment's default publisher via the organization record
+ * - Otherwise, resolves the environment's default publisher via the **Default solution's**
+ *   publisher (the organization record does not expose a usable default-publisher value on
+ *   every API version)
  * @param {object} sdk - SDK client with queryRecords
  * @param {string|null} publisherUniqueName - Explicit publisher uniquename or null for default
  * @returns {Promise<{publisherid: string, uniquename: string, customizationprefix: string}|null>}
@@ -63,7 +65,7 @@ async function findPublisher(sdk, publisherUniqueName) {
     if (defaultPublisherId) {
       const pubRows = await sdk.queryRecords('publisher', {
         select: ['publisherid', 'uniquename', 'customizationprefix'],
-        filter: `publisherid eq '${odataEscape(defaultPublisherId)}'`,
+        filter: `publisherid eq ${defaultPublisherId}`,
         top: 1,
       });
       if (pubRows && pubRows.length > 0) {
@@ -74,8 +76,8 @@ async function findPublisher(sdk, publisherUniqueName) {
     // Fall through to the broad fallback below if the Default-solution probe fails.
   }
 
-  // Last-resort fallback — any non-readonly publisher. Used only if the
-  // authoritative organization lookup above didn't return anything (rare).
+  // Last-resort fallback — any non-readonly publisher. Used only if the Default-solution
+  // publisher probe above didn't return anything (rare).
   const fallbackRows = await sdk.queryRecords('publisher', {
     select: ['publisherid', 'uniquename', 'customizationprefix'],
     filter: 'isreadonly eq false',
@@ -94,11 +96,11 @@ async function runProvisionSolution(args, deps) {
   const { envUrl, uniqueName, friendlyName, description, version, publisherUniqueName } = args;
   const { sdk } = deps;
 
-  // Validate uniqueName (alphanumeric, start with letter, no spaces/hyphens)
+  // Validate uniqueName (letters, digits, underscores; must start with a letter)
   if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(uniqueName)) {
     return {
       ok: false,
-      error: `uniqueName "${uniqueName}" must be alphanumeric (start with a letter, no spaces or hyphens)`,
+      error: `uniqueName "${uniqueName}" must start with a letter and contain only letters, digits, and underscores (no spaces or hyphens)`,
     };
   }
 
@@ -116,7 +118,7 @@ async function runProvisionSolution(args, deps) {
     const result = await sdk.createSolution({
       uniqueName,
       friendlyName,
-      description: description || `${friendlyName} (created by /genpage)`,
+      description: description || `${friendlyName} (created by Power Platform model-apps)`,
       version: version || '1.0.0.0',
       publisherId: publisher.publisherid,
     });
@@ -152,6 +154,7 @@ async function main() {
     instanceUrl: envUrl,
     httpClient,
   });
+  sdk.initWorkspace(); // consistent with other entrypoints; harmless for the Dataverse-only ops here
 
   try {
     const result = await runProvisionSolution(

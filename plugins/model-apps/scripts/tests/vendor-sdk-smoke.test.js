@@ -11,9 +11,23 @@ const fs = require('node:fs');
 
 const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
 
+// Track temp workspace dirs created by the smoke tests and remove them once the suite finishes,
+// so repeated runs don't leak directories into the test runner's temp folder.
+const tempDirs = [];
+function mkTempWorkspace(prefix) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+test.after(() => {
+  for (const dir of tempDirs) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 function freshSdk(capture) {
   const { createMakerSdk } = require(BUNDLE);
-  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'sdk-smoke-'));
+  const ws = mkTempWorkspace('sdk-smoke-');
   const httpClient = {
     get: async () => ({ status: 200, headers: {}, body: {} }),
     post: async (url, body) => {
@@ -89,7 +103,7 @@ test('vendored SDK exposes the consolidation methods', () => {
 
 test('addFormEventHandler injects a handler into the retained FormXML headlessly (Tier 2)', () => {
   const { createMakerSdk } = require(BUNDLE);
-  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'sdk-evt-'));
+  const ws = mkTempWorkspace('sdk-evt-');
   const formXml = '<form><tabs><tab name="general"><columns><column><sections><section><rows /></section></sections></column></columns></tab></tabs></form>';
   const httpClient = {
     get: async () => ({ status: 200, headers: { etag: 'W/"1"' }, body: { formid: '22222222-2222-2222-2222-222222222222', name: 'F', type: 2, objecttypecode: 'account', formxml: formXml } }),

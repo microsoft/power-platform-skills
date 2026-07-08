@@ -235,11 +235,14 @@ function planTeardown(spec) {
   return steps;
 }
 
-// Delete the resolved artifacts for one plan step via SDK methods. Returns the ids deleted (a
-// not-found error counts as already-gone when tolerateNotFound is set). Throws only on a genuine
-// failure (a non-not-found error).
+// Delete the resolved artifacts for one plan step via SDK methods. Returns `{ deletedIds,
+// skippedIds }` — `skippedIds` are artifacts that exist but cannot be removed (system/managed),
+// surfaced so a destructive run is auditable rather than silently reporting "(0 deleted)". A
+// not-found error counts as already-gone. Throws only on a genuine failure (non-not-found,
+// non-undeletable).
 async function deleteStep(sdk, handler, items) {
   const deletedIds = [];
+  const skippedIds = [];
   for (const item of items) {
     try {
       await handler.del(sdk, item);
@@ -257,13 +260,14 @@ async function deleteStep(sdk, handler, items) {
       }
       if (isUndeletable(err)) {
         // A system/managed artifact (e.g. an auto-generated "Active <Entity>" view that shares
-        // the spec view's name) — not ours to remove. Skip it without failing the teardown.
+        // the spec view's name) — not ours to remove. Record it as skipped without failing.
+        skippedIds.push(item.id);
         continue;
       }
       throw err;
     }
   }
-  return deletedIds;
+  return { deletedIds, skippedIds };
 }
 
 // Execute a teardown. Dry-run (default) emits the plan (no I/O) and returns { ok, dryRun, plan }.
@@ -306,9 +310,15 @@ async function runTeardown(spec, opts = {}, deps = {}) {
         emit({ phase: step.phase, status: 'skip', label: `${step.label} (not found)`, n: myN, total });
         continue;
       }
-      const deletedIds = await deleteStep(sdk, handler, items);
+      const { deletedIds, skippedIds } = await deleteStep(sdk, handler, items);
       (result.deleted[step.kind] = result.deleted[step.kind] || []).push(...deletedIds);
-      emit({ phase: step.phase, status: 'ok', label: `${step.label} (${deletedIds.length} deleted)`, n: myN, total });
+      if (skippedIds.length) {
+        result.skipped.push(`${step.label} (${skippedIds.length} undeletable — skipped)`);
+      }
+      const summary = skippedIds.length
+        ? `${deletedIds.length} deleted, ${skippedIds.length} undeletable`
+        : `${deletedIds.length} deleted`;
+      emit({ phase: step.phase, status: 'ok', label: `${step.label} (${summary})`, n: myN, total });
     } catch (err) {
       result.ok = false;
       const message = errMsg(err);
