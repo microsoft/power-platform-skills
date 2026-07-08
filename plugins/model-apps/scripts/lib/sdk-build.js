@@ -61,12 +61,15 @@ const PHASES = ['solution', 'data-model', 'sample-data', 'web-resources', 'views
 function dashboardTileOpts(spec, tile, result) {
   const viewEntity = (name) => { const v = (spec.views || []).find((x) => x.name === name); return v && v.entity.toLowerCase(); };
   const span = (o) => { if (tile.colspan) o.colspan = tile.colspan; if (tile.rowspan) o.rowspan = tile.rowspan; return o; };
+  // ID passthrough (round-tripped dashboards): a tile may carry the deployed view/chart ids + entity
+  // directly, so it binds to the EXISTING views/charts without re-declaring them in views[]/charts[].
+  const targetEntity = tile.entity ? tile.entity.toLowerCase() : viewEntity(tile.view);
   if (tile.type === 'chart') {
-    return span({ type: 'chart', name: tile.name || tile.chart, targetEntity: tile.entity ? tile.entity.toLowerCase() : viewEntity(tile.view),
-      viewId: result.created.views[tile.view], visualizationId: result.created.charts[tile.chart] });
+    return span({ type: 'chart', name: tile.name || tile.chart, targetEntity,
+      viewId: tile.viewId || result.created.views[tile.view], visualizationId: tile.visualizationId || result.created.charts[tile.chart] });
   }
   if (tile.type === 'list') {
-    return span({ type: 'list', name: tile.name || tile.view, targetEntity: tile.entity ? tile.entity.toLowerCase() : viewEntity(tile.view), viewId: result.created.views[tile.view] });
+    return span({ type: 'list', name: tile.name || tile.view, targetEntity, viewId: tile.viewId || result.created.views[tile.view] });
   }
   if (tile.type === 'iframe') return span({ type: 'iframe', name: tile.name, url: tile.url });
   return span({ type: 'webresource', name: tile.name, webResourceName: tile.webResource });
@@ -745,4 +748,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, chartDef, formDef, appDef, appUniqueName, commandsByEntity, webResourceOpts, formEventOpts, WEB_RESOURCE_KINDS, FORM_EVENTS };
+module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, chartDef, dashboardTileOpts, formDef, appDef, appUniqueName, commandsByEntity, webResourceOpts, formEventOpts, WEB_RESOURCE_KINDS, FORM_EVENTS };

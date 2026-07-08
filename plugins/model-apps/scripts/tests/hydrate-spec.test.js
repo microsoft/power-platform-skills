@@ -55,13 +55,32 @@ test('hydrateSpec maps a GenPage subarea back to a page target by name (case-ins
   assert.strictEqual(page.title, 'Overview');
 });
 
-test('hydrateSpec preserves entity + URL subareas and icons, omits legacy DashBoard', async () => {
+test('hydrateSpec preserves entity + URL subareas and icons; omits a DashBoard when no dashboards reader', async () => {
   const spec = await hydrateSpec(deployedRead());
   const subs = spec.appShell.areas[0].groups[0].subAreas;
   assert.ok(subs.some((s) => s.entity === 'new_order' && s.icon === 'new_ordericon.png'), 'entity subarea + icon preserved');
   assert.ok(subs.some((s) => s.url === 'https://help'), 'url subarea preserved');
-  assert.ok(!subs.some((s) => s.title === 'Legacy'), 'DashBoard subarea omitted (not hydrated)');
+  assert.ok(!subs.some((s) => s.title === 'Legacy'), 'DashBoard subarea omitted when it cannot be reconstructed');
   assert.strictEqual(spec.appShell.areas[0].icon, 'new_areaicon.png', 'area icon preserved');
+});
+
+test('hydrateSpec round-trips a DashBoard subarea + dashboards[] (id-passthrough tiles) when a dashboards reader is present', async () => {
+  const read = deployedRead();
+  read.dashboards = async () => [{ id: 'D-1', name: 'Ops Overview', tiles: [
+    { type: 'chart', name: 'Orders by Status', entity: 'new_order', viewId: 'v1', visualizationId: 'c1' },
+    { type: 'list', name: 'Active Orders', entity: 'new_order', viewId: 'v1' },
+  ] }];
+  const spec = await hydrateSpec(read);
+  // subarea now resolves to the dashboard by its real name
+  const subs = spec.appShell.areas[0].groups[0].subAreas;
+  assert.ok(subs.some((s) => s.dashboard === 'Ops Overview' && s.title === 'Legacy'), 'DashBoard subarea -> { dashboard: name }');
+  // dashboards[] reconstructed with the id-passthrough tiles
+  assert.strictEqual(spec.dashboards.length, 1);
+  assert.strictEqual(spec.dashboards[0].name, 'Ops Overview');
+  assert.deepStrictEqual(spec.dashboards[0].tiles[0], { type: 'chart', name: 'Orders by Status', entity: 'new_order', viewId: 'v1', visualizationId: 'c1' });
+  // and the whole spec still validates (id-based tiles need no declared views[]/charts[])
+  const r = validateAppSpec(spec);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });
 
 test('hydrateSpec carries every deployed page into pages[] (incl. Maker-authored)', async () => {

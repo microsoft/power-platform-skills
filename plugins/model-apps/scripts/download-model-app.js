@@ -17,6 +17,41 @@ const { makeGenpageCli } = require('./lib/genpage-cli.js');
 // webresourcetype (int) -> app-spec web-resource type.
 const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7: 'gif', 8: 'xap', 9: 'xsl', 10: 'ico', 11: 'svg', 12: 'resx' };
 
+// Reconstruct the app's dashboards (declared as DashBoard sitemap subareas) into app-spec
+// dashboards[] entries. Each tile is reconstructed with ID PASSTHROUGH — it carries the deployed
+// view/chart ids (+ target entity) directly, so a rebuild recreates the dashboard against the
+// EXISTING views/charts without needing views[]/charts[] declared (which would else duplicate them).
+async function readDashboards(sdk, app) {
+  const strip = (g) => String(g || '').replace(/[{}]/g, '') || undefined;
+  const ids = new Map(); // dashboardId -> subarea title (fallback name)
+  for (const a of (app.siteMap && app.siteMap.areas) || []) {
+    for (const g of a.groups || []) {
+      for (const sa of g.subAreas || []) {
+        if (sa.type === 'DashBoard' && sa.dashboardId) ids.set(String(sa.dashboardId).toLowerCase(), sa.title);
+      }
+    }
+  }
+  const out = [];
+  for (const [id, title] of ids) {
+    let art;
+    try { art = await sdk.fetchArtifact('dashboard', id); } catch { continue; }
+    let name = title || id;
+    try { const rows = await sdk.queryRecords('systemform', { select: ['name'], filter: `formid eq ${id}`, top: 1 }); if (rows && rows[0] && rows[0].name) name = rows[0].name; } catch { /* keep fallback */ }
+    const tiles = [];
+    for (const c of art.components || []) {
+      const p = c.parameters || {};
+      const entity = p.TargetEntityType;
+      const viewId = strip(p.ViewId);
+      if (c.type === 'chart' && viewId) tiles.push({ type: 'chart', name: c.name, entity, viewId, visualizationId: strip(p.VisualizationId) });
+      else if (c.type === 'list' && viewId) tiles.push({ type: 'list', name: c.name, entity, viewId });
+      else if (c.type === 'iframe' && p.Url) tiles.push({ type: 'iframe', name: c.name, url: p.Url });
+      else if (c.type === 'webresource' && p.WebResourceName) tiles.push({ type: 'webresource', name: c.name, webResource: p.WebResourceName });
+    }
+    if (tiles.length) out.push({ id, name, tiles });
+  }
+  return out;
+}
+
 function makeProvision(env, workspaceDir) {
   const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
   const httpClient = createAzHttpClient(env);
@@ -152,6 +187,10 @@ async function main() {
   // Icon web resources — looked up by NAME (see iconWebResources).
   const webResources = await iconWebResources(sdk, icons);
 
+  // Dashboards (declared as DashBoard sitemap subareas) — reconstructed with id-passthrough tiles.
+  let dashboards = [];
+  try { dashboards = await readDashboards(sdk, app); } catch (e) { process.stderr.write(`(dashboards reconstruction skipped: ${e.message})\n`); }
+
   // Solution (best-effort): the unmanaged solution the appmodule belongs to.
   let solution = { uniqueName: 'Default', publisherPrefix: 'new' };
   try {
@@ -168,15 +207,16 @@ async function main() {
     pages: async () => pages,
     entities: async () => entities,
     webResources: async () => webResources,
+    dashboards: async () => dashboards,
     solution: async () => solution,
   };
   const spec = await hydrateSpec(read);
-  // Warn about any sitemap subareas the edit flow can't yet round-trip (classic DashBoard / CustomPage
-  // subareas are not hydrated) — a rebuild from this spec would drop them from the sitemap, so the
-  // caller must re-add them after editing. Entity/GenPage/URL subareas round-trip losslessly.
+  // Warn about any sitemap subareas the edit flow can't yet round-trip (CustomPage subareas and
+  // unmapped/legacy types are not hydrated) — a rebuild from this spec would drop them, so the caller
+  // must re-add them. Entity/GenPage/URL/DashBoard subareas round-trip losslessly.
   const droppedSubareas = droppedSubareaCount(app, spec);
   if (droppedSubareas > 0) {
-    process.stderr.write(`WARNING: ${droppedSubareas} sitemap subarea(s) could not be round-tripped (e.g. classic dashboards) — a rebuild from this spec will DROP them from the app nav. Re-add them after editing.\n`);
+    process.stderr.write(`WARNING: ${droppedSubareas} sitemap subarea(s) could not be round-tripped (e.g. custom pages / legacy types) — a rebuild from this spec will DROP them from the app nav. Re-add them after editing.\n`);
   }
   const specPath = path.join(outDir, 'app-spec.json');
   fs.writeFileSync(specPath, JSON.stringify(spec, null, 2));
@@ -187,4 +227,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, iconWebResources, droppedSubareaCount };
+module.exports = { resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount };

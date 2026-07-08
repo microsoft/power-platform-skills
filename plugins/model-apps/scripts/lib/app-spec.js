@@ -325,11 +325,23 @@ function validateAppSpec(spec) {
     if (!Array.isArray(d.tiles) || !d.tiles.length) { errors.push(`dashboard '${d.name}': needs tiles[]`); continue; }
     for (const t of d.tiles) {
       if (!t || !DASH_TILE_TYPES.has(t.type)) { errors.push(`dashboard '${d.name}': tile type must be chart|list|iframe|webresource`); continue; }
+      // ID-passthrough tiles (from a round-tripped/downloaded app) carry the deployed view/chart ids
+      // + entity directly instead of names — they bind to existing artifacts, so skip the name checks.
+      const byId = t.viewId || t.visualizationId;
       if (t.type === 'chart') {
-        if (!t.chart || !chartNamesSet.has(t.chart)) errors.push(`dashboard '${d.name}': chart tile references unknown chart '${t.chart}'`);
-        if (!t.view || !viewNamesSet.has(t.view)) errors.push(`dashboard '${d.name}': chart tile needs a declared view for its data — '${t.view}' not found`);
+        if (byId) {
+          if (!t.viewId) errors.push(`dashboard '${d.name}': chart tile with visualizationId also needs viewId`);
+          if (!t.entity) errors.push(`dashboard '${d.name}': id-based chart tile needs entity`);
+        } else {
+          if (!t.chart || !chartNamesSet.has(t.chart)) errors.push(`dashboard '${d.name}': chart tile references unknown chart '${t.chart}'`);
+          if (!t.view || !viewNamesSet.has(t.view)) errors.push(`dashboard '${d.name}': chart tile needs a declared view for its data — '${t.view}' not found`);
+        }
       } else if (t.type === 'list') {
-        if (!t.view || !viewNamesSet.has(t.view)) errors.push(`dashboard '${d.name}': list tile references unknown view '${t.view}'`);
+        if (byId) {
+          if (!t.entity) errors.push(`dashboard '${d.name}': id-based list tile needs entity`);
+        } else if (!t.view || !viewNamesSet.has(t.view)) {
+          errors.push(`dashboard '${d.name}': list tile references unknown view '${t.view}'`);
+        }
       } else if (t.type === 'iframe') {
         if (!t.url) errors.push(`dashboard '${d.name}': iframe tile needs a url`);
         if (!t.name) errors.push(`dashboard '${d.name}': iframe tile needs a name`);

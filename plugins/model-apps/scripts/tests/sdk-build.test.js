@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { runSdkBuild, planFor, resolvePhases, formDef, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, PHASES } = require('../lib/sdk-build.js');
+const { runSdkBuild, planFor, resolvePhases, formDef, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, dashboardTileOpts, PHASES } = require('../lib/sdk-build.js');
 
 // Customer 1:N Tickets: a Choice column, sample data with $parent, a view, a Choice chart,
 // and a parent form with a child sub-grid.
@@ -925,4 +925,26 @@ test('ai-features planFor: summaries.default=off suppresses per-table summary pl
   const items = planFor(spec, { phases: ['ai-features'] });
   assert.ok(items.some((i) => i.label === 'enable app AI features'));
   assert.ok(!items.some((i) => /row summary for/.test(i.label)));
+});
+
+test('dashboardTileOpts id-passthrough: a tile carrying viewId/visualizationId + entity binds to existing ids (round-tripped dashboard)', () => {
+  const spec = { views: [], charts: [] };
+  const result = { created: { views: {}, charts: {} } };
+  const chart = dashboardTileOpts(spec, { type: 'chart', name: 'By Status', entity: 'New_OhProject', viewId: 'v-1', visualizationId: 'c-1' }, result);
+  assert.strictEqual(chart.type, 'chart');
+  assert.strictEqual(chart.targetEntity, 'new_ohproject');
+  assert.strictEqual(chart.viewId, 'v-1');
+  assert.strictEqual(chart.visualizationId, 'c-1');
+  const list = dashboardTileOpts(spec, { type: 'list', name: 'Active', entity: 'new_ohproject', viewId: 'v-1' }, result);
+  assert.strictEqual(list.type, 'list');
+  assert.strictEqual(list.viewId, 'v-1');
+});
+
+test('dashboardTileOpts name-based still resolves from result.created (author-declared dashboard)', () => {
+  const spec = { views: [{ name: 'V', entity: 'new_ohproject' }], charts: [{ name: 'C', entity: 'new_ohproject' }] };
+  const result = { created: { views: { V: 'view-id' }, charts: { C: 'chart-id' } } };
+  const chart = dashboardTileOpts(spec, { type: 'chart', chart: 'C', view: 'V' }, result);
+  assert.strictEqual(chart.viewId, 'view-id');
+  assert.strictEqual(chart.visualizationId, 'chart-id');
+  assert.strictEqual(chart.targetEntity, 'new_ohproject');
 });

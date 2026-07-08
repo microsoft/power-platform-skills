@@ -229,6 +229,26 @@ test('validateAppSpec accepts a dashboard with chart + list tiles on declared vi
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });
 
+test('validateAppSpec accepts id-passthrough dashboard tiles (viewId/visualizationId + entity, no declared view/chart)', () => {
+  const ok = cloneDesk();
+  ok.views = []; ok.charts = []; // round-tripped spec declares no views/charts
+  ok.dashboards = [{ name: 'Ops', tiles: [
+    { type: 'chart', name: 'By Status', entity: ok.entities[0].schemaName, viewId: 'v1', visualizationId: 'c1' },
+    { type: 'list', name: 'Active', entity: ok.entities[0].schemaName, viewId: 'v1' },
+  ] }];
+  const r = validateAppSpec(ok);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('validateAppSpec rejects an id-based dashboard tile missing entity or viewId', () => {
+  const noEntity = cloneDesk();
+  noEntity.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', name: 'X', viewId: 'v1', visualizationId: 'c1' }] }];
+  assert.ok(validateAppSpec(noEntity).errors.some((e) => /id-based chart tile needs entity/.test(e)));
+  const noView = cloneDesk();
+  noView.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', name: 'X', entity: noView.entities[0].schemaName, visualizationId: 'c1' }] }];
+  assert.ok(validateAppSpec(noView).errors.some((e) => /also needs viewId/.test(e)));
+});
+
 test('validateAppSpec rejects a dashboard chart tile referencing an unknown chart', () => {
   const bad = cloneDesk();
   bad.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', chart: 'Nope', view: bad.views[0].name }] }];
