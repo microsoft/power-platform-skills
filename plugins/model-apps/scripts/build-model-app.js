@@ -14,7 +14,7 @@ const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { validateAppSpec } = require('./lib/app-spec.js');
-const { runSdkBuild, planFor, resolvePhases, appUniqueName } = require('./lib/sdk-build.js');
+const { runSdkBuild, planFor, resolvePhases, headlessPhaseAllowlist, appUniqueName } = require('./lib/sdk-build.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
@@ -93,6 +93,21 @@ async function buildModelApp(spec, opts, deps) {
   if (!v.ok) {
     return { ok: false, errors: v.errors };
   }
+  // Headless allow-list gate: for a spec.headless === true, intersect the CLI-resolved phase
+  // set (or the full PHASES default) with the reduced headless phase allow-list BEFORE
+  // runSdkBuild sees it. Applied here (not only in main()) so direct callers — tests, other
+  // CLIs invoking buildModelApp() — get the same guarantee: `opts.phases` handed to
+  // runSdkBuild NEVER contains views/charts/forms/commands/dashboards/pages/ai-features/
+  // web-resources when spec.headless === true, regardless of what --only/--from/--to/--skip
+  // would otherwise admit. For a non-headless spec headlessPhaseAllowlist returns PHASES,
+  // so this filter is an idempotent no-op — classic-spec behavior is unchanged.
+  // See sdk-build.js::headlessPhaseAllowlist for the allow-list rules and DoD #2 in
+  // units.json for run20260708headless01.
+  const allow = headlessPhaseAllowlist(spec, { sampleData: opts.sampleData === true, publish: opts.publish === true });
+  const effectivePhases = opts.phases
+    ? opts.phases.filter((p) => allow.includes(p))
+    : allow.slice();
+  opts = { ...opts, phases: effectivePhases };
   const log = deps.log || (() => undefined);
   const counts = { ok: 0, skip: 0, error: 0 };
   const journal = deps.journal;

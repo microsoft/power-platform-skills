@@ -958,14 +958,14 @@ test('headlessPhaseAllowlist honors spec.headless + opts.sampleData/publish', ()
   assert.deepStrictEqual(headlessPhaseAllowlist({}, {}), PHASES.slice());
   assert.deepStrictEqual(headlessPhaseAllowlist({ headless: false }, { sampleData: true, publish: true }), PHASES.slice());
   assert.deepStrictEqual(headlessPhaseAllowlist(null, {}), PHASES.slice());
-  // Headless base — no sample-data, no publish.
+  // Headless base — no sample-data, no publish. Order follows canonical PHASES.
   assert.deepStrictEqual(headlessPhaseAllowlist({ headless: true }, {}), ['solution', 'data-model', 'app-shell']);
-  // Headless + --sample-data appends sample-data.
-  assert.deepStrictEqual(headlessPhaseAllowlist({ headless: true }, { sampleData: true }), ['solution', 'data-model', 'app-shell', 'sample-data']);
-  // Headless + --publish appends publish.
+  // Headless + --sample-data — sample-data slots into its canonical position (before app-shell).
+  assert.deepStrictEqual(headlessPhaseAllowlist({ headless: true }, { sampleData: true }), ['solution', 'data-model', 'sample-data', 'app-shell']);
+  // Headless + --publish — publish slots into its canonical position (last).
   assert.deepStrictEqual(headlessPhaseAllowlist({ headless: true }, { publish: true }), ['solution', 'data-model', 'app-shell', 'publish']);
-  // Headless + both flags appends both.
-  assert.deepStrictEqual(headlessPhaseAllowlist({ headless: true }, { sampleData: true, publish: true }), ['solution', 'data-model', 'app-shell', 'sample-data', 'publish']);
+  // Headless + both flags — both slot into canonical PHASES order.
+  assert.deepStrictEqual(headlessPhaseAllowlist({ headless: true }, { sampleData: true, publish: true }), ['solution', 'data-model', 'sample-data', 'app-shell', 'publish']);
   // Only strict `=== true` counts (truthy but non-true values do NOT enable optional phases —
   // matches the `apply === true` / `sampleData === true` pattern used elsewhere in the CLI).
   assert.deepStrictEqual(headlessPhaseAllowlist({ headless: true }, { sampleData: 1, publish: 'yes' }), ['solution', 'data-model', 'app-shell']);
@@ -974,8 +974,10 @@ test('headlessPhaseAllowlist honors spec.headless + opts.sampleData/publish', ()
 
 // U2 DoD #5 — runSdkBuild on a headless spec (with a pre-filtered headless phase set) MUST NOT
 // create form/view/chart/dashboard/webresource artifacts, MUST emit exactly one Entity subarea
-// per declared table in the app-shell sitemap, and MUST return an appDef that JSON-round-trips
-// (proxy for the tester persona's live "app opens in Dataverse" check).
+// per declared table in the app-shell sitemap, and MUST produce an appDef with empty component
+// buckets (a real DoD-relevant invariant — the built app has no forms/views/charts attached).
+// The headless spec DELIBERATELY declares UI artifacts (bypassing lint) so the assertion has
+// teeth: without the pre-filtered phase set, form/view/chart createArtifact calls WOULD land.
 function makeHeadlessSpec() {
   return {
     headless: true,
@@ -989,35 +991,42 @@ function makeHeadlessSpec() {
       { entity: 'new_alpha', title: 'Alphas' },
       { entity: 'new_beta', title: 'Betas' },
     ] }] }] },
+    // Adversarial UI declarations: without the headless allow-list gating the phase set,
+    // runSdkBuild would create form/view/chart artifacts for these — proving the allow-list
+    // is what actually suppresses them.
+    forms: [{ entity: 'new_alpha', name: 'Alpha', formType: 'Main', layout: 'auto' }],
+    views: [{ entity: 'new_alpha', name: 'Active Alphas', columns: ['new_name'] }],
+    charts: [{ entity: 'new_alpha', name: 'By Name', groupBy: 'new_name', measure: 'count', chartType: 'Column' }],
   };
 }
 
-test('headless build: runSdkBuild creates ZERO form/view/chart/dashboard/webresource artifacts', async () => {
+test('headless build: runSdkBuild with allow-list phases creates ZERO form/view/chart/dashboard/webresource artifacts', async () => {
   const { sdk, calls } = mockSdk();
   const spec = makeHeadlessSpec();
   const phases = headlessPhaseAllowlist(spec, {});
   await runSdkBuild(spec, { sdk, apply: true, phases });
   const artifactKinds = find(calls, 'createArtifact').map((c) => c.args[0]);
   for (const forbidden of ['form', 'view', 'chart', 'dashboard', 'webresource']) {
-    assert.ok(!artifactKinds.includes(forbidden), `headless build must not create '${forbidden}' artifact; saw kinds=${JSON.stringify(artifactKinds)}`);
+    assert.ok(!artifactKinds.includes(forbidden), `headless allow-list must suppress '${forbidden}' artifacts even when spec declares them; saw kinds=${JSON.stringify(artifactKinds)}`);
   }
   // The 'app' artifact is the app-shell output — must be present (headless still ships an app module).
   assert.ok(artifactKinds.includes('app'), `headless build should still create the 'app' artifact; kinds=${JSON.stringify(artifactKinds)}`);
 });
 
-test('headless appDef: one Entity subarea per declared table + JSON-serializable', () => {
+test('headless appDef: one Entity subarea per declared table + empty component buckets', () => {
   const spec = makeHeadlessSpec();
   // Simulate the state after data-model + app-shell phases (no forms/views/charts created).
   const result = { forms: {}, views: {}, charts: {}, dashboards: {}, pages: {}, created: {} };
   const def = appDef(spec, result);
   // Exactly one Entity subarea per declared table, matching entity logical names.
+  // sitemap shape: def.siteMap.areas[].groups[].subAreas[] (all lowercase — appDef emits them that way).
   const subs = def.siteMap.areas.flatMap((a) => a.groups.flatMap((g) => g.subAreas));
   assert.strictEqual(subs.length, spec.entities.length, 'one subarea per declared table');
   for (const s of subs) assert.strictEqual(s.type, 'Entity', `subarea type should be Entity, got ${s.type}`);
   const entLogicals = subs.map((s) => s.entity).sort();
   assert.deepStrictEqual(entLogicals, ['new_alpha', 'new_beta']);
-  // JSON round-trip: def.siteMap.Areas[].Groups[].SubAreas[] is a plain, JSON-serializable object.
-  // Proxy for "the built app opens in Dataverse" — verified live by the tester persona per skill doctrine.
-  const roundTripped = JSON.parse(JSON.stringify(def));
-  assert.deepStrictEqual(roundTripped, def, 'appDef must be pure JSON (no functions, no cycles, no undefineds)');
+  // Real DoD-relevant invariant: a headless appDef must have empty component buckets — the app
+  // module isn't attached to any forms/views/charts because those phases never ran. This is the
+  // structural end-of-build shape the tester persona then verifies live-in-Dataverse.
+  assert.deepStrictEqual(def.components, { forms: [], views: [], charts: [] }, 'headless appDef has no attached components');
 });

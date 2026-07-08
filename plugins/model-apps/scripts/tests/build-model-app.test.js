@@ -191,7 +191,18 @@ const headlessFixture = JSON.parse(
 test('headless dry-run: phase headers are exactly the reduced set (no UI phases)', async () => {
   const { sdk } = mockSdk();
   const cap = logCapture();
-  await buildModelApp(headlessFixture, { apply: false, env: 'https://x' }, { sdk, log: cap.log });
+  // Adversarially declare UI artifacts alongside the headless fixture so `▶ views/forms/charts/
+  // dashboards` WOULD emit without the allow-list wiring (each of those phases fires per-artifact
+  // events which trigger the `▶ <phase>` header in cliEmit at build-model-app.js:59). The
+  // negative assertions below then genuinely prove the allow-list dropped those phases.
+  const spec = {
+    ...headlessFixture,
+    forms:      [{ entity: 'new_project', name: 'Project', formType: 'Main', layout: 'auto' }],
+    views:      [{ entity: 'new_project', name: 'Active', columns: ['new_name'] }],
+    charts:     [{ entity: 'new_project', name: 'By Status', groupBy: 'new_status', measure: 'count', chartType: 'Column' }],
+    dashboards: [{ name: 'Overview', tiles: [{ type: 'chart', chart: 'By Status', view: 'Active' }] }],
+  };
+  await buildModelApp(spec, { apply: false, env: 'https://x' }, { sdk, log: cap.log });
   const phaseHeaders = cap.logs.filter((l) => /^\s*▶ /.test(l)).map((l) => l.trim());
   // Present: solution, data-model, app-shell.
   assert.ok(phaseHeaders.includes('▶ solution'), `expected ▶ solution; got ${JSON.stringify(phaseHeaders)}`);

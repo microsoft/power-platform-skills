@@ -145,6 +145,33 @@ function resolvePhases({ only, skip, from, to } = {}) {
   return active.filter((p) => (!onlySet || onlySet.has(p)) && (!skipSet || !skipSet.has(p)));
 }
 
+// Pure allow-list for a headless model app (spec.headless === true): the reduced phase set
+// authorised for a table+sitemap-only shell. UI phases (views/charts/forms/commands/dashboards/
+// pages/ai-features/web-resources) are structurally forbidden even if the spec accidentally
+// declares them and even if --only/--from/--to would otherwise admit them; the caller
+// intersects this with the resolvePhases() output so CLI flags still narrow WITHIN the
+// allow-list but never widen past it (defense-in-depth).
+//
+// For a non-headless spec the helper is a pass-through: it returns the full PHASES list,
+// so `resolved.filter((p) => allow.includes(p))` at the caller is an idempotent no-op —
+// the existing CLI behavior for classic specs is unchanged.
+//
+// `opts.sampleData === true` / `opts.publish === true` widen the allow-list by exactly those
+// two phases (opt-in, matching the `--sample-data` / `--publish` CLI flags on
+// build-model-app.js). Only the strict boolean `true` counts, matching the `apply === true`
+// pattern used elsewhere on the CLI options object.
+function headlessPhaseAllowlist(spec, opts = {}) {
+  if (!spec || spec.headless !== true) return PHASES.slice();
+  // Build via Set + PHASES.filter so the returned list always follows the canonical PHASES
+  // order regardless of any future reordering of the allow-list literal (the caller's
+  // filter against `allow` then stays idempotent for both branches — pass-through returns
+  // PHASES, headless returns a strict subset in PHASES order).
+  const allowSet = new Set(['solution', 'data-model', 'app-shell']);
+  if (opts.sampleData === true) allowSet.add('sample-data');
+  if (opts.publish === true) allowSet.add('publish');
+  return PHASES.filter((p) => allowSet.has(p));
+}
+
 // Resolve a view-filter value: a Choice/MultiChoice label becomes its option int; everything
 // else (raw ints, strings, ISO dates) passes through. No-value operators omit the value entirely.
 function resolveFilterValue(spec, entityLogical, attr, val) {
@@ -748,4 +775,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, chartDef, dashboardTileOpts, formDef, appDef, appUniqueName, commandsByEntity, webResourceOpts, formEventOpts, WEB_RESOURCE_KINDS, FORM_EVENTS };
+module.exports = { runSdkBuild, planFor, resolvePhases, headlessPhaseAllowlist, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, chartDef, dashboardTileOpts, formDef, appDef, appUniqueName, commandsByEntity, webResourceOpts, formEventOpts, WEB_RESOURCE_KINDS, FORM_EVENTS };
