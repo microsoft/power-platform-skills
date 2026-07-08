@@ -235,19 +235,63 @@ TypeScript type definitions generated from Dataverse metadata. Contains entity t
 - Use progressive disclosure: SKILL.md for workflow, reference files for details
 - Link to references inline: `See [troubleshooting.md](../../references/troubleshooting.md)`
 
-## Testing Changes
+## Building & Testing
 
-After modifying this plugin:
+**One-command regression gate (run before every commit)** — from `plugins/model-apps/`:
 
-1. Run `claude --debug` to see plugin loading details
-2. Run `node --test plugins/model-apps/scripts/tests/*.test.js` (must pass)
-3. Run `node --test evals/model-apps/genpage/tests/*.test.js` (must pass)
-4. Run both eval-suite runners against shipping fixtures (Layer 1 + Layer 2):
-   - `node evals/model-apps/genpage/run-layer-1.js --tier smoke`
-   - `node evals/model-apps/genpage/run-layer-2.js --tier smoke`
-5. Test skill invocation with `/genpage`
-6. Test with both Dataverse entity pages and mock data pages (smoke + edit)
-7. Verify Playwright browser verification works (navigate, snapshot, click, screenshot)
+```bash
+# Plugin unit suite only (node:test):
+node scripts/run-tests.js
+
+# Plugin suite + the vendored SDK's Jest suite (Node 20):
+NODE20_BIN=/path/to/node20/bin node scripts/run-tests.js --with-sdk /path/to/power-platform-ux
+```
+
+- `run-tests.js` runs the full `scripts/tests/*.test.js` suite and prints a combined PASS/FAIL.
+- The SDK's Jest suite needs **Node 20** (its `canvas` native module is built for the Node-20 ABI).
+  Set `NODE20_BIN` to a Node-20 bin dir; without it the SDK suite is skipped (plugin suite still runs).
+- genpage evals: `node --test evals/model-apps/genpage/tests/*.test.js`, plus the Layer 1/2 runners
+  (`node evals/model-apps/genpage/run-layer-{1,2}.js --tier smoke`). See `## Eval Suite` below.
+
+**The vendored SDK lives in a separate repo.** The Dataverse mechanics are in
+`power-platform-ux` (Azure DevOps `msazure/OneAgile`), package `packages/cds-maker-sdk`. This plugin
+ships a **self-contained bundle** at `scripts/vendor/cds-maker-sdk.cjs` (NOT the SDK source). The SDK
+owns deterministic wire formats (create/query/delete, AI settings/row-summaries, `seedRecordGraph`,
+`enrichDefaultViews`, artifact resolve/cascade); the plugin owns judgment (spec validation, candidate
+selection, prompt authoring). To change SDK behavior:
+
+```bash
+# 1. Build the SDK (emits lib/) — from <ppux>/packages/cds-maker-sdk:
+npm run build          # tsc/ppux-build
+npm test               # Jest (Node 20)
+npm run lint           # ppux-lint (Node 20)
+
+# 2. Rebuild the vendored bundle here (reads the SDK's lib/, so build the SDK first) — from repo root:
+node plugins/model-apps/scripts/_vendor-build/build.js --sdk /path/to/power-platform-ux
+# → rewrites scripts/vendor/cds-maker-sdk.cjs (~540 KB). COMMIT the rebuilt bundle.
+```
+
+Only the SDK `src/` is committed in the SDK repo (`lib/` is gitignored). A type-only/whitespace SDK
+edit produces a byte-identical `lib/*.js`, so the bundle only needs rebuilding when SDK **runtime**
+changes.
+
+**Live end-to-end (model-app-maker — writes to a real Dataverse env; optional).** All build/verify/
+teardown scripts are **dry-run by default**; add `--apply` to write.
+
+```bash
+az account set --subscription <sub-id>
+node scripts/check-auth.js <envUrl>          # az + pac identity match + WhoAmI preflight
+node scripts/build-model-app.js   --env <envUrl> --spec @<dir>/app-spec.json [--sample-data --publish] --apply
+node scripts/verify-model-app.js  --env <envUrl> --spec @<dir>/app-spec.json
+node scripts/teardown-model-app.js --env <envUrl> --spec @<dir>/app-spec.json --apply
+```
+
+AI features are **admin-gated** — preflight readiness with `node scripts/ai-preflight.js --env <envUrl>`.
+Prefer a scratch env; always tear down probes (`teardown-model-app.js --apply`) to leave 0 leftovers.
+
+**After modifying the plugin also:** run `claude --debug` to confirm the plugin loads, exercise the
+skill (`/genpage` or `/model-app-maker`), and for genpage verify Playwright browser checks
+(navigate/snapshot/click/screenshot).
 
 ## Eval Suite
 
