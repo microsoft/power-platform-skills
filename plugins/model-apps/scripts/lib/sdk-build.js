@@ -33,6 +33,8 @@ const {
   SDK_COLUMN_TYPE: _SDK_COLUMN_TYPE,
 } = require('./entity-provision.js');
 const { makeGenpageCli } = require('./genpage-cli.js');
+const { selectSummaryTables } = require('./ai-candidates.js');
+const { buildPromptSpec } = require('./ai-prompt.js');
 
 // Re-export from entity-provision so the export surface stays unchanged
 const BuildHalt = _BuildHalt;
@@ -50,7 +52,7 @@ const WEB_RESOURCE_KINDS = new Set(['js', 'html', 'css', 'xml', 'png', 'jpg', 'g
 // Form-event kinds the SDK can wire (addFormEventHandler).
 const FORM_EVENTS = new Set(['onload', 'onsave', 'onchange']);
 
-const PHASES = ['solution', 'data-model', 'sample-data', 'web-resources', 'views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell', 'pages', 'publish'];
+const PHASES = ['solution', 'data-model', 'sample-data', 'web-resources', 'views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell', 'pages', 'ai-features', 'publish'];
 
 // Map a dashboard tile (App Spec) to the SDK's AddDashboardTileOptions. chart/list tiles resolve
 // the underlying view (savedqueryid) — and the chart its visualization id — from what the build
@@ -219,6 +221,14 @@ function planFor(spec, opts) {
   if (has('app-shell')) items.push({ phase: 'app-shell', label: `app module "${spec.app.name}" + sitemap` });
   if (has('pages')) for (const p of spec.pages || []) items.push({ phase: 'pages', label: `page "${p.name}"` });
   if (has('pages') && (spec.pages || []).length && appHasPageSubareas(spec)) items.push({ phase: 'pages', label: 'finalize sitemap (genpage subareas)' });
+  if (has('ai-features') && spec.ai !== undefined && spec.ai !== null) {
+    items.push({ phase: 'ai-features', label: 'enable app AI features' });
+    if (!(spec.ai.summaries && spec.ai.summaries.default === 'off')) {
+      for (const logical of selectSummaryTables(spec)) {
+        items.push({ phase: 'ai-features', label: `row summary for ${logical}` });
+      }
+    }
+  }
   if (has('publish') && opts.publish) items.push({ phase: 'publish', label: 'publish customizations' });
   return items;
 }
@@ -468,7 +478,7 @@ async function runSdkBuild(spec, opts = {}) {
     return { ok: true, dryRun: true, plan: plan.map((p) => p.label) };
   }
 
-  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, commands: {}, dashboards: {}, pages: {}, app: null } };
+  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, commands: {}, dashboards: {}, pages: {}, ai: { appFeatures: null, summaries: {} }, app: null } };
   const runner = makeRunner({ emit, total: plan.length });
   const sol = spec.solution;
 
@@ -697,6 +707,32 @@ async function runSdkBuild(spec, opts = {}) {
         await provision.pushArtifact('app', result.created.app);
         await provision.publishArtifact('app', result.created.app);
         return result.created.app;
+      });
+    }
+  }
+
+  // 7c. AI features (opt-in via spec.ai). Enable app-level agents (gated on admin settings) +
+  //     configure per-table row summaries. All AI writes are best-effort-gated: setAppAiFeatures
+  //     skips features whose admin gate is off; it never throws.
+  if (has('ai-features') && spec.ai !== undefined && spec.ai !== null) {
+    const solutionUniqueName = spec.solution && spec.solution.uniqueName;
+    const appUnique = appUniqueName(spec);
+    const flags = Object.assign({ formFill: true, nlSearch: true, nlChart: true, m365: false }, (spec.ai.appFeatures || {}));
+    await runner.run('ai-features', 'enable app AI features', async () => {
+      const r = await provision.setAppAiFeatures(appUnique, flags, { solutionUniqueName });
+      result.created.ai.appFeatures = r;
+      return (r.applied && r.applied.length) ? `applied: ${r.applied.join(', ')}${r.skipped && r.skipped.length ? '; skipped (admin gate off): ' + r.skipped.join(', ') : ''}` : '(none \u2014 admin gate off)';
+    });
+    const tables = (spec.ai.summaries && spec.ai.summaries.default === 'off') ? [] : selectSummaryTables(spec);
+    for (const logical of tables) {
+      const ent = (spec.entities || []).find((e) => String(e.schemaName).toLowerCase() === String(logical).toLowerCase());
+      if (!ent) continue;
+      const override = spec.ai.summaries && spec.ai.summaries.tables && (spec.ai.summaries.tables[logical] || spec.ai.summaries.tables[String(logical).toLowerCase()]);
+      await runner.run('ai-features', `row summary for ${logical}`, async () => {
+        const promptSpec = buildPromptSpec(ent, { spec, override });
+        const res = await provision.configureRowSummary(promptSpec, { solutionUniqueName });
+        result.created.ai.summaries[logical] = res;
+        return res.modelId;
       });
     }
   }

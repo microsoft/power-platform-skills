@@ -30,6 +30,9 @@ function makeSimpleMockSdk() {
     fetchArtifact: async (t, id) => ({ id }),
     addSolutionComponent: async () => undefined,
     publishArtifact: async () => undefined,
+    getAiReadiness: async (opts) => { calls.push(['getAiReadiness', opts]); return { enabled: true }; },
+    setAppAiFeatures: async (appUnique, flags, opts) => { calls.push(['setAppAiFeatures', appUnique, flags, opts]); return { applied: Object.keys(flags).filter((k) => flags[k]), skipped: [] }; },
+    configureRowSummary: async (promptSpec, opts) => { calls.push(['configureRowSummary', promptSpec, opts]); return { modelId: 'model-' + promptSpec.entityLogicalName, aiSkillConfigId: 'skill-' + promptSpec.entityLogicalName }; },
   };
   return { sdk, calls };
 }

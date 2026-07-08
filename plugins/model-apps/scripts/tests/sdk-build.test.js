@@ -85,6 +85,9 @@ function mockSdk(opts = {}) {
     addSolutionComponent: async (o) => { calls.push({ name: 'addSolutionComponent', args: [o] }); },
     publishArtifact: async (t, id) => { calls.push({ name: 'publishArtifact', args: [t, id] }); },
     setAppDefinition: (id, def) => { calls.push({ name: 'setAppDefinition', args: [id, def] }); return { id }; },
+    getAiReadiness: async (opts) => { calls.push({ name: 'getAiReadiness', args: [opts] }); return { enabled: true }; },
+    setAppAiFeatures: async (appUnique, flags, opts) => { calls.push({ name: 'setAppAiFeatures', args: [appUnique, flags, opts] }); return { applied: Object.keys(flags).filter((k) => flags[k]), skipped: [] }; },
+    configureRowSummary: async (promptSpec, opts) => { calls.push({ name: 'configureRowSummary', args: [promptSpec, opts] }); return { modelId: 'model-' + promptSpec.entityLogicalName, aiSkillConfigId: 'skill-' + promptSpec.entityLogicalName }; },
   };
   return { sdk, calls };
 }
@@ -832,8 +835,8 @@ test('publish (opt-in) publishes one artifact per entity + the app', async () =>
 
 test('resolvePhases honors only/skip/from/to', () => {
   assert.deepStrictEqual(resolvePhases({ only: ['views', 'charts'] }), ['views', 'charts']);
-  assert.deepStrictEqual(resolvePhases({ skip: ['data-model', 'sample-data', 'publish'] }), ['solution', 'web-resources', 'views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell', 'pages']);
-  assert.deepStrictEqual(resolvePhases({ from: 'views' }), ['views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell', 'pages', 'publish']);
+  assert.deepStrictEqual(resolvePhases({ skip: ['data-model', 'sample-data', 'publish'] }), ['solution', 'web-resources', 'views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell', 'pages', 'ai-features']);
+  assert.deepStrictEqual(resolvePhases({ from: 'views' }), ['views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell', 'pages', 'ai-features', 'publish']);
   assert.deepStrictEqual(resolvePhases({ to: 'data-model' }), ['solution', 'data-model']);
 });
 
@@ -859,4 +862,46 @@ test('planFor reflects the selected phases', () => {
   assert.ok(labels.some((l) => l.includes('form for new_customer (sub-grids: new_ticket)')));
   const onlyViews = planFor(makeSpec(), { phases: ['views'] }).map((p) => p.phase);
   assert.ok(onlyViews.every((p) => p === 'views'));
+});
+
+test('ai-features phase enables app features and configures summaries for candidate tables', async () => {
+  const spec = makeSpec({ ai: { appFeatures: { formFill: true }, summaries: { default: 'auto' } } });
+  const { sdk, calls } = mockSdk();
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'] });
+  assert.strictEqual(find(calls, 'setAppAiFeatures').length, 1, 'setAppAiFeatures called once');
+  assert.ok(find(calls, 'configureRowSummary').length >= 1, 'configureRowSummary called for candidate table(s)');
+  const featureCall = find(calls, 'setAppAiFeatures')[0];
+  assert.ok(featureCall.args[0].includes('support'), 'app unique name derived from spec (contains app name slug)');
+  assert.strictEqual(featureCall.args[1].formFill, true, 'formFill flag merged from spec.ai.appFeatures');
+  assert.ok(result.created.ai && result.created.ai.appFeatures, 'appFeatures populated on result');
+  assert.ok(result.created.ai.summaries && Object.keys(result.created.ai.summaries).length >= 1, 'summaries populated on result');
+});
+
+test('ai-features phase: summaries.default=off skips all row-summary calls', async () => {
+  const spec = makeSpec({ ai: { summaries: { default: 'off' } } });
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'] });
+  assert.strictEqual(find(calls, 'setAppAiFeatures').length, 1, 'app features still enabled');
+  assert.strictEqual(find(calls, 'configureRowSummary').length, 0, 'no row summaries when default is off');
+});
+
+test('ai-features phase: spec without spec.ai is a no-op', async () => {
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['ai-features'] });
+  assert.strictEqual(find(calls, 'setAppAiFeatures').length, 0, 'setAppAiFeatures not called without spec.ai');
+  assert.strictEqual(find(calls, 'configureRowSummary').length, 0, 'configureRowSummary not called without spec.ai');
+});
+
+test('ai-features planFor: spec.ai adds enable + per-table summary plan entries', () => {
+  const spec = makeSpec({ ai: { appFeatures: { formFill: true }, summaries: { default: 'auto' } } });
+  const items = planFor(spec, { phases: ['ai-features'] });
+  assert.ok(items.some((i) => i.phase === 'ai-features' && i.label === 'enable app AI features'));
+  assert.ok(items.some((i) => i.phase === 'ai-features' && /row summary for/.test(i.label)));
+});
+
+test('ai-features planFor: summaries.default=off suppresses per-table summary plan entries', () => {
+  const spec = makeSpec({ ai: { summaries: { default: 'off' } } });
+  const items = planFor(spec, { phases: ['ai-features'] });
+  assert.ok(items.some((i) => i.label === 'enable app AI features'));
+  assert.ok(!items.some((i) => /row summary for/.test(i.label)));
 });
