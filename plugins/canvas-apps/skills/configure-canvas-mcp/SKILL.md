@@ -1,7 +1,7 @@
 ---
 name: configure-canvas-mcp
 version: 2.1.0
-description: Configure the Canvas Authoring MCP server for the current coauthoring session. USE WHEN "configure MCP", "set up MCP server", "MCP not working", "connect Canvas Apps MCP", "canvas-authoring not available", "MCP not configured", "set up canvas apps". DO NOT USE WHEN prerequisites are missing — direct the user to install .NET 10 SDK first.
+description: Configure the Canvas Authoring MCP server for the current coauthoring session. USE WHEN "configure MCP", "set up MCP server", "MCP not working", "connect Canvas Apps MCP", "canvas-authoring not available", "MCP not configured", "set up canvas apps".
 author: Microsoft Corporation
 user-invocable: true
 allowed-tools: Bash, AskUserQuestion, mcp__canvas-authoring__connect
@@ -12,20 +12,6 @@ allowed-tools: Bash, AskUserQuestion, mcp__canvas-authoring__connect
 This skill configures the Canvas Authoring MCP server for the user's current Power Apps coauthoring session. The MCP server is auto-registered by the plugin — this skill connects it to a specific app session.
 
 ## Instructions
-
-### 0. Check prerequisites
-
-Verify that .NET 10 SDK or higher is installed:
-
-```bash
-dotnet --list-sdks
-```
-
-If a version 10.x.y or higher is not listed, tell the user:
-
-> ⚠️ .NET 10 SDK is required to run the Canvas Authoring MCP server. It looks like you don't have it installed. Please install it first to use this skill. https://dotnet.microsoft.com/download/dotnet/10.0
-
-Then wait for the user to install it before continuing. If they say it's installed, run the command again to confirm. If it's still not found, repeat the message until they have it installed.
 
 ### 1. Ask for the studio URL
 
@@ -89,12 +75,21 @@ mcp__canvas-authoring__connect(
 - `login_hint`: Pass the user's UPN or email **only if** they have indicated they want to connect as a specific/different user (e.g. "log in as alice@contoso.com"). These values cannot be derived from the maker portal URL — never guess. Omit otherwise to use the first signed-in user.
 - `auth_flow`: Pass `"browser"` or `"broker"` **only if** the user has explicitly stated a preferred auth flow (e.g. "use browser sign-in"). Omit otherwise to use the default.
 
-If the call fails, report the error to the user and suggest checking that:
+If the call fails, run the following command to check if the MCP server failed to start due to a missing .NET 10 SDK:
+
+```bash
+dotnet --list-sdks
+```
+
+If a version 10.x.y or higher is **not** listed, tell the user:
+
+> ⚠️ .NET 10 SDK is required to run the Canvas Authoring MCP server. It looks like you don't have it installed. Please install it from https://dotnet.microsoft.com/download/dotnet/10.0 and then try again.
+
+Otherwise, report the original error and suggest checking that:
 
 1. The studio URL is correct and the browser tab is still open
 2. Coauthoring is enabled in the app settings
-3. .NET 10 SDK is correctly installed
-4. If sign-in failed, the user may need to specify `auth_flow` (`broker` vs. `browser`) or a `login_hint` (UPN/email) to authenticate as the correct account
+3. If sign-in failed, the user may need to specify `auth_flow` (`broker` vs. `browser`) or a `login_hint` (UPN/email) to authenticate as the correct account
 
 ### 4. Confirm
 
