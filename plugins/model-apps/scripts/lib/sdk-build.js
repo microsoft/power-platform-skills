@@ -526,10 +526,13 @@ async function runSdkBuild(spec, opts = {}) {
   const buildArtifact = (type, def) => runner.run(type === 'app' ? 'app-shell' : `${type}s`, `${type} "${def.name}"`, async () => {
     // Idempotency: if an artifact with this (entity, name) identity already exists (a re-run or a
     // retry after a partial failure), reuse it instead of creating a duplicate.
-    const idq = artifactIdentityQuery(type, def);
-    if (idq) {
-      const rows = await provision.queryRecords(idq.set, { select: [idq.idField], filter: idq.filter, top: 1 });
-      if (rows && rows[0] && rows[0][idq.idField]) return rows[0][idq.idField];
+    // Deduplicated kinds: view, chart, form (by name+entity), app (by uniqueName).
+    let identity = null;
+    if (type === 'view' || type === 'chart' || type === 'form') identity = { name: def.name, entity: def.entityLogicalName };
+    else if (type === 'app') identity = { uniqueName: def.uniqueName };
+    if (identity) {
+      const existingId = await provision.findArtifact(type, identity);
+      if (existingId) return existingId;
     }
     const art = provision.createArtifact(type, def);
     if (type === 'form' && def.__subgrids) for (const sg of def.__subgrids) provision.addSubGrid(art.id, sg);

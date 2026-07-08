@@ -31,6 +31,7 @@ function mockSdk() {
     addSubGrid: () => ({}),
     addSolutionComponent: async () => undefined,
     publishArtifact: async () => undefined,
+    findArtifact: async (kind, identity) => null,
   };
   return { sdk, calls };
 }

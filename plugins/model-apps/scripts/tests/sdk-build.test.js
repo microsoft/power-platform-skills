@@ -39,14 +39,10 @@ function mockSdk(opts = {}) {
       if (e === 'solution') return opts.solutionExists ? [{ solutionid: 's' }] : [];
       if (e === 'webresource') return opts.existingWebResource ? [{ webresourceid: 'wr-existing' }] : [];
       if (e === 'savedquery') {
-        // Artifact idempotency lookup (filters by name): reuse only when opts.artifactsExist.
-        if (/name eq/i.test(filter)) return opts.artifactsExist ? [{ savedqueryid: 'view-existing' }] : [];
         // Default-view / subgrid default lookup (filters by querytype): a default view exists.
+        // Artifact idempotency (name eq filter) is now handled by findArtifact, not queryRecords.
         return [{ savedqueryid: `defview-${filter.match(/'([^']+)'/)?.[1] || 'x'}`, isdefault: true }];
       }
-      if (e === 'savedqueryvisualization') return opts.artifactsExist ? [{ savedqueryvisualizationid: 'chart-existing' }] : [];
-      if (e === 'systemform') return opts.artifactsExist ? [{ formid: 'form-existing' }] : [];
-      if (e === 'appmodule') return opts.artifactsExist ? [{ appmoduleid: 'app-existing' }] : [];
       // Sample-data idempotency lookup (entity-set query: [primary, <logical>id] + `<primary> eq '...'`).
       if (opts.sampleDataExists && ((o && o.select) || []).length === 2 && /id$/.test((o.select || [])[1]) && /eq '/.test(filter)) {
         const [primaryField, idField] = o.select;
@@ -54,6 +50,16 @@ function mockSdk(opts = {}) {
         return names.map((n, i) => ({ [primaryField]: n, [idField]: `${idField}-existing-${i}` }));
       }
       return opts.noPublisher ? [] : [{ publisherid: 'pub-1' }];
+    },
+    // Artifact idempotency: reuse existing view/chart/form/app when opts.artifactsExist is set.
+    findArtifact: async (kind, identity) => {
+      calls.push({ name: 'findArtifact', args: [kind, identity] });
+      if (!opts.artifactsExist) return null;
+      if (kind === 'view') return 'view-existing';
+      if (kind === 'chart') return 'chart-existing';
+      if (kind === 'form') return 'form-existing';
+      if (kind === 'app') return 'app-existing';
+      return null;
     },
     createWebResource: async (o) => { calls.push({ name: 'createWebResource', args: [o] }); return { id: `wr-${++idc}`, name: o.name }; },
     fetchArtifact: async (t, id) => { calls.push({ name: 'fetchArtifact', args: [t, id] }); return { id }; },
