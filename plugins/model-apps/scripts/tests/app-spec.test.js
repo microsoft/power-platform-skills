@@ -394,6 +394,29 @@ test('validateAppSpec accepts a spec with headless:true', () => {
   assert.ok(!r.errors.some((e) => /headless/i.test(e)), 'no error should mention headless when the value is a valid boolean');
 });
 
+test('validateAppSpec accepts headless:false', () => {
+  // Companion to the headless:true case — guards against a regression to
+  // `typeof spec.headless === 'boolean' && spec.headless` (which would reject false)
+  // or a truthy-only check that would accept 1 but reject 0/false.
+  const s = cloneDesk();
+  s.headless = false;
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  assert.ok(!r.errors.some((e) => /headless/i.test(e)), 'headless:false is a valid boolean and must not raise a headless error');
+});
+
+test('validateAppSpec treats absent headless as valid (undefined is not a value)', () => {
+  // Impl uses `spec.headless !== undefined && typeof spec.headless !== 'boolean'`. The
+  // `!== undefined` guard is easy to drop by accident, which would then reject every
+  // classic (non-headless) spec. This pins the intent explicitly so a maintainer can't
+  // silently drop it and pass the loop test below.
+  const s = cloneDesk();
+  delete s.headless;
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  assert.ok(!r.errors.some((e) => /headless/i.test(e)), 'absent headless key must not raise a headless error');
+});
+
 test('validateAppSpec rejects headless set to a non-boolean value', () => {
   // Includes null/0/'' — the values most likely to slip past a `if (spec.headless && ...)`
   // style guard. Impl uses `!== undefined` so all non-boolean values are rejected.

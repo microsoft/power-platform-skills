@@ -318,7 +318,7 @@ test('lint fails a headless spec that also declares non-empty views/charts/dashb
     // Shape doesn't matter — mutual-exclusion is structural (non-empty array).
     s[key] = [{ name: 'x', entity: 'new_ticket', chartType: 'Column', groupBy: 'new_priority' }];
     const r = lintAppSpec(s);
-    if (r.ok || !r.errors.some((m) => /headless/i.test(m) && new RegExp(key, 'i').test(m))) {
+    if (r.ok || !r.errors.some((m) => new RegExp(`headless spec must not declare\\s+\\b${key}\\b`).test(m))) {
       failures.push({ key, ok: r.ok, errors: r.errors });
     }
   }
@@ -348,6 +348,20 @@ test('lint fails a headless spec whose appShell has no Entity-typed subareas', (
     `expected a headless error naming the missing entity subarea; got ${JSON.stringify(r.errors)}`);
 });
 
+test('lint fails a headless spec whose appShell is entirely absent', () => {
+  // Companion to the "no Entity subareas" case above. The impl uses
+  // `(spec.appShell && spec.appShell.areas) || []` so missing appShell should also
+  // trigger the empty-sitemap error. Guards against a refactor to
+  // `spec.appShell.areas.forEach(...)` (would crash) or `spec.appShell && ...` that
+  // short-circuits past the check.
+  const s = headlessBase();
+  delete s.appShell;
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((m) => /headless/i.test(m) && /subarea|sitemap|appShell/i.test(m)),
+    `expected a headless error when appShell is absent; got ${JSON.stringify(r.errors)}`);
+});
+
 test('lint does not apply headless rules when headless is false or absent (populated classic UI stays legal)', () => {
   // Populate the classic-UI sections that WOULD trip the headless rule if it fired.
   // The real regression case is "user forgets `headless: true`, keeps forms/views" — the
@@ -358,6 +372,9 @@ test('lint does not apply headless rules when headless is false or absent (popul
     s.views = [{ entity: 'new_ticket', name: 'Active', columns: ['new_name'] }];
     mutate(s);
     const r = lintAppSpec(s);
+    // Assert overall lint succeeds too — otherwise the test would pass even if lint were
+    // completely broken and rejecting the spec for an unrelated reason.
+    assert.strictEqual(r.ok, true, `classic spec with populated UI should still lint clean; got ${JSON.stringify(r.errors)}`);
     assert.ok(!r.errors.some((m) => /headless/i.test(m)),
       `no headless-rule error should fire when headless is ${s.headless}; got ${JSON.stringify(r.errors)}`);
   }
