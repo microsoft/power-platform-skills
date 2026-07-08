@@ -45,8 +45,8 @@ diagnostic mirror — so an opted-out run still writes the session's `events.jso
 The mirror is laid out per-plugin, per-session at
 `~/.power-platform-skills/telemetry/<pluginName>/sessions/<sessionId>/events.jsonl`,
 so a user can hand over one self-contained file per problem. Session directories
-older than 14 days are pruned best-effort on each write, and an individual
-session log is rotated to `events.<stamp>.old` if it ever exceeds 10 MB.
+older than 14 days are pruned best-effort whenever a new session starts, and an
+individual session log is rotated to `events.<stamp>.old` if it ever exceeds 10 MB.
 
 ### Custom routing (the resolver contract)
 
