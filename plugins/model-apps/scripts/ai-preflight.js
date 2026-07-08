@@ -8,6 +8,9 @@
 
 const { parseArgs, emitResult } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 // Human-readable label + admin-action hint for each feature key returned by getAiReadiness.
 const FEATURE_META = {
@@ -66,27 +69,36 @@ async function main() {
 
   const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
   const httpClient = createAzHttpClient(env);
-  const sdk = createMakerSdk({ instanceUrl: env, httpClient });
+  // getAiReadiness is a read-only org/app query, but the vendored SDK expects an initialized
+  // workspace (throws WorkspaceNotInitializedError otherwise) — mirror the other entrypoints:
+  // create a throwaway workspace, initWorkspace(), and remove it in finally.
+  const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-preflight-'));
+  const sdk = createMakerSdk({ workspacePath: workspaceDir, instanceUrl: env, httpClient });
+  sdk.initWorkspace();
 
-  const readinessOpts = app ? { appUniqueName: app } : {};
-  const readiness = await sdk.getAiReadiness(readinessOpts);
-  const report = runPreflight(readiness);
+  try {
+    const readinessOpts = app ? { appUniqueName: app } : {};
+    const readiness = await sdk.getAiReadiness(readinessOpts);
+    const report = runPreflight(readiness);
 
-  process.stderr.write('\nAI Feature Readiness\n');
-  process.stderr.write('====================\n');
-  for (const f of report.features) {
-    process.stderr.write(`  ${f.enabled ? '✓' : '✗'} ${FEATURE_META[f.feature]?.label || f.feature} (${f.setting})\n`);
-  }
-  if (report.adminActions.length) {
-    process.stderr.write('\nAdmin actions required:\n');
-    for (const a of report.adminActions) {
-      process.stderr.write(`  • ${a}\n`);
+    process.stderr.write('\nAI Feature Readiness\n');
+    process.stderr.write('====================\n');
+    for (const f of report.features) {
+      process.stderr.write(`  ${f.enabled ? '✓' : '✗'} ${FEATURE_META[f.feature]?.label || f.feature} (${f.setting})\n`);
     }
-  } else {
-    process.stderr.write('\nAll AI features are enabled.\n');
-  }
+    if (report.adminActions.length) {
+      process.stderr.write('\nAdmin actions required:\n');
+      for (const a of report.adminActions) {
+        process.stderr.write(`  • ${a}\n`);
+      }
+    } else {
+      process.stderr.write('\nAll AI features are enabled.\n');
+    }
 
-  emitResult(true, { ok: true, ...report });
+    emitResult(true, { ok: true, ...report });
+  } finally {
+    fs.rmSync(workspaceDir, { recursive: true, force: true });
+  }
 }
 
 module.exports = { runPreflight };

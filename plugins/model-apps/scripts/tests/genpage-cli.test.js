@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { makeGenpageCli, parsePageId, parseList, quoteArg } = require('../lib/genpage-cli.js');
+const { makeGenpageCli, parsePageId, parseList, quoteArg, buildPacInvocation } = require('../lib/genpage-cli.js');
 
 const GUID = '6e0c28a2-cdbf-41ec-9186-d10fd5de6e35';
 
@@ -16,6 +16,28 @@ test('quoteArg collapses newlines to spaces (a multi-line prompt must not break 
   assert.strictEqual(quoteArg('Conversation with 2 prompts:\r\n1. A\r\n2. B'), '"Conversation with 2 prompts: 1. A 2. B"');
   assert.strictEqual(quoteArg('line1\nline2'), '"line1 line2"');
   assert.ok(!quoteArg('a\r\nb').includes('\n'), 'no raw newline survives into the command line');
+});
+
+test('buildPacInvocation (win32) builds a shell command line with cmd-style quoting', () => {
+  const inv = buildPacInvocation(['model', 'genpage', 'upload', '--prompt', 'a "quote"'], 'win32');
+  assert.strictEqual(inv.options.shell, true);
+  assert.strictEqual(inv.args, undefined);
+  assert.ok(inv.command.startsWith('pac '));
+  assert.ok(inv.command.includes('"a ""quote"""'), 'embedded quotes are cmd-escaped by doubling');
+});
+
+test('buildPacInvocation (posix) spawns pac directly with an args array and no shell', () => {
+  const inv = buildPacInvocation(['model', 'genpage', 'upload', '--prompt', 'a "quote" & more'], 'linux');
+  assert.strictEqual(inv.command, 'pac');
+  assert.strictEqual(inv.options.shell, undefined, 'no shell on POSIX so metacharacters round-trip verbatim');
+  assert.deepStrictEqual(inv.args, ['model', 'genpage', 'upload', '--prompt', 'a "quote" & more']);
+});
+
+test('buildPacInvocation collapses embedded newlines in args (both platforms)', () => {
+  const posix = buildPacInvocation(['--prompt', 'l1\r\nl2\nl3'], 'linux');
+  assert.deepStrictEqual(posix.args, ['--prompt', 'l1 l2 l3'], 'multi-line prompt collapsed to spaces');
+  const win = buildPacInvocation(['--prompt', 'l1\r\nl2'], 'win32');
+  assert.ok(!win.command.includes('\n'), 'no raw newline survives into the Windows command line');
 });
 
 test('parsePageId extracts the guid from upload output', () => {

@@ -36,15 +36,22 @@ async function verifySpec(spec, read) {
     add('form', name, rows && rows[0]);
   }
 
-  // Sitemap subareas (+ icons).
+  // Sitemap subareas (+ icons). Scope every check to the specific element type (and, for a subarea
+  // icon, the owning entity) so an icon/entity value reused elsewhere in the XML can't satisfy an
+  // unrelated check (e.g. an Area icon must not make a missing SubArea icon look present).
   const xml = (await read.sitemapXml()) || '';
   for (const a of (spec.appShell && spec.appShell.areas) || []) {
-    if (a.icon) add('area-icon', a.label || '', new RegExp(`Icon="${escapeRe(String(a.icon))}"`, 'i').test(xml));
+    if (a.icon) add('area-icon', a.label || '', hasElement(xml, 'Area', { Icon: a.icon }));
     for (const g of a.groups || []) {
       for (const sa of g.subAreas || []) {
-        if (sa.entity) add('subarea', sa.title || sa.entity, new RegExp(`Entity="${escapeRe(String(sa.entity))}"`, 'i').test(xml));
+        if (sa.entity) add('subarea', sa.title || sa.entity, hasElement(xml, 'SubArea', { Entity: sa.entity }));
         if (sa.dashboard) add('subarea', sa.title || sa.dashboard, /DefaultDashboard=/.test(xml));
-        if (sa.icon) add('subarea-icon', sa.title || '', new RegExp(`Icon="${escapeRe(String(sa.icon))}"`, 'i').test(xml));
+        if (sa.icon) {
+          // Prefer matching the icon on the SubArea that also declares this entity; fall back to any
+          // SubArea carrying the icon when the subarea has no entity identity.
+          const present = sa.entity ? hasElement(xml, 'SubArea', { Entity: sa.entity, Icon: sa.icon }) : hasElement(xml, 'SubArea', { Icon: sa.icon });
+          add('subarea-icon', sa.title || '', present);
+        }
       }
     }
   }
@@ -57,4 +64,18 @@ function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-module.exports = { verifySpec };
+// True when the sitemap XML contains a `<tag ...>` start-tag whose attributes include every
+// name="value" pair in `attrs` (order-independent, scoped to a single element). Used so icon/entity
+// checks match on the intended element type rather than anywhere in the document.
+function hasElement(xml, tag, attrs) {
+  const re = new RegExp(`<${tag}\\b[^>]*>`, 'gi');
+  const pairs = Object.entries(attrs);
+  let m;
+  while ((m = re.exec(xml)) !== null) {
+    const startTag = m[0];
+    if (pairs.every(([name, val]) => new RegExp(`\\b${escapeRe(name)}="${escapeRe(String(val))}"`, 'i').test(startTag))) return true;
+  }
+  return false;
+}
+
+module.exports = { verifySpec, hasElement };

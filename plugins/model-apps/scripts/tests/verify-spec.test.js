@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { verifySpec } = require('../lib/verify-spec.js');
+const { verifySpec, hasElement } = require('../lib/verify-spec.js');
 const { sitemapXmlFor } = require('../verify-model-app.js');
 
 const idFor = (set) => ({ savedquery: 'savedqueryid', savedqueryvisualization: 'savedqueryvisualizationid', systemform: 'formid' }[set] || 'id');
@@ -53,6 +53,31 @@ test('verifySpec: a missing entity skips its column checks', async () => {
   const r = await verifySpec(spec, read);
   assert.ok(r.missing.some((m) => m.kind === 'entity'));
   assert.ok(!r.checks.some((c) => c.kind === 'column'), 'no column checks when the entity is absent');
+});
+
+test('verifySpec: an icon present only on a different element does not satisfy the check (scoped)', async () => {
+  const spec = {
+    entities: [], views: [], charts: [], forms: [],
+    appShell: { areas: [{ label: 'Main', icon: 'shared.png', groups: [{ subAreas: [{ entity: 'new_o', title: 'O', icon: 'shared.png' }] }] }] },
+  };
+  const read = {
+    findTable: async () => null,
+    findColumns: async () => [],
+    queryRecords: async () => [],
+    // 'shared.png' appears ONLY on the SubArea, never on the Area.
+    sitemapXml: async () => '<SiteMap><Area Icon="area-only.png"><SubArea Entity="new_o" Icon="shared.png"/></Area></SiteMap>',
+  };
+  const r = await verifySpec(spec, read);
+  assert.ok(r.missing.some((m) => m.kind === 'area-icon'), 'area icon missing even though the same icon exists on a subarea');
+  assert.ok(r.checks.some((c) => c.kind === 'subarea-icon' && c.present), 'subarea icon correctly matched on its own SubArea');
+});
+
+test('hasElement scopes attribute matching to the named element start-tag', () => {
+  const xml = '<SiteMap><Area Icon="a.png"><SubArea Entity="new_o" Icon="ic.png"/></Area></SiteMap>';
+  assert.strictEqual(hasElement(xml, 'Area', { Icon: 'a.png' }), true);
+  assert.strictEqual(hasElement(xml, 'Area', { Icon: 'ic.png' }), false, 'a SubArea icon must not match an Area check');
+  assert.strictEqual(hasElement(xml, 'SubArea', { Entity: 'new_o', Icon: 'ic.png' }), true, 'both attrs on the same SubArea');
+  assert.strictEqual(hasElement(xml, 'SubArea', { Entity: 'new_o', Icon: 'a.png' }), false, 'icon lives on the Area, not this SubArea');
 });
 
 test('sitemapXmlFor resolves appmodule -> component 62 -> sitemap', async () => {

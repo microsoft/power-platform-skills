@@ -57,9 +57,10 @@ function main(argv) {
     const spec = sdkTestSpec(sdkPath, node20Bin);
     if (!spec.pkgExists) {
       process.stdout.write(`\n(skipping SDK tests — ${spec.pkgDir} not found)\n`);
+      results.push({ name: 'cds-maker-sdk Jest', ok: true, skipped: 'SDK package not found' });
     } else if (!spec.node20Exists) {
       process.stdout.write(`\n(skipping SDK tests — set NODE20_BIN to a Node-20 bin dir${node20Bin ? ` (not found at ${node20Bin})` : ''})\n`);
-      results.push({ name: 'cds-maker-sdk Jest', ok: false, skipped: 'no Node 20' });
+      results.push({ name: 'cds-maker-sdk Jest', ok: true, skipped: 'no Node 20 (set NODE20_BIN)' });
     } else {
       process.stdout.write('\n=== cds-maker-sdk Jest (Node 20) ===\n');
       const env = { ...process.env, PATH: `${spec.node20Bin}${path.delimiter}${process.env.PATH}` };
@@ -70,12 +71,22 @@ function main(argv) {
 
   // Summary.
   process.stdout.write('\n=== regression summary ===\n');
-  for (const r of results) process.stdout.write(`  ${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.skipped ? ` (${r.skipped})` : ''}\n`);
-  return results.every((r) => r.ok) ? 0 : 1;
+  const { lines, exitCode } = summarize(results);
+  for (const l of lines) process.stdout.write(`${l}\n`);
+  return exitCode;
+}
+
+// Render summary lines + resolve the exit code from collected suite results. A suite marked
+// `skipped` is reported as SKIP and never fails the run — the SDK Jest suite is opt-in, so a missing
+// prerequisite (no Node-20 bin / SDK package) leaves the regression gate green rather than red.
+function summarize(results) {
+  const lines = results.map((r) => `  ${r.skipped ? 'SKIP' : r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.skipped ? ` (${r.skipped})` : ''}`);
+  const exitCode = results.every((r) => r.ok) ? 0 : 1;
+  return { lines, exitCode };
 }
 
 if (require.main === module) {
   process.exit(main(process.argv));
 }
 
-module.exports = { pluginTestFiles, sdkTestSpec, main };
+module.exports = { pluginTestFiles, sdkTestSpec, summarize, main };

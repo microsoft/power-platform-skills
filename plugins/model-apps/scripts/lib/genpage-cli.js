@@ -14,9 +14,24 @@ function quoteArg(a) {
   return /[\s"'&|<>^()]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
+// Build the spawnSync invocation for a `pac` call, per platform. Windows: pac resolves as pac.cmd,
+// which requires a shell; shell:true ignores an args array, so pass a single cmd-quoted command
+// line ("" escapes an embedded quote). POSIX: spawn pac directly with the args array (no shell) so
+// embedded quotes and other shell metacharacters in prompts round-trip verbatim instead of being
+// mangled by cmd-style quoting. Embedded newlines are collapsed to spaces on every arg first (they
+// truncate the command line on Windows and confuse pac's parsing) — downloaded page prompts are
+// multi-line and would otherwise break the upload on an edit-rebuild.
+function buildPacInvocation(args, platform = process.platform) {
+  const clean = args.map((a) => String(a).replace(/\r\n|[\r\n]/g, ' '));
+  if (platform === 'win32') {
+    return { command: 'pac ' + clean.map(quoteArg).join(' '), args: undefined, options: { encoding: 'utf8', shell: true } };
+  }
+  return { command: 'pac', args: clean, options: { encoding: 'utf8' } };
+}
+
 function runPac(args) {
-  const line = 'pac ' + args.map(quoteArg).join(' ');
-  const r = spawnSync(line, { encoding: 'utf8', shell: true });
+  const inv = buildPacInvocation(args);
+  const r = inv.args ? spawnSync(inv.command, inv.args, inv.options) : spawnSync(inv.command, inv.options);
   return { status: r.status == null ? 1 : r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
 
@@ -101,4 +116,4 @@ function makeGenpageCli(env, deps = {}) {
   };
 }
 
-module.exports = { makeGenpageCli, parsePageId, parseList, quoteArg, runPac };
+module.exports = { makeGenpageCli, parsePageId, parseList, quoteArg, buildPacInvocation, runPac };

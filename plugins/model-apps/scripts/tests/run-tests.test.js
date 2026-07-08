@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { pluginTestFiles, sdkTestSpec } = require('../run-tests.js');
+const { pluginTestFiles, sdkTestSpec, summarize } = require('../run-tests.js');
 
 test('pluginTestFiles discovers every *.test.js as a scripts/tests path, sorted', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runtests-'));
@@ -27,4 +27,23 @@ test('sdkTestSpec resolves the package dir and reports presence', () => {
   assert.ok(spec.pkgDir.endsWith(path.join('packages', 'cds-maker-sdk')));
   assert.strictEqual(spec.pkgExists, false);
   assert.strictEqual(spec.node20Exists, false);
+});
+
+test('summarize reports a skipped suite as SKIP and keeps the run green', () => {
+  const { lines, exitCode } = summarize([
+    { name: 'plugin node:test', ok: true },
+    { name: 'cds-maker-sdk Jest', ok: true, skipped: 'no Node 20 (set NODE20_BIN)' },
+  ]);
+  assert.strictEqual(exitCode, 0, 'a missing SDK prerequisite must not fail the run');
+  assert.ok(lines.some((l) => /SKIP\s+cds-maker-sdk Jest \(no Node 20 \(set NODE20_BIN\)\)/.test(l)));
+  assert.ok(lines.some((l) => /PASS\s+plugin node:test/.test(l)));
+});
+
+test('summarize fails the run when any non-skipped suite failed', () => {
+  const { lines, exitCode } = summarize([
+    { name: 'plugin node:test', ok: false },
+    { name: 'cds-maker-sdk Jest', ok: true },
+  ]);
+  assert.strictEqual(exitCode, 1);
+  assert.ok(lines.some((l) => /FAIL\s+plugin node:test/.test(l)));
 });
