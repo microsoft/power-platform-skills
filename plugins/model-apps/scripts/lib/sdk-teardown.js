@@ -34,6 +34,7 @@
 const { topoOrderEntities } = require('./_graph.js');
 const { appUniqueName, commandsByEntity } = require('./sdk-build.js');
 const { relationshipSchemaName, manyToManySchemaName } = require('./app-spec.js');
+const { selectSummaryTables } = require('./ai-candidates.js');
 
 // OData v4 string-literal escaping: a single quote inside a literal is doubled.
 function odataStr(v) {
@@ -183,6 +184,18 @@ const KIND_HANDLERS = {
     del: (sdk, item) => sdk.deleteGlobalOptionSet(item.name),
     tolerateNotFound: true, // absent, or a shared choice already removed, is "gone"
   },
+  aiSummary: {
+    // AI row-summary records reference the table and would block its delete; remove them first.
+    // removeRowSummary is a no-op when the record is absent, so this is safe/idempotent.
+    async resolve(sdk, target) {
+      return [{ id: target.entityLogicalName, entityLogicalName: target.entityLogicalName }];
+    },
+    async del(sdk, item) {
+      if (sdk.removeRowSummary) {
+        try { await sdk.removeRowSummary({ entityLogicalName: item.entityLogicalName }); } catch { /* best-effort */ }
+      }
+    },
+  },
   solution: {
     async resolve(sdk, target) {
       const rows = await sdk.queryRecords('solution', { select: ['solutionid', 'uniquename'], filter: `uniquename eq '${odataStr(target.uniqueName)}'`, top: 1 });
@@ -222,6 +235,14 @@ function planTeardown(spec) {
   }
   for (const wr of spec.webResources || []) {
     steps.push({ kind: 'webResource', phase: 'web-resources', label: `web resource ${wr.name}`, target: { name: wr.name } });
+  }
+  // AI row-summary records must be removed BEFORE tables: the summary record references the
+  // table and would block its delete. Reuses selectSummaryTables to respect default:'off' + overrides.
+  if (spec.ai && spec.ai.summaries) {
+    for (const schema of selectSummaryTables(spec)) {
+      const logical = String(schema).toLowerCase();
+      steps.push({ kind: 'aiSummary', phase: 'ai-summaries', label: `row summary ${logical}`, target: { entityLogicalName: logical } });
+    }
   }
   // Tables in REVERSE topological order: topoOrderEntities lists parents-before-children (build
   // order); teardown deletes children-before-parents so a still-referenced parent never blocks.

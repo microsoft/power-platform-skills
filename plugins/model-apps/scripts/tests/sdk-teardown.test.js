@@ -501,3 +501,64 @@ test('deleteStep tolerates a not-found error for non-tolerateNotFound kinds', as
   const ids = await deleteStep(sdk, KIND_HANDLERS.webResource, [{ id: 'wr-1' }]);
   assert.deepStrictEqual(ids, ['wr-1']);
 });
+
+// --- Task 22: aiSummary teardown --------------------------------------------------------
+
+test('teardown plans an ai-summaries step (before tables) for each candidate and calls removeRowSummary', async () => {
+  // Spec with one content entity (has a Memo col) + spec.ai.summaries = { default:'auto' }
+  const spec = {
+    solution: { uniqueName: 'AiTest', publisherPrefix: 'new' },
+    app: { name: 'AiApp' },
+    entities: [
+      {
+        schemaName: 'new_memo',
+        displayName: 'Memo',
+        primaryAttribute: { schemaName: 'new_name' },
+        columns: [{ schemaName: 'new_body', displayName: 'Body', type: 'Memo' }],
+      },
+    ],
+    relationships: [],
+    ai: { summaries: { default: 'auto' } },
+  };
+
+  const plan = planTeardown(spec);
+  const aiIdx = plan.findIndex((s) => s.kind === 'aiSummary');
+  const tableIdx = plan.findIndex((s) => s.kind === 'table');
+  assert.ok(aiIdx !== -1, 'aiSummary step present');
+  assert.ok(tableIdx === -1 || aiIdx < tableIdx, 'aiSummary step precedes table steps');
+  assert.strictEqual(plan[aiIdx].phase, 'ai-summaries');
+  assert.strictEqual(plan[aiIdx].target.entityLogicalName, 'new_memo');
+
+  // Run with a mock sdk that records removeRowSummary calls
+  const removeCalls = [];
+  const sdk = {
+    queryRecords: async (logical, opts) => {
+      if (logical === 'appmodule') return [];
+      if (logical === 'solution') return [{ solutionid: 'sol-1', uniquename: 'AiTest' }];
+      return [];
+    },
+    removeRowSummary: async (args) => { removeCalls.push(args); },
+    deleteTable: async () => { const e = new Error('not found'); e.statusCode = 404; throw e; },
+    deleteSolution: async () => {},
+  };
+  const res = await runTeardown(spec, { apply: true }, { sdk, emit: () => {} });
+  assert.strictEqual(res.ok, true, JSON.stringify(res.errors));
+  assert.ok(removeCalls.some((c) => c.entityLogicalName === 'new_memo'), 'removeRowSummary called for the candidate table');
+});
+
+test('planTeardown omits ai-summaries steps when spec.ai.summaries is absent', () => {
+  const steps = planTeardown(fullSpec()); // no spec.ai
+  assert.ok(!steps.some((s) => s.kind === 'aiSummary'), 'no aiSummary steps when spec has no ai.summaries');
+});
+
+test('planTeardown omits ai-summaries steps when default is off and no overrides', () => {
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    entities: [{ schemaName: 'new_x', primaryAttribute: { schemaName: 'new_name' }, columns: [{ schemaName: 'new_body', type: 'Memo' }] }],
+    relationships: [],
+    ai: { summaries: { default: 'off' } },
+  };
+  const steps = planTeardown(spec);
+  assert.ok(!steps.some((s) => s.kind === 'aiSummary'), 'no aiSummary when default is off');
+});
+
