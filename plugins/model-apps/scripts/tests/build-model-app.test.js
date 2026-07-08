@@ -255,6 +255,52 @@ test('headless apply: --only cannot smuggle a UI phase past the headless allowli
   for (const forbidden of ['form', 'view']) {
     assert.ok(!artifactKinds.includes(forbidden), `--only should NOT smuggle '${forbidden}' into a headless build; kinds=${JSON.stringify(artifactKinds)}`);
   }
+  // Positive assertion: the intersection must KEEP the allow-listed phase the caller also
+  // requested (app-shell). Without this the test would pass even if the allow-list wrongly
+  // dropped every requested phase — a false green that hides an over-aggressive filter. Only
+  // app-shell was requested via --only, so it (and its 'app' artifact) is the phase that must
+  // survive; solution/data-model were not in the --only set and are correctly absent here.
+  assert.ok(artifactKinds.includes('app'), `--only app-shell must still create the 'app' artifact; kinds=${JSON.stringify(artifactKinds)}`);
+});
+
+test('headless apply: --from/--to range is intersected with the allow-list (AC3)', async () => {
+  const { sdk, calls } = mockSdk();
+  const { resolvePhases } = require(path.join(__dirname, '..', 'lib', 'sdk-build.js'));
+  const spec = {
+    ...headlessFixture,
+    forms: [{ entity: 'new_project', name: 'Project', formType: 'Main', layout: 'auto' }],
+    views: [{ entity: 'new_project', name: 'Active Projects', columns: ['new_name'] }],
+  };
+  // A --from/--to window that spans UI phases (forms/views) alongside allow-listed ones. The
+  // headless intersection must drop the UI phases while preserving whatever allow-listed phases
+  // fall inside the window — exercising AC3 through buildModelApp, not just via --only.
+  const ranged = resolvePhases({ from: 'data-model', to: 'views' });
+  const r = await buildModelApp(spec, { apply: true, env: 'https://x', phases: ranged }, { sdk });
+  assert.strictEqual(r.ok, true, `ranged headless build should succeed; got ${JSON.stringify(r.errors || r)}`);
+  const artifactKinds = calls.filter((c) => c[0] === 'createArtifact').map((c) => c[1]);
+  for (const forbidden of ['form', 'view']) {
+    assert.ok(!artifactKinds.includes(forbidden), `--from/--to must NOT admit '${forbidden}' into a headless build; kinds=${JSON.stringify(artifactKinds)}`);
+  }
+  assert.ok(calls.some((c) => c[0] === 'createTable'), 'data-model phase (inside the window and allow-listed) must still run');
+});
+
+test('headless apply: --only naming only UI phases warns and builds nothing (misconfiguration guard)', async () => {
+  const { sdk, calls } = mockSdk();
+  const cap = logCapture();
+  const { resolvePhases } = require(path.join(__dirname, '..', 'lib', 'sdk-build.js'));
+  const spec = {
+    ...headlessFixture,
+    forms: [{ entity: 'new_project', name: 'Project', formType: 'Main', layout: 'auto' }],
+    views: [{ entity: 'new_project', name: 'Active Projects', columns: ['new_name'] }],
+  };
+  // Every requested phase is a UI phase excluded by the headless allow-list, so the intersection
+  // is empty. The build stays ok:true (empty effective set is not an error) but must WARN so a
+  // mistyped --only isn't mistaken for a successful build.
+  const uiOnly = resolvePhases({ only: ['forms', 'views'] });
+  const r = await buildModelApp(spec, { apply: true, env: 'https://x', phases: uiOnly }, { sdk, log: cap.log });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(calls.filter((c) => c[0] === 'createArtifact').length, 0, 'no artifacts when every requested phase is filtered away');
+  assert.ok(cap.logs.some((l) => /all requested phases are outside the headless allow-list/.test(l)), `expected a headless misconfiguration warning; got ${JSON.stringify(cap.logs)}`);
 });
 
 // Edge cases — U2 defense-in-depth boundaries.

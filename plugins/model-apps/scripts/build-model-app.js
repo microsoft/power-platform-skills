@@ -104,11 +104,21 @@ async function buildModelApp(spec, opts, deps) {
   // See sdk-build.js::headlessPhaseAllowlist for the allow-list rules and DoD #2 in
   // units.json for run20260708headless01.
   const allow = headlessPhaseAllowlist(spec, { sampleData: opts.sampleData === true, publish: opts.publish === true });
-  const effectivePhases = opts.phases
-    ? opts.phases.filter((p) => allow.includes(p))
+  const requestedPhases = opts.phases;
+  const effectivePhases = requestedPhases
+    ? requestedPhases.filter((p) => allow.includes(p))
     : allow.slice();
-  opts = { ...opts, phases: effectivePhases };
   const log = deps.log || (() => undefined);
+  // Headless misconfiguration guard: if the caller requested a NON-EMPTY phase set but every
+  // requested phase is a UI phase excluded by the headless allow-list, the intersection is empty
+  // and the build would silently return ok having created nothing. Warn so a mistyped
+  // --only/--from/--to on a headless build isn't mistaken for a successful build. (An explicitly
+  // empty requested set — e.g. phases:[] — is left silent: the caller asked for nothing, which is
+  // not a misconfiguration. Kept as ok:true either way — an empty effective set is not an error.)
+  if (spec.headless === true && Array.isArray(requestedPhases) && requestedPhases.length > 0 && effectivePhases.length === 0) {
+    log('⚠ headless: all requested phases are outside the headless allow-list (solution, data-model, app-shell[, sample-data][, publish]) — nothing to build.');
+  }
+  opts = { ...opts, phases: effectivePhases };
   const counts = { ok: 0, skip: 0, error: 0 };
   const journal = deps.journal;
   // Tee the engine's progress events into the durable journal without touching the pure engine.
@@ -221,8 +231,14 @@ async function main() {
   const { sdk, provisionSdk, cleanup } = makeSdk(env, spec, workspaceDir);
   // Durable build journal (apply runs only): a per-run record of steps + where a run halted,
   // written to <workspace>/build-log.jsonl. Resume = re-run the same command (idempotent).
+  // Record the phases that will ACTUALLY run: for a headless spec buildModelApp intersects the
+  // resolved set with the reduced allow-list, so mirror that intersection here — otherwise the
+  // journal header advertises UI phases (views/forms/charts) that were never executed.
+  const journalPhases = spec.headless === true
+    ? opts.phases.filter((p) => headlessPhaseAllowlist(spec, { sampleData: opts.sampleData === true, publish: opts.publish === true }).includes(p))
+    : opts.phases;
   const journal = opts.apply
-    ? openJournal(workspaceDir, { app: spec.app && spec.app.name, solution: spec.solution && spec.solution.uniqueName, apply: true, phases: opts.phases })
+    ? openJournal(workspaceDir, { app: spec.app && spec.app.name, solution: spec.solution && spec.solution.uniqueName, apply: true, phases: journalPhases })
     : null;
   let r;
   try {
