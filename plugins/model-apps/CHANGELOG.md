@@ -45,6 +45,12 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   local enum mapping, etc.) — no rule loosening.
 
 ### Fixed
+- **AI row summaries errored on every record (`ai-prompt.js`):** the
+  `GptDynamicPrompt` data filter used the entity's primary **name** column
+  (`primaryAttribute`, e.g. `new_name`) as the record key, so it filtered
+  `new_name eq <record-GUID>` — which matches no rows and the Copilot summary
+  card shows an error. Now uses the entity's primary **key** (`<entity>id`).
+  Live-verified: removed + rebuilt the row summaries on the test app.
 - **PR review round 2–3 (model-app-maker):** sitemap `verify` checks are now
   element-scoped (`<Area>`/`<SubArea>`) and a dashboard subarea is verified by
   resolving the dashboard id (systemform type 0) and matching the sitemap's

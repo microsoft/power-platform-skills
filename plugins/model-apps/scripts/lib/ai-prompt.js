@@ -21,10 +21,11 @@ function buildPromptSpec(entity, opts) {
   const override = (opts && opts.override) || null;
 
   const entityLogicalName = entity.schemaName.toLowerCase();
-  const pkSchema = (entity.primaryAttribute && entity.primaryAttribute.schemaName)
-    ? entity.primaryAttribute.schemaName
-    : entity.schemaName + 'id';
-  const primaryKey = pkSchema.toLowerCase();
+  // The record's primary KEY attribute (its id) — e.g. new_ohproject -> new_ohprojectid. The
+  // GptDynamicPrompt data filter matches this against the RecordId input (`<primaryKey> eq RecordId`).
+  // It is the entity id, NOT `primaryAttribute` (which is the primary NAME column such as new_name):
+  // filtering the name column by a record GUID matches no rows and the summary card errors.
+  const primaryKey = `${entityLogicalName}id`;
 
   // Build columns list.
   let columns;
