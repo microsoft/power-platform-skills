@@ -50,12 +50,12 @@ are in [`architecture.md`](architecture.md).
 ### Edit flow (download → edit → rebuild) — ✅ verified live
 - `download-model-app.js` pulls a **deployed app** back into a complete App Spec (+ page code, icons, referenced entities, solution); edit the spec and re-run the idempotent build — **create and edit share one path** (reuses app/tables, updates pages in place, keeps `GenPage` subareas).
 - Live regression on the edit path found + fixed **4 bugs**, then re-verified clean.
-- `verify-model-app.js` — read-only reconcile of spec vs deployed (exits non-zero on anything missing).
+- `verify-model-app.js` — read-only reconcile of spec vs deployed (exits non-zero on anything missing). Sitemap checks are **element-scoped**: an area/subarea icon is matched on its own `<Area>`/`<SubArea>` element, and a **dashboard subarea** is verified by resolving the dashboard id (systemform type 0, by name) and matching the sitemap's `DefaultDashboard` — so a value reused elsewhere can't produce a false pass. **Multi-area sitemaps** and the dashboard-subarea path were re-verified live (positive + negative).
 - **Limitation (Preview):** classic DashBoard subareas aren't round-tripped yet — download prints a warning; re-add a classic dashboard to the spec before rebuilding (genpage / entity / URL subareas round-trip losslessly).
 
 ### Teardown — ✅ verified live
 - `teardown-model-app.js` deletes exactly what an App Spec declares, in dependency-safe order (dashboards → commands → forms → charts → views → relationships → web-resources → AI row summaries → tables [children-first] → global choices → solution). Forms/charts/views/relationships are removed **before** tables (a table delete doesn't reliably cascade cross-references).
-- **Classifier-safe** (every id resolved from a spec-declared name via an exact-match, entity-scoped filter), dry-run by default, best-effort continue, not-found aware, undeletable (system/managed) artifacts recorded as `skipped`.
+- **Classifier-safe** (every id resolved from a spec-declared name via an exact-match, entity-scoped filter), dry-run by default, best-effort continue, not-found aware, undeletable (system/managed) artifacts recorded as `skipped`. An already-gone relationship (Dataverse 400 *"…but 0 were found"*) is tolerated as deleted, like the table not-found case.
 
 ### Tooling & internals — ✅ verified live
 - ASCII **form wireframe** preview (`preview-form.js`); phase-grouped build log with per-step status glyphs (`✓`/`⊘`/`✗`) + a closing summary.

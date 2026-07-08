@@ -222,6 +222,13 @@ test('deleteStep skips a system view that cannot be deleted (best-effort, no thr
   assert.deepStrictEqual(skippedIds, ['v1'], 'undeletable system view is recorded as skipped');
 });
 
+test('deleteStep tolerates a relationship already-gone 400 ("...but 0 were found") as deleted', async () => {
+  const sdk = { deleteRelationship: async () => { const e = new Error('There should be one and only one relationship related to the entity relationship with id cb989759-967a-f111-9d0f-7ced8d711dbf, but 0 were found'); e.statusCode = 400; throw e; } };
+  const { deletedIds, skippedIds } = await deleteStep(sdk, KIND_HANDLERS.relationship, [{ id: 'new_a_new_b', schemaName: 'new_a_new_b' }]);
+  assert.deepStrictEqual(deletedIds, ['new_a_new_b'], 'an already-gone relationship (0 were found) is counted as deleted, not thrown');
+  assert.deepStrictEqual(skippedIds, [], 'not recorded as undeletable');
+});
+
 test('deleteStep does NOT swallow a dependency block ("referenced by N components") — it surfaces', async () => {
   const sdk = { deleteWebResource: async () => { const e = new Error('The WebResource component cannot be deleted because it is referenced by 3 other components.'); e.statusCode = 400; throw e; } };
   await assert.rejects(

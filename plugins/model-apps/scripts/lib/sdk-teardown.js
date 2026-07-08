@@ -55,7 +55,10 @@ function isNotFound(err) {
   const status = err.statusCode || err.status || (err.cause && (err.cause.statusCode || err.cause.status));
   if (status === 404) return true;
   const msg = String((err && err.message) || '').toLowerCase();
-  return /not found|does not exist|could not find/.test(msg);
+  // "...but 0 were found" is Dataverse's signal that the record targeted for delete (e.g. a
+  // RelationshipDefinitions metadata id that no longer resolves — already cascaded away) does not
+  // exist; treat it as already-gone. Only zero counts (">1 were found" is a genuine ambiguity error).
+  return /not found|does not exist|could not find|but 0 were found/.test(msg);
 }
 
 // Detect a system/managed artifact that Dataverse refuses to delete (e.g. the auto-generated

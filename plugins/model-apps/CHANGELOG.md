@@ -45,6 +45,17 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   local enum mapping, etc.) — no rule loosening.
 
 ### Fixed
+- **PR review round 2–3 (model-app-maker):** sitemap `verify` checks are now
+  element-scoped (`<Area>`/`<SubArea>`) and a dashboard subarea is verified by
+  resolving the dashboard id (systemform type 0) and matching the sitemap's
+  `DefaultDashboard` — no more false passes from a value reused elsewhere.
+  `genpage-cli` spawns `pac` directly with an args array on POSIX (Windows keeps
+  cmd-quoting) so quotes in prompts round-trip. `ai-preflight` initializes a temp
+  workspace. `run-tests` treats a missing SDK-suite prerequisite as a true SKIP
+  (not a failure). `provision-input` accepts underscores in the schemaName suffix
+  (`new_ticket_tag`) and dropped a dead variable. `sdk-http-client` backoff
+  comment corrected. Teardown now tolerates an already-gone relationship
+  (Dataverse 400 *"…but 0 were found"*) as deleted, matching the table not-found case.
 - **Synthetic fixtures + sample 11 now follow Rule 11 (queryTable returns
   DataTable, not an array).** 7 files were iterating `result` directly
   (`setTasks(result)`, `result.map(...)`) instead of `result.rows`,
