@@ -479,6 +479,13 @@ function validateAppSpec(spec) {
       }
     }
   }
+  // headless flag (optional top-level, boolean). Semantic rules (mutual exclusion with
+  // classic UI, minimum-viability shell) live in spec-lint.js; here we only guard the
+  // structural type so downstream consumers can trust `spec.headless === true`.
+  // Mirrors the shape of the `spec.ai` optional block above.
+  if (spec.headless !== undefined && typeof spec.headless !== 'boolean') {
+    errors.push('headless must be a boolean');
+  }
   return { ok: errors.length === 0, errors };
 }
 

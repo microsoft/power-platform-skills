@@ -395,7 +395,9 @@ test('validateAppSpec accepts a spec with headless:true', () => {
 });
 
 test('validateAppSpec rejects headless set to a non-boolean value', () => {
-  for (const bad of ['yes', 1, [], {}]) {
+  // Includes null/0/'' — the values most likely to slip past a `if (spec.headless && ...)`
+  // style guard. Impl uses `!== undefined` so all non-boolean values are rejected.
+  for (const bad of ['yes', 1, 0, '', null, [], {}]) {
     const s = cloneDesk();
     s.headless = bad;
     const r = validateAppSpec(s);

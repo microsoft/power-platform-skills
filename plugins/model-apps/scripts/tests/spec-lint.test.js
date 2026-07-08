@@ -285,6 +285,9 @@ const headlessBase = () => {
 test('lint passes a clean headless spec (entities + entity subarea, no classic UI)', () => {
   const r = lintAppSpec(headlessBase());
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  // Guard against a future noisy warning being added to the headless code path.
+  assert.ok(!(r.warnings || []).some((w) => /headless/i.test(w)),
+    `clean headless spec should raise no headless warnings; got ${JSON.stringify(r.warnings)}`);
 });
 
 test('lint fails a headless spec that declares non-empty forms[] with a mutual-exclusion error naming headless', () => {
@@ -304,24 +307,30 @@ test('lint tolerates empty classic UI arrays on a headless spec (forms:[], views
 });
 
 test('lint fails a headless spec that also declares non-empty views/charts/dashboards/pages/commands/webResources', () => {
+  // Collect failures across every forbidden key so we see EVERY regression, not just
+  // the first. `assert` inside a loop aborts on the first miss and hides the rest.
+  const failures = [];
   for (const key of ['views', 'charts', 'dashboards', 'pages', 'commands', 'webResources']) {
     const s = headlessBase();
-    // shape doesn't matter — mutual-exclusion is structural (non-empty array).
+    // Shape doesn't matter — mutual-exclusion is structural (non-empty array).
     s[key] = [{ name: 'x', entity: 'new_ticket', chartType: 'Column', groupBy: 'new_priority' }];
     const r = lintAppSpec(s);
-    assert.strictEqual(r.ok, false, `expected ${key} on headless spec to fail; got ok=true`);
-    assert.ok(r.errors.some((m) => /headless/i.test(m) && new RegExp(key, 'i').test(m)),
-      `expected an error mentioning both 'headless' and '${key}'; got ${JSON.stringify(r.errors)}`);
+    if (r.ok || !r.errors.some((m) => /headless/i.test(m) && new RegExp(key, 'i').test(m))) {
+      failures.push({ key, ok: r.ok, errors: r.errors });
+    }
   }
+  assert.deepStrictEqual(failures, [], `forbidden sections that failed to trigger a headless error: ${JSON.stringify(failures)}`);
 });
 
-test('lint fails a headless spec with no entities', () => {
-  const s = headlessBase();
-  s.entities = [];
-  const r = lintAppSpec(s);
-  assert.strictEqual(r.ok, false);
-  assert.ok(r.errors.some((m) => /headless/i.test(m) && /entit/i.test(m)),
-    `expected an error mentioning both 'headless' and 'entities'; got ${JSON.stringify(r.errors)}`);
+test('lint fails a headless spec with no entities (both missing key and empty array)', () => {
+  for (const mutate of [(s) => { s.entities = []; }, (s) => { delete s.entities; }]) {
+    const s = headlessBase();
+    mutate(s);
+    const r = lintAppSpec(s);
+    assert.strictEqual(r.ok, false);
+    assert.ok(r.errors.some((m) => /headless/i.test(m) && /entit/i.test(m)),
+      `expected an error mentioning both 'headless' and 'entities'; got ${JSON.stringify(r.errors)}`);
+  }
 });
 
 test('lint fails a headless spec whose appShell has no Entity-typed subareas', () => {
@@ -330,18 +339,23 @@ test('lint fails a headless spec whose appShell has no Entity-typed subareas', (
   s.appShell.areas[0].groups[0].subAreas = [{ url: 'https://example.com', title: 'Docs' }];
   const r = lintAppSpec(s);
   assert.strictEqual(r.ok, false);
-  assert.ok(r.errors.some((m) => /headless/i.test(m) && /(entity|subarea|sitemap)/i.test(m)),
-    `expected an error mentioning 'headless' and the missing entity subarea; got ${JSON.stringify(r.errors)}`);
+  // Match specifically on subarea/sitemap wording (not just 'entity', which would also
+  // match an unrelated no-entities error and mask a regression).
+  assert.ok(r.errors.some((m) => /headless/i.test(m) && /subarea|sitemap/i.test(m)),
+    `expected a headless error naming the missing entity subarea; got ${JSON.stringify(r.errors)}`);
 });
 
-test('lint does not apply headless rules when headless is false or absent (no regression)', () => {
-  // headless:false — classic UI arrays should NOT be flagged by the headless rule.
-  const s1 = base();
-  s1.headless = false;
-  s1.forms = []; // still no forms — base is a clean minimal spec
-  assert.strictEqual(lintAppSpec(s1).ok, true);
-
-  // headless absent — plain base() already covered above but re-assert here.
-  const s2 = base();
-  assert.strictEqual(lintAppSpec(s2).ok, true);
+test('lint does not apply headless rules when headless is false or absent (populated classic UI stays legal)', () => {
+  // Populate the classic-UI sections that WOULD trip the headless rule if it fired.
+  // The real regression case is "user forgets `headless: true`, keeps forms/views" — the
+  // headless rule must stay silent.
+  for (const mutate of [(s) => { s.headless = false; }, (_s) => { /* headless absent */ }]) {
+    const s = base();
+    s.forms = [{ entity: 'new_ticket', name: 'Ticket', formType: 'Main', layout: 'auto' }];
+    s.views = [{ entity: 'new_ticket', name: 'Active', columns: ['new_name'] }];
+    mutate(s);
+    const r = lintAppSpec(s);
+    assert.ok(!r.errors.some((m) => /headless/i.test(m)),
+      `no headless-rule error should fire when headless is ${s.headless}; got ${JSON.stringify(r.errors)}`);
+  }
 });

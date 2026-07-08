@@ -294,6 +294,38 @@ function lintAppSpec(spec) {
   dupWarn((spec.charts || []).map((c) => c.name), 'chart', W);
   dupWarn((spec.forms || []).map((f) => f.name).filter(Boolean), 'form', W);
 
+  // Headless model apps: entity-only shells intended for pages/code-app scenarios where
+  // classic Dataverse UI artifacts are counter-productive. Enforce two contracts here:
+  //   1) mutual exclusion — a headless spec must not carry non-empty forms/views/charts/
+  //      dashboards/pages/commands/webResources (empty arrays are tolerated so authors can
+  //      leave the sections in place while switching a spec to headless).
+  //   2) minimum viability — a headless spec still needs >=1 entity AND at least one
+  //      appShell subarea that targets an entity, otherwise the built app has an empty
+  //      sitemap. See U1 contract in units.json for run20260708headless01.
+  if (spec.headless === true) {
+    const FORBIDDEN_ON_HEADLESS = ['forms', 'views', 'charts', 'dashboards', 'pages', 'commands', 'webResources'];
+    for (const key of FORBIDDEN_ON_HEADLESS) {
+      const arr = spec[key];
+      if (Array.isArray(arr) && arr.length > 0) {
+        E(`headless spec must not declare ${key}[] — remove the ${key} section (headless apps are entity-only shells)`);
+      }
+    }
+    if (!Array.isArray(spec.entities) || spec.entities.length === 0) {
+      E('headless spec needs at least one entity — a headless app with no entities produces an empty shell');
+    }
+    let entitySubareaCount = 0;
+    for (const a of (spec.appShell && spec.appShell.areas) || []) {
+      for (const g of a.groups || []) {
+        for (const sa of g.subAreas || []) {
+          if (sa && sa.entity) entitySubareaCount++;
+        }
+      }
+    }
+    if (entitySubareaCount === 0) {
+      E('headless spec needs at least one appShell subarea with an entity — otherwise the sitemap is empty');
+    }
+  }
+
   return { ok: errors.length === 0, errors, warnings };
 }
 
