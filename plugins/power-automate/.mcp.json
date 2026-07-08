@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "flowagent": {
+      "command": "node",
+      "args": [
+        "-e",
+        "const p=require('node:path');const r=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT;if(!r){console.error('Neither PLUGIN_ROOT nor CLAUDE_PLUGIN_ROOT is set');process.exit(1);}(async()=>{try{await import(require('node:url').pathToFileURL(p.resolve(r,'server','mcp.mjs')).href)}catch(e){console.error(e);process.exit(1)}})();"
+      ]
+    }
+  }
+}
