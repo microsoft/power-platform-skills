@@ -61,6 +61,12 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   "displayName": "Ticket",
   "pluralName": "Tickets",               // optional (defaults to "<displayName>s")
   "hasNotes": true,                       // optional — enables the Notes/timeline on the table + form
+  "existing": true,                       // optional — this table PRE-EXISTS (system table like
+                                          //   account/contact, or a custom table owned elsewhere).
+                                          //   The build reuses it; teardown NEVER deletes it. System
+                                          //   tables are auto-detected and skipped by teardown even
+                                          //   without this flag — set it for a REUSED CUSTOM table
+                                          //   you want protected from teardown.
   "primaryAttribute": { "schemaName": "new_subject", "displayName": "Subject" },
   // primary can be auto-numbered (the number IS the record identity — recommended for orders/cases):
   // "primaryAttribute": { "schemaName": "new_ordernumber", "displayName": "Order Number", "autoNumberFormat": "WO-{SEQNUM:5}" },

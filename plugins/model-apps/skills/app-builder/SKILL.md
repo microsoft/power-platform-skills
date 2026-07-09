@@ -171,7 +171,10 @@ failed build — run the classifier-safe teardown. It deletes only the artifacts
 dependency order (**app [+ its generative pages and the orphaned sitemap] → dashboards → commands → forms → charts → views → relationships → web-resources → AI row summaries → tables [children-first] → global choices → solution**).
 Forms/charts/views/relationships are deleted **explicitly before tables** (a table delete does not
 reliably cascade cross-references; it does remove the table's own columns). Command teardown removes
-the whole command bar for any entity the spec authored commands on. **Dry-run by default** — it
+the whole command bar for any entity the spec authored commands on. **Teardown only deletes tables
+this build created** — a **system/standard table** (account, contact, …) is auto-detected and
+**skipped** (never deleted), and a **reused custom table** is skipped when its entity is flagged
+`"existing": true` in the spec, so pre-existing data survives cleanup. **Dry-run by default** — it
 lists what it would delete and touches nothing; add `--apply` to actually delete (add
 `--clear-workspace` to also prune `.maker-workspace/`):
 

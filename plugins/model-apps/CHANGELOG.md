@@ -45,6 +45,14 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   local enum mapping, etc.) — no rule loosening.
 
 ### Fixed
+- **Teardown only deletes tables this build created — never reused/system
+  tables (`sdk-teardown.js`).** Declaring an existing CDS table (e.g. a system
+  table like `account`/`contact`) for the nav made teardown *try* to delete it,
+  surfacing a noisy `Only Custom Entities can be deleted` error. The table step
+  now resolves the table first: a **non-custom/system table is skipped** (never
+  created by a build, never deletable), and a **reused custom table flagged
+  `"existing": true`** in the spec is skipped too. Both are recorded as skips
+  with a reason, so a reused table's data survives cleanup.
 - **System/standard tables (account, contact, …) keep their default sitemap
   icon (vendored `cds-maker-sdk` `AppAdapter`).** An entity subarea authored
   without an explicit `icon` was serialized with the SDK's transparent-spacer

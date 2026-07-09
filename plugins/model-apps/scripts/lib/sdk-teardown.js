@@ -144,9 +144,25 @@ const KIND_HANDLERS = {
     del: (sdk, item) => sdk.deleteWebResource(item.id),
   },
   table: {
+    // Only tear down tables THIS build created. Skip (never delete):
+    //  · a table the spec explicitly flags as pre-existing (`existing: true`) — a reused custom
+    //    table owned elsewhere; and
+    //  · any non-custom/system table (account, contact, …) — never created by a build, and
+    //    Dataverse refuses to delete it, so a delete attempt would only surface a noisy error.
+    // A table that can't be discovered is treated as already-gone: fall through to the delete
+    // call, which tolerates the cosmetic/absent 404 (see tolerateNotFound).
     async resolve(sdk, target) {
-      // For tables, we don't pre-resolve; deleteTable itself checks existence. Return a
-      // synthetic item so deleteStep proceeds to the delete call.
+      if (target.existing) {
+        return { items: [], skipReason: 'reused table (existing: true) — not created by this build' };
+      }
+      let table = null;
+      try {
+        const hits = await sdk.findTables(target.logical, { top: 50 });
+        table = (hits || []).find((t) => String(t.logicalName).toLowerCase() === target.logical) || null;
+      } catch { table = null; }
+      if (table && table.isCustom === false) {
+        return { items: [], skipReason: 'system table — not created by this build' };
+      }
       return [{ id: target.logical, logical: target.logical }];
     },
     del: (sdk, item) => sdk.deleteTable(item.logical),
@@ -225,7 +241,7 @@ function planTeardown(spec) {
   // Tables in REVERSE topological order: topoOrderEntities lists parents-before-children (build
   // order); teardown deletes children-before-parents so a still-referenced parent never blocks.
   for (const e of topoOrderEntities(spec).slice().reverse()) {
-    steps.push({ kind: 'table', phase: 'tables', label: `table ${e.schemaName}`, target: { logical: e.schemaName.toLowerCase(), schemaName: e.schemaName } });
+    steps.push({ kind: 'table', phase: 'tables', label: `table ${e.schemaName}`, target: { logical: e.schemaName.toLowerCase(), schemaName: e.schemaName, existing: e.existing === true } });
   }
   // Global option sets last (before the solution container): every column that bound one lives
   // on a table deleted above, so the shared choice now has no dependents blocking its delete.
@@ -299,18 +315,23 @@ async function runTeardown(spec, opts = {}, deps = {}) {
     emit({ phase: step.phase, status: 'start', label: step.label, n: myN, total });
     const handler = KIND_HANDLERS[step.kind];
     try {
-      let items;
+      let resolved;
       try {
-        items = await handler.resolve(sdk, step.target);
+        resolved = await handler.resolve(sdk, step.target);
       } catch (resolveErr) {
         // Resolving forms/charts/views filters by an entity's typecode; if that entity was never
         // created (partial build) or is already gone, Dataverse answers 400 "entity ... not found
         // in the MetadataCache". There is nothing to delete — treat it as an empty resolution.
-        if (isNotFound(resolveErr)) { items = []; } else { throw resolveErr; }
+        if (isNotFound(resolveErr)) { resolved = []; } else { throw resolveErr; }
       }
+      // resolve returns either an array of items, or `{ items, skipReason }` when the step is
+      // intentionally NOT torn down (e.g. a reused/system table the build did not create). The
+      // reason is surfaced so a destructive run is auditable rather than silently omitting it.
+      const items = Array.isArray(resolved) ? resolved : (resolved.items || []);
+      const skipReason = Array.isArray(resolved) ? null : resolved.skipReason;
       if (!items.length) {
-        result.skipped.push(step.label);
-        emit({ phase: step.phase, status: 'skip', label: `${step.label} (not found)`, n: myN, total });
+        result.skipped.push(skipReason ? `${step.label} (${skipReason})` : step.label);
+        emit({ phase: step.phase, status: 'skip', label: `${step.label} (${skipReason || 'not found'})`, n: myN, total });
         continue;
       }
       const { deletedIds, skippedIds } = await deleteStep(sdk, handler, items);

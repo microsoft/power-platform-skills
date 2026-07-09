@@ -31,7 +31,8 @@ function mockSdk(state = {}) {
     views: state.views || {},                  // `${entity}:${name}` -> { savedqueryid, name }
     relationships: new Set(state.relationships || []), // schemaNames
     webresources: state.webresources || {},    // name -> { webresourceid, name }
-    tables: new Set(state.tables || []),       // logical names
+    tables: new Set(state.tables || []),       // logical names (custom — created by a build)
+    systemTables: new Set(state.systemTables || []), // logical names (non-custom / reused)
     solutions: state.solutions || {},          // uniquename -> { solutionid, uniquename }
     globalchoices: new Set(state.globalchoices || []), // option set names
   };
@@ -148,6 +149,15 @@ function mockSdk(state = {}) {
     }
   };
 
+  const findTables = async (query, _opts) => {
+    calls.push({ method: 'findTables', query });
+    const q = String(query).toLowerCase();
+    const out = [];
+    if (db.tables.has(q)) out.push({ logicalName: q, schemaName: q, entitySetName: `${q}s`, isCustom: true });
+    if (db.systemTables.has(q)) out.push({ logicalName: q, schemaName: q, entitySetName: `${q}s`, isCustom: false });
+    return out;
+  };
+
   const deleteTable = async (logical) => {
     calls.push({ method: 'deleteTable', logical });
     if (!db.tables.has(logical)) {
@@ -182,7 +192,7 @@ function mockSdk(state = {}) {
     db.globalchoices.delete(name);
   };
 
-  return { resolveArtifact, deleteAppCascade, deleteRemoteArtifact, deleteRelationship, deleteWebResource, deleteTable, deleteSolution, deleteGlobalOptionSet, calls, db };
+  return { resolveArtifact, deleteAppCascade, deleteRemoteArtifact, deleteRelationship, deleteWebResource, deleteTable, findTables, deleteSolution, deleteGlobalOptionSet, calls, db };
 }
 
 // --- planTeardown (pure) ----------------------------------------------------------------
@@ -368,7 +378,7 @@ test('apply deletes every declared artifact in dependency order', async () => {
   assert.strictEqual(sdk.db.tables.size, 0);
   assert.deepStrictEqual(sdk.db.solutions, {});
   // ordering: forms/charts/views/relationships before tables; deleteRemoteArtifact('command') calls precede deleteWebResource; deleteTable precedes deleteSolution
-  const dels = sdk.calls.filter((c) => c.method !== 'resolveArtifact' && c.method !== 'queryRecords');
+  const dels = sdk.calls.filter((c) => c.method !== 'resolveArtifact' && c.method !== 'queryRecords' && c.method !== 'findTables');
   const idx = (method, arg) => dels.findIndex((c) => c.method === method && (!arg || (c.type === arg || c.logical === arg || c.id === arg || c.schemaName === arg)));
   assert.ok(idx('deleteRemoteArtifact', 'command') < idx('deleteWebResource'), 'commands before web resource');
   assert.ok(idx('deleteAppCascade') < idx('deleteTable'), 'app before tables');
@@ -393,7 +403,7 @@ test('not-found artifacts are skipped, not errors, and issue no delete', async (
   assert.strictEqual((r.deleted.table || []).length, 3); // tables counted as deleted (tolerateNotFound)
   assert.strictEqual((r.deleted.relationship || []).length, 2); // relationships counted as deleted (tolerateNotFound)
   // Only table/relationship deletes were attempted (synthetic items); other kinds skipped before delete
-  const deletesDone = sdk.calls.filter((c) => c.method !== 'resolveArtifact' && c.method !== 'queryRecords');
+  const deletesDone = sdk.calls.filter((c) => c.method !== 'resolveArtifact' && c.method !== 'queryRecords' && c.method !== 'findTables');
   assert.ok(deletesDone.every((c) => c.method === 'deleteTable' || c.method === 'deleteRelationship'), 'only table/relationship deletes attempted');
 });
 
@@ -403,6 +413,39 @@ test('table deleteTable not-found error counts as deleted (cosmetic 404)', async
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
   assert.strictEqual((r.deleted.table || []).length, 3);
   assert.strictEqual(sdk.db.tables.size, 0);
+});
+
+test('teardown skips a reused SYSTEM table (isCustom=false): no delete, no error', async () => {
+  const sdk = mockSdk({ systemTables: ['account'], solutions: { S: { solutionid: 'sol-1', uniquename: 'S' } } });
+  const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [{ schemaName: 'account', primaryAttribute: { schemaName: 'name' } }] };
+  const r = await runTeardown(spec, { apply: true }, { sdk });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  assert.ok(!sdk.calls.some((c) => c.method === 'deleteTable'), 'no deleteTable attempted for a system table');
+  assert.ok(r.skipped.some((s) => s.includes('table account') && /system table/.test(s)), 'system table recorded as a skip with reason');
+});
+
+test('teardown skips a table flagged existing:true (reused custom table): survives, no discovery', async () => {
+  const sdk = mockSdk({ tables: ['new_shared'], solutions: { S: { solutionid: 'sol-1', uniquename: 'S' } } });
+  const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [{ schemaName: 'new_shared', existing: true, primaryAttribute: { schemaName: 'new_name' } }] };
+  const r = await runTeardown(spec, { apply: true }, { sdk });
+  assert.strictEqual(r.ok, true);
+  assert.ok(!sdk.calls.some((c) => c.method === 'deleteTable'), 'no deleteTable for an existing:true table');
+  assert.ok(!sdk.calls.some((c) => c.method === 'findTables'), 'existing:true short-circuits before discovery');
+  assert.ok(r.skipped.some((s) => s.includes('table new_shared') && /existing: true/.test(s)), 'flagged table recorded as a skip');
+  assert.ok(sdk.db.tables.has('new_shared'), 'the reused table survives teardown');
+});
+
+test('teardown deletes a created custom table but skips a reused system table in the same spec', async () => {
+  const sdk = mockSdk({ tables: ['new_order'], systemTables: ['account'], solutions: { S: { solutionid: 'sol-1', uniquename: 'S' } } });
+  const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [
+    { schemaName: 'new_order', primaryAttribute: { schemaName: 'new_name' } },
+    { schemaName: 'account', primaryAttribute: { schemaName: 'name' } },
+  ] };
+  const r = await runTeardown(spec, { apply: true }, { sdk });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  const tableDels = sdk.calls.filter((c) => c.method === 'deleteTable').map((c) => c.logical);
+  assert.deepStrictEqual(tableDels, ['new_order'], 'only the created custom table is deleted');
+  assert.ok(!sdk.db.tables.has('new_order'), 'created table deleted; system table left intact');
 });
 
 test('a table that does not exist skips the delete', async () => {
