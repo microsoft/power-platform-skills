@@ -45,6 +45,16 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   local enum mapping, etc.) — no rule loosening.
 
 ### Fixed
+- **System/standard tables (account, contact, …) keep their default sitemap
+  icon (vendored `cds-maker-sdk` `AppAdapter`).** An entity subarea authored
+  without an explicit `icon` was serialized with the SDK's transparent-spacer
+  placeholder (`Icon="/_imgs/imagestrips/transparent_spacer.gif"`). Because an
+  explicit `Icon` attribute **overrides the table's default nav glyph** in a
+  model-driven app, adding an existing CDS table to the nav blanked its icon
+  (had to be re-set by hand in the app designer). The adapter now **strips the
+  placeholder on write** (symmetric with the existing read-side filter), so an
+  iconless subarea emits **no** `Icon` and Dataverse falls back to the table's
+  own icon. Re-running an edit also cleans a previously-persisted placeholder.
 - **Editing an existing app now updates the sitemap for *page-less* apps too
   (`sdk-build.js` app-shell phase).** The app module's sitemap/components were
   effectively **write-once** — only the generative-pages finalizer rewrote them,
