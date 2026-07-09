@@ -10,12 +10,12 @@
     "repository": "https://github.com/microsoft/power-platform-skills/",
     "license": "MIT",
     "keywords": [
-        "power platform",
-        "power apps",
-        "code apps",
+        "power-platform",
+        "power-apps",
+        "code-apps",
         "mobile",
         "expo",
-        "react native",
+        "react-native",
         "native",
         "connectors",
         "microsoft"

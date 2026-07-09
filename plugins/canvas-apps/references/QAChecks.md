@@ -23,13 +23,15 @@ All checks are safe: they tighten existing YAML, never delete semantic content.
 
 ---
 
-## Check 1 — LayoutMinWidth / LayoutMinHeight on every GroupContainer
+## Check 1 — LayoutMinWidth / LayoutMinHeight on every AutoLayout child
 
 **Problem:** Power Apps defaults `LayoutMinWidth` to 250 and `LayoutMinHeight` to
-100 on `GroupContainer`. In a sidebar, header, or narrow cell, these defaults
-silently push the container wider/taller than intended and clip siblings.
+100 on children of an AutoLayout `GroupContainer` (any container that sets
+`LayoutDirection`). In a sidebar, header, or narrow cell, these defaults
+silently push the child wider/taller than intended and clip its siblings.
 
-**Detect:** For every control with `Control: GroupContainer`, check whether
+**Detect:** For every control whose parent has a `LayoutDirection` property
+(i.e., it is a child of an AutoLayout `GroupContainer`), check whether
 `LayoutMinWidth: =0` and `LayoutMinHeight: =0` are present in `Properties:`.
 
 **Fix:** Add either property if missing:
@@ -39,7 +41,8 @@ LayoutMinWidth: =0
 LayoutMinHeight: =0
 ```
 
-**Exception:** None. Always set both on every GroupContainer.
+**Exception:** None. Always set both on every child of an AutoLayout
+`GroupContainer`.
 
 ---
 

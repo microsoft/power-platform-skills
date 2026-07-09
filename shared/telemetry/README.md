@@ -186,7 +186,22 @@ is never touched. (Power-pages is the reference example: see
 `plugins/power-pages/scripts/lib/telemetry/resolver.js` + `region/`.)
 
 **Ship with `disabled: true`** until the tenant-side annotation, Kusto table, and
-FieldNameMappings are provisioned. The committed `ikey.json` must stay `disabled: true`.
+FieldNameMappings are provisioned. Keep it `disabled: true` for as long as the plugin is
+unprovisioned; once the tenant-side stream is live you flip it to `disabled: false` and the
+committed `ikey.json` ships enabled (as `power-pages` does — see the CI opt-out guidance in
+the repo-root `AGENTS.md`).
+
+**Provision a fresh key — never copy another plugin's.** Your `ikey.json` must carry
+this plugin's own instrumentation key(s) and `event_stream_name`. Do not lift another
+adopter's `ikey.json` (e.g. power-pages') wholesale — that mis-attributes your events to
+their Kusto stream. This is CI-enforced by `scripts/validate-telemetry-ikeys.js` (run in
+the `validate-repository-metadata` workflow), which fails if the same key or
+`event_stream_name` appears under two different plugins. Run it locally after editing
+`ikey.json`:
+
+```bash
+node scripts/validate-telemetry-ikeys.js
+```
 
 ### 3. Register hooks
 

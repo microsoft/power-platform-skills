@@ -78,23 +78,27 @@ mcp__canvas-authoring__connect(
   environment_id: ENV_ID,
   app_id: APP_ID,
   cluster_category: CLUSTER_CATEGORY,
-  // Optional — include only if the user has expressed a preference (see below):
-  auth_flow: "broker" | "browser",
-  login_hint: "user@contoso.com"
+  // Optional — include only if the user has expressed a preference or a prior sign-in failed (see below):
+  auth_flow: "broker" | "browser" | "devicecode",
+  login_hint: "user@contoso.com",
+  tenant_id: "00000000-0000-0000-0000-000000000000",
+  force_account_select: true
 )
 ```
 
-**Optional parameters — do NOT prompt the user for these.** Only include them if the user has already expressed a preference earlier in the conversation:
+**Optional parameters — do NOT prompt the user for these.** Only include them if the user has already expressed a preference earlier in the conversation, or if a prior connect attempt failed:
 
-- `login_hint`: Pass the user's UPN or email **only if** they have indicated they want to connect as a specific/different user (e.g. "log in as alice@contoso.com"). These values cannot be derived from the maker portal URL — never guess. Omit otherwise to use the first signed-in user.
-- `auth_flow`: Pass `"browser"` or `"broker"` **only if** the user has explicitly stated a preferred auth flow (e.g. "use browser sign-in"). Omit otherwise to use the default.
+- `login_hint`: Pass the user's UPN or email **only if** they have indicated they want to connect as a specific/different user (e.g. "log in as alice@contoso.com"). These values cannot be derived from the maker portal URL — never guess. Omit otherwise to use the first signed-in user. When reconnecting to switch environment/app, reuse the same `login_hint` value as the previous successful connect (if known) so the same user is reused without re-prompting.
+- `auth_flow`: Pass `"browser"`, `"broker"`, or `"devicecode"` **only if** the user has explicitly stated a preferred auth flow (e.g. "use browser sign-in"). Use `"devicecode"` on headless/SSH hosts where neither broker nor browser flow can pop a UI — the verification URL and user code are surfaced via an MCP elicitation request and require a client that supports elicitation. Omit otherwise to use the default.
+- `tenant_id`: Pass a tenant GUID **only** for Entra B2B guest access — set it to the host/resource tenant where the user is a guest so the token is issued by that tenant rather than the user's home tenant. Combine with `login_hint` (the guest's home UPN) to pre-fill the account. Omit for normal same-tenant sign-in.
+- `force_account_select`: Pass `true` **only** to force the account picker instead of silently reusing a cached account — set this when a previous connect failed with a 401/403 and no `login_hint` was given, so the user can pick the correct account. Omit otherwise.
 
 If the call fails, report the error to the user and suggest checking that:
 
 1. The studio URL is correct and the browser tab is still open
 2. Coauthoring is enabled in the app settings
 3. .NET 10 SDK is correctly installed
-4. If sign-in failed, the user may need to specify `auth_flow` (`broker` vs. `browser`) or a `login_hint` (UPN/email) to authenticate as the correct account
+4. If sign-in failed, the user may need to specify `auth_flow` (`broker`, `browser`, or `devicecode`) or a `login_hint` (UPN/email) to authenticate as the correct account. On a headless/SSH host, use `auth_flow: "devicecode"`. If a cached account keeps getting picked, retry with `force_account_select: true`. For Entra B2B guest access, set `tenant_id` to the host tenant.
 
 ### 4. Confirm
 
