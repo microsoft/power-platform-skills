@@ -526,13 +526,13 @@ async function runSdkBuild(spec, opts = {}) {
   }
 
   // helper: create an artifact header-less, push, add to the solution.
-  const buildArtifact = (type, def) => runner.run(type === 'app' ? 'app-shell' : `${type}s`, `${type} "${def.name}"`, async () => {
+  const buildArtifact = (type, def) => runner.run(`${type}s`, `${type} "${def.name}"`, async () => {
     // Idempotency: if an artifact with this (entity, name) identity already exists (a re-run or a
     // retry after a partial failure), reuse it instead of creating a duplicate.
-    // Deduplicated kinds: view, chart, form (by name+entity), app (by uniqueName).
+    // Deduplicated kinds: view, chart, form (by name+entity). The app module is handled separately
+    // in the app-shell phase (an existing app is re-synced, not just reused — see below).
     let identity = null;
     if (type === 'view' || type === 'chart' || type === 'form') identity = { name: def.name, entity: def.entityLogicalName };
-    else if (type === 'app') identity = { uniqueName: def.uniqueName };
     if (identity) {
       const existingId = await provision.findArtifact(type, identity);
       if (existingId) return existingId;
@@ -672,8 +672,28 @@ async function runSdkBuild(spec, opts = {}) {
 
   // 7. App module + sitemap. When the app has generative-page subareas, create it WITHOUT them
   //    (they can't resolve until pages upload); the pages phase then rewrites the sitemap.
+  //    For an app that ALREADY exists (edit flow / retry), its sitemap + components are write-once
+  //    on create, so a plain reuse would silently drop requested subarea add/rename/reorder edits.
+  //    Fetch it into this session's workspace (also required before push/publish on a cross-session
+  //    edit) and rewrite the sitemap + components from the current spec so edits land idempotently.
   if (has('app-shell')) {
-    result.created.app = await buildArtifact('app', appDef(spec, result.created, { omitUnbuiltPages: true }));
+    const def = appDef(spec, result.created, { omitUnbuiltPages: true });
+    result.created.app = await runner.run('app-shell', `app "${def.name}"`, async () => {
+      const existingId = await provision.findArtifact('app', { uniqueName: def.uniqueName });
+      if (existingId) {
+        await provision.fetchArtifact('app', existingId);
+        provision.setAppDefinition(existingId, { siteMap: def.siteMap, components: def.components });
+        await provision.pushArtifact('app', existingId);
+        // Page-backed apps get their authoritative sitemap (incl. GenPage subareas) + publish from
+        // the pages finalizer below; publish here only when there are no page subareas to wait for.
+        if (!appHasPageSubareas(spec)) await provision.publishArtifact('app', existingId);
+        return existingId;
+      }
+      const art = provision.createArtifact('app', def);
+      const pushed = await provision.pushArtifact('app', art.id);
+      await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.app, solutionUniqueName: sol.uniqueName });
+      return pushed.id;
+    });
   }
 
   // 7b. Pages (generative pages). The app now exists, so upload each page's content via pac

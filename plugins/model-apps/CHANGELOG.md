@@ -45,6 +45,18 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   local enum mapping, etc.) — no rule loosening.
 
 ### Fixed
+- **Editing an existing app now updates the sitemap for *page-less* apps too
+  (`sdk-build.js` app-shell phase).** The app module's sitemap/components were
+  effectively **write-once** — only the generative-pages finalizer rewrote them,
+  so re-running the build to add/rename/reorder entity, dashboard, or URL
+  subareas on an app **without** a generative page was a silent no-op (the build
+  printed `✓ app "…"` but the nav never changed; only `verify` surfaced the gap).
+  The app-shell phase now **re-syncs any existing app**: fetch → recompute
+  sitemap + components from the spec → push → publish, so subarea edits land
+  idempotently regardless of whether the app has pages, and `--only app-shell`
+  can force the rewrite. The fetch also **hydrates the app into the session
+  workspace**, fixing the cross-session `Artifact app/<id> not found in
+  workspace` halt on push/publish.
 - **Classic DashBoard sitemap subareas now round-trip through download/edit
   (`download-model-app.js` / `hydrate-spec.js`).** Previously `download` dropped
   them (a rebuild lost the dashboard from the app nav). The dashboard is now

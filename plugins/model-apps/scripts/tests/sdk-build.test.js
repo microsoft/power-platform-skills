@@ -747,6 +747,26 @@ test('idempotency: existing view/chart/form/app are reused, not re-created (no d
   assert.ok(!created.includes('app'), 'existing app reused');
 });
 
+test('edit flow: an existing (page-less) app has its sitemap rewritten so subarea edits land', async () => {
+  // Re-running the build against an app that already exists must not silently drop requested
+  // subarea add/rename/reorder edits (the sitemap was previously write-once on create).
+  const spec = makeSpec();
+  const { sdk, calls } = mockSdk({ artifactsExist: true }); // findArtifact('app') -> 'app-existing'
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'views', 'charts', 'forms', 'app-shell'] });
+  // No duplicate app is created...
+  assert.ok(!find(calls, 'createArtifact').some((c) => c.args[0] === 'app'), 'no duplicate app created');
+  // ...but the sitemap + components are rewritten from the current spec.
+  const setDef = find(calls, 'setAppDefinition').find((c) => c.args[0] === 'app-existing');
+  assert.ok(setDef, 'existing app sitemap rewritten via setAppDefinition');
+  const subs = setDef.args[1].siteMap.areas[0].groups[0].subAreas;
+  assert.ok(subs.some((s) => s.type === 'Entity' && s.entity === 'new_customer'), 'entity subarea present in rewritten sitemap');
+  // Fetched into this session's workspace before push (also fixes cross-session publish), then
+  // pushed + published so the nav change actually goes live.
+  assert.ok(find(calls, 'fetchArtifact').some((c) => c.args[0] === 'app' && c.args[1] === 'app-existing'), 'app fetched (workspace hydration) before push');
+  assert.ok(find(calls, 'pushArtifact').some((c) => c.args[0] === 'app' && c.args[1] === 'app-existing'), 'app pushed');
+  assert.ok(find(calls, 'publishArtifact').some((c) => c.args[0] === 'app' && c.args[1] === 'app-existing'), 'page-less app published so the nav updates');
+});
+
 test('idempotency: absent artifacts are created as normal', async () => {
   const spec = makeSpec();
   const { sdk, calls } = mockSdk();
