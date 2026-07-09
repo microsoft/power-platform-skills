@@ -209,6 +209,7 @@ function planFor(spec, opts) {
     for (const e of spec.entities) { const n = sampleRecordsFor(spec, e).length; if (n) items.push({ phase: 'sample-data', label: `${n} sample record(s) -> ${e.schemaName}` }); }
   }
   if (has('web-resources')) for (const wr of spec.webResources || []) items.push({ phase: 'web-resources', label: `web resource ${wr.name} (${wr.type || 'js'})` });
+  if (has('web-resources')) for (const e of spec.entities || []) if (e.icon || e.vectorIcon) items.push({ phase: 'web-resources', label: `table icon for ${e.schemaName.toLowerCase()}` });
   if (has('views')) for (const v of spec.views || []) items.push({ phase: 'views', label: `view "${v.name}" for ${v.entity}` });
   if (has('views')) for (const e of spec.entities || []) if (enrichesDefaultViews(spec, e)) items.push({ phase: 'views', label: `enrich default views for ${e.schemaName.toLowerCase()}` });
   if (has('charts')) for (const c of spec.charts || []) items.push({ phase: 'charts', label: `chart "${c.name}" (${c.chartType}) for ${c.entity}` });
@@ -523,6 +524,29 @@ async function runSdkBuild(spec, opts = {}) {
         await provision.addSolutionComponent({ componentId: r.id, componentType: COMPONENT_TYPE.webResource, solutionUniqueName: sol.uniqueName });
       });
     }
+    // 3c. Table icons — set each entity's OWN icon to a declared web resource (SVG -> IconVectorName
+    //     for the modern designer/nav; raster -> IconMediumName). Runs here (after web resources
+    //     exist) so the referenced web resource is present + published before we point the table at
+    //     it. Skipped for a table not built/reused this run, or an icon whose web resource wasn't
+    //     created/reused (e.g. its phase was skipped) — with a clear message rather than a hard fail.
+    const builtWrNames = new Set(Object.keys(result.created.webResources).map((n) => n.toLowerCase()));
+    for (const e of spec.entities || []) {
+      if (!e.icon && !e.vectorIcon) continue;
+      const logical = e.schemaName.toLowerCase();
+      if (!result.created.entities[logical] && !result.created.entities[e.schemaName]) {
+        runner.skip('web-resources', `table icon for ${logical} (table not built this run)`);
+        continue;
+      }
+      const missing = [e.vectorIcon, e.icon].filter((n) => n && !builtWrNames.has(String(n).toLowerCase()));
+      if (missing.length) {
+        runner.skip('web-resources', `table icon for ${logical} (web resource ${missing.join(', ')} not built this run)`);
+        continue;
+      }
+      await runner.run('web-resources', `table icon for ${logical}`, async () => {
+        await provision.setEntityIcon(logical, { vector: e.vectorIcon || undefined, medium: e.icon || undefined });
+        return `${[e.vectorIcon && `vector=${e.vectorIcon}`, e.icon && `raster=${e.icon}`].filter(Boolean).join(', ')}`;
+      });
+    }
   }
 
   // helper: create an artifact header-less, push, add to the solution.
@@ -586,7 +610,7 @@ async function runSdkBuild(spec, opts = {}) {
         const oneToMany = relationshipFor(spec, f.entity, sg.childEntity);
         const nn = oneToMany ? null : manyToManyFor(spec, f.entity, sg.childEntity);
         if (!oneToMany && !nn) continue;
-        const relationshipName = oneToMany ? relationshipSchemaName(oneToMany) : manyToManySchemaName(nn);
+        const relationshipName = oneToMany ? relationshipSchemaName(oneToMany, spec.solution && spec.solution.publisherPrefix) : manyToManySchemaName(nn, spec.solution && spec.solution.publisherPrefix);
         const childLogical = sg.childEntity.toLowerCase();
         const viewId = await subgridViewId(provision, result.created.views, spec, sg, childLogical);
         // Every sub-grid needs a concrete view id (the SDK embeds it in the control XML). If the

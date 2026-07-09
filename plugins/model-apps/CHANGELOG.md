@@ -9,6 +9,15 @@ plus local-dev ergonomics, sample coverage, and an automated eval suite with
 real and synthetic fixtures. Builds on v2.1; no breaking changes.
 
 ### Added
+- **Table icons** (`entities[].vectorIcon` / `entities[].icon`) — set a custom table's **own** icon
+  (what the modern app designer and app nav render for the table) to a **declared web resource**:
+  `vectorIcon` → an **SVG** web resource (Dataverse `IconVectorName`, the modern look), `icon` → a
+  raster PNG/JPG/GIF/ICO web resource (`IconMediumName`). Applied after the web-resources phase (so
+  the image exists + is published first) via the new SDK `setEntityIcon`. **Hard-validated** against
+  declared web resources: an unresolvable table icon is exactly what leaves the designer's property
+  pane stuck on a glimmer, so the spec now rejects a `vectorIcon` that isn't a real SVG web resource
+  (e.g. a Fluent icon token). Table icons are a table property, so teardown removes them with the
+  table it created and leaves reused/system tables untouched.
 - **`/app-builder` skill (Preview)** — natural-language intent → deployed model-driven app:
   tables/columns/relationships, adaptive forms + sub-grids, views (with enriched default columns),
   Choice-column charts, modern command bars, dashboards, sitemap icons, genpage-first pages, and
@@ -45,6 +54,17 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   local enum mapping, etc.) — no rule loosening.
 
 ### Fixed
+- **Relationships to a standard/system table no longer halt the build with an invalid
+  schema name (`app-spec.js` / `spec-lint.js`).** The relationship schema name defaulted to
+  `<referenced>_<referencing>`, which only starts with the publisher prefix when the *referenced*
+  table is custom. A 1:N to a **system table** (e.g. `systemuser` — a common "bridge to a real
+  user/owner" pattern) produced an unprefixed name like `systemuser_contoso_teammember` that
+  Dataverse rejects (`schema name … is invalid … must start with a valid customization prefix`),
+  hard-halting the data-model phase at `--apply` time on a lint-clean, dry-run-clean spec. The
+  default now **auto-prepends the publisher prefix** (→ `contoso_systemuser_teammember`) for both
+  1:N and N:N, so authoring a relationship to a system table just works. `spec-lint` also now
+  **errors** on an explicit `schemaName` that lacks the prefix, turning a build-time 400 into an
+  authoring-time message. (All-custom relationships are unchanged — backward compatible.)
 - **Teardown only deletes tables this build created — never reused/system
   tables (`sdk-teardown.js`).** Declaring an existing CDS table (e.g. a system
   table like `account`/`contact`) for the nav made teardown *try* to delete it,

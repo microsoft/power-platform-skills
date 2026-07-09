@@ -224,7 +224,7 @@ function planTeardown(spec) {
     steps.push({ kind: 'view', phase: 'views', label: `view "${v.name}" (${v.entity})`, target: { name: v.name, entity: String(v.entity).toLowerCase() } });
   }
   for (const r of spec.relationships || []) {
-    const schema = r.type === 'ManyToMany' ? manyToManySchemaName(r) : relationshipSchemaName(r);
+    const schema = r.type === 'ManyToMany' ? manyToManySchemaName(r, spec.solution && spec.solution.publisherPrefix) : relationshipSchemaName(r, spec.solution && spec.solution.publisherPrefix);
     steps.push({ kind: 'relationship', phase: 'relationships', label: `relationship ${schema}`, target: { schemaName: schema } });
   }
   for (const wr of spec.webResources || []) {

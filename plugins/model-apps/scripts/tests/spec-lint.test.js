@@ -37,6 +37,24 @@ test('flags the relationship-name vs lookup-name collision (the live bug)', () =
   assert.ok(r.errors.some((m) => /collides with its lookup/i.test(m)));
 });
 
+test('errors on an explicit relationship schemaName that lacks the publisher prefix', () => {
+  const s = base();
+  // systemuser-referenced relationship with a hand-written, unprefixed name — Dataverse would 400.
+  s.entities.push({ schemaName: 'systemuser', displayName: 'User', primaryAttribute: { schemaName: 'fullname', displayName: 'Name' }, columns: [] });
+  s.relationships.push({ type: 'OneToMany', referenced: 'systemuser', referencing: 'new_ticket', schemaName: 'systemuser_new_ticket', lookup: { schemaName: 'new_UserId', displayName: 'User' } });
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((m) => /must start with the publisher prefix 'new_'/.test(m)), JSON.stringify(r.errors));
+});
+
+test('a system-table relationship with NO schemaName is clean (auto-prefixed default is valid)', () => {
+  const s = base();
+  s.entities.push({ schemaName: 'systemuser', displayName: 'User', primaryAttribute: { schemaName: 'fullname', displayName: 'Name' }, columns: [] });
+  s.relationships.push({ type: 'OneToMany', referenced: 'systemuser', referencing: 'new_ticket', lookup: { schemaName: 'new_UserId', displayName: 'User' } });
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
 test('errors on a missing primaryAttribute', () => {
   const s = base();
   delete s.entities[1].primaryAttribute;

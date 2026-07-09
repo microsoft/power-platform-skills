@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
-const { validateAppSpec, columnTypeMap, relationshipFor, resolveSampleRecords } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
+const { validateAppSpec, columnTypeMap, relationshipFor, relationshipSchemaName, manyToManySchemaName, resolveSampleRecords } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
 
 const sample = JSON.parse(
   fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.project-tracker.json'), 'utf8')
@@ -15,6 +15,37 @@ const cloneDesk = () => JSON.parse(JSON.stringify(desk));
 test('validateAppSpec accepts the sample', () => {
   const r = validateAppSpec(sample);
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('relationshipSchemaName: all-custom default is unchanged (backward compatible)', () => {
+  const rel = { type: 'OneToMany', referenced: 'new_customer', referencing: 'new_ticket' };
+  assert.strictEqual(relationshipSchemaName(rel, 'new'), 'new_customer_new_ticket');
+  // With no prefix supplied, the legacy composed name is returned unchanged.
+  assert.strictEqual(relationshipSchemaName(rel), 'new_customer_new_ticket');
+});
+
+test('relationshipSchemaName: a relationship to a SYSTEM table is auto-prefixed (the build-halt fix)', () => {
+  const rel = { type: 'OneToMany', referenced: 'systemuser', referencing: 'contoso_teammember' };
+  // systemuser has no publisher prefix, so the naive `systemuser_contoso_teammember` would be
+  // rejected by Dataverse. The prefix is prepended and the redundant one on the child is stripped.
+  assert.strictEqual(relationshipSchemaName(rel, 'contoso'), 'contoso_systemuser_teammember');
+});
+
+test('relationshipSchemaName: account-referenced default is also prefixed', () => {
+  const rel = { type: 'OneToMany', referenced: 'account', referencing: 'contoso_project' };
+  assert.strictEqual(relationshipSchemaName(rel, 'contoso'), 'contoso_account_project');
+});
+
+test('relationshipSchemaName: an explicit schemaName is honored verbatim', () => {
+  const rel = { type: 'OneToMany', referenced: 'systemuser', referencing: 'contoso_teammember', schemaName: 'contoso_myrel' };
+  assert.strictEqual(relationshipSchemaName(rel, 'contoso'), 'contoso_myrel');
+});
+
+test('manyToManySchemaName: system-table N:N is auto-prefixed', () => {
+  const rel = { type: 'ManyToMany', entity1: 'systemuser', entity2: 'contoso_project' };
+  assert.strictEqual(manyToManySchemaName(rel, 'contoso'), 'contoso_systemuser_project');
+  // all-custom is unchanged
+  assert.strictEqual(manyToManySchemaName({ entity1: 'new_a', entity2: 'new_b' }, 'new'), 'new_a_new_b');
 });
 
 test('validateAppSpec accepts a sitemap icon referencing a declared image web resource', () => {
@@ -42,6 +73,40 @@ test('validateAppSpec rejects a sitemap icon referencing a non-image web resourc
   const r = validateAppSpec(s);
   assert.strictEqual(r.ok, false);
   assert.ok(r.errors.some((e) => /must be an image web resource/.test(e)), JSON.stringify(r.errors));
+});
+
+test('validateAppSpec accepts a table vectorIcon referencing a declared SVG web resource', () => {
+  const s = JSON.parse(JSON.stringify(sample));
+  s.webResources = (s.webResources || []).concat([{ name: 'new_tableicon', type: 'svg', content: '<svg/>' }]);
+  s.entities[0].vectorIcon = 'new_tableicon';
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('validateAppSpec rejects a table vectorIcon that is not a declared web resource (the glimmer cause)', () => {
+  const s = JSON.parse(JSON.stringify(sample));
+  s.entities[0].vectorIcon = 'AccessTimeFilled'; // a Fluent token, NOT a web resource
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /vectorIcon 'AccessTimeFilled' is not a declared web resource/.test(e)), JSON.stringify(r.errors));
+});
+
+test('validateAppSpec rejects a table vectorIcon that is a non-SVG web resource', () => {
+  const s = JSON.parse(JSON.stringify(sample));
+  s.webResources = (s.webResources || []).concat([{ name: 'new_tableicon_png', type: 'png', contentBase64: 'AAAA' }]);
+  s.entities[0].vectorIcon = 'new_tableicon_png';
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /vectorIcon 'new_tableicon_png' must be an SVG web resource/.test(e)), JSON.stringify(r.errors));
+});
+
+test('validateAppSpec rejects a table (raster) icon that is an SVG web resource (use vectorIcon)', () => {
+  const s = JSON.parse(JSON.stringify(sample));
+  s.webResources = (s.webResources || []).concat([{ name: 'new_svgicon', type: 'svg', content: '<svg/>' }]);
+  s.entities[0].icon = 'new_svgicon';
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /must be a raster image web resource/.test(e)), JSON.stringify(r.errors));
 });
 
 test('validateAppSpec accepts pages[] + a page sitemap subarea', () => {

@@ -61,6 +61,14 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   "displayName": "Ticket",
   "pluralName": "Tickets",               // optional (defaults to "<displayName>s")
   "hasNotes": true,                       // optional — enables the Notes/timeline on the table + form
+  "vectorIcon": "new_ticketicon",         // optional — the table's OWN icon (what the modern app
+                                          //   designer + app nav render for the table). Must be a
+                                          //   declared SVG web resource (webResources[] type "svg").
+                                          //   NOTE: this is a web-resource name, NOT a Fluent token —
+                                          //   an unresolvable value leaves the designer's property
+                                          //   pane stuck on a glimmer, so it is hard-validated.
+  "icon": "new_ticketicon_png",           // optional — raster fallback (png/jpg/gif/ico web resource,
+                                          //   → IconMediumName). Prefer vectorIcon for the modern look.
   "existing": true,                       // optional — this table PRE-EXISTS (system table like
                                           //   account/contact, or a custom table owned elsewhere).
                                           //   The build reuses it; teardown NEVER deletes it. System
@@ -109,6 +117,13 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 - `referenced` = the "one" (parent); `referencing` = the "many" (child, gets the lookup column).
 - The relationship's schema name defaults to `<referenced>_<referencing>` and **must differ**
   from `lookup.schemaName` (Dataverse rejects a collision — the lint enforces this).
+- **Relationships to a standard/system table** (e.g. `systemuser`, `account` — a common
+  "bridge to a real user / owner" pattern) are handled automatically: because a system table has
+  no publisher prefix, the naive default name wouldn't start with your prefix and Dataverse would
+  reject it. The builder **auto-prepends the publisher prefix** (e.g. `systemuser` + child
+  `contoso_teammember` → `contoso_systemuser_teammember`), so you don't need to set `schemaName`.
+  If you *do* supply an explicit `schemaName`, it **must** start with `<publisherPrefix>_` — the
+  lint errors otherwise (an unprefixed relationship name is a build-time 400).
 
 **Many-to-many:**
 ```jsonc

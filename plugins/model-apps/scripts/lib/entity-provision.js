@@ -10,6 +10,7 @@ const {
   resolveSampleRecords,
   relationshipFor,
   relationshipSchemaName,
+  manyToManySchemaName,
 } = require('./app-spec.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 
@@ -236,10 +237,13 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply }) {
     }
   }
   
-  // 2c. Relationships — 1:N and N:N; skip those already present.
+  // 2c. Relationships — 1:N and N:N; skip those already present. The publisher prefix is threaded
+  //     into the schema-name defaulting so a relationship to a standard/system table gets a valid,
+  //     prefixed name Dataverse accepts (see prefixedRelationshipName).
+  const publisherPrefix = spec.solution && spec.solution.publisherPrefix;
   for (const rel of spec.relationships || []) {
     if (rel.type === 'OneToMany') {
-      const schema = relationshipSchemaName(rel);
+      const schema = relationshipSchemaName(rel, publisherPrefix);
       let exists = false;
       try { exists = ((await provision.fetchEntityMetadata(rel.referenced.toLowerCase())).relationships || []).some((r) => r.schemaName.toLowerCase() === schema.toLowerCase()); } catch { /* just created */ }
       if (exists) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
@@ -253,7 +257,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply }) {
         });
       }, { skipIf: isAlreadyExists });
     } else if (rel.type === 'ManyToMany') {
-      const schema = rel.schemaName || `${rel.entity1.toLowerCase()}_${rel.entity2.toLowerCase()}`;
+      const schema = manyToManySchemaName(rel, publisherPrefix);
       let exists = false;
       try { exists = ((await provision.fetchEntityMetadata(rel.entity1.toLowerCase())).relationships || []).some((r) => r.schemaName.toLowerCase() === schema.toLowerCase()); } catch { /* just created */ }
       if (exists) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }

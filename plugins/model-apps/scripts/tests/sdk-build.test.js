@@ -98,6 +98,7 @@ function mockSdk(opts = {}) {
     addSolutionComponent: async (o) => { calls.push({ name: 'addSolutionComponent', args: [o] }); },
     publishArtifact: async (t, id) => { calls.push({ name: 'publishArtifact', args: [t, id] }); },
     setAppDefinition: (id, def) => { calls.push({ name: 'setAppDefinition', args: [id, def] }); return { id }; },
+    setEntityIcon: async (logical, icons) => { calls.push({ name: 'setEntityIcon', args: [logical, icons] }); return { id: logical }; },
     getAiReadiness: async (opts) => { calls.push({ name: 'getAiReadiness', args: [opts] }); return { enabled: true }; },
     setAppAiFeatures: async (appUnique, flags, opts) => { calls.push({ name: 'setAppAiFeatures', args: [appUnique, flags, opts] }); return { applied: Object.keys(flags).filter((k) => flags[k]), skipped: [] }; },
     configureRowSummary: async (promptSpec, opts) => { calls.push({ name: 'configureRowSummary', args: [promptSpec, opts] }); return { modelId: 'model-' + promptSpec.entityLogicalName, aiSkillConfigId: 'skill-' + promptSpec.entityLogicalName }; },
@@ -265,6 +266,47 @@ test('Tier 2: idempotent — an existing web resource is reused (no createWebRes
   await runSdkBuild(specWithFormJs(), { sdk, apply: true, emit: (e) => events.push(e) });
   assert.strictEqual(find(calls, 'createWebResource').length, 0, 'existing web resource not re-created');
   assert.ok(events.some((e) => e.status === 'skip' && /web resource new_ticket\.js \(exists/.test(e.label)));
+});
+
+test('table icon: an entity vectorIcon/icon sets the table icon via setEntityIcon after web resources', async () => {
+  const spec = makeSpec({
+    webResources: [
+      { name: 'new_widgeticon', type: 'svg', content: '<svg/>' },
+      { name: 'new_widgeticon_png', type: 'png', contentBase64: 'AAAA' },
+    ],
+    entities: [
+      { schemaName: 'new_widget', displayName: 'Widget', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' },
+        vectorIcon: 'new_widgeticon', icon: 'new_widgeticon_png' },
+    ],
+    relationships: [], views: [], charts: [], forms: [], sampleData: {},
+    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Records', subAreas: [{ entity: 'new_widget', title: 'Widgets' }] }] }] },
+  });
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'web-resources'] });
+  const icon = find(calls, 'setEntityIcon');
+  assert.strictEqual(icon.length, 1, 'setEntityIcon called once');
+  assert.strictEqual(icon[0].args[0], 'new_widget');
+  assert.strictEqual(icon[0].args[1].vector, 'new_widgeticon');
+  assert.strictEqual(icon[0].args[1].medium, 'new_widgeticon_png');
+  // Ordering: the web resource must be created BEFORE the table icon points at it.
+  const wrIdx = calls.findIndex((c) => c.name === 'createWebResource');
+  const iconIdx = calls.findIndex((c) => c.name === 'setEntityIcon');
+  assert.ok(wrIdx >= 0 && wrIdx < iconIdx, 'web resource created before setEntityIcon');
+});
+
+test('table icon: skipped (not failed) when the table is not built this run', async () => {
+  const spec = makeSpec({
+    webResources: [{ name: 'new_widgeticon', type: 'svg', content: '<svg/>' }],
+    entities: [{ schemaName: 'new_widget', displayName: 'Widget', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, vectorIcon: 'new_widgeticon' }],
+    relationships: [], views: [], charts: [], forms: [], sampleData: {},
+    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Records', subAreas: [{ entity: 'new_widget', title: 'Widgets' }] }] }] },
+  });
+  const { sdk, calls } = mockSdk();
+  const events = [];
+  // Only run web-resources (no data-model) — the table isn't built this run.
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'web-resources'], emit: (e) => events.push(e) });
+  assert.strictEqual(find(calls, 'setEntityIcon').length, 0, 'setEntityIcon not called');
+  assert.ok(events.some((e) => e.status === 'skip' && /table icon for new_widget \(table not built/.test(e.label)), 'icon step skipped with a clear reason');
 });
 
 test('Tier 2: form events are wired (fetch -> addFormEventHandler -> push -> publish) with mapped opts', async () => {

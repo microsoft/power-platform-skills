@@ -87,6 +87,9 @@ function lintAppSpec(spec) {
     if (r.type === 'ManyToMany') {
       if (!entityNames.has(lc(r.entity1))) E(`N:N relationship references unknown entity '${r.entity1}'`);
       if (!entityNames.has(lc(r.entity2))) E(`N:N relationship references unknown entity '${r.entity2}'`);
+      if (prefix && r.schemaName && !lc(r.schemaName).startsWith(lc(prefix) + '_')) {
+        E(`N:N relationship schema name '${r.schemaName}' must start with the publisher prefix '${prefix}_' (Dataverse rejects an unprefixed relationship name); omit schemaName to auto-generate a valid one`);
+      }
       continue;
     }
     if (r.type !== 'OneToMany') continue;
@@ -96,8 +99,14 @@ function lintAppSpec(spec) {
       E(`OneToMany ${r.referenced}->${r.referencing} is missing lookup.schemaName`);
       continue;
     }
-    if (lc(relationshipSchemaName(r)) === lc(r.lookup.schemaName)) {
-      E(`Relationship schema name '${relationshipSchemaName(r)}' collides with its lookup attribute name '${r.lookup.schemaName}' — Dataverse rejects this; use a distinct relationship name`);
+    if (lc(relationshipSchemaName(r, prefix)) === lc(r.lookup.schemaName)) {
+      E(`Relationship schema name '${relationshipSchemaName(r, prefix)}' collides with its lookup attribute name '${r.lookup.schemaName}' — Dataverse rejects this; use a distinct relationship name`);
+    }
+    // Dataverse requires a relationship schema name to start with the publisher prefix. The default
+    // name is auto-prefixed (incl. relationships to standard tables like systemuser/account), but an
+    // EXPLICIT rel.schemaName is honored verbatim — so catch an explicit name that would 400 at build.
+    if (prefix && r.schemaName && !lc(r.schemaName).startsWith(lc(prefix) + '_')) {
+      E(`Relationship schema name '${r.schemaName}' must start with the publisher prefix '${prefix}_' (Dataverse rejects an unprefixed relationship name); omit schemaName to auto-generate a valid one`);
     }
   }
 

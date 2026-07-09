@@ -84,13 +84,35 @@ function relationshipFor(spec, parentEntity, childEntity) {
 // The 1:N relationship's SCHEMA name (used for entity provisioning and the
 // sub-grid RelationshipName). This MUST be distinct from the lookup attribute's
 // schema name — Dataverse rejects a relationship whose name collides with the
-// lookup column on the referencing table. Defaults to `<referenced>_<referencing>`
-// (both already publisher-prefixed), or an explicit `rel.schemaName` when provided.
-function relationshipSchemaName(rel) {
+// lookup column on the referencing table. Defaults to `<referenced>_<referencing>`,
+// with the solution's publisher prefix guaranteed at the front (see
+// prefixedRelationshipName) so a relationship to a STANDARD/system table (systemuser,
+// account, …) — which has no custom prefix — still gets a valid, prefixed name that
+// Dataverse accepts. An explicit `rel.schemaName` is honored verbatim.
+function relationshipSchemaName(rel, publisherPrefix) {
   if (rel && rel.schemaName) {
     return rel.schemaName;
   }
-  return `${String(rel.referenced || '').toLowerCase()}_${String(rel.referencing || '').toLowerCase()}`;
+  return prefixedRelationshipName(rel.referenced, rel.referencing, publisherPrefix);
+}
+
+// Compose a relationship schema name from two entity schema names, guaranteeing the result starts
+// with the solution's publisher prefix. Dataverse REQUIRES a relationship schema name to start with
+// the publisher prefix; the naive `<a>_<b>` only satisfies that when `a` is a custom (prefixed)
+// table. When `a` is a standard/system table (systemuser, account, …) the composed name starts with
+// the table name instead and Dataverse rejects the create with a 400. So when the composed name
+// doesn't already start with `<prefix>_`, prepend it (stripping a redundant prefix from `b` so we
+// don't double it). With no prefix supplied the legacy `<a>_<b>` is returned unchanged.
+function prefixedRelationshipName(a, b, publisherPrefix) {
+  const first = String(a || '').toLowerCase();
+  const second = String(b || '').toLowerCase();
+  const prefix = String(publisherPrefix || '').toLowerCase();
+  const composed = `${first}_${second}`;
+  if (!prefix || composed.startsWith(`${prefix}_`)) {
+    return composed;
+  }
+  const secondStripped = second.startsWith(`${prefix}_`) ? second.slice(prefix.length + 1) : second;
+  return `${prefix}_${first}_${secondStripped}`;
 }
 
 // Find the ManyToMany relationship linking two entities (order-independent), or null.
@@ -108,10 +130,13 @@ function manyToManyFor(spec, entityA, entityB) {
 }
 
 // The N:N relationship's SCHEMA name (the intersect/RelationshipName), defaulting to
-// `<entity1>_<entity2>` — matches the builder's createRelationship naming.
-function manyToManySchemaName(rel) {
-  if (rel && rel.schemaName) return rel.schemaName;
-  return `${String(rel.entity1 || '').toLowerCase()}_${String(rel.entity2 || '').toLowerCase()}`;
+// `<entity1>_<entity2>` with the publisher prefix guaranteed at the front (see
+// prefixedRelationshipName) — matches the builder's createRelationship naming.
+function manyToManySchemaName(rel, publisherPrefix) {
+  if (rel && rel.schemaName) {
+    return rel.schemaName;
+  }
+  return prefixedRelationshipName(rel.entity1, rel.entity2, publisherPrefix);
 }
 
 // Turn author-friendly sample records into Web-API bodies: Choice / MultiChoice values
@@ -196,10 +221,15 @@ function validateAppSpec(spec) {
   const webResourceNames = new Set();
   const IMAGE_WR_TYPES = new Set(['png', 'jpg', 'gif', 'svg', 'ico']);
   const imageWebResourceNames = new Set();
+  const svgWebResourceNames = new Set();      // SVG only — valid for a table's vector icon
+  const rasterWebResourceNames = new Set();   // png/jpg/gif/ico — valid for a table's raster icon
   for (const wr of spec.webResources || []) {
     if (!wr || !wr.name) { errors.push('a webResource is missing a name'); continue; }
     webResourceNames.add(wr.name.toLowerCase());
-    if (IMAGE_WR_TYPES.has(String(wr.type || '').toLowerCase())) imageWebResourceNames.add(wr.name.toLowerCase());
+    const wrType = String(wr.type || '').toLowerCase();
+    if (IMAGE_WR_TYPES.has(wrType)) imageWebResourceNames.add(wr.name.toLowerCase());
+    if (wrType === 'svg') svgWebResourceNames.add(wr.name.toLowerCase());
+    else if (IMAGE_WR_TYPES.has(wrType)) rasterWebResourceNames.add(wr.name.toLowerCase());
     if (!WEB_RESOURCE_KINDS.has(String(wr.type || 'js').toLowerCase())) {
       errors.push(`webResource ${wr.name}: type must be one of ${[...WEB_RESOURCE_KINDS].join('|')}`);
     }
@@ -383,6 +413,25 @@ function validateAppSpec(spec) {
       }
     }
   }
+  // Table (entity) icons — these set the table's OWN icon (what the modern app designer and app
+  // nav render for the table). Unlike a sitemap subarea's `vectorIcon` (a free-form Fluent token),
+  // a TABLE's icon must be a declared, buildable web resource: `vectorIcon` an SVG web resource
+  // (Dataverse IconVectorName), `icon` a raster PNG/JPG/GIF/ICO web resource (IconMediumName). An
+  // unresolvable value is exactly what leaves the designer's property pane stuck on a glimmer, so
+  // this is a hard error, not a lint warning.
+  for (const e of spec.entities || []) {
+    const label = `entity ${e.schemaName || ''}`;
+    if (e.vectorIcon) {
+      const v = String(e.vectorIcon).toLowerCase();
+      if (!webResourceNames.has(v)) errors.push(`${label}: vectorIcon '${e.vectorIcon}' is not a declared web resource (a table's vectorIcon must be an SVG web resource — declare it in webResources[])`);
+      else if (!svgWebResourceNames.has(v)) errors.push(`${label}: vectorIcon '${e.vectorIcon}' must be an SVG web resource (type "svg")`);
+    }
+    if (e.icon) {
+      const ic = String(e.icon).toLowerCase();
+      if (!webResourceNames.has(ic)) errors.push(`${label}: icon '${e.icon}' is not a declared web resource`);
+      else if (!rasterWebResourceNames.has(ic)) errors.push(`${label}: icon '${e.icon}' must be a raster image web resource (png/jpg/gif/ico); use vectorIcon for an SVG`);
+    }
+  }
   if (spec.sampleData !== undefined) {
     if (typeof spec.sampleData !== 'object' || spec.sampleData === null || Array.isArray(spec.sampleData)) {
       errors.push('sampleData must be an object keyed by entity schemaName');
@@ -491,6 +540,7 @@ module.exports = {
   resolveSampleRecords,
   relationshipFor,
   relationshipSchemaName,
+  prefixedRelationshipName,
   manyToManyFor,
   manyToManySchemaName,
   CHART_TYPES,
