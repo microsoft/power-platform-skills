@@ -109,6 +109,22 @@ test('validateAppSpec rejects a table (raster) icon that is an SVG web resource 
   assert.ok(r.errors.some((e) => /must be a raster image web resource/.test(e)), JSON.stringify(r.errors));
 });
 
+test('validateAppSpec accepts an app.icon referencing a declared image web resource', () => {
+  const s = JSON.parse(JSON.stringify(sample));
+  s.webResources = (s.webResources || []).concat([{ name: 'new_appicon', type: 'png', contentBase64: 'AAAA' }]);
+  s.app.icon = 'new_appicon';
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('validateAppSpec rejects an app.icon that is not a declared web resource', () => {
+  const s = JSON.parse(JSON.stringify(sample));
+  s.app.icon = 'new_missingappicon';
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /app\.icon 'new_missingappicon' is not a declared web resource/.test(e)), JSON.stringify(r.errors));
+});
+
 test('validateAppSpec accepts pages[] + a page sitemap subarea', () => {
   const s = JSON.parse(JSON.stringify(sample));
   s.pages = [{ name: 'Overview', dataSources: ['new_project'], prompt: 'kpis', codeFile: 'overview.tsx' }];

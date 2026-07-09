@@ -38,7 +38,7 @@ are in [`architecture.md`](architecture.md).
 - Choice-column charts.
 
 ### App shell & navigation — ✅ verified live
-- App module + sitemap; **multi-area sitemaps** — every `appShell.areas[]` maps to its own `<Area>` (icon + groups + subareas; order follows array order).
+- App module + sitemap; **multi-area sitemaps** — every `appShell.areas[]` maps to its own `<Area>` (icon + groups + subareas; order follows array order). The app is **self-contained for export/import**: its **sitemap** is added to the solution (componenttype 62), and its **tile icon** is an in-solution web resource — `app.icon` (a declared image web resource) or a generated default SVG — never an arbitrary external/managed icon.
 - Generative pages (**genpage-first**) for overview / dashboard surfaces — uploaded via `pac model genpage upload`; the SDK finalizes the sitemap with `GenPage` subareas.
 - Dashboards (chart / list / iframe / webresource tiles) with **sitemap placement** (auto-pinned as an app component). Tiles render in a **multi-column grid** (2-wide) rather than one stacked full-width column.
 - Modern command-bar buttons — functional **JS on-click** + static hidden/disabled, incl. **flyout / split-button menus**.

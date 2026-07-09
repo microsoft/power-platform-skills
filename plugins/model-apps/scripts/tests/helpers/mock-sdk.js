@@ -28,6 +28,7 @@ function makeSimpleMockSdk() {
     },
     enrichDefaultViews: async (logical, cols, opts) => { calls.push(['enrichDefaultViews', logical, cols, opts]); return { updated: [`defview-${logical}`] }; },
     createArtifact: (t, def) => { calls.push(['createArtifact', t]); return Object.assign({ id: `${t}-${++idc}` }, def); },
+    createWebResource: async (o) => { calls.push(['createWebResource', o.name]); return { id: `wr-${++idc}`, name: o.name }; },
     pushArtifact: async (t, id) => ({ type: t, id, success: true }),
     setViewColumns: () => ({}),
     addSubGrid: () => ({}),

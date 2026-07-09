@@ -432,6 +432,13 @@ function validateAppSpec(spec) {
       else if (!rasterWebResourceNames.has(ic)) errors.push(`${label}: icon '${e.icon}' must be a raster image web resource (png/jpg/gif/ico); use vectorIcon for an SVG`);
     }
   }
+  // App tile icon (optional). When set it must be a declared IMAGE web resource so the app is
+  // self-contained on export/import; when omitted, the build generates a default icon in-solution.
+  if (spec.app && spec.app.icon) {
+    const ai = String(spec.app.icon).toLowerCase();
+    if (!webResourceNames.has(ai)) errors.push(`app.icon '${spec.app.icon}' is not a declared web resource`);
+    else if (!imageWebResourceNames.has(ai)) errors.push(`app.icon '${spec.app.icon}' must be an image web resource (png/jpg/gif/svg/ico)`);
+  }
   if (spec.sampleData !== undefined) {
     if (typeof spec.sampleData !== 'object' || spec.sampleData === null || Array.isArray(spec.sampleData)) {
       errors.push('sampleData must be an object keyed by entity schemaName');

@@ -12,5 +12,7 @@ views	start	enrich default views for new_project
 views	ok	enrich default views for new_project
 forms	start	form "Project"
 forms	ok	form "Project"
+app-shell	start	app icon (generated) new_projecttracker_icon
+app-shell	ok	app icon (generated) new_projecttracker_icon
 app-shell	start	app "Project Tracker"
 app-shell	ok	app "Project Tracker"

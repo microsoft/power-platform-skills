@@ -35,6 +35,7 @@ const {
 const { makeGenpageCli } = require('./genpage-cli.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
 const { buildPromptSpec } = require('./ai-prompt.js');
+const { odataLit } = require('./odata.js');
 
 // Re-export from entity-provision so the export surface stays unchanged
 const BuildHalt = _BuildHalt;
@@ -44,7 +45,7 @@ const SDK_COLUMN_TYPE = _SDK_COLUMN_TYPE;
 // classic Notes/timeline control classId.
 const STD_FIELD_CLASS_ID = '4273EDBD-AC1D-40d3-9FB2-095C621B552D';
 const NOTES_CLASS_ID = '06375649-C143-495E-A496-C962E5B4488E';
-const COMPONENT_TYPE = { view: 26, chart: 59, form: 60, dashboard: 60, webResource: 61, app: 80 };
+const COMPONENT_TYPE = { view: 26, chart: 59, form: 60, dashboard: 60, webResource: 61, sitemap: 62, app: 80 };
 
 // Web-resource kinds (App Spec `type`) -> SDK createWebResource `type` token. The SDK maps
 // the token to the Dataverse webresourcetype code (js=3, html=1, css=2, …).
@@ -223,6 +224,7 @@ function planFor(spec, opts) {
   if (has('commands')) for (const [entity, cmds] of Object.entries(commandsByEntity(spec))) items.push({ phase: 'commands', label: `command bar for ${entity} (${cmds.length} button(s))` });
   if (has('dashboards')) for (const d of spec.dashboards || []) items.push({ phase: 'dashboards', label: `dashboard "${d.name}" (${(d.tiles || []).length} tile(s))` });
   if (has('app-shell')) items.push({ phase: 'app-shell', label: `app module "${spec.app.name}" + sitemap` });
+  if (has('app-shell') && !(spec.app && spec.app.icon)) items.push({ phase: 'app-shell', label: `app icon (generated) ${appUniqueName(spec)}_icon` });
   if (has('pages')) for (const p of spec.pages || []) items.push({ phase: 'pages', label: `page "${p.name}"` });
   if (has('pages') && (spec.pages || []).length && appHasPageSubareas(spec)) items.push({ phase: 'pages', label: 'finalize sitemap (genpage subareas)' });
   if (has('ai-features') && spec.ai !== undefined && spec.ai !== null) {
@@ -307,9 +309,6 @@ function defaultViewColumns(spec, entity) {
 function enrichesDefaultViews(spec, entity) {
   return !!entity && entity.enrichDefaultViews !== false && defaultViewColumns(spec, entity).length >= 2;
 }
-
-// OData single-quote escape for $filter string literals.
-function odataLit(v) { return String(v == null ? '' : v).replace(/'/g, "''"); }
 
 // The (entity, name) identity query that finds an already-built artifact so a re-run or a
 // retry-after-partial-failure REUSES it instead of creating a duplicate. These artifact types
@@ -415,10 +414,64 @@ function appUniqueName(spec) {
   return `${sol.publisherPrefix}_${spec.app.name}`.replace(/[^a-z0-9_]/gi, '').toLowerCase();
 }
 
+// A simple, self-contained default app-tile icon (SVG) — a rounded square with the app's initial.
+// Generated INTO the app's solution so the app never depends on an arbitrary external/managed icon
+// (which fails to import into an environment where that managed solution isn't installed).
+function defaultAppIconSvg(appName) {
+  const letter = (String(appName || 'A').trim()[0] || 'A').toUpperCase().replace(/[<>&"']/g, '');
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">` +
+    `<rect width="44" height="44" rx="8" fill="#0F6CBD"/>` +
+    `<text x="22" y="30" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="600" text-anchor="middle" fill="#ffffff">${letter}</text>` +
+    `</svg>`;
+}
+
+// Resolve the app's tile-icon web resource id, ensuring it lives IN this solution. Uses
+// spec.app.icon (a declared web resource) when set; otherwise generates a default SVG icon named
+// `<appUniqueName>_icon` and adds it to the solution (idempotent — reused by name on a re-run).
+// Returns the web-resource id, or undefined if it can't be resolved (the SDK then falls back).
+async function ensureAppIcon(spec, created, deps) {
+  const { provision, sol, runner } = deps;
+  const findByName = async (name) => {
+    const rows = await provision.queryRecords('webresource', { select: ['webresourceid'], filter: `name eq '${odataLit(name)}'`, top: 1 });
+    return rows && rows[0] && rows[0].webresourceid;
+  };
+  if (spec.app && spec.app.icon) {
+    // An explicit author icon — created this run (in webResources) or already present by name.
+    return (created.webResources && created.webResources[spec.app.icon]) || (await findByName(spec.app.icon)) || undefined;
+  }
+  const name = `${appUniqueName(spec)}_icon`;
+  const existing = await findByName(name);
+  if (existing) {
+    created.webResources[name] = existing;
+    return existing;
+  }
+  let id;
+  await runner.run('app-shell', `app icon (generated) ${name}`, async () => {
+    const r = await provision.createWebResource({ name, displayName: `${spec.app.name} Icon`, type: 'svg', content: defaultAppIconSvg(spec.app.name) });
+    id = r.id;
+    created.webResources[name] = r.id;
+    await provision.addSolutionComponent({ componentId: r.id, componentType: COMPONENT_TYPE.webResource, solutionUniqueName: sol.uniqueName });
+    return name;
+  });
+  return id;
+}
+
+// Add the app's sitemap (componenttype 62) to the solution. Adding the app module alone leaves the
+// sitemap only in the Default solution, so the app's own solution is incomplete on export. Resolve
+// the sitemap by its unique name (== the app's unique name) and add it. Best-effort + idempotent:
+// a re-add of an already-present component is tolerated so this never fails an otherwise-good build.
+async function ensureSitemapInSolution(provision, sol, appUnique) {
+  try {
+    const rows = await provision.queryRecords('sitemap', { select: ['sitemapid'], filter: `sitemapnameunique eq '${odataLit(appUnique)}'`, top: 1 });
+    const sitemapId = rows && rows[0] && rows[0].sitemapid;
+    if (!sitemapId) return;
+    await provision.addSolutionComponent({ componentId: sitemapId, componentType: COMPONENT_TYPE.sitemap, solutionUniqueName: sol.uniqueName });
+  } catch { /* best-effort — the app + its sitemap already exist; a component-pin hiccup must not fail the build */ }
+}
+
 // True when any sitemap subarea targets a generative page — the app must then be created first
 // (app_early) and its sitemap rewritten after the pages phase resolves the genPageIds.
-function appHasPageSubareas(spec) {
-  for (const a of (spec.appShell && spec.appShell.areas) || []) {
+function appHasPageSubareas(spec) {  for (const a of (spec.appShell && spec.appShell.areas) || []) {
     for (const g of a.groups || []) {
       for (const s of g.subAreas || []) if (s && s.page) return true;
     }
@@ -460,6 +513,7 @@ function appDef(spec, result, opts = {}) {
     groups: (a.groups || []).map((g, gi) => ({ id: `group_${ai}_${gi}`, title: g.label,
       subAreas: (g.subAreas || []).map((s, si) => subAreaJson(s, `sub_${ai}_${gi}_${si}`)).filter(Boolean) })) }));
   return { name: spec.app.name, uniqueName, description: spec.app.description || '', siteMap: { areas },
+    ...(opts.iconWebResourceId ? { iconWebResourceId: opts.iconWebResourceId } : {}),
     components: { forms: Object.values(result.forms || {}).filter(Boolean), views: Object.values(result.views || {}).filter(Boolean), charts: Object.values(result.charts || {}).filter(Boolean) } };
 }
 
@@ -701,7 +755,12 @@ async function runSdkBuild(spec, opts = {}) {
   //    Fetch it into this session's workspace (also required before push/publish on a cross-session
   //    edit) and rewrite the sitemap + components from the current spec so edits land idempotently.
   if (has('app-shell')) {
-    const def = appDef(spec, result.created, { omitUnbuiltPages: true });
+    // Self-contained app-tile icon: a web resource IN this solution (default generated, or the
+    // author's spec.app.icon). Resolved BEFORE appDef so the id is embedded at create time — the
+    // reliable path (an appmodule's webresourceid is effectively write-once). This replaces the
+    // SDK's arbitrary external/managed icon fallback that broke import into a fresh environment.
+    const iconWebResourceId = await ensureAppIcon(spec, result.created, { provision, sol, runner });
+    const def = appDef(spec, result.created, { omitUnbuiltPages: true, iconWebResourceId });
     result.created.app = await runner.run('app-shell', `app "${def.name}"`, async () => {
       const existingId = await provision.findArtifact('app', { uniqueName: def.uniqueName });
       if (existingId) {
@@ -711,11 +770,16 @@ async function runSdkBuild(spec, opts = {}) {
         // Page-backed apps get their authoritative sitemap (incl. GenPage subareas) + publish from
         // the pages finalizer below; publish here only when there are no page subareas to wait for.
         if (!appHasPageSubareas(spec)) await provision.publishArtifact('app', existingId);
+        await ensureSitemapInSolution(provision, sol, def.uniqueName);
         return existingId;
       }
       const art = provision.createArtifact('app', def);
       const pushed = await provision.pushArtifact('app', art.id);
       await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.app, solutionUniqueName: sol.uniqueName });
+      // The app module and its sitemap are DISTINCT solution components — adding the appmodule does
+      // NOT pull the sitemap in (it lands only in the Default solution), so export/import from the
+      // app's own solution would be incomplete. Add the sitemap (componenttype 62) explicitly.
+      await ensureSitemapInSolution(provision, sol, def.uniqueName);
       return pushed.id;
     });
   }

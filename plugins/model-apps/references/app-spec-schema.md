@@ -40,7 +40,7 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
 ```jsonc
 {
   "solution": { "uniqueName": "ContosoSupportDesk", "displayName": "Contoso Support Desk", "publisherPrefix": "new" },
-  "app":      { "name": "Support Desk", "description": "Track tickets" },
+  "app":      { "name": "Support Desk", "description": "Track tickets", "icon": "new_appicon" },
   "entities":      [ /* tables — see below */ ],
   "relationships": [ /* 1:N links — see below */ ],
   "globalChoices": [ /* optional shared option sets */ ],
@@ -53,6 +53,12 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   "ai":            { /* optional — AI feature flags + row-summary config */ }
 }
 ```
+
+- **`app.icon`** *(optional)* — the app tile icon. Must be a **declared image web resource**
+  (png/jpg/gif/svg/ico in `webResources[]`) so the app is **self-contained** on export/import.
+  **Omit it** and the build generates a simple default SVG icon **inside the solution** — either
+  way the app never depends on an arbitrary external/managed icon (which would fail to import into
+  a new environment). The app's **sitemap** is also added to the solution automatically.
 
 ## entities[]
 ```jsonc

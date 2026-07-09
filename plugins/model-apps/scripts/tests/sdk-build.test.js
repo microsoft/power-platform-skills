@@ -38,6 +38,7 @@ function mockSdk(opts = {}) {
       const filter = (o && o.filter) || '';
       if (e === 'solution') return opts.solutionExists ? [{ solutionid: 's' }] : [];
       if (e === 'webresource') return opts.existingWebResource ? [{ webresourceid: 'wr-existing' }] : [];
+      if (e === 'sitemap') return [{ sitemapid: 'sm-1' }];
       if (e === 'savedquery') {
         // Default-view / subgrid default lookup (filters by querytype): a default view exists.
         // Artifact idempotency (name eq filter) is now handled by findArtifact, not queryRecords.
@@ -198,11 +199,44 @@ test('existing-table entity-set name comes from findTables (sample-data binding 
   assert.strictEqual(await call.args[1].entitySetFor('new_customer'), 'new_customerset', 'existing-table entity-set resolved for the SDK bind');
 });
 
-test('artifacts added to the solution by component type (view 26 / chart 59 / form 60 / app 80)', async () => {
+test('artifacts added to the solution by component type (view 26 / chart 59 / form 60 / generated app-icon WR 61 / sitemap 62 / app 80)', async () => {
   const { sdk, calls } = mockSdk();
   await runSdkBuild(makeSpec(), { sdk, apply: true });
   const types = find(calls, 'addSolutionComponent').map((c) => c.args[0].componentType).sort((a, b) => a - b);
-  assert.deepStrictEqual(types, [26, 59, 60, 80]);
+  // 61 = the generated default app-icon web resource; 62 = the app's sitemap (added explicitly so
+  // export from the app's own solution is complete).
+  assert.deepStrictEqual(types, [26, 59, 60, 61, 62, 80]);
+});
+
+test('app icon: a default SVG icon is generated in-solution and set as the app tile icon', async () => {
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'web-resources', 'app-shell'] });
+  // The generated icon web resource is created (name <appUniqueName>_icon, type svg) ...
+  const wr = find(calls, 'createWebResource').find((c) => /_icon$/.test(c.args[0].name));
+  assert.ok(wr, 'a default app-icon web resource is created');
+  assert.strictEqual(wr.args[0].type, 'svg');
+  // ... and the app is created carrying that icon's id as iconWebResourceId.
+  const appCreate = find(calls, 'createArtifact').find((c) => c.args[0] === 'app');
+  assert.ok(appCreate.args[1].iconWebResourceId, 'app def carries an iconWebResourceId');
+});
+
+test('app icon: an explicit spec.app.icon (declared web resource) is used instead of generating one', async () => {
+  const spec = makeSpec({
+    app: { name: 'Support Desk', description: 'Tickets', icon: 'new_appicon' },
+    webResources: [{ name: 'new_appicon', type: 'png', contentBase64: 'AAAA' }],
+  });
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'web-resources', 'app-shell'] });
+  // No generated <appUniqueName>_icon web resource is created (the author's icon is reused).
+  assert.ok(!find(calls, 'createWebResource').some((c) => /_icon$/.test(c.args[0].name)), 'no generated icon when app.icon is set');
+  const appCreate = find(calls, 'createArtifact').find((c) => c.args[0] === 'app');
+  assert.ok(appCreate.args[1].iconWebResourceId, 'app def carries the explicit icon id');
+});
+
+test('sitemap: the app sitemap is added to the solution (componenttype 62)', async () => {
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'app-shell'] });
+  assert.ok(find(calls, 'addSolutionComponent').some((c) => c.args[0].componentType === 62 && c.args[0].componentId === 'sm-1'), 'sitemap added to solution as component 62');
 });
 
 test('Tier 1 data model: global choices, rich column types, customer, status, alt keys, N:N', async () => {

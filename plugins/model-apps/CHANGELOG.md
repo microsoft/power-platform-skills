@@ -54,6 +54,19 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   local enum mapping, etc.) — no rule loosening.
 
 ### Fixed
+- **Exported solutions are now self-contained — app icon + sitemap no longer missing
+  (`sdk-build.js` app-shell phase; vendored `cds-maker-sdk` `AppApi`).** Two import blockers when
+  moving an app to a new environment:
+  - The app tile **icon** pointed at an arbitrary **managed/external** web resource the SDK
+    auto-picked (e.g. a Field-Service `msdyn_` icon, or a *FormsPro* icon) that isn't in the
+    solution → import failed. The build now uses a **self-contained icon in the solution**: a new
+    optional `app.icon` (a declared image web resource), or a generated default SVG added to the
+    solution. Its id is set at create time (an appmodule's `webresourceid` is effectively
+    write-once). The SDK's `resolveAppIcon` fallback is also hardened to only ever pick an
+    **unmanaged** web resource.
+  - The app's **sitemap** was only in the Default solution (adding the app module doesn't pull it
+    in), so export prompted *"missing required unmanaged components: SiteMap"*. The build now adds
+    the sitemap (componenttype 62) to the app's solution explicitly.
 - **Relationships to a standard/system table no longer halt the build with an invalid
   schema name (`app-spec.js` / `spec-lint.js`).** The relationship schema name defaulted to
   `<referenced>_<referencing>`, which only starts with the publisher prefix when the *referenced*

@@ -56,5 +56,7 @@ forms	start	form "Comment"
 forms	ok	form "Customer"
 forms	ok	form "Ticket"
 forms	ok	form "Comment"
+app-shell	start	app icon (generated) new_supportdesk_icon
+app-shell	ok	app icon (generated) new_supportdesk_icon
 app-shell	start	app "Support Desk"
 app-shell	ok	app "Support Desk"
