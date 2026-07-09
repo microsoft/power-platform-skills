@@ -84,8 +84,6 @@ connector wiring.
 		- `user_impersonation`
 	- Microsoft Graph
 		- `User.Read`
-	- Microsoft Mobile Application Management
-	- Power BI Service
 	- Power Platform API
 		- `Connectivity.Connections.Read`
 		- `Connectivity.Connections.Write`
