@@ -174,7 +174,7 @@ In **review mode**, write the `transform-scan-code.js` stdout to `<REVIEW_DIR>/s
 
 Skip in **review mode**.
 
-Render uses the same shared template as the consolidated security review. Build a single-section review-data payload, then render:
+Render uses the same shared template as the consolidated security review. First write the Step 3 Normalize stdout to `<TEMP_DIR>/scan-code.json`, then build a single-section review-data payload and render:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/build-review-data.js" \
@@ -191,7 +191,7 @@ node "${PLUGIN_ROOT}/scripts/render-review.js" \
   --output "<PROJECT_ROOT>/docs/code-scan-<YYYY-MM-DD-HHMMSS>.html"
 ```
 
-`<TEMP_DIR>` should contain only `scan-code.json` (the transform output from Step 3) — `build-review-data.js` ignores intermediate files. The filename **must** include the local timestamp (e.g., `code-scan-2026-05-14-053805.html`). Delete `<TEMP_DIR>` after the render succeeds. Open the rendered HTML in the browser.
+`<TEMP_DIR>` also holds the intermediate `opengrep.json`/`trivy.json` from Step 3 alongside `scan-code.json`; `build-review-data.js` reads only `scan-code.json` and ignores the rest. The filename **must** include the local timestamp (e.g., `code-scan-2026-05-14-053805.html`). Delete `<TEMP_DIR>` after the render succeeds. Open the rendered HTML in the browser.
 
 ### 4.3 Present summary
 
