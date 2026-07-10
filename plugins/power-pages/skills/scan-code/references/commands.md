@@ -33,7 +33,7 @@ node "${PLUGIN_ROOT}/skills/scan-code/scripts/run-opengrep.js" --projectRoot "<p
 
 | Flag | Required | Default | Description |
 |------|----------|---------|-------------|
-| `--projectRoot` | Yes | — | Directory to scan. |
+| `--projectRoot` | Yes | — | Directory to scan. Must be a Power Pages site project root (`powerpages.config.json` or `.powerpages-site/`); any other directory is refused with exit 1. |
 | `--rulesets` | No | `p/default,p/owasp-top-ten` | Comma-separated list of rulesets. Accepts registry packs and local paths. |
 | `--include` | No | — | Optional glob narrowing the file set. |
 
@@ -53,7 +53,7 @@ node "${PLUGIN_ROOT}/skills/scan-code/scripts/run-trivy.js" --projectRoot "<proj
 
 | Flag | Required | Default | Description |
 |------|----------|---------|-------------|
-| `--projectRoot` | Yes | — | Directory to scan. |
+| `--projectRoot` | Yes | — | Directory to scan. Must be a Power Pages site project root (`powerpages.config.json` or `.powerpages-site/`); any other directory is refused with exit 1. |
 | `--severity` | No | `LOW,MEDIUM,HIGH,CRITICAL` | Severity floor for vulnerability findings. |
 | `--scanners` | No | `vuln,secret,license` | Comma-separated scanner list. |
 | `--secretConfig` | No | Auto-detected | Path to custom secret rules file. Auto-detects `trivy-secret.yaml` in the project root. |

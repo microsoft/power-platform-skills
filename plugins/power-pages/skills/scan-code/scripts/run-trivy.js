@@ -3,6 +3,7 @@
 const path = require('path');
 const fs = require('fs');
 const { spawnSync, execSync } = require('child_process');
+const { findProjectRoot } = require('../../../scripts/lib/validation-helpers');
 
 if (process.argv.includes('--help')) {
   process.stdout.write(`run-trivy.js — Runs trivy and emits the raw JSON output.
@@ -14,7 +15,8 @@ Usage:
   node run-trivy.js --projectRoot <path> [flags]
 
 Flags:
-  --projectRoot     Directory to scan (required)
+  --projectRoot     Directory to scan (required). Must be a Power Pages site project root
+                    (has powerpages.config.json or .powerpages-site/); anything else is refused.
   --severity        Comma-separated severity floor (default: LOW,MEDIUM,HIGH,CRITICAL)
   --scanners        Comma-separated scanner list (default: vuln,secret,license)
   --secretConfig    Path to custom secret rules file (trivy-secret.yaml format)
@@ -25,7 +27,8 @@ Flags:
 
 Exit codes:
   0  Success (raw trivy JSON on stdout)
-  1  Invocation error
+  1  Invocation error (missing --projectRoot, root not found, not a Power Pages site
+     project, or trivy failed unexpectedly)
 
 Examples:
   node run-trivy.js --projectRoot <project-root>
@@ -67,6 +70,12 @@ if (!projectRoot) {
 
 if (!fs.existsSync(projectRoot)) {
   process.stderr.write(`Project root not found: ${projectRoot}\n`);
+  process.exit(1);
+}
+
+// Defensive: scan only a Power Pages site project root, never an arbitrary directory.
+if (findProjectRoot(projectRoot) !== path.resolve(projectRoot)) {
+  process.stderr.write(`Refusing to scan ${path.resolve(projectRoot)}: not a Power Pages site project (no powerpages.config.json or .powerpages-site/).\n`);
   process.exit(1);
 }
 

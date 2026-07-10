@@ -29,6 +29,7 @@ Scan a Power Pages site project's source files and dependencies for security iss
 - **Opengrep exits 1 when findings exist.** This is normal behavior, not an error — the script handles it.
 - **Large output.** Both tools can produce large JSON for big projects. The scripts normalize the output into a flat findings list.
 - **Trivy severity flag only affects vulnerability findings.** Secrets and license findings are always returned regardless of the `--severity` flag.
+- **Secrets are never shown in full — anywhere.** Whenever **you** read source directly (the agent-driven review) or present a finding, use your judgment to recognize any credential — API keys, tokens, passwords, connection strings, private keys, or any other secret shape (there is no fixed list). Never output its raw value **anywhere** — your context, the session, chat, logs, a summary, the report, or any other output — not even partially; where a value would otherwise be shown, replace it with a mask (e.g. `********`).
 
 ## Workflow
 
@@ -79,7 +80,7 @@ Warn the user that this review reads many files and uses a large amount of token
 - **Feature branch** (not `main`, `master`, or equivalent): offer to review only the changes in the current branch (`git diff <main-branch>...HEAD`).
 - **Main/master branch or no git repo**: offer to review the entire project source.
 
-If the user accepts, use `Glob` + `Read` + `Grep` to scan the relevant files for common security patterns (hardcoded secrets, unsafe API usage, missing input validation, exposed endpoints, etc.) and present findings. Do not attempt to install the tools.
+If the user accepts, use `Glob` + `Read` + `Grep` to review the relevant files for common security patterns (hard-coded secrets, unsafe API usage, missing input validation, exposed endpoints, etc.) and present findings. **Never surface a secret value anywhere** — never output a credential's raw value in any output (your context, the session, chat, logs, etc.), not even partially; where a value would otherwise be shown, replace it with a mask (e.g. `********`). Do not attempt to install the tools.
 
 ---
 
@@ -224,6 +225,7 @@ If no meaningful follow-up exists, end the skill.
 - **Context-aware interactions** — recommendations MUST reflect the site's actual scan results. Do not present generic advice.
 - **Recommendations MUST NOT break the site** — when suggesting fixes for code findings, verify that the fix does not introduce regressions.
 - **NEVER recommend broadening security** — if a finding suggests tightening (e.g., removing a hard-coded secret), do not suggest keeping it for convenience.
+- **NEVER disclose a secret value** — Never output, log, store, or repeat a raw secret anywhere, not even partially or when a regex/grep matches it. Identify a secret finding by its type, file, and line — not its value. Masking (e.g. `********`) applies only where a secret value would otherwise be shown; you are not required to display it.
 
 ## References
 

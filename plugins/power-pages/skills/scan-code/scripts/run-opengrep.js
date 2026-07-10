@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
 const fs = require('fs');
+const path = require('path');
 const { spawnSync, execSync } = require('child_process');
+const { findProjectRoot } = require('../../../scripts/lib/validation-helpers');
 
 if (process.argv.includes('--help')) {
   process.stdout.write(`run-opengrep.js — Runs opengrep and emits the raw JSON output.
@@ -10,7 +12,8 @@ Usage:
   node run-opengrep.js --projectRoot <path> [--rulesets <comma-separated>] [--include <glob>]
 
 Flags:
-  --projectRoot   Directory to scan (required)
+  --projectRoot   Directory to scan (required). Must be a Power Pages site project root
+                  (has powerpages.config.json or .powerpages-site/); anything else is refused.
   --rulesets      Comma-separated list of rulesets (default: p/default,p/owasp-top-ten)
                   Each value is passed as a separate --config flag to opengrep.
                   Accepts registry packs (p/owasp-top-ten) and local paths (/path/to/rules.yml).
@@ -19,7 +22,8 @@ Flags:
 
 Exit codes:
   0  Success (raw opengrep JSON on stdout)
-  1  Invocation error (bad args or opengrep failed unexpectedly)
+  1  Invocation error (missing --projectRoot, root not found, not a Power Pages site
+     project, or opengrep failed unexpectedly)
 
 Example:
   node run-opengrep.js --projectRoot <project-root>
@@ -45,6 +49,12 @@ if (!projectRoot) {
 
 if (!fs.existsSync(projectRoot)) {
   process.stderr.write(`Project root not found: ${projectRoot}\n`);
+  process.exit(1);
+}
+
+// Defensive: scan only a Power Pages site project root, never an arbitrary directory.
+if (findProjectRoot(projectRoot) !== path.resolve(projectRoot)) {
+  process.stderr.write(`Refusing to scan ${path.resolve(projectRoot)}: not a Power Pages site project (no powerpages.config.json or .powerpages-site/).\n`);
   process.exit(1);
 }
 

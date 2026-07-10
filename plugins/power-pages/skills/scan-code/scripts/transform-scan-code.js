@@ -52,8 +52,12 @@ function readJson(filePath, label) {
 
 const OPENGREP_SEVERITY_TO_BUCKET = {
   ERROR: 'critical',
+  CRITICAL: 'critical',
+  HIGH: 'high',
   WARNING: 'warning',
+  MEDIUM: 'medium',
   INFO: 'info',
+  LOW: 'low',
 };
 
 const TRIVY_SEVERITY_TO_BUCKET = {
@@ -63,6 +67,17 @@ const TRIVY_SEVERITY_TO_BUCKET = {
   LOW: 'low',
   UNKNOWN: 'info',
 };
+
+// Fallback so an unknown severity is still counted, never dropped from report totals.
+const SEVERITY_FALLBACK = 'warning';
+
+function normalizeSeverity(map, raw) {
+  if (typeof raw === 'string') {
+    const bucket = map[raw.trim().toUpperCase()];
+    if (bucket) return bucket;
+  }
+  return SEVERITY_FALLBACK;
+}
 
 function relativize(filePath, projectRoot) {
   const normalized = filePath.replace(/\\/g, '/');
@@ -110,7 +125,7 @@ function transformOpengrep(raw, projectRoot) {
 
     findings.push({
       id: `opengrep-${counter++}`,
-      severity: OPENGREP_SEVERITY_TO_BUCKET[first.extra.severity],
+      severity: normalizeSeverity(OPENGREP_SEVERITY_TO_BUCKET, first.extra.severity),
       category: metadata.category,
       confidence: metadata.confidence,
       title,
@@ -125,8 +140,10 @@ function transformOpengrep(raw, projectRoot) {
 // Trivy result shape (per trivy1-8.json samples):
 //   Results[]: { Target, Class, Vulnerabilities?, Secrets?, Licenses? }
 //   Vulnerability: { VulnerabilityID, PkgName, InstalledVersion, FixedVersion, Severity, Title }
-//   Secret:        { RuleID, Category, Severity, Title, StartLine }
+//   Secret:        { RuleID, Category, Severity, Title, StartLine, Match, Code }
 //   License:       { Severity, Category, PkgName, FilePath, Name }
+//
+// Read only safe metadata — never Match/Code — so secret values can't leak. Don't add them.
 function transformTrivy(raw, projectRoot) {
   const findings = [];
   let counter = 1;
@@ -139,7 +156,7 @@ function transformTrivy(raw, projectRoot) {
       for (const v of target.Vulnerabilities) {
         findings.push({
           id: `trivy-${counter++}`,
-          severity: TRIVY_SEVERITY_TO_BUCKET[v.Severity],
+          severity: normalizeSeverity(TRIVY_SEVERITY_TO_BUCKET, v.Severity),
           category: 'vulnerability',
           title: `${v.PkgName}@${v.InstalledVersion}`,
           tag: v.VulnerabilityID,
@@ -154,7 +171,7 @@ function transformTrivy(raw, projectRoot) {
       for (const s of target.Secrets) {
         findings.push({
           id: `trivy-${counter++}`,
-          severity: TRIVY_SEVERITY_TO_BUCKET[s.Severity],
+          severity: normalizeSeverity(TRIVY_SEVERITY_TO_BUCKET, s.Severity),
           category: 'secret',
           title: s.Title,
           tag: s.RuleID,
@@ -169,7 +186,7 @@ function transformTrivy(raw, projectRoot) {
       for (const l of target.Licenses) {
         findings.push({
           id: `trivy-${counter++}`,
-          severity: TRIVY_SEVERITY_TO_BUCKET[l.Severity],
+          severity: normalizeSeverity(TRIVY_SEVERITY_TO_BUCKET, l.Severity),
           category: 'license',
           title: `${l.PkgName}: ${l.Name}`,
           tag: l.Name,
