@@ -336,6 +336,72 @@ test('app teardown skips when app not found (resolve returns [])', async () => {
   assert.strictEqual(cascadeCalls.length, 0, 'no cascade when resolve returns []');
 });
 
+// deleteAppCascade now returns a structured { success, deleted, failures } result (older vendored
+// bundles returned void). The app `del` handler must surface a GENUINE child-cleanup failure as a
+// thrown error (so the teardown reports ok=false with the leftover), tolerate a not-found child
+// failure (already cascaded away — not a leftover), and stay backward-compatible with a void return.
+test('app teardown surfaces a genuine deleteAppCascade cascade failure (orphaned sitemap/genpage) as a thrown error', async () => {
+  const sdk = {
+    deleteAppCascade: async () => ({
+      success: false,
+      deleted: [{ type: 'app', id: 'app-1' }],
+      failures: [{ operation: 'delete', type: 'sitemap', id: 'sm-1', error: new Error('server exploded') }],
+    }),
+  };
+  await assert.rejects(
+    () => KIND_HANDLERS.app.del(sdk, { id: 'app-1', name: 'A', appModuleIdUnique: 'u-1' }),
+    /orphaned rows remain.*sitemap sm-1: server exploded/,
+    'a real child-cleanup failure must be surfaced, not swallowed'
+  );
+});
+
+test('app teardown tolerates a not-found deleteAppCascade child failure (already cascaded away)', async () => {
+  const notFound = new Error('sitemap not found');
+  notFound.statusCode = 404;
+  const sdk = {
+    deleteAppCascade: async () => ({
+      success: false,
+      deleted: [{ type: 'app', id: 'app-1' }],
+      failures: [{ operation: 'delete', type: 'sitemap', id: 'sm-1', error: notFound }],
+    }),
+  };
+  await assert.doesNotReject(
+    () => KIND_HANDLERS.app.del(sdk, { id: 'app-1', name: 'A', appModuleIdUnique: 'u-1' }),
+    'a not-found child (already gone) is not a leftover and must not fail the step'
+  );
+});
+
+test('app teardown treats a clean deleteAppCascade result and a void return alike (no throw)', async () => {
+  const cleanSdk = { deleteAppCascade: async () => ({ success: true, deleted: [{ type: 'app', id: 'app-1' }], failures: [] }) };
+  const voidSdk = { deleteAppCascade: async () => undefined }; // older bundle contract
+  await assert.doesNotReject(() => KIND_HANDLERS.app.del(cleanSdk, { id: 'app-1', name: 'A', appModuleIdUnique: 'u-1' }));
+  await assert.doesNotReject(() => KIND_HANDLERS.app.del(voidSdk, { id: 'app-1', name: 'A', appModuleIdUnique: 'u-1' }));
+});
+
+test('runTeardown reports ok=false and records the app step when a deleteAppCascade child cleanup fails, but continues to later steps', async () => {
+  const solutionDeletes = [];
+  const sdk = {
+    resolveArtifact: async (kind) => {
+      if (kind === 'app') return [{ id: 'app-1', name: 'A', appModuleIdUnique: 'u-1' }];
+      if (kind === 'solution') return [{ id: 'sol-1', name: 'ContosoApp' }];
+      return [];
+    },
+    deleteAppCascade: async () => ({
+      success: false,
+      deleted: [{ type: 'app', id: 'app-1' }],
+      failures: [{ operation: 'delete', type: 'genPage', id: 'gp-1', error: new Error('locked') }],
+    }),
+    deleteSolution: async (id) => { solutionDeletes.push(id); },
+  };
+  const spec = { app: { name: 'A' }, solution: { uniqueName: 'ContosoApp', publisherPrefix: 'new' } };
+  const events = [];
+  const r = await runTeardown(spec, { apply: true }, { sdk, emit: (e) => events.push(e) });
+  assert.strictEqual(r.ok, false, 'a cascade child-cleanup failure makes the whole run not-ok');
+  assert.ok(r.errors.some((e) => /app module "A"/.test(e.step || '') && /genPage gp-1: locked/.test(e.message)), 'the app step error names the orphaned genPage');
+  assert.ok(events.some((e) => e.phase === 'app' && e.status === 'error'), 'the app step emits an error status');
+  assert.deepStrictEqual(solutionDeletes, ['sol-1'], 'best-effort: the solution step still ran after the app failure');
+});
+
 // --- dry-run ----------------------------------------------------------------------------
 
 test('dry-run emits the whole plan as skips and never calls SDK', async () => {

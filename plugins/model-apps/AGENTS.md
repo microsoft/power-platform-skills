@@ -316,6 +316,9 @@ skill relies on behaviors that must survive. `scripts/tests/vendor-sdk-smoke.tes
   normalizer must apply to GUID params ONLY, never to these names.
 - **Sitemap free-text (titles/URLs/descriptions) is XML-escaped, not rejected** — a "safe DOM factory"
   must escape attribute/text VALUES while only validating element/attribute NAMES.
+- **`deleteAppCascade` returns a structured `{ success, deleted, failures }` result** — teardown
+  reads `failures` to report orphaned sitemap/genpage rows instead of claiming a clean delete; the
+  bundle must keep returning the result (not void) after a re-vendor.
 
 **Live end-to-end (app-builder — writes to a real Dataverse env; optional).** All build/verify/
 teardown scripts are **dry-run by default**; add `--apply` to write.

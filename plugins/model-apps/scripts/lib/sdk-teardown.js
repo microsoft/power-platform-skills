@@ -84,10 +84,28 @@ const KIND_HANDLERS = {
       const items = await sdk.resolveArtifact('app', { uniqueName: target.uniqueName });
       return (items || []).map((x) => ({ id: x.id, name: x.name, appModuleIdUnique: x.appModuleIdUnique }));
     },
-    // deleteAppCascade handles the app module + orphaned sitemap + genpage rows internally,
-    // preserving the same best-effort cascade behavior as the prior manual chain.
+    // deleteAppCascade fail-fast-deletes the app module, then best-effort cleans up the
+    // orphaned sitemap + generative-page rows (uxagentproject[file]). It returns a structured
+    // { success, deleted, failures } result (older vendored bundles returned void). The app
+    // record itself is gone once this resolves, but an individual child-cleanup step can still
+    // fail — which the old void contract swallowed, silently leaving orphaned rows while the
+    // teardown reported a clean delete. Surface any GENUINE child failure so the run reports
+    // ok=false with the exact leftovers. A not-found child failure means the row already
+    // cascaded away (not a leftover), so it is tolerated — the same best-effort spirit as the
+    // step-level isNotFound handling in deleteStep.
     async del(sdk, item) {
-      await sdk.deleteAppCascade(item.id, item.appModuleIdUnique);
+      const result = await sdk.deleteAppCascade(item.id, item.appModuleIdUnique);
+      const failures = (result && Array.isArray(result.failures) ? result.failures : []).filter(
+        (f) => !isNotFound(f && f.error)
+      );
+      if (failures.length) {
+        const detail = failures
+          .map((f) => `${f.operation} ${f.type}${f.id ? ` ${f.id}` : ''}: ${errMsg(f.error)}`)
+          .join('; ');
+        throw new Error(
+          `app "${item.name}" deleted, but ${failures.length} cascade cleanup step(s) failed (orphaned rows remain): ${detail}`
+        );
+      }
     },
   },
   dashboard: {

@@ -46,6 +46,16 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   `provision-entities.js` / the build engine), eliminating duplicate metadata logic.
 
 ### Changed
+- **Re-vendored `cds-maker-sdk` with shared input safety boundaries.** The bundled SDK now
+  normalizes GUID-typed ids to lowercase-canonical form (rejecting OData-expression-shaped ids
+  before they can reach a `$filter`/`@odata.bind`), routes every OData query through a builder that
+  **single-encodes** each option value, and constructs sitemap XML via a factory that validates
+  element/attribute **names** while XML-escaping free-text **values**. This is transparent to the
+  skill: raw `$filter` strings still round-trip (single-encoded, never double-encoded), name-based
+  methods (`resolveArtifact`/`setEntityIcon`/`createRelationship`/`deleteTable`) still accept
+  logical/unique/schema names verbatim, and special characters in sitemap titles/URLs still
+  serialize instead of throwing. The vendored-SDK `CONTRACT:` regression tests lock all three, so a
+  future re-vendor that breaks an invariant fails here.
 - Spec tightening so workflow-logs are command-verbatim and `pageInput`
   destructure is required even on mock pages (planner, page-builder,
   SKILL.md Phase 6 + Phase 8).
@@ -54,6 +64,13 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   local enum mapping, etc.) — no rule loosening.
 
 ### Fixed
+- **Teardown surfaces cascade cleanup failures instead of silently orphaning rows
+  (`sdk-teardown.js`).** The re-vendored SDK's `deleteAppCascade` now returns a structured
+  `{ success, deleted, failures }` result (it used to return void and swallow child-cleanup
+  errors). The app teardown step now reads `failures`: if the app module is deleted but a cascaded
+  sitemap/generative-page row cleanup genuinely fails, the run reports `ok=false` and names the
+  orphaned rows rather than claiming a clean delete. An already-gone (not-found) child is still
+  tolerated, and a void/clean result is unchanged — so best-effort teardown keeps going.
 - **Exported solutions are now self-contained — app icon + sitemap no longer missing
   (`sdk-build.js` app-shell phase; vendored `cds-maker-sdk` `AppApi`).** Two import blockers when
   moving an app to a new environment:

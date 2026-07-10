@@ -191,7 +191,13 @@ test('CONTRACT: name-based SDK methods accept logical/unique names verbatim (nev
   await sdk.setEntityIcon('contoso_widget', { vector: 'contoso_icon', publish: false }); // table icon by logical name
   await sdk.createRelationship({ type: 'OneToMany', schemaName: 'contoso_systemuser_teammember', referencedEntity: 'systemuser', referencingEntity: 'contoso_teammember', lookupSchemaName: 'contoso_LinkedUserId', lookupDisplayName: 'Linked User' });
   try { await sdk.deleteTable('account'); } catch { /* the SDK's deleteTable throws a cosmetic not-found even on success */ }
-  const wire = reqs.map((r) => `${r.method} ${r.url} ${JSON.stringify(r.body || '')}`).join('\n');
+  // Decode each URL before matching: the SDK's OData query builder single-encodes query
+  // values (spaces -> %20, `$select` commas -> %2C), so a raw-string regex would miss the
+  // name even though it transmitted fine. The GUID-validation guard is unaffected — if any
+  // name-based method had rejected its name argument, the awaits above would have thrown
+  // before reaching these assertions. decodeURIComponent recovers the raw names to prove
+  // they survived transport (path segments like LogicalName='account' are unencoded already).
+  const wire = reqs.map((r) => `${r.method} ${decodeURIComponent(r.url)} ${JSON.stringify(r.body || '')}`).join('\n');
   assert.match(wire, /uniquename eq 'new_app'/i, 'resolveArtifact accepted a unique name');
   assert.match(wire, /contoso_widget/i, 'setEntityIcon accepted a table logical name');
   assert.match(wire, /systemuser/, 'createRelationship kept the system-table logical name');
@@ -218,5 +224,41 @@ test('CONTRACT: free-text sitemap titles/URLs are XML-escaped, not rejected (a s
   assert.match(xml, /&amp;/, 'ampersands in titles/URLs are escaped');
   assert.match(xml, /a=1&amp;b=2/, 'URL query separators are escaped in the attribute value (not lost or left raw)');
   assert.ok(!/<Title[^>]*>[^<]*&(?!amp;|lt;|gt;|quot;|apos;|#)/.test(xml), 'no raw unescaped ampersand inside a Title');
+});
+
+test('CONTRACT: vendored deleteAppCascade returns a structured { success, deleted, failures } result surfacing child-cleanup failures (teardown relies on this to report orphaned sitemap/genpage rows)', async () => {
+  // The app delete succeeds but the cascaded sitemap delete fails (a locked/500 row). The old
+  // void contract swallowed this; the skill's teardown now reads result.failures to flag the
+  // orphan, so the bundle MUST keep returning the structured result after a re-vendor.
+  const APP_ID = '77777777-7777-7777-7777-777777777777';
+  const APP_UNIQUE = '88888888-8888-8888-8888-888888888888';
+  const SITEMAP_ID = '99999999-9999-9999-9999-999999999999';
+  const client = {
+    get: async (url) => {
+      if (/EntityDefinitions\(LogicalName=/i.test(url)) {
+        const ln = (url.match(/LogicalName='([^']+)'/) || [])[1] || 'x';
+        return { status: 200, headers: {}, body: { MetadataId: '33333333-3333-3333-3333-333333333333', EntitySetName: `${ln}s`, LogicalName: ln } };
+      }
+      // appmodulecomponent (type 62) resolves the app's sitemap id...
+      if (/\/appmodulecomponents\?/.test(url)) return { status: 200, headers: {}, body: { value: [{ objectid: SITEMAP_ID, componenttype: 62 }] } };
+      // ...and the sitemap row has no GenPageId, so there are no generative pages to cascade.
+      if (/\/sitemaps\?/.test(url)) return { status: 200, headers: {}, body: { value: [{ sitemapxml: '<SiteMap></SiteMap>' }] } };
+      return { status: 200, headers: {}, body: { value: [] } };
+    },
+    post: async () => ({ status: 204, headers: {}, body: {} }),
+    patch: async () => ({ status: 204, headers: {}, body: {} }),
+    delete: async (url) => {
+      // The DELETE /sitemaps(<id>) child cleanup fails; the DELETE /appmodules(<id>) primary succeeds.
+      if (/\/sitemaps\(/.test(url)) return { status: 500, headers: {}, body: { error: { message: 'sitemap locked' } } };
+      return { status: 204, headers: {}, body: {} };
+    },
+    put: async () => ({ status: 204, headers: {}, body: {} }),
+  };
+  const sdk = sdkWith(client);
+  const result = await sdk.deleteAppCascade(APP_ID, APP_UNIQUE);
+  assert.ok(result && typeof result === 'object', 'deleteAppCascade returns a structured result (not void)');
+  assert.strictEqual(result.success, false, 'a failed child cleanup makes success=false');
+  assert.ok(Array.isArray(result.deleted) && result.deleted.some((d) => d.type === 'app'), 'the primary app delete is reported in deleted[]');
+  assert.ok(Array.isArray(result.failures) && result.failures.some((f) => f.type === 'sitemap'), 'the orphaned sitemap cleanup failure is surfaced in failures[]');
 });
 
