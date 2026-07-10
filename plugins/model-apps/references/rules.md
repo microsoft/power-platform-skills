@@ -546,6 +546,14 @@ What you can rely on from RuntimeTypes:
 - `BaseUxAgentDataApi<TR, ER>` — the dataApi interface with `createRow`,
   `updateRow`, `deleteRow`, `retrieveRow`, `queryTable`, `getChoices`
 
+### Connector DataAPI (optional — only when the plan has Connector Bindings)
+
+When the plan's `## Connector Bindings` is non-empty, the page may call Power
+Platform connectors via `queryConnectorTable` (tabular) and
+`executeConnectorOperation` (REST). These are optional runtime methods — always
+presence-check before calling. See [connectors.md](./connectors.md) for the
+required patterns and the binding contract.
+
 ---
 
 ## DataAPI Usage Examples
