@@ -199,6 +199,41 @@ If any entities need creating, note that entity creation requires:
 Detection uses `pac model list-tables` natively; creation runs through the
 plugin's own Web API scripts under `${PLUGIN_ROOT}/scripts/`.
 
+### Connector Detection
+
+If the request implies a non-Dataverse source (for example SharePoint, Teams,
+weather, Office 365, SQL via connector, or a custom REST connector), discover
+available connector bindings before app selection:
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/list-connections.js" "<ENV_URL>"
+```
+
+Log the command in `workflow-log.md`. The script returns `connections` sorted
+with `readyToBind: true` first and `connectionReferences` from Dataverse. Present
+the ready-to-bind choices first via `AskUserQuestion`, showing the
+connectionreference logical name, connector id, and connection display name.
+
+For tabular connectors, resolve the dataset and table before writing the plan:
+- Use the chosen connection from `pac connection list` to identify the connector.
+- Use the connector runtime metadata discovery (`/datasets`, then `/tables`) to
+  enumerate available datasets and tables for that connection.
+- Store SharePoint datasets as the site URL and tables as list GUIDs (not list
+  display names); write list display names only in `Table Display Names`.
+
+For REST/action connectors, resolve the operation name from the connector's
+available operations and store it in `Operations`.
+
+If the maker chooses a connection that has no connectionreference, do not invent
+a logical name. Either instruct the maker to create one or call:
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/create-connection-reference.js" "<ENV_URL>" "<logicalName>" "<connectorId>" --connection-id "<connectionId>"
+```
+
+Write the final selections to `## Connector Bindings` in `genpage-plan.md`. If
+no connectors are used, the section value must be exactly `No connector bindings.`
+
 ### App Detection
 
 Run:
@@ -326,6 +361,7 @@ Enter plan mode (`EnterPlanMode`) and present:
 - Entities needed: [list]
 - Entities that exist: [list]
 - Entities to create: [list — with columns, types, relationships, choices]
+- Connector bindings: [ready-to-bind connectionreference logical names, or "none"]
 - Sample data: will ask after entity creation
 
 ### App
