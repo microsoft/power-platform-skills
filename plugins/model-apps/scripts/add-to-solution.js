@@ -20,6 +20,11 @@
 //   62  = Site Map
 //   65  = Hierarchy Rule
 //   80  = Model-driven App (appmodule)
+//   371 = Connection Reference (connectionreference) — confirm per env (Task A0)
+//
+// NOTE: a GenPage (uxagentproject) is NOT a standalone solution component type.
+// Add the page's appmodule with AddRequiredComponents=true and the uxagentproject
+// + sitemap travel as required components. See add-page-to-solution.js.
 //
 // Output: { "ok": true }
 
