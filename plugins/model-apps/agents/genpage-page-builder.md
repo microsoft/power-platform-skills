@@ -296,18 +296,29 @@ const mockRecords = [
 ### Connector-backed data
 
 When the plan has `## Connector Bindings`, use only the logical name, connector
-id, dataset, table GUID, display name, and operation values from that section.
-Never guess a `connectorLogicalName` that is not in the plan. Read
+id, dataset, table GUID, display name, operation, and Fields values from that
+section. Never guess a `connectorLogicalName` or connector field name that is
+not in the plan. Read
 `${PLUGIN_ROOT}/references/connectors.md` and emit connector calls with the
 verified runtime patterns below. Connector methods are optional at runtime, so
 every call must be presence-checked and wrapped in `try`/`catch` with a graceful
 empty or error state.
 
+Connector rows are not covered by RuntimeTypes. Before using
+`queryConnectorTable`, declare an inline row interface from the plan's discovered
+`Fields` list and mark every property optional. Use the field spelling and types
+exactly as recorded in the plan; if a type is unclear, use `unknown`. SharePoint
+choice fields use the `{ Value?: string }` shape. Example:
+
+```typescript
+type PetRow = { ID?: number; PetName?: string; OwnerName?: string; PetType?: { Value?: string }; Created?: string };
+```
+
 Tabular connectors use `queryConnectorTable`. Tables must be the plan's list
 GUIDs, and datasets must be the plan's dataset value (SharePoint site URL):
 
 ```typescript
-const connectorApi = dataApi as unknown as { queryConnectorTable?: (connectorLogicalName: string, dataset: string, table: string, options: Record<string, unknown>) => Promise<{ rows: Row[] }>; };
+const connectorApi = dataApi as unknown as { queryConnectorTable?: (connectorLogicalName: string, dataset: string, table: string, options: Record<string, unknown>) => Promise<{ rows: PetRow[] }>; };
 if (typeof connectorApi.queryConnectorTable !== 'function') { return; }
 const result = await connectorApi.queryConnectorTable('new_uxtest_sharepoint', 'https://host.sharepoint.com/sites/x', '<list-guid>', { top: 50 });
 ```

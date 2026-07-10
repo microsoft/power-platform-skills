@@ -108,11 +108,14 @@ validation rejects values that look like `crb2b_playername` or even
 [If NO connectors are used, the value is exactly:]
 No connector bindings.
 
-[Else, one row per binding:]
-| Logical Name | Connector Id | Dataset | Tables (GUIDs) | Table Display Names | Operations |
-|--------------|--------------|---------|----------------|---------------------|------------|
-| new_uxtest_sharepoint | /providers/Microsoft.PowerApps/apis/shared_sharepointonline | https://.../sites/foo | 5709dd6f-... | Pet | |
-| new_uxtest_msnweather | /providers/Microsoft.PowerApps/apis/shared_msnweather | | | | CurrentWeather |
+[Else, one row per binding. `Fields` is required for tabular connectors and
+records the authoring-time connector column/schema discovery used by the
+page-builder. All connector fields are treated as OPTIONAL in generated TSX
+because connector rows are dynamically typed and may omit values at runtime.]
+| Logical Name | Connector Id | Dataset | Tables (GUIDs) | Table Display Names | Operations | Fields |
+|--------------|--------------|---------|----------------|---------------------|------------|--------|
+| new_uxtest_sharepoint | /providers/Microsoft.PowerApps/apis/shared_sharepointonline | https://.../sites/foo | 5709dd6f-... | Pet | | PetName (string), OwnerName (string), PetType ({Value:string}), Created (datetime) |
+| new_uxtest_msnweather | /providers/Microsoft.PowerApps/apis/shared_msnweather | | | | CurrentWeather | |
 
 ## Solution Packaging
 - Package into solution: true / false (default false)
@@ -163,7 +166,7 @@ No connector bindings.
 | `## Pages` | Orchestrator (page list for Phase 5 dispatch) | File names must be unique |
 | `## Entity Creation Required` | Entity-builder | Exact literal "No entity creation required..." when empty, else per-entity subsections |
 | `## Existing Entities` | Orchestrator (for `pac model genpage generate-types --data-sources`) | Comma-separated logical names |
-| `## Connector Bindings` | Planner, page-builder, orchestrator deploy | Exact literal "No connector bindings." when empty; logical names must match Dataverse connectionreferences |
+| `## Connector Bindings` | Planner, page-builder, orchestrator deploy | Exact literal "No connector bindings." when empty; logical names must match Dataverse connectionreferences; tabular bindings must include discovered optional `Fields` |
 | `## Solution Packaging` | Orchestrator (Phase 6.7) | Opt-in; absent = skip |
 | `## Design Preferences` | Page-builder | Prose, free-form |
 | `## Relevant Samples` | Page-builder (for Read path resolution) | Sample filename must match a file in `${PLUGIN_ROOT}/samples/` |
@@ -179,6 +182,7 @@ Before the orchestrator fans out to builders in Phase 5, it should verify:
 - [ ] Every page in `## Pages` has a matching `### [Page Name]` subsection in `## Per-Page Specifications`
 - [ ] If `## Pages` contains Dataverse entities, `## Existing Entities` is non-empty OR `## Entity Creation Required` is non-empty
 - [ ] Every non-empty `## Connector Bindings` logical name matches an existing `connectionreference` in the selected environment
+- [ ] Every tabular connector binding records discovered `Fields`; generated connector row interfaces must mark every field optional
 
 If validation fails, the orchestrator should surface a clear error to the user rather
 than dispatching builders that will fail silently.

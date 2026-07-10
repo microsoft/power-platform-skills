@@ -46,10 +46,36 @@ upload --connectors` persists it into the page `config.json`.
 - Always cast `dataApi` to an optional connector-method shape.
 - Always presence-check the method before calling it.
 - Always wrap calls in `try`/`catch` and set a graceful empty/error state.
-- Never guess a logical name, dataset, table GUID, or operation name. Use the
-  plan's `## Connector Bindings` values only.
+- Never guess a logical name, dataset, table GUID, operation name, or field name.
+  Use the plan's `## Connector Bindings` values only.
 - Keep non-connector pages unchanged; only emit connector code when the plan has
   connector bindings.
+
+## Field schema
+
+`config.json.connectorBindings` stores where to fetch connector data, not the
+table's column list. Connector rows are dynamically typed and passed through by
+the runtime; there is no connector equivalent of Dataverse `RuntimeTypes.ts`.
+Therefore the page-builder must declare the connector row interface inline from
+the plan's discovered `Fields` list.
+
+Rules:
+- Build row interfaces only from `## Connector Bindings` → `Fields`.
+- Mark every connector field optional with `?`; connector APIs can omit values
+  row-by-row.
+- Use the discovered field spelling exactly. Do not camel-case, singularize, or
+  infer alternate display names.
+- Use `unknown` for any field whose shape was not discovered with confidence.
+- SharePoint choice columns come back as objects with a `Value` property.
+
+Example discovered SharePoint fields:
+
+```typescript
+type PetRow = { ID?: number; PetName?: string; OwnerName?: string; PetType?: { Value?: string }; Created?: string };
+```
+
+`Created` is represented as a string because connector date/time values arrive
+serialized; parse/format it at the display boundary only when needed.
 
 ## Verified tabular pattern
 

@@ -224,6 +224,40 @@ For tabular connectors, resolve the dataset and table before writing the plan:
 For REST/action connectors, resolve the operation name from the connector's
 available operations and store it in `Operations`.
 
+### Connector Column Discovery
+
+For every tabular connector binding, discover the table fields before writing
+`genpage-plan.md`. The binding tells the runtime where to fetch; the Fields list
+tells the page-builder which properties it may access without guessing.
+
+Preferred path after resolving connector id, connection id, dataset, and table:
+
+```powershell
+pac model genpage --help
+```
+
+Pre-flight that the help text contains `list-connector-tables`. If present, run:
+
+```powershell
+pac model genpage list-connector-tables --connector-id <apiId> --connection-id <connId> --dataset <ds> --table <tableId>
+```
+
+Parse the returned `columns` collection. Record each field name and type in the
+binding's `Fields` cell, for example:
+`PetName (string), OwnerName (string), PetType ({Value:string}), Created (datetime)`.
+Treat all connector fields as optional; the generated TSX declares `field?`
+because connector rows are dynamic and may omit values.
+
+Fallback when the PAC verb is unavailable:
+1. If another discovery path can query a single row safely, sample top 1 and
+   record that row's keys and observed primitive/object shapes.
+2. If no discovery path is available or the table is empty, ask the maker via
+   `AskUserQuestion` for the field names/types they expect to use.
+
+Never fabricate connector field names. If fields cannot be discovered or supplied
+by the maker, keep the binding out of the approved plan or mark it blocked rather
+than letting the page-builder guess.
+
 If the maker chooses a connection that has no connectionreference, do not invent
 a logical name. Either instruct the maker to create one or call:
 
@@ -233,6 +267,7 @@ node "${PLUGIN_ROOT}/scripts/create-connection-reference.js" "<ENV_URL>" "<logic
 
 Write the final selections to `## Connector Bindings` in `genpage-plan.md`. If
 no connectors are used, the section value must be exactly `No connector bindings.`
+For tabular bindings, include the discovered `Fields` list in the plan.
 
 ### App Detection
 
