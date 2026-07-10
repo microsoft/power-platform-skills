@@ -420,6 +420,21 @@ phase substitutes the real GUIDs.
 
 Pages with no `PAGEREF_` strings need no second upload.
 
+### Phase 6.7: Solution Packaging (ALM, optional)
+
+Runs only when the plan's `## Solution Packaging` has `Package into solution: true`.
+Adds the deployed page (via its appmodule) and any connection references to the
+target solution so the page travels cross-environment.
+
+1. Ensure the solution exists (create via `scripts/create-solution.js` if needed).
+2. Add the page + connection references:
+   `node ${PLUGIN_ROOT}/scripts/add-page-to-solution.js <envUrl> <solutionUniqueName> <app-id> --connection-refs "<logicalName1,logicalName2>"`
+3. Log the command + result to `workflow-log.md`.
+
+Cross-env note: at import time the target maker supplies env-specific
+`ConnectionId` values via `pac solution create-settings` (deployment settings
+file) — the page's `connectorBindings` resolve through the connection references.
+
 ### Phase 7: Verify in Browser (Optional)
 
 After successful deployment, ask the user via `AskUserQuestion`:

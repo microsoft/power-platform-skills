@@ -17,7 +17,9 @@ Changing a heading name breaks downstream agents. Add new sections only.
 
 ## Required Structure
 
-All sections must appear in this exact order with these exact headings:
+All required sections must appear in this exact order with these exact headings.
+Optional sections marked opt-in may be omitted; if present, keep them in the
+same relative position so downstream parsers can find them predictably:
 
 ```markdown
 # Genpage Plan
@@ -102,6 +104,11 @@ validation rejects values that look like `crb2b_playername` or even
  Example: "account, contact, task"
  OR "None" if all data is mock or all entities need creating.]
 
+## Solution Packaging
+- Package into solution: true / false (default false)
+- Solution unique name: [when true — the target solution for cross-env travel]
+- Connection references: [comma-separated connectionreference logical names to include, or "none"]
+
 ## Design Preferences
 - Styling: [user's styling preferences — colors, theme, visual aesthetic]
 - Features: [specific features mentioned — search, filtering, sorting, navigation, etc.]
@@ -146,6 +153,7 @@ validation rejects values that look like `crb2b_playername` or even
 | `## Pages` | Orchestrator (page list for Phase 5 dispatch) | File names must be unique |
 | `## Entity Creation Required` | Entity-builder | Exact literal "No entity creation required..." when empty, else per-entity subsections |
 | `## Existing Entities` | Orchestrator (for `pac model genpage generate-types --data-sources`) | Comma-separated logical names |
+| `## Solution Packaging` | Orchestrator (Phase 6.7) | Opt-in; absent = skip |
 | `## Design Preferences` | Page-builder | Prose, free-form |
 | `## Relevant Samples` | Page-builder (for Read path resolution) | Sample filename must match a file in `${PLUGIN_ROOT}/samples/` |
 | `## Per-Page Specifications` | Page-builder | Each page gets one `### [Page Name]` subsection matching the Pages table |
