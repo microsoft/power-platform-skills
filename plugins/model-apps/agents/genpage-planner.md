@@ -236,17 +236,21 @@ Preferred path after resolving connector id, connection id, dataset, and table:
 pac model genpage --help
 ```
 
-Pre-flight that the help text contains `list-connector-tables`. If present, run:
+Pre-flight that the help text contains `get-connector-schema`. If present, run:
 
 ```powershell
-pac model genpage list-connector-tables --connector-id <apiId> --connection-id <connId> --dataset <ds> --table <tableId>
+pac model genpage get-connector-schema --connector-id <apiId> --connection-id <connId> --dataset <ds> --table <tableId>
 ```
 
-Parse the returned `columns` collection. Record each field name and type in the
-binding's `Fields` cell, for example:
+Parse the returned `{ table, columns: [{ name, type, required }] }` payload.
+Record each column name and type in the binding's `Fields` cell, for example:
 `PetName (string), OwnerName (string), PetType ({Value:string}), Created (datetime)`.
 Treat all connector fields as optional; the generated TSX declares `field?`
-because connector rows are dynamic and may omit values.
+because connector rows are dynamic and may omit values regardless of the
+discovery payload's `required` metadata.
+
+Use `list-connector-tables` only earlier in Connector Detection to enumerate and
+pick the table; it does not provide the column schema needed for codegen.
 
 Fallback when the PAC verb is unavailable:
 1. If another discovery path can query a single row safely, sample top 1 and
