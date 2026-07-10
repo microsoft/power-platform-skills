@@ -296,9 +296,10 @@ const mockRecords = [
 ### Connector-backed data
 
 When the plan has `## Connector Bindings`, use only the logical name, connector
-id, dataset, table GUID, display name, operation, and Fields values from that
-section. Never guess a `connectorLogicalName` or connector field name that is
-not in the plan. Read
+id, dataset, table GUID, display name, operation, Fields, Parameters, and
+Response values from that section. Never guess a `connectorLogicalName`,
+connector field name, parameter name, or response field name that is not in the
+plan. Read
 `${PLUGIN_ROOT}/references/connectors.md` and emit connector calls with the
 verified runtime patterns below. Connector methods are optional at runtime, so
 every call must be presence-checked and wrapped in `try`/`catch` with a graceful
@@ -323,14 +324,25 @@ if (typeof connectorApi.queryConnectorTable !== 'function') { return; }
 const result = await connectorApi.queryConnectorTable('new_uxtest_sharepoint', 'https://host.sharepoint.com/sites/x', '<list-guid>', { top: 50 });
 ```
 
-REST/action connectors use `executeConnectorOperation`. Operation names and
-parameters must come from the plan and user requirements; check `response.ok`
-before using the body:
+REST/action connector operation names, parameter names, and response field names
+must come from the plan's discovered `Operations`, `Parameters`, and `Response`
+schema. Before calling `executeConnectorOperation`, declare the response
+interface from the plan and mark every response field optional. Build the
+parameter object from discovered parameters plus maker-provided values; never
+invent parameter or response field names. Check `response.ok` before casting or
+using the body:
+
+```typescript
+type WeatherResponse = { temperature?: number; conditions?: string; humidity?: number };
+const parameters: { Location: string; units?: string } = { Location: 'Seattle', units: 'C' };
+```
 
 ```typescript
 const connectorApi = dataApi as unknown as { executeConnectorOperation?: (connectorLogicalName: string, operationName: string, parameters: Record<string, unknown>) => Promise<{ ok: boolean; body: unknown }>; };
 if (typeof connectorApi.executeConnectorOperation !== 'function') { return; }
-const response = await connectorApi.executeConnectorOperation('new_uxtest_msnweather', 'CurrentWeather', { Location: 'Seattle', units: 'C' });
+const response = await connectorApi.executeConnectorOperation('new_uxtest_msnweather', 'CurrentWeather', parameters);
+if (!response.ok) { return; }
+const weather = response.body as WeatherResponse;
 ```
 
 ## Step 6 — Write the .tsx File

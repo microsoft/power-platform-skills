@@ -46,8 +46,9 @@ upload --connectors` persists it into the page `config.json`.
 - Always cast `dataApi` to an optional connector-method shape.
 - Always presence-check the method before calling it.
 - Always wrap calls in `try`/`catch` and set a graceful empty/error state.
-- Never guess a logical name, dataset, table GUID, operation name, or field name.
-  Use the plan's `## Connector Bindings` values only.
+- Never guess a logical name, dataset, table GUID, operation name, field name,
+  parameter name, or response field name. Use the plan's `## Connector Bindings`
+  values only.
 - Keep non-connector pages unchanged; only emit connector code when the plan has
   connector bindings.
 
@@ -67,6 +68,13 @@ Rules:
   infer alternate display names.
 - Use `unknown` for any field whose shape was not discovered with confidence.
 - SharePoint choice columns come back as objects with a `Value` property.
+- For SharePoint, record only maker/user-meaningful columns by default. Keep
+  fields such as `Title`, `PetName`, `OwnerName`, `PetType`, `Created`, and
+  `Modified`; drop system/synthetic fields unless the maker explicitly needs
+  them: `{...}`-wrapped names (`{Identifier}`, `{IsFolder}`, `{Thumbnail}`),
+  `ComplianceAssetId`, `OData__*`, and `*#Id` / `*#Claims` variants.
+- SharePoint `type:"object"` choice columns should be represented as
+  `{ Value?: string }`.
 
 Example discovered SharePoint fields:
 
@@ -76,6 +84,28 @@ type PetRow = { ID?: number; PetName?: string; OwnerName?: string; PetType?: { V
 
 `Created` is represented as a string because connector date/time values arrive
 serialized; parse/format it at the display boundary only when needed.
+
+## Operation schema
+
+REST/action connectors do not use `dataset`/`table`. The planner records the
+selected operation, discovered `Parameters`, and discovered `Response` shape in
+`## Connector Bindings` from `get-connector-schema --operation`.
+
+Rules:
+- Build request parameter objects only from discovered `Parameters` plus the
+  maker's provided values. Never invent parameter names.
+- Declare the response interface from the discovered `Response` schema. Mark
+  every field optional because connector responses are dynamic.
+- If a response field shape is unclear, use `unknown`; if a nested object is
+  discovered, model only the discovered nested properties.
+- Check `response.ok` before casting/reading `response.body`.
+
+Example:
+
+```typescript
+type WeatherResponse = { temperature?: number; conditions?: string; humidity?: number };
+const parameters: { Location: string; units?: string } = { Location: 'Seattle', units: 'C' };
+```
 
 ## Verified tabular pattern
 
@@ -97,4 +127,6 @@ const response = await connectorApi.executeConnectorOperation('new_uxtest_msnwea
 ```
 
 Use this for REST-style connector operations. Check `response.ok` before reading
-`response.body`, and keep the call inside the same `try`/`catch` as state updates.
+`response.body`, cast it to the response interface declared from the plan's
+`Response` schema, and keep the call inside the same `try`/`catch` as state
+updates.

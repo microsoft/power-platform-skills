@@ -221,8 +221,26 @@ For tabular connectors, resolve the dataset and table before writing the plan:
 - Store SharePoint datasets as the site URL and tables as list GUIDs (not list
   display names); write list display names only in `Table Display Names`.
 
-For REST/action connectors, resolve the operation name from the connector's
-available operations and store it in `Operations`.
+For REST/action connectors, resolve the operation name and schema before writing
+the plan:
+- Pre-flight that `pac model genpage --help` contains `list-connector-operations`
+  and `get-connector-schema`.
+- Enumerate operations:
+  ```powershell
+  pac model genpage list-connector-operations --connector-id <apiId> --connection-id <connId>
+  ```
+- Let the maker pick the operation via `AskUserQuestion` when the requirement
+  does not imply exactly one operation.
+- Discover the operation schema:
+  ```powershell
+  pac model genpage get-connector-schema --connector-id <apiId> --connection-id <connId> --operation <op>
+  ```
+- Parse `{ operation, parameters:[{ name, required }], response:{...} }`.
+  Record the operation in `Operations`, parameters in `Parameters`, and response
+  shape in `Response` under `## Connector Bindings`.
+- If either verb is unavailable, fall back to asking the maker for the operation,
+  required/optional parameters, and expected response shape. Never fabricate
+  operation, parameter, or response field names.
 
 ### Connector Column Discovery
 
@@ -249,6 +267,16 @@ Treat all connector fields as optional; the generated TSX declares `field?`
 because connector rows are dynamic and may omit values regardless of the
 discovery payload's `required` metadata.
 
+When the connector is SharePoint, filter the discovered column list before
+recording `Fields`:
+- Keep maker/user-meaningful columns such as `Title`, `PetName`, `OwnerName`,
+  `PetType`, `Created`, and `Modified`.
+- Drop SharePoint system/synthetic columns unless the maker explicitly asks for
+  them: `{...}`-wrapped names (`{Identifier}`, `{IsFolder}`, `{Thumbnail}`),
+  `ComplianceAssetId`, `OData__*`, and `*#Id` / `*#Claims` variants.
+- Treat `type:"object"` choice columns as `{Value:string}` in the plan because
+  SharePoint choice values arrive as `{ Value }`.
+
 Use `list-connector-tables` only earlier in Connector Detection to enumerate and
 pick the table; it does not provide the column schema needed for codegen.
 
@@ -271,7 +299,9 @@ node "${PLUGIN_ROOT}/scripts/create-connection-reference.js" "<ENV_URL>" "<logic
 
 Write the final selections to `## Connector Bindings` in `genpage-plan.md`. If
 no connectors are used, the section value must be exactly `No connector bindings.`
-For tabular bindings, include the discovered `Fields` list in the plan.
+For tabular bindings, include the discovered `Fields` list in the plan. For
+REST/action bindings, include the selected `Operations` value plus discovered
+`Parameters` and `Response` schemas.
 
 ### App Detection
 
