@@ -19,8 +19,11 @@
 //   61  = Web Resource
 //   62  = Site Map
 //   65  = Hierarchy Rule
-//   80  = Model-driven App (appmodule)
-//   371 = Connection Reference (connectionreference) — confirm per env (Task A0)
+//   80    = Model-driven App (appmodule)
+//   10158 = Connection Reference (connectionreference) — verified live 2026-07-10 on
+//           AuroraBAPEnv03468. NOTE: 371 is "Connector" (msdyn_Connector), NOT a
+//           connection reference; AddSolutionComponent with 371 fails with a
+//           MetadataCache 'msdyn_Connector' error.
 //
 // NOTE: a GenPage (uxagentproject) is NOT a standalone solution component type.
 // Add the page's appmodule with AddRequiredComponents=true and the uxagentproject

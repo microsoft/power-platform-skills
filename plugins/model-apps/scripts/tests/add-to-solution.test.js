@@ -19,7 +19,7 @@ test('add-to-solution.js builds canonical request body', () => {
 });
 
 test('add-to-solution.js documents connection reference component type', () => {
-  assert.match(scriptSrc, /371\s*=\s*Connection Reference/);
+  assert.match(scriptSrc, /10158\s*=\s*Connection Reference/);
 });
 
 test('add-to-solution.js notes uxagentproject travels via appmodule', () => {

@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 
-// Adds a GenPage (via its appmodule) and its connection references to a solution
-// so the page travels cross-env. The GenPage itself (uxagentproject) is NOT a
-// standalone solution component type — it travels as a REQUIRED component of the
-// appmodule/sitemap that references it, so we add the appmodule with
-// AddRequiredComponents=true. Connection references ARE their own component and
-// are added explicitly so connectorBindings resolve in the target env.
-// Ref: docs/topics/GenPages/architecture/genpages-architecture.md (uxagentproject ALM)
+// Adds a connector-bound GenPage and its connection references to a solution so it
+// travels cross-environment. Verified live 2026-07-10 on AuroraBAPEnv03468:
+//   - The appmodule (type 80, AddRequiredComponents=true) pulls the sitemap (62) and
+//     appmodulecomponent (10097) but does NOT pull the GenPage — so the GenPage's
+//     uxagentproject row MUST be added explicitly (type 10372); adding it pulls its
+//     uxagentprojectfile children (10373, incl. config.json with connectorBindings).
+//   - connectionreference is its own component (type 10158) and is added explicitly so
+//     the bindings resolve in the target env (at import the deployer supplies each
+//     ConnectionId via `pac solution create-settings` + `pac solution import --settings-file`).
 //
 // Usage:
 //   node add-page-to-solution.js <envUrl> <solutionUniqueName> <appId>
+//     [--page-ids <uxagentprojectId1,uxagentprojectId2>]
 //     [--connection-refs <logicalName1,logicalName2>]
 //
 // Output: { "ok": true, "added": [...] }
@@ -22,7 +25,18 @@ const {
 } = require('./lib/dataverse-auth');
 
 const APPMODULE_COMPONENT_TYPE = 80;
-const CONNECTION_REFERENCE_COMPONENT_TYPE = 371; // confirm per env (Task A0)
+// Solution component type for the GenPage itself. uxagentproject IS a registered
+// component type (10372 = its ObjectTypeCode), verified live 2026-07-10 on
+// AuroraBAPEnv03468. It does NOT auto-travel with the appmodule, so it is added
+// explicitly; AddRequiredComponents=true then pulls its uxagentprojectfile rows
+// (10373: page.tsx, page.compiled, config.json, firstPrompt.json).
+const UXAGENTPROJECT_COMPONENT_TYPE = 10372;
+// Solution component type for connectionreference. Verified live (2026-07-10) by
+// reading solutioncomponent.componenttype for an existing connection reference in the
+// Default/Active solutions on AuroraBAPEnv03468 (= 10158). Note: 371 is "Connector"
+// (msdyn_Connector), NOT a connection reference — AddSolutionComponent with 371 fails
+// with "entity ... 'msdyn_Connector' ... not found in MetadataCache".
+const CONNECTION_REFERENCE_COMPONENT_TYPE = 10158;
 
 function escapeODataString(value) {
   return String(value).replace(/'/g, "''");
@@ -43,7 +57,7 @@ async function main() {
   const { positional, flags } = parseArgs(process.argv.slice(2));
   if (positional.length < 3) {
     process.stderr.write(
-      'Usage: node add-page-to-solution.js <envUrl> <solutionUniqueName> <appId> [--connection-refs <logicalName1,logicalName2>]\n'
+      'Usage: node add-page-to-solution.js <envUrl> <solutionUniqueName> <appId> [--page-ids <id1,id2>] [--connection-refs <logicalName1,logicalName2>]\n'
     );
     process.exit(1);
   }
@@ -51,11 +65,22 @@ async function main() {
   const added = [];
 
   try {
-    // The appmodule AddSolutionComponent action must receive the equivalent of
-    // { ComponentType: 80, AddRequiredComponents: true } because that required
-    // component closure is what carries uxagentproject rows and sitemap links.
+    // The appmodule (type 80) with AddRequiredComponents=true pulls the sitemap and
+    // appmodulecomponent, but NOT the GenPage — the page is added explicitly below.
     await addComponent(envUrl, solutionUniqueName, appId, APPMODULE_COMPONENT_TYPE, true);
     added.push({ type: 'appmodule', id: appId });
+
+    // Add each GenPage (uxagentproject, type 10372) explicitly. AddRequiredComponents
+    // pulls its uxagentprojectfile rows (10373) — including config.json with the
+    // connectorBindings that must travel with the page.
+    const pageIds = (flags['page-ids'] || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    for (const pageId of pageIds) {
+      await addComponent(envUrl, solutionUniqueName, pageId, UXAGENTPROJECT_COMPONENT_TYPE, true);
+      added.push({ type: 'uxagentproject', id: pageId });
+    }
 
     const refs = (flags['connection-refs'] || '')
       .split(',')

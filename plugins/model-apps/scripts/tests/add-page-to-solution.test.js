@@ -9,13 +9,18 @@ const scriptPath = path.join(__dirname, '..', 'add-page-to-solution.js');
 const scriptSrc = fs.readFileSync(scriptPath, 'utf8');
 
 test('adds appmodule (80) with required components', () => {
-  assert.match(scriptSrc, /ComponentType: 80/);
-  assert.match(scriptSrc, /AddRequiredComponents: true/);
+  assert.match(scriptSrc, /APPMODULE_COMPONENT_TYPE\s*=\s*80/);
+  assert.match(scriptSrc, /addComponent\([^)]*APPMODULE_COMPONENT_TYPE,\s*true\)/);
 });
 
 test('adds connection references by confirmed component type', () => {
   assert.match(scriptSrc, /connectionreferences\?\$filter=connectionreferencelogicalname/);
-  assert.match(scriptSrc, /CONNECTION_REFERENCE_COMPONENT_TYPE\s*=\s*371/);
+  assert.match(scriptSrc, /CONNECTION_REFERENCE_COMPONENT_TYPE\s*=\s*10158/);
+});
+
+test('adds the GenPage uxagentproject explicitly (type 10372)', () => {
+  assert.match(scriptSrc, /UXAGENTPROJECT_COMPONENT_TYPE\s*=\s*10372/);
+  assert.match(scriptSrc, /flags\['page-ids'\]/);
 });
 
 test('missing args exits 1 with usage', () => {
