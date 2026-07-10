@@ -203,6 +203,23 @@ test('plan is ordered app -> dashboards -> commands -> forms -> charts -> views 
   assert.deepStrictEqual(kinds, ['app', 'dashboard', 'commands', 'form', 'form', 'form', 'chart', 'chart', 'view', 'view', 'view', 'relationship', 'relationship', 'webResource', 'table', 'table', 'table', 'solution']);
 });
 
+test('teardown computes the SAME publisher-prefixed relationship name as the build for a system-table rel', () => {
+  // Build and teardown must agree on the schema name or teardown can't find the relationship. The
+  // default name for a 1:N to a system table (systemuser) is auto-prefixed — planTeardown must
+  // produce that identical prefixed name (threads spec.solution.publisherPrefix, like the build).
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'contoso' },
+    entities: [
+      { schemaName: 'systemuser', primaryAttribute: { schemaName: 'fullname' } },
+      { schemaName: 'contoso_teammember', primaryAttribute: { schemaName: 'contoso_name' } },
+    ],
+    relationships: [{ type: 'OneToMany', referenced: 'systemuser', referencing: 'contoso_teammember', lookup: { schemaName: 'contoso_LinkedUserId', displayName: 'Linked User' } }],
+  };
+  const relStep = planTeardown(spec).find((s) => s.kind === 'relationship');
+  assert.ok(relStep, 'a relationship teardown step exists');
+  assert.strictEqual(relStep.target.schemaName, 'contoso_systemuser_teammember');
+});
+
 test('plan places global choices after tables and before the solution container', () => {
   const s = fullSpec();
   s.globalChoices = [{ name: 'new_severity', displayName: 'Severity', options: ['Low', 'High'] }];

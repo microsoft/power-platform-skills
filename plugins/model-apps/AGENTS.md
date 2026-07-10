@@ -305,6 +305,18 @@ Only the SDK `src/` is committed in the SDK repo (`lib/` is gitignored). A type-
 edit produces a byte-identical `lib/*.js`, so the bundle only needs rebuilding when SDK **runtime**
 changes.
 
+**Vendored-SDK contract invariants (regression net).** When you bump the SDK and re-vendor, the
+skill relies on behaviors that must survive. `scripts/tests/vendor-sdk-smoke.test.js` locks them
+(the `CONTRACT:` tests) — run them against every rebuilt bundle:
+- **Raw OData filters pass through, single-encoded** — the skill builds raw `$filter` strings
+  (quoted string literals via `lib/odata.js`, and **unquoted GUID literals** like `objectid eq <guid>`);
+  a query builder may transport-encode them but must not double-encode.
+- **Name-based methods accept logical/unique/schema names verbatim** — `deleteTable`, `setEntityIcon`,
+  `resolveArtifact({uniqueName}/{name}/{entity})`, `createRelationship({referencedEntity,…})`. A GUID
+  normalizer must apply to GUID params ONLY, never to these names.
+- **Sitemap free-text (titles/URLs/descriptions) is XML-escaped, not rejected** — a "safe DOM factory"
+  must escape attribute/text VALUES while only validating element/attribute NAMES.
+
 **Live end-to-end (app-builder — writes to a real Dataverse env; optional).** All build/verify/
 teardown scripts are **dry-run by default**; add `--apply` to write.
 

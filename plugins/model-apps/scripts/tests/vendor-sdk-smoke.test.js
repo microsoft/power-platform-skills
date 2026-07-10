@@ -121,3 +121,102 @@ test('addFormEventHandler injects a handler into the retained FormXML headlessly
     assert.ok(raw, 'form still readable after wiring a handler');
   });
 });
+
+// --- SDK safety-boundary contract invariants ------------------------------------------------
+// Lock the behaviors the SKILL depends on so a future SDK hardening (GUID normalizer, safe DOM
+// element factory, percent-encoding OData query builder) can't silently break the skill when the
+// vendored bundle is rebuilt. Each test passes today AND must keep passing after the boundaries
+// land — the assertions are chosen so a contract-breaking change (GUID-validating a logical name,
+// double-encoding a filter, rejecting free-text XML values) fails here.
+
+// A capturing httpClient that records every request and answers EntityDefinitions set-name lookups
+// so queryRecords can resolve a logical name -> entity-set name headlessly.
+function captureClient() {
+  const reqs = [];
+  const metaBody = (url) => {
+    const ln = (url.match(/LogicalName='([^']+)'/) || [])[1] || 'x';
+    return { MetadataId: '33333333-3333-3333-3333-333333333333', EntitySetName: `${ln}s`, LogicalName: ln };
+  };
+  const client = {
+    get: async (url) => {
+      reqs.push({ method: 'GET', url });
+      if (/EntityDefinitions\(LogicalName=/i.test(url)) return { status: 200, headers: {}, body: metaBody(url) };
+      return { status: 200, headers: {}, body: { value: [] } };
+    },
+    post: async (url, body) => { reqs.push({ method: 'POST', url, body }); return { status: 204, headers: { 'odata-entityid': 'https://x/y(44444444-4444-4444-4444-444444444444)' }, body: {} }; },
+    patch: async (url, body) => { reqs.push({ method: 'PATCH', url, body }); return { status: 204, headers: {}, body: {} }; },
+    delete: async (url) => { reqs.push({ method: 'DELETE', url }); return { status: 204, headers: {}, body: {} }; },
+    put: async (url, body) => { reqs.push({ method: 'PUT', url, body }); return { status: 204, headers: {}, body: {} }; },
+  };
+  return { client, reqs };
+}
+function sdkWith(client) {
+  const { createMakerSdk } = require(BUNDLE);
+  const ws = mkTempWorkspace('sdk-contract-');
+  const sdk = createMakerSdk({ workspacePath: ws, instanceUrl: 'https://example.crm.dynamics.com', httpClient: client });
+  sdk.initWorkspace();
+  return sdk;
+}
+// The wire $filter, decoded exactly once by URLSearchParams. Equals the raw OData filter whether the
+// SDK sends it unencoded (today) or single-encoded (after the query builder lands); a DOUBLE-encoded
+// value decodes to a still-encoded string and fails the equality — catching the classic regression.
+function filterOf(url) {
+  return new URL(url).searchParams.get('$filter');
+}
+
+test('CONTRACT: queryRecords transmits a raw quoted-string OData filter that round-trips (raw filters stay supported; no double-encoding)', async () => {
+  const { client, reqs } = captureClient();
+  const sdk = sdkWith(client);
+  const raw = `uniquename eq 'new_a b' and ismanaged eq false`;
+  await sdk.queryRecords('appmodule', { select: ['appmoduleid', 'name'], filter: raw, top: 1 });
+  const get = reqs.find((r) => r.method === 'GET' && /appmodules\?/.test(r.url));
+  assert.ok(get, 'a GET to the resolved entity set was issued');
+  assert.strictEqual(filterOf(get.url), raw, 'the raw filter must survive transport exactly once');
+});
+
+test('CONTRACT: queryRecords transmits an UNQUOTED GUID-literal filter unchanged (the solutioncomponent/sitemap pattern the skill uses)', async () => {
+  const { client, reqs } = captureClient();
+  const sdk = sdkWith(client);
+  const raw = `objectid eq 11111111-1111-1111-1111-111111111111`;
+  await sdk.queryRecords('solutioncomponent', { select: ['_solutionid_value'], filter: raw, top: 1 });
+  const get = reqs.find((r) => r.method === 'GET' && /solutioncomponents\?/.test(r.url));
+  assert.strictEqual(filterOf(get.url), raw);
+});
+
+test('CONTRACT: name-based SDK methods accept logical/unique names verbatim (never forced through GUID validation)', async () => {
+  const { client, reqs } = captureClient();
+  const sdk = sdkWith(client);
+  // The skill passes NAMES (not GUIDs) to these — a GUID normalizer applied here would reject them.
+  await sdk.resolveArtifact('app', { uniqueName: 'new_app' });           // teardown/verify resolve-by-name
+  await sdk.setEntityIcon('contoso_widget', { vector: 'contoso_icon', publish: false }); // table icon by logical name
+  await sdk.createRelationship({ type: 'OneToMany', schemaName: 'contoso_systemuser_teammember', referencedEntity: 'systemuser', referencingEntity: 'contoso_teammember', lookupSchemaName: 'contoso_LinkedUserId', lookupDisplayName: 'Linked User' });
+  try { await sdk.deleteTable('account'); } catch { /* the SDK's deleteTable throws a cosmetic not-found even on success */ }
+  const wire = reqs.map((r) => `${r.method} ${r.url} ${JSON.stringify(r.body || '')}`).join('\n');
+  assert.match(wire, /uniquename eq 'new_app'/i, 'resolveArtifact accepted a unique name');
+  assert.match(wire, /contoso_widget/i, 'setEntityIcon accepted a table logical name');
+  assert.match(wire, /systemuser/, 'createRelationship kept the system-table logical name');
+  assert.match(wire, /LogicalName='account'/i, 'deleteTable accepted a table logical name');
+});
+
+test('CONTRACT: free-text sitemap titles/URLs are XML-escaped, not rejected (a safe DOM factory must escape VALUES, only validate NAMES)', () => {
+  const { AppAdapter } = require(BUNDLE);
+  const { appDef } = require('../lib/sdk-build.js');
+  const spec = {
+    solution: { uniqueName: 'EscA', publisherPrefix: 'new' },
+    app: { name: 'R&D <Ops> "Hub"', description: 'a & b < c > d' },
+    entities: [{ schemaName: 'new_o', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
+    appShell: { areas: [{ label: 'Sales & Ops', groups: [{ label: 'A & B', subAreas: [
+      { entity: 'new_o', title: 'Tom & "Jerry" <x>' },
+      { url: 'https://x/y?a=1&b=2&c=<z>', title: 'Link & Go' },
+    ] }] }] },
+  };
+  const def = appDef(spec, { forms: {}, views: {}, charts: {}, dashboards: {} });
+  const adapter = new AppAdapter();
+  const art = { id: 'app-esc', name: spec.app.name, uniqueName: 'new_escapp', description: spec.app.description, siteMap: def.siteMap, components: def.components };
+  let xml;
+  assert.doesNotThrow(() => { xml = adapter.toApiPayload(art).sitemapxml; }, 'special-char titles/URLs must serialize, not throw');
+  assert.match(xml, /&amp;/, 'ampersands in titles/URLs are escaped');
+  assert.match(xml, /a=1&amp;b=2/, 'URL query separators are escaped in the attribute value (not lost or left raw)');
+  assert.ok(!/<Title[^>]*>[^<]*&(?!amp;|lt;|gt;|quot;|apos;|#)/.test(xml), 'no raw unescaped ampersand inside a Title');
+});
+

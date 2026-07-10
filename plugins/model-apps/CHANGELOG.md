@@ -145,6 +145,12 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
 - Full `scripts/tests/` suite (unit + golden snapshots + journal evals) plus the genpage eval suites
   and the vendored `cds-maker-sdk` Jest suite — all green. `node scripts/run-tests.js --with-sdk <ppux>`
   runs the plugin + SDK suites in one command.
+- **Vendored-SDK contract invariants** (`vendor-sdk-smoke.test.js` — the `CONTRACT:` tests) lock the
+  behaviors the skill depends on so a future SDK hardening (GUID normalizer, safe DOM element factory,
+  percent-encoding OData query builder) can't silently break the skill on re-vendor: raw OData filters
+  (quoted + unquoted GUID literals) round-trip without double-encoding; name-based methods
+  (`deleteTable` / `setEntityIcon` / `resolveArtifact` / `createRelationship`) accept logical/unique
+  names verbatim; sitemap free-text titles/URLs are XML-escaped, not rejected.
 
 ## 2.1.0 — 2026-05-13
 

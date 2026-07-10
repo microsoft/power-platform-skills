@@ -239,6 +239,13 @@ test('sitemap: the app sitemap is added to the solution (componenttype 62)', asy
   assert.ok(find(calls, 'addSolutionComponent').some((c) => c.args[0].componentType === 62 && c.args[0].componentId === 'sm-1'), 'sitemap added to solution as component 62');
 });
 
+test('sitemap: an existing (edit) app also gets its sitemap added to the solution', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true }); // findArtifact('app') -> existing
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'app-shell'] });
+  assert.ok(!find(calls, 'createArtifact').some((c) => c.args[0] === 'app'), 'no duplicate app created on the edit path');
+  assert.ok(find(calls, 'addSolutionComponent').some((c) => c.args[0].componentType === 62 && c.args[0].componentId === 'sm-1'), 'sitemap added to solution on the edit path too');
+});
+
 test('Tier 1 data model: global choices, rich column types, customer, status, alt keys, N:N', async () => {
   const spec = makeSpec();
   spec.globalChoices = [{ name: 'new_severity', displayName: 'Severity', options: ['Low', 'High'] }];
@@ -979,6 +986,13 @@ test('planFor reflects the selected phases', () => {
   assert.ok(labels.some((l) => l.includes('form for new_customer (sub-grids: new_ticket)')));
   const onlyViews = planFor(makeSpec(), { phases: ['views'] }).map((p) => p.phase);
   assert.ok(onlyViews.every((p) => p === 'views'));
+});
+
+test('planFor lists the generated app-icon step by default, but omits it when app.icon is set', () => {
+  const gen = planFor(makeSpec(), { phases: PHASES }).map((p) => p.label);
+  assert.ok(gen.some((l) => /app icon \(generated\)/.test(l)), 'default plan generates an app icon');
+  const withIcon = planFor(makeSpec({ app: { name: 'Support Desk', description: 'x', icon: 'new_appicon' }, webResources: [{ name: 'new_appicon', type: 'png', contentBase64: 'AAAA' }] }), { phases: PHASES }).map((p) => p.label);
+  assert.ok(!withIcon.some((l) => /app icon \(generated\)/.test(l)), 'no generated icon step when app.icon is supplied');
 });
 
 test('ai-features phase enables app features and configures summaries for candidate tables', async () => {
