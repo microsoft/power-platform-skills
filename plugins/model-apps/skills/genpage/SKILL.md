@@ -246,6 +246,39 @@ After generating, read the RuntimeTypes.ts file to verify it generated correctly
 
 **For mock data pages only:** Skip this phase.
 
+### Phase 4.5: Write Connector Bindings (Conditional)
+
+Read the plan's `## Connector Bindings` section.
+
+**If the section is exactly `No connector bindings.`:** skip this phase and do
+not create `connectors.json`.
+
+**If connector bindings are present:** write `<working-dir>/connectors.json` as
+a JSON array using the plan table:
+
+```json
+[
+  {
+    "logicalName": "new_uxtest_sharepoint",
+    "connectorId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+    "dataset": "https://host.sharepoint.com/sites/x",
+    "tables": ["5709dd6f-c73e-4079-ad23-2334e45e0e13"],
+    "tableDisplayNames": ["Pet"]
+  },
+  {
+    "logicalName": "new_uxtest_msnweather",
+    "connectorId": "/providers/Microsoft.PowerApps/apis/shared_msnweather",
+    "dataset": "",
+    "operations": ["CurrentWeather"]
+  }
+]
+```
+
+Ownership: the skill writes only this working-dir `connectors.json`; `pac model
+genpage upload --connectors` writes it into the deployed page `config.json`;
+the importing maker/admin fills env-specific `ConnectionId` values through
+solution deployment settings. Do **not** write connection IDs into
+`connectors.json`.
 
 ### Phase 5: Build Pages (Parallel)
 
@@ -269,18 +302,20 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
 
 1. Read `${PLUGIN_ROOT}/references/rules.md`
 2. Read the sample listed in the plan's `## Relevant Samples`
-3. If the plan's Per-Page Specification has `Needs caching: true`, also read
+3. If the plan's `## Connector Bindings` section is not exactly
+   `No connector bindings.`, also read `${PLUGIN_ROOT}/references/connectors.md`
+4. If the plan's Per-Page Specification has `Needs caching: true`, also read
    `${PLUGIN_ROOT}/references/data-caching.md`
-4. If the plan's `## Environment` indicates non-English languages, also read
+5. If the plan's `## Environment` indicates non-English languages, also read
    `${PLUGIN_ROOT}/references/localization.md`
-5. Read `genpage-plan.md` (already in working directory) and `RuntimeTypes.ts`
+6. Read `genpage-plan.md` (already in working directory) and `RuntimeTypes.ts`
    if Data mode is dataverse
-6. Write the `.tsx` file to `<working-dir>/<filename>.tsx` following all rules
-7. After writing, Grep every named import from `@fluentui/react-icons` against
+7. Write the `.tsx` file to `<working-dir>/<filename>.tsx` following all rules
+8. After writing, Grep every named import from `@fluentui/react-icons` against
    `${PLUGIN_ROOT}/references/verified-icons.txt` (one Grep per name).
    Rewrite any unverified names with the closest verified alternative; do not
    load the full icon list into context
-8. Proceed to Phase 6
+9. Proceed to Phase 6
 
 This saves ~5-15s of Task overhead and ~3K tokens that would otherwise be
 duplicated in a subagent context.
@@ -333,6 +368,29 @@ Wait for all page-builder tasks to complete before proceeding.
 
 For each `.tsx` file produced, deploy to Power Apps.
 
+If Phase 4.5 wrote `<working-dir>/connectors.json`, first pre-flight the active
+PAC CLI:
+
+```powershell
+pac model genpage upload --help
+```
+
+The help output must contain `--connectors`. If it does not, stop and surface:
+"connector deploy requires a pac build with `pac model genpage upload
+--connectors` — build from PowerPlatform-Scale-AdminTools or update pac." Do
+not silently drop bindings.
+
+Connector deployment matrix:
+- **Create (new page):** include `--connectors "<working-dir>/connectors.json"`
+  with the first `upload --add-to-sitemap`.
+- **Edit — connectors changed, added, or one removed:** write the full desired
+  binding set to `connectors.json` and include `--connectors` with
+  `upload --page-id <id>` (full replace).
+- **Edit — no connector change:** omit `--connectors`; pac preserves existing
+  bindings. Never pass a stale or empty file on an unrelated edit.
+- **Delete all connectors:** write `[]` to `connectors.json` and pass
+  `--connectors` so pac clears the page's `connectorBindings`.
+
 **Copy the upload commands below exactly — `--app-id`, `--code-file`, `--prompt`, `--agent-message` are all required and must use these exact flag names.**
 
 **Log the full command verbatim into `workflow-log.md` under a `## Phase 6 — Deploy` section before invoking it.** Including `--prompt` and all other flags. The eval harness greps the log for these tokens — a terse summary like `Command: pac model genpage upload --add-to-sitemap` will fail the `--prompt scoping` assertion. Format:
@@ -342,6 +400,9 @@ For each `.tsx` file produced, deploy to Power Apps.
 - Command: `pac model genpage upload --app-id <id> --code-file <path> --data-sources '<entities>' --prompt "<full prompt>" --model <model-id> --name "<page name>" --agent-message "<description>" --add-to-sitemap`
 - Result: page-id = <returned-id>, status = success
 ```
+
+When connector bindings are present, the logged command must also include
+`--connectors "<working-dir>/connectors.json"`.
 
 #### `--prompt` semantics
 
@@ -362,11 +423,14 @@ pac model genpage upload `
   --code-file <working-dir>/<file>.tsx `
   --name "Page Display Name" `
   --data-sources "entity1,entity2" `
+  --connectors "<working-dir>/connectors.json" `
   --prompt "<Full page description from plan's ## User Requirements>" `
   --model "<current-model-id>" `
   --agent-message "Description of what was built and any relevant details" `
   --add-to-sitemap
 ```
+
+Omit the `--connectors` line when Phase 4.5 did not write `connectors.json`.
 
 **For mock data pages:** Same but omit `--data-sources`.
 
@@ -380,10 +444,15 @@ pac model genpage upload `
   --page-id <page-id> `
   --code-file <working-dir>/<file>.tsx `
   --data-sources "entity1,entity2" `
+  --connectors "<working-dir>/connectors.json" `
   --prompt "<Only the changes in this upload, e.g. 'Add a search box and sort by company name'>" `
   --model "<current-model-id>" `
   --agent-message "Description of what was changed in this upload"
 ```
+
+For updates, include the `--connectors` line only when this upload intentionally
+replaces or clears connector bindings; otherwise omit it to preserve the
+deployed page's current bindings.
 
 ### Phase 6.5: Navigation Fix-Up (Multi-Page Only)
 

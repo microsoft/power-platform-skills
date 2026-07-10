@@ -78,7 +78,8 @@ pac model genpage download `
 The download creates a `<working-dir>/<page-id>/` folder with fixed filenames:
 `page.tsx` (source), `config.json` (entity list + model), `prompt.txt` (original
 prompt). Downstream phases operate on `<working-dir>/<page-id>/page.tsx` for
-editing and uploading, and read `config.json.dataSources` in Phase 3.
+editing and uploading, and read `config.json.dataSources` plus
+`config.json.connectorBindings` in Phase 3.
 
 ## Edit Phase 3: Generate RuntimeTypes (Conditional)
 
@@ -93,6 +94,19 @@ pac model genpage generate-types `
 
 Pass the exact entity list from `config.json.dataSources`. If `dataSources` is an
 empty array, the page is mock-data only — skip this phase.
+
+Also read `config.json.connectorBindings`.
+
+- If it is non-empty, write the exact array back to
+  `<working-dir>/connectors.json` as the seed binding set for this edit. This
+  file is only the skill's working input to `pac upload --connectors`; pac writes
+  it back to the page `config.json`.
+- Do not add or persist connection IDs. Env-specific `ConnectionId` values belong
+  to the connectionreference row and ALM deployment settings, not the page config.
+- If the edit does not change connector bindings, omit `--connectors` in Edit
+  Phase 6 so pac preserves the deployed bindings. The seeded file is used only
+  when the edit intentionally re-supplies, replaces, or clears connector
+  bindings.
 
 ## Edit Phase 4: Plan the Edit
 
@@ -120,11 +134,15 @@ Also read:
 - `<working-dir>/RuntimeTypes.ts` — if generated in Edit Phase 3, for verified
   column names
 - `<working-dir>/<page-id>/page.tsx` — the current source
+- `${PLUGIN_ROOT}/references/connectors.md` — if `config.json.connectorBindings`
+  is non-empty or the edit adds connector-backed data
 
 Apply each change from the edit plan using targeted `Edit` operations on
 `<working-dir>/<page-id>/page.tsx`. **Preserve the functionality** listed under
 "Preservation Constraints" in the plan. Use ONLY verified column names from
-RuntimeTypes.ts when the edit touches data access.
+RuntimeTypes.ts when the edit touches Dataverse data access. Use ONLY logical
+names, datasets, table GUIDs, and operations from the seeded connector bindings
+or approved edit plan when the edit touches connector data access.
 
 Do NOT rewrite the entire file. Use the minimum necessary `Edit` operations.
 
@@ -134,12 +152,26 @@ This is an **update** (existing page-id), so `--prompt` must describe the
 **delta of changes only** — not a re-statement of the original page description.
 See SKILL.md Phase 6 "`--prompt` semantics".
 
+Connector binding rules for edit deploy:
+- If this edit intentionally changes, adds, or removes one connector, write the
+  full desired binding set to `<working-dir>/connectors.json`, pre-flight that
+  `pac model genpage upload --help` contains `--connectors`, and include
+  `--connectors "<working-dir>/connectors.json"` in the upload.
+- If this edit only changes code/visuals and leaves connectors unchanged, omit
+  `--connectors`; pac preserves existing bindings.
+- If this edit removes every connector, write `[]` to `connectors.json` and pass
+  `--connectors` so pac clears `config.json.connectorBindings`.
+- If connector code was regenerated and you choose to pass `--connectors`,
+  re-supply the seeded `config.json.connectorBindings` set rather than dropping
+  it. Never write connection IDs.
+
 ```powershell
 pac model genpage upload `
   --app-id <app-id> `
   --page-id <page-id> `
   --code-file <working-dir>/<page-id>/page.tsx `
   --data-sources "entity1,entity2" `
+  --connectors "<working-dir>/connectors.json" `
   --prompt "<User's edit request — only the changes, not the full page>" `
   --model "<current-model-id>" `
   --agent-message "Description of what was changed in this upload"
@@ -148,6 +180,7 @@ pac model genpage upload `
 Use `--page-id` for updates. Omit `--add-to-sitemap` (the page is already in
 the sitemap).
 Omit `--data-sources` when `config.json.dataSources` was empty.
+Omit `--connectors` when connector bindings are unchanged.
 
 ## Edit Phase 7: Verify (Optional)
 
