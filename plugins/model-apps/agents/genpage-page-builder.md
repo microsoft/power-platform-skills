@@ -99,6 +99,13 @@ Read the code generation rules reference:
 ${PLUGIN_ROOT}/references/rules.md
 ```
 
+If the plan's `## Connector Bindings` section is anything other than the exact
+literal `No connector bindings.`, also read:
+
+```
+${PLUGIN_ROOT}/references/connectors.md
+```
+
 Read the relevant sample file identified in the plan:
 
 ```
@@ -284,6 +291,35 @@ const mockRecords = [
   { id: "2", name: "Fabrikam Inc", revenue: 2300000, status: "Active" },
   // ... 5-10 realistic records
 ];
+```
+
+### Connector-backed data
+
+When the plan has `## Connector Bindings`, use only the logical name, connector
+id, dataset, table GUID, display name, and operation values from that section.
+Never guess a `connectorLogicalName` that is not in the plan. Read
+`${PLUGIN_ROOT}/references/connectors.md` and emit connector calls with the
+verified runtime patterns below. Connector methods are optional at runtime, so
+every call must be presence-checked and wrapped in `try`/`catch` with a graceful
+empty or error state.
+
+Tabular connectors use `queryConnectorTable`. Tables must be the plan's list
+GUIDs, and datasets must be the plan's dataset value (SharePoint site URL):
+
+```typescript
+const connectorApi = dataApi as unknown as { queryConnectorTable?: (connectorLogicalName: string, dataset: string, table: string, options: Record<string, unknown>) => Promise<{ rows: Row[] }>; };
+if (typeof connectorApi.queryConnectorTable !== 'function') { return; }
+const result = await connectorApi.queryConnectorTable('new_uxtest_sharepoint', 'https://host.sharepoint.com/sites/x', '<list-guid>', { top: 50 });
+```
+
+REST/action connectors use `executeConnectorOperation`. Operation names and
+parameters must come from the plan and user requirements; check `response.ok`
+before using the body:
+
+```typescript
+const connectorApi = dataApi as unknown as { executeConnectorOperation?: (connectorLogicalName: string, operationName: string, parameters: Record<string, unknown>) => Promise<{ ok: boolean; body: unknown }>; };
+if (typeof connectorApi.executeConnectorOperation !== 'function') { return; }
+const response = await connectorApi.executeConnectorOperation('new_uxtest_msnweather', 'CurrentWeather', { Location: 'Seattle', units: 'C' });
 ```
 
 ## Step 6 — Write the .tsx File
