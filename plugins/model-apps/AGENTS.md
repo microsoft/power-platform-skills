@@ -83,10 +83,14 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
 - **`scripts/teardown-model-app.js` → `scripts/lib/sdk-teardown.js`** — the first-class, **classifier-safe**
   teardown (reverse of the build), for cleaning up live-verification probes or a failed build. Deletes
   exactly the artifacts a given App Spec declares, in dependency-safe order (**app → dashboards →
-  commands → forms → charts → views → relationships → web-resources → AI row summaries → tables
-  [reverse-topological, children-first] → global choices → solution**). Forms/charts/views/relationships
+  commands → forms → charts → views → relationships → AI row summaries → tables
+  [reverse-topological, children-first] → web-resources → global choices → solution**). Forms/charts/views/relationships
   are deleted **explicitly before tables** (a table delete does not reliably cascade cross-references; it
-  does remove the table's own columns), and the empty solution container goes last. Command teardown
+  does remove the table's own columns). **Web resources are deleted after tables**: a table's vector/raster
+  **icon** web resource is referenced by the table itself, so Dataverse refuses to delete it until the table
+  is gone (form JS, referenced by its already-deleted form, is safe either way). Teardown also removes the
+  build's **generated default app icon** (`<appUnique>_icon`, created in-solution when the spec sets no
+  `app.icon`) so it doesn't leak as an orphan. The empty solution container goes last. Command teardown
   removes the whole command bar for an entity the spec authored commands on (the SDK models a command bar
   per entity, not per button). Every id is resolved from a spec-declared name/logical/uniquename via an
   exact-match OData filter, so it can never wildcard-scan an org. **Dry-run by default** (`--apply`

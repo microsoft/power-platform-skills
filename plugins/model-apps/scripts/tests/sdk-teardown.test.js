@@ -7,6 +7,7 @@ const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
 const { planTeardown, runTeardown, deleteStep, odataStr, KIND_HANDLERS } = require(path.join(__dirname, '..', 'lib', 'sdk-teardown.js'));
+const { appUniqueName } = require(path.join(__dirname, '..', 'lib', 'sdk-build.js'));
 
 const desk = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.support-desk.json'), 'utf8'));
 
@@ -197,10 +198,47 @@ function mockSdk(state = {}) {
 
 // --- planTeardown (pure) ----------------------------------------------------------------
 
-test('plan is ordered app -> dashboards -> commands -> forms -> charts -> views -> relationships -> web-resources -> tables -> solution', () => {
+test('plan is ordered app -> dashboards -> commands -> forms -> charts -> views -> relationships -> tables -> web-resources -> solution', () => {
   const steps = planTeardown(fullSpec());
   const kinds = steps.map((s) => s.kind);
-  assert.deepStrictEqual(kinds, ['app', 'dashboard', 'commands', 'form', 'form', 'form', 'chart', 'chart', 'view', 'view', 'view', 'relationship', 'relationship', 'webResource', 'table', 'table', 'table', 'solution']);
+  // Web resources come after tables (a table-icon WR is referenced by its table); fullSpec's app
+  // sets no app.icon, so a second webResource step (the generated default app icon) is planned too.
+  assert.deepStrictEqual(kinds, ['app', 'dashboard', 'commands', 'form', 'form', 'form', 'chart', 'chart', 'view', 'view', 'view', 'relationship', 'relationship', 'table', 'table', 'table', 'webResource', 'webResource', 'solution']);
+});
+
+// Regression (found by live teardown): a table's icon web resource is referenced by the table, so
+// it must be planned AFTER the table; and the build's generated default app icon web resource must
+// be cleaned up or it leaks as an orphan the spec never declared.
+test('a table-icon web resource is torn down AFTER its table, and the generated app icon is cleaned up', () => {
+  const spec = {
+    solution: { uniqueName: 'IconSln', publisherPrefix: 'new' },
+    app: { name: 'Icon App' },
+    entities: [{ schemaName: 'new_widget', primaryAttribute: { schemaName: 'new_name' }, columns: [], vectorIcon: 'new_widgeticon.svg' }],
+    webResources: [{ name: 'new_widgeticon.svg', type: 'svg', content: '<svg/>' }],
+    appShell: { areas: [{ label: 'A', groups: [{ label: 'G', subAreas: [{ entity: 'new_widget' }] }] }] },
+  };
+  const steps = planTeardown(spec);
+  const kinds = steps.map((s) => s.kind);
+  const tableIdx = kinds.indexOf('table');
+  const firstWrIdx = kinds.indexOf('webResource');
+  assert.ok(tableIdx !== -1 && firstWrIdx !== -1, 'both a table and a web resource are planned');
+  assert.ok(tableIdx < firstWrIdx, 'web resources are torn down after tables (the table-icon WR is referenced by the table)');
+  const wrNames = steps.filter((s) => s.kind === 'webResource').map((s) => s.target.name);
+  assert.ok(wrNames.includes('new_widgeticon.svg'), 'the declared table-icon web resource is torn down');
+  assert.ok(wrNames.includes(`${appUniqueName(spec)}_icon`), 'the generated default app icon web resource is torn down (no orphan)');
+});
+
+test('the generated app-icon teardown step is skipped when the spec sets an explicit app.icon', () => {
+  const spec = {
+    solution: { uniqueName: 'IconSln2', publisherPrefix: 'new' },
+    app: { name: 'Icon App 2', icon: 'new_appicon.png' },
+    entities: [{ schemaName: 'new_widget2', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
+    webResources: [{ name: 'new_appicon.png', type: 'png', contentBase64: '' }],
+    appShell: { areas: [{ label: 'A', groups: [{ label: 'G', subAreas: [{ entity: 'new_widget2' }] }] }] },
+  };
+  const wrNames = planTeardown(spec).filter((s) => s.kind === 'webResource').map((s) => s.target.name);
+  assert.ok(!wrNames.includes(`${appUniqueName(spec)}_icon`), 'no generated-icon step when app.icon is explicit');
+  assert.ok(wrNames.includes('new_appicon.png'), 'the explicit app.icon WR is still torn down via webResources[]');
 });
 
 test('teardown computes the SAME publisher-prefixed relationship name as the build for a system-table rel', () => {
@@ -409,10 +447,10 @@ test('dry-run emits the whole plan as skips and never calls SDK', async () => {
   const throwingSdk = { queryRecords: () => { throw new Error('dry-run must not call SDK'); } };
   const r = await runTeardown(fullSpec(), { apply: false }, { sdk: throwingSdk, emit: (e) => events.push(e) });
   assert.strictEqual(r.dryRun, true);
-  assert.strictEqual(r.plan.length, 18);
+  assert.strictEqual(r.plan.length, 19); // +1 generated app-icon web resource (fullSpec sets no app.icon)
   const terminal = events.filter((e) => e.status !== 'start');
   assert.ok(terminal.every((e) => e.status === 'skip'));
-  assert.strictEqual(terminal.length, 18);
+  assert.strictEqual(terminal.length, 19);
 });
 
 test('apply without an sdk throws', async () => {
@@ -482,7 +520,7 @@ test('not-found artifacts are skipped, not errors, and issue no delete', async (
   // Tables will attempt deleteTable (synthetic item) but get not-found immediately, counted as deleted
   // Relationships will attempt deleteRelationship but get not-found, counted as deleted (tolerateNotFound)
   // Other artifacts (app, dashboard, commands, forms, charts, views, webResource, solution) skip when resolve returns []
-  assert.strictEqual(r.skipped.length, 13); // app, dashboard, commands, 3 forms, 2 charts, 3 views, webResource, solution
+  assert.strictEqual(r.skipped.length, 14); // app, dashboard, commands, 3 forms, 2 charts, 3 views, webResource, generated app-icon WR, solution
   assert.strictEqual((r.deleted.table || []).length, 3); // tables counted as deleted (tolerateNotFound)
   assert.strictEqual((r.deleted.relationship || []).length, 2); // relationships counted as deleted (tolerateNotFound)
   // Only table/relationship deletes were attempted (synthetic items); other kinds skipped before delete

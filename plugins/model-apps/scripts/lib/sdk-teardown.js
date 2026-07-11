@@ -16,13 +16,15 @@
 //   5. charts        — savedqueryvisualization rows per entity (deleted before tables)
 //   6. views         — savedquery rows per entity (deleted before tables)
 //   7. relationships — OneToMany/ManyToMany relationships (deleted before tables)
-//   8. web-resources — webresourceset rows (the form/command JS) — deletable only once the
-//                      commands/forms above that reference them are gone.
-//   9. tables        — EntityDefinitions in REVERSE-topological order (a child's lookup references
+//   8. tables        — EntityDefinitions in REVERSE-topological order (a child's lookup references
 //                      its parent, so children/referencing tables delete first). Deleting a table
 //                      does NOT cascade forms/views/charts/relationships when cross-references exist
 //                      (e.g. a form subgrid references another table's view), so teardown deletes
 //                      them explicitly first.
+//   9. web-resources — webresourceset rows (form/command JS, table-icon SVG/raster images, and the
+//                      build's generated default app icon) — deleted AFTER tables: a table's icon
+//                      web resource is referenced by the TABLE itself, so it can't be removed until
+//                      the table is gone (form JS is referenced by forms, already deleted above).
 //  10. global-choices — shared option sets, deleted after the tables whose columns bound them.
 //  11. solution      — the (now-empty) solution container, deleted last.
 //
@@ -245,9 +247,6 @@ function planTeardown(spec) {
     const schema = r.type === 'ManyToMany' ? manyToManySchemaName(r, spec.solution && spec.solution.publisherPrefix) : relationshipSchemaName(r, spec.solution && spec.solution.publisherPrefix);
     steps.push({ kind: 'relationship', phase: 'relationships', label: `relationship ${schema}`, target: { schemaName: schema } });
   }
-  for (const wr of spec.webResources || []) {
-    steps.push({ kind: 'webResource', phase: 'web-resources', label: `web resource ${wr.name}`, target: { name: wr.name } });
-  }
   // AI row-summary records must be removed BEFORE tables: the summary record references the
   // table and would block its delete. Reuses selectSummaryTables to respect default:'off' + overrides.
   if (spec.ai && spec.ai.summaries) {
@@ -260,6 +259,22 @@ function planTeardown(spec) {
   // order); teardown deletes children-before-parents so a still-referenced parent never blocks.
   for (const e of topoOrderEntities(spec).slice().reverse()) {
     steps.push({ kind: 'table', phase: 'tables', label: `table ${e.schemaName}`, target: { logical: e.schemaName.toLowerCase(), schemaName: e.schemaName, existing: e.existing === true } });
+  }
+  // Web resources AFTER tables (see the order note in the file header): a form's JS is referenced
+  // by its form (deleted in the forms phase), but a table's vector/raster ICON web resource is
+  // referenced by the TABLE — Dataverse rejects the delete with "referenced by N other components"
+  // while the table still exists, so it must come after the tables phase.
+  for (const wr of spec.webResources || []) {
+    steps.push({ kind: 'webResource', phase: 'web-resources', label: `web resource ${wr.name}`, target: { name: wr.name } });
+  }
+  // The build generates a default app icon web resource (`<appUnique>_icon`) in the solution when
+  // the spec sets no explicit app.icon; it is referenced by the app module (deleted first), so it
+  // is safe to delete here. Without this step it leaks as an orphan the spec never declared (the
+  // solution delete removes the container, not the underlying webresource row). Skipped when
+  // app.icon is set — that image is a declared webResources[] entry handled by the loop above.
+  if (spec.app && spec.solution && !spec.app.icon) {
+    const generatedIcon = `${appUniqueName(spec)}_icon`;
+    steps.push({ kind: 'webResource', phase: 'web-resources', label: `web resource ${generatedIcon} (generated app icon)`, target: { name: generatedIcon } });
   }
   // Global option sets last (before the solution container): every column that bound one lives
   // on a table deleted above, so the shared choice now has no dependents blocking its delete.

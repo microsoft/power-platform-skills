@@ -64,6 +64,16 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   local enum mapping, etc.) — no rule loosening.
 
 ### Fixed
+- **Teardown no longer leaks a table's icon web resource or the generated app icon
+  (`sdk-teardown.js`).** Two "0-leftover" gaps found by a full live build→teardown probe:
+  - A table's **vector/raster icon web resource** is referenced by the table, so deleting web
+    resources *before* tables failed with Dataverse *"referenced by 1 other components"*. Web
+    resources are now torn down **after** tables (form JS, referenced by its already-deleted form,
+    is unaffected).
+  - The build's **generated default app icon** (`<appUnique>_icon`, created in-solution when the
+    spec sets no `app.icon`) was never deleted — deleting the solution drops the container, not the
+    underlying webresource row — so it orphaned. Teardown now removes it (skipped when `app.icon`
+    is an explicit, already-declared web resource).
 - **Teardown surfaces cascade cleanup failures instead of silently orphaning rows
   (`sdk-teardown.js`).** The re-vendored SDK's `deleteAppCascade` now returns a structured
   `{ success, deleted, failures }` result (it used to return void and swallow child-cleanup
