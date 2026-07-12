@@ -119,7 +119,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 **Goal**: Route the user into the appropriate creation path after path-agnostic Discovery.
 
-> **Current implementation state:** Template discovery, selection, unmanaged solution import, inactive-site identification, activation, and live-site preview are implemented here. Seed data and robustness/re-install handling are implemented by later slices. The user can always choose **Start from scratch** to continue into the existing scaffold flow.
+> **Current implementation state:** Template discovery, selection, unmanaged solution import, optional seed data, robustness/re-install handling, activation, live-site preview, and terminal telemetry are implemented here. The user can always choose **Start from scratch** to continue into the existing scaffold flow.
 
 **Actions**:
 

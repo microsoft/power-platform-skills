@@ -487,6 +487,8 @@ When **removing** a gate, also remove its catalog row in the same PR.
 | `create-site:7.review` | gate | plan | 7 | Live site ready — *"Would you like any changes?"* | nothing |
 | `create-site:8.deploy` | gate | plan | 8 | *"Deploy now (Recommended) / Skip for now"* — invokes `/deploy-site` on Yes | nothing |
 
+Template-path note: when Phase 1.5 selects and installs a template, the workflow stops after activation/live preview and does **not** enter the from-scratch Phase 4 plan approval or Phase 8 deploy prompt. Those gates fire only on the from-scratch branch.
+
 ---
 
 ### 6.14 `deploy-site` (8 calls)
