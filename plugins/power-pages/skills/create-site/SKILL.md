@@ -20,7 +20,7 @@ Guide the user through creating a complete, production-quality Power Pages code 
 ## Core Principles
 
 - **Use best judgement for design details**: Once the user picks an aesthetic direction and mood, make confident decisions about specific fonts, colors, page layouts, and component behavior. Do not ask the user to specify every detail — use the design reference and your own taste to make creative, distinctive choices.
-- **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
+- **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the path-agnostic upfront tasks first, then append branch-specific tasks after the creation path is selected.
 - **Scaffold early, design with intention**: Get the dev server running immediately after discovery so the user has something to look at. Then plan the design and features while the scaffold is live — apply the chosen aesthetic during implementation.
 - **Live preview feedback loop**: The dev server MUST be running before any customization begins. Browse the site via Playwright (`browser_navigate` + `browser_snapshot`) to verify every significant change. Do NOT take screenshots — only use accessibility snapshots to check page structure and content.
 - **Keep the scaffold loader in sync with reality**: The scaffold loader polls `public/scaffold-status.json`. Update this file before every `AskUserQuestion` (to raise the "waiting for your input" banner so the user doesn't miss a terminal prompt) and before each implementation step in Phase 5 (so the progress-bar label matches what you're actually doing while the decorative spinner continues its default cycle). See [Live Preview Status Protocol](#live-preview-status-protocol).
@@ -74,27 +74,65 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 <!-- gate: create-site:1.purpose | category=plan | cancel-leaves=nothing -->
 
-> 🚦 **Gate (plan · create-site:1.purpose):** Multi-question prompt collecting site name, framework, purpose, audience, and target directory. Determines what gets scaffolded. Fires only on the "site purpose unclear" branch (step 3 below).
+> 🚦 **Gate (plan · create-site:1.purpose):** Path-agnostic discovery prompt collecting site name, purpose, and audience. Determines what kind of site the user needs before the skill decides between a template-backed path and the from-scratch scaffold path. Fires only on the "site purpose unclear" branch (step 3 below).
 >
-> **Trigger:** Phase 1 when site purpose was not provided in `$ARGUMENTS`.
-> **Why we ask:** Wrong framework picked → wrong template copied into the wrong directory; cleanup is annoying.
+> **Trigger:** Phase 1 when site name, purpose, or audience was not provided in `$ARGUMENTS`.
+> **Why we ask:** Wrong purpose/audience context → wrong branch decision and wrong generated site plan; cleanup is annoying.
 > **Cancel leaves:** Nothing — no scaffolding has started yet.
 
-1. Create todo list with all 8 phases (see [Progress Tracking](#progress-tracking) table)
-2. If site purpose is clear from arguments:
+1. Create the minimal upfront todo list (see [Progress Tracking](#progress-tracking)):
+   - Discover site requirements
+   - Select template or choose from-scratch
+2. If site name, purpose, and audience are clear from arguments:
    - Summarize understanding
    - Identify site type (portal, dashboard, landing page, blog, etc.)
-3. If site purpose is unclear, use `AskUserQuestion`:
+3. If site name, purpose, or audience is unclear, use `AskUserQuestion`:
 
    | Question | Header | Options |
    |----------|--------|---------|
    | What should the site be called? (e.g., "Contoso Portal", "HR Dashboard") | Site Name | *(free text — use a single generic option so the user types a custom name via "Other")* |
-   | Which frontend framework? | Framework | React (Recommended), Vue, Angular, Astro |
    | What is the site's purpose? | Purpose | Company Portal, Blog/Content, Dashboard, Landing Page |
    | Who is the target audience? | Audience | Internal (employees, partners), External (public-facing customers) |
+
+4. From the user's answers, derive:
+   - `__SITE_NAME__` (Title Case, e.g., `Contoso Portal`)
+   - `__SITE_SLUG__` (kebab-case derived from site name, e.g., `contoso-portal`)
+   - `__SITE_DESCRIPTION__` (one-line description based on name + purpose)
+5. Summarize the path-agnostic understanding and confirm with user before proceeding:
+   - Site name
+   - Site purpose/type
+   - Target audience
+
+   Do **not** ask for framework or project location in Phase 1. Those questions only apply to the from-scratch branch and are asked after Phase 1.5 when that branch is selected.
+
+**Audience influences site generation:**
+
+- **Internal**: Prioritize data tables, dashboards, authentication, navigation depth, functional over flashy design
+- **External**: Prioritize landing page appeal, SEO-friendly structure, contact forms, clean marketing-oriented layout
+
+**Output**: Clear statement of site purpose, audience, and derived naming values.
+
+---
+
+## Phase 1.5: Template Branch Decision
+
+**Goal**: Route the user into the appropriate creation path after path-agnostic Discovery.
+
+> **Current implementation state:** The branch seam is intentionally present now, but the template path is not implemented yet. Until the template catalog and selection UX are added, this phase always selects the from-scratch path and proceeds to Phase 2. Future template support will plug into this seam.
+
+**Actions**:
+
+1. Mark **Select template or choose from-scratch** as `in_progress`.
+2. Set `CREATION_PATH = "from-scratch"`.
+3. Tell the user: "I'll scaffold this site from scratch."
+4. Ask the from-scratch-only questions that were deferred from Phase 1:
+
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | Which frontend framework? | Framework | React (Recommended), Vue, Angular, Astro |
    | Where should the project be created? | Location | Current directory, New folder in current directory (Recommended), Any other directory |
 
-4. Resolve the project location:
+5. Resolve the project location:
    - **If "Current directory"**: Project root = `<cwd>`.
    - **If "New folder in current directory"**: Create a folder named `__SITE_NAME__` inside the cwd. Project root = `<cwd>/__SITE_NAME__/`.
    - **If "Any other directory"**: Ask for the full path. Verify/create it. Project root = provided path.
@@ -102,19 +140,9 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    After resolving, confirm: "The site will be created at `<resolved path>`."
 
    Store this as `PROJECT_ROOT`.
+6. Append the from-scratch task list (Phases 2-8) to the todo list (see [Progress Tracking](#progress-tracking)), then mark **Select template or choose from-scratch** as `completed`.
 
-5. From the user's answers, derive:
-   - `__SITE_NAME__` (Title Case, e.g., `Contoso Portal`)
-   - `__SITE_SLUG__` (kebab-case derived from site name, e.g., `contoso-portal`)
-   - `__SITE_DESCRIPTION__` (one-line description based on name + purpose)
-6. Summarize understanding and confirm with user before proceeding
-
-**Audience influences site generation:**
-
-- **Internal**: Prioritize data tables, dashboards, authentication, navigation depth, functional over flashy design
-- **External**: Prioritize landing page appeal, SEO-friendly structure, contact forms, clean marketing-oriented layout
-
-**Output**: Clear statement of site purpose, framework, audience, derived naming values, and project location
+**Output**: `CREATION_PATH = "from-scratch"`, selected framework, and resolved project location.
 
 ---
 
@@ -708,18 +736,25 @@ Present a summary table to the user:
 
 ### Key Decision Points (Wait for User)
 
-1. After Phase 1: Confirm site purpose, framework, and project location
-2. After Phase 4: Approve implementation plan
-3. After Phase 7: Accept site or request changes
-4. At Phase 8: Deploy or skip
+1. After Phase 1: Confirm site purpose and audience
+2. During Phase 1.5: Choose framework and project location for the from-scratch path
+3. After Phase 4: Approve implementation plan
+4. After Phase 7: Accept site or request changes
+5. At Phase 8: Deploy or skip
 
 ### Progress Tracking
 
-Before starting Phase 1, create a task list with all phases using `TaskCreate`:
+Before starting Phase 1, create only the path-agnostic upfront tasks using `TaskCreate`:
 
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
-| Discover site requirements | Discovering requirements | Collect site name, framework, purpose, audience, and project location |
+| Discover site requirements | Discovering requirements | Collect site name, purpose, audience, and derived naming values |
+| Select template or choose from-scratch | Selecting creation path | Route the user into the from-scratch path until template selection is implemented |
+
+After Phase 1.5 selects the from-scratch path, append the existing from-scratch phase tasks:
+
+| Task subject | activeForm | Description |
+|-------------|------------|-------------|
 | Scaffold and launch dev server | Scaffolding project | Copy template, replace placeholders with defaults, git init, npm install, start dev server, share URL |
 | Plan site components | Planning components | Determine pages, components, design direction, and routes while user previews scaffold |
 | Approve implementation plan | Getting plan approval | Present implementation plan covering design and pages, get user approval |
@@ -728,7 +763,7 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Review with user | Reviewing site | Navigate all pages, share URL, get user feedback, apply changes |
 | Deploy and wrap up | Deploying site | Ask about deployment, present summary, suggest next steps |
 
-Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. This gives the user visibility into progress and keeps the workflow deterministic.
+Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. This gives the user visibility into progress and keeps the workflow deterministic while avoiding permanently skipped tasks on future non-from-scratch branches.
 
 ### Quality Standards
 
@@ -756,9 +791,13 @@ Every site must meet these standards before completion:
 ### Phase 1: Discovery
 
 - Name: Partner Portal
-- Framework: React
 - Purpose: Company Portal
 - Audience: Internal (partners, consultants)
+
+### Phase 1.5: Template Branch Decision
+
+- Creation path: From-scratch
+- Framework: React
 - Location: New folder `partner-portal` in current directory
 
 ### Phase 2: Scaffold & Launch
