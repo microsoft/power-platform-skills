@@ -172,7 +172,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         node "${PLUGIN_ROOT}/scripts/fetch-template-solution.js" --sha "<catalog-sha>" --solutionPath "<selected.solutionPath>"
         ```
      2. If the result is `ok: false`, tell the user the selected template package is unavailable or corrupt, then set `CREATION_PATH = "from-scratch"` and continue to the from-scratch questions below. Do not leave partial cache files behind.
-     3. If the result is `ok: true`, set `CREATION_PATH = "template"`, `SELECTED_TEMPLATE = <manifest entry>`, and `SELECTED_TEMPLATE_SOLUTION_ZIP = <localPath>`. Append the template-path tasks (see [Progress Tracking](#progress-tracking)), then continue to the template import sequence below. Do **not** ask framework/location and do **not** proceed to Phase 2.
+     3. If the result is `ok: true`, set `CREATION_PATH = "template"`, `SELECTED_TEMPLATE = <manifest entry>`, and `SELECTED_TEMPLATE_SOLUTION_ZIP = <localPath>`. Append only **Verify prerequisites and confirm template import** now (see [Progress Tracking](#progress-tracking)); the import-vs-clone tasks are appended after the reinstall policy is known. Continue to the template import sequence below. Do **not** ask framework/location and do **not** proceed to Phase 2.
    - **Start from scratch** or catalog unavailable: set `CREATION_PATH = "from-scratch"` and continue below.
 
 7. For the template path only:
@@ -184,9 +184,9 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       ```
       Use the returned `environmentUrl` and `token` for the import request and poller. If `ok: false`, surface the error and stop before import.
 
-<!-- gate: create-site:template.import | category=consent | cancel-leaves=template-cache -->
+<!-- gate: create-site:1.5.template-import | category=consent | cancel-leaves=template-cache -->
 
-> 🚦 **Gate (consent · create-site:template.import):** Confirm importing the selected template solution into the current Power Platform environment.
+> 🚦 **Gate (consent · create-site:1.5.template-import):** Confirm importing the selected template solution into the current Power Platform environment.
 >
 > **Trigger:** Phase 1.5 after the selected template solution zip is downloaded and the target environment is resolved.
 > **Why we ask:** The next step imports an unmanaged Dataverse solution into the user's org. Wrong environment or wrong template is disruptive and cannot be cleanly undone.
@@ -200,13 +200,104 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
       - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to step 8.
       - **Cancel**: stop; no org mutation has happened.
-   4. Capture a pre-import site list snapshot:
+   4. Inspect the selected solution zip and check whether that solution is already installed:
+      ```bash
+      node "${PLUGIN_ROOT}/scripts/inspect-template-solution.js" --zipPath "<SELECTED_TEMPLATE_SOLUTION_ZIP>"
+      node "${PLUGIN_ROOT}/scripts/check-solution-installed.js" --solutionName "<uniqueName>" --envUrl "<environmentUrl>"
+      node "${PLUGIN_ROOT}/scripts/inspect-template-solution.js" --zipPath "<SELECTED_TEMPLATE_SOLUTION_ZIP>" --installed "<true|false>" --installedVersion "<version-or-empty>"
+      ```
+      If `inspect-template-solution.js` returns `ok: false`, treat detection as unknown (`decision: "ask"`). The solution can still be imported if the user explicitly chooses to continue, but the safer defaults are **Start from scratch** or **Stop**.
+      If `check-solution-installed.js` exits 1, treat detection as unknown (`decision: "ask"`) and do not assume the solution is absent.
+      - **`decision: "import"`**: append the import-path tasks (**Import template solution**, **Show imported inactive site**, optional **Apply template seed data**, **Activate imported site**, **Show live template site**) and continue.
+      - **`decision: "confirm-update"`**: tell the user a newer template version is available and confirm before importing in place.
+
+        <!-- gate: create-site:1.5.update-installed | category=consent | cancel-leaves=template-cache -->
+
+        > 🚦 **Gate (consent · create-site:1.5.update-installed):** Confirm updating an already-installed unmanaged template solution.
+        >
+        > **Trigger:** Phase 1.5 when the selected template solution is already installed and the downloaded zip has a newer version.
+        > **Why we ask:** Updating an unmanaged solution merges changes into the environment and cannot be cleanly rolled back.
+        > **Cancel leaves:** `template-cache` — downloaded template artifacts remain in the SHA-keyed temp cache; no org mutation happens if cancelled.
+
+        Use `AskUserQuestion`:
+
+        | Question | Header | Options |
+        |----------|--------|---------|
+        | Template `<displayName>` is already installed at version `<installedVersion>`. The selected template zip is newer (`<zipVersion>`). Update the unmanaged solution in this environment? | Update Template | Yes, update the template (Recommended), No, cancel |
+
+        If the user declines or cancels, stop before import; no org mutation has happened. If the user confirms, append the import-path tasks and continue.
+
+      - **`decision: "offer-clone"`**: do not re-import. Append **Clone existing template site**, then offer to clone the existing site instead:
+
+        <!-- gate: create-site:1.5.clone-existing | category=consent | cancel-leaves=template-cache -->
+
+        > 🚦 **Gate (consent · create-site:1.5.clone-existing):** Confirm cloning an existing website instead of re-importing the same or older unmanaged template solution.
+        >
+        > **Trigger:** Phase 1.5 when the selected template solution is already installed at the same or newer version.
+        > **Why we ask:** Cloning creates/upload site content for a new site; wrong source site creates the wrong clone.
+        > **Cancel leaves:** `template-cache` — downloaded template artifacts remain in the SHA-keyed temp cache; no clone/upload happens if cancelled.
+
+        Use `AskUserQuestion`:
+
+        | Question | Header | Options |
+        |----------|--------|---------|
+        | Template `<displayName>` is already installed at the same or newer version. Re-importing is not recommended. Clone an existing website from this template instead? | Clone Existing Site | Yes, clone an existing site (Recommended), No, cancel |
+
+        First run `pac pages list -v` and identify the existing website to clone.
+
+        <!-- not-a-gate: clone source-site disambiguation after the user has already approved the clone path; data-gathering only, no clone/download/upload runs until a source is selected -->
+
+        If more than one candidate could be the template site, ask the user to pick the source site name/Website Record ID before running clone commands.
+        ```bash
+        pac pages download-code-site --webSiteId "<existing website id>" --path "<temp path>"
+        pac pages clone --path "<downloaded path>"
+        pac pages upload-code-site --rootPath "<cloned path>"
+        ```
+        If any clone command fails, surface the failed command and error output, then fire this gate:
+
+        <!-- gate: create-site:1.5.clone-failed | category=progress | cancel-leaves=partial-template-clone -->
+
+        > 🚦 **Gate (progress · create-site:1.5.clone-failed):** Choose how to proceed after cloning an existing template site fails.
+        >
+        > **Trigger:** Phase 1.5 when `download-code-site`, `clone`, or `upload-code-site` fails.
+        > **Why we ask:** The environment or local temp folder may contain partial clone state; retrying or switching paths should be explicit.
+        > **Cancel leaves:** `partial-template-clone` — downloaded template artifacts remain in the SHA-keyed temp cache, and local downloaded/cloned files or a partial code-site upload may remain; the error summary names the failed command.
+
+        Use `AskUserQuestion`:
+
+        | Question | Header | Options |
+        |----------|--------|---------|
+        | Cloning the existing template site failed. How would you like to proceed? | Clone Failed | Retry clone (Recommended), Fall back to from-scratch, Stop |
+
+        Do not retry automatically; offer **Retry clone**, **Fall back to from-scratch**, or **Stop**. Verify a successful upload by running `pac pages list -v` again and diffing the output with `diff-pages-list.js`. If the cloned site identity is found, invoke `/activate-site` with that cloned site name and Website Record ID, then open the live URL and present the same template-path summary used below. If the cloned site identity cannot be resolved, stop and tell the user the clone/upload completed but activation needs a manual `/activate-site` run with the cloned Website Record ID from `pac pages list -v`. If the user declines cloning, stop. **Do not continue into the normal template import flow after a clone path succeeds or stops.**
+      - **`decision: "ask"`** or detection failure: ask whether to import anyway, start from scratch, or stop.
+
+        <!-- gate: create-site:1.5.reinstall-unknown | category=consent | cancel-leaves=template-cache -->
+
+        > 🚦 **Gate (consent · create-site:1.5.reinstall-unknown):** Confirm whether to import when installed-solution detection failed.
+        >
+        > **Trigger:** Phase 1.5 when `check-solution-installed.js` cannot determine whether the selected template solution already exists.
+        > **Why we ask:** Importing an unmanaged solution that may already exist can merge components or create duplicate site state.
+        > **Cancel leaves:** `template-cache` — downloaded template artifacts remain in the SHA-keyed temp cache; no org mutation happens if cancelled.
+
+        Use `AskUserQuestion`:
+
+        | Question | Header | Options |
+        |----------|--------|---------|
+        | I couldn't determine whether this template solution is already installed. Importing anyway may merge unmanaged components or create duplicate site state. How would you like to proceed? | Template Install Unknown | Import anyway (advanced), Start from scratch (Recommended), Stop |
+
+        Branch on the answer:
+        - **Import anyway**: append the import-path tasks and continue to the pre-import snapshot and import flow below.
+        - **Start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions.
+        - **Stop**: stop before import; no org mutation has happened.
+
+   5. Capture a pre-import site list snapshot:
       ```bash
       node "${PLUGIN_ROOT}/scripts/capture-pages-list.js" --output "<temp-before-pages-list.txt>"
       ```
       If the result is `ok: false`, surface the error and stop before import.
-   5. Mark **Verify prerequisites and confirm template import** as `completed` and **Import template solution** as `in_progress`.
-   6. Import the unmanaged solution inline, without invoking `/import-solution` and without writing ALM artifacts:
+   6. Mark **Verify prerequisites and confirm template import** as `completed` and **Import template solution** as `in_progress`.
+   7. Import the unmanaged solution inline, without invoking `/import-solution` and without writing ALM artifacts:
       ```bash
       node "${PLUGIN_ROOT}/scripts/encode-solution-file.js" --zipPath "<SELECTED_TEMPLATE_SOLUTION_ZIP>"
       node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "<environmentUrl>" POST "ImportSolutionAsync" \
@@ -219,9 +310,31 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         --intervalMs 8000 \
         --maxAttempts 75
       ```
-      If the poll result is not `Succeeded`, surface the error and stop; full retry/fallback handling is the robustness ticket.
-   7. Mark **Import template solution** as `completed` and **Show imported inactive site** as `in_progress`.
-   8. Capture a post-import site list snapshot and identify the newly-imported site:
+      If the poll result is not `Succeeded`, query the import job (using the `ImportJobKey` returned by `ImportSolutionAsync`) and parse its component-level error XML, following `/import-solution`'s Phase 6 pattern. Do **not** auto-clean up the unmanaged partial import.
+
+      <!-- gate: create-site:1.5.import-failed | category=progress | cancel-leaves=partial-unmanaged-template-import -->
+
+      > 🚦 **Gate (progress · create-site:1.5.import-failed):** Choose how to proceed after template solution import fails.
+      >
+      > **Trigger:** Phase 1.5 when `ImportSolutionAsync` fails, times out, or reports component-level failures.
+      > **Why we ask:** The environment may contain a partial unmanaged import; retrying or switching paths should be an explicit choice.
+      > **Cancel leaves:** `partial-unmanaged-template-import` — downloaded template artifacts remain in the SHA-keyed temp cache; any unmanaged partial import remains in Dataverse and is explained in the error summary.
+
+      Use `AskUserQuestion`:
+
+      | Question | Header | Options |
+      |----------|--------|---------|
+      | Template import failed or partially completed. How would you like to proceed? | Template Import Failed | Retry import, Fall back to from-scratch (Recommended), Stop |
+
+      Branch on the answer:
+      - **Retry import**: return to the import command sequence above and poll again.
+      - **Fall back to from-scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions. Tell the user the unmanaged partial import may remain in Dataverse.
+      - **Stop**: stop after showing the error summary. Do not mark **Import template solution** as completed and do not continue to post-import site detection.
+
+      If the error is `AttachmentBlocked`, point to `/import-solution` Phase 5b remediation.
+      Only continue to the next step when the import poll result is `Succeeded`.
+   8. Mark **Import template solution** as `completed` and **Show imported inactive site** as `in_progress`.
+   9. Capture a post-import site list snapshot and identify the newly-imported site:
       ```bash
       node "${PLUGIN_ROOT}/scripts/capture-pages-list.js" --output "<temp-after-pages-list.txt>"
       node "${PLUGIN_ROOT}/scripts/diff-pages-list.js" --before "<temp-before-pages-list.txt>" --after "<temp-after-pages-list.txt>"
@@ -229,8 +342,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       - **`status: "found"` and `inactive: true`**: set `IMPORTED_SITE_NAME`, `IMPORTED_WEBSITE_RECORD_ID`, and `IMPORTED_SITE_STATE`, then tell the user: "Template `<displayName>` was imported as `<IMPORTED_SITE_NAME>` (`<IMPORTED_WEBSITE_RECORD_ID>`). Current state from `pac pages list -v`: `<IMPORTED_SITE_STATE>`. The site exists in your environment but is not live yet; activation is the next step."
       - **`status: "found"` but `inactive: false`**: show the diff result and explain that the import succeeded but the inactive state could not be verified automatically. Stop before activation; the next slice will handle recovery.
       - **`status: "none"` or `"multiple"`**: show the diff result and explain that the import succeeded but the newly-imported site could not be identified automatically. Stop before activation; the next slice will handle recovery.
-   9. Mark **Show imported inactive site** as `completed`.
-   10. If `SELECTED_TEMPLATE.seedDataPath` is present, mark **Apply template seed data** as `in_progress` and run:
+   10. Mark **Show imported inactive site** as `completed`.
+   11. If `SELECTED_TEMPLATE.seedDataPath` is present, mark **Apply template seed data** as `in_progress` and run:
        ```bash
        node "${PLUGIN_ROOT}/scripts/fetch-template-seed-data.js" --sha "<catalog-sha>" --seedDataPath "<SELECTED_TEMPLATE.seedDataPath>"
        ```
@@ -240,8 +353,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        ```
        Surface the JSON summary (`inserted`, `failed`, `skipped`, `errors`). For a lightweight read-only verification path, query each seeded `entitySetName` with `dataverse-request.js` using `GET "<entitySetName>?$top=1"` and report whether the seeded table is reachable. Seeding is best-effort: even if `failed > 0`, `ok: false`, or read-only verification cannot run, continue to activation.
        If `seedDataPath` is absent, skip this task.
-   11. Mark **Apply template seed data** as `completed` or skipped, then mark **Activate imported site** as `in_progress`.
-   12. Invoke `/activate-site`, passing the resolved identity in the request so it skips local-project discovery:
+   12. Mark **Apply template seed data** as `completed` or skipped, then mark **Activate imported site** as `in_progress`.
+   13. Invoke `/activate-site`, passing the resolved identity in the request so it skips local-project discovery:
        ```text
        Activate imported template site:
        - siteName: <IMPORTED_SITE_NAME>
@@ -250,8 +363,9 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        - source: create-site template path
        ```
        The activate-site skill owns subdomain selection, final activation confirmation, provisioning, polling, and recovery.
-   13. When `/activate-site` returns a `siteUrl`, mark **Activate imported site** as `completed` and **Show live template site** as `in_progress`.
-   14. Open the live site URL in the user's default browser:
+       If activation ultimately fails, tell the user the site is imported but not live yet and can be activated later by rerunning `/activate-site` with the imported site identity. Do **not** treat this as a failed import.
+   14. When `/activate-site` returns a `siteUrl`, mark **Activate imported site** as `completed` and **Show live template site** as `in_progress`.
+   15. Open the live site URL in the user's default browser:
        ```bash
        node "${PLUGIN_ROOT}/scripts/open-url.js" --url "<siteUrl>"
        ```
@@ -260,7 +374,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        - **`ok: false`**: tell the user the browser could not be opened automatically and show the `siteUrl` for manual opening.
 
        Always surface the activate-site DNS propagation caveat: the site may take a few minutes to load even after activation succeeds.
-   15. Mark **Show live template site** and **Select template or choose from-scratch** as `completed`, then present the template-path summary:
+   16. Mark **Show live template site** and **Select template or choose from-scratch** as `completed`, then present the template-path summary:
        - Template name and framework
        - Imported site name and Website Record ID
        - Live site URL
@@ -910,16 +1024,27 @@ After Phase 1.5 selects the from-scratch path, append the existing from-scratch 
 | Review with user | Reviewing site | Navigate all pages, share URL, get user feedback, apply changes |
 | Deploy and wrap up | Deploying site | Ask about deployment, present summary, suggest next steps |
 
-After Phase 1.5 selects the template path, append the current template phase tasks:
+After Phase 1.5 selects the template path, append only the common template confirmation task first:
 
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
 | Verify prerequisites and confirm template import | Confirming template import | Verify PAC/Azure auth, resolve the target environment, and ask for import consent |
+
+After the reinstall policy chooses a normal import/update/import-anyway path, append:
+
+| Task subject | activeForm | Description |
+|-------------|------------|-------------|
 | Import template solution | Importing template solution | Import the selected unmanaged solution and poll the async job to completion |
 | Show imported inactive site | Showing imported site | Diff `pac pages list -v` output to identify the imported site record and tell the user it is not live yet |
 | Apply template seed data | Applying seed data | Insert optional template seed records using the deterministic seed-data script; failures do not block activation |
 | Activate imported site | Activating imported site | Invoke activate-site with the resolved site name and Website Record ID |
 | Show live template site | Showing live site | Open the activated site URL in the browser and invite the user to continue customizing |
+
+When the selected template is already installed at the same or a newer version and the user chooses the clone path, append this branch-specific task instead of the import-path tasks:
+
+| Task subject | activeForm | Description |
+|-------------|------------|-------------|
+| Clone existing template site | Cloning existing site | Download, clone, upload, and identify the cloned site before activation |
 
 Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. This gives the user visibility into progress and keeps the workflow deterministic while avoiding permanently skipped tasks on future non-from-scratch branches.
 

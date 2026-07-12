@@ -468,14 +468,20 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 ---
 
-### 6.13 `create-site` (8 calls: 6 gates + 2 not-a-gates)
+### 6.13 `create-site` (14 calls: 11 gates + 3 not-a-gates)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
 | `create-site:1.purpose` | gate | plan | 1 | Site name, purpose, or audience unclear — path-agnostic discovery prompt | nothing |
 | `create-site:1.5.template-choice` | not-a-gate | — | 1.5 | Read-only route selection after template preview; only disposable temp preview files exist, with no project directory, Dataverse write, or durable skill state | — |
 | `create-site:1.5.from-scratch-setup` | not-a-gate | — | 1.5 | Deferred framework and directory data-gathering before any scaffold files are written | — |
-| `create-site:template.import` | gate | consent | 1.5 | Selected template zip downloaded and target env resolved — confirm importing unmanaged solution into the org | template-cache |
+| `create-site:1.5.template-import` | gate | consent | 1.5 | Selected template zip downloaded and target env resolved — confirm importing unmanaged solution into the org | template-cache |
+| `create-site:1.5.update-installed` | gate | consent | 1.5 | Selected template solution is installed but zip is newer — confirm unmanaged update import | template-cache |
+| `create-site:1.5.clone-existing` | gate | consent | 1.5 | Selected template solution is same/older — confirm cloning an existing website instead of re-importing | template-cache |
+| `create-site:1.5.clone-source-site` | not-a-gate | — | 1.5 | Disambiguate which existing Website Record ID to clone after clone path is already approved | — |
+| `create-site:1.5.clone-failed` | gate | progress | 1.5 | Clone/download/upload failed — choose retry, from-scratch fallback, or stop | partial-template-clone |
+| `create-site:1.5.reinstall-unknown` | gate | consent | 1.5 | Installed-solution detection failed — confirm whether to import anyway, start from scratch, or stop | template-cache |
+| `create-site:1.5.import-failed` | gate | progress | 1.5 | Import failed or partial — choose retry, from-scratch fallback, or stop | partial-unmanaged-template-import |
 | `create-site:3.requirements` | gate | plan | 3 | *"Which features? / Aesthetic / Mood"* — three sub-prompts sharing this gate; shape the rendered Phase 4 plan | nothing |
 | `create-site:4.7.plan-approval` | gate | plan | 4.7 | HTML plan rendered — *"Approve and start building / I'd like to make changes"* | nothing |
 | `create-site:7.review` | gate | plan | 7 | Live site ready — *"Would you like any changes?"* | nothing |
