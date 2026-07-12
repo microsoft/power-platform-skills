@@ -130,9 +130,20 @@ function buildSkillCompleted(envelopeName, input) {
   );
 }
 
+function buildTemplateOutcome(envelopeName, input) {
+  const severity = input && input.outcome === "failure" ? "Error" : "Info";
+  return buildEvent(
+    envelopeName,
+    "template_outcome",
+    pick(input, [...COMMON_FIELDS, ...SKILL_FIELDS, ...COMPLETED_FIELDS]),
+    severity
+  );
+}
+
 module.exports = {
   buildSkillStarted,
   buildSkillCompleted,
+  buildTemplateOutcome,
   FIELD_TYPES,
   pick,
 };

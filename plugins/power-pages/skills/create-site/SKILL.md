@@ -171,7 +171,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         ```bash
         node "${PLUGIN_ROOT}/scripts/fetch-template-solution.js" --sha "<catalog-sha>" --solutionPath "<selected.solutionPath>"
         ```
-     2. If the result is `ok: false`, tell the user the selected template package is unavailable or corrupt, then set `CREATION_PATH = "from-scratch"` and continue to the from-scratch questions below. Do not leave partial cache files behind.
+     2. If the result is `ok: false`, tell the user the selected template package is unavailable or corrupt, then set `CREATION_PATH = "from-scratch"` and continue to the from-scratch questions below. Do not leave partial cache files behind. The from-scratch branch emits the single terminal telemetry event for this run.
      3. If the result is `ok: true`, set `CREATION_PATH = "template"`, `SELECTED_TEMPLATE = <manifest entry>`, and `SELECTED_TEMPLATE_SOLUTION_ZIP = <localPath>`. Append only **Verify prerequisites and confirm template import** now (see [Progress Tracking](#progress-tracking)); the import-vs-clone tasks are appended after the reinstall policy is known. Continue to the template import sequence below. Do **not** ask framework/location and do **not** proceed to Phase 2.
    - **Start from scratch** or catalog unavailable: set `CREATION_PATH = "from-scratch"` and continue below.
 
@@ -182,7 +182,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       ```bash
       node "${PLUGIN_ROOT}/scripts/resolve-template-import-context.js"
       ```
-      Use the returned `environmentUrl` and `token` for the import request and poller. If `ok: false`, surface the error and stop before import.
+      Use the returned `environmentUrl` and `token` for the import request and poller. If `ok: false`, surface the error, emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop before import.
 
 <!-- gate: create-site:1.5.template-import | category=consent | cancel-leaves=template-cache -->
 
@@ -199,7 +199,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       | Install **`<SELECTED_TEMPLATE.displayName>`** into **`<environmentUrl>`**? This imports an unmanaged solution into your org. If the template includes seed data, it will be applied after import and before activation. | Install Template | Yes, import this template (Recommended), No, start from scratch, Cancel |
 
       - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to step 8.
-      - **Cancel**: stop; no org mutation has happened.
+      - **Cancel**: emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop; no org mutation has happened.
    4. Inspect the selected solution zip and check whether that solution is already installed:
       ```bash
       node "${PLUGIN_ROOT}/scripts/inspect-template-solution.js" --zipPath "<SELECTED_TEMPLATE_SOLUTION_ZIP>"
@@ -225,7 +225,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         |----------|--------|---------|
         | Template `<displayName>` is already installed at version `<installedVersion>`. The selected template zip is newer (`<zipVersion>`). Update the unmanaged solution in this environment? | Update Template | Yes, update the template (Recommended), No, cancel |
 
-        If the user declines or cancels, stop before import; no org mutation has happened. If the user confirms, append the import-path tasks and continue.
+        If the user declines or cancels, emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop before import; no org mutation has happened. If the user confirms, append the import-path tasks and continue.
 
       - **`decision: "offer-clone"`**: do not re-import. Append **Clone existing template site**, then offer to clone the existing site instead:
 
@@ -269,7 +269,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         |----------|--------|---------|
         | Cloning the existing template site failed. How would you like to proceed? | Clone Failed | Retry clone (Recommended), Fall back to from-scratch, Stop |
 
-        Do not retry automatically; offer **Retry clone**, **Fall back to from-scratch**, or **Stop**. Verify a successful upload by running `pac pages list -v` again and diffing the output with `diff-pages-list.js`. If the cloned site identity is found, invoke `/activate-site` with that cloned site name and Website Record ID, then open the live URL and present the same template-path summary used below. If the cloned site identity cannot be resolved, stop and tell the user the clone/upload completed but activation needs a manual `/activate-site` run with the cloned Website Record ID from `pac pages list -v`. If the user declines cloning, stop. **Do not continue into the normal template import flow after a clone path succeeds or stops.**
+        Do not retry automatically; offer **Retry clone**, **Fall back to from-scratch**, or **Stop**. Verify a successful upload by running `pac pages list -v` again and diffing the output with `diff-pages-list.js`. If the cloned site identity is found, invoke `/activate-site` with that cloned site name and Website Record ID, then open the live URL, emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=success`, the actual activation outcome, and `seedApplied=false`, and present the same template-path summary used below. If the cloned site identity cannot be resolved, emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=success`, `activationOutcome=skipped`, and `seedApplied=false`, then stop and tell the user the clone/upload completed but activation needs a manual `/activate-site` run with the cloned Website Record ID from `pac pages list -v`. If the user declines cloning, emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop. **Do not continue into the normal template import flow after a clone path succeeds or stops.**
       - **`decision: "ask"`** or detection failure: ask whether to import anyway, start from scratch, or stop.
 
         <!-- gate: create-site:1.5.reinstall-unknown | category=consent | cancel-leaves=template-cache -->
@@ -289,13 +289,13 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         Branch on the answer:
         - **Import anyway**: append the import-path tasks and continue to the pre-import snapshot and import flow below.
         - **Start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions.
-        - **Stop**: stop before import; no org mutation has happened.
+        - **Stop**: emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop before import; no org mutation has happened.
 
    5. Capture a pre-import site list snapshot:
       ```bash
       node "${PLUGIN_ROOT}/scripts/capture-pages-list.js" --output "<temp-before-pages-list.txt>"
       ```
-      If the result is `ok: false`, surface the error and stop before import.
+      If the result is `ok: false`, surface the error, emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop before import.
    6. Mark **Verify prerequisites and confirm template import** as `completed` and **Import template solution** as `in_progress`.
    7. Import the unmanaged solution inline, without invoking `/import-solution` and without writing ALM artifacts:
       ```bash
@@ -328,8 +328,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
       Branch on the answer:
       - **Retry import**: return to the import command sequence above and poll again.
-      - **Fall back to from-scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions. Tell the user the unmanaged partial import may remain in Dataverse.
-      - **Stop**: stop after showing the error summary. Do not mark **Import template solution** as completed and do not continue to post-import site detection.
+      - **Fall back to from-scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions. Tell the user the unmanaged partial import may remain in Dataverse. The eventual from-scratch branch emits the single terminal telemetry event.
+      - **Stop**: emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop after showing the error summary. Do not mark **Import template solution** as completed and do not continue to post-import site detection.
 
       If the error is `AttachmentBlocked`, point to `/import-solution` Phase 5b remediation.
       Only continue to the next step when the import poll result is `Succeeded`.
@@ -340,8 +340,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       node "${PLUGIN_ROOT}/scripts/diff-pages-list.js" --before "<temp-before-pages-list.txt>" --after "<temp-after-pages-list.txt>"
       ```
       - **`status: "found"` and `inactive: true`**: set `IMPORTED_SITE_NAME`, `IMPORTED_WEBSITE_RECORD_ID`, and `IMPORTED_SITE_STATE`, then tell the user: "Template `<displayName>` was imported as `<IMPORTED_SITE_NAME>` (`<IMPORTED_WEBSITE_RECORD_ID>`). Current state from `pac pages list -v`: `<IMPORTED_SITE_STATE>`. The site exists in your environment but is not live yet; activation is the next step."
-      - **`status: "found"` but `inactive: false`**: show the diff result and explain that the import succeeded but the inactive state could not be verified automatically. Stop before activation; the next slice will handle recovery.
-      - **`status: "none"` or `"multiple"`**: show the diff result and explain that the import succeeded but the newly-imported site could not be identified automatically. Stop before activation; the next slice will handle recovery.
+      - **`status: "found"` but `inactive: false`**: show the diff result, emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=success`, `activationOutcome=skipped`, and `seedApplied=false`, then explain that the import succeeded but the inactive state could not be verified automatically. Stop before activation; the next slice will handle recovery.
+      - **`status: "none"` or `"multiple"`**: show the diff result, emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=success`, `activationOutcome=skipped`, and `seedApplied=false`, then explain that the import succeeded but the newly-imported site could not be identified automatically. Stop before activation; the next slice will handle recovery.
    10. Mark **Show imported inactive site** as `completed`.
    11. If `SELECTED_TEMPLATE.seedDataPath` is present, mark **Apply template seed data** as `in_progress` and run:
        ```bash
@@ -363,7 +363,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        - source: create-site template path
        ```
        The activate-site skill owns subdomain selection, final activation confirmation, provisioning, polling, and recovery.
-       If activation ultimately fails, tell the user the site is imported but not live yet and can be activated later by rerunning `/activate-site` with the imported site identity. Do **not** treat this as a failed import.
+       If activation ultimately fails, tell the user the site is imported but not live yet and can be activated later by rerunning `/activate-site` with the imported site identity. Emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=success`, `activationOutcome=failure`, and the actual `seedApplied` boolean, then stop. Do **not** treat this as a failed import.
    14. When `/activate-site` returns a `siteUrl`, mark **Activate imported site** as `completed` and **Show live template site** as `in_progress`.
    15. Open the live site URL in the user's default browser:
        ```bash
@@ -374,7 +374,19 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        - **`ok: false`**: tell the user the browser could not be opened automatically and show the `siteUrl` for manual opening.
 
        Always surface the activate-site DNS propagation caveat: the site may take a few minutes to load even after activation succeeds.
-   16. Mark **Show live template site** and **Select template or choose from-scratch** as `completed`, then present the template-path summary:
+   16. Emit the template-outcome telemetry event (fail-closed):
+       ```bash
+       node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
+         --mode template \
+         --templateId "<SELECTED_TEMPLATE.id>" \
+         --framework "<SELECTED_TEMPLATE.framework>" \
+         --audience "<SELECTED_TEMPLATE.audience>" \
+         --importOutcome "success" \
+         --activationOutcome "success" \
+         --seedApplied "<true|false>"
+       ```
+       Do not include site name, URL, subdomain, free-text purpose, or any other user-identifying value.
+   17. Mark **Show live template site** and **Select template or choose from-scratch** as `completed`, then present the template-path summary:
        - Template name and framework
        - Imported site name and Website Record ID
        - Live site URL
@@ -978,6 +990,13 @@ Present a summary table to the user:
    - `/add-seo` — Add meta tags, robots.txt, sitemap.xml, favicon
    - `/add-tests` — Add unit tests (Vitest) and E2E tests (Playwright)
    - `/add-ai-webapi` — Add generative-AI summaries (Search Summary and Data Summarization). **Recommend first when `AI_SUMMARY_PLACEMENTS` from Phase 3 is non-empty** — the pages already carry `POWERPAGES:AI-SLOT` comment markers at the intended insertion points, so the follow-up skill's explore step finds them deterministically and the user gets the AI surface they picked during discovery without any page redesign.
+7. Emit the from-scratch template-outcome telemetry event (fail-closed):
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
+    --mode scratch \
+    --framework "<framework>" \
+    --audience "<audience>"
+   ```
 
 **Output**: Deployed (or deployment-ready) site with clear next steps
 
