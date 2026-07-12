@@ -119,7 +119,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 **Goal**: Route the user into the appropriate creation path after path-agnostic Discovery.
 
-> **Current implementation state:** Template discovery and selection are implemented here. Template import/activation is not implemented until the next slice, so selecting a template records `SELECTED_TEMPLATE` and stops before any org mutation. The user can always choose **Start from scratch** to continue into the existing scaffold flow.
+> **Current implementation state:** Template discovery, selection, unmanaged solution import, and inactive-site identification are implemented here. Template activation is not implemented until the next slice, so the template path stops after showing the imported-but-not-live site. The user can always choose **Start from scratch** to continue into the existing scaffold flow.
 
 **Actions**:
 
@@ -172,21 +172,77 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         node "${PLUGIN_ROOT}/scripts/fetch-template-solution.js" --sha "<catalog-sha>" --solutionPath "<selected.solutionPath>"
         ```
      2. If the result is `ok: false`, tell the user the selected template package is unavailable or corrupt, then set `CREATION_PATH = "from-scratch"` and continue to the from-scratch questions below. Do not leave partial cache files behind.
-     3. If the result is `ok: true`, set `CREATION_PATH = "template"`, `SELECTED_TEMPLATE = <manifest entry>`, and `SELECTED_TEMPLATE_SOLUTION_ZIP = <localPath>`. Mark **Select template or choose from-scratch** as `completed`, then stop before any org mutation and tell the user: "Template `<displayName>` is selected. Template installation will import this solution in the next step once the import flow is implemented." Do **not** ask framework/location and do **not** proceed to Phase 2.
+     3. If the result is `ok: true`, set `CREATION_PATH = "template"`, `SELECTED_TEMPLATE = <manifest entry>`, and `SELECTED_TEMPLATE_SOLUTION_ZIP = <localPath>`. Append the template-path tasks (see [Progress Tracking](#progress-tracking)), then continue to the template import sequence below. Do **not** ask framework/location and do **not** proceed to Phase 2.
    - **Start from scratch** or catalog unavailable: set `CREATION_PATH = "from-scratch"` and continue below.
 
-7. For the from-scratch path only, tell the user: "I'll scaffold this site from scratch."
+7. For the template path only:
+
+   1. Mark **Verify prerequisites and confirm template import** as `in_progress`.
+   2. Resolve the target environment and token via the shared auth helpers:
+      ```bash
+      node "${PLUGIN_ROOT}/scripts/resolve-template-import-context.js"
+      ```
+      Use the returned `environmentUrl` and `token` for the import request and poller. If `ok: false`, surface the error and stop before import.
+
+<!-- gate: create-site:template.import | category=consent | cancel-leaves=template-cache -->
+
+> 🚦 **Gate (consent · create-site:template.import):** Confirm importing the selected template solution into the current Power Platform environment.
+>
+> **Trigger:** Phase 1.5 after the selected template solution zip is downloaded and the target environment is resolved.
+> **Why we ask:** The next step imports an unmanaged Dataverse solution into the user's org. Wrong environment or wrong template is disruptive and cannot be cleanly undone.
+> **Cancel leaves:** `template-cache` — the selected solution zip and preview images may remain in the SHA-keyed temp cache; no org mutation has occurred.
+
+   3. Present the template and environment, then ask:
+
+      | Question | Header | Options |
+      |----------|--------|---------|
+      | Install **`<SELECTED_TEMPLATE.displayName>`** into **`<environmentUrl>`**? This imports an unmanaged solution into your org. | Install Template | Yes, import this template (Recommended), No, start from scratch, Cancel |
+
+      - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to step 8.
+      - **Cancel**: stop; no org mutation has happened.
+   4. Capture a pre-import site list snapshot:
+      ```bash
+      node "${PLUGIN_ROOT}/scripts/capture-pages-list.js" --output "<temp-before-pages-list.txt>"
+      ```
+      If the result is `ok: false`, surface the error and stop before import.
+   5. Mark **Verify prerequisites and confirm template import** as `completed` and **Import template solution** as `in_progress`.
+   6. Import the unmanaged solution inline, without invoking `/import-solution` and without writing ALM artifacts:
+      ```bash
+      node "${PLUGIN_ROOT}/scripts/encode-solution-file.js" --zipPath "<SELECTED_TEMPLATE_SOLUTION_ZIP>"
+      node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "<environmentUrl>" POST "ImportSolutionAsync" \
+        --body '{"CustomizationFile":"<encoded>","OverwriteUnmanagedCustomizations":true,"PublishWorkflows":true,"ConvertToManaged":false}' \
+        --include-headers
+      node "${PLUGIN_ROOT}/scripts/poll-async-operation.js" \
+        --asyncJobId "<AsyncOperationId from ImportSolutionAsync>" \
+        --envUrl "<environmentUrl>" \
+        --token "<token>" \
+        --intervalMs 8000 \
+        --maxAttempts 75
+      ```
+      If the poll result is not `Succeeded`, surface the error and stop; full retry/fallback handling is the robustness ticket.
+   7. Mark **Import template solution** as `completed` and **Show imported inactive site** as `in_progress`.
+   8. Capture a post-import site list snapshot and identify the newly-imported site:
+      ```bash
+      node "${PLUGIN_ROOT}/scripts/capture-pages-list.js" --output "<temp-after-pages-list.txt>"
+      node "${PLUGIN_ROOT}/scripts/diff-pages-list.js" --before "<temp-before-pages-list.txt>" --after "<temp-after-pages-list.txt>"
+      ```
+      - **`status: "found"` and `inactive: true`**: set `IMPORTED_SITE_NAME`, `IMPORTED_WEBSITE_RECORD_ID`, and `IMPORTED_SITE_STATE`, then tell the user: "Template `<displayName>` was imported as `<IMPORTED_SITE_NAME>` (`<IMPORTED_WEBSITE_RECORD_ID>`). Current state from `pac pages list -v`: `<IMPORTED_SITE_STATE>`. The site exists in your environment but is not live yet; activation is the next step."
+      - **`status: "found"` but `inactive: false`**: show the diff result and explain that the import succeeded but the inactive state could not be verified automatically. Stop before activation; the next slice will handle recovery.
+      - **`status: "none"` or `"multiple"`**: show the diff result and explain that the import succeeded but the newly-imported site could not be identified automatically. Stop before activation; the next slice will handle recovery.
+   9. Mark **Show imported inactive site** and **Select template or choose from-scratch** as `completed`, then stop. Do **not** continue to Phase 2.
+
+8. For the from-scratch path only, tell the user: "I'll scaffold this site from scratch."
 
 <!-- not-a-gate: deferred data-gathering prompt for framework and directory before any scaffold files are written -->
 
-8. Ask the from-scratch-only questions that were deferred from Phase 1:
+9. Ask the from-scratch-only questions that were deferred from Phase 1:
 
    | Question | Header | Options |
    |----------|--------|---------|
    | Which frontend framework? | Framework | React (Recommended), Vue, Angular, Astro |
    | Where should the project be created? | Location | Current directory, New folder in current directory (Recommended), Any other directory |
 
-9. Resolve the project location:
+10. Resolve the project location:
    - **If "Current directory"**: Project root = `<cwd>`.
    - **If "New folder in current directory"**: Create a folder named `__SITE_NAME__` inside the cwd. Project root = `<cwd>/__SITE_NAME__/`.
    - **If "Any other directory"**: Ask for the full path. Verify/create it. Project root = provided path.
@@ -194,9 +250,9 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    After resolving, confirm: "The site will be created at `<resolved path>`."
 
    Store this as `PROJECT_ROOT`.
-10. Append the from-scratch task list (Phases 2-8) to the todo list (see [Progress Tracking](#progress-tracking)), then mark **Select template or choose from-scratch** as `completed`.
+11. Append the from-scratch task list (Phases 2-8) to the todo list (see [Progress Tracking](#progress-tracking)), then mark **Select template or choose from-scratch** as `completed`.
 
-**Output**: either `CREATION_PATH = "template"` with `SELECTED_TEMPLATE`, or `CREATION_PATH = "from-scratch"` with selected framework and resolved project location.
+**Output**: either imported template site identity (`IMPORTED_SITE_NAME`, `IMPORTED_WEBSITE_RECORD_ID`) in an inactive/not-live state, or `CREATION_PATH = "from-scratch"` with selected framework and resolved project location.
 
 ---
 
@@ -816,6 +872,14 @@ After Phase 1.5 selects the from-scratch path, append the existing from-scratch 
 | Verify accessibility with axe-core | Verifying accessibility | Run axe-core on every page, fix all critical/serious violations, re-verify until passing |
 | Review with user | Reviewing site | Navigate all pages, share URL, get user feedback, apply changes |
 | Deploy and wrap up | Deploying site | Ask about deployment, present summary, suggest next steps |
+
+After Phase 1.5 selects the template path, append the current template phase tasks:
+
+| Task subject | activeForm | Description |
+|-------------|------------|-------------|
+| Verify prerequisites and confirm template import | Confirming template import | Verify PAC/Azure auth, resolve the target environment, and ask for import consent |
+| Import template solution | Importing template solution | Import the selected unmanaged solution and poll the async job to completion |
+| Show imported inactive site | Showing imported site | Diff `pac pages list -v` output to identify the imported site record and tell the user it is not live yet |
 
 Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. This gives the user visibility into progress and keeps the workflow deterministic while avoiding permanently skipped tasks on future non-from-scratch branches.
 
