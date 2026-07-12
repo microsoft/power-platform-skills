@@ -2,10 +2,9 @@
 'use strict';
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
 const { renderTemplate } = require('./lib/render-template');
+const { openInDefaultBrowser } = require('./lib/default-browser');
 
 // Accepted argv shape:
 //   --templatesJsonPath /tmp/templates.json --outputPath /tmp/picker.html [--open]
@@ -23,15 +22,7 @@ function parseArgs(argv) {
 }
 
 function openFileInDefaultBrowser(filePath, deps = {}) {
-  const platform = (deps.os || os).platform();
-  const execFile = deps.execFileSync || execFileSync;
-  if (platform === 'darwin') {
-    execFile('open', [filePath], { stdio: 'ignore' });
-  } else if (platform === 'win32') {
-    execFile('cmd', ['/c', 'start', '', filePath], { stdio: 'ignore', windowsHide: true });
-  } else {
-    execFile('xdg-open', [filePath], { stdio: 'ignore' });
-  }
+  openInDefaultBrowser(filePath, deps);
 }
 
 function renderTemplatePicker({ templatesJsonPath, outputPath, open = false }, deps = {}) {

@@ -119,7 +119,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 **Goal**: Route the user into the appropriate creation path after path-agnostic Discovery.
 
-> **Current implementation state:** Template discovery, selection, unmanaged solution import, and inactive-site identification are implemented here. Template activation is not implemented until the next slice, so the template path stops after showing the imported-but-not-live site. The user can always choose **Start from scratch** to continue into the existing scaffold flow.
+> **Current implementation state:** Template discovery, selection, unmanaged solution import, inactive-site identification, activation, and live-site preview are implemented here. Seed data and robustness/re-install handling are implemented by later slices. The user can always choose **Start from scratch** to continue into the existing scaffold flow.
 
 **Actions**:
 
@@ -229,7 +229,33 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       - **`status: "found"` and `inactive: true`**: set `IMPORTED_SITE_NAME`, `IMPORTED_WEBSITE_RECORD_ID`, and `IMPORTED_SITE_STATE`, then tell the user: "Template `<displayName>` was imported as `<IMPORTED_SITE_NAME>` (`<IMPORTED_WEBSITE_RECORD_ID>`). Current state from `pac pages list -v`: `<IMPORTED_SITE_STATE>`. The site exists in your environment but is not live yet; activation is the next step."
       - **`status: "found"` but `inactive: false`**: show the diff result and explain that the import succeeded but the inactive state could not be verified automatically. Stop before activation; the next slice will handle recovery.
       - **`status: "none"` or `"multiple"`**: show the diff result and explain that the import succeeded but the newly-imported site could not be identified automatically. Stop before activation; the next slice will handle recovery.
-   9. Mark **Show imported inactive site** and **Select template or choose from-scratch** as `completed`, then stop. Do **not** continue to Phase 2.
+   9. Mark **Show imported inactive site** as `completed` and **Activate imported site** as `in_progress`.
+   10. Invoke `/activate-site`, passing the resolved identity in the request so it skips local-project discovery:
+       ```text
+       Activate imported template site:
+       - siteName: <IMPORTED_SITE_NAME>
+       - websiteRecordId: <IMPORTED_WEBSITE_RECORD_ID>
+       - environmentUrl: <environmentUrl>
+       - source: create-site template path
+       ```
+       The activate-site skill owns subdomain selection, final activation confirmation, provisioning, polling, and recovery.
+   11. When `/activate-site` returns a `siteUrl`, mark **Activate imported site** as `completed` and **Show live template site** as `in_progress`.
+   12. Open the live site URL in the user's default browser:
+       ```bash
+       node "${PLUGIN_ROOT}/scripts/open-url.js" --url "<siteUrl>"
+       ```
+       Evaluate the JSON result:
+       - **`ok: true`**: tell the user the site was opened in their default browser.
+       - **`ok: false`**: tell the user the browser could not be opened automatically and show the `siteUrl` for manual opening.
+
+       Always surface the activate-site DNS propagation caveat: the site may take a few minutes to load even after activation succeeds.
+   13. Mark **Show live template site** and **Select template or choose from-scratch** as `completed`, then present the template-path summary:
+       - Template name and framework
+       - Imported site name and Website Record ID
+       - Live site URL
+       - DNS propagation note: the site may take a few minutes to load everywhere
+       - "Your site is live. Want to keep customizing it from here?"
+       Do **not** continue to Phase 2.
 
 8. For the from-scratch path only, tell the user: "I'll scaffold this site from scratch."
 
@@ -880,6 +906,8 @@ After Phase 1.5 selects the template path, append the current template phase tas
 | Verify prerequisites and confirm template import | Confirming template import | Verify PAC/Azure auth, resolve the target environment, and ask for import consent |
 | Import template solution | Importing template solution | Import the selected unmanaged solution and poll the async job to completion |
 | Show imported inactive site | Showing imported site | Diff `pac pages list -v` output to identify the imported site record and tell the user it is not live yet |
+| Activate imported site | Activating imported site | Invoke activate-site with the resolved site name and Website Record ID |
+| Show live template site | Showing live site | Open the activated site URL in the browser and invite the user to continue customizing |
 
 Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. This gives the user visibility into progress and keeps the workflow deterministic while avoiding permanently skipped tasks on future non-from-scratch branches.
 

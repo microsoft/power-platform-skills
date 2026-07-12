@@ -8,7 +8,6 @@ const path = require('path');
 
 const {
   parseArgs,
-  openFileInDefaultBrowser,
   renderTemplatePicker,
 } = require('../render-template-picker');
 
@@ -26,21 +25,6 @@ test('parseArgs accepts templates JSON, output path, and open switch', () => {
     outputPath: '/tmp/picker.html',
     open: true,
   });
-});
-
-test('openFileInDefaultBrowser uses platform-specific default-browser commands', () => {
-  const calls = [];
-  const execFileSync = (...args) => calls.push(args);
-
-  openFileInDefaultBrowser('/tmp/picker.html', { os: { platform: () => 'darwin' }, execFileSync });
-  openFileInDefaultBrowser('C:\\tmp\\picker.html', { os: { platform: () => 'win32' }, execFileSync });
-  openFileInDefaultBrowser('/tmp/picker.html', { os: { platform: () => 'linux' }, execFileSync });
-
-  assert.deepEqual(calls, [
-    ['open', ['/tmp/picker.html'], { stdio: 'ignore' }],
-    ['cmd', ['/c', 'start', '', 'C:\\tmp\\picker.html'], { stdio: 'ignore', windowsHide: true }],
-    ['xdg-open', ['/tmp/picker.html'], { stdio: 'ignore' }],
-  ]);
 });
 
 test('renderTemplatePicker renders all preview images and can skip opening', (t) => {

@@ -88,6 +88,15 @@ az account show
 
 #### 1.4 Check If Already Activated
 
+First inspect `$ARGUMENTS` for explicit imported-site identity from another skill:
+
+```text
+siteName: <name>
+websiteRecordId: <guid>
+```
+
+When both values are present, set `SITE_IDENTITY_SOURCE = "arguments"` immediately and **skip the local-project activation status check below**. That check resolves identity from `powerpages.config.json` / `.powerpages-site`, which may be absent or unrelated when `/create-site` activates an imported template site. Continue to Phase 2 with the explicit identity.
+
 Before gathering parameters, check whether the site is already activated by running the shared activation status script:
 
 ```bash
@@ -117,6 +126,22 @@ Evaluate the JSON result:
 ### Actions
 
 #### 2.1 Read Site Name
+
+If the skill was invoked by another skill with explicit imported-site identity in `$ARGUMENTS`, use it before local project discovery:
+
+```text
+siteName: <name>
+websiteRecordId: <guid>
+```
+
+When both values are present:
+
+- Set `siteName` from the explicit value.
+- Set `websiteRecordId` from the explicit value.
+- Set `SITE_IDENTITY_SOURCE = "arguments"`.
+- Skip the `powerpages.config.json` lookup below and skip Phase 2.3 (`pac pages list`) because the caller already resolved the imported website record.
+
+If either explicit value is missing, continue with the existing local-project discovery flow.
 
 Look for `powerpages.config.json` in the current directory or one level of subdirectories using `Glob`:
 
@@ -158,6 +183,8 @@ Present the generated subdomain to the user and ask them to accept or enter thei
 **If custom**: The user provides their own subdomain via "Other" free text input. Validate it is lowercase, alphanumeric with hyphens only, and 3-50 characters.
 
 #### 2.3 Get Website Record ID
+
+Skip this step when `SITE_IDENTITY_SOURCE = "arguments"` and `websiteRecordId` is already set.
 
 Run `pac pages list` to get the website record ID:
 
