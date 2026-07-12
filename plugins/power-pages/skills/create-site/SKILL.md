@@ -1,10 +1,11 @@
 ---
 name: create-site
 description: >-
-  Creates a new Power Pages code site (SPA) using React, Angular, Vue, or Astro. Guides through
-  the full process from initial concept to deployed site: requirements discovery, scaffolding,
-  component planning, design, implementation, validation, and deployment. Use when the user
-  wants to create, build, or scaffold a new Power Pages website or portal.
+  Creates a new Power Pages code site (SPA) from a curated template or from scratch using React,
+  Angular, Vue, or Astro. Guides through the full process from initial concept to deployed site:
+  requirements discovery, template selection or scaffolding, component planning, design,
+  implementation, validation, and deployment. Use when the user wants to create, build, use a
+  template for, or scaffold a new Power Pages website or portal.
 user-invocable: true
 argument-hint: Optional site description
 allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click
@@ -118,21 +119,74 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 **Goal**: Route the user into the appropriate creation path after path-agnostic Discovery.
 
-> **Current implementation state:** The branch seam is intentionally present now, but the template path is not implemented yet. Until the template catalog and selection UX are added, this phase always selects the from-scratch path and proceeds to Phase 2. Future template support will plug into this seam.
+> **Current implementation state:** Template discovery and selection are implemented here. Template import/activation is not implemented until the next slice, so selecting a template records `SELECTED_TEMPLATE` and stops before any org mutation. The user can always choose **Start from scratch** to continue into the existing scaffold flow.
 
 **Actions**:
 
 1. Mark **Select template or choose from-scratch** as `in_progress`.
-2. Set `CREATION_PATH = "from-scratch"`.
-3. Tell the user: "I'll scaffold this site from scratch."
-4. Ask the from-scratch-only questions that were deferred from Phase 1:
+2. Fetch the template catalog:
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/fetch-template-catalog.js"
+   ```
+
+   Evaluate the JSON result:
+   - **If `ok: false`**: tell the user templates are temporarily unavailable and continue with the from-scratch path. This is additive; a catalog failure must never block `create-site`.
+   - **If `ok: true` but `catalog.templates` is empty or malformed**: tell the user no templates are currently available and continue with the from-scratch path.
+   - **If templates are available**: proceed to semantic matching.
+
+3. Semantically match the templates against the Phase 1 context (`$ARGUMENTS`, site name, purpose, and audience):
+   - Use each template's `displayName`, `description`, `keywords`, `audience`, and `framework`.
+   - Do **not** compute a numeric score or invent a ranking script. Keywords guide agent judgement; they are not counted.
+
+4. Render the relevant templates for browser preview:
+
+   - Download each `previewImages` artifact into the SHA-keyed cache before rendering:
+     ```bash
+     node "${PLUGIN_ROOT}/scripts/fetch-template-artifact.js" --sha "<catalog-sha>" --artifactPath "<preview-image-path>"
+     ```
+     Replace each preview image path with the returned `localUrl`. If a preview download returns `ok: false`, omit that one image from the gallery and continue; a missing preview should not block using an otherwise-valid template.
+   - Write a temporary JSON file containing a `TEMPLATES_JSON` array with the templates the user should preview and the cached preview image URLs.
+   - Run:
+     ```bash
+     node "${PLUGIN_ROOT}/scripts/render-template-picker.js" --templatesJsonPath "<temp-json>" --outputPath "<temp-html>" --open
+     ```
+   - The browser view is read-only; the terminal `AskUserQuestion` remains the decision surface.
+
+<!-- not-a-gate: read-only route selection after template preview; only disposable temp preview files exist, with no project directory, Dataverse write, or durable skill state -->
+
+5. Ask one of the following `AskUserQuestion` prompts:
+
+   | Match situation | Prompt options |
+   |-----------------|----------------|
+   | One strong match | Use `<displayName>` (Recommended), See all templates, Start from scratch |
+   | Several plausible matches | One option per shortlisted template, See all templates, Start from scratch |
+   | No clear match | See all templates, Start from scratch (Recommended) |
+
+   When the user chooses **See all templates**, render the full catalog gallery and ask again with one option per template plus **Start from scratch**.
+
+6. Branch on the user's selection:
+   - **Template selected**:
+     1. Download and validate the selected template's solution zip before committing to the template path:
+        ```bash
+        node "${PLUGIN_ROOT}/scripts/fetch-template-solution.js" --sha "<catalog-sha>" --solutionPath "<selected.solutionPath>"
+        ```
+     2. If the result is `ok: false`, tell the user the selected template package is unavailable or corrupt, then set `CREATION_PATH = "from-scratch"` and continue to the from-scratch questions below. Do not leave partial cache files behind.
+     3. If the result is `ok: true`, set `CREATION_PATH = "template"`, `SELECTED_TEMPLATE = <manifest entry>`, and `SELECTED_TEMPLATE_SOLUTION_ZIP = <localPath>`. Mark **Select template or choose from-scratch** as `completed`, then stop before any org mutation and tell the user: "Template `<displayName>` is selected. Template installation will import this solution in the next step once the import flow is implemented." Do **not** ask framework/location and do **not** proceed to Phase 2.
+   - **Start from scratch** or catalog unavailable: set `CREATION_PATH = "from-scratch"` and continue below.
+
+7. For the from-scratch path only, tell the user: "I'll scaffold this site from scratch."
+
+<!-- not-a-gate: deferred data-gathering prompt for framework and directory before any scaffold files are written -->
+
+8. Ask the from-scratch-only questions that were deferred from Phase 1:
 
    | Question | Header | Options |
    |----------|--------|---------|
    | Which frontend framework? | Framework | React (Recommended), Vue, Angular, Astro |
    | Where should the project be created? | Location | Current directory, New folder in current directory (Recommended), Any other directory |
 
-5. Resolve the project location:
+9. Resolve the project location:
    - **If "Current directory"**: Project root = `<cwd>`.
    - **If "New folder in current directory"**: Create a folder named `__SITE_NAME__` inside the cwd. Project root = `<cwd>/__SITE_NAME__/`.
    - **If "Any other directory"**: Ask for the full path. Verify/create it. Project root = provided path.
@@ -140,9 +194,9 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    After resolving, confirm: "The site will be created at `<resolved path>`."
 
    Store this as `PROJECT_ROOT`.
-6. Append the from-scratch task list (Phases 2-8) to the todo list (see [Progress Tracking](#progress-tracking)), then mark **Select template or choose from-scratch** as `completed`.
+10. Append the from-scratch task list (Phases 2-8) to the todo list (see [Progress Tracking](#progress-tracking)), then mark **Select template or choose from-scratch** as `completed`.
 
-**Output**: `CREATION_PATH = "from-scratch"`, selected framework, and resolved project location.
+**Output**: either `CREATION_PATH = "template"` with `SELECTED_TEMPLATE`, or `CREATION_PATH = "from-scratch"` with selected framework and resolved project location.
 
 ---
 
@@ -749,7 +803,7 @@ Before starting Phase 1, create only the path-agnostic upfront tasks using `Task
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
 | Discover site requirements | Discovering requirements | Collect site name, purpose, audience, and derived naming values |
-| Select template or choose from-scratch | Selecting creation path | Route the user into the from-scratch path until template selection is implemented |
+| Select template or choose from-scratch | Selecting creation path | Offer matching templates, or route the user into the from-scratch path |
 
 After Phase 1.5 selects the from-scratch path, append the existing from-scratch phase tasks:
 

@@ -1,0 +1,284 @@
+'use strict';
+
+const fs = require('fs');
+const https = require('https');
+const os = require('os');
+const path = require('path');
+const { execFileSync } = require('child_process');
+
+const DEFAULT_OWNER = 'microsoft';
+const DEFAULT_REPO = 'power-pages-samples';
+const DEFAULT_REF = 'main';
+const DEFAULT_CATALOG_PATH = 'templates/manifest.json';
+
+function getDefaultCacheRoot() {
+  return path.join(os.tmpdir(), 'powerpages-templates');
+}
+
+function encodePath(filePath) {
+  return filePath.split('/').map(encodeURIComponent).join('/');
+}
+
+function buildRawUrl({ owner = DEFAULT_OWNER, repo = DEFAULT_REPO, sha, filePath }) {
+  if (!sha) throw new Error('sha is required');
+  assertValidSha(sha);
+  if (!filePath) throw new Error('filePath is required');
+  return `https://raw.githubusercontent.com/${owner}/${repo}/${sha}/${encodePath(filePath)}`;
+}
+
+function buildCommitUrl({ owner = DEFAULT_OWNER, repo = DEFAULT_REPO, ref = DEFAULT_REF }) {
+  return `https://api.github.com/repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}`;
+}
+
+function cacheDirForSha(cacheRoot, sha) {
+  assertValidSha(sha);
+  return path.join(cacheRoot || getDefaultCacheRoot(), sha);
+}
+
+function artifactCachePath({ cacheRoot, sha, artifactPath }) {
+  if (path.isAbsolute(artifactPath) || artifactPath.split(/[\\/]+/).includes('..')) {
+    throw new Error(`Template artifact path must stay under the templates cache: ${artifactPath}`);
+  }
+  return path.join(cacheDirForSha(cacheRoot, sha), artifactPath);
+}
+
+function isNonEmptyString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function assertValidSha(sha) {
+  if (!/^[0-9a-f]{40}$/i.test(sha || '')) {
+    throw new Error(`Expected an immutable 40-character commit sha, got: ${sha}`);
+  }
+}
+
+function validateCatalogShape(catalog) {
+  // Raw `templates/manifest.json` shape:
+  //   { "manifestVersion": "1.0", "templates": [
+  //     { "id": "company-portal", "displayName": "Company Portal",
+  //       "kind": "spa", "framework": "react", "keywords": ["portal"],
+  //       "audience": "internal", "previewImages": ["templates/.../home.png"],
+  //       "solutionPath": "templates/.../Company_1_0_0_0.zip",
+  //       "templateVersion": "1.0.0", "author": "Microsoft" }
+  //   ] }
+  // Keep this structural, not semantic: the samples repo owns the full JSON
+  // Schema, while create-site only needs enough validation to fail open before
+  // previewing malformed entries or caching artifacts under a pinned SHA.
+  if (!catalog || !Array.isArray(catalog.templates)) {
+    return 'expected a templates array';
+  }
+  for (const [index, template] of catalog.templates.entries()) {
+    if (!template || typeof template !== 'object') return `template at index ${index} is not an object`;
+    const requiredStringFields = ['id', 'displayName', 'description', 'kind', 'framework', 'audience', 'solutionPath', 'templateVersion', 'author'];
+    const missing = requiredStringFields.filter((field) => !isNonEmptyString(template[field]));
+    if (missing.length > 0) return `template ${template.id || index} missing string field(s): ${missing.join(', ')}`;
+    if (!Array.isArray(template.keywords)) return `template ${template.id} keywords must be an array`;
+    if (!Array.isArray(template.previewImages) || template.previewImages.length === 0) {
+      return `template ${template.id} previewImages must be a non-empty array`;
+    }
+  }
+  return null;
+}
+
+function startHttpsGet({ url, headers, timeoutMs, deps, reject, onResponse }) {
+  const httpsImpl = deps.https || https;
+  const req = httpsImpl.get(url, {
+    headers: {
+      'User-Agent': 'power-pages-template-catalog',
+      ...headers,
+    },
+    timeout: timeoutMs,
+  }, onResponse);
+  req.on('error', reject);
+  req.on('timeout', () => {
+    req.destroy(new Error(`GET ${url} timed out`));
+  });
+  return req;
+}
+
+function requestJson(url, deps = {}) {
+  return new Promise((resolve, reject) => {
+    startHttpsGet({
+      url,
+      headers: {
+        Accept: 'application/vnd.github+json, application/json',
+      },
+      timeoutMs: deps.timeoutMs || 10000,
+      deps,
+      reject,
+      onResponse: (res) => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          res.resume();
+          reject(new Error(`GET ${url} failed with ${res.statusCode}`));
+          return;
+        }
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => { body += chunk; });
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(body));
+          } catch (err) {
+            reject(new Error(`GET ${url} returned invalid JSON: ${err.message}`));
+          }
+        });
+      },
+    });
+  });
+}
+
+function downloadFile(url, outputPath, deps = {}) {
+  const fsImpl = deps.fs || fs;
+  return new Promise((resolve, reject) => {
+    fsImpl.mkdirSync(path.dirname(outputPath), { recursive: true });
+    const tmpPath = `${outputPath}.partial`;
+    const file = fsImpl.createWriteStream(tmpPath);
+    const cleanup = () => {
+      try { fsImpl.rmSync(tmpPath, { force: true }); } catch { /* best-effort */ }
+    };
+    startHttpsGet({
+      url,
+      headers: {},
+      timeoutMs: deps.timeoutMs || 30000,
+      deps,
+      reject: (err) => {
+        file.destroy();
+        cleanup();
+        reject(err);
+      },
+      onResponse: (res) => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          res.resume();
+          file.destroy();
+          cleanup();
+          reject(new Error(`GET ${url} failed with ${res.statusCode}`));
+          return;
+        }
+        res.pipe(file);
+        file.on('finish', () => {
+          file.close(() => {
+            fsImpl.renameSync(tmpPath, outputPath);
+            resolve(outputPath);
+          });
+        });
+      },
+    });
+    file.on('error', (err) => {
+      cleanup();
+      reject(err);
+    });
+  });
+}
+
+async function resolveRefToSha(options = {}, deps = {}) {
+  const request = deps.requestJson || ((url) => requestJson(url, deps));
+  const result = await request(buildCommitUrl(options));
+  if (!result || typeof result.sha !== 'string' || !/^[0-9a-f]{40}$/i.test(result.sha)) {
+    throw new Error('GitHub commit response did not include a valid 40-character sha');
+  }
+  return result.sha;
+}
+
+async function fetchCatalog(options = {}, deps = {}) {
+  const {
+    owner = DEFAULT_OWNER,
+    repo = DEFAULT_REPO,
+    ref = DEFAULT_REF,
+    catalogPath = DEFAULT_CATALOG_PATH,
+    cacheRoot = getDefaultCacheRoot(),
+  } = options;
+  const fsImpl = deps.fs || fs;
+  const request = deps.requestJson || ((url) => requestJson(url, deps));
+
+  try {
+    const sha = await resolveRefToSha({ owner, repo, ref }, { ...deps, requestJson: request });
+    const cacheDir = cacheDirForSha(cacheRoot, sha);
+    const catalog = await request(buildRawUrl({ owner, repo, sha, filePath: catalogPath }));
+    const catalogError = validateCatalogShape(catalog);
+    if (catalogError) throw new Error(`Template catalog is malformed: ${catalogError}`);
+    fsImpl.mkdirSync(cacheDir, { recursive: true });
+    const catalogLocalPath = artifactCachePath({ cacheRoot, sha, artifactPath: catalogPath });
+    fsImpl.mkdirSync(path.dirname(catalogLocalPath), { recursive: true });
+    fsImpl.writeFileSync(catalogLocalPath, JSON.stringify(catalog, null, 2), 'utf8');
+    return { ok: true, owner, repo, ref, sha, catalogPath, catalogLocalPath, cacheDir, catalog };
+  } catch (err) {
+    return { ok: false, owner, repo, ref, catalogPath, error: err.message };
+  }
+}
+
+function validateZipContainsSolution(zipPath, deps = {}) {
+  const execFile = deps.execFileSync || execFileSync;
+  try {
+    const output = execFile('unzip', ['-l', zipPath], { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+    // `unzip -l` prints one file per line, for example:
+    //   Length      Date    Time    Name
+    //   ---------  ---------- -----   ----
+    //        123  2026-07-12 12:00   solution.xml
+    // Dataverse solution zips must contain a root `solution.xml`; matching a
+    // whitespace-delimited token avoids false positives like `solution.xml.bak`.
+    return /(^|\s)solution\.xml(\s|$)/i.test(output);
+  } catch {
+    return false;
+  }
+}
+
+async function downloadArtifact(options = {}, deps = {}) {
+  const {
+    owner = DEFAULT_OWNER,
+    repo = DEFAULT_REPO,
+    sha,
+    artifactPath,
+    cacheRoot = getDefaultCacheRoot(),
+  } = options;
+  if (!sha) throw new Error('sha is required');
+  if (!artifactPath) throw new Error('artifactPath is required');
+  const fsImpl = deps.fs || fs;
+  const localPath = artifactCachePath({ cacheRoot, sha, artifactPath });
+  if (fsImpl.existsSync(localPath)) return { localPath, cached: true };
+  const download = deps.downloadFile || ((url, dest) => downloadFile(url, dest, deps));
+  await download(buildRawUrl({ owner, repo, sha, filePath: artifactPath }), localPath);
+  return { localPath, cached: false };
+}
+
+async function downloadSolutionArtifact(options = {}, deps = {}) {
+  const fsImpl = deps.fs || fs;
+  try {
+    const result = await downloadArtifact(options, deps);
+    const validate = deps.validateZipContainsSolution || ((zipPath) => validateZipContainsSolution(zipPath, deps));
+    if (!validate(result.localPath)) {
+      try { fsImpl.rmSync(result.localPath, { force: true }); } catch { /* best-effort */ }
+      return {
+        ok: false,
+        artifactPath: options.artifactPath,
+        error: `Downloaded template solution is not a valid Dataverse solution zip: ${options.artifactPath}`,
+      };
+    }
+    return { ok: true, ...result };
+  } catch (err) {
+    if (options.artifactPath && options.sha) {
+      try { fsImpl.rmSync(artifactCachePath(options), { force: true }); } catch { /* best-effort */ }
+    }
+    return { ok: false, artifactPath: options.artifactPath, error: err.message };
+  }
+}
+
+module.exports = {
+  DEFAULT_OWNER,
+  DEFAULT_REPO,
+  DEFAULT_REF,
+  DEFAULT_CATALOG_PATH,
+  getDefaultCacheRoot,
+  buildRawUrl,
+  buildCommitUrl,
+  cacheDirForSha,
+  artifactCachePath,
+  requestJson,
+  downloadFile,
+  resolveRefToSha,
+  fetchCatalog,
+  validateZipContainsSolution,
+  downloadArtifact,
+  downloadSolutionArtifact,
+  validateCatalogShape,
+  assertValidSha,
+};
