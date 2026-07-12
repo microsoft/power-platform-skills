@@ -253,12 +253,45 @@ async function downloadSolutionArtifact(options = {}, deps = {}) {
         error: `Downloaded template solution is not a valid Dataverse solution zip: ${options.artifactPath}`,
       };
     }
+
     return { ok: true, ...result };
   } catch (err) {
     if (options.artifactPath && options.sha) {
       try { fsImpl.rmSync(artifactCachePath(options), { force: true }); } catch { /* best-effort */ }
     }
     return { ok: false, artifactPath: options.artifactPath, error: err.message };
+  }
+}
+
+async function downloadSeedDataDirectory(options = {}, deps = {}) {
+  const {
+    owner = DEFAULT_OWNER,
+    repo = DEFAULT_REPO,
+    sha,
+    seedDataPath,
+    cacheRoot = getDefaultCacheRoot(),
+  } = options;
+  if (!sha) throw new Error('sha is required');
+  assertValidSha(sha);
+  if (!seedDataPath) return { ok: true, localDir: null, files: [] };
+  if (path.isAbsolute(seedDataPath) || seedDataPath.split(/[\\/]+/).includes('..')) {
+    return { ok: false, seedDataPath, error: `Seed data path must stay under templates: ${seedDataPath}` };
+  }
+  const request = deps.requestJson || ((url) => requestJson(url, deps));
+  try {
+    const tree = await request(`https://api.github.com/repos/${owner}/${repo}/git/trees/${sha}?recursive=1`);
+    const prefix = seedDataPath.replace(/\/+$/, '') + '/';
+    const files = (tree.tree || [])
+      .filter((entry) => entry.type === 'blob' && entry.path.startsWith(prefix) && entry.path.toLowerCase().endsWith('.json'))
+      .map((entry) => entry.path)
+      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const downloaded = [];
+    for (const artifactPath of files) {
+      downloaded.push((await downloadArtifact({ owner, repo, sha, artifactPath, cacheRoot }, deps)).localPath);
+    }
+    return { ok: true, localDir: artifactCachePath({ cacheRoot, sha, artifactPath: seedDataPath }), files: downloaded };
+  } catch (err) {
+    return { ok: false, seedDataPath, error: err.message };
   }
 }
 
@@ -279,6 +312,7 @@ module.exports = {
   validateZipContainsSolution,
   downloadArtifact,
   downloadSolutionArtifact,
+  downloadSeedDataDirectory,
   validateCatalogShape,
   assertValidSha,
 };

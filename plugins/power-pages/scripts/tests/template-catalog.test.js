@@ -18,6 +18,7 @@ const {
   fetchCatalog,
   downloadArtifact,
   downloadSolutionArtifact,
+  downloadSeedDataDirectory,
   validateZipContainsSolution,
   validateCatalogShape,
   assertValidSha,
@@ -25,6 +26,7 @@ const {
 const { parseArgs: parseCatalogArgs } = require('../fetch-template-catalog');
 const { parseArgs: parseSolutionArgs } = require('../fetch-template-solution');
 const { parseArgs: parseArtifactArgs } = require('../fetch-template-artifact');
+const { parseArgs: parseSeedArgs } = require('../fetch-template-seed-data');
 const { parseTemplateRepoArgs, formatJsonResult, runBestEffortJsonCli } = require('../lib/template-cli-args');
 
 function tempDir() {
@@ -276,6 +278,55 @@ test('downloadSolutionArtifact reports download failures as ok:false for from-sc
   });
 
   assert.deepEqual(result, { ok: false, artifactPath: 'missing.zip', error: '404' });
+});
+
+test('downloadSeedDataDirectory discovers JSON files from the pinned tree and caches them', async (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const downloaded = [];
+  const result = await downloadSeedDataDirectory({
+    owner: 'o',
+    repo: 'r',
+    sha: SHA,
+    seedDataPath: 'templates/spa/company/seed-data',
+    cacheRoot: dir,
+  }, {
+    requestJson: async (url) => {
+      assert.equal(url, `https://api.github.com/repos/o/r/git/trees/${SHA}?recursive=1`);
+      return {
+        tree: [
+          { type: 'blob', path: 'templates/spa/company/seed-data/020-posts.json' },
+          { type: 'blob', path: 'templates/spa/company/README.md' },
+          { type: 'blob', path: 'templates/spa/company/seed-data/010-categories.json' },
+        ],
+      };
+    },
+    downloadFile: async (_url, dest) => {
+      downloaded.push(path.basename(dest));
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.writeFileSync(dest, '{}');
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(downloaded, ['010-categories.json', '020-posts.json']);
+  assert.equal(result.localDir, path.join(dir, SHA, 'templates/spa/company/seed-data'));
+});
+
+test('fetch-template-seed-data CLI parser accepts seed data path', () => {
+  assert.deepEqual(parseSeedArgs([
+    '--owner', 'contoso',
+    '--repo', 'samples',
+    '--sha', SHA,
+    '--seedDataPath', 'templates/spa/company/seed-data',
+    '--cacheRoot', '/tmp/cache',
+  ]), {
+    owner: 'contoso',
+    repo: 'samples',
+    sha: SHA,
+    seedDataPath: 'templates/spa/company/seed-data',
+    cacheRoot: '/tmp/cache',
+  });
 });
 
 test('validateZipContainsSolution recognizes solution.xml in unzip output', () => {

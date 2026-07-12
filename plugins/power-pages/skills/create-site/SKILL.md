@@ -196,7 +196,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
       | Question | Header | Options |
       |----------|--------|---------|
-      | Install **`<SELECTED_TEMPLATE.displayName>`** into **`<environmentUrl>`**? This imports an unmanaged solution into your org. | Install Template | Yes, import this template (Recommended), No, start from scratch, Cancel |
+      | Install **`<SELECTED_TEMPLATE.displayName>`** into **`<environmentUrl>`**? This imports an unmanaged solution into your org. If the template includes seed data, it will be applied after import and before activation. | Install Template | Yes, import this template (Recommended), No, start from scratch, Cancel |
 
       - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to step 8.
       - **Cancel**: stop; no org mutation has happened.
@@ -229,8 +229,19 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       - **`status: "found"` and `inactive: true`**: set `IMPORTED_SITE_NAME`, `IMPORTED_WEBSITE_RECORD_ID`, and `IMPORTED_SITE_STATE`, then tell the user: "Template `<displayName>` was imported as `<IMPORTED_SITE_NAME>` (`<IMPORTED_WEBSITE_RECORD_ID>`). Current state from `pac pages list -v`: `<IMPORTED_SITE_STATE>`. The site exists in your environment but is not live yet; activation is the next step."
       - **`status: "found"` but `inactive: false`**: show the diff result and explain that the import succeeded but the inactive state could not be verified automatically. Stop before activation; the next slice will handle recovery.
       - **`status: "none"` or `"multiple"`**: show the diff result and explain that the import succeeded but the newly-imported site could not be identified automatically. Stop before activation; the next slice will handle recovery.
-   9. Mark **Show imported inactive site** as `completed` and **Activate imported site** as `in_progress`.
-   10. Invoke `/activate-site`, passing the resolved identity in the request so it skips local-project discovery:
+   9. Mark **Show imported inactive site** as `completed`.
+   10. If `SELECTED_TEMPLATE.seedDataPath` is present, mark **Apply template seed data** as `in_progress` and run:
+       ```bash
+       node "${PLUGIN_ROOT}/scripts/fetch-template-seed-data.js" --sha "<catalog-sha>" --seedDataPath "<SELECTED_TEMPLATE.seedDataPath>"
+       ```
+       If the result is `ok: true`, use `localDir` as the seed directory. If the result is `ok: false`, surface the error and continue to activation; seed-data fetch is best-effort.
+       ```bash
+       node "${PLUGIN_ROOT}/scripts/apply-seed-data.js" --seedDir "<localDir>" --envUrl "<environmentUrl>"
+       ```
+       Surface the JSON summary (`inserted`, `failed`, `skipped`, `errors`). For a lightweight read-only verification path, query each seeded `entitySetName` with `dataverse-request.js` using `GET "<entitySetName>?$top=1"` and report whether the seeded table is reachable. Seeding is best-effort: even if `failed > 0`, `ok: false`, or read-only verification cannot run, continue to activation.
+       If `seedDataPath` is absent, skip this task.
+   11. Mark **Apply template seed data** as `completed` or skipped, then mark **Activate imported site** as `in_progress`.
+   12. Invoke `/activate-site`, passing the resolved identity in the request so it skips local-project discovery:
        ```text
        Activate imported template site:
        - siteName: <IMPORTED_SITE_NAME>
@@ -239,8 +250,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        - source: create-site template path
        ```
        The activate-site skill owns subdomain selection, final activation confirmation, provisioning, polling, and recovery.
-   11. When `/activate-site` returns a `siteUrl`, mark **Activate imported site** as `completed` and **Show live template site** as `in_progress`.
-   12. Open the live site URL in the user's default browser:
+   13. When `/activate-site` returns a `siteUrl`, mark **Activate imported site** as `completed` and **Show live template site** as `in_progress`.
+   14. Open the live site URL in the user's default browser:
        ```bash
        node "${PLUGIN_ROOT}/scripts/open-url.js" --url "<siteUrl>"
        ```
@@ -249,7 +260,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        - **`ok: false`**: tell the user the browser could not be opened automatically and show the `siteUrl` for manual opening.
 
        Always surface the activate-site DNS propagation caveat: the site may take a few minutes to load even after activation succeeds.
-   13. Mark **Show live template site** and **Select template or choose from-scratch** as `completed`, then present the template-path summary:
+   15. Mark **Show live template site** and **Select template or choose from-scratch** as `completed`, then present the template-path summary:
        - Template name and framework
        - Imported site name and Website Record ID
        - Live site URL
@@ -906,6 +917,7 @@ After Phase 1.5 selects the template path, append the current template phase tas
 | Verify prerequisites and confirm template import | Confirming template import | Verify PAC/Azure auth, resolve the target environment, and ask for import consent |
 | Import template solution | Importing template solution | Import the selected unmanaged solution and poll the async job to completion |
 | Show imported inactive site | Showing imported site | Diff `pac pages list -v` output to identify the imported site record and tell the user it is not live yet |
+| Apply template seed data | Applying seed data | Insert optional template seed records using the deterministic seed-data script; failures do not block activation |
 | Activate imported site | Activating imported site | Invoke activate-site with the resolved site name and Website Record ID |
 | Show live template site | Showing live site | Open the activated site URL in the browser and invite the user to continue customizing |
 
