@@ -747,19 +747,22 @@ test('app-shell: a DashBoard subarea for an unbuilt dashboard throws a clear err
   assert.throws(() => appDef(spec, { forms: {}, views: {}, charts: {}, dashboards: {} }), /references dashboard 'Missing' which wasn't built/);
 });
 
-test('app-shell: threads icon/vectorIcon on area and subarea (icon web-resource name lowercased)', () => {
+test('app-shell: an entity subarea DROPS vectorIcon (invalid VectorIcon breaks the designer — nav uses the table icon); areas + non-entity subareas keep it', () => {
   const spec = makeSpec();
   spec.appShell.areas[0].icon = 'New_AreaIcon.png';
   spec.appShell.areas[0].vectorIcon = 'Home';
   spec.appShell.areas[0].groups[0].subAreas[0].icon = 'New_SubIcon.png';
-  spec.appShell.areas[0].groups[0].subAreas[0].vectorIcon = 'Grid';
+  spec.appShell.areas[0].groups[0].subAreas[0].vectorIcon = 'Grid'; // entity subarea -> dropped
+  spec.appShell.areas[0].groups[0].subAreas.push({ url: 'https://x', title: 'Help', vectorIcon: '/_imgs/x.svg' });
   const def = appDef(spec, { forms: {}, views: {}, charts: {}, dashboards: {} });
   const area = def.siteMap.areas[0];
   const sub = area.groups[0].subAreas[0];
+  const urlSub = area.groups[0].subAreas.find((s) => s.type === 'URL');
   assert.strictEqual(area.icon, 'new_areaicon.png');
-  assert.strictEqual(area.vectorIcon, 'Home');
+  assert.strictEqual(area.vectorIcon, 'Home', 'area vectorIcon is kept (areas are out of the reported bug scope)');
   assert.strictEqual(sub.icon, 'new_subicon.png');
-  assert.strictEqual(sub.vectorIcon, 'Grid');
+  assert.strictEqual(sub.vectorIcon, undefined, 'entity subarea vectorIcon is dropped (would emit an invalid VectorIcon)');
+  assert.strictEqual(urlSub.vectorIcon, '/_imgs/x.svg', 'a non-entity (url) subarea keeps vectorIcon (an SVG path is valid there)');
 });
 
 test('app-shell: a page subarea resolves to a GenPage subarea with the built genPageId', () => {

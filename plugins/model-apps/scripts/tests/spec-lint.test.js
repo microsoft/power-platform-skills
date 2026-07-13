@@ -20,13 +20,22 @@ test('a clean spec passes with no errors', () => {
   assert.strictEqual(r.errors.length, 0);
 });
 
-test('warns when a sitemap vectorIcon looks like an image filename (probably meant icon)', () => {
+test('warns that vectorIcon on an entity subarea is ignored (dropped) — the nav uses the table icon', () => {
   const s = base();
   s.appShell = { areas: [{ label: 'Main', groups: [{ label: 'Records', subAreas: [
-    { entity: 'new_customer', title: 'Customers', vectorIcon: 'my.svg' },
+    { entity: 'new_customer', title: 'Customers', vectorIcon: 'Shield' },
   ] }] }] };
   const r = lintAppSpec(s);
-  assert.ok(r.warnings.some((w) => /vectorIcon 'my\.svg' looks like a file/.test(w)), JSON.stringify(r.warnings));
+  assert.ok(r.warnings.some((w) => /vectorIcon is ignored on an entity subarea/.test(w)), JSON.stringify(r.warnings));
+});
+
+test('warns when a non-entity subarea vectorIcon is a bare Fluent token (VectorIcon needs an SVG path / $webresource)', () => {
+  const s = base();
+  s.appShell = { areas: [{ label: 'Main', groups: [{ label: 'Records', subAreas: [
+    { url: 'https://x', title: 'Help', vectorIcon: 'Home' },
+  ] }] }] };
+  const r = lintAppSpec(s);
+  assert.ok(r.warnings.some((w) => /vectorIcon 'Home' is a bare token/.test(w)), JSON.stringify(r.warnings));
 });
 
 test('flags the relationship-name vs lookup-name collision (the live bug)', () => {

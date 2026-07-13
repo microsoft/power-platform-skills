@@ -201,10 +201,15 @@ function lintAppSpec(spec) {
       if (!entityLowerSet.has(lc(ds))) W(`Page '${p.name}' data source '${ds}' isn't a declared entity — ok if it's a standard table, otherwise a likely typo`);
     }
   }
-  // `icon` is a web-resource image; `vectorIcon` is a Fluent icon token. Warn on the common mixup.
+  // The sitemap `VectorIcon` attribute must be an SVG path (e.g. /_imgs/TableIconsFluentV9/x.svg) or
+  // a $webresource:<name>.svg reference — NOT a bare Fluent token, which breaks the modern
+  // app-designer property pane. For ENTITY subareas the nav icon comes from the TABLE icon
+  // (entities[].vectorIcon → IconVectorName), so a subarea vectorIcon is DROPPED at build time; warn
+  // the author to set the table icon instead.
   const looksLikeFile = (v) => v && /\.(png|jpe?g|gif|svg|ico)$/i.test(String(v));
+  const validVectorIcon = (v) => looksLikeFile(v) || /^\$webresource:/i.test(String(v || ''));
   for (const a of (spec.appShell && spec.appShell.areas) || []) {
-    if (looksLikeFile(a.vectorIcon)) W(`Sitemap area "${a.label || ''}": vectorIcon '${a.vectorIcon}' looks like a file — use "icon" for a web-resource image and "vectorIcon" for a Fluent icon token`);
+    if (a.vectorIcon && !validVectorIcon(a.vectorIcon)) W(`Sitemap area "${a.label || ''}": vectorIcon '${a.vectorIcon}' is a bare token — the sitemap VectorIcon needs an SVG path (…/x.svg) or a $webresource:<name>.svg reference, not a Fluent token`);
     for (const g of a.groups || []) {
       for (const sa of g.subAreas || []) {
         const targets = ['entity', 'dashboard', 'url', 'page'].filter((k) => sa[k]);
@@ -213,7 +218,10 @@ function lintAppSpec(spec) {
         if (sa.entity && !entityNames.has(lc(sa.entity))) E(`Sitemap subarea references unknown entity '${sa.entity}'`);
         if (sa.dashboard && !dashNames.has(sa.dashboard)) E(`Sitemap subarea references unknown dashboard '${sa.dashboard}' — declare it in dashboards[]`);
         if (sa.page && !pageNames.has(sa.page)) E(`Sitemap subarea references unknown page '${sa.page}' — declare it in pages[]`);
-        if (looksLikeFile(sa.vectorIcon)) W(`Sitemap subarea "${sa.title || ''}": vectorIcon '${sa.vectorIcon}' looks like a file — use "icon" for a web-resource image and "vectorIcon" for a Fluent icon token`);
+        if (sa.vectorIcon) {
+          if (sa.entity) W(`Sitemap subarea "${sa.title || ''}": vectorIcon is ignored on an entity subarea (dropped from the sitemap so it doesn't break the app designer) — an entity's nav icon comes from the table icon; set entities[].vectorIcon (an SVG web resource) for a custom icon`);
+          else if (!validVectorIcon(sa.vectorIcon)) W(`Sitemap subarea "${sa.title || ''}": vectorIcon '${sa.vectorIcon}' is a bare token — the sitemap VectorIcon needs an SVG path (…/x.svg) or a $webresource:<name>.svg reference, not a Fluent token`);
+        }
       }
     }
   }

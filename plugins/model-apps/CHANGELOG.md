@@ -36,6 +36,15 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   is read from `--env <url>` or a positional arg (fixing the `envUrl: "--env"` parse bug).
 
 ### Fixed
+- **Entity subarea `vectorIcon` no longer breaks the app designer (`sdk-build.js` / `spec-lint.js`).**
+  A `vectorIcon` (Fluent token) on an **entity** sitemap subarea was written verbatim into the sitemap
+  `VectorIcon` attribute, which the modern app designer can't resolve — the property pane failed to
+  load for those subareas and the nav showed a fallback icon. An entity's nav icon comes from the
+  **table** icon (`entities[].vectorIcon` → `IconVectorName`), so the build now **drops** `vectorIcon`
+  from entity subareas (keeping it on `url`/`page`/`dashboard` subareas, where an SVG path/`$webresource`
+  is valid). Lint now warns that an entity-subarea `vectorIcon` is ignored (set the table icon instead)
+  and that a non-entity subarea/area `vectorIcon` must be an SVG path or `$webresource:` — not a bare
+  token. Live-verified: the deployed sitemap emits no invalid `VectorIcon`.
 - **Sub-grids are no longer built with an empty target entity (`sdk-build.js`).** Sub-grid options were
   passed with `entity` but the SDK reads `targetEntity`, so every generated sub-grid shipped an empty
   `<TargetEntityType/>`. Dataverse tolerated it on create (POST) but rejected it on edit (PATCH) with

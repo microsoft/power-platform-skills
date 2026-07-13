@@ -528,12 +528,17 @@ function appDef(spec, result, opts = {}) {
   // auto-pins its dashboardId as an app component so the nav actually includes it), or a URL.
   const subAreaJson = (s, id) => {
     const base = { id, title: s.title,
-      ...(s.icon ? { icon: String(s.icon).toLowerCase() } : {}),
-      ...(s.vectorIcon ? { vectorIcon: s.vectorIcon } : {}) };
+      ...(s.icon ? { icon: String(s.icon).toLowerCase() } : {}) };
+    // `vectorIcon` on an ENTITY subarea produces an invalid sitemap `VectorIcon` that breaks the
+    // modern app-designer property pane — an entity's nav icon comes from the TABLE icon
+    // (entities[].vectorIcon → IconVectorName), NOT the subarea. So carry vectorIcon only on
+    // non-entity subareas (URL / GenPage / DashBoard), where an SVG-path / $webresource value is
+    // valid; entity subareas below use `base` (no VectorIcon) and fall back to the table icon.
+    const withVector = s.vectorIcon ? { ...base, vectorIcon: s.vectorIcon } : base;
     if (s.dashboard) {
       const dashboardId = (result.dashboards || {})[s.dashboard];
       if (!dashboardId) throw new Error(`sitemap subarea "${s.title}" references dashboard '${s.dashboard}' which wasn't built — declare it in dashboards[] and don't skip the dashboards phase`);
-      return { ...base, type: 'DashBoard', dashboardId };
+      return { ...withVector, type: 'DashBoard', dashboardId };
     }
     if (s.page) {
       const genPageId = (result.pages || {})[s.page];
@@ -544,9 +549,9 @@ function appDef(spec, result, opts = {}) {
         if (opts.omitUnbuiltPages) return null;
         throw new Error(`sitemap subarea "${s.title}" references page '${s.page}' which wasn't built — declare it in pages[] and don't skip the pages phase`);
       }
-      return { ...base, type: 'GenPage', genPageId };
+      return { ...withVector, type: 'GenPage', genPageId };
     }
-    if (s.url) return { ...base, type: 'URL', url: s.url };
+    if (s.url) return { ...withVector, type: 'URL', url: s.url };
     return { ...base, type: 'Entity', entity: s.entity && s.entity.toLowerCase() };
   };
   const areas = (spec.appShell.areas || []).map((a, ai) => ({ id: `area_${ai}`, title: a.label,

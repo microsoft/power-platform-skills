@@ -283,18 +283,22 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 ## appShell
 ```jsonc
 { "areas": [ { "label": "Main", "icon": "new_areaicon.svg", "groups": [ { "label": "Records", "subAreas": [
-  { "entity": "new_customer", "title": "Customers", "icon": "new_customer.svg" },  // a table (+ nav icon)
-  { "dashboard": "Operations", "title": "Overview", "vectorIcon": "Home" },        // a built dashboard (by name)
+  { "entity": "new_customer", "title": "Customers" },                              // a table (nav icon = its TABLE icon)
+  { "dashboard": "Operations", "title": "Overview", "icon": "new_overview.svg" },  // a built dashboard (by name)
   { "url": "https://…",       "title": "Help" }                                    // an external link
 ] } ] } ] }
 ```
 - A subarea names exactly **one** target (lint-enforced): `entity` (a table), `dashboard` (the **name**
   of a `dashboards[]` entry — auto-pinned as an app component so the app includes it), `url`, or
   `page` (the **name** of a `pages[]` generative page — surfaced as a `GenPage` sitemap subarea).
-- Any area or subarea may set **`icon`** (a declared image `webResources[]` entry — png/jpg/gif/svg/ico)
-  and/or **`vectorIcon`** (a Fluent icon token, e.g. `"Home"`). Icons are **chrome, not a target** — they
-  don't count toward the "exactly one target" rule. `icon` must reference a declared **image** web resource
-  (validated); `vectorIcon` is a free-form token (lint warns if it looks like a filename).
+- Any area or subarea may set **`icon`** (a declared image `webResources[]` entry — png/jpg/gif/svg/ico;
+  validated). Icons are **chrome, not a target** — they don't count toward the "exactly one target" rule.
+- **Entity nav icons come from the TABLE icon, not the subarea.** For an `entity` subarea, set the table's
+  own icon via `entities[].vectorIcon` (an SVG web resource → `IconVectorName`); a subarea `vectorIcon`
+  on an entity subarea is **ignored/dropped** (a raw value there breaks the modern app-designer property
+  pane). For a non-entity subarea (`url`/`page`/`dashboard`), `vectorIcon` must be an **SVG path**
+  (e.g. `/_imgs/TableIconsFluentV9/x.svg`) or a **`$webresource:<name>.svg`** reference — not a bare
+  Fluent token (lint warns).
 
 ## sampleData (optional)
 Keyed by entity `schemaName`. Choice values are **labels** (resolved to ints) — for **both** inline
