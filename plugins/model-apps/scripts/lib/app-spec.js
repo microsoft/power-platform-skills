@@ -102,6 +102,31 @@ function lookupColumnsFor(spec, entityLogical) {
   return out;
 }
 
+// The child relationships to show as sub-grids on `entityLogical`'s (parent) form: every 1:N where
+// this entity is the REFERENCED (parent) side, plus every N:N it participates in. Returns the child
+// (the "many"/other side) as [{ childEntity }], deduped, declared order preserved. Used by the opt-in
+// forms[].autoSubgrids to give a hub table a "list of its children" grid without hand-authoring each.
+function childRelationshipsFor(spec, entityLogical) {
+  const parent = String(entityLogical || '').toLowerCase();
+  const seen = new Set();
+  const out = [];
+  for (const r of spec.relationships || []) {
+    let child = null;
+    if (r.type === 'OneToMany' && String(r.referenced || '').toLowerCase() === parent) {
+      child = String(r.referencing || '').toLowerCase();
+    } else if (r.type === 'ManyToMany') {
+      const a = String(r.entity1 || '').toLowerCase();
+      const b = String(r.entity2 || '').toLowerCase();
+      if (a === parent) child = b;
+      else if (b === parent) child = a;
+    }
+    if (!child || seen.has(child)) continue;
+    seen.add(child);
+    out.push({ childEntity: child });
+  }
+  return out;
+}
+
 // The 1:N relationship's SCHEMA name (used for entity provisioning and the
 // sub-grid RelationshipName). This MUST be distinct from the lookup attribute's
 // schema name — Dataverse rejects a relationship whose name collides with the
@@ -568,6 +593,7 @@ module.exports = {
   resolveSampleRecords,
   relationshipFor,
   lookupColumnsFor,
+  childRelationshipsFor,
   relationshipSchemaName,
   prefixedRelationshipName,
   manyToManyFor,

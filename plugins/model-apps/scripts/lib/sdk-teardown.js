@@ -34,8 +34,8 @@
 // the identical phase-grouped, status-marked log.
 
 const { topoOrderEntities } = require('./_graph.js');
-const { appUniqueName, commandsByEntity } = require('./sdk-build.js');
-const { relationshipSchemaName, manyToManySchemaName } = require('./app-spec.js');
+const { appUniqueName, commandsByEntity, defaultViewColumns } = require('./sdk-build.js');
+const { relationshipSchemaName, manyToManySchemaName, lookupColumnsFor } = require('./app-spec.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
 
 // OData v4 string-literal escaping lives in ./odata.js. `odataStr` is kept as a backward-compatible
@@ -189,6 +189,20 @@ const KIND_HANDLERS = {
     del: (sdk, item) => sdk.deleteRelationship(item.schemaName),
     tolerateNotFound: true, // a relationship already removed (e.g. by a prior table delete) is "gone"
   },
+  // Gap 6: the build adds parent lookups to the built-in Active/Inactive default views, which can't be
+  // deleted — a lookup column on them references the relationship and blocks its delete. Before the
+  // relationships phase, reset those default views to a lookup-free column set so the relationship
+  // (and then the tables) can be removed. Best-effort; enrichDefaultViews resolves+sets+publishes.
+  resetDefaultViews: {
+    async resolve(sdk, target) {
+      return [{ id: target.entityLogical, cols: target.cols }];
+    },
+    async del(sdk, item) {
+      if (typeof sdk.enrichDefaultViews === 'function') {
+        try { await sdk.enrichDefaultViews(item.id, item.cols); } catch { /* best-effort — a reset that fails just leaves the surfacing lookup, which the delete will then report */ }
+      }
+    },
+  },
   webResource: {
     async resolve(sdk, target) {
       const items = await sdk.resolveArtifact('webResource', { name: target.name });
@@ -278,6 +292,15 @@ function planTeardown(spec) {
   }
   for (const v of spec.views || []) {
     steps.push({ kind: 'view', phase: 'views', label: `view "${v.name}" (${v.entity})`, target: { name: v.name, entity: String(v.entity).toLowerCase() } });
+  }
+  // Gap 6: before deleting relationships, reset each child entity's built-in default views to a
+  // lookup-free column set — the build surfaces parent lookups there, and a lookup column on an
+  // un-deletable default view blocks the relationship's delete. Only entities that actually have a
+  // 1:N lookup need it. Pure: defaultViewColumns(...,{includeLookups:false}) computes the reset set.
+  for (const e of spec.entities || []) {
+    const logical = e.schemaName.toLowerCase();
+    if (!lookupColumnsFor(spec, logical).length) continue;
+    steps.push({ kind: 'resetDefaultViews', phase: 'views', label: `reset default views for ${logical} (drop parent lookups)`, target: { entityLogical: logical, cols: defaultViewColumns(spec, e, { includeLookups: false }) } });
   }
   for (const r of spec.relationships || []) {
     const schema = r.type === 'ManyToMany' ? manyToManySchemaName(r, spec.solution && spec.solution.publisherPrefix) : relationshipSchemaName(r, spec.solution && spec.solution.publisherPrefix);

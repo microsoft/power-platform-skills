@@ -19,6 +19,7 @@ const {
   resolveSampleRecords,
   relationshipFor,
   lookupColumnsFor,
+  childRelationshipsFor,
   relationshipSchemaName,
   manyToManyFor,
   manyToManySchemaName,
@@ -293,7 +294,7 @@ function viewDef(spec, v) {
 // the primary column).
 const DEFAULT_VIEW_MAX_EXTRA = 6;
 const DEFAULT_VIEW_SKIP_TYPES = new Set(['Memo', 'File', 'Image']);
-function defaultViewColumns(spec, entity) {
+function defaultViewColumns(spec, entity, opts = {}) {
   const primary = entity.primaryAttribute.schemaName.toLowerCase();
   const picked = [{ name: primary, width: 300, order: 0 }];
   for (const c of entity.columns || []) {
@@ -303,10 +304,19 @@ function defaultViewColumns(spec, entity) {
     if (DEFAULT_VIEW_SKIP_TYPES.has(c.type)) continue;
     picked.push({ name: logical, width: 150, order: picked.length });
   }
-  // NOTE: parent lookups are intentionally NOT added to the built-in Active/Inactive default views.
-  // Those system views can't be deleted, so a lookup column on them references the relationship and
-  // blocks a clean teardown of the relationship/tables. Lookups are surfaced on the form auto-layout
-  // and on author-declared views[] (both deletable) instead — see formDef / viewDef.
+  // Gap 6: parent lookups read well in a grid (the "which parent?" column), so include them in the
+  // built-in Active/Inactive default views too — bounded by the same cap. Teardown calls this with
+  // { includeLookups: false } to reset those views BEFORE deleting the relationship, since a lookup
+  // column on an un-deletable default view would otherwise block the relationship's delete.
+  if (opts.includeLookups !== false) {
+    const chosen = new Set(picked.map((p) => p.name));
+    for (const lk of lookupColumnsFor(spec, entity.schemaName.toLowerCase())) {
+      if (picked.length > DEFAULT_VIEW_MAX_EXTRA) break;
+      if (chosen.has(lk.logical)) continue;
+      chosen.add(lk.logical);
+      picked.push({ name: lk.logical, width: 150, order: picked.length });
+    }
+  }
   return picked;
 }
 // True when a table has enough declared columns to make enriching its default views worthwhile
@@ -779,7 +789,17 @@ async function runSdkBuild(spec, opts = {}) {
     const defs = await Promise.all((spec.forms || []).map(async (f) => {
       const def = formDef(spec, f);
       const subs = [];
-      for (const sg of (f.subgrids || [])) {
+      // Gap 7: opt-in auto sub-grids. `forms[].autoSubgrids: true` adds a sub-grid for every child
+      // relationship of this form's entity (1:N where it's the parent + N:N) that isn't already
+      // declared in subgrids[], so a hub table's form lists its children without hand-authoring each.
+      const subgridSpecs = [...(f.subgrids || [])];
+      if (f.autoSubgrids) {
+        const declared = new Set(subgridSpecs.map((s) => String(s.childEntity).toLowerCase()));
+        for (const c of childRelationshipsFor(spec, f.entity)) {
+          if (!declared.has(c.childEntity)) subgridSpecs.push({ childEntity: c.childEntity });
+        }
+      }
+      for (const sg of subgridSpecs) {
         // A sub-grid can hang off a 1:N (child has the lookup) or an N:N (intersect) relationship.
         const oneToMany = relationshipFor(spec, f.entity, sg.childEntity);
         const nn = oneToMany ? null : manyToManyFor(spec, f.entity, sg.childEntity);

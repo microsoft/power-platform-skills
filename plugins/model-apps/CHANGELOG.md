@@ -9,6 +9,13 @@ plus local-dev ergonomics, sample coverage, and an automated eval suite with
 real and synthetic fixtures. Builds on v2.1; no breaking changes.
 
 ### Added
+- **Opt-in auto sub-grids (`forms[].autoSubgrids: true`).** Adds a sub-grid to a parent form for every
+  child relationship of its entity (each 1:N where it's the parent + each N:N) that isn't already in
+  `subgrids[]`, so a hub table's form lists its children without hand-authoring each grid.
+- **Parent lookups on the default views too (Gap 6).** 1:N lookups are now included in the built-in
+  Active/Inactive default view column set (not just the form + authored views), so the "which parent?"
+  column shows in the grid. Teardown resets those un-deletable default views to a lookup-free set
+  before deleting the relationship, so cleanup stays 0-leftover (live-verified).
 - **Forms & views update in place on edit (`sdk-build.js`).** Re-running the build against a deployed
   app now **reconciles** an existing form (re-applies the spec's fields + sub-grids via the SDK's
   idempotent `addField`/`addSubGrid`, then push + publish) and an existing view (unions its columns

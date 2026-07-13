@@ -440,12 +440,14 @@ test('formDef auto-layout does NOT add a lookup on the parent side (parent has n
   assert.ok(!autoFormFields(def).includes('new_projectid'), 'the parent form has no child lookup');
 });
 
-test('defaultViewColumns does NOT add the 1:N parent lookup (default views are un-deletable; lookups go on forms + author views to keep teardown clean)', () => {
+test('defaultViewColumns includes the 1:N parent lookup (Gap 6); includeLookups:false gives the teardown reset set', () => {
   const spec = lookupSpec();
   const task = spec.entities.find((e) => e.schemaName === 'new_task');
   const cols = defaultViewColumns(spec, task).map((c) => c.name);
-  assert.ok(!cols.includes('new_projectid'), 'the parent lookup is NOT added to the built-in Active/Inactive default views');
+  assert.ok(cols.includes('new_projectid'), 'the parent lookup is surfaced on the built-in default views');
   assert.ok(cols.includes('new_priority'), 'scalar columns are still included');
+  const scalar = defaultViewColumns(spec, task, { includeLookups: false }).map((c) => c.name);
+  assert.ok(!scalar.includes('new_projectid'), 'includeLookups:false drops the lookup (what teardown resets the default views to)');
 });
 
 test('an N:N sub-grid uses the ManyToMany relationship schema name', async () => {
@@ -487,6 +489,18 @@ test('a sub-grid whose child has no resolvable view at all is skipped, not fatal
   const sub = find(calls, 'addSubGrid').map((c) => c.args[1]).find((s) => s.targetEntity === 'new_tag');
   assert.strictEqual(sub, undefined, 'unresolvable sub-grid is dropped');
   assert.ok(events.some((e) => e.status === 'skip' && /sub-grid Tags/.test(e.label)), 'a skip was emitted for it');
+});
+
+test('Gap 7: forms[].autoSubgrids adds a sub-grid for each child relationship not already declared', async () => {
+  const spec = makeSpec();
+  const custForm = spec.forms.find((f) => f.entity === 'new_customer');
+  custForm.autoSubgrids = true;
+  custForm.subgrids = []; // no explicit sub-grids — the auto pass supplies them
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true });
+  const sub = find(calls, 'addSubGrid').map((c) => c.args[1]).find((s) => s.targetEntity === 'new_ticket');
+  assert.ok(sub, 'a sub-grid for the child (new_ticket) was auto-added to the parent form');
+  assert.strictEqual(sub.relationshipName, 'new_customer_new_ticket');
 });
 
 test('a junction sample row binds multiple parents via $parents', async () => {

@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
-const { validateAppSpec, columnTypeMap, relationshipFor, lookupColumnsFor, relationshipSchemaName, manyToManySchemaName, resolveSampleRecords } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
+const { validateAppSpec, columnTypeMap, relationshipFor, lookupColumnsFor, childRelationshipsFor, relationshipSchemaName, manyToManySchemaName, resolveSampleRecords } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
 
 const sample = JSON.parse(
   fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.project-tracker.json'), 'utf8')
@@ -418,6 +418,22 @@ test('lookupColumnsFor returns the 1:N lookups on the child (referencing) side, 
   assert.strictEqual(forTask[0].displayName, 'Project');
   // the parent side (new_project is referenced, not referencing) has no lookup column
   assert.deepStrictEqual(lookupColumnsFor(spec, 'new_project'), []);
+});
+
+// --- Gap 7: childRelationshipsFor (auto sub-grids) -------------------------------------------
+test('childRelationshipsFor returns the child (many) side of each 1:N where the entity is the parent, plus N:N partners', () => {
+  const spec = {
+    relationships: [
+      { type: 'OneToMany', referenced: 'new_project', referencing: 'new_task', lookup: { schemaName: 'new_ProjectId' } },
+      { type: 'OneToMany', referenced: 'new_project', referencing: 'new_risk', lookup: { schemaName: 'new_ProjectId2' } },
+      { type: 'ManyToMany', entity1: 'new_project', entity2: 'new_tag', intersectEntityName: 'new_project_tag' },
+      { type: 'OneToMany', referenced: 'systemuser', referencing: 'new_project', lookup: { schemaName: 'new_OwnerId' } },
+    ],
+  };
+  // new_project is the PARENT of task + risk, and an N:N partner of tag — its form should list all three.
+  assert.deepStrictEqual(childRelationshipsFor(spec, 'new_project').map((c) => c.childEntity), ['new_task', 'new_risk', 'new_tag']);
+  // new_task is only a child (referencing) — it has no child grids of its own here.
+  assert.deepStrictEqual(childRelationshipsFor(spec, 'new_task'), []);
 });
 
 test('validateAppSpec rejects $parent with an empty match', () => {

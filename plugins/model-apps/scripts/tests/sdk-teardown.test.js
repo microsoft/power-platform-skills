@@ -198,12 +198,12 @@ function mockSdk(state = {}) {
 
 // --- planTeardown (pure) ----------------------------------------------------------------
 
-test('plan is ordered app -> dashboards -> commands -> forms -> charts -> views -> relationships -> tables -> web-resources -> solution', () => {
+test('plan is ordered app -> dashboards -> commands -> forms -> charts -> views -> resetDefaultViews -> relationships -> tables -> web-resources -> solution', () => {
   const steps = planTeardown(fullSpec());
   const kinds = steps.map((s) => s.kind);
-  // Web resources come after tables (a table-icon WR is referenced by its table); fullSpec's app
-  // sets no app.icon, so a second webResource step (the generated default app icon) is planned too.
-  assert.deepStrictEqual(kinds, ['app', 'dashboard', 'commands', 'form', 'form', 'form', 'chart', 'chart', 'view', 'view', 'view', 'relationship', 'relationship', 'table', 'table', 'table', 'webResource', 'webResource', 'solution']);
+  // Gap 6: resetDefaultViews steps (drop parent lookups from un-deletable default views) precede the
+  // relationships. fullSpec's ticket + comment are 1:N children, so both get a reset step.
+  assert.deepStrictEqual(kinds, ['app', 'dashboard', 'commands', 'form', 'form', 'form', 'chart', 'chart', 'view', 'view', 'view', 'resetDefaultViews', 'resetDefaultViews', 'relationship', 'relationship', 'table', 'table', 'table', 'webResource', 'webResource', 'solution']);
 });
 
 // Regression (found by live teardown): a table's icon web resource is referenced by the table, so
@@ -468,6 +468,30 @@ test('form teardown of a non-main form does not touch systemform default/activat
   assert.deepStrictEqual(calls, ['d'], 'only the delete runs for a non-main (quick-create/quick-view) form');
 });
 
+// Gap 6: before deleting a relationship, teardown resets the child entity's un-deletable default
+// views to a lookup-free column set (they'd otherwise block the relationship delete).
+test('resetDefaultViews resets an entity\'s default views to the given (lookup-free) column set via enrichDefaultViews', async () => {
+  const calls = [];
+  const sdk = { enrichDefaultViews: async (logical, cols) => { calls.push({ logical, cols }); return { updated: [] }; } };
+  await KIND_HANDLERS.resetDefaultViews.del(sdk, { id: 'new_task', cols: [{ name: 'new_name', width: 300, order: 0 }] });
+  assert.strictEqual(calls.length, 1, 'the default views are reset once');
+  assert.strictEqual(calls[0].logical, 'new_task');
+  assert.ok(!calls[0].cols.some((c) => c.name === 'new_projectid'), 'reset to a column set without the parent lookup');
+});
+
+test('planTeardown adds a resetDefaultViews step only for entities that have a 1:N parent lookup', () => {
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' }, app: { name: 'A' },
+    entities: [
+      { schemaName: 'new_project', primaryAttribute: { schemaName: 'new_name' }, columns: [] },
+      { schemaName: 'new_task', primaryAttribute: { schemaName: 'new_name' }, columns: [] },
+    ],
+    relationships: [{ type: 'OneToMany', referenced: 'new_project', referencing: 'new_task', lookup: { schemaName: 'new_ProjectId' } }],
+  };
+  const resets = planTeardown(spec).filter((s) => s.kind === 'resetDefaultViews').map((s) => s.target.entityLogical);
+  assert.deepStrictEqual(resets, ['new_task'], 'only the child (referencing) entity needs its default views reset');
+});
+
 // --- dry-run ----------------------------------------------------------------------------
 
 test('dry-run emits the whole plan as skips and never calls SDK', async () => {
@@ -475,10 +499,10 @@ test('dry-run emits the whole plan as skips and never calls SDK', async () => {
   const throwingSdk = { queryRecords: () => { throw new Error('dry-run must not call SDK'); } };
   const r = await runTeardown(fullSpec(), { apply: false }, { sdk: throwingSdk, emit: (e) => events.push(e) });
   assert.strictEqual(r.dryRun, true);
-  assert.strictEqual(r.plan.length, 19); // +1 generated app-icon web resource (fullSpec sets no app.icon)
+  assert.strictEqual(r.plan.length, 21); // +1 generated app-icon WR, +2 resetDefaultViews (ticket, comment)
   const terminal = events.filter((e) => e.status !== 'start');
   assert.ok(terminal.every((e) => e.status === 'skip'));
-  assert.strictEqual(terminal.length, 19);
+  assert.strictEqual(terminal.length, 21);
 });
 
 test('apply without an sdk throws', async () => {

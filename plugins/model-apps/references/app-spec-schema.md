@@ -186,9 +186,10 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 
 ## forms[]
 ```jsonc
-// auto layout (default): primary + all scalar columns, sub-grids for child relationships
+// auto layout (default): primary + all scalar columns + 1:N parent lookups; opt-in child grids
 { "entity": "new_customer", "type": "main", "name": "Customer", "layout": "auto",
   "notes": true,                                   // optional — add a Notes section
+  "autoSubgrids": true,                            // optional — a sub-grid for every child relationship
   "subgrids": [ { "childEntity": "new_ticket", "view": "Active Tickets", "label": "Tickets" } ] }
 
 // explicit layout: author tabs -> sections -> columns(1-4) -> fields
