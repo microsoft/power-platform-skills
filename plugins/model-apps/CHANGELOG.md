@@ -9,6 +9,32 @@ plus local-dev ergonomics, sample coverage, and an automated eval suite with
 real and synthetic fixtures. Builds on v2.1; no breaking changes.
 
 ### Added
+- **Forms & views update in place on edit (`sdk-build.js`).** Re-running the build against a deployed
+  app now **reconciles** an existing form (re-applies the spec's fields + sub-grids via the SDK's
+  idempotent `addField`/`addSubGrid`, then push + publish) and an existing view (unions its columns
+  with the spec's), instead of reusing the artifact unchanged. Editing a deployed form/view layout
+  finally lands — the documented "create and edit share one path" now holds for forms and views, not
+  just pages. (Chart *definition* edits still aren't applied on rebuild — an existing chart is skipped
+  with a visible reason rather than silently reported as rebuilt.)
+- **The app shows your form, not the blank stock form (`sdk-build.js`).** After building a table's main
+  form, the build marks it the entity **default** (`isdefault`) and deactivates the auto-created blank
+  "Information" form (custom tables only) — so a freshly built app opens your authored layout. Teardown
+  reverses this (re-activates + re-defaults a stock form) before deleting, so cleanup stays at 0 leftovers.
+- **Auto-layout + authored views surface parent lookups** — a 1:N lookup (which lives on
+  `relationships[]`, not `columns[]`) is now placed on the child's form auto-layout and honored in
+  authored `views[].columns`, so the "which parent?" link is visible without hand-authoring an explicit
+  `tabs` layout.
+- **`check-auth.js` accepts `--env` and no longer false-blocks on PAC** — the build authenticates with the
+  az token, so a missing pac login is a warning (genpage opts back in with `--require-pac`); the env URL
+  is read from `--env <url>` or a positional arg (fixing the `envUrl: "--env"` parse bug).
+
+### Fixed
+- **Sub-grids are no longer built with an empty target entity (`sdk-build.js`).** Sub-grid options were
+  passed with `entity` but the SDK reads `targetEntity`, so every generated sub-grid shipped an empty
+  `<TargetEntityType/>`. Dataverse tolerated it on create (POST) but rejected it on edit (PATCH) with
+  "Expected non-empty string", and the rendered grid had no target. Now passed as `targetEntity`.
+
+### Added (previously)
 - **Table icons** (`entities[].vectorIcon` / `entities[].icon`) — set a custom table's **own** icon
   (what the modern app designer and app nav render for the table) to a **declared web resource**:
   `vectorIcon` → an **SVG** web resource (Dataverse `IconVectorName`, the modern look), `icon` → a

@@ -440,6 +440,34 @@ test('runTeardown reports ok=false and records the app step when a deleteAppCasc
   assert.deepStrictEqual(solutionDeletes, ['sol-1'], 'best-effort: the solution step still ran after the app failure');
 });
 
+// A main form the build promoted to the entity default (Gap 2) can't be deleted until a stock form
+// is restored as the active default. The form handler reverses that before deleting.
+test('form teardown restores a stock main form (reactivate + re-default) BEFORE deleting a promoted main form', async () => {
+  const calls = [];
+  const sdk = {
+    queryRecords: async (e) => { calls.push(['queryRecords', e]); return [{ formid: 'ours', formactivationstate: 1, isdefault: true }, { formid: 'stock', formactivationstate: 0, isdefault: false }]; },
+    updateRecord: async (e, id, data) => { calls.push(['updateRecord', id, data]); },
+    deleteRemoteArtifact: async (t, id) => { calls.push(['delete', id]); },
+  };
+  await KIND_HANDLERS.form.del(sdk, { id: 'ours', name: 'F', entity: 'new_x', isMain: true });
+  assert.ok(calls.some((c) => c[0] === 'updateRecord' && c[1] === 'stock' && c[2].formactivationstate === 1), 'the deactivated stock form is reactivated');
+  assert.ok(calls.some((c) => c[0] === 'updateRecord' && c[1] === 'stock' && c[2].isdefault === true), 'the stock form is re-defaulted (demoting ours)');
+  const reIdx = calls.findIndex((c) => c[0] === 'updateRecord' && c[2].isdefault === true);
+  const delIdx = calls.findIndex((c) => c[0] === 'delete');
+  assert.ok(reIdx !== -1 && reIdx < delIdx, 'the stock form is restored before our form is deleted');
+});
+
+test('form teardown of a non-main form does not touch systemform default/activation', async () => {
+  const calls = [];
+  const sdk = {
+    queryRecords: async () => { calls.push('q'); return []; },
+    updateRecord: async () => { calls.push('u'); },
+    deleteRemoteArtifact: async () => { calls.push('d'); },
+  };
+  await KIND_HANDLERS.form.del(sdk, { id: 'qc', name: 'QC', entity: 'new_x', isMain: false });
+  assert.deepStrictEqual(calls, ['d'], 'only the delete runs for a non-main (quick-create/quick-view) form');
+});
+
 // --- dry-run ----------------------------------------------------------------------------
 
 test('dry-run emits the whole plan as skips and never calls SDK', async () => {

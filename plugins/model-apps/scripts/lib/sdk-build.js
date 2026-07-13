@@ -303,15 +303,10 @@ function defaultViewColumns(spec, entity) {
     if (DEFAULT_VIEW_SKIP_TYPES.has(c.type)) continue;
     picked.push({ name: logical, width: 150, order: picked.length });
   }
-  // Parent lookups (from relationships[], not columns[]) read well in a grid and are usually the
-  // most useful "which parent?" column, so include them too — still bounded by the same cap.
-  const chosen = new Set(picked.map((p) => p.name));
-  for (const lk of lookupColumnsFor(spec, entity.schemaName.toLowerCase())) {
-    if (picked.length > DEFAULT_VIEW_MAX_EXTRA) break;
-    if (chosen.has(lk.logical)) continue;
-    chosen.add(lk.logical);
-    picked.push({ name: lk.logical, width: 150, order: picked.length });
-  }
+  // NOTE: parent lookups are intentionally NOT added to the built-in Active/Inactive default views.
+  // Those system views can't be deleted, so a lookup column on them references the relationship and
+  // blocks a clean teardown of the relationship/tables. Lookups are surfaced on the form auto-layout
+  // and on author-declared views[] (both deletable) instead — see formDef / viewDef.
   return picked;
 }
 // True when a table has enough declared columns to make enriching its default views worthwhile
@@ -417,6 +412,30 @@ function formDef(spec, f) {
   }
 
   return { entityLogicalName: entityLogical, name: f.name || `${f.entity} form`, formType, status: 'Active', tabs };
+}
+
+// The ordered field logical names a form definition places (across tabs/sections/rows/cells),
+// excluding the notes/timeline control (which has no bound field). The form update-in-place
+// reconcile re-applies each of these via the SDK's idempotent addField, so editing a deployed
+// form's field set actually lands. Deduped, lowercased.
+function formFieldLogicals(def) {
+  const seen = new Set();
+  const out = [];
+  for (const t of def.tabs || []) {
+    for (const s of t.sections || []) {
+      for (const r of s.rows || []) {
+        for (const c of r.cells || []) {
+          const fn = c.control && c.control.fieldName;
+          if (!fn) continue;
+          const logical = String(fn).toLowerCase();
+          if (seen.has(logical)) continue;
+          seen.add(logical);
+          out.push(logical);
+        }
+      }
+    }
+  }
+  return out;
 }
 
 // The app module's uniquename, derived deterministically from the publisher prefix + app name
@@ -616,17 +635,89 @@ async function runSdkBuild(spec, opts = {}) {
     }
   }
 
-  // helper: create an artifact header-less, push, add to the solution.
+  // Reconcile an EXISTING form to the spec: fetch it, then re-apply every spec field + sub-grid via
+  // the SDK's IDEMPOTENT addField/addSubGrid (no duplicates), push, publish, and ensure it's a
+  // solution component. This is what makes editing a deployed form actually land — the build used
+  // to reuse a form by name and skip the push, silently dropping layout edits.
+  const reconcileForm = async (formId, def) => {
+    await provision.fetchArtifact('form', formId);
+    for (const fieldName of formFieldLogicals(def)) await provision.addField(formId, { fieldName });
+    for (const sg of def.__subgrids || []) provision.addSubGrid(formId, sg);
+    await provision.pushArtifact('form', formId);
+    await provision.publishArtifact('form', formId);
+    await provision.addSolutionComponent({ componentId: formId, componentType: COMPONENT_TYPE.form, solutionUniqueName: sol.uniqueName });
+    return formId;
+  };
+
+  // Reconcile an EXISTING author view: fetch it, UNION its current columns with the spec's (so a
+  // manual column add in Maker is preserved AND the spec's new lookup columns land), set, push,
+  // publish. Editing a view's column set (e.g. to surface a parent lookup) now takes effect.
+  const reconcileView = async (viewId, def) => {
+    await provision.fetchArtifact('view', viewId);
+    const current = provision.getArtifact('view', viewId) || {};
+    const have = new Set((current.columns || []).map((c) => String(c.name).toLowerCase()));
+    const merged = (current.columns || []).slice();
+    for (const col of def.columns || []) {
+      const n = String(col.name).toLowerCase();
+      if (have.has(n)) continue;
+      have.add(n);
+      merged.push({ name: n, width: col.width || 100, order: merged.length });
+    }
+    provision.setViewColumns(viewId, merged);
+    await provision.pushArtifact('view', viewId);
+    await provision.publishArtifact('view', viewId);
+    await provision.addSolutionComponent({ componentId: viewId, componentType: COMPONENT_TYPE.view, solutionUniqueName: sol.uniqueName });
+    return viewId;
+  };
+
+  // Gap 2: make our spec form the entity's DEFAULT main form AND deactivate the blank stock
+  // "Information" form, so the app shows OUR form instead of an empty one (the user's complaint).
+  // Marking our form isdefault demotes the previous default; formactivationstate 0 = Inactive.
+  // Best-effort throughout — never fail the build over form-default/activation flags. Guarded to
+  // tables THIS build owns: `isReusedEntity` skips deactivation so we never disable the forms of a
+  // system/reused table the author merely referenced (e.g. account/contact).
+  const promoteDefaultForm = async (entityLogical, formId, isReusedEntity) => {
+    try {
+      await provision.updateRecord('systemform', formId, { isdefault: true });
+    } catch {
+      /* best-effort */
+    }
+    if (isReusedEntity) return;
+    try {
+      const mains = await provision.queryRecords('systemform', {
+        select: ['formid'],
+        filter: `objecttypecode eq '${odataLit(entityLogical)}' and type eq 2`,
+        top: 50,
+      });
+      for (const m of mains || []) {
+        if (String(m.formid) === String(formId)) continue;
+        try {
+          await provision.updateRecord('systemform', String(m.formid), { formactivationstate: 0 });
+        } catch {
+          /* best-effort: a form that can't be deactivated (e.g. still pinned) just stays active */
+        }
+      }
+    } catch {
+      /* best-effort */
+    }
+  };
+
+  // helper: create an artifact — or UPDATE it in place if it already exists — then add to the solution.
   const buildArtifact = (type, def) => runner.run(`${type}s`, `${type} "${def.name}"`, async () => {
-    // Idempotency: if an artifact with this (entity, name) identity already exists (a re-run or a
-    // retry after a partial failure), reuse it instead of creating a duplicate.
-    // Deduplicated kinds: view, chart, form (by name+entity). The app module is handled separately
-    // in the app-shell phase (an existing app is re-synced, not just reused — see below).
-    let identity = null;
-    if (type === 'view' || type === 'chart' || type === 'form') identity = { name: def.name, entity: def.entityLogicalName };
-    if (identity) {
-      const existingId = await provision.findArtifact(type, identity);
-      if (existingId) return existingId;
+    // Update-in-place: editing a deployed spec must land, so a form is reconciled (fields +
+    // sub-grids) and a view has its columns reconciled, instead of the artifact being reused
+    // unchanged (the old behavior silently dropped every edit while still reporting success).
+    if (type === 'form') {
+      // Reconcile onto our OWN spec-named form (create it on first build, update it on re-runs) —
+      // never onto the entity's stock "Information" form. The stock form can't be deleted (every
+      // table must keep one main form), so reconciling onto it would attach the spec's subgrids +
+      // parent lookups to an un-deletable form and strand references that block teardown. Gap 2 is
+      // instead handled by making our form the entity's default (see promoteDefaultForm below).
+      const existingId = await provision.findArtifact('form', { name: def.name, entity: def.entityLogicalName });
+      if (existingId) return reconcileForm(existingId, def);
+    } else if (type === 'view') {
+      const existingId = await provision.findArtifact('view', { name: def.name, entity: def.entityLogicalName });
+      if (existingId) return reconcileView(existingId, def);
     }
     const art = provision.createArtifact(type, def);
     if (type === 'form' && def.__subgrids) for (const sg of def.__subgrids) provision.addSubGrid(art.id, sg);
@@ -659,9 +750,25 @@ async function runSdkBuild(spec, opts = {}) {
   }
 
   // 5. Charts (independent -> parallel; built before forms so a form could reference one).
+  // Chart DEFINITION edits are not applied in place on a rebuild (there is no SDK chart-update
+  // path yet), so an existing chart is skipped WITH A REASON rather than silently reported as
+  // (re)built — recreate the chart to change it. New charts are created + added to the solution.
   if (has('charts')) {
     const charts = spec.charts || [];
-    const ids = await runner.mapLimit(charts, concurrency, (c) => buildArtifact('chart', chartDef(spec, c)));
+    const ids = await runner.mapLimit(charts, concurrency, async (c) => {
+      const def = chartDef(spec, c);
+      const existingId = await provision.findArtifact('chart', { name: def.name, entity: def.entityLogicalName });
+      if (existingId) {
+        runner.skip('charts', `chart "${def.name}" (exists — chart edits aren't applied on rebuild; recreate to change)`);
+        return existingId;
+      }
+      return runner.run('charts', `chart "${def.name}"`, async () => {
+        const art = provision.createArtifact('chart', def);
+        const pushed = await provision.pushArtifact('chart', art.id);
+        await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.chart, solutionUniqueName: sol.uniqueName });
+        return pushed.id;
+      });
+    });
     charts.forEach((c, i) => { result.created.charts[c.name] = ids[i]; });
   }
 
@@ -684,13 +791,19 @@ async function runSdkBuild(spec, opts = {}) {
         // child entity has neither an explicit nor a built view AND no default public view can be
         // found, skip the sub-grid rather than crash the whole forms phase.
         if (!viewId) { runner.skip('forms', `sub-grid ${sg.label || sg.childEntity} on ${f.entity} (no resolvable view — skipped)`); continue; }
-        subs.push({ entity: childLogical, relationshipName, viewId, label: sg.label || sg.childEntity });
+        subs.push({ targetEntity: childLogical, relationshipName, viewId, label: sg.label || sg.childEntity });
       }
       def.__subgrids = subs;
       return { f, def };
     }));
     const ids = await runner.mapLimit(defs, concurrency, async (d) => {
       const id = await buildArtifact('form', d.def);
+      // Gap 2: make our main form the entity's default + deactivate the blank stock form so the app
+      // shows ours. Skip deactivation for a reused/system table (only touch tables this build owns).
+      if ((d.f.formType || 'Main') === 'Main') {
+        const entSpec = entityByLogical(spec, d.f.entity.toLowerCase());
+        await promoteDefaultForm(d.f.entity.toLowerCase(), id, !!(entSpec && entSpec.existing === true));
+      }
       const events = (d.f.events || []).filter((ev) => FORM_EVENTS.has(ev.event) && ev.library && ev.function);
       if (events.length) {
         await runner.run('forms', `wire ${events.length} event handler(s) on ${d.f.entity}`, async () => {
@@ -869,4 +982,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, chartDef, dashboardTileOpts, formDef, appDef, appUniqueName, commandsByEntity, webResourceOpts, formEventOpts, WEB_RESOURCE_KINDS, FORM_EVENTS };
+module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, chartDef, dashboardTileOpts, formDef, formFieldLogicals, appDef, appUniqueName, commandsByEntity, webResourceOpts, formEventOpts, WEB_RESOURCE_KINDS, FORM_EVENTS };

@@ -75,6 +75,34 @@ function isUndeletable(err) {
   return /system-defined|system managed|system-managed/.test(msg);
 }
 
+// Before deleting a MAIN form the build promoted to the entity default (Gap 2), restore a stock
+// main form as the active default — Dataverse refuses to delete the default form and refuses to
+// leave a table with zero active main forms. Reactivates any deactivated stock forms and re-defaults
+// one of them, which demotes our form so it becomes deletable. Best-effort: a failure just means the
+// subsequent delete may report the platform's own error. Mirrors the build's promoteDefaultForm.
+async function restoreStockMainForm(sdk, entityLogical, formIdToDelete) {
+  if (typeof sdk.queryRecords !== 'function' || typeof sdk.updateRecord !== 'function') return;
+  let forms;
+  try {
+    forms = await sdk.queryRecords('systemform', {
+      select: ['formid', 'formactivationstate', 'isdefault'],
+      filter: `objecttypecode eq '${odataStr(entityLogical)}' and type eq 2`,
+      top: 50,
+    });
+  } catch {
+    return;
+  }
+  const others = (forms || []).filter((f) => String(f.formid) !== String(formIdToDelete));
+  for (const f of others) {
+    if (f.formactivationstate !== 1) {
+      try { await sdk.updateRecord('systemform', String(f.formid), { formactivationstate: 1 }); } catch { /* best-effort */ }
+    }
+  }
+  if (others[0]) {
+    try { await sdk.updateRecord('systemform', String(others[0].formid), { isdefault: true }); } catch { /* best-effort */ }
+  }
+}
+
 // Per-kind resolve (id lookup via sdk.resolveArtifact) + delete handlers via SDK methods.
 // `resolve` returns the concrete artifacts to delete ([] when nothing matches — already gone /
 // never built). `del` deletes one. A not-found error on delete is tolerated as "already gone"
@@ -130,9 +158,14 @@ const KIND_HANDLERS = {
   form: {
     async resolve(sdk, target) {
       const items = await sdk.resolveArtifact('form', { name: target.name, entity: target.entity });
-      return (items || []).map((x) => ({ id: x.id, name: x.name }));
+      return (items || []).map((x) => ({ id: x.id, name: x.name, entity: target.entity, isMain: target.isMain }));
     },
-    del: (sdk, item) => sdk.deleteRemoteArtifact('form', item.id),
+    async del(sdk, item) {
+      // A main form the build promoted to default can't be deleted until a stock form is restored
+      // as the active default (reverse of Gap 2's promote) — otherwise Dataverse blocks the delete.
+      if (item.isMain) await restoreStockMainForm(sdk, item.entity, item.id);
+      await sdk.deleteRemoteArtifact('form', item.id);
+    },
   },
   chart: {
     async resolve(sdk, target) {
@@ -235,7 +268,10 @@ function planTeardown(spec) {
   }
   for (const f of spec.forms || []) {
     if (!f.name) continue; // only forms the spec named can be resolved
-    steps.push({ kind: 'form', phase: 'forms', label: `form "${f.name}" (${f.entity})`, target: { name: f.name, entity: String(f.entity).toLowerCase() } });
+    // Main forms get promoted to the entity default at build time; teardown reverses that before
+    // deleting (restoreStockMainForm), so flag them here.
+    const isMain = String(f.formType || f.type || 'main').toLowerCase() === 'main';
+    steps.push({ kind: 'form', phase: 'forms', label: `form "${f.name}" (${f.entity})`, target: { name: f.name, entity: String(f.entity).toLowerCase(), isMain } });
   }
   for (const c of spec.charts || []) {
     steps.push({ kind: 'chart', phase: 'charts', label: `chart "${c.name}" (${c.entity})`, target: { name: c.name, entity: String(c.entity).toLowerCase() } });

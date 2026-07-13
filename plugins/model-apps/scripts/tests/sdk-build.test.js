@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { runSdkBuild, planFor, resolvePhases, formDef, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, dashboardTileOpts, PHASES } = require('../lib/sdk-build.js');
+const { runSdkBuild, planFor, resolvePhases, formDef, formFieldLogicals, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, dashboardTileOpts, PHASES } = require('../lib/sdk-build.js');
 
 // Customer 1:N Tickets: a Choice column, sample data with $parent, a view, a Choice chart,
 // and a parent form with a child sub-grid.
@@ -39,6 +39,8 @@ function mockSdk(opts = {}) {
       if (e === 'solution') return opts.solutionExists ? [{ solutionid: 's' }] : [];
       if (e === 'webresource') return opts.existingWebResource ? [{ webresourceid: 'wr-existing' }] : [];
       if (e === 'sitemap') return [{ sitemapid: 'sm-1' }];
+      // Main forms for an entity: our reconciled form + a blank stock "Information" form to deactivate.
+      if (e === 'systemform') return opts.artifactsExist ? [{ formid: 'form-existing', isdefault: true }, { formid: 'stock-info', isdefault: false }] : [];
       if (e === 'savedquery') {
         // Default-view / subgrid default lookup (filters by querytype): a default view exists.
         // Artifact idempotency (name eq filter) is now handled by findArtifact, not queryRecords.
@@ -91,6 +93,9 @@ function mockSdk(opts = {}) {
     },
     enrichDefaultViews: async (logical, cols, o2) => { calls.push({ name: 'enrichDefaultViews', args: [logical, cols, o2] }); return { updated: [`defview-${logical}`] }; },
     createArtifact: (t, def) => { calls.push({ name: 'createArtifact', args: [t, def] }); return Object.assign({ id: `${t}-${++idc}` }, def); },
+    getArtifact: (t, id) => { calls.push({ name: 'getArtifact', args: [t, id] }); return { id, columns: (opts.existingViewColumns || []) }; },
+    updateRecord: async (e, id, data) => { calls.push({ name: 'updateRecord', args: [e, id, data] }); },
+    addField: async (formId, o) => { calls.push({ name: 'addField', args: [formId, o] }); return {}; },
     pushArtifact: async (t, id) => { calls.push({ name: 'pushArtifact', args: [t, id] }); return { type: t, id, success: true }; },
     setViewColumns: (id, cols) => { calls.push({ name: 'setViewColumns', args: [id, cols] }); return { id }; },
     addSubGrid: (formId, o) => { calls.push({ name: 'addSubGrid', args: [formId, o] }); return {}; },
@@ -171,7 +176,7 @@ test('form sub-grid references the child view id and relationship name', async (
   const { sdk, calls } = mockSdk();
   await runSdkBuild(makeSpec(), { sdk, apply: true });
   const sub = find(calls, 'addSubGrid')[0].args[1];
-  assert.strictEqual(sub.entity, 'new_ticket');
+  assert.strictEqual(sub.targetEntity, 'new_ticket');
   assert.strictEqual(sub.relationshipName, 'new_customer_new_ticket');
   assert.strictEqual(sub.viewId, 'view-1');
 });
@@ -435,11 +440,12 @@ test('formDef auto-layout does NOT add a lookup on the parent side (parent has n
   assert.ok(!autoFormFields(def).includes('new_projectid'), 'the parent form has no child lookup');
 });
 
-test('defaultViewColumns includes the 1:N parent lookup', () => {
+test('defaultViewColumns does NOT add the 1:N parent lookup (default views are un-deletable; lookups go on forms + author views to keep teardown clean)', () => {
   const spec = lookupSpec();
   const task = spec.entities.find((e) => e.schemaName === 'new_task');
   const cols = defaultViewColumns(spec, task).map((c) => c.name);
-  assert.ok(cols.includes('new_projectid'), 'the child default view surfaces the parent lookup column');
+  assert.ok(!cols.includes('new_projectid'), 'the parent lookup is NOT added to the built-in Active/Inactive default views');
+  assert.ok(cols.includes('new_priority'), 'scalar columns are still included');
 });
 
 test('an N:N sub-grid uses the ManyToMany relationship schema name', async () => {
@@ -450,7 +456,7 @@ test('an N:N sub-grid uses the ManyToMany relationship schema name', async () =>
   spec.forms[0].subgrids.push({ childEntity: 'new_tag', view: 'All Tags', label: 'Tags' });
   const { sdk, calls } = mockSdk();
   await runSdkBuild(spec, { sdk, apply: true });
-  const sub = find(calls, 'addSubGrid').map((c) => c.args[1]).find((s) => s.entity === 'new_tag');
+  const sub = find(calls, 'addSubGrid').map((c) => c.args[1]).find((s) => s.targetEntity === 'new_tag');
   assert.ok(sub, 'N:N sub-grid is placed on the form');
   assert.strictEqual(sub.relationshipName, 'new_customer_new_tag');
 });
@@ -463,7 +469,7 @@ test('a sub-grid with no explicit or built view falls back to the child default 
   spec.forms[0].subgrids.push({ childEntity: 'new_tag', label: 'Tags' }); // no `view`
   const { sdk, calls } = mockSdk();
   await runSdkBuild(spec, { sdk, apply: true });
-  const sub = find(calls, 'addSubGrid').map((c) => c.args[1]).find((s) => s.entity === 'new_tag');
+  const sub = find(calls, 'addSubGrid').map((c) => c.args[1]).find((s) => s.targetEntity === 'new_tag');
   assert.ok(sub, 'sub-grid still placed (not skipped)');
   assert.ok(sub.viewId, 'a view id was resolved from the default public view');
   assert.ok(has(calls, 'queryRecords'), 'the child default view was looked up');
@@ -478,7 +484,7 @@ test('a sub-grid whose child has no resolvable view at all is skipped, not fatal
   sdk.queryRecords = async () => []; // no default view exists
   const events = [];
   await runSdkBuild(spec, { sdk, apply: true, emit: (e) => events.push(e) });
-  const sub = find(calls, 'addSubGrid').map((c) => c.args[1]).find((s) => s.entity === 'new_tag');
+  const sub = find(calls, 'addSubGrid').map((c) => c.args[1]).find((s) => s.targetEntity === 'new_tag');
   assert.strictEqual(sub, undefined, 'unresolvable sub-grid is dropped');
   assert.ok(events.some((e) => e.status === 'skip' && /sub-grid Tags/.test(e.label)), 'a skip was emitted for it');
 });
@@ -863,6 +869,53 @@ test('idempotency: existing view/chart/form/app are reused, not re-created (no d
   assert.ok(!created.includes('chart'), 'existing chart reused');
   assert.ok(!created.includes('form'), 'existing form reused');
   assert.ok(!created.includes('app'), 'existing app reused');
+});
+
+// --- Gap 1/2: update-in-place (reconcile) for forms + views; stock-form reuse -----------------
+test('form update-in-place: an existing form is reconciled (addField per spec field), not recreated', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'views', 'charts', 'forms'] });
+  assert.ok(!find(calls, 'createArtifact').some((c) => c.args[0] === 'form'), 'no new form created on edit');
+  assert.ok(find(calls, 'addField').length > 0, 'spec fields re-applied via the idempotent addField');
+  assert.ok(find(calls, 'fetchArtifact').some((c) => c.args[0] === 'form' && c.args[1] === 'form-existing'), 'form fetched before reconcile');
+  assert.ok(find(calls, 'publishArtifact').some((c) => c.args[0] === 'form'), 'form published so the edit goes live');
+});
+
+test('Gap 2: our main form is promoted to the entity default (isdefault) + the blank stock form is deactivated, so the app shows ours', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const upd = find(calls, 'updateRecord').filter((c) => c.args[0] === 'systemform');
+  assert.ok(upd.some((c) => c.args[2] && c.args[2].isdefault === true), 'our main form is marked isdefault=true');
+  assert.ok(upd.some((c) => c.args[1] === 'stock-info' && c.args[2] && c.args[2].formactivationstate === 0), 'the blank stock form is deactivated');
+  assert.ok(find(calls, 'findArtifact').some((c) => c.args[0] === 'form'), 'form resolved by name+entity (our form), not the stock form');
+});
+
+test('view update-in-place: an existing view has its columns reconciled (existing UNION spec) via setViewColumns', async () => {
+  // Seed the deployed view with a manually-added column that a union must preserve.
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingViewColumns: [{ name: 'new_manual', width: 100, order: 0 }] });
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'views'] });
+  assert.ok(!find(calls, 'createArtifact').some((c) => c.args[0] === 'view'), 'no new view created on edit');
+  const setCols = find(calls, 'setViewColumns');
+  assert.ok(setCols.length > 0, 'view columns reconciled via setViewColumns');
+  assert.ok(setCols[0].args[1].map((c) => c.name).includes('new_manual'), 'a manually-added column is preserved (union, not replace)');
+});
+
+test('chart update-in-place is unsupported: an existing chart is skipped with a reason, not silently rebuilt', async () => {
+  const events = [];
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'charts'], emit: (e) => events.push(e) });
+  assert.ok(!find(calls, 'createArtifact').some((c) => c.args[0] === 'chart'), 'existing chart not recreated');
+  assert.ok(events.some((e) => e.phase === 'charts' && e.status === 'skip' && /aren't applied on rebuild/.test(e.label)), 'existing chart skipped with a clear reason');
+});
+
+test('formFieldLogicals extracts bound field names (excludes the notes control), deduped + lowercased', () => {
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' }, app: { name: 'A' },
+    entities: [{ schemaName: 'new_task', primaryAttribute: { schemaName: 'new_name', displayName: 'T' }, columns: [{ schemaName: 'new_priority', displayName: 'P', type: 'Text' }], hasNotes: true }],
+    relationships: [{ type: 'OneToMany', referenced: 'new_project', referencing: 'new_task', lookup: { schemaName: 'new_ProjectId', displayName: 'Project' } }],
+  };
+  const def = formDef(spec, { entity: 'new_task', name: 'T', layout: 'auto', notes: true });
+  assert.deepStrictEqual(formFieldLogicals(def), ['new_name', 'new_priority', 'new_projectid']);
 });
 
 test('edit flow: an existing (page-less) app has its sitemap rewritten so subarea edits land', async () => {
