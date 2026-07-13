@@ -898,13 +898,27 @@ test('form update-in-place: an existing form is reconciled (addField per spec fi
   assert.ok(find(calls, 'publishArtifact').some((c) => c.args[0] === 'form'), 'form published so the edit goes live');
 });
 
-test('Gap 2: our main form is promoted to the entity default (isdefault) + the blank stock form is deactivated, so the app shows ours', async () => {
+test('Gap 2: our (custom) main form is promoted to the entity default (isdefault) and NOTHING is deactivated', async () => {
   const { sdk, calls } = mockSdk({ artifactsExist: true });
   await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
   const upd = find(calls, 'updateRecord').filter((c) => c.args[0] === 'systemform');
   assert.ok(upd.some((c) => c.args[2] && c.args[2].isdefault === true), 'our main form is marked isdefault=true');
-  assert.ok(upd.some((c) => c.args[1] === 'stock-info' && c.args[2] && c.args[2].formactivationstate === 0), 'the blank stock form is deactivated');
+  // Deactivation is destructive (disables sibling/role-based + env-wide OOB forms), so it must NOT happen.
+  assert.ok(!upd.some((c) => c.args[2] && Object.prototype.hasOwnProperty.call(c.args[2], 'formactivationstate')), 'no form is deactivated');
   assert.ok(find(calls, 'findArtifact').some((c) => c.args[0] === 'form'), 'form resolved by name+entity (our form), not the stock form');
+});
+
+test('Gap 2: a Main form on a reused/system table is NOT promoted (never re-points a shared table default form)', async () => {
+  // A system table (not prefixed with the solution publisher prefix, or flagged existing) must never
+  // have its default form touched — that is an environment-wide side effect on shared data.
+  const spec = makeSpec();
+  spec.entities[0].existing = true; // mark the first entity as reused
+  const reusedEntity = spec.entities[0].schemaName.toLowerCase();
+  spec.forms = [{ entity: spec.entities[0].schemaName, type: 'main', name: 'Reused Form', layout: 'auto' }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const promotedReused = find(calls, 'updateRecord').some((c) => c.args[0] === 'systemform' && c.args[2] && c.args[2].isdefault === true);
+  assert.ok(!promotedReused, `no isdefault write for the reused table ${reusedEntity}`);
 });
 
 test('view update-in-place: an existing view has its columns reconciled (existing UNION spec) via setViewColumns', async () => {

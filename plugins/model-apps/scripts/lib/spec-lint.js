@@ -93,7 +93,11 @@ function lintAppSpec(spec) {
       continue;
     }
     if (r.type !== 'OneToMany') continue;
-    if (!entityNames.has(lc(r.referenced))) E(`Relationship references unknown entity '${r.referenced}'`);
+    // The `referenced` (parent) side may be a standard/system table (systemuser, account, …) that
+    // isn't declared in entities[] — a supported pattern (the build auto-prefixes the relationship
+    // name). So WARN, don't error, when it's absent (matches validateAppSpec + the build). The
+    // `referencing` (child) side gets the lookup column, so it MUST be a declared entity.
+    if (!entityNames.has(lc(r.referenced))) W(`Relationship references entity '${r.referenced}' that isn't declared in entities[] — OK if it's a standard/system table (e.g. systemuser, account); otherwise a likely typo`);
     if (!entityNames.has(lc(r.referencing))) E(`Relationship references unknown entity '${r.referencing}'`);
     if (!r.lookup || !r.lookup.schemaName) {
       E(`OneToMany ${r.referenced}->${r.referencing} is missing lookup.schemaName`);

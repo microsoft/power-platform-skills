@@ -24,9 +24,12 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   just pages. (Chart *definition* edits still aren't applied on rebuild — an existing chart is skipped
   with a visible reason rather than silently reported as rebuilt.)
 - **The app shows your form, not the blank stock form (`sdk-build.js`).** After building a table's main
-  form, the build marks it the entity **default** (`isdefault`) and deactivates the auto-created blank
-  "Information" form (custom tables only) — so a freshly built app opens your authored layout. Teardown
-  reverses this (re-activates + re-defaults a stock form) before deleting, so cleanup stays at 0 leftovers.
+  form, the build marks it the entity **default** (`isdefault`) — scoped strictly to the build's own
+  custom (publisher-prefixed, non-`existing`) tables — so a freshly built app opens your authored
+  layout while the stock "Information" form stays available in the form switcher. It does **not**
+  deactivate any forms (that would disable role-based/sibling forms and, on a shared system table,
+  out-of-box forms environment-wide). Teardown re-defaults a stock form before deleting the promoted
+  form, so cleanup stays at 0 leftovers.
 - **Auto-layout + authored views surface parent lookups** — a 1:N lookup (which lives on
   `relationships[]`, not `columns[]`) is now placed on the child's form auto-layout and honored in
   authored `views[].columns`, so the "which parent?" link is visible without hand-authoring an explicit

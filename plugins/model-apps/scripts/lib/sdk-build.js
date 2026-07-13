@@ -685,33 +685,18 @@ async function runSdkBuild(spec, opts = {}) {
     return viewId;
   };
 
-  // Gap 2: make our spec form the entity's DEFAULT main form AND deactivate the blank stock
-  // "Information" form, so the app shows OUR form instead of an empty one (the user's complaint).
-  // Marking our form isdefault demotes the previous default; formactivationstate 0 = Inactive.
-  // Best-effort throughout — never fail the build over form-default/activation flags. Guarded to
-  // tables THIS build owns: `isReusedEntity` skips deactivation so we never disable the forms of a
-  // system/reused table the author merely referenced (e.g. account/contact).
-  const promoteDefaultForm = async (entityLogical, formId, isReusedEntity) => {
+  // Gap 2: mark our spec form the entity's DEFAULT main form so the app opens it, not the blank
+  // stock "Information" form. Called ONLY for a table THIS build owns (a custom, publisher-prefixed
+  // table — see the call-site guard), so it never touches a reused/system table's forms.
+  //
+  // We deliberately do NOT deactivate other main forms. That would be destructive: on a shared
+  // system table it disables out-of-box forms env-wide, and on any table it kills legitimate
+  // role-based / sibling author forms — and with concurrent form builds the winner is
+  // nondeterministic. Marking ours `isdefault` is enough for the app to open it (the stock form
+  // stays available in the form switcher). Best-effort — never fail the build over the flag.
+  const promoteDefaultForm = async (formId) => {
     try {
       await provision.updateRecord('systemform', formId, { isdefault: true });
-    } catch {
-      /* best-effort */
-    }
-    if (isReusedEntity) return;
-    try {
-      const mains = await provision.queryRecords('systemform', {
-        select: ['formid'],
-        filter: `objecttypecode eq '${odataLit(entityLogical)}' and type eq 2`,
-        top: 50,
-      });
-      for (const m of mains || []) {
-        if (String(m.formid) === String(formId)) continue;
-        try {
-          await provision.updateRecord('systemform', String(m.formid), { formactivationstate: 0 });
-        } catch {
-          /* best-effort: a form that can't be deactivated (e.g. still pinned) just stays active */
-        }
-      }
     } catch {
       /* best-effort */
     }
@@ -823,11 +808,16 @@ async function runSdkBuild(spec, opts = {}) {
     }));
     const ids = await runner.mapLimit(defs, concurrency, async (d) => {
       const id = await buildArtifact('form', d.def);
-      // Gap 2: make our main form the entity's default + deactivate the blank stock form so the app
-      // shows ours. Skip deactivation for a reused/system table (only touch tables this build owns).
+      // Gap 2: make our main form the entity's default so the app opens it, not the blank stock form.
+      // Guarded to a table THIS build OWNS — a custom, publisher-prefixed table that isn't flagged
+      // `existing`. A system/reused table (account, systemuser, or anything without our prefix) must
+      // never have its default form re-pointed: that's a shared, environment-wide side effect.
       if ((d.f.formType || 'Main') === 'Main') {
         const entSpec = entityByLogical(spec, d.f.entity.toLowerCase());
-        await promoteDefaultForm(d.f.entity.toLowerCase(), id, !!(entSpec && entSpec.existing === true));
+        const prefix = spec.solution && spec.solution.publisherPrefix;
+        const isOwnCustomTable = !!(entSpec && entSpec.existing !== true && prefix &&
+          String(entSpec.schemaName).toLowerCase().startsWith(String(prefix).toLowerCase() + '_'));
+        if (isOwnCustomTable) await promoteDefaultForm(id);
       }
       const events = (d.f.events || []).filter((ev) => FORM_EVENTS.has(ev.event) && ev.library && ev.function);
       if (events.length) {

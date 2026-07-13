@@ -20,6 +20,22 @@ test('a clean spec passes with no errors', () => {
   assert.strictEqual(r.errors.length, 0);
 });
 
+test('a relationship to a standard/system table (referenced not in entities[]) WARNS, not errors', () => {
+  const s = base();
+  // systemuser is a standard table the build supports (auto-prefixes the rel name) — must not error.
+  s.relationships.push({ type: 'OneToMany', referenced: 'systemuser', referencing: 'new_ticket', lookup: { schemaName: 'new_AssignedUserId', displayName: 'Assigned' } });
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, true, 'systemuser referenced is not an error: ' + JSON.stringify(r.errors));
+  assert.ok(r.warnings.some((w) => /systemuser/.test(w) && /standard\/system table/.test(w)), JSON.stringify(r.warnings));
+});
+
+test('a relationship whose REFERENCING (child) side is unknown IS an error (the child must be declared)', () => {
+  const s = base();
+  s.relationships.push({ type: 'OneToMany', referenced: 'new_customer', referencing: 'new_missing', lookup: { schemaName: 'new_CustId', displayName: 'Customer' } });
+  const r = lintAppSpec(s);
+  assert.ok(r.errors.some((e) => /unknown entity 'new_missing'/.test(e)), JSON.stringify(r.errors));
+});
+
 test('warns that vectorIcon on an entity subarea is ignored (dropped) — the nav uses the table icon', () => {
   const s = base();
   s.appShell = { areas: [{ label: 'Main', groups: [{ label: 'Records', subAreas: [
