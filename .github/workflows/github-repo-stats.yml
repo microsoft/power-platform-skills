@@ -21,8 +21,6 @@ jobs:
               with:
                   app-id: 3189942
                   private-key: ${{ secrets.POWER_PLATFORM_SKILLS_APP_PRIVATE_KEY }}
-                  owner: ${{ github.repository_owner }}
-                  repositories: ${{ github.event.repository.name }}
                   permission-administration: read
                   permission-contents: write
                   permission-metadata: read
