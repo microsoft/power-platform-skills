@@ -34,6 +34,7 @@ jobs:
                   set -euo pipefail
 
                   response_headers="$(mktemp)"
+                  trap 'rm -f "${response_headers}"' EXIT
                   status="$(
                       curl -sS -o /dev/null -D "${response_headers}" -w "%{http_code}" \
                           -H "Authorization: Bearer ${GH_TOKEN}" \
