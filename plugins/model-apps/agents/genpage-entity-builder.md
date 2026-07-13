@@ -108,7 +108,7 @@ You still re-probe defensively in case the orchestrator's check went stale
 (e.g., the user revoked auth mid-run):
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/check-auth.js" <envUrl>
+node "${PLUGIN_ROOT}/scripts/check-auth.js" --env <envUrl> --require-pac
 ```
 
 Parse the JSON output. If `ok: false`, **abort and surface the `message` field

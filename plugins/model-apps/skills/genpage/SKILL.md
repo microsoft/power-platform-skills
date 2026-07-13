@@ -162,9 +162,11 @@ auth, and the `az` and `pac` identities should normally match. Run the
 consolidated pre-flight:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/check-auth.js"
+node "${PLUGIN_ROOT}/scripts/check-auth.js" --require-pac
 ```
 
+Genpage deploys pages via `pac model genpage`, so pass `--require-pac` to keep a missing pac login
+a hard blocker (the app-builder skill omits the flag — its build path only needs the az token).
 It returns a single JSON object:
 
 ```json
@@ -173,6 +175,7 @@ It returns a single JSON object:
   "blocker": null | "az_missing" | "az_not_logged_in" | "pac_not_logged_in"
                  | "no_env_url" | "whoami_403" | "whoami_401" | "whoami_error",
   "message": "human-readable next step",
+  "warnings": ["..."],
   "azUser": "...", "pacUser": "...", "envUrl": "...",
   "identitiesMatch": true | false,
   "whoAmI": { "ok": true, "userId": "...", "organizationId": "..." }

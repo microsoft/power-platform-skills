@@ -329,7 +329,7 @@ teardown scripts are **dry-run by default**; add `--apply` to write.
 
 ```bash
 az account set --subscription <sub-id>
-node scripts/check-auth.js <envUrl>          # az + pac identity match + WhoAmI preflight
+node scripts/check-auth.js --env <envUrl>       # az token + WhoAmI preflight (pac optional; --require-pac for genpage)
 node scripts/build-model-app.js   --env <envUrl> --spec @<dir>/app-spec.json [--sample-data --publish] --apply
 node scripts/verify-model-app.js  --env <envUrl> --spec @<dir>/app-spec.json
 node scripts/teardown-model-app.js --env <envUrl> --spec @<dir>/app-spec.json --apply
