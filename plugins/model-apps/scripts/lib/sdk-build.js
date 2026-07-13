@@ -18,6 +18,7 @@ const {
   sampleRecordsFor,
   resolveSampleRecords,
   relationshipFor,
+  lookupColumnsFor,
   relationshipSchemaName,
   manyToManyFor,
   manyToManySchemaName,
@@ -302,6 +303,15 @@ function defaultViewColumns(spec, entity) {
     if (DEFAULT_VIEW_SKIP_TYPES.has(c.type)) continue;
     picked.push({ name: logical, width: 150, order: picked.length });
   }
+  // Parent lookups (from relationships[], not columns[]) read well in a grid and are usually the
+  // most useful "which parent?" column, so include them too — still bounded by the same cap.
+  const chosen = new Set(picked.map((p) => p.name));
+  for (const lk of lookupColumnsFor(spec, entity.schemaName.toLowerCase())) {
+    if (picked.length > DEFAULT_VIEW_MAX_EXTRA) break;
+    if (chosen.has(lk.logical)) continue;
+    chosen.add(lk.logical);
+    picked.push({ name: lk.logical, width: 150, order: picked.length });
+  }
   return picked;
 }
 // True when a table has enough declared columns to make enriching its default views worthwhile
@@ -385,11 +395,14 @@ function formDef(spec, f) {
       }),
     }));
   } else {
-    // Auto: primary + every scalar column. 2-column when field-heavy (> 6), else 1.
+    // Auto: primary + every scalar column, then 1:N parent lookups. 2-column when field-heavy (> 6), else 1.
     const cells = [];
     if (entity) {
       cells.push(fieldCell(entity.primaryAttribute.schemaName.toLowerCase(), entity.primaryAttribute.displayName || 'Name', true));
       for (const c of entity.columns || []) { if (!SDK_COLUMN_TYPE[c.type || 'Text']) continue; cells.push(fieldCell(c.schemaName.toLowerCase(), c.displayName || c.schemaName, c.required === true)); }
+      // Parent lookups live on relationships[], not columns[] — surface them so the parent link is
+      // visible on the form (otherwise a first build shows no way to set the record's parent).
+      for (const lk of lookupColumnsFor(spec, entityLogical)) cells.push(fieldCell(lk.logical, lk.displayName, false));
     }
     const columns = Math.min(cells.length > 6 ? 2 : 1, maxCols);
     tabs = [{ name: 'tab_general', label: 'General', expanded: true, visible: true,

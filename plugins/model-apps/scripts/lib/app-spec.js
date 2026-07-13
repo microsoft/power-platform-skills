@@ -81,6 +81,27 @@ function relationshipFor(spec, parentEntity, childEntity) {
   );
 }
 
+// The 1:N lookup columns a relationship places ON `entityLogical` (the referencing/child side).
+// These lookups are NOT part of entities[].columns — they come from relationships[] — so form
+// auto-layout and default-view enrichment call this to surface the parent links (otherwise the
+// parent lookup is invisible on the form/grid). N:N relationships use an intersect table and place
+// no lookup column on either side, so they're excluded. Deduped by logical name; declared order
+// preserved. Returns [{ logical, displayName }].
+function lookupColumnsFor(spec, entityLogical) {
+  const child = String(entityLogical || '').toLowerCase();
+  const seen = new Set();
+  const out = [];
+  for (const r of spec.relationships || []) {
+    if (r.type !== 'OneToMany') continue;
+    if (String(r.referencing || '').toLowerCase() !== child) continue;
+    const logical = String((r.lookup && r.lookup.schemaName) || '').toLowerCase();
+    if (!logical || seen.has(logical)) continue;
+    seen.add(logical);
+    out.push({ logical, displayName: (r.lookup && r.lookup.displayName) || (r.lookup && r.lookup.schemaName) || logical });
+  }
+  return out;
+}
+
 // The 1:N relationship's SCHEMA name (used for entity provisioning and the
 // sub-grid RelationshipName). This MUST be distinct from the lookup attribute's
 // schema name — Dataverse rejects a relationship whose name collides with the
@@ -546,6 +567,7 @@ module.exports = {
   sampleRecordsFor,
   resolveSampleRecords,
   relationshipFor,
+  lookupColumnsFor,
   relationshipSchemaName,
   prefixedRelationshipName,
   manyToManyFor,

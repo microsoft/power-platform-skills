@@ -407,6 +407,41 @@ test('formDef clamps an explicitly authored multi-column section to 1 for QuickC
   assert.strictEqual(qc.tabs[0].sections[0].columns, 1, 'authored 3-column section clamped to 1 on a QuickCreate form');
 });
 
+// --- Gap 3: auto-derive 1:N parent lookups into forms + default views ------------------------
+function autoFormFields(def) {
+  return def.tabs.flatMap((t) =>
+    t.sections.flatMap((s) => s.rows.flatMap((r) => r.cells.map((c) => c.control && c.control.fieldName).filter(Boolean)))
+  );
+}
+const lookupSpec = () => ({
+  solution: { uniqueName: 'S', publisherPrefix: 'new' },
+  app: { name: 'A' },
+  entities: [
+    { schemaName: 'new_project', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] },
+    { schemaName: 'new_task', primaryAttribute: { schemaName: 'new_name', displayName: 'Title' }, columns: [{ schemaName: 'new_priority', displayName: 'Priority', type: 'Text' }] },
+  ],
+  relationships: [
+    { type: 'OneToMany', referenced: 'new_project', referencing: 'new_task', lookup: { schemaName: 'new_ProjectId', displayName: 'Project' } },
+  ],
+});
+
+test('formDef auto-layout places the 1:N parent lookup on the child form (lookups come from relationships[], not columns[])', () => {
+  const def = formDef(lookupSpec(), { entity: 'new_task', name: 'Task', layout: 'auto' });
+  assert.ok(autoFormFields(def).includes('new_projectid'), 'parent lookup new_projectid is auto-placed on the child form');
+});
+
+test('formDef auto-layout does NOT add a lookup on the parent side (parent has no lookup column)', () => {
+  const def = formDef(lookupSpec(), { entity: 'new_project', name: 'Project', layout: 'auto' });
+  assert.ok(!autoFormFields(def).includes('new_projectid'), 'the parent form has no child lookup');
+});
+
+test('defaultViewColumns includes the 1:N parent lookup', () => {
+  const spec = lookupSpec();
+  const task = spec.entities.find((e) => e.schemaName === 'new_task');
+  const cols = defaultViewColumns(spec, task).map((c) => c.name);
+  assert.ok(cols.includes('new_projectid'), 'the child default view surfaces the parent lookup column');
+});
+
 test('an N:N sub-grid uses the ManyToMany relationship schema name', async () => {
   const spec = makeSpec();
   spec.entities.push({ schemaName: 'new_tag', displayName: 'Tag', primaryAttribute: { schemaName: 'new_label', displayName: 'Label' }, columns: [] });

@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
-const { validateAppSpec, columnTypeMap, relationshipFor, relationshipSchemaName, manyToManySchemaName, resolveSampleRecords } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
+const { validateAppSpec, columnTypeMap, relationshipFor, lookupColumnsFor, relationshipSchemaName, manyToManySchemaName, resolveSampleRecords } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
 
 const sample = JSON.parse(
   fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.project-tracker.json'), 'utf8')
@@ -401,6 +401,23 @@ test('validateAppSpec rejects $parent pointing at an entity with no relationship
   const r = validateAppSpec(bad);
   assert.strictEqual(r.ok, false);
   assert.ok(r.errors.some((e) => /no OneToMany relationship from \$parent/.test(e)));
+});
+
+// --- Gap 3: lookupColumnsFor -----------------------------------------------------------------
+test('lookupColumnsFor returns the 1:N lookups on the child (referencing) side, excludes N:N, dedupes', () => {
+  const spec = {
+    relationships: [
+      { type: 'OneToMany', referenced: 'new_project', referencing: 'new_task', lookup: { schemaName: 'new_ProjectId', displayName: 'Project' } },
+      { type: 'OneToMany', referenced: 'systemuser', referencing: 'new_task', lookup: { schemaName: 'new_AssignedTo', displayName: 'Assigned To' } },
+      { type: 'ManyToMany', entity1: 'new_task', entity2: 'new_tag', intersectEntityName: 'new_task_tag' },
+      { type: 'OneToMany', referenced: 'new_project', referencing: 'new_other', lookup: { schemaName: 'new_ProjectId', displayName: 'Project' } },
+    ],
+  };
+  const forTask = lookupColumnsFor(spec, 'new_task');
+  assert.deepStrictEqual(forTask.map((l) => l.logical), ['new_projectid', 'new_assignedto'], 'both 1:N lookups on new_task, N:N excluded, lowercased');
+  assert.strictEqual(forTask[0].displayName, 'Project');
+  // the parent side (new_project is referenced, not referencing) has no lookup column
+  assert.deepStrictEqual(lookupColumnsFor(spec, 'new_project'), []);
 });
 
 test('validateAppSpec rejects $parent with an empty match', () => {
