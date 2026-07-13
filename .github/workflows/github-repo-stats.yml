@@ -43,7 +43,7 @@ jobs:
                           "https://api.github.com/repos/${{ github.repository }}/traffic/popular/referrers"
                   )"
 
-                  if [ "${status}" != "200" ]; then
+                  if [ "${status}" != "200" ] && [ "${status}" != "204" ]; then
                       echo "GitHub traffic API preflight failed with HTTP ${status}."
                       echo "The github-repo-stats action needs an installation token with repository Administration: read access."
                       awk 'BEGIN { IGNORECASE = 1 } /^x-accepted-github-permissions:|^x-oauth-scopes:|^x-github-api-version-selected:|^x-ratelimit-/ { print }' "${response_headers}"
