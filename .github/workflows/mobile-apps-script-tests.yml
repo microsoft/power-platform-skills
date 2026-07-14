@@ -49,6 +49,7 @@ jobs:
                   node --check plugins/mobile-apps/scripts/render-mobile-migration-report.js
                   node --check plugins/mobile-apps/scripts/lib/modernizer-paths.js
                   node --check plugins/mobile-apps/shared/samples/scripts/check-behavior-coverage.js
+                  node --check plugins/mobile-apps/shared/samples/scripts/check-pcf-coverage.js
                   node --check plugins/mobile-apps/shared/samples/scripts/check-conversion-scaffolding.js
                   node --check plugins/mobile-apps/shared/samples/scripts/check-i18n-keys.js
                   node --check plugins/mobile-apps/shared/samples/scripts/generate-asset-binding.js

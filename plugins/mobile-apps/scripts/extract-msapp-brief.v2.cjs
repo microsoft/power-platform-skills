@@ -4595,21 +4595,22 @@ function guessNativeReplacement(templateName) {
     return { strategy: 'ai-decide', note: 'No template name; infer from properties.' };
   }
   const n = String(templateName).toLowerCase();
+  if (/navigation|sidebar|side.?menu|menu/.test(n)) return { strategy: 'native-navigation', candidates: ['Expo Router Drawer', 'Expo Router Tabs'] };
   if (n.includes('calendar')) return { strategy: 'native-library', candidates: ['react-native-calendars'] };
-  if (n.includes('chart') || n.includes('graph')) return { strategy: 'native-library', candidates: ['victory-native', 'react-native-svg-charts'] };
-  if (n.includes('map')) return { strategy: 'native-library', candidates: ['react-native-maps'] };
-  if (n.includes('signature') || n.includes('penmark')) return { strategy: 'native-library', candidates: ['react-native-signature-canvas'] };
-  if (n.includes('barcode') || n.includes('qr')) return { strategy: 'expo-module', candidates: ['expo-barcode-scanner', 'expo-camera'] };
-  if (n.includes('richtext') || n.includes('html') || n.includes('editor')) return { strategy: 'native-library', candidates: ['react-native-render-html', 'react-native-pell-rich-editor'] };
-  if (n.includes('rating') || n.includes('star')) return { strategy: 'native-library', candidates: ['react-native-ratings'] };
+  if (n.includes('chart') || n.includes('graph')) return { strategy: 'review-required', note: 'No chart library is guaranteed by the prebuilt runtime; approve a native summary/list or block.' };
+  if (n.includes('map')) return { strategy: 'review-required', note: 'No interactive map library is guaranteed by the prebuilt runtime; approve an external-map/degraded strategy or block.' };
+  if (n.includes('signature') || n.includes('penmark')) return { strategy: 'review-required', note: 'Use the Power Apps native pen package only when it is already allowlisted; otherwise block.' };
+  if (n.includes('barcode') || n.includes('qr')) return { strategy: 'expo-module', candidates: ['expo-camera'] };
+  if (n.includes('richtext') || n.includes('html') || n.includes('editor')) return { strategy: 'review-required', note: 'Approve plain-text/Tamagui composition or block; no rich-text library is guaranteed.' };
+  if (n.includes('rating') || n.includes('star')) return { strategy: 'tamagui', candidates: ['Tamagui XStack + @expo/vector-icons'] };
   if (n.includes('slider')) return { strategy: 'tamagui', candidates: ['Tamagui Slider'] };
   if (n.includes('toggle') || n.includes('switch')) return { strategy: 'tamagui', candidates: ['Tamagui Switch'] };
   if (n.includes('image') || n.includes('photo')) return { strategy: 'expo-module', candidates: ['expo-image', 'expo-image-picker'] };
-  if (n.includes('pdf')) return { strategy: 'native-library', candidates: ['react-native-pdf'] };
+  if (n.includes('pdf')) return { strategy: 'review-required', note: 'Approve validated HTTPS open via expo-web-browser or an already-allowlisted native PDF package; otherwise block.' };
   if (n.includes('file') || n.includes('attachment')) return { strategy: 'expo-module', candidates: ['expo-document-picker', 'expo-file-system'] };
-  if (n.includes('audio') || n.includes('voice')) return { strategy: 'expo-module', candidates: ['expo-av', 'expo-speech'] };
-  if (n.includes('video')) return { strategy: 'expo-module', candidates: ['expo-av', 'expo-video'] };
-  return { strategy: 'ai-decide', note: 'No known mapping; propose Tamagui/Expo equivalent from properties.' };
+  if (n.includes('audio') || n.includes('voice')) return { strategy: 'expo-module', candidates: ['expo-audio'] };
+  if (n.includes('video')) return { strategy: 'expo-module', candidates: ['expo-video'] };
+  return { strategy: 'review-required', note: 'No deterministic allowlisted mapping; explicit PCF disposition approval is required.' };
 }
 
 // =============================================================================

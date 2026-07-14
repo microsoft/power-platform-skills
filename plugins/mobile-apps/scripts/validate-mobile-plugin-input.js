@@ -17,12 +17,13 @@ const MAX_MARKDOWN_ENTRIES = 10000;
 const MAX_MARKDOWN_DEPTH = 8;
 
 function parseArgs(argv) {
-  const args = { dir: '', json: false };
+  const args = { dir: '', json: false, requirePcfApproval: false };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--dir') args.dir = argv[++i] || '';
     else if (argv[i] === '--json') args.json = true;
+    else if (argv[i] === '--require-pcf-approval') args.requirePcfApproval = true;
     else if (argv[i] === '--help' || argv[i] === '-h') {
-      process.stdout.write('Usage: node scripts/validate-mobile-plugin-input.js --dir <mobile-plugin-input-dir> [--json]\n');
+      process.stdout.write('Usage: node scripts/validate-mobile-plugin-input.js --dir <mobile-plugin-input-dir> [--json] [--require-pcf-approval]\n');
       process.exit(0);
     } else {
       throw new Error(`Unknown argument: ${argv[i]}`);
@@ -170,6 +171,7 @@ function main() {
   const behaviors = readJson(path.join(root, 'behaviors.json'), errors, 'behaviors.json');
   const coverage = readJson(path.join(root, 'control-intent-coverage.json'), errors, 'control-intent-coverage.json');
   const serverSideAssets = readJson(path.join(root, 'server-side-assets.json'), errors, 'server-side-assets.json');
+  let pcfPlan = null;
 
   for (const required of ['native-app-plan.md', path.join('state', 'app-state.md'), 'migration-checklist.md']) {
     const file = path.join(root, required);
@@ -191,6 +193,8 @@ function main() {
     if (briefPath && (path.isAbsolute(briefPath) || /^[A-Za-z]:[\\/]/.test(briefPath) || /[\u0000-\u001f\u007f]/.test(briefPath))) {
       errors.push('source.appBriefPath must be a portable relative path');
     }
+    const pcfPlanFile = safePackagePath(root, input.pcfPlan?.file, errors, 'pcfPlan.file');
+    if (pcfPlanFile) pcfPlan = readJson(pcfPlanFile, errors, 'pcf-plan.json');
 
     const screens = input.screenPlan?.screens;
     if (!Array.isArray(screens)) errors.push('screenPlan.screens must be an array');
@@ -304,6 +308,116 @@ function main() {
     scanSecrets(coverage, 'control-intent-coverage', errors);
   }
 
+  if (pcfPlan) {
+    const allowedDispositions = new Set(['native-replacement', 'server-dependency', 'explicit-unsupported', 'blocker']);
+    const allowedStatuses = new Set(['pending', 'approved', 'blocked']);
+    const controls = Array.isArray(pcfPlan.controls) ? pcfPlan.controls : [];
+    if (!Array.isArray(pcfPlan.controls)) errors.push('pcf-plan.controls must be an array');
+    const coveragePcfs = (coverage?.rows || []).filter((row) => row?.flags?.isPcf);
+    if (controls.length !== coveragePcfs.length) {
+      errors.push(`PCF accounting mismatch: pcf-plan=${controls.length}, control coverage=${coveragePcfs.length}`);
+    }
+    if (input?.pcfPlan?.stats?.total !== controls.length) {
+      errors.push(`pcfPlan.stats.total mismatch: input=${input?.pcfPlan?.stats?.total}, rows=${controls.length}`);
+    }
+    const sourceSignals = pcfPlan.discovery?.sourceSignals || {};
+    const sourceIndicatesPcf = sourceSignals.containsThirdPartyPcfControls === true
+      || Number(sourceSignals.extractedPackageCount || 0) > 0
+      || Number(sourceSignals.extractedControlCount || 0) > 0;
+    const discoveryComplete = pcfPlan.discovery?.complete === true;
+    if (pcfPlan.stats?.discoveryComplete !== discoveryComplete || input?.pcfPlan?.stats?.discoveryComplete !== discoveryComplete) {
+      errors.push(`PCF discovery summary mismatch: expected discoveryComplete=${discoveryComplete}`);
+    }
+    if (sourceIndicatesPcf && controls.length === 0) {
+      const message = 'source reports PCF content but per-control PCF discovery is incomplete';
+      if (args.requirePcfApproval) errors.push(message);
+      else warnings.push(message);
+    }
+    if (!discoveryComplete) {
+      if (!Array.isArray(pcfPlan.discovery?.blockers) || pcfPlan.discovery.blockers.length === 0) {
+        errors.push('incomplete PCF discovery must include a discovery blocker');
+      }
+      if (args.requirePcfApproval) errors.push('PCF discovery is incomplete and blocks generation');
+    }
+    const requirementIds = new Set((input?.dataModelPlan?.connectionRequirements || []).map((row) => row.id).filter(Boolean));
+    const ids = new Set();
+    for (const [index, row] of controls.entries()) {
+      const at = `pcf-plan.controls[${index}]`;
+      if (!/^pcf-[0-9a-f]{16}$/.test(String(row.pcfId || ''))) errors.push(`${at}.pcfId is missing or invalid`);
+      else if (ids.has(row.pcfId)) errors.push(`duplicate PCF ID: ${row.pcfId}`);
+      else ids.add(row.pcfId);
+      if (!knownScreens.has(row.screen)) errors.push(`${at}.screen references unknown screen: ${row.screen}`);
+      const matchingCoverage = coveragePcfs.find((entry) =>
+        entry.path === row.path
+        && entry.screen === row.screen
+        && entry.control === row.control);
+      if (!matchingCoverage) errors.push(`${at} has no matching PCF control-intent row: ${row.screen}/${row.path}`);
+      if (!allowedDispositions.has(row.proposal?.disposition)) errors.push(`${at}.proposal.disposition is invalid`);
+      if (!allowedStatuses.has(row.approval?.status)) errors.push(`${at}.approval.status is invalid`);
+
+      const approval = row.approval || {};
+      if (approval.status === 'approved') {
+        if (!allowedDispositions.has(approval.disposition)) errors.push(`${at}.approval.disposition is invalid`);
+        if (!['essential', 'optional'].includes(approval.essentiality)) errors.push(`${at}.approval.essentiality must be essential or optional`);
+        if (!approval.reason || typeof approval.reason !== 'string') errors.push(`${at}.approval.reason is required`);
+        if (approval.approvedBy !== 'user') errors.push(`${at}.approval.approvedBy must be user`);
+        if (!approval.approvedAt || !Number.isFinite(Date.parse(approval.approvedAt))) errors.push(`${at}.approval.approvedAt must be an ISO timestamp`);
+        if (approval.disposition === 'blocker') errors.push(`${at} cannot approve a blocker for generation`);
+        if (approval.disposition === 'native-replacement') {
+          if (!approval.targetStrategy?.primitive) errors.push(`${at} native replacement requires targetStrategy.primitive`);
+          if (!Array.isArray(approval.targetStrategy?.packages)) errors.push(`${at} native replacement requires targetStrategy.packages`);
+          for (const packageName of approval.targetStrategy?.packages || []) {
+            if (typeof packageName !== 'string' || !/^(?:@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)$/i.test(packageName)) {
+              errors.push(`${at} contains unsafe/invalid native package name: ${packageName}`);
+            }
+          }
+        }
+        if (approval.disposition === 'server-dependency') {
+          const dependencies = approval.targetStrategy?.dependencies;
+          if (!Array.isArray(dependencies) || dependencies.length === 0) errors.push(`${at} server dependency requires targetStrategy.dependencies`);
+          for (const dependency of dependencies || []) {
+            if (!dependency.connectionRequirementId || !requirementIds.has(dependency.connectionRequirementId)) {
+              errors.push(`${at} references unknown connection requirement: ${dependency.connectionRequirementId || 'missing'}`);
+            }
+          }
+        }
+        if (approval.disposition === 'explicit-unsupported') {
+          if (approval.essentiality !== 'optional') errors.push(`${at} explicit unsupported is allowed only for user-approved optional PCFs`);
+          if (!approval.unsupportedUx || typeof approval.unsupportedUx !== 'string') errors.push(`${at} explicit unsupported requires visible unsupportedUx copy`);
+        }
+      }
+      if (approval.status === 'blocked' && approval.disposition !== 'blocker') {
+        errors.push(`${at} blocked approval must use blocker disposition`);
+      }
+      if (args.requirePcfApproval) {
+        if (approval.status === 'pending') errors.push(`${at} still requires explicit PCF approval`);
+        if (approval.status === 'blocked' || approval.disposition === 'blocker') errors.push(`${at} is a hard PCF blocker`);
+      }
+    }
+    const derivedPcfStats = {
+      pendingApproval: controls.filter((row) => row.approval?.status === 'pending').length,
+      approved: controls.filter((row) => row.approval?.status === 'approved').length,
+      blocked: controls.filter((row) => row.approval?.status === 'blocked').length,
+      byDisposition: Object.fromEntries([...allowedDispositions].map((disposition) => [
+        disposition,
+        controls.filter((row) => row.approval?.disposition === disposition).length,
+      ])),
+    };
+    for (const key of ['pendingApproval', 'approved', 'blocked']) {
+      if (pcfPlan.stats?.[key] !== derivedPcfStats[key]) errors.push(`pcf-plan.stats.${key} mismatch: expected ${derivedPcfStats[key]}`);
+      if (input?.pcfPlan?.stats?.[key] !== derivedPcfStats[key]) errors.push(`mobile-plugin-input pcfPlan.stats.${key} mismatch: expected ${derivedPcfStats[key]}`);
+    }
+    for (const disposition of allowedDispositions) {
+      if (pcfPlan.stats?.byDisposition?.[disposition] !== derivedPcfStats.byDisposition[disposition]) {
+        errors.push(`pcf-plan.stats.byDisposition.${disposition} mismatch: expected ${derivedPcfStats.byDisposition[disposition]}`);
+      }
+      if (input?.pcfPlan?.stats?.byDisposition?.[disposition] !== derivedPcfStats.byDisposition[disposition]) {
+        errors.push(`mobile-plugin-input pcfPlan.stats.byDisposition.${disposition} mismatch: expected ${derivedPcfStats.byDisposition[disposition]}`);
+      }
+    }
+    scanSecrets(pcfPlan, 'pcf-plan', errors);
+  }
+
   if (serverSideAssets) scanSecrets(serverSideAssets, 'server-side-assets', errors);
   for (const optional of ['flows.json', 'localization.json', 'assets.json']) {
     const file = path.join(root, optional);
@@ -326,6 +440,8 @@ function main() {
     connectors: input?.dataModelPlan?.connectionRequirements?.length || 0,
     behaviors: behaviors?.actions?.length || 0,
     controls: coverage?.rows?.length || 0,
+    pcfs: pcfPlan?.controls?.length || 0,
+    pcfDiscoveryComplete: pcfPlan?.discovery?.complete !== false,
     errors,
     warnings,
   };
@@ -333,7 +449,7 @@ function main() {
   if (args.json) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   else {
     process.stdout.write(`Migration package: ${result.ok ? 'VALID' : 'INVALID'}\n`);
-    process.stdout.write(`App: ${result.app || '(unknown)'} | screens ${result.screens} | tables ${result.tables} | connectors ${result.connectors} | behaviors ${result.behaviors} | controls ${result.controls}\n`);
+    process.stdout.write(`App: ${result.app || '(unknown)'} | screens ${result.screens} | tables ${result.tables} | connectors ${result.connectors} | behaviors ${result.behaviors} | controls ${result.controls} | PCFs ${result.pcfs}\n`);
     warnings.forEach((warning) => process.stdout.write(`WARN: ${warning}\n`));
     errors.forEach((error) => process.stderr.write(`ERROR: ${error}\n`));
   }

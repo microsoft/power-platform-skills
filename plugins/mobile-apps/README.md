@@ -249,7 +249,7 @@ End state: a working app you can iterate on with hot reload. ~5–12 minutes for
 > /modernize-canvas-app --msapp ./FieldInspection.msapp --working-dir ../field-inspection-native
 ```
 
-The skill deterministically extracts screens, controls, Power Fx behavior, Dataverse schema, connectors, flows, components, assets, and localization into a local migration package. It presents behavior/control coverage and unsupported items before changing the target. On approval, it delegates to `/create-mobile-app --adapted-from` so the current public template, app registration, offline, native capability, screen-generation, debug, and `/edit-app` workflows remain unchanged.
+The skill deterministically extracts screens, controls, Power Fx behavior, Dataverse schema, connectors, flows, components, assets, localization, and PCF public contracts into a local migration package. It presents behavior/control coverage and unsupported items before changing the target. Every PCF receives an explicit user-approved native replacement, server dependency, optional visible unsupported state, or hard blocker before screen generation. On approval, it delegates to `/create-mobile-app --adapted-from` so the current public template, app registration, offline, native capability, screen-generation, debug, and `/edit-app` workflows remain unchanged.
 
 ### 2. Add Dataverse tables to an existing app
 

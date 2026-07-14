@@ -58,6 +58,7 @@ function main() {
   const input = readJson(cli.dir, 'mobile-plugin-input.json', {});
   const behaviors = readJson(cli.dir, 'behaviors.json', { stats: {}, actions: [], unmatchedFormulas: [] });
   const controls = readJson(cli.dir, 'control-intent-coverage.json', { stats: {}, rows: [] });
+  const pcfPlan = readJson(cli.dir, 'pcf-plan.json', { stats: {}, controls: [] });
   const server = readJson(cli.dir, 'server-side-assets.json', { stats: {}, assets: [] });
   const flows = readJson(cli.dir, 'flows.json', { stats: {}, flows: [] });
   const checklistPath = path.join(cli.dir, 'migration-checklist.md');
@@ -84,11 +85,21 @@ function main() {
   const unmatched = behaviors.unmatchedFormulas || [];
   const unresolved = input.dataModelPlan?.unresolvedDataSources || [];
   const missingFlows = (flows.flows || input.dataModelPlan?.flows || []).filter((flow) => !(flow.flowId || flow.id));
+  const pcfRows = pcfPlan.controls || [];
+  const pcfDiscoveryBlockers = pcfPlan.discovery?.complete === false
+    ? (pcfPlan.discovery?.blockers || [{ message: 'PCF inventory is incomplete.' }])
+    : [];
+  const pcfPending = pcfRows.filter((row) => row.approval?.status === 'pending');
+  const pcfHardBlocks = pcfRows.filter((row) =>
+    row.approval?.status === 'blocked'
+    || row.approval?.disposition === 'blocker');
   const blockers = [
     ...(validation.errors || []),
     ...unresolved.map((item) => `Unresolved data source: ${item.name || '(unnamed)'}`),
+    ...pcfHardBlocks.map((row) => `PCF requires a resolved strategy: ${row.screen}/${row.control}`),
+    ...pcfDiscoveryBlockers.map((finding) => finding.message || finding.code || 'PCF inventory is incomplete'),
   ];
-  const reviewCount = unmatched.length + unsupported.length + highRisk.length + missingFlows.length + (validation.warnings || []).length;
+  const reviewCount = unmatched.length + unsupported.length + highRisk.length + missingFlows.length + pcfPending.length + (validation.warnings || []).length;
   const status = blockers.length ? 'Blocked' : reviewCount ? 'Ready with review' : 'Ready for guided generation';
   const statusTone = blockers.length ? 'bad' : reviewCount ? 'warn' : 'good';
 
@@ -107,10 +118,11 @@ function main() {
 <section class="hero"><div><div class="eyebrow">Canvas → native / behavior ledger</div><h1>${esc(input.app?.name || 'Canvas app')}</h1><p>This report measures what can be carried into the current native mobile workflow before any target app is changed. It tracks business behavior and data contracts—not Canvas pixels.</p>${badge(status,statusTone)}</div><div class="ledger"><div class="ledger-row"><span>Source actions</span><strong>${behaviorSource}</strong></div><div class="ledger-row"><span>Accounted</span><strong>${behaviorAccounted}</strong></div><div class="ledger-row"><span>Dropped</span><strong>${dropped}</strong></div><div class="ledger-row"><span>Unmatched</span><strong>${unmatched.length}</strong></div></div></section>
 <section class="metrics"><div class="metric"><strong>${screens.length}</strong><span>Screens</span></div><div class="metric"><strong>${controls.stats?.totalControls || controls.rows?.length || 0}</strong><span>Controls</span></div><div class="metric"><strong>${tables.length}</strong><span>Dataverse tables</span></div><div class="metric"><strong>${requirements.length}</strong><span>Connections / flows</span></div><div class="metric"><strong>${highRisk.length}</strong><span>High-risk controls</span></div></section>
 <section class="grid">
-<div class="card"><h2>Readiness</h2>${blockers.length ? list(blockers,(item)=>`<span class="mono">${esc(item)}</span>`) : '<p>No blocking contract errors detected.</p>'}<h3>Review queue</h3><p>${reviewCount} item(s): ${unmatched.length} unmatched formula(s), ${unsupported.length} unsupported item(s), ${highRisk.length} high-risk control(s), ${missingFlows.length} target flow ID(s) to resolve, ${(validation.warnings||[]).length} validation warning(s).</p></div>
+<div class="card"><h2>Readiness</h2>${blockers.length ? list(blockers,(item)=>`<span class="mono">${esc(item)}</span>`) : '<p>No blocking contract errors detected.</p>'}<h3>Review queue</h3><p>${reviewCount} item(s): ${unmatched.length} unmatched formula(s), ${unsupported.length} unsupported item(s), ${highRisk.length} high-risk control(s), ${missingFlows.length} target flow ID(s), ${pcfPending.length} PCF approval(s), ${(validation.warnings||[]).length} validation warning(s).</p></div>
 <div class="card"><h2>Data model</h2><p>${badge(`${tableCounts.reuse} reuse`,'good')} ${badge(`${tableCounts.extend} extend`,'warn')} ${badge(`${tableCounts.new} new`,'info')}</p><table><thead><tr><th>Table</th><th>Status</th><th>Tier</th><th>Columns</th></tr></thead><tbody>${tables.slice(0,40).map((t)=>`<tr><td><code>${esc(t.logicalName)}</code><br>${esc(t.displayName||'')}</td><td>${badge(t.status,t.status==='reuse'?'good':t.status==='extend'?'warn':'info')}</td><td>${esc(t.tier)}</td><td>${(t.columns||[]).length}</td></tr>`).join('')}</tbody></table></div>
 <div class="card"><h2>Connections and flows</h2>${list(requirements,(r)=>`${badge(r.status,r.status==='ready-to-add'?'good':r.status==='unsupported'?'bad':'warn')} <strong>${esc(r.connector||r.apiId)}</strong><br><span class="mono">${esc(r.apiId||r.classification||'')}</span>`)}</div>
 <div class="card"><h2>High-risk control intent</h2>${list(highRisk.slice(0,24),(row)=>`<strong>${esc(row.screen)} / ${esc(row.control)}</strong><br>${esc(row.role)} — ${esc((row.mustPreserve||[]).join('; ')||row.nativeSuggestion||row.support)}`)}</div>
+<div class="card wide"><h2>PCF disposition approval</h2>${pcfDiscoveryBlockers.length ? list(pcfDiscoveryBlockers,(item)=>`${badge('blocked','bad')} ${esc(item.message||item.code)}`) : pcfRows.length ? `<table><thead><tr><th>PCF</th><th>Screen</th><th>Essentiality</th><th>Proposal</th><th>Approval</th><th>Target / reason</th></tr></thead><tbody>${pcfRows.map((row)=>`<tr><td><strong>${esc(row.control)}</strong><br><code>${esc(row.pcfId)}</code></td><td>${esc(row.screen)}</td><td>${badge(row.essentiality?.level||'unknown',row.essentiality?.level==='essential'?'bad':'warn')}</td><td>${badge(row.proposal?.disposition||'missing',row.proposal?.disposition==='blocker'?'bad':'info')}</td><td>${badge(row.approval?.status||'missing',row.approval?.status==='approved'?'good':row.approval?.status==='blocked'?'bad':'warn')}</td><td>${esc(row.proposal?.targetStrategy?.primitive||row.proposal?.targetStrategy?.uiPrimitive||row.proposal?.reason||'')}</td></tr>`).join('')}</tbody></table>` : '<p>No PCF controls detected and source metadata contains no PCF signal.</p>'}</div>
 <div class="card wide"><h2>Screens</h2><table><thead><tr><th>Screen</th><th>Purpose</th><th>Data</th><th>Native upgrades</th></tr></thead><tbody>${screens.map((s)=>`<tr><td><strong>${esc(s.name)}</strong></td><td>${esc(s.purpose||s.userStory||'')}</td><td>${esc((s.dataverseTablesUsed||[]).join(', '))}</td><td>${esc((s.upgradeHints||[]).map((h)=>h.antiPattern||h.id).join(', '))}</td></tr>`).join('')}</tbody></table></div>
 <div class="card"><h2>Unmatched Power Fx</h2>${list(unmatched.slice(0,30),(item)=>`<strong>${esc(item.screen)} / ${esc(item.control||item.property)}</strong><br><code>${esc(item.sourceStatement||item.formula||item.raw)}</code>`)}</div>
 <div class="card"><h2>Unsupported and risk notes</h2>${list([...unsupported,...risks].slice(0,30),(item)=>`${item.severity?badge(item.severity,item.severity==='high'?'bad':'warn'):''} ${esc(item.reason||item.message||item.code||JSON.stringify(item))}`)}</div>

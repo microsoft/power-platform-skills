@@ -3,7 +3,7 @@
   "$id": "https://raw.githubusercontent.com/microsoft/power-platform-skills/main/plugins/mobile-apps/scripts/schemas/mobile-plugin-input.v3.schema.json",
   "title": "Canvas-to-native mobile plugin input",
   "type": "object",
-  "required": ["schemaVersion", "source", "app", "dataModelPlan", "screenPlan", "nativePlan", "riskReport", "unsupported"],
+  "required": ["schemaVersion", "source", "app", "dataModelPlan", "screenPlan", "nativePlan", "pcfPlan", "riskReport", "unsupported"],
   "properties": {
     "schemaVersion": { "const": "3" },
     "source": { "type": "object" },
@@ -52,6 +52,29 @@
       "additionalProperties": true
     },
     "nativePlan": { "type": "object" },
+    "pcfPlan": {
+      "type": "object",
+      "required": ["file", "schema", "stats"],
+      "properties": {
+        "file": { "const": "pcf-plan.json" },
+        "schema": { "const": "pcf-plan-v1" },
+        "stats": {
+          "type": "object",
+          "required": ["total", "discoveryComplete", "pendingApproval", "approved", "blocked", "byDisposition", "proposed"],
+          "properties": {
+            "total": { "type": "integer", "minimum": 0 },
+            "discoveryComplete": { "type": "boolean" },
+            "pendingApproval": { "type": "integer", "minimum": 0 },
+            "approved": { "type": "integer", "minimum": 0 },
+            "blocked": { "type": "integer", "minimum": 0 },
+            "byDisposition": { "type": "object" },
+            "proposed": { "type": "object" }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
     "riskReport": { "type": "array" },
     "unsupported": { "type": "array" }
   },

@@ -3430,6 +3430,347 @@ function buildControlIntentCoverage(loadedScreens) {
   };
 }
 
+const PCF_DISPOSITIONS = new Set([
+  'native-replacement',
+  'server-dependency',
+  'explicit-unsupported',
+  'blocker',
+]);
+
+function pcfIdFor(control, screenName, templateName) {
+  const identity = [screenName, control.path || control.name, templateName || control.template || null];
+  return `pcf-${crypto.createHash('sha256').update(JSON.stringify(identity)).digest('hex').slice(0, 16)}`;
+}
+
+function pcfServerDependencies(control, connectionRequirements) {
+  const dependencies = [];
+  const seen = new Set();
+  function add(kind, name, operation, knownRequirement = null) {
+    if (!name) return;
+    const key = `${kind}:${String(name).toLowerCase()}:${operation || ''}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const requirement = knownRequirement || toArray(connectionRequirements).find((row) => {
+      if (kind === 'flow' && row.classification !== 'flow') return false;
+      if (kind !== 'flow' && row.classification === 'flow') return false;
+      return String(row.connector || '').toLowerCase() === String(name).toLowerCase();
+    });
+    dependencies.push({
+      kind,
+      name,
+      operation: operation || null,
+      connectionRequirementId: requirement ? requirement.id : null,
+    });
+  }
+
+  for (const actions of Object.values((control && control.events) || {})) {
+    for (const action of toArray(actions)) {
+      if (!action || typeof action !== 'object') continue;
+      if (action.intent === 'connectorCall') add('connector', action.connector, action.action);
+      else if (action.intent === 'flowCall') add('flow', action.flow, action.action);
+      else if (action.intent === 'aiCall') add('ai', action.connector, action.action);
+    }
+  }
+  // Canvas PCFs frequently bind connector results through Items/DataSource
+  // rather than an event. Match only connectors/flows already inventoried in
+  // the handoff contract; never infer a backend from arbitrary source text.
+  for (const formula of Object.values((control && control.properties) || {})) {
+    if (typeof formula !== 'string' || formula.trim() === '') continue;
+    for (const requirement of toArray(connectionRequirements)) {
+      const name = requirement && requirement.connector;
+      if (!name) continue;
+      const escaped = escapeRegExp(String(name));
+      const reference = new RegExp(`(?:'${escaped}'|\\b${escaped})\\s*\\.\\s*([A-Za-z_][A-Za-z0-9_]*)`, 'i').exec(formula);
+      if (!reference) continue;
+      const kind = requirement.classification === 'flow'
+        ? 'flow'
+        : requirement.classification === 'ai' ? 'ai' : 'connector';
+      add(kind, name, reference[1], requirement);
+    }
+  }
+  return dependencies;
+}
+
+function pcfEssentiality(control, dependencies) {
+  const properties = (control && control.properties) || {};
+  const required = stripLeadingEq(properties.Required).trim().toLowerCase();
+  if (required === 'true') return { level: 'essential', reason: 'Source Required property is true.' };
+  if (dependencies.length > 0) return { level: 'essential', reason: 'The PCF invokes a connector, flow, or AI operation.' };
+  const events = eventNamesWithSource(control);
+  if (events.length > 0) return { level: 'essential', reason: `The PCF owns source behavior: ${events.join(', ')}.` };
+  if (properties.DataField != null || properties.DataSource != null || properties.Items != null) {
+    return { level: 'essential', reason: 'The PCF is bound to source data or a record field.' };
+  }
+  return { level: 'unknown', reason: 'No deterministic evidence proves the PCF is optional; user review is required.' };
+}
+
+function availablePcfNativeStrategy(control, templateName, bundledDeps) {
+  const properties = (control && control.properties) || {};
+  const templateWords = String(templateName || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  const wordSet = new Set(templateWords);
+  const compact = templateWords.join('');
+  const hasWord = (...words) => words.some((word) => wordSet.has(word));
+  const hasCompact = (...values) => values.some((value) => compact.includes(value));
+  const strategy = (primitive, packages, extra = {}) => {
+    const requiredPackages = toArray(packages);
+    if (!requiredPackages.every((pkg) => bundledDeps.has(pkg))) return null;
+    return {
+      type: 'native-ui',
+      primitive,
+      packages: requiredPackages,
+      capability: extra.capability || null,
+      implementationOwner: extra.implementationOwner || 'screen-builder',
+      preserves: extra.preserves || [],
+    };
+  };
+
+  if (hasWord('navigation', 'sidebar') || hasCompact('sidenavigation', 'navigationmenu', 'sidebarmenu')) {
+    return strategy('Expo Router Drawer or Tabs selected from approved navigation graph', ['expo-router'], {
+      implementationOwner: 'navigation-orchestrator',
+      preserves: ['destinations', 'labels/icons', 'visibility rules', 'selected destination'],
+    });
+  }
+  if (hasWord('calendar', 'agenda', 'schedule')) {
+    return strategy('Calendar/Agenda screen composition', ['react-native-calendars'], {
+      preserves: ['date/event bindings', 'selection behavior', 'filters'],
+    });
+  }
+  if (hasWord('barcode', 'qr') || hasCompact('barcodereader', 'qrcoder', 'qrscanner')) {
+    return strategy('CameraView barcode scanner', ['expo-camera'], {
+      capability: 'barcode-scanner',
+      implementationOwner: 'add-native',
+      preserves: ['scan value/type', 'OnChange/OnSelect behavior'],
+    });
+  }
+  if (hasCompact('datepicker', 'datetimepicker') || (hasWord('date', 'datetime') && hasWord('picker'))) {
+    return strategy('Native DateTimePicker', ['@react-native-community/datetimepicker'], {
+      preserves: ['default value', 'minimum/maximum constraints', 'change behavior'],
+    });
+  }
+  if (hasWord('rating', 'stars') || hasCompact('starrating')) {
+    return strategy('Accessible Tamagui star rating row', ['tamagui', '@expo/vector-icons'], {
+      preserves: ['selected numeric value', 'bounds', 'change behavior'],
+    });
+  }
+  if (hasWord('slider', 'range')) {
+    return strategy('Tamagui Slider', ['tamagui'], {
+      preserves: ['minimum', 'maximum', 'step', 'selected value'],
+    });
+  }
+  if (hasWord('toggle', 'switch', 'checkbox')) {
+    return strategy('Tamagui Switch or expo-checkbox', ['tamagui'], {
+      preserves: ['boolean value', 'check/uncheck behavior'],
+    });
+  }
+  if (hasWord('camera', 'photo', 'capture') || hasCompact('imagepicker', 'photopicker', 'imagecapture')) {
+    return strategy('Native camera/image workflow', ['expo-camera', 'expo-image-picker'], {
+      capability: 'camera',
+      implementationOwner: 'add-native',
+      preserves: ['captured/selected media', 'record binding', 'change behavior'],
+    });
+  }
+  if (hasWord('file', 'attachment', 'document') || hasCompact('filepicker', 'documentpicker')) {
+    return strategy('Native document picker or Dataverse File field', ['expo-document-picker'], {
+      capability: 'document-picker',
+      implementationOwner: 'add-native',
+      preserves: ['selected file metadata', 'record binding', 'change behavior'],
+    });
+  }
+  if (hasWord('audio', 'voice', 'microphone')) {
+    return strategy('Native audio workflow', ['expo-audio'], {
+      capability: 'audio',
+      implementationOwner: 'add-native',
+      preserves: ['audio source/capture result', 'playback/change behavior'],
+    });
+  }
+  if (hasWord('video')) {
+    return strategy('Native VideoView workflow', ['expo-video'], {
+      capability: 'video',
+      implementationOwner: 'add-native',
+      preserves: ['video source', 'playback behavior'],
+    });
+  }
+  if (hasWord('pdf') && typeof properties.Document === 'string' && /https?:/i.test(properties.Document)) {
+    return strategy('Validated HTTPS PDF opened with expo-web-browser', ['expo-web-browser'], {
+      preserves: ['document URL', 'open behavior'],
+    });
+  }
+  if (hasWord('image') || hasCompact('imageviewer', 'imagedisplay')) {
+    return strategy('Native image display', ['expo-image'], {
+      preserves: ['image source', 'visibility', 'selection behavior'],
+    });
+  }
+  return null;
+}
+
+function pcfServerUiPrimitive(control) {
+  const properties = (control && control.properties) || {};
+  if (properties.Items != null || properties.DataSource != null) return 'Native query-backed list, picker, or search surface';
+  if (properties.Text != null || properties.Default != null || properties.DataField != null) return 'Native typed input or form field';
+  return 'Native action surface backed by generated service';
+}
+
+function buildPcfPlan(brief, loadedScreens, connectionRequirements, bundledDeps) {
+  const extractedByPath = new Map();
+  const extractedByScreenControl = new Map();
+  for (const item of toArray(brief && brief.app && brief.app.pcfControls)) {
+    if (item.path) extractedByPath.set(item.path, item);
+    extractedByScreenControl.set(`${item.screen || ''}\u0000${item.control || ''}`, item);
+  }
+
+  const controls = [];
+  for (const screen of toArray(loadedScreens)) {
+    for (const control of toArray(screen && screen.controls)) {
+      if (!control || !control.isPcf) continue;
+      const extracted = extractedByPath.get(control.path)
+        || extractedByScreenControl.get(`${screen.name}\u0000${control.name}`)
+        || {};
+      const rawTemplateName = extracted.templateName || control.templateName || control.template || null;
+      const templateName = isGuid(rawTemplateName) ? null : rawTemplateName;
+      const dependencies = pcfServerDependencies(control, connectionRequirements);
+      const essentiality = pcfEssentiality(control, dependencies);
+      const nativeStrategy = availablePcfNativeStrategy(control, templateName, bundledDeps);
+      let proposal;
+      if (dependencies.length > 0) {
+        const unresolvedDependencies = dependencies.filter((dep) => !dep.connectionRequirementId);
+        proposal = unresolvedDependencies.length === 0
+          ? {
+              disposition: 'server-dependency',
+              targetStrategy: {
+                type: 'generated-service',
+                uiPrimitive: nativeStrategy ? nativeStrategy.primitive : pcfServerUiPrimitive(control),
+                dependencies,
+                nativeSupport: nativeStrategy,
+              },
+              reason: 'Source PCF behavior invokes backend operations that must be rebound in the target before rebuilding its UI.',
+            }
+          : {
+              disposition: 'blocker',
+              targetStrategy: null,
+              reason: `PCF backend dependency is not represented by a target connection requirement: ${unresolvedDependencies.map((dep) => dep.name).join(', ')}.`,
+            };
+      } else if (nativeStrategy) {
+        proposal = {
+          disposition: 'native-replacement',
+          targetStrategy: nativeStrategy,
+          reason: 'A semantically matching primitive is already allowlisted by the current mobile template.',
+        };
+      } else {
+        proposal = {
+          disposition: 'blocker',
+          targetStrategy: null,
+          reason: 'No deterministic allowlisted native replacement or explicit backend dependency was found; PCF source/specification or a user-approved strategy is required.',
+        };
+      }
+
+      const publicProperties = extracted.properties || Object.fromEntries(
+        ['Default', 'Items', 'DataField', 'DataSource', 'Text', 'OnChange', 'OnSelect', 'DisplayMode', 'Visible', 'Required']
+          .filter((key) => control.properties && control.properties[key] != null)
+          .map((key) => [key, control.properties[key]])
+      );
+      controls.push({
+        pcfId: pcfIdFor(control, screen.name, rawTemplateName),
+        screen: screen.name,
+        control: control.name || shortName(control.path, 'PCF'),
+        path: control.path || null,
+        templateName,
+        sourceTemplateIdPresent: !!(extracted.templateId || control.templateId || isGuid(rawTemplateName)),
+        isPremium: !!(extracted.isPremiumPcf || control.isPremiumPcf),
+        sourceContract: {
+          properties: publicProperties,
+          events: eventNamesWithSource(control),
+          dataBindings: ['Items', 'Default', 'DataField', 'DataSource', 'Text', 'Required', 'DisplayMode', 'Visible']
+            .filter((key) => publicProperties[key] != null),
+        },
+        dependencies,
+        essentiality,
+        proposal,
+        approval: {
+          status: 'pending',
+          disposition: null,
+          essentiality: null,
+          targetStrategy: null,
+          unsupportedUx: null,
+          reason: null,
+          approvedBy: null,
+          approvedAt: null,
+        },
+      });
+    }
+  }
+
+  controls.sort((a, b) => a.screen.localeCompare(b.screen) || String(a.path || '').localeCompare(String(b.path || '')));
+  const sourceSignals = {
+    containsThirdPartyPcfControls: brief?.app?.settings?.containsThirdPartyPcfControls === true,
+    extractedPackageCount: toArray(brief && brief.pcfComponents).length,
+    extractedControlCount: toArray(brief && brief.app && brief.app.pcfControls).length,
+  };
+  const sourceIndicatesPcf = sourceSignals.containsThirdPartyPcfControls
+    || sourceSignals.extractedPackageCount > 0
+    || sourceSignals.extractedControlCount > 0;
+  const discoveryComplete = !sourceIndicatesPcf || controls.length > 0;
+  const discoveryBlockers = discoveryComplete ? [] : [{
+    code: 'PCF_INVENTORY_INCOMPLETE',
+    message: 'Source metadata reports third-party PCF content, but no per-control PCF contract could be enumerated. Re-export with supported Controls/Components sidecars or provide a verified PCF inventory/specification before generation.',
+  }];
+  const proposed = Object.fromEntries([...PCF_DISPOSITIONS].map((disposition) => [
+    disposition,
+    controls.filter((row) => row.proposal.disposition === disposition).length,
+  ]));
+  return {
+    $schema: 'pcf-plan-v1',
+    generatedAt: GENERATION_TIMESTAMP,
+    rule: 'Every PCF requires explicit user approval as a native replacement, server dependency, explicit unsupported state, or blocker before screen generation.',
+    allowedDispositions: [...PCF_DISPOSITIONS],
+    discovery: {
+      complete: discoveryComplete,
+      sourceSignals,
+      blockers: discoveryBlockers,
+    },
+    stats: {
+      total: controls.length,
+      discoveryComplete,
+      pendingApproval: controls.length,
+      approved: 0,
+      blocked: 0,
+      byDisposition: Object.fromEntries([...PCF_DISPOSITIONS].map((disposition) => [disposition, 0])),
+      proposed,
+    },
+    controls,
+  };
+}
+
+function buildPcfPlanSectionLines(pcfPlan) {
+  const rows = toArray(pcfPlan && pcfPlan.controls);
+  if (rows.length === 0 && pcfPlan?.discovery?.complete !== false) return [];
+  const lines = [];
+  lines.push('### PCF Disposition Plan — Gate 2b');
+  lines.push('');
+  if (pcfPlan?.discovery?.complete === false) {
+    lines.push('> **BLOCKED — PCF inventory incomplete.** Source metadata reports PCF content, but per-control contracts were not available. Re-export with supported Controls/Components sidecars or supply a verified PCF inventory/specification before generation.');
+    lines.push('');
+    return lines;
+  }
+  lines.push('PCF binaries cannot run in the native rewrap runtime. Every row below requires explicit user approval before generation; a proposal is not approval. The terminal decision must be native replacement, server dependency, explicit unsupported UX, or blocker.');
+  lines.push('');
+  lines.push('| PCF ID | Screen / control | Premium | Essentiality | Proposed disposition | Target / reason | Approval |');
+  lines.push('|---|---|---|---|---|---|---|');
+  for (const row of rows) {
+    const target = row.proposal.targetStrategy
+      ? row.proposal.targetStrategy.primitive || row.proposal.targetStrategy.uiPrimitive || row.proposal.targetStrategy.type
+      : row.proposal.reason;
+    lines.push(`| \`${row.pcfId}\` | ${markdownTableText(row.screen)} / ${markdownTableText(row.control)} | ${row.isPremium ? 'yes' : 'no'} | ${row.essentiality.level} | \`${row.proposal.disposition}\` | ${markdownTableText(target)} | \`${row.approval.status}\` |`);
+  }
+  lines.push('');
+  lines.push('Full public property/event contracts and target dependency references: [`pcf-plan.json`](pcf-plan.json).');
+  lines.push('');
+  return lines;
+}
+
 // ---------- Native Capability Playbook ----------
 //
 // `buildNativeCapabilityPlaybook(loadedScreens)` joins each per-screen
@@ -5428,7 +5769,7 @@ function buildAssetsSectionLines(brief) {
   return lines;
 }
 
-function buildMasterPlan(brief, screenRows, connectors, tables, risks, screenFiles, swapAggregate, playbook, structuredForms, nativeExecution, demotedCapabilities, upgradeHintsAggregate, serverSideAssets) {
+function buildMasterPlan(brief, screenRows, connectors, tables, risks, screenFiles, swapAggregate, playbook, structuredForms, nativeExecution, demotedCapabilities, upgradeHintsAggregate, serverSideAssets, pcfPlan) {
   const appName = (brief.app && brief.app.name) || 'Converted Canvas App';
   const startScreen = (brief.app && brief.app.startScreen) || 'Unknown';
   const nativeCaps = toArray(nativeExecution && nativeExecution.capabilities);
@@ -5516,6 +5857,7 @@ function buildMasterPlan(brief, screenRows, connectors, tables, risks, screenFil
   lines.push('- `npm run gen:assets` regenerates `src/generated/assets.ts` from `assets.json`; missing/non-RN-ready files must be reported, not silently required.');
   lines.push('- `npm run check:i18n -- --strict` reports `unknown keys used: 0`. Screen code must use catalog keys from `localization.json`; for text that is not in the catalog, render the literal fallback instead of inventing a `t("...")` key.');
   lines.push('- `npm run check:coverage -- --min 80` passes per screen and overall. Shared implementations count at their screen call sites through exact `source-behavior` markers.');
+  lines.push('- `npm run check:pcf -- --strict` passes: every explicitly approved PCF disposition is implemented with the exact PCF ID/disposition marker or approved visible unsupported UX.');
   lines.push('- `npm run check:scaffold -- --strict` passes: final screens must not expose conversion/debug scaffolding such as `CapabilityPanel`, `RelatedSources`, generic data-source lists, generic service registries (`serviceRegistry.ts`, `DATA_SOURCES`, `useDataSourceRows`), source/clone labels, or screen-config-driven next actions.');
   lines.push('- Screen implementations live directly in Expo Router files under `app/(app)/...`; do not generate `src/appScreens/*Screen.tsx` plus thin wrappers. Do not create `src/appScreens/` or `src/data/` support-code folders either — reusable mobile code belongs in domain folders such as `src/components/`, `src/hooks/`, `src/navigation/`, and `src/features/`.');
   lines.push('- `npx tsc --noEmit` is clean.');
@@ -5613,6 +5955,7 @@ function buildMasterPlan(brief, screenRows, connectors, tables, risks, screenFil
       lines.push(`| ${capability} | ${screensFor.join(', ') || '—'} |`);
     }
   }
+  for (const line of buildPcfPlanSectionLines(pcfPlan)) lines.push(line);
   // Surface the §8.3 demotions inline so reviewers can see exactly which
   // camera / attachment capabilities got reclassified into form host:* pickers.
   if (Array.isArray(demotedCapabilities) && demotedCapabilities.length > 0) {
@@ -5986,7 +6329,7 @@ function buildRequirementsBrief(brief, screenRows, connectors, tables) {
   return lines.join('\n') + '\n';
 }
 
-function buildMigrationChecklist(brief, connectors, tables, risks, serverSideAssets) {
+function buildMigrationChecklist(brief, connectors, tables, risks, serverSideAssets, pcfPlan) {
   const lines = [];
   const flows = toArray(brief.dataModel && brief.dataModel.flows);
   lines.push('# Migration Checklist To Working Mobile App');
@@ -6009,6 +6352,11 @@ function buildMigrationChecklist(brief, connectors, tables, risks, serverSideAss
   if (flows.length > 0) {
     const flowSummary = flows.map((f) => f.name || f.displayName || f.flowId || f.id || 'unnamed-flow').slice(0, 8).join(', ') + (flows.length > 8 ? `, … (+${flows.length - 8})` : '');
     lines.push(`${step++}. Add cloud flows with \`npx power-apps add-flow\`: ${flowSummary}.`);
+  }
+  if (pcfPlan?.discovery?.complete === false) {
+    lines.push(`${step++}. **HARD BLOCK:** obtain a complete PCF control inventory/specification; source reports PCF content but per-control contracts were unavailable.`);
+  } else if (pcfPlan?.stats?.total > 0) {
+    lines.push(`${step++}. **HARD GATE:** explicitly approve all ${pcfPlan.stats.total} PCF dispositions in Gate 2b before native/connector/screen work.`);
   }
   if (tables.length > 0) {
     const assetCount = serverSideAssets && serverSideAssets.stats ? serverSideAssets.stats.total : 0;
@@ -6036,6 +6384,7 @@ function buildMigrationChecklist(brief, connectors, tables, risks, serverSideAss
   lines.push('- `npm run gen:assets` succeeds and reports missing assets explicitly.');
   lines.push('- `npm run check:i18n -- --strict` reports zero unknown keys. Do not invent translation keys; use literals when the source catalog does not contain the key.');
   lines.push('- `npm run check:coverage -- --min 80` passes. Coverage must count shared call sites and native equivalents of Canvas `UpdateContext`, `Reset`, `ClearCollect`, and collection `Patch`.');
+  lines.push('- `npm run check:pcf -- --strict` passes. Every approved PCF has an exact native/server implementation marker or approved visible unsupported state; pending/blocker PCFs are forbidden.');
   lines.push('- `npm run check:scaffold -- --strict` passes. The final UI must be workflow-specific, not a visible inventory of data sources, capabilities, screen config, or conversion notes.');
   lines.push('- Every row in `control-intent-coverage.json` is either implemented as native semantics, explicitly unsupported, or surfaced as a follow-up. Do not copy Canvas UI chrome; do preserve `mustPreserve` data/event/layout intent.');
   lines.push('- `npx tsc --noEmit` is clean.');
@@ -6292,7 +6641,7 @@ function buildAppStateMd(state) {
   return lines.join('\n') + '\n';
 }
 
-function buildPluginInput(brief, inputPath, screenRows, connectors, tables, risks, screenFiles, structuredForms, nativeExecution, demotedCapabilities, loadedScreens, serverSideAssets, controlIntentCoverage) {
+function buildPluginInput(brief, inputPath, screenRows, connectors, tables, risks, screenFiles, structuredForms, nativeExecution, demotedCapabilities, loadedScreens, serverSideAssets, controlIntentCoverage, pcfPlan) {
   // Per-screen upgrade-hints index — keyed by screen name so the screenRows
   // map below can attach hints without re-walking the brief.
   const upgradeHintsByScreen = new Map();
@@ -6375,6 +6724,12 @@ function buildPluginInput(brief, inputPath, screenRows, connectors, tables, risk
           stats: controlIntentCoverage.stats,
         }
       : null,
+    pcfPlan: {
+      file: 'pcf-plan.json',
+      schema: pcfPlan.$schema,
+      rule: pcfPlan.rule,
+      stats: pcfPlan.stats,
+    },
     localization: (brief && brief.localization) || null,
     assets: (brief && brief.assets) || null,
     qualityGates: {
@@ -6383,6 +6738,7 @@ function buildPluginInput(brief, inputPath, screenRows, connectors, tables, risk
         'npm run gen:assets',
         'npm run check:i18n -- --strict',
         'npm run check:coverage -- --min 80',
+        'npm run check:pcf -- --strict',
         'npm run check:scaffold -- --strict',
         'npx tsc --noEmit',
       ],
@@ -6732,10 +7088,13 @@ function main() {
   // `screenRows[].nativeCapabilities` in place so the per-screen rows that
   // feed into `buildMasterPlan` and `nativePlan.capabilities` are consistent.
   const connectorInv = collectConnectorInventory(brief);
+  const targetConnectorInv = sanitizeConnectorInventoryForTarget(connectorInv);
+  const connectionRequirements = buildConnectionRequirements(brief, targetConnectorInv);
   const structuredForms = collectForms(brief, loadedScreens, tables, connectorInv);
   const downgrade = applyImagePickerDowngrade(structuredForms, brief, screenRows);
   const nativeExecution = buildNativeExecutionPlan(downgrade.capabilities, bundledDeps);
   const serverSideAssets = buildServerSideAssets(tables);
+  const pcfPlan = buildPcfPlan(brief, loadedScreens, connectionRequirements, bundledDeps);
 
   const masterPlan = buildMasterPlan(
     brief,
@@ -6750,10 +7109,11 @@ function main() {
     nativeExecution,
     downgrade.demoted,
     upgradeHintsAggregate,
-    serverSideAssets
+    serverSideAssets,
+    pcfPlan
   );
   const requirementsMd = buildRequirementsBrief(brief, screenRows, connectors, tables);
-  const checklistMd = buildMigrationChecklist(brief, connectors, tables, risks, serverSideAssets);
+  const checklistMd = buildMigrationChecklist(brief, connectors, tables, risks, serverSideAssets, pcfPlan);
   const componentsMd = buildComponentsMd(components);
   const stateMd = buildAppStateMd(appState);
   const pluginInput = buildPluginInput(
@@ -6769,7 +7129,8 @@ function main() {
     downgrade.demoted,
     loadedScreens,
     serverSideAssets,
-    controlIntentCoverage
+    controlIntentCoverage,
+    pcfPlan
   );
 
   writeFile(path.join(args.outDir, 'native-app-plan.md'), masterPlan);
@@ -6779,6 +7140,7 @@ function main() {
   writeFile(path.join(args.outDir, 'state', 'app-state.md'), stateMd);
   writeFile(path.join(args.outDir, 'server-side-assets.json'), JSON.stringify(serverSideAssets, null, 2) + '\n');
   writeFile(path.join(args.outDir, 'control-intent-coverage.json'), JSON.stringify(controlIntentCoverage, null, 2) + '\n');
+  writeFile(path.join(args.outDir, 'pcf-plan.json'), JSON.stringify(pcfPlan, null, 2) + '\n');
   writeFile(path.join(args.outDir, 'mobile-plugin-input.json'), JSON.stringify(pluginInput, null, 2) + '\n');
   writeFile(path.join(args.outDir, 'behaviors.json'), JSON.stringify(behaviors, null, 2) + '\n');
   writeFile(path.join(args.outDir, 'flows.json'), JSON.stringify(flows, null, 2) + '\n');
@@ -6810,6 +7172,9 @@ function main() {
     ' (' + controlIntentCoverage.stats.totalControls + ' controls, ' +
     controlIntentCoverage.stats.behavioralControls + ' behavioral, ' +
     controlIntentCoverage.stats.highRiskControls + ' high-risk)');
+  console.log('- ' + path.join(args.outDir, 'pcf-plan.json') +
+    ' (' + pcfPlan.stats.total + ' PCFs, ' + pcfPlan.stats.proposed.blocker +
+    ' proposed blockers, explicit approval required)');
   console.log('- ' + path.join(args.outDir, 'behaviors.json') +
     ' (' + behaviors.stats.totalActions + ' actions, ' + behaviors.stats.visibility +
     ' visibility, ' + behaviors.stats.validations + ' validations, ' +
@@ -6867,6 +7232,8 @@ module.exports = {
   deriveFieldLabel,
   collectForms,
   buildNativeExecutionPlan,
+  buildPcfPlan,
+  buildControlIntentCoverage,
   extractBehaviors,
   extractFlows,
   collectAppState,

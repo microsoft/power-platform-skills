@@ -10,6 +10,7 @@ const test = require('node:test');
 const extractor = require('../extract-msapp-brief.v2.cjs');
 const legacyAlias = require('../extract-msapp-brief.cjs');
 const adapter = require('../adapt-app-brief-for-mobile-plugin.js');
+const importer = require('../import-mobile-plugin-input.js');
 
 function withoutControlFlowId(frame) {
   const { id, ...rest } = frame;
@@ -64,6 +65,89 @@ test('extractor rejects malformed MSAPR sidecars and source symlinks', (t) => {
   ], { encoding: 'utf8' });
   assert.equal(linked.status, 1);
   assert.match(linked.stderr, /symbolic links are not allowed/i);
+});
+
+test('PCF sidecar extraction creates Gate 2b contract and YAML-only PCF signals block generation', (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'msapp-pcf-e2e-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const extractorPath = path.resolve(__dirname, '..', 'extract-msapp-brief.v2.cjs');
+  const adapterPath = path.resolve(__dirname, '..', 'adapt-app-brief-for-mobile-plugin.js');
+  const validatorPath = path.resolve(__dirname, '..', 'validate-mobile-plugin-input.js');
+  const yaml = [
+    'App:',
+    '  Properties:',
+    '    StartScreen: =Home',
+    'Screens:',
+    '  Home:',
+    '    Children:',
+    '      - SideNavigation:',
+    '          Control: CodeComponent@1.0.0',
+    '          Properties:',
+    '            Items: =col_navigation',
+    '            OnSelect: =Navigate(Home)',
+    '',
+  ].join('\n');
+
+  const enrichedRoot = path.join(tmp, 'enriched');
+  fs.mkdirSync(path.join(enrichedRoot, 'Src'), { recursive: true });
+  fs.mkdirSync(path.join(enrichedRoot, 'Controls'));
+  fs.mkdirSync(path.join(enrichedRoot, 'Components'));
+  fs.writeFileSync(path.join(enrichedRoot, 'Src', 'App.pa.yaml'), yaml);
+  fs.writeFileSync(path.join(enrichedRoot, 'Properties.json'), JSON.stringify({ ContainsThirdPartyPcfControls: true }));
+  fs.writeFileSync(path.join(enrichedRoot, 'Controls', 'Home.json'), JSON.stringify({
+    TopParent: {
+      Name: 'Home',
+      Template: { FirstParty: true },
+      Children: [{
+        Name: 'SideNavigation',
+        Template: {
+          FirstParty: false,
+          IsPremiumPcfControl: true,
+          Name: 'Contoso.SideNavigation',
+          Id: 'source-template-guid',
+        },
+        Children: [],
+      }],
+    },
+  }));
+  const briefDir = path.join(tmp, 'brief');
+  const adaptedDir = path.join(tmp, 'adapted');
+  const extracted = spawnSync(process.execPath, [extractorPath, '--extracted', enrichedRoot, '--out', briefDir], { encoding: 'utf8' });
+  assert.equal(extracted.status, 0, extracted.stderr || extracted.stdout);
+  const brief = JSON.parse(fs.readFileSync(path.join(briefDir, 'app-brief.json'), 'utf8'));
+  assert.equal(brief.app.pcfControls.length, 1);
+  assert.equal(brief.app.pcfControls[0].templateName, 'Contoso.SideNavigation');
+  assert.equal(brief.app.pcfControls[0].isPremiumPcf, true);
+  const adapted = spawnSync(process.execPath, [adapterPath, '--input', path.join(briefDir, 'app-brief.json'), '--screens-dir', path.join(briefDir, 'screens'), '--out-dir', adaptedDir], { encoding: 'utf8' });
+  assert.equal(adapted.status, 0, adapted.stderr || adapted.stdout);
+  const pcfPlan = JSON.parse(fs.readFileSync(path.join(adaptedDir, 'pcf-plan.json'), 'utf8'));
+  assert.equal(pcfPlan.discovery.complete, true);
+  assert.equal(pcfPlan.controls.length, 1);
+  assert.match(pcfPlan.controls[0].pcfId, /^pcf-[0-9a-f]{16}$/);
+  assert.equal(pcfPlan.controls[0].proposal.disposition, 'native-replacement');
+  assert.equal(pcfPlan.controls[0].approval.status, 'pending');
+  assert.equal(JSON.stringify(pcfPlan).includes('source-template-guid'), false);
+
+  const yamlOnlyRoot = path.join(tmp, 'yaml-only');
+  fs.mkdirSync(path.join(yamlOnlyRoot, 'Src'), { recursive: true });
+  fs.writeFileSync(path.join(yamlOnlyRoot, 'Src', 'App.pa.yaml'), yaml);
+  fs.writeFileSync(path.join(yamlOnlyRoot, 'Properties.json'), JSON.stringify({ ContainsThirdPartyPcfControls: true }));
+  const yamlBrief = path.join(tmp, 'yaml-brief');
+  const yamlAdapted = path.join(tmp, 'yaml-adapted');
+  const extractedYaml = spawnSync(process.execPath, [extractorPath, '--extracted', yamlOnlyRoot, '--out', yamlBrief], { encoding: 'utf8' });
+  assert.equal(extractedYaml.status, 0, extractedYaml.stderr || extractedYaml.stdout);
+  const adaptedYaml = spawnSync(process.execPath, [adapterPath, '--input', path.join(yamlBrief, 'app-brief.json'), '--screens-dir', path.join(yamlBrief, 'screens'), '--out-dir', yamlAdapted], { encoding: 'utf8' });
+  assert.equal(adaptedYaml.status, 0, adaptedYaml.stderr || adaptedYaml.stdout);
+  const incompletePlan = JSON.parse(fs.readFileSync(path.join(yamlAdapted, 'pcf-plan.json'), 'utf8'));
+  assert.equal(incompletePlan.discovery.complete, false);
+  assert.equal(incompletePlan.controls.length, 0);
+  assert.match(incompletePlan.discovery.blockers[0].code, /PCF_INVENTORY_INCOMPLETE/);
+  const baseValidation = spawnSync(process.execPath, [validatorPath, '--dir', yamlAdapted, '--json'], { encoding: 'utf8' });
+  assert.equal(baseValidation.status, 0, baseValidation.stderr || baseValidation.stdout);
+  assert.match(JSON.parse(baseValidation.stdout).warnings.join('\n'), /PCF content.*incomplete/i);
+  const strictValidation = spawnSync(process.execPath, [validatorPath, '--dir', yamlAdapted, '--json', '--require-pcf-approval'], { encoding: 'utf8' });
+  assert.equal(strictValidation.status, 1);
+  assert.match(JSON.parse(strictValidation.stdout).errors.join('\n'), /PCF discovery is incomplete|source reports PCF content/);
 });
 
 test('screen names cannot traverse extractor or adapter output paths', (t) => {
@@ -178,6 +262,9 @@ test('extractor accepts lowercase src directory on case-sensitive filesystems', 
   assert.deepEqual(pluginInput.nativePlan.capabilities, []);
   assert.deepEqual(pluginInput.nativePlan.sourceIntents, ['notification']);
   assert.equal(pluginInput.controlIntentCoverage.stats.totalControls, 1);
+  assert.equal(pluginInput.pcfPlan.file, 'pcf-plan.json');
+  assert.equal(pluginInput.pcfPlan.stats.total, 0);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(adaptedDir, 'pcf-plan.json'), 'utf8')).controls, []);
   const adaptedScreenPlan = fs.readFileSync(path.resolve(adaptedDir, pluginInput.screenPlan.screens[0].planFile), 'utf8');
   assert.match(adaptedScreenPlan, /    ````pfx\n    Notify\("```source text```"\)\n    ````/);
   const nativePlan = fs.readFileSync(path.join(adaptedDir, 'native-app-plan.md'), 'utf8');
@@ -197,6 +284,8 @@ test('extractor accepts lowercase src directory on case-sensitive filesystems', 
   const validation = spawnSync(process.execPath, [validatorPath, '--dir', adaptedDir, '--json'], { encoding: 'utf8' });
   assert.equal(validation.status, 0, validation.stderr || validation.stdout);
   assert.equal(JSON.parse(validation.stdout).ok, true);
+  const strictPcfValidation = spawnSync(process.execPath, [validatorPath, '--dir', adaptedDir, '--json', '--require-pcf-approval'], { encoding: 'utf8' });
+  assert.equal(strictPcfValidation.status, 0, strictPcfValidation.stderr || strictPcfValidation.stdout);
 
   const firstPluginInput = fs.readFileSync(path.join(adaptedDir, 'mobile-plugin-input.json'), 'utf8');
   const firstNativePlan = fs.readFileSync(path.join(adaptedDir, 'native-app-plan.md'), 'utf8');
@@ -209,6 +298,109 @@ test('extractor accepts lowercase src directory on case-sensitive filesystems', 
   assert.equal(repeatedAdapt.status, 0, repeatedAdapt.stderr || repeatedAdapt.stdout);
   assert.equal(fs.readFileSync(path.join(adaptedDir, 'mobile-plugin-input.json'), 'utf8'), firstPluginInput);
   assert.equal(fs.readFileSync(path.join(adaptedDir, 'native-app-plan.md'), 'utf8'), firstNativePlan);
+
+  const pcfPlanPath = path.join(adaptedDir, 'pcf-plan.json');
+  const coveragePath = path.join(adaptedDir, 'control-intent-coverage.json');
+  const originalPcfPlan = fs.readFileSync(pcfPlanPath, 'utf8');
+  const originalCoverage = fs.readFileSync(coveragePath, 'utf8');
+  const pendingInput = JSON.parse(firstPluginInput);
+  pendingInput.pcfPlan.stats.total = 1;
+  pendingInput.pcfPlan.stats.pendingApproval = 1;
+  pendingInput.pcfPlan.stats.approved = 0;
+  pendingInput.pcfPlan.stats.blocked = 0;
+  pendingInput.pcfPlan.stats.byDisposition = { 'native-replacement': 0, 'server-dependency': 0, 'explicit-unsupported': 0, blocker: 0 };
+  const pendingCoverage = JSON.parse(originalCoverage);
+  pendingCoverage.rows.push({
+    screen: 'Home',
+    control: 'TestPCF',
+    path: 'Home/TestPCF',
+    businessRisk: 'high',
+    nativeSuggestion: 'Tamagui Switch',
+    flags: { isPcf: true },
+  });
+  pendingCoverage.stats.totalControls = pendingCoverage.rows.length;
+  pendingCoverage.stats.pcfControls = 1;
+  const pendingPcf = {
+    $schema: 'pcf-plan-v1',
+    generatedAt: '1970-01-01T00:00:00.000Z',
+    allowedDispositions: ['native-replacement', 'server-dependency', 'explicit-unsupported', 'blocker'],
+    discovery: {
+      complete: true,
+      sourceSignals: { containsThirdPartyPcfControls: true, extractedPackageCount: 0, extractedControlCount: 1 },
+      blockers: [],
+    },
+    stats: {
+      total: 1,
+      discoveryComplete: true,
+      pendingApproval: 1,
+      approved: 0,
+      blocked: 0,
+      byDisposition: { 'native-replacement': 0, 'server-dependency': 0, 'explicit-unsupported': 0, blocker: 0 },
+      proposed: { 'native-replacement': 1, 'server-dependency': 0, 'explicit-unsupported': 0, blocker: 0 },
+    },
+    controls: [{
+      pcfId: 'pcf-1111111111111111',
+      screen: 'Home',
+      control: 'TestPCF',
+      path: 'Home/TestPCF',
+      proposal: { disposition: 'native-replacement', targetStrategy: { primitive: 'Tamagui Switch', packages: ['tamagui'] } },
+      approval: { status: 'pending', disposition: null },
+    }],
+  };
+  fs.writeFileSync(path.join(adaptedDir, 'mobile-plugin-input.json'), JSON.stringify(pendingInput));
+  fs.writeFileSync(coveragePath, JSON.stringify(pendingCoverage));
+  fs.writeFileSync(pcfPlanPath, JSON.stringify(pendingPcf));
+  const pendingBaseValidation = spawnSync(process.execPath, [validatorPath, '--dir', adaptedDir, '--json'], { encoding: 'utf8' });
+  assert.equal(pendingBaseValidation.status, 0, pendingBaseValidation.stderr || pendingBaseValidation.stdout);
+  const pendingStrictValidation = spawnSync(process.execPath, [validatorPath, '--dir', adaptedDir, '--json', '--require-pcf-approval'], { encoding: 'utf8' });
+  assert.equal(pendingStrictValidation.status, 1);
+  assert.match(JSON.parse(pendingStrictValidation.stdout).errors.join('\n'), /still requires explicit PCF approval/);
+  pendingPcf.controls[0].approval = {
+    status: 'approved',
+    disposition: 'explicit-unsupported',
+    essentiality: 'essential',
+    targetStrategy: null,
+    unsupportedUx: 'This required capability is unavailable.',
+    reason: 'Invalid attempted waiver.',
+    approvedBy: 'user',
+    approvedAt: '2026-07-14T00:00:00.000Z',
+  };
+  pendingPcf.stats.pendingApproval = 0;
+  pendingPcf.stats.approved = 1;
+  pendingPcf.stats.byDisposition['explicit-unsupported'] = 1;
+  pendingInput.pcfPlan.stats.pendingApproval = 0;
+  pendingInput.pcfPlan.stats.approved = 1;
+  pendingInput.pcfPlan.stats.byDisposition['explicit-unsupported'] = 1;
+  fs.writeFileSync(path.join(adaptedDir, 'mobile-plugin-input.json'), JSON.stringify(pendingInput));
+  fs.writeFileSync(pcfPlanPath, JSON.stringify(pendingPcf));
+  const invalidWaiver = spawnSync(process.execPath, [validatorPath, '--dir', adaptedDir, '--json', '--require-pcf-approval'], { encoding: 'utf8' });
+  assert.equal(invalidWaiver.status, 1);
+  assert.match(JSON.parse(invalidWaiver.stdout).errors.join('\n'), /explicit unsupported is allowed only/);
+  pendingPcf.controls[0].approval = {
+    status: 'approved',
+    disposition: 'native-replacement',
+    essentiality: 'essential',
+    targetStrategy: { primitive: 'Tamagui Switch', packages: ['tamagui'] },
+    unsupportedUx: null,
+    reason: 'User approved the native switch replacement.',
+    approvedBy: 'user',
+    approvedAt: '2026-07-14T00:00:00.000Z',
+  };
+  pendingPcf.stats.pendingApproval = 0;
+  pendingPcf.stats.approved = 1;
+  pendingPcf.stats.byDisposition['explicit-unsupported'] = 0;
+  pendingPcf.stats.byDisposition['native-replacement'] = 1;
+  pendingInput.pcfPlan.stats.pendingApproval = 0;
+  pendingInput.pcfPlan.stats.approved = 1;
+  pendingInput.pcfPlan.stats.byDisposition['explicit-unsupported'] = 0;
+  pendingInput.pcfPlan.stats.byDisposition['native-replacement'] = 1;
+  fs.writeFileSync(path.join(adaptedDir, 'mobile-plugin-input.json'), JSON.stringify(pendingInput));
+  fs.writeFileSync(pcfPlanPath, JSON.stringify(pendingPcf));
+  const approvedStrictValidation = spawnSync(process.execPath, [validatorPath, '--dir', adaptedDir, '--json', '--require-pcf-approval'], { encoding: 'utf8' });
+  assert.equal(approvedStrictValidation.status, 0, approvedStrictValidation.stderr || approvedStrictValidation.stdout);
+  fs.writeFileSync(path.join(adaptedDir, 'mobile-plugin-input.json'), firstPluginInput);
+  fs.writeFileSync(coveragePath, originalCoverage);
+  fs.writeFileSync(pcfPlanPath, originalPcfPlan);
 
   const extractedImageDir = path.join(tmp, 'extracted', 'Assets', 'Images');
   fs.mkdirSync(extractedImageDir, { recursive: true });
@@ -522,6 +714,116 @@ test('native execution filters screen-level intent and unavailable host packages
   assert.deepEqual(plan.sourceIntents, ['camera', 'form', 'list', 'notification', 'pdf-viewer', 'persistence', 'signature']);
 });
 
+test('PCF plan proposes safe native/server outcomes and blocks unknown controls', () => {
+  const requirements = [{ id: 'office365users', connector: 'Office365Users', classification: 'action' }];
+  const loadedScreens = [{
+    name: 'Home',
+    controls: [
+      {
+        name: 'SideNavigation',
+        path: 'Home/SideNavigation',
+        kind: 'CodeComponent',
+        templateName: 'Contoso.SideNavigation',
+        isPcf: true,
+        properties: { Items: '=col_navigation', OnSelect: '=Navigate(ThisItem.Screen)' },
+        events: { OnSelect: [{ intent: 'navigate', target: 'ThisItem.Screen' }] },
+      },
+      {
+        name: 'PeopleLookup',
+        path: 'Home/PeopleLookup',
+        kind: 'CodeComponent',
+        templateName: 'Contoso.PeopleLookup',
+        isPcf: true,
+        isPremiumPcf: true,
+        properties: { Text: '=var_query', Items: '=Office365Users.SearchUser(var_query)' },
+        events: {},
+      },
+      {
+        name: 'ColorSwitchSelector',
+        path: 'Home/PricingEngine',
+        kind: 'CodeComponent',
+        templateName: 'Contoso.PricingEngine',
+        isPcf: true,
+        properties: { Required: '=true' },
+        events: {},
+      },
+    ],
+  }];
+  const brief = {
+    app: {
+      pcfControls: loadedScreens[0].controls.map((control) => ({
+        screen: 'Home',
+        control: control.name,
+        path: control.path,
+        templateName: control.templateName,
+        templateId: 'source-template-guid',
+        isPremiumPcf: !!control.isPremiumPcf,
+        properties: control.properties,
+      })),
+    },
+  };
+  const pcfPlan = adapter.buildPcfPlan(brief, loadedScreens, requirements, new Set(['expo-router', 'tamagui']));
+  assert.equal(pcfPlan.stats.total, 3);
+  assert.equal(pcfPlan.stats.pendingApproval, 3);
+  assert.deepEqual(pcfPlan.controls.map((row) => row.proposal.disposition), [
+    'server-dependency',
+    'blocker',
+    'native-replacement',
+  ]);
+  const people = pcfPlan.controls.find((row) => row.control === 'PeopleLookup');
+  assert.equal(people.isPremium, true);
+  assert.equal(people.proposal.targetStrategy.dependencies[0].connectionRequirementId, 'office365users');
+  assert.equal(people.proposal.targetStrategy.dependencies[0].operation, 'SearchUser');
+  assert.equal(people.approval.status, 'pending');
+  assert.equal(people.sourceTemplateIdPresent, true);
+  assert.equal(JSON.stringify(pcfPlan).includes('source-template-guid'), false);
+  const unknown = pcfPlan.controls.find((row) => row.control === 'ColorSwitchSelector');
+  assert.equal(unknown.essentiality.level, 'essential');
+  assert.equal(unknown.proposal.disposition, 'blocker');
+  const coverage = adapter.buildControlIntentCoverage(loadedScreens);
+  assert.equal(coverage.stats.pcfControls, 3);
+  assert.equal(coverage.rows.filter((row) => row.flags.isPcf && row.businessRisk === 'high').length, 3);
+  assert.equal(new Set(pcfPlan.controls.map((row) => row.pcfId)).size, 3);
+});
+
+test('import resets stale PCF approvals before Gate 2b', () => {
+  const input = {
+    pcfPlan: {
+      stats: { total: 1, pendingApproval: 0, approved: 1, blocked: 0, byDisposition: { 'native-replacement': 1 } },
+    },
+  };
+  const pcfPlan = {
+    discovery: { complete: true },
+    stats: { total: 1, pendingApproval: 0, approved: 1, blocked: 0, byDisposition: { 'native-replacement': 1 } },
+    controls: [{
+      pcfId: 'pcf-1111111111111111',
+      approval: {
+        status: 'approved',
+        disposition: 'native-replacement',
+        essentiality: 'essential',
+        targetStrategy: { primitive: 'Tamagui Switch', packages: ['tamagui'] },
+        reason: 'Crafted stale approval.',
+        approvedBy: 'user',
+        approvedAt: '2026-07-01T00:00:00.000Z',
+      },
+    }],
+  };
+  assert.equal(importer.resetPcfApprovals(input, pcfPlan), 1);
+  assert.deepEqual(pcfPlan.controls[0].approval, {
+    status: 'pending',
+    disposition: null,
+    essentiality: null,
+    targetStrategy: null,
+    unsupportedUx: null,
+    reason: null,
+    approvedBy: null,
+    approvedAt: null,
+  });
+  assert.equal(pcfPlan.stats.pendingApproval, 1);
+  assert.equal(pcfPlan.stats.approved, 0);
+  assert.deepEqual(input.pcfPlan.stats, pcfPlan.stats);
+});
+
 test('native route map reserves home for the actual source start screen', () => {
   const routes = adapter.buildNativeRouteMap({
     app: { startScreen: 'Dashboard' },
@@ -769,6 +1071,77 @@ test('behavior coverage resolves kebab-case routes and requires critical actions
   });
   assert.equal(fail.status, 1, fail.stderr || fail.stdout);
   assert.match(fail.stdout, /critical behavior accounting: FAIL/);
+});
+
+test('PCF coverage requires approved implementation markers and visible unsupported UX', (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-coverage-test-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const screenDir = path.join(tmp, 'app', '(app)');
+  fs.mkdirSync(screenDir, { recursive: true });
+  fs.writeFileSync(path.join(tmp, 'mobile-plugin-input.json'), JSON.stringify({
+    screenPlan: { screens: [{ name: 'Home', file: 'app/(app)/home.tsx' }] },
+  }));
+  fs.writeFileSync(path.join(tmp, 'pcf-plan.json'), JSON.stringify({
+    controls: [
+      {
+        pcfId: 'pcf-1111111111111111',
+        screen: 'Home',
+        approval: { status: 'approved', disposition: 'native-replacement' },
+      },
+      {
+        pcfId: 'pcf-2222222222222222',
+        screen: 'Home',
+        approval: { status: 'approved', disposition: 'explicit-unsupported' },
+      },
+    ],
+  }));
+  const screenPath = path.join(screenDir, 'home.tsx');
+  fs.writeFileSync(screenPath, [
+    '// source-pcf: pcf-1111111111111111 native-replacement',
+    'const replacement = <Switch />;',
+    '// source-pcf-unsupported: pcf-2222222222222222 — optional 3D viewer unavailable',
+    'const fallback = <Text>3D preview is unavailable on mobile</Text>;',
+    'export default function Home(){ return <>{replacement}{fallback}</>; }',
+    '',
+  ].join('\n'));
+  const checker = path.resolve(__dirname, '..', '..', 'shared', 'samples', 'scripts', 'check-pcf-coverage.js');
+  const pass = spawnSync(process.execPath, [checker, '--strict'], { cwd: tmp, encoding: 'utf8' });
+  assert.equal(pass.status, 0, pass.stderr || pass.stdout);
+  assert.match(pass.stdout, /implemented: 1 .* explicit unsupported: 1/);
+
+  fs.writeFileSync(screenPath, [
+    '// source-pcf: pcf-1111111111111111',
+    'const replacement = <Switch />;',
+    '// source-pcf-unsupported: pcf-2222222222222222 — optional 3D viewer unavailable',
+    'const fallback = <Text>3D preview is unavailable on mobile</Text>;',
+    'export default function Home(){ return <>{replacement}{fallback}</>; }',
+    '',
+  ].join('\n'));
+  const missingDisposition = spawnSync(process.execPath, [checker, '--strict'], { cwd: tmp, encoding: 'utf8' });
+  assert.equal(missingDisposition.status, 1);
+  assert.match(missingDisposition.stdout, /lacks exact source-pcf ID\/disposition marker/);
+
+  fs.writeFileSync(screenPath, [
+    '// source-pcf: pcf-1111111111111111 native-replacement',
+    'const replacement = <Switch />;',
+    '// source-pcf-unsupported: pcf-2222222222222222 — optional viewer unavailable',
+    '// This unavailable feature is intentionally not rendered.',
+    'export default function Home(){ return replacement; }',
+    '',
+  ].join('\n'));
+  const commentOnly = spawnSync(process.execPath, [checker, '--strict'], { cwd: tmp, encoding: 'utf8' });
+  assert.equal(commentOnly.status, 1);
+  assert.match(commentOnly.stdout, /lacks marker plus visible unavailable UX/);
+
+  fs.writeFileSync(screenPath, 'export default function Home(){ return null; }\n');
+  const fail = spawnSync(process.execPath, [checker, '--strict'], { cwd: tmp, encoding: 'utf8' });
+  assert.equal(fail.status, 1);
+  assert.match(fail.stdout, /lacks exact source-pcf ID\/disposition marker|lacks marker plus visible unavailable UX/);
+
+  fs.writeFileSync(path.join(tmp, 'pcf-plan.json'), JSON.stringify({ discovery: { complete: false }, controls: [] }));
+  const incomplete = spawnSync(process.execPath, [checker, '--strict'], { cwd: tmp, encoding: 'utf8' });
+  assert.equal(incomplete.status, 1);
+  assert.match(incomplete.stderr, /PCF discovery is incomplete/);
 });
 
 test('asset binding safely quotes source filenames and resolves name collisions', (t) => {

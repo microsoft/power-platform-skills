@@ -133,6 +133,7 @@ Require these primary outputs:
 - `screens/`
 - `behaviors.json`
 - `control-intent-coverage.json`
+- `pcf-plan.json`
 - `server-side-assets.json`
 - `state/app-state.md`
 - `migration-checklist.md`
@@ -162,8 +163,9 @@ Read the generated JSON and check:
 6. Every flow call has a flow ID or an explicit `needs-flow-id` status.
 7. `behaviors.stats.droppedEventActionCount === 0`.
 8. Every high-risk control-intent row has a native strategy or explicit unsupported status.
-9. Server-computed/calculated/rollup columns are marked read-only for app writes.
-10. No output contains secrets, access tokens, private registry credentials, or customer record payloads.
+9. `pcf-plan.json` has exactly one row per PCF control. If source metadata reports PCF content but discovery cannot enumerate controls, treat `discovery.complete: false` as a hard blocker rather than assuming zero PCFs. Every proposal is one of `native-replacement`, `server-dependency`, or `blocker`; the adapter never silently proposes unsupported loss.
+10. Server-computed/calculated/rollup columns are marked read-only for app writes.
+11. No output contains secrets, access tokens, private registry credentials, or customer record payloads.
 
 If `migrationCheck` reports a component library, stop after the assessment. Do not route it into `/create-mobile-app`; component libraries have no runnable screen graph.
 
@@ -190,6 +192,7 @@ Connectors       : <count; unresolved count>
 Flows            : <count; missing-id count>
 Behaviors        : <classified>/<total>; unmatched <count>; dropped <count>
 Native upgrades  : <count>
+PCFs             : <count; proposed native/server/blocker; pending approvals>
 Unsupported      : <count by severity>
 Output package   : <output-dir>/mobile-plugin-input
 ```
@@ -201,6 +204,14 @@ Then list blockers and manual follow-ups. Distinguish:
 - **Post-generation verification:** target-environment plug-ins/business rules/workflows, connection consent, translation values, unavailable asset bytes.
 
 If `--analyze-only`, stop here with the exact output path and no target changes.
+
+If any blocking-before-generation item exists, stop after the report and remediation instructions. Incomplete PCF discovery is always blocking. A **pending conservative PCF blocker proposal** may proceed only into `/create-mobile-app` Gate 2b so the user can provide a verified replacement/backend/specification; Gate 2b must resolve it or stop before Step 4 mutation. A recorded/approved blocker never proceeds.
+
+### Step 5.5 — Preview PCF disposition proposals
+
+Read `pcf-plan.json`. If `discovery.complete` is false, show its discovery blockers and STOP; generation cannot safely approve PCFs that were not enumerated. Otherwise, when `controls[]` is non-empty, show the proposal matrix in the assessment: PCF ID, screen/control, public inputs/events/data bindings, premium flag, inferred essentiality, backend dependencies, proposed disposition, target strategy, and proposal reason.
+
+Do **not** write approval fields here. `/create-mobile-app` owns the single authoritative Gate 2b after safe import. The importer deliberately resets any pre-existing approval fields to `pending`, preventing a crafted/stale migration package from bypassing user confirmation. `--analyze-only` therefore remains read-only and ordinary generation asks for each PCF decision exactly once.
 
 ### Step 6 — Generate through the existing public workflow
 

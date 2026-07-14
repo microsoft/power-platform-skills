@@ -47,6 +47,8 @@
         "Redacts source connection, flow, and workflow IDs and emits target needs-connection-id / needs-flow-id resolution instead of reusing source GUIDs",
         "Requires a target flow ID resolved with list-flows before screen generation",
         "Reports the PCF as a high-risk control-intent row and requires native implementation, explicit unsupported state, or blocker",
+        "Generates pcf-plan.json with one stable row per PCF and requires explicit Gate 2b user disposition approval before generation",
+        "Allows only native replacement, server dependency, optional visible unsupported state, or hard blocker; essential PCFs cannot be waived",
         "Preserves raw unmatched formulas for review",
         "Does not silently downgrade essential unsupported behavior to a visual placeholder",
         "Keeps all generated artifacts local and excludes credentials, tokens, and customer record payloads"

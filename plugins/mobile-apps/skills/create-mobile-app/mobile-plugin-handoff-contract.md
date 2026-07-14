@@ -24,6 +24,7 @@ Canvas source (`Src/*.pa.yaml`, optional supported sidecars)
       state/app-state.md
       behaviors.json
       control-intent-coverage.json
+      pcf-plan.json
       server-side-assets.json
       optional components/flows/localization/assets artifacts
   → /create-mobile-app --adapted-from mobile-plugin-input/
@@ -41,6 +42,7 @@ All artifacts remain local. Do not include credentials, access tokens, customer 
 | `state/app-state.md` | Source variable/collection readers, writers, and recommended native placement | Bootstrap and builders |
 | `behaviors.json` | Normalized actions, visibility, validation, derivations, unmatched formulas | Bootstrap, builders, coverage gate |
 | `control-intent-coverage.json` | One semantic row per source control | Builder accounting |
+| `pcf-plan.json` | One proposed and explicitly approved disposition per PCF | Gate 2b, native/connector routing, builders, PCF coverage gate |
 | `server-side-assets.json` | Dataverse calculated/rollup/managed column rules | Data/write guard |
 | `migration-checklist.md` | Manual blockers/follow-ups | Final summary |
 
@@ -206,6 +208,31 @@ Each row carries:
 - flags for components, PCF, data controls, and generated form cards
 
 Every high-risk row must have a native implementation, explicit unsupported UI, or named blocker.
+
+## PCF disposition contract
+
+PCF binaries cannot execute in the native rewrap runtime. `pcf-plan.json` therefore contains exactly one stable `pcfId` row for every control-intent row where `flags.isPcf === true`.
+
+`discovery.complete` must also be true. If Properties/package metadata signals PCF content but no per-control contracts can be enumerated (common in an incomplete YAML-only export), the plan carries `PCF_INVENTORY_INCOMPLETE` and generation stops until a supported sidecar export or verified inventory/specification is supplied. Zero enumerated rows never overrides a positive source PCF signal.
+
+Each row carries:
+
+- source screen/control/path and redacted template identity presence
+- public PCF property/event/data-binding contract
+- premium flag
+- connector/flow/AI dependencies joined to target `connectionRequirementId` values
+- conservative essentiality evidence
+- deterministic proposal
+- separate user-owned `approval`
+
+Allowed terminal dispositions:
+
+1. `native-replacement` — exact built-in or package already present in target `package.json`
+2. `server-dependency` — approved native UI plus generated-service requirements
+3. `explicit-unsupported` — optional only, with approved visible unavailable-state copy
+4. `blocker` — missing source/spec/backend/native strategy; prevents generation
+
+Adapter proposals are never approvals and never propose unsupported loss automatically. Safe import clears all incoming approval fields to `pending`, so a stale/crafted package cannot bypass Gate 2b. Gate 2b sets `approval.status`, disposition, essentiality, strategy, reason, `approvedBy: user`, and timestamp. Before screen fan-out, `validate-mobile-plugin-input.js --require-pcf-approval` must pass. Generated screens use exact `source-pcf: <id> <disposition>` or `source-pcf-unsupported` markers, enforced by `check-pcf-coverage.js --strict`.
 
 ## State contract
 

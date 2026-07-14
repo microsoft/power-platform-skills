@@ -72,6 +72,7 @@ When `--adapted-from` is used, structural compilation is not enough. The importe
 npm run gen:assets
 npm run check:i18n -- --strict
 npm run check:coverage -- --min 80
+npm run check:pcf -- --strict
 npm run check:scaffold -- --strict
 ```
 
@@ -80,6 +81,7 @@ The scripts are installed at Step 10.8 only for projects that enter adapted mode
 - Referenced bundled assets must resolve or remain explicit manual follow-ups; generated screens must not `require()` missing files.
 - Translation keys used by generated screens must come from `localization.json`; literal fallback text is preferred over invented keys.
 - At least 80% of normalized source behaviors must be implemented per screen and overall. A TODO or logging stub does not count.
+- Every approved PCF disposition must have an exact native/server implementation marker or approved visible unsupported state; pending/blocker PCFs fail the gate.
 - Conversion/debug scaffolding must not remain visible in final screens.
 - Every source behavior that writes data, navigates, validates, authorizes, invokes a connector, or invokes a flow must be implemented or explicitly reported as unsupported; it must never disappear silently.
 
@@ -141,6 +143,7 @@ Skip this step unless `$ARGUMENTS` contains `--adapted-from <dir>`. This mode co
   | `state/app-state.md` | `$ADAPTED_STATE` | State placement and bootstrap |
   | `components.md` | `$ADAPTED_COMPONENTS_MD` | Shared component scaffolding and builders |
   | `behaviors.json` | `$ADAPTED_BEHAVIORS` | Bootstrap, builders, coverage gate |
+  | `pcf-plan.json` | `$ADAPTED_PCF_PLAN` | Gate 2b, native/connector routing, builders, PCF coverage gate |
   | `control-intent-coverage.json` | `$ADAPTED_CONTROL_INTENT_COVERAGE` | Builder semantic guardrail |
   | `server-side-assets.json` | `$ADAPTED_SERVER_SIDE_ASSETS` | Dataverse write guards |
   | `localization.json` | `$ADAPTED_LOCALIZATION` | Valid translation keys and follow-ups |
@@ -148,7 +151,7 @@ Skip this step unless `$ARGUMENTS` contains `--adapted-from <dir>`. This mode co
   | `flows.json` | `$ADAPTED_FLOWS` | Step 10 flow binding |
   | `requirements-brief.md` | `$ADAPTED_BRIEF` | Wizard short-circuit |
 
-4. **Preserve importer results.** Stash `assetsCopied`, `assetsMissing`, and `validationWarnings` from `IMPORT_JSON` for the final assessment/summary. Missing bytes remain in `assets.json`, render as neutral placeholders later, and are already recorded in `.adapted-followups.md`; never create a broken `require()`.
+4. **Preserve importer results.** Stash `assetsCopied`, `assetsMissing`, `pcfApprovalsReset`, and `validationWarnings` from `IMPORT_JSON` for the final assessment/summary. Missing bytes remain in `assets.json`, render as neutral placeholders later, and are already recorded in `.adapted-followups.md`; never create a broken `require()`. If `pcfApprovalsReset > 0`, print that stale package approvals were cleared and Gate 2b will collect fresh user decisions.
 
 Print:
 
@@ -492,7 +495,7 @@ If the planner needs to record a `DONE_WITH_CONCERNS` from a sub-agent (data-mod
 **Adapted-input fast path.** When `$RESUME_FROM_DRAFT=true` and `$ADAPTED_FROM` is set, skip the planner spawn—the adapter output is the draft being reviewed. Use the existing inline-gate machinery in `one-tap-import` mode:
 
 1. Read the imported `native-app-plan.md` and `mobile-plugin-input.json` together.
-2. Surface `## Data Model`, `## Native Capabilities`, `## Connectors`, and `## Screens` verbatim, one gate at a time. Ask whether to approve or edit that section; default to approve because the user explicitly selected the imported package.
+2. Surface `## Data Model`, `## Native Capabilities`, `## Connectors`, and `## Screens` verbatim, one gate at a time. Ask whether to approve or edit that section; default to approve because the user explicitly selected the imported package. Immediately after Native Capabilities, run **Gate 2b — explicit PCF disposition approval** below before moving to Connectors.
 3. If a section is edited, preserve unaffected imported decisions and companion contracts. Do not regenerate the whole plan or discard exact table, connector, flow, route, form, or behavior mappings.
 4. Append or refresh `## Approvals` with an imported-approval timestamp after all four gates pass.
 5. Do not invoke `data-model-architect` or `screen-planner` for an accepted imported section. They are still available for a section the user explicitly asks to redesign.
@@ -502,6 +505,31 @@ Print before the first gate:
 > "→ Imported plan from `<ADAPTED_FROM>` — entering one-tap approval mode. No app or environment mutation occurs until all four gates pass."
 
 After the imported gates complete, continue with the existing public-template flow at Step 4.
+
+#### Gate 2b — Explicit PCF disposition approval (adapted mode)
+
+Skip only when `$ADAPTED_PCF_PLAN` is unset, `controls[]` is empty, **and** `discovery.complete === true`. If discovery is incomplete, STOP and request a source export with supported Controls/Components sidecars or a verified PCF inventory/specification; zero rows does not mean zero PCFs. PCF cannot execute in the native rewrap runtime. Display every PCF row with its public contract, premium flag, inferred essentiality, backend dependencies, proposal, and reason. Every row needs a terminal user decision: `native-replacement`, `server-dependency`, `explicit-unsupported`, or `blocker`.
+
+- Bulk approval is permitted only for the complete visible set of non-blocker proposals. Handle every proposed blocker/edited row individually.
+- Native replacement requires an exact built-in or package already present in project `package.json`. If the approved strategy has a `capability`, merge it into `## Native Capabilities`/`nativePlan.capabilities` so Step 9 owns its wrapper.
+- Server dependency requires existing `connectionRequirementId` values. Add missing explicit requirements to `mobile-plugin-input.json` for Gate 3/Step 10; source connector/flow GUIDs are never accepted.
+- Explicit unsupported requires user-approved `essentiality: optional`, visible `unsupportedUx` copy, and a reason. Essential PCFs cannot be waived.
+- `essentiality: unknown` is deliberately conservative. The user may reclassify it as `optional` only after confirming the PCF has no required business, data, integration, validation, authorization, or workflow function; that explicit classification is required before `explicit-unsupported` can be approved.
+- A blocker gets `approval.status: blocked`, `approval.disposition: blocker`; STOP before Step 4.
+
+For approved rows set `approval.status: approved`, copy or edit the approved disposition/target strategy, set `essentiality`, `reason`, `approvedBy: user`, and an ISO `approvedAt`; recompute plan/summary counts. Then run before continuing:
+
+**Server-dependency update order is atomic:** when the user resolves a blocker by supplying a backend, first add/validate its target-resolution row in `mobile-plugin-input.json dataModelPlan.connectionRequirements[]`; second reference that exact new `id` from `pcf-plan.json approval.targetStrategy.dependencies[]`; third update both PCF stats summaries; only then run the validator. Never write an approval that temporarily points at a missing requirement and never route to Gate 3 until this validation succeeds.
+
+Update the `### PCF Disposition Plan — Gate 2b` table in `native-app-plan.md` with the approved essentiality, disposition, target, and `approved` status for every row. If Gate 2b changes native capabilities, connector requirements, or affected screen specs, update only those linked sections/contracts before validation; preserve unrelated imported decisions.
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-plugin-input.js" \
+  --dir "$WORKING_DIR" \
+  --require-pcf-approval
+```
+
+Any failure is blocking. The importer resets all incoming PCF approvals to `pending`, so this gate is always the sole authoritative approval event and never silently trusts stale/crafted package metadata.
 
 **Planner preflight (silent).** Before the full Task spawn, do a no-op `Task` probe for `mobile-app:native-app-planner` (same pattern as Step 11.0). If the probe fails with `Agent type … not found`, `tool unavailable`, or the host clearly cannot route nested agents, fall through to **inline-gate mode** (described below) without prompting. The orchestrator has the full tool surface itself — it can run the gates directly. Do not retry, do not ask the user.
 
@@ -1333,6 +1361,8 @@ When the strategy is `dataverse-translation-table`, append one item to `.adapted
 
 Read the `## Native Capabilities` section from `native-app-plan.md`. For each capability, invoke `/add-native` — it routes to nested helpers for camera/PDF/pen controls when needed, otherwise generates a generic wrapper:
 
+In adapted mode, also read approved `native-replacement` rows from `$ADAPTED_PCF_PLAN`. When `approval.targetStrategy.capability` is non-null, it must already be merged into the section and is invoked exactly once here. When the strategy owner is `navigation-orchestrator` or `screen-builder`, do not invent an `/add-native` capability; Step 10b or Step 11 implements the approved primitive directly. Recheck every listed package against project `package.json` before use.
+
 ```
 Invoke skill: /add-native
 
@@ -1407,6 +1437,7 @@ Before adding anything:
 - Normalize full provider API paths to their final API ID segment.
 - Treat `classification: "flow"` and `shared_logicflows` as Power Automate flows, never connector data sources.
 - Treat GUID-like local connection-reference names as aliases, not connector IDs or connector names.
+- Read approved `server-dependency` rows from `$ADAPTED_PCF_PLAN`. Their `targetStrategy.dependencies[].connectionRequirementId` values are mandatory Step 10 requirements even when no ordinary screen formula references them. Do not launch builders until each resolves to a generated target service.
 
 For each `connectionRequirements[]` row:
 
@@ -1851,6 +1882,7 @@ Skip when `$ADAPTED_FROM` is unset. Copy the maintained scripts from `${CLAUDE_S
 - `generate-asset-binding.js`
 - `check-i18n-keys.js`
 - `check-behavior-coverage.js`
+- `check-pcf-coverage.js`
 - `check-conversion-scaffolding.js`
 
 Patch `package.json` idempotently with these commands:
@@ -1860,6 +1892,7 @@ Patch `package.json` idempotently with these commands:
   "gen:assets": "node scripts/generate-asset-binding.js",
   "check:i18n": "node scripts/check-i18n-keys.js",
   "check:coverage": "node scripts/check-behavior-coverage.js",
+  "check:pcf": "node scripts/check-pcf-coverage.js",
   "check:scaffold": "node scripts/check-conversion-scaffolding.js"
 }
 ```
@@ -1890,6 +1923,18 @@ Classify each source variable/collection using `$ADAPTED_STATE`:
 - Translation catalogs may be prewarmed through a named query hook when `localization.json` requires one.
 
 Run bootstrap only after the existing auth state reports ready and signed in. Each independent remote warm-up must fail closed and log its own label so one missing optional source cannot prevent the app from opening. Do not add a second `QueryClientProvider`; the current public `PowerAppsProvider` already owns it.
+
+#### 10.8f — PCF readiness gate
+
+Skip only when `$ADAPTED_PCF_PLAN` is unset. Re-run the contract validator after native and connector setup and before any screen builder:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-plugin-input.js" \
+  --dir "$WORKING_DIR" \
+  --require-pcf-approval
+```
+
+Then verify every approved `server-dependency` references connection requirements completed in Step 10 and every `native-replacement` package still exists in project `package.json`. STOP on pending approval, blocker, unresolved dependency, or missing package; do not defer essential PCF work to a generic screen TODO.
 
 ### Step 11 — Build screens (parallel)
 
@@ -1948,6 +1993,7 @@ Each prompt:
   adapted_components: <$ADAPTED_COMPONENTS_MD>
   adapted_behaviors: <$ADAPTED_BEHAVIORS>
   adapted_control_intent_coverage: <$ADAPTED_CONTROL_INTENT_COVERAGE>
+  adapted_pcf_plan: <$ADAPTED_PCF_PLAN>
   adapted_state: <$ADAPTED_STATE>
   adapted_server_side_assets: <$ADAPTED_SERVER_SIDE_ASSETS>
   adapted_localization: <$ADAPTED_LOCALIZATION>
@@ -2106,6 +2152,7 @@ When `$ADAPTED_FROM` is set, run these four commands sequentially **between** sc
 npm run gen:assets
 npm run check:i18n -- --strict
 npm run check:coverage -- --min 80
+npm run check:pcf -- --strict
 npm run check:scaffold -- --strict
 ```
 
@@ -2190,7 +2237,7 @@ Data model    : <N tables — M reuse, K extend, L create>
 Native caps   : <list>
 Connectors    : <list>
 Screens       : <N total — M from template, K built in parallel>
-Quality gates : <adapted mode only: assets, i18n, behavior coverage, scaffold audit>
+Quality gates : <adapted mode only: assets, i18n, behavior coverage, PCF coverage, scaffold audit>
 Dev server    : npx expo start — running in background terminal <id>
                 (scan QR there when you want to run locally)
 ─────────────────────────────────────────────
@@ -2198,7 +2245,7 @@ Dev server    : npx expo start — running in background terminal <id>
 
 If Step 1 emitted warnings, list them in one line each under the block (no decoration).
 
-When `$ADAPTED_FROM` is set, also print concise counts for imported components, translation keys, and asset entries when their companion files exist. Then read `.adapted-followups.md` and `migration-checklist.md` and print their raw action bullets under `Manual follow-ups from adapted source:`. Do not auto-resolve these post-generation items or replace `/edit-app`; the summary preserves provenance and hands normal iteration back to the existing marketplace workflow.
+When `$ADAPTED_FROM` is set, also print concise counts for imported components, translation keys, asset entries, and PCF dispositions (`native-replacement`, `server-dependency`, `explicit-unsupported`; blockers must already be zero). Then read `.adapted-followups.md` and `migration-checklist.md` and print their raw action bullets under `Manual follow-ups from adapted source:`. Do not auto-resolve these post-generation items or replace `/edit-app`; the summary preserves provenance and hands normal iteration back to the existing marketplace workflow.
 
 Then present exactly these 4 options:
 

@@ -45,6 +45,17 @@ The brief feeds in at step 4. The screen-builder works upward to step 1, then ba
 | Pen / signature | `/add-native pen-input` when `@microsoft/power-apps-native-pen-input` is allowlisted | ⚠️ HOST | If the native package is absent, report a blocker/review item rather than installing another signature library |
 | Push notifications | `burnt` for in-app toast | ⚠️ DEGRADE | `expo-notifications` not in rewrap runtime — cross-device push requires server-side flow |
 
+### PCF disposition rule
+
+PCF is never copied, hosted in a WebView, or invoked through HostingSDK. `pcf-plan.json` Gate 2b must give every PCF one explicit user-approved outcome:
+
+1. **Native replacement** — exact built-in or already-allowlisted primitive; preserve public inputs, outputs, events, data bindings, validation, and authorization semantics.
+2. **Server dependency** — retain/rebind the connector, flow, Custom API, or Dataverse operation in the target, then rebuild the UI natively over its generated service.
+3. **Explicit unsupported** — optional PCFs only, with user-approved visible unavailable-state copy. A hidden TODO is invalid.
+4. **Blocker** — essential behavior is hidden/unknown, its backend/specification is missing, or no supported native strategy exists. Stop generation for the affected app path.
+
+Extractor replacement hints are evidence, not approval. An arbitrary third-party React Native package is never a valid automatic replacement because the rewrap runtime is prebuilt.
+
 ---
 
 ## 3. The HTML escape-hatch problem (most common upgrade case)

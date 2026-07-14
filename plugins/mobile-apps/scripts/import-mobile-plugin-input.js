@@ -30,20 +30,25 @@ const COLLISION_PATHS = [
   'screens',
   'state',
   'behaviors.json',
+  'pcf-plan.json',
   'control-intent-coverage.json',
   'server-side-assets.json',
 ];
-const REQUIRED_SOURCE_FILES = ['native-app-plan.md', 'mobile-plugin-input.json'];
+const REQUIRED_SOURCE_FILES = [
+  'native-app-plan.md',
+  'mobile-plugin-input.json',
+  'behaviors.json',
+  'pcf-plan.json',
+  'control-intent-coverage.json',
+  'server-side-assets.json',
+];
 const OPTIONAL_SOURCE_FILES = [
   'requirements-brief.md',
   'components.md',
   'migration-checklist.md',
-  'behaviors.json',
-  'control-intent-coverage.json',
   'flows.json',
   'localization.json',
   'assets.json',
-  'server-side-assets.json',
 ];
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_TREE_ENTRIES = 10000;
@@ -101,6 +106,43 @@ function copyChecked(source, target, written, dryRun, allowedRoot) {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.copyFileSync(realSource, target, fs.constants.COPYFILE_EXCL);
   written.push(target);
+}
+
+function writeJsonChecked(target, value, written, dryRun) {
+  if (fs.existsSync(target)) throw new Error(`target collision: ${target}`);
+  if (dryRun) return;
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
+  written.push(target);
+}
+
+function resetPcfApprovals(input, pcfPlan) {
+  const controls = Array.isArray(pcfPlan.controls) ? pcfPlan.controls : [];
+  for (const row of controls) {
+    row.approval = {
+      status: 'pending',
+      disposition: null,
+      essentiality: null,
+      targetStrategy: null,
+      unsupportedUx: null,
+      reason: null,
+      approvedBy: null,
+      approvedAt: null,
+    };
+  }
+  const dispositions = ['native-replacement', 'server-dependency', 'explicit-unsupported', 'blocker'];
+  pcfPlan.stats = {
+    ...(pcfPlan.stats || {}),
+    total: controls.length,
+    discoveryComplete: pcfPlan.discovery?.complete === true,
+    pendingApproval: controls.length,
+    approved: 0,
+    blocked: 0,
+    byDisposition: Object.fromEntries(dispositions.map((disposition) => [disposition, 0])),
+  };
+  if (!input.pcfPlan || typeof input.pcfPlan !== 'object') throw new Error('mobile-plugin-input.json pcfPlan summary is missing');
+  input.pcfPlan.stats = JSON.parse(JSON.stringify(pcfPlan.stats));
+  return controls.length;
 }
 
 function copyMarkdownTree(sourceRoot, targetRoot, written, dryRun, packageRoot, treeState, depth = 0) {
@@ -220,6 +262,10 @@ function main() {
   if (validation.status !== 0) throw new Error(`migration package validation failed:\n${validation.stderr || validation.stdout}`);
   const validationResult = JSON.parse(validation.stdout);
   validateSourceEntries(source);
+  const pcfPlanPath = path.join(source, input.pcfPlan.file);
+  assertRegularFile(pcfPlanPath, 'PCF migration artifact', source);
+  const pcfPlan = JSON.parse(fs.readFileSync(pcfPlanPath, 'utf8'));
+  const pcfApprovalsReset = resetPcfApprovals(input, pcfPlan);
   const context = contextFromInput(input, source);
 
   const written = [];
@@ -229,11 +275,16 @@ function main() {
   let assetsCopied = 0;
   let assetsMissing = 0;
   try {
-    for (const relative of REQUIRED_SOURCE_FILES) copyChecked(path.join(source, relative), path.join(target, relative), written, args.dryRun, source);
+    for (const relative of REQUIRED_SOURCE_FILES) {
+      if (relative === 'mobile-plugin-input.json' || relative === 'pcf-plan.json') continue;
+      copyChecked(path.join(source, relative), path.join(target, relative), written, args.dryRun, source);
+    }
     for (const relative of OPTIONAL_SOURCE_FILES) {
       const from = path.join(source, relative);
       if (fs.existsSync(from)) copyChecked(from, path.join(target, relative), written, args.dryRun, source);
     }
+    writeJsonChecked(path.join(target, 'mobile-plugin-input.json'), input, written, args.dryRun);
+    writeJsonChecked(path.join(target, 'pcf-plan.json'), pcfPlan, written, args.dryRun);
     copyMarkdownTree(path.join(source, 'screens'), path.join(target, 'screens'), written, args.dryRun, source, treeState);
     copyMarkdownTree(path.join(source, 'state'), path.join(target, 'state'), written, args.dryRun, source, treeState);
 
@@ -294,13 +345,18 @@ function main() {
     ...context,
     assetsCopied,
     assetsMissing,
+    pcfApprovalsReset,
     validationWarnings: validationResult.warnings || [],
   }, null, 2)}\n`);
 }
 
-try {
-  main();
-} catch (error) {
-  process.stderr.write(`Import failed: ${error.message}\n`);
-  process.exit(1);
+if (require.main === module) {
+  try {
+    main();
+  } catch (error) {
+    process.stderr.write(`Import failed: ${error.message}\n`);
+    process.exit(1);
+  }
 }
+
+module.exports = { main, resetPcfApprovals };
