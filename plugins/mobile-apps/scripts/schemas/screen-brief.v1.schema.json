@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/microsoft/power-platform-skills/main/plugins/mobile-apps/scripts/schemas/screen-brief.v1.schema.json",
+  "title": "Canvas screen canonical migration brief",
+  "type": "object",
+  "required": ["name", "controls", "unsupported"],
+  "properties": {
+    "name": { "type": "string", "minLength": 1 },
+    "controls": { "type": "array" },
+    "unsupported": { "type": "array" }
+  },
+  "additionalProperties": true
+}

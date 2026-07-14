@@ -45,6 +45,27 @@ test -f native-app-plan.md
 - The Mermaid ER diagram (informational)
 - The "Creation Order" tier list
 
+**Imported structured data model.** If `mobile-plugin-input.json` also exists and contains `dataModelPlan.dataverseTables[]`, treat those rows as the machine-readable detail behind the approved markdown section. Use the exact `logicalName`, `displayName`, `entitySetName`, primary attributes, tier, columns, lookup targets, choice values/labels, operations, and source screens. Do not infer column types from the markdown `Cols` count.
+
+Before continuing, validate each imported row:
+
+- `status` is `reuse`, `extend`, or `new`.
+- `new` / `extend` rows include complete `columns[]`; an empty column contract is a blocker rather than permission to create an empty table.
+- Lookup targets exist in the imported set or are confirmed existing target tables.
+- File/Image columns retain their distinct write behavior.
+- Any column listed in `server-side-assets.json` remains server-managed/read-only for generated app writes.
+
+The imported status describes the **source** environment and is not automatically trusted in the target. Step 4 must reconcile every logical name against live target metadata:
+
+| Source contract + target discovery | Action |
+|---|---|
+| Target table exists and satisfies columns | Reuse. |
+| Target table exists but approved columns are missing | Reclassify to extend and show the exact missing-column diff. |
+| Source says `new`, target table absent, complete columns exist | Create in imported tier order after normal approval/safety checks. |
+| Source says `reuse`/`extend`, target table absent | STOP and ask whether to import the source solution, explicitly recreate from the captured schema, or abort. Do not silently recreate a dependency that may rely on plug-ins/business rules/workflows. |
+
+When the caller passed `--skip-planning`, skip architect re-planning but do not skip this live target reconciliation or its mutation preview.
+
 **If absent:** check `$ARGUMENTS` for diagram hints (`*.png`, `*.jpg`, `*.jpeg` filename, `erDiagram` keyword, `||--o{` cardinality syntax). 
 
 - **Diagram hint present** → Path A (Step 2.5).

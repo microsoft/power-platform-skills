@@ -2,7 +2,7 @@
 
 This file provides guidance to AI Agents when working with the **mobile-app** plugin.
 
-> **Status:** v0 — 23 skills + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
+> **Status:** v0 — 24 user-facing skills + 5 internal native helpers + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
 
 ## What This Plugin Is
 
@@ -26,7 +26,7 @@ README.md                      ← Plugin overview
 agents/                        ← native-app-planner, data-model-architect, screen-planner, screen-builder
 shared/                        ← shared-instructions, references, samples, memory-bank template
 skills/                        ← /create-mobile-app, /add-dataverse, /add-connector, /add-native, ...
-scripts/                       ← dataverse-request.js helper used by /add-dataverse + open-wrap-url.js helper used by /open-wrap-url
+scripts/                       ← platform helpers plus deterministic Canvas/MSAPP extraction + adaptation
 hooks/                         ← PostToolUse validators
 ```
 
@@ -77,6 +77,7 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 - ✅ Markdown plan with Mermaid (no HTML rendering)
 - ✅ **Per-section approval gates** in the planner (data model → native APIs → screen plan)
 - ✅ `/edit-app` skill for post-generation app iteration: updates the approved plan delta, applies Dataverse/native/design/screen mutations, verifies, and refreshes preview output. `--plan-only` is the explicit docs-only escape hatch.
+- ✅ `/modernize-canvas-app` is an additive migration entry point: it extracts a Canvas app into a canonical brief, adapts it into semantic migration contracts, reports coverage/unsupported behavior, then delegates generation to the unchanged `/create-mobile-app --adapted-from` path. Canvas controls are treated as intent evidence, not a pixel-perfect React Native specification.
 - ✅ Single `/deploy` skill — `npm run build` + `npx power-apps push`; no local native compile, no OTA in v0
 - ✅ Connection model: per-environment connections, with platform-specific auth (`expo-msal-intune` on native, `expo-auth-session` on web)
 - ✅ Auth: `/create-mobile-app` resolves the tenant from the selected Power Platform environment (`scripts/resolve-environment.js`), writes that tenant to `auth.config.json`, then lets the user paste an app registration client ID, create one from the Power Apps Wrap page and paste it, or skip auth for later. `/set-app-registration-native` is a manual helper for the same Wrap-page + pasted-client-ID flow.

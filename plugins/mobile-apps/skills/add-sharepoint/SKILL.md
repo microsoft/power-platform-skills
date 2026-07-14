@@ -18,6 +18,8 @@ model: sonnet
 
 Two paths: **existing lists** (skip to Step 6) or **new lists** (full workflow).
 
+**Adapted-input fast path.** If the caller supplies `--api-id`, `--connection-id`, `--dataset`, and `--resource-name`, normalize the API ID and first confirm that the connection ID exists for SharePoint in the currently selected target environment. When values came from an imported requirement, also run the existing target `list-datasets` + `list-tables` discovery and require exact matches for the site/list before Step 9; source site/list values are identity hints, not proof of target availability. Skip discovery only for values the caller explicitly supplied as target facts outside an imported requirement during this run. If the connection is source-only/absent, a target match is missing, or any value is absent, keep the existing discovery workflow below; do not switch environments or guess a site/list from the Canvas display name.
+
 ## Workflow
 
 1. Check Memory Bank → 2. Plan → 3. Setup Graph API Auth → 4. Review Existing Lists → 5. Create Lists → 6. Get Connection ID → 7. Discover Sites → 8. Discover Tables → 9. Add Connector → 10. Configure → 11. Type-check → 12. Update Memory Bank

@@ -243,6 +243,14 @@ What happens:
 
 End state: a working app you can iterate on with hot reload. ~5–12 minutes for the planning gates, then scaffolding runs.
 
+### Modernize an existing Canvas app
+
+```text
+> /modernize-canvas-app --msapp ./FieldInspection.msapp --working-dir ../field-inspection-native
+```
+
+The skill deterministically extracts screens, controls, Power Fx behavior, Dataverse schema, connectors, flows, components, assets, and localization into a local migration package. It presents behavior/control coverage and unsupported items before changing the target. On approval, it delegates to `/create-mobile-app --adapted-from` so the current public template, app registration, offline, native capability, screen-generation, debug, and `/edit-app` workflows remain unchanged.
+
 ### 2. Add Dataverse tables to an existing app
 
 ```text
@@ -324,6 +332,7 @@ At Step 6.75 of `/create-mobile-app`, the `/design-system` skill offers a cost p
 | Command | Status | Description |
 | --- | --- | --- |
 | `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder, gates planning, runs `npx power-apps init`, resolves the selected environment tenant, lets the user paste an app registration client ID, create one in the portal and paste it, or skip auth for later, then applies data/native/connectors, builds screens, starts dev server |
+| `/modernize-canvas-app` | 🟡 preview | Analyze an existing Canvas app (`Src/*.pa.yaml`, `.msapp`, or PAC environment app), produce a behavior-preserving native migration package and assessment, then optionally run the existing `/create-mobile-app --adapted-from` flow. |
 | `/set-app-registration-native` | ✅ v0 | Manual auth helper — opens the Power Apps Wrap app-registration page for the selected environment, captures the pasted client ID, and writes `auth.config.json`. |
 | `/add-dataverse` | ✅ v0 | Add Dataverse — connect to existing tables, or create / extend tables in Tier 0 → N order via the Dataverse Web API, then generate TS services. Accepts ER diagrams via image / Mermaid / text, or spawns the data-model-architect agent. |
 | `/setup-datamodel` | ✅ v0 | Discoverable alias for `/add-dataverse` optimized for the design-first entry point ("how do I plan my Dataverse schema?"). Same workflow under a more searchable name. |

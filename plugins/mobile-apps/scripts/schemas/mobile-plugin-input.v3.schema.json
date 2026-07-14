@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/microsoft/power-platform-skills/main/plugins/mobile-apps/scripts/schemas/mobile-plugin-input.v3.schema.json",
+  "title": "Canvas-to-native mobile plugin input",
+  "type": "object",
+  "required": ["schemaVersion", "source", "app", "dataModelPlan", "screenPlan", "nativePlan", "riskReport", "unsupported"],
+  "properties": {
+    "schemaVersion": { "const": "3" },
+    "source": { "type": "object" },
+    "app": {
+      "type": "object",
+      "required": ["name", "startScreen"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "startScreen": { "type": "string", "minLength": 1 },
+        "auth": { "enum": ["entra", "none", null] }
+      },
+      "additionalProperties": true
+    },
+    "dataModelPlan": {
+      "type": "object",
+      "required": ["dataverseTables", "connectionRequirements"],
+      "properties": {
+        "dataverseTables": { "type": "array" },
+        "connectionRequirements": { "type": "array" },
+        "flows": { "type": "array" },
+        "unresolvedDataSources": { "type": "array" }
+      },
+      "additionalProperties": true
+    },
+    "screenPlan": {
+      "type": "object",
+      "required": ["screens", "navigationEdges"],
+      "properties": {
+        "screens": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["name", "route", "file", "planFile"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "route": { "type": "string", "pattern": "^/" },
+              "file": { "type": "string", "pattern": "^app/" },
+              "planFile": { "type": "string", "minLength": 1 }
+            },
+            "additionalProperties": true
+          }
+        },
+        "navigationEdges": { "type": "array" }
+      },
+      "additionalProperties": true
+    },
+    "nativePlan": { "type": "object" },
+    "riskReport": { "type": "array" },
+    "unsupported": { "type": "array" }
+  },
+  "additionalProperties": true
+}

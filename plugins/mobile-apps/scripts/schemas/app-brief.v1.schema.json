@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/microsoft/power-platform-skills/main/plugins/mobile-apps/scripts/schemas/app-brief.v1.schema.json",
+  "title": "Canvas app canonical migration brief",
+  "type": "object",
+  "required": ["version", "source", "app", "dataModel", "navigation", "screens", "unsupported"],
+  "properties": {
+    "version": { "const": "1" },
+    "generatedAt": { "type": "string" },
+    "source": { "type": "object" },
+    "app": {
+      "type": "object",
+      "required": ["name", "startScreen"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "startScreen": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "dataModel": { "type": "object" },
+    "navigation": {
+      "type": "object",
+      "required": ["edges"],
+      "properties": { "edges": { "type": "array" } },
+      "additionalProperties": true
+    },
+    "screens": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "briefPath"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "briefPath": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": true
+      }
+    },
+    "unsupported": { "type": "array" }
+  },
+  "additionalProperties": true
+}

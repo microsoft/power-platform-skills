@@ -41,6 +41,8 @@ If either is missing, instruct the user to run `/create-mobile-app` first and st
 
 **If `$ARGUMENTS` is provided or the caller already specified the connector**, use it directly and skip the question below.
 
+The Canvas/MSAPP adapted path may supply exact setup arguments: `--api-id`, `--connection-id`, `--dataset`, `--resource-name`, `--sql-stored-procedure`, and `--connection-requirement-id`. Explicit arguments override imported contract values. Normalize a full provider API path to its final API ID segment before any CLI call.
+
 Otherwise, ask the user which connector they want to add. Browse available connectors: [Connector Reference](https://learn.microsoft.com/en-us/connectors/connector-reference/).
 
 **Before proceeding, check if the connector has a dedicated skill. If it does, delegate immediately and STOP:**
@@ -74,9 +76,28 @@ npx power-apps remove-flow --flow-id <flow-guid> --non-interactive
 
 After `add-flow`, continue at Step 4 and inspect the generated service/model files the same way as connector data sources.
 
+### Step 2.5 — Resolve an imported connection requirement
+
+Run this step when `--connection-requirement-id` is provided or `mobile-plugin-input.json` contains a matching `dataModelPlan.connectionRequirements[]` row. Find the row by ID, normalized API ID, or connector name; merge explicit arguments over it; then use the merged values in Step 3.
+
+An imported `connectionId` came from the source app/environment and is not automatically valid in the selected target. Unless the caller explicitly supplied that ID for the target during this run, verify it appears in the current target's `/list-connections` output for the normalized API ID. If absent, discard it and follow the normal missing-connection path. Never switch environments to make a source connection ID work.
+
+Imported custom-connector API IDs are also environment-bound candidates. Require an exact target API ID from the current environment's connector/connection discovery or maker portal; never carry a source custom GUID into `add-data-source`. For imported table/SQL/SharePoint requirements, treat dataset, resource, and procedure values as identity hints: after resolving the target connection, verify each through the normal `list-datasets`, `list-tables`, or `list-sqlStoredProcedures` command before adding. Skip that rediscovery only when the caller explicitly supplied the value as a target fact outside an imported requirement during this run.
+
+| Missing contract field/status | Existing workflow action |
+|---|---|
+| API ID / `needs-api-id` | Ask for the exact API ID; do not infer a custom connector from display text. |
+| Connection ID / `needs-connection-id` | Run the normal `/list-connections` path. |
+| Dataset / `needs-dataset` | Run the normal `list-datasets` discovery. |
+| Resource name / `needs-resource-name` | Run the normal `list-tables` discovery. |
+| SQL procedure | Run the normal stored-procedure discovery. |
+| `classification: "flow"` or `shared_logicflows` | Skip connector setup and use `npx power-apps add-flow`. |
+
+Preserve `usedOperations[]` and `authResources[]` in the setup summary. Surface premium licensing as a note rather than silently failing. Do not recreate Canvas Player's connection-management UI; this is setup-time service generation and the current native host keeps ownership of runtime routing and OAuth.
+
 ### Step 3 — Add Connector
 
-**First, get the connection ID or connection reference** (see [connector-reference.md](${CLAUDE_SKILL_DIR}/../../shared/connector-reference.md)):
+**First, get the connection ID or connection reference** (see [connector-reference.md](${CLAUDE_SKILL_DIR}/../../shared/connector-reference.md)). If an explicitly target-confirmed `--connection-id` is already resolved, use it and skip connection lookup; imported source IDs still require the Step 2.5 verification above:
 
 Run the `/list-connections` skill with the connector API ID (for example `shared_office365users`). Capture the exact `connectionId` from `create-connection`, or the `connectionRef` from `list-connection-references` if the caller is solution-aware. If creation cannot complete in the CLI, direct the user to create one using the environment-specific Connections URL — construct it from the active environment ID in context (from `power.config.json` `environmentId` or a prior step):
 `https://make.powerapps.com/environments/<environment-id>/connections` → **+ New connection** → search for the connector → Create.
@@ -98,7 +119,7 @@ Then run:
 npx power-apps add-data-source --api-id <apiId> --connection-id <connectionId>
 ```
 
-**For table-based connectors, discover datasets and tables first:**
+**For table-based connectors, discover datasets and tables first.** If imported/explicit arguments already provide both `--dataset` and `--resource-name`, use them directly and skip discovery:
 
 ```bash
 npx power-apps list-datasets --api-id <apiId> --connection-id <connectionId> --json

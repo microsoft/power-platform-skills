@@ -1,7 +1,7 @@
 {
     "name": "mobile-app",
-    "version": "0.1.0",
-    "description": "Build and deploy Power Apps code apps for mobile using Expo (React Native), with native device functionality and Power Platform connectors",
+    "version": "0.2.0",
+    "description": "Build, modernize, and deploy Power Apps mobile code apps using Expo and React Native, with native device functionality and Power Platform connectors",
     "author": {
         "name": "Microsoft",
         "url": "https://www.microsoft.com"
@@ -13,6 +13,8 @@
         "power-platform",
         "power-apps",
         "code-apps",
+        "canvas-apps",
+        "migration",
         "mobile",
         "expo",
         "react-native",
