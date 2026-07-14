@@ -73,6 +73,7 @@ npm run gen:assets
 npm run check:i18n -- --strict
 npm run check:coverage -- --min 80
 npm run check:pcf -- --strict
+npm run check:workflows -- --strict
 npm run check:scaffold -- --strict
 ```
 
@@ -82,6 +83,7 @@ The scripts are installed at Step 10.8 only for projects that enter adapted mode
 - Translation keys used by generated screens must come from `localization.json`; literal fallback text is preferred over invented keys.
 - At least 80% of normalized source behaviors must be implemented per screen and overall. A TODO or logging stub does not count.
 - Every approved PCF disposition must have an exact native/server implementation marker or approved visible unsupported state; pending/blocker PCFs fail the gate.
+- Every pathological event handler must use its approved named-step workflow module and call site. Pending decisions, monolithic callbacks, missing step/behavior markers, or uninvoked modules fail the gate.
 - Conversion/debug scaffolding must not remain visible in final screens.
 - Every source behavior that writes data, navigates, validates, authorizes, invokes a connector, or invokes a flow must be implemented or explicitly reported as unsupported; it must never disappear silently.
 
@@ -143,6 +145,7 @@ Skip this step unless `$ARGUMENTS` contains `--adapted-from <dir>`. This mode co
   | `state/app-state.md` | `$ADAPTED_STATE` | State placement and bootstrap |
   | `components.md` | `$ADAPTED_COMPONENTS_MD` | Shared component scaffolding and builders |
   | `behaviors.json` | `$ADAPTED_BEHAVIORS` | Bootstrap, builders, coverage gate |
+  | `workflows.json` | `$ADAPTED_WORKFLOWS` | Gate 2c, shared workflow modules, builders, workflow coverage gate |
   | `pcf-plan.json` | `$ADAPTED_PCF_PLAN` | Gate 2b, native/connector routing, builders, PCF coverage gate |
   | `control-intent-coverage.json` | `$ADAPTED_CONTROL_INTENT_COVERAGE` | Builder semantic guardrail |
   | `server-side-assets.json` | `$ADAPTED_SERVER_SIDE_ASSETS` | Dataverse write guards |
@@ -151,7 +154,7 @@ Skip this step unless `$ARGUMENTS` contains `--adapted-from <dir>`. This mode co
   | `flows.json` | `$ADAPTED_FLOWS` | Step 10 flow binding |
   | `requirements-brief.md` | `$ADAPTED_BRIEF` | Wizard short-circuit |
 
-4. **Preserve importer results.** Stash `assetsCopied`, `assetsMissing`, `pcfApprovalsReset`, and `validationWarnings` from `IMPORT_JSON` for the final assessment/summary. Missing bytes remain in `assets.json`, render as neutral placeholders later, and are already recorded in `.adapted-followups.md`; never create a broken `require()`. If `pcfApprovalsReset > 0`, print that stale package approvals were cleared and Gate 2b will collect fresh user decisions.
+4. **Preserve importer results.** Stash `assetsCopied`, `assetsMissing`, `pcfApprovalsReset`, `workflowApprovalsReset`, and `validationWarnings` from `IMPORT_JSON` for the final assessment/summary. Missing bytes remain in `assets.json`, render as neutral placeholders later, and are already recorded in `.adapted-followups.md`; never create a broken `require()`. If `pcfApprovalsReset > 0`, print that stale package approvals were cleared and Gate 2b will collect fresh user decisions. If `workflowApprovalsReset > 0`, print that stale workflow approvals/answers were cleared and Gate 2c will collect fresh correctness-critical answers plus one approval.
 
 Print:
 
@@ -495,7 +498,7 @@ If the planner needs to record a `DONE_WITH_CONCERNS` from a sub-agent (data-mod
 **Adapted-input fast path.** When `$RESUME_FROM_DRAFT=true` and `$ADAPTED_FROM` is set, skip the planner spawn—the adapter output is the draft being reviewed. Use the existing inline-gate machinery in `one-tap-import` mode:
 
 1. Read the imported `native-app-plan.md` and `mobile-plugin-input.json` together.
-2. Surface `## Data Model`, `## Native Capabilities`, `## Connectors`, and `## Screens` verbatim, one gate at a time. Ask whether to approve or edit that section; default to approve because the user explicitly selected the imported package. Immediately after Native Capabilities, run **Gate 2b — explicit PCF disposition approval** below before moving to Connectors.
+2. Surface `## Data Model`, `## Native Capabilities`, `## Connectors`, and `## Screens` verbatim, one gate at a time. Ask whether to approve or edit that section; default to approve because the user explicitly selected the imported package. Immediately after Native Capabilities, run **Gate 2b — explicit PCF disposition approval**, then **Gate 2c — pathological workflow approval**, before moving to Connectors. Gate 2c may add a server dependency, so Gate 3 must see its final result.
 3. If a section is edited, preserve unaffected imported decisions and companion contracts. Do not regenerate the whole plan or discard exact table, connector, flow, route, form, or behavior mappings.
 4. Append or refresh `## Approvals` with an imported-approval timestamp after all four gates pass.
 5. Do not invoke `data-model-architect` or `screen-planner` for an accepted imported section. They are still available for a section the user explicitly asks to redesign.
@@ -526,10 +529,46 @@ Update the `### PCF Disposition Plan — Gate 2b` table in `native-app-plan.md` 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-plugin-input.js" \
   --dir "$WORKING_DIR" \
-  --require-pcf-approval
+  --require-pcf-approval \
+  --require-workflow-approval
 ```
 
 Any failure is blocking. The importer resets all incoming PCF approvals to `pending`, so this gate is always the sole authoritative approval event and never silently trusts stale/crafted package metadata.
+
+#### Gate 2c — Pathological workflow decomposition approval (adapted mode)
+
+Skip only when `$ADAPTED_WORKFLOWS` is unset or `workflows[]` is empty. This is an adapted-mode subgate inside the existing four-gate plan flow; it does not add a general creation question. Read `workflows.json` and display every detected source event handler with its deterministic complexity evidence, ordered named steps, exact behavior-ID coverage, target module/export, proposed execution owner/UX mode, and required decisions.
+
+**Question policy — AI-led with exceptions only:**
+
+- AI owns helper/function boundaries, module names, progress/error presentation, replacement of Canvas reset/refresh/toast plumbing, and ordinary single-screen versus native composition choices. Propose these and include them in the one approval; do not ask the user to design code structure.
+- Ask only entries in `requiredDecisions[]` where `requiresUserInput: true`. These are limited to unresolved partial-failure/transaction policy, cross-system retry/idempotency, mutating-batch failure, async completion, or an unclassified critical source contract.
+- Batch the required decisions with `AskUserQuestion` where the tool permits. Show the recommended source-parity option and its effect. Do not ask cosmetic, naming, helper, loading-indicator, or implementation-language questions.
+- A decision with `requiresUserInput: false` may be resolved by AI only from explicit source evidence. Record `resolvedBy: ai` and the evidence-based reason; never auto-resolve a user-owned decision.
+- After required answers are recorded, ask once to approve the complete visible workflow decomposition. Workflows with no required decisions need only this one approval and no discovery questionnaire.
+
+For each resolved decision append to `approval.decisions[]`: `decisionId`, `status: resolved`, selected/free-text `value`, `resolvedBy: user|ai`, and `reason`. Then set:
+
+- `approval.status: approved`
+- `approvedStepIds` to every proposal step ID exactly once
+- `executionOwner` to `client-orchestrator` or `server-orchestrator`
+- `uxMode` to `single-action-with-progress`, `native-multi-step`, or `background-job`
+- `reason`, `approvedBy: user`, and an ISO `approvedAt`
+
+If the user selects `block`, set `approval.status: blocked` and STOP. `compensate-client` requires a concrete `compensationPlan`. `server-transaction`, `whole-workflow-idempotency`, or `server-batch` requires `executionOwner: server-orchestrator` plus `approval.serverDependency.connectionRequirementId` referencing a target `dataModelPlan.connectionRequirements[]` row. Add that target requirement before Gate 3; never accept a source GUID or an unnamed future backend.
+
+The source behavior mapping and executable step identity are immutable during approval: every `source.behaviorIds[]` entry remains in exactly one ordered proposal step, with its deterministic `stepId`, phase, and target function. The user may edit a human-facing step title or request a different native UX. Splitting, merging, reordering, or rephasing requires rerunning deterministic adaptation and reviewing the newly generated contract—not an ad hoc Gate 2c edit. Never summarize away formulas, field maps, connector arguments, or control-flow frames.
+
+Refresh `workflows.json.stats` and `mobile-plugin-input.json workflowPlan.stats`, then update `### Pathological Event Workflow Plan — Gate 2c` in `native-app-plan.md`. Validate before Gate 3:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-plugin-input.js" \
+  --dir "$WORKING_DIR" \
+  --require-pcf-approval \
+  --require-workflow-approval
+```
+
+Any failure is blocking. Safe import resets every incoming workflow approval and decision answer, so stale/crafted package metadata cannot bypass this gate.
 
 **Planner preflight (silent).** Before the full Task spawn, do a no-op `Task` probe for `mobile-app:native-app-planner` (same pattern as Step 11.0). If the probe fails with `Agent type … not found`, `tool unavailable`, or the host clearly cannot route nested agents, fall through to **inline-gate mode** (described below) without prompting. The orchestrator has the full tool surface itself — it can run the gates directly. Do not retry, do not ask the user.
 
@@ -1678,6 +1717,20 @@ Skip when `$ADAPTED_COMPONENTS_MD` is unset. Read the instantiated-component inv
 
 #### 10.8a — Analyze plan for cross-screen patterns
 
+Before ordinary cross-screen analysis, materialize approved pathological workflows when `$ADAPTED_WORKFLOWS` contains rows:
+
+##### 10.8a-workflows — Materialize approved named-step workflow modules
+
+1. Re-read `workflows.json`, `behaviors.json`, generated-service signatures, server-side write guards, and every approved decision. STOP unless every workflow is `approval.status: approved` and every required decision is resolved.
+2. For each workflow, write exactly the approved `proposal.target.module` under `src/features/<screen-domain>/workflows/`. The top-level orchestrator owns these shared files; screen builders must never create or edit them.
+3. Implement each proposal step as its own named function using the exact `step.targetFunction`. Place `// source-workflow-step: <stepId>` immediately above the function and each `// source-behavior: <behaviorId>` immediately above the real operation/branch/rule it implements. Preserve exact Dataverse field maps, connector/flow arguments, source order, and `controlFlow[]` frames from `behaviors.json`.
+4. Put `// source-workflow: <workflowId>` immediately above the exported `proposal.target.exportName` orchestrator. That export invokes the named step functions according to source semantics. For every distinct frame in `step.controlFlow[]`, put `// source-control-flow: <frame.id> <frame.kind> <token>` beside the native control structure, where token is `then-N`/`else`, `case-N`/`default`, `try-N`/`fallback-N`/`default`, `branch-N`, `body`, or `scope` as applicable. A source `If`/`Switch` remains alternative branches, `ForAll` remains a bounded loop, `IfError` retains its scoped fallback, `With` retains bindings, and only source `Concurrent` branches may run in parallel through `Promise.all`. Do not call flattened alternative branches sequentially merely because their steps have sequence numbers.
+5. Apply the approved failure/retry/batch/async policy. Client compensation must implement the approved compensation plan. Server-owned policies call the exact approved generated server/flow dependency; they do not recreate a transaction in client TypeScript.
+6. Keep UI concerns out of the module. Return a typed progress/result/error contract so the owning screen can show native pending, retry, partial-success, or completion UX. Do not leave TODOs, placeholders, logging-only steps, generic `any` workflow payloads, or one large function containing all source operations.
+7. Declare step functions before the exported orchestrator and invoke every step function from that export in approved source order/control flow. This shape is checked by `check-workflow-coverage.js`.
+
+For non-App workflows, Step 10.8b must pre-resolve the module import into the owning screen skeleton and create a typed event handler that invokes the approved export. Put `// source-workflow-call: <workflowId>` immediately above the real invocation. For `screen: App`, Step 10.8e owns the call from `src/bootstrap.ts` after auth readiness.
+
 Read all per-screen specs in `## Screens → ### Per-Screen Specs`. Identify:
 
 1. **Entity cards/rows** — if 2+ screens render the same entity (same Service) in a card/row format, generate a shared component.
@@ -1863,6 +1916,7 @@ export default function <ScreenName>() {
 **Rules for skeleton generation:**
 - Replace `<Service>`, `<Entity>`, `<ScreenName>`, `<searchKeys>`, `<orderField>`, `<field_declarations>` with actual values from the plan's per-screen spec + Generated Services table.
 - If a service is NOT in the Generated Services table, still write the import but add `// TODO(connector-not-yet-added)` above it.
+- If `$ADAPTED_WORKFLOWS` assigns an approved workflow to this screen, import its exact `proposal.target.exportName` from `proposal.target.importPath`, create the minimal typed pending/result state, and prewire the source event handler to invoke it under `// source-workflow-call: <workflowId>`. The screen builder may compose UX around this call but must not inline or duplicate the workflow operations.
 - The skeleton is a **valid TypeScript file** (compiles with `return null`) — builders replace the `return null` with real JSX.
 - Do NOT write skeletons for screens that the Screen Map marks `template (keep)`. A row marked `replace template` is intentionally rebuilt even when its file already exists; in adapted mode this is how the source start screen replaces the placeholder `home.tsx`.
 - **Never destructure `user`, `account`, `profile`, or `claims` from `useAuth()`** — those fields do not exist on `AuthState`. The only fields are `isLoading`, `isAuthReady`, `isSignedIn`, `error`, `acquireToken`, `signIn`, `signOut`. If the screen needs the signed-in user's name/email, add a `// TODO: decode ID token claim` comment — do not invent a field.
@@ -1883,6 +1937,7 @@ Skip when `$ADAPTED_FROM` is unset. Copy the maintained scripts from `${CLAUDE_S
 - `check-i18n-keys.js`
 - `check-behavior-coverage.js`
 - `check-pcf-coverage.js`
+- `check-workflow-coverage.js`
 - `check-conversion-scaffolding.js`
 
 Patch `package.json` idempotently with these commands:
@@ -1893,11 +1948,12 @@ Patch `package.json` idempotently with these commands:
   "check:i18n": "node scripts/check-i18n-keys.js",
   "check:coverage": "node scripts/check-behavior-coverage.js",
   "check:pcf": "node scripts/check-pcf-coverage.js",
+  "check:workflows": "node scripts/check-workflow-coverage.js",
   "check:scaffold": "node scripts/check-conversion-scaffolding.js"
 }
 ```
 
-Do not replace existing scripts. Add `npm run gen:assets` to `predev` only if it is not already present. Run all four once in baseline mode; missing companion manifests are a clean no-op, low pre-build behavior coverage is expected, and syntax/runtime failures in the scripts are blocking.
+Do not replace existing scripts. Add `npm run gen:assets` to `predev` only if it is not already present. Run all six once in baseline mode; missing companion manifests are a clean no-op, low pre-build behavior/workflow coverage is expected, and syntax/runtime failures in the scripts are blocking.
 
 #### 10.8d — Navigation/skeleton TypeScript gate
 
@@ -1912,6 +1968,8 @@ If this fails, do not launch Step 11. Capture the full error list once, batch-fi
 #### 10.8e — Reconstruct source bootstrap behavior
 
 Skip when `$ADAPTED_BEHAVIORS` is unset or contains no `screen: "App"` behavior. Otherwise, generate `src/bootstrap.ts` and mount a tiny `BootstrapRunner` inside the existing `PowerAppsProvider` tree. Preserve nested `If`, `Switch`, `ForAll`, `With`, `IfError`, and `Concurrent` control-flow frames from `behaviors.json`; never flatten a conditional source action into an unconditional startup call.
+
+When `$ADAPTED_WORKFLOWS` assigns an approved `screen: App` workflow, import its exact target export and invoke it from bootstrap under `// source-workflow-call: <workflowId>`. Those behavior IDs are owned by the workflow module; do not duplicate their operations or markers in `src/bootstrap.ts`.
 
 For every implemented App-level entry, place its exact `// source-behavior: <behaviorId>` marker immediately above the real bootstrap operation or conditional that owns it. Never add a marker to make coverage pass when the behavior is omitted, stubbed, or only logged.
 
@@ -1935,6 +1993,8 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-plugin-input.js" \
 ```
 
 Then verify every approved `server-dependency` references connection requirements completed in Step 10 and every `native-replacement` package still exists in project `package.json`. STOP on pending approval, blocker, unresolved dependency, or missing package; do not defer essential PCF work to a generic screen TODO.
+
+Also verify every approved `server-orchestrator` workflow references a completed target connection requirement and every approved workflow module/call-site path remains within the imported contract. STOP on pending/blocked workflow approval, unresolved decision, missing backend, or unsafe target path; do not let a screen builder improvise the missing policy.
 
 ### Step 11 — Build screens (parallel)
 
@@ -1992,6 +2052,7 @@ Each prompt:
   adapted_screen_controls: <working_dir>/<that row's controlsFile; omit when null>
   adapted_components: <$ADAPTED_COMPONENTS_MD>
   adapted_behaviors: <$ADAPTED_BEHAVIORS>
+  adapted_workflows: <$ADAPTED_WORKFLOWS>
   adapted_control_intent_coverage: <$ADAPTED_CONTROL_INTENT_COVERAGE>
   adapted_pcf_plan: <$ADAPTED_PCF_PLAN>
   adapted_state: <$ADAPTED_STATE>
@@ -1999,7 +2060,7 @@ Each prompt:
   adapted_localization: <$ADAPTED_LOCALIZATION>
   adapted_assets: <$ADAPTED_ASSETS>
 
-  Follow screen-builder.md. Build from the user's compact per-screen spec, shared conventions, and design direction — inherited defaults are intentional, and samples are API/import references only, not layouts to copy. A typed skeleton already exists at your target_file with all imports and hook calls pre-resolved from the Generated Services table + per-screen `**Data**` field — fill in the JSX, do not discard imports. The skeleton file IS the import source of truth; the plan no longer documents per-screen imports separately. When any adapted_* path is present, read it before writing: preserve source behavior/data/navigation/component contracts and control intent, but regenerate the best native UI rather than cloning Canvas pixels. Return per AGENTS.md rule #10: literal first line is `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:`, then a blank line, then the one-line summary.
+  Follow screen-builder.md. Build from the user's compact per-screen spec, shared conventions, and design direction — inherited defaults are intentional, and samples are API/import references only, not layouts to copy. A typed skeleton already exists at your target_file with all imports and hook calls pre-resolved from the Generated Services table + per-screen `**Data**` field — fill in the JSX, do not discard imports. The skeleton file IS the import source of truth; the plan no longer documents per-screen imports separately. When any adapted_* path is present, read it before writing: preserve source behavior/data/navigation/component contracts and control intent, but regenerate the best native UI rather than cloning Canvas pixels. Approved pathological handlers are already implemented in orchestrator-owned modules from adapted_workflows; invoke and present their typed result/progress UX, but never inline, duplicate, or rewrite their source operations. Return per AGENTS.md rule #10: literal first line is `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:`, then a blank line, then the one-line summary.
 ```
 
 **`target_file` resolution (HARD):** read the **File** column from the Screen Map row for this screen and prefix it with `<working_dir>/`. The path may be nested (e.g. `<working_dir>/app/(app)/inspections/[id].tsx`). The folder is guaranteed to exist because Step 10b.2 created it and wrote the inner `_layout.tsx`. **Do NOT compute the path as `<working_dir>/app/(app)/<screen-name>.tsx`** — that strips the folder structure and produces phantom-tab files. If the Screen Map row has no File column (older planner output), fall back to the flat path and surface a `DONE_WITH_CONCERNS: Screen Map missing File column — used flat fallback paths, expect phantom tabs` after the wave.
@@ -2146,13 +2207,14 @@ cd <working_dir>
 npm run generate-schemas    # refresh schema map for any data sources added since last run (idempotent)
 ```
 
-When `$ADAPTED_FROM` is set, run these four commands sequentially **between** schema generation and `tsc`; otherwise skip them. Do not wrap them in POSIX-only `if [ ... ]` syntax—the workflow must also run from Windows shells:
+When `$ADAPTED_FROM` is set, run these six commands sequentially **between** schema generation and `tsc`; otherwise skip them. Do not wrap them in POSIX-only `if [ ... ]` syntax—the workflow must also run from Windows shells:
 
 ```bash
 npm run gen:assets
 npm run check:i18n -- --strict
 npm run check:coverage -- --min 80
 npm run check:pcf -- --strict
+npm run check:workflows -- --strict
 npm run check:scaffold -- --strict
 ```
 

@@ -3,7 +3,7 @@
   "$id": "https://raw.githubusercontent.com/microsoft/power-platform-skills/main/plugins/mobile-apps/scripts/schemas/mobile-plugin-input.v3.schema.json",
   "title": "Canvas-to-native mobile plugin input",
   "type": "object",
-  "required": ["schemaVersion", "source", "app", "dataModelPlan", "screenPlan", "nativePlan", "pcfPlan", "riskReport", "unsupported"],
+  "required": ["schemaVersion", "source", "app", "dataModelPlan", "screenPlan", "nativePlan", "pcfPlan", "workflowPlan", "riskReport", "unsupported"],
   "properties": {
     "schemaVersion": { "const": "3" },
     "source": { "type": "object" },
@@ -69,6 +69,32 @@
             "blocked": { "type": "integer", "minimum": 0 },
             "byDisposition": { "type": "object" },
             "proposed": { "type": "object" }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "workflowPlan": {
+      "type": "object",
+      "required": ["file", "schema", "stats"],
+      "properties": {
+        "file": { "const": "workflows.json" },
+        "schema": { "const": "workflow-plan-v1" },
+        "stats": {
+          "type": "object",
+          "required": ["handlersScanned", "total", "pathologicalHandlers", "totalSteps", "mappedBehaviors", "requiredDecisions", "unresolvedDecisions", "pendingApproval", "approved", "blocked"],
+          "properties": {
+            "handlersScanned": { "type": "integer", "minimum": 0 },
+            "total": { "type": "integer", "minimum": 0 },
+            "pathologicalHandlers": { "type": "integer", "minimum": 0 },
+            "totalSteps": { "type": "integer", "minimum": 0 },
+            "mappedBehaviors": { "type": "integer", "minimum": 0 },
+            "requiredDecisions": { "type": "integer", "minimum": 0 },
+            "unresolvedDecisions": { "type": "integer", "minimum": 0 },
+            "pendingApproval": { "type": "integer", "minimum": 0 },
+            "approved": { "type": "integer", "minimum": 0 },
+            "blocked": { "type": "integer", "minimum": 0 }
           },
           "additionalProperties": true
         }

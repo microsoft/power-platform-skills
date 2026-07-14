@@ -141,9 +141,9 @@ function loadFileWithLocalImports(entryFile) {
 function localImportPaths(text) {
   const paths = new Set();
   const patterns = [
-    /from\s+['"](\.{1,2}\/[^'"]+)['"]/g,
-    /import\s*\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)/g,
-    /require\s*\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)/g,
+    /from\s+['"]((?:\.{1,2}\/|@\/)[^'"]+)['"]/g,
+    /import\s*\(\s*['"]((?:\.{1,2}\/|@\/)[^'"]+)['"]\s*\)/g,
+    /require\s*\(\s*['"]((?:\.{1,2}\/|@\/)[^'"]+)['"]\s*\)/g,
   ];
   for (const re of patterns) {
     let match;
@@ -153,7 +153,16 @@ function localImportPaths(text) {
 }
 
 function resolveLocalImport(fromFile, importPath) {
-  const base = path.resolve(path.dirname(fromFile), importPath);
+  if (importPath.startsWith('@/') && !/^@\/features\/[A-Za-z0-9_.-]+\/workflows\/[A-Za-z0-9_./-]+$/.test(importPath)) {
+    return null;
+  }
+  const sourceRoot = path.join(ROOT, 'src');
+  const base = importPath.startsWith('@/')
+    ? path.resolve(sourceRoot, importPath.slice(2))
+    : path.resolve(path.dirname(fromFile), importPath);
+  const allowedRoot = importPath.startsWith('@/') ? sourceRoot : ROOT;
+  const relative = path.relative(allowedRoot, base);
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
   const candidates = [
     base,
     `${base}.tsx`,

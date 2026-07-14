@@ -23,6 +23,7 @@ Canvas source (`Src/*.pa.yaml`, optional supported sidecars)
       screens/*.plan.md
       state/app-state.md
       behaviors.json
+      workflows.json
       control-intent-coverage.json
       pcf-plan.json
       server-side-assets.json
@@ -36,11 +37,13 @@ All artifacts remain local. Do not include credentials, access tokens, customer 
 
 | File | Required content | Consumer |
 |---|---|---|
+| `.mobile-app-modernizer-output` | Exact adapter ownership marker; proves the package was emitted by the deterministic adapter | Safe importer ownership guard |
 | `native-app-plan.md` | Approved-plan baseline with data, capabilities, connectors, navigation, and screen specs | Four one-tap import gates, data/native/connector/screen phases |
 | `mobile-plugin-input.json` | Machine-readable schema v3 payload | Orchestrator and specialized skills |
 | `screens/<Name>.plan.md` | Source workflow, control evidence, upgrade hints | One screen builder |
 | `state/app-state.md` | Source variable/collection readers, writers, and recommended native placement | Bootstrap and builders |
 | `behaviors.json` | Normalized actions, visibility, validation, derivations, unmatched formulas | Bootstrap, builders, coverage gate |
+| `workflows.json` | Pathological event detection, ordered named-step proposals, exception-only questions, user approval | Gate 2c, shared workflow generation, builders, workflow coverage gate |
 | `control-intent-coverage.json` | One semantic row per source control | Builder accounting |
 | `pcf-plan.json` | One proposed and explicitly approved disposition per PCF | Gate 2b, native/connector routing, builders, PCF coverage gate |
 | `server-side-assets.json` | Dataverse calculated/rollup/managed column rules | Data/write guard |
@@ -193,6 +196,38 @@ Rules:
 - Data mutation, navigation, validation, authorization/visibility, connector, and flow behavior must be implemented or explicitly unsupported.
 - Final generated coverage must be at least 80% per screen and overall; critical behavior has a 100% accounting requirement even when some entries remain explicit unsupported items.
 
+## Pathological workflow contract
+
+`workflows.json` is a compact architecture index over `behaviors.json`. It does not summarize away Power Fx. The adapter emits one row only when an event handler crosses deterministic complexity thresholds such as high action/statement count, mixed responsibilities, several remote side effects, a mutating loop, or deep control flow.
+
+Each row carries:
+
+- stable `workflowId` plus source screen/control/path/event
+- the exact ordered source `behaviorIds[]`
+- deterministic detection reasons and metrics
+- an ordered `proposal.steps[]` list with stable `stepId`, named target function, phase, behavior IDs, and preserved control-flow IDs/kinds
+- an orchestrator-owned target module/export/call-site path
+- `requiredDecisions[]` only for correctness-critical ambiguity
+- a separate user-owned `approval`
+
+Decision ownership is intentionally narrow:
+
+- AI owns helper/module names, step boundaries, native progress/error presentation, Canvas UI-state/reset/toast replacement, and other routine code/UX choices. These remain visible in the proposal and are approved once; they are not individual questions.
+- User answers are required only when source evidence cannot prove partial-failure/transaction policy, cross-system retry/idempotency, mutating batch failure behavior, asynchronous completion semantics, or an unclassified critical business operation.
+
+Safe import resets every workflow approval and decision answer. Gate 2c records each resolution (`decisionId`, value, `resolvedBy`, reason), approves every step ID, locks client/server execution ownership and UX mode, and records the user/timestamp. A server transaction/batch/idempotency choice must reference an actual target connection requirement; client compensation requires a concrete compensation plan. A blocking answer stops generation.
+
+Implementation ownership is split deliberately:
+
+- The orchestrator writes each approved module under `src/features/<domain>/workflows/` before screen builders run.
+- Each named step has `// source-workflow-step: <stepId>` and its exact `source-behavior` markers beside real operations.
+- Every full `step.controlFlow[]` frame has an exact `source-control-flow` marker beside its native branch/loop/error/concurrency structure.
+- The exported orchestrator has `// source-workflow: <workflowId>` and invokes named steps according to preserved branch/loop/error/concurrency semantics.
+- The owning screen or bootstrap invokes the export under `// source-workflow-call: <workflowId>` and renders typed progress/result/retry UX.
+- Screen builders never inline, duplicate, or rewrite workflow-owned operations.
+
+`check-workflow-coverage.js --strict` verifies approval readiness, safe target paths, module/export/call-site existence, exact markers, named step functions, behavior accounting, and orchestrator invocation order. `check-behavior-coverage.js` follows local `@/` imports so behavior markers implemented in approved workflow modules remain part of screen coverage.
+
 ## Control-intent contract
 
 `control-intent-coverage.json` has one row per source control. It is a semantic guardrail, not a component map.
@@ -261,6 +296,8 @@ Adapted apps install and run:
 npm run gen:assets
 STRICT=1 npm run check:i18n
 MIN_COVERAGE=80 npm run check:coverage
+STRICT=1 npm run check:pcf
+STRICT=1 npm run check:workflows
 STRICT=1 npm run check:scaffold
 npx tsc --noEmit
 ```

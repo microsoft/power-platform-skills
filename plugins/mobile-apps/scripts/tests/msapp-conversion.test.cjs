@@ -11,6 +11,7 @@ const extractor = require('../extract-msapp-brief.v2.cjs');
 const legacyAlias = require('../extract-msapp-brief.cjs');
 const adapter = require('../adapt-app-brief-for-mobile-plugin.js');
 const importer = require('../import-mobile-plugin-input.js');
+const workflowPlanLib = require('../lib/workflow-plan.js');
 
 function withoutControlFlowId(frame) {
   const { id, ...rest } = frame;
@@ -195,6 +196,155 @@ test('screen names cannot traverse extractor or adapter output paths', (t) => {
   assert.equal(fs.existsSync(path.join(tmp, 'Escape.json')), false);
 });
 
+test('workflow Gate 2c validation blocks pending plans and rejects behavior or path tampering', (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'msapp-workflow-gate-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const src = path.join(tmp, 'Src');
+  const briefDir = path.join(tmp, 'brief');
+  const adaptedDir = path.join(tmp, 'adapted');
+  fs.mkdirSync(src, { recursive: true });
+  fs.writeFileSync(path.join(src, 'App.pa.yaml'), [
+    'App:',
+    '  Properties:',
+    '    StartScreen: =OrderConfirm',
+    'Screens:',
+    '  OrderConfirm:',
+    '    Children:',
+    '      - ConfirmButton:',
+    '          Control: Button@1.0.0',
+    '          Properties:',
+    '            OnSelect: =Confirm("Submit order?"); Patch(Orders, Defaults(Orders), {name: var_name}); ForAll(col_lines As line, Patch(OrderLines, Defaults(OrderLines), {name: line.name})); \'Approval Flow\'.Run(var_orderId); Set(var_submitted, true); Refresh(Orders); Notify("Order submitted"); Navigate(OrderComplete)',
+    '  OrderComplete:',
+    '    Children: []',
+    '',
+  ].join('\n'));
+
+  const extract = spawnSync(process.execPath, [
+    path.resolve(__dirname, '..', 'extract-msapp-brief.v2.cjs'),
+    '--extracted', tmp,
+    '--out', briefDir,
+    '--app-name', 'Workflow Gate App',
+  ], { encoding: 'utf8' });
+  assert.equal(extract.status, 0, extract.stderr || extract.stdout);
+  const adapt = spawnSync(process.execPath, [
+    path.resolve(__dirname, '..', 'adapt-app-brief-for-mobile-plugin.js'),
+    '--input', path.join(briefDir, 'app-brief.json'),
+    '--screens-dir', path.join(briefDir, 'screens'),
+    '--out-dir', adaptedDir,
+  ], { encoding: 'utf8' });
+  assert.equal(adapt.status, 0, adapt.stderr || adapt.stdout);
+
+  const validatorPath = path.resolve(__dirname, '..', 'validate-mobile-plugin-input.js');
+  const base = spawnSync(process.execPath, [validatorPath, '--dir', adaptedDir, '--json'], { encoding: 'utf8' });
+  assert.equal(base.status, 0, base.stderr || base.stdout);
+  const pending = spawnSync(process.execPath, [validatorPath, '--dir', adaptedDir, '--json', '--require-workflow-approval'], { encoding: 'utf8' });
+  assert.equal(pending.status, 1);
+  assert.match(JSON.parse(pending.stdout).errors.join('\n'), /still requires explicit workflow approval/);
+
+  const reportPath = path.join(tmp, 'workflow-assessment.html');
+  const report = spawnSync(process.execPath, [
+    path.resolve(__dirname, '..', 'render-mobile-migration-report.js'),
+    '--dir', adaptedDir,
+    '--out', reportPath,
+  ], { encoding: 'utf8' });
+  assert.equal(report.status, 0, report.stderr || report.stdout);
+  const reportHtml = fs.readFileSync(reportPath, 'utf8');
+  assert.match(reportHtml, /Pathological event workflows/);
+  assert.match(reportHtml, /correctness-critical workflow answer/);
+
+  const workflowsPath = path.join(adaptedDir, 'workflows.json');
+  const inputPath = path.join(adaptedDir, 'mobile-plugin-input.json');
+  const workflowPlan = JSON.parse(fs.readFileSync(workflowsPath, 'utf8'));
+  const pluginInput = JSON.parse(fs.readFileSync(inputPath, 'utf8'));
+  const workflow = workflowPlan.workflows[0];
+  workflow.approval = {
+    status: 'approved',
+    approvedStepIds: workflow.proposal.steps.map((step) => step.stepId),
+    decisions: workflow.requiredDecisions.map((decision) => ({
+      decisionId: decision.decisionId,
+      status: 'resolved',
+      value: decision.recommended,
+      resolvedBy: 'user',
+      reason: 'User selected the recommended source-parity policy.',
+    })),
+    executionOwner: 'client-orchestrator',
+    uxMode: 'single-action-with-progress',
+    serverDependency: null,
+    compensationPlan: null,
+    reason: 'User approved the named-step workflow decomposition.',
+    approvedBy: 'user',
+    approvedAt: '2026-07-15T00:00:00.000Z',
+  };
+  workflowPlan.stats = workflowPlanLib.deriveWorkflowStats(workflowPlan.workflows, workflowPlan.stats);
+  pluginInput.workflowPlan.stats = JSON.parse(JSON.stringify(workflowPlan.stats));
+  fs.writeFileSync(workflowsPath, JSON.stringify(workflowPlan, null, 2));
+  fs.writeFileSync(inputPath, JSON.stringify(pluginInput, null, 2));
+
+  const approved = spawnSync(process.execPath, [validatorPath, '--dir', adaptedDir, '--json', '--require-workflow-approval'], { encoding: 'utf8' });
+  assert.equal(approved.status, 0, approved.stderr || approved.stdout);
+
+  const target = path.join(tmp, 'fresh-template');
+  fs.mkdirSync(path.join(target, 'node_modules', 'expo'), { recursive: true });
+  fs.writeFileSync(path.join(target, 'package.json'), '{"name":"workflow-target"}\n');
+  fs.writeFileSync(path.join(target, 'app.config.js'), 'module.exports = {};\n');
+  fs.writeFileSync(path.join(target, 'auth.config.json'), '{"msal":{"clientId":"","tenantId":""}}\n');
+  fs.writeFileSync(path.join(target, 'tamagui.config.ts'), 'export default {};\n');
+  const imported = spawnSync(process.execPath, [
+    path.resolve(__dirname, '..', 'import-mobile-plugin-input.js'),
+    '--source', adaptedDir,
+    '--target', target,
+  ], { encoding: 'utf8' });
+  assert.equal(imported.status, 0, imported.stderr || imported.stdout);
+  assert.equal(JSON.parse(imported.stdout).workflowApprovalsReset, 1);
+  const importedWorkflows = JSON.parse(fs.readFileSync(path.join(target, 'workflows.json'), 'utf8'));
+  const importedInput = JSON.parse(fs.readFileSync(path.join(target, 'mobile-plugin-input.json'), 'utf8'));
+  assert.equal(importedWorkflows.workflows[0].approval.status, 'pending');
+  assert.deepEqual(importedWorkflows.workflows[0].approval.decisions, []);
+  assert.equal(importedWorkflows.stats.pendingApproval, 1);
+  assert.equal(importedInput.workflowPlan.stats.pendingApproval, 1);
+
+  const unownedSource = path.join(tmp, 'unowned-source');
+  fs.cpSync(adaptedDir, unownedSource, { recursive: true });
+  fs.rmSync(path.join(unownedSource, '.mobile-app-modernizer-output'));
+  const unownedTarget = path.join(tmp, 'unowned-target');
+  fs.mkdirSync(path.join(unownedTarget, 'node_modules', 'expo'), { recursive: true });
+  fs.writeFileSync(path.join(unownedTarget, 'package.json'), '{"name":"unowned-target"}\n');
+  fs.writeFileSync(path.join(unownedTarget, 'app.config.js'), 'module.exports = {};\n');
+  fs.writeFileSync(path.join(unownedTarget, 'auth.config.json'), '{"msal":{"clientId":"","tenantId":""}}\n');
+  fs.writeFileSync(path.join(unownedTarget, 'tamagui.config.ts'), 'export default {};\n');
+  const unownedImport = spawnSync(process.execPath, [
+    path.resolve(__dirname, '..', 'import-mobile-plugin-input.js'),
+    '--source', unownedSource,
+    '--target', unownedTarget,
+  ], { encoding: 'utf8' });
+  assert.equal(unownedImport.status, 1);
+  assert.match(unownedImport.stderr, /adapter ownership marker/);
+  assert.equal(fs.existsSync(path.join(unownedTarget, 'native-app-plan.md')), false);
+
+  const originalSteps = JSON.stringify(workflow.proposal.steps);
+  workflow.proposal.steps[0].behaviorIds = [];
+  fs.writeFileSync(workflowsPath, JSON.stringify(workflowPlan, null, 2));
+  const missingBehavior = spawnSync(process.execPath, [validatorPath, '--dir', adaptedDir, '--json'], { encoding: 'utf8' });
+  assert.equal(missingBehavior.status, 1);
+  assert.match(JSON.parse(missingBehavior.stdout).errors.join('\n'), /behaviorIds must not be empty|account for every source behavior/);
+  workflow.proposal.steps = JSON.parse(originalSteps);
+
+  const loopStepIndex = workflow.proposal.steps.findIndex((step) => step.controlFlowKinds.includes('forAll'));
+  workflow.proposal.steps[loopStepIndex].controlFlow[0].source = 'col_tampered';
+  fs.writeFileSync(workflowsPath, JSON.stringify(workflowPlan, null, 2));
+  const controlFlowDrift = spawnSync(process.execPath, [validatorPath, '--dir', adaptedDir, '--json'], { encoding: 'utf8' });
+  assert.equal(controlFlowDrift.status, 1);
+  assert.match(JSON.parse(controlFlowDrift.stdout).errors.join('\n'), /controlFlow differs from behavior/);
+  workflow.proposal.steps = JSON.parse(originalSteps);
+
+  workflow.proposal.target.module = '../escape.ts';
+  workflow.proposal.target.importPath = '@/escape';
+  fs.writeFileSync(workflowsPath, JSON.stringify(workflowPlan, null, 2));
+  const unsafePath = spawnSync(process.execPath, [validatorPath, '--dir', adaptedDir, '--json'], { encoding: 'utf8' });
+  assert.equal(unsafePath.status, 1);
+  assert.match(JSON.parse(unsafePath.stdout).errors.join('\n'), /target\.module is unsafe or invalid/);
+});
+
 test('extractor accepts lowercase src directory on case-sensitive filesystems', (t) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'msapp-lowercase-src-'));
   t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
@@ -265,6 +415,9 @@ test('extractor accepts lowercase src directory on case-sensitive filesystems', 
   assert.equal(pluginInput.pcfPlan.file, 'pcf-plan.json');
   assert.equal(pluginInput.pcfPlan.stats.total, 0);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(adaptedDir, 'pcf-plan.json'), 'utf8')).controls, []);
+  assert.equal(pluginInput.workflowPlan.file, 'workflows.json');
+  assert.equal(pluginInput.workflowPlan.stats.total, 0);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(adaptedDir, 'workflows.json'), 'utf8')).workflows, []);
   const adaptedScreenPlan = fs.readFileSync(path.resolve(adaptedDir, pluginInput.screenPlan.screens[0].planFile), 'utf8');
   assert.match(adaptedScreenPlan, /    ````pfx\n    Notify\("```source text```"\)\n    ````/);
   const nativePlan = fs.readFileSync(path.join(adaptedDir, 'native-app-plan.md'), 'utf8');
@@ -427,8 +580,10 @@ test('extractor accepts lowercase src directory on case-sensitive filesystems', 
   assert.equal(importResult.screenCount, 1);
   assert.equal(importResult.assetsCopied, 1);
   assert.equal(importResult.assetsMissing, 1);
+  assert.equal(importResult.workflowApprovalsReset, 0);
   assert.equal(JSON.parse(fs.readFileSync(path.join(target, 'package.json'), 'utf8')).name, 'fresh-template');
   assert.ok(fs.existsSync(path.join(target, 'native-app-plan.md')));
+  assert.ok(fs.existsSync(path.join(target, 'workflows.json')));
   assert.equal(fs.readFileSync(path.join(target, 'assets', 'images', 'sample.png'), 'utf8'), 'portable-asset-bytes');
   const importedMemory = fs.readFileSync(path.join(target, 'memory-bank.md'), 'utf8');
   assert.match(importedMemory, /Imported from adapted brief at: adapted/);
@@ -1029,6 +1184,145 @@ test('adapter behaviors retain extractor control-flow and leaf source statement'
   assert.equal(new Set(duplicateNames.actions.map((action) => action.behaviorId)).size, 4);
 });
 
+test('adapter decomposes pathological handlers into stable named workflow steps and only critical questions', () => {
+  const formula = [
+    '=Confirm("Submit order?")',
+    'Patch(Orders, Defaults(Orders), {name: var_name})',
+    'ForAll(col_lines As line, Patch(OrderLines, Defaults(OrderLines), {name: line.name}))',
+    "'Approval Flow'.Run(var_orderId)",
+    'Set(var_submitted, true)',
+    'Refresh(Orders)',
+    'Notify("Order submitted")',
+    'Navigate(OrderComplete)',
+  ].join('; ');
+  const actions = extractor.classifyFormulaIntents(formula);
+  const behaviors = adapter.extractBehaviors([{
+    name: 'OrderConfirm',
+    controls: [{
+      name: 'ConfirmButton',
+      path: 'OrderConfirm/Footer/ConfirmButton',
+      properties: { OnSelect: formula },
+      events: { OnSelect: actions },
+    }],
+  }], { app: {} });
+  const screenRows = [{ name: 'OrderConfirm', file: 'app/(app)/order-confirm.tsx' }];
+  const workflowPlan = adapter.buildWorkflowPlan(behaviors, screenRows);
+
+  assert.equal(workflowPlan.$schema, 'workflow-plan-v1');
+  assert.equal(workflowPlan.workflows.length, 1);
+  const workflow = workflowPlan.workflows[0];
+  assert.match(workflow.workflowId, /^wf-[0-9a-f]{16}$/);
+  assert.deepEqual(workflow.source.behaviorIds, behaviors.actions.map((action) => action.behaviorId));
+  assert.ok(workflow.detection.reasons.includes('ACTION_COUNT'));
+  assert.ok(workflow.detection.reasons.includes('MULTI_SYSTEM_SIDE_EFFECTS'));
+  assert.ok(workflow.detection.reasons.includes('LOOPED_MUTATION'));
+  assert.equal(workflow.proposal.target.implementationOwner, 'workflow-orchestrator');
+  assert.equal(workflow.proposal.target.callSiteFile, 'app/(app)/order-confirm.tsx');
+  assert.match(workflow.proposal.target.module, /^src\/features\/order-confirm\/workflows\//);
+  assert.equal(workflow.proposal.steps.length, 6);
+  assert.deepEqual(
+    workflow.proposal.steps.flatMap((step) => step.behaviorIds),
+    behaviors.actions.map((action) => action.behaviorId)
+  );
+  const loopStep = workflow.proposal.steps.find((step) => step.controlFlowKinds.includes('forAll'));
+  assert.deepEqual(withoutControlFlowId(loopStep.controlFlow[0]), { kind: 'forAll', source: 'col_lines', alias: 'line' });
+  assert.deepEqual(
+    workflow.requiredDecisions.map((decision) => decision.type),
+    ['partial-failure-policy', 'retry-policy', 'batch-failure-policy']
+  );
+  assert.equal(workflow.requiredDecisions.every((decision) => decision.requiresUserInput === true), true);
+  assert.equal(workflow.requiredDecisions.some((decision) => /helper|function name|spinner|color/i.test(decision.prompt)), false);
+  assert.equal(workflow.approval.status, 'pending');
+  assert.equal(workflowPlan.stats.mappedBehaviors, behaviors.actions.length);
+  assert.equal(workflowPlan.stats.requiredDecisions, 3);
+  assert.equal(workflowPlan.stats.unresolvedDecisions, 3);
+
+  const repeated = adapter.buildWorkflowPlan(behaviors, screenRows);
+  assert.deepEqual(repeated, workflowPlan);
+
+  const unambiguousFormula = '=Set(var_a, 1); Set(var_b, 2); Set(var_c, 3); Set(var_d, 4); Set(var_e, 5); Set(var_f, 6); Set(var_g, 7); Set(var_h, 8)';
+  const unambiguousBehaviors = adapter.extractBehaviors([{
+    name: 'OrderConfirm',
+    controls: [{
+      name: 'PrepareButton',
+      path: 'OrderConfirm/PrepareButton',
+      properties: { OnSelect: unambiguousFormula },
+      events: { OnSelect: extractor.classifyFormulaIntents(unambiguousFormula) },
+    }],
+  }], { app: {} });
+  const unambiguous = adapter.buildWorkflowPlan(unambiguousBehaviors, screenRows);
+  assert.equal(unambiguous.workflows.length, 1);
+  assert.deepEqual(unambiguous.workflows[0].requiredDecisions, []);
+  assert.equal(unambiguous.stats.pendingApproval, 1);
+  assert.equal(unambiguous.stats.requiredDecisions, 0);
+
+  const exclusiveFormula = '=If(var_useA, Patch(OrdersA, Defaults(OrdersA), {name: "A"}), Patch(OrdersB, Defaults(OrdersB), {name: "B"})); Set(var_a, 1); Set(var_b, 2); Set(var_c, 3); Set(var_d, 4); Set(var_e, 5); Set(var_f, 6)';
+  const exclusiveBehaviors = adapter.extractBehaviors([{
+    name: 'OrderConfirm',
+    controls: [{
+      name: 'BranchButton',
+      path: 'OrderConfirm/BranchButton',
+      properties: { OnSelect: exclusiveFormula },
+      events: { OnSelect: extractor.classifyFormulaIntents(exclusiveFormula) },
+    }],
+  }], { app: {} });
+  const exclusive = adapter.buildWorkflowPlan(exclusiveBehaviors, screenRows);
+  assert.equal(exclusive.workflows.length, 1);
+  assert.deepEqual(exclusive.workflows[0].requiredDecisions, []);
+
+  const errorHandledFormula = '=IfError(Patch(Orders, Defaults(Orders), {name: var_name}); \'Approval Flow\'.Run(var_orderId), Notify("Submission failed")); Set(var_a, 1); Set(var_b, 2); Set(var_c, 3); Set(var_d, 4); Set(var_e, 5)';
+  const errorHandledBehaviors = adapter.extractBehaviors([{
+    name: 'OrderConfirm',
+    controls: [{
+      name: 'HandledButton',
+      path: 'OrderConfirm/HandledButton',
+      properties: { OnSelect: errorHandledFormula },
+      events: { OnSelect: extractor.classifyFormulaIntents(errorHandledFormula) },
+    }],
+  }], { app: {} });
+  const errorHandled = adapter.buildWorkflowPlan(errorHandledBehaviors, screenRows);
+  assert.equal(errorHandled.workflows.length, 1);
+  assert.deepEqual(errorHandled.workflows[0].requiredDecisions.map((decision) => decision.type), ['retry-policy']);
+  assert.ok(errorHandled.workflows[0].proposal.steps.some((step) => step.controlFlow.some((frame) => frame.kind === 'ifError' && frame.role === 'fallback')));
+
+  const ordinary = adapter.buildWorkflowPlan(adapter.extractBehaviors([{
+    name: 'OrderConfirm',
+    controls: [{
+      name: 'CancelButton',
+      path: 'OrderConfirm/CancelButton',
+      properties: { OnSelect: '=Back(); Notify("Canceled")' },
+      events: { OnSelect: extractor.classifyFormulaIntents('=Back(); Notify("Canceled")') },
+    }],
+  }], { app: {} }), screenRows);
+  assert.deepEqual(ordinary.workflows, []);
+});
+
+test('workflow approval reset clears stale answers and recomputes summaries', () => {
+  const workflow = {
+    workflowId: 'wf-1111111111111111',
+    requiredDecisions: [{ decisionId: 'wfd-1111111111111111', type: 'retry-policy' }],
+    proposal: { steps: [{ stepId: 'wfs-1111111111111111', behaviorIds: ['b-1111111111111111'] }] },
+    approval: {
+      status: 'approved',
+      approvedStepIds: ['wfs-1111111111111111'],
+      decisions: [{ decisionId: 'wfd-1111111111111111', status: 'resolved', value: 'no-retry', resolvedBy: 'user', reason: 'stale' }],
+      executionOwner: 'client-orchestrator',
+      uxMode: 'single-action-with-progress',
+      reason: 'Crafted stale approval.',
+      approvedBy: 'user',
+      approvedAt: '2026-07-01T00:00:00.000Z',
+    },
+  };
+  const workflowPlan = { stats: { handlersScanned: 1 }, workflows: [workflow] };
+  const input = { workflowPlan: { stats: { approved: 1 } } };
+  assert.equal(importer.resetWorkflowApprovals(input, workflowPlan), 1);
+  assert.deepEqual(workflow.approval, workflowPlanLib.emptyWorkflowApproval());
+  assert.equal(workflowPlan.stats.pendingApproval, 1);
+  assert.equal(workflowPlan.stats.approved, 0);
+  assert.equal(workflowPlan.stats.unresolvedDecisions, 1);
+  assert.deepEqual(input.workflowPlan.stats, workflowPlan.stats);
+});
+
 test('behavior coverage resolves kebab-case routes and requires critical actions', (t) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'behavior-coverage-test-'));
   t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
@@ -1071,6 +1365,123 @@ test('behavior coverage resolves kebab-case routes and requires critical actions
   });
   assert.equal(fail.status, 1, fail.stderr || fail.stdout);
   assert.match(fail.stdout, /critical behavior accounting: FAIL/);
+});
+
+test('workflow coverage requires named steps, exact markers, and a real screen invocation', (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-coverage-test-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const screenDir = path.join(tmp, 'app', '(app)');
+  const moduleDir = path.join(tmp, 'src', 'features', 'order-confirm', 'workflows');
+  fs.mkdirSync(screenDir, { recursive: true });
+  fs.mkdirSync(moduleDir, { recursive: true });
+  fs.writeFileSync(path.join(tmp, 'mobile-plugin-input.json'), JSON.stringify({
+    screenPlan: { screens: [{ name: 'OrderConfirm', file: 'app/(app)/order-confirm.tsx' }] },
+  }));
+  fs.writeFileSync(path.join(tmp, 'behaviors.json'), JSON.stringify({
+    actions: [
+      { behaviorId: 'b-1111111111111111', screen: 'OrderConfirm', intent: 'patch', source: 'Orders' },
+      { behaviorId: 'b-2222222222222222', screen: 'OrderConfirm', intent: 'navigate', target: 'Complete' },
+    ],
+  }));
+  fs.writeFileSync(path.join(tmp, 'workflows.json'), JSON.stringify({
+    $schema: 'workflow-plan-v1',
+    workflows: [{
+      workflowId: 'wf-1111111111111111',
+      source: { screen: 'OrderConfirm', control: 'ConfirmButton', event: 'OnSelect' },
+      proposal: {
+        target: {
+          module: 'src/features/order-confirm/workflows/confirm.ts',
+          importPath: '@/features/order-confirm/workflows/confirm',
+          exportName: 'runConfirmWorkflow',
+          callSiteFile: 'app/(app)/order-confirm.tsx',
+        },
+        steps: [
+          { stepId: 'wfs-1111111111111111', targetFunction: 'step01PersistData', behaviorIds: ['b-1111111111111111'] },
+          { stepId: 'wfs-2222222222222222', targetFunction: 'step02CompleteWorkflow', behaviorIds: ['b-2222222222222222'] },
+        ],
+      },
+      approval: { status: 'approved' },
+    }],
+  }));
+  const modulePath = path.join(moduleDir, 'confirm.ts');
+  fs.writeFileSync(modulePath, [
+    '// source-workflow-step: wfs-1111111111111111',
+    'async function step01PersistData() {',
+    '  // source-behavior: b-1111111111111111',
+    '  await OrdersService.create({ name: "Order" });',
+    '}',
+    '// source-workflow-step: wfs-2222222222222222',
+    'async function step02CompleteWorkflow() {',
+    '  // source-behavior: b-2222222222222222',
+    '  router.navigate("/complete");',
+    '}',
+    '// source-workflow: wf-1111111111111111',
+    'export async function runConfirmWorkflow() {',
+    '  await step01PersistData();',
+    '  await step02CompleteWorkflow();',
+    '}',
+    '',
+  ].join('\n'));
+  const screenPath = path.join(screenDir, 'order-confirm.tsx');
+  fs.writeFileSync(screenPath, [
+    "import { runConfirmWorkflow } from '@/features/order-confirm/workflows/confirm';",
+    'export default function OrderConfirm() {',
+    '  const submit = async () => {',
+    '    // source-workflow-call: wf-1111111111111111',
+    '    await runConfirmWorkflow();',
+    '  };',
+    '  return <Button onPress={submit}>Confirm</Button>;',
+    '}',
+    '',
+  ].join('\n'));
+
+  const workflowChecker = path.resolve(__dirname, '..', '..', 'shared', 'samples', 'scripts', 'check-workflow-coverage.js');
+  const pass = spawnSync(process.execPath, [workflowChecker, '--strict'], { cwd: tmp, encoding: 'utf8' });
+  assert.equal(pass.status, 0, pass.stderr || pass.stdout);
+  assert.match(pass.stdout, /implemented: 1\/1/);
+
+  const behaviorChecker = path.resolve(__dirname, '..', '..', 'shared', 'samples', 'scripts', 'check-behavior-coverage.js');
+  const behaviorPass = spawnSync(process.execPath, [behaviorChecker, '--min', '100'], { cwd: tmp, encoding: 'utf8' });
+  assert.equal(behaviorPass.status, 0, behaviorPass.stderr || behaviorPass.stdout);
+  assert.match(behaviorPass.stdout, /critical behavior accounting: PASS/);
+
+  const framedPlanPath = path.join(tmp, 'workflows.json');
+  const framedPlan = JSON.parse(fs.readFileSync(framedPlanPath, 'utf8'));
+  framedPlan.workflows[0].proposal.steps[0].controlFlow = [{ id: 'if-12345678', kind: 'if', role: 'then', branchIndex: 0 }];
+  fs.writeFileSync(framedPlanPath, JSON.stringify(framedPlan));
+  const missingFrame = spawnSync(process.execPath, [workflowChecker, '--strict'], { cwd: tmp, encoding: 'utf8' });
+  assert.equal(missingFrame.status, 1);
+  assert.match(missingFrame.stdout + missingFrame.stderr, /lacks an exact source-control-flow marker|lack a native if condition/);
+  fs.writeFileSync(modulePath, fs.readFileSync(modulePath, 'utf8').replace(
+    '  await step01PersistData();',
+    '  // source-control-flow: if-12345678 if then-0\n  if (shouldPersist) { await step01PersistData(); }'
+  ));
+  const framedPass = spawnSync(process.execPath, [workflowChecker, '--strict'], { cwd: tmp, encoding: 'utf8' });
+  assert.equal(framedPass.status, 0, framedPass.stderr || framedPass.stdout);
+
+  fs.writeFileSync(screenPath, 'export default function OrderConfirm(){ return null; }\n');
+  const uninvoked = spawnSync(process.execPath, [workflowChecker, '--strict'], { cwd: tmp, encoding: 'utf8' });
+  assert.equal(uninvoked.status, 1);
+  assert.match(uninvoked.stdout + uninvoked.stderr, /lacks exact source-workflow-call marker/);
+
+  fs.writeFileSync(screenPath, [
+    "import { runConfirmWorkflow } from '@/features/order-confirm/workflows/confirm';",
+    '// source-workflow-call: wf-1111111111111111',
+    'runConfirmWorkflow();',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(modulePath, [
+    '// source-workflow-step: wfs-1111111111111111',
+    '// source-behavior: b-1111111111111111',
+    '// source-workflow-step: wfs-2222222222222222',
+    '// source-behavior: b-2222222222222222',
+    '// source-workflow: wf-1111111111111111',
+    'export async function runConfirmWorkflow() { await OrdersService.create({}); router.navigate("/complete"); }',
+    '',
+  ].join('\n'));
+  const monolithic = spawnSync(process.execPath, [workflowChecker, '--strict'], { cwd: tmp, encoding: 'utf8' });
+  assert.equal(monolithic.status, 1);
+  assert.match(monolithic.stdout + monolithic.stderr, /lacks named function/);
 });
 
 test('PCF coverage requires approved implementation markers and visible unsupported UX', (t) => {

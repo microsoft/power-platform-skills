@@ -21,6 +21,7 @@
  *   migration-checklist.md          ← execution checklist
  *   components.md                   ← reused custom component catalog
  *   state/app-state.md              ← state scope report for `var_*` and `col_*` (writers, readers, placement)
+ *   workflows.json                  ← approved plan-time decomposition for pathological event handlers
  *   control-intent-coverage.json    ← Canvas control intent + must-preserve behavior/data/layout contract
  *   screens/<Name>.plan.md          ← per-screen full spec (summary + tree)
  *   screens/<Name>.controls.md      ← (only when .plan.md would exceed cap)
@@ -64,6 +65,10 @@ const {
   isWindowsReservedBasename,
   pathContains,
 } = require('./lib/modernizer-paths.js');
+const {
+  deriveWorkflowStats,
+  emptyWorkflowApproval,
+} = require('./lib/workflow-plan.js');
 const MAX_INPUT_JSON_BYTES = 64 * 1024 * 1024;
 const DETERMINISTIC_EPOCH = '1970-01-01T00:00:00.000Z';
 let GENERATION_TIMESTAMP = DETERMINISTIC_EPOCH;
@@ -2157,6 +2162,449 @@ function extractBehaviors(loadedScreens, brief) {
   };
 }
 
+// ---------- Plan-time workflow decomposition ----------
+//
+// Canvas makers often place an entire business transaction in one OnSelect.
+// The behavior ledger above already preserves each classified leaf and its
+// control-flow frames; this layer adds a compact architecture contract so a
+// screen builder never turns those leaves back into one giant React callback.
+// It never rewrites formulas or reorders actions. Steps are contiguous slices
+// of the existing behavior ledger and retain the original behavior IDs.
+
+const WORKFLOW_MUTATION_INTENTS = new Set([
+  'patch', 'update', 'updateIf', 'remove', 'removeIf', 'submitForm',
+]);
+const WORKFLOW_EXTERNAL_INTENTS = new Set(['connectorCall', 'flowCall', 'aiCall']);
+const WORKFLOW_STATE_INTENTS = new Set([
+  'setVar', 'setContext', 'collect', 'clearCollect', 'clear', 'reset',
+  'resetForm', 'newForm', 'editForm', 'viewForm', 'setProperty', 'setFocus',
+]);
+const WORKFLOW_COMPLETION_INTENTS = new Set([
+  'navigate', 'back', 'notify', 'refresh', 'exitApp', 'requestHide',
+]);
+
+function stableContractId(prefix, identity) {
+  return `${prefix}-${crypto.createHash('sha256').update(JSON.stringify(identity)).digest('hex').slice(0, 16)}`;
+}
+
+function pascalIdentifier(value, fallback = 'Workflow') {
+  const words = String(value || '')
+    .normalize('NFKC')
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean);
+  const result = words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join('') || fallback;
+  return /^[A-Za-z_$]/.test(result) ? result.slice(0, 100) : `Workflow${result}`.slice(0, 100);
+}
+
+function uniqueIntegers(values) {
+  return [...new Set(toArray(values).filter(Number.isInteger))].sort((a, b) => a - b);
+}
+
+function workflowPhase(intent) {
+  if (intent === 'confirm' || intent === 'predicate-only') return 'validate';
+  if (WORKFLOW_MUTATION_INTENTS.has(intent)) return 'persist-data';
+  if (WORKFLOW_EXTERNAL_INTENTS.has(intent)) return 'invoke-integration';
+  if (intent === 'read' || intent === 'literal' || intent === 'projection' || intent === 'paramRead') return 'derive-data';
+  if (WORKFLOW_STATE_INTENTS.has(intent)) return 'prepare-state';
+  if (WORKFLOW_COMPLETION_INTENTS.has(intent)) return 'complete-workflow';
+  if (['saveData', 'loadData', 'clearOfflineData'].includes(intent)) return 'persist-local-state';
+  if (['launch', 'download', 'downloadJson', 'print'].includes(intent)) return 'invoke-device-action';
+  return 'source-operation';
+}
+
+function workflowPhaseTitle(phase) {
+  return ({
+    validate: 'Validate preconditions',
+    'derive-data': 'Derive workflow data',
+    'prepare-state': 'Prepare workflow state',
+    'persist-data': 'Persist business data',
+    'invoke-integration': 'Invoke approved integration',
+    'persist-local-state': 'Persist local workflow state',
+    'invoke-device-action': 'Run device action',
+    'complete-workflow': 'Complete and present result',
+    'source-operation': 'Preserve source operation',
+  })[phase] || 'Preserve source operation';
+}
+
+function workflowActionTarget(action) {
+  if (!action || typeof action !== 'object') return null;
+  if (WORKFLOW_MUTATION_INTENTS.has(action.intent)) return action.source || action.form || null;
+  if (action.intent === 'connectorCall' || action.intent === 'aiCall') return action.connector || null;
+  if (action.intent === 'flowCall') return action.flow || null;
+  if (action.intent === 'navigate') return action.target || null;
+  return null;
+}
+
+function workflowHandlerKey(value) {
+  return JSON.stringify([
+    value && value.screen,
+    (value && (value.controlPath || value.control)) || null,
+    (value && (value.event || value.property)) || null,
+  ]);
+}
+
+function workflowControlFlowSignature(action) {
+  return JSON.stringify(toArray(action && action.controlFlow));
+}
+
+function exclusiveBranchToken(frame) {
+  if (!frame || !frame.id) return null;
+  if (frame.kind === 'if') {
+    return frame.role === 'else' ? 'else' : `then:${frame.branchIndex ?? 0}`;
+  }
+  if (frame.kind === 'switch') {
+    return frame.role === 'default' ? 'default' : `case:${frame.caseIndex ?? 0}`;
+  }
+  return null;
+}
+
+function workflowActionsCanCoExecute(left, right) {
+  const leftFrames = new Map(toArray(left && left.controlFlow).filter((frame) => frame && frame.id).map((frame) => [frame.id, frame]));
+  for (const rightFrame of toArray(right && right.controlFlow)) {
+    if (!rightFrame || !rightFrame.id || !leftFrames.has(rightFrame.id)) continue;
+    const leftToken = exclusiveBranchToken(leftFrames.get(rightFrame.id));
+    const rightToken = exclusiveBranchToken(rightFrame);
+    if (leftToken && rightToken && leftToken !== rightToken) return false;
+  }
+  return true;
+}
+
+function buildWorkflowSteps(workflowId, actions) {
+  const groups = [];
+  let current = null;
+  for (const action of actions) {
+    const phase = workflowPhase(action.intent);
+    const flowSignature = workflowControlFlowSignature(action);
+    // Cap a step at three leaves. A handler made of ten sequential writes is
+    // still pathological even though every leaf belongs to the same phase.
+    const canAppend = current
+      && current.phase === phase
+      && current.flowSignature === flowSignature
+      && current.actions.length < 3;
+    if (!canAppend) {
+      current = { phase, flowSignature, actions: [] };
+      groups.push(current);
+    }
+    current.actions.push(action);
+  }
+
+  const steps = groups.map((group, index) => {
+    const sequence = index + 1;
+    const behaviorIds = group.actions.map((action) => action.behaviorId);
+    const stepId = stableContractId('wfs', [workflowId, sequence, group.phase, behaviorIds]);
+    const controlFlow = group.actions.flatMap((action) => toArray(action.controlFlow));
+    return {
+      stepId,
+      sequence,
+      phase: group.phase,
+      title: workflowPhaseTitle(group.phase),
+      targetFunction: `step${String(sequence).padStart(2, '0')}${pascalIdentifier(group.phase, 'SourceOperation')}`,
+      behaviorIds,
+      intents: unique(group.actions.map((action) => action.intent)),
+      sourceStatementIndexes: uniqueIntegers(group.actions.map((action) => action.sourceStatementIndex)),
+      controlFlow: toArray(group.actions[0] && group.actions[0].controlFlow).map((frame) => ({ ...frame })),
+      controlFlowKinds: unique(controlFlow.map((frame) => frame && frame.kind)).sort(),
+      controlFlowIds: unique(controlFlow.map((frame) => frame && frame.id)).sort(),
+      rule: 'Implement as a named function. Preserve each referenced behavior controlFlow[] frame; do not execute alternative branches sequentially.',
+    };
+  });
+  return steps.map((step, index) => ({
+    ...step,
+    sourceOrderAfter: index > 0 ? steps[index - 1].stepId : null,
+  }));
+}
+
+function buildWorkflowDecision(workflowId, type, config) {
+  return {
+    decisionId: stableContractId('wfd', [workflowId, type]),
+    type,
+    requiresUserInput: config.requiresUserInput !== false,
+    answerKind: config.answerKind || 'choice',
+    prompt: config.prompt,
+    whyRequired: config.whyRequired,
+    recommended: config.recommended || null,
+    options: toArray(config.options),
+    evidence: config.evidence || {},
+  };
+}
+
+function buildWorkflowDecisions(workflowId, actions, unmatched, metrics) {
+  const decisions = [];
+  const mutationActions = actions.filter((action) => WORKFLOW_MUTATION_INTENTS.has(action.intent));
+  const externalActions = actions.filter((action) => WORKFLOW_EXTERNAL_INTENTS.has(action.intent));
+  const mutationIds = mutationActions.map((action) => action.behaviorId);
+  const externalIds = externalActions.map((action) => action.behaviorId);
+  const loopMutationActions = mutationActions.filter((action) =>
+    WORKFLOW_MUTATION_INTENTS.has(action.intent)
+    && toArray(action.controlFlow).some((frame) => frame && frame.kind === 'forAll'));
+  const remoteActions = [...mutationActions, ...externalActions];
+  const allRemoteErrorBounded = remoteActions.length > 0 && remoteActions.every((action) =>
+    toArray(action.controlFlow).some((frame) => frame && frame.kind === 'ifError'));
+  const unboundedLoopMutationIds = loopMutationActions.filter((action) =>
+    !toArray(action.controlFlow).some((frame) => frame && frame.kind === 'ifError'))
+    .map((action) => action.behaviorId);
+  const compatibleRemotePairs = [];
+  for (let i = 0; i < remoteActions.length; i += 1) {
+    for (let j = i + 1; j < remoteActions.length; j += 1) {
+      if (workflowActionsCanCoExecute(remoteActions[i], remoteActions[j])) compatibleRemotePairs.push([remoteActions[i], remoteActions[j]]);
+    }
+  }
+  const compatibleMutationExternalPairs = mutationActions.flatMap((mutation) =>
+    externalActions.filter((external) => workflowActionsCanCoExecute(mutation, external)).map((external) => [mutation, external]));
+
+  if (compatibleRemotePairs.length > 0 && !allRemoteErrorBounded) {
+    decisions.push(buildWorkflowDecision(workflowId, 'partial-failure-policy', {
+      prompt: 'If a later remote operation fails after an earlier write succeeded, what result should the native workflow preserve?',
+      whyRequired: 'The source performs multiple remote side effects without an explicit IfError boundary, so intended atomicity cannot be proven.',
+      recommended: 'preserve-source-partial',
+      options: [
+        { value: 'preserve-source-partial', label: 'Keep completed operations and show the failed step', effect: 'Closest source-parity behavior; retry only the failed step.' },
+        { value: 'compensate-client', label: 'Undo completed operations from the client', effect: 'Requires an explicit compensation plan for every completed write.' },
+        { value: 'server-transaction', label: 'Move the atomic operation to an approved server workflow', effect: 'Requires a target server/flow dependency before generation.' },
+        { value: 'block', label: 'Block conversion until policy is specified', effect: 'No code generation for this workflow.' },
+      ],
+      evidence: { behaviorIds: [...mutationIds, ...externalIds], targets: metrics.remoteTargets },
+    }));
+  }
+
+  if (compatibleMutationExternalPairs.length > 0) {
+    decisions.push(buildWorkflowDecision(workflowId, 'retry-policy', {
+      prompt: 'How should the app prevent duplicate writes or duplicate integration calls when the user retries this workflow?',
+      whyRequired: 'A retry spans both persisted data and an external connector/flow call; source code does not prove an idempotency contract.',
+      recommended: 'disable-resubmit-retry-failed-step',
+      options: [
+        { value: 'disable-resubmit-retry-failed-step', label: 'Disable double-submit and retry only the failed step', effect: 'Client tracks completed steps during the current attempt.' },
+        { value: 'whole-workflow-idempotency', label: 'Use a backend idempotency key', effect: 'Requires target backend support and a server dependency.' },
+        { value: 'no-retry', label: 'Do not offer retry', effect: 'Show a terminal result and require a fresh business action.' },
+        { value: 'block', label: 'Block conversion until retry semantics are specified', effect: 'No code generation for this workflow.' },
+      ],
+      evidence: { mutationBehaviorIds: mutationIds, integrationBehaviorIds: externalIds },
+    }));
+  }
+
+  if (unboundedLoopMutationIds.length > 0) {
+    decisions.push(buildWorkflowDecision(workflowId, 'batch-failure-policy', {
+      prompt: 'When one row fails inside the source ForAll write loop, should remaining rows continue?',
+      whyRequired: 'The source contains a mutating loop without an explicit per-row error boundary.',
+      recommended: 'continue-and-report-per-row',
+      options: [
+        { value: 'continue-and-report-per-row', label: 'Continue and report failed rows', effect: 'Preserves independent row processing and exposes partial results.' },
+        { value: 'stop-first-failure', label: 'Stop on the first failure', effect: 'Later rows are not attempted.' },
+        { value: 'server-batch', label: 'Use an approved server-side batch/transaction', effect: 'Requires a target server dependency.' },
+        { value: 'block', label: 'Block conversion until batch semantics are specified', effect: 'No code generation for this workflow.' },
+      ],
+      evidence: { behaviorIds: unboundedLoopMutationIds },
+    }));
+  }
+
+  const asyncCalls = actions.filter((action) =>
+    action.intent === 'flowCall' && String(action.action || '').toLowerCase() === 'runasync');
+    if (asyncCalls.some((call) => actions.some((action) => action.actionIndex > call.actionIndex
+      && workflowActionsCanCoExecute(call, action)
+      && (WORKFLOW_MUTATION_INTENTS.has(action.intent) || WORKFLOW_COMPLETION_INTENTS.has(action.intent))))) {
+    decisions.push(buildWorkflowDecision(workflowId, 'async-completion-policy', {
+      prompt: 'Should the native workflow wait for the asynchronous flow result before finalizing or navigating?',
+      whyRequired: 'The source invokes RunAsync and then performs another business/UI completion action.',
+      recommended: 'fire-and-track-status',
+      options: [
+        { value: 'wait-for-result', label: 'Wait for a terminal result', effect: 'Keep progress UI active until completion.' },
+        { value: 'fire-and-track-status', label: 'Submit and track status', effect: 'Navigate to a pending/result state backed by server status.' },
+        { value: 'fire-and-forget', label: 'Submit without tracking', effect: 'Complete immediately; later flow failure is not shown in-app.' },
+        { value: 'block', label: 'Block conversion until completion semantics are specified', effect: 'No code generation for this workflow.' },
+      ],
+      evidence: { behaviorIds: asyncCalls.map((action) => action.behaviorId) },
+    }));
+  }
+
+  const criticalUnmatched = unmatched.filter((entry) =>
+    /\b(?:Patch|Update|UpdateIf|Remove|RemoveIf|Collect|SubmitForm|\.Run(?:Async)?|Navigate)\s*\(/i
+      .test(String(entry.sourceStatement || entry.raw || entry.sourceFormula || '')));
+  if (criticalUnmatched.length > 0) {
+    decisions.push(buildWorkflowDecision(workflowId, 'source-contract', {
+      answerKind: 'text',
+      prompt: 'Describe the required business outcome of the unclassified source operation so it can be preserved without guessing.',
+      whyRequired: 'A potentially mutating, integrating, or navigating source statement could not be deterministically classified.',
+      recommended: null,
+      options: [],
+      evidence: {
+        sourceStatementIndexes: uniqueIntegers(criticalUnmatched.map((entry) => entry.sourceStatementIndex)),
+        count: criticalUnmatched.length,
+      },
+    }));
+  }
+  return decisions;
+}
+
+function buildWorkflowPlan(behaviors, screenRows) {
+  const handlers = new Map();
+  const screenFiles = new Map(toArray(screenRows).map((screen) => [screen.name, screen.file]));
+  const ensureHandler = (entry) => {
+    const key = workflowHandlerKey(entry);
+    if (!handlers.has(key)) {
+      handlers.set(key, {
+        key,
+        screen: entry.screen,
+        control: entry.control || null,
+        controlPath: entry.controlPath || entry.control || null,
+        event: entry.event || entry.property,
+        actions: [],
+        unmatched: [],
+        sourceFormula: entry.sourceFormula || null,
+      });
+    }
+    const handler = handlers.get(key);
+    if (!handler.sourceFormula && entry.sourceFormula) handler.sourceFormula = entry.sourceFormula;
+    return handler;
+  };
+
+  for (const action of toArray(behaviors && behaviors.actions)) ensureHandler(action).actions.push(action);
+  for (const entry of toArray(behaviors && behaviors.unmatchedFormulas)) {
+    if (!isEventPropertyName(entry.property)) continue;
+    ensureHandler(entry).unmatched.push(entry);
+  }
+
+  const workflows = [];
+  let handlersSkippedUnclassified = 0;
+  for (const handler of handlers.values()) {
+    handler.actions.sort((a, b) => (a.actionIndex || 0) - (b.actionIndex || 0));
+    if (handler.actions.length === 0) {
+      handlersSkippedUnclassified += 1;
+      continue;
+    }
+    const formulaLength = String(handler.sourceFormula || '').length;
+    const phases = unique(handler.actions.map((action) => workflowPhase(action.intent)));
+    const mutationActions = handler.actions.filter((action) => WORKFLOW_MUTATION_INTENTS.has(action.intent));
+    const externalActions = handler.actions.filter((action) => WORKFLOW_EXTERNAL_INTENTS.has(action.intent));
+    const remoteTargets = unique([...mutationActions, ...externalActions].map(workflowActionTarget)).sort();
+    const maxControlFlowDepth = Math.max(0, ...handler.actions.map((action) => toArray(action.controlFlow).length));
+    const loopMutationCount = mutationActions.filter((action) =>
+      toArray(action.controlFlow).some((frame) => frame && frame.kind === 'forAll')).length;
+    const sourceStatementCount = uniqueIntegers(handler.actions.map((action) => action.sourceStatementIndex)).length;
+    const remoteSideEffectCount = mutationActions.length + externalActions.length;
+    const metrics = {
+      classifiedActions: handler.actions.length,
+      unmatchedActions: handler.unmatched.length,
+      sourceStatementCount,
+      formulaLength,
+      responsibilityCount: phases.length,
+      mutationCount: mutationActions.length,
+      externalCallCount: externalActions.length,
+      remoteSideEffectCount,
+      remoteTargets,
+      maxControlFlowDepth,
+      loopMutationCount,
+      concurrentActionCount: handler.actions.filter((action) =>
+        toArray(action.controlFlow).some((frame) => frame && frame.kind === 'concurrent')).length,
+      errorBoundActionCount: handler.actions.filter((action) =>
+        toArray(action.controlFlow).some((frame) => frame && frame.kind === 'ifError')).length,
+    };
+    const reasons = [];
+    if (handler.actions.length >= 8) reasons.push('ACTION_COUNT');
+    if (sourceStatementCount >= 6) reasons.push('STATEMENT_COUNT');
+    if (formulaLength >= 3000 && handler.actions.length >= 4) reasons.push('FORMULA_SIZE');
+    if (handler.actions.length >= 5 && phases.length >= 4) reasons.push('MIXED_RESPONSIBILITIES');
+    if (mutationActions.length >= 2 && (externalActions.length >= 1 || maxControlFlowDepth >= 2)) reasons.push('MULTI_SYSTEM_SIDE_EFFECTS');
+    if (loopMutationCount >= 1 && handler.actions.length >= 4) reasons.push('LOOPED_MUTATION');
+    if (maxControlFlowDepth >= 3 && handler.actions.length >= 5) reasons.push('DEEP_CONTROL_FLOW');
+    if (reasons.length === 0) continue;
+
+    const workflowId = stableContractId('wf', [handler.screen, handler.controlPath, handler.event]);
+    const steps = buildWorkflowSteps(workflowId, handler.actions);
+    const suffix = workflowId.slice(-6);
+    const screenStem = routeStem(handler.screen === 'App' ? 'app-bootstrap' : handler.screen);
+    const controlStem = routeStem(handler.control || handler.controlPath || 'screen');
+    const eventStem = routeStem(handler.event || 'event');
+    const exportName = `run${pascalIdentifier(handler.control || 'Screen')}${pascalIdentifier(handler.event || 'Event')}Workflow${suffix}`;
+    const targetModule = `src/features/${screenStem}/workflows/${controlStem}-${eventStem}-${suffix}.ts`;
+    const target = {
+      implementationOwner: 'workflow-orchestrator',
+      module: targetModule,
+      importPath: `@/${targetModule.replace(/^src\//, '').replace(/\.tsx?$/, '')}`,
+      exportName,
+      callSiteFile: handler.screen === 'App' ? 'src/bootstrap.ts' : (screenFiles.get(handler.screen) || null),
+    };
+    const requiredDecisions = buildWorkflowDecisions(workflowId, handler.actions, handler.unmatched, metrics);
+    const complexityScore = handler.actions.length
+      + (phases.length * 2)
+      + (remoteSideEffectCount * 2)
+      + (maxControlFlowDepth * 2)
+      + (loopMutationCount * 3)
+      + Math.min(5, Math.floor(formulaLength / 1000));
+    workflows.push({
+      workflowId,
+      source: {
+        screen: handler.screen,
+        control: handler.control,
+        controlPath: handler.controlPath,
+        event: handler.event,
+        behaviorIds: handler.actions.map((action) => action.behaviorId),
+        unmatchedCount: handler.unmatched.length,
+      },
+      detection: {
+        pathological: true,
+        score: complexityScore,
+        reasons,
+        metrics,
+      },
+      proposal: {
+        architecture: 'named-step-orchestrator',
+        executionOwner: 'client-orchestrator',
+        uxMode: 'single-action-with-progress',
+        target,
+        steps,
+        preserves: [
+          'source behavior IDs and source statement order',
+          'branch, loop, error-boundary, With-scope, and Concurrent frames from behaviors.json',
+          'exact Dataverse field maps and connector/flow arguments',
+          'source navigation and user-visible outcomes',
+        ],
+        regenerated: [
+          'Canvas UI-state choreography',
+          'temporary reset/refresh/toast plumbing where a native equivalent preserves the outcome',
+          'one giant event callback',
+        ],
+      },
+      requiredDecisions,
+      approval: emptyWorkflowApproval(),
+    });
+  }
+
+  workflows.sort((a, b) =>
+    a.source.screen.localeCompare(b.source.screen)
+    || String(a.source.controlPath || '').localeCompare(String(b.source.controlPath || ''))
+    || a.source.event.localeCompare(b.source.event));
+  const analysis = { handlersScanned: handlers.size, handlersSkippedUnclassified };
+  return {
+    $schema: 'workflow-plan-v1',
+    generatedAt: GENERATION_TIMESTAMP,
+    rule: 'AI proposes code/UX decomposition. Ask the user only for unresolved correctness-critical business policy, then require one explicit workflow approval before generation.',
+    decisionPolicy: {
+      aiOwned: [
+        'named helper boundaries and target function names',
+        'native progress/error presentation',
+        'Canvas UI-state/reset/notification plumbing replacement',
+        'single-screen versus native multi-step proposal when source intent is unambiguous',
+      ],
+      userOwnedWhenUnresolved: [
+        'partial-failure and transaction policy',
+        'retry and idempotency policy across remote systems',
+        'mutating batch failure policy',
+        'asynchronous completion semantics',
+        'unclassified critical source behavior',
+      ],
+    },
+    detectionThresholds: {
+      actionCount: 8,
+      sourceStatementCount: 6,
+      formulaLengthWithFourActions: 3000,
+      mixedResponsibilities: { minActions: 5, minResponsibilities: 4 },
+      deepControlFlow: { minActions: 5, minDepth: 3 },
+    },
+    stats: deriveWorkflowStats(workflows, analysis),
+    workflows,
+  };
+}
+
 // ---------- Flows (Power Automate cloud-flow inventory) ----------
 //
 // Combines `brief.dataModel.flows[]` (declared) with the union of per-screen
@@ -3767,6 +4215,47 @@ function buildPcfPlanSectionLines(pcfPlan) {
   }
   lines.push('');
   lines.push('Full public property/event contracts and target dependency references: [`pcf-plan.json`](pcf-plan.json).');
+  lines.push('');
+  return lines;
+}
+
+function buildWorkflowPlanSectionLines(workflowPlan) {
+  const workflows = toArray(workflowPlan && workflowPlan.workflows);
+  if (workflows.length === 0) return [];
+  const lines = [];
+  lines.push('### Pathological Event Workflow Plan — Gate 2c');
+  lines.push('');
+  lines.push('The adapter detected event handlers whose size, mixed responsibilities, control-flow depth, or cross-system side effects make a single native callback unsafe. AI owns routine helper boundaries and native progress/error UX. Ask the user only the correctness-critical questions listed below, then approve each workflow once. Exact formulas remain in `behaviors.json`; this section is a compact architecture index, not a lossy summary.');
+  lines.push('');
+  lines.push('| Workflow | Source event | Score / signals | Named steps | Required questions | Target module | Approval |');
+  lines.push('|---|---|---|---|---|---|---|');
+  for (const workflow of workflows) {
+    const source = `${workflow.source.screen} / ${workflow.source.control || '__screen__'}.${workflow.source.event}`;
+    const signals = `${workflow.detection.score}: ${toArray(workflow.detection.reasons).join(', ')}`;
+    lines.push(`| \`${workflow.workflowId}\` | ${markdownTableText(source)} | ${markdownTableText(signals)} | ${workflow.proposal.steps.length} | ${workflow.requiredDecisions.length} | \`${workflow.proposal.target.module}\` | \`${workflow.approval.status}\` |`);
+  }
+  lines.push('');
+  for (const workflow of workflows) {
+    lines.push(`#### ${workflow.source.screen} / ${workflow.source.control || '__screen__'}.${workflow.source.event} (\`${workflow.workflowId}\`)`);
+    lines.push('');
+    lines.push(`- **Native target:** \`${workflow.proposal.target.exportName}\` in \`${workflow.proposal.target.module}\`; call site \`${workflow.proposal.target.callSiteFile || 'unresolved'}\`.`);
+    lines.push(`- **Default UX:** \`${workflow.proposal.uxMode}\`; code decomposition does not automatically create a user-facing wizard.`);
+    lines.push('- **Ordered named steps:**');
+    for (const step of workflow.proposal.steps) {
+      lines.push(`  ${step.sequence}. \`${step.targetFunction}\` — ${step.title}; behaviors: ${step.behaviorIds.map((id) => `\`${id}\``).join(', ')}; frames: ${step.controlFlowKinds.join(', ') || 'none'}.`);
+    }
+    if (workflow.requiredDecisions.length === 0) {
+      lines.push('- **Critical questions:** none. AI may implement the proposal without additional discovery; the user still approves the complete workflow contract once.');
+    } else {
+      lines.push('- **Critical questions (ask only these):**');
+      for (const decision of workflow.requiredDecisions) {
+        const recommendation = decision.recommended ? ` Recommended: \`${decision.recommended}\`.` : '';
+        lines.push(`  - \`${decision.decisionId}\` (${decision.type}) — ${decision.prompt}${recommendation}`);
+      }
+    }
+    lines.push('');
+  }
+  lines.push('Full metrics, target function names, stable behavior mappings, question options, and approval records: [`workflows.json`](workflows.json).');
   lines.push('');
   return lines;
 }
@@ -5769,7 +6258,7 @@ function buildAssetsSectionLines(brief) {
   return lines;
 }
 
-function buildMasterPlan(brief, screenRows, connectors, tables, risks, screenFiles, swapAggregate, playbook, structuredForms, nativeExecution, demotedCapabilities, upgradeHintsAggregate, serverSideAssets, pcfPlan) {
+function buildMasterPlan(brief, screenRows, connectors, tables, risks, screenFiles, swapAggregate, playbook, structuredForms, nativeExecution, demotedCapabilities, upgradeHintsAggregate, serverSideAssets, pcfPlan, workflowPlan) {
   const appName = (brief.app && brief.app.name) || 'Converted Canvas App';
   const startScreen = (brief.app && brief.app.startScreen) || 'Unknown';
   const nativeCaps = toArray(nativeExecution && nativeExecution.capabilities);
@@ -5792,8 +6281,8 @@ function buildMasterPlan(brief, screenRows, connectors, tables, risks, screenFil
   lines.push('');
   lines.push('> Draft generated from a Power Platform brief by ' +
     '`scripts/adapt-app-brief-for-mobile-plugin.js`.');
-  lines.push('> Review and approve this plan, then drop it into a fresh Expo template working dir and run ' +
-    '`/create-mobile-app` — the planner picks it up as the resume-from-draft baseline.');
+  lines.push('> Keep this package intact, then run ' +
+    '`/create-mobile-app --working-dir <fresh-template> --adapted-from <this-package>` — the safe importer validates every sidecar and the planner uses this file as its approval baseline.');
   lines.push('');
   if (hasDataverseTables && hasConnectorOrFlowData) {
     lines.push('> **Data backend:** Dataverse tables plus Power Platform connectors/flows are required. ' +
@@ -5858,6 +6347,7 @@ function buildMasterPlan(brief, screenRows, connectors, tables, risks, screenFil
   lines.push('- `npm run check:i18n -- --strict` reports `unknown keys used: 0`. Screen code must use catalog keys from `localization.json`; for text that is not in the catalog, render the literal fallback instead of inventing a `t("...")` key.');
   lines.push('- `npm run check:coverage -- --min 80` passes per screen and overall. Shared implementations count at their screen call sites through exact `source-behavior` markers.');
   lines.push('- `npm run check:pcf -- --strict` passes: every explicitly approved PCF disposition is implemented with the exact PCF ID/disposition marker or approved visible unsupported UX.');
+  lines.push('- `npm run check:workflows -- --strict` passes: every approved pathological handler is implemented as an invoked named-step module with exact workflow, step, and behavior markers.');
   lines.push('- `npm run check:scaffold -- --strict` passes: final screens must not expose conversion/debug scaffolding such as `CapabilityPanel`, `RelatedSources`, generic data-source lists, generic service registries (`serviceRegistry.ts`, `DATA_SOURCES`, `useDataSourceRows`), source/clone labels, or screen-config-driven next actions.');
   lines.push('- Screen implementations live directly in Expo Router files under `app/(app)/...`; do not generate `src/appScreens/*Screen.tsx` plus thin wrappers. Do not create `src/appScreens/` or `src/data/` support-code folders either — reusable mobile code belongs in domain folders such as `src/components/`, `src/hooks/`, `src/navigation/`, and `src/features/`.');
   lines.push('- `npx tsc --noEmit` is clean.');
@@ -5956,6 +6446,7 @@ function buildMasterPlan(brief, screenRows, connectors, tables, risks, screenFil
     }
   }
   for (const line of buildPcfPlanSectionLines(pcfPlan)) lines.push(line);
+  for (const line of buildWorkflowPlanSectionLines(workflowPlan)) lines.push(line);
   // Surface the §8.3 demotions inline so reviewers can see exactly which
   // camera / attachment capabilities got reclassified into form host:* pickers.
   if (Array.isArray(demotedCapabilities) && demotedCapabilities.length > 0) {
@@ -6183,6 +6674,11 @@ function buildMasterPlan(brief, screenRows, connectors, tables, risks, screenFil
     lines.push(`- **Navigation:** ${navigation.length ? navigation.join('; ') : 'no outgoing source navigation detected'}.`);
     lines.push('- **State delta:** Use `state/app-state.md` placement recommendations; keep screen-only flags local and server collections query-backed.');
     lines.push('- **Key user actions:** Implement the normalized actions, visibility, validation, and derivation entries for this screen from `behaviors.json`.');
+    const screenWorkflows = toArray(workflowPlan && workflowPlan.workflows)
+      .filter((workflow) => workflow.source.screen === s.name);
+    lines.push(`- **Decomposed workflows:** ${screenWorkflows.length
+      ? screenWorkflows.map((workflow) => `\`${workflow.workflowId}\` → \`${workflow.proposal.target.exportName}\` from \`${workflow.proposal.target.importPath}\``).join('; ')
+      : 'none; implement ordinary event behaviors directly in this screen.'}`);
     lines.push('');
   });
 
@@ -6329,15 +6825,15 @@ function buildRequirementsBrief(brief, screenRows, connectors, tables) {
   return lines.join('\n') + '\n';
 }
 
-function buildMigrationChecklist(brief, connectors, tables, risks, serverSideAssets, pcfPlan) {
+function buildMigrationChecklist(brief, connectors, tables, risks, serverSideAssets, pcfPlan, workflowPlan) {
   const lines = [];
   const flows = toArray(brief.dataModel && brief.dataModel.flows);
   lines.push('# Migration Checklist To Working Mobile App');
   lines.push('');
   let step = 1;
   lines.push(`${step++}. Prepare fresh Expo template folder and run \`npm install\`.`);
-  lines.push(`${step++}. Copy \`native-app-plan.md\` and the entire \`screens/\` directory into the working dir.`);
-  lines.push(`${step++}. Run \`/create-mobile-app\` — it resumes from the draft plan.`);
+  lines.push(`${step++}. Keep this entire migration package intact; do not copy only the plan/screens or omit behavior, workflow, PCF, coverage, state, or server sidecars.`);
+  lines.push(`${step++}. Run \`/create-mobile-app --working-dir <fresh-template> --adapted-from <this-package>\`; its safe importer validates and copies the allowlisted contract.`);
   if (tables.length > 0) {
     lines.push(`${step++}. **HARD GATE:** run \`/add-dataverse\` for all ${tables.length} tables BEFORE the screen build pass.`);
   } else {
@@ -6357,6 +6853,9 @@ function buildMigrationChecklist(brief, connectors, tables, risks, serverSideAss
     lines.push(`${step++}. **HARD BLOCK:** obtain a complete PCF control inventory/specification; source reports PCF content but per-control contracts were unavailable.`);
   } else if (pcfPlan?.stats?.total > 0) {
     lines.push(`${step++}. **HARD GATE:** explicitly approve all ${pcfPlan.stats.total} PCF dispositions in Gate 2b before native/connector/screen work.`);
+  }
+  if (workflowPlan?.stats?.total > 0) {
+    lines.push(`${step++}. **HARD GATE:** answer only the ${workflowPlan.stats.requiredDecisions} correctness-critical workflow question(s), then approve all ${workflowPlan.stats.total} named-step decompositions in Gate 2c before connector/screen work.`);
   }
   if (tables.length > 0) {
     const assetCount = serverSideAssets && serverSideAssets.stats ? serverSideAssets.stats.total : 0;
@@ -6385,6 +6884,7 @@ function buildMigrationChecklist(brief, connectors, tables, risks, serverSideAss
   lines.push('- `npm run check:i18n -- --strict` reports zero unknown keys. Do not invent translation keys; use literals when the source catalog does not contain the key.');
   lines.push('- `npm run check:coverage -- --min 80` passes. Coverage must count shared call sites and native equivalents of Canvas `UpdateContext`, `Reset`, `ClearCollect`, and collection `Patch`.');
   lines.push('- `npm run check:pcf -- --strict` passes. Every approved PCF has an exact native/server implementation marker or approved visible unsupported state; pending/blocker PCFs are forbidden.');
+  lines.push('- `npm run check:workflows -- --strict` passes. Every approved pathological handler has an invoked named-step module with exact workflow, step, and behavior markers; pending/blocked workflows are forbidden.');
   lines.push('- `npm run check:scaffold -- --strict` passes. The final UI must be workflow-specific, not a visible inventory of data sources, capabilities, screen config, or conversion notes.');
   lines.push('- Every row in `control-intent-coverage.json` is either implemented as native semantics, explicitly unsupported, or surfaced as a follow-up. Do not copy Canvas UI chrome; do preserve `mustPreserve` data/event/layout intent.');
   lines.push('- `npx tsc --noEmit` is clean.');
@@ -6394,6 +6894,7 @@ function buildMigrationChecklist(brief, connectors, tables, risks, serverSideAss
   lines.push(`- Non-Dataverse connectors detected: ${connectors.length}`);
   lines.push(`- Cloud flows detected: ${flows.length}`);
   lines.push(`- Dataverse tables: ${tables.length}`);
+  lines.push(`- Pathological event workflows: ${workflowPlan?.stats?.total || 0} (${workflowPlan?.stats?.requiredDecisions || 0} correctness-critical decisions)`);
   if (serverSideAssets && serverSideAssets.stats) {
     lines.push(`- Server-side Dataverse column assets: ${serverSideAssets.stats.total} (${serverSideAssets.stats.rollupColumns} rollup, ${serverSideAssets.stats.calculatedColumns} calculated, ${serverSideAssets.stats.serverComputedColumns + serverSideAssets.stats.serverManagedColumns} write-restricted/computed)`);
   }
@@ -6641,7 +7142,7 @@ function buildAppStateMd(state) {
   return lines.join('\n') + '\n';
 }
 
-function buildPluginInput(brief, inputPath, screenRows, connectors, tables, risks, screenFiles, structuredForms, nativeExecution, demotedCapabilities, loadedScreens, serverSideAssets, controlIntentCoverage, pcfPlan) {
+function buildPluginInput(brief, inputPath, screenRows, connectors, tables, risks, screenFiles, structuredForms, nativeExecution, demotedCapabilities, loadedScreens, serverSideAssets, controlIntentCoverage, pcfPlan, workflowPlan) {
   // Per-screen upgrade-hints index — keyed by screen name so the screenRows
   // map below can attach hints without re-walking the brief.
   const upgradeHintsByScreen = new Map();
@@ -6730,6 +7231,12 @@ function buildPluginInput(brief, inputPath, screenRows, connectors, tables, risk
       rule: pcfPlan.rule,
       stats: pcfPlan.stats,
     },
+    workflowPlan: {
+      file: 'workflows.json',
+      schema: workflowPlan.$schema,
+      rule: workflowPlan.rule,
+      stats: workflowPlan.stats,
+    },
     localization: (brief && brief.localization) || null,
     assets: (brief && brief.assets) || null,
     qualityGates: {
@@ -6739,6 +7246,7 @@ function buildPluginInput(brief, inputPath, screenRows, connectors, tables, risk
         'npm run check:i18n -- --strict',
         'npm run check:coverage -- --min 80',
         'npm run check:pcf -- --strict',
+        'npm run check:workflows -- --strict',
         'npm run check:scaffold -- --strict',
         'npx tsc --noEmit',
       ],
@@ -7078,6 +7586,7 @@ function main() {
   const components = collectComponentInstances(loadedScreens, brief);
   const appState = collectAppState(loadedScreens);
   const behaviors = extractBehaviors(loadedScreens, brief);
+  const workflowPlan = buildWorkflowPlan(behaviors, screenRows);
   const flows = extractFlows(brief, loadedScreens);
   const controlIntentCoverage = buildControlIntentCoverage(loadedScreens);
 
@@ -7110,10 +7619,11 @@ function main() {
     downgrade.demoted,
     upgradeHintsAggregate,
     serverSideAssets,
-    pcfPlan
+    pcfPlan,
+    workflowPlan
   );
   const requirementsMd = buildRequirementsBrief(brief, screenRows, connectors, tables);
-  const checklistMd = buildMigrationChecklist(brief, connectors, tables, risks, serverSideAssets, pcfPlan);
+  const checklistMd = buildMigrationChecklist(brief, connectors, tables, risks, serverSideAssets, pcfPlan, workflowPlan);
   const componentsMd = buildComponentsMd(components);
   const stateMd = buildAppStateMd(appState);
   const pluginInput = buildPluginInput(
@@ -7130,7 +7640,8 @@ function main() {
     loadedScreens,
     serverSideAssets,
     controlIntentCoverage,
-    pcfPlan
+    pcfPlan,
+    workflowPlan
   );
 
   writeFile(path.join(args.outDir, 'native-app-plan.md'), masterPlan);
@@ -7143,6 +7654,7 @@ function main() {
   writeFile(path.join(args.outDir, 'pcf-plan.json'), JSON.stringify(pcfPlan, null, 2) + '\n');
   writeFile(path.join(args.outDir, 'mobile-plugin-input.json'), JSON.stringify(pluginInput, null, 2) + '\n');
   writeFile(path.join(args.outDir, 'behaviors.json'), JSON.stringify(behaviors, null, 2) + '\n');
+  writeFile(path.join(args.outDir, 'workflows.json'), JSON.stringify(workflowPlan, null, 2) + '\n');
   writeFile(path.join(args.outDir, 'flows.json'), JSON.stringify(flows, null, 2) + '\n');
 
   // Sidecars: localization key list + asset catalog (kept out of the master
@@ -7180,6 +7692,9 @@ function main() {
     ' visibility, ' + behaviors.stats.validations + ' validations, ' +
     behaviors.stats.derivations + ' derivations across ' + behaviors.stats.screensWithBehaviors +
     ' screens, ' + behaviors.stats.totalUnmatched + ' unmatched)');
+  console.log('- ' + path.join(args.outDir, 'workflows.json') +
+    ' (' + workflowPlan.stats.total + ' pathological handlers, ' + workflowPlan.stats.totalSteps +
+    ' named steps, ' + workflowPlan.stats.requiredDecisions + ' correctness-critical decisions)');
   console.log('- ' + path.join(args.outDir, 'flows.json') +
     ' (' + flows.stats.totalFlows + ' flows, ' + flows.stats.withId + ' ready-to-wire, ' +
     flows.stats.missingId + ' missing flow-id)');
@@ -7233,6 +7748,7 @@ module.exports = {
   collectForms,
   buildNativeExecutionPlan,
   buildPcfPlan,
+  buildWorkflowPlan,
   buildControlIntentCoverage,
   extractBehaviors,
   extractFlows,

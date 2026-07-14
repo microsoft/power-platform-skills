@@ -12,18 +12,25 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathContains } = require('./lib/modernizer-paths.js');
+const {
+  WORKFLOW_APPROVAL_STATUSES,
+  WORKFLOW_EXECUTION_OWNERS,
+  WORKFLOW_UX_MODES,
+  deriveWorkflowStats,
+} = require('./lib/workflow-plan.js');
 const MAX_PACKAGE_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_MARKDOWN_ENTRIES = 10000;
 const MAX_MARKDOWN_DEPTH = 8;
 
 function parseArgs(argv) {
-  const args = { dir: '', json: false, requirePcfApproval: false };
+  const args = { dir: '', json: false, requirePcfApproval: false, requireWorkflowApproval: false };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--dir') args.dir = argv[++i] || '';
     else if (argv[i] === '--json') args.json = true;
     else if (argv[i] === '--require-pcf-approval') args.requirePcfApproval = true;
+    else if (argv[i] === '--require-workflow-approval') args.requireWorkflowApproval = true;
     else if (argv[i] === '--help' || argv[i] === '-h') {
-      process.stdout.write('Usage: node scripts/validate-mobile-plugin-input.js --dir <mobile-plugin-input-dir> [--json] [--require-pcf-approval]\n');
+      process.stdout.write('Usage: node scripts/validate-mobile-plugin-input.js --dir <mobile-plugin-input-dir> [--json] [--require-pcf-approval] [--require-workflow-approval]\n');
       process.exit(0);
     } else {
       throw new Error(`Unknown argument: ${argv[i]}`);
@@ -81,8 +88,29 @@ function validTargetFile(value) {
   return segments.every((segment) => segment && segment !== '.' && segment !== '..' && /^[A-Za-z0-9_@().\[\]-]+$/.test(segment));
 }
 
+function validWorkflowModule(value) {
+  if (typeof value !== 'string' || !value.startsWith('src/features/') || !/\.tsx?$/.test(value)) return false;
+  if (/[\\:\u0000-\u001f\u007f]/.test(value) || path.posix.normalize(value) !== value) return false;
+  return value.split('/').every((segment) => segment && segment !== '.' && segment !== '..' && /^[A-Za-z0-9_.-]+$/.test(segment));
+}
+
+function validWorkflowCallSite(value) {
+  return value === 'src/bootstrap.ts' || validTargetFile(value);
+}
+
+function validTypeScriptIdentifier(value) {
+  return typeof value === 'string' && /^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/.test(value);
+}
+
 function validSourceLabel(value) {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= 300 && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
+function validDecisionText(value, maxLength = 4000) {
+  return typeof value === 'string'
+    && value.trim().length > 0
+    && value.length <= maxLength
+    && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value);
 }
 
 function validDataverseName(value) {
@@ -172,6 +200,7 @@ function main() {
   const coverage = readJson(path.join(root, 'control-intent-coverage.json'), errors, 'control-intent-coverage.json');
   const serverSideAssets = readJson(path.join(root, 'server-side-assets.json'), errors, 'server-side-assets.json');
   let pcfPlan = null;
+  let workflowPlan = null;
 
   for (const required of ['native-app-plan.md', path.join('state', 'app-state.md'), 'migration-checklist.md']) {
     const file = path.join(root, required);
@@ -195,6 +224,8 @@ function main() {
     }
     const pcfPlanFile = safePackagePath(root, input.pcfPlan?.file, errors, 'pcfPlan.file');
     if (pcfPlanFile) pcfPlan = readJson(pcfPlanFile, errors, 'pcf-plan.json');
+    const workflowPlanFile = safePackagePath(root, input.workflowPlan?.file, errors, 'workflowPlan.file');
+    if (workflowPlanFile) workflowPlan = readJson(workflowPlanFile, errors, 'workflows.json');
 
     const screens = input.screenPlan?.screens;
     if (!Array.isArray(screens)) errors.push('screenPlan.screens must be an array');
@@ -264,6 +295,8 @@ function main() {
     scanSecrets(input, 'mobile-plugin-input', errors);
   }
 
+  const behaviorById = new Map();
+  const behaviorOrder = new Map();
   if (behaviors) {
     if ((behaviors.stats?.droppedEventActionCount || 0) !== 0) {
       errors.push(`behaviors.json droppedEventActionCount is ${behaviors.stats.droppedEventActionCount}; expected 0`);
@@ -276,6 +309,7 @@ function main() {
       errors.push(`behavior event accounting mismatch: source=${sourceCount}, accounted=${accountedCount}, dropped=${droppedCount}`);
     }
     const behaviorIds = new Set();
+    const allowedControlFlowKinds = new Set(['if', 'switch', 'ifError', 'forAll', 'with', 'concurrent']);
     for (const group of ['actions', 'visibility', 'validations', 'derivations', 'unmatchedFormulas']) {
       for (const [index, entry] of (behaviors[group] || []).entries()) {
         if (entry.screen && entry.screen !== 'App' && !knownScreens.has(entry.screen)) {
@@ -288,11 +322,315 @@ function main() {
             errors.push(`duplicate behaviorId: ${entry.behaviorId}`);
           } else {
             behaviorIds.add(entry.behaviorId);
+            behaviorById.set(entry.behaviorId, { ...entry, group });
+            if (group === 'actions') behaviorOrder.set(entry.behaviorId, index);
+          }
+        }
+        if (group === 'actions' && entry.controlFlow != null && !Array.isArray(entry.controlFlow)) {
+          errors.push(`behaviors.${group}[${index}].controlFlow must be an array`);
+        }
+        if (group === 'actions') {
+          for (const [frameIndex, frame] of (entry.controlFlow || []).entries()) {
+            if (!allowedControlFlowKinds.has(frame?.kind)) errors.push(`behaviors.${group}[${index}].controlFlow[${frameIndex}].kind is invalid`);
+            if (!/^[A-Za-z]+-[0-9a-f]{8}$/.test(String(frame?.id || ''))) errors.push(`behaviors.${group}[${index}].controlFlow[${frameIndex}].id is invalid`);
           }
         }
       }
     }
     scanSecrets(behaviors, 'behaviors', errors);
+  }
+
+  if (workflowPlan) {
+    const workflows = Array.isArray(workflowPlan.workflows) ? workflowPlan.workflows : [];
+    if (workflowPlan.$schema !== 'workflow-plan-v1') errors.push(`unsupported workflows.json schema: ${workflowPlan.$schema || 'missing'}`);
+    if (!Array.isArray(workflowPlan.workflows)) errors.push('workflows.workflows must be an array');
+    if (input?.workflowPlan?.schema !== 'workflow-plan-v1') errors.push('mobile-plugin-input workflowPlan.schema must be workflow-plan-v1');
+    if (input?.workflowPlan?.file !== 'workflows.json') errors.push('mobile-plugin-input workflowPlan.file must be workflows.json');
+
+    const allowedDecisionTypes = new Set([
+      'partial-failure-policy',
+      'retry-policy',
+      'batch-failure-policy',
+      'async-completion-policy',
+      'source-contract',
+    ]);
+    const workflowPhaseSuffix = new Map([
+      ['validate', 'Validate'],
+      ['derive-data', 'DeriveData'],
+      ['prepare-state', 'PrepareState'],
+      ['persist-data', 'PersistData'],
+      ['invoke-integration', 'InvokeIntegration'],
+      ['persist-local-state', 'PersistLocalState'],
+      ['invoke-device-action', 'InvokeDeviceAction'],
+      ['complete-workflow', 'CompleteWorkflow'],
+      ['source-operation', 'SourceOperation'],
+    ]);
+    const workflowMutationIntents = new Set(['patch', 'update', 'updateIf', 'remove', 'removeIf', 'submitForm']);
+    const workflowExternalIntents = new Set(['connectorCall', 'flowCall', 'aiCall']);
+    const workflowStateIntents = new Set(['setVar', 'setContext', 'collect', 'clearCollect', 'clear', 'reset', 'resetForm', 'newForm', 'editForm', 'viewForm', 'setProperty', 'setFocus']);
+    const workflowCompletionIntents = new Set(['navigate', 'back', 'notify', 'refresh', 'exitApp', 'requestHide']);
+    const phaseForIntent = (intent) => {
+      if (intent === 'confirm' || intent === 'predicate-only') return 'validate';
+      if (workflowMutationIntents.has(intent)) return 'persist-data';
+      if (workflowExternalIntents.has(intent)) return 'invoke-integration';
+      if (['read', 'literal', 'projection', 'paramRead'].includes(intent)) return 'derive-data';
+      if (workflowStateIntents.has(intent)) return 'prepare-state';
+      if (workflowCompletionIntents.has(intent)) return 'complete-workflow';
+      if (['saveData', 'loadData', 'clearOfflineData'].includes(intent)) return 'persist-local-state';
+      if (['launch', 'download', 'downloadJson', 'print'].includes(intent)) return 'invoke-device-action';
+      return 'source-operation';
+    };
+    const workflowTarget = (action) => {
+      if (workflowMutationIntents.has(action?.intent)) return action.source || action.form || null;
+      if (action?.intent === 'connectorCall' || action?.intent === 'aiCall') return action.connector || null;
+      if (action?.intent === 'flowCall') return action.flow || null;
+      if (action?.intent === 'navigate') return action.target || null;
+      return null;
+    };
+    const approvalStatuses = new Set(WORKFLOW_APPROVAL_STATUSES);
+    const executionOwners = new Set(WORKFLOW_EXECUTION_OWNERS);
+    const uxModes = new Set(WORKFLOW_UX_MODES);
+    const requirementIds = new Set((input?.dataModelPlan?.connectionRequirements || []).map((row) => row.id).filter(Boolean));
+    const screenFiles = new Map((input?.screenPlan?.screens || []).map((screen) => [screen.name, screen.file]));
+    const workflowIds = new Set();
+    const handlerKeys = new Set();
+    const modulePaths = new Set();
+    const mappedBehaviorIds = new Set();
+
+    for (const [workflowIndex, workflow] of workflows.entries()) {
+      const at = `workflows.workflows[${workflowIndex}]`;
+      if (!/^wf-[0-9a-f]{16}$/.test(String(workflow?.workflowId || ''))) errors.push(`${at}.workflowId is missing or invalid`);
+      else if (workflowIds.has(workflow.workflowId)) errors.push(`duplicate workflowId: ${workflow.workflowId}`);
+      else workflowIds.add(workflow.workflowId);
+
+      const source = workflow?.source || {};
+      if (source.screen !== 'App' && !knownScreens.has(source.screen)) errors.push(`${at}.source.screen references unknown screen: ${source.screen || 'missing'}`);
+      if (!validSourceLabel(source.control || '__screen__')) errors.push(`${at}.source.control is unsafe or missing`);
+      if (!validSourceLabel(source.event)) errors.push(`${at}.source.event is unsafe or missing`);
+      const handlerKey = JSON.stringify([source.screen, source.controlPath || source.control, source.event]);
+      if (handlerKeys.has(handlerKey)) errors.push(`${at} duplicates another workflow for the same source event handler`);
+      else handlerKeys.add(handlerKey);
+
+      if (workflow?.detection?.pathological !== true || !Array.isArray(workflow?.detection?.reasons) || workflow.detection.reasons.length === 0) {
+        errors.push(`${at} must include deterministic pathological-handler evidence`);
+      }
+      const sourceBehaviorIds = Array.isArray(source.behaviorIds) ? source.behaviorIds : [];
+      if (sourceBehaviorIds.length === 0) errors.push(`${at}.source.behaviorIds must not be empty`);
+      for (const behaviorId of sourceBehaviorIds) {
+        const behavior = behaviorById.get(behaviorId);
+        if (!behavior || behavior.group !== 'actions') {
+          errors.push(`${at} references unknown/non-action behavior: ${behaviorId}`);
+          continue;
+        }
+        if (behavior.screen !== source.screen
+            || (behavior.controlPath || behavior.control) !== (source.controlPath || source.control)
+            || behavior.event !== source.event) {
+          errors.push(`${at} behavior ${behaviorId} does not belong to the declared source handler`);
+        }
+      }
+
+      const sourceActions = sourceBehaviorIds.map((behaviorId) => behaviorById.get(behaviorId)).filter(Boolean);
+      const mutationActions = sourceActions.filter((action) => workflowMutationIntents.has(action.intent));
+      const externalActions = sourceActions.filter((action) => workflowExternalIntents.has(action.intent));
+      const handlerUnmatched = (behaviors?.unmatchedFormulas || []).filter((entry) =>
+        entry?.screen === source.screen
+        && (entry.controlPath || entry.control) === (source.controlPath || source.control)
+        && entry.property === source.event);
+      if (source.unmatchedCount !== handlerUnmatched.length) errors.push(`${at}.source.unmatchedCount mismatch: expected ${handlerUnmatched.length}`);
+      const derivedMetrics = {
+        classifiedActions: sourceActions.length,
+        unmatchedActions: handlerUnmatched.length,
+        sourceStatementCount: new Set(sourceActions.map((action) => action.sourceStatementIndex).filter(Number.isInteger)).size,
+        formulaLength: Math.max(0, ...sourceActions.map((action) => String(action.sourceFormula || '').length)),
+        responsibilityCount: new Set(sourceActions.map((action) => phaseForIntent(action.intent))).size,
+        mutationCount: mutationActions.length,
+        externalCallCount: externalActions.length,
+        remoteSideEffectCount: mutationActions.length + externalActions.length,
+        remoteTargets: [...new Set([...mutationActions, ...externalActions].map(workflowTarget).filter(Boolean))].sort(),
+        maxControlFlowDepth: Math.max(0, ...sourceActions.map((action) => Array.isArray(action.controlFlow) ? action.controlFlow.length : 0)),
+        loopMutationCount: mutationActions.filter((action) => (action.controlFlow || []).some((frame) => frame?.kind === 'forAll')).length,
+        concurrentActionCount: sourceActions.filter((action) => (action.controlFlow || []).some((frame) => frame?.kind === 'concurrent')).length,
+        errorBoundActionCount: sourceActions.filter((action) => (action.controlFlow || []).some((frame) => frame?.kind === 'ifError')).length,
+      };
+      for (const [metric, expected] of Object.entries(derivedMetrics)) {
+        if (JSON.stringify(workflow?.detection?.metrics?.[metric]) !== JSON.stringify(expected)) {
+          errors.push(`${at}.detection.metrics.${metric} mismatch: expected ${JSON.stringify(expected)}`);
+        }
+      }
+      const expectedReasons = [];
+      if (derivedMetrics.classifiedActions >= 8) expectedReasons.push('ACTION_COUNT');
+      if (derivedMetrics.sourceStatementCount >= 6) expectedReasons.push('STATEMENT_COUNT');
+      if (derivedMetrics.formulaLength >= 3000 && derivedMetrics.classifiedActions >= 4) expectedReasons.push('FORMULA_SIZE');
+      if (derivedMetrics.classifiedActions >= 5 && derivedMetrics.responsibilityCount >= 4) expectedReasons.push('MIXED_RESPONSIBILITIES');
+      if (derivedMetrics.mutationCount >= 2 && (derivedMetrics.externalCallCount >= 1 || derivedMetrics.maxControlFlowDepth >= 2)) expectedReasons.push('MULTI_SYSTEM_SIDE_EFFECTS');
+      if (derivedMetrics.loopMutationCount >= 1 && derivedMetrics.classifiedActions >= 4) expectedReasons.push('LOOPED_MUTATION');
+      if (derivedMetrics.maxControlFlowDepth >= 3 && derivedMetrics.classifiedActions >= 5) expectedReasons.push('DEEP_CONTROL_FLOW');
+      if (JSON.stringify(workflow?.detection?.reasons || []) !== JSON.stringify(expectedReasons)) {
+        errors.push(`${at}.detection.reasons mismatch: expected ${JSON.stringify(expectedReasons)}`);
+      }
+      const expectedScore = derivedMetrics.classifiedActions
+        + (derivedMetrics.responsibilityCount * 2)
+        + (derivedMetrics.remoteSideEffectCount * 2)
+        + (derivedMetrics.maxControlFlowDepth * 2)
+        + (derivedMetrics.loopMutationCount * 3)
+        + Math.min(5, Math.floor(derivedMetrics.formulaLength / 1000));
+      if (workflow?.detection?.score !== expectedScore) errors.push(`${at}.detection.score mismatch: expected ${expectedScore}`);
+
+      const proposal = workflow?.proposal || {};
+      if (proposal.architecture !== 'named-step-orchestrator') errors.push(`${at}.proposal.architecture must be named-step-orchestrator`);
+      const target = proposal.target || {};
+      if (target.implementationOwner !== 'workflow-orchestrator') errors.push(`${at}.proposal.target.implementationOwner must be workflow-orchestrator`);
+      if (!validWorkflowModule(target.module)) errors.push(`${at}.proposal.target.module is unsafe or invalid: ${target.module || 'missing'}`);
+      else if (modulePaths.has(target.module.toLowerCase())) errors.push(`duplicate workflow target module: ${target.module}`);
+      else modulePaths.add(target.module.toLowerCase());
+      const expectedImport = typeof target.module === 'string'
+        ? `@/${target.module.replace(/^src\//, '').replace(/\.tsx?$/, '')}`
+        : '';
+      if (target.importPath !== expectedImport) errors.push(`${at}.proposal.target.importPath must match target.module`);
+      if (!validTypeScriptIdentifier(target.exportName)) errors.push(`${at}.proposal.target.exportName is invalid`);
+      if (!validWorkflowCallSite(target.callSiteFile)) errors.push(`${at}.proposal.target.callSiteFile is unsafe or invalid`);
+      const expectedCallSite = source.screen === 'App' ? 'src/bootstrap.ts' : screenFiles.get(source.screen);
+      if (expectedCallSite && target.callSiteFile !== expectedCallSite) errors.push(`${at}.proposal.target.callSiteFile must be ${expectedCallSite}`);
+
+      const steps = Array.isArray(proposal.steps) ? proposal.steps : [];
+      if (steps.length < 2) errors.push(`${at}.proposal.steps must contain at least two named steps`);
+      const stepIds = new Set();
+      const stepFunctions = new Set();
+      const stepBehaviorIds = [];
+      for (const [stepIndex, step] of steps.entries()) {
+        const stepAt = `${at}.proposal.steps[${stepIndex}]`;
+        if (!/^wfs-[0-9a-f]{16}$/.test(String(step?.stepId || ''))) errors.push(`${stepAt}.stepId is missing or invalid`);
+        else if (stepIds.has(step.stepId)) errors.push(`${at} contains duplicate stepId: ${step.stepId}`);
+        else stepIds.add(step.stepId);
+        if (step?.sequence !== stepIndex + 1) errors.push(`${stepAt}.sequence must be ${stepIndex + 1}`);
+        if (!workflowPhaseSuffix.has(step?.phase)) errors.push(`${stepAt}.phase is invalid: ${step?.phase || 'missing'}`);
+        if (!validTypeScriptIdentifier(step?.targetFunction)) errors.push(`${stepAt}.targetFunction is invalid`);
+        else if (stepFunctions.has(step.targetFunction)) errors.push(`${at} contains duplicate targetFunction: ${step.targetFunction}`);
+        else {
+          stepFunctions.add(step.targetFunction);
+          const expectedFunction = `step${String(stepIndex + 1).padStart(2, '0')}${workflowPhaseSuffix.get(step.phase) || ''}`;
+          if (step.targetFunction !== expectedFunction) errors.push(`${stepAt}.targetFunction must be ${expectedFunction}`);
+        }
+        if (stepIndex === 0 && step?.sourceOrderAfter != null) errors.push(`${stepAt}.sourceOrderAfter must be null for the first step`);
+        if (stepIndex > 0 && step?.sourceOrderAfter !== steps[stepIndex - 1]?.stepId) errors.push(`${stepAt}.sourceOrderAfter must reference the preceding step`);
+        const ids = Array.isArray(step?.behaviorIds) ? step.behaviorIds : [];
+        if (ids.length === 0) errors.push(`${stepAt}.behaviorIds must not be empty`);
+        const stepControlFlow = Array.isArray(step?.controlFlow) ? step.controlFlow : [];
+        if (!Array.isArray(step?.controlFlow)) errors.push(`${stepAt}.controlFlow must be an array`);
+        const expectedKinds = [...new Set(stepControlFlow.map((frame) => frame?.kind).filter(Boolean))].sort();
+        const expectedIds = [...new Set(stepControlFlow.map((frame) => frame?.id).filter(Boolean))].sort();
+        if (JSON.stringify(step?.controlFlowKinds || []) !== JSON.stringify(expectedKinds)) errors.push(`${stepAt}.controlFlowKinds does not match controlFlow`);
+        if (JSON.stringify(step?.controlFlowIds || []) !== JSON.stringify(expectedIds)) errors.push(`${stepAt}.controlFlowIds does not match controlFlow`);
+        for (const behaviorId of ids) {
+          if (!sourceBehaviorIds.includes(behaviorId)) errors.push(`${stepAt} references behavior outside this handler: ${behaviorId}`);
+          const behavior = behaviorById.get(behaviorId);
+          if (behavior && JSON.stringify(behavior.controlFlow || []) !== JSON.stringify(stepControlFlow)) {
+            errors.push(`${stepAt}.controlFlow differs from behavior ${behaviorId}`);
+          }
+          if (stepBehaviorIds.includes(behaviorId)) errors.push(`${at} maps behavior more than once: ${behaviorId}`);
+          stepBehaviorIds.push(behaviorId);
+          if (mappedBehaviorIds.has(behaviorId)) errors.push(`behavior is mapped by more than one workflow: ${behaviorId}`);
+          else mappedBehaviorIds.add(behaviorId);
+        }
+      }
+      if (stepBehaviorIds.length !== sourceBehaviorIds.length
+          || sourceBehaviorIds.some((behaviorId) => !stepBehaviorIds.includes(behaviorId))) {
+        errors.push(`${at} steps must account for every source behavior exactly once`);
+      }
+      const sourceOrder = sourceBehaviorIds.map((behaviorId) => behaviorOrder.get(behaviorId));
+      const stepOrder = stepBehaviorIds.map((behaviorId) => behaviorOrder.get(behaviorId));
+      if (sourceOrder.length === stepOrder.length && sourceOrder.some((value, index) => value !== stepOrder[index])) {
+        errors.push(`${at} step behavior order differs from the source behavior ledger`);
+      }
+
+      const decisions = Array.isArray(workflow?.requiredDecisions) ? workflow.requiredDecisions : [];
+      const decisionIds = new Set();
+      for (const [decisionIndex, decision] of decisions.entries()) {
+        const decisionAt = `${at}.requiredDecisions[${decisionIndex}]`;
+        if (!/^wfd-[0-9a-f]{16}$/.test(String(decision?.decisionId || ''))) errors.push(`${decisionAt}.decisionId is missing or invalid`);
+        else if (decisionIds.has(decision.decisionId)) errors.push(`${at} contains duplicate decisionId: ${decision.decisionId}`);
+        else decisionIds.add(decision.decisionId);
+        if (!allowedDecisionTypes.has(decision?.type)) errors.push(`${decisionAt}.type is invalid`);
+        if (decision?.requiresUserInput !== true && decision?.requiresUserInput !== false) errors.push(`${decisionAt}.requiresUserInput must be boolean`);
+        if (!['choice', 'text'].includes(decision?.answerKind)) errors.push(`${decisionAt}.answerKind is invalid`);
+        if (!validSourceLabel(decision?.prompt) || !validSourceLabel(decision?.whyRequired)) errors.push(`${decisionAt} prompt/reason is missing or unsafe`);
+        const options = Array.isArray(decision?.options) ? decision.options : [];
+        const optionValues = new Set();
+        if (decision?.answerKind === 'choice' && options.length < 2) errors.push(`${decisionAt} choice decisions require at least two options`);
+        if (decision?.answerKind === 'text' && options.length !== 0) errors.push(`${decisionAt} text decisions must not contain options`);
+        for (const option of options) {
+          if (!validSourceLabel(option?.value) || !validSourceLabel(option?.label) || !validSourceLabel(option?.effect)) errors.push(`${decisionAt} contains an invalid option`);
+          if (optionValues.has(option?.value)) errors.push(`${decisionAt} contains duplicate option value: ${option?.value}`);
+          optionValues.add(option?.value);
+        }
+        if (decision?.recommended != null && !optionValues.has(decision.recommended)) errors.push(`${decisionAt}.recommended must reference an option`);
+      }
+
+      const approval = workflow?.approval || {};
+      if (!approvalStatuses.has(approval.status)) errors.push(`${at}.approval.status is invalid`);
+      const resolutions = Array.isArray(approval.decisions) ? approval.decisions : [];
+      const resolutionIds = new Set();
+      for (const [resolutionIndex, resolution] of resolutions.entries()) {
+        const resolutionAt = `${at}.approval.decisions[${resolutionIndex}]`;
+        if (!decisionIds.has(resolution?.decisionId)) errors.push(`${resolutionAt} references unknown decisionId: ${resolution?.decisionId || 'missing'}`);
+        if (resolutionIds.has(resolution?.decisionId)) errors.push(`${at} contains duplicate decision resolution: ${resolution?.decisionId}`);
+        resolutionIds.add(resolution?.decisionId);
+        if (resolution?.status !== 'resolved') errors.push(`${resolutionAt}.status must be resolved`);
+        if (!['user', 'ai'].includes(resolution?.resolvedBy)) errors.push(`${resolutionAt}.resolvedBy must be user or ai`);
+        if (!validDecisionText(resolution?.value) || !validDecisionText(resolution?.reason, 2000)) errors.push(`${resolutionAt} value/reason is missing, oversized, or unsafe`);
+        const decision = decisions.find((entry) => entry.decisionId === resolution?.decisionId);
+        if (decision?.requiresUserInput === true && resolution?.resolvedBy !== 'user') errors.push(`${resolutionAt} requires a user answer`);
+        if (decision?.answerKind === 'choice' && !decision.options.some((option) => option.value === resolution?.value)) {
+          errors.push(`${resolutionAt}.value is not an allowed option`);
+        }
+      }
+
+      if (approval.status === 'approved') {
+        const approvedStepIds = Array.isArray(approval.approvedStepIds) ? approval.approvedStepIds : [];
+        if (approvedStepIds.length !== steps.length || steps.some((step) => !approvedStepIds.includes(step.stepId))) {
+          errors.push(`${at}.approval.approvedStepIds must contain every proposed step exactly once`);
+        }
+        if (decisions.some((decision) => !resolutionIds.has(decision.decisionId))) errors.push(`${at} has unresolved correctness-critical decisions`);
+        if (!executionOwners.has(approval.executionOwner)) errors.push(`${at}.approval.executionOwner is invalid`);
+        if (!uxModes.has(approval.uxMode)) errors.push(`${at}.approval.uxMode is invalid`);
+        if (!validSourceLabel(approval.reason)) errors.push(`${at}.approval.reason is required`);
+        if (approval.approvedBy !== 'user') errors.push(`${at}.approval.approvedBy must be user`);
+        if (!approval.approvedAt || !Number.isFinite(Date.parse(approval.approvedAt))) errors.push(`${at}.approval.approvedAt must be an ISO timestamp`);
+        const selectedValues = new Set(resolutions.map((resolution) => resolution.value));
+        const needsServer = ['server-transaction', 'whole-workflow-idempotency', 'server-batch']
+          .some((value) => selectedValues.has(value));
+        if (needsServer) {
+          if (approval.executionOwner !== 'server-orchestrator') errors.push(`${at} selected a server policy but executionOwner is not server-orchestrator`);
+          if (!approval.serverDependency?.connectionRequirementId
+              || !requirementIds.has(approval.serverDependency.connectionRequirementId)) {
+            errors.push(`${at} selected a server policy without a valid serverDependency connection requirement`);
+          }
+        }
+        if (selectedValues.has('compensate-client') && !validDecisionText(approval.compensationPlan)) {
+          errors.push(`${at} selected client compensation without an explicit compensationPlan`);
+        }
+        if (selectedValues.has('block')) errors.push(`${at} cannot be approved with a blocking decision`);
+      }
+      if (approval.status === 'blocked' && !validSourceLabel(approval.reason)) errors.push(`${at}.approval.reason is required when blocked`);
+      if (args.requireWorkflowApproval) {
+        if (approval.status === 'pending') errors.push(`${at} still requires explicit workflow approval`);
+        if (approval.status === 'blocked') errors.push(`${at} is a hard workflow blocker`);
+      }
+    }
+
+    const derivedWorkflowStats = deriveWorkflowStats(workflows, {
+      handlersScanned: workflowPlan.stats?.handlersScanned,
+      handlersSkippedUnclassified: workflowPlan.stats?.handlersSkippedUnclassified,
+    });
+    for (const [key, value] of Object.entries(derivedWorkflowStats)) {
+      if (JSON.stringify(workflowPlan.stats?.[key]) !== JSON.stringify(value)) {
+        errors.push(`workflows.stats.${key} mismatch: expected ${JSON.stringify(value)}`);
+      }
+      if (JSON.stringify(input?.workflowPlan?.stats?.[key]) !== JSON.stringify(value)) {
+        errors.push(`mobile-plugin-input workflowPlan.stats.${key} mismatch: expected ${JSON.stringify(value)}`);
+      }
+    }
+    scanSecrets(workflowPlan, 'workflows', errors);
   }
 
   if (coverage) {
@@ -442,6 +780,8 @@ function main() {
     controls: coverage?.rows?.length || 0,
     pcfs: pcfPlan?.controls?.length || 0,
     pcfDiscoveryComplete: pcfPlan?.discovery?.complete !== false,
+    workflows: workflowPlan?.workflows?.length || 0,
+    workflowDecisionsUnresolved: workflowPlan?.stats?.unresolvedDecisions || 0,
     errors,
     warnings,
   };
@@ -449,7 +789,7 @@ function main() {
   if (args.json) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   else {
     process.stdout.write(`Migration package: ${result.ok ? 'VALID' : 'INVALID'}\n`);
-    process.stdout.write(`App: ${result.app || '(unknown)'} | screens ${result.screens} | tables ${result.tables} | connectors ${result.connectors} | behaviors ${result.behaviors} | controls ${result.controls} | PCFs ${result.pcfs}\n`);
+    process.stdout.write(`App: ${result.app || '(unknown)'} | screens ${result.screens} | tables ${result.tables} | connectors ${result.connectors} | behaviors ${result.behaviors} | controls ${result.controls} | PCFs ${result.pcfs} | workflows ${result.workflows}\n`);
     warnings.forEach((warning) => process.stdout.write(`WARN: ${warning}\n`));
     errors.forEach((error) => process.stderr.write(`ERROR: ${error}\n`));
   }

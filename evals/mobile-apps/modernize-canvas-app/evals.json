@@ -10,8 +10,10 @@
         "Uses --extracted mode and verifies a unique Src directory containing .pa.yaml files",
         "Runs adapt-app-brief-for-mobile-plugin.js --self-test before the real pipeline",
         "Runs extract-msapp-brief.v2.cjs before adapt-app-brief-for-mobile-plugin.js",
-        "Requires native-app-plan.md, mobile-plugin-input.json, behaviors.json, control-intent-coverage.json, and server-side-assets.json",
+        "Requires native-app-plan.md, mobile-plugin-input.json, behaviors.json, workflows.json, control-intent-coverage.json, and server-side-assets.json",
         "Checks droppedEventActionCount and blocks if any source event action disappeared",
+        "Detects pathological event handlers deterministically and maps every source behavior ID exactly once and in order into named workflow steps",
+        "Leaves routine helper/module/native UX choices to AI and asks users only correctness-critical transaction, failure, retry, batch, async, or unknown-contract questions",
         "Reports screens, controls, tables, connectors, flows, behaviors, native upgrades, and unsupported items",
         "Generates a self-contained migration-assessment.html behavior ledger before target mutation",
         "Stops after assessment because analyze-only was requested",
@@ -31,6 +33,7 @@
         "Does not copy source package.json, app.config.js, auth.config.json, power.config.json, .npmrc, node_modules, or native binaries into the target",
         "Presents the migration assessment before target mutation",
         "Uses the deterministic import-mobile-plugin-input.js path rather than manually copying arbitrary directories",
+        "Resets stale workflow approvals and runs authoritative Gate 2c before generation",
         "Invokes /create-mobile-app --working-dir <target> --adapted-from <migration-package>",
         "Preserves the current four plan gates, -t MobileApp init, SafeArea gate, offline flow, manual registration flow, debug handoff, and edit-app"
       ]
@@ -50,6 +53,7 @@
         "Generates pcf-plan.json with one stable row per PCF and requires explicit Gate 2b user disposition approval before generation",
         "Allows only native replacement, server dependency, optional visible unsupported state, or hard blocker; essential PCFs cannot be waived",
         "Preserves raw unmatched formulas for review",
+        "Decomposes any giant order/submission handler into orchestrator-owned named steps and enforces exact workflow/step/call markers before Metro",
         "Does not silently downgrade essential unsupported behavior to a visual placeholder",
         "Keeps all generated artifacts local and excludes credentials, tokens, and customer record payloads"
       ]

@@ -128,10 +128,12 @@ Read the generated `mobile-plugin-input.json` immediately. If it contains `migra
 
 Require these primary outputs:
 
+- `.mobile-app-modernizer-output`
 - `native-app-plan.md`
 - `mobile-plugin-input.json`
 - `screens/`
 - `behaviors.json`
+- `workflows.json`
 - `control-intent-coverage.json`
 - `pcf-plan.json`
 - `server-side-assets.json`
@@ -164,8 +166,9 @@ Read the generated JSON and check:
 7. `behaviors.stats.droppedEventActionCount === 0`.
 8. Every high-risk control-intent row has a native strategy or explicit unsupported status.
 9. `pcf-plan.json` has exactly one row per PCF control. If source metadata reports PCF content but discovery cannot enumerate controls, treat `discovery.complete: false` as a hard blocker rather than assuming zero PCFs. Every proposal is one of `native-replacement`, `server-dependency`, or `blocker`; the adapter never silently proposes unsupported loss.
-10. Server-computed/calculated/rollup columns are marked read-only for app writes.
-11. No output contains secrets, access tokens, private registry credentials, or customer record payloads.
+10. `workflows.json` contains every event handler that crossed the deterministic pathological-handler threshold. Each workflow maps every source `behaviorId` exactly once and in source order to named steps. Only correctness-critical unresolved business policies appear in `requiredDecisions[]`; routine code structure and native UX remain AI-owned proposal details.
+11. Server-computed/calculated/rollup columns are marked read-only for app writes.
+12. No output contains secrets, access tokens, private registry credentials, or customer record payloads.
 
 If `migrationCheck` reports a component library, stop after the assessment. Do not route it into `/create-mobile-app`; component libraries have no runnable screen graph.
 
@@ -193,6 +196,7 @@ Flows            : <count; missing-id count>
 Behaviors        : <classified>/<total>; unmatched <count>; dropped <count>
 Native upgrades  : <count>
 PCFs             : <count; proposed native/server/blocker; pending approvals>
+Workflows         : <pathological handlers; named steps; correctness-critical questions; pending approvals>
 Unsupported      : <count by severity>
 Output package   : <output-dir>/mobile-plugin-input
 ```
@@ -212,6 +216,12 @@ If any blocking-before-generation item exists, stop after the report and remedia
 Read `pcf-plan.json`. If `discovery.complete` is false, show its discovery blockers and STOP; generation cannot safely approve PCFs that were not enumerated. Otherwise, when `controls[]` is non-empty, show the proposal matrix in the assessment: PCF ID, screen/control, public inputs/events/data bindings, premium flag, inferred essentiality, backend dependencies, proposed disposition, target strategy, and proposal reason.
 
 Do **not** write approval fields here. `/create-mobile-app` owns the single authoritative Gate 2b after safe import. The importer deliberately resets any pre-existing approval fields to `pending`, preventing a crafted/stale migration package from bypassing user confirmation. `--analyze-only` therefore remains read-only and ordinary generation asks for each PCF decision exactly once.
+
+### Step 5.6 — Preview workflow decomposition proposals
+
+Read `workflows.json`. When `workflows[]` is non-empty, show each workflow ID, source screen/control/event, deterministic complexity signals, ordered named steps, target module, mapped behavior count, and `requiredDecisions[]`.
+
+Do **not** ask or write answers here. `/create-mobile-app` owns authoritative Gate 2c after safe import, and the importer resets all incoming workflow approvals/answers to pending. Explain that AI will choose routine code/UX structure automatically; Gate 2c asks only unresolved transaction/partial-failure, retry/idempotency, batch-failure, async-completion, or unknown critical source-contract questions, then requests one approval for the complete workflow plan.
 
 ### Step 6 — Generate through the existing public workflow
 
