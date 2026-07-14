@@ -30660,8 +30660,8 @@ var FlowClient = class _FlowClient {
     const headers = {
       Authorization: `Bearer ${token}`,
       Accept: "application/json",
-      "User-Agent": "power-automate-plugin/2.0.0",
-      ...extraHeaders
+      ...extraHeaders,
+      "User-Agent": "power-automate-plugin/2.0.0"
     };
     if (body !== void 0) {
       headers["Content-Type"] = "application/json";
