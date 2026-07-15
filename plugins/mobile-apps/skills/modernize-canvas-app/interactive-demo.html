@@ -1,0 +1,796 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Interactive walkthrough of how a large Power Apps Canvas app is modernized using the existing mobile-app plugin." />
+  <title>Canvas to Native — Interactive Modernization Demo</title>
+  <style>
+    :root {
+      --ink: #10241d;
+      --ink-2: #28443a;
+      --muted: #687b74;
+      --paper: #f6f8f5;
+      --surface: #ffffff;
+      --line: #cdd8d2;
+      --line-strong: #91a89d;
+      --brand: #087a4b;
+      --brand-dark: #045c39;
+      --brand-soft: #dff3e8;
+      --blue: #135d95;
+      --blue-soft: #e4f1fa;
+      --amber: #a65d08;
+      --amber-soft: #fff0d6;
+      --red: #a13b31;
+      --red-soft: #fce7e4;
+      --navy: #102a3a;
+      --canvas: #6d4aff;
+      --canvas-soft: #eeeaff;
+      --shadow: 0 16px 45px rgba(25, 56, 43, 0.10);
+      --radius: 10px;
+      --stage-progress: 0%;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(rgba(16, 36, 29, 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(16, 36, 29, 0.035) 1px, transparent 1px),
+        var(--paper);
+      background-size: 28px 28px;
+      font-family: "Avenir Next", Avenir, "Segoe UI", system-ui, sans-serif;
+      line-height: 1.5;
+    }
+
+    button, select { font: inherit; }
+    button { cursor: pointer; }
+    button:focus-visible, select:focus-visible {
+      outline: 3px solid rgba(19, 93, 149, 0.32);
+      outline-offset: 3px;
+    }
+
+    .topbar {
+      min-height: 68px;
+      padding: 0 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      color: #fff;
+      background: var(--navy);
+      border-bottom: 4px solid var(--brand);
+    }
+
+    .wordmark {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 750;
+      letter-spacing: -0.02em;
+    }
+
+    .wordmark-mark {
+      position: relative;
+      width: 30px;
+      height: 30px;
+      border: 2px solid #9be6bf;
+      transform: rotate(45deg);
+    }
+    .wordmark-mark::after {
+      content: "";
+      position: absolute;
+      inset: 6px;
+      background: #9be6bf;
+    }
+
+    .top-note {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: #bdd0c8;
+      font-size: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .live-dot {
+      width: 8px;
+      height: 8px;
+      background: #7fe0aa;
+      border-radius: 50%;
+      box-shadow: 0 0 0 5px rgba(127, 224, 170, 0.12);
+    }
+
+    .hero {
+      max-width: 1500px;
+      margin: 0 auto;
+      padding: 42px 30px 30px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.65fr);
+      gap: 42px;
+      align-items: end;
+    }
+
+    .eyebrow {
+      margin: 0 0 12px;
+      color: var(--brand);
+      font: 750 12px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+      letter-spacing: 0.13em;
+      text-transform: uppercase;
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+    h1 {
+      max-width: 870px;
+      margin-bottom: 18px;
+      font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      font-size: clamp(42px, 6vw, 78px);
+      font-weight: 600;
+      line-height: 0.98;
+      letter-spacing: -0.045em;
+    }
+    .hero-copy {
+      max-width: 760px;
+      margin-bottom: 24px;
+      color: var(--ink-2);
+      font-size: clamp(16px, 1.5vw, 20px);
+    }
+
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+    .primary, .secondary {
+      min-height: 44px;
+      padding: 10px 16px;
+      border: 1px solid transparent;
+      border-radius: 5px;
+      font-weight: 750;
+      transition: transform 150ms ease, background 150ms ease, border-color 150ms ease;
+    }
+    .primary { color: #fff; background: var(--brand); }
+    .primary:hover { background: var(--brand-dark); transform: translateY(-1px); }
+    .secondary { color: var(--ink); background: transparent; border-color: var(--line-strong); }
+    .secondary:hover { background: #fff; border-color: var(--ink-2); }
+
+    .hero-control {
+      padding: 22px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-left: 5px solid var(--brand);
+      box-shadow: var(--shadow);
+    }
+    .hero-control label {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--muted);
+      font: 700 11px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .hero-control select {
+      width: 100%;
+      min-height: 42px;
+      padding: 8px 12px;
+      color: var(--ink);
+      background: #fff;
+      border: 1px solid var(--line-strong);
+      border-radius: 4px;
+    }
+    .scenario-note { margin: 12px 0 0; color: var(--muted); font-size: 13px; }
+
+    .metrics {
+      max-width: 1500px;
+      margin: 0 auto;
+      padding: 0 30px 30px;
+      display: grid;
+      grid-template-columns: repeat(6, minmax(120px, 1fr));
+      gap: 1px;
+      background: var(--line);
+      border: 1px solid var(--line);
+    }
+    .metric { min-height: 92px; padding: 16px; background: var(--surface); }
+    .metric strong {
+      display: block;
+      font: 750 clamp(22px, 2.6vw, 34px)/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+      letter-spacing: -0.05em;
+    }
+    .metric span { display: block; margin-top: 8px; color: var(--muted); font-size: 12px; }
+
+    .workspace {
+      max-width: 1500px;
+      margin: 0 auto 70px;
+      padding: 0 30px;
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr);
+      gap: 22px;
+    }
+
+    .rail {
+      position: sticky;
+      top: 16px;
+      align-self: start;
+      background: var(--navy);
+      color: #fff;
+      box-shadow: var(--shadow);
+    }
+    .rail-head { padding: 18px 18px 14px; border-bottom: 1px solid #315064; }
+    .rail-head p { margin: 0; color: #9eb7c3; font-size: 12px; }
+    .stage-nav { padding: 8px; }
+    .stage-button {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 30px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 11px 10px;
+      color: #c7d7df;
+      text-align: left;
+      background: transparent;
+      border: 0;
+      border-left: 3px solid transparent;
+      border-radius: 0;
+    }
+    .stage-button:hover { background: #17384b; color: #fff; }
+    .stage-button.active { color: #fff; background: #1b4255; border-left-color: #7fe0aa; }
+    .stage-number {
+      width: 27px;
+      height: 27px;
+      display: grid;
+      place-items: center;
+      color: #9eb7c3;
+      border: 1px solid #496778;
+      border-radius: 50%;
+      font: 700 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .stage-button.active .stage-number { color: var(--navy); background: #7fe0aa; border-color: #7fe0aa; }
+    .stage-label { font-size: 13px; font-weight: 650; }
+    .stage-check { color: #7fe0aa; opacity: 0; }
+    .stage-button.done .stage-check { opacity: 1; }
+
+    .main-panel { min-width: 0; }
+    .progress-shell {
+      height: 6px;
+      margin-bottom: 14px;
+      overflow: hidden;
+      background: #dce5e0;
+    }
+    .progress-bar {
+      width: var(--stage-progress);
+      height: 100%;
+      background: var(--brand);
+      transition: width 420ms cubic-bezier(.2,.8,.2,1);
+    }
+
+    .stage-card {
+      min-height: 660px;
+      padding: 28px;
+      background: rgba(255,255,255,0.94);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+    }
+    .stage-heading {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 20px;
+      align-items: start;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--line);
+    }
+    .stage-kicker {
+      margin-bottom: 8px;
+      color: var(--brand);
+      font: 750 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+    .stage-title {
+      margin-bottom: 10px;
+      font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      font-size: clamp(30px, 4vw, 52px);
+      font-weight: 600;
+      line-height: 1.02;
+      letter-spacing: -0.035em;
+    }
+    .stage-summary { max-width: 790px; margin: 0; color: var(--ink-2); font-size: 16px; }
+    .owner-badge {
+      padding: 8px 10px;
+      color: var(--blue);
+      background: var(--blue-soft);
+      border: 1px solid #a8cfe8;
+      border-radius: 4px;
+      font: 700 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+      white-space: nowrap;
+    }
+
+    .stage-content { padding-top: 24px; }
+    .demo-grid { display: grid; grid-template-columns: minmax(280px, 0.8fr) minmax(300px, 1.2fr); gap: 20px; }
+    .panel {
+      padding: 18px;
+      background: #fbfcfb;
+      border: 1px solid var(--line);
+    }
+    .panel h3 { margin-bottom: 12px; font-size: 15px; }
+    .utility {
+      color: var(--muted);
+      font: 700 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+
+    .artifact-list, .plain-list { margin: 0; padding: 0; list-style: none; }
+    .artifact-list li, .plain-list li {
+      display: flex;
+      gap: 10px;
+      padding: 9px 0;
+      border-bottom: 1px solid #e4ebe7;
+      font-size: 13px;
+    }
+    .artifact-list li:last-child, .plain-list li:last-child { border-bottom: 0; }
+    .artifact-list code {
+      color: var(--blue);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      overflow-wrap: anywhere;
+    }
+    .tick { color: var(--brand); font-weight: 800; }
+
+    .phone-pair { display: grid; grid-template-columns: 1fr 52px 1fr; gap: 12px; align-items: center; }
+    .phone {
+      min-width: 0;
+      height: 390px;
+      padding: 9px;
+      overflow: hidden;
+      color: var(--ink);
+      background: #162d27;
+      border: 2px solid #162d27;
+      border-radius: 25px;
+      box-shadow: 0 12px 25px rgba(16,36,29,.15);
+    }
+    .phone-screen { height: 100%; overflow: hidden; background: #f8faf8; border-radius: 17px; }
+    .phone-cap { height: 24px; display: flex; align-items: center; justify-content: center; background: #fff; }
+    .phone-cap::after { content: ""; width: 42px; height: 5px; background: #18342b; border-radius: 10px; }
+    .canvas-screen { background: #f2f0ff; }
+    .phone-header { padding: 13px 12px; color: #fff; background: var(--canvas); font-size: 12px; font-weight: 750; }
+    .native-header { background: var(--navy); }
+    .canvas-body, .native-body { padding: 10px; }
+    .canvas-control {
+      height: 29px;
+      margin-bottom: 7px;
+      padding: 6px 8px;
+      color: #4f3fad;
+      background: #fff;
+      border: 1px dashed #9889ef;
+      font: 650 9px ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .native-search { height: 30px; margin-bottom: 8px; padding: 7px 9px; color: #718179; background: #edf2ef; border-radius: 7px; font-size: 9px; }
+    .native-row { display: grid; grid-template-columns: 31px 1fr auto; gap: 8px; align-items: center; padding: 9px 2px; border-bottom: 1px solid #dce6e1; }
+    .native-thumb { width: 31px; height: 31px; display: grid; place-items: center; color: #fff; background: var(--brand); border-radius: 7px; font-size: 10px; }
+    .native-row strong { display: block; font-size: 9px; }
+    .native-row span { display: block; color: #718179; font-size: 7px; }
+    .status-pill { padding: 3px 5px; color: var(--brand-dark); background: var(--brand-soft); border-radius: 10px; font-size: 6px; font-weight: 800; }
+    .handoff-arrow { display: grid; place-items: center; color: var(--brand); font-size: 32px; font-weight: 300; }
+    .handoff-arrow small { display: block; color: var(--muted); font: 700 7px ui-monospace, monospace; text-align: center; transform: rotate(-90deg); }
+
+    .code-window { overflow: hidden; color: #d6e5de; background: #10241d; border: 1px solid #315044; }
+    .code-head { display: flex; justify-content: space-between; padding: 9px 12px; color: #8da99d; background: #17352b; font: 700 10px ui-monospace, monospace; }
+    pre { margin: 0; padding: 15px; overflow: auto; white-space: pre-wrap; font: 11px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .code-accent { color: #9be6bf; }
+
+    .flow { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; }
+    .flow-node { flex: 1 1 130px; min-height: 76px; padding: 12px; background: #fff; border: 1px solid var(--line); border-top: 4px solid var(--brand); }
+    .flow-node strong { display: block; font-size: 12px; }
+    .flow-node span { color: var(--muted); font-size: 10px; }
+    .flow-node.warning { border-top-color: var(--amber); }
+    .flow-node.audit { border-top-color: var(--blue); }
+
+    .role-grid, .plugin-grid, .gate-grid, .validation-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .role, .plugin, .gate, .validation {
+      padding: 14px;
+      background: #fff;
+      border: 1px solid var(--line);
+      transition: transform 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+    }
+    button.plugin { color: inherit; text-align: left; }
+    .role:hover, .plugin:hover { transform: translateY(-2px); border-color: var(--brand); box-shadow: 0 8px 20px rgba(25,56,43,.08); }
+    .role-source { display: inline-block; margin-bottom: 6px; color: var(--canvas); font: 750 10px ui-monospace, monospace; }
+    .role-target { display: block; margin-bottom: 5px; font-size: 13px; }
+    .role p, .plugin p, .gate p { margin: 0; color: var(--muted); font-size: 11px; }
+    .plugin.active { color: #fff; background: var(--navy); border-color: var(--navy); }
+    .plugin.active p { color: #b9ced7; }
+    .plugin code { font-size: 11px; font-weight: 800; }
+    .plugin-detail { margin-top: 12px; padding: 16px; background: var(--navy); color: #fff; min-height: 104px; }
+    .plugin-detail p { margin-bottom: 0; color: #bed0c8; font-size: 13px; }
+
+    .connection-lane { display: grid; grid-template-columns: 1fr 65px 1fr; gap: 10px; align-items: stretch; }
+    .environment { padding: 16px; background: #fff; border: 1px solid var(--line); }
+    .environment.source { border-top: 4px solid var(--canvas); }
+    .environment.target { border-top: 4px solid var(--brand); }
+    .env-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+    .env-title strong { font-size: 13px; }
+    .env-tag { padding: 3px 6px; color: var(--muted); background: #edf2ef; font: 700 8px ui-monospace, monospace; }
+    .conn-row { padding: 8px 0; border-bottom: 1px solid #e4ebe7; font-size: 11px; }
+    .conn-row:last-child { border: 0; }
+    .conn-row span { display: block; color: var(--muted); font-size: 9px; }
+    .redacted { color: var(--red); text-decoration: line-through; }
+    .connection-action { display: grid; place-items: center; color: var(--brand); font: 800 10px ui-monospace, monospace; text-align: center; }
+    .connection-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    .mini-button { padding: 7px 10px; color: var(--ink); background: #fff; border: 1px solid var(--line-strong); border-radius: 4px; font-size: 11px; font-weight: 750; }
+    .mini-button.active { color: #fff; background: var(--brand); border-color: var(--brand); }
+
+    .shard-bars { display: grid; gap: 8px; }
+    .shard-row { display: grid; grid-template-columns: 145px 1fr 62px; gap: 10px; align-items: center; font-size: 11px; }
+    .bar-track { height: 12px; background: #e5ece8; }
+    .bar-fill { height: 100%; background: var(--brand); }
+    .bar-fill.workflow { background: var(--blue); }
+    .bar-fill.gate { background: var(--amber); }
+    .budget-ok { color: var(--brand); font-weight: 800; }
+
+    .validation { display: grid; grid-template-columns: 30px 1fr; gap: 10px; align-items: start; }
+    .validation-icon { width: 26px; height: 26px; display: grid; place-items: center; color: #fff; background: var(--brand); border-radius: 50%; font-size: 12px; }
+    .validation strong { display: block; font-size: 12px; }
+    .validation span { color: var(--muted); font-size: 10px; }
+
+    .stage-footer { margin-top: 24px; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-top: 18px; border-top: 1px solid var(--line); }
+    .stage-footer p { margin: 0; color: var(--muted); font-size: 12px; }
+    .next-button { min-height: 40px; padding: 8px 14px; color: #fff; background: var(--navy); border: 0; border-radius: 4px; font-weight: 750; }
+    .next-button:hover { background: #1c4358; }
+
+    .takeaway {
+      max-width: 1500px;
+      margin: 0 auto 70px;
+      padding: 0 30px;
+    }
+    .takeaway-inner {
+      padding: 28px;
+      color: #fff;
+      background: var(--navy);
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(280px, .45fr);
+      gap: 30px;
+      align-items: center;
+    }
+    .takeaway h2 { margin-bottom: 10px; font-family: "Iowan Old Style", Palatino, serif; font-size: 34px; font-weight: 600; }
+    .takeaway p { margin: 0; color: #bdd0c8; }
+    .preserve-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .preserve-item { padding: 9px; color: #dff3e8; border: 1px solid #426070; font-size: 11px; }
+
+    @media (max-width: 1050px) {
+      .hero { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: repeat(3, 1fr); }
+      .workspace { grid-template-columns: 1fr; }
+      .rail { position: static; }
+      .stage-nav { display: grid; grid-template-columns: repeat(3, 1fr); }
+      .stage-button { grid-template-columns: 26px 1fr; }
+      .stage-check { display: none; }
+      .demo-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 680px) {
+      .topbar { padding: 14px 16px; align-items: flex-start; flex-direction: column; }
+      .hero, .workspace, .metrics, .takeaway { padding-left: 14px; padding-right: 14px; }
+      .hero { padding-top: 28px; }
+      .metrics { grid-template-columns: repeat(2, 1fr); }
+      .stage-nav { grid-template-columns: 1fr 1fr; }
+      .stage-card { padding: 18px; }
+      .stage-heading { grid-template-columns: 1fr; }
+      .owner-badge { justify-self: start; }
+      .phone-pair { grid-template-columns: 1fr; }
+      .phone { max-width: 300px; margin: 0 auto; }
+      .handoff-arrow { transform: rotate(90deg); }
+      .role-grid, .plugin-grid, .gate-grid, .validation-grid { grid-template-columns: 1fr; }
+      .connection-lane { grid-template-columns: 1fr; }
+      .connection-action { min-height: 42px; }
+      .shard-row { grid-template-columns: 110px 1fr; }
+      .shard-row > :last-child { grid-column: 2; }
+      .takeaway-inner { grid-template-columns: 1fr; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="wordmark"><span class="wordmark-mark" aria-hidden="true"></span>Mobile Apps Modernizer</div>
+    <div class="top-note"><span class="live-dot" aria-hidden="true"></span>Interactive architecture demo · no tenant changes</div>
+  </header>
+
+  <section class="hero">
+    <div>
+      <p class="eyebrow">Canvas source → existing mobile-app plugin → native app</p>
+      <h1>Follow one large app through the conversion.</h1>
+      <p class="hero-copy">Click each stage to see what the converter analyzes, what stays exact, what becomes native intent, and which existing mobile-app capability performs the next step.</p>
+      <div class="hero-actions">
+        <button class="primary" id="playButton" type="button">Play conversion</button>
+        <button class="secondary" id="resetButton" type="button">Reset walkthrough</button>
+      </div>
+    </div>
+    <div class="hero-control">
+      <label for="scenarioSelect">Demo scale</label>
+      <select id="scenarioSelect">
+        <option value="large">Large field-operations app — verified benchmark</option>
+        <option value="inspection">Compact equipment-inspection example</option>
+      </select>
+      <p class="scenario-note" id="scenarioNote">Uses verified large-app adaptation results: complete control accounting and bounded model feeds.</p>
+    </div>
+  </section>
+
+  <section class="metrics" aria-label="Scenario metrics">
+    <div class="metric"><strong data-metric="screens">18</strong><span>Screens</span></div>
+    <div class="metric"><strong data-metric="controls">2,204</strong><span>Controls accounted</span></div>
+    <div class="metric"><strong data-metric="behaviors">3,007</strong><span>Source behaviors</span></div>
+    <div class="metric"><strong data-metric="tables">39</strong><span>Dataverse tables</span></div>
+    <div class="metric"><strong data-metric="workflows">55</strong><span>Complex workflows</span></div>
+    <div class="metric"><strong data-metric="decisions">33</strong><span>Business decisions</span></div>
+  </section>
+
+  <main class="workspace">
+    <aside class="rail" aria-label="Conversion stages">
+      <div class="rail-head">
+        <p>SELECT A HANDOFF STAGE</p>
+      </div>
+      <nav class="stage-nav" id="stageNav"></nav>
+    </aside>
+
+    <section class="main-panel" aria-live="polite">
+      <div class="progress-shell" aria-hidden="true"><div class="progress-bar"></div></div>
+      <article class="stage-card">
+        <header class="stage-heading">
+          <div>
+            <div class="stage-kicker" id="stageKicker"></div>
+            <h2 class="stage-title" id="stageTitle"></h2>
+            <p class="stage-summary" id="stageSummary"></p>
+          </div>
+          <div class="owner-badge" id="stageOwner"></div>
+        </header>
+        <div class="stage-content" id="stageContent"></div>
+        <footer class="stage-footer">
+          <p id="stageFooterText"></p>
+          <button class="next-button" id="nextButton" type="button">Next stage →</button>
+        </footer>
+      </article>
+    </section>
+  </main>
+
+  <section class="takeaway">
+    <div class="takeaway-inner">
+      <div>
+        <p class="eyebrow" style="color:#7fe0aa">THE CONTRACT</p>
+        <h2>Preserve the business. Replace the Canvas implementation.</h2>
+        <p>The converter owns source understanding and traceability. The existing mobile-app plugin still owns environment setup, connections, generated services, native capabilities, design, screen generation, testing, iteration, and deployment.</p>
+      </div>
+      <div class="preserve-list">
+        <div class="preserve-item">✓ Data writes</div>
+        <div class="preserve-item">✓ Validation</div>
+        <div class="preserve-item">✓ Integrations</div>
+        <div class="preserve-item">✓ Record identity</div>
+        <div class="preserve-item">↻ Canvas layout</div>
+        <div class="preserve-item">↻ UI choreography</div>
+      </div>
+    </div>
+  </section>
+
+  <script>
+    const scenarios = {
+      large: {
+        note: 'Uses verified large-app adaptation results: complete control accounting and bounded model feeds.',
+        screens: '18', controls: '2,204', behaviors: '3,007', tables: '39', workflows: '55', decisions: '33',
+        appName: 'Large field-operations app', core: '2,623', intent: '384', largestScreen: '420,847 B', largestWorkflow: '99,029 B'
+      },
+      inspection: {
+        note: 'Illustrative smaller app: equipment list, inspections, defects, barcode, camera, and approval flow.',
+        screens: '6', controls: '148', behaviors: '214', tables: '4', workflows: '1', decisions: '1',
+        appName: 'Equipment inspection app', core: '183', intent: '31', largestScreen: '74,208 B', largestWorkflow: '28,410 B'
+      }
+    };
+
+    const plugins = [
+      ['/create-mobile-app', 'Resumes from the approved migration package and keeps the existing template, auth, environment, routing, and quality pipeline.'],
+      ['/add-dataverse', 'Reuses, extends, or creates approved target tables, then generates typed models and services.'],
+      ['/add-connector', 'Finds or creates target connector connections and adds cloud flows without reusing source GUIDs.'],
+      ['/add-native', 'Implements approved camera, barcode, document, file, PDF, pen, and other allowlisted native capabilities.'],
+      ['/design-system', 'Creates app-specific Tamagui tokens and native visual grammar instead of copying Canvas pixels.'],
+      ['workflow-builder', 'Builds one approved pathological event workflow from one bounded exact implementation shard.'],
+      ['screen-builder', 'Builds one screen from one compact behavior shard and invokes prebuilt workflow modules.'],
+      ['/debug-app', 'Exercises the generated app and fixes runtime errors and silent failures.'],
+      ['/edit-app', 'Handles normal post-generation iteration without restarting modernization.'],
+      ['/deploy', 'Runs final build and publishes through the existing mobile-app deployment workflow.']
+    ];
+
+    function phoneComparison() {
+      return `
+        <div class="phone-pair" aria-label="Canvas and native screen comparison">
+          <div class="phone">
+            <div class="phone-screen canvas-screen">
+              <div class="phone-cap"></div>
+              <div class="phone-header">Canvas: Equipment Gallery</div>
+              <div class="canvas-body">
+                <div class="canvas-control">Gallery.Items = Filter(Equipment…)</div>
+                <div class="canvas-control">Label.Text = ThisItem.Name</div>
+                <div class="canvas-control">Icon.X = Parent.Width - 48</div>
+                <div class="canvas-control">Rectangle.Fill = RGBA(…)</div>
+                <div class="canvas-control">OnSelect = Set(var_Selected…)</div>
+                <div class="canvas-control">Navigate(EquipmentDetail)</div>
+                <div class="canvas-control">Spinner.Visible = var_Loading</div>
+              </div>
+            </div>
+          </div>
+          <div class="handoff-arrow" aria-hidden="true">→<small>INTENT</small></div>
+          <div class="phone">
+            <div class="phone-screen">
+              <div class="phone-cap"></div>
+              <div class="phone-header native-header">Native: Equipment</div>
+              <div class="native-body">
+                <div class="native-search">Search equipment or scan barcode</div>
+                ${['Boiler 04|West plant|Due today','Pump 18|Line 2|Passed','Generator 07|North yard|Attention','Conveyor 03|Packing|Passed'].map((row, i) => {
+                  const [name, sub, status] = row.split('|');
+                  return `<div class="native-row"><div class="native-thumb">${String(i + 1).padStart(2,'0')}</div><div><strong>${name}</strong><span>${sub}</span></div><div class="status-pill">${status}</div></div>`;
+                }).join('')}
+              </div>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    function pluginMap() {
+      return `<div class="plugin-grid">${plugins.map((p, i) => `<button class="plugin${i === 0 ? ' active' : ''}" type="button" data-plugin="${i}"><code>${p[0]}</code><p>${p[1].split('.')[0]}.</p></button>`).join('')}</div><div class="plugin-detail" id="pluginDetail"><strong>${plugins[0][0]}</strong><p>${plugins[0][1]}</p></div>`;
+    }
+
+    const stages = [
+      {
+        label: 'Canvas source', kicker: '01 · ACQUIRE', title: 'Start with the existing Canvas app', owner: 'modernize-canvas-app',
+        summary: 'The source can be an exported app or supported unpacked Canvas source. It remains unchanged while screens, formulas, controls, metadata, and integrations are inspected.',
+        footer: 'No source or target environment is mutated.',
+        content: () => `<div class="demo-grid"><div class="panel"><span class="utility">Source inventory</span><h3>What is read</h3><ul class="plain-list"><li><span class="tick">◆</span>Screens, controls, properties, and navigation</li><li><span class="tick">◆</span>Power Fx events, branches, loops, and formulas</li><li><span class="tick">◆</span>Dataverse tables, fields, lookups, files, and images</li><li><span class="tick">◆</span>Connectors, flows, PCFs, components, assets, and localization</li><li><span class="tick">◆</span>Variables, collections, readers, and writers</li></ul></div><div>${phoneComparison()}</div></div>`
+      },
+      {
+        label: 'Safe extraction', kicker: '02 · EXTRACT', title: 'Create a lossless local brief', owner: 'extract-msapp-brief.v2',
+        summary: 'The extractor converts source files into a canonical app brief while rejecting unsafe paths, symlinks, secrets, and environment-bound identifiers.',
+        footer: 'Customer records are not copied.',
+        content: () => `<div class="demo-grid"><div class="code-window"><div class="code-head"><span>CANONICAL OUTPUT</span><span>LOCAL ONLY</span></div><pre><span class="code-accent">app-brief/</span>\n  app-brief.json\n  app-brief.md\n  screens/\n    EquipmentList.json\n    InspectionForm.json\n  tables/\n    equipment.json\n    inspections.json\n  assets manifest\n  localization keys</pre></div><div class="panel"><span class="utility">Safety boundary</span><h3>What is intentionally removed</h3><ul class="plain-list"><li><span class="tick">×</span>Source connection instance IDs</li><li><span class="tick">×</span>Source flow and environment GUIDs</li><li><span class="tick">×</span>Tokens, secrets, and author metadata</li><li><span class="tick">×</span>Customer record payloads</li><li><span class="tick">×</span>Archive paths that escape the source root</li></ul></div></div>`
+      },
+      {
+        label: 'Semantic analysis', kicker: '03 · UNDERSTAND', title: 'Translate intent, not control names', owner: 'adapter + behavior contract',
+        summary: 'Controls become evidence. Every behavior is classified through conservative dependency analysis: exact business behavior stays core; disconnected Canvas UI plumbing becomes native intent.',
+        footer: 'Ambiguity defaults to core or explicit review.',
+        content: () => `<div class="demo-grid"><div><div class="role-grid"><div class="role"><span class="role-source">Gallery + Dataverse Items</span><strong class="role-target">→ record-list</strong><p>Native FlatList with domain rows.</p></div><div class="role"><span class="role-source">Gallery + ThisItem.Route</span><strong class="role-target">→ navigation-menu</strong><p>Expo Router Drawer, Tabs, or destination list.</p></div><div class="role"><span class="role-source">Gallery + Choices(...)</span><strong class="role-target">→ picker-options</strong><p>Searchable Sheet or Select.</p></div><div class="role"><span class="role-source">Shared Canvas component</span><strong class="role-target">→ domain component</strong><p>Typed React Native props and callbacks.</p></div></div></div><div class="code-window"><div class="code-head"><span>BEHAVIOR SPLIT</span><span>EXACT VS NATIVE</span></div><pre><span class="code-accent">Patch(Inspections, ...)</span>  → exact core\nValidation rule             → exact core\nRecord ID in route context  → exact core\nSet(var_Loading, true)      → native pending state\nNotify("Saved")             → native feedback\nCanvas pixel X / Y          → discarded layout plumbing</pre></div></div>`
+      },
+      {
+        label: 'Package + assessment', kicker: '04 · PACKAGE', title: 'Produce a reviewable migration contract', owner: 'modernize-canvas-app',
+        summary: 'The adapter writes global audit ledgers plus bounded model-facing feeds. A deterministic validator recomputes the package before any target change.',
+        footer: 'Every model-facing feed must remain below 512 KiB.',
+        content: scenario => `<div class="demo-grid"><div class="panel"><span class="utility">Generated contract</span><h3>Key artifacts</h3><ul class="artifact-list"><li><span class="tick">✓</span><code>native-app-plan.md</code></li><li><span class="tick">✓</span><code>behaviors.json</code> — lossless audit only</li><li><span class="tick">✓</span><code>behavior-shards/&lt;Screen&gt;.json</code></li><li><span class="tick">✓</span><code>workflow-shards/&lt;Workflow&gt;.json</code></li><li><span class="tick">✓</span><code>workflow-gate-summary.json</code></li><li><span class="tick">✓</span><code>pcf-plan.json</code></li></ul></div><div class="panel"><span class="utility">Bounded context</span><h3>Largest verified feeds</h3><div class="shard-bars"><div class="shard-row"><span>Screen builder</span><div class="bar-track"><div class="bar-fill" style="width:${scenario === 'large' ? 80 : 14}%"></div></div><strong>${scenarios[scenario].largestScreen}</strong></div><div class="shard-row"><span>Workflow builder</span><div class="bar-track"><div class="bar-fill workflow" style="width:${scenario === 'large' ? 19 : 6}%"></div></div><strong>${scenarios[scenario].largestWorkflow}</strong></div><div class="shard-row"><span>Budget</span><div class="bar-track"><div class="bar-fill gate" style="width:100%"></div></div><strong>524,288 B</strong></div></div><p class="budget-ok" style="margin:16px 0 0">✓ All feeds fit the enforced budget</p></div></div>`
+      },
+      {
+        label: 'Approval gates', kicker: '05 · DECIDE', title: 'Ask only what the source cannot prove', owner: 'create-mobile-app gates',
+        summary: 'The user approves the data model, native capabilities, PCF outcomes, complex workflow policy, connections, and screen graph. Routine code and UX structure remain AI-owned.',
+        footer: 'A blocker stops generation before target mutation.',
+        content: () => `<div class="gate-grid"><div class="gate"><span class="utility">Gate 1</span><h3>Data model</h3><p>Reuse, extend, or create target tables and relationships.</p></div><div class="gate"><span class="utility">Gate 2</span><h3>Native capabilities</h3><p>Approve camera, barcode, files, PDF, location, and supported host controls.</p></div><div class="gate"><span class="utility">Gate 2b</span><h3>PCF disposition</h3><p>Native replacement, server-backed UI, optional unsupported state, or blocker.</p></div><div class="gate"><span class="utility">Gate 2c</span><h3>Workflow policy</h3><p>Example: what happens after the third item in a five-record batch fails?</p></div><div class="gate"><span class="utility">Gate 3</span><h3>Connections</h3><p>Resolve valid target connections and flow IDs.</p></div><div class="gate"><span class="utility">Gate 4</span><h3>Native screen graph</h3><p>Approve routes, screen roles, navigation, and native UX direction.</p></div></div>`
+      },
+      {
+        label: 'Target rebinding', kicker: '06 · REBIND', title: 'Reuse target connections—not source GUIDs', owner: 'add-dataverse + add-connector',
+        summary: 'The existing mobile-app plugin resolves the selected target environment. Existing valid target connections are reused; missing connections require creation or authorization.',
+        footer: 'Business data is not automatically moved between environments.',
+        content: () => `<div class="panel"><div class="connection-lane"><div class="environment source"><div class="env-title"><strong>Source Canvas environment</strong><span class="env-tag">READ ONLY</span></div><div class="conn-row">Dataverse<span class="redacted">connection-id/source-9813</span></div><div class="conn-row">Office 365 Users<span class="redacted">shared-users/source-2488</span></div><div class="conn-row">Approval Flow<span class="redacted">flow-guid/source-7721</span></div></div><div class="connection-action">IDs removed<br>→</div><div class="environment target"><div class="env-title"><strong>Selected native target</strong><span class="env-tag">RESOLVED</span></div><div class="conn-row">Dataverse<span id="dataverseConn">Existing target environment binding</span></div><div class="conn-row">Office 365 Users<span id="usersConn">Existing authorized target connection</span></div><div class="conn-row">Approval Flow<span id="flowConn">Target flow selected by name + context</span></div></div></div><div class="connection-actions"><button class="mini-button active" type="button" data-connection="existing">Use existing target connections</button><button class="mini-button" type="button" data-connection="new">Show missing connection path</button></div></div>`
+      },
+      {
+        label: 'Existing plugin reuse', kicker: '07 · ORCHESTRATE', title: 'The converter hands off to the existing mobile-app plugin', owner: 'create-mobile-app',
+        summary: 'Modernization is additive. It supplies an approved migration package; the existing plugin keeps ownership of environment setup, generated services, native wrappers, design, builders, testing, editing, and deployment.',
+        footer: 'Click a capability to see its responsibility.',
+        content: () => pluginMap()
+      },
+      {
+        label: 'Parallel generation', kicker: '08 · BUILD', title: 'Build workflows first, then screens', owner: 'workflow-builder + screen-builder',
+        summary: 'Complex event handlers are isolated into typed workflow modules. Each screen builder then receives only its own compact shard and invokes those prebuilt modules.',
+        footer: 'Builders run in waves of up to five.',
+        content: scenario => `<div class="demo-grid"><div class="code-window"><div class="code-head"><span>CANVAS ONSELECT</span><span>BEFORE</span></div><pre>If(incomplete, Notify(...),\n  Patch(Inspections, ...);\n  ForAll(col_Defects, Patch(...));\n  'Approval Flow'.Run(...);\n  Refresh(Inspections);\n  Navigate(Result)\n)</pre></div><div><div class="flow"><div class="flow-node"><strong>Validate</strong><span>Exact source rule</span></div><div class="flow-node"><strong>Create inspection</strong><span>Generated service</span></div><div class="flow-node warning"><strong>Create defects</strong><span>Approved failure policy</span></div><div class="flow-node"><strong>Run approval</strong><span>Target flow service</span></div><div class="flow-node audit"><strong>Return result</strong><span>Typed native outcome</span></div></div><div class="panel" style="margin-top:12px"><span class="utility">Parallel fan-out</span><h3>${scenarios[scenario].workflows} workflow module(s) → ${scenarios[scenario].screens} screen(s)</h3><p style="margin:0;color:var(--muted);font-size:12px">Workflow builders see exact workflow shards. Screen builders cannot read those shards or global ledgers; they receive workflow call references only.</p></div></div></div>`
+      },
+      {
+        label: 'Proof + runtime', kicker: '09 · VERIFY', title: 'Prove coverage, then run the existing quality pipeline', owner: 'validators + debug-app + deploy',
+        summary: 'Generated code carries stable source markers beside real implementations. Deterministic checks reject missing behavior, fake TODO coverage, stale approvals, unsafe paths, oversized feeds, invalid routes, and write-guard violations.',
+        footer: 'After runtime verification, normal /edit-app and /deploy continue the lifecycle.',
+        content: scenario => `<div class="validation-grid"><div class="validation"><div class="validation-icon">✓</div><div><strong>${scenarios[scenario].controls}/${scenarios[scenario].controls} controls</strong><span>Round-trip control accounting</span></div></div><div class="validation"><div class="validation-icon">✓</div><div><strong>${scenarios[scenario].core} exact core</strong><span>Real source-behavior implementations</span></div></div><div class="validation"><div class="validation-icon">✓</div><div><strong>${scenarios[scenario].intent} native intents</strong><span>Real source-intent equivalents</span></div></div><div class="validation"><div class="validation-icon">✓</div><div><strong>Workflow markers</strong><span>Steps, branches, loops, calls, and results</span></div></div><div class="validation"><div class="validation-icon">✓</div><div><strong>PCF outcomes</strong><span>Approved implementation or visible unsupported state</span></div></div><div class="validation"><div class="validation-icon">✓</div><div><strong>Target write guards</strong><span>No calculated or server-managed column writes</span></div></div><div class="validation"><div class="validation-icon">✓</div><div><strong>TypeScript + routes</strong><span>Generated services, imports, and parameter contracts</span></div></div><div class="validation"><div class="validation-icon">→</div><div><strong>Runtime + deploy</strong><span>/debug-app, device checks, /edit-app, then /deploy</span></div></div></div>`
+      }
+    ];
+
+    let currentStage = 0;
+    let currentScenario = 'large';
+    let playTimer = null;
+
+    const stageNav = document.getElementById('stageNav');
+    const scenarioSelect = document.getElementById('scenarioSelect');
+    const playButton = document.getElementById('playButton');
+
+    function formatNumber(value) { return String(value); }
+
+    function renderNav() {
+      stageNav.innerHTML = stages.map((stage, index) => `
+        <button type="button" class="stage-button${index === currentStage ? ' active' : ''}${index < currentStage ? ' done' : ''}" data-stage="${index}" aria-current="${index === currentStage ? 'step' : 'false'}">
+          <span class="stage-number">${String(index + 1).padStart(2, '0')}</span>
+          <span class="stage-label">${stage.label}</span>
+          <span class="stage-check" aria-hidden="true">✓</span>
+        </button>`).join('');
+      stageNav.querySelectorAll('[data-stage]').forEach(button => button.addEventListener('click', () => {
+        stopPlaying();
+        setStage(Number(button.dataset.stage));
+      }));
+    }
+
+    function bindStageInteractions() {
+      document.querySelectorAll('[data-plugin]').forEach(button => button.addEventListener('click', () => {
+        document.querySelectorAll('[data-plugin]').forEach(item => item.classList.remove('active'));
+        button.classList.add('active');
+        const plugin = plugins[Number(button.dataset.plugin)];
+        document.getElementById('pluginDetail').innerHTML = `<strong>${plugin[0]}</strong><p>${plugin[1]}</p>`;
+      }));
+
+      document.querySelectorAll('[data-connection]').forEach(button => button.addEventListener('click', () => {
+        document.querySelectorAll('[data-connection]').forEach(item => item.classList.remove('active'));
+        button.classList.add('active');
+        const missing = button.dataset.connection === 'new';
+        document.getElementById('dataverseConn').textContent = missing ? 'Environment selected; table binding pending' : 'Existing target environment binding';
+        document.getElementById('usersConn').textContent = missing ? 'Create or authorize target connection' : 'Existing authorized target connection';
+        document.getElementById('flowConn').textContent = missing ? 'Select a target flow; source GUID rejected' : 'Target flow selected by name + context';
+      }));
+    }
+
+    function setStage(index) {
+      currentStage = Math.max(0, Math.min(stages.length - 1, index));
+      const stage = stages[currentStage];
+      document.documentElement.style.setProperty('--stage-progress', `${((currentStage + 1) / stages.length) * 100}%`);
+      document.getElementById('stageKicker').textContent = stage.kicker;
+      document.getElementById('stageTitle').textContent = stage.title;
+      document.getElementById('stageSummary').textContent = stage.summary;
+      document.getElementById('stageOwner').textContent = stage.owner;
+      document.getElementById('stageContent').innerHTML = stage.content(currentScenario);
+      document.getElementById('stageFooterText').textContent = stage.footer;
+      document.getElementById('nextButton').textContent = currentStage === stages.length - 1 ? 'Start again ↺' : 'Next stage →';
+      renderNav();
+      bindStageInteractions();
+    }
+
+    function updateScenario(value) {
+      currentScenario = value;
+      const scenario = scenarios[value];
+      document.getElementById('scenarioNote').textContent = scenario.note;
+      document.querySelectorAll('[data-metric]').forEach(node => {
+        node.textContent = formatNumber(scenario[node.dataset.metric]);
+      });
+      setStage(currentStage);
+    }
+
+    function stopPlaying() {
+      if (playTimer) clearInterval(playTimer);
+      playTimer = null;
+      playButton.textContent = 'Play conversion';
+    }
+
+    function playConversion() {
+      if (playTimer) { stopPlaying(); return; }
+      if (currentStage === stages.length - 1) setStage(0);
+      playButton.textContent = 'Pause walkthrough';
+      playTimer = setInterval(() => {
+        if (currentStage >= stages.length - 1) { stopPlaying(); return; }
+        setStage(currentStage + 1);
+      }, 2600);
+    }
+
+    scenarioSelect.addEventListener('change', event => updateScenario(event.target.value));
+    playButton.addEventListener('click', playConversion);
+    document.getElementById('resetButton').addEventListener('click', () => { stopPlaying(); setStage(0); });
+    document.getElementById('nextButton').addEventListener('click', () => {
+      stopPlaying();
+      setStage(currentStage === stages.length - 1 ? 0 : currentStage + 1);
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key === 'ArrowRight') { stopPlaying(); setStage(currentStage + 1); }
+      if (event.key === 'ArrowLeft') { stopPlaying(); setStage(currentStage - 1); }
+    });
+
+    updateScenario('large');
+  </script>
+</body>
+</html>
