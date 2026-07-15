@@ -33,15 +33,11 @@
 
 const fs = require('fs');
 const path = require('path');
-const zlib = require('zlib');
 const { buildArtifactNameMap, pathContains } = require('./lib/modernizer-paths.js');
+const { openZipReader } = require('./lib/safe-zip.js');
 
 const MAX_SOURCE_TEXT_BYTES = 64 * 1024 * 1024;
 const MAX_SOURCE_ENTRIES = 100000;
-const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
-const MAX_ARCHIVE_ENTRY_BYTES = 64 * 1024 * 1024;
-const MAX_ARCHIVE_TOTAL_BYTES = 1024 * 1024 * 1024;
-const MAX_ARCHIVE_ENTRIES = 50000;
 const DETERMINISTIC_EPOCH = '1970-01-01T00:00:00.000Z';
 
 // =============================================================================
@@ -453,7 +449,13 @@ function firstExistingDir(parent, names) {
 
 function createSourceReader(extractedRoot) {
   const msaprPath = findMsaprPackage(extractedRoot);
-  const archive = msaprPath ? openZipReader(msaprPath) : null;
+  const archive = msaprPath ? openZipReader(msaprPath, {
+    label: 'MSAPR',
+    unsupportedMethod: 'skip',
+    onWarning(message) {
+      console.warn(`[brief] WARN ${message}`);
+    },
+  }) : null;
   const prefix = 'msapp/';
 
   function safeRelative(relPath) {
@@ -543,110 +545,6 @@ function findMsaprPackage(extractedRoot) {
     .filter((file) => fs.lstatSync(file).isFile() && !fs.lstatSync(file).isSymbolicLink())
     .sort();
   return candidates[0] || null;
-}
-
-function normalizeArchivePath(p) {
-  return String(p || '').replace(/\\/g, '/').replace(/^\/+/, '');
-}
-
-function openZipReader(zipPath) {
-  let buffer;
-  try {
-    const stat = fs.lstatSync(zipPath);
-    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('archive must be a regular file');
-    if (stat.size > MAX_ARCHIVE_BYTES) throw new Error(`archive exceeds ${MAX_ARCHIVE_BYTES} bytes`);
-    buffer = fs.readFileSync(zipPath);
-  } catch (err) {
-    throw new Error(`Failed to read MSAPR archive ${zipPath}: ${err.message}`);
-  }
-
-  const eocdOffset = findEndOfCentralDirectory(buffer);
-  if (eocdOffset < 0) {
-    throw new Error(`MSAPR is not a readable ZIP archive: ${zipPath}`);
-  }
-
-  if (eocdOffset + 22 > buffer.length) throw new Error(`Truncated ZIP end record: ${zipPath}`);
-  const entryCount = buffer.readUInt16LE(eocdOffset + 10);
-  if (entryCount > MAX_ARCHIVE_ENTRIES) throw new Error(`Archive exceeds ${MAX_ARCHIVE_ENTRIES} entries: ${zipPath}`);
-  const centralDirOffset = buffer.readUInt32LE(eocdOffset + 16);
-  if (centralDirOffset < 0 || centralDirOffset >= eocdOffset) throw new Error(`Invalid ZIP central directory offset: ${zipPath}`);
-  const entries = new Map();
-  let totalUncompressed = 0;
-  let offset = centralDirOffset;
-  for (let i = 0; i < entryCount; i += 1) {
-    if (offset + 46 > buffer.length || buffer.readUInt32LE(offset) !== 0x02014b50) {
-      throw new Error(`Invalid ZIP central directory entry ${i}: ${zipPath}`);
-    }
-    const method = buffer.readUInt16LE(offset + 10);
-    const compressedSize = buffer.readUInt32LE(offset + 20);
-    const uncompressedSize = buffer.readUInt32LE(offset + 24);
-    const nameLength = buffer.readUInt16LE(offset + 28);
-    const extraLength = buffer.readUInt16LE(offset + 30);
-    const commentLength = buffer.readUInt16LE(offset + 32);
-    const localHeaderOffset = buffer.readUInt32LE(offset + 42);
-    const nextOffset = offset + 46 + nameLength + extraLength + commentLength;
-    if (nextOffset > buffer.length) throw new Error(`Truncated ZIP entry ${i}: ${zipPath}`);
-    const rawName = buffer.slice(offset + 46, offset + 46 + nameLength).toString('utf8').replace(/\\/g, '/');
-    const name = path.posix.normalize(rawName);
-    if (!rawName || rawName.startsWith('/') || /^[A-Za-z]:/.test(rawName) || /[\u0000-\u001f\u007f]/.test(rawName) || rawName.split('/').includes('..')) {
-      throw new Error(`Unsafe ZIP entry path: ${rawName}`);
-    }
-    if (uncompressedSize > MAX_ARCHIVE_ENTRY_BYTES) throw new Error(`ZIP entry exceeds ${MAX_ARCHIVE_ENTRY_BYTES} bytes: ${name}`);
-    totalUncompressed += uncompressedSize;
-    if (totalUncompressed > MAX_ARCHIVE_TOTAL_BYTES) throw new Error(`Archive exceeds ${MAX_ARCHIVE_TOTAL_BYTES} uncompressed bytes: ${zipPath}`);
-    if (uncompressedSize > 0 && (compressedSize === 0 || uncompressedSize / compressedSize > 500)) {
-      throw new Error(`Suspicious ZIP compression ratio for ${name}`);
-    }
-    if (localHeaderOffset + 30 > buffer.length) throw new Error(`Invalid ZIP local header for ${name}`);
-    if (entries.has(name)) throw new Error(`Duplicate ZIP entry: ${name}`);
-    entries.set(name, { name, method, compressedSize, uncompressedSize, localHeaderOffset });
-    offset = nextOffset;
-  }
-
-  return {
-    getEntry(name) {
-      return entries.get(normalizeArchivePath(name)) || null;
-    },
-    hasPrefix(prefixPath) {
-      const prefixNorm = normalizeArchivePath(prefixPath);
-      for (const name of entries.keys()) if (name.startsWith(prefixNorm)) return true;
-      return false;
-    },
-    listEntries(prefixPath, suffix) {
-      const prefixNorm = normalizeArchivePath(prefixPath);
-      return [...entries.keys()]
-        .filter((name) => name.startsWith(prefixNorm) && name.endsWith(suffix))
-        .sort();
-    },
-    readEntry(name) {
-      const entry = entries.get(normalizeArchivePath(name));
-      if (!entry) return null;
-      const header = entry.localHeaderOffset;
-      if (buffer.readUInt32LE(header) !== 0x04034b50) return null;
-      const nameLength = buffer.readUInt16LE(header + 26);
-      const extraLength = buffer.readUInt16LE(header + 28);
-      const dataStart = header + 30 + nameLength + extraLength;
-      if (dataStart + entry.compressedSize > buffer.length) throw new Error(`Truncated ZIP data for ${entry.name}`);
-      const compressed = buffer.slice(dataStart, dataStart + entry.compressedSize);
-      let output;
-      if (entry.method === 0) output = compressed;
-      else if (entry.method === 8) output = zlib.inflateRawSync(compressed, { maxOutputLength: MAX_ARCHIVE_ENTRY_BYTES });
-      else {
-        console.warn(`[brief] WARN unsupported zip compression method ${entry.method} for ${entry.name}`);
-        return null;
-      }
-      if (output.length !== entry.uncompressedSize) throw new Error(`ZIP size mismatch for ${entry.name}`);
-      return output;
-    },
-  };
-}
-
-function findEndOfCentralDirectory(buffer) {
-  const min = Math.max(0, buffer.length - 0xffff - 22);
-  for (let i = buffer.length - 22; i >= min; i -= 1) {
-    if (buffer.readUInt32LE(i) === 0x06054b50) return i;
-  }
-  return -1;
 }
 
 /**

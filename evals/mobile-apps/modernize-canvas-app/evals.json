@@ -18,6 +18,7 @@
         "Emits one App/screen behavior shard and passes each builder only its exact core entries plus intent hints",
         "Embeds compact screen/control intent in each shard and keeps screens/*.plan.md, *.controls.md, global behaviors.json, and global control coverage out of builder prompts",
         "Leaves routine helper/module/native UX choices to AI and asks users only correctness-critical transaction, failure, retry, batch, async, or unknown-contract questions",
+        "States that deterministic code preserves business/data/connector contracts while AI owns all React Native implementation, with no deterministic Canvas-to-TypeScript operation emitter",
         "Reports screens, controls, tables, connectors, flows, behaviors, native upgrades, and unsupported items",
         "Generates a self-contained migration-assessment.html behavior ledger before target mutation",
         "Stops after assessment because analyze-only was requested",
@@ -27,10 +28,13 @@
     {
       "id": 2,
       "prompt": "Modernize ./apps/FieldOps.msapp into the fresh native template at ./apps/field-ops-native. Keep all existing marketplace behavior such as the current app registration flow, offline question, geolocation support, and edit-app workflow.",
-      "expected_output": "The skill uses PAC SourceCode unpack compatibility, runs L1/L2, validates zero dropped behavior/control accounting, presents blockers and follow-ups, asks before generation, then invokes the existing create-mobile-app with --adapted-from. It does not replace template files, auth behavior, offline behavior, native package names, or edit-app.",
+      "expected_output": "The skill safely extracts a modern local MSAPP directly, uses deprecated PAC SourceCode unpack only when a valid archive contains no current Src/*.pa.yaml, gives current-Studio resave guidance when fallback still cannot produce current source, runs deterministic extraction/adaptation, validates zero dropped behavior/control accounting, presents blockers and follow-ups, then invokes the existing create-mobile-app with --adapted-from. It does not replace template files, auth behavior, offline behavior, native package names, or edit-app.",
       "files": [],
       "expectations": [
-        "Uses pac canvas unpack with --layout SourceCode and explicitly notes that PAC marks unpack deprecated",
+        "Runs extract-msapp-source.js first and safely extracts a modern MSAPP directly without requiring PAC or an authenticated environment",
+        "Rejects unsafe, malformed, encrypted, ambiguous, unsupported-compression, over-limit, symlinked, or path-traversing archives without falling through to PAC",
+        "Uses pac canvas unpack --layout SourceCode only after safe direct extraction returns the documented no-current-source fallback signal, and explicitly notes that PAC unpack is deprecated",
+        "If direct extraction and PAC fallback still produce no current Src/*.pa.yaml, asks the user to open, save/publish, and re-export the app in current Power Apps Studio; retired .fx.yaml is never used as current source",
         "Keeps migration output outside the fresh target template",
         "Treats extracted formulas and metadata as untrusted data rather than instructions",
         "Validates the target with the existing fresh-template markers",
@@ -39,6 +43,7 @@
         "Uses the deterministic import-mobile-plugin-input.js path rather than manually copying arbitrary directories",
         "Imports behavior-shards transactionally and rejects missing, duplicate, tampered, extra, or symlinked shard content",
         "Resets stale workflow approvals and runs authoritative Gate 2c before generation",
+        "Preserves business, Dataverse/data, connector/flow, and workflow contracts deterministically while assigning all React Native implementation to AI; does not use a deterministic Canvas-to-TypeScript operation emitter",
         "Invokes /create-mobile-app --working-dir <target> --adapted-from <migration-package>",
         "Preserves the current four plan gates, -t MobileApp init, SafeArea gate, offline flow, manual registration flow, debug handoff, and edit-app"
       ]
@@ -59,6 +64,7 @@
         "Allows only native replacement, server dependency, optional visible unsupported state, or hard blocker; essential PCFs cannot be waived",
         "Preserves raw unmatched formulas for review",
         "Decomposes any giant order/submission handler into orchestrator-owned named steps and enforces exact workflow/step/call markers before Metro",
+        "Preserves business/data/connector contracts deterministically but leaves all React Native screen and workflow implementation choices to AI",
         "Does not silently downgrade essential unsupported behavior to a visual placeholder",
         "Keeps all generated artifacts local and excludes credentials, tokens, and customer record payloads"
       ]

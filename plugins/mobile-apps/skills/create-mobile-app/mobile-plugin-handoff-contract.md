@@ -8,6 +8,14 @@ This document defines the local artifact contract between:
 
 The contract carries source behavior and data semantics into the existing public mobile generator. It never replaces the current template, package versions, authentication flow, offline workflow, native capability allowlist, `edit-app`, or deployment behavior.
 
+## Ownership invariant
+
+> **Deterministic code preserves business/data/connector contracts. AI owns all React Native implementation.**
+
+This is a new native app, not a Canvas-to-TypeScript transpilation. Deterministic extraction, adaptation, approval projection, and validation own the **what**: business rules, validation/authorization/calculation obligations, Dataverse tables/columns/relationships and read/write fields, connector/flow operations and arguments, workflow order/control flow and approved policy, source ownership, and explicit unsupported gaps. The AI workflow/screen/bootstrap builders own the **how**: React Native components, hooks, state representation, navigation code, helper/module structure, native progress/error/empty UX, accessibility, and TypeScript implementation within those contracts.
+
+Do not build, invoke, generate, or introduce a deterministic Canvas-to-TypeScript operation emitter at any handoff stage. Deterministic outputs may provide typed target-service facts, write guards, skeleton interfaces, markers, and semantic test oracles, but business handlers, workflow implementations, and JSX remain AI-owned. AI implementation freedom never authorizes changing business meaning, Dataverse fields/lookups, connector/flow arguments, workflow policy, or approved unsupported behavior.
+
 ## Pipeline
 
 ```text
