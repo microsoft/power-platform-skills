@@ -19,6 +19,10 @@ const {
   deriveWorkflowStats,
 } = require('./lib/workflow-plan.js');
 const { attachWorkflowRefs, buildBehaviorArtifacts } = require('./lib/behavior-contract.js');
+const {
+  derivePcfStats,
+  projectPcfControlIntents,
+} = require('./lib/pcf-control-intent.js');
 const MAX_PACKAGE_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_MARKDOWN_ENTRIES = 10000;
 const MAX_MARKDOWN_DEPTH = 8;
@@ -740,14 +744,42 @@ function main() {
   }
 
   if (coverage) {
+    if (coverage.$schema !== 'control-intent-coverage-v1') errors.push(`unsupported control-intent coverage schema: ${coverage.$schema || 'missing'}`);
     if (!Array.isArray(coverage.rows)) errors.push('control-intent-coverage.rows must be an array');
     const expected = coverage.stats?.totalControls;
     if (Number.isFinite(expected) && expected !== coverage.rows?.length) {
       errors.push(`control intent row count mismatch: stats=${expected}, rows=${coverage.rows?.length || 0}`);
     }
+    if (input?.controlIntentCoverage?.file !== 'control-intent-coverage.json') {
+      errors.push('mobile-plugin-input controlIntentCoverage.file must be control-intent-coverage.json');
+    }
+    if (input?.controlIntentCoverage?.schema !== 'control-intent-coverage-v1') {
+      errors.push('mobile-plugin-input controlIntentCoverage.schema must be control-intent-coverage-v1');
+    }
+    if (canonicalJson(input?.controlIntentCoverage?.stats) !== canonicalJson(coverage.stats)) {
+      errors.push('mobile-plugin-input controlIntentCoverage.stats differs from control-intent-coverage.json');
+    }
+    for (const [index, row] of (coverage.rows || []).entries()) {
+      if (!validSourceLabel(row?.role)) errors.push(`control-intent-coverage.rows[${index}].role is missing or unsafe`);
+      if (!row?.roleEvidence || typeof row.roleEvidence !== 'object') {
+        errors.push(`control-intent-coverage.rows[${index}].roleEvidence is missing`);
+      } else if (!Array.isArray(row.roleEvidence.signals)) {
+        errors.push(`control-intent-coverage.rows[${index}].roleEvidence.signals must be an array`);
+      }
+    }
     for (const row of (coverage.rows || []).filter((entry) => entry.businessRisk === 'high')) {
       const accounted = row.nativeSuggestion || row.nativeHints?.length || /unsupported/i.test(String(row.support || ''));
       if (!accounted) errors.push(`high-risk control lacks native/unsupported strategy: ${row.screen}/${row.control}`);
+    }
+    if (pcfPlan) {
+      try {
+        const projected = projectPcfControlIntents(coverage, pcfPlan);
+        if (canonicalJson(projected) !== canonicalJson(coverage)) {
+          errors.push('PCF control-intent projection is stale; run sync-pcf-control-intents.js after Gate 2b approval changes');
+        }
+      } catch (error) {
+        errors.push(`PCF control-intent projection is invalid: ${error.message}`);
+      }
     }
     scanSecrets(coverage, 'control-intent-coverage', errors);
   }
@@ -838,15 +870,7 @@ function main() {
         if (approval.status === 'blocked' || approval.disposition === 'blocker') errors.push(`${at} is a hard PCF blocker`);
       }
     }
-    const derivedPcfStats = {
-      pendingApproval: controls.filter((row) => row.approval?.status === 'pending').length,
-      approved: controls.filter((row) => row.approval?.status === 'approved').length,
-      blocked: controls.filter((row) => row.approval?.status === 'blocked').length,
-      byDisposition: Object.fromEntries([...allowedDispositions].map((disposition) => [
-        disposition,
-        controls.filter((row) => row.approval?.disposition === disposition).length,
-      ])),
-    };
+    const derivedPcfStats = derivePcfStats(pcfPlan);
     for (const key of ['pendingApproval', 'approved', 'blocked']) {
       if (pcfPlan.stats?.[key] !== derivedPcfStats[key]) errors.push(`pcf-plan.stats.${key} mismatch: expected ${derivedPcfStats[key]}`);
       if (input?.pcfPlan?.stats?.[key] !== derivedPcfStats[key]) errors.push(`mobile-plugin-input pcfPlan.stats.${key} mismatch: expected ${derivedPcfStats[key]}`);
@@ -857,6 +881,12 @@ function main() {
       }
       if (input?.pcfPlan?.stats?.byDisposition?.[disposition] !== derivedPcfStats.byDisposition[disposition]) {
         errors.push(`mobile-plugin-input pcfPlan.stats.byDisposition.${disposition} mismatch: expected ${derivedPcfStats.byDisposition[disposition]}`);
+      }
+      if (pcfPlan.stats?.proposed?.[disposition] !== derivedPcfStats.proposed[disposition]) {
+        errors.push(`pcf-plan.stats.proposed.${disposition} mismatch: expected ${derivedPcfStats.proposed[disposition]}`);
+      }
+      if (input?.pcfPlan?.stats?.proposed?.[disposition] !== derivedPcfStats.proposed[disposition]) {
+        errors.push(`mobile-plugin-input pcfPlan.stats.proposed.${disposition} mismatch: expected ${derivedPcfStats.proposed[disposition]}`);
       }
     }
     scanSecrets(pcfPlan, 'pcf-plan', errors);

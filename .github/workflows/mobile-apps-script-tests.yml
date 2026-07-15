@@ -46,9 +46,11 @@ jobs:
                   node --check plugins/mobile-apps/scripts/adapt-app-brief-for-mobile-plugin.js
                   node --check plugins/mobile-apps/scripts/validate-mobile-plugin-input.js
                   node --check plugins/mobile-apps/scripts/import-mobile-plugin-input.js
+                  node --check plugins/mobile-apps/scripts/sync-pcf-control-intents.js
                   node --check plugins/mobile-apps/scripts/render-mobile-migration-report.js
                   node --check plugins/mobile-apps/scripts/lib/modernizer-paths.js
                   node --check plugins/mobile-apps/scripts/lib/behavior-contract.js
+                  node --check plugins/mobile-apps/scripts/lib/pcf-control-intent.js
                   node --check plugins/mobile-apps/scripts/lib/workflow-plan.js
                   node --check plugins/mobile-apps/shared/samples/scripts/check-behavior-coverage.js
                   node --check plugins/mobile-apps/shared/samples/scripts/check-pcf-coverage.js

@@ -150,7 +150,7 @@ Skip this step unless `$ARGUMENTS` contains `--adapted-from <dir>`. This mode co
   | `behavior-shards/` | `$ADAPTED_BEHAVIOR_SHARDS_DIR` | Per-screen exact-core + native-intent builder feeds |
   | `mobile-plugin-input.json behaviorPlan.appShard` | `$ADAPTED_APP_BEHAVIOR_SHARD` | App bootstrap exact-core + native-intent feed |
   | `workflows.json` | `$ADAPTED_WORKFLOWS` | Gate 2c, orchestrator-owned workflow modules, workflow coverage; builders use shard `workflowRefs[]` |
-  | `pcf-plan.json` | `$ADAPTED_PCF_PLAN` | Gate 2b, native/connector routing, builders, PCF coverage gate |
+  | `pcf-plan.json` | `$ADAPTED_PCF_PLAN` | Gate 2b, native/connector routing, readiness and PCF coverage gates; builders use the approved per-screen projection |
   | `control-intent-coverage.json` | `$ADAPTED_CONTROL_INTENT_COVERAGE` | Global deterministic validation; per-screen semantic rows are embedded in behavior shards |
   | `server-side-assets.json` | `$ADAPTED_SERVER_SIDE_ASSETS` | Dataverse write guards |
   | `localization.json` | `$ADAPTED_LOCALIZATION` | Valid translation keys and follow-ups |
@@ -524,9 +524,16 @@ Skip only when `$ADAPTED_PCF_PLAN` is unset, `controls[]` is empty, **and** `dis
 - `essentiality: unknown` is deliberately conservative. The user may reclassify it as `optional` only after confirming the PCF has no required business, data, integration, validation, authorization, or workflow function; that explicit classification is required before `explicit-unsupported` can be approved.
 - A blocker gets `approval.status: blocked`, `approval.disposition: blocker`; STOP before Step 4.
 
-For approved rows set `approval.status: approved`, copy or edit the approved disposition/target strategy, set `essentiality`, `reason`, `approvedBy: user`, and an ISO `approvedAt`; recompute plan/summary counts. Then run before continuing:
+For approved rows set `approval.status: approved`, copy or edit the approved disposition/target strategy, set `essentiality`, `reason`, `approvedBy: user`, and an ISO `approvedAt`. Then run the deterministic synchronizer; it recomputes both PCF summaries and projects each authoritative approval into `control-intent-coverage.json` plus the owning `behavior-shards/<Screen>.json` row:
 
-**Server-dependency update order is atomic:** when the user resolves a blocker by supplying a backend, first add/validate its target-resolution row in `mobile-plugin-input.json dataModelPlan.connectionRequirements[]`; second reference that exact new `id` from `pcf-plan.json approval.targetStrategy.dependencies[]`; third update both PCF stats summaries; only then run the validator. Never write an approval that temporarily points at a missing requirement and never route to Gate 3 until this validation succeeds.
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/sync-pcf-control-intents.js" \
+  --dir "$WORKING_DIR"
+```
+
+Do not hand-edit projected PCF roles or shard copies. Pending/blocked rows project as `pcf-review`/`pcf-blocker`; approved rows project as `pcf-known-capability`, `pcf-native-rebuild`, `pcf-server-backed`, or `pcf-optional-unsupported`. Then run before continuing:
+
+**Server-dependency update order is atomic:** when the user resolves a blocker by supplying a backend, first add/validate its target-resolution row in `mobile-plugin-input.json dataModelPlan.connectionRequirements[]`; second reference that exact new `id` from `pcf-plan.json approval.targetStrategy.dependencies[]`; third run `sync-pcf-control-intents.js` so both summaries and every per-screen projection update together; only then run the validator. Never route to Gate 3 until this validation succeeds.
 
 Update the `### PCF Disposition Plan — Gate 2b` table in `native-app-plan.md` with the approved essentiality, disposition, target, and `approved` status for every row. If Gate 2b changes native capabilities, connector requirements, or affected screen specs, update only those linked sections/contracts before validation; preserve unrelated imported decisions.
 
@@ -1707,11 +1714,13 @@ This step analyzes the per-screen specs and generates **shared code that multipl
 
 ---
 
-#### 10.8a-pre — Materialize imported reusable-component contracts
+#### 10.8a-pre — Materialize imported semantic component contracts
 
-Skip when `$ADAPTED_COMPONENTS_MD` is unset. Read the instantiated-component inventory and the `Component instances and bindings` section from `components.md`.
+Skip when `$ADAPTED_COMPONENTS_MD` is unset. Read the instantiated-component inventory, its **Semantic role(s)** column, and the `Component instances and bindings` section from `components.md`.
 
-- Generate one `src/components/<Name>.tsx` contract per **instantiated** component; skip definitions with no source instances.
+- Generate one `src/components/<Name>.tsx` contract per instantiated `domain-component`, `shared-app-chrome`, `navigation-component`, or `form-composite`; skip definitions with no source instances.
+- Do not materialize `disposable-canvas-scaffolding` as a shared runtime component. Its definition is proven empty; screen builders remove the wrapper and retain only relevant placement/grouping intent.
+- For `component-review`, materialize the exact typed contract conservatively and let the approved screen spec settle routine native structure. Never discard it or classify it as scaffolding. Ask only when unresolved evidence changes correctness (data/output/event behavior, navigation, validation, authorization, or workflow ownership).
 - Derive `<Name>` as a PascalCase alphanumeric/underscore identifier, strip every path separator/dot traversal sequence, cap it at 120 characters, prefix Windows-reserved basenames (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`) with `Canvas`, and STOP on a case-insensitive filename collision. Keep the original Canvas component name only in comments/metadata.
 - Convert extracted Power Fx input types to TypeScript props and extracted events/outputs to optional callback props.
 - Re-export each component from the existing component barrel without overwriting existing exports.
@@ -2057,13 +2066,12 @@ Each prompt:
   # Include only when Step 0.5 provided the corresponding file:
   adapted_components: <$ADAPTED_COMPONENTS_MD>
   adapted_behavior_shard: <working_dir>/<that row's behaviorShard; REQUIRED in adapted mode>
-  adapted_pcf_plan: <$ADAPTED_PCF_PLAN>
   adapted_state: <$ADAPTED_STATE>
   adapted_server_side_assets: <$ADAPTED_SERVER_SIDE_ASSETS>
   adapted_localization: <$ADAPTED_LOCALIZATION>
   adapted_assets: <$ADAPTED_ASSETS>
 
-  Follow screen-builder.md. Build from the user's compact per-screen spec, shared conventions, and design direction — inherited defaults are intentional, and samples are API/import references only, not layouts to copy. A typed skeleton already exists at your target_file with all imports and hook calls pre-resolved from the Generated Services table + per-screen `**Data**` field — fill in the JSX, do not discard imports. The skeleton file IS the import source of truth. Read the one adapted_behavior_shard before writing: preserve every exact core behavior, implement every structured native intent hint, and honor its compact `workflowRefs[]`; never request/read global `behaviors.json`, `workflows.json`, or verbose screen/control formula files. Regenerate the best native UI rather than cloning Canvas pixels. Approved pathological handlers are already implemented in orchestrator-owned modules referenced by the shard; invoke and present typed result/progress UX, but never inline, duplicate, or rewrite core operations. Return per AGENTS.md rule #10: literal first line is `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:`, then a blank line, then the one-line summary.
+  Follow screen-builder.md. Build from the user's compact per-screen spec, shared conventions, and design direction — inherited defaults are intentional, and samples are API/import references only, not layouts to copy. A typed skeleton already exists at your target_file with all imports and hook calls pre-resolved from the Generated Services table + per-screen `**Data**` field — fill in the JSX, do not discard imports. The skeleton file IS the import source of truth. Read the one adapted_behavior_shard before writing: preserve every exact core behavior, implement every structured native intent hint, honor its compact `workflowRefs[]`, and implement the binding approved PCF projection carried by its `controlIntents[].pcf`; never request/read global `behaviors.json`, `workflows.json`, `pcf-plan.json`, or verbose screen/control formula files. Regenerate the best native UI rather than cloning Canvas pixels. Approved pathological handlers are already implemented in orchestrator-owned modules referenced by the shard; invoke and present typed result/progress UX, but never inline, duplicate, or rewrite core operations. Return per AGENTS.md rule #10: literal first line is `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:`, then a blank line, then the one-line summary.
 ```
 
 **`target_file` resolution (HARD):** read the **File** column from the Screen Map row for this screen and prefix it with `<working_dir>/`. The path may be nested (e.g. `<working_dir>/app/(app)/inspections/[id].tsx`). The folder is guaranteed to exist because Step 10b.2 created it and wrote the inner `_layout.tsx`. **Do NOT compute the path as `<working_dir>/app/(app)/<screen-name>.tsx`** — that strips the folder structure and produces phantom-tab files. If the Screen Map row has no File column (older planner output), fall back to the flat path and surface a `DONE_WITH_CONCERNS: Screen Map missing File column — used flat fallback paths, expect phantom tabs` after the wave.

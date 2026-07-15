@@ -24,7 +24,8 @@
  *   behavior-contract.json          ← global core/regenerable dependency ledger + shard index
  *   behavior-shards/<Screen>.json   ← exact core behavior + structured native intent hints for one builder
  *   workflows.json                  ← approved plan-time decomposition for pathological event handlers
- *   control-intent-coverage.json    ← Canvas control intent + must-preserve behavior/data/layout contract
+ *   control-intent-coverage.json    ← contextual control roles + must-preserve behavior/data/layout contract
+ *   pcf-plan.json                   ← Gate 2b PCF proposals/approvals projected into control intent + shards
  *   screens/<Name>.plan.md          ← per-screen full spec (summary + tree)
  *   screens/<Name>.controls.md      ← (only when .plan.md would exceed cap)
  *
@@ -72,6 +73,10 @@ const {
   emptyWorkflowApproval,
 } = require('./lib/workflow-plan.js');
 const { attachWorkflowRefs, buildBehaviorArtifacts } = require('./lib/behavior-contract.js');
+const {
+  projectPcfControlIntents,
+  recomputeRoleStats,
+} = require('./lib/pcf-control-intent.js');
 const MAX_INPUT_JSON_BYTES = 64 * 1024 * 1024;
 const DETERMINISTIC_EPOCH = '1970-01-01T00:00:00.000Z';
 let GENERATION_TIMESTAMP = DETERMINISTIC_EPOCH;
@@ -2800,11 +2805,19 @@ function collectComponentInstances(screens, brief) {
       accessAppScope: def.accessAppScope === true ? true : (def.accessAppScope === false ? false : null),
       allowCustomization: def.allowCustomization === true ? true : (def.allowCustomization === false ? false : null),
       isPcf: !!def.isPcf,
-      controlCount: def.controlCount || 0,
+      definitionFound: true,
+      controlCount: Number.isInteger(def.controlCount) ? def.controlCount : null,
       inputs: toArray(def.inputs),
       outputs: toArray(def.outputs),
       events: toArray(def.events),
-      functions: toArray(def.functions),
+      // Source-schema v3 separates input and output functions. Older briefs
+      // used one `functions` bucket, so retain all three without making the
+      // downstream component contract depend on the exporter generation.
+      functions: [
+        ...toArray(def.functions),
+        ...toArray(def.inputFunctions),
+        ...toArray(def.outputFunctions),
+      ],
       actions: toArray(def.actions),
       instances: [],
       definedOnly: true, // flipped to false the moment we see an instance below
@@ -2829,7 +2842,8 @@ function collectComponentInstances(screens, brief) {
           accessAppScope: null,
           allowCustomization: null,
           isPcf: false,
-          controlCount: 0,
+          definitionFound: false,
+          controlCount: null,
           inputs: [],
           outputs: [],
           events: [],
@@ -2865,6 +2879,7 @@ function collectComponentInstances(screens, brief) {
       accessAppScope: info.accessAppScope,
       allowCustomization: info.allowCustomization,
       isPcf: info.isPcf,
+      definitionFound: info.definitionFound,
       controlCount: info.controlCount,
       inputs: info.inputs,
       outputs: info.outputs,
@@ -3655,55 +3670,425 @@ function normalizeKindText(value) {
   return String(value || '').toLowerCase();
 }
 
-function controlIntentRole(control) {
+function semanticWords(...values) {
+  return values
+    .filter(Boolean)
+    .map((value) => String(value).replace(/([a-z0-9])([A-Z])/g, '$1 $2'))
+    .join(' ')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function hasSemanticWord(text, ...words) {
+  const tokens = new Set(String(text || '').split(/\s+/).filter(Boolean));
+  return words.some((word) => tokens.has(word));
+}
+
+function controlsWithin(screen, control) {
+  const pathPrefix = control && control.path ? `${control.path}/` : null;
+  return toArray(screen && screen.controls).filter((candidate) => {
+    if (!candidate || candidate === control) return false;
+    if (pathPrefix && String(candidate.path || '').startsWith(pathPrefix)) return true;
+    return candidate.parent && control.name && candidate.parent === control.name;
+  });
+}
+
+function actionIntentsFor(controls) {
+  const intents = [];
+  for (const control of toArray(controls)) {
+    for (const actions of Object.values((control && control.events) || {})) {
+      for (const action of toArray(actions)) {
+        if (action && action.intent) intents.push(String(action.intent));
+      }
+    }
+  }
+  return unique(intents).sort();
+}
+
+function eventActionsFor(controls, intent) {
+  const matches = [];
+  for (const control of toArray(controls)) {
+    for (const actions of Object.values((control && control.events) || {})) {
+      for (const action of toArray(actions)) {
+        if (action && action.intent === intent) matches.push(action);
+      }
+    }
+  }
+  return matches;
+}
+
+function formulasForInternalClassification(controls, propertyNames = null) {
+  const allow = propertyNames ? new Set(propertyNames) : null;
+  const formulas = [];
+  for (const control of toArray(controls)) {
+    for (const [name, value] of Object.entries((control && control.properties) || {})) {
+      if (allow && !allow.has(name)) continue;
+      if (typeof value === 'string' && value.trim()) formulas.push(stripLeadingEq(value));
+    }
+  }
+  return formulas.join('\n');
+}
+
+function tableNamesForScreen(screen) {
+  const rows = [
+    ...toArray(screen && screen.dataverseUsed),
+    ...toArray(screen && screen.dataverseTablesUsed),
+  ];
+  return unique(rows.flatMap((row) => [
+    row && row.table,
+    row && row.logicalName,
+    row && row.displayName,
+  ])).map((name) => String(name).toLowerCase());
+}
+
+function formulaReferencesKnownTable(formula, screen) {
+  const text = String(formula || '');
+  return tableNamesForScreen(screen).some((name) => {
+    if (name.length <= 1) return false;
+    // Power Fx identifiers can be bare or single-quoted. Delimiter matching
+    // avoids treating a table named `Order` as present in `SortOrder`.
+    const escaped = escapeRegExp(name);
+    return new RegExp(`(?:^|[^A-Za-z0-9_])${escaped}(?=$|[^A-Za-z0-9_])`, 'i').test(text);
+  });
+}
+
+function galleryIntentClassification(control, screen) {
+  const descendants = controlsWithin(screen, control);
+  const related = [control, ...descendants];
+  const items = stripLeadingEq(control?.properties?.Items || '');
+  // Parent container names in the full path are not evidence about this
+  // Gallery. An OrdersGallery nested under DashboardContainer remains a list.
+  const nameText = semanticWords(control?.name, control?.template, control?.variant);
+  const descendantText = formulasForInternalClassification(descendants);
+  const intents = actionIntentsFor(related);
+  const navigateActions = eventActionsFor(related, 'navigate');
+  const hasMutation = intents.some((intent) => [
+    'patch', 'update', 'updateIf', 'remove', 'removeIf', 'submitForm',
+    'connectorCall', 'flowCall', 'aiCall',
+  ].includes(intent));
+  const hasSelectionAction = intents.some((intent) => [
+    'select', 'setVar', 'setContext', 'collect', 'clearCollect', 'patch',
+    'back', 'requestHide',
+  ].includes(intent));
+  const dynamicNavigationTarget = navigateActions.some((action) =>
+    /(?:thisitem|selected|\.screen\b|\.route\b|\.target\b)/i.test(String(action.target || '')));
+  const choiceItems = /\bChoices\s*\(/i.test(items);
+  const aggregateItems = /\b(?:CountRows|Sum|Average|Min|Max|GroupBy|AddColumns)\s*\(/i.test(items);
+  const staticItems = /^\s*(?:Table\s*\(|\[|\{)/i.test(items);
+  const collectionItems = /^\s*(?:col_|var_)/i.test(items);
+  const knownTableItems = formulaReferencesKnownTable(items, screen);
+  const usesThisItem = /\bThisItem\b/i.test(descendantText);
+  const pickerNamed = hasSemanticWord(nameText, 'picker', 'lookup', 'selector', 'select', 'choice', 'choices', 'options');
+  const navigationNamed = hasSemanticWord(nameText, 'navigation', 'nav', 'menu', 'sidebar', 'drawer', 'tabs', 'routes');
+  const dashboardNamed = hasSemanticWord(nameText, 'dashboard', 'kpi', 'metric', 'metrics', 'summary', 'tile', 'tiles', 'stats');
+  const recordNamed = hasSemanticWord(nameText, 'records', 'record', 'list', 'accounts', 'orders', 'items', 'results');
+  const dimensions = {
+    itemsSource: choiceItems
+      ? 'choices'
+      : (knownTableItems ? 'dataverse-records'
+        : (staticItems ? 'inline-records' : (collectionItems ? 'local-state' : (items ? 'computed-or-unknown' : 'missing')))),
+    actionIntents: intents,
+    childCount: descendants.length,
+    usesThisItem,
+    dynamicNavigationTarget,
+  };
+
+  // Selection surfaces win over generic list evidence. `Choices(...)` is a
+  // schema-level picker signal even when the source commits selection through
+  // a child control rather than the Gallery's own OnSelect.
+  if (choiceItems || (pickerNamed && (hasSelectionAction || usesThisItem))) {
+    return {
+      role: 'picker-options',
+      evidence: {
+        classifier: 'gallery-intent-v1',
+        confidence: choiceItems && hasSelectionAction ? 'high' : 'medium',
+        signals: unique([choiceItems ? 'CHOICES_ITEMS' : null, pickerNamed ? 'PICKER_NAMING' : null, hasSelectionAction ? 'SELECTION_ACTION' : null]),
+        dimensions,
+      },
+    };
+  }
+
+  // A dynamic ThisItem route/destination is characteristic of a menu model.
+  // Ordinary record lists usually navigate to one static detail route and pass
+  // the selected record through context instead.
+  if (navigationNamed || (navigateActions.length > 0 && dynamicNavigationTarget && !knownTableItems && !hasMutation)) {
+    return {
+      role: 'navigation-menu',
+      evidence: {
+        classifier: 'gallery-intent-v1',
+        confidence: navigationNamed && navigateActions.length > 0 ? 'high' : 'medium',
+        signals: unique([navigationNamed ? 'NAVIGATION_NAMING' : null, navigateActions.length > 0 ? 'NAVIGATE_ACTION' : null, dynamicNavigationTarget ? 'DYNAMIC_DESTINATION' : null]),
+        dimensions,
+      },
+    };
+  }
+
+  if ((dashboardNamed || aggregateItems) && !hasMutation) {
+    return {
+      role: 'dashboard-sections',
+      evidence: {
+        classifier: 'gallery-intent-v1',
+        confidence: dashboardNamed && aggregateItems ? 'high' : 'medium',
+        signals: unique([dashboardNamed ? 'DASHBOARD_NAMING' : null, aggregateItems ? 'AGGREGATE_ITEMS' : null, !hasMutation ? 'DISPLAY_ONLY' : null]),
+        dimensions,
+      },
+    };
+  }
+
+  if (knownTableItems || control?.isDataControl || (usesThisItem && items && !staticItems) || (recordNamed && items)) {
+    return {
+      role: 'record-list',
+      evidence: {
+        classifier: 'gallery-intent-v1',
+        confidence: knownTableItems || control?.isDataControl ? 'high' : 'medium',
+        signals: unique([knownTableItems ? 'DATAVERSE_ITEMS' : null, control?.isDataControl ? 'DATA_CONTROL' : null, usesThisItem ? 'ROW_BINDINGS' : null, recordNamed ? 'RECORD_LIST_NAMING' : null]),
+        dimensions,
+      },
+    };
+  }
+
+  return {
+    role: 'repeating-records-review',
+    evidence: {
+      classifier: 'gallery-intent-v1',
+      confidence: 'review',
+      signals: unique([items ? 'ITEMS_PRESENT' : 'ITEMS_MISSING', staticItems ? 'INLINE_RECORDS_AMBIGUOUS' : null, collectionItems ? 'LOCAL_STATE_AMBIGUOUS' : null]),
+      dimensions,
+    },
+  };
+}
+
+const COMPONENT_PRESENTATION_NAME_RE = /^(?:color|fill|font|size|width|height|x|y|padding|margin|gap|radius|border|theme|style|visible|displaymode|icon|image|label|title|subtitle)$/i;
+
+function componentIntentClassification(control, screen, componentCatalog, totalScreens) {
+  const componentName = control?.componentName || control?.templateName || control?.name || 'UnnamedComponent';
+  const info = componentCatalog.get(componentName) || null;
+  const nameText = semanticWords(componentName, control?.name, info?.description);
+  const intents = actionIntentsFor([control]);
+  const inputs = toArray(info && info.inputs);
+  const outputs = toArray(info && info.outputs);
+  const events = toArray(info && info.events);
+  const functions = toArray(info && info.functions);
+  const actions = toArray(info && info.actions);
+  const instance = toArray(info && info.instances).find((row) => row.path === control.path && row.screen === screen?.name);
+  const bindings = instance && instance.bindings || {};
+  const meaningfulInputs = inputs.filter((input) => !COMPONENT_PRESENTATION_NAME_RE.test(String(input && input.name || '')));
+  const businessBindingNames = Object.keys(control?.properties || {}).filter((name) =>
+    !SUPPRESSED_PROPS.has(name)
+    && !isEventPropertyName(name)
+    && !COMPONENT_PRESENTATION_NAME_RE.test(name));
+  const typedDataInput = meaningfulInputs.some((input) =>
+    /(?:record|table|data|object|guid|date|number|boolean|currency|decimal)/i.test(String(input && input.dataType || '')));
+  const hasDataContract = typedDataInput
+    || businessBindingNames.some((name) => /(?:item|record|data|source|model|entity|field|value|selected|account|order|user|id)$/i.test(name))
+    || toArray(bindings.outputReads).length > 0;
+  const hasBehaviorContract = outputs.length > 0
+    || events.length > 0
+    || functions.length > 0
+    || actions.length > 0
+    || toArray(bindings.events).length > 0
+    || intents.length > 0;
+  const navigationNamed = hasSemanticWord(nameText, 'navigation', 'nav', 'menu', 'sidebar', 'drawer', 'tabs', 'breadcrumb', 'stepper');
+  const formNamed = hasSemanticWord(nameText, 'form', 'editor', 'edit', 'create', 'fields');
+  const chromeNamed = hasSemanticWord(nameText, 'header', 'footer', 'topbar', 'appbar', 'toolbar', 'chrome', 'shell', 'banner', 'masthead');
+  const scaffoldingNamed = hasSemanticWord(nameText, 'layout', 'wrapper', 'container', 'spacer', 'background', 'group', 'scaffold', 'frame');
+  const screenCount = toArray(info && info.screens).length || 1;
+  const instanceCount = info?.instanceCount || 1;
+  const reusedAsChrome = chromeNamed && (totalScreens <= 1 || screenCount >= 2 || screenCount / Math.max(1, totalScreens) >= 0.5);
+  const formEvent = [...events.map((event) => event && event.name), ...Object.keys(control?.events || {})]
+    .some((name) => /(?:save|submit|change|valid|success|failure)/i.test(String(name || '')));
+  const dynamicNavigationTarget = eventActionsFor([control], 'navigate').some((action) =>
+    /(?:thisitem|selected|\.screen\b|\.route\b|\.target\b)/i.test(String(action.target || '')));
+  // The screen brief does not carry a component definition's internal child
+  // formulas. Therefore a layout-looking component with children, app-scope
+  // access, an external library owner, or a missing definition can never be
+  // proven disposable from instance bindings alone.
+  const definitionProvesEmptyScaffold = info?.definitionFound === true
+    && info.controlCount === 0
+    && info.accessAppScope !== true
+    && !control?.componentLibraryUniqueName;
+  const dimensions = {
+    definitionFound: info?.definitionFound === true,
+    instanceCount,
+    screenCount,
+    contract: {
+      inputs: inputs.length,
+      outputs: outputs.length,
+      events: events.length,
+      functions: functions.length,
+      actions: actions.length,
+    },
+    hasDataContract,
+    hasBehaviorContract,
+    actionIntents: intents,
+    dynamicNavigationTarget,
+    definitionControlCount: info?.controlCount ?? null,
+    accessAppScope: info?.accessAppScope ?? null,
+    externalLibrary: !!control?.componentLibraryUniqueName,
+  };
+
+  if (navigationNamed || ((dynamicNavigationTarget || intents.includes('back')) && !hasDataContract)) {
+    return {
+      role: 'navigation-component',
+      evidence: {
+        classifier: 'component-intent-v1',
+        confidence: navigationNamed && intents.some((intent) => ['navigate', 'back'].includes(intent)) ? 'high' : 'medium',
+        signals: unique([navigationNamed ? 'NAVIGATION_NAMING' : null, dynamicNavigationTarget ? 'DYNAMIC_DESTINATION' : null, intents.includes('navigate') ? 'NAVIGATE_ACTION' : null, intents.includes('back') ? 'BACK_ACTION' : null]),
+        dimensions,
+      },
+    };
+  }
+  if (formNamed && (meaningfulInputs.length >= 2 || formEvent || hasDataContract)) {
+    return {
+      role: 'form-composite',
+      evidence: {
+        classifier: 'component-intent-v1',
+        confidence: meaningfulInputs.length >= 2 && formEvent ? 'high' : 'medium',
+        signals: unique(['FORM_NAMING', meaningfulInputs.length >= 2 ? 'MULTI_FIELD_CONTRACT' : null, formEvent ? 'FORM_EVENT' : null]),
+        dimensions,
+      },
+    };
+  }
+  if (reusedAsChrome && !hasDataContract) {
+    return {
+      role: 'shared-app-chrome',
+      evidence: {
+        classifier: 'component-intent-v1',
+        confidence: screenCount >= 2 ? 'high' : 'medium',
+        signals: unique(['CHROME_NAMING', screenCount >= 2 ? 'CROSS_SCREEN_REUSE' : 'SINGLE_SCREEN_APP']),
+        dimensions,
+      },
+    };
+  }
+  if (hasDataContract || hasBehaviorContract) {
+    return {
+      role: 'domain-component',
+      evidence: {
+        classifier: 'component-intent-v1',
+        confidence: hasDataContract && hasBehaviorContract ? 'high' : 'medium',
+        signals: unique([hasDataContract ? 'BUSINESS_DATA_CONTRACT' : null, hasBehaviorContract ? 'BEHAVIOR_CONTRACT' : null, instanceCount > 1 ? 'REUSED' : null]),
+        dimensions,
+      },
+    };
+  }
+  if (scaffoldingNamed && instanceCount === 1 && definitionProvesEmptyScaffold) {
+    return {
+      role: 'disposable-canvas-scaffolding',
+      evidence: {
+        classifier: 'component-intent-v1',
+        confidence: 'high',
+        signals: ['LAYOUT_SCAFFOLD_NAMING', 'SINGLE_INSTANCE', 'NO_DATA_OR_BEHAVIOR_CONTRACT'],
+        dimensions,
+      },
+    };
+  }
+  return {
+    role: 'component-review',
+    evidence: {
+      classifier: 'component-intent-v1',
+      confidence: 'review',
+      signals: unique([info ? 'DEFINITION_PRESENT' : 'DEFINITION_MISSING', 'NO_DECISIVE_SEMANTIC_EVIDENCE']),
+      dimensions,
+    },
+  };
+}
+
+function classifyControlIntentRole(control, context = {}) {
   const kind = normalizeKindText(control && control.kind);
   const template = normalizeKindText(control && control.template);
-  const pathText = normalizeKindText(control && control.path);
-  const combined = `${kind} ${template} ${pathText}`;
-  if (control && control.isPcf) return 'custom-control';
-  if (isComponentInstance(control)) return 'reusable-component';
-  if (combined.includes('attachments')) return 'file-attachments';
-  if (combined.includes('timer')) return 'timer-lifecycle';
-  if (combined.includes('pdfviewer')) return 'document-preview';
-  if (combined.includes('htmlviewer') || combined.includes('richtexteditor')) return 'rich-content';
-  if (combined.includes('powerbi')) return 'embedded-report';
-  if (combined.includes('viewinmr') || combined.includes('arviewer')) return 'mixed-reality';
-  if (combined.includes('peninput')) return 'signature-input';
-  if (combined.includes('microphone')) return 'audio-capture';
-  if (combined.includes('import') || combined.includes('export')) return 'file-transfer';
-  if (combined.includes('video') || combined.includes('audio')) return 'media-playback';
-  if (combined.includes('chart') || combined.includes('legend')) return 'chart-visualization';
-  if (combined.includes('datatable')) return 'tabular-records';
-  if (combined.includes('gallery')) return 'repeating-records';
-  if (combined.includes('form')) return 'record-form';
-  if (combined.includes('datacard')) return 'form-field-card';
-  if (combined.includes('fluidgrid')) return 'responsive-form-layout';
-  if (combined.includes('groupcontainer') || combined.includes('container')) return 'layout-container';
-  if (combined.includes('barcode')) return 'barcode-input';
-  if (combined.includes('camera') || combined.includes('addmedia')) return 'media-capture';
-  if (combined.includes('combobox') || combined.includes('dropdown') || combined.includes('radio')) return 'choice-input';
-  if (combined.includes('listbox')) return 'choice-input';
-  if (combined.includes('rating')) return 'rating-input';
-  if (combined.includes('slider')) return 'range-input';
-  if (combined.includes('textinput') || combined === 'text') return 'text-input';
-  if (combined.includes('datepicker')) return 'date-input';
-  if (combined.includes('toggle') || combined.includes('checkbox')) return 'boolean-input';
-  if (combined.includes('image')) return 'image-display';
-  if (combined.includes('label') || combined.includes('text')) return 'text-display';
-  return isInteractive(control) ? 'interactive-control' : 'visual-structure';
+  // Only inspect this node's own name. Including the full path causes a Label
+  // under `AccountsGallery/...` to inherit its parent's Gallery role.
+  const controlName = normalizeKindText(control && (control.name || shortName(control.path, '')));
+  const combined = `${kind} ${template} ${controlName}`;
+  if (control && control.isPcf) {
+    return {
+      role: 'pcf-review',
+      evidence: {
+        classifier: 'pcf-disposition-v1',
+        confidence: 'review',
+        signals: ['PCF_APPROVAL_PENDING'],
+      },
+    };
+  }
+  if (isComponentInstance(control)) {
+    return componentIntentClassification(
+      control,
+      context.screen,
+      context.componentCatalog || new Map(),
+      context.totalScreens || 0
+    );
+  }
+  if (combined.includes('gallery')) return galleryIntentClassification(control, context.screen);
+  const mappings = [
+    ['file-attachments', combined.includes('attachments')],
+    ['timer-lifecycle', combined.includes('timer')],
+    ['document-preview', combined.includes('pdfviewer')],
+    ['rich-content', combined.includes('htmlviewer') || combined.includes('richtexteditor')],
+    ['embedded-report', combined.includes('powerbi')],
+    ['mixed-reality', combined.includes('viewinmr') || combined.includes('arviewer')],
+    ['signature-input', combined.includes('peninput')],
+    ['audio-capture', combined.includes('microphone')],
+    ['file-transfer', combined.includes('import') || combined.includes('export')],
+    ['media-playback', combined.includes('video') || combined.includes('audio')],
+    ['chart-visualization', combined.includes('chart') || combined.includes('legend')],
+    ['tabular-records', combined.includes('datatable')],
+    ['record-form', combined.includes('form')],
+    ['form-field-card', combined.includes('datacard')],
+    ['responsive-form-layout', combined.includes('fluidgrid')],
+    ['layout-container', combined.includes('groupcontainer') || combined.includes('container')],
+    ['barcode-input', combined.includes('barcode')],
+    ['media-capture', combined.includes('camera') || combined.includes('addmedia')],
+    ['choice-input', combined.includes('combobox') || combined.includes('dropdown') || combined.includes('radio') || combined.includes('listbox')],
+    ['rating-input', combined.includes('rating')],
+    ['range-input', combined.includes('slider')],
+    ['text-input', combined.includes('textinput') || combined === 'text'],
+    ['date-input', combined.includes('datepicker')],
+    ['boolean-input', combined.includes('toggle') || combined.includes('checkbox')],
+    ['image-display', combined.includes('image')],
+    ['text-display', combined.includes('label') || combined.includes('text')],
+  ];
+  const match = mappings.find(([, matched]) => matched);
+  const role = match ? match[0] : (isInteractive(control) ? 'interactive-control' : 'visual-structure');
+  return {
+    role,
+    evidence: {
+      classifier: 'control-kind-v1',
+      confidence: match ? 'high' : 'medium',
+      signals: [match ? 'CONTROL_KIND_MATCH' : 'GENERIC_CONTROL_FALLBACK'],
+    },
+  };
+}
+
+function controlIntentRole(control, context = {}) {
+  return classifyControlIntentRole(control, context).role;
 }
 
 function nativeSuggestionForRole(role) {
   const map = {
     'file-attachments': 'native attachment/file field',
     'timer-lifecycle': 'native effect/timer lifecycle',
-    'repeating-records': 'native list/sectioned list chosen by screen-builder',
+    'record-list': 'virtualized native FlatList or SectionList with domain rows',
+    'navigation-menu': 'approved Expo Router Drawer, Tabs, or native destination list',
+    'picker-options': 'searchable native Sheet/Select backed by a FlatList',
+    'dashboard-sections': 'domain dashboard sections or summary tiles',
+    'repeating-records-review': 'review Items and selection semantics before choosing the native collection pattern',
     'record-form': 'native form sections with typed validation',
     'form-field-card': 'native field binding inside owning form',
     'responsive-form-layout': 'native responsive section layout',
     'layout-container': 'native grouping/section layout',
-    'reusable-component': 'shared React Native component',
-    'custom-control': 'known native replacement or unsupported placeholder',
+    'domain-component': 'shared domain-specific React Native component with typed props/callbacks',
+    'shared-app-chrome': 'shared native header/footer/chrome composition',
+    'navigation-component': 'native navigation composition owned by the approved route graph',
+    'form-composite': 'shared typed form-section component',
+    'disposable-canvas-scaffolding': 'remove the proven-empty Canvas wrapper while preserving its placement intent when relevant',
+    'component-review': 'review the component contract before deciding whether to share, inline, or remove it',
+    'pcf-known-capability': 'implement the exact approved native capability',
+    'pcf-native-rebuild': 'rebuild the approved PCF contract as a native component',
+    'pcf-server-backed': 'bind the approved generated service and rebuild its UI natively',
+    'pcf-optional-unsupported': 'render the exact approved visible unavailable state',
+    'pcf-blocker': 'blocked until an approved supported strategy exists',
+    'pcf-review': 'Gate 2b approval required before implementation',
     'document-preview': 'native document preview/open flow or unsupported placeholder',
     'rich-content': 'native rich text/html interpretation chosen by screen-builder',
     'embedded-report': 'unsupported placeholder unless native report strategy exists',
@@ -3729,18 +4114,25 @@ function nativeSuggestionForRole(role) {
 }
 
 function supportForControlIntent(control, role) {
-  if (role === 'custom-control') return 'unsupported-or-custom-native-component';
+  if (role === 'pcf-review') return 'explicit-pcf-approval-required';
+  if (role === 'pcf-blocker') return 'blocked';
+  if (role === 'pcf-known-capability') return 'approved-native-capability';
+  if (role === 'pcf-native-rebuild') return 'approved-native-replacement';
+  if (role === 'pcf-server-backed') return 'approved-server-dependency';
+  if (role === 'pcf-optional-unsupported') return 'approved-visible-unsupported';
   if (role === 'embedded-report' || role === 'mixed-reality') return 'unsupported-or-explicit-native-strategy';
   if (role === 'document-preview' || role === 'signature-input' || role === 'audio-capture' || role === 'file-transfer') return 'native-capability-contract-required';
-  if (role === 'reusable-component') return 'preserve-contract-regenerate-ui';
+  if (role === 'component-review' || role === 'repeating-records-review') return 'semantic-review-required';
+  if (role === 'disposable-canvas-scaffolding') return 'regenerate-without-component';
+  if (['domain-component', 'shared-app-chrome', 'navigation-component', 'form-composite'].includes(role)) return 'preserve-contract-regenerate-ui';
   if (role === 'file-attachments' || role === 'timer-lifecycle') return 'behavior-contract-required';
   return 'regenerate-native';
 }
 
 function controlBusinessRisk(control, role, mustPreserve) {
-  if (role === 'custom-control' || role === 'file-attachments' || role === 'timer-lifecycle') return 'high';
+  if (role.startsWith('pcf-') || role === 'component-review' || role === 'file-attachments' || role === 'timer-lifecycle') return 'high';
   if (role === 'embedded-report' || role === 'mixed-reality' || role === 'document-preview' || role === 'signature-input' || role === 'audio-capture' || role === 'file-transfer') return 'high';
-  if (role === 'rich-content' || role === 'chart-visualization' || role === 'tabular-records' || role === 'media-playback') return 'medium';
+  if (role === 'rich-content' || role === 'chart-visualization' || role === 'tabular-records' || role === 'media-playback' || role === 'repeating-records-review') return 'medium';
   if (isComponentInstance(control) || (control && control.isDataControl)) return 'medium';
   if (mustPreserve.length >= 3) return 'medium';
   return 'low';
@@ -3779,11 +4171,15 @@ function controlMustPreserve(control, role, eventNames) {
       if (props[key] != null || eventNames.includes(key)) add(`${key} contract`);
     }
   }
-  if (role === 'repeating-records') {
+  if (['record-list', 'navigation-menu', 'picker-options', 'dashboard-sections', 'repeating-records-review'].includes(role)) {
     add('record iteration intent');
     if (props.Items != null) add('filter/sort/source Items formula');
     if (eventNames.includes('OnSelect')) add('selected record identity');
   }
+  if (role === 'navigation-menu') add('destination labels, visibility, selection, and route intent');
+  if (role === 'picker-options') add('selected option identity, commit behavior, and dismissal intent');
+  if (role === 'dashboard-sections') add('metric grouping, aggregation, and drill-down intent');
+  if (role === 'repeating-records-review') add('all row bindings and interactions until semantic review resolves the collection pattern');
   if (role === 'record-form') {
     add('record edit/display intent');
     add('submit success/failure behavior when present');
@@ -3794,12 +4190,16 @@ function controlMustPreserve(control, role, eventNames) {
   if (role === 'layout-container' || role === 'responsive-form-layout') {
     add('child grouping/layout intent');
   }
-  if (role === 'reusable-component') {
+  if (['domain-component', 'shared-app-chrome', 'navigation-component', 'form-composite', 'component-review'].includes(role)) {
     add('component input/output/event contract');
   }
-  if (role === 'custom-control') {
-    add('custom control capability or explicit unsupported marker');
-  }
+  if (role === 'domain-component') add('domain data and callback semantics');
+  if (role === 'shared-app-chrome') add('cross-screen chrome identity and actions');
+  if (role === 'navigation-component') add('destinations, route parameters, visibility, and selected state');
+  if (role === 'form-composite') add('field bindings, validation, submit, and error semantics');
+  if (role === 'disposable-canvas-scaffolding') add('source placement intent only; no reusable runtime contract');
+  if (role === 'component-review') add('component contract until domain/chrome/scaffolding intent is resolved');
+  if (role.startsWith('pcf-')) add('PCF public input/output/event/data-binding contract and approved disposition');
   if (role === 'document-preview') add('document source/open intent');
   if (role === 'rich-content') add('rich text/html content intent');
   if (role === 'embedded-report') add('report embedding intent or explicit unsupported marker');
@@ -3813,10 +4213,14 @@ function controlMustPreserve(control, role, eventNames) {
   return preserve;
 }
 
-function buildControlIntentCoverage(loadedScreens) {
+function buildControlIntentCoverage(loadedScreens, options = {}) {
   const rows = [];
   const byKind = new Map();
   const byRole = new Map();
+  const components = toArray(options.components).length > 0
+    ? toArray(options.components)
+    : (options.brief ? collectComponentInstances(loadedScreens, options.brief) : []);
+  const componentCatalog = new Map(components.map((component) => [component.name, component]));
   const stats = {
     screens: toArray(loadedScreens).length,
     totalControls: 0,
@@ -3832,7 +4236,12 @@ function buildControlIntentCoverage(loadedScreens) {
     for (const control of toArray(screen.controls)) {
       stats.totalControls += 1;
       const eventNames = eventNamesWithSource(control);
-      const role = controlIntentRole(control);
+      const roleResult = classifyControlIntentRole(control, {
+        screen,
+        componentCatalog,
+        totalScreens: toArray(loadedScreens).length,
+      });
+      const role = roleResult.role;
       const mustPreserve = controlMustPreserve(control, role, eventNames);
       const support = supportForControlIntent(control, role);
       const risk = controlBusinessRisk(control, role, mustPreserve);
@@ -3846,23 +4255,36 @@ function buildControlIntentCoverage(loadedScreens) {
         : [];
 
       if (eventNames.length > 0 || mustPreserve.length > 0) stats.behavioralControls += 1;
-      if (role === 'layout-container' || role === 'responsive-form-layout' || role === 'repeating-records' || role === 'record-form') stats.layoutControls += 1;
+      if (role === 'layout-container'
+          || role === 'responsive-form-layout'
+          || role === 'record-form'
+          || ['record-list', 'navigation-menu', 'picker-options', 'dashboard-sections', 'repeating-records-review'].includes(role)) {
+        stats.layoutControls += 1;
+      }
       if (isComponentInstance(control)) stats.componentInstances += 1;
       if (control && control.isPcf) stats.pcfControls += 1;
       if (risk === 'high') stats.highRiskControls += 1;
       byKind.set(control.kind || 'Unknown', (byKind.get(control.kind || 'Unknown') || 0) + 1);
       byRole.set(role, (byRole.get(role) || 0) + 1);
 
-      rows.push({
+      const componentInfo = isComponentInstance(control)
+        ? componentCatalog.get(control.componentName || control.templateName || '') || null
+        : null;
+      const row = {
         screen: screen.name,
         control: control.name || shortName(control.path, control.name),
         path: control.path || null,
         canvasType: control.kind || control.template || 'Unknown',
         template: control.template || null,
         role,
+        roleEvidence: roleResult.evidence,
         support,
         businessRisk: risk,
-        uiFreedom: 'regenerate-native',
+        uiFreedom: role === 'disposable-canvas-scaffolding'
+          ? 'inline-or-remove-scaffolding'
+          : (['component-review', 'repeating-records-review', 'pcf-review'].includes(role)
+            ? 'review-before-generation'
+            : 'regenerate-native'),
         nativeSuggestion: nativeSuggestionForRole(role),
         nativeHints,
         mustPreserve,
@@ -3880,13 +4302,33 @@ function buildControlIntentCoverage(loadedScreens) {
           isPcf: !!(control && control.isPcf),
           isDataControl: !!(control && control.isDataControl),
           isAutoGeneratedFormCard: !!(control && control.isAutoGeneratedFormCard),
+          requiresSemanticReview: ['component-review', 'repeating-records-review', 'pcf-review', 'pcf-blocker'].includes(role),
         },
-        notesForAI: 'Preserve mustPreserve semantics and data/event contracts; choose the best native UI for the target app.',
-      });
+        notesForAI: ['component-review', 'repeating-records-review'].includes(role)
+          ? 'Classification is intentionally conservative. Resolve the semantic review without dropping mustPreserve behavior, data, or layout contracts.'
+          : (role === 'disposable-canvas-scaffolding'
+            ? 'The source definition proves this wrapper is empty and has no business contract. Remove it unless its placement conveys approved screen grouping; do not recreate a shared runtime component.'
+            : 'Preserve mustPreserve semantics and data/event contracts; choose the best native UI for the target app.'),
+      };
+      if (componentInfo) {
+        row.component = {
+          name: componentInfo.name,
+          instanceCount: componentInfo.instanceCount,
+          screens: toArray(componentInfo.screens),
+          contract: {
+            inputs: toArray(componentInfo.inputs).length,
+            outputs: toArray(componentInfo.outputs).length,
+            events: toArray(componentInfo.events).length,
+            functions: toArray(componentInfo.functions).length,
+            actions: toArray(componentInfo.actions).length,
+          },
+        };
+      }
+      rows.push(row);
     }
   }
 
-  return {
+  const coverage = recomputeRoleStats({
     $schema: 'control-intent-coverage-v1',
     generatedAt: GENERATION_TIMESTAMP,
     rule: 'Canvas controls are evidence of intent, not target UI. Preserve business/data/event/layout semantics; regenerate native UI.',
@@ -3896,7 +4338,10 @@ function buildControlIntentCoverage(loadedScreens) {
       byRole: Object.fromEntries([...byRole.entries()].sort((a, b) => a[0].localeCompare(b[0]))),
     },
     rows,
-  };
+  });
+  return options.pcfPlan
+    ? projectPcfControlIntents(coverage, options.pcfPlan)
+    : coverage;
 }
 
 const PCF_DISPOSITIONS = new Set([
@@ -6956,7 +7401,7 @@ function buildComponentsMd(components) {
   const lines = [];
   lines.push('# Reusable Custom Components');
   lines.push('');
-  lines.push('Source-app custom components (defined once, instantiated on many screens). The screen-builder should factor each of these into a single shared React Native component under `src/components/` rather than re-implementing inline per screen.');
+  lines.push('Source-app custom components classified by semantic contract. Domain, form, navigation, and shared-chrome components preserve a reusable native contract; Canvas-only scaffolding may be inlined or removed; ambiguous components remain explicit review items.');
   lines.push('');
   if (components.length === 0) {
     lines.push('No custom components detected.');
@@ -6969,8 +7414,8 @@ function buildComponentsMd(components) {
   lines.push('');
   // Summary table — adds DefinitionType + I/O counts so the screen-builder
   // can see the contract size at a glance.
-  lines.push('| Component | Type | DefinitionType | Instances | Controls | In/Out/Evt/Fn/Act | Screens |');
-  lines.push('|---|---|---|---|---|---|---|');
+  lines.push('| Component | Semantic role(s) | Type | DefinitionType | Instances | Controls | In/Out/Evt/Fn/Act | Screens |');
+  lines.push('|---|---|---|---|---|---|---|---|');
   for (const c of used) {
     const t = c.isPcf ? 'PCF' : (c.type || 'Component');
     const dt = c.definitionType || '—';
@@ -6978,7 +7423,8 @@ function buildComponentsMd(components) {
     const scrCell = c.screens.length > 6
       ? c.screens.slice(0, 6).join(', ') + `, … (+${c.screens.length - 6})`
       : c.screens.join(', ');
-    lines.push(`| \`${c.name}\` | ${t} | ${dt} | ${c.instanceCount} | ${c.controlCount || '?'} | ${io} | ${scrCell} |`);
+    const roles = toArray(c.semanticRoles).length > 0 ? c.semanticRoles.map((role) => `\`${role}\``).join('<br>') : '`component-review`';
+    lines.push(`| \`${c.name}\` | ${roles} | ${t} | ${dt} | ${c.instanceCount} | ${c.controlCount || '?'} | ${io} | ${scrCell} |`);
   }
   if (definedOnly.length > 0) {
     lines.push('');
@@ -7643,11 +8089,19 @@ function main() {
   const components = collectComponentInstances(loadedScreens, brief);
   const appState = collectAppState(loadedScreens);
   const behaviors = extractBehaviors(loadedScreens, brief);
-  const controlIntentCoverage = buildControlIntentCoverage(loadedScreens);
+  const flows = extractFlows(brief, loadedScreens);
+  const connectorInv = collectConnectorInventory(brief);
+  const targetConnectorInv = sanitizeConnectorInventoryForTarget(connectorInv);
+  const connectionRequirements = buildConnectionRequirements(brief, targetConnectorInv);
+  const pcfPlan = buildPcfPlan(brief, loadedScreens, connectionRequirements, bundledDeps);
+  const controlIntentCoverage = buildControlIntentCoverage(loadedScreens, {
+    brief,
+    components,
+    pcfPlan,
+  });
   const behaviorArtifacts = buildBehaviorArtifacts(behaviors, screenRows, GENERATION_TIMESTAMP, controlIntentCoverage);
   const workflowPlan = buildWorkflowPlan(behaviors, screenRows, behaviorArtifacts.contract);
   attachWorkflowRefs(behaviorArtifacts, workflowPlan);
-  const flows = extractFlows(brief, loadedScreens);
 
   // §10.1 / §8.3 / §14 pipeline: hydrate forms[] into the structured shape,
   // then run the image-picker downgrade so {camera, attachment, image-picker,
@@ -7655,14 +8109,10 @@ function main() {
   // bound Image/File form field. `applyImagePickerDowngrade` mutates
   // `screenRows[].nativeCapabilities` in place so the per-screen rows that
   // feed into `buildMasterPlan` and `nativePlan.capabilities` are consistent.
-  const connectorInv = collectConnectorInventory(brief);
-  const targetConnectorInv = sanitizeConnectorInventoryForTarget(connectorInv);
-  const connectionRequirements = buildConnectionRequirements(brief, targetConnectorInv);
   const structuredForms = collectForms(brief, loadedScreens, tables, connectorInv);
   const downgrade = applyImagePickerDowngrade(structuredForms, brief, screenRows);
   const nativeExecution = buildNativeExecutionPlan(downgrade.capabilities, bundledDeps);
   const serverSideAssets = buildServerSideAssets(tables);
-  const pcfPlan = buildPcfPlan(brief, loadedScreens, connectionRequirements, bundledDeps);
 
   const masterPlan = buildMasterPlan(
     brief,
@@ -7684,6 +8134,12 @@ function main() {
   );
   const requirementsMd = buildRequirementsBrief(brief, screenRows, connectors, tables);
   const checklistMd = buildMigrationChecklist(brief, connectors, tables, risks, serverSideAssets, pcfPlan, workflowPlan, behaviorArtifacts.contract);
+  for (const component of components) {
+    component.semanticRoles = unique(controlIntentCoverage.rows
+      .filter((row) => row.component?.name === component.name)
+      .map((row) => row.role))
+      .sort();
+  }
   const componentsMd = buildComponentsMd(components);
   const stateMd = buildAppStateMd(appState);
   const pluginInput = buildPluginInput(
@@ -7818,9 +8274,13 @@ module.exports = {
   collectForms,
   buildNativeExecutionPlan,
   buildPcfPlan,
+  classifyControlIntentRole,
+  controlIntentRole,
   buildBehaviorArtifacts,
   buildWorkflowPlan,
   buildControlIntentCoverage,
+  collectComponentInstances,
+  projectPcfControlIntents,
   extractBehaviors,
   extractFlows,
   collectAppState,

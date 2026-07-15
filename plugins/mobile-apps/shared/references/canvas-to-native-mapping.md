@@ -27,7 +27,7 @@ The brief feeds in at step 4. The screen-builder works upward to step 1, then ba
 | `Button` | Tamagui `<Button>` | ✅ 1:1 | Same |
 | `Toggle` | Tamagui `<Switch>` | ✅ 1:1 | Same intent |
 | `Checkbox` | `expo-checkbox` `<Checkbox>` | ✅ 1:1 | Same |
-| `Gallery` | RN `<FlatList>` / `<SectionList>` | ✅ 1:1 | Scrollable list of records; virtualized |
+| `Gallery` | Role-dependent native pattern | ✅ INTENT | `record-list` → `FlatList`/`SectionList`; `navigation-menu` → Router Drawer/Tabs/destination list; `picker-options` → Sheet/Select; `dashboard-sections` → domain dashboard composition |
 | `Form` / `TypedDataCard` | `react-hook-form` + zod + Tamagui inputs | ✅ 1:1 | Multi-field record edit |
 | `DatePicker` | `@react-native-community/datetimepicker` | ✅ 1:1 | Native picker is better |
 | `BarcodeReader` | `expo-camera <CameraView barcodeScannerSettings>` | ✅ 1:1 | Same |
@@ -55,6 +55,26 @@ PCF is never copied, hosted in a WebView, or invoked through HostingSDK. `pcf-pl
 4. **Blocker** — essential behavior is hidden/unknown, its backend/specification is missing, or no supported native strategy exists. Stop generation for the affected app path.
 
 Extractor replacement hints are evidence, not approval. An arbitrary third-party React Native package is never a valid automatic replacement because the rewrap runtime is prebuilt.
+
+After Gate 2b, the approved disposition is projected into the owning screen's `controlIntents[].pcf` contract. Builders use that compact projection and do not read the global PCF plan. `pcf-review` and `pcf-blocker` stop generation; approved roles are `pcf-known-capability`, `pcf-native-rebuild`, `pcf-server-backed`, or `pcf-optional-unsupported`.
+
+### Gallery and Canvas-component semantic roles
+
+The adapter classifies intent conservatively from raw-free evidence categories. Do not flatten these roles back to the source control kind:
+
+| Source evidence | Emitted role | Native interpretation |
+|---|---|---|
+| Dataverse/data-bound Items with row bindings | `record-list` | Virtualized domain rows, optional detail drill-down |
+| Destination/menu naming or dynamic per-row route target | `navigation-menu` | Approved Router Drawer/Tabs or destination list |
+| `Choices(...)`, lookup/picker naming, and selection/commit behavior | `picker-options` | Searchable Sheet/Select with explicit selection identity |
+| KPI/metric/summary naming or aggregate Items without mutation | `dashboard-sections` | Domain summary sections/tiles, not a generic list card wall |
+| Insufficient or conflicting Gallery evidence | `repeating-records-review` | Resolve semantics before choosing a native collection pattern |
+| Business data plus output/event/function/action contract | `domain-component` | Shared typed domain component |
+| Cross-screen header/footer/shell with no domain data | `shared-app-chrome` | Shared native chrome composition |
+| Route/menu contract or navigation behavior | `navigation-component` | Navigation-orchestrator-owned native composition |
+| Multi-field/edit contract with save/change behavior | `form-composite` | Shared typed form section |
+| Single layout wrapper whose extracted definition has no internal controls, app-scope access, external library, data, or behavior contract | `disposable-canvas-scaffolding` | Inline/remove the empty wrapper |
+| Ambiguous component evidence | `component-review` | Preserve the contract until review; never assume disposable |
 
 ---
 

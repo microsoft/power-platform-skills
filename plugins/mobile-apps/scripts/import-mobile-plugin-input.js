@@ -21,6 +21,8 @@ const {
   pathContains: contains,
 } = require('./lib/modernizer-paths.js');
 const { resetWorkflowApprovals } = require('./lib/workflow-plan.js');
+const { derivePcfStats } = require('./lib/pcf-control-intent.js');
+const { synchronizePcfControlIntentsInDirectory } = require('./sync-pcf-control-intents.js');
 
 const REQUIRED_TARGET_FILES = ['package.json', 'app.config.js', 'auth.config.json', 'tamagui.config.ts'];
 const COLLISION_PATHS = [
@@ -138,16 +140,7 @@ function resetPcfApprovals(input, pcfPlan) {
       approvedAt: null,
     };
   }
-  const dispositions = ['native-replacement', 'server-dependency', 'explicit-unsupported', 'blocker'];
-  pcfPlan.stats = {
-    ...(pcfPlan.stats || {}),
-    total: controls.length,
-    discoveryComplete: pcfPlan.discovery?.complete === true,
-    pendingApproval: controls.length,
-    approved: 0,
-    blocked: 0,
-    byDisposition: Object.fromEntries(dispositions.map((disposition) => [disposition, 0])),
-  };
+  pcfPlan.stats = derivePcfStats(pcfPlan);
   if (!input.pcfPlan || typeof input.pcfPlan !== 'object') throw new Error('mobile-plugin-input.json pcfPlan summary is missing');
   input.pcfPlan.stats = JSON.parse(JSON.stringify(pcfPlan.stats));
   return controls.length;
@@ -317,6 +310,7 @@ function main() {
   const treeState = { count: 0 };
   let assetsCopied = 0;
   let assetsMissing = 0;
+  let pcfControlIntentFilesUpdated = 0;
   try {
     for (const relative of REQUIRED_SOURCE_FILES) {
       if (relative === 'mobile-plugin-input.json' || relative === 'pcf-plan.json' || relative === 'workflows.json') continue;
@@ -332,6 +326,14 @@ function main() {
     copyMarkdownTree(path.join(source, 'screens'), path.join(target, 'screens'), written, args.dryRun, source, treeState);
     copyMarkdownTree(path.join(source, 'state'), path.join(target, 'state'), written, args.dryRun, source, treeState);
     copyJsonTree(behaviorShardsSource, path.join(target, 'behavior-shards'), written, args.dryRun, source, treeState);
+
+    if (!args.dryRun) {
+      // Approval reset and shard projection are one logical import operation.
+      // The synchronizer has its own rollback, and the outer catch removes all
+      // imported files if anything still fails afterward.
+      const projection = synchronizePcfControlIntentsInDirectory(target);
+      pcfControlIntentFilesUpdated = projection.changedFiles.length;
+    }
 
     if (fs.existsSync(assetsManifest)) {
       const assets = JSON.parse(fs.readFileSync(assetsManifest, 'utf8'));
@@ -391,6 +393,7 @@ function main() {
     assetsCopied,
     assetsMissing,
     pcfApprovalsReset,
+    pcfControlIntentFilesUpdated,
     workflowApprovalsReset,
     behaviorShardsCopied: input.behaviorPlan?.stats?.shards || 0,
     validationWarnings: validationResult.warnings || [],

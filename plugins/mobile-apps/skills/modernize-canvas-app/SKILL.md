@@ -168,8 +168,8 @@ Read the generated JSON and check:
 7. `behaviors.stats.droppedEventActionCount === 0`.
 8. `behavior-contract.json` deterministically classifies every global behavior ID exactly once as `core` or `regenerable`. Core includes all declarative rules, durable/integration/device effects, ambiguous state, and the backward closure of every state writer feeding a core sink. Regenerable is allowlist-only disconnected UI plumbing.
 9. Every declared `behavior-shards/<Screen>.json` exists and exactly matches the contract: compact screen/control intent, verbatim core entries, raw-free structured `intentHints[]`, and exact unmatched formulas. No builder shard may omit, duplicate, or demote a global ledger entry. Verbose `screens/*.plan.md` / `*.controls.md` remain audit-only and are not passed to builders.
-10. Every high-risk control-intent row has a native strategy or explicit unsupported status.
-11. `pcf-plan.json` has exactly one row per PCF control. If source metadata reports PCF content but discovery cannot enumerate controls, treat `discovery.complete: false` as a hard blocker rather than assuming zero PCFs. Every proposal is one of `native-replacement`, `server-dependency`, or `blocker`; the adapter never silently proposes unsupported loss.
+10. Every high-risk control-intent row has a native strategy or explicit unsupported status. Gallery/component rows carry contextual `roleEvidence`; `repeating-records-review` and `component-review` remain explicit review gates, and only a verified empty layout definition may be `disposable-canvas-scaffolding`.
+11. `pcf-plan.json` has exactly one row per PCF control. If source metadata reports PCF content but discovery cannot enumerate controls, treat `discovery.complete: false` as a hard blocker rather than assuming zero PCFs. Every proposal is one of `native-replacement`, `server-dependency`, or `blocker`; the adapter never silently proposes unsupported loss. Every matching control row and screen shard must contain the deterministic pending/approved/blocked PCF projection produced by `sync-pcf-control-intents.js`.
 12. `workflows.json` contains every event handler that crossed the deterministic pathological-handler threshold and has at least one core behavior. Each workflow maps exact core behavior into named steps and maps regenerable source behavior to intent-hint IDs. Only correctness-critical unresolved business policies appear in `requiredDecisions[]`; routine code structure and native UX remain AI-owned proposal details.
 13. Server-computed/calculated/rollup columns are marked read-only for app writes.
 14. No output contains secrets, access tokens, private registry credentials, or customer record payloads.
@@ -194,6 +194,7 @@ Canvas modernization assessment
 Source app       : <name>
 Screens          : <count>
 Controls         : <count; high-risk count>
+Semantic reviews : <repeating-records-review + component-review count>
 Dataverse tables : <count>
 Connectors       : <count; unresolved count>
 Flows            : <count; missing-id count>

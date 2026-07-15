@@ -213,7 +213,7 @@ Every classification row records state reads/writes, dependency behavior IDs, co
 Each `behavior-shards/<Screen>.json` contains:
 
 - compact `screenIntent` (route, archetype, purpose, data sources, params, navigation)
-- semantic `controlIntents[]` (`mustPreserve`, source event/data-binding names, layout role, native suggestions) with no verbatim formulas
+- semantic `controlIntents[]` (`mustPreserve`, source event/data-binding names, contextual role + evidence, layout role, native suggestions, and compact approved PCF disposition when applicable) with no verbatim formulas
 - compact `workflowRefs[]` (workflow ID, core/hint ownership, target import/export/call site) so builders never receive global `workflows.json`
 - exact core `actions[]`, `visibility[]`, `validations[]`, and `derivations[]`
 - exact `unmatchedFormulas[]` for review
@@ -269,13 +269,17 @@ Implementation ownership is split deliberately:
 
 Each row carries:
 
-- source control kind/path and inferred role
+- source control kind/path and inferred role plus raw-free `roleEvidence`
 - business risk/support status
 - `mustPreserve[]`
 - source events and data bindings
 - layout intent
 - native suggestions and upgrade hints
 - flags for components, PCF, data controls, and generated form cards
+
+Gallery roles are contextual rather than control-kind-only: `record-list`, `navigation-menu`, `picker-options`, `dashboard-sections`, or conservative `repeating-records-review`. Evidence includes only categories/signals such as Items source kind, action intents, child count, row-binding presence, and dynamic-destination presence—not source formulas.
+
+Canvas component instances similarly resolve to `domain-component`, `shared-app-chrome`, `navigation-component`, `form-composite`, `disposable-canvas-scaffolding`, or `component-review`. A component is disposable only when deterministic evidence shows a single layout-scaffold instance with no data, output, event, function, action, navigation, internal-control, app-scope, or external-library contract. The source brief does not expose internal component formulas, so any definition with internal controls remains review/preserve rather than disposable. Ambiguity never becomes disposable.
 
 Every high-risk row must have a native implementation, explicit unsupported UI, or named blocker.
 
@@ -303,6 +307,8 @@ Allowed terminal dispositions:
 4. `blocker` — missing source/spec/backend/native strategy; prevents generation
 
 Adapter proposals are never approvals and never propose unsupported loss automatically. Safe import clears all incoming approval fields to `pending`, so a stale/crafted package cannot bypass Gate 2b. Gate 2b sets `approval.status`, disposition, essentiality, strategy, reason, `approvedBy: user`, and timestamp. Before screen fan-out, `validate-mobile-plugin-input.js --require-pcf-approval` must pass. Generated screens use exact `source-pcf: <id> <disposition>` or `source-pcf-unsupported` markers, enforced by `check-pcf-coverage.js --strict`.
+
+After any Gate 2b edit, `sync-pcf-control-intents.js` atomically recomputes PCF summaries and projects the authoritative decision into the matching global control row plus its per-screen shard. Pending/blocked controls become `pcf-review`/`pcf-blocker`; approved outcomes become `pcf-known-capability`, `pcf-native-rebuild`, `pcf-server-backed`, or `pcf-optional-unsupported`. The projection contains only public property/event/data-binding names and an allowlisted target-strategy summary. A SHA-256 digest over stable PCF identity, public contract names, and backend dependencies binds the plan and coverage to one source inventory; mixing an old plan with a new extraction fails before any file is changed. Builders receive this per-screen projection and never read global `pcf-plan.json`. Validation independently recomputes the projection and rejects stale coverage or shards.
 
 ## State contract
 
