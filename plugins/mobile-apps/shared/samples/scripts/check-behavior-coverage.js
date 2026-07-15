@@ -34,8 +34,9 @@ if (!fs.existsSync(BEHAVIORS_PATH)) {
 const data = JSON.parse(fs.readFileSync(BEHAVIORS_PATH, 'utf8'));
 const SCREEN_FILE_BY_SOURCE = new Map();
 const pluginInputPath = path.join(ROOT, 'mobile-plugin-input.json');
+let pluginInput = null;
 if (fs.existsSync(pluginInputPath)) {
-  const pluginInput = JSON.parse(fs.readFileSync(pluginInputPath, 'utf8'));
+  pluginInput = JSON.parse(fs.readFileSync(pluginInputPath, 'utf8'));
   for (const screen of pluginInput.screenPlan?.screens || []) {
     if (!screen?.name || typeof screen.file !== 'string') continue;
     const resolved = path.resolve(ROOT, screen.file);
@@ -43,6 +44,19 @@ if (fs.existsSync(pluginInputPath)) {
     const contained = relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
     if (contained) SCREEN_FILE_BY_SOURCE.set(screen.name, resolved);
   }
+}
+const behaviorContractPath = path.join(ROOT, 'behavior-contract.json');
+let behaviorContract = null;
+if (fs.existsSync(behaviorContractPath)) {
+  behaviorContract = JSON.parse(fs.readFileSync(behaviorContractPath, 'utf8'));
+} else if (pluginInput?.behaviorPlan) {
+  console.error('[coverage] behavior-contract.json is required by mobile-plugin-input.json');
+  process.exit(2);
+}
+const CLASSIFICATION_BY_ID = new Map((behaviorContract?.classifications || []).map((row) => [row.behaviorId, row]));
+const HINT_BY_BEHAVIOR_ID = new Map();
+for (const hint of behaviorContract?.intentHints || []) {
+  for (const behaviorId of hint.sourceBehaviorIds || []) HINT_BY_BEHAVIOR_ID.set(behaviorId, hint);
 }
 const behaviors = Array.isArray(data)
   ? data.map((entry) => ({ ...entry, behaviorGroup: 'action' }))
@@ -52,6 +66,19 @@ const behaviors = Array.isArray(data)
       ...(data.validations || []).map((entry) => ({ ...entry, behaviorGroup: 'validation' })),
       ...(data.derivations || []).map((entry) => ({ ...entry, behaviorGroup: 'derivation' })),
     ];
+
+if (behaviorContract) {
+  const behaviorIds = new Set(behaviors.map((entry) => entry.behaviorId).filter(Boolean));
+  const classificationIds = new Set((behaviorContract.classifications || []).map((entry) => entry.behaviorId).filter(Boolean));
+  const missing = [...behaviorIds].filter((id) => !classificationIds.has(id));
+  const extra = [...classificationIds].filter((id) => !behaviorIds.has(id));
+  const invalidHints = (behaviorContract.classifications || []).filter((entry) =>
+    entry.tier === 'regenerable' && !HINT_BY_BEHAVIOR_ID.has(entry.behaviorId));
+  if (missing.length || extra.length || invalidHints.length) {
+    console.error(`[coverage] behavior contract accounting mismatch: missing=${missing.length}, extra=${extra.length}, regenerable-without-hint=${invalidHints.length}`);
+    process.exit(2);
+  }
+}
 
 const byScreen = new Map();
 for (const behavior of behaviors) {
@@ -220,6 +247,58 @@ function hasUnsupportedMarker(action, text) {
     && /unsupported|unavailable|not available/i.test(textAfterMarker('source-unsupported', action, text));
 }
 
+function intentMarkerMatch(hint, text) {
+  if (!hint?.hintId || !text) return null;
+  const escaped = String(hint.hintId).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^\\s*//\\s*source-intent:\\s*${escaped}(?![a-z0-9-])`, 'im').exec(text);
+}
+
+function textAfterIntentMarker(hint, text) {
+  const marker = intentMarkerMatch(hint, text);
+  if (!marker) return '';
+  const lineEnd = text.indexOf('\n', marker.index + marker[0].length);
+  if (lineEnd < 0) return '';
+  return text.slice(lineEnd + 1, lineEnd + 2501);
+}
+
+function isIntentWired(hint, text) {
+  const after = textAfterIntentMarker(hint, text);
+  if (!after) return false;
+  if (/^\s*(?:\/\/|\/\*)?\s*(?:TODO|placeholder|not[ -]implemented)/i.test(after)) return false;
+  switch (hint.nativeIntent) {
+    case 'native-navigation':
+    case 'dismiss-current-surface':
+      return /router\.(?:push|replace|navigate|back)\s*\(/.test(after);
+    case 'native-feedback':
+      return /notify(?:Success|Error)?\s*\(|Toast\.show|Snackbar|Alert\.alert|set(?:Error|Message|Status)\s*\(/.test(after);
+    case 'query-refresh':
+      return /invalidateQueries\s*\(|refetch\s*\(|onRefresh\s*=|refresh\s*\(/.test(after);
+    case 'native-confirmation':
+      return /Alert\.alert|confirm\s*\(|<Sheet\b|<Dialog\b/.test(after);
+    case 'native-form-mode':
+    case 'clear-transient-input':
+      return /\.reset\s*\(|reset\s*\(|setValue\s*\(|router\.(?:push|replace|navigate)\s*\(/.test(after);
+    case 'native-focus-or-selection':
+      return /\.focus\s*\(|onPress\s*=|setSelected|setActive/.test(after);
+    case 'native-control-state':
+      return /disabled\s*=|editable\s*=|set[A-Z]\w*\s*\(|useMemo\s*\(/.test(after);
+    case 'native-visibility-state':
+      return /(?:isLoading|isPending|loading|saving|show|visible|open|expanded)\w*\s*(?:&&|\?|===)|useMemo\s*\(/i.test(after);
+    case 'transient-ui-state':
+      return /isPending|isLoading|loading|saving|submitting|disabled\s*=|useState\s*\(|useReducer\s*\(/i.test(after);
+    case 'native-query-or-list-state':
+      return /useQuery|useInfiniteQuery|useListData|useCursorListData|setQueryData|set[A-Z]\w*\s*\(/.test(after);
+    case 'native-diagnostic':
+      return /console\.(?:debug|info|warn|error)\s*\(/.test(after);
+    case 'discard-no-side-effect':
+      // The deterministic disposition itself is the implementation: the
+      // source expression had no side effect and intentionally emits no code.
+      return true;
+    default:
+      return /useState\s*\(|useMemo\s*\(|onPress\s*=|set[A-Z]\w*\s*\(/.test(after);
+  }
+}
+
 function isWired(action, text) {
   if (!text) return false;
   if (!hasBehaviorMarker(action, text)) return false;
@@ -271,12 +350,14 @@ function isWired(action, text) {
 const results = [];
 let failing = 0;
 let criticalUnwired = 0;
+let missingIntentHints = 0;
 const CRITICAL_INTENTS = new Set([
   'patch', 'update', 'updateIf', 'remove', 'removeIf', 'collect',
   'navigate', 'back', 'submitForm', 'connectorCall', 'aiCall',
   'flow', 'flowRun', 'runFlow', 'flowCall',
 ]);
 function isCriticalBehavior(behavior) {
+  if (CLASSIFICATION_BY_ID.get(behavior.behaviorId)?.tier === 'regenerable') return false;
   return behavior.behaviorGroup === 'visibility'
     || behavior.behaviorGroup === 'validation'
     || (behavior.behaviorGroup === 'action' && CRITICAL_INTENTS.has(inferIntent(behavior)));
@@ -285,18 +366,28 @@ for (const [screen, list] of byScreen.entries()) {
   const text = loadScreen(screen);
   let implemented = 0;
   let unsupported = 0;
+  let regenerated = 0;
   let screenCriticalUnwired = 0;
+  let screenMissingIntentHints = 0;
   for (const action of list) {
+    const classification = CLASSIFICATION_BY_ID.get(action.behaviorId);
+    if (classification?.tier === 'regenerable') {
+      const hint = HINT_BY_BEHAVIOR_ID.get(action.behaviorId);
+      if (hint && isIntentWired(hint, text)) regenerated += 1;
+      else screenMissingIntentHints += 1;
+      continue;
+    }
     const wiredAction = isWired(action, text);
     if (wiredAction) implemented += 1;
     else if (hasUnsupportedMarker(action, text)) unsupported += 1;
     else if (isCriticalBehavior(action)) screenCriticalUnwired += 1;
   }
   criticalUnwired += screenCriticalUnwired;
-  const accounted = implemented + unsupported;
+  missingIntentHints += screenMissingIntentHints;
+  const accounted = implemented + unsupported + regenerated;
   const ratio = list.length === 0 ? 1 : accounted / list.length;
-  results.push({ screen, total: list.length, implemented, unsupported, accounted, ratio, hasFile: Boolean(text), criticalUnwired: screenCriticalUnwired });
-  if (ratio < MIN_COVERAGE || screenCriticalUnwired > 0) failing += 1;
+  results.push({ screen, total: list.length, implemented, unsupported, regenerated, accounted, ratio, hasFile: Boolean(text), criticalUnwired: screenCriticalUnwired, missingIntentHints: screenMissingIntentHints });
+  if (ratio < MIN_COVERAGE || screenCriticalUnwired > 0 || screenMissingIntentHints > 0) failing += 1;
 }
 
 results.sort((a, b) => a.ratio - b.ratio);
@@ -304,21 +395,25 @@ const pct = (value) => `${(value * 100).toFixed(0)}%`;
 console.log('\n=== behavior coverage ===');
 console.log('screen'.padEnd(36), 'accounted/total', '  ratio');
 for (const result of results) {
-  const marker = result.ratio < MIN_COVERAGE || result.criticalUnwired > 0 ? 'x' : 'v';
+  const marker = result.ratio < MIN_COVERAGE || result.criticalUnwired > 0 || result.missingIntentHints > 0 ? 'x' : 'v';
   const file = result.hasFile ? '' : ' (NO SCREEN FILE)';
   const critical = result.criticalUnwired ? ` (${result.criticalUnwired} critical unwired)` : '';
   const unsupported = result.unsupported ? ` (${result.unsupported} explicit unsupported)` : '';
-  console.log(`${marker} ${result.screen.padEnd(34)} ${String(result.accounted).padStart(4)}/${String(result.total).padEnd(4)}  ${pct(result.ratio).padStart(5)}${file}${unsupported}${critical}`);
+  const regenerated = result.regenerated ? ` (${result.regenerated} native intent)` : '';
+  const missingIntent = result.missingIntentHints ? ` (${result.missingIntentHints} intent missing)` : '';
+  console.log(`${marker} ${result.screen.padEnd(34)} ${String(result.accounted).padStart(4)}/${String(result.total).padEnd(4)}  ${pct(result.ratio).padStart(5)}${file}${unsupported}${regenerated}${critical}${missingIntent}`);
 }
 const totalBehaviors = results.reduce((sum, result) => sum + result.total, 0);
 const totalAccounted = results.reduce((sum, result) => sum + result.accounted, 0);
 const totalUnsupported = results.reduce((sum, result) => sum + result.unsupported, 0);
-console.log(`\noverall: ${totalAccounted}/${totalBehaviors}  (${pct(totalAccounted / Math.max(totalBehaviors, 1))}); explicit unsupported: ${totalUnsupported}`);
+const totalRegenerated = results.reduce((sum, result) => sum + result.regenerated, 0);
+console.log(`\noverall: ${totalAccounted}/${totalBehaviors}  (${pct(totalAccounted / Math.max(totalBehaviors, 1))}); explicit unsupported: ${totalUnsupported}; native intent: ${totalRegenerated}`);
 console.log(`gate: MIN_COVERAGE=${pct(MIN_COVERAGE)}  failing screens: ${failing}`);
 console.log(`critical behavior accounting: ${criticalUnwired === 0 ? 'PASS' : `FAIL (${criticalUnwired} unwired)`}`);
+console.log(`regenerable intent accounting: ${missingIntentHints === 0 ? 'PASS' : `FAIL (${missingIntentHints} missing)`}`);
 
 if (failing > 0) {
-  console.error(`\n[coverage] ${failing} screen(s) below ${pct(MIN_COVERAGE)} gate`);
+  console.error(`\n[coverage] ${failing} screen(s) failed coverage/core/intent accounting`);
   process.exit(1);
 }
 process.exit(0);

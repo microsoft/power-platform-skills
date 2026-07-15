@@ -11,6 +11,8 @@ const extractor = require('../extract-msapp-brief.v2.cjs');
 const legacyAlias = require('../extract-msapp-brief.cjs');
 const adapter = require('../adapt-app-brief-for-mobile-plugin.js');
 const importer = require('../import-mobile-plugin-input.js');
+const behaviorContractLib = require('../lib/behavior-contract.js');
+const modernizerPaths = require('../lib/modernizer-paths.js');
 const workflowPlanLib = require('../lib/workflow-plan.js');
 
 function withoutControlFlowId(frame) {
@@ -32,6 +34,15 @@ test('source reader rejects archive-shaped disk path escapes', (t) => {
   fs.writeFileSync(path.join(tmp, 'outside.json'), '{"secret":"must-not-read"}');
   const reader = extractor.createSourceReader(source);
   assert.throws(() => reader.readJson('../outside.json'), /escapes root/);
+});
+
+test('artifact collision suffixes stay within the cross-platform stem limit', () => {
+  const prefix = 'A'.repeat(120);
+  const names = [`${prefix} first`, `${prefix} second`, `${prefix} third`];
+  const mapped = modernizerPaths.buildArtifactNameMap(names);
+  const stems = names.map((name) => mapped.get(name));
+  assert.equal(stems.every((stem) => stem.length <= 120), true);
+  assert.equal(new Set(stems.map((stem) => stem.toLowerCase())).size, stems.length);
 });
 
 test('extractor rejects malformed MSAPR sidecars and source symlinks', (t) => {
@@ -418,6 +429,20 @@ test('extractor accepts lowercase src directory on case-sensitive filesystems', 
   assert.equal(pluginInput.workflowPlan.file, 'workflows.json');
   assert.equal(pluginInput.workflowPlan.stats.total, 0);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(adaptedDir, 'workflows.json'), 'utf8')).workflows, []);
+  assert.equal(pluginInput.behaviorPlan.file, 'behavior-contract.json');
+  assert.equal(pluginInput.behaviorPlan.stats.totalBehaviors, 2);
+  assert.equal(pluginInput.behaviorPlan.stats.coreBehaviors, 1);
+  assert.equal(pluginInput.behaviorPlan.stats.regenerableBehaviors, 1);
+  assert.equal(pluginInput.behaviorPlan.stats.shards, 2);
+  assert.match(pluginInput.screenPlan.screens[0].behaviorShard, /^behavior-shards\/.+\.json$/);
+  const homeBehaviorShardPath = path.join(adaptedDir, pluginInput.screenPlan.screens[0].behaviorShard);
+  const homeBehaviorShard = JSON.parse(fs.readFileSync(homeBehaviorShardPath, 'utf8'));
+  assert.equal(homeBehaviorShard.actions.length, 0);
+  assert.equal(homeBehaviorShard.intentHints.length, 1);
+  assert.equal(homeBehaviorShard.controlIntents.length, 1);
+  assert.equal(homeBehaviorShard.screenIntent.route, '/(app)/home');
+  assert.equal(homeBehaviorShard.intentHints[0].nativeIntent, 'native-feedback');
+  assert.equal(JSON.stringify(homeBehaviorShard.intentHints).includes('```source text```'), false);
   const adaptedScreenPlan = fs.readFileSync(path.resolve(adaptedDir, pluginInput.screenPlan.screens[0].planFile), 'utf8');
   assert.match(adaptedScreenPlan, /    ````pfx\n    Notify\("```source text```"\)\n    ````/);
   const nativePlan = fs.readFileSync(path.join(adaptedDir, 'native-app-plan.md'), 'utf8');
@@ -440,6 +465,21 @@ test('extractor accepts lowercase src directory on case-sensitive filesystems', 
   const strictPcfValidation = spawnSync(process.execPath, [validatorPath, '--dir', adaptedDir, '--json', '--require-pcf-approval'], { encoding: 'utf8' });
   assert.equal(strictPcfValidation.status, 0, strictPcfValidation.stderr || strictPcfValidation.stdout);
 
+  const originalHomeBehaviorShard = fs.readFileSync(homeBehaviorShardPath, 'utf8');
+  const tamperedHomeBehaviorShard = JSON.parse(originalHomeBehaviorShard);
+  tamperedHomeBehaviorShard.intentHints[0].guidance = 'Drop the source behavior.';
+  fs.writeFileSync(homeBehaviorShardPath, JSON.stringify(tamperedHomeBehaviorShard));
+  const tamperedShardValidation = spawnSync(process.execPath, [validatorPath, '--dir', adaptedDir, '--json'], { encoding: 'utf8' });
+  assert.equal(tamperedShardValidation.status, 1);
+  assert.match(JSON.parse(tamperedShardValidation.stdout).errors.join('\n'), /differs from deterministic core-and-intent projection/);
+  fs.writeFileSync(homeBehaviorShardPath, originalHomeBehaviorShard);
+  const extraShardPath = path.join(adaptedDir, 'behavior-shards', 'unexpected.json');
+  fs.writeFileSync(extraShardPath, '{}');
+  const extraShardValidation = spawnSync(process.execPath, [validatorPath, '--dir', adaptedDir, '--json'], { encoding: 'utf8' });
+  assert.equal(extraShardValidation.status, 1);
+  assert.match(JSON.parse(extraShardValidation.stdout).errors.join('\n'), /unexpected behavior shard file/);
+  fs.rmSync(extraShardPath);
+
   const firstPluginInput = fs.readFileSync(path.join(adaptedDir, 'mobile-plugin-input.json'), 'utf8');
   const firstNativePlan = fs.readFileSync(path.join(adaptedDir, 'native-app-plan.md'), 'utf8');
   const repeatedAdapt = spawnSync(process.execPath, [
@@ -456,6 +496,13 @@ test('extractor accepts lowercase src directory on case-sensitive filesystems', 
   const coveragePath = path.join(adaptedDir, 'control-intent-coverage.json');
   const originalPcfPlan = fs.readFileSync(pcfPlanPath, 'utf8');
   const originalCoverage = fs.readFileSync(coveragePath, 'utf8');
+  const behaviorContractPath = path.join(adaptedDir, 'behavior-contract.json');
+  const originalBehaviorContract = fs.readFileSync(behaviorContractPath, 'utf8');
+  const parsedOriginalBehaviorContract = JSON.parse(originalBehaviorContract);
+  const originalBehaviorShards = new Map(parsedOriginalBehaviorContract.shards.map((shard) => [
+    shard.file,
+    fs.readFileSync(path.join(adaptedDir, shard.file), 'utf8'),
+  ]));
   const pendingInput = JSON.parse(firstPluginInput);
   pendingInput.pcfPlan.stats.total = 1;
   pendingInput.pcfPlan.stats.pendingApproval = 1;
@@ -473,6 +520,18 @@ test('extractor accepts lowercase src directory on case-sensitive filesystems', 
   });
   pendingCoverage.stats.totalControls = pendingCoverage.rows.length;
   pendingCoverage.stats.pcfControls = 1;
+  const pendingBehaviorArtifacts = adapter.buildBehaviorArtifacts(
+    JSON.parse(fs.readFileSync(path.join(adaptedDir, 'behaviors.json'), 'utf8')),
+    pendingInput.screenPlan.screens,
+    parsedOriginalBehaviorContract.generatedAt,
+    pendingCoverage
+  );
+  behaviorContractLib.attachWorkflowRefs(
+    pendingBehaviorArtifacts,
+    JSON.parse(fs.readFileSync(path.join(adaptedDir, 'workflows.json'), 'utf8'))
+  );
+  pendingInput.behaviorPlan.stats = pendingBehaviorArtifacts.contract.stats;
+  pendingInput.behaviorPlan.appShard = pendingBehaviorArtifacts.contract.appShard;
   const pendingPcf = {
     $schema: 'pcf-plan-v1',
     generatedAt: '1970-01-01T00:00:00.000Z',
@@ -502,6 +561,10 @@ test('extractor accepts lowercase src directory on case-sensitive filesystems', 
   };
   fs.writeFileSync(path.join(adaptedDir, 'mobile-plugin-input.json'), JSON.stringify(pendingInput));
   fs.writeFileSync(coveragePath, JSON.stringify(pendingCoverage));
+  fs.writeFileSync(behaviorContractPath, JSON.stringify(pendingBehaviorArtifacts.contract));
+  for (const [relativePath, shard] of pendingBehaviorArtifacts.shards) {
+    fs.writeFileSync(path.join(adaptedDir, relativePath), JSON.stringify(shard));
+  }
   fs.writeFileSync(pcfPlanPath, JSON.stringify(pendingPcf));
   const pendingBaseValidation = spawnSync(process.execPath, [validatorPath, '--dir', adaptedDir, '--json'], { encoding: 'utf8' });
   assert.equal(pendingBaseValidation.status, 0, pendingBaseValidation.stderr || pendingBaseValidation.stdout);
@@ -554,6 +617,8 @@ test('extractor accepts lowercase src directory on case-sensitive filesystems', 
   fs.writeFileSync(path.join(adaptedDir, 'mobile-plugin-input.json'), firstPluginInput);
   fs.writeFileSync(coveragePath, originalCoverage);
   fs.writeFileSync(pcfPlanPath, originalPcfPlan);
+  fs.writeFileSync(behaviorContractPath, originalBehaviorContract);
+  for (const [relativePath, content] of originalBehaviorShards) fs.writeFileSync(path.join(adaptedDir, relativePath), content);
 
   const extractedImageDir = path.join(tmp, 'extracted', 'Assets', 'Images');
   fs.mkdirSync(extractedImageDir, { recursive: true });
@@ -581,9 +646,13 @@ test('extractor accepts lowercase src directory on case-sensitive filesystems', 
   assert.equal(importResult.assetsCopied, 1);
   assert.equal(importResult.assetsMissing, 1);
   assert.equal(importResult.workflowApprovalsReset, 0);
+  assert.equal(importResult.behaviorShardsCopied, 2);
   assert.equal(JSON.parse(fs.readFileSync(path.join(target, 'package.json'), 'utf8')).name, 'fresh-template');
   assert.ok(fs.existsSync(path.join(target, 'native-app-plan.md')));
   assert.ok(fs.existsSync(path.join(target, 'workflows.json')));
+  assert.ok(fs.existsSync(path.join(target, 'behavior-contract.json')));
+  assert.ok(fs.existsSync(path.join(target, pluginInput.screenPlan.screens[0].behaviorShard)));
+  assert.ok(fs.existsSync(path.join(target, pluginInput.behaviorPlan.appShard)));
   assert.equal(fs.readFileSync(path.join(target, 'assets', 'images', 'sample.png'), 'utf8'), 'portable-asset-bytes');
   const importedMemory = fs.readFileSync(path.join(target, 'memory-bank.md'), 'utf8');
   assert.match(importedMemory, /Imported from adapted brief at: adapted/);
@@ -1184,6 +1253,103 @@ test('adapter behaviors retain extractor control-flow and leaf source statement'
   assert.equal(new Set(duplicateNames.actions.map((action) => action.behaviorId)).size, 4);
 });
 
+test('behavior dependency analysis keeps load-bearing state exact and shards disconnected UI plumbing as intent', () => {
+  const formula = [
+    '=Set(var_message, txtNote.Text)',
+    'Set(var_showApproval, true)',
+    'Set(var_loading, true)',
+    'Patch(Orders, Defaults(Orders), {description: var_message, requiresapproval: var_showApproval})',
+    'Set(var_loading, false)',
+    'Notify("Saved")',
+    'Refresh(Orders)',
+    'Navigate(OrderDone)',
+    'Set(var_businessFlag, true)',
+  ].join('; ');
+  const behaviors = adapter.extractBehaviors([{
+    name: 'OrderEdit',
+    controls: [
+      {
+        name: 'SaveButton',
+        path: 'OrderEdit/SaveButton',
+        properties: { OnSelect: formula },
+        events: { OnSelect: extractor.classifyFormulaIntents(formula) },
+      },
+      {
+        name: 'Spinner',
+        path: 'OrderEdit/Spinner',
+        properties: { Visible: '=var_loading' },
+        events: {},
+      },
+      {
+        name: 'AdminPanel',
+        path: 'OrderEdit/AdminPanel',
+        properties: { Visible: '=var_isAdmin' },
+        events: {},
+      },
+      {
+        name: 'DynamicButton',
+        path: 'OrderEdit/DynamicButton',
+        properties: { OnSelect: '=Set(var_loadingBusiness, Orders.Selected.Status); Navigate(OrderDetail, ScreenTransition.None, {id: var_orderId}); Notify(var_businessMessage)' },
+        events: { OnSelect: extractor.classifyFormulaIntents('=Set(var_loadingBusiness, Orders.Selected.Status); Navigate(OrderDetail, ScreenTransition.None, {id: var_orderId}); Notify(var_businessMessage)') },
+      },
+    ],
+  }], { app: {} });
+  const screenRows = [{ name: 'OrderEdit', file: 'app/(app)/order-edit.tsx' }];
+  const artifacts = adapter.buildBehaviorArtifacts(behaviors, screenRows, '1970-01-01T00:00:00.000Z');
+  const byId = new Map(artifacts.contract.classifications.map((row) => [row.behaviorId, row]));
+  const action = (intent, name = null) => behaviors.actions.find((row) => row.intent === intent && (name == null || row.name === name));
+  const messageWriter = action('setVar', 'var_message');
+  const approvalWriter = action('setVar', 'var_showApproval');
+  const loadingWriters = behaviors.actions.filter((row) => row.intent === 'setVar' && row.name === 'var_loading');
+  const businessWriter = action('setVar', 'var_businessFlag');
+  const dynamicStateWriter = behaviors.actions.find((row) => row.control === 'DynamicButton' && row.intent === 'setVar');
+  const dynamicNavigation = behaviors.actions.find((row) => row.control === 'DynamicButton' && row.intent === 'navigate');
+  const dynamicFeedback = behaviors.actions.find((row) => row.control === 'DynamicButton' && row.intent === 'notify');
+  assert.equal(byId.get(messageWriter.behaviorId).tier, 'core');
+  assert.ok(byId.get(messageWriter.behaviorId).reasonCodes.includes('AMBIGUOUS_STATE_WRITE'));
+  assert.equal(byId.get(approvalWriter.behaviorId).tier, 'core');
+  assert.ok(byId.get(approvalWriter.behaviorId).reasonCodes.includes('DEPENDENCY_OF_CORE'));
+  assert.equal(byId.get(businessWriter.behaviorId).tier, 'core');
+  assert.ok(byId.get(businessWriter.behaviorId).reasonCodes.includes('AMBIGUOUS_STATE_WRITE'));
+  assert.equal(byId.get(dynamicStateWriter.behaviorId).tier, 'core');
+  assert.equal(byId.get(dynamicNavigation.behaviorId).tier, 'core');
+  assert.ok(byId.get(dynamicNavigation.behaviorId).reasonCodes.includes('NAVIGATION_DATA_CONTRACT'));
+  assert.equal(byId.get(dynamicFeedback.behaviorId).tier, 'core');
+  assert.ok(byId.get(dynamicFeedback.behaviorId).reasonCodes.includes('DYNAMIC_USER_OUTCOME'));
+  assert.equal(loadingWriters.every((row) => byId.get(row.behaviorId).tier === 'regenerable'), true);
+  assert.equal(['notify', 'refresh', 'navigate'].every((intent) => byId.get(action(intent).behaviorId).tier === 'regenerable'), true);
+  const spinnerVisibility = behaviors.visibility.find((row) => row.control === 'Spinner');
+  const adminVisibility = behaviors.visibility.find((row) => row.control === 'AdminPanel');
+  assert.equal(byId.get(spinnerVisibility.behaviorId).tier, 'regenerable');
+  assert.equal(byId.get(adminVisibility.behaviorId).tier, 'core');
+
+  assert.equal(artifacts.contract.stats.totalBehaviors, artifacts.contract.stats.coreBehaviors + artifacts.contract.stats.regenerableBehaviors);
+  assert.equal(artifacts.contract.stats.regenerableBehaviors, artifacts.contract.stats.intentHints);
+  assert.equal(artifacts.contract.shards.length, 2); // App + OrderEdit
+  const orderShardPath = artifacts.contract.shards.find((row) => row.screen === 'OrderEdit').file;
+  const orderShard = artifacts.shards.get(orderShardPath);
+  assert.equal(orderShard.actions.some((row) => row.behaviorId === messageWriter.behaviorId), true);
+  assert.equal(orderShard.actions.some((row) => Object.hasOwn(row, 'sourceFormula')), false);
+  assert.equal(orderShard.actions.find((row) => row.behaviorId === messageWriter.behaviorId).sourceStatement, 'Set(var_message, txtNote.Text)');
+  assert.equal(orderShard.actions.some((row) => row.behaviorId === loadingWriters[0].behaviorId), false);
+  assert.equal(orderShard.intentHints.some((hint) => hint.sourceBehaviorIds.includes(loadingWriters[0].behaviorId)), true);
+  assert.equal(orderShard.intentHints.some((hint) => hint.nativeIntent === 'native-visibility-state'), true);
+  assert.equal(JSON.stringify(orderShard.intentHints).includes('sourceStatement'), false);
+  assert.equal(JSON.stringify(orderShard.intentHints).includes('sourceFormula'), false);
+  assert.equal(JSON.stringify(orderShard.intentHints).includes('"formula"'), false);
+  assert.equal(artifacts.shards.get(artifacts.contract.appShard).screen, 'App');
+
+  const workflow = adapter.buildWorkflowPlan(behaviors, screenRows, artifacts.contract).workflows[0];
+  const workflowPlan = { workflows: [workflow] };
+  behaviorContractLib.attachWorkflowRefs(artifacts, workflowPlan);
+  assert.equal(artifacts.shards.get(orderShardPath).workflowRefs.length, 1);
+  assert.equal(artifacts.shards.get(orderShardPath).workflowRefs[0].workflowId, workflow.workflowId);
+  assert.deepEqual(workflow.source.coreBehaviorIds, behaviors.actions.filter((row) => row.control === 'SaveButton' && byId.get(row.behaviorId).tier === 'core').map((row) => row.behaviorId));
+  assert.deepEqual(workflow.source.regenerableBehaviorIds, behaviors.actions.filter((row) => row.control === 'SaveButton' && byId.get(row.behaviorId).tier === 'regenerable').map((row) => row.behaviorId));
+  assert.deepEqual(workflow.proposal.steps.flatMap((step) => step.behaviorIds), workflow.source.coreBehaviorIds);
+  assert.equal(workflow.proposal.intentHintIds.length, workflow.source.regenerableBehaviorIds.length);
+});
+
 test('adapter decomposes pathological handlers into stable named workflow steps and only critical questions', () => {
   const formula = [
     '=Confirm("Submit order?")',
@@ -1367,6 +1533,55 @@ test('behavior coverage resolves kebab-case routes and requires critical actions
   assert.match(fail.stdout, /critical behavior accounting: FAIL/);
 });
 
+test('behavior coverage accounts regenerable plumbing only through its real native intent marker', (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'behavior-intent-coverage-test-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const screenDir = path.join(tmp, 'app', '(app)');
+  fs.mkdirSync(screenDir, { recursive: true });
+  const behaviors = {
+    $schema: 'behaviors-v1',
+    actions: [
+      { behaviorId: 'b-1111111111111111', screen: 'OrderEdit', control: 'Save', controlPath: 'OrderEdit/Save', event: 'OnSelect', actionIndex: 0, intent: 'patch', source: 'Orders', sourceStatement: 'Patch(Orders, Defaults(Orders), {name: "A"})' },
+      { behaviorId: 'b-2222222222222222', screen: 'OrderEdit', control: 'Save', controlPath: 'OrderEdit/Save', event: 'OnSelect', actionIndex: 1, intent: 'notify', type: 'NotificationType.Success', sourceStatement: 'Notify("Saved")' },
+    ],
+    visibility: [], validations: [], derivations: [], unmatchedFormulas: [],
+  };
+  const artifacts = adapter.buildBehaviorArtifacts(behaviors, [{ name: 'OrderEdit', file: 'app/(app)/order-edit.tsx' }]);
+  const hint = artifacts.contract.intentHints[0];
+  fs.writeFileSync(path.join(tmp, 'behaviors.json'), JSON.stringify(behaviors));
+  fs.writeFileSync(path.join(tmp, 'behavior-contract.json'), JSON.stringify(artifacts.contract));
+  fs.writeFileSync(path.join(tmp, 'mobile-plugin-input.json'), JSON.stringify({
+    behaviorPlan: { file: 'behavior-contract.json' },
+    screenPlan: { screens: [{ name: 'OrderEdit', file: 'app/(app)/order-edit.tsx' }] },
+  }));
+  const screenPath = path.join(screenDir, 'order-edit.tsx');
+  fs.writeFileSync(screenPath, [
+    '// source-behavior: b-1111111111111111',
+    'async function save(){ await OrdersService.create({ name: "A" }); }',
+    `// source-intent: ${hint.hintId}`,
+    'function onSaved(){ Toast.show("Saved"); }',
+    'export default function OrderEdit(){ return <Button onPress={save}>Save</Button>; }',
+    '',
+  ].join('\n'));
+  const coverageScript = path.resolve(__dirname, '..', '..', 'shared', 'samples', 'scripts', 'check-behavior-coverage.js');
+  const pass = spawnSync(process.execPath, [coverageScript, '--min', '100'], { cwd: tmp, encoding: 'utf8' });
+  assert.equal(pass.status, 0, pass.stderr || pass.stdout);
+  assert.match(pass.stdout, /regenerable intent accounting: PASS/);
+  assert.match(pass.stdout, /native intent: 1/);
+
+  fs.writeFileSync(screenPath, [
+    '// source-behavior: b-1111111111111111',
+    'async function save(){ await OrdersService.create({ name: "A" }); }',
+    `// source-intent: ${hint.hintId}`,
+    '// TODO: add native feedback later',
+    'export default function OrderEdit(){ return <Button onPress={save}>Save</Button>; }',
+    '',
+  ].join('\n'));
+  const fail = spawnSync(process.execPath, [coverageScript, '--min', '50'], { cwd: tmp, encoding: 'utf8' });
+  assert.equal(fail.status, 1);
+  assert.match(fail.stdout, /regenerable intent accounting: FAIL/);
+});
+
 test('workflow coverage requires named steps, exact markers, and a real screen invocation', (t) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-coverage-test-'));
   t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
@@ -1399,6 +1614,7 @@ test('workflow coverage requires named steps, exact markers, and a real screen i
           { stepId: 'wfs-1111111111111111', targetFunction: 'step01PersistData', behaviorIds: ['b-1111111111111111'] },
           { stepId: 'wfs-2222222222222222', targetFunction: 'step02CompleteWorkflow', behaviorIds: ['b-2222222222222222'] },
         ],
+        intentHintIds: ['ih-1111111111111111'],
       },
       approval: { status: 'approved' },
     }],
@@ -1429,6 +1645,8 @@ test('workflow coverage requires named steps, exact markers, and a real screen i
     '  const submit = async () => {',
     '    // source-workflow-call: wf-1111111111111111',
     '    await runConfirmWorkflow();',
+    '    // source-intent: ih-1111111111111111',
+    '    Toast.show("Order confirmed");',
     '  };',
     '  return <Button onPress={submit}>Confirm</Button>;',
     '}',

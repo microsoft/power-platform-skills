@@ -179,8 +179,9 @@ for (const workflow of workflows) {
     if (frameKinds.has('concurrent') && !/\bPromise\.all\s*\(/.test(moduleText)) result.issues.push('source Concurrent frames lack Promise.all');
   }
 
+  let callSiteText = '';
   if (callSiteFile && fs.existsSync(callSiteFile)) {
-    const callSiteText = fs.readFileSync(callSiteFile, 'utf8');
+    callSiteText = fs.readFileSync(callSiteFile, 'utf8');
     const callMarker = exactMarker(callSiteText, 'source-workflow-call', id);
     if (!callMarker) result.issues.push('call site lacks exact source-workflow-call marker');
     else {
@@ -189,6 +190,11 @@ for (const workflow of workflows) {
         result.issues.push(`call marker is not followed by ${target.exportName}(...)`);
       }
       if (/TODO|placeholder|not[ -]implemented/i.test(after.slice(0, 500))) result.issues.push('call site marker is attached to a TODO/placeholder');
+    }
+  }
+  for (const hintId of Array.isArray(workflow.proposal?.intentHintIds) ? workflow.proposal.intentHintIds : []) {
+    if (!exactMarker(moduleText, 'source-intent', hintId) && !exactMarker(callSiteText, 'source-intent', hintId)) {
+      result.issues.push(`workflow intent ${hintId} lacks an exact source-intent marker in its module or call site`);
     }
   }
 

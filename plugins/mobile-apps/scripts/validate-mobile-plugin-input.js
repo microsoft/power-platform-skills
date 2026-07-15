@@ -18,6 +18,7 @@ const {
   WORKFLOW_UX_MODES,
   deriveWorkflowStats,
 } = require('./lib/workflow-plan.js');
+const { attachWorkflowRefs, buildBehaviorArtifacts } = require('./lib/behavior-contract.js');
 const MAX_PACKAGE_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_MARKDOWN_ENTRIES = 10000;
 const MAX_MARKDOWN_DEPTH = 8;
@@ -59,6 +60,28 @@ function readJson(file, errors, label) {
   } catch (error) {
     errors.push(`${label} is invalid JSON: ${error.message}`);
     return null;
+  }
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function scanIntentHintForRawSource(value, at, errors) {
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => scanIntentHintForRawSource(entry, `${at}[${index}]`, errors));
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  for (const [key, child] of Object.entries(value)) {
+    if (/^(?:sourceStatement|sourceFormula|formula|expression|raw|args|fields|context|baseRecord|from|value)$/i.test(key)) {
+      errors.push(`regenerable intent hint must not contain raw Power Fx payload: ${at}.${key}`);
+    }
+    scanIntentHintForRawSource(child, `${at}.${key}`, errors);
   }
 }
 
@@ -199,6 +222,7 @@ function main() {
   const behaviors = readJson(path.join(root, 'behaviors.json'), errors, 'behaviors.json');
   const coverage = readJson(path.join(root, 'control-intent-coverage.json'), errors, 'control-intent-coverage.json');
   const serverSideAssets = readJson(path.join(root, 'server-side-assets.json'), errors, 'server-side-assets.json');
+  let behaviorContract = null;
   let pcfPlan = null;
   let workflowPlan = null;
 
@@ -226,6 +250,8 @@ function main() {
     if (pcfPlanFile) pcfPlan = readJson(pcfPlanFile, errors, 'pcf-plan.json');
     const workflowPlanFile = safePackagePath(root, input.workflowPlan?.file, errors, 'workflowPlan.file');
     if (workflowPlanFile) workflowPlan = readJson(workflowPlanFile, errors, 'workflows.json');
+    const behaviorContractFile = safePackagePath(root, input.behaviorPlan?.file, errors, 'behaviorPlan.file');
+    if (behaviorContractFile) behaviorContract = readJson(behaviorContractFile, errors, 'behavior-contract.json');
 
     const screens = input.screenPlan?.screens;
     if (!Array.isArray(screens)) errors.push('screenPlan.screens must be an array');
@@ -340,6 +366,65 @@ function main() {
     scanSecrets(behaviors, 'behaviors', errors);
   }
 
+  if (behaviorContract && behaviors && input) {
+    if (behaviorContract.$schema !== 'behavior-contract-v1') errors.push(`unsupported behavior-contract.json schema: ${behaviorContract.$schema || 'missing'}`);
+    if (input.behaviorPlan?.schema !== 'behavior-contract-v1') errors.push('mobile-plugin-input behaviorPlan.schema must be behavior-contract-v1');
+    if (input.behaviorPlan?.file !== 'behavior-contract.json') errors.push('mobile-plugin-input behaviorPlan.file must be behavior-contract.json');
+    if (!behaviorContract.generatedAt || !Number.isFinite(Date.parse(behaviorContract.generatedAt))) {
+      errors.push('behavior-contract.generatedAt must be an ISO timestamp');
+    }
+    const expectedArtifacts = buildBehaviorArtifacts(
+      behaviors,
+      input.screenPlan?.screens || [],
+      behaviorContract.generatedAt || '1970-01-01T00:00:00.000Z',
+      coverage
+    );
+    attachWorkflowRefs(expectedArtifacts, workflowPlan);
+    if (canonicalJson(behaviorContract) !== canonicalJson(expectedArtifacts.contract)) {
+      errors.push('behavior-contract.json differs from deterministic dependency analysis of behaviors.json');
+    }
+    if (canonicalJson(input.behaviorPlan?.stats) !== canonicalJson(expectedArtifacts.contract.stats)) {
+      errors.push('mobile-plugin-input behaviorPlan.stats differs from behavior-contract.json');
+    }
+    if (input.behaviorPlan?.appShard !== expectedArtifacts.contract.appShard) {
+      errors.push(`mobile-plugin-input behaviorPlan.appShard mismatch: expected ${expectedArtifacts.contract.appShard}`);
+    }
+
+    const expectedShardFiles = new Set(expectedArtifacts.shards.keys());
+    const shardRoot = path.join(root, 'behavior-shards');
+    if (!fs.existsSync(shardRoot) || fs.lstatSync(shardRoot).isSymbolicLink() || !fs.lstatSync(shardRoot).isDirectory()) {
+      errors.push('behavior-shards must be a real directory');
+    } else {
+      for (const entry of fs.readdirSync(shardRoot, { withFileTypes: true })) {
+        const relative = `behavior-shards/${entry.name}`;
+        if (entry.isSymbolicLink() || !entry.isFile() || !entry.name.endsWith('.json')) {
+          errors.push(`unexpected behavior shard entry: ${relative}`);
+        } else if (!expectedShardFiles.has(relative)) {
+          errors.push(`unexpected behavior shard file: ${relative}`);
+        }
+      }
+    }
+    for (const [relativePath, expectedShard] of expectedArtifacts.shards) {
+      const shardPath = safePackagePath(root, relativePath, errors, `behavior shard ${relativePath}`);
+      const actualShard = shardPath ? readJson(shardPath, errors, relativePath) : null;
+      if (actualShard && canonicalJson(actualShard) !== canonicalJson(expectedShard)) {
+        errors.push(`${relativePath} differs from deterministic core-and-intent projection`);
+      }
+      if (actualShard) {
+        scanIntentHintForRawSource(actualShard.intentHints || [], `${relativePath}.intentHints`, errors);
+        scanSecrets(actualShard, relativePath, errors);
+      }
+    }
+    for (const screen of input.screenPlan?.screens || []) {
+      const expected = expectedArtifacts.contract.shards.find((shard) => shard.screen === screen.name)?.file;
+      if (screen.behaviorShard !== expected) errors.push(`screen ${screen.name} behaviorShard mismatch: expected ${expected}`);
+    }
+    scanIntentHintForRawSource(behaviorContract.intentHints || [], 'behavior-contract.intentHints', errors);
+    scanSecrets(behaviorContract, 'behavior-contract', errors);
+  } else if (input && !behaviorContract) {
+    errors.push('behavior-contract.json is required');
+  }
+
   if (workflowPlan) {
     const workflows = Array.isArray(workflowPlan.workflows) ? workflowPlan.workflows : [];
     if (workflowPlan.$schema !== 'workflow-plan-v1') errors.push(`unsupported workflows.json schema: ${workflowPlan.$schema || 'missing'}`);
@@ -392,6 +477,11 @@ function main() {
     const uxModes = new Set(WORKFLOW_UX_MODES);
     const requirementIds = new Set((input?.dataModelPlan?.connectionRequirements || []).map((row) => row.id).filter(Boolean));
     const screenFiles = new Map((input?.screenPlan?.screens || []).map((screen) => [screen.name, screen.file]));
+    const behaviorClassificationById = new Map((behaviorContract?.classifications || []).map((row) => [row.behaviorId, row]));
+    const behaviorHintBySourceId = new Map();
+    for (const hint of behaviorContract?.intentHints || []) {
+      for (const behaviorId of hint.sourceBehaviorIds || []) behaviorHintBySourceId.set(behaviorId, hint);
+    }
     const workflowIds = new Set();
     const handlerKeys = new Set();
     const modulePaths = new Set();
@@ -416,6 +506,18 @@ function main() {
       }
       const sourceBehaviorIds = Array.isArray(source.behaviorIds) ? source.behaviorIds : [];
       if (sourceBehaviorIds.length === 0) errors.push(`${at}.source.behaviorIds must not be empty`);
+      const expectedCoreBehaviorIds = sourceBehaviorIds.filter((behaviorId) => behaviorClassificationById.get(behaviorId)?.tier === 'core');
+      const expectedRegenerableBehaviorIds = sourceBehaviorIds.filter((behaviorId) => behaviorClassificationById.get(behaviorId)?.tier === 'regenerable');
+      if (canonicalJson(source.coreBehaviorIds || []) !== canonicalJson(expectedCoreBehaviorIds)) {
+        errors.push(`${at}.source.coreBehaviorIds differs from behavior-contract classification`);
+      }
+      if (canonicalJson(source.regenerableBehaviorIds || []) !== canonicalJson(expectedRegenerableBehaviorIds)) {
+        errors.push(`${at}.source.regenerableBehaviorIds differs from behavior-contract classification`);
+      }
+      for (const behaviorId of sourceBehaviorIds) {
+        if (mappedBehaviorIds.has(behaviorId)) errors.push(`behavior is mapped by more than one workflow: ${behaviorId}`);
+        else mappedBehaviorIds.add(behaviorId);
+      }
       for (const behaviorId of sourceBehaviorIds) {
         const behavior = behaviorById.get(behaviorId);
         if (!behavior || behavior.group !== 'actions') {
@@ -493,7 +595,7 @@ function main() {
       if (expectedCallSite && target.callSiteFile !== expectedCallSite) errors.push(`${at}.proposal.target.callSiteFile must be ${expectedCallSite}`);
 
       const steps = Array.isArray(proposal.steps) ? proposal.steps : [];
-      if (steps.length < 2) errors.push(`${at}.proposal.steps must contain at least two named steps`);
+      if (steps.length < 1) errors.push(`${at}.proposal.steps must contain at least one named core step`);
       const stepIds = new Set();
       const stepFunctions = new Set();
       const stepBehaviorIds = [];
@@ -522,25 +624,29 @@ function main() {
         if (JSON.stringify(step?.controlFlowKinds || []) !== JSON.stringify(expectedKinds)) errors.push(`${stepAt}.controlFlowKinds does not match controlFlow`);
         if (JSON.stringify(step?.controlFlowIds || []) !== JSON.stringify(expectedIds)) errors.push(`${stepAt}.controlFlowIds does not match controlFlow`);
         for (const behaviorId of ids) {
-          if (!sourceBehaviorIds.includes(behaviorId)) errors.push(`${stepAt} references behavior outside this handler: ${behaviorId}`);
+          if (!expectedCoreBehaviorIds.includes(behaviorId)) errors.push(`${stepAt} references non-core or out-of-handler behavior: ${behaviorId}`);
           const behavior = behaviorById.get(behaviorId);
           if (behavior && JSON.stringify(behavior.controlFlow || []) !== JSON.stringify(stepControlFlow)) {
             errors.push(`${stepAt}.controlFlow differs from behavior ${behaviorId}`);
           }
           if (stepBehaviorIds.includes(behaviorId)) errors.push(`${at} maps behavior more than once: ${behaviorId}`);
           stepBehaviorIds.push(behaviorId);
-          if (mappedBehaviorIds.has(behaviorId)) errors.push(`behavior is mapped by more than one workflow: ${behaviorId}`);
-          else mappedBehaviorIds.add(behaviorId);
         }
       }
-      if (stepBehaviorIds.length !== sourceBehaviorIds.length
-          || sourceBehaviorIds.some((behaviorId) => !stepBehaviorIds.includes(behaviorId))) {
-        errors.push(`${at} steps must account for every source behavior exactly once`);
+      if (stepBehaviorIds.length !== expectedCoreBehaviorIds.length
+          || expectedCoreBehaviorIds.some((behaviorId) => !stepBehaviorIds.includes(behaviorId))) {
+        errors.push(`${at} steps must account for every exact core behavior exactly once`);
       }
-      const sourceOrder = sourceBehaviorIds.map((behaviorId) => behaviorOrder.get(behaviorId));
+      const sourceOrder = expectedCoreBehaviorIds.map((behaviorId) => behaviorOrder.get(behaviorId));
       const stepOrder = stepBehaviorIds.map((behaviorId) => behaviorOrder.get(behaviorId));
       if (sourceOrder.length === stepOrder.length && sourceOrder.some((value, index) => value !== stepOrder[index])) {
         errors.push(`${at} step behavior order differs from the source behavior ledger`);
+      }
+      const expectedIntentHintIds = expectedRegenerableBehaviorIds
+        .map((behaviorId) => behaviorHintBySourceId.get(behaviorId)?.hintId)
+        .filter(Boolean);
+      if (canonicalJson(proposal.intentHintIds || []) !== canonicalJson(expectedIntentHintIds)) {
+        errors.push(`${at}.proposal.intentHintIds differs from behavior-contract mapping`);
       }
 
       const decisions = Array.isArray(workflow?.requiredDecisions) ? workflow.requiredDecisions : [];
@@ -777,6 +883,9 @@ function main() {
     tables: input?.dataModelPlan?.dataverseTables?.length || 0,
     connectors: input?.dataModelPlan?.connectionRequirements?.length || 0,
     behaviors: behaviors?.actions?.length || 0,
+    totalBehaviors: behaviorContract?.stats?.totalBehaviors || 0,
+    coreBehaviors: behaviorContract?.stats?.coreBehaviors || 0,
+    regenerableBehaviors: behaviorContract?.stats?.regenerableBehaviors || 0,
     controls: coverage?.rows?.length || 0,
     pcfs: pcfPlan?.controls?.length || 0,
     pcfDiscoveryComplete: pcfPlan?.discovery?.complete !== false,
@@ -789,7 +898,7 @@ function main() {
   if (args.json) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   else {
     process.stdout.write(`Migration package: ${result.ok ? 'VALID' : 'INVALID'}\n`);
-    process.stdout.write(`App: ${result.app || '(unknown)'} | screens ${result.screens} | tables ${result.tables} | connectors ${result.connectors} | behaviors ${result.behaviors} | controls ${result.controls} | PCFs ${result.pcfs} | workflows ${result.workflows}\n`);
+    process.stdout.write(`App: ${result.app || '(unknown)'} | screens ${result.screens} | tables ${result.tables} | connectors ${result.connectors} | behaviors ${result.totalBehaviors} (${result.coreBehaviors} core / ${result.regenerableBehaviors} intent) | controls ${result.controls} | PCFs ${result.pcfs} | workflows ${result.workflows}\n`);
     warnings.forEach((warning) => process.stdout.write(`WARN: ${warning}\n`));
     errors.forEach((error) => process.stderr.write(`ERROR: ${error}\n`));
   }

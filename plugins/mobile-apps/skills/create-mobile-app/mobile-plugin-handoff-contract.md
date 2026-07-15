@@ -23,6 +23,8 @@ Canvas source (`Src/*.pa.yaml`, optional supported sidecars)
       screens/*.plan.md
       state/app-state.md
       behaviors.json
+      behavior-contract.json
+      behavior-shards/*.json
       workflows.json
       control-intent-coverage.json
       pcf-plan.json
@@ -40,11 +42,13 @@ All artifacts remain local. Do not include credentials, access tokens, customer 
 | `.mobile-app-modernizer-output` | Exact adapter ownership marker; proves the package was emitted by the deterministic adapter | Safe importer ownership guard |
 | `native-app-plan.md` | Approved-plan baseline with data, capabilities, connectors, navigation, and screen specs | Four one-tap import gates, data/native/connector/screen phases |
 | `mobile-plugin-input.json` | Machine-readable schema v3 payload | Orchestrator and specialized skills |
-| `screens/<Name>.plan.md` | Source workflow, control evidence, upgrade hints | One screen builder |
+| `screens/<Name>.plan.md` | Lossless source workflow/control/formula provenance and upgrade evidence | Human review/debug audit only; never model-facing during generation |
 | `state/app-state.md` | Source variable/collection readers, writers, and recommended native placement | Bootstrap and builders |
-| `behaviors.json` | Normalized actions, visibility, validation, derivations, unmatched formulas | Bootstrap, builders, coverage gate |
+| `behaviors.json` | Lossless normalized global ledger: actions, visibility, validation, derivations, unmatched formulas | Deterministic validation and final coverage only; never builders |
+| `behavior-contract.json` | Conservative dependency closure, core/regenerable disposition, raw-free native intent mapping, shard index | Validator, report, coverage gate, orchestrator routing |
+| `behavior-shards/<Screen>.json` | One screen's exact core behavior, structured native intent hints, and unmatched formulas | One screen builder; `App` shard feeds bootstrap |
 | `workflows.json` | Pathological event detection, ordered named-step proposals, exception-only questions, user approval | Gate 2c, shared workflow generation, builders, workflow coverage gate |
-| `control-intent-coverage.json` | One semantic row per source control | Builder accounting |
+| `control-intent-coverage.json` | Global one-row-per-control semantic ledger | Deterministic validation; per-screen rows are copied into builder shards |
 | `pcf-plan.json` | One proposed and explicitly approved disposition per PCF | Gate 2b, native/connector routing, builders, PCF coverage gate |
 | `server-side-assets.json` | Dataverse calculated/rollup/managed column rules | Data/write guard |
 | `migration-checklist.md` | Manual blockers/follow-ups | Final summary |
@@ -77,6 +81,7 @@ Top-level shape:
   },
   "bootstrap": {},
   "forms": [],
+  "behaviorPlan": {},
   "dataModelPlan": {},
   "screenPlan": {},
   "nativePlan": {},
@@ -187,14 +192,43 @@ The complete translation policy is in [canvas-to-native-mapping.md](../../shared
 - `unmatchedFormulas[]`
 - accounting statistics including dropped event actions
 
+It remains the lossless global ledger. It is copied into the target for deterministic checks but is never passed to a screen builder or read by the model-driven bootstrap/workflow materialization phases.
+
+`behavior-contract.json` deterministically derives one disposition for every stable behavior ID:
+
+- `core` — exact behavior required in a builder shard
+- `regenerable` — disconnected Canvas UI plumbing represented by a structured native intent hint
+
+Core selection is conservative:
+
+1. Seed core with every validation, visibility/authorization, derivation/default/items rule, unmatched/unknown operation, Dataverse mutation, connector/flow/AI call, persistent local operation, and device/external effect.
+2. Extract state writes and reads from normalized leaf statements and their control-flow frames.
+3. Walk dependencies backward from every core sink and promote every upstream writer into core.
+4. Promote writers consumed by unmatched formulas.
+5. Allow regeneration only for explicitly allowlisted UI operations and transient state names after closure proves they do not reach a core sink.
+6. Default ambiguity, business-looking state, unknown intents, and unsafe-to-classify operations to core.
+
+Every classification row records state reads/writes, dependency behavior IDs, core consumers, reason codes, shard path, and optional intent-hint ID. The contract also hashes `behaviors.json`; package validation recomputes the complete contract and every shard from the global ledger and rejects any drift.
+
+Each `behavior-shards/<Screen>.json` contains:
+
+- compact `screenIntent` (route, archetype, purpose, data sources, params, navigation)
+- semantic `controlIntents[]` (`mustPreserve`, source event/data-binding names, layout role, native suggestions) with no verbatim formulas
+- compact `workflowRefs[]` (workflow ID, core/hint ownership, target import/export/call site) so builders never receive global `workflows.json`
+- exact core `actions[]`, `visibility[]`, `validations[]`, and `derivations[]`
+- exact `unmatchedFormulas[]` for review
+- raw-free `intentHints[]` with stable `hintId`, native intent, guidance, compact control-flow role, structured target/state/query/form data, and nearest core anchors
+
+The shard intentionally omits source formulas/statements for regenerable entries. Exact core action leaves retain `sourceStatement`, normalized payload, order, and control flow but omit the repeated full-handler `sourceFormula`; that lossless formula remains in the global ledger. Builders implement each exact core entry with `// source-behavior: <behaviorId>` and each native equivalent with `// source-intent: <hintId>`. The only zero-runtime hint is `discard-no-side-effect`, which records an intentionally discarded source expression that had no effect. Verbose screen/control formula files plus global behaviors, workflows, and control coverage remain audit/debug artifacts and are never passed to builders.
+
 Rules:
 
 - `droppedEventActionCount` must be zero before import.
 - Nested branch/loop/error/concurrent frames remain nested after translation.
 - Each real implementation carries `// source-behavior: <behaviorId>` immediately beside its owning handler/rule/expression. Markers beside TODOs, placeholders, logs, or unrelated code are invalid.
 - An approved unrepresentable behavior carries `// source-unsupported: <behaviorId> — <reason>` beside clear user-facing unavailable UX and remains a reported concern. Marker-only/TODO suppression is invalid.
-- Data mutation, navigation, validation, authorization/visibility, connector, and flow behavior must be implemented or explicitly unsupported.
-- Final generated coverage must be at least 80% per screen and overall; critical behavior has a 100% accounting requirement even when some entries remain explicit unsupported items.
+- Data mutation, validation, authorization/visibility, connector, and flow behavior remain exact core and must be implemented or explicitly unsupported. Navigation/feedback/refresh/form/reset plumbing may use intent markers only when the contract proves it is disconnected from core state.
+- Final generated coverage reads the global ledger plus contract: at least 80% per screen and overall, 100% critical core accounting, and 100% regenerable intent accounting. No source behavior ID may disappear merely because builders did not receive its raw formula.
 
 ## Pathological workflow contract
 
@@ -203,9 +237,9 @@ Rules:
 Each row carries:
 
 - stable `workflowId` plus source screen/control/path/event
-- the exact ordered source `behaviorIds[]`
+- the exact ordered global `behaviorIds[]`, partitioned into `coreBehaviorIds[]` and `regenerableBehaviorIds[]`
 - deterministic detection reasons and metrics
-- an ordered `proposal.steps[]` list with stable `stepId`, named target function, phase, behavior IDs, and preserved control-flow IDs/kinds
+- an ordered `proposal.steps[]` list containing exact core behavior only, plus `proposal.intentHintIds[]` for regenerated UI outcomes
 - an orchestrator-owned target module/export/call-site path
 - `requiredDecisions[]` only for correctness-critical ambiguity
 - a separate user-owned `approval`
@@ -219,11 +253,12 @@ Safe import resets every workflow approval and decision answer. Gate 2c records 
 
 Implementation ownership is split deliberately:
 
-- The orchestrator writes each approved module under `src/features/<domain>/workflows/` before screen builders run.
+- The orchestrator reads only the owning behavior shard and writes each approved module under `src/features/<domain>/workflows/` before screen builders run.
 - Each named step has `// source-workflow-step: <stepId>` and its exact `source-behavior` markers beside real operations.
 - Every full `step.controlFlow[]` frame has an exact `source-control-flow` marker beside its native branch/loop/error/concurrency structure.
 - The exported orchestrator has `// source-workflow: <workflowId>` and invokes named steps according to preserved branch/loop/error/concurrency semantics.
 - The owning screen or bootstrap invokes the export under `// source-workflow-call: <workflowId>` and renders typed progress/result/retry UX.
+- Every workflow-owned regenerated outcome has a real `// source-intent: <hintId>` implementation at the module or call site.
 - Screen builders never inline, duplicate, or rewrite workflow-owned operations.
 
 `check-workflow-coverage.js --strict` verifies approval readiness, safe target paths, module/export/call-site existence, exact markers, named step functions, behavior accounting, and orchestrator invocation order. `check-behavior-coverage.js` follows local `@/` imports so behavior markers implemented in approved workflow modules remain part of screen coverage.

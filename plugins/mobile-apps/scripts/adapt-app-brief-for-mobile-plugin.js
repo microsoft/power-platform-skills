@@ -21,6 +21,8 @@
  *   migration-checklist.md          ← execution checklist
  *   components.md                   ← reused custom component catalog
  *   state/app-state.md              ← state scope report for `var_*` and `col_*` (writers, readers, placement)
+ *   behavior-contract.json          ← global core/regenerable dependency ledger + shard index
+ *   behavior-shards/<Screen>.json   ← exact core behavior + structured native intent hints for one builder
  *   workflows.json                  ← approved plan-time decomposition for pathological event handlers
  *   control-intent-coverage.json    ← Canvas control intent + must-preserve behavior/data/layout contract
  *   screens/<Name>.plan.md          ← per-screen full spec (summary + tree)
@@ -69,6 +71,7 @@ const {
   deriveWorkflowStats,
   emptyWorkflowApproval,
 } = require('./lib/workflow-plan.js');
+const { attachWorkflowRefs, buildBehaviorArtifacts } = require('./lib/behavior-contract.js');
 const MAX_INPUT_JSON_BYTES = 64 * 1024 * 1024;
 const DETERMINISTIC_EPOCH = '1970-01-01T00:00:00.000Z';
 let GENERATION_TIMESTAMP = DETERMINISTIC_EPOCH;
@@ -2435,9 +2438,15 @@ function buildWorkflowDecisions(workflowId, actions, unmatched, metrics) {
   return decisions;
 }
 
-function buildWorkflowPlan(behaviors, screenRows) {
+function buildWorkflowPlan(behaviors, screenRows, behaviorContract = null) {
   const handlers = new Map();
   const screenFiles = new Map(toArray(screenRows).map((screen) => [screen.name, screen.file]));
+  const classificationById = new Map(toArray(behaviorContract && behaviorContract.classifications)
+    .map((row) => [row.behaviorId, row]));
+  const hintByBehaviorId = new Map();
+  for (const hint of toArray(behaviorContract && behaviorContract.intentHints)) {
+    for (const behaviorId of toArray(hint.sourceBehaviorIds)) hintByBehaviorId.set(behaviorId, hint);
+  }
   const ensureHandler = (entry) => {
     const key = workflowHandlerKey(entry);
     if (!handlers.has(key)) {
@@ -2471,6 +2480,15 @@ function buildWorkflowPlan(behaviors, screenRows) {
       handlersSkippedUnclassified += 1;
       continue;
     }
+    const coreActions = behaviorContract
+      ? handler.actions.filter((action) => classificationById.get(action.behaviorId)?.tier === 'core')
+      : handler.actions;
+    // A complex handler made entirely of disconnected presentation plumbing
+    // is represented by shard intent hints; it does not need a shared business
+    // workflow module or a user approval gate.
+    if (coreActions.length === 0) continue;
+    const regenerableActions = handler.actions.filter((action) =>
+      classificationById.get(action.behaviorId)?.tier === 'regenerable');
     const formulaLength = String(handler.sourceFormula || '').length;
     const phases = unique(handler.actions.map((action) => workflowPhase(action.intent)));
     const mutationActions = handler.actions.filter((action) => WORKFLOW_MUTATION_INTENTS.has(action.intent));
@@ -2509,7 +2527,7 @@ function buildWorkflowPlan(behaviors, screenRows) {
     if (reasons.length === 0) continue;
 
     const workflowId = stableContractId('wf', [handler.screen, handler.controlPath, handler.event]);
-    const steps = buildWorkflowSteps(workflowId, handler.actions);
+    const steps = buildWorkflowSteps(workflowId, coreActions);
     const suffix = workflowId.slice(-6);
     const screenStem = routeStem(handler.screen === 'App' ? 'app-bootstrap' : handler.screen);
     const controlStem = routeStem(handler.control || handler.controlPath || 'screen');
@@ -2538,6 +2556,8 @@ function buildWorkflowPlan(behaviors, screenRows) {
         controlPath: handler.controlPath,
         event: handler.event,
         behaviorIds: handler.actions.map((action) => action.behaviorId),
+        coreBehaviorIds: coreActions.map((action) => action.behaviorId),
+        regenerableBehaviorIds: regenerableActions.map((action) => action.behaviorId),
         unmatchedCount: handler.unmatched.length,
       },
       detection: {
@@ -2552,6 +2572,7 @@ function buildWorkflowPlan(behaviors, screenRows) {
         uxMode: 'single-action-with-progress',
         target,
         steps,
+        intentHintIds: regenerableActions.map((action) => hintByBehaviorId.get(action.behaviorId)?.hintId).filter(Boolean),
         preserves: [
           'source behavior IDs and source statement order',
           'branch, loop, error-boundary, With-scope, and Concurrent frames from behaviors.json',
@@ -4240,6 +4261,7 @@ function buildWorkflowPlanSectionLines(workflowPlan) {
     lines.push('');
     lines.push(`- **Native target:** \`${workflow.proposal.target.exportName}\` in \`${workflow.proposal.target.module}\`; call site \`${workflow.proposal.target.callSiteFile || 'unresolved'}\`.`);
     lines.push(`- **Default UX:** \`${workflow.proposal.uxMode}\`; code decomposition does not automatically create a user-facing wizard.`);
+    lines.push(`- **Behavior feed:** ${toArray(workflow.source.coreBehaviorIds).length} exact core behavior(s); ${toArray(workflow.proposal.intentHintIds).length} regenerable native intent hint(s). The global ledger retains all ${toArray(workflow.source.behaviorIds).length} source behavior IDs.`);
     lines.push('- **Ordered named steps:**');
     for (const step of workflow.proposal.steps) {
       lines.push(`  ${step.sequence}. \`${step.targetFunction}\` — ${step.title}; behaviors: ${step.behaviorIds.map((id) => `\`${id}\``).join(', ')}; frames: ${step.controlFlowKinds.join(', ') || 'none'}.`);
@@ -4256,6 +4278,25 @@ function buildWorkflowPlanSectionLines(workflowPlan) {
     lines.push('');
   }
   lines.push('Full metrics, target function names, stable behavior mappings, question options, and approval records: [`workflows.json`](workflows.json).');
+  lines.push('');
+  return lines;
+}
+
+function buildBehaviorContractSectionLines(behaviorContract) {
+  if (!behaviorContract) return [];
+  const stats = behaviorContract.stats || {};
+  const lines = [];
+  lines.push('### Core Behavior + Native Intent Feed');
+  lines.push('');
+  lines.push(`The global lossless ledger contains **${stats.totalBehaviors || 0}** behavior(s). Deterministic backward dependency closure keeps **${stats.coreBehaviors || 0}** load-bearing behavior(s) exact and converts **${stats.regenerableBehaviors || 0}** disconnected Canvas UI-plumbing behavior(s) into **${stats.intentHints || 0}** structured native intent hint(s). Ambiguous state defaults to core.`);
+  lines.push('');
+  lines.push('| Screen | Builder shard | Control intents | Exact core | Native intent hints | Unmatched review |');
+  lines.push('|---|---|---|---|---|---|');
+  for (const shard of toArray(behaviorContract.shards)) {
+    lines.push(`| ${markdownTableText(shard.screen)} | \`${shard.file}\` | ${shard.stats?.controlIntents || 0} | ${shard.stats?.coreBehaviors || 0} | ${shard.stats?.intentHints || 0} | ${shard.stats?.unmatchedFormulas || 0} |`);
+  }
+  lines.push('');
+  lines.push('Builders read only their shard. `behaviors.json` remains the global source of truth for deterministic final coverage and is never passed into screen-builder context. Full dependency reasons, state reads/writes, behavior dispositions, and hint mappings: [`behavior-contract.json`](behavior-contract.json).');
   lines.push('');
   return lines;
 }
@@ -6258,7 +6299,7 @@ function buildAssetsSectionLines(brief) {
   return lines;
 }
 
-function buildMasterPlan(brief, screenRows, connectors, tables, risks, screenFiles, swapAggregate, playbook, structuredForms, nativeExecution, demotedCapabilities, upgradeHintsAggregate, serverSideAssets, pcfPlan, workflowPlan) {
+function buildMasterPlan(brief, screenRows, connectors, tables, risks, screenFiles, swapAggregate, playbook, structuredForms, nativeExecution, demotedCapabilities, upgradeHintsAggregate, serverSideAssets, pcfPlan, workflowPlan, behaviorContract) {
   const appName = (brief.app && brief.app.name) || 'Converted Canvas App';
   const startScreen = (brief.app && brief.app.startScreen) || 'Unknown';
   const nativeCaps = toArray(nativeExecution && nativeExecution.capabilities);
@@ -6346,6 +6387,7 @@ function buildMasterPlan(brief, screenRows, connectors, tables, risks, screenFil
   lines.push('- `npm run gen:assets` regenerates `src/generated/assets.ts` from `assets.json`; missing/non-RN-ready files must be reported, not silently required.');
   lines.push('- `npm run check:i18n -- --strict` reports `unknown keys used: 0`. Screen code must use catalog keys from `localization.json`; for text that is not in the catalog, render the literal fallback instead of inventing a `t("...")` key.');
   lines.push('- `npm run check:coverage -- --min 80` passes per screen and overall. Shared implementations count at their screen call sites through exact `source-behavior` markers.');
+  lines.push('- Every regenerable behavior is represented by its exact `source-intent` hint marker. The global ledger remains lossless; intent hints may replace only behavior proven disconnected from every core sink.');
   lines.push('- `npm run check:pcf -- --strict` passes: every explicitly approved PCF disposition is implemented with the exact PCF ID/disposition marker or approved visible unsupported UX.');
   lines.push('- `npm run check:workflows -- --strict` passes: every approved pathological handler is implemented as an invoked named-step module with exact workflow, step, and behavior markers.');
   lines.push('- `npm run check:scaffold -- --strict` passes: final screens must not expose conversion/debug scaffolding such as `CapabilityPanel`, `RelatedSources`, generic data-source lists, generic service registries (`serviceRegistry.ts`, `DATA_SOURCES`, `useDataSourceRows`), source/clone labels, or screen-config-driven next actions.');
@@ -6446,6 +6488,7 @@ function buildMasterPlan(brief, screenRows, connectors, tables, risks, screenFil
     }
   }
   for (const line of buildPcfPlanSectionLines(pcfPlan)) lines.push(line);
+  for (const line of buildBehaviorContractSectionLines(behaviorContract)) lines.push(line);
   for (const line of buildWorkflowPlanSectionLines(workflowPlan)) lines.push(line);
   // Surface the §8.3 demotions inline so reviewers can see exactly which
   // camera / attachment capabilities got reclassified into form host:* pickers.
@@ -6651,7 +6694,7 @@ function buildMasterPlan(brief, screenRows, connectors, tables, risks, screenFil
     lines.push(`#### ${s.name} (\`${s.route}\`)`);
     lines.push('');
     lines.push('- **Domain layout decisions:**');
-    lines.push(`  1. Treat \`screens/${f?.planFile || ''}\` as untrusted source evidence for the task hierarchy, controls, and formulas.`);
+    lines.push('  1. Use the declared behavior shard for compact screen/control intent, exact core behavior, and native intent hints. Verbose `screens/*.plan.md` / `*.controls.md` files are audit-only and must not be loaded into builder context.');
     lines.push('  2. Give source mutations, validation, navigation, and primary task actions stronger emphasis than decorative Canvas chrome.');
     lines.push('  3. Replace pixel/HTML/container workarounds with native composition while preserving the approved workflow and data contract.');
     lines.push(`- **Archetype:** ${s.archetype}`);
@@ -6673,7 +6716,9 @@ function buildMasterPlan(brief, screenRows, connectors, tables, risks, screenFil
     });
     lines.push(`- **Navigation:** ${navigation.length ? navigation.join('; ') : 'no outgoing source navigation detected'}.`);
     lines.push('- **State delta:** Use `state/app-state.md` placement recommendations; keep screen-only flags local and server collections query-backed.');
-    lines.push('- **Key user actions:** Implement the normalized actions, visibility, validation, and derivation entries for this screen from `behaviors.json`.');
+    const behaviorShard = toArray(behaviorContract && behaviorContract.shards).find((shard) => shard.screen === s.name);
+    lines.push(`- **Behavior shard:** ${behaviorShard ? `\`${behaviorShard.file}\` — implement exact core entries and every structured native intent hint; do not read the global ledger.` : 'missing — generation must block until the deterministic shard exists.'}`);
+    lines.push('- **Key user actions:** Implement exact core actions/rules from the shard and regenerate each disconnected Canvas plumbing entry from its structured native intent.');
     const screenWorkflows = toArray(workflowPlan && workflowPlan.workflows)
       .filter((workflow) => workflow.source.screen === s.name);
     lines.push(`- **Decomposed workflows:** ${screenWorkflows.length
@@ -6684,7 +6729,7 @@ function buildMasterPlan(brief, screenRows, connectors, tables, risks, screenFil
 
   lines.push('### Adapted per-screen evidence');
   lines.push('');
-  lines.push('Each screen has a dedicated plan file under `screens/`. Large screens are split into `<Name>.plan.md` (summary + control tree) plus `<Name>.controls.md` (verbatim Power Fx for every interactive control). The screen-builder agent reads both files for any split screen.');
+  lines.push('Each screen retains a dedicated lossless audit file under `screens/`. Large screens split into `<Name>.plan.md` plus `<Name>.controls.md` with verbatim Power Fx. These files support human/debug provenance and are deliberately model-invisible during generation; builders use `behavior-shards/*.json` instead.');
   lines.push('');
   for (const s of screenRows) {
     const f = fileByName.get(s.name);
@@ -6825,7 +6870,7 @@ function buildRequirementsBrief(brief, screenRows, connectors, tables) {
   return lines.join('\n') + '\n';
 }
 
-function buildMigrationChecklist(brief, connectors, tables, risks, serverSideAssets, pcfPlan, workflowPlan) {
+function buildMigrationChecklist(brief, connectors, tables, risks, serverSideAssets, pcfPlan, workflowPlan, behaviorContract) {
   const lines = [];
   const flows = toArray(brief.dataModel && brief.dataModel.flows);
   lines.push('# Migration Checklist To Working Mobile App');
@@ -6857,6 +6902,7 @@ function buildMigrationChecklist(brief, connectors, tables, risks, serverSideAss
   if (workflowPlan?.stats?.total > 0) {
     lines.push(`${step++}. **HARD GATE:** answer only the ${workflowPlan.stats.requiredDecisions} correctness-critical workflow question(s), then approve all ${workflowPlan.stats.total} named-step decompositions in Gate 2c before connector/screen work.`);
   }
+  lines.push(`${step++}. Use the ${behaviorContract?.stats?.shards || 0} declared behavior shard(s) for generation: ${behaviorContract?.stats?.coreBehaviors || 0} exact core behavior(s) plus ${behaviorContract?.stats?.intentHints || 0} native intent hint(s). Keep \`behaviors.json\` model-invisible for final coverage.`);
   if (tables.length > 0) {
     const assetCount = serverSideAssets && serverSideAssets.stats ? serverSideAssets.stats.total : 0;
     lines.push(`${step++}. Confirm Dataverse server-side logic in the target environment: business rules, calculated/rollup columns, plug-ins, custom APIs/actions, and classic workflows that the source app depends on${assetCount ? ` (${assetCount} column-level assets inventoried in \`server-side-assets.json\`)` : ''}.`);
@@ -6883,6 +6929,7 @@ function buildMigrationChecklist(brief, connectors, tables, risks, serverSideAss
   lines.push('- `npm run gen:assets` succeeds and reports missing assets explicitly.');
   lines.push('- `npm run check:i18n -- --strict` reports zero unknown keys. Do not invent translation keys; use literals when the source catalog does not contain the key.');
   lines.push('- `npm run check:coverage -- --min 80` passes. Coverage must count shared call sites and native equivalents of Canvas `UpdateContext`, `Reset`, `ClearCollect`, and collection `Patch`.');
+  lines.push('- Every `behavior-contract.json` regenerable entry has a real `source-intent` implementation; every exact core entry remains governed by `source-behavior`/`source-unsupported` accounting.');
   lines.push('- `npm run check:pcf -- --strict` passes. Every approved PCF has an exact native/server implementation marker or approved visible unsupported state; pending/blocker PCFs are forbidden.');
   lines.push('- `npm run check:workflows -- --strict` passes. Every approved pathological handler has an invoked named-step module with exact workflow, step, and behavior markers; pending/blocked workflows are forbidden.');
   lines.push('- `npm run check:scaffold -- --strict` passes. The final UI must be workflow-specific, not a visible inventory of data sources, capabilities, screen config, or conversion notes.');
@@ -6895,6 +6942,7 @@ function buildMigrationChecklist(brief, connectors, tables, risks, serverSideAss
   lines.push(`- Cloud flows detected: ${flows.length}`);
   lines.push(`- Dataverse tables: ${tables.length}`);
   lines.push(`- Pathological event workflows: ${workflowPlan?.stats?.total || 0} (${workflowPlan?.stats?.requiredDecisions || 0} correctness-critical decisions)`);
+  lines.push(`- Behavior feed: ${behaviorContract?.stats?.coreBehaviors || 0} exact core / ${behaviorContract?.stats?.regenerableBehaviors || 0} native intent across ${behaviorContract?.stats?.shards || 0} shards`);
   if (serverSideAssets && serverSideAssets.stats) {
     lines.push(`- Server-side Dataverse column assets: ${serverSideAssets.stats.total} (${serverSideAssets.stats.rollupColumns} rollup, ${serverSideAssets.stats.calculatedColumns} calculated, ${serverSideAssets.stats.serverComputedColumns + serverSideAssets.stats.serverManagedColumns} write-restricted/computed)`);
   }
@@ -6953,7 +7001,7 @@ function buildComponentsMd(components) {
     lines.push('');
     lines.push('## Component instances and bindings');
     lines.push('');
-    lines.push('Exact source instance bindings from screen controls. Use this section when rendering component instances in screens: inputs become props, output reads identify values the screen consumed from the component, and event bindings become callback props wired from `behaviors.json`.');
+    lines.push('Exact source instance bindings from screen controls. Inputs become props, output reads identify consumed values, and event bindings become callback props wired to the owning screen shard behavior/workflow references.');
     lines.push('');
     for (const c of withInstances) {
       lines.push(`### \`${c.name}\` instances`);
@@ -7142,7 +7190,7 @@ function buildAppStateMd(state) {
   return lines.join('\n') + '\n';
 }
 
-function buildPluginInput(brief, inputPath, screenRows, connectors, tables, risks, screenFiles, structuredForms, nativeExecution, demotedCapabilities, loadedScreens, serverSideAssets, controlIntentCoverage, pcfPlan, workflowPlan) {
+function buildPluginInput(brief, inputPath, screenRows, connectors, tables, risks, screenFiles, structuredForms, nativeExecution, demotedCapabilities, loadedScreens, serverSideAssets, controlIntentCoverage, pcfPlan, workflowPlan, behaviorContract) {
   // Per-screen upgrade-hints index — keyed by screen name so the screenRows
   // map below can attach hints without re-walking the brief.
   const upgradeHintsByScreen = new Map();
@@ -7237,6 +7285,13 @@ function buildPluginInput(brief, inputPath, screenRows, connectors, tables, risk
       rule: workflowPlan.rule,
       stats: workflowPlan.stats,
     },
+    behaviorPlan: {
+      file: 'behavior-contract.json',
+      schema: behaviorContract.$schema,
+      rule: behaviorContract.rule,
+      appShard: behaviorContract.appShard,
+      stats: behaviorContract.stats,
+    },
     localization: (brief && brief.localization) || null,
     assets: (brief && brief.assets) || null,
     qualityGates: {
@@ -7312,6 +7367,7 @@ function buildPluginInput(brief, inputPath, screenRows, connectors, tables, risk
       screens: screenRows.map((s) => {
         const f = screenFiles.find((x) => x.name === s.name);
         const hints = upgradeHintsByScreen.get(s.name) || [];
+        const behaviorShard = toArray(behaviorContract.shards).find((shard) => shard.screen === s.name);
         return {
           ...s,
           sourceNativeIntents: toArray(s.nativeCapabilities),
@@ -7320,6 +7376,7 @@ function buildPluginInput(brief, inputPath, screenRows, connectors, tables, risk
           controlsFile: f && f.controlsFile ? `screens/${f.controlsFile}` : null,
           lineCount: f ? f.lineCount : null,
           mode: f ? f.mode : null,
+          behaviorShard: behaviorShard ? behaviorShard.file : null,
           // Canvas anti-pattern upgrades detected on this screen. See
           // shared/references/canvas-to-native-mapping.md for the principle
           // and `## Upgrade Hints` in the per-screen plan for the prose.
@@ -7586,9 +7643,11 @@ function main() {
   const components = collectComponentInstances(loadedScreens, brief);
   const appState = collectAppState(loadedScreens);
   const behaviors = extractBehaviors(loadedScreens, brief);
-  const workflowPlan = buildWorkflowPlan(behaviors, screenRows);
-  const flows = extractFlows(brief, loadedScreens);
   const controlIntentCoverage = buildControlIntentCoverage(loadedScreens);
+  const behaviorArtifacts = buildBehaviorArtifacts(behaviors, screenRows, GENERATION_TIMESTAMP, controlIntentCoverage);
+  const workflowPlan = buildWorkflowPlan(behaviors, screenRows, behaviorArtifacts.contract);
+  attachWorkflowRefs(behaviorArtifacts, workflowPlan);
+  const flows = extractFlows(brief, loadedScreens);
 
   // §10.1 / §8.3 / §14 pipeline: hydrate forms[] into the structured shape,
   // then run the image-picker downgrade so {camera, attachment, image-picker,
@@ -7620,10 +7679,11 @@ function main() {
     upgradeHintsAggregate,
     serverSideAssets,
     pcfPlan,
-    workflowPlan
+    workflowPlan,
+    behaviorArtifacts.contract
   );
   const requirementsMd = buildRequirementsBrief(brief, screenRows, connectors, tables);
-  const checklistMd = buildMigrationChecklist(brief, connectors, tables, risks, serverSideAssets, pcfPlan, workflowPlan);
+  const checklistMd = buildMigrationChecklist(brief, connectors, tables, risks, serverSideAssets, pcfPlan, workflowPlan, behaviorArtifacts.contract);
   const componentsMd = buildComponentsMd(components);
   const stateMd = buildAppStateMd(appState);
   const pluginInput = buildPluginInput(
@@ -7641,7 +7701,8 @@ function main() {
     serverSideAssets,
     controlIntentCoverage,
     pcfPlan,
-    workflowPlan
+    workflowPlan,
+    behaviorArtifacts.contract
   );
 
   writeFile(path.join(args.outDir, 'native-app-plan.md'), masterPlan);
@@ -7654,6 +7715,10 @@ function main() {
   writeFile(path.join(args.outDir, 'pcf-plan.json'), JSON.stringify(pcfPlan, null, 2) + '\n');
   writeFile(path.join(args.outDir, 'mobile-plugin-input.json'), JSON.stringify(pluginInput, null, 2) + '\n');
   writeFile(path.join(args.outDir, 'behaviors.json'), JSON.stringify(behaviors, null, 2) + '\n');
+  writeFile(path.join(args.outDir, 'behavior-contract.json'), JSON.stringify(behaviorArtifacts.contract, null, 2) + '\n');
+  for (const [relativePath, shard] of behaviorArtifacts.shards) {
+    writeFile(path.join(args.outDir, relativePath), JSON.stringify(shard, null, 2) + '\n');
+  }
   writeFile(path.join(args.outDir, 'workflows.json'), JSON.stringify(workflowPlan, null, 2) + '\n');
   writeFile(path.join(args.outDir, 'flows.json'), JSON.stringify(flows, null, 2) + '\n');
 
@@ -7692,6 +7757,11 @@ function main() {
     ' visibility, ' + behaviors.stats.validations + ' validations, ' +
     behaviors.stats.derivations + ' derivations across ' + behaviors.stats.screensWithBehaviors +
     ' screens, ' + behaviors.stats.totalUnmatched + ' unmatched)');
+  console.log('- ' + path.join(args.outDir, 'behavior-contract.json') +
+    ' (' + behaviorArtifacts.contract.stats.coreBehaviors + ' exact core, ' +
+    behaviorArtifacts.contract.stats.regenerableBehaviors + ' regenerable as ' +
+    behaviorArtifacts.contract.stats.intentHints + ' native intent hints across ' +
+    behaviorArtifacts.contract.stats.shards + ' shards)');
   console.log('- ' + path.join(args.outDir, 'workflows.json') +
     ' (' + workflowPlan.stats.total + ' pathological handlers, ' + workflowPlan.stats.totalSteps +
     ' named steps, ' + workflowPlan.stats.requiredDecisions + ' correctness-critical decisions)');
@@ -7748,6 +7818,7 @@ module.exports = {
   collectForms,
   buildNativeExecutionPlan,
   buildPcfPlan,
+  buildBehaviorArtifacts,
   buildWorkflowPlan,
   buildControlIntentCoverage,
   extractBehaviors,

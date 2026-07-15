@@ -32,6 +32,8 @@ function deriveWorkflowStats(workflows, analysis = {}) {
   const rows = Array.isArray(workflows) ? workflows : [];
   const byDecisionType = {};
   const mappedBehaviorIds = new Set();
+  const coreMappedBehaviorIds = new Set();
+  const regenerableMappedBehaviorIds = new Set();
   let requiredDecisions = 0;
   let unresolvedDecisions = 0;
   let totalSteps = 0;
@@ -54,8 +56,16 @@ function deriveWorkflowStats(workflows, analysis = {}) {
     totalSteps += steps.length;
     for (const step of steps) {
       for (const behaviorId of Array.isArray(step && step.behaviorIds) ? step.behaviorIds : []) {
-        if (behaviorId) mappedBehaviorIds.add(behaviorId);
+        if (behaviorId) coreMappedBehaviorIds.add(behaviorId);
       }
+    }
+    for (const behaviorId of Array.isArray(workflow && workflow.source && workflow.source.regenerableBehaviorIds)
+      ? workflow.source.regenerableBehaviorIds : []) {
+      if (behaviorId) regenerableMappedBehaviorIds.add(behaviorId);
+    }
+    for (const behaviorId of Array.isArray(workflow && workflow.source && workflow.source.behaviorIds)
+      ? workflow.source.behaviorIds : []) {
+      if (behaviorId) mappedBehaviorIds.add(behaviorId);
     }
   }
 
@@ -66,6 +76,8 @@ function deriveWorkflowStats(workflows, analysis = {}) {
     pathologicalHandlers: rows.length,
     totalSteps,
     mappedBehaviors: mappedBehaviorIds.size,
+    coreMappedBehaviors: coreMappedBehaviorIds.size,
+    regenerableMappedBehaviors: regenerableMappedBehaviorIds.size,
     workflowsWithQuestions,
     requiredDecisions,
     unresolvedDecisions,

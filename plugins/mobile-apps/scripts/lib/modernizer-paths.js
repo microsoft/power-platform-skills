@@ -28,7 +28,10 @@ function buildArtifactNameMap(names, fallback = 'artifact') {
     if (isWindowsReservedBasename(stem)) stem = `_${stem}`;
     const base = stem;
     let suffix = 2;
-    while (used.has(stem.toLowerCase())) stem = `${base}_${suffix++}`;
+    while (used.has(stem.toLowerCase())) {
+      const suffixText = `_${suffix++}`;
+      stem = `${base.slice(0, Math.max(1, 120 - suffixText.length))}${suffixText}`;
+    }
     used.add(stem.toLowerCase());
     map.set(name, stem);
   }

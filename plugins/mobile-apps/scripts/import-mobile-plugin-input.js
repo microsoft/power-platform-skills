@@ -31,6 +31,8 @@ const COLLISION_PATHS = [
   'screens',
   'state',
   'behaviors.json',
+  'behavior-contract.json',
+  'behavior-shards',
   'workflows.json',
   'pcf-plan.json',
   'control-intent-coverage.json',
@@ -40,6 +42,7 @@ const REQUIRED_SOURCE_FILES = [
   'native-app-plan.md',
   'mobile-plugin-input.json',
   'behaviors.json',
+  'behavior-contract.json',
   'workflows.json',
   'pcf-plan.json',
   'control-intent-coverage.json',
@@ -63,6 +66,7 @@ const ALLOWED_SOURCE_ENTRIES = new Set([
   ...OPTIONAL_SOURCE_FILES,
   'screens',
   'state',
+  'behavior-shards',
   '.mobile-app-modernizer-output',
   'migration-assessment.html',
   '.DS_Store',
@@ -169,15 +173,35 @@ function copyMarkdownTree(sourceRoot, targetRoot, written, dryRun, packageRoot, 
   }
 }
 
+function copyJsonTree(sourceRoot, targetRoot, written, dryRun, packageRoot, treeState, depth = 0) {
+  if (!fs.existsSync(sourceRoot)) throw new Error(`required JSON tree is missing: ${sourceRoot}`);
+  if (depth > MAX_TREE_DEPTH) throw new Error(`migration package tree exceeds depth ${MAX_TREE_DEPTH}: ${sourceRoot}`);
+  const stat = fs.lstatSync(sourceRoot);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`import JSON tree must be a real directory: ${sourceRoot}`);
+  if (!contains(fs.realpathSync(packageRoot), fs.realpathSync(sourceRoot))) {
+    throw new Error(`import JSON tree escapes migration package: ${sourceRoot}`);
+  }
+  for (const entry of fs.readdirSync(sourceRoot, { withFileTypes: true })) {
+    treeState.count += 1;
+    if (treeState.count > MAX_TREE_ENTRIES) throw new Error(`migration package exceeds ${MAX_TREE_ENTRIES} tree entries`);
+    const source = path.join(sourceRoot, entry.name);
+    const target = path.join(targetRoot, entry.name);
+    if (entry.isSymbolicLink()) throw new Error(`symbolic links are not allowed in migration package: ${source}`);
+    if (entry.isDirectory()) copyJsonTree(source, target, written, dryRun, packageRoot, treeState, depth + 1);
+    else if (entry.isFile() && entry.name.endsWith('.json')) copyChecked(source, target, written, dryRun, packageRoot);
+    else throw new Error(`unexpected file in migration package JSON tree: ${source}`);
+  }
+}
+
 function validateSourceEntries(source) {
   for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
     const full = path.join(source, entry.name);
     if (entry.isSymbolicLink()) throw new Error(`symbolic links are not allowed in migration package: ${full}`);
     if (!ALLOWED_SOURCE_ENTRIES.has(entry.name)) throw new Error(`unexpected top-level migration artifact: ${full}`);
-    if ((entry.name === 'screens' || entry.name === 'state') && !entry.isDirectory()) {
+    if ((entry.name === 'screens' || entry.name === 'state' || entry.name === 'behavior-shards') && !entry.isDirectory()) {
       throw new Error(`migration package tree must be a directory: ${full}`);
     }
-    if (entry.name !== 'screens' && entry.name !== 'state' && !entry.isFile()) {
+    if (entry.name !== 'screens' && entry.name !== 'state' && entry.name !== 'behavior-shards' && !entry.isFile()) {
       throw new Error(`migration package artifact must be a regular file: ${full}`);
     }
   }
@@ -254,6 +278,12 @@ function main() {
     if (fs.existsSync(path.join(target, relative))) throw new Error(`target is not fresh; collision at ${relative}`);
   }
   for (const relative of REQUIRED_SOURCE_FILES) assertRegularFile(path.join(source, relative), `required migration artifact ${relative}`);
+  const behaviorShardsSource = path.join(source, 'behavior-shards');
+  if (!fs.existsSync(behaviorShardsSource)
+      || fs.lstatSync(behaviorShardsSource).isSymbolicLink()
+      || !fs.lstatSync(behaviorShardsSource).isDirectory()) {
+    throw new Error(`required behavior-shards directory is missing or unsafe: ${behaviorShardsSource}`);
+  }
   const outputMarker = path.join(source, '.mobile-app-modernizer-output');
   assertRegularFile(outputMarker, 'adapter ownership marker', source);
   if (fs.readFileSync(outputMarker, 'utf8') !== ADAPTER_OUTPUT_MARKER) {
@@ -301,6 +331,7 @@ function main() {
     writeJsonChecked(path.join(target, 'workflows.json'), workflowPlan, written, args.dryRun);
     copyMarkdownTree(path.join(source, 'screens'), path.join(target, 'screens'), written, args.dryRun, source, treeState);
     copyMarkdownTree(path.join(source, 'state'), path.join(target, 'state'), written, args.dryRun, source, treeState);
+    copyJsonTree(behaviorShardsSource, path.join(target, 'behavior-shards'), written, args.dryRun, source, treeState);
 
     if (fs.existsSync(assetsManifest)) {
       const assets = JSON.parse(fs.readFileSync(assetsManifest, 'utf8'));
@@ -344,7 +375,7 @@ function main() {
       // Screens/state are freshness collisions, and assets/images is a
       // freshness collision whenever assets.json is imported. Only remove
       // directories that this run was therefore allowed to create.
-      const generatedDirectories = ['screens', 'state'];
+      const generatedDirectories = ['screens', 'state', 'behavior-shards'];
       if (fs.existsSync(assetsManifest)) generatedDirectories.unshift('assets/images');
       for (const directory of generatedDirectories) {
         fs.rmSync(path.join(target, directory), { recursive: true, force: true });
@@ -361,6 +392,7 @@ function main() {
     assetsMissing,
     pcfApprovalsReset,
     workflowApprovalsReset,
+    behaviorShardsCopied: input.behaviorPlan?.stats?.shards || 0,
     validationWarnings: validationResult.warnings || [],
   }, null, 2)}\n`);
 }
