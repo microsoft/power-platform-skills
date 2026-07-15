@@ -200,6 +200,7 @@ Adds login/logout functionality and role-based authorization to your site.
 - Login/logout UI component
 - Role-based UI patterns (show/hide elements by role)
 - Framework-specific implementation (hooks, composables, services)
+- **IDP app-registration setup for OIDC providers** (Okta, Auth0, Microsoft Entra External ID, and other OpenID Connect) — reads the provider's own documentation first, then **guides the user through the provider's console** or, **when the provider supports it, configures the app for the user**; either way it wires the client ID, authority, and claims mapping (registration + login) into Power Pages using the platform-default no-secret `code id_token` flow
 
 #### `/audit-permissions`
 

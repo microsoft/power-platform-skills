@@ -10,7 +10,7 @@ Power Pages supports the following authentication mechanisms:
 |---------------|-------------|----------------|---------------------|
 | **Microsoft Entra ID** | Azure AD / Entra ID via OpenID Connect | `/Account/Login/ExternalLogin` | `https://login.windows.net/{tenantId}/` |
 | **Entra External ID** | Customer identity (CIAM) with self-service sign-up. Uses OIDC — authority may be `ciamlogin.com` or a custom domain. **This is NOT Microsoft Account** — it is a separate OIDC provider for customer-facing apps. | `/Account/Login/ExternalLogin` | Site setting `Authentication/OpenIdConnect/{name}/AuthenticationType` |
-| **OpenID Connect (Generic)** | Any OIDC-compliant provider (Okta, Auth0, Ping, etc.) | `/Account/Login/ExternalLogin` | Site setting `Authentication/OpenIdConnect/{name}/AuthenticationType` |
+| **OpenID Connect** | Any OIDC-compliant provider (Okta, Auth0, etc.) | `/Account/Login/ExternalLogin` | Site setting `Authentication/OpenIdConnect/{name}/AuthenticationType` |
 | **SAML2** | SAML 2.0 identity providers (ADFS, Shibboleth, etc.) | `/Account/Login/ExternalLogin` | Site setting `Authentication/SAML2/{name}/AuthenticationType` |
 | **WS-Federation** | WS-Federation identity providers | `/Account/Login/ExternalLogin` | Site setting `Authentication/WsFederation/{name}/AuthenticationType` |
 | **Local Authentication** | Username/password login without external provider | `/Account/Login/Login` | N/A (direct credential POST) |
