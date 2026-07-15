@@ -88,12 +88,12 @@ unspecified and you MUST ask.
 Call `AskUserQuestion` with the applicable questions from the table below (include only the
 ones that need answers):
 
-| Question | Header | When to Ask | Options |
-|----------|--------|-------------|---------|
-| Who will primarily use this app, and on what device? | Target Users & Device | Only if not clear from `$ARGUMENTS` | *(3–4 dynamically inferred options that combine the user role with their likely device, e.g., for "visitor check-in": Front desk staff on desktop/tablet, Security team on tablet, Self-service kiosk on tablet, Visitors on their phone)* |
-| Do you have a screenshot or mockup for reference? (paste an image or provide a file path) | Reference | Only if user has NOT already attached/pasted an image with their request | Yes I'll share one now, No just pick a direction for me |
-| What aesthetic direction? | Aesthetic | Only if not clear from `$ARGUMENTS` (skip if user already described a visual direction like "dark themed", "minimal", "corporate style", or provided a reference image) | Clean & Professional (Recommended), Bold & High-Contrast, Soft & Approachable, Dense & Utilitarian |
-| Which features do you need? (multi-select) | Features | Only if `$ARGUMENTS` is vague on features | *(3–4 dynamically inferred options based on app purpose + target users)* |
+| Question                                                                                  | Header                | When to Ask                                                                                                                                                             | Options                                                                                                                                                                                                                                    |
+| ----------------------------------------------------------------------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Who will primarily use this app, and on what device?                                      | Target Users & Device | Only if not clear from `$ARGUMENTS`                                                                                                                                     | _(3–4 dynamically inferred options that combine the user role with their likely device, e.g., for "visitor check-in": Front desk staff on desktop/tablet, Security team on tablet, Self-service kiosk on tablet, Visitors on their phone)_ |
+| Do you have a screenshot or mockup for reference? (paste an image or provide a file path) | Reference             | Only if user has NOT already attached/pasted an image with their request                                                                                                | Yes I'll share one now, No just pick a direction for me                                                                                                                                                                                    |
+| What aesthetic direction?                                                                 | Aesthetic             | Only if not clear from `$ARGUMENTS` (skip if user already described a visual direction like "dark themed", "minimal", "corporate style", or provided a reference image) | Clean & Professional (Recommended), Bold & High-Contrast, Soft & Approachable, Dense & Utilitarian                                                                                                                                         |
+| Which features do you need? (multi-select)                                                | Features              | Only if `$ARGUMENTS` is vague on features                                                                                                                               | _(3–4 dynamically inferred options based on app purpose + target users)_                                                                                                                                                                   |
 
 **Rules:**
 
@@ -107,6 +107,7 @@ ones that need answers):
 4. Store all answers for use in the planner prompt below.
 
 **Target users & device influence design decisions:**
+
 - **Desktop users** → data-dense layouts, tables, keyboard-friendly, multi-column. ManualLayout acceptable for pixel-perfect dashboards.
 - **Tablet users** → touch-friendly targets, medium density, AutoLayout (responsive) so the app adapts to landscape/portrait.
 - **Phone users** → large touch targets, single-column, simplified navigation, AutoLayout (responsive), minimal typing.
@@ -122,6 +123,7 @@ Read all synced `.pa.yaml` files. Based on `$ARGUMENTS` and the current app stat
 whether this is a **simple** or **complex** edit:
 
 **Simple** — all of the following are true:
+
 - Changes affect ≤ 2 controls or properties
 - Changes are confined to ≤ 1 screen
 - No new screens are being added
@@ -131,6 +133,7 @@ whether this is a **simple** or **complex** edit:
 Examples: change a button color, update label text, fix a formula, adjust a control size.
 
 **Complex** — any of the following are true:
+
 - Changes span multiple screens
 - One or more new screens need to be created
 - New data sources or connectors are required
@@ -272,9 +275,11 @@ Example prompt:
 >
 > Approved plan:
 > [paste the full plan you presented in Step 5.3 — screens, data strategy, aesthetic
-> direction, all RGBA values]
+>
+> > direction, all RGBA values]
 >
 > User preferences (from wizard):
+>
 > - Target users & device: [answer]
 > - Aesthetic direction: [answer]
 > - Features: [answer]
@@ -299,9 +304,11 @@ Example prompt:
 >
 > Approved plan:
 > [paste the full plan you presented in Step 5.3 — screens to modify/add, approach,
-> all RGBA values]
+>
+> > all RGBA values]
 >
 > Current app state:
+>
 > - Palette: [exact RGBA values extracted from existing files]
 > - Variables: [variable names found in existing files]
 > - Layout strategy: [AutoLayout / ManualLayout as found in existing files]
@@ -326,6 +333,27 @@ After the planner completes, read `canvas-app-plan.md` from the working director
 
 Extract the screen list from the `## Screens` table — collect each screen name, its target
 file name, and its action (Create or Modify).
+
+### Step 6.0 — Verify Control Prefix Assignments
+
+Before invoking any screen builder, verify that `canvas-app-plan.md` assigns a **unique
+2-4 character prefix** to each screen's controls. This prevents the compiler from renaming
+controls during Phase 7, which would cause contract name drift.
+
+**Check the Per-Screen Specifications section:**
+
+1. Each screen must have a `Control Prefix` line (e.g., `Hom_`, `Cat_`, `Req_`, `Ord_`, `Adm_`).
+2. All control names in that screen's Contract section must use the prefix (e.g., `Hom_SubmitBtn`,
+   not `SubmitBtn`).
+3. No two screens may share the same prefix.
+
+**If prefixes are missing or controls use generic names:**
+
+1. Reinvoke the planner agent with a prompt specifying that control prefixes are mandatory.
+2. If the planner still produces unprefixed names, **log a warning and proceed anyway** —
+   contract verification may fail later, but apps must always be generated for evaluation.
+
+### Step 6.1 — Invoke Screen Builders
 
 Invoke one `canvas-screen-builder` agent per screen. **Fire all invocations in a single
 message** (parallel execution) — do not wait for one screen to finish before starting the
@@ -355,12 +383,138 @@ Wait for all screen-builder tasks to complete before proceeding.
 
 ---
 
+## Phase 6a — Plan Contract Verification
+
+After all screen-builders finish, verify each screen fulfills its plan contract. This catches
+screens that compile but do not implement their planned functionality.
+
+### Step 6a.1 — Extract contracts from the plan
+
+Read `canvas-app-plan.md` and extract, for each screen, the **Contract** section:
+
+- Primary Content (control name and data binding)
+- Primary Interaction (control name and handler requirement)
+- Required Handlers (list of ControlName.Handler patterns)
+- Journey Steps (list of steps this screen implements)
+- Outcome Handling (validation, success/failure feedback, state refresh, empty state)
+
+Also extract the **Core Functional Journeys** section with their Journey Step Mapping tables.
+
+### Step 6a.2 — Verify each screen against its contract
+
+For each screen in the plan, read its `.pa.yaml` file and verify:
+
+1. **Screen exists** — the `.pa.yaml` file was written and is non-empty.
+
+2. **Primary Content exists** — the control named in "Primary Content" is present.
+   - A Gallery must have an `Items` property referencing data.
+   - A Form must have a `DataSource` property.
+   - A DataTable must have an `Items` property.
+   - Content controls must have their stated data bindings.
+
+3. **Primary Interaction exists** — the control named in "Primary Interaction" is present and
+   has a non-empty, non-placeholder handler.
+   - Buttons must have `OnSelect` with actual logic (not empty, not just a comment).
+   - Gallery items with navigation must have `OnSelect` containing `Navigate()` or state updates.
+   - Forms with submit must have a submit button whose `OnSelect` calls `Patch()`, `SubmitForm()`,
+     or equivalent.
+
+4. **Required Handlers are implemented** — for each handler listed in "Required Handlers":
+   - The control exists.
+   - The handler property (`OnSelect`, `OnChange`, `OnVisible`, etc.) is present.
+   - The handler contains the required function call or pattern (e.g., "must call Patch()"
+     means the formula contains `Patch(`).
+   - The handler is NOT a placeholder:
+     - ❌ Empty: `=`
+     - ❌ Boolean: `=false` or `=true`
+     - ❌ Comment only: `=// TODO`
+     - ❌ Stub: `="not implemented"`
+
+5. **Required data operations exist** — for each handler that must perform a data operation
+   (Patch, Remove, Collect, ClearCollect, SubmitForm), verify the formula contains the
+   required function call.
+
+6. **Navigation targets exist** — for every `Navigate()` call in the screen, the target screen's
+   `.pa.yaml` file exists and is non-empty.
+
+7. **Outcome Handling is implemented** (where specified in the contract):
+   - **Validation**: If required, form/input validation logic exists.
+   - **Success feedback**: If required, success notification or navigation exists after data ops.
+   - **Failure feedback**: If required, error handling with `IfError()` or `IsError()` exists.
+   - **State refresh**: If required, data refresh after mutations exists.
+   - **Empty state**: If required, conditional display for empty data exists.
+
+### Step 6a.3 — Handle failures (best-effort repair)
+
+**If any contract check fails:**
+
+1. **Group failures by screen.** Each failing screen gets one repair invocation listing all
+   its violations.
+
+2. **Do not remove functionality.** Never silently delete navigation or controls to pass checks.
+
+3. **Reinvoke the screen builder** for each failing screen with an explicit repair prompt:
+
+   > You are the canvas-screen-builder agent. **Repair** the **[Screen Name]** screen.
+   >
+   > - Action: Repair
+   > - Target file: [ScreenName].pa.yaml
+   > - Plan document: [absolute path to canvas-app-plan.md]
+   > - Working directory: [absolute path]
+   >
+   > **Contract violations found:**
+   >
+   > - [List each specific failure, e.g., "Primary Content: Gallery 'TaskList' missing — plan
+   >   > requires a Gallery with Items bound to Tasks data source"]
+   > - [e.g., "Required Handler: SubmitBtn.OnSelect is empty — plan requires Patch() call"]
+   > - [e.g., "Outcome Handling: Missing failure feedback — plan requires IfError() wrapper"]
+   >
+   > Read the plan document. Implement the missing contract obligations. Do not remove any
+   > existing functionality.
+
+4. **After repair, re-run Step 6a.2** for the repaired screens only.
+
+5. **Limit repair iterations to 2.** If violations remain after 2 repair attempts:
+   - **Log the unresolved violations** for inclusion in the Phase 8 summary.
+   - **Proceed to Phase 7 anyway** — apps must always be generated for evaluation.
+
+### Step 6a.4 — Verify Core Journeys
+
+After all screens pass their individual contracts, verify the **Core Functional Journeys** from
+the plan document using the Journey Step Mapping tables:
+
+1. **For each journey step in the mapping table:**
+   - Verify the specified Screen exists.
+   - Verify the specified Control exists in that screen.
+   - Verify the Event Property (OnSelect, OnChange, etc.) contains the required formula pattern.
+
+2. **Verify navigation chain** — for multi-screen journeys, verify that navigation from each
+   screen to the next is implemented.
+
+3. **Verify Success/Failure Behaviors** — check that the handlers implementing success and
+   failure behaviors exist and are non-placeholder.
+
+**If any journey check fails:**
+
+1. Identify which screen(s) are missing the required elements.
+2. Reinvoke the screen builder(s) with repair prompts specifying the journey obligations.
+3. Limit journey repair to 1 additional iteration.
+4. If journey verification still fails, **log the failures** for the Phase 8 summary.
+
+### Step 6a.5 — Proceed
+
+**Always proceed to Phase 7** after completing verification and repair attempts. Contract
+and journey violations are logged for reporting but do not block generation — apps must
+always be produced for evaluation.
+
+---
+
 ## Phase 7 — Validate and Fix
 
 After all screen-builders have finished writing their files, call `compile_canvas` on the
 working directory.
 
-**On success:** Proceed to Phase 8.
+**On success:** Proceed to Step 7.1 (Contract Sync).
 
 **On failure:** Read every error in the output. Errors will reference specific files and
 line numbers. For each error:
@@ -374,6 +528,89 @@ iterate until the entire directory compiles clean.
 
 Track how many `compile_canvas` passes were needed.
 
+### Step 7.1 — Contract Sync After Compilation
+
+After successful compilation, scan all `.pa.yaml` files and compare actual control names
+against the plan's Contract control names. Compiler fixes or repairs may have renamed controls.
+
+**For each screen:**
+
+1. Extract all control names from the `.pa.yaml` file (lines matching `^\s*-\s+[^:]+:$`).
+2. Compare against the Contract's control names (Primary Content, Primary Interaction,
+   Required Handlers).
+3. If a planned control name does not exist but a similar prefixed name does (e.g., plan
+   says `SubmitBtn` but file has `Req_SubmitBtn`), **update the Contract in canvas-app-plan.md**
+   to use the actual name.
+
+**Update the plan document using Edit:**
+
+1. For each renamed control, update all Contract references in `canvas-app-plan.md`.
+2. Update the Journey Step Mapping table if any Control names changed.
+3. Write the updated plan so Phase 7a verification uses accurate names.
+
+This sync is mandatory — do not skip it even if you believe no renames occurred.
+
+After Contract Sync, proceed to Phase 7a.
+
+---
+
+## Phase 7a — Post-Compilation Contract Re-Verification
+
+Compiler-error fixes may alter control properties, handlers, or formulas. Re-run contract
+verification to ensure fixes did not break planned functionality.
+
+### Step 7a.1 — Re-verify screen contracts
+
+For each screen, re-run the contract checks from Step 6a.2:
+
+1. Primary Content still exists and has correct bindings.
+2. Primary Interaction still exists with non-empty, non-placeholder handler.
+3. Required Handlers are still implemented (not emptied or commented out during fixes).
+4. Required data operations are still present.
+5. Outcome Handling is still in place (validation, success/failure feedback, state refresh).
+
+### Step 7a.2 — Re-verify core journeys
+
+Re-run the journey checks from Step 6a.4:
+
+1. Each journey step's Control and Event Property still have the required formula pattern.
+2. Navigation between journey screens is still functional.
+3. Success/Failure Behaviors are still implemented.
+
+### Step 7a.3 — Handle post-compilation failures (best-effort)
+
+**If any check fails after compilation:**
+
+1. The compilation fix introduced a regression.
+
+2. **Attempt a single targeted repair:** Read the affected file, restore the missing element
+   using `Edit`, preserving the compilation fix where possible.
+
+3. **Re-run `compile_canvas`** after the repair to verify the fix didn't break compilation.
+
+4. **Re-run contract verification** (Step 7a.1 and 7a.2) after successful compilation.
+
+5. **Repeat this loop** (repair → compile → verify) up to 2 times total.
+
+6. **If the loop cannot converge:**
+   - **Log all remaining violations** for the Phase 8 summary.
+   - **If compilation succeeds, proceed to Phase 8** — apps must always be generated.
+   - **If compilation fails, continue attempting fixes** — compilation is blocking, but
+     contract violations are not.
+
+### Step 7a.4 — Success criteria
+
+**Generation always proceeds if compilation succeeds.** Contract violations are logged but
+do not block — apps must be produced for evaluation.
+
+Track two outcomes separately:
+
+- **Compilation status:** Clean or Errors (errors block generation)
+- **Contract status:** Clean or Violations (violations determine marker type)
+
+**On compilation success:** Proceed to Phase 8. The completion marker will reflect whether
+contracts passed (`GENERATION_COMPLETE`) or failed (`GENERATION_COMPLETE_WITH_WARNINGS`).
+
 ---
 
 ## Phase 8 — Summary
@@ -381,27 +618,152 @@ Track how many `compile_canvas` passes were needed.
 Delete `canvas-app-plan.md` from the working directory using `Bash`:
 `rm <working-directory>/canvas-app-plan.md`
 
-Present a final summary based on the mode:
+Present a final summary based on the outcome:
 
-**CREATE mode:**
+**Outcome A: Compilation AND contracts pass (CREATE mode):**
 
 > **App generation complete.**
 >
-> | Screen | File | Status |
-> |--------|------|--------|
+> | Screen        | File               | Status  |
+> | ------------- | ------------------ | ------- |
 > | [Screen Name] | [filename].pa.yaml | Created |
 >
 > **Compiled clean** after [N] pass(es). | **Screens:** [N] | **Data:** [source or collections]
+>
+> **Contracts:** All verified ✓
+>
+> **GENERATION_COMPLETE**
 
-**EDIT mode (complex):**
+**Outcome A: Compilation AND contracts pass (EDIT mode):**
 
 > **Edit complete.**
 >
-> | Action | Screen | File | Status |
-> |--------|--------|------|--------|
-> | [Create / Modify] | [Screen Name] | [filename].pa.yaml | Done |
+> | Action            | Screen        | File               | Status |
+> | ----------------- | ------------- | ------------------ | ------ |
+> | [Create / Modify] | [Screen Name] | [filename].pa.yaml | Done   |
 >
 > **Compiled clean** after [N] pass(es).
+>
+> **Contracts:** All verified ✓
+>
+> **GENERATION_COMPLETE**
 
-If any errors remain after exhausting fixes, report them explicitly so the user knows what
-needs manual attention.
+**Outcome B: Compilation passes, contracts fail (CREATE mode):**
+
+> **App generation complete with warnings.**
+>
+> | Screen        | File               | Status  |
+> | ------------- | ------------------ | ------- |
+> | [Screen Name] | [filename].pa.yaml | Created |
+>
+> **Compiled clean** after [N] pass(es). | **Screens:** [N] | **Data:** [source or collections]
+>
+> **Contracts:** [N] unresolved violations ⚠
+>
+> [Include full Contract Violation Report — see format below]
+>
+> **GENERATION_COMPLETE_WITH_WARNINGS**
+
+**Outcome B: Compilation passes, contracts fail (EDIT mode):**
+
+> **Edit complete with warnings.**
+>
+> | Action            | Screen        | File               | Status |
+> | ----------------- | ------------- | ------------------ | ------ |
+> | [Create / Modify] | [Screen Name] | [filename].pa.yaml | Done   |
+>
+> **Compiled clean** after [N] pass(es).
+>
+> **Contracts:** [N] unresolved violations ⚠
+>
+> [Include full Contract Violation Report — see format below]
+>
+> **GENERATION_COMPLETE_WITH_WARNINGS**
+
+**Outcome C: Compilation fails:**
+
+> ❌ **App generation FAILED**
+>
+> Compilation could not be completed after maximum fix attempts.
+>
+> **Compilation errors:**
+> [list remaining errors]
+>
+> **Files written:** [list of .pa.yaml files that were created]
+>
+> **GENERATION_FAILED**
+
+---
+
+## Contract Violation Report Format
+
+When contracts fail, include a detailed report for benchmark analysis. This report must
+contain enough information to diagnose GI-004 regressions.
+
+> **Contract Violation Report**
+>
+> **Summary:** [N] screen violations, [N] journey violations
+>
+> **Screen Contract Violations:**
+>
+> | Screen       | Control       | Violation                                                    | Repair Attempts | Final State                                 |
+> | ------------ | ------------- | ------------------------------------------------------------ | --------------- | ------------------------------------------- |
+> | [ScreenName] | [ControlName] | [e.g., "Primary Content missing — Gallery not found"]        | [0/1/2]         | [e.g., "Control absent" or "Handler empty"] |
+> | [ScreenName] | [ControlName] | [e.g., "Required Handler SubmitBtn.OnSelect is placeholder"] | [2]             | [e.g., "OnSelect: =false"]                  |
+>
+> **Journey Violations:**
+>
+> | Journey       | Step      | Screen   | Control   | Expected                            | Actual                             |
+> | ------------- | --------- | -------- | --------- | ----------------------------------- | ---------------------------------- |
+> | [JourneyName] | [StepNum] | [Screen] | [Control] | [e.g., "OnSelect must call Patch("] | [e.g., "OnSelect: =Navigate(Home"] |
+>
+> **YAML Evidence:**
+>
+> For each violation, include the actual YAML snippet from the `.pa.yaml` file:
+>
+> ```yaml
+> # [ScreenName].pa.yaml — [ControlName]
+> - [ControlName]:
+>     Control: [ControlType]
+>     OnSelect: =[actual formula or empty]
+> ```
+>
+> **Repair History:**
+>
+> - Phase 6a: [N] violations found, [N] repaired, [N] unresolved
+> - Phase 7a: [N] regressions found, [N] repaired, [N] unresolved
+
+If any compilation errors remain after exhausting fixes, report them explicitly so the user
+knows what needs manual attention.
+
+---
+
+## Completion Markers
+
+The pipeline detects generation outcomes via these exact markers in the skill output.
+**Always emit exactly one marker at the end of Phase 8:**
+
+- `GENERATION_COMPLETE` — compilation succeeds AND all contract/journey verifications pass.
+  This is a fully successful generation.
+
+- `GENERATION_COMPLETE_WITH_WARNINGS` — compilation succeeds but contract/journey verification
+  failed. The app was generated and can be evaluated, but has known functional gaps.
+  Benchmark analysis must count this separately from full success.
+
+- `GENERATION_FAILED` — compilation cannot be fixed. This is rare and indicates a pipeline
+  or syntax failure, not a contract violation.
+
+**Marker selection logic:**
+
+```
+if compilation_failed:
+    emit GENERATION_FAILED
+elif contract_violations > 0:
+    emit GENERATION_COMPLETE_WITH_WARNINGS
+else:
+    emit GENERATION_COMPLETE
+```
+
+These markers must appear on their own line, exactly as shown, with no additional formatting.
+Do not emit a marker until Phase 8 is reached — partial completions or mid-phase states should
+not emit markers.

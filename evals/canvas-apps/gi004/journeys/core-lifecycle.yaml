@@ -1,0 +1,62 @@
+# GI-004 Journey: Core Lifecycle
+# Tests the complete device ordering flow to verify functional journeys complete.
+#
+# This journey validates that navigation leads to functional screens with real content
+# and that the core procurement workflow completes end-to-end.
+#
+# GI-004 Definition: Verify complete core functional journeys after compilation.
+# Empty destination screens are one symptom; incomplete functional flows are the bug.
+
+id: gi004-core-lifecycle
+name: Core Device Ordering Lifecycle
+description: |
+  End-to-end procurement flow testing screen completeness at each navigation step.
+  Verifies the app supports the complete functional journey, not just navigation.
+
+purpose: Verify core procurement journey completes with functional screens at each step
+
+steps:
+  - action: "Open the app and view the device catalog"
+    expect: "Gallery displays device entries with identifying information (name, image, or description)"
+    fail_if: "Catalog is empty or shows only headers without content"
+
+  - action: "Select a device from the catalog"
+    expect: "Device detail or request form appears with device information and input fields"
+    fail_if: "Destination screen is blank or missing device context"
+
+  - action: "Fill in procurement request (quantity, justification) and submit"
+    expect: "Form accepts input; submission shows confirmation or navigates to success state"
+    fail_if: "Form has labels but no functional input fields, or submit has no effect"
+
+  - action: "Navigate to My Orders / My Requests"
+    expect: "Request list shows the newly created order with pending/submitted status"
+    fail_if: "My Orders screen is blank or doesn't include the new request"
+
+  - action: "Open the request details"
+    expect: "Detail view shows request information (device, quantity, status, justification)"
+    fail_if: "Detail view is empty or shows only the header"
+
+  - action: "Navigate to Approvals (as approver role)"
+    expect: "Approvals list shows pending requests awaiting action"
+    fail_if: "Approvals screen is blank or unreachable"
+
+  - action: "Approve the request"
+    expect: "Request status changes to Approved; UI reflects the change"
+    fail_if: "Approval action has no visible effect"
+
+  - action: "Return to My Orders and verify status"
+    expect: "Request shows Approved status"
+    fail_if: "Status unchanged or screen doesn't reflect approval"
+
+pass_criteria:
+  - "Complete procurement journey completes end-to-end"
+  - "All navigation destinations show content relevant to the journey step"
+  - "All galleries display data rows or explicit empty-state messages"
+  - "All forms have functional input fields that accept user input"
+  - "Status changes are reflected in the UI after actions"
+
+fail_criteria:
+  - "Any screen shows only headers with blank content area"
+  - "Any gallery shows no rows and no empty-state explanation"
+  - "Any form has labels but no corresponding input controls"
+  - "Core journey step cannot complete due to missing functionality"

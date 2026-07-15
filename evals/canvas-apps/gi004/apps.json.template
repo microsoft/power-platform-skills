@@ -1,0 +1,14 @@
+[
+  {
+    "name": "device-ordering-app",
+    "player_url": "https://apps.powerapps.com/play/e/YOUR_ENV/a/YOUR_APP_ID",
+    "description": "Device ordering app for GI-004 testing",
+    "source": "nightly-canvas-mcp-eval"
+  },
+  {
+    "name": "inventory-tracker",
+    "player_url": "https://apps.powerapps.com/play/e/YOUR_ENV/a/ANOTHER_APP_ID",
+    "description": "Inventory tracking app",
+    "source": "nightly-canvas-mcp-eval"
+  }
+]

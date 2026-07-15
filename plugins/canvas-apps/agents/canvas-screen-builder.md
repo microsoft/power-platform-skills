@@ -26,9 +26,10 @@ You will be invoked with a prompt that includes:
 
 - **Screen name** — e.g., "Home"
 - **Target file** — e.g., "Home.pa.yaml"
-- **Action** — `Create` (new screen) or `Modify` (existing screen)
+- **Action** — `Create` (new screen), `Modify` (existing screen), or `Repair` (fix contract violations)
 - **Plan document path** — absolute path to `canvas-app-plan.md`
 - **Working directory** — where the `.pa.yaml` files are located
+- **Contract violations** (Repair action only) — list of specific missing elements to fix
 
 ## Step 1 — Read the Plan Document
 
@@ -37,6 +38,7 @@ Read `canvas-app-plan.md` at the path provided in your invocation prompt.
 **If your action is `Create`**, locate and extract:
 
 - The **Per-Screen Specification** for your assigned screen (purpose, layout, controls, data bindings, images, navigation, state)
+- The **Contract** section for your screen (Primary Content, Primary Interaction, Required Handlers, Journey Steps)
 - The **Aesthetic Direction** section (exact RGBA values, layout strategy, typography scale)
 - The **Named Variables and Shared State** section (variable names to use for consistency)
 - The **Control Definitions** for every control type your screen uses (full `describe_control` output embedded in the plan)
@@ -49,6 +51,14 @@ Read `canvas-app-plan.md` at the path provided in your invocation prompt.
 - The **Control Definitions** for any new control types your screen uses (full `describe_control` output embedded in the plan)
 - The **TechnicalGuide Key Conventions** section (YAML syntax rules)
 
+**If your action is `Repair`**, locate and extract:
+
+- The **Per-Screen Specification** or **Per-Screen Edit Specification** for your screen
+- The **Contract** section for your screen (Primary Content, Primary Interaction, Required Handlers, Journey Steps)
+- The **Control Definitions** for any control types needed to fix the violations
+- The **TechnicalGuide Key Conventions** section (YAML syntax rules)
+- Also note the **Contract violations** from your invocation prompt — these are the specific issues to fix
+
 Do not call `describe_control`, `list_controls`, `list_apis`, or `list_data_sources`. All of that information is embedded in the plan document.
 
 ## Step 2 — Create a Task
@@ -57,11 +67,29 @@ Do not call `describe_control`, `list_controls`, `list_apis`, or `list_data_sour
 
 **Modify action:** Call `TaskCreate` for: "Edit [Screen Name] screen"
 
+**Repair action:** Call `TaskCreate` for: "Repair [Screen Name] screen — [N] contract violations"
+
 ## Step 3 — Write or Edit the Screen
 
 ### Create action — Write the screen from scratch
 
 Write `[ScreenName].pa.yaml` to the working directory.
+
+**Before writing any YAML, read the Contract section for your screen.** You must implement:
+
+1. **Every control listed** in Primary Content and Primary Interaction.
+2. **Every handler listed** in Required Handlers — with actual logic, not placeholders.
+3. **Every journey step** assigned to your screen in the Journey Step Mapping table.
+4. **Every outcome behavior** specified in Outcome Handling (validation, success/failure feedback, etc.).
+
+**Reject placeholder handlers.** The following are NOT valid implementations:
+
+- Empty formulas: `OnSelect: =`
+- Boolean placeholders: `OnSelect: =false` or `OnSelect: =true`
+- Comments only: `OnSelect: =// TODO`
+- Stub text: `OnSelect: ="not implemented"`
+
+If a handler is listed in Required Handlers, it must contain the specified formula pattern.
 
 Follow the conventions from the plan document's TechnicalGuide Key Conventions section:
 
@@ -86,6 +114,14 @@ listed in the Per-Screen Edit Specification:
 - For each **control to add**: use `Edit` to insert the new control YAML in the correct location
 - For each **control to remove**: use `Edit` to delete the control's YAML block
 
+**The Contract section applies to Modify actions too.** After your changes, the screen must
+satisfy its contract. Verify that:
+
+1. Primary Content still exists (or is newly added per the edit spec).
+2. Primary Interaction still exists with a non-placeholder handler.
+3. All Required Handlers are implemented.
+4. Journey steps assigned to this screen are still functional.
+
 Follow the conventions from the plan document's TechnicalGuide Key Conventions section:
 
 - All formulas must start with `=`
@@ -97,6 +133,36 @@ Follow the conventions from the plan document's TechnicalGuide Key Conventions s
 
 Write the simplest working version of each formula. The compiler will catch syntax errors —
 reserve your reasoning for logic correctness that the compiler cannot catch.
+
+### Repair action — Fix contract violations on an existing screen
+
+You will be invoked with a Repair action when the orchestrating skill's contract verification
+(Phase 6a) detects that your screen does not fulfill its plan contract. The invocation prompt
+will include a list of **contract violations** — specific missing elements.
+
+1. **Read the plan document** to understand the full screen contract (Primary Content, Primary
+   Interaction, Required Handlers, Journey Steps).
+
+2. **Read the current `.pa.yaml`** to understand what already exists.
+
+3. **For each contract violation**, implement the missing element:
+   - **Missing Primary Content** — add the required data-displaying control (Gallery, Form,
+     DataTable, etc.) with proper data bindings as specified in the plan.
+
+   - **Missing Primary Interaction** — add or fix the required interactive control. Ensure its
+     handler (`OnSelect`, `OnChange`, etc.) contains the required logic.
+
+   - **Empty/placeholder handler** — replace the empty or placeholder formula with actual
+     implementation. Reference the plan's Required Handlers section for what the formula must do.
+
+   - **Missing navigation target** — if your screen navigates to a target that doesn't exist,
+     that's the target screen's problem, not yours. But if your own navigation handler is empty
+     or incorrect, fix it.
+
+4. **Do not remove existing functionality.** Repair means adding or fixing — never deleting
+   controls or navigation that were planned and approved.
+
+5. **Do not add filler controls** just to pass checks. Implement the actual planned content.
 
 ## Step 3.5 — Self-QA
 
@@ -126,8 +192,26 @@ Mark the task complete. Return a concise result to the orchestrating skill:
 Screen: [Screen Name]
 Action: Create
 File: [working directory]/[ScreenName].pa.yaml
+
+Contract Implementation:
+  Primary Content: [Implemented / Missing — control name]
+  Primary Interaction: [Implemented / Missing — control name]
+  Required Handlers:
+    - [ControlName.Handler]: [Implemented / Missing]
+  Outcome Handling:
+    - Validation: [Implemented / N/A]
+    - Success feedback: [Implemented / N/A]
+    - Failure feedback: [Implemented / N/A]
+    - State refresh: [Implemented / N/A]
+    - Empty state: [Implemented / N/A]
+
+Journey Steps Implemented:
+  - [Step description from Journey Step Mapping]
+Journey Steps Unresolved: [none, or list]
+
 QA fixes applied: [N]
   - [one-line description per fix, or "clean" if N=0]
+
 Status: Done
 ```
 
@@ -137,11 +221,51 @@ Status: Done
 Screen: [Screen Name]
 Action: Modify
 File: [working directory]/[ScreenName].pa.yaml
+
+Contract Implementation:
+  Primary Content: [Preserved / Added / Modified — control name]
+  Primary Interaction: [Preserved / Added / Modified — control name]
+  Required Handlers:
+    - [ControlName.Handler]: [Preserved / Added / Modified]
+
+Journey Steps Implemented:
+  - [Step description]
+Journey Steps Unresolved: [none, or list]
+
+Changes applied: [brief list of what was changed/added]
+
 QA fixes applied: [N]
   - [one-line description per fix, or "clean" if N=0]
+
 Status: Done
-Changes applied: [brief list of what was changed/added]
 ```
+
+**Repair action:**
+
+```
+Screen: [Screen Name]
+Action: Repair
+File: [working directory]/[ScreenName].pa.yaml
+
+Contract violations fixed:
+  - [one-line description per fix]
+
+Contract violations remaining: [none, or list with reason]
+  - [violation]: [why it could not be fixed]
+
+Journey Steps Implemented:
+  - [Step description]
+Journey Steps Unresolved: [none, or list]
+
+QA fixes applied: [N]
+  - [one-line description per fix, or "clean" if N=0]
+
+Status: Done
+```
+
+**For Repair actions:** You may only edit your assigned screen. If a contract violation
+requires changes to another screen (e.g., a navigation target doesn't exist), report it
+as unresolved — do not attempt to create or modify other screens.
 
 ## Critical Constraints
 

@@ -55,17 +55,20 @@ Internalize both. These govern every YAML syntax and design decision.
 ### CREATE mode
 
 Call `list_controls`, `list_apis`, and `list_data_sources`. Summarize:
+
 - Which controls are most relevant to the approved plan's screens
 - Which data sources (if any) should drive the app's data layer
 
 Then call the detail tools for resources the app will use. Collect the full output of each
 for embedding in the plan document:
+
 - `describe_api` — for each connector, to get operations and parameters
 - `get_data_source_schema` — for each data source, to get columns and Power Fx types
 
 ### EDIT mode
 
 Read all `.pa.yaml` files in the working directory. Extract:
+
 - All screens, controls, layout strategies, and formulas
 - Exact RGBA color values in use
 - All variable names and data bindings
@@ -147,6 +150,98 @@ structure (CREATE or EDIT). Follow the template exactly — fill in every sectio
 content from the approved plan, discovery results, and control definitions. Do not omit
 sections unless the template says to.
 
+### Control Prefixes (Mandatory)
+
+**Before writing any Per-Screen Specification, assign a unique 2-4 character prefix to each
+screen.** This prefix must be used by all controls on that screen to prevent naming conflicts
+when multiple screen builders run in parallel.
+
+**Rules:**
+
+1. **Every screen gets a unique prefix.** Examples: `Hom_`, `Cat_`, `Req_`, `Ord_`, `Adm_`,
+   `Det_`, `Set_`, `Frm_`.
+
+2. **All control names must include the prefix.** Write `Hom_SubmitBtn`, not `SubmitBtn`.
+   Write `Cat_DeviceGallery`, not `DeviceGallery`.
+
+3. **The Contract section uses prefixed names.** Primary Content, Primary Interaction, and
+   Required Handlers must all reference the prefixed control names.
+
+4. **The Journey Step Mapping uses prefixed names.** The Control column must match the actual
+   prefixed control name that will be written to the YAML file.
+
+5. **Do not use generic names.** Generic names like `Gallery1`, `Button1`, `TextInput1` will
+   be renamed by the compiler, breaking contract verification.
+
+**Why this matters:** When parallel screen builders write YAML files, the compiler may rename
+controls to resolve name conflicts. If the plan uses generic names, the contracts become stale
+and verification fails. Prefixed names are globally unique from the start, preventing renames.
+
+### Contract Section (Required for Each Screen)
+
+Every Per-Screen Specification **must** include a **Contract** subsection. This contract is
+verified by the orchestrating skill in Phase 6a — screens that do not fulfill their contract
+will trigger repair loops.
+
+For each screen, specify:
+
+- **Primary Content** — the main data-displaying element. Be specific: "Gallery named
+  `TaskList` with Items bound to `Filter(Tasks, Status = selectedStatus)`" not just "a
+  gallery". If the screen has no primary content (e.g., a transient confirmation screen),
+  state that explicitly.
+
+- **Primary Interaction** — the main user action and what it does. Be specific: "Button named
+  `SubmitBtn` whose OnSelect calls `Patch(Orders, orderForm.LastSubmit)`" not just "a submit
+  button". If the screen has no primary interaction (e.g., a read-only detail view), state
+  that explicitly.
+
+- **Required Handlers** — list each handler that must be non-empty and what it must do. Format:
+  `ControlName.HandlerProperty must [action]`. Example: "TaskList.OnSelect must set
+  selectedTask variable", "SubmitBtn.OnSelect must call Patch()".
+
+- **Journey Steps** — which user journey steps this screen implements. These come from the
+  approved plan's purpose description. Example: "View filtered list of tasks", "Navigate to
+  task detail", "Mark task complete".
+
+- **Outcome Handling** — specify required feedback and state management:
+  - Validation (if the screen has forms/inputs)
+  - Success feedback (after data operations)
+  - Failure feedback (error handling)
+  - State refresh (after mutations)
+  - Empty state (when no data exists)
+
+The Contract section is the acceptance criteria for the screen. Do not write vague contracts —
+write contracts that can be mechanically verified.
+
+### Core Functional Journeys (Required)
+
+After all Per-Screen Specifications, write the **Core Functional Journeys** section. This is
+mandatory for both CREATE and EDIT modes.
+
+**Requirements:**
+
+1. **Define 3–5 journeys** prioritized as P1 (critical), P2 (important), or P3 (nice-to-have).
+
+2. **Map every journey step** to a specific screen, control, and event property using the
+   Journey Step Mapping table. No step may be orphaned — every step must have exactly one
+   responsible screen and control.
+
+3. **Specify formula requirements** — for each step, state what the formula must include
+   (e.g., "must call `Patch(`", "must contain `Navigate(Home`").
+
+4. **Never use vague requirements** such as:
+   - ❌ "supports editing"
+   - ❌ "allows user to save"
+   - ❌ "handles errors appropriately"
+
+   Instead use specific, verifiable requirements:
+   - ✅ "EditBtn.OnSelect must call `Patch(Tasks, {ID: selectedTask.ID, ...})`"
+   - ✅ "SaveBtn.OnSelect must call `Patch()` and then `Navigate(Home`"
+   - ✅ "SaveBtn.OnSelect must include `IfError(Patch(...), Set(errorMessage, ...))`"
+
+5. **Validate coverage** — before writing the plan document, verify that every journey step
+   maps to exactly one screen. If a step has no responsible screen, the plan is incomplete.
+
 Mark the "Write plan document" task complete when done.
 
 ## Step 7 — Return Summary
@@ -200,7 +295,7 @@ Plan document: [working directory]/canvas-app-plan.md
 - **Embed full `describe_control` output** in the plan document — never summarize property
   names. Downstream agents must be able to write correct YAML from the plan document alone.
 - **Only include properties that were returned by `describe_control` specifically for that control.**
-  If you are uncertain whether a property exists for a control, it does not exist. Only the `describe_control` 
+  If you are uncertain whether a property exists for a control, it does not exist. Only the `describe_control`
   output is authoritative — not training data, not intuition, not analogies to similar controls.
 - **Embed exact RGBA values** from the approved plan — not prose color descriptions.
   Consistent visual design across parallel agents depends on exact values.

@@ -1,0 +1,77 @@
+# GI-004 Journey: Validation Guards
+# Tests form validation to verify error messages display correctly.
+#
+# This journey validates that validation UI exists and functions,
+# which requires screens to have actual content (not empty scaffolds).
+#
+# NOTE: Tests SEMANTIC behavior, not exact message strings.
+# Actual app messages may vary; verify the validation constraint is enforced.
+
+id: gi004-validation-guards
+name: Form Validation Guards
+description: |
+  Tests that form validation is implemented with meaningful feedback.
+  Validates that validation UI controls exist and enforce constraints.
+
+purpose: Verify form screens have functional validation with meaningful feedback
+
+steps:
+  - action: "Navigate to the order request form"
+    expect: "Form displays with input fields for quantity, justification, etc."
+    fail_if: "Form screen is empty or has no input controls"
+
+  - action: "Attempt to submit form with empty justification field"
+    expect: "Submission is blocked; error indicates justification is required"
+    semantic_match: "Message mentions justification, request reason, or required field"
+    # Observed message: "Enter a justification for this request"
+    fail_if: "Form submits without validation or shows no feedback"
+
+  - action: "Clear error and enter quantity of 0 or negative number"
+    expect: "Submission is blocked; error indicates invalid quantity"
+    semantic_match: "Message mentions quantity, minimum, or positive number required"
+    fail_if: "Invalid quantity accepted without feedback"
+
+  - action: "Enter quantity exceeding available stock"
+    expect: "Submission is blocked; error indicates stock limit exceeded"
+    semantic_match: "Message mentions stock, available, exceeds, or limit"
+    # Observed message: "Quantity exceeds available stock (N available)"
+    fail_if: "Over-stock quantity accepted without feedback"
+
+  - action: "Correct all validation errors with valid values"
+    expect: "All error messages clear; form is ready to submit"
+    fail_if: "Error messages persist after fixing issues"
+
+  - action: "Submit the valid request"
+    expect: "Form submits successfully; shows confirmation or navigates away"
+    fail_if: "Valid submission fails or provides no feedback"
+
+pass_criteria:
+  - "Empty justification is blocked with feedback mentioning the field"
+  - "Invalid quantity is blocked with feedback about the constraint"
+  - "Over-stock quantity is blocked with feedback mentioning the limit"
+  - "Valid request succeeds after correcting errors"
+  - "Error messages are field-specific, not generic"
+
+fail_criteria:
+  - "Form has no visible validation feedback mechanism"
+  - "Validation shows only generic 'Error' with no field context"
+  - "Invalid data is accepted without blocking submission"
+  - "Error messages reference the wrong field or constraint"
+
+validation_semantics:
+  # These are semantic requirements, not exact strings
+  required_justification:
+    constraint: "Justification field must not be empty"
+    feedback_must_mention: ["justification", "reason", "required"]
+  positive_quantity:
+    constraint: "Quantity must be a positive integer"
+    feedback_must_mention: ["quantity", "number", "positive", "at least"]
+  stock_limit:
+    constraint: "Quantity cannot exceed available stock"
+    feedback_must_mention: ["stock", "available", "exceeds", "limit"]
+
+anti_patterns:
+  - "Patch/Navigate executes before validation check"
+  - "Generic 'Something went wrong' with no field context"
+  - "Validation errors not visible to user"
+  - "Form submits with invalid data and fails server-side"
