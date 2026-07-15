@@ -63,7 +63,9 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   `seedRecordGraph` (SDK-owned parent-bind + resolve-by-name idempotency), enriches default
   Active/Inactive views via `enrichDefaultViews`, then
   `createWebResource` for form JS, `createArtifact`+`pushArtifact` for views/charts/forms/app,
-  `addSubGrid` for sub-grids, `addFormEventHandler` for form events) — so new, existing, and mixed
+  `addSubGrid` for sub-grids, `addField`/`removeField` to reconcile a form's field set on edit (add the
+  spec's fields, and — for an author-controlled **explicit** layout — prune fields it dropped, never the
+  primary), `addFormEventHandler` for form events) — so new, existing, and mixed
   envs all work. The data model is **complete** (all column types, global choices, status reasons,
   alternate keys, N:N). It also builds **quick-create/quick-view forms** (`formType`) with **quick-view
   placement** (`forms[].quickViews[]` — embed a QuickView form via a lookup), **modern command-bar

@@ -122,6 +122,35 @@ test('addFormEventHandler injects a handler into the retained FormXML headlessly
   });
 });
 
+test('CONTRACT: vendored removeField drops a bound field from a fetched form (reconcile can DELETE a field, not only add)', async () => {
+  const { createMakerSdk } = require(BUNDLE);
+  const ws = mkTempWorkspace('sdk-rmfield-');
+  const FID = '22222222-2222-2222-2222-222222222222';
+  // A fetched form whose retained formxml carries two bound fields (name + tier). The skill's form
+  // reconcile removes a field the edited spec dropped — this locks that the bundle can do it.
+  const formXml =
+    '<form><tabs><tab id="{11111111-1111-1111-1111-111111111111}" name="general"><columns><column><sections>' +
+    '<section id="{55555555-5555-5555-5555-555555555555}" name="sec" columns="1"><rows>' +
+    '<row><cell id="{c1}"><control id="new_name" classid="{4273EDBD-AC1D-40d3-9FB2-095C621B552D}" datafieldname="new_name" /></cell></row>' +
+    '<row><cell id="{c2}"><control id="new_tier" classid="{4273EDBD-AC1D-40d3-9FB2-095C621B552D}" datafieldname="new_tier" /></cell></row>' +
+    '</rows></section></sections></column></columns></tab></tabs></form>';
+  let pushedXml = '';
+  const httpClient = {
+    get: async () => ({ status: 200, headers: { etag: 'W/"1"' }, body: { formid: FID, name: 'F', type: 2, objecttypecode: 'new_customer', formxml: formXml } }),
+    post: async () => ({ status: 204, headers: {}, body: {} }),
+    patch: async (url, body) => { pushedXml = String((body && body.formxml) || ''); return { status: 204, headers: {}, body: {} }; },
+    delete: async () => ({ status: 204, headers: {}, body: {} }),
+    put: async () => ({ status: 204, headers: {}, body: {} }),
+  };
+  const sdk = createMakerSdk({ workspacePath: ws, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+  sdk.initWorkspace();
+  await sdk.fetchArtifact('form', FID);
+  sdk.removeField(FID, { fieldName: 'new_tier' });
+  await sdk.pushArtifact('form', FID);
+  assert.ok(/datafieldname="new_name"/.test(pushedXml), 'the kept field survives the push');
+  assert.ok(!/datafieldname="new_tier"/.test(pushedXml), 'the removed field is gone from the pushed formxml');
+});
+
 // --- SDK safety-boundary contract invariants ------------------------------------------------
 // Lock the behaviors the SKILL depends on so a future SDK hardening (GUID normalizer, safe DOM
 // element factory, percent-encoding OData query builder) can't silently break the skill when the

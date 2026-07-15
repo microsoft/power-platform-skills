@@ -421,7 +421,7 @@ function formDef(spec, f) {
     tabs[0].sections.push({ name: 'section_notes', label: 'Notes', visible: true, showLabel: true, columns: 1, rows: [{ cells: [notesCell()] }] });
   }
 
-  return { entityLogicalName: entityLogical, name: f.name || `${f.entity} form`, formType, status: 'Active', tabs };
+  return { entityLogicalName: entityLogical, name: f.name || `${f.entity} form`, formType, status: 'Active', tabs, __explicitLayout: explicit, __primaryField: entity ? entity.primaryAttribute.schemaName.toLowerCase() : undefined };
 }
 
 // The ordered field logical names a form definition places (across tabs/sections/rows/cells),
@@ -656,8 +656,25 @@ async function runSdkBuild(spec, opts = {}) {
   // to reuse a form by name and skip the push, silently dropping layout edits.
   const reconcileForm = async (formId, def) => {
     await provision.fetchArtifact('form', formId);
-    for (const fieldName of formFieldLogicals(def)) await provision.addField(formId, { fieldName });
+    const want = formFieldLogicals(def);
+    for (const fieldName of want) await provision.addField(formId, { fieldName });
     for (const sg of def.__subgrids || []) provision.addSubGrid(formId, sg);
+    // Prune fields the deployed form still carries that the spec's EXPLICIT layout dropped, so
+    // editing a form to REMOVE a field actually lands — the old add-only reconcile could never
+    // delete one, silently keeping stale fields. Gated to an author-controlled layout (explicit
+    // `tabs`): an AUTO layout stays additive so we never strip a column a user added in Maker.
+    // Never remove the entity's primary field — a main form must keep it, even if an explicit
+    // layout omits it (the author usually relies on the header's primary field). Uses the SDK's
+    // idempotent removeField (no-op when the field is already gone).
+    if (def.__explicitLayout && typeof provision.removeField === 'function') {
+      const current = provision.getArtifact('form', formId) || {};
+      const wantSet = new Set(want);
+      const primary = def.__primaryField ? String(def.__primaryField).toLowerCase() : null;
+      for (const logical of formFieldLogicals(current)) {
+        if (wantSet.has(logical) || logical === primary) continue;
+        await provision.removeField(formId, { fieldName: logical });
+      }
+    }
     await provision.pushArtifact('form', formId);
     await provision.publishArtifact('form', formId);
     await provision.addSolutionComponent({ componentId: formId, componentType: COMPONENT_TYPE.form, solutionUniqueName: sol.uniqueName });

@@ -277,6 +277,45 @@ When the user has entities that already exist (detected in Step 3), propose
 columns that complement rather than duplicate what's already there. Build
 *around* existing tables.
 
+#### Table icons (assign one per custom table — default)
+
+**By default, give every _custom_ table you create a meaningful table icon** so the app nav shows a
+recognizable glyph instead of the generic Dataverse table cube. This is the default authoring
+behavior — only skip it if the user declines. (A model-driven app's nav icon for an `entity`
+subarea comes from the **table's own icon**, not the sitemap subarea — a subarea `vectorIcon` is
+ignored for entity subareas.)
+
+Author it entirely inside the App Spec (so the app stays self-contained on export/import):
+
+1. Add an **SVG web resource** to `webResources[]` (`"type": "svg"`) carrying the icon markup, named
+   `<publisherPrefix>_<tablelogical>_icon` (e.g. `new_project_icon`).
+2. Point the table at it with `entities[].vectorIcon: "<that web resource name>"` (→ Dataverse
+   `IconVectorName`). The build creates the web resource, publishes it, then sets the table icon.
+
+Pick a glyph that matches the table's concept (a briefcase for Projects, a clipboard/checklist for
+Work Items, a person for Team Members, a calendar for Sprints, a document for Contracts, etc.) and
+emit **clean, original, single-color SVG** — do **not** paste a third-party icon file. Author it
+like a Fluent V9 glyph:
+
+- `viewBox="0 0 24 24"` (or `0 0 32 32`), no fixed `width`/`height`.
+- One or two `<path>` elements, `fill="currentColor"` (Dataverse tints it) — simple, legible at 16px.
+- Keep it geometric and minimal; avoid gradients, embedded rasters, or `<script>`.
+
+```json
+"webResources": [
+  { "name": "new_project_icon", "type": "svg",
+    "content": "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='currentColor' d='M9 4h6a2 2 0 0 1 2 2v1h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3V6a2 2 0 0 1 2-2Zm0 3h6V6H9v1Z'/></svg>" }
+],
+"entities": [
+  { "schemaName": "new_project", "displayName": "Project", "vectorIcon": "new_project_icon",
+    "primaryAttribute": { "schemaName": "new_name", "displayName": "Name" }, "columns": [ ... ] }
+]
+```
+
+Standard/reused tables (Account, Contact, systemuser, …) already ship an icon — leave them alone.
+See [`references/app-spec-schema.md`](./app-spec-schema.md) → `entities[].vectorIcon` and
+`webResources[]`.
+
 Persist the agreed data model to `<working-dir>/app-spec.json` before
 proceeding to Level (b).
 

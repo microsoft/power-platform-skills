@@ -93,9 +93,19 @@ function mockSdk(opts = {}) {
     },
     enrichDefaultViews: async (logical, cols, o2) => { calls.push({ name: 'enrichDefaultViews', args: [logical, cols, o2] }); return { updated: [`defview-${logical}`] }; },
     createArtifact: (t, def) => { calls.push({ name: 'createArtifact', args: [t, def] }); return Object.assign({ id: `${t}-${++idc}` }, def); },
-    getArtifact: (t, id) => { calls.push({ name: 'getArtifact', args: [t, id] }); return { id, columns: (opts.existingViewColumns || []) }; },
+    getArtifact: (t, id) => {
+      calls.push({ name: 'getArtifact', args: [t, id] });
+      // A form reconcile reads the deployed form's current fields (to prune ones the spec dropped);
+      // seed them from opts.existingFormFields (logical names) as a minimal tabs->sections->rows tree.
+      if (t === 'form') {
+        const fields = opts.existingFormFields || [];
+        return { id, tabs: [{ sections: [{ rows: fields.map((fn) => ({ cells: [{ control: { fieldName: fn } }] })) }] }] };
+      }
+      return { id, columns: (opts.existingViewColumns || []) };
+    },
     updateRecord: async (e, id, data) => { calls.push({ name: 'updateRecord', args: [e, id, data] }); },
     addField: async (formId, o) => { calls.push({ name: 'addField', args: [formId, o] }); return {}; },
+    removeField: async (formId, o) => { calls.push({ name: 'removeField', args: [formId, o] }); return {}; },
     pushArtifact: async (t, id) => { calls.push({ name: 'pushArtifact', args: [t, id] }); return { type: t, id, success: true }; },
     setViewColumns: (id, cols) => { calls.push({ name: 'setViewColumns', args: [id, cols] }); return { id }; },
     addSubGrid: (formId, o) => { calls.push({ name: 'addSubGrid', args: [formId, o] }); return {}; },
@@ -896,6 +906,37 @@ test('form update-in-place: an existing form is reconciled (addField per spec fi
   assert.ok(find(calls, 'addField').length > 0, 'spec fields re-applied via the idempotent addField');
   assert.ok(find(calls, 'fetchArtifact').some((c) => c.args[0] === 'form' && c.args[1] === 'form-existing'), 'form fetched before reconcile');
   assert.ok(find(calls, 'publishArtifact').some((c) => c.args[0] === 'form'), 'form published so the edit goes live');
+});
+
+test('form reconcile: an explicit-layout edit REMOVES a field dropped from the spec (add-only reconcile kept stale fields)', async () => {
+  const spec = makeSpec();
+  // Author controls the exact field set via explicit tabs, listing only name + tier.
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit',
+    tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_name', 'new_tier'] }] }] }];
+  // The deployed form still carries an extra field the edited spec no longer lists.
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier', 'new_obsolete'] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const removed = find(calls, 'removeField').map((c) => c.args[1].fieldName);
+  assert.deepStrictEqual(removed, ['new_obsolete'], 'only the field dropped from the spec is removed');
+});
+
+test('form reconcile: an AUTO layout is additive — a deployed field not in the spec is NOT pruned (Maker adds survive)', async () => {
+  // makeSpec's new_customer form is layout:auto; a manual Maker field must not be stripped.
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier', 'new_manual'] });
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  assert.strictEqual(find(calls, 'removeField').length, 0, 'auto layout never removes fields');
+});
+
+test('form reconcile: the entity primary field is never pruned, even when an explicit layout omits it', async () => {
+  const spec = makeSpec();
+  // Explicit layout omits the primary (new_name) — authors often rely on the header primary field.
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit',
+    tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_tier'] }] }] }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier', 'new_extra'] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const removed = find(calls, 'removeField').map((c) => c.args[1].fieldName);
+  assert.ok(!removed.includes('new_name'), 'the primary field (new_name) is protected from pruning');
+  assert.ok(removed.includes('new_extra'), 'a genuinely dropped field is still removed');
 });
 
 test('Gap 2: our (custom) main form is promoted to the entity default (isdefault) and NOTHING is deactivated', async () => {

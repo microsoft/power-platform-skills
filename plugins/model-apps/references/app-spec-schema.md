@@ -67,12 +67,16 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   "displayName": "Ticket",
   "pluralName": "Tickets",               // optional (defaults to "<displayName>s")
   "hasNotes": true,                       // optional — enables the Notes/timeline on the table + form
-  "vectorIcon": "new_ticketicon",         // optional — the table's OWN icon (what the modern app
-                                          //   designer + app nav render for the table). Must be a
-                                          //   declared SVG web resource (webResources[] type "svg").
+  "vectorIcon": "new_ticketicon",         // RECOMMENDED — the table's OWN icon (what the modern app
+                                          //   designer + app nav render for the table). Assign one
+                                          //   per CUSTOM table by default so the nav shows a glyph,
+                                          //   not the generic table cube. Must be a declared SVG web
+                                          //   resource (webResources[] type "svg").
                                           //   NOTE: this is a web-resource name, NOT a Fluent token —
                                           //   an unresolvable value leaves the designer's property
                                           //   pane stuck on a glimmer, so it is hard-validated.
+                                          //   (Author a clean, original single-path Fluent-style SVG;
+                                          //   see references/authoring-flow.md → Table icons.)
   "icon": "new_ticketicon_png",           // optional — raster fallback (png/jpg/gif/ico web resource,
                                           //   → IconMediumName). Prefer vectorIcon for the modern look.
   "existing": true,                       // optional — this table PRE-EXISTS (system table like

@@ -9,6 +9,17 @@ plus local-dev ergonomics, sample coverage, and an automated eval suite with
 real and synthetic fixtures. Builds on v2.1; no breaking changes.
 
 ### Added
+- **Editing a form can now REMOVE a field, not just add one (`sdk-build.js` + SDK `removeField`).** The
+  form reconcile was add-only, so dropping a field from an explicit `tabs` layout and rebuilding silently
+  kept the stale field on the deployed form. The build now prunes fields the deployed form still carries
+  that the spec's **explicit** layout no longer lists (via the new idempotent SDK `removeField` /
+  `removeFieldFromForm`). Scoped to author-controlled explicit layouts only — an **auto** layout stays
+  additive (a field added in Maker survives) — and the entity **primary** field is never pruned.
+- **Meaningful table icons by default (authoring flow).** The `/app-builder` authoring flow now assigns
+  each **custom** table a clean, original, Fluent-style **SVG** icon by default (an `svg` `webResources[]`
+  entry + `entities[].vectorIcon`), so a freshly built app's nav shows a recognizable glyph instead of the
+  generic table cube. The build mechanism was already there; this makes using it the default. Standard/reused
+  tables keep their shipped icon.
 - **Opt-in auto sub-grids (`forms[].autoSubgrids: true`).** Adds a sub-grid to a parent form for every
   child relationship of its entity (each 1:N where it's the parent + each N:N) that isn't already in
   `subgrids[]`, so a hub table's form lists its children without hand-authoring each grid.
