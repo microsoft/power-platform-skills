@@ -2,7 +2,7 @@
 name: setup
 description: Set up Power Automate CLI prerequisites. Use when the user is new, something isn't working, or they need help getting started.
 user-invocable: true
-allowed-tools: Bash, Read, Write, Glob, Grep, AskUserQuestion, mcp__flowagent__list_environments, mcp__flowagent__set_current_env, mcp__flowagent__get_current_env, mcp__flowagent__resolve_environment, mcp__flowagent__list_flows, mcp__flowagent__get_flow, mcp__flowagent__create_flow, mcp__flowagent__update_flow, mcp__flowagent__edit_flow, mcp__flowagent__copy_flow, mcp__flowagent__publish_flow, mcp__flowagent__disable_flow, mcp__flowagent__delete_flow, mcp__flowagent__run_flow, mcp__flowagent__get_run_history, mcp__flowagent__get_run_details, mcp__flowagent__get_run_actions, mcp__flowagent__get_run_action_repetitions, mcp__flowagent__cancel_run, mcp__flowagent__cancel_all_runs, mcp__flowagent__resubmit_run, mcp__flowagent__diagnose_run, mcp__flowagent__list_connections, mcp__flowagent__list_connectors, mcp__flowagent__get_connector, mcp__flowagent__search_operations, mcp__flowagent__get_operation_details, mcp__flowagent__pick_or_create_connection, mcp__flowagent__resolve_refs, mcp__flowagent__resolve_params, mcp__flowagent__scaffold_flow, mcp__flowagent__list_templates, mcp__flowagent__validate_flow, mcp__flowagent__preflight_flow, mcp__flowagent__smoke_test, mcp__flowagent__get_expression_help, mcp__flowagent__list_desktop_flows, mcp__flowagent__list_machine_groups, mcp__flowagent__run_desktop_flow, mcp__flowagent__get_flow_context, mcp__flowagent__set_current_flow, mcp__flowagent__clear_current_flow, mcp__flowagent__invoke_operation, mcp__flowagent__get_past_trigger_inputs, mcp__flowagent__test_connection, mcp__flowagent__fix_connection, mcp__flowagent__delete_connection, mcp__flowagent__preview_update, mcp__flowagent__get_backup, mcp__flowagent__list_backups, mcp__flowagent__restore_backup, mcp__flowagent__list_trigger_emulators
+allowed-tools: Bash, Read, Write, Glob, Grep, AskUserQuestion, mcp__flowagent__*
 model: opus
 ---
 
@@ -51,9 +51,27 @@ az account show --output json 2>&1
   This will open their browser. Tell them: "A browser window should open. Sign in with your work account — the one you use for Power Automate."
   After login completes, confirm it worked by running `az account show` again.
 
-**Verify token access** — this catches permission issues early:
+**Detect Azure cloud** — check if the user is on a sovereign cloud:
 ```bash
-az account get-access-token --resource https://service.flow.microsoft.com --output json 2>&1
+az cloud show --query name -o tsv 2>&1
+```
+- **If it returns `AzureCloud`**: Commercial cloud, proceed normally.
+- **If it returns `AzureUSGovernment`**: GCC High / US Government cloud. Tell the user:
+  "You're on Azure US Government. I'll configure the plugin for GCC High endpoints."
+  Then set the sovereign cloud env vars for the session:
+  ```bash
+  export PA_FLOW_RESOURCE="https://service.flow.microsoft.us"
+  export PA_BASE_URL="https://gov.api.flow.microsoft.us"
+  export PA_PPAPI_SUFFIX="environment.api.gov.powerplatform.us"
+  export PA_AUTHORITY_HOST="https://login.microsoftonline.us"
+  export PA_CONNECTIVITY_RESOURCE="https://api.gov.powerplatform.us"
+  ```
+  Tell the user: "For permanent configuration, add these to your shell profile or set them in `~/.power-automate-cli/config.json`."
+- **If it returns something else** (e.g. `AzureChinaCloud`): Tell them sovereign cloud support is limited and they may need to set `PA_FLOW_RESOURCE` and `PA_BASE_URL` manually for their cloud.
+
+**Verify token access** — this catches permission issues early. Use the correct resource for the detected cloud:
+```bash
+az account get-access-token --resource "${PA_FLOW_RESOURCE:-https://service.flow.microsoft.com}" --output json 2>&1
 ```
 - **If it works**: Move on.
 - **If it fails with "AADSTS"**: The user's account may not have Power Automate access. Tell them: "Your Azure account doesn't seem to have access to Power Automate. Check with your IT admin that you have a Power Automate license."
@@ -62,29 +80,22 @@ az account get-access-token --resource https://service.flow.microsoft.com --outp
 ## Step 4: Check the FlowAgent tools are wired
 
 The plugin talks to Power Automate through the **FlowAgent MCP server**, which is
-launched automatically from the plugin's `.mcp.json` via a small Node
-bootstrap that resolves `PLUGIN_ROOT` / `CLAUDE_PLUGIN_ROOT` and imports
-`server/mcp.mjs`.
+launched automatically from the plugin's `.mcp.json` via
+`node ${CLAUDE_PLUGIN_ROOT}/server/mcp.mjs`.
 
 - **If `flowagent-*` / `mcp__flowagent__*` tools appear in your tool list**: tell
   them "The Power Automate tools are connected" and move on.
-- **If they're missing**: the MCP server isn't registered. Ask the user for
-  confirmation before fixing:
-
-  **Tell them**: "The FlowAgent MCP server isn't wired up yet. I can fix this
-  by adding it to your `~/.copilot/mcp-config.json`. Shall I go ahead?"
-
-  **If they confirm**, fix it:
+- **If they're missing**: the MCP server isn't registered. Fix it automatically:
 
   1. **Locate the installed plugin's MCP bundle.** Run:
      ```bash
-     node -e "const fs=require('fs'),p=require('path'),d=p.join(process.env.HOME||process.env.USERPROFILE,'.copilot','installed-plugins');try{const find=(dir)=>{for(const e of fs.readdirSync(dir,{withFileTypes:true})){const f=p.join(dir,e.name);if(e.isDirectory())try{const r=find(f);if(r)return r}catch{}if(e.name==='mcp.mjs'&&dir.split(p.sep).includes('power-automate'))return dir}return null};const r=find(d);if(r)console.log(JSON.stringify({found:true,serverDir:r,mcpMjs:p.join(r,'mcp.mjs')}));else console.log(JSON.stringify({found:false}))}catch(e){console.log(JSON.stringify({found:false,error:e.message}))}"
+     node -e "const fs=require('fs'),p=require('path'),d=p.join(process.env.HOME||process.env.USERPROFILE,'.copilot','installed-plugins');try{const find=(dir)=>{for(const e of fs.readdirSync(dir,{withFileTypes:true})){const f=p.join(dir,e.name);if(e.isDirectory())try{const r=find(f);if(r)return r}catch{}if(e.name==='mcp.mjs')return dir}return null};const r=find(d);if(r)console.log(JSON.stringify({found:true,serverDir:r,mcpMjs:p.join(r,'mcp.mjs')}));else console.log(JSON.stringify({found:false}))}catch(e){console.log(JSON.stringify({found:false,error:e.message}))}"
      ```
 
   2. **If found**, read `~/.copilot/mcp-config.json`, add the `flowagent` MCP
      entry, and write it back:
      ```bash
-     node -e "const fs=require('fs'),p=require('path');const cfgPath=p.join(process.env.HOME||process.env.USERPROFILE,'.copilot','mcp-config.json');let cfg;try{cfg=JSON.parse(fs.readFileSync(cfgPath,'utf8'))}catch{cfg={mcpServers:{}}};if(!cfg.mcpServers)cfg.mcpServers={};if(cfg.mcpServers.flowagent){console.log('already registered');process.exit(0)}const pluginDir=p.join(process.env.HOME||process.env.USERPROFILE,'.copilot','installed-plugins');const find=(dir)=>{for(const e of fs.readdirSync(dir,{withFileTypes:true})){const f=p.join(dir,e.name);if(e.isDirectory())try{const r=find(f);if(r)return r}catch{}if(e.name==='mcp.mjs'&&dir.split(p.sep).includes('power-automate'))return dir}return null};const srvDir=find(pluginDir);if(!srvDir){console.log('mcp.mjs not found');process.exit(1)}const mcpPath=p.join(srvDir,'mcp.mjs');cfg.mcpServers.flowagent={command:'node',args:[mcpPath]};fs.writeFileSync(cfgPath,JSON.stringify(cfg,null,2)+'\n');console.log('registered flowagent MCP at '+mcpPath)"
+     node -e "const fs=require('fs'),p=require('path');const cfgPath=p.join(process.env.HOME||process.env.USERPROFILE,'.copilot','mcp-config.json');let cfg;try{cfg=JSON.parse(fs.readFileSync(cfgPath,'utf8'))}catch{cfg={mcpServers:{}}};if(!cfg.mcpServers)cfg.mcpServers={};if(cfg.mcpServers.flowagent){console.log('already registered');process.exit(0)}const pluginDir=p.join(process.env.HOME||process.env.USERPROFILE,'.copilot','installed-plugins');const find=(dir)=>{for(const e of fs.readdirSync(dir,{withFileTypes:true})){const f=p.join(dir,e.name);if(e.isDirectory())try{const r=find(f);if(r)return r}catch{}if(e.name==='mcp.mjs')return dir}return null};const srvDir=find(pluginDir);if(!srvDir){console.log('mcp.mjs not found');process.exit(1)}const mcpPath=p.join(srvDir,'mcp.mjs');cfg.mcpServers.flowagent={command:'node',args:[mcpPath]};fs.writeFileSync(cfgPath,JSON.stringify(cfg,null,2)+'\n');console.log('registered flowagent MCP at '+mcpPath)"
      ```
 
   3. **Tell the user** to restart the agent (Copilot CLI: `/restart`, Claude Code:
@@ -94,9 +105,8 @@ bootstrap that resolves `PLUGIN_ROOT` / `CLAUDE_PLUGIN_ROOT` and imports
      plugin first:
      ```
      /plugin marketplace add microsoft/power-platform-skills
-     /plugin install power-automate@power-platform-skills
      ```
-     Then run `/setup` again.
+     Then select `power-automate` and run `/setup` again.
 
 ## Step 5: Smoke Test
 

@@ -67,3 +67,34 @@ It needs only Node.js 18+ — no `npx`, no published npm package, no remote host
 
 Auth uses Azure CLI (`az login`) plus MSAL for connectivity endpoints — see the
 [FlowAgent repo CLAUDE.md](https://github.com/matow_microsoft/flow-agent/blob/main/CLAUDE.md).
+
+## Sovereign clouds (GCC High, DoD)
+
+The plugin auto-detects your Azure cloud from `az cloud show`. For GCC High:
+
+```bash
+az cloud set --name AzureUSGovernment
+az login
+```
+
+The plugin will detect the government cloud and use GCC High endpoints. To
+explicitly select a profile (required for DoD, optional for GCC High):
+
+```bash
+export PA_CLOUD=gcchigh   # or: gcc, dod
+```
+
+If endpoint URLs are incorrect for your environment, override individually:
+
+| Variable | Purpose |
+|----------|---------|
+| `PA_CLOUD` | Cloud profile: `commercial`, `gcc`, `gcchigh`, `dod` |
+| `PA_FLOW_RESOURCE` | Token audience for Flow API |
+| `PA_BASE_URL` | Flow RP base URL |
+| `PA_PPAPI_SUFFIX` | PPAPI domain suffix |
+| `PA_AUTHORITY_HOST` | Entra authority host |
+| `PA_CONNECTIVITY_RESOURCE` | Connectivity API audience |
+
+> **Note**: Sovereign cloud endpoints are community-verified. If you encounter
+> auth failures, please report the correct endpoint in
+> [issue #248](https://github.com/microsoft/power-platform-skills/issues/248).
