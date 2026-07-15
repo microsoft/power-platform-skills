@@ -129,7 +129,7 @@ The mobile-app plugin is stored in `plugins/mobile-apps` in the `power-platform-
 
 ```
 skills/       — /commands users invoke
-agents/       — sub-processes (planner, architects, screen-builder)
+agents/       — sub-processes (planner, architects, workflow-builder, screen-builder)
 hooks/        — pre/post-tool validators
 shared/       — cross-cutting refs (memory-bank, version-check, MCP, …)
 AGENTS.md     — agent contract
@@ -361,6 +361,7 @@ At Step 6.75 of `/create-mobile-app`, the `/design-system` skill offers a cost p
 | `native-app-planner` | Orchestrator — coordinates the data-model + screen-planner architects, plans native capabilities + connectors inline, runs 4 approval gates |
 | `data-model-architect` | Read-only — discovers Dataverse, scores reuse / extend / create, returns an ER section |
 | `screen-planner` | Read-only — picks navigation pattern, designs per-screen specs |
+| `workflow-builder` | Mutation — writes ONE approved pathological workflow module from one bounded implementation shard; runs in parallel waves |
 | `screen-builder` | Mutation — writes ONE TSX file per assigned screen, runs N in parallel |
 | `offline-profile-architect` | Read-only — proposes per-table row scope, relationships, selected columns, sync frequency; returns `_offline_section.md` for `/setup-offline-profile` to embed in `native-app-plan.md` |
 

@@ -77,9 +77,11 @@
     },
     "workflowPlan": {
       "type": "object",
-      "required": ["file", "schema", "stats"],
+      "required": ["file", "gateSummaryFile", "gateSummarySchema", "schema", "stats"],
       "properties": {
         "file": { "const": "workflows.json" },
+        "gateSummaryFile": { "const": "workflow-gate-summary.json" },
+        "gateSummarySchema": { "const": "workflow-gate-summary-v1" },
         "schema": { "const": "workflow-plan-v1" },
         "stats": {
           "type": "object",

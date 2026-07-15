@@ -21,6 +21,7 @@ const {
   pathContains: contains,
 } = require('./lib/modernizer-paths.js');
 const { resetWorkflowApprovals } = require('./lib/workflow-plan.js');
+const { deriveWorkflowGateSummary } = require('./lib/workflow-gate-summary.js');
 const { derivePcfStats } = require('./lib/pcf-control-intent.js');
 const { synchronizePcfControlIntentsInDirectory } = require('./sync-pcf-control-intents.js');
 
@@ -35,7 +36,9 @@ const COLLISION_PATHS = [
   'behaviors.json',
   'behavior-contract.json',
   'behavior-shards',
+  'workflow-shards',
   'workflows.json',
+  'workflow-gate-summary.json',
   'pcf-plan.json',
   'control-intent-coverage.json',
   'server-side-assets.json',
@@ -46,6 +49,7 @@ const REQUIRED_SOURCE_FILES = [
   'behaviors.json',
   'behavior-contract.json',
   'workflows.json',
+  'workflow-gate-summary.json',
   'pcf-plan.json',
   'control-intent-coverage.json',
   'server-side-assets.json',
@@ -69,6 +73,7 @@ const ALLOWED_SOURCE_ENTRIES = new Set([
   'screens',
   'state',
   'behavior-shards',
+  'workflow-shards',
   '.mobile-app-modernizer-output',
   'migration-assessment.html',
   '.DS_Store',
@@ -191,10 +196,10 @@ function validateSourceEntries(source) {
     const full = path.join(source, entry.name);
     if (entry.isSymbolicLink()) throw new Error(`symbolic links are not allowed in migration package: ${full}`);
     if (!ALLOWED_SOURCE_ENTRIES.has(entry.name)) throw new Error(`unexpected top-level migration artifact: ${full}`);
-    if ((entry.name === 'screens' || entry.name === 'state' || entry.name === 'behavior-shards') && !entry.isDirectory()) {
+    if ((entry.name === 'screens' || entry.name === 'state' || entry.name === 'behavior-shards' || entry.name === 'workflow-shards') && !entry.isDirectory()) {
       throw new Error(`migration package tree must be a directory: ${full}`);
     }
-    if (entry.name !== 'screens' && entry.name !== 'state' && entry.name !== 'behavior-shards' && !entry.isFile()) {
+    if (entry.name !== 'screens' && entry.name !== 'state' && entry.name !== 'behavior-shards' && entry.name !== 'workflow-shards' && !entry.isFile()) {
       throw new Error(`migration package artifact must be a regular file: ${full}`);
     }
   }
@@ -277,6 +282,7 @@ function main() {
       || !fs.lstatSync(behaviorShardsSource).isDirectory()) {
     throw new Error(`required behavior-shards directory is missing or unsafe: ${behaviorShardsSource}`);
   }
+  const workflowShardsSource = path.join(source, 'workflow-shards');
   const outputMarker = path.join(source, '.mobile-app-modernizer-output');
   assertRegularFile(outputMarker, 'adapter ownership marker', source);
   if (fs.readFileSync(outputMarker, 'utf8') !== ADAPTER_OUTPUT_MARKER) {
@@ -313,7 +319,10 @@ function main() {
   let pcfControlIntentFilesUpdated = 0;
   try {
     for (const relative of REQUIRED_SOURCE_FILES) {
-      if (relative === 'mobile-plugin-input.json' || relative === 'pcf-plan.json' || relative === 'workflows.json') continue;
+        if (relative === 'mobile-plugin-input.json'
+          || relative === 'pcf-plan.json'
+          || relative === 'workflows.json'
+          || relative === 'workflow-gate-summary.json') continue;
       copyChecked(path.join(source, relative), path.join(target, relative), written, args.dryRun, source);
     }
     for (const relative of OPTIONAL_SOURCE_FILES) {
@@ -323,9 +332,18 @@ function main() {
     writeJsonChecked(path.join(target, 'mobile-plugin-input.json'), input, written, args.dryRun);
     writeJsonChecked(path.join(target, 'pcf-plan.json'), pcfPlan, written, args.dryRun);
     writeJsonChecked(path.join(target, 'workflows.json'), workflowPlan, written, args.dryRun);
+    writeJsonChecked(
+      path.join(target, 'workflow-gate-summary.json'),
+      deriveWorkflowGateSummary(workflowPlan),
+      written,
+      args.dryRun
+    );
     copyMarkdownTree(path.join(source, 'screens'), path.join(target, 'screens'), written, args.dryRun, source, treeState);
     copyMarkdownTree(path.join(source, 'state'), path.join(target, 'state'), written, args.dryRun, source, treeState);
     copyJsonTree(behaviorShardsSource, path.join(target, 'behavior-shards'), written, args.dryRun, source, treeState);
+    if (fs.existsSync(workflowShardsSource)) {
+      copyJsonTree(workflowShardsSource, path.join(target, 'workflow-shards'), written, args.dryRun, source, treeState);
+    }
 
     if (!args.dryRun) {
       // Approval reset and shard projection are one logical import operation.
@@ -378,6 +396,7 @@ function main() {
       // freshness collision whenever assets.json is imported. Only remove
       // directories that this run was therefore allowed to create.
       const generatedDirectories = ['screens', 'state', 'behavior-shards'];
+      if (fs.existsSync(workflowShardsSource)) generatedDirectories.push('workflow-shards');
       if (fs.existsSync(assetsManifest)) generatedDirectories.unshift('assets/images');
       for (const directory of generatedDirectories) {
         fs.rmSync(path.join(target, directory), { recursive: true, force: true });
@@ -396,6 +415,7 @@ function main() {
     pcfControlIntentFilesUpdated,
     workflowApprovalsReset,
     behaviorShardsCopied: input.behaviorPlan?.stats?.shards || 0,
+    workflowShardsCopied: input.behaviorPlan?.stats?.workflowShards || 0,
     validationWarnings: validationResult.warnings || [],
   }, null, 2)}\n`);
 }

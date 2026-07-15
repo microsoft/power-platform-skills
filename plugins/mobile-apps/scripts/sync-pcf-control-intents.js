@@ -13,6 +13,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathContains } = require('./lib/modernizer-paths.js');
+const { projectControlIntentsForShard } = require('./lib/behavior-contract.js');
 const {
   derivePcfStats,
   projectPcfControlIntents,
@@ -119,7 +120,10 @@ function collectSynchronizedFiles(root) {
     }
     if (knownShardScreens.has(screen)) throw new Error(`behavior contract contains duplicate shard screen: ${screen}`);
     knownShardScreens.add(screen);
-    shardEntry.value.controlIntents = rowsByScreen.get(screen) || [];
+    const controlProjection = projectControlIntentsForShard(rowsByScreen.get(screen) || [], screen);
+    shardEntry.value.controlIntents = controlProjection.controlIntents;
+    shardEntry.value.controlRoleGuidance = controlProjection.controlRoleGuidance;
+    shardEntry.value.controlIntentDefaults = controlProjection.controlIntentDefaults;
     shardEntry.value.stats = {
       ...(shardEntry.value.stats || {}),
       controlIntents: shardEntry.value.controlIntents.length,

@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const { buildArtifactNameMap } = require('./modernizer-paths.js');
+const MAX_MODEL_FEED_BYTES = 512 * 1024;
 
 const BEHAVIOR_COLLECTIONS = Object.freeze([
   ['actions', 'action'],
@@ -32,6 +33,26 @@ const REGENERABLE_ACTION_INTENTS = new Set([
 
 const STATE_ACTION_INTENTS = new Set([
   'setVar', 'setContext', 'collect', 'clearCollect', 'clear',
+]);
+
+const CONTEXTUAL_CONTROL_ROLES = new Set([
+  'record-list',
+  'navigation-menu',
+  'picker-options',
+  'dashboard-sections',
+  'repeating-records-review',
+  'domain-component',
+  'shared-app-chrome',
+  'navigation-component',
+  'form-composite',
+  'disposable-canvas-scaffolding',
+  'component-review',
+  'pcf-known-capability',
+  'pcf-native-rebuild',
+  'pcf-server-backed',
+  'pcf-optional-unsupported',
+  'pcf-blocker',
+  'pcf-review',
 ]);
 
 // A state write is a regenerable candidate only when its name itself signals
@@ -327,7 +348,22 @@ function safeControlFlowFrames(frames) {
   }));
 }
 
-function coreEntryForShard(entry, group) {
+function relativeControlPath(value, screen) {
+  const prefix = `${screen}/`;
+  return typeof value === 'string' && value.startsWith(prefix)
+    ? value.slice(prefix.length)
+    : value;
+}
+
+function withoutEmptyMetadata(value) {
+  return Object.fromEntries(Object.entries(value || {}).filter(([, child]) =>
+    child !== null
+    && child !== undefined
+    && !(Array.isArray(child) && child.length === 0)
+    && !(child && typeof child === 'object' && !Array.isArray(child) && Object.keys(child).length === 0)));
+}
+
+function coreEntryForShard(entry, group, screen) {
   const copy = JSON.parse(JSON.stringify(entry));
   if (group === 'action') {
     // `sourceFormula` is the complete event handler and is repeated on every
@@ -336,7 +372,107 @@ function coreEntryForShard(entry, group) {
     // same giant handler. The lossless formula remains in behaviors.json.
     delete copy.sourceFormula;
   }
+  // The shard already declares its screen. Relative paths and behavior IDs are
+  // sufficient to locate the owner, while the global ledger retains every
+  // repeated screen/control/template label for audit and deterministic checks.
+  delete copy.screen;
+  delete copy.control;
+  delete copy.controlTemplate;
+  delete copy.hint;
+  copy.controlPath = relativeControlPath(copy.controlPath, screen);
+  if (copy.expression === copy.formula) delete copy.expression;
+  if (Array.isArray(copy.controlFlow) && copy.controlFlow.length === 0) delete copy.controlFlow;
   return copy;
+}
+
+function compactIntentHintForShard(hint, screen, intentGuidance) {
+  const copy = JSON.parse(JSON.stringify(hint));
+  delete copy.screen;
+  delete copy.control;
+  copy.controlPath = relativeControlPath(copy.controlPath, screen);
+  if (copy.guidance) {
+    const existing = intentGuidance[copy.nativeIntent];
+    if (existing && existing !== copy.guidance) {
+      throw new Error(`Conflicting native intent guidance for ${copy.nativeIntent}`);
+    }
+    intentGuidance[copy.nativeIntent] = copy.guidance;
+    delete copy.guidance;
+  }
+  return withoutEmptyMetadata(copy);
+}
+
+function buildControlRoleGuidance(rows) {
+  const fields = ['support', 'uiFreedom', 'nativeSuggestion', 'notesForAI'];
+  const grouped = new Map();
+  for (const row of toArray(rows)) {
+    if (!grouped.has(row.role)) grouped.set(row.role, []);
+    grouped.get(row.role).push(row);
+  }
+  const guidance = {};
+  for (const [role, roleRows] of grouped) {
+    const common = {};
+    for (const field of fields) {
+      const first = JSON.stringify(roleRows[0] && roleRows[0][field]);
+      if (roleRows.every((row) => JSON.stringify(row && row[field]) === first)
+          && roleRows[0] && roleRows[0][field] != null) {
+        common[field] = roleRows[0][field];
+      }
+    }
+    if (Object.keys(common).length > 0) guidance[role] = common;
+  }
+  return guidance;
+}
+
+function compactControlIntentForShard(row, screen, roleGuidance) {
+  const common = roleGuidance[row.role] || {};
+  const flags = Object.fromEntries(Object.entries(row.flags || {}).filter(([, enabled]) => enabled === true));
+  const layoutIntent = withoutEmptyMetadata({ ...(row.layoutIntent || {}) });
+  // Nesting depth is exactly derivable from the relative path and adds no
+  // semantic information to a builder feed.
+  delete layoutIntent.nestingDepth;
+  const compact = {
+    control: row.control || null,
+    path: relativeControlPath(row.path, screen),
+    canvasType: row.canvasType || null,
+    role: row.role || null,
+    ...(CONTEXTUAL_CONTROL_ROLES.has(row.role) ? { roleEvidence: row.roleEvidence || null } : {}),
+    ...(row.businessRisk && row.businessRisk !== 'low' ? { businessRisk: row.businessRisk } : {}),
+    ...(JSON.stringify(row.support) !== JSON.stringify(common.support) ? { support: row.support } : {}),
+    ...(JSON.stringify(row.uiFreedom) !== JSON.stringify(common.uiFreedom) ? { uiFreedom: row.uiFreedom } : {}),
+    ...(JSON.stringify(row.nativeSuggestion) !== JSON.stringify(common.nativeSuggestion) ? { nativeSuggestion: row.nativeSuggestion } : {}),
+    ...(JSON.stringify(row.notesForAI) !== JSON.stringify(common.notesForAI) ? { notesForAI: row.notesForAI } : {}),
+    ...(toArray(row.nativeHints).length > 0 ? { nativeHints: row.nativeHints } : {}),
+    ...(toArray(row.mustPreserve).length > 0 ? { mustPreserve: row.mustPreserve } : {}),
+    ...(toArray(row.sourceEvents).length > 0 ? { sourceEvents: row.sourceEvents } : {}),
+    ...(toArray(row.dataBindings).length > 0 ? { dataBindings: row.dataBindings } : {}),
+    ...(Object.keys(layoutIntent).length > 0 ? { layoutIntent } : {}),
+    ...(Object.keys(flags).length > 0 ? { flags } : {}),
+    ...(row.component ? { component: row.component } : {}),
+    ...(row.pcf ? { pcf: row.pcf } : {}),
+  };
+  return withoutEmptyMetadata(compact);
+}
+
+function projectControlIntentsForShard(rows, screen) {
+  const roleGuidance = buildControlRoleGuidance(rows);
+  return {
+    controlIntents: toArray(rows).map((row) => compactControlIntentForShard(row, screen, roleGuidance)),
+    controlRoleGuidance: roleGuidance,
+    controlIntentDefaults: { businessRisk: 'low' },
+  };
+}
+
+function compactUnmatchedFormulaForShard(entry, screen) {
+  const copy = JSON.parse(JSON.stringify(entry));
+  delete copy.screen;
+  delete copy.control;
+  delete copy.controlTemplate;
+  copy.controlPath = relativeControlPath(copy.controlPath, screen);
+  if (copy.raw === copy.sourceStatement) delete copy.raw;
+  // One exact source statement per unmatched row is sufficient for builder
+  // review. The repeated complete event formula remains losslessly global.
+  if (copy.sourceStatement) delete copy.sourceFormula;
+  return withoutEmptyMetadata(copy);
 }
 
 function intentDataFor(entry, reads, writes) {
@@ -537,8 +673,12 @@ function buildBehaviorArtifacts(behaviors, screens, generatedAt = '1970-01-01T00
   const shards = new Map();
   const shardIndex = [];
   for (const screen of screenNames) {
+    const sourceControlIntents = toArray(controlIntentsByScreen.get(screen));
+    const controlProjection = projectControlIntentsForShard(sourceControlIntents, screen);
+    const sourceIntentHints = toArray(hintsByScreen.get(screen));
+    const intentGuidance = {};
     const shard = {
-      $schema: 'behavior-shard-v1',
+      $schema: 'behavior-shard-v2',
       generatedAt,
       screen,
       sourceLedger: 'behaviors.json',
@@ -571,15 +711,20 @@ function buildBehaviorArtifacts(behaviors, screens, generatedAt = '1970-01-01T00
       visibility: [],
       validations: [],
       derivations: [],
-      intentHints: toArray(hintsByScreen.get(screen)),
-      controlIntents: toArray(controlIntentsByScreen.get(screen)),
-      unmatchedFormulas: toArray(behaviors && behaviors.unmatchedFormulas).filter((entry) => entry.screen === screen),
+      intentGuidance,
+      intentHints: sourceIntentHints.map((hint) => compactIntentHintForShard(hint, screen, intentGuidance)),
+      controlIntentDefaults: controlProjection.controlIntentDefaults,
+      controlRoleGuidance: controlProjection.controlRoleGuidance,
+      controlIntents: controlProjection.controlIntents,
+      unmatchedFormulas: toArray(behaviors && behaviors.unmatchedFormulas)
+        .filter((entry) => entry.screen === screen)
+        .map((entry) => compactUnmatchedFormulaForShard(entry, screen)),
     };
     for (const row of rows.filter((item) => item.entry.screen === screen)) {
       const node = nodes.get(row.entry.behaviorId);
       shard.stats.totalSourceBehaviors += 1;
       if (node.tier === 'core') {
-        shard[row.collection].push(coreEntryForShard(row.entry, row.group));
+        shard[row.collection].push(coreEntryForShard(row.entry, row.group, screen));
         shard.stats.coreBehaviors += 1;
       } else {
         shard.stats.regenerableBehaviors += 1;
@@ -627,43 +772,159 @@ function buildBehaviorArtifacts(behaviors, screens, generatedAt = '1970-01-01T00
     shards: shardIndex,
     appShard: shardFileByScreen.get('App'),
   };
-  return { contract, shards };
+  return { contract, shards, workflowShards: new Map() };
 }
 
 function attachWorkflowRefs(artifacts, workflowPlan) {
   const workflows = toArray(workflowPlan && workflowPlan.workflows);
+  artifacts.workflowShards = new Map();
+  artifacts.contract.workflowShards = [];
+  const delegatedBehaviorIds = new Set();
+  const delegatedHintIds = new Set();
   let totalRefs = 0;
+  let totalDelegatedCore = 0;
+  let totalDelegatedHints = 0;
   for (const shardRow of toArray(artifacts && artifacts.contract && artifacts.contract.shards)) {
     const shard = artifacts.shards.get(shardRow.file);
     if (!shard) throw new Error(`Internal behavior-contract error: shard missing for ${shardRow.file}`);
-    shard.workflowRefs = workflows
-      .filter((workflow) => workflow.source?.screen === shard.screen)
-      .map((workflow) => ({
+    const screenWorkflows = workflows.filter((workflow) => workflow.source?.screen === shard.screen);
+    shard.workflowRefs = screenWorkflows
+      .map((workflow) => {
+        if (!/^wf-[0-9a-f]{16}$/.test(String(workflow.workflowId || ''))) {
+          throw new Error(`Internal behavior-contract error: invalid workflow ID ${workflow.workflowId || 'missing'}`);
+        }
+        const coreBehaviorIds = toArray(workflow.source?.coreBehaviorIds);
+        const intentHintIds = toArray(workflow.proposal?.intentHintIds);
+        for (const behaviorId of coreBehaviorIds) {
+          if (delegatedBehaviorIds.has(behaviorId)) throw new Error(`Workflow behavior delegated more than once: ${behaviorId}`);
+          delegatedBehaviorIds.add(behaviorId);
+        }
+        for (const hintId of intentHintIds) {
+          if (delegatedHintIds.has(hintId)) throw new Error(`Workflow intent delegated more than once: ${hintId}`);
+          delegatedHintIds.add(hintId);
+        }
+        const actionById = new Map(shard.actions.map((action) => [action.behaviorId, action]));
+        const hintById = new Map(shard.intentHints.map((hint) => [hint.hintId, hint]));
+        const workflowActions = coreBehaviorIds.map((behaviorId) => {
+          const action = actionById.get(behaviorId);
+          if (!action) throw new Error(`Workflow ${workflow.workflowId} core behavior is absent from ${shardRow.file}: ${behaviorId}`);
+          return action;
+        });
+        const workflowHints = intentHintIds.map((hintId) => {
+          const hint = hintById.get(hintId);
+          if (!hint) throw new Error(`Workflow ${workflow.workflowId} intent hint is absent from ${shardRow.file}: ${hintId}`);
+          return hint;
+        });
+        const implementationShard = `workflow-shards/${workflow.workflowId}.json`;
+        const usedNativeIntents = new Set(workflowHints.map((hint) => hint.nativeIntent));
+        const intentGuidance = Object.fromEntries(Object.entries(shard.intentGuidance || {})
+          .filter(([nativeIntent]) => usedNativeIntents.has(nativeIntent)));
+        const workflowShard = {
+          $schema: 'workflow-implementation-shard-v1',
+          generatedAt: shard.generatedAt,
+          workflowId: workflow.workflowId,
+          screen: shard.screen,
+          source: {
+            control: workflow.source?.control || null,
+            controlPath: relativeControlPath(workflow.source?.controlPath, shard.screen),
+            event: workflow.source?.event || null,
+          },
+          target: {
+            module: workflow.proposal?.target?.module || null,
+            importPath: workflow.proposal?.target?.importPath || null,
+            exportName: workflow.proposal?.target?.exportName || null,
+            callSiteFile: workflow.proposal?.target?.callSiteFile || null,
+          },
+          coreBehaviorIds,
+          intentHintIds,
+          intentGuidance,
+          actions: workflowActions,
+          intentHints: workflowHints,
+        };
+        artifacts.workflowShards.set(implementationShard, workflowShard);
+        artifacts.contract.workflowShards.push({
+          workflowId: workflow.workflowId,
+          screen: shard.screen,
+          file: implementationShard,
+          stats: {
+            coreBehaviors: workflowActions.length,
+            intentHints: workflowHints.length,
+          },
+        });
+        totalDelegatedCore += workflowActions.length;
+        totalDelegatedHints += workflowHints.length;
+        return {
         workflowId: workflow.workflowId,
-        coreBehaviorIds: toArray(workflow.source?.coreBehaviorIds),
+        implementationShard,
+        coreBehaviorIds,
         regenerableBehaviorIds: toArray(workflow.source?.regenerableBehaviorIds),
-        intentHintIds: toArray(workflow.proposal?.intentHintIds),
+        intentHintIds,
         target: {
           importPath: workflow.proposal?.target?.importPath || null,
           exportName: workflow.proposal?.target?.exportName || null,
           callSiteFile: workflow.proposal?.target?.callSiteFile || null,
         },
-      }));
+        };
+      });
+    const screenDelegatedBehaviorIds = new Set(shard.workflowRefs.flatMap((workflow) => workflow.coreBehaviorIds));
+    const screenDelegatedHintIds = new Set(shard.workflowRefs.flatMap((workflow) => workflow.intentHintIds));
+    shard.actions = shard.actions.filter((action) => !screenDelegatedBehaviorIds.has(action.behaviorId));
+    shard.intentHints = shard.intentHints.filter((hint) => !screenDelegatedHintIds.has(hint.hintId));
+    const usedNativeIntents = new Set(shard.intentHints.map((hint) => hint.nativeIntent));
+    shard.intentGuidance = Object.fromEntries(Object.entries(shard.intentGuidance || {})
+      .filter(([nativeIntent]) => usedNativeIntents.has(nativeIntent)));
     shard.stats.workflows = shard.workflowRefs.length;
+    shard.stats.builderCoreBehaviors = shard.actions.length
+      + shard.visibility.length
+      + shard.validations.length
+      + shard.derivations.length;
+    shard.stats.workflowCoreBehaviors = screenDelegatedBehaviorIds.size;
+    shard.stats.builderIntentHints = shard.intentHints.length;
+    shard.stats.workflowIntentHints = screenDelegatedHintIds.size;
+    if (shard.stats.coreBehaviors !== shard.stats.builderCoreBehaviors + shard.stats.workflowCoreBehaviors) {
+      throw new Error(`Workflow core delegation accounting mismatch for ${shard.screen}`);
+    }
+    if (shard.stats.intentHints !== shard.stats.builderIntentHints + shard.stats.workflowIntentHints) {
+      throw new Error(`Workflow intent delegation accounting mismatch for ${shard.screen}`);
+    }
     shardRow.stats.workflows = shard.workflowRefs.length;
+    shardRow.stats.builderCoreBehaviors = shard.stats.builderCoreBehaviors;
+    shardRow.stats.workflowCoreBehaviors = shard.stats.workflowCoreBehaviors;
+    shardRow.stats.builderIntentHints = shard.stats.builderIntentHints;
+    shardRow.stats.workflowIntentHints = shard.stats.workflowIntentHints;
     totalRefs += shard.workflowRefs.length;
   }
   artifacts.contract.stats.workflowRefs = totalRefs;
+  artifacts.contract.stats.workflowShards = artifacts.workflowShards.size;
+  artifacts.contract.stats.workflowCoreBehaviors = totalDelegatedCore;
+  artifacts.contract.stats.workflowIntentHints = totalDelegatedHints;
+  artifacts.contract.stats.builderCoreBehaviors = artifacts.contract.stats.coreBehaviors - totalDelegatedCore;
+  artifacts.contract.stats.builderIntentHints = artifacts.contract.stats.intentHints - totalDelegatedHints;
+  const implementationByBehaviorId = new Map();
+  for (const [file, workflowShard] of artifacts.workflowShards) {
+    for (const behaviorId of workflowShard.coreBehaviorIds) implementationByBehaviorId.set(behaviorId, file);
+    for (const hintId of workflowShard.intentHintIds) {
+      const classification = artifacts.contract.classifications.find((row) => row.intentHintId === hintId);
+      if (classification) classification.implementationFile = file;
+    }
+  }
+  for (const classification of artifacts.contract.classifications) {
+    if (implementationByBehaviorId.has(classification.behaviorId)) {
+      classification.implementationFile = implementationByBehaviorId.get(classification.behaviorId);
+    }
+  }
   return artifacts;
 }
 
 module.exports = {
   BEHAVIOR_COLLECTIONS,
   CORE_ACTION_INTENTS,
+  MAX_MODEL_FEED_BYTES,
   REGENERABLE_ACTION_INTENTS,
   STATE_ACTION_INTENTS,
   attachWorkflowRefs,
   buildBehaviorArtifacts,
+  projectControlIntentsForShard,
   orderedBehaviorEntries,
   sourceLedgerHash,
 };

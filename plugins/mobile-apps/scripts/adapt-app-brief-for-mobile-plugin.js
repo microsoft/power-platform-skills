@@ -22,8 +22,10 @@
  *   components.md                   ← reused custom component catalog
  *   state/app-state.md              ← state scope report for `var_*` and `col_*` (writers, readers, placement)
  *   behavior-contract.json          ← global core/regenerable dependency ledger + shard index
- *   behavior-shards/<Screen>.json   ← exact core behavior + structured native intent hints for one builder
+ *   behavior-shards/<Screen>.json   ← compact builder-owned core/intent + workflow refs for one builder
  *   workflows.json                  ← approved plan-time decomposition for pathological event handlers
+ *   workflow-gate-summary.json      ← compact model-facing Gate 2c review/approval feed
+ *   workflow-shards/<Workflow>.json ← exact workflow-owned core/hints for orchestrator materialization
  *   control-intent-coverage.json    ← contextual control roles + must-preserve behavior/data/layout contract
  *   pcf-plan.json                   ← Gate 2b PCF proposals/approvals projected into control intent + shards
  *   screens/<Name>.plan.md          ← per-screen full spec (summary + tree)
@@ -72,7 +74,12 @@ const {
   deriveWorkflowStats,
   emptyWorkflowApproval,
 } = require('./lib/workflow-plan.js');
-const { attachWorkflowRefs, buildBehaviorArtifacts } = require('./lib/behavior-contract.js');
+const { deriveWorkflowGateSummary } = require('./lib/workflow-gate-summary.js');
+const {
+  MAX_MODEL_FEED_BYTES,
+  attachWorkflowRefs,
+  buildBehaviorArtifacts,
+} = require('./lib/behavior-contract.js');
 const {
   projectPcfControlIntents,
   recomputeRoleStats,
@@ -7139,7 +7146,7 @@ function buildMasterPlan(brief, screenRows, connectors, tables, risks, screenFil
     lines.push(`#### ${s.name} (\`${s.route}\`)`);
     lines.push('');
     lines.push('- **Domain layout decisions:**');
-    lines.push('  1. Use the declared behavior shard for compact screen/control intent, exact core behavior, and native intent hints. Verbose `screens/*.plan.md` / `*.controls.md` files are audit-only and must not be loaded into builder context.');
+    lines.push('  1. Use the declared behavior shard for compact screen/control intent, builder-owned exact core behavior, native intent hints, and workflow call refs. Workflow-owned actions/hints are materialized earlier from private implementation shards. Verbose `screens/*.plan.md` / `*.controls.md` files are audit-only and must not be loaded into builder context.');
     lines.push('  2. Give source mutations, validation, navigation, and primary task actions stronger emphasis than decorative Canvas chrome.');
     lines.push('  3. Replace pixel/HTML/container workarounds with native composition while preserving the approved workflow and data contract.');
     lines.push(`- **Archetype:** ${s.archetype}`);
@@ -7347,7 +7354,7 @@ function buildMigrationChecklist(brief, connectors, tables, risks, serverSideAss
   if (workflowPlan?.stats?.total > 0) {
     lines.push(`${step++}. **HARD GATE:** answer only the ${workflowPlan.stats.requiredDecisions} correctness-critical workflow question(s), then approve all ${workflowPlan.stats.total} named-step decompositions in Gate 2c before connector/screen work.`);
   }
-  lines.push(`${step++}. Use the ${behaviorContract?.stats?.shards || 0} declared behavior shard(s) for generation: ${behaviorContract?.stats?.coreBehaviors || 0} exact core behavior(s) plus ${behaviorContract?.stats?.intentHints || 0} native intent hint(s). Keep \`behaviors.json\` model-invisible for final coverage.`);
+  lines.push(`${step++}. Use the ${behaviorContract?.stats?.shards || 0} compact screen/App shard(s) plus ${behaviorContract?.stats?.workflowShards || 0} workflow implementation shard(s): ${behaviorContract?.stats?.builderCoreBehaviors ?? behaviorContract?.stats?.coreBehaviors ?? 0} builder-owned and ${behaviorContract?.stats?.workflowCoreBehaviors || 0} workflow-owned exact core behavior(s), with complete global coverage kept model-invisible in \`behaviors.json\`.`);
   if (tables.length > 0) {
     const assetCount = serverSideAssets && serverSideAssets.stats ? serverSideAssets.stats.total : 0;
     lines.push(`${step++}. Confirm Dataverse server-side logic in the target environment: business rules, calculated/rollup columns, plug-ins, custom APIs/actions, and classic workflows that the source app depends on${assetCount ? ` (${assetCount} column-level assets inventoried in \`server-side-assets.json\`)` : ''}.`);
@@ -7727,6 +7734,8 @@ function buildPluginInput(brief, inputPath, screenRows, connectors, tables, risk
     },
     workflowPlan: {
       file: 'workflows.json',
+      gateSummaryFile: 'workflow-gate-summary.json',
+      gateSummarySchema: 'workflow-gate-summary-v1',
       schema: workflowPlan.$schema,
       rule: workflowPlan.rule,
       stats: workflowPlan.stats,
@@ -8175,7 +8184,14 @@ function main() {
   for (const [relativePath, shard] of behaviorArtifacts.shards) {
     writeFile(path.join(args.outDir, relativePath), JSON.stringify(shard, null, 2) + '\n');
   }
+  for (const [relativePath, shard] of behaviorArtifacts.workflowShards) {
+    writeFile(path.join(args.outDir, relativePath), JSON.stringify(shard, null, 2) + '\n');
+  }
   writeFile(path.join(args.outDir, 'workflows.json'), JSON.stringify(workflowPlan, null, 2) + '\n');
+  writeFile(
+    path.join(args.outDir, 'workflow-gate-summary.json'),
+    JSON.stringify(deriveWorkflowGateSummary(workflowPlan), null, 2) + '\n'
+  );
   writeFile(path.join(args.outDir, 'flows.json'), JSON.stringify(flows, null, 2) + '\n');
 
   // Sidecars: localization key list + asset catalog (kept out of the master
@@ -8218,9 +8234,39 @@ function main() {
     behaviorArtifacts.contract.stats.regenerableBehaviors + ' regenerable as ' +
     behaviorArtifacts.contract.stats.intentHints + ' native intent hints across ' +
     behaviorArtifacts.contract.stats.shards + ' shards)');
+  const screenFeedSizes = [...behaviorArtifacts.shards.keys()].map((relativePath) => ({
+    relativePath,
+    bytes: fs.statSync(path.join(args.outDir, relativePath)).size,
+  })).sort((a, b) => b.bytes - a.bytes);
+  const workflowFeedSizes = [...behaviorArtifacts.workflowShards.keys()].map((relativePath) => ({
+    relativePath,
+    bytes: fs.statSync(path.join(args.outDir, relativePath)).size,
+  })).sort((a, b) => b.bytes - a.bytes);
+  const largestScreenFeed = screenFeedSizes[0] || { relativePath: 'none', bytes: 0 };
+  const largestWorkflowFeed = workflowFeedSizes[0] || { relativePath: 'none', bytes: 0 };
+  console.log('- model feed budget: ' + MAX_MODEL_FEED_BYTES + ' bytes; largest screen ' +
+    largestScreenFeed.relativePath + ' = ' + largestScreenFeed.bytes + ' bytes; largest workflow ' +
+    largestWorkflowFeed.relativePath + ' = ' + largestWorkflowFeed.bytes + ' bytes');
+  const oversizedFeeds = [...screenFeedSizes, ...workflowFeedSizes]
+    .filter((entry) => entry.bytes > MAX_MODEL_FEED_BYTES);
+  if (oversizedFeeds.length > 0) {
+    for (const entry of oversizedFeeds) {
+      console.error(`MODEL FEED BUDGET EXCEEDED: ${entry.relativePath} is ${entry.bytes} bytes (max ${MAX_MODEL_FEED_BYTES})`);
+    }
+    process.exitCode = 4;
+  }
   console.log('- ' + path.join(args.outDir, 'workflows.json') +
     ' (' + workflowPlan.stats.total + ' pathological handlers, ' + workflowPlan.stats.totalSteps +
     ' named steps, ' + workflowPlan.stats.requiredDecisions + ' correctness-critical decisions)');
+  const workflowGateSummaryBytes = fs.statSync(path.join(args.outDir, 'workflow-gate-summary.json')).size;
+  console.log('- ' + path.join(args.outDir, 'workflow-gate-summary.json') +
+    ' (' + workflowGateSummaryBytes + ' bytes; model-facing Gate 2c feed)');
+  if (workflowGateSummaryBytes > MAX_MODEL_FEED_BYTES) {
+    console.error(`MODEL FEED BUDGET EXCEEDED: workflow-gate-summary.json is ${workflowGateSummaryBytes} bytes (max ${MAX_MODEL_FEED_BYTES})`);
+    process.exitCode = 4;
+  }
+  console.log('- ' + path.join(args.outDir, 'workflow-shards/') +
+    ' (' + behaviorArtifacts.workflowShards.size + ' exact workflow implementation feeds; removed from screen-builder shards)');
   console.log('- ' + path.join(args.outDir, 'flows.json') +
     ' (' + flows.stats.totalFlows + ' flows, ' + flows.stats.withId + ' ready-to-wire, ' +
     flows.stats.missingId + ' missing flow-id)');

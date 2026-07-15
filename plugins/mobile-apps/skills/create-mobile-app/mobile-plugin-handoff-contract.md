@@ -25,7 +25,9 @@ Canvas source (`Src/*.pa.yaml`, optional supported sidecars)
       behaviors.json
       behavior-contract.json
       behavior-shards/*.json
+      workflow-shards/*.json
       workflows.json
+      workflow-gate-summary.json
       control-intent-coverage.json
       pcf-plan.json
       server-side-assets.json
@@ -46,8 +48,10 @@ All artifacts remain local. Do not include credentials, access tokens, customer 
 | `state/app-state.md` | Source variable/collection readers, writers, and recommended native placement | Bootstrap and builders |
 | `behaviors.json` | Lossless normalized global ledger: actions, visibility, validation, derivations, unmatched formulas | Deterministic validation and final coverage only; never builders |
 | `behavior-contract.json` | Conservative dependency closure, core/regenerable disposition, raw-free native intent mapping, shard index | Validator, report, coverage gate, orchestrator routing |
-| `behavior-shards/<Screen>.json` | One screen's exact core behavior, structured native intent hints, and unmatched formulas | One screen builder; `App` shard feeds bootstrap |
+| `behavior-shards/<Screen>.json` | One screen's compact builder-owned exact core behavior, structured native intent hints, semantic control rows, and unmatched statements | One screen builder; `App` shard feeds bootstrap |
+| `workflow-shards/<Workflow>.json` | One pathological handler's exact workflow-owned actions and intent hints | Workflow orchestrator only; never screen builders |
 | `workflows.json` | Pathological event detection, ordered named-step proposals, exception-only questions, user approval | Gate 2c, shared workflow generation, builders, workflow coverage gate |
+| `workflow-gate-summary.json` | Deterministic bounded projection of workflow evidence, step summaries, questions, and approvals; no exact formulas/payloads | Model-facing Gate 2c review only |
 | `control-intent-coverage.json` | Global one-row-per-control semantic ledger | Deterministic validation; per-screen rows are copied into builder shards |
 | `pcf-plan.json` | One proposed and explicitly approved disposition per PCF | Gate 2b, native/connector routing, builders, PCF coverage gate |
 | `server-side-assets.json` | Dataverse calculated/rollup/managed column rules | Data/write guard |
@@ -210,16 +214,16 @@ Core selection is conservative:
 
 Every classification row records state reads/writes, dependency behavior IDs, core consumers, reason codes, shard path, and optional intent-hint ID. The contract also hashes `behaviors.json`; package validation recomputes the complete contract and every shard from the global ledger and rejects any drift.
 
-Each `behavior-shards/<Screen>.json` contains:
+Each `behavior-shards/<Screen>.json` uses `behavior-shard-v2` and contains:
 
 - compact `screenIntent` (route, archetype, purpose, data sources, params, navigation)
-- semantic `controlIntents[]` (`mustPreserve`, source event/data-binding names, contextual role + evidence, layout role, native suggestions, and compact approved PCF disposition when applicable) with no verbatim formulas
+- compact semantic `controlIntents[]` (`mustPreserve`, source event/data-binding names, contextual role + evidence, layout role, and compact approved PCF disposition when applicable) with no verbatim formulas; repeated defaults/guidance live once in `controlIntentDefaults` and `controlRoleGuidance`
 - compact `workflowRefs[]` (workflow ID, core/hint ownership, target import/export/call site) so builders never receive global `workflows.json`
-- exact core `actions[]`, `visibility[]`, `validations[]`, and `derivations[]`
-- exact `unmatchedFormulas[]` for review
-- raw-free `intentHints[]` with stable `hintId`, native intent, guidance, compact control-flow role, structured target/state/query/form data, and nearest core anchors
+- builder-owned exact core `actions[]`, `visibility[]`, `validations[]`, and `derivations[]`
+- exact unmatched source statements for review; repeated full handlers remain in the global ledger
+- raw-free `intentHints[]` with stable `hintId`, native intent, compact control-flow role, structured target/state/query/form data, and nearest core anchors; repeated guidance lives once in `intentGuidance`
 
-The shard intentionally omits source formulas/statements for regenerable entries. Exact core action leaves retain `sourceStatement`, normalized payload, order, and control flow but omit the repeated full-handler `sourceFormula`; that lossless formula remains in the global ledger. Builders implement each exact core entry with `// source-behavior: <behaviorId>` and each native equivalent with `// source-intent: <hintId>`. The only zero-runtime hint is `discard-no-side-effect`, which records an intentionally discarded source expression that had no effect. Verbose screen/control formula files plus global behaviors, workflows, and control coverage remain audit/debug artifacts and are never passed to builders.
+The shard intentionally omits source formulas/statements for regenerable entries and removes repeated screen names, owner labels, templates, generic hints, duplicate `formula`/`expression` values, and complete unmatched handlers retained globally. Paths are relative to `screen`. Exact core action leaves retain `sourceStatement`, normalized payload, order, and control flow but omit repeated full-handler `sourceFormula`; that lossless formula remains in the global ledger. Builders implement each exact core entry with `// source-behavior: <behaviorId>` and each native equivalent with `// source-intent: <hintId>`. The only zero-runtime hint is `discard-no-side-effect`, which records an intentionally discarded source expression that had no effect. Verbose screen/control formula files plus global behaviors, workflows, workflow implementation shards, and control coverage remain audit/orchestrator artifacts and are never passed to screen builders. Validation rejects any screen or workflow implementation feed over 512 KiB so oversized context cannot silently reach one model invocation.
 
 Rules:
 
@@ -233,6 +237,8 @@ Rules:
 ## Pathological workflow contract
 
 `workflows.json` is a compact architecture index over `behaviors.json`. It does not summarize away Power Fx. The adapter emits one row only when an event handler crosses deterministic complexity thresholds such as high action/statement count, mixed responsibilities, several remote side effects, a mutating loop, or deep control flow.
+
+`workflow-gate-summary.json` is the only model-facing Gate 2c overview. It contains source labels, behavior counts, detection metrics, named-step summaries, target paths, implementation-shard routing, correctness-critical questions, and approval state—but no exact formulas, payloads, or full control-flow frames. `sync-workflow-gate-summary.js` regenerates it after approvals; package validation rejects drift or a summary over 512 KiB. Exact implementation remains split across bounded workflow shards.
 
 Each row carries:
 
@@ -253,13 +259,14 @@ Safe import resets every workflow approval and decision answer. Gate 2c records 
 
 Implementation ownership is split deliberately:
 
-- The orchestrator reads only the owning behavior shard and writes each approved module under `src/features/<domain>/workflows/` before screen builders run.
+- `attachWorkflowRefs()` moves every workflow-owned exact action and native intent out of its screen builder feed into one deterministic `workflow-shards/<workflowId>.json`; global behavior accounting remains unchanged.
+- The orchestrator reads only the owning workflow implementation shard and writes each approved module under `src/features/<domain>/workflows/` before screen builders run.
 - Each named step has `// source-workflow-step: <stepId>` and its exact `source-behavior` markers beside real operations.
 - Every full `step.controlFlow[]` frame has an exact `source-control-flow` marker beside its native branch/loop/error/concurrency structure.
 - The exported orchestrator has `// source-workflow: <workflowId>` and invokes named steps according to preserved branch/loop/error/concurrency semantics.
 - The owning screen or bootstrap invokes the export under `// source-workflow-call: <workflowId>` and renders typed progress/result/retry UX.
 - Every workflow-owned regenerated outcome has a real `// source-intent: <hintId>` implementation at the module or call site.
-- Screen builders never inline, duplicate, or rewrite workflow-owned operations.
+- Screen builders receive only each workflow's compact ref/import/call contract; they never read implementation shards or inline, duplicate, or rewrite workflow-owned operations.
 
 `check-workflow-coverage.js --strict` verifies approval readiness, safe target paths, module/export/call-site existence, exact markers, named step functions, behavior accounting, and orchestrator invocation order. `check-behavior-coverage.js` follows local `@/` imports so behavior markers implemented in approved workflow modules remain part of screen coverage.
 

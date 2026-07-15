@@ -18,12 +18,20 @@ const {
   WORKFLOW_UX_MODES,
   deriveWorkflowStats,
 } = require('./lib/workflow-plan.js');
-const { attachWorkflowRefs, buildBehaviorArtifacts } = require('./lib/behavior-contract.js');
+const { deriveWorkflowGateSummary } = require('./lib/workflow-gate-summary.js');
+const {
+  MAX_MODEL_FEED_BYTES,
+  attachWorkflowRefs,
+  buildBehaviorArtifacts,
+} = require('./lib/behavior-contract.js');
 const {
   derivePcfStats,
   projectPcfControlIntents,
 } = require('./lib/pcf-control-intent.js');
 const MAX_PACKAGE_FILE_BYTES = 64 * 1024 * 1024;
+// Leave substantial room in a 200k-class context for the screen spec, typed
+// skeleton, component/state contracts, and generated code. Oversized feeds
+// must be compacted/delegated rather than silently handed to one builder.
 const MAX_MARKDOWN_ENTRIES = 10000;
 const MAX_MARKDOWN_DEPTH = 8;
 
@@ -229,6 +237,7 @@ function main() {
   let behaviorContract = null;
   let pcfPlan = null;
   let workflowPlan = null;
+  let workflowGateSummary = null;
 
   for (const required of ['native-app-plan.md', path.join('state', 'app-state.md'), 'migration-checklist.md']) {
     const file = path.join(root, required);
@@ -254,6 +263,8 @@ function main() {
     if (pcfPlanFile) pcfPlan = readJson(pcfPlanFile, errors, 'pcf-plan.json');
     const workflowPlanFile = safePackagePath(root, input.workflowPlan?.file, errors, 'workflowPlan.file');
     if (workflowPlanFile) workflowPlan = readJson(workflowPlanFile, errors, 'workflows.json');
+    const workflowGateSummaryFile = safePackagePath(root, input.workflowPlan?.gateSummaryFile, errors, 'workflowPlan.gateSummaryFile');
+    if (workflowGateSummaryFile) workflowGateSummary = readJson(workflowGateSummaryFile, errors, 'workflow-gate-summary.json');
     const behaviorContractFile = safePackagePath(root, input.behaviorPlan?.file, errors, 'behaviorPlan.file');
     if (behaviorContractFile) behaviorContract = readJson(behaviorContractFile, errors, 'behavior-contract.json');
 
@@ -415,6 +426,50 @@ function main() {
         errors.push(`${relativePath} differs from deterministic core-and-intent projection`);
       }
       if (actualShard) {
+        if (actualShard.$schema !== 'behavior-shard-v2') errors.push(`${relativePath} must use behavior-shard-v2`);
+        const shardBytes = fs.lstatSync(shardPath).size;
+        if (shardBytes > MAX_MODEL_FEED_BYTES) {
+          errors.push(`${relativePath} exceeds the ${MAX_MODEL_FEED_BYTES}-byte builder-feed budget: ${shardBytes}`);
+        }
+        scanIntentHintForRawSource(actualShard.intentHints || [], `${relativePath}.intentHints`, errors);
+        scanSecrets(actualShard, relativePath, errors);
+      }
+    }
+    const expectedWorkflowShardFiles = new Set(expectedArtifacts.workflowShards.keys());
+    const workflowShardRoot = path.join(root, 'workflow-shards');
+    if (expectedWorkflowShardFiles.size > 0) {
+      if (!fs.existsSync(workflowShardRoot)
+          || fs.lstatSync(workflowShardRoot).isSymbolicLink()
+          || !fs.lstatSync(workflowShardRoot).isDirectory()) {
+        errors.push('workflow-shards must be a real directory when workflows own implementation behavior');
+      }
+    }
+    if (fs.existsSync(workflowShardRoot)) {
+      const rootStat = fs.lstatSync(workflowShardRoot);
+      if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+        errors.push('workflow-shards must be a real directory');
+      } else {
+        for (const entry of fs.readdirSync(workflowShardRoot, { withFileTypes: true })) {
+          const relative = `workflow-shards/${entry.name}`;
+          if (entry.isSymbolicLink() || !entry.isFile() || !entry.name.endsWith('.json')) {
+            errors.push(`unexpected workflow implementation shard entry: ${relative}`);
+          } else if (!expectedWorkflowShardFiles.has(relative)) {
+            errors.push(`unexpected workflow implementation shard file: ${relative}`);
+          }
+        }
+      }
+    }
+    for (const [relativePath, expectedShard] of expectedArtifacts.workflowShards) {
+      const shardPath = safePackagePath(root, relativePath, errors, `workflow implementation shard ${relativePath}`);
+      const actualShard = shardPath ? readJson(shardPath, errors, relativePath) : null;
+      if (actualShard && canonicalJson(actualShard) !== canonicalJson(expectedShard)) {
+        errors.push(`${relativePath} differs from deterministic workflow implementation projection`);
+      }
+      if (actualShard) {
+        const shardBytes = fs.lstatSync(shardPath).size;
+        if (shardBytes > MAX_MODEL_FEED_BYTES) {
+          errors.push(`${relativePath} exceeds the ${MAX_MODEL_FEED_BYTES}-byte implementation-feed budget: ${shardBytes}`);
+        }
         scanIntentHintForRawSource(actualShard.intentHints || [], `${relativePath}.intentHints`, errors);
         scanSecrets(actualShard, relativePath, errors);
       }
@@ -435,6 +490,21 @@ function main() {
     if (!Array.isArray(workflowPlan.workflows)) errors.push('workflows.workflows must be an array');
     if (input?.workflowPlan?.schema !== 'workflow-plan-v1') errors.push('mobile-plugin-input workflowPlan.schema must be workflow-plan-v1');
     if (input?.workflowPlan?.file !== 'workflows.json') errors.push('mobile-plugin-input workflowPlan.file must be workflows.json');
+    if (input?.workflowPlan?.gateSummaryFile !== 'workflow-gate-summary.json') errors.push('mobile-plugin-input workflowPlan.gateSummaryFile must be workflow-gate-summary.json');
+    if (input?.workflowPlan?.gateSummarySchema !== 'workflow-gate-summary-v1') errors.push('mobile-plugin-input workflowPlan.gateSummarySchema must be workflow-gate-summary-v1');
+    if (!workflowGateSummary) {
+      errors.push('workflow-gate-summary.json is required');
+    } else {
+      const expectedGateSummary = deriveWorkflowGateSummary(workflowPlan);
+      if (canonicalJson(workflowGateSummary) !== canonicalJson(expectedGateSummary)) {
+        errors.push('workflow-gate-summary.json differs from the deterministic workflows.json projection');
+      }
+      const summaryPath = path.join(root, 'workflow-gate-summary.json');
+      if (fs.existsSync(summaryPath) && fs.lstatSync(summaryPath).size > MAX_MODEL_FEED_BYTES) {
+        errors.push(`workflow-gate-summary.json exceeds the ${MAX_MODEL_FEED_BYTES}-byte model-feed budget: ${fs.lstatSync(summaryPath).size}`);
+      }
+      scanSecrets(workflowGateSummary, 'workflow-gate-summary', errors);
+    }
 
     const allowedDecisionTypes = new Set([
       'partial-failure-policy',

@@ -2,7 +2,7 @@
 
 This file provides guidance to AI Agents when working with the **mobile-app** plugin.
 
-> **Status:** v0 — 24 user-facing skills + 5 internal native helpers + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
+> **Status:** v0 — 24 user-facing skills + 5 internal native helpers + 6 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
 
 ## What This Plugin Is
 
@@ -23,7 +23,7 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/mobile-apps
 .claude-plugin/plugin.json     ← Legacy metadata mirror
 AGENTS.md                      ← This file
 README.md                      ← Plugin overview
-agents/                        ← native-app-planner, data-model-architect, screen-planner, screen-builder
+agents/                        ← native-app-planner, data-model-architect, screen-planner, workflow-builder, screen-builder
 shared/                        ← shared-instructions, references, samples, memory-bank template
 skills/                        ← /create-mobile-app, /add-dataverse, /add-connector, /add-native, ...
 scripts/                       ← platform helpers plus deterministic Canvas/MSAPP extraction + adaptation
@@ -56,7 +56,7 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 7. **Persisted plan** — Write `native-app-plan.md` (Mermaid ER + per-screen specs + native capabilities matrix) as the source of truth that sub-skills `Read`.
 8. **CLI compatibility** — Use `npx power-apps ...` for code-app lifecycle and data-source commands. Use `scripts/resolve-environment.js` plus `az` tokens for Dataverse environment URL/tenant discovery and Azure/Entra operations. See [`shared/shared-instructions.md`](./shared/shared-instructions.md).
 9. **Agent invocation namespace** — All `Task` invocations of agents in this plugin MUST use the fully-qualified `mobile-app:<agent-name>` form (e.g. `mobile-app:native-app-planner`, `mobile-app:screen-builder`). Bare names like `native-app-planner` return `Agent type 'native-app-planner' not found` because Claude Code namespaces all plugin agents by plugin name.
-10. **Sub-agent return-status protocol** — Every agent in this plugin (`native-app-planner`, `data-model-architect`, `screen-planner`, `screen-builder`) MUST return a status code as the **literal first line** of its final message. Orchestrators (skills that invoke agents via `Task`) MUST parse the first line and branch:
+10. **Sub-agent return-status protocol** — Every agent in this plugin (`native-app-planner`, `data-model-architect`, `screen-planner`, `workflow-builder`, `screen-builder`) MUST return a status code as the **literal first line** of its final message. Orchestrators (skills that invoke agents via `Task`) MUST parse the first line and branch:
 
     | Code | Meaning | Orchestrator action |
     |---|---|---|
@@ -81,6 +81,8 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 - ✅ Canvas PCF controls are contract evidence only; PCF binaries/HostingSDK are never hosted. Gate 2b requires an explicit user-approved native replacement, generated-service dependency, optional visible unsupported state, or hard blocker for every PCF before builders run.
 - ✅ Pathological Canvas event handlers are decomposed at plan time into orchestrator-owned named-step workflow modules. Gate 2c asks only unresolved correctness-critical business-policy questions, then requires one user approval; routine native code/UX choices remain AI-owned proposals. Exact source behavior IDs, order, formulas, writes, connector arguments, and control-flow frames remain authoritative.
 - ✅ Adapted behavior uses drop-to-contract shaping: `behaviors.json` remains the global lossless audit ledger, while deterministic backward dependency closure emits one self-contained builder shard per screen containing compact screen/control intent, exact load-bearing behavior leaves, raw-free native intent hints, and compact workflow ownership. Ambiguity defaults to core; builders never receive/read global behavior/workflow ledgers, verbose screen/control formula archives, or global control coverage.
+- ✅ Builder feeds use compact `behavior-shard-v2`: repeated owner/template/guidance metadata and duplicate formulas stay global or move to shard dictionaries, paths are screen-relative, and every pathological workflow's exact actions/hints move into a private `workflow-shards/<workflowId>.json` read only by the orchestrator. Validation caps each model-facing feed at 512 KiB.
+- ✅ Pathological workflow implementation fans out to one `workflow-builder` per bounded implementation shard (waves of five). Gate 2c reads `workflow-gate-summary.json`, not the exact global workflow plan; screen builders receive only workflow call refs.
 - ✅ Adapted control intent is contextual: Galleries classify as record lists, navigation menus, pickers, dashboards, or explicit review; Canvas components classify as domain components, shared chrome, navigation, form composites, proven disposable scaffolding, or review. Raw-free evidence accompanies every role and ambiguity never becomes disposable.
 - ✅ Gate 2b PCF decisions are atomically projected into the matching global control row and per-screen shard (`pcf-known-capability`, `pcf-native-rebuild`, `pcf-server-backed`, `pcf-optional-unsupported`, review/blocker). Builders consume only their compact approved shard projection and never read the global PCF plan.
 - ✅ Single `/deploy` skill — `npm run build` + `npx power-apps push`; no local native compile, no OTA in v0

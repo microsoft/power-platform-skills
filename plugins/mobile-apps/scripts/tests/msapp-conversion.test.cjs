@@ -249,6 +249,28 @@ test('workflow Gate 2c validation blocks pending plans and rejects behavior or p
   const validatorPath = path.resolve(__dirname, '..', 'validate-mobile-plugin-input.js');
   const base = spawnSync(process.execPath, [validatorPath, '--dir', adaptedDir, '--json'], { encoding: 'utf8' });
   assert.equal(base.status, 0, base.stderr || base.stdout);
+  const initialInput = JSON.parse(fs.readFileSync(path.join(adaptedDir, 'mobile-plugin-input.json'), 'utf8'));
+  const initialContract = JSON.parse(fs.readFileSync(path.join(adaptedDir, 'behavior-contract.json'), 'utf8'));
+  assert.equal(initialContract.workflowShards.length, 1);
+  assert.equal(initialContract.stats.builderCoreBehaviors + initialContract.stats.workflowCoreBehaviors, initialContract.stats.coreBehaviors);
+  assert.equal(initialContract.stats.builderIntentHints + initialContract.stats.workflowIntentHints, initialContract.stats.intentHints);
+  const screenShard = JSON.parse(fs.readFileSync(path.join(adaptedDir, initialInput.screenPlan.screens[0].behaviorShard), 'utf8'));
+  assert.equal(screenShard.$schema, 'behavior-shard-v2');
+  const workflowRef = screenShard.workflowRefs[0];
+  assert.match(workflowRef.implementationShard, /^workflow-shards\/wf-[0-9a-f]{16}\.json$/);
+  const implementationPath = path.join(adaptedDir, workflowRef.implementationShard);
+  const implementationShard = JSON.parse(fs.readFileSync(implementationPath, 'utf8'));
+  assert.equal(implementationShard.$schema, 'workflow-implementation-shard-v1');
+  assert.deepEqual(implementationShard.coreBehaviorIds, workflowRef.coreBehaviorIds);
+  assert.equal(implementationShard.actions.length, workflowRef.coreBehaviorIds.length);
+  assert.equal(screenShard.actions.some((action) => workflowRef.coreBehaviorIds.includes(action.behaviorId)), false);
+  const originalImplementationShard = fs.readFileSync(implementationPath, 'utf8');
+  implementationShard.actions[0].sourceStatement = 'Patch(Tampered, Defaults(Tampered), {name:"bad"})';
+  fs.writeFileSync(implementationPath, JSON.stringify(implementationShard));
+  const tamperedImplementation = spawnSync(process.execPath, [validatorPath, '--dir', adaptedDir, '--json'], { encoding: 'utf8' });
+  assert.equal(tamperedImplementation.status, 1);
+  assert.match(JSON.parse(tamperedImplementation.stdout).errors.join('\n'), /workflow implementation projection/);
+  fs.writeFileSync(implementationPath, originalImplementationShard);
   const pending = spawnSync(process.execPath, [validatorPath, '--dir', adaptedDir, '--json', '--require-workflow-approval'], { encoding: 'utf8' });
   assert.equal(pending.status, 1);
   assert.match(JSON.parse(pending.stdout).errors.join('\n'), /still requires explicit workflow approval/);
@@ -268,6 +290,11 @@ test('workflow Gate 2c validation blocks pending plans and rejects behavior or p
   const inputPath = path.join(adaptedDir, 'mobile-plugin-input.json');
   const workflowPlan = JSON.parse(fs.readFileSync(workflowsPath, 'utf8'));
   const pluginInput = JSON.parse(fs.readFileSync(inputPath, 'utf8'));
+  const gateSummaryPath = path.join(adaptedDir, 'workflow-gate-summary.json');
+  const gateSummary = JSON.parse(fs.readFileSync(gateSummaryPath, 'utf8'));
+  assert.equal(gateSummary.$schema, 'workflow-gate-summary-v1');
+  assert.equal(gateSummary.workflows[0].implementationShard, workflowRef.implementationShard);
+  assert.equal(JSON.stringify(gateSummary).includes('Patch(Orders'), false);
   const workflow = workflowPlan.workflows[0];
   workflow.approval = {
     status: 'approved',
@@ -291,6 +318,14 @@ test('workflow Gate 2c validation blocks pending plans and rejects behavior or p
   pluginInput.workflowPlan.stats = JSON.parse(JSON.stringify(workflowPlan.stats));
   fs.writeFileSync(workflowsPath, JSON.stringify(workflowPlan, null, 2));
   fs.writeFileSync(inputPath, JSON.stringify(pluginInput, null, 2));
+  const staleGateSummary = spawnSync(process.execPath, [validatorPath, '--dir', adaptedDir, '--json'], { encoding: 'utf8' });
+  assert.equal(staleGateSummary.status, 1);
+  assert.match(JSON.parse(staleGateSummary.stdout).errors.join('\n'), /workflow-gate-summary\.json differs/);
+  const summarySyncPath = path.resolve(__dirname, '..', 'sync-workflow-gate-summary.js');
+  const summarySync = spawnSync(process.execPath, [summarySyncPath, '--dir', adaptedDir, '--json'], { encoding: 'utf8' });
+  assert.equal(summarySync.status, 0, summarySync.stderr || summarySync.stdout);
+  const summaryCheck = spawnSync(process.execPath, [summarySyncPath, '--dir', adaptedDir, '--check', '--json'], { encoding: 'utf8' });
+  assert.equal(summaryCheck.status, 0, summaryCheck.stderr || summaryCheck.stdout);
 
   const approved = spawnSync(process.execPath, [validatorPath, '--dir', adaptedDir, '--json', '--require-workflow-approval'], { encoding: 'utf8' });
   assert.equal(approved.status, 0, approved.stderr || approved.stdout);
@@ -307,13 +342,18 @@ test('workflow Gate 2c validation blocks pending plans and rejects behavior or p
     '--target', target,
   ], { encoding: 'utf8' });
   assert.equal(imported.status, 0, imported.stderr || imported.stdout);
-  assert.equal(JSON.parse(imported.stdout).workflowApprovalsReset, 1);
+  const importedResult = JSON.parse(imported.stdout);
+  assert.equal(importedResult.workflowApprovalsReset, 1);
+  assert.equal(importedResult.workflowShardsCopied, 1);
   const importedWorkflows = JSON.parse(fs.readFileSync(path.join(target, 'workflows.json'), 'utf8'));
   const importedInput = JSON.parse(fs.readFileSync(path.join(target, 'mobile-plugin-input.json'), 'utf8'));
   assert.equal(importedWorkflows.workflows[0].approval.status, 'pending');
   assert.deepEqual(importedWorkflows.workflows[0].approval.decisions, []);
   assert.equal(importedWorkflows.stats.pendingApproval, 1);
   assert.equal(importedInput.workflowPlan.stats.pendingApproval, 1);
+  const importedGateSummary = JSON.parse(fs.readFileSync(path.join(target, 'workflow-gate-summary.json'), 'utf8'));
+  assert.equal(importedGateSummary.workflows[0].approval.status, 'pending');
+  assert.ok(fs.existsSync(path.join(target, workflowRef.implementationShard)));
 
   const unownedSource = path.join(tmp, 'unowned-source');
   fs.cpSync(adaptedDir, unownedSource, { recursive: true });
@@ -667,6 +707,7 @@ test('extractor accepts lowercase src directory on case-sensitive filesystems', 
   assert.equal(importResult.assetsMissing, 1);
   assert.equal(importResult.workflowApprovalsReset, 0);
   assert.equal(importResult.behaviorShardsCopied, 2);
+  assert.equal(importResult.workflowShardsCopied, 0);
   assert.equal(JSON.parse(fs.readFileSync(path.join(target, 'package.json'), 'utf8')).name, 'fresh-template');
   assert.ok(fs.existsSync(path.join(target, 'native-app-plan.md')));
   assert.ok(fs.existsSync(path.join(target, 'workflows.json')));
@@ -1214,7 +1255,11 @@ test('control intent classifies Gallery and component semantics conservatively',
     unmatchedFormulas: [],
   }, [home, detail], '1970-01-01T00:00:00.000Z', coverage);
   const homeShard = artifacts.shards.get(artifacts.contract.shards.find((row) => row.screen === 'Home').file);
-  assert.equal(homeShard.controlIntents.find((row) => row.control === 'OwnerPicker').role, 'picker-options');
+  const compactPicker = homeShard.controlIntents.find((row) => row.control === 'OwnerPicker');
+  assert.equal(compactPicker.role, 'picker-options');
+  assert.equal(Object.hasOwn(compactPicker, 'screen'), false);
+  assert.equal(Object.hasOwn(compactPicker, 'notesForAI'), false);
+  assert.equal(typeof homeShard.controlRoleGuidance['picker-options'].notesForAI, 'string');
   assert.equal(homeShard.controlIntents.find((row) => row.control === 'Wrapper1').role, 'disposable-canvas-scaffolding');
 });
 
@@ -1598,12 +1643,22 @@ test('behavior dependency analysis keeps load-bearing state exact and shards dis
   assert.equal(artifacts.contract.shards.length, 2); // App + OrderEdit
   const orderShardPath = artifacts.contract.shards.find((row) => row.screen === 'OrderEdit').file;
   const orderShard = artifacts.shards.get(orderShardPath);
+  assert.equal(orderShard.$schema, 'behavior-shard-v2');
   assert.equal(orderShard.actions.some((row) => row.behaviorId === messageWriter.behaviorId), true);
   assert.equal(orderShard.actions.some((row) => Object.hasOwn(row, 'sourceFormula')), false);
-  assert.equal(orderShard.actions.find((row) => row.behaviorId === messageWriter.behaviorId).sourceStatement, 'Set(var_message, txtNote.Text)');
+  const compactMessageWriter = orderShard.actions.find((row) => row.behaviorId === messageWriter.behaviorId);
+  assert.equal(compactMessageWriter.sourceStatement, 'Set(var_message, txtNote.Text)');
+  assert.equal(compactMessageWriter.controlPath, 'SaveButton');
+  assert.equal(Object.hasOwn(compactMessageWriter, 'screen'), false);
+  assert.equal(Object.hasOwn(compactMessageWriter, 'controlTemplate'), false);
+  assert.equal(Object.hasOwn(compactMessageWriter, 'hint'), false);
   assert.equal(orderShard.actions.some((row) => row.behaviorId === loadingWriters[0].behaviorId), false);
   assert.equal(orderShard.intentHints.some((hint) => hint.sourceBehaviorIds.includes(loadingWriters[0].behaviorId)), true);
   assert.equal(orderShard.intentHints.some((hint) => hint.nativeIntent === 'native-visibility-state'), true);
+  assert.equal(typeof orderShard.intentGuidance['native-visibility-state'], 'string');
+  assert.equal(orderShard.intentHints.some((hint) => Object.hasOwn(hint, 'guidance')), false);
+  const compactAdminVisibility = orderShard.visibility.find((row) => row.behaviorId === adminVisibility.behaviorId);
+  assert.equal(Object.hasOwn(compactAdminVisibility, 'expression'), false);
   assert.equal(JSON.stringify(orderShard.intentHints).includes('sourceStatement'), false);
   assert.equal(JSON.stringify(orderShard.intentHints).includes('sourceFormula'), false);
   assert.equal(JSON.stringify(orderShard.intentHints).includes('"formula"'), false);
@@ -1731,6 +1786,111 @@ test('adapter decomposes pathological handlers into stable named workflow steps 
     }],
   }], { app: {} }), screenRows);
   assert.deepEqual(ordinary.workflows, []);
+});
+
+test('verbose global ledgers compact into bounded screen and workflow model feeds', () => {
+  const screen = 'LargeOperationalScreen';
+  const longOwner = Array.from({ length: 12 }, (_, index) => `ContainerSegment${index}`).join('/');
+  const actions = Array.from({ length: 80 }, (_, index) => ({
+    behaviorId: `b-${(index + 1).toString(16).padStart(16, '0')}`,
+    screen,
+    control: 'SubmitEverythingButton',
+    controlPath: `${screen}/${longOwner}/SubmitEverythingButton`,
+    controlTemplate: 'Classic/Button@2.2.0',
+    event: 'OnSelect',
+    actionIndex: index,
+    sourceStatementIndex: index,
+    intent: 'patch',
+    source: 'Orders',
+    baseRecord: 'Defaults(Orders)',
+    fields: { name: `"Order ${index}"`, description: `"${'detail '.repeat(18)}"` },
+    sourceFormula: `Patch(Orders, Defaults(Orders), {name: "Order ${index}", description: "${'detail '.repeat(18)}"})`,
+    sourceStatement: `Patch(Orders, Defaults(Orders), {name: "Order ${index}", description: "${'detail '.repeat(18)}"})`,
+    hint: 'Repeated global implementation guidance that belongs outside the compact row.',
+    controlFlow: [],
+  }));
+  const derivations = Array.from({ length: 320 }, (_, index) => {
+    const formula = `LookUp(Accounts, accountid = var_accountId, name) & "${index}-${'copy '.repeat(24)}"`;
+    return {
+      behaviorId: `b-${(index + 1000).toString(16).padStart(16, '0')}`,
+      screen,
+      control: `Label${index}`,
+      controlPath: `${screen}/${longOwner}/GalleryRows/Label${index}`,
+      controlTemplate: 'Label@2.5.1',
+      property: 'Text',
+      formula,
+      kind: 'computed',
+      expression: formula,
+      hint: 'Repeated useMemo guidance retained by the global ledger.',
+    };
+  });
+  const behaviors = {
+    $schema: 'behaviors-v1',
+    actions,
+    visibility: [],
+    validations: [],
+    derivations,
+    unmatchedFormulas: [],
+  };
+  const coverage = {
+    rows: Array.from({ length: 320 }, (_, index) => ({
+      screen,
+      control: `Label${index}`,
+      path: `${screen}/${longOwner}/GalleryRows/Label${index}`,
+      canvasType: 'Label',
+      template: 'Label@2.5.1',
+      role: 'text-display',
+      roleEvidence: { classifier: 'control-kind-v1', confidence: 'high', signals: ['CONTROL_KIND_MATCH'] },
+      support: 'regenerate-native',
+      businessRisk: 'low',
+      uiFreedom: 'regenerate-native',
+      nativeSuggestion: 'native text display',
+      nativeHints: [],
+      mustPreserve: ['Text binding'],
+      sourceEvents: [],
+      dataBindings: ['Text'],
+      layoutIntent: { parent: 'GalleryRows', group: null, layout: null, nestingDepth: 14 },
+      flags: { isComponentInstance: false, isPcf: false, isDataControl: false, isAutoGeneratedFormCard: false, requiresSemanticReview: false },
+      notesForAI: 'Repeated guidance retained once per role in the compact shard.',
+    })),
+  };
+  assert.ok(Buffer.byteLength(JSON.stringify({ behaviors, coverage })) > behaviorContractLib.MAX_MODEL_FEED_BYTES);
+  const artifacts = behaviorContractLib.buildBehaviorArtifacts(
+    behaviors,
+    [{ name: screen, file: 'app/(app)/large-operational-screen.tsx' }],
+    '1970-01-01T00:00:00.000Z',
+    coverage
+  );
+  behaviorContractLib.attachWorkflowRefs(artifacts, {
+    workflows: [{
+      workflowId: 'wf-1111111111111111',
+      source: {
+        screen,
+        control: 'SubmitEverythingButton',
+        controlPath: `${screen}/${longOwner}/SubmitEverythingButton`,
+        event: 'OnSelect',
+        coreBehaviorIds: actions.map((action) => action.behaviorId),
+        regenerableBehaviorIds: [],
+      },
+      proposal: {
+        intentHintIds: [],
+        target: {
+          module: 'src/features/large/workflows/submit-everything.ts',
+          importPath: '@/features/large/workflows/submit-everything',
+          exportName: 'runSubmitEverything',
+          callSiteFile: 'app/(app)/large-operational-screen.tsx',
+        },
+      },
+    }],
+  });
+  const screenShard = artifacts.shards.get(artifacts.contract.shards.find((row) => row.screen === screen).file);
+  const workflowShard = artifacts.workflowShards.get('workflow-shards/wf-1111111111111111.json');
+  assert.ok(Buffer.byteLength(JSON.stringify(screenShard, null, 2)) < behaviorContractLib.MAX_MODEL_FEED_BYTES);
+  assert.ok(Buffer.byteLength(JSON.stringify(workflowShard, null, 2)) < behaviorContractLib.MAX_MODEL_FEED_BYTES);
+  assert.equal(screenShard.actions.length, 0);
+  assert.equal(workflowShard.actions.length, actions.length);
+  assert.equal(screenShard.derivations.length, derivations.length);
+  assert.equal(artifacts.contract.stats.builderCoreBehaviors + artifacts.contract.stats.workflowCoreBehaviors, artifacts.contract.stats.coreBehaviors);
 });
 
 test('workflow approval reset clears stale answers and recomputes summaries', () => {

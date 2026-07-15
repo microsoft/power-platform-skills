@@ -134,8 +134,10 @@ Require these primary outputs:
 - `screens/`
 - `behaviors.json`
 - `behavior-contract.json`
-- `behavior-shards/` (one exact-core + native-intent shard per screen plus `App`)
+- `behavior-shards/` (one compact builder-owned core + native-intent + workflow-ref shard per screen plus `App`)
 - `workflows.json`
+- `workflow-gate-summary.json` (bounded Gate 2c review feed; no exact formulas)
+- `workflow-shards/` when pathological handlers exist (one exact implementation feed per handler)
 - `control-intent-coverage.json`
 - `pcf-plan.json`
 - `server-side-assets.json`
@@ -167,10 +169,10 @@ Read the generated JSON and check:
 6. Every flow call has a flow ID or an explicit `needs-flow-id` status.
 7. `behaviors.stats.droppedEventActionCount === 0`.
 8. `behavior-contract.json` deterministically classifies every global behavior ID exactly once as `core` or `regenerable`. Core includes all declarative rules, durable/integration/device effects, ambiguous state, and the backward closure of every state writer feeding a core sink. Regenerable is allowlist-only disconnected UI plumbing.
-9. Every declared `behavior-shards/<Screen>.json` exists and exactly matches the contract: compact screen/control intent, verbatim core entries, raw-free structured `intentHints[]`, and exact unmatched formulas. No builder shard may omit, duplicate, or demote a global ledger entry. Verbose `screens/*.plan.md` / `*.controls.md` remain audit-only and are not passed to builders.
+9. Every declared `behavior-shards/<Screen>.json` exists and exactly matches the contract: compact screen/control intent, builder-owned exact core entries, raw-free structured `intentHints[]`, compact guidance dictionaries, workflow refs, and exact unmatched statements. Every declared `workflow-shards/<Workflow>.json` contains the exact actions/hints delegated to that orchestrator and is absent from the screen-builder payload. No source ID may be omitted, duplicated, or demoted. Each model-facing feed must remain at or below 512 KiB. Verbose `screens/*.plan.md` / `*.controls.md` remain audit-only and are not passed to builders.
 10. Every high-risk control-intent row has a native strategy or explicit unsupported status. Gallery/component rows carry contextual `roleEvidence`; `repeating-records-review` and `component-review` remain explicit review gates, and only a verified empty layout definition may be `disposable-canvas-scaffolding`.
 11. `pcf-plan.json` has exactly one row per PCF control. If source metadata reports PCF content but discovery cannot enumerate controls, treat `discovery.complete: false` as a hard blocker rather than assuming zero PCFs. Every proposal is one of `native-replacement`, `server-dependency`, or `blocker`; the adapter never silently proposes unsupported loss. Every matching control row and screen shard must contain the deterministic pending/approved/blocked PCF projection produced by `sync-pcf-control-intents.js`.
-12. `workflows.json` contains every event handler that crossed the deterministic pathological-handler threshold and has at least one core behavior. Each workflow maps exact core behavior into named steps and maps regenerable source behavior to intent-hint IDs. Only correctness-critical unresolved business policies appear in `requiredDecisions[]`; routine code structure and native UX remain AI-owned proposal details.
+12. `workflows.json` contains every event handler that crossed the deterministic pathological-handler threshold and has at least one core behavior. Each workflow maps exact core behavior into named steps and maps regenerable source behavior to intent-hint IDs. `workflow-gate-summary.json` must exactly match its deterministic bounded projection and remain under 512 KiB; Gate 2c reads the summary, not exact global workflow payloads. Only correctness-critical unresolved business policies appear in `requiredDecisions[]`; routine code structure and native UX remain AI-owned proposal details.
 13. Server-computed/calculated/rollup columns are marked read-only for app writes.
 14. No output contains secrets, access tokens, private registry credentials, or customer record payloads.
 
