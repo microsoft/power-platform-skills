@@ -179,17 +179,19 @@ async function main() {
     }
     const connections = parsePacConnectionList(pac.stdout);
 
+    // NB: on `connectionreference`, `connectionid` is a plain String attribute (not a Dataverse
+    // lookup), so it's selected as `connectionid` — `_connectionid_value` does not exist and 400s.
     const refsRes = await dataverseRequest(
       envUrl,
       'GET',
-      'connectionreferences?$select=connectionreferencelogicalname,connectorid,_connectionid_value'
+      'connectionreferences?$select=connectionreferencelogicalname,connectorid,connectionid'
     );
     ensureOk(refsRes, 'List connection references');
     const connectionReferences = (refsRes.data?.value || [])
       .map((row) => ({
         logicalName: row.connectionreferencelogicalname,
         connectorId: row.connectorid,
-        connectionId: row._connectionid_value || null,
+        connectionId: row.connectionid || null,
       }))
       .filter((row) => row.logicalName)
       .sort((a, b) => String(a.logicalName).localeCompare(String(b.logicalName)));

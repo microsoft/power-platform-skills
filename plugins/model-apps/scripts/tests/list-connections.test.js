@@ -9,7 +9,7 @@ const scriptPath = path.join(__dirname, '..', 'list-connections.js');
 const scriptSrc = fs.readFileSync(scriptPath, 'utf8');
 
 test('reads connection references (ready-to-bind first)', () => {
-  assert.match(scriptSrc, /connectionreferences\?\$select=connectionreferencelogicalname,connectorid,_connectionid_value/);
+  assert.match(scriptSrc, /connectionreferences\?\$select=connectionreferencelogicalname,connectorid,connectionid/);
   assert.match(scriptSrc, /readyToBind/);
 });
 
