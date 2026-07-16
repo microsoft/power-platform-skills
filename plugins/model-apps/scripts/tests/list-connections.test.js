@@ -22,7 +22,21 @@ test('documents raw pac output parsed', () => {
 });
 
 test('missing args exits 1 with usage', () => {
-  const res = spawnSync(process.execPath, [scriptPath], { encoding: 'utf8' });
+  // Enable connectors so the run reaches arg validation instead of the feature gate.
+  const res = spawnSync(process.execPath, [scriptPath], {
+    encoding: 'utf8',
+    env: { ...process.env, GENPAGE_ENABLE_CONNECTORS: '1' },
+  });
   assert.equal(res.status, 1);
   assert.match(res.stderr, /Usage:/);
+});
+
+test('exits 3 with a disabled message when the connectors flag is OFF', () => {
+  // Gate runs before any pac/Dataverse call, so a valid-looking env URL still bails.
+  const res = spawnSync(process.execPath, [scriptPath, 'https://example.crm.dynamics.com'], {
+    encoding: 'utf8',
+    env: { ...process.env, GENPAGE_ENABLE_CONNECTORS: '0' },
+  });
+  assert.equal(res.status, 3);
+  assert.match(res.stderr, /disabled/i);
 });

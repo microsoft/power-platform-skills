@@ -201,6 +201,26 @@ plugin's own Web API scripts under `${PLUGIN_ROOT}/scripts/`.
 
 ### Connector Detection
 
+> **Feature gate — connectors ship OFF.** Before any connector discovery, probe
+> the flag:
+>
+> ```powershell
+> node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" connectors
+> ```
+>
+> If it prints `disabled` (exit 1), connector support is not yet live in PROD.
+> In that case:
+> - Do **not** run `list-connections.js` or any other connector discovery.
+> - Treat the request as Dataverse-only — build from Dataverse tables, or ask the
+>   maker to choose a Dataverse source. Never invent connector bindings.
+> - Write `## Connector Bindings` in `genpage-plan.md` as exactly
+>   `No connector bindings.` and skip the rest of this section.
+>
+> Only when it prints `enabled` (exit 0) do you proceed with the discovery below.
+> The flag lives in `plugins/model-apps/feature-flags.json`; flip it to `true`
+> (or set `GENPAGE_ENABLE_CONNECTORS=1` for a single run) once the pac connector
+> verbs, the GenUX control, and the maker/admin setting are all released.
+
 If the request implies a non-Dataverse source (for example SharePoint, Teams,
 weather, Office 365, SQL via connector, or a custom REST connector), discover
 available connector bindings before app selection:

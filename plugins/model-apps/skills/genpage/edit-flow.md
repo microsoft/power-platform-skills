@@ -97,6 +97,14 @@ empty array, the page is mock-data only — skip this phase.
 
 Also read `config.json.connectorBindings`.
 
+> **Feature gate.** Connector support ships OFF (`plugins/model-apps/feature-flags.json`).
+> When it is disabled, an edit must **not add or discover new** connector bindings:
+> do not run `list-connections.js` or any connector discovery. Existing bindings on
+> the page are still **preserved** — read them below and omit `--connectors` on
+> upload so pac keeps them untouched. Only when the flag is `enabled`
+> (`node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" connectors`) may an edit add,
+> replace, or clear bindings.
+
 - If it is non-empty, write the exact array back to
   `<working-dir>/connectors.json` as the seed binding set for this edit. This
   file is only the skill's working input to `pac upload --connectors`; pac writes

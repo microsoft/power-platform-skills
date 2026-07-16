@@ -26,6 +26,15 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   `contain: layout`, default dialogs to `modalType="non-modal"`, and never nest
   dialogs — so a modal can't escape the preview and cover the designer /
   coding-agent panel.
+- **Feature-flag gate for connectors (default OFF).** `feature-flags.json` at the
+  plugin root plus `scripts/lib/feature-flags.js` gate connector support so the
+  skill can ship ahead of its cross-repo dependencies (pac connector verbs, the
+  GenUX authoring control, and the maker/admin setting) reaching PROD. When OFF,
+  the planner skips connector discovery and records `No connector bindings.`, and
+  the connector scripts (`list-connections.js`, `create-connection-reference.js`)
+  fail closed with exit 3. Precedence: env `GENPAGE_ENABLE_CONNECTORS` overrides
+  the committed file; default is OFF (fail-closed). Flip the file to `true` once
+  the dependencies are GA.
 
 ### Changed
 - Spec tightening so workflow-logs are command-verbatim and `pageInput`

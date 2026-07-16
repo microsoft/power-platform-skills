@@ -250,6 +250,12 @@ After generating, read the RuntimeTypes.ts file to verify it generated correctly
 
 Read the plan's `## Connector Bindings` section.
 
+> **Feature gate.** Connector support ships OFF (`plugins/model-apps/feature-flags.json`).
+> When it is disabled the planner records `## Connector Bindings` as
+> `No connector bindings.`, so this phase is a no-op. As a backstop, the connector
+> scripts (`list-connections.js`, `create-connection-reference.js`) fail closed
+> (exit 3, "disabled") if invoked while the flag is OFF.
+
 **If the section is exactly `No connector bindings.`:** skip this phase and do
 not create `connectors.json`.
 

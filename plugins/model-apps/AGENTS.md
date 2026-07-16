@@ -102,6 +102,31 @@ The DataAPI (`props.dataApi`) provides typed CRUD operations against Dataverse t
 
 TypeScript type definitions generated from Dataverse metadata. Contains entity types, enum registrations, and the `GeneratedComponentProps` interface. Generated via PAC CLI before code generation to ensure correct column names.
 
+## Feature Flags
+
+Unreleased functionality is gated behind committed, **default-OFF** feature flags so
+the skill can merge ahead of its cross-repo dependencies and behave identically to
+production until they are live. The mechanism lives in `scripts/lib/feature-flags.js`
+with the committed values in `feature-flags.json` at the plugin root.
+
+- **Source of truth:** `feature-flags.json` (e.g. `{ "connectors": false }`). Flip a
+  flag to `true` in a one-line PR once its dependencies are GA in PROD.
+- **Precedence (highest first):** env var `GENPAGE_ENABLE_<FLAG>` (e.g.
+  `GENPAGE_ENABLE_CONNECTORS=1`) → committed `feature-flags.json` → default `false`
+  (fail-closed). This mirrors the telemetry opt-out env-over-config convention.
+- **LLM gate:** skill/agent markdown probes a flag with
+  `node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" <flag>` (prints `enabled`/`disabled`,
+  exits 0/1) and skips the gated workflow when disabled.
+- **Script backstop:** entrypoints for a gated feature call `isConnectorsEnabled()`
+  (or `isEnabled(<flag>)`) and fail closed — `list-connections.js` and
+  `create-connection-reference.js` exit 3 with a "disabled" message when the
+  `connectors` flag is OFF, so the feature can never run even if the markdown gate
+  is bypassed.
+
+The **`connectors`** flag currently ships OFF: GenPage connector support needs the
+pac CLI connector verbs (PowerPlatform-Scale-AdminTools), the GenUX authoring control
+(power-platform-ux), and the maker/admin ECS setting to all be released first.
+
 ## Development Standards
 
 - **React 17 + TypeScript** — all generated code
