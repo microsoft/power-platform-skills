@@ -9,6 +9,8 @@ model: sonnet
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, Task, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 ---
 
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
 # Power Apps Generative Pages Builder
 
 **Triggers:** genpage, generative page, create genpage, genux page, build genux, power apps page, model page
