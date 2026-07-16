@@ -1,0 +1,116 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const HOOK = path.join(__dirname, '..', '..', 'hooks', 'validate-icon-imports.js');
+
+// Run the hook as a child process with a JSON stdin payload (its real entry
+// shape). Returns { status, stderr }.
+function runHook(payload) {
+  const res = spawnSync(process.execPath, [HOOK], {
+    input: JSON.stringify(payload),
+    encoding: 'utf8',
+  });
+  return { status: res.status, stderr: res.stderr || '' };
+}
+
+// Write a temp .tsx file on disk (the hook reads the final on-disk content in
+// PostToolUse) and return its path plus a Write tool payload.
+function writeTemp(dir, name, content) {
+  const filePath = path.join(dir, name);
+  fs.writeFileSync(filePath, content, 'utf8');
+  return filePath;
+}
+
+function payloadFor(filePath, content, tool = 'Write') {
+  const toolInput = tool === 'Write'
+    ? { file_path: filePath, content }
+    : { file_path: filePath, new_string: content };
+  return { tool_name: tool, tool_input: toolInput, cwd: path.dirname(filePath) };
+}
+
+const GENPAGE_HEADER =
+  "import * as React from 'react';\nconst GeneratedComponent = () => null;\nexport default GeneratedComponent;\n";
+
+let tmp;
+test.beforeEach(() => {
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-icons-'));
+});
+test.afterEach(() => {
+  try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+});
+
+test('valid verified icons in a genpage file pass (exit 0)', () => {
+  const content = `import { AddRegular, DeleteRegular } from '@fluentui/react-icons';\n${GENPAGE_HEADER}`;
+  const fp = writeTemp(tmp, 'page.tsx', content);
+  const { status } = runHook(payloadFor(fp, content));
+  assert.equal(status, 0);
+});
+
+test('hallucinated icon name in a genpage file is blocked (exit 2)', () => {
+  const bad = 'TotallyMadeUpIconRegular';
+  const content = `import { AddRegular, ${bad} } from '@fluentui/react-icons';\n${GENPAGE_HEADER}`;
+  const fp = writeTemp(tmp, 'page.tsx', content);
+  const { status, stderr } = runHook(payloadFor(fp, content));
+  assert.equal(status, 2);
+  assert.match(stderr, new RegExp(bad));
+});
+
+test('sized icon variant is rejected (unsized-only rule) (exit 2)', () => {
+  const content = `import { Add24Regular } from '@fluentui/react-icons';\n${GENPAGE_HEADER}`;
+  const fp = writeTemp(tmp, 'page.tsx', content);
+  const { status, stderr } = runHook(payloadFor(fp, content));
+  assert.equal(status, 2);
+  assert.match(stderr, /Add24Regular/);
+});
+
+test('`as` alias uses the source export name for validation', () => {
+  const content = `import { DeleteRegular as Trash } from '@fluentui/react-icons';\n${GENPAGE_HEADER}`;
+  const fp = writeTemp(tmp, 'page.tsx', content);
+  const { status } = runHook(payloadFor(fp, content));
+  assert.equal(status, 0);
+});
+
+test('non-genpage file is ignored even with a bad icon (exit 0)', () => {
+  // No `export default GeneratedComponent` and no sibling genpage-plan.md.
+  const content = "import { NotARealIconRegular } from '@fluentui/react-icons';\nexport const x = 1;\n";
+  const fp = writeTemp(tmp, 'random.tsx', content);
+  const { status } = runHook(payloadFor(fp, content));
+  assert.equal(status, 0);
+});
+
+test('sibling genpage-plan.md opts a file into validation (exit 2 on bad icon)', () => {
+  fs.writeFileSync(path.join(tmp, 'genpage-plan.md'), '# plan\n', 'utf8');
+  const content = "import { NotARealIconRegular } from '@fluentui/react-icons';\nexport const x = 1;\n";
+  const fp = writeTemp(tmp, 'page.tsx', content);
+  const { status, stderr } = runHook(payloadFor(fp, content));
+  assert.equal(status, 2);
+  assert.match(stderr, /NotARealIconRegular/);
+});
+
+test('non-tsx file is ignored (exit 0)', () => {
+  const content = "import { NotARealIconRegular } from '@fluentui/react-icons';\n";
+  const fp = writeTemp(tmp, 'notes.md', content);
+  const { status } = runHook(payloadFor(fp, content));
+  assert.equal(status, 0);
+});
+
+test('non-write tool is ignored (exit 0)', () => {
+  const { status } = runHook({ tool_name: 'Read', tool_input: { file_path: 'x.tsx' } });
+  assert.equal(status, 0);
+});
+
+test('file with no @fluentui/react-icons imports passes (exit 0)', () => {
+  const content = `import * as React from 'react';\n${GENPAGE_HEADER}`;
+  const fp = writeTemp(tmp, 'page.tsx', content);
+  const { status } = runHook(payloadFor(fp, content));
+  assert.equal(status, 0);
+});
+
+test('unparseable stdin does not block (exit 0)', () => {
+  const res = spawnSync(process.execPath, [HOOK], { input: 'not json', encoding: 'utf8' });
+  assert.equal(res.status, 0);
+});

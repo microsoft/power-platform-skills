@@ -1,0 +1,6 @@
+{
+  "instrumentationKey": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+  "collector_url": "",
+  "event_stream_name": "PluginEventStreamPlaceholder",
+  "disabled": true
+}
