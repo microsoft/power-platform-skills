@@ -4,7 +4,7 @@ This template is an Expo, React Native, and TypeScript starter for building a st
 
 ## Requirements
 
-- Node.js 22 LTS.
+- Node.js 20 LTS.
 - npm 10 or newer.
 - The Power Apps Developer app from the Apple App Store or Google Play.
 
@@ -143,7 +143,7 @@ The skill checks these in Step 1 (Prerequisites) and stops with a clear error if
 
 | Tool | Min version | How to install / check |
 |---|---|---|
-| Node.js | **22 LTS** | `node -v` — install via [nvm](https://github.com/nvm-sh/nvm) (`nvm install 22 && nvm use 22`) |
+| Node.js | **20 LTS** | `node -v` — install via [nvm](https://github.com/nvm-sh/nvm) (`nvm install 20 && nvm use 20`) |
 | `az` (Azure CLI) | **2.60+** | `az --version` — needed for Dataverse helper scripts. Install via Homebrew: `brew install azure-cli` |
 | `git` | any recent | required for upstream template clone |
 
