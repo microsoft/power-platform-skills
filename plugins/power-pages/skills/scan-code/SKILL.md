@@ -23,7 +23,7 @@ Scan a Power Pages site project's source files and dependencies for security iss
 
 **Initial request:** $ARGUMENTS
 
-> **WARNING:** Before proceeding, inform the user: "This scan runs **third-party open-source security tools** against your source code and dependencies. If those tools aren't installed and you opt into the fallback review, the **AI model reads your source code directly**. **Do not proceed with sensitive information** — such as credentials, internal URLs, tenant IDs, customer data, or proprietary code — that you're not comfortable exposing to third-party tools or an AI model."
+> **WARNING:** Before proceeding, inform the user: "This skill uses **opengrep** and **trivy**, only if they are installed on your local machine. These third-party, open-source tools scan your source code and dependencies and might collect or transmit data under their own terms, privacy policies, and data-handling practices. Microsoft does not control these. If you select the AI fallback, the AI service processes your source code. Review your organization's policies and applicable third-party terms before continuing."
 
 ## Gotchas
 
