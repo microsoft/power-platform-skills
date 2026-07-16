@@ -48,7 +48,9 @@ references/                    ← Shared reference docs
   verified-icons.txt           ← ~5000 Fluent UI icon names; Grep-validated by page-builder
 samples/                       ← Example .tsx files (12 samples)
 scripts/
-  launch-playwright-mcp.js     ← Playwright MCP server launcher (detects system browser)
+  launch-playwright-mcp.js     ← Playwright MCP server launcher (fullscreen; uses lib/detect-browser.js)
+  playwright-mcp-fullscreen.config.json ← Fullscreen browser config for the launcher
+  check-version.js             ← Compares local plugin version to origin/main; skills run it up front
   regenerate-verified-icons.js ← Regenerates references/verified-icons.txt from npm
   check-auth.js                ← Pre-flight: az present + logged in, pac identity, WhoAmI, identity match
   dataverse-request.js         ← General Dataverse Web API wrapper (escape hatch)
@@ -63,12 +65,23 @@ scripts/
   lib/
     dataverse-auth.js          ← Shared auth + HTTP helpers (uses `az account get-access-token`)
     supported-dependencies.js  ← Single source of truth for runtime + dev deps versions
-  tests/                       ← node --test coverage for the scripts above
+    detect-browser.js          ← System Chromium/Edge/Chrome detection (used by the launcher)
+    modelapps-hook-utils.js    ← Tracked-skill discovery + validator lookup for the hooks
+    telemetry/                 ← Bundled 1DS telemetry: ikey.json (this plugin's config) + lib/ (copy of shared/telemetry/lib)
+  tests/                       ← node --test coverage for the scripts + hooks
+hooks/                         ← Lifecycle hooks (registered in hooks/hooks.json)
+  run-skill-posttool-validation.js ← Runs a skill's validate*.js after the Skill tool returns
+  validate-icon-imports.js     ← PostToolUse: blocks unverified @fluentui/react-icons in genpage .tsx
+  validate-write-safety.js     ← PreToolUse: blocks writes outside the working dir
+  run-skill-pretool-telemetry.js   ← PreToolUse(Skill): emits skill_started (ships disabled)
+  run-user-prompt-telemetry.js ← UserPromptSubmit: emits skill_started for /model-apps:<skill>
 skills/
   genpage/
     SKILL.md                   ← Orchestrator skill (delegates to agents)
     edit-flow.md               ← Edit flow steps (loaded only on edit path)
     verify-flow.md             ← Playwright browser verification (loaded only when user opts in)
+  report-issue/                ← Bug-report skill (bundled shared workflow)
+  telemetry/                   ← /model-apps:telemetry on|off|status control skill
 ```
 
 ## Skills
@@ -76,6 +89,8 @@ skills/
 | Skill | Description |
 |-------|-------------|
 | `/genpage` | Build and deploy generative pages for a model-driven Power App |
+| `/report-issue` | File a bug report against this plugin's GitHub repo |
+| `/telemetry` | Enable/disable/check anonymous usage telemetry (`on \| off \| status`) |
 
 ## Agents
 
@@ -150,6 +165,47 @@ The **`connectors`** flag currently ships OFF: GenPage connector support needs t
 pac CLI connector verbs (PowerPlatform-Scale-AdminTools), the GenUX authoring control
 (power-platform-ux), and the maker/admin ECS setting to all be released first.
 
+## Hooks & Validators
+
+Hooks are registered centrally in `hooks/hooks.json` (auto-loaded by the plugin
+host). Every hook **fails open** on any internal error (exit 0) and **fails closed**
+(exit 2) only on a real violation, so a hook bug can never break a genpage run.
+
+- **PostToolUse(Skill)** — `run-skill-posttool-validation.js` runs a skill's
+  `skills/<skill>/scripts/validate*.js` when present. Tracked skills are discovered
+  from `skills/*/SKILL.md` by `scripts/lib/modelapps-hook-utils.js` (the telemetry
+  control skill is excluded from tracking).
+- **PostToolUse(Write|Edit|MultiEdit)** — `validate-icon-imports.js` validates
+  `@fluentui/react-icons` named imports in genpage-generated `.tsx` files against
+  `references/verified-icons.txt`, automating the page-builder's manual grep. It is
+  gated to genpage output (the file's `export default GeneratedComponent` marker or
+  a sibling `genpage-plan.md`) so it never fires on unrelated React files.
+- **PreToolUse(Write|Edit|MultiEdit)** — `validate-write-safety.js` blocks writes
+  outside the working directory (runaway sub-agent protection). Bypass with
+  `MODEL_APPS_SKIP_WRITE_GUARD=1`.
+
+## Telemetry
+
+This plugin ships 1DS telemetry for `skill_started`. The canonical library is the
+repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **physical copy**
+(never a symlink) so installed plugins don't depend on symlink handling. Edit
+`shared/telemetry/lib/` first, then refresh this plugin's copy in the same change.
+
+- **Posture:** the committed `ikey.json` ships **`disabled: true` with a placeholder
+  key** (Tier-1 static, no resolver). It emits nothing — no POST, no local log —
+  until a real key + Kusto stream are provisioned and `disabled` is flipped to
+  `false`. **Provision a fresh key; never copy another plugin's `ikey.json`**
+  (CI-enforced: `node scripts/validate-telemetry-ikeys.js`).
+- **Emission:** `hooks/run-skill-pretool-telemetry.js` (PreToolUse Skill) and
+  `hooks/run-user-prompt-telemetry.js` (UserPromptSubmit `/model-apps:<skill>`).
+- **Privacy:** anonymous, default-on. Users opt out of transmission via
+  `/model-apps:telemetry off`; the local diagnostic mirror
+  (`~/.power-platform-skills/telemetry/model-apps/sessions/<id>/events.jsonl`) is
+  still written. CI/automation opt out via
+  `POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT=1` (highest precedence).
+- **Fail closed:** telemetry never changes a script's exit code; emission is
+  fire-and-forget via a detached dispatcher child. See `shared/telemetry/README.md`.
+
 ## Development Standards
 
 - **React 17 + TypeScript** — all generated code
@@ -182,6 +238,7 @@ After modifying this plugin:
 5. Test skill invocation with `/genpage`
 6. Test with both Dataverse entity pages and mock data pages (smoke + edit)
 7. Verify Playwright browser verification works (navigate, snapshot, click, screenshot)
+8. Hooks/validators + telemetry hooks are covered by step 2. Keep `scripts/lib/telemetry/ikey.json` shipping `disabled: true` until a key is provisioned (a test enforces this), and run `node scripts/validate-telemetry-ikeys.js` after touching `ikey.json`
 
 ## Eval Suite
 
