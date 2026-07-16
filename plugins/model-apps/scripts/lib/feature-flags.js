@@ -83,10 +83,28 @@ function isConnectorsEnabled(opts) {
   return isEnabled('connectors', opts);
 }
 
-// The set of flag names the skill knows about. Used to validate the committed
-// file (catch typo'd keys that would silently stay OFF — or, after a flip to
-// true, an unintended key) and to enumerate state via `describe()`.
-const KNOWN_FLAGS = ['connectors'];
+// Catalog of every flag the skill knows about, with lifecycle status so makers
+// and devs can see what is experimental / in-progress vs GA. `status` is one of
+// 'experimental' | 'in-progress' | 'ga'. Keep this the single source of truth —
+// feature-flags.json only carries the on/off value; this catalog carries the
+// metadata (what it enables, what it depends on, how to turn it on).
+const FLAGS = {
+  connectors: {
+    status: 'in-progress',
+    summary:
+      'GenPage connector authoring (SharePoint, weather, Office 365, SQL, custom REST) ' +
+      'and ALM packaging of connection references.',
+    dependencies:
+      'pac CLI connector verbs (PowerPlatform-Scale-AdminTools), the GenUX authoring ' +
+      'control (power-platform-ux), and the maker/admin ECS setting — all live in PROD.',
+    enableEnv: 'GENPAGE_ENABLE_CONNECTORS=1',
+  },
+};
+
+// Flag names the skill knows about, derived from the catalog. Used to validate the
+// committed file (catch typo'd keys that would silently stay OFF — or, after a flip
+// to true, an unintended key) and to enumerate state via `describe()`.
+const KNOWN_FLAGS = Object.keys(FLAGS);
 
 // Fail-closed gate shared by every connector script entry point. Centralizing it
 // (instead of each script inlining the same `if (!isConnectorsEnabled()) exit 3`)
@@ -116,7 +134,7 @@ function describe(opts = {}) {
       : Object.prototype.hasOwnProperty.call(flags, flag)
         ? 'file'
         : 'default';
-    return { flag, enabled: isEnabled(flag, { env, flags }), source };
+    return { flag, enabled: isEnabled(flag, { env, flags }), source, status: FLAGS[flag].status };
   });
 }
 
@@ -158,6 +176,7 @@ module.exports = {
   validateFlags,
   envVarName,
   parseBool,
+  FLAGS,
   KNOWN_FLAGS,
   FLAGS_PATH,
 };
@@ -169,8 +188,12 @@ module.exports = {
 if (require.main === module) {
   const arg = process.argv[2];
   if (arg === '--list') {
-    for (const { flag, enabled, source } of describe()) {
-      process.stdout.write(`${flag}: ${enabled ? 'enabled' : 'disabled'} (source: ${source})\n`);
+    for (const { flag, enabled, source, status } of describe()) {
+      process.stdout.write(
+        `${flag}: ${enabled ? 'enabled' : 'disabled'} (status: ${status}, source: ${source})\n`
+      );
+      process.stdout.write(`  ${FLAGS[flag].summary}\n`);
+      process.stdout.write(`  enable: ${FLAGS[flag].enableEnv} (or set "${flag}": true in feature-flags.json)\n`);
     }
     for (const w of validateFlags(readFlagsFile(FLAGS_PATH))) {
       process.stderr.write(`warning: ${w}\n`);

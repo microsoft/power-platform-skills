@@ -16,6 +16,7 @@ const {
   describe,
   validateFlags,
   KNOWN_FLAGS,
+  FLAGS,
 } = require(libPath);
 
 // --- Default OFF (fail-closed) ---------------------------------------------
@@ -168,4 +169,23 @@ test('validateFlags warns on unknown keys and non-boolean values, ignores _comme
   assert.deepEqual(validateFlags({ connectors: false, _comment: 'x' }), []);
   assert.match(validateFlags({ conectors: true })[0], /unknown flag/i);
   assert.match(validateFlags({ connectors: 'yes' })[0], /boolean/i);
+});
+
+// --- flag catalog: status tracking for experimental / in-progress features --
+
+test('FLAGS catalog documents connectors with a status and summary', () => {
+  assert.ok(FLAGS.connectors, 'connectors flag should be in the catalog');
+  assert.ok(['experimental', 'in-progress', 'ga'].includes(FLAGS.connectors.status));
+  assert.match(FLAGS.connectors.summary, /connector/i);
+  assert.ok(FLAGS.connectors.dependencies, 'should document what it depends on');
+});
+
+test('KNOWN_FLAGS is derived from the FLAGS catalog', () => {
+  assert.deepEqual(KNOWN_FLAGS, Object.keys(FLAGS));
+});
+
+test('describe includes the status for each known flag', () => {
+  const d = describe({ env: {}, flags: {} });
+  const c = d.find((f) => f.flag === 'connectors');
+  assert.equal(c.status, FLAGS.connectors.status);
 });

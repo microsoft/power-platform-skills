@@ -121,7 +121,10 @@ values in `feature-flags.json` at the plugin root.
 - **LLM gate:** skill/agent markdown probes a flag with
   `node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" <flag>` (prints `enabled`/`disabled`,
   exits 0/1) and skips the gated workflow when disabled. `--list` prints every known
-  flag's effective state + source (env/file/default) plus config-validation warnings.
+  flag's lifecycle **status** (experimental / in-progress / ga), effective state +
+  source (env/file/default), summary, how to enable, plus config-validation warnings.
+  Flags are catalogued with that metadata in the `FLAGS` map in `feature-flags.js`
+  (the committed `feature-flags.json` carries only the on/off value).
 - **Script backstop:** connector entrypoints call the shared
   `exitIfConnectorsDisabled()` helper (DRY — no inlined gate) and fail closed with
   exit 3 when OFF: `list-connections.js`, `create-connection-reference.js`, and the
