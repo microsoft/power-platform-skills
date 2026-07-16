@@ -10,28 +10,40 @@ logical name must exist as a connection reference in the target environment.
 > the plugin `AGENTS.md` and `feature-flags.json`. When OFF, pages are Dataverse /
 > mock-data only and no connector code is emitted.
 
-## `config.json` binding shape
+## Binding shape: `connectors.json` (array) vs page `config.json` (object)
 
-The skill writes this array to working-dir `connectors.json`; `pac model genpage
-upload --connectors` persists it into the page `config.json`.
+The skill writes a **bare JSON array** of bindings to working-dir
+`connectors.json`. `pac model genpage upload --connectors <connectors.json>` then
+persists that array into the deployed page's `config.json` under a
+`connectorBindings` property. The two files therefore have **different shapes** —
+do not write the object wrapper to `connectors.json`.
+
+**`connectors.json`** — what the skill writes (a JSON array; no wrapper object):
+
+```json
+[
+  {
+    "logicalName": "new_uxtest_sharepoint",
+    "connectorId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+    "dataset": "https://host.sharepoint.com/sites/x",
+    "tables": ["5709dd6f-c73e-4079-ad23-2334e45e0e13"],
+    "tableDisplayNames": ["Pet"]
+  },
+  {
+    "logicalName": "new_uxtest_msnweather",
+    "connectorId": "/providers/Microsoft.PowerApps/apis/shared_msnweather",
+    "dataset": "",
+    "operations": ["CurrentWeather"]
+  }
+]
+```
+
+**page `config.json`** — what `pac` writes into the deployed page (the same array
+wrapped under `connectorBindings`; the skill never writes this file directly):
 
 ```json
 {
-  "connectorBindings": [
-    {
-      "logicalName": "new_uxtest_sharepoint",
-      "connectorId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
-      "dataset": "https://host.sharepoint.com/sites/x",
-      "tables": ["5709dd6f-c73e-4079-ad23-2334e45e0e13"],
-      "tableDisplayNames": ["Pet"]
-    },
-    {
-      "logicalName": "new_uxtest_msnweather",
-      "connectorId": "/providers/Microsoft.PowerApps/apis/shared_msnweather",
-      "dataset": "",
-      "operations": ["CurrentWeather"]
-    }
-  ]
+  "connectorBindings": [ /* ...the identical array from connectors.json... */ ]
 }
 ```
 

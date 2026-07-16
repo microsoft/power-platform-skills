@@ -120,6 +120,10 @@ at runtime.]
 | new_uxtest_msnweather | /providers/Microsoft.PowerApps/apis/shared_msnweather | | | | CurrentWeather | | Location (required), units (optional) | temperature (number), conditions (string), humidity (number) |
 
 ## Solution Packaging
+[OPTIONAL section — include ONLY when packaging into a solution. Omit it entirely
+to skip packaging; when absent, the orchestrator skips Phase 6.7. This section is
+opt-in, unlike the always-present `## Connector Bindings` (which uses the "No
+connector bindings." sentinel).]
 - Package into solution: true / false (default false)
 - Solution unique name: [when true — the target solution for cross-env travel]
 - Connection references: [comma-separated connectionreference logical names to include, or "none"]

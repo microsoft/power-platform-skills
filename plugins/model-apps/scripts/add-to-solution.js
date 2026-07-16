@@ -25,9 +25,13 @@
 //           connection reference; AddSolutionComponent with 371 fails with a
 //           MetadataCache 'msdyn_Connector' error.
 //
-// NOTE: a GenPage (uxagentproject) is NOT a standalone solution component type.
-// Add the page's appmodule with AddRequiredComponents=true and the uxagentproject
-// + sitemap travel as required components. See add-page-to-solution.js.
+// NOTE: a GenPage's uxagentproject IS a registered solution component type
+// (10372 = its ObjectTypeCode), but it does NOT auto-travel with the appmodule.
+// Adding the appmodule (type 80) with AddRequiredComponents=true pulls the sitemap
+// (62) and appmodulecomponent (10097) but NOT the GenPage, so the uxagentproject
+// row must be added EXPLICITLY (adding it then pulls its uxagentprojectfile
+// children, 10373, incl. config.json with connectorBindings). See
+// add-page-to-solution.js.
 //
 // Output: { "ok": true }
 

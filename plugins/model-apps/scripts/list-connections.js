@@ -149,9 +149,16 @@ function sortReadyToBindFirst(connections, connectionReferences) {
   return connections
     .map((connection) => {
       const refs = refsForConnection(connection, connectionReferences);
+      // "Ready to bind" means a connectionreference is actually bound to THIS
+      // connection (its connectionId matches). Matching only by connectorId is
+      // not enough — that reference may be bound to a different connection (or
+      // none), so binding a page to it here would not resolve at runtime. The
+      // broader `connectionReferences` list still includes connector-id matches
+      // for operator convenience.
+      const boundRefs = refs.filter((ref) => sameConnectionId(connection.connectionId, ref.connectionId));
       return {
         ...connection,
-        readyToBind: refs.length > 0,
+        readyToBind: boundRefs.length > 0,
         connectionReferences: refs.map((ref) => ref.logicalName),
       };
     })
@@ -159,6 +166,19 @@ function sortReadyToBindFirst(connections, connectionReferences) {
       if (a.readyToBind !== b.readyToBind) return a.readyToBind ? -1 : 1;
       return String(a.displayName).localeCompare(String(b.displayName));
     });
+}
+
+function pacFailureMessage(pac) {
+  // spawnSync signals a failure to LAUNCH the process (e.g. `pac` not on PATH →
+  // ENOENT) via `pac.error`, leaving `status` null. A process that ran but exited
+  // non-zero has a numeric `status` (and maybe a `signal`). Distinguish the two so
+  // a missing PAC install produces an actionable message instead of "exit null".
+  if (pac.error) {
+    return `pac connection list could not run: ${pac.error.message}. Ensure the PAC CLI is installed and on PATH (dotnet tool install -g Microsoft.PowerApps.CLI.Tool).`;
+  }
+  const detail = String(pac.stderr || pac.stdout || '').trim();
+  const signal = pac.signal ? `, signal ${pac.signal}` : '';
+  return `pac connection list failed (exit ${pac.status}${signal})${detail ? `: ${detail}` : ''}`;
 }
 
 async function main() {
@@ -183,8 +203,8 @@ async function main() {
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: process.platform === 'win32',
     });
-    if (pac.status !== 0) {
-      throw new Error(`pac connection list failed: ${pac.stderr || pac.stdout || `exit ${pac.status}`}`);
+    if (pac.error || pac.status !== 0) {
+      throw new Error(pacFailureMessage(pac));
     }
     const connections = parsePacConnectionList(pac.stdout);
 
@@ -215,4 +235,15 @@ async function main() {
   }
 }
 
-main();
+// Only run when invoked directly as a CLI; when required by tests, export the
+// pure helpers so their logic can be unit-tested without side effects.
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  sameConnectionId,
+  refsForConnection,
+  sortReadyToBindFirst,
+  pacFailureMessage,
+};

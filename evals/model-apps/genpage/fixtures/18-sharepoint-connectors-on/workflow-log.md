@@ -56,7 +56,7 @@
 
 ## Phase 4.5 — Connector bindings
 - Writing connectors.json for SharePoint binding
-- connectors.json written to sharepoint-team-docs/connectors.json: { "connectorBindings": [{ "logicalName": "new_uxtest_sharepoint", "connectorId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline", "dataset": "https://contoso.sharepoint.com/sites/team", "tables": ["5709dd6f-c73e-4079-ad23-2334e45e0e13"], "tableDisplayNames": ["Documents"] }] }
+- connectors.json written to sharepoint-team-docs/connectors.json (a JSON array of bindings, per SKILL.md Phase 4.5): [{ "logicalName": "new_uxtest_sharepoint", "connectorId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline", "dataset": "https://contoso.sharepoint.com/sites/team", "tables": ["5709dd6f-c73e-4079-ad23-2334e45e0e13"], "tableDisplayNames": ["Documents"] }]
 
 ## Phase 5b — Single-page fast path
 - Plan has 1 page → fast path taken (inlined build, no Task subagent dispatched for page-builder)
