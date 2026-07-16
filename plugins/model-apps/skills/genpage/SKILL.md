@@ -257,11 +257,11 @@ node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" connectors
 
 **If it prints `disabled`:** connectors are OFF. Skip this phase entirely — do not
 create or pass `connectors.json`, and never add `--connectors` on upload —
-**regardless of what the plan''s `## Connector Bindings` section says**. (Backstop:
+**regardless of what the plan's `## Connector Bindings` section says**. (Backstop:
 `list-connections.js` / `create-connection-reference.js` also fail closed with
 exit 3 if invoked while OFF.)
 
-**If it prints `enabled`:** read the plan''s `## Connector Bindings` section and
+**If it prints `enabled`:** read the plan's `## Connector Bindings` section and
 treat it as bindings **only when it contains an actual binding table** (a
 `| Logical Name | …` header with at least one data row). If the section is
 `No connector bindings.`, empty, missing, or malformed, treat the page as having
@@ -315,8 +315,11 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
 
 1. Read `${PLUGIN_ROOT}/references/rules.md`
 2. Read the sample listed in the plan's `## Relevant Samples`
-3. If the plan's `## Connector Bindings` section is not exactly
-   `No connector bindings.`, also read `${PLUGIN_ROOT}/references/connectors.md`
+3. Only when the plan's `## Connector Bindings` section contains an **actual
+   binding table** (a `| Logical Name | …` header with at least one data row),
+   also read `${PLUGIN_ROOT}/references/connectors.md`. Treat a
+   `No connector bindings.` sentinel, or an empty/missing/malformed section, as
+   having no connectors (same contract as Phase 4.5 and genpage-page-builder).
 4. If the plan's Per-Page Specification has `Needs caching: true`, also read
    `${PLUGIN_ROOT}/references/data-caching.md`
 5. If the plan's `## Environment` indicates non-English languages, also read
