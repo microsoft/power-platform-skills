@@ -118,6 +118,13 @@ Ask questions via `AskUserQuestion`, one at a time:
 4. **"Any specific requirements for the changes?"** — styling, accessibility,
    behavior, or preservation constraints not yet covered.
 
+> **Connector data changes** (SharePoint, weather, Office 365, SQL, custom REST):
+> if the edit adds, replaces, or removes connector-backed data, capture it in the
+> plan's `### Connector Changes` below. Do **not** run connector discovery here —
+> the orchestrator delegates that to the `genpage-connector-builder` agent (which
+> owns the feature gate). Preserving or clearing existing connectors needs no
+> discovery.
+
 Mark "Analyze existing page" task complete.
 
 ## Step 3 — Present Edit Plan for Approval
@@ -137,6 +144,10 @@ Enter plan mode (`EnterPlanMode`) with:
 ### Proposed Changes
 1. [Change 1 — what to add / modify / remove]
 2. [Change 2 — ...]
+
+### Connector Changes
+- [none | add <source> | replace <logicalName> with <source> | remove <logicalName>]
+  (the orchestrator delegates any add/replace/remove to genpage-connector-builder)
 
 ### Preservation Constraints
 - [What must remain unchanged — feature preservation, specific behaviors]

@@ -480,6 +480,7 @@
       },
       "expectations": [
         "Phase 1 (Planner): With the connectors feature flag ON, the feature gate passes (enabled) and list-connections.js is run for connector discovery, and the plan's ## Connector Bindings records at least one binding (not 'No connector bindings.')",
+        "Phase 4.5 / Phase 6 (connectors ON): connectors.json is written as a bare array (not the config.json object wrapper) and the upload includes --connectors",
         "Phase 2: Entity-builder is SKIPPED (no entities to create)",
         "Phase 5b (single-page fast path): Plan has 1 page so orchestrator inlines the build — NO Task subagent dispatched for the page-builder",
         "Phase 5b: Orchestrator reads ${PLUGIN_ROOT}/references/verified-icons.txt before writing the .tsx",

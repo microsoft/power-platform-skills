@@ -12,6 +12,10 @@ const {
   connectorsDisabledMessage,
   envVarName,
   parseBool,
+  exitIfConnectorsDisabled,
+  describe,
+  validateFlags,
+  KNOWN_FLAGS,
 } = require(libPath);
 
 // --- Default OFF (fail-closed) ---------------------------------------------
@@ -111,4 +115,57 @@ test('CLI without a flag name exits 2 with usage', () => {
   const res = spawnSync(process.execPath, [libPath], { encoding: 'utf8' });
   assert.equal(res.status, 2);
   assert.match(res.stderr, /Usage:/);
+});
+
+// --- exitIfConnectorsDisabled (DRY gate helper) -----------------------------
+
+test('exitIfConnectorsDisabled exits 3 and writes the message when OFF', () => {
+  let exitCode = null;
+  let written = '';
+  exitIfConnectorsDisabled({
+    env: {},
+    exit: (c) => { exitCode = c; },
+    write: (s) => { written += s; },
+  });
+  assert.equal(exitCode, 3);
+  assert.match(written, /disabled/i);
+});
+
+test('exitIfConnectorsDisabled is a no-op when ON', () => {
+  let exitCalled = false;
+  exitIfConnectorsDisabled({
+    env: { GENPAGE_ENABLE_CONNECTORS: '1' },
+    exit: () => { exitCalled = true; },
+    write: () => {},
+  });
+  assert.equal(exitCalled, false);
+});
+
+// --- known-flag registry + describe() + validation --------------------------
+
+test('KNOWN_FLAGS includes connectors', () => {
+  assert.ok(KNOWN_FLAGS.includes('connectors'));
+});
+
+test('describe reports effective state and source per known flag', () => {
+  const envOn = describe({ env: { GENPAGE_ENABLE_CONNECTORS: '1' }, flags: { connectors: false } });
+  const c1 = envOn.find((f) => f.flag === 'connectors');
+  assert.equal(c1.enabled, true);
+  assert.equal(c1.source, 'env');
+
+  const fileOn = describe({ env: {}, flags: { connectors: true } });
+  const c2 = fileOn.find((f) => f.flag === 'connectors');
+  assert.equal(c2.enabled, true);
+  assert.equal(c2.source, 'file');
+
+  const dflt = describe({ env: {}, flags: {} });
+  const c3 = dflt.find((f) => f.flag === 'connectors');
+  assert.equal(c3.enabled, false);
+  assert.equal(c3.source, 'default');
+});
+
+test('validateFlags warns on unknown keys and non-boolean values, ignores _comment', () => {
+  assert.deepEqual(validateFlags({ connectors: false, _comment: 'x' }), []);
+  assert.match(validateFlags({ conectors: true })[0], /unknown flag/i);
+  assert.match(validateFlags({ connectors: 'yes' })[0], /boolean/i);
 });

@@ -97,24 +97,23 @@ empty array, the page is mock-data only — skip this phase.
 
 Also read `config.json.connectorBindings`.
 
-> **Feature gate.** Connector support ships OFF (`plugins/model-apps/feature-flags.json`).
-> When it is disabled, an edit must **not add or discover new** connector bindings:
-> do not run `list-connections.js` or any connector discovery. Existing bindings on
-> the page are still **preserved** — read them below and omit `--connectors` on
-> upload so pac keeps them untouched. Only when the flag is `enabled`
-> (`node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" connectors`) may an edit add,
-> replace, or clear bindings.
+> **Connectors are owned by `genpage-connector-builder`.** Read the existing
+> `config.json.connectorBindings` (the current bindings). If the edit intent
+> **adds, replaces, or discovers** connector data, do NOT run discovery inline —
+> delegate to the `genpage-connector-builder` agent (**Mode: `edit`**) via the
+> `Task` tool, passing the working directory, `${PLUGIN_ROOT}`, the environment
+> URL, the existing bindings, and the edit intent. That agent **owns the feature
+> gate**: when connectors are OFF it preserves the existing bindings and adds none;
+> when ON it discovers and returns the updated set. It writes
+> `<working-dir>/connectors.json` (bare array) and `<working-dir>/connector-bindings.md`.
+>
+> For edits that only **preserve** connectors (no connector change) you don't need
+> the agent — omit `--connectors` on upload so pac keeps the deployed bindings. To
+> **clear all** connectors, write `[]` to `<working-dir>/connectors.json` and pass
+> `--connectors`.
 
-- If it is non-empty, write the exact array back to
-  `<working-dir>/connectors.json` as the seed binding set for this edit. This
-  file is only the skill's working input to `pac upload --connectors`; pac writes
-  it back to the page `config.json`.
 - Do not add or persist connection IDs. Env-specific `ConnectionId` values belong
   to the connectionreference row and ALM deployment settings, not the page config.
-- If the edit does not change connector bindings, omit `--connectors` in Edit
-  Phase 6 so pac preserves the deployed bindings. The seeded file is used only
-  when the edit intentionally re-supplies, replaces, or clears connector
-  bindings.
 
 ## Edit Phase 4: Plan the Edit
 
@@ -161,17 +160,16 @@ This is an **update** (existing page-id), so `--prompt` must describe the
 See SKILL.md Phase 6 "`--prompt` semantics".
 
 Connector binding rules for edit deploy:
-- If this edit intentionally changes, adds, or removes one connector, write the
-  full desired binding set to `<working-dir>/connectors.json`, pre-flight that
-  `pac model genpage upload --help` contains `--connectors`, and include
-  `--connectors "<working-dir>/connectors.json"` in the upload.
-- If this edit only changes code/visuals and leaves connectors unchanged, omit
-  `--connectors`; pac preserves existing bindings.
-- If this edit removes every connector, write `[]` to `connectors.json` and pass
+- **Add / replace / discover connectors:** the `genpage-connector-builder` agent
+  (Mode: `edit`) has already gated on the flag and written the full desired binding
+  set to `<working-dir>/connectors.json`. Pre-flight that `pac model genpage upload
+  --help` contains `--connectors` and include `--connectors "<working-dir>/connectors.json"`
+  in the upload.
+- **Code/visual-only edit (connectors unchanged):** omit `--connectors`; pac
+  preserves existing bindings.
+- **Remove every connector:** write `[]` to `connectors.json` and pass
   `--connectors` so pac clears `config.json.connectorBindings`.
-- If connector code was regenerated and you choose to pass `--connectors`,
-  re-supply the seeded `config.json.connectorBindings` set rather than dropping
-  it. Never write connection IDs.
+- Never write connection IDs.
 
 ```powershell
 pac model genpage upload `

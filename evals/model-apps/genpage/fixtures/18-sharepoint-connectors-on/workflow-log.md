@@ -21,14 +21,15 @@
 - Question 3 (specific requirements): "list documents"
 - Question 4 (app selection): user selected existing app from pac model list: "Operations Hub"
 
-### Connector Detection
-- Request is explicitly for SharePoint connector → probing the connectors feature gate first
-- `node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" connectors` → `enabled` (exit 0)
+### Connector Detection (delegated to genpage-connector-builder)
+- Request is explicitly for SharePoint connector → planner delegates all connector work to the `genpage-connector-builder` agent (mode: create) via the Task tool
+- genpage-connector-builder probes the gate FIRST: `node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" connectors` → `enabled` (exit 0)
 - Connectors feature flag ON: proceeding with connector discovery
-- `node "${PLUGIN_ROOT}/scripts/lib/list-connections.js" "https://contoso-dev.crm10.dynamics.com/"` → 2 connections found:
+- `node "${PLUGIN_ROOT}/scripts/list-connections.js" "https://contoso-dev.crm10.dynamics.com/"` → 2 connections found:
   - SharePoint Online: logical name `new_uxtest_sharepoint`, connectorId `/providers/Microsoft.PowerApps/apis/shared_sharepointonline`
   - OneDrive for Business: logical name `new_uxtest_onedrive`, connectorId `/providers/Microsoft.PowerApps/apis/shared_onedriveforbusiness`
 - Selected SharePoint Online connection (best match for "SharePoint team site"): `new_uxtest_sharepoint`
+- Agent wrote `connector-bindings.md` (binding table) and `connectors.json` (bare array)
 
 ### Solution selection
 - Build is code-only (connector page, no new entities, no new app) → solution selection question SKIPPED

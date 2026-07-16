@@ -23,6 +23,16 @@ const {
   parseArgs,
   emitResult,
 } = require('./lib/dataverse-auth');
+const { isConnectorsEnabled } = require('./lib/feature-flags');
+
+// Connection references are connector state. When the connectors flag is OFF, ALM
+// must not add them — but non-connector page packaging (appmodule + uxagentproject)
+// still proceeds. This is a defense-in-depth backstop: in the normal flow the plan
+// carries no connection-refs when OFF, but a direct/out-of-band call must not slip
+// connector state into a solution while the feature is disabled.
+function connectionRefsToAdd(refs, connectorsEnabled) {
+  return connectorsEnabled ? refs : [];
+}
 
 const APPMODULE_COMPONENT_TYPE = 80;
 // Solution component type for the GenPage itself. uxagentproject IS a registered
@@ -86,7 +96,11 @@ async function main() {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
-    for (const logicalName of refs) {
+    // Gate the connection-reference branch on the connectors flag (see above).
+    const connectorsOn = isConnectorsEnabled();
+    const refsToAdd = connectionRefsToAdd(refs, connectorsOn);
+    const skippedConnectionRefs = connectorsOn ? [] : refs;
+    for (const logicalName of refsToAdd) {
       const query =
         `connectionreferences?$filter=connectionreferencelogicalname eq '${escapeODataString(logicalName)}'` +
         '&$select=connectionreferenceid&$top=1';
@@ -99,10 +113,16 @@ async function main() {
       added.push({ type: 'connectionreference', logicalName, id });
     }
 
-    emitResult(true, { ok: true, added });
+    emitResult(true, { ok: true, added, skippedConnectionRefs });
   } catch (e) {
     emitResult(false, e);
   }
 }
 
-main();
+// Only run when invoked directly as a CLI; requiring the module (e.g. from tests)
+// must not execute main().
+if (require.main === module) {
+  main();
+}
+
+module.exports = { connectionRefsToAdd };

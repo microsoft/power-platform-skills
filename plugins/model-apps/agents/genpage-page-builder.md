@@ -26,13 +26,28 @@ You will be invoked with a prompt that includes:
 - **Page name** — e.g., "Candidate Tracker"
 - **Target file** — e.g., "candidate-tracker.tsx"
 - **Plan document path** — absolute path to `genpage-plan.md`
-- **Data mode** — either `dataverse` or `mock`
+- **Data mode** — the **Dataverse axis**: `dataverse` (page reads Dataverse tables
+  via RuntimeTypes) or `mock` (no Dataverse tables). This is **orthogonal to
+  connectors**: a page may *also* carry connector bindings (the plan's
+  `## Connector Bindings`), which layer connector-backed data on top of either mode.
+  The effective shapes are `dataverse`, `mock`, `dataverse + connectors`, or
+  `mock + connectors` — a **connector-only page is `mock` data mode with connector
+  bindings**.
 - **RuntimeTypes path** — absolute path to `RuntimeTypes.ts` (present only when Data mode is `dataverse`)
 - **Working directory** — where to write the `.tsx` file
 - **Plugin root** — `${PLUGIN_ROOT}` for reading references and samples
 
-The **Data mode** flag is authoritative — use it to decide whether to perform Step 2
-(read RuntimeTypes.ts) or skip it. Do not infer data mode from the plan document.
+The **Data mode** flag is authoritative for the Dataverse axis — use it to decide
+whether to perform Step 2 (read RuntimeTypes.ts) or skip it. Do not infer data mode
+from the plan document.
+
+**Connectors are decided separately from Data mode** by the plan's `## Connector
+Bindings` (see the connector-detection step below): when it has an actual binding
+table, the page uses `props.dataApi` connector methods (`queryConnectorTable` /
+`executeConnectorOperation`) **even in `mock` data mode** — the "mock data forbids
+`dataApi`" rule applies only to *non-connector* panels, which still use realistic
+inline data. Never fabricate connector rows/fields; use only the discovered
+`Fields`/`Parameters`/`Response` from the plan.
 
 ## Step 1 — Read the Plan Document
 
@@ -99,12 +114,17 @@ Read the code generation rules reference:
 ${PLUGIN_ROOT}/references/rules.md
 ```
 
-If the plan's `## Connector Bindings` section is anything other than the exact
-literal `No connector bindings.`, also read:
+Only when the plan's `## Connector Bindings` section contains an actual binding
+table (a `| Logical Name | …` header with at least one data row) do you treat the
+page as connector-backed and also read:
 
 ```
 ${PLUGIN_ROOT}/references/connectors.md
 ```
+
+If the `## Connector Bindings` section is the literal `No connector bindings.`, is
+empty, is missing entirely, or contains no binding row, the page has **no
+connectors** — do not read connectors.md and do not emit any connector code.
 
 Read the relevant sample file identified in the plan:
 

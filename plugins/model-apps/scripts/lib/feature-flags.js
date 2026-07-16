@@ -83,6 +83,60 @@ function isConnectorsEnabled(opts) {
   return isEnabled('connectors', opts);
 }
 
+// The set of flag names the skill knows about. Used to validate the committed
+// file (catch typo'd keys that would silently stay OFF — or, after a flip to
+// true, an unintended key) and to enumerate state via `describe()`.
+const KNOWN_FLAGS = ['connectors'];
+
+// Fail-closed gate shared by every connector script entry point. Centralizing it
+// (instead of each script inlining the same `if (!isConnectorsEnabled()) exit 3`)
+// keeps the disabled message and exit code (3 = "feature off", distinct from
+// 1 = runtime/usage error) consistent and prevents drift. `exit`/`write` are
+// injectable for unit testing.
+function exitIfConnectorsDisabled(opts = {}) {
+  const exit = opts.exit || process.exit;
+  const write = opts.write || ((s) => process.stderr.write(s));
+  if (!isConnectorsEnabled(opts)) {
+    write(connectorsDisabledMessage() + '\n');
+    return exit(3);
+  }
+  return undefined;
+}
+
+// Returns the effective state of every known flag plus where the value came from
+// (env override / committed file / default). Powers the `--list` command and any
+// observability that wants to record the gate decision in a workflow log.
+function describe(opts = {}) {
+  const env = opts.env || process.env;
+  const flags = opts.flags || readFlagsFile(opts.flagsPath || FLAGS_PATH);
+  return KNOWN_FLAGS.map((flag) => {
+    const envVal = parseBool(env[envVarName(flag)]);
+    const source = envVal !== null
+      ? 'env'
+      : Object.prototype.hasOwnProperty.call(flags, flag)
+        ? 'file'
+        : 'default';
+    return { flag, enabled: isEnabled(flag, { env, flags }), source };
+  });
+}
+
+// Returns human-readable warnings for a flags object: unknown keys (typos that
+// would silently do nothing) and non-boolean values. Keys starting with '_' are
+// treated as documentation (the committed file uses `_comment`). Returns [] when
+// the file is clean.
+function validateFlags(flags) {
+  const warnings = [];
+  for (const [key, value] of Object.entries(flags || {})) {
+    if (key.startsWith('_')) continue;
+    if (!KNOWN_FLAGS.includes(key)) {
+      warnings.push(`unknown flag "${key}" (known flags: ${KNOWN_FLAGS.join(', ')})`);
+    } else if (typeof value !== 'boolean') {
+      warnings.push(`flag "${key}" should be a boolean, got ${typeof value} (${JSON.stringify(value)})`);
+    }
+  }
+  return warnings;
+}
+
 // Standard operator-facing message printed when a connector entrypoint is invoked
 // while the flag is OFF. Centralized so every connector script speaks with one voice.
 function connectorsDisabledMessage() {
@@ -99,19 +153,35 @@ module.exports = {
   isEnabled,
   isConnectorsEnabled,
   connectorsDisabledMessage,
+  exitIfConnectorsDisabled,
+  describe,
+  validateFlags,
   envVarName,
   parseBool,
+  KNOWN_FLAGS,
   FLAGS_PATH,
 };
 
-// CLI: `node feature-flags.js <flag>` → exit 0 (enabled) / 1 (disabled) / 2 (usage).
+// CLI:
+//   node feature-flags.js <flag>   → exit 0 (enabled) / 1 (disabled) / 2 (usage)
+//   node feature-flags.js --list   → prints every known flag's state + source,
+//                                    plus any validation warnings for the file.
 if (require.main === module) {
-  const flag = process.argv[2];
-  if (!flag) {
-    process.stderr.write('Usage: node feature-flags.js <flag>\n');
+  const arg = process.argv[2];
+  if (arg === '--list') {
+    for (const { flag, enabled, source } of describe()) {
+      process.stdout.write(`${flag}: ${enabled ? 'enabled' : 'disabled'} (source: ${source})\n`);
+    }
+    for (const w of validateFlags(readFlagsFile(FLAGS_PATH))) {
+      process.stderr.write(`warning: ${w}\n`);
+    }
+    process.exit(0);
+  }
+  if (!arg) {
+    process.stderr.write('Usage: node feature-flags.js <flag> | --list\n');
     process.exit(2);
   }
-  const on = isEnabled(flag);
+  const on = isEnabled(arg);
   process.stdout.write((on ? 'enabled' : 'disabled') + '\n');
   process.exit(on ? 0 : 1);
 }

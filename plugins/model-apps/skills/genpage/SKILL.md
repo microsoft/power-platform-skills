@@ -246,21 +246,32 @@ After generating, read the RuntimeTypes.ts file to verify it generated correctly
 
 **For mock data pages only:** Skip this phase.
 
-### Phase 4.5: Write Connector Bindings (Conditional)
+### Phase 4.5: Connector Bindings (Conditional)
 
-Read the plan's `## Connector Bindings` section.
+**Re-probe the feature gate here — do not rely on the plan content alone.** A plan
+authored while the flag was ON must not deploy connectors after it is turned OFF:
 
-> **Feature gate.** Connector support ships OFF (`plugins/model-apps/feature-flags.json`).
-> When it is disabled the planner records `## Connector Bindings` as
-> `No connector bindings.`, so this phase is a no-op. As a backstop, the connector
-> scripts (`list-connections.js`, `create-connection-reference.js`) fail closed
-> (exit 3, "disabled") if invoked while the flag is OFF.
+```powershell
+node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" connectors
+```
 
-**If the section is exactly `No connector bindings.`:** skip this phase and do
-not create `connectors.json`.
+**If it prints `disabled`:** connectors are OFF. Skip this phase entirely — do not
+create or pass `connectors.json`, and never add `--connectors` on upload —
+**regardless of what the plan''s `## Connector Bindings` section says**. (Backstop:
+`list-connections.js` / `create-connection-reference.js` also fail closed with
+exit 3 if invoked while OFF.)
 
-**If connector bindings are present:** write `<working-dir>/connectors.json` as
-a JSON array using the plan table:
+**If it prints `enabled`:** read the plan''s `## Connector Bindings` section and
+treat it as bindings **only when it contains an actual binding table** (a
+`| Logical Name | …` header with at least one data row). If the section is
+`No connector bindings.`, empty, missing, or malformed, treat the page as having
+no connectors and skip this phase.
+
+When there are real bindings, the `genpage-connector-builder` agent already wrote
+`<working-dir>/connectors.json` during planning — verify it exists and matches the
+plan table. If it is missing, derive it from the plan table as a **bare JSON
+array** (never the `{ "connectorBindings": [...] }` object wrapper — that is the
+deployed page `config.json` shape that `pac` writes):
 
 ```json
 [
@@ -280,12 +291,8 @@ a JSON array using the plan table:
 ]
 ```
 
-Ownership: the skill writes only this working-dir `connectors.json`; `pac model
-genpage upload --connectors` writes it into the deployed page `config.json`;
-the importing maker/admin fills env-specific `ConnectionId` values through
-solution deployment settings. Do **not** write connection IDs into
-`connectors.json`.
-
+Do **not** write connection IDs into `connectors.json` — the importing maker/admin
+fills env-specific `ConnectionId` values through solution deployment settings.
 ### Phase 5: Build Pages (Parallel)
 
 Read `genpage-plan.md` and extract the pages table.

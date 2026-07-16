@@ -21,10 +21,11 @@
 - Question 3 (specific requirements): "current weather panel"
 - Question 4 (app selection): user selected existing app from pac model list: "Operations Hub"
 
-### Connector Detection
-- Request implies external weather data (e.g., MSN Weather connector) → must probe the connectors feature gate before attempting any connector discovery
-- `node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" connectors` → `disabled` (exit 1)
+### Connector Detection (delegated to genpage-connector-builder)
+- Request implies external weather data (MSN Weather connector) → planner delegates all connector work to the `genpage-connector-builder` agent (mode: create) via the Task tool
+- genpage-connector-builder probes the gate FIRST: `node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" connectors` → `disabled` (exit 1)
 - Connectors feature flag OFF: connector discovery SKIPPED; list-connections.js NOT run
+- Agent wrote `connector-bindings.md` = `No connector bindings.` and `connectors.json` = `[]`
 - Page falls back to inline mock weather data for Seattle
 
 ### Solution selection

@@ -35,6 +35,16 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   fail closed with exit 3. Precedence: env `GENPAGE_ENABLE_CONNECTORS` overrides
   the committed file; default is OFF (fail-closed). Flip the file to `true` once
   the dependencies are GA.
+- **`genpage-connector-builder` agent — single owner of connector work.** Connector
+  discovery, connection-reference creation, the feature gate, and the
+  `## Connector Bindings` contract now live in one agent invoked from **both** the
+  create flow (planner) and the edit flow (edit-planner) — so edits can add/replace
+  connectors (previously only preserve/clear worked) and the gate can't drift across
+  markdown. Hardened per review: deploy (SKILL Phase 4.5) **re-probes** the flag and
+  treats an absent/malformed `## Connector Bindings` as no bindings; the page-builder
+  emits connector code only for an actual binding table; the `--connection-refs`
+  branch of `add-page-to-solution.js` is gated; scripts share `exitIfConnectorsDisabled()`;
+  and `feature-flags.js` gains `--list`, `describe()`, and config validation.
 
 ### Changed
 - Spec tightening so workflow-logs are command-verbatim and `pageInput`

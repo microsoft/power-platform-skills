@@ -18,7 +18,7 @@ const {
   parseArgs,
   emitResult,
 } = require('./lib/dataverse-auth');
-const { isConnectorsEnabled, connectorsDisabledMessage } = require('./lib/feature-flags');
+const { exitIfConnectorsDisabled } = require('./lib/feature-flags');
 
 function normalizeHeader(header) {
   return String(header).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -182,13 +182,9 @@ function pacFailureMessage(pac) {
 }
 
 async function main() {
-  // Feature gate first: connector support is OFF until the pac verbs, GenUX
-  // control, and maker/admin setting are all live in PROD. Exit 3 (distinct from
-  // 1=runtime error / usage) so callers can tell "disabled" apart from "failed".
-  if (!isConnectorsEnabled()) {
-    process.stderr.write(connectorsDisabledMessage() + '\n');
-    process.exit(3);
-  }
+  // Feature gate first (fail closed) — see lib/feature-flags.js. Exit 3 = "feature
+  // off", distinct from 1 = runtime/usage error, so callers can tell them apart.
+  exitIfConnectorsDisabled();
 
   const { positional } = parseArgs(process.argv.slice(2));
   if (positional.length < 1) {

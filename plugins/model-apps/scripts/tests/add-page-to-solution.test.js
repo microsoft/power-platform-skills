@@ -28,3 +28,10 @@ test('missing args exits 1 with usage', () => {
   assert.equal(res.status, 1);
   assert.match(res.stderr, /Usage:/);
 });
+
+const { connectionRefsToAdd } = require(scriptPath);
+
+test('connection references are gated by the connectors flag (added only when ON)', () => {
+  assert.deepEqual(connectionRefsToAdd(['new_a', 'new_b'], true), ['new_a', 'new_b']);
+  assert.deepEqual(connectionRefsToAdd(['new_a', 'new_b'], false), []);
+});

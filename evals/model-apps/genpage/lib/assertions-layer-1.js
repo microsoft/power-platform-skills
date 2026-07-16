@@ -781,6 +781,25 @@ PHASE_EXPECTATIONS.set(
   }
 );
 
+// Eval 18: connectors ON deploy — connectors.json is written as a bare array (not
+// the config.json { connectorBindings: [...] } wrapper) and the upload passes
+// --connectors. Locks in the connectors.json shape and the deploy wiring.
+PHASE_EXPECTATIONS.set(
+  "Phase 4.5 / Phase 6 (connectors ON): connectors.json is written as a bare array (not the config.json object wrapper) and the upload includes --connectors",
+  ({ fixture }) => {
+    const log = fixture.workflowLog;
+    if (!log) return fail('no workflow-log.md');
+    if (!/connectors\.json/.test(log)) return fail('workflow-log does not record connectors.json');
+    if (!/--connectors\b/.test(log)) return fail('upload does not include --connectors');
+    // Guard against the object-wrapper regression: connectors.json must be a bare
+    // array, not `{ "connectorBindings": [...] }` (that is the deployed config.json).
+    if (/connectors\.json[^\n]*\{\s*"connectorBindings"/.test(log)) {
+      return fail('connectors.json shown as the config.json object wrapper, not a bare array');
+    }
+    return pass();
+  }
+);
+
 module.exports = {
   WORKFLOW_ASSERTIONS,
   PHASE_EXPECTATIONS,

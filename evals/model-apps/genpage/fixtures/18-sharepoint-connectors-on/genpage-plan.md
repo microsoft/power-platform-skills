@@ -28,7 +28,7 @@ D:\Projects\power-platform-skills\plugins\model-apps
 
 ## Entity Creation Required
 
-No entity creation required — connector-only page.
+No entity creation required — all entities already exist.
 
 ## Existing Entities
 

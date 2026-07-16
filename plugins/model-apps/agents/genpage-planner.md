@@ -199,129 +199,34 @@ If any entities need creating, note that entity creation requires:
 Detection uses `pac model list-tables` natively; creation runs through the
 plugin's own Web API scripts under `${PLUGIN_ROOT}/scripts/`.
 
-### Connector Detection
+### Connector Detection (delegated to genpage-connector-builder)
 
-> **Feature gate — connectors ship OFF.** Before any connector discovery, probe
-> the flag:
->
-> ```powershell
-> node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" connectors
-> ```
->
-> If it prints `disabled` (exit 1), connector support is not yet live in PROD.
-> In that case:
-> - Do **not** run `list-connections.js` or any other connector discovery.
-> - Treat the request as Dataverse-only — build from Dataverse tables, or ask the
->   maker to choose a Dataverse source. Never invent connector bindings.
-> - Write `## Connector Bindings` in `genpage-plan.md` as exactly
->   `No connector bindings.` and skip the rest of this section.
->
-> Only when it prints `enabled` (exit 0) do you proceed with the discovery below.
-> The flag lives in `plugins/model-apps/feature-flags.json`; flip it to `true`
-> (or set `GENPAGE_ENABLE_CONNECTORS=1` for a single run) once the pac connector
-> verbs, the GenUX control, and the maker/admin setting are all released.
+If the request implies a non-Dataverse source (SharePoint, Teams, weather,
+Office 365, SQL via connector, or a custom REST connector), delegate ALL
+connector work to the `genpage-connector-builder` agent via the `Task` tool. Do
+**not** run the feature-gate probe or any connector discovery inline — that agent
+is the single owner of the connectors feature gate, connection / connection-ref
+discovery, connection-reference creation, and the binding contract.
 
-If the request implies a non-Dataverse source (for example SharePoint, Teams,
-weather, Office 365, SQL via connector, or a custom REST connector), discover
-available connector bindings before app selection:
+Invoke `genpage-connector-builder` with a prompt containing:
 
-```powershell
-node "${PLUGIN_ROOT}/scripts/list-connections.js" "<ENV_URL>"
-```
+- **Mode:** `create`
+- **Working directory**, **Plugin root** (`${PLUGIN_ROOT}`), **Environment URL**
+- **Intent:** the source(s) the request implies (e.g. "SharePoint documents",
+  "current weather")
 
-Log the command in `workflow-log.md`. The script returns `connections` sorted
-with `readyToBind: true` first and `connectionReferences` from Dataverse. Present
-the ready-to-bind choices first via `AskUserQuestion`, showing the
-connectionreference logical name, connector id, and connection display name.
+It writes two files into the working directory:
 
-For tabular connectors, resolve the dataset and table before writing the plan:
-- Use the chosen connection from `pac connection list` to identify the connector.
-- Use the connector runtime metadata discovery (`/datasets`, then `/tables`) to
-  enumerate available datasets and tables for that connection.
-- Store SharePoint datasets as the site URL and tables as list GUIDs (not list
-  display names); write list display names only in `Table Display Names`.
+- `connector-bindings.md` — the exact body for the plan's `## Connector Bindings`
+  section (either `No connector bindings.` or the binding table).
+- `connectors.json` — the bare-array binding file for deployment.
 
-For REST/action connectors, resolve the operation name and schema before writing
-the plan:
-- Pre-flight that `pac model genpage --help` contains `list-connector-operations`
-  and `get-connector-schema`.
-- Enumerate operations:
-  ```powershell
-  pac model genpage list-connector-operations --connector-id <apiId> --connection-id <connId>
-  ```
-- Let the maker pick the operation via `AskUserQuestion` when the requirement
-  does not imply exactly one operation.
-- Discover the operation schema:
-  ```powershell
-  pac model genpage get-connector-schema --connector-id <apiId> --connection-id <connId> --operation <op>
-  ```
-- Parse `{ operation, parameters:[{ name, required }], response:{...} }`.
-  Record the operation in `Operations`, parameters in `Parameters`, and response
-  shape in `Response` under `## Connector Bindings`.
-- If either verb is unavailable, fall back to asking the maker for the operation,
-  required/optional parameters, and expected response shape. Never fabricate
-  operation, parameter, or response field names.
+Read `connector-bindings.md` and splice its contents verbatim into the
+`## Connector Bindings` section of `genpage-plan.md`.
 
-### Connector Column Discovery
-
-For every tabular connector binding, discover the table fields before writing
-`genpage-plan.md`. The binding tells the runtime where to fetch; the Fields list
-tells the page-builder which properties it may access without guessing.
-
-Preferred path after resolving connector id, connection id, dataset, and table:
-
-```powershell
-pac model genpage --help
-```
-
-Pre-flight that the help text contains `get-connector-schema`. If present, run:
-
-```powershell
-pac model genpage get-connector-schema --connector-id <apiId> --connection-id <connId> --dataset <ds> --table <tableId>
-```
-
-Parse the returned `{ table, columns: [{ name, type, required }] }` payload.
-Record each column name and type in the binding's `Fields` cell, for example:
-`PetName (string), OwnerName (string), PetType ({Value:string}), Created (datetime)`.
-Treat all connector fields as optional; the generated TSX declares `field?`
-because connector rows are dynamic and may omit values regardless of the
-discovery payload's `required` metadata.
-
-When the connector is SharePoint, filter the discovered column list before
-recording `Fields`:
-- Keep maker/user-meaningful columns such as `Title`, `PetName`, `OwnerName`,
-  `PetType`, `Created`, and `Modified`.
-- Drop SharePoint system/synthetic columns unless the maker explicitly asks for
-  them: `{...}`-wrapped names (`{Identifier}`, `{IsFolder}`, `{Thumbnail}`),
-  `ComplianceAssetId`, `OData__*`, and `*#Id` / `*#Claims` variants.
-- Treat `type:"object"` choice columns as `{Value:string}` in the plan because
-  SharePoint choice values arrive as `{ Value }`.
-
-Use `list-connector-tables` only earlier in Connector Detection to enumerate and
-pick the table; it does not provide the column schema needed for codegen.
-
-Fallback when the PAC verb is unavailable:
-1. If another discovery path can query a single row safely, sample top 1 and
-   record that row's keys and observed primitive/object shapes.
-2. If no discovery path is available or the table is empty, ask the maker via
-   `AskUserQuestion` for the field names/types they expect to use.
-
-Never fabricate connector field names. If fields cannot be discovered or supplied
-by the maker, keep the binding out of the approved plan or mark it blocked rather
-than letting the page-builder guess.
-
-If the maker chooses a connection that has no connectionreference, do not invent
-a logical name. Either instruct the maker to create one or call:
-
-```powershell
-node "${PLUGIN_ROOT}/scripts/create-connection-reference.js" "<ENV_URL>" "<logicalName>" "<connectorId>" --connection-id "<connectionId>"
-```
-
-Write the final selections to `## Connector Bindings` in `genpage-plan.md`. If
-no connectors are used, the section value must be exactly `No connector bindings.`
-For tabular bindings, include the discovered `Fields` list in the plan. For
-REST/action bindings, include the selected `Operations` value plus discovered
-`Parameters` and `Response` schemas.
+If the request implies **only** Dataverse and/or mock data (no connector source),
+skip the agent entirely and write `## Connector Bindings` as exactly
+`No connector bindings.`.
 
 ### App Detection
 
