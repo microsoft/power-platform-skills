@@ -61,7 +61,7 @@
 
 ## Phase 5b — Single-page fast path
 - Plan has 1 page → fast path taken (inlined build, no Task subagent dispatched for page-builder)
-- Data mode: connector (SharePoint Online)
+- Data mode: mock + connectors (SharePoint Online)
 - Read sample: plugins/model-apps/samples/7-responsive-cards.tsx (card list layout pattern for document display)
 - Read references/verified-icons.txt to source icon names
 - Wrote sharepoint-docs.tsx
