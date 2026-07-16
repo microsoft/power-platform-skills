@@ -403,6 +403,18 @@ Replace or create the `## Generated Services (snapshot at <ISO timestamp>)` sect
 
 Do not ask the user to run these follow-up skills manually. This skill is the orchestrator.
 
+#### Step 5.6 — Offline profile reconciliation
+
+If Step 5 created or extended Dataverse tables, an existing Mobile Offline Profile may now be missing those tables/columns (new tables never sync to devices; new columns arrive blank). Step 5's `/add-dataverse --skip-planning` suppresses that skill's own Step 8.5 reconciliation, so this orchestrator owns the check. Skip when no Data Model mutation occurred in this edit.
+
+Run the local, no-network delta check:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/offline-profile-delta.js"
+```
+
+Branch on the JSON `status` per [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → continue silently (do not nag when no profile exists); `delta` → prompt to update, then invoke `/add-table-to-offline-profile` (for `missingTables[]`) and `/edit-offline-profile --table <t> --columns add:<newColumns>` (for `tablesWithNewColumns[]`), and re-check to `in-sync`. Record the reconciliation outcome in the Step 8 memory-bank edit entry.
+
 ### Step 6 — Rebuild affected screens
 
 Use the plan diff plus the user's request to build the affected screen set:

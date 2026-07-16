@@ -158,6 +158,18 @@ Arguments:
 
 Run sequentially. Skip if `## Connectors` is "None".
 
+### Phase 6.5 — Offline profile reconciliation
+
+If Phase 5 created or extended Dataverse tables, an existing Mobile Offline Profile may now be missing those tables/columns. Because Phase 5 invoked `/add-dataverse` with `--skip-planning` (which suppresses that skill's own Step 8.5 reconciliation), this orchestrator owns the check. Skip when Phase 2 chose Path C (no Dataverse).
+
+Run the local, no-network delta check:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/offline-profile-delta.js"
+```
+
+Branch on the JSON `status` per [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → continue to Phase 7 silently (do not nag when no profile exists); `delta` → prompt to update, then invoke `/add-table-to-offline-profile` (for `missingTables[]`) and `/edit-offline-profile --table <t> --columns add:<newColumns>` (for `tablesWithNewColumns[]`), and re-check to `in-sync`.
+
 ### Phase 7 — Summary
 
 ```
@@ -188,5 +200,6 @@ Next steps:
 ## Reference
 
 - [shared/references/connector-planning.md](${CLAUDE_SKILL_DIR}/../../shared/references/connector-planning.md) — connector inference + confirmation logic
+- [shared/references/offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md) — Phase 6.5 offline delta check + reconciliation flow
 - [skills/add-dataverse/SKILL.md](../add-dataverse/SKILL.md) — full data model execution workflow
 - [agents/data-model-architect.md](../../agents/data-model-architect.md) — read-only architect agent

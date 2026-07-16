@@ -11,6 +11,7 @@ model: sonnet
 **References:**
 
 - [dataverse-offline-api.md](${CLAUDE_SKILL_DIR}/../../shared/references/dataverse-offline-api.md) §4 + §7 — POST item + PATCH selectedcolumns
+- [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md) — the `schemaColumns` baseline written in Step 7
 
 # Add Table to Offline Profile
 
@@ -155,7 +156,9 @@ Publishes only this profile, not the entire org's customizations. See [shared/re
 
 ### Step 7 — Update artifacts
 
-Append to `offline-profile.json` `tables[]` array. Append to `memory-bank.md` `## Offline profile` block:
+Append the new table's entry to `offline-profile.json` `tables[]`. The entry MUST include a `schemaColumns` array — the added table's full set of schema column logical names from `.datamodel-manifest.json` at this moment. This is the schema-reconciliation baseline that `scripts/offline-profile-delta.js` diffs future manifest changes against; omitting it makes the lifecycle delta check report this table under `columnBaselineMissing` until it is re-reconciled. It is distinct from `selectedColumns` (the curated sync set) — see [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md). Match the canonical entry shape in [`/setup-offline-profile` Step 9a](../setup-offline-profile/SKILL.md).
+
+Append to `memory-bank.md` `## Offline profile` block:
 
 ```yaml
 addedTables:
