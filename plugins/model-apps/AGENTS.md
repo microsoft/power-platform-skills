@@ -50,7 +50,6 @@ samples/                       ← Example .tsx files (12 samples)
 scripts/
   launch-playwright-mcp.js     ← Playwright MCP server launcher (fullscreen; uses lib/detect-browser.js)
   playwright-mcp-fullscreen.config.json ← Fullscreen browser config for the launcher
-  check-version.js             ← Compares local plugin version to origin/main; skills run it up front
   regenerate-verified-icons.js ← Regenerates references/verified-icons.txt from npm
   check-auth.js                ← Pre-flight: az present + logged in, pac identity, WhoAmI, identity match
   dataverse-request.js         ← General Dataverse Web API wrapper (escape hatch)

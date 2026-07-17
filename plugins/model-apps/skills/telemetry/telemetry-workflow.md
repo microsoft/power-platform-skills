@@ -23,7 +23,7 @@ usage telemetry for this plugin. Default to `status` when no argument is given.
 - **No personal data is ever collected.** Telemetry is anonymous: it records only
   things like skill name, plugin version, OS, and Node version. It never includes
   file paths, prompts, tool inputs, entity/table names, URLs, credentials,
-  usernames, or hostnames.
+  usernames, hostnames, or any user-level identifier (no Entra object id).
 - The local diagnostic mirror is always written (even when opted out of
   transmission) at `~/.power-platform-skills/telemetry/model-apps/sessions/<sessionId>/events.jsonl`.
   `status` prints its location so you can hand over one self-contained file per

@@ -10,6 +10,4 @@ allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, 
 model: sonnet
 ---
 
-> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
-
 **Workflow: [report-issue-workflow.md](${PLUGIN_ROOT}/skills/report-issue/report-issue-workflow.md)** — Read and follow all phases defined in that bundled file.

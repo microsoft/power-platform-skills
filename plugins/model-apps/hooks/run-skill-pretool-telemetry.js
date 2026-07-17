@@ -163,7 +163,9 @@ function readStdin() {
   };
   if (pacAuth && pacAuth.orgId) fields.orgId = pacAuth.orgId;
   if (pacAuth && pacAuth.tenantId) fields.tenantId = pacAuth.tenantId;
-  if (pacAuth && pacAuth.objectId) fields.eventInfo = { aadObjectId: pacAuth.objectId };
+  // model-apps intentionally does NOT send the Entra directory object id
+  // (aadObjectId) that power-pages attaches as eventInfo — no user-level
+  // identifier reaches telemetry. Org/tenant GUIDs (org-level) still flow.
   if (agentInfo.aiAgentName) fields.aiAgentName = agentInfo.aiAgentName;
   if (agentInfo.aiAgentVersion) fields.aiAgentVersion = agentInfo.aiAgentVersion;
   if (agentInfo.pacCliVersion) fields.pacCliVersion = agentInfo.pacCliVersion;
