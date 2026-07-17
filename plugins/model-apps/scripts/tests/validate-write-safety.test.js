@@ -80,6 +80,15 @@ test('missing file_path is not our concern (exit 0)', () => {
   assert.equal(runHook(payload).status, 0);
 });
 
+test('Windows: in-cwd target with different drive-letter casing is allowed (exit 0)', { skip: process.platform !== 'win32' }, () => {
+  // A tool may emit `d:\...` while cwd is `D:\...`; case-insensitive containment
+  // on Windows must not reject a legitimate in-project write.
+  const target = path.join(cwd, 'sub', 'page.tsx');
+  const lowered = target.charAt(0).toLowerCase() + target.slice(1);
+  const payload = { tool_name: 'Write', tool_input: { file_path: lowered, content: 'x' }, cwd };
+  assert.equal(runHook(payload).status, 0);
+});
+
 test('unparseable stdin does not block (exit 0)', () => {
   const res = spawnSync(process.execPath, [HOOK], { input: 'not json', encoding: 'utf8' });
   assert.equal(res.status, 0);

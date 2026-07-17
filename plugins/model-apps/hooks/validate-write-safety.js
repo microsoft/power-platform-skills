@@ -46,22 +46,28 @@ function reject(userMsg, modelMsg) {
  * (EnterPlanMode persists plan files there before the orchestrator sees them —
  * blocking those would break plan-mode UX).
  */
+function isWithin(child, parent) {
+  // Windows paths are case-insensitive, so compare case-folded there — otherwise a
+  // target that differs only by drive-letter/segment casing (e.g. `d:\proj\x` vs a
+  // `D:\proj\x` cwd) is wrongly rejected. The `path.sep` boundary stops `/foobar`
+  // from matching a `/foo` parent. (Symlink/junction escape is NOT resolved here:
+  // realpath needs the target to exist, but PreToolUse fires before the write; a
+  // lexical check matches the mobile-apps/power-pages guardrails.)
+  const fold = (p) => (process.platform === 'win32' ? p.toLowerCase() : p);
+  const c = fold(child);
+  const p = fold(parent);
+  return c === p || c.startsWith(p + path.sep);
+}
+
 function isPathSafe(targetPath, cwd) {
   if (!targetPath || typeof targetPath !== 'string') return true; // not our concern
   const abs = path.resolve(cwd, targetPath);
-  const normalizedCwd = path.resolve(cwd);
 
-  if (abs === normalizedCwd) return true;
-  if (abs.startsWith(normalizedCwd + path.sep)) return true;
-
-  const tmp = path.resolve(os.tmpdir());
-  if (abs === tmp || abs.startsWith(tmp + path.sep)) return true;
+  if (isWithin(abs, path.resolve(cwd))) return true;
+  if (isWithin(abs, path.resolve(os.tmpdir()))) return true;
 
   const home = os.homedir();
-  if (home) {
-    const claudeDir = path.resolve(home, '.claude');
-    if (abs === claudeDir || abs.startsWith(claudeDir + path.sep)) return true;
-  }
+  if (home && isWithin(abs, path.resolve(home, '.claude'))) return true;
 
   return false;
 }

@@ -113,3 +113,28 @@ test("provisioned Tier-1 config → tracked skill emits skill_started to the pro
   assert.equal(body.data.pluginName, "model-apps");
   assert.equal(body.data.skillName, "genpage");
 });
+
+test("enabled config but placeholder key → treated as unprovisioned (no probe)", () => {
+  // Flipping disabled:false before replacing the placeholder must NOT emit: the
+  // hook's Tier-1 provisioned check rejects the sentinel, so no dispatch happens.
+  const configDir = mkTemp();
+  const probePath = path.join(configDir, "probe.json");
+  const ikeyPath = path.join(configDir, "ikey.json");
+  fs.writeFileSync(
+    ikeyPath,
+    JSON.stringify({
+      instrumentationKey: "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      collector_url: "https://example.invalid/OneCollector/1.0/",
+      event_stream_name: "ModelAppsTestStream",
+      disabled: false,
+    })
+  );
+  const { status } = runHook({
+    input: JSON.stringify({ tool_input: { skill: "genpage" } }),
+    configDir,
+    ikeyPath,
+    fakeProbe: probePath,
+  });
+  assert.equal(status, 0);
+  assert.equal(waitForFile(probePath, 1500), false, "placeholder key must not emit a probe");
+});

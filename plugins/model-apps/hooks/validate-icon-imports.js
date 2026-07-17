@@ -106,15 +106,23 @@ function loadVerifiedIcons() {
  * `import type { ... }` form. Only the local-source name before `as` matters —
  * that's the icon export being referenced.
  *
+ * Only real, top-level import statements are matched: `/* ... *\/` block comments
+ * are stripped first, and the pattern is anchored to the start of a line so a
+ * commented-out example (`// import { Foo } from '@fluentui/react-icons'`) or an
+ * indented occurrence inside prose is ignored. This is fail-open: if stripping
+ * ever drops a genuine import, we under-report (miss a bad icon) rather than
+ * wrongly block a legitimate write.
+ *
  * Example matched block:
  *   import { AddRegular, DeleteRegular as Trash } from "@fluentui/react-icons";
  *   → ["AddRegular", "DeleteRegular"]
  */
 function extractIconImports(content) {
   const names = [];
-  const re = /import\s+(?:type\s+)?\{([^}]+)\}\s*from\s*['"]@fluentui\/react-icons['"]/g;
+  const code = content.replace(/\/\*[\s\S]*?\*\//g, ' ');
+  const re = /^[ \t]*import\s+(?:type\s+)?\{([^}]+)\}\s*from\s*['"]@fluentui\/react-icons['"]/gm;
   let m;
-  while ((m = re.exec(content)) !== null) {
+  while ((m = re.exec(code)) !== null) {
     for (const raw of m[1].split(',')) {
       const spec = raw.trim();
       if (!spec) continue;

@@ -110,6 +110,20 @@ test('file with no @fluentui/react-icons imports passes (exit 0)', () => {
   assert.equal(status, 0);
 });
 
+test('commented-out import (line comment) is not treated as a real import (exit 0)', () => {
+  const content = `// import { TotallyMadeUpIconRegular } from '@fluentui/react-icons';\n${GENPAGE_HEADER}`;
+  const fp = writeTemp(tmp, 'page.tsx', content);
+  const { status } = runHook(payloadFor(fp, content));
+  assert.equal(status, 0);
+});
+
+test('block-commented import is not treated as a real import (exit 0)', () => {
+  const content = `/* import { TotallyMadeUpIconRegular } from '@fluentui/react-icons'; */\n${GENPAGE_HEADER}`;
+  const fp = writeTemp(tmp, 'page.tsx', content);
+  const { status } = runHook(payloadFor(fp, content));
+  assert.equal(status, 0);
+});
+
 test('unparseable stdin does not block (exit 0)', () => {
   const res = spawnSync(process.execPath, [HOOK], { input: 'not json', encoding: 'utf8' });
   assert.equal(res.status, 0);

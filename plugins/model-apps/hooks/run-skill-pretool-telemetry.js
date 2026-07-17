@@ -116,7 +116,13 @@ function readStdin() {
     provisioned =
       resolver && typeof resolver.isProvisioned === "function"
         ? resolver.isProvisioned(cfg)
-        : !!(cfg && cfg.instrumentationKey);
+        // Tier-1 static-key fallback (no resolver): a real key must be present AND
+        // must not be the shipped placeholder sentinel. Without the sentinel check,
+        // flipping `disabled:false` before replacing the key would still be treated
+        // as provisioned — incurring the pac shellouts and a local-mirror write even
+        // though the dispatcher can never POST a placeholder key. Matches the
+        // dispatcher's own PLACEHOLDER_IKEY guard.
+        : !!(cfg && cfg.instrumentationKey && cfg.instrumentationKey !== "PLACEHOLDER_REPLACE_BEFORE_SHIPPING");
   } catch {
     // A plugin resolver threw — treat as not provisioned so a bad resolver can't
     // crash the pretool hook and impact the tool run (fail closed).
