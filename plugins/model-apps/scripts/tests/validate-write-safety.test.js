@@ -89,6 +89,12 @@ test('Windows: in-cwd target with different drive-letter casing is allowed (exit
   assert.equal(runHook(payload).status, 0);
 });
 
+test('MODEL_APPS_DISABLE_HOOKS=1 disables the guard (exit 0 for an outside write)', () => {
+  const outside = path.join(path.parse(cwd).root, 'model-apps-guard-evil', 'evil.ts');
+  const payload = { tool_name: 'Write', tool_input: { file_path: outside, content: 'x' }, cwd };
+  assert.equal(runHook(payload, { MODEL_APPS_DISABLE_HOOKS: '1' }).status, 0);
+});
+
 test('unparseable stdin does not block (exit 0)', () => {
   const res = spawnSync(process.execPath, [HOOK], { input: 'not json', encoding: 'utf8' });
   assert.equal(res.status, 0);

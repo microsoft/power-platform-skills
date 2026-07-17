@@ -121,6 +121,55 @@ The plugin invokes multiple tools during a session. To reduce approval prompts:
 claude --dangerously-skip-permissions
 ```
 
+## Hooks and guardrails
+
+The plugin registers lifecycle hooks (in `hooks/hooks.json`) that run automatically
+while it's loaded. They are **fail-open**: any internal error exits 0, so a hook can
+never fail or abort a skill run. Only a real violation blocks a single tool call (the
+agent reworks it) — never the whole skill.
+
+| Hook | When | What it does |
+|---|---|---|
+| Write-safety | before Write/Edit/MultiEdit | Blocks writes outside the current working directory (runaway sub-agent protection). |
+| Icon validator | after a genpage `.tsx` write | Blocks `@fluentui/react-icons` imports that aren't in the verified list. |
+| Skill validator | after a skill runs | Runs the skill's `validate*.js` if it has one. |
+| Telemetry | on skill start / prompt | Emits anonymous `skill_started` (see [Telemetry](#telemetry)). |
+
+**Escape hatches** (environment variables — set to `1` or `true`):
+
+| Variable | Effect |
+|---|---|
+| `MODEL_APPS_DISABLE_HOOKS` | Disables **all** model-apps hooks (validators + telemetry emit). |
+| `MODEL_APPS_SKIP_WRITE_GUARD` | Disables **only** the write-safety guard (keeps the others). |
+
+```powershell
+# Windows (PowerShell)
+$env:MODEL_APPS_DISABLE_HOOKS = "1"
+```
+
+```bash
+# macOS / Linux (bash)
+export MODEL_APPS_DISABLE_HOOKS=1
+```
+
+## Telemetry
+
+model-apps ships anonymous, opt-out usage telemetry (1DS), following the same pattern
+as the power-pages plugin. The committed config ships **disabled with a placeholder
+key**, so it is off until a plugin-specific telemetry key + stream are provisioned;
+once provisioned it is **on by default** (you opt out) — exactly like power-pages.
+
+- **What's collected:** skill name, plugin/PAC/agent versions, OS/Node versions, and
+  Dataverse org/tenant GUIDs when signed in. **Never** file paths, prompts, tool
+  inputs, entity/table names, URLs, credentials, usernames, hostnames, or any
+  user-level identifier (no Entra object id).
+- **Local diagnostic mirror:** every event is also written to
+  `~/.power-platform-skills/telemetry/model-apps/sessions/<id>/events.jsonl` (even
+  when you've opted out of transmission) — hand over that one file when filing an issue.
+- **Opt out** per-user with `/model-apps:telemetry off` (re-enable with `on`, check
+  with `status`), or for CI/automation set
+  `POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT=1` (highest precedence).
+
 ## Technology Stack
 
 - **React 17 + TypeScript** — all generated page code

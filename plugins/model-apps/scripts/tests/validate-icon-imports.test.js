@@ -9,10 +9,11 @@ const HOOK = path.join(__dirname, '..', '..', 'hooks', 'validate-icon-imports.js
 
 // Run the hook as a child process with a JSON stdin payload (its real entry
 // shape). Returns { status, stderr }.
-function runHook(payload) {
+function runHook(payload, env) {
   const res = spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify(payload),
     encoding: 'utf8',
+    env: { ...process.env, ...(env || {}) },
   });
   return { status: res.status, stderr: res.stderr || '' };
 }
@@ -121,6 +122,13 @@ test('block-commented import is not treated as a real import (exit 0)', () => {
   const content = `/* import { TotallyMadeUpIconRegular } from '@fluentui/react-icons'; */\n${GENPAGE_HEADER}`;
   const fp = writeTemp(tmp, 'page.tsx', content);
   const { status } = runHook(payloadFor(fp, content));
+  assert.equal(status, 0);
+});
+
+test('MODEL_APPS_DISABLE_HOOKS=1 disables the validator (exit 0 despite bad icon)', () => {
+  const content = `import { TotallyMadeUpIconRegular } from '@fluentui/react-icons';\n${GENPAGE_HEADER}`;
+  const fp = writeTemp(tmp, 'page.tsx', content);
+  const { status } = runHook(payloadFor(fp, content), { MODEL_APPS_DISABLE_HOOKS: '1' });
   assert.equal(status, 0);
 });
 

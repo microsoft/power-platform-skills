@@ -26,6 +26,14 @@ const crypto = require("node:crypto");
 const PLUGIN_ROOT = path.resolve(__dirname, "..");
 const TELEMETRY_DIR = path.join(PLUGIN_ROOT, "scripts", "lib", "telemetry");
 
+// Master kill-switch: MODEL_APPS_DISABLE_HOOKS=1 disables every model-apps hook
+// (validators + telemetry emit) — an operator escape hatch. Checked before any
+// requires/stdin/work so it is a clean no-op (exit 0). Telemetry also has its own
+// finer-grained opt-out (ikey.json disabled, /model-apps:telemetry off, *_OPTOUT).
+if (process.env.MODEL_APPS_DISABLE_HOOKS === "1" || process.env.MODEL_APPS_DISABLE_HOOKS === "true") {
+  process.exit(0);
+}
+
 let emitSpawn, eventsLib, sessionLib, pacAuthLib, agentInfoLib, resolverLoader;
 try {
   emitSpawn = require(path.join(TELEMETRY_DIR, "lib", "emit-spawn"));

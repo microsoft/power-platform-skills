@@ -182,6 +182,9 @@ host). Every hook **fails open** on any internal error (exit 0) and **fails clos
 - **PreToolUse(Write|Edit|MultiEdit)** — `validate-write-safety.js` blocks writes
   outside the working directory (runaway sub-agent protection). Bypass with
   `MODEL_APPS_SKIP_WRITE_GUARD=1`.
+- **Master kill-switch** — `MODEL_APPS_DISABLE_HOOKS=1` (or `true`) disables **all**
+  model-apps hooks (validators + telemetry emit); checked before any stdin/work.
+  Both escape hatches are documented in `README.md`.
 
 ## Telemetry
 

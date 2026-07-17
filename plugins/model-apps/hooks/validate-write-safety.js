@@ -28,6 +28,13 @@ const os = require('os');
 const DEBUG = process.env.DEBUG === '1' || process.env.DEBUG === 'true';
 const SKIP = process.env.MODEL_APPS_SKIP_WRITE_GUARD === '1';
 
+// Master kill-switch: MODEL_APPS_DISABLE_HOOKS=1 disables every model-apps hook
+// (validators + telemetry emit) — an operator escape hatch if a hook ever
+// misbehaves. Checked before any stdin/work so it is a clean no-op (exit 0).
+if (process.env.MODEL_APPS_DISABLE_HOOKS === '1' || process.env.MODEL_APPS_DISABLE_HOOKS === 'true') {
+  process.exit(0);
+}
+
 function debug(msg) {
   if (DEBUG) process.stderr.write(`[write-safety] ${msg}\n`);
 }
