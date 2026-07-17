@@ -12,19 +12,19 @@ model: sonnet
 
 **Internal helper.** Users should invoke `/add-native pdf-report`, `/add-native generate-pdf`, or `/add-native pdf-export`; `/add-native` routes here after resolving the capability.
 
-Generate or verify a local PDF report wrapper for app-owned PDFs created from records, evidence, certificates, receipts, or summaries. This helper uses `expo-print` to create a local PDF file URI. It may use `expo-sharing` only when that package is already present. It never installs packages and never routes local PDF URIs to the native PDF viewer.
+Generate or verify a local PDF report wrapper for app-owned PDFs created from records, evidence, certificates, receipts, or summaries. This helper uses `expo-print` to create a local PDF file URI. It may use `expo-sharing` only when that package is already present. It never installs packages or imports the native PDF viewer directly.
 
 ## Capability boundaries
 
 | User need | Correct path |
 |---|---|
 | Generate/export/print a report from app data | This helper: `expo-print` -> local PDF URI |
-| Share/open the generated local PDF from the device | Add share method only if `expo-sharing` is already in `package.json` |
+| Share the generated local PDF from the device | Add share method only if `expo-sharing` is already in `package.json` |
 | Retain the generated PDF in Dataverse | Create/update parent row first, then upload to a Dataverse File column with generated services |
-| Open an existing HTTPS PDF URL in the Power Apps native viewer | `/add-native pdf-viewer`, only if `@microsoft/power-apps-native-pdf-viewer` is already present |
+| Open an existing HTTPS or local file PDF in the Power Apps native viewer | `/add-native pdf-viewer`, only if `@microsoft/power-apps-native-pdf-viewer` 0.2.9+ is already present |
 | Pick/import/upload a user-selected PDF | `/add-native document-picker` or host `<FilePicker>` for Dataverse File columns |
 
-Local generated PDFs are usually `file://` URIs. They are not valid input for `openHttpsPdf(...)` and must not be passed to `@microsoft/power-apps-native-pdf-viewer`.
+Local generated PDFs are usually `file://` URIs and can be passed to `openHttpsPdf(...)` with `@microsoft/power-apps-native-pdf-viewer` 0.2.9+.
 
 ## Steps
 
@@ -38,20 +38,20 @@ If this fails, tell the user to run `/create-mobile-app` first and STOP.
 
 ### 2. Verify packages are already present
 
-`expo-print` is required. `expo-sharing` is optional unless the plan specifically needs local share/open behavior.
+`expo-print` is required. `expo-sharing` is optional unless the plan specifically needs sharing behavior.
 
 ```bash
-node -e "const p=require('./package.json'); const deps={...p.dependencies,...p.devDependencies}; const required='expo-print'; if (!deps[required]) { console.error('MISSING: expo-print is not in package.json. The template/app must already ship it for /add-native pdf-report. This skill will not install it or edit native config. Capability not added.'); process.exit(1); } console.log('OK: expo-print package present'); console.log(deps['expo-sharing'] ? 'OK: expo-sharing package present' : 'OPTIONAL_MISSING: expo-sharing is not in package.json; generated PDFs can be created/uploaded, but local share/open helpers must not be generated.');"
+node -e "const p=require('./package.json'); const deps={...p.dependencies,...p.devDependencies}; const required='expo-print'; if (!deps[required]) { console.error('MISSING: expo-print is not in package.json. The template/app must already ship it for /add-native pdf-report. This skill will not install it or edit native config. Capability not added.'); process.exit(1); } console.log('OK: expo-print package present'); console.log(deps['expo-sharing'] ? 'OK: expo-sharing package present' : 'OPTIONAL_MISSING: expo-sharing is not in package.json; generated PDFs can be created/viewed/uploaded, but sharing helpers must not be generated.');"
 ```
 
 If `expo-print` is missing, STOP. Do not run `npm install`, `npx expo install`, `pod install`, or edit `app.config.js`. Do not add `pdf-report` to the plan or generated wrappers for this app.
 
 If `expo-sharing` is missing:
 
-- Continue only for generate-only or Dataverse-upload flows.
+- Continue for generate-only, native-viewer preview, or Dataverse-upload flows.
 - Do not import `expo-sharing`.
 - Do not generate `sharePdfReport(...)`.
-- If the user's requirement is specifically local share/open and there is no Dataverse upload alternative, STOP and say the requested share/open behavior is not supported by this template.
+- If the user's requirement specifically includes sharing, STOP and say sharing is not supported by this template.
 
 ### 3. Write or verify `src/native/pdfReport.ts`
 
@@ -62,8 +62,8 @@ The wrapper MUST:
 - Import `expo-print` only after Step 2 confirms it is present.
 - Import `expo-sharing` only when Step 2 confirms it is present.
 - Return discriminated unions and never throw.
-- Treat generated local PDFs as local files for share/upload only.
-- Never call `openHttpsPdf(...)` or import `@microsoft/power-apps-native-pdf-viewer`.
+- Treat generated local PDFs as local files for view/share/upload flows.
+- Never import `@microsoft/power-apps-native-pdf-viewer` directly from this wrapper.
 - Keep HTML generation deterministic and app-owned; do not fetch remote HTML inside the wrapper.
 
 Base wrapper when `expo-sharing` is present:
@@ -185,7 +185,7 @@ if (!share.ok) {
 }
 ```
 
-If `expo-sharing` is absent, screens may still call `createPdfReport(...)` and then upload the generated PDF to a Dataverse File column through generated services. They must not render a local Share/Open button unless another supported app-specific path exists.
+If `expo-sharing` is absent, screens may still call `createPdfReport(...)`, preview the returned `file://` URI through native PDF viewer 0.2.9+, or upload it to a Dataverse File column through generated services. They must not render a Share button.
 
 ### 5. Optional Dataverse upload
 
@@ -251,7 +251,7 @@ Required package : expo-print
 Optional share   : expo-sharing <present | absent>
 Wrapper          : src/native/pdfReport.ts
 Output           : local PDF file URI
-Native viewer    : not used; generated local URIs are not HTTPS viewer input
+Native viewer    : optional; 0.2.9+ can open the generated file:// URI
 Type-check       : PASS
 Native rebuild   : not performed by this skill
 ```

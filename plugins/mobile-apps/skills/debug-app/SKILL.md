@@ -323,7 +323,7 @@ Apply the 8-category table. Treat each unique stack trace / error message as one
 | Critical | `Cannot read properties of undefined`, `is not a function` | JS Runtime |
 | High | `NATIVE_MODULE_MISSING` from `pdfViewer` or `penInput` wrapper | Native |
 | High | `NATIVE_MODULE_MISSING`, `PERMISSION_DENIED`, or `TRACKING_FAILED` from `geolocation` wrapper | Native |
-| High | `INVALID_URL` from `pdfViewer`, or logs mentioning `file://`, `content://`, `blob:`, or `http://` PDF viewer input | JS Runtime |
+| High | `INVALID_URL` from `pdfViewer`, or logs mentioning `content://`, `blob:`, or `http://` PDF viewer input | JS Runtime |
 | High | `VIEWER_FAILED` or `CAPTURE_FAILED` from PDF/pen wrapper | Native |
 | High | `ERROR` level runtime log | JS Runtime |
 | High | HTTP 4xx / 5xx surfaced in logs | Network / API |
@@ -438,8 +438,8 @@ Read the relevant source file(s). Identify:
 | Unrecognized error pattern | **Best-effort autonomous fix** — see D3.2 below. The skill attempts a single named hypothesis instead of stopping; the existing 2-attempt escalation rule is the safety net. |
 
 PDF/pen/geolocation-specific routing:
-- `INVALID_URL` for PDF viewer input is an inline screen/wrapper fix. Enforce `https://` before dispatch. Never add support for `file://`, `content://`, `blob:`, or `http://` in the native viewer path.
-- A generated PDF local URI must be handled through `src/native/pdfReport.ts` sharing only when `expo-sharing` is present, or uploaded to Dataverse File storage first and viewed only through a supported HTTPS URL if the app has one.
+- `INVALID_URL` for PDF viewer input is an inline screen/wrapper fix. Allow `https://` and non-empty `file://` inputs with viewer 0.2.9+. Never add support for `content://`, `blob:`, or `http://` in the native viewer path.
+- A generated PDF local `file://` URI may be opened by native PDF viewer 0.2.9+.
 - `NATIVE_MODULE_MISSING` for PDF viewer or pen input means the native extension is not in the running build. Do not install packages or edit native config from debug; route to `/add-native pdf-viewer` or `/add-native pen-input` to verify wrapper/package state, then tell the user a native rebuild/template update is needed if the package is absent from the app build.
 - For `geolocation`, debug the actual failure dimension: can tracking start (`startTracking`, permissions, native module), are rows reaching Dataverse (default `msdyn_locationrecords` exists, native upload/auth errors, no JS upload path), and does behavior match the user expectation (background, restart persistence, breadcrumb/route continuity). Fix visible screen handling inline; if the native module/table is missing, block use and route to the relevant geolocation setup path, not `/add-dataverse`.
 - `USER_CANCELLED` from pen input is not a bug unless the screen renders it as an error. Inline fix screens that show cancellation as failure.
