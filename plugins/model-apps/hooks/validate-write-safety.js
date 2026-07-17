@@ -26,7 +26,7 @@ const path = require('path');
 const os = require('os');
 
 const DEBUG = process.env.DEBUG === '1' || process.env.DEBUG === 'true';
-const SKIP = process.env.MODEL_APPS_SKIP_WRITE_GUARD === '1';
+const SKIP = process.env.MODEL_APPS_SKIP_WRITE_GUARD === '1' || process.env.MODEL_APPS_SKIP_WRITE_GUARD === 'true';
 
 // Master kill-switch: MODEL_APPS_DISABLE_HOOKS=1 disables every model-apps hook
 // (validators + telemetry emit) — an operator escape hatch if a hook ever

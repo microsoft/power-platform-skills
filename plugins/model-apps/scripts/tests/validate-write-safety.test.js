@@ -75,6 +75,12 @@ test('MODEL_APPS_SKIP_WRITE_GUARD=1 bypasses the guard (exit 0)', () => {
   assert.equal(runHook(payload, { MODEL_APPS_SKIP_WRITE_GUARD: '1' }).status, 0);
 });
 
+test('MODEL_APPS_SKIP_WRITE_GUARD=true also bypasses the guard (exit 0)', () => {
+  const outside = path.join(path.parse(cwd).root, 'model-apps-guard-evil', 'evil.ts');
+  const payload = { tool_name: 'Write', tool_input: { file_path: outside, content: 'x' }, cwd };
+  assert.equal(runHook(payload, { MODEL_APPS_SKIP_WRITE_GUARD: 'true' }).status, 0);
+});
+
 test('missing file_path is not our concern (exit 0)', () => {
   const payload = { tool_name: 'Write', tool_input: { content: 'x' }, cwd };
   assert.equal(runHook(payload).status, 0);

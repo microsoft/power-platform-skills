@@ -127,7 +127,11 @@ function loadVerifiedIcons() {
 function extractIconImports(content) {
   const names = [];
   const code = content.replace(/\/\*[\s\S]*?\*\//g, ' ');
-  const re = /^[ \t]*import\s+(?:type\s+)?\{([^}]+)\}\s*from\s*['"]@fluentui\/react-icons['"]/gm;
+  const escapedModule = ICON_MODULE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(
+    "^[ \\t]*import\\s+(?:type\\s+)?\\{([^}]+)\\}\\s*from\\s*['\"]" + escapedModule + "['\"]",
+    'gm'
+  );
   let m;
   while ((m = re.exec(code)) !== null) {
     for (const raw of m[1].split(',')) {
