@@ -2,9 +2,9 @@
 
 // Detects the best available Chromium-based browser on the system.
 // Returns a Playwright channel name ('msedge', 'chrome', 'chromium').
-// Used by the Playwright MCP launcher and the axe-core audit script.
+// Used by the Playwright MCP launcher.
 
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -15,7 +15,10 @@ function exists(filePath) {
 
 function whichExists(cmd) {
   try {
-    execSync(`which ${cmd}`, { stdio: 'ignore' });
+    // execFileSync (no shell) avoids interpolating `cmd` into a shell command
+    // string. Call sites pass fixed literals today, but this removes the
+    // injection-prone `which ${cmd}` pattern outright.
+    execFileSync('which', [cmd], { stdio: 'ignore' });
     return true;
   } catch {
     return false;

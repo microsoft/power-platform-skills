@@ -59,3 +59,15 @@ test('launch wires spawn and process exit handling', () => {
   child.emit('exit', 7);
   assert.equal(spawnCall.exitCode, 7);
 });
+
+test('launch handles the child error event (npx fails to spawn)', () => {
+  const child = new EventEmitter();
+  let handled;
+  launch({
+    browser: 'chrome',
+    spawnFn: () => child,
+    onError: (err) => { handled = err.message; },
+  });
+  child.emit('error', new Error('spawn npx ENOENT'));
+  assert.equal(handled, 'spawn npx ENOENT');
+});
