@@ -154,10 +154,9 @@ export MODEL_APPS_DISABLE_HOOKS=1
 
 ## Telemetry
 
-model-apps ships anonymous, opt-out usage telemetry (1DS), following the same pattern
-as the power-pages plugin. The committed config ships **disabled with a placeholder
-key**, so it is off until a plugin-specific telemetry key + stream are provisioned;
-once provisioned it is **on by default** (you opt out) — exactly like power-pages.
+model-apps ships anonymous, opt-out usage telemetry (1DS). The committed config ships
+**disabled with a placeholder key**, so it is off until a plugin-specific telemetry
+key + stream are provisioned; once provisioned it is **on by default** (you opt out).
 
 - **What's collected:** skill name, plugin/PAC/agent versions, OS/Node versions, and
   Dataverse org/tenant GUIDs when signed in. **Never** file paths, prompts, tool

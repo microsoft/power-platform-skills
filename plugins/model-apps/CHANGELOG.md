@@ -17,9 +17,8 @@ hardened Playwright launcher. No breaking changes.
   `~/.power-platform-skills/telemetry/model-apps/sessions/<id>/events.jsonl`. New
   `/model-apps:telemetry on|off|status` control skill; CI/automation opt-out via
   `POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT=1`. Fail-closed throughout —
-  never changes a skill's exit code. Carries **no user-level identifier** (unlike
-  power-pages it does not send the Entra object id) — only org/tenant GUIDs when
-  signed in.
+  never changes a skill's exit code. Carries **no user-level identifier** (no Entra
+  object id) — only org/tenant GUIDs when signed in.
 - **PostToolUse validators (`hooks/hooks.json`).** A per-skill validator runner
   plus an `@fluentui/react-icons` allowlist check that validates every genpage
   `.tsx` write against `references/verified-icons.txt`, automating the
