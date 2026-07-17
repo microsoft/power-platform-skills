@@ -28,7 +28,8 @@ Purely local and deterministic — no `az` token, no Dataverse call — so it is
 fast to run as a gate. It auto-locates `.datamodel-manifest.json` (root or
 `docs/plan-artifacts/`) and `offline-profile.json` (root). Output is single-line JSON on
 stdout; exit `0` when the comparison ran (branch on `status`), exit `1` on a fatal error
-(bad args, unreadable/invalid JSON).
+(bad args, an explicit `--manifest`/`--profile` path that doesn't exist, or an
+unreadable/invalid JSON file).
 
 | `status` | Meaning | What to do |
 |---|---|---|
@@ -36,7 +37,7 @@ stdout; exit `0` when the comparison ran (branch on `status`), exit `1` on a fat
 | `no-profile` | The app has a data model but **no** offline profile. | The app never set up offline (or opted out). Do **not** auto-run an edit. Offer `/setup-offline-profile` only if the user wants offline; otherwise continue. |
 | `in-sync` | Every schema table is in the profile and no new columns since each table's baseline. | Continue. |
 | `delta` | ≥1 table missing from the profile, and/or ≥1 table has new columns since its baseline. | Reconcile — see below. |
-| `error` | Fatal (invalid JSON). | Surface the `error` string and stop; the offline artifacts are unreadable. |
+| `error` | Fatal — `offline-profile.json` (or the manifest) is unreadable/invalid JSON; the script also **exits non-zero**. | Surface the `error` string and **stop** (do not treat as `in-sync`/continue): coverage can't be validated against a corrupt file. Skip reconciliation; the user must fix the file and re-run. At `/deploy` this maps to STOP-or-`deploy without offline` override. |
 
 A `delta` result carries:
 

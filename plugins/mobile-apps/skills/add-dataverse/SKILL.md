@@ -796,7 +796,7 @@ Branch on the JSON `status` per [offline-profile-reconciliation.md](${CLAUDE_SKI
 | `status` | Action |
 |---|---|
 | `no-manifest` / `no-profile` / `in-sync` | Continue to Step 9 silently. For `no-profile` (no offline profile exists) do not nag — the app may not use offline. |
-| `error` | Surface the `error` string as a `DONE_WITH_CONCERNS` note and continue (the schema work itself succeeded). |
+| `error` | `offline-profile.json` is unreadable — the script prints `status: error` and **exits non-zero**. Do NOT treat this as an `/add-dataverse` failure (the tables are already created): surface the `error` string, **skip reconciliation** (never drive the update skills against a corrupt file), and finish with `DONE_WITH_CONCERNS` telling the user to fix `offline-profile.json`, then run `/add-table-to-offline-profile` manually. |
 | `delta` | Prompt the user (one `AskUserQuestion`, default = update now) to add the missing tables / new columns to the offline profile, then invoke `/add-table-to-offline-profile` (for `missingTables[]`) and `/edit-offline-profile --table <t> --columns add:<newColumns>` (for `tablesWithNewColumns[]`). Re-run the delta check; it should read `in-sync`. Follow the exact prompt + ordering in the reconciliation reference. |
 
 ### Step 9 — Summary

@@ -224,3 +224,24 @@ test('CLI exits 1 on invalid JSON', () => {
   assert.strictEqual(res.code, 1);
   assert.strictEqual(res.json.status, 'error');
 });
+
+test('CLI exits 1 when an explicit --manifest path does not exist (not silently no-manifest)', () => {
+  const dir = tmpProject();
+  const res = runCli(dir, ['--manifest', path.join(dir, 'does-not-exist.json')]);
+  assert.strictEqual(res.code, 1);
+  // Usage errors go to stderr, not the JSON stdout contract.
+  assert.strictEqual(res.json, null);
+  assert.match(res.stderr, /--manifest path not found/);
+});
+
+test('CLI exits 1 when an explicit --profile path does not exist (not silently no-profile)', () => {
+  const dir = tmpProject();
+  fs.writeFileSync(
+    path.join(dir, '.datamodel-manifest.json'),
+    JSON.stringify({ tables: [{ logicalName: 'cr123_order' }] }),
+  );
+  const res = runCli(dir, ['--profile', path.join(dir, 'nope.json')]);
+  assert.strictEqual(res.code, 1);
+  assert.strictEqual(res.json, null);
+  assert.match(res.stderr, /--profile path not found/);
+});

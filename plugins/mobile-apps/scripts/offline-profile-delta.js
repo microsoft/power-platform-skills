@@ -44,7 +44,8 @@
 //
 // Exit codes:
 //   0 — comparison ran; branch on the `status` field (in-sync / delta / no-profile / no-manifest)
-//   1 — fatal error (bad args, unreadable file, invalid JSON)
+//   1 — fatal error (bad args, an explicit --manifest/--profile path that doesn't exist,
+//       an unreadable file, or invalid JSON)
 
 const fs = require('fs');
 const path = require('path');
@@ -177,6 +178,13 @@ function main() {
   const { projectRoot, manifest: manifestFlag, profile: profileFlag } = parseArgs(
     process.argv.slice(2),
   );
+
+  // An explicit --manifest / --profile that doesn't exist is a bad invocation, not an
+  // absent artifact. Fail loudly (exit 1) so a typo'd path can't masquerade as
+  // `no-manifest` / `no-profile` and make a caller silently skip reconciliation. The
+  // auto-locate path (no flag) legitimately returns null → no-manifest / no-profile.
+  if (manifestFlag && !fs.existsSync(manifestFlag)) usage(`--manifest path not found: ${manifestFlag}`);
+  if (profileFlag && !fs.existsSync(profileFlag)) usage(`--profile path not found: ${profileFlag}`);
 
   const manifestPath = locateManifest(projectRoot, manifestFlag);
   if (!manifestPath) {

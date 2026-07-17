@@ -81,7 +81,7 @@ Branch on the JSON `status` (full contract in [offline-profile-reconciliation.md
 | `no-manifest` | Connectors-only app — no Dataverse schema. Continue to Step 3 silently. |
 | `no-profile` | No offline profile in this project. Print one line: `↷ No offline profile — skipping offline coverage check. Run /setup-offline-profile if you want offline support.` Continue to Step 3. |
 | `in-sync` | Print `✓ Offline profile covers all schema changes.` Continue to Step 3. |
-| `error` | `offline-profile.json` is unreadable. Print the `error` string as a warning and continue (the web bundle is independent of the profile), but recommend the user check the file. |
+| `error` | `offline-profile.json` is unreadable — the script prints `status: error` and **exits non-zero**. Offline coverage can't be validated against a corrupt file, so **STOP before pushing**: surface the `error` string and have the user fix `offline-profile.json` and re-run, or type the `deploy without offline` override (below) to push anyway. |
 | `delta` | **STOP before pushing.** See below. |
 
 **On `delta`** — print the uncovered schema, then gate with `AskUserQuestion`:
