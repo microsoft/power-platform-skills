@@ -422,7 +422,7 @@ Store as `EXTERNAL_ID_TENANT_SUBDOMAIN` and `EXTERNAL_ID_TENANT_ID`.
 
 Re-prompt on invalid input. Then store the value as `REDIRECT_URI` for the rest of the walkthrough and Phase 8.1.
 
-> **Note**: The skill writes two site settings derived from this single `REDIRECT_URI`: the user-facing `RedirectUri` (the full URI, sent to the IdP) and the internal `CallbackPath` (just the path portion, used by the OWIN middleware to know which incoming request to handle). The user doesn't need to think about `CallbackPath` separately — the skill derives it automatically from `REDIRECT_URI` by extracting the path portion.
+> **Note**: The skill writes two site settings derived from this single `REDIRECT_URI`: the user-facing `RedirectUri` (the full URI, sent to the IdP) and the internal `CallbackPath` (just the path portion, used by the OWIN middleware to know which incoming request to handle). The maker doesn't need to think about `CallbackPath` separately — the skill derives it automatically from `REDIRECT_URI` by extracting the path portion.
 
 | Question | Header | Options |
 |----------|--------|---------|
@@ -997,7 +997,7 @@ Applies to **OIDC providers** (Okta, Auth0, Entra External ID, and other OIDC). 
 
 Power Pages needs an OIDC **app registration** at the IDP, wired to this site. **How you set it up depends entirely on the identity provider**, so read the provider's own current documentation first.
 
-> Read first: `${PLUGIN_ROOT}/skills/setup-auth/references/idp-provisioning-reference.md` — the Power Pages ↔ IDP contract (Redirect URI, the no-secret `code id_token` flow, claims mapping, open registration) and the **per-IDP official documentation links**.
+> Read first: `${PLUGIN_ROOT}/skills/setup-auth/references/idp-provisioning-reference.md` — the Power Pages ↔ IDP contract (Redirect URI, the no-secret `code id_token` flow) and the **per-IDP official documentation links**.
 
 **Step A — check the provider's docs (always the first step).** As soon as you know which IDP the user wants, read that provider's official documentation (via the reference links; use the Learn MCP `microsoft_docs_search`/`microsoft_docs_fetch` for Microsoft IDPs) to determine two things: **(1)** the exact steps to register and configure an OIDC app, and **(2)** the CLI it offers for configuring the app (Okta, Auth0, and Entra External ID each provide one). **Do not proceed to any other step before this**, and never invent console paths or endpoints.
 
@@ -1065,7 +1065,7 @@ In **Guided**, this is the checklist the user applies in the console. When you *
 
 Store as `OPEN_REGISTRATION_CHOICE`. Phase 8.1 writes `Authentication/Registration/OpenRegistrationEnabled` (`true` for Open, `false` for Controlled). Pair this with the contact-linking (`AllowContactMappingWithEmail`) choice already collected in Phase 2.1.
 
-**Step F — record the results for Phase 8.1.** However the app was set up, capture the values Phase 8.1 writes as site settings (identical for both flows): `ClientId`, `Authority` (and `AuthenticationType` = Authority), `MetadataAddress` (`{authority}/.well-known/openid-configuration`), `RedirectUri` (CallbackPath = its path portion). **No `ClientSecret`** — the no-secret flow needs none, so skip Phase 8.1.1 (Key Vault), same as Entra External ID. See the reference's "Resulting site settings" table.
+**Step F — record the results for Phase 8.1.** However the app was set up, capture the values Phase 8.1 writes as site settings (identical for both flows): `ClientId`, `Authority` (and `AuthenticationType` = Authority), `MetadataAddress` (`{authority}/.well-known/openid-configuration`), `RedirectUri`. **No `ClientSecret`** — the no-secret flow needs none, so skip Phase 8.1.1 (Key Vault), same as Entra External ID. See the reference's "Resulting site settings" table.
 
 #### 2.2 Present Plan for Approval
 
