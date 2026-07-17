@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { setTelemetryChoice, effectiveTelemetryChoice } = require("./user-config");
+const { pluginLogDir, latestSessionLog } = require("./local-log");
 
 const ANONYMITY =
   "ℹ️  No personal data is collected. Telemetry is anonymous — it records only\n" +
@@ -23,10 +24,6 @@ function configDir() {
     process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR ||
     path.join(os.homedir(), ".power-platform-skills")
   );
-}
-
-function logPath() {
-  return path.join(configDir(), "events.jsonl");
 }
 
 // --plugin wins; otherwise auto-detect from the plugin manifest 4 levels up
@@ -49,6 +46,21 @@ function out(s) {
   process.stdout.write(s + "\n");
 }
 
+// Print where this plugin's local diagnostic logs live and name the newest
+// session file, so a user can hand over exactly the log for the session they
+// just hit a problem in. Reuses the shared layout helpers (DRY — no path logic
+// is duplicated in the skill).
+function emitLogLocations(dir, plugin) {
+  out(`Logs directory: ${pluginLogDir(dir, plugin)}`);
+  const latest = latestSessionLog(dir, plugin);
+  if (latest) {
+    out(`Most recent session: ${latest}`);
+    out("ℹ️  Share that file when reporting an issue (it covers your latest session).");
+  } else {
+    out(`No local logs yet for ${plugin}.`);
+  }
+}
+
 function main() {
   const action = getArg("action");
   const plugin = resolvePlugin();
@@ -63,10 +75,11 @@ function main() {
     if (on) {
       out(`Telemetry (${plugin}): ON`);
       out(ANONYMITY);
-      out(`Local log: ${logPath()}`);
+      emitLogLocations(dir, plugin);
     } else {
       out(`Telemetry (${plugin}): OFF — nothing is transmitted.`);
-      out(`A local diagnostic log is still kept at ${logPath()}.`);
+      out(`A local diagnostic log is still kept.`);
+      emitLogLocations(dir, plugin);
       out(`Re-enable anytime with /${plugin}:telemetry on.`);
       out(ANONYMITY);
     }
@@ -79,7 +92,8 @@ function main() {
   }
   if (action === "off") {
     out(`Telemetry (${plugin}): OFF — nothing is transmitted.`);
-    out(`A local diagnostic log is still kept at ${logPath()}.`);
+    out(`A local diagnostic log is still kept.`);
+    emitLogLocations(dir, plugin);
     out(`Re-enable anytime with /${plugin}:telemetry on.`);
   } else {
     out(`Telemetry (${plugin}): ON`);

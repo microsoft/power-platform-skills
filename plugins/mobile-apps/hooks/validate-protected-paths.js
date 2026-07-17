@@ -29,7 +29,7 @@ const PROTECTED = [
   {
     rx: /(^|\/)power\.config\.json$/,
     reason:
-      '`power.config.json` is owned by `npx power-apps init`. Re-run `npx power-apps init --display-name <name> --environment-id <id> --non-interactive` to change environment binding.',
+      '`power.config.json` is owned by `npx power-apps init`. Re-run `npx power-apps init -t MobileApp --display-name <name> --environment-id <id> --non-interactive` to change environment binding.',
   },
   {
     rx: /(^|\/)vendor\/[^/]+\.tgz$/,

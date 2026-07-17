@@ -439,6 +439,54 @@
         "Phase 1 (Planner): Because the account entity exists, ## Entity Creation Required contains the literal string 'No entity creation required — all entities already exist.'",
         "Phase 1 (Planner): ## Existing Entities contains the entity logical name used for RuntimeTypes generation (account)"
       ]
+    },
+    {
+      "id": 17,
+      "tier": "smoke",
+      "prompt": "Build a dashboard showing the current weather for Seattle with temperature, conditions, and humidity.",
+      "data": {
+        "question_answers": {
+          "new_or_edit": "Create new page(s)",
+          "data_source": "Mock data",
+          "specific_requirements": "current weather panel"
+        },
+        "app_selection": "user selects an existing app from pac model list"
+      },
+      "expectations": [
+        "Phase 1 (Planner): With the connectors feature flag OFF, the feature gate (scripts/lib/feature-flags.js) is checked, connector discovery (list-connections.js) is NOT run, and the plan's ## Connector Bindings is exactly 'No connector bindings.'",
+        "Phase 2: Entity-builder is SKIPPED (mock data)",
+        "Phase 4: RuntimeTypes generation is SKIPPED (mock data)",
+        "Phase 5 (Page Builder): genpage-page-builder is invoked with Data mode: mock",
+        "Phase 5b (single-page fast path): Plan has 1 page so orchestrator inlines the build — NO Task subagent dispatched for the page-builder",
+        "Phase 5b: Orchestrator reads ${PLUGIN_ROOT}/references/verified-icons.txt before writing the .tsx",
+        "Phase 5b: A relevant sample file is read (e.g., 7-responsive-cards.tsx for card layout)",
+        "Phase 5b: After writing, orchestrator greps the .tsx for `from \"@fluentui/react-icons\"` imports and verifies each named import against verified-icons.txt — rewrites if any are missing",
+        "Phase 6: Deployment omits --data-sources flag (mock data page)"
+      ]
+    },
+    {
+      "id": 18,
+      "tier": "full",
+      "prompt": "Build a page listing documents from our SharePoint team site.",
+      "data": {
+        "question_answers": {
+          "new_or_edit": "Create new page(s)",
+          "data_source": "SharePoint (connector)",
+          "specific_requirements": "list documents"
+        },
+        "feature_flags": {
+          "connectors": "ON (GENPAGE_ENABLE_CONNECTORS=1)"
+        }
+      },
+      "expectations": [
+        "Phase 1 (Planner): With the connectors feature flag ON, the feature gate passes (enabled) and list-connections.js is run for connector discovery, and the plan's ## Connector Bindings records at least one binding (not 'No connector bindings.')",
+        "Phase 4.5 / Phase 6 (connectors ON): connectors.json is written as a bare array (not the config.json object wrapper) and the upload includes --connectors",
+        "Phase 2: Entity-builder is SKIPPED (no entities to create)",
+        "Phase 5b (single-page fast path): Plan has 1 page so orchestrator inlines the build — NO Task subagent dispatched for the page-builder",
+        "Phase 5b: Orchestrator reads ${PLUGIN_ROOT}/references/verified-icons.txt before writing the .tsx",
+        "Phase 5b: A relevant sample file is read (e.g., 7-responsive-cards.tsx for card layout)",
+        "Phase 5b: After writing, orchestrator greps the .tsx for `from \"@fluentui/react-icons\"` imports and verifies each named import against verified-icons.txt — rewrites if any are missing"
+      ]
     }
   ]
 }

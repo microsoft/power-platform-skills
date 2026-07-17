@@ -128,7 +128,7 @@ Capture target Power Platform environment for the remaining flow.
 | 1. User supplies env ID | `scripts/resolve-environment.js <environment-id>` | Ask only if `power.config.json` is missing/empty or user wants a different env |
 | 2. User wants a different account | Follow shared-instructions standalone CLI auth handling | Only if resolution/token acquisition fails or user asks |
 | 3. User wants different env | Ask for another env ID and re-run resolver | Only if user selects "use a different environment" at Step 2 |
-| 4. `npx power-apps init --display-name "$DISPLAY_NAME" --environment-id $ACTIVE_ENV_ID --non-interactive` | Persists choice into `power.config.json` | Only when this skill owns the initial init path |
+| 4. `npx power-apps init -t MobileApp --display-name "$DISPLAY_NAME" --environment-id $ACTIVE_ENV_ID --non-interactive` | Persists choice into `power.config.json` | Only when this skill owns the initial init path |
 
 ```bash
 TARGET_ENV="<environment-id-or-empty>"
@@ -840,11 +840,11 @@ Do not run `npm install` inside Step 5 — in template-only mode dependencies mu
 ### Step 6 — Initialize
 
 **Print before starting:**
-> "→ [Step 6/13] Running `npx power-apps init` to write power.config.json for environment <env-id>. ~15–30 seconds."
+> "→ [Step 6/13] Running `npx power-apps init -t MobileApp` to write power.config.json for environment <env-id>. ~15–30 seconds."
 
 ```bash
 cd <working_dir>
-npx power-apps init --display-name '<displayName>' --environment-id <environment-id> --non-interactive
+npx power-apps init -t MobileApp --display-name '<displayName>' --environment-id <environment-id> --non-interactive
 ```
 
 Verify `power.config.json` was created and `environmentId` matches Step 4. If `npx power-apps init` fails, report the exact error and STOP — do not proceed.

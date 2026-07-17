@@ -246,7 +246,53 @@ After generating, read the RuntimeTypes.ts file to verify it generated correctly
 
 **For mock data pages only:** Skip this phase.
 
+### Phase 4.5: Connector Bindings (Conditional)
 
+**Re-probe the feature gate here — do not rely on the plan content alone.** A plan
+authored while the flag was ON must not deploy connectors after it is turned OFF:
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" connectors
+```
+
+**If it prints `disabled`:** connectors are OFF. Skip this phase entirely — do not
+create or pass `connectors.json`, and never add `--connectors` on upload —
+**regardless of what the plan's `## Connector Bindings` section says**. (Backstop:
+`list-connections.js` / `create-connection-reference.js` also fail closed with
+exit 3 if invoked while OFF.)
+
+**If it prints `enabled`:** read the plan's `## Connector Bindings` section and
+treat it as bindings **only when it contains an actual binding table** (a
+`| Logical Name | …` header with at least one data row). If the section is
+`No connector bindings.`, empty, missing, or malformed, treat the page as having
+no connectors and skip this phase.
+
+When there are real bindings, the `genpage-connector-builder` agent already wrote
+`<working-dir>/connectors.json` during planning — verify it exists and matches the
+plan table. If it is missing, derive it from the plan table as a **bare JSON
+array** (never the `{ "connectorBindings": [...] }` object wrapper — that is the
+deployed page `config.json` shape that `pac` writes):
+
+```json
+[
+  {
+    "logicalName": "new_uxtest_sharepoint",
+    "connectorId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+    "dataset": "https://host.sharepoint.com/sites/x",
+    "tables": ["5709dd6f-c73e-4079-ad23-2334e45e0e13"],
+    "tableDisplayNames": ["Pet"]
+  },
+  {
+    "logicalName": "new_uxtest_msnweather",
+    "connectorId": "/providers/Microsoft.PowerApps/apis/shared_msnweather",
+    "dataset": "",
+    "operations": ["CurrentWeather"]
+  }
+]
+```
+
+Do **not** write connection IDs into `connectors.json` — the importing maker/admin
+fills env-specific `ConnectionId` values through solution deployment settings.
 ### Phase 5: Build Pages (Parallel)
 
 Read `genpage-plan.md` and extract the pages table.
@@ -269,18 +315,23 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
 
 1. Read `${PLUGIN_ROOT}/references/rules.md`
 2. Read the sample listed in the plan's `## Relevant Samples`
-3. If the plan's Per-Page Specification has `Needs caching: true`, also read
+3. Only when the plan's `## Connector Bindings` section contains an **actual
+   binding table** (a `| Logical Name | …` header with at least one data row),
+   also read `${PLUGIN_ROOT}/references/connectors.md`. Treat a
+   `No connector bindings.` sentinel, or an empty/missing/malformed section, as
+   having no connectors (same contract as Phase 4.5 and genpage-page-builder).
+4. If the plan's Per-Page Specification has `Needs caching: true`, also read
    `${PLUGIN_ROOT}/references/data-caching.md`
-4. If the plan's `## Environment` indicates non-English languages, also read
+5. If the plan's `## Environment` indicates non-English languages, also read
    `${PLUGIN_ROOT}/references/localization.md`
-5. Read `genpage-plan.md` (already in working directory) and `RuntimeTypes.ts`
+6. Read `genpage-plan.md` (already in working directory) and `RuntimeTypes.ts`
    if Data mode is dataverse
-6. Write the `.tsx` file to `<working-dir>/<filename>.tsx` following all rules
-7. After writing, Grep every named import from `@fluentui/react-icons` against
+7. Write the `.tsx` file to `<working-dir>/<filename>.tsx` following all rules
+8. After writing, Grep every named import from `@fluentui/react-icons` against
    `${PLUGIN_ROOT}/references/verified-icons.txt` (one Grep per name).
    Rewrite any unverified names with the closest verified alternative; do not
    load the full icon list into context
-8. Proceed to Phase 6
+9. Proceed to Phase 6
 
 This saves ~5-15s of Task overhead and ~3K tokens that would otherwise be
 duplicated in a subagent context.
@@ -333,6 +384,29 @@ Wait for all page-builder tasks to complete before proceeding.
 
 For each `.tsx` file produced, deploy to Power Apps.
 
+If Phase 4.5 wrote `<working-dir>/connectors.json`, first pre-flight the active
+PAC CLI:
+
+```powershell
+pac model genpage upload --help
+```
+
+The help output must contain `--connectors`. If it does not, stop and surface:
+"connector deploy requires a pac build with `pac model genpage upload
+--connectors` — build from PowerPlatform-Scale-AdminTools or update pac." Do
+not silently drop bindings.
+
+Connector deployment matrix:
+- **Create (new page):** include `--connectors "<working-dir>/connectors.json"`
+  with the first `upload --add-to-sitemap`.
+- **Edit — connectors changed, added, or one removed:** write the full desired
+  binding set to `connectors.json` and include `--connectors` with
+  `upload --page-id <id>` (full replace).
+- **Edit — no connector change:** omit `--connectors`; pac preserves existing
+  bindings. Never pass a stale or empty file on an unrelated edit.
+- **Delete all connectors:** write `[]` to `connectors.json` and pass
+  `--connectors` so pac clears the page's `connectorBindings`.
+
 **Copy the upload commands below exactly — `--app-id`, `--code-file`, `--prompt`, `--agent-message` are all required and must use these exact flag names.**
 
 **Log the full command verbatim into `workflow-log.md` under a `## Phase 6 — Deploy` section before invoking it.** Including `--prompt` and all other flags. The eval harness greps the log for these tokens — a terse summary like `Command: pac model genpage upload --add-to-sitemap` will fail the `--prompt scoping` assertion. Format:
@@ -342,6 +416,9 @@ For each `.tsx` file produced, deploy to Power Apps.
 - Command: `pac model genpage upload --app-id <id> --code-file <path> --data-sources '<entities>' --prompt "<full prompt>" --model <model-id> --name "<page name>" --agent-message "<description>" --add-to-sitemap`
 - Result: page-id = <returned-id>, status = success
 ```
+
+When connector bindings are present, the logged command must also include
+`--connectors "<working-dir>/connectors.json"`.
 
 #### `--prompt` semantics
 
@@ -362,11 +439,14 @@ pac model genpage upload `
   --code-file <working-dir>/<file>.tsx `
   --name "Page Display Name" `
   --data-sources "entity1,entity2" `
+  --connectors "<working-dir>/connectors.json" `
   --prompt "<Full page description from plan's ## User Requirements>" `
   --model "<current-model-id>" `
   --agent-message "Description of what was built and any relevant details" `
   --add-to-sitemap
 ```
+
+Omit the `--connectors` line when Phase 4.5 did not write `connectors.json`.
 
 **For mock data pages:** Same but omit `--data-sources`.
 
@@ -380,10 +460,15 @@ pac model genpage upload `
   --page-id <page-id> `
   --code-file <working-dir>/<file>.tsx `
   --data-sources "entity1,entity2" `
+  --connectors "<working-dir>/connectors.json" `
   --prompt "<Only the changes in this upload, e.g. 'Add a search box and sort by company name'>" `
   --model "<current-model-id>" `
   --agent-message "Description of what was changed in this upload"
 ```
+
+For updates, include the `--connectors` line only when this upload intentionally
+replaces or clears connector bindings; otherwise omit it to preserve the
+deployed page's current bindings.
 
 ### Phase 6.5: Navigation Fix-Up (Multi-Page Only)
 
@@ -419,6 +504,26 @@ phase substitutes the real GUIDs.
    ```
 
 Pages with no `PAGEREF_` strings need no second upload.
+
+### Phase 6.7: Solution Packaging (ALM, optional)
+
+Runs only when the plan's `## Solution Packaging` has `Package into solution: true`.
+Adds the deployed app, the GenPage(s), and any connection references to the
+target solution so they travel cross-environment.
+
+1. Ensure the solution exists (create via `scripts/create-solution.js` if needed).
+2. Add the app + GenPage(s) + connection references (pass the page-id(s) returned
+   by Phase 6 as `--page-ids` — the GenPage is added explicitly, it does NOT travel
+   with the app on its own):
+   `node ${PLUGIN_ROOT}/scripts/add-page-to-solution.js <envUrl> <solutionUniqueName> <app-id> --page-ids "<page-id1,page-id2>" --connection-refs "<logicalName1,logicalName2>"`
+3. Log the command + result to `workflow-log.md`.
+
+Cross-env note (verified 2026-07-10): the app (80) pulls the sitemap (62); the
+GenPage `uxagentproject` (10372) is added explicitly and pulls its
+`uxagentprojectfile` rows (10373, incl. `config.json` with `connectorBindings`);
+each `connectionreference` (10158) is added so bindings resolve. At import the
+deployer supplies env-specific `ConnectionId` per connection reference via
+`pac solution create-settings` + `pac solution import --settings-file`.
 
 ### Phase 7: Verify in Browser (Optional)
 

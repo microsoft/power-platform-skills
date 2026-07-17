@@ -27,6 +27,47 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
 
 After installing `az`, run `az login` with the same identity as your active `pac auth list` profile. Without `az`, the `/genpage` skill still works for pages over existing entities or mock data — it only fails when entity creation is needed.
 
+## Feature flags (experimental & in-progress)
+
+Some capabilities ship **OFF by default** while their cross-repo dependencies roll
+out to production. With a flag OFF, the skill behaves as if the feature doesn't
+exist and deployed pages are unchanged. Flags are catalogued (with lifecycle
+status) in `scripts/lib/feature-flags.js`; their on/off value lives in
+`feature-flags.json` at the plugin root.
+
+| Flag | Status | Enables | Depends on |
+|---|---|---|---|
+| `connectors` | in-progress | GenPage connector authoring (SharePoint, weather, Office 365, SQL, custom REST) + ALM packaging of connection references | pac CLI connector verbs, the GenUX authoring control, and the maker/admin ECS setting — all live in PROD |
+
+**See the current state** (status, whether each flag is on, and why):
+
+```bash
+node scripts/lib/feature-flags.js --list
+```
+
+**Enable a flag for a single run** via an environment variable (highest precedence):
+
+```powershell
+# Windows (PowerShell)
+$env:GENPAGE_ENABLE_CONNECTORS = "1"
+```
+
+```bash
+# macOS / Linux (bash)
+export GENPAGE_ENABLE_CONNECTORS=1
+```
+
+**Enable it persistently** by flipping the value in `feature-flags.json`:
+
+```json
+{ "connectors": true }
+```
+
+Precedence is **env var → `feature-flags.json` → default OFF** (fail-closed). Only
+turn a flag on once its "Depends on" items are actually available in your
+environment — otherwise the feature's commands will fail with a clear "disabled" or
+capability error. The env var name is always `GENPAGE_ENABLE_<FLAG>` (uppercased).
+
 ## Skills
 
 The plugin provides a single skill that covers the full lifecycle of a generative page.

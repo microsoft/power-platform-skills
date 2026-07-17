@@ -19,7 +19,19 @@
 //   61  = Web Resource
 //   62  = Site Map
 //   65  = Hierarchy Rule
-//   80  = Model-driven App (appmodule)
+//   80    = Model-driven App (appmodule)
+//   10158 = Connection Reference (connectionreference) — verified live 2026-07-10 on
+//           AuroraBAPEnv03468. NOTE: 371 is "Connector" (msdyn_Connector), NOT a
+//           connection reference; AddSolutionComponent with 371 fails with a
+//           MetadataCache 'msdyn_Connector' error.
+//
+// NOTE: a GenPage's uxagentproject IS a registered solution component type
+// (10372 = its ObjectTypeCode), but it does NOT auto-travel with the appmodule.
+// Adding the appmodule (type 80) with AddRequiredComponents=true pulls the sitemap
+// (62) and appmodulecomponent (10097) but NOT the GenPage, so the uxagentproject
+// row must be added EXPLICITLY (adding it then pulls its uxagentprojectfile
+// children, 10373, incl. config.json with connectorBindings). See
+// add-page-to-solution.js.
 //
 // Output: { "ok": true }
 

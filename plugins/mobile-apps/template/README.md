@@ -10,6 +10,8 @@ This template is an Expo, React Native, and TypeScript starter for building a st
 
 ## Setup
 
+**Building native mobile apps with Power Platform is in Private Preview; do not use this in production.**
+
 Start from the Power Platform mobile app template, then use the mobile-app
 skill to generate the app plan, data model, screens, native capabilities, and
 connector wiring.
@@ -82,8 +84,6 @@ connector wiring.
 		- `user_impersonation`
 	- Microsoft Graph
 		- `User.Read`
-	- Microsoft Mobile Application Management
-	- Power BI Service
 	- Power Platform API
 		- `Connectivity.Connections.Read`
 		- `Connectivity.Connections.Write`

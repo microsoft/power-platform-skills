@@ -46,6 +46,7 @@ If the tracking script creates or updates site setting YAML files, include those
 | manage-headers | ManageHeaders | Site/AI/Skills/ManageHeaders |
 | manage-firewall | ManageFirewall | Site/AI/Skills/ManageFirewall |
 | security-review | SecurityReview | Site/AI/Skills/SecurityReview |
+| scan-code | ScanCode | Site/AI/Skills/ScanCode |
 | setup-solution | SetupSolution | Site/AI/Skills/SetupSolution |
 | export-solution | ExportSolution | Site/AI/Skills/ExportSolution |
 | import-solution | ImportSolution | Site/AI/Skills/ImportSolution |

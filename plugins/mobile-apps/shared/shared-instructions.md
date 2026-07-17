@@ -134,7 +134,7 @@ Use direct `npx power-apps`, `node`, and `az` commands for the mobile-app plugin
 Typical commands:
 
 ```bash
-npx power-apps init --display-name '<name>' --environment-id <id> --non-interactive
+npx power-apps init -t MobileApp --display-name '<name>' --environment-id <id> --non-interactive
 npx power-apps add-data-source --api-id <api> --connection-id <connection-id>
 npx power-apps create-connection --api-id <api> --json
 npx power-apps list-connection-references --solution-id <solution-id> --json
@@ -195,7 +195,7 @@ Apply these rules whenever an `az`, `npm`, `npx`, or `expo` command exits non-ze
 | Wrong Power Apps CLI user, `Multiple accounts found`, or standalone CLI auth loop | Run `npx power-apps auth-status --json` to see cached accounts. If the right account is cached, run `npx power-apps auth-switch --account <email>`. If not cached, run `npx power-apps login [--account <email>]`. Do not use `az account set` to switch this CLI. |
 | `connectionId not found` or empty `-c` | Create a connection with `npx power-apps create-connection --api-id <api-id> --json`, use a caller-provided existing connection ID, or use `list-connection-references --solution-id <solution-id> --json` and retry with `--connection-ref`. |
 | Missing `orgUrl`, `resourceName`, `apiId`, or `environmentId` | Re-run with the full long-form command for that connector shape; do not fall back to interactive prompts. |
-| `environment not set` | Confirm `power.config.json` has `environmentId`; if missing, rerun `npx power-apps init --display-name '<name>' --environment-id <id> --non-interactive`. |
+| `environment not set` | Confirm `power.config.json` has `environmentId`; if missing, rerun `npx power-apps init -t MobileApp --display-name '<name>' --environment-id <id> --non-interactive`. |
 | Non-zero exit for any other reason | Report exact stderr. STOP. |
 
 ### `npm install` / `npx expo install` failures
