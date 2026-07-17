@@ -44,7 +44,7 @@ Configure authentication (login/logout) and role-based authorization for a Power
 ## Workflow
 
 1. **Phase 1: Check Prerequisites** — Verify site exists, detect framework, check web roles
-2. **Phase 2: Plan** — Gather auth requirements (optionally provision the IDP app end-to-end via API for Okta / Entra ID / Entra External ID / Azure AD B2C) and present plan for approval
+2. **Phase 2: Plan** — Gather auth requirements (optionally set up the IDP app registration knowledge-first — Guided by default, or configure-for-you via the provider's own CLI where supported: Okta / Auth0 / Entra External ID) and present plan for approval
 3. **Phase 3: Create Auth Service** — Auth service with login/logout and type declarations
 4. **Phase 4: Create Authorization Utils** — Role-checking functions and wrapper components
 5. **Phase 5: Create Auth UI** — Login/logout button integrated into navigation
@@ -2693,7 +2693,7 @@ node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
 **Only run this phase if a provider requires a secret.** Skip entirely when none of the configured providers need one.
 
 Providers that **may** require a secret:
-- **OpenID Connect** — usually yes (confidential client)
+- **OpenID Connect** — **NO by default.** Power Pages' default `code id_token` flow is a no-secret public client (see Phase 2.1.2 and idp-provisioning-reference.md). Only a confidential-client override requires a secret — skip this section unless the user explicitly opts into one.
 - **Entra External ID** — **NO by default.** The Phase 2.1 walkthrough configures Entra External ID as a public client using PKCE (no client secret). **Always skip this section for Entra External ID.** If a user later needs a confidential-client setup with a secret, they add `ClientSecret` manually via the Power Pages admin center — covered in Phase 8.5 post-deploy notes.
 - **Microsoft Account / Facebook / Google** — yes (social OAuth requires app secret)
 - **SAML2 / WS-Federation** — no (certificate-based, not secrets)
@@ -2796,7 +2796,7 @@ This creates a site setting with `envvar_schema` and `source: 1`, which tells Po
 
 **Fallback — if user skipped Key Vault:**
 
-If the user chose not to use Key Vault, create environment variables with placeholder values (plain string type, not secret type). The user updates them later via the Power Apps user portal:
+If the user chose not to use Key Vault, create environment variables with placeholder values (plain string type, not secret type). The user updates them later via the Power Apps maker portal:
 
 ```powershell
 node "${PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
@@ -2811,7 +2811,7 @@ node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
 ```
 
 Tell the user to update each placeholder via:
-- **Power Apps user portal** ([make.powerapps.com](https://make.powerapps.com)) → **Solutions** → **Default Solution** → **Environment variables** → find by display name → update the value
+- **Power Apps maker portal** ([make.powerapps.com](https://make.powerapps.com)) → **Solutions** → **Default Solution** → **Environment variables** → find by display name → update the value
 
 Present the list of environment variables that need updating (display name and schema name for each).
 
@@ -2995,9 +2995,9 @@ After deployment (or if skipped), remind the user with provider-specific guidanc
   - **SAML2**: Register the site as a service provider (SP) with the SAML IdP. The `ServiceProviderRealm` and `AssertionConsumerServiceUrl` must match the site URL
   - **WS-Federation**: Register the site as a relying party with the WS-Fed provider
   - **Local Authentication**: No external provider needed — users register and log in with username/password directly on the site
-  - **Microsoft Account**: Register an application in the Azure portal and update the `ClientSecret` environment variable via the Power Apps user portal -- do not commit secrets to source control
-  - **Facebook**: Register an application in the Facebook Developer Console and update the `AppSecret` environment variable via the Power Apps user portal -- do not commit secrets to source control
-  - **Google**: Register an application in the Google Cloud Console and update the `ClientSecret` environment variable via the Power Apps user portal -- do not commit secrets to source control
+  - **Microsoft Account**: Register an application in the Azure portal and update the `ClientSecret` environment variable via the Power Apps maker portal -- do not commit secrets to source control
+  - **Facebook**: Register an application in the Facebook Developer Console and update the `AppSecret` environment variable via the Power Apps maker portal -- do not commit secrets to source control
+  - **Google**: Register an application in the Google Cloud Console and update the `ClientSecret` environment variable via the Power Apps maker portal -- do not commit secrets to source control
   - **Entra External ID**: Register the application in the Entra External ID tenant. Update the `ClientId` site setting. Set the redirect URI to `{site-url}/signin-{provider}`. The authority URL may use `{tenant}.ciamlogin.com` or a custom domain.
 - **Auth failure handling (keep users in SPA)**: When OIDC/SAML2/WS-Fed auth fails, the server redirects to `/Account/Login/ExternalAuthenticationFailed` — a server-rendered page that breaks the SPA. To keep users in the SPA on failure, edit the Dataverse content snippets `Account/Register/ExternalAuthenticationFailed` and `Account/Register/ExternalAuthenticationFailed/AccessDenied` in the Power Pages admin center to inject a `<script>` that redirects to `/login?message={error-code}`. The SPA's `getAuthError()` will then display the error inline. See authentication-reference.md for the exact script.
 - **User profile display**: After login, the auth service's `getUserDisplayName()` falls back through `firstName + lastName` → `firstName` → `lastName` → `email` → `userName` → `'User'`. **Email beats userName** because for external providers (Entra External ID, OIDC) the `userName` field is the OIDC subject identifier — a long opaque string like `vs25QwNe1ZAHqlWK1Naw9dVEBe-TbF5tZEpb0XjAEZQ` that's ugly and meaningless in a navigation bar. Power Pages populates `firstName`/`lastName`/`email` from standard OIDC claims (`given_name`, `family_name`, `email`). Entra External ID user flows often don't include `given_name`/`family_name` in the returned claims by default — if you want names populated, ensure the user flow has both attributes selected under "User attributes to collect" AND "Application claims" / "User attributes to return as claims" (see Phase 2.1 Entra External ID Step 3). The `email` claim is almost always emitted, so emails reliably populate even when names don't. `getUserInitials()` follows the same priority chain using the first character of each fallback source.

@@ -20,7 +20,7 @@ How the app is set up depends entirely on the provider, so **always read the pro
 
 Power Pages redirects the user to the IDP, receives the response at the **Redirect URI**, validates the token, then maps the identity to a Dataverse contact. Regardless of provider, the app registration must satisfy this contract:
 
-- **Redirect URI** = `{SITE_URL}/signin-{ProviderName-lowercased}` — exact string, including casing and the `signin-` prefix.
+- **Redirect URI** = `{SITE_URL}/signin-{ProviderName-lowercased}` — lowercase the provider slug in this path; the resulting URI must then be referenced **exactly** as registered at the IDP (the `signin-` prefix and the full string must match character-for-character).
 - **ID token issuance enabled** — Power Pages' default response type is `code id_token`, so the app must return an ID token from the authorize endpoint.
 - **Web application, no client secret** — see below.
 - **Scopes** `openid profile email` — so the token carries the claims Power Pages maps to the contact.
@@ -48,7 +48,7 @@ Standard seed values (the user confirms via the Phase 2.1 profile-mapping questi
 | Azure AD B2C | `firstname=given_name,lastname=family_name,emailaddress1=emails` | Email is the **plural** `emails` array claim. |
 | Workforce Entra ID | `firstname=given_name,lastname=family_name,emailaddress1=upn` | v1.0 tokens omit `email`; `upn` is the reliable substitute. |
 
-Power Pages already resolves the email from `email`, `emails`, and `upn` by default; override with `Authentication/{Provider}/{ProviderName}/EmailClaimIdentifier` when the IDP uses a custom email claim.
+Power Pages already resolves the email from `email`, `emails`, and `upn` by default; override with `Authentication/OpenIdConnect/{ProviderName}/EmailClaimIdentifier` when the IDP uses a custom email claim.
 
 ## Open registration vs. controlled access
 
