@@ -12,7 +12,7 @@ Scan the user's description and wizard answers for these signals, then confirm i
 | "photo", "attach", "image", "camera" | Camera capability + image column |
 | "pick file", "upload PDF", "import document", "attach file" | Document-picker capability + optional Dataverse File column |
 | "generate PDF", "export report", "print report", "evidence packet", "certificate PDF" | PDF-report capability + optional Dataverse File column when retained |
-| "view PDF", "open PDF", "preview PDF" | Native PDF viewer capability for HTTPS URLs or local `file://` URIs |
+| "view PDF", "open PDF", "preview PDF" | Native PDF viewer capability for HTTPS URLs or local `file://` URIs with viewer 0.2.9+ |
 | "signature", "sign", "sign off", "approval", "pen", "ink", "draw" | Pen-input capability + Dataverse Image/File storage target |
 | "track location", "background location", "GPS tracking", "follow route", "breadcrumb", "field worker location" | Geolocation capability (`@microsoft/power-apps-native-bglocation`) + Dataverse location table (default `msdyn_locationrecords`) |
 | "current location", "where am I", "tag with coordinates", "one-shot location" | One-shot location capability (`expo-location`) |

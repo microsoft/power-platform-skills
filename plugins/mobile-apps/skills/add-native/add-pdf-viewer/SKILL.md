@@ -61,13 +61,13 @@ export async function openHttpsPdf(
   try {
     parsed = new URL(url);
   } catch {
-    return { ok: false, reason: 'INVALID_URL', message: 'PDF URL must be a valid HTTPS URL or file URI.' };
+    return { ok: false, reason: 'INVALID_URL', message: 'PDF location must be a valid https:// URL or file:// URI.' };
   }
 
   const isHttpsUrl = parsed.protocol === 'https:';
   const isFileUri = parsed.protocol === 'file:' && url.startsWith('file://') && parsed.pathname !== '/';
   if (!isHttpsUrl && !isFileUri) {
-    return { ok: false, reason: 'INVALID_URL', message: 'Native PDF viewer supports HTTPS URLs and file URIs only.' };
+    return { ok: false, reason: 'INVALID_URL', message: 'Native PDF viewer supports https:// and file:// inputs only.' };
   }
 
   if (!NativePdfViewer?.openPdf) {

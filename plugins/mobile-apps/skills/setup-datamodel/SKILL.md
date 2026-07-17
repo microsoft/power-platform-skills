@@ -58,7 +58,7 @@ When requirements mention signatures, sign-off, ink, drawings, generated PDFs, e
 | "capture signature", "sign off", "approval signature", "ink" | Image column on the signed record for one current signature, or child Evidence/Signature table for multiple captures/history |
 | "generate PDF", "export report", "evidence packet", "certificate PDF" | Ask whether the generated PDF should be retained. If yes, use a Dataverse File column, usually on the parent record or a child Evidence/Attachment table. If no, document on-device/share-only behavior and add no column. |
 | "upload PDF", "attach file", "import document" | File column or child Attachment table with lookup to parent |
-| "view PDF" | Store or reference an HTTPS URL if the app has a durable source. Native PDF viewer 0.2.9+ also supports local `file://` URIs; `content://` and `blob:` remain unsupported. |
+| "view PDF" | Store or reference an HTTPS URL if the app has a durable source. Native PDF viewer 0.2.9+ also supports local `file://` URIs; `content://`, `blob:`, and `http://` remain unsupported. |
 
 PDF content must never be modeled as long text/base64 text. Use Dataverse File columns for retained PDFs. Signature PNGs may use Image columns when the generated service supports image payloads; use File columns or child Evidence rows when the capture should behave like an attachment.
 
