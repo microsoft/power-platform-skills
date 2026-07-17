@@ -11,7 +11,7 @@ hardened Playwright launcher. No breaking changes.
 ### Added
 - **Anonymous 1DS telemetry (default-on, ships `disabled` until provisioned).**
   Copied the shared telemetry library into `scripts/lib/telemetry/lib` with a
-  plugin-owned `ikey.json` (Tier-1 static key, `disabled: true` placeholder).
+  plugin-owned `ikey.json` (Tier-1 static key; ships `disabled: true` until go-live).
   Emits `skill_started` via PreToolUse(Skill) + UserPromptSubmit hooks and writes
   a local diagnostic mirror at
   `~/.power-platform-skills/telemetry/model-apps/sessions/<id>/events.jsonl`. New

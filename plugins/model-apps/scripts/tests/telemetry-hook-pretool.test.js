@@ -60,10 +60,14 @@ function writeProvisionedConfig(configDir) {
   return ikeyPath;
 }
 
-test("shipped ikey.json is disabled with a placeholder key (never ship enabled unprovisioned)", () => {
+test("ikey.json is never shipped enabled with the placeholder key", () => {
   const cfg = JSON.parse(fs.readFileSync(SHIPPED_IKEY, "utf8"));
-  assert.equal(cfg.disabled, true, "ikey.json must ship disabled:true until provisioned");
-  assert.equal(cfg.instrumentationKey, "PLACEHOLDER_REPLACE_BEFORE_SHIPPING");
+  if (cfg.instrumentationKey === "PLACEHOLDER_REPLACE_BEFORE_SHIPPING") {
+    // Unprovisioned placeholder must stay hard-off.
+    assert.equal(cfg.disabled, true, "a placeholder key must ship disabled:true");
+  }
+  // A real (provisioned) key may ship staged (disabled:true) or live (disabled:false) —
+  // both valid. The guard only forbids enabling a placeholder key.
 });
 
 test("exits 0 and emits nothing when tool_input has no tracked skill", () => {

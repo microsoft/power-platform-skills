@@ -1,6 +1,6 @@
 {
-  "instrumentationKey": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
-  "collector_url": "",
-  "event_stream_name": "PluginEventStreamPlaceholder",
+  "instrumentationKey": "17d9aee1951341508c46b0aad2f3fcb5-a41425e0-9b67-482e-971f-ad83c3b467e3-6814",
+  "collector_url": "https://us-mobile.events.data.microsoft.com/OneCollector/1.0/",
+  "event_stream_name": "ModelAppsAIPluginEvent",
   "disabled": true
 }
