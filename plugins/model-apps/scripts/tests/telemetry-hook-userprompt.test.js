@@ -118,3 +118,26 @@ test("exits 0 on malformed stdin", () => {
   const { status } = runHook({ input: "{not json", configDir: mkTemp() });
   assert.equal(status, 0);
 });
+
+test("enabled config but placeholder key → prompt path emits nothing (no probe)", () => {
+  const configDir = mkTemp();
+  const probePath = path.join(configDir, "probe.json");
+  const ikeyPath = path.join(configDir, "ikey.json");
+  fs.writeFileSync(
+    ikeyPath,
+    JSON.stringify({
+      instrumentationKey: "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      collector_url: "https://example.invalid/OneCollector/1.0/",
+      event_stream_name: "ModelAppsTestStream",
+      disabled: false,
+    })
+  );
+  const { status } = runHook({
+    input: JSON.stringify({ prompt: "/model-apps:genpage x" }),
+    configDir,
+    ikeyPath,
+    fakeProbe: probePath,
+  });
+  assert.equal(status, 0);
+  assert.equal(waitForFile(probePath, 1500), false, "placeholder key must not emit on the prompt path");
+});
