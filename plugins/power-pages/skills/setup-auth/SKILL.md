@@ -1022,7 +1022,6 @@ For a provider that offers no such CLI, go Guided.
 - **Sign-in flow:** `code id_token` (the app must issue **ID tokens** at the IDP)
 - **Redirect URI:** `<REDIRECT_URI>` (exact — casing + `signin-` prefix)
 - **Scopes:** `openid profile email`
-- **Claims mapping:** the IDP-correct seed (Step E)
 
 In **Guided**, this is the checklist the user applies in the console. When you **configure it for the user**, it is the spec you apply.
 
@@ -1031,7 +1030,6 @@ In **Guided**, this is the checklist the user applies in the console. When you *
 1. Register the app → capture/verify the **Client ID**.
 2. Set the Redirect URI → verify it matches `<REDIRECT_URI>` exactly.
 3. Enable **ID token** issuance (`code id_token`) → verify.
-4. Set the claims mapping (Step E).
 
 - **Guided:** instruct the user to perform each step in the console, then confirm the result before moving on.
 - **Configure it for the user:** run the provider's CLI/API for each step, then read the object back to verify before the next.
@@ -1052,10 +1050,7 @@ In **Guided**, this is the checklist the user applies in the console. When you *
 
 **If "No"**: switch to the Guided flow.
 
-**Step E — claims mapping + open registration.** Setting up the app is not enough — set these explicitly:
-
-1. **Claims mapping — derive, then confirm (do not open-ask).** Pick the IDP-correct mapping from the seed defaults: Auth0 / Okta / Entra External ID / other OIDC → `firstname=given_name,lastname=family_name,emailaddress1=email`; **Azure AD B2C → `emailaddress1=emails`** (plural array claim — a common empty-email bug); workforce Entra ID → `emailaddress1=upn`. When the provider's `claims_supported` lacks `email`, fall back to `preferred_username`. Present the derived mapping and ask only for a yes/no confirmation (offer "customize" as an escape hatch). This drives `RegistrationClaimsMapping` (first sign-in) and, when Phase 2.1 chose "sync every login", `LoginClaimsMapping`.
-2. **Open registration — confirm the recommended default** (external sign-ins obey registration gating). Default to **Open** for customer-facing providers (Auth0 / Okta / Entra External ID) and **Controlled** for workforce Entra ID, and confirm:
+**Step E — open registration.** External sign-ins obey the site's registration gating. Confirm the recommended default — **Open** for customer-facing providers (Auth0 / Okta / Entra External ID), **Controlled** for workforce Entra ID:
 
 <!-- not-a-gate: configuration sub-prompt — records the OpenRegistrationEnabled value; the load-bearing plan sign-off is the 2.2 gate. -->
 
@@ -1065,7 +1060,7 @@ In **Guided**, this is the checklist the user applies in the console. When you *
 
 Store as `OPEN_REGISTRATION_CHOICE`. Phase 8.1 writes `Authentication/Registration/OpenRegistrationEnabled` (`true` for Open, `false` for Controlled). Pair this with the contact-linking (`AllowContactMappingWithEmail`) choice already collected in Phase 2.1.
 
-**Step F — record the results for Phase 8.1.** However the app was set up, capture the values Phase 8.1 writes as site settings (identical for both flows): `ClientId`, `Authority` (and `AuthenticationType` = Authority), `MetadataAddress` (`{authority}/.well-known/openid-configuration`), `RedirectUri`. **No `ClientSecret`** — the no-secret flow needs none, so skip Phase 8.1.1 (Key Vault), same as Entra External ID. See the reference's "Resulting site settings" table.
+**Step F — record the results for Phase 8.1.** However the app was set up, capture the values Phase 8.1 writes as site settings (identical for both flows): `ClientId`, `Authority` (and `AuthenticationType` = Authority), `MetadataAddress` (the provider's discovery endpoint — read from the IDP), `RedirectUri`. **No `ClientSecret`** — the no-secret flow needs none, so skip Phase 8.1.1 (Key Vault), same as Entra External ID. See the reference's "Resulting site settings" table.
 
 #### 2.2 Present Plan for Approval
 
