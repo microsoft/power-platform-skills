@@ -199,6 +199,35 @@ If any entities need creating, note that entity creation requires:
 Detection uses `pac model list-tables` natively; creation runs through the
 plugin's own Web API scripts under `${PLUGIN_ROOT}/scripts/`.
 
+### Connector Detection (delegated to genpage-connector-builder)
+
+If the request implies a non-Dataverse source (SharePoint, Teams, weather,
+Office 365, SQL via connector, or a custom REST connector), delegate ALL
+connector work to the `genpage-connector-builder` agent via the `Task` tool. Do
+**not** run the feature-gate probe or any connector discovery inline — that agent
+is the single owner of the connectors feature gate, connection / connection-ref
+discovery, connection-reference creation, and the binding contract.
+
+Invoke `genpage-connector-builder` with a prompt containing:
+
+- **Mode:** `create`
+- **Working directory**, **Plugin root** (`${PLUGIN_ROOT}`), **Environment URL**
+- **Intent:** the source(s) the request implies (e.g. "SharePoint documents",
+  "current weather")
+
+It writes two files into the working directory:
+
+- `connector-bindings.md` — the exact body for the plan's `## Connector Bindings`
+  section (either `No connector bindings.` or the binding table).
+- `connectors.json` — the bare-array binding file for deployment.
+
+Read `connector-bindings.md` and splice its contents verbatim into the
+`## Connector Bindings` section of `genpage-plan.md`.
+
+If the request implies **only** Dataverse and/or mock data (no connector source),
+skip the agent entirely and write `## Connector Bindings` as exactly
+`No connector bindings.`.
+
 ### App Detection
 
 Run:
@@ -326,6 +355,7 @@ Enter plan mode (`EnterPlanMode`) and present:
 - Entities needed: [list]
 - Entities that exist: [list]
 - Entities to create: [list — with columns, types, relationships, choices]
+- Connector bindings: [ready-to-bind connectionreference logical names, or "none"]
 - Sample data: will ask after entity creation
 
 ### App

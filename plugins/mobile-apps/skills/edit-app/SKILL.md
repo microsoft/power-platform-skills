@@ -210,7 +210,7 @@ For PDF/signature requests, map the change to every affected section instead of 
 | Store signed approval as Dataverse image | Data Model: Image column; Screens: normalize `data:image/png;base64,...` before update; Native Capabilities: `pen-input` if capture is in-app |
 | Generate/export/print evidence PDF | Native Capabilities: `pdf-report` only when `expo-print` is present, plus `sharing` only when local share is needed and `expo-sharing` is present; Data Model: File column only if retained; Screens: generation pending/failed/success states |
 | Persist generated PDFs | Data Model: Dataverse File column or child Attachment table; Screens: create/update row first, then upload File bytes; Native Capabilities: `pdf-report` |
-| View/open/preview PDF | Native Capabilities: `native-pdf-viewer` only for HTTPS PDF URLs and only when `@microsoft/power-apps-native-pdf-viewer` is present; Screens: invalid URL and viewer failed states |
+| View/open/preview PDF | Native Capabilities: `native-pdf-viewer` for HTTPS URLs or local `file://` URIs when `@microsoft/power-apps-native-pdf-viewer` 0.2.9+ is present; Screens: invalid URL and viewer failed states |
 
 If a single PDF/signature request requires multiple plan sections, say so and run the edit loop section-by-section. Do not write a native capability entry that references a Dataverse column or screen state that remains absent from the plan.
 
@@ -329,8 +329,8 @@ Parse the first line of every agent result using the return-status protocol in `
 
 For Native Capabilities (no separate agent), do it inline: read the current capability table, apply the change, regenerate the table. For PDF/pen rows, include storage/output notes in the table or immediately below it:
 
-- `native-pdf-viewer` opens HTTPS URLs only; it does not support `file://`, `content://`, or `blob:`.
-- `pdf-report` generates a local PDF only when `expo-print` is present; local output is shared with `expo-sharing` only when that package is present, or uploaded to Dataverse File storage before later HTTPS viewing.
+- `native-pdf-viewer` 0.2.9+ opens HTTPS URLs and local `file://` URIs; it does not support `content://`, `blob:`, or `http://`.
+- `pdf-report` generates a local PDF only when `expo-print` is present; local output may be opened by `native-pdf-viewer` 0.2.9+, shared with `expo-sharing` when present, or uploaded to Dataverse File storage.
 - `pen-input` returns a PNG data URI; cancellation is a non-error state; Dataverse target must be Image, File, or child Evidence/Signature row.
 
 For connector/data-source edits, read and execute `/add-datasource` when the source type is unclear; use `/add-sharepoint`, `/add-connector`, or `/add-dataverse` directly only when the source type is clear. If the connector drives new screens or forms, update the Screens section too before applying code.
@@ -402,6 +402,18 @@ done
 Replace or create the `## Generated Services (snapshot at <ISO timestamp>)` section in `native-app-plan.md` immediately after `## Screens`. If there are no services, write an empty table and a note. Screen-builders must treat this table as authoritative.
 
 Do not ask the user to run these follow-up skills manually. This skill is the orchestrator.
+
+#### Step 5.6 — Offline profile reconciliation
+
+If Step 5 created or extended Dataverse tables, an existing Mobile Offline Profile may now be missing those tables/columns (new tables never sync to devices; new columns arrive blank). Step 5's `/add-dataverse --skip-planning` suppresses that skill's own Step 8.5 reconciliation, so this orchestrator owns the check. Skip when no Data Model mutation occurred in this edit.
+
+Run the local, no-network delta check:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/offline-profile-delta.js"
+```
+
+Branch on the JSON `status` per [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → continue silently (do not nag when no profile exists); `delta` → prompt to update, then invoke `/add-table-to-offline-profile` (for `missingTables[]`) and `/edit-offline-profile --table <t> --columns add:<newColumns>` (for `tablesWithNewColumns[]`), and re-check to `in-sync`. Record the reconciliation outcome in the Step 8 memory-bank edit entry.
 
 ### Step 6 — Rebuild affected screens
 

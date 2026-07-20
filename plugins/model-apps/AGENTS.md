@@ -87,6 +87,7 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 | `genpage-entity-builder` | `genpage` (create flow) | Creates Dataverse tables, columns, relationships, choices, and sample data via the plugin's Node.js Web API scripts (`scripts/`). Bulk inserts use OData `$batch`. Writes a transactional log for recovery |
 | `genpage-page-builder` | `genpage` (create flow) | Generates one complete `.tsx` page from the plan and schema; runs in parallel with other builders for multi-page requests |
 | `genpage-edit-planner` | `genpage` (edit flow) | Reads the downloaded page artifacts (page.tsx, config.json, prompt.txt), gathers change requirements, presents edit plan, writes `genpage-edit-plan.md`. The orchestrator applies the edit inline. |
+| `genpage-connector-builder` | `genpage` (create **and** edit flows) | **Single owner of the connectors feature gate.** Performs connector discovery (connections, connection references, datasets, tables, operations, schema), creates Dataverse connection references, and writes the `## Connector Bindings` contract + `connectors.json`. Both the planner and the edit-planner delegate all connector work to it. |
 
 ## Key Concepts
 
@@ -101,6 +102,53 @@ The DataAPI (`props.dataApi`) provides typed CRUD operations against Dataverse t
 ### RuntimeTypes
 
 TypeScript type definitions generated from Dataverse metadata. Contains entity types, enum registrations, and the `GeneratedComponentProps` interface. Generated via PAC CLI before code generation to ensure correct column names.
+
+## Feature Flags
+
+Unreleased functionality is gated behind committed, **default-OFF** feature flags so
+the skill can merge ahead of its cross-repo dependencies. With a flag OFF, the
+**deployed page behavior is identical to before the feature existed** — the guarantee
+is about runtime/deploy output, not that every authoring artifact is byte-for-byte
+unchanged (e.g. plans still carry a `## Connector Bindings: No connector bindings.`
+line). The mechanism lives in `scripts/lib/feature-flags.js` with the committed
+values in `feature-flags.json` at the plugin root.
+
+- **Source of truth:** `feature-flags.json` (e.g. `{ "connectors": false }`). Flip a
+  flag to `true` in a one-line PR once its dependencies are GA in PROD.
+- **Precedence (highest first):** env var `GENPAGE_ENABLE_<FLAG>` (e.g.
+  `GENPAGE_ENABLE_CONNECTORS=1`) → committed `feature-flags.json` → default `false`
+  (fail-closed). This mirrors the telemetry opt-out env-over-config convention.
+- **LLM gate:** skill/agent markdown probes a flag with
+  `node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" <flag>` (prints `enabled`/`disabled`,
+  exits 0/1) and skips the gated workflow when disabled. `--list` prints every known
+  flag's lifecycle **status** (experimental / in-progress / ga), effective state +
+  source (env/file/default), summary, how to enable, plus config-validation warnings.
+  Flags are catalogued with that metadata in the `FLAGS` map in `feature-flags.js`
+  (the committed `feature-flags.json` carries only the on/off value).
+- **Script backstop:** connector entrypoints call the shared
+  `exitIfConnectorsDisabled()` helper (DRY — no inlined gate) and fail closed with
+  exit 3 when OFF: `list-connections.js`, `create-connection-reference.js`, and the
+  `--connection-refs` branch of `add-page-to-solution.js`.
+- **Validation:** `KNOWN_FLAGS` + `validateFlags()` warn on unknown keys / non-boolean
+  values in the committed file (so a typo can't silently do nothing, or — after a flip
+  to `true` — accidentally enable the wrong thing).
+
+**Connectors gate — the single owner is `genpage-connector-builder`.** Every connector
+entry point must go through it or the helper; the checklist of places that gate:
+
+1. Discovery — `genpage-connector-builder` runs the probe first (planner + edit-planner
+   delegate to it; they do not gate inline).
+2. Scripts — `list-connections.js` / `create-connection-reference.js` (`exitIfConnectorsDisabled`).
+3. Deploy — SKILL Phase 4.5 **re-probes** the flag and treats absent/malformed
+   `## Connector Bindings` as no bindings (a plan authored while ON must not deploy
+   connectors after OFF).
+4. ALM — the `--connection-refs` branch of `add-page-to-solution.js`.
+5. Codegen — `genpage-page-builder` emits connector code only when the plan has an
+   actual binding table (never on an absent/sentinel section).
+
+The **`connectors`** flag currently ships OFF: GenPage connector support needs the
+pac CLI connector verbs (PowerPlatform-Scale-AdminTools), the GenUX authoring control
+(power-platform-ux), and the maker/admin ECS setting to all be released first.
 
 ## Development Standards
 

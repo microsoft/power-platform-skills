@@ -2,7 +2,7 @@
 name: deploy
 description: Use when the user wants to deploy / publish / push a Power Apps mobile app to a Power Platform tenant so others can run it.
 user-invocable: true
-allowed-tools: Read, Glob, Bash, AskUserQuestion
+allowed-tools: Read, Glob, Bash, AskUserQuestion, Skill
 model: sonnet
 ---
 
@@ -22,7 +22,7 @@ This skill uses the standard 4-step deployment flow for this plugin: check memor
 
 ## Workflow
 
-1. Check memory bank → 2. Build → 3. Deploy → 4. Update memory bank
+1. Check memory bank → 2. Build → 2.5 Offline profile coverage gate → 3. Deploy → 4. Update memory bank
 
 ---
 
@@ -64,6 +64,43 @@ If the build fails:
 
 Verify `dist/` exists with `index.html` before continuing.
 
+### Step 2.5 — Offline profile coverage gate
+
+This is the final chance to catch schema that never made it into the Mobile Offline Profile before it ships — a table added to the data model but not the profile never syncs to devices, and a new column arrives blank offline. Validate that every schema change is covered **before** pushing.
+
+Run the local, no-network delta check (`.datamodel-manifest.json` vs `offline-profile.json`):
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/offline-profile-delta.js"
+```
+
+Branch on the JSON `status` (full contract in [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md)):
+
+| `status` | Action |
+|---|---|
+| `no-manifest` | Connectors-only app — no Dataverse schema. Continue to Step 3 silently. |
+| `no-profile` | No offline profile in this project. Print one line: `↷ No offline profile — skipping offline coverage check. Run /setup-offline-profile if you want offline support.` Continue to Step 3. |
+| `in-sync` | Print `✓ Offline profile covers all schema changes.` Continue to Step 3. |
+| `error` | `offline-profile.json` is unreadable — the script prints `status: error` and **exits non-zero**. Offline coverage can't be validated against a corrupt file, so **STOP before pushing**: surface the `error` string and have the user fix `offline-profile.json` and re-run, or type the `deploy without offline` override (below) to push anyway. |
+| `delta` | **STOP before pushing.** See below. |
+
+**On `delta`** — print the uncovered schema, then gate with `AskUserQuestion`:
+
+```
+⚠ The offline profile is missing schema changes. If you deploy now, these won't be
+  available on disconnected devices:
+
+  Tables not in the profile : <missingTables[].logicalName>
+  Tables with new columns   : <tablesWithNewColumns[].logicalName (newColumns)>
+```
+
+Options:
+
+- **Update the offline profile now (recommended)** — invoke `/add-table-to-offline-profile` for each `missingTables[]` entry (or once with `--all-new`) and `/edit-offline-profile --table <t> --columns add:<newColumns>` for each `tablesWithNewColumns[]` entry, following the ordering in the reconciliation reference. Then re-run the delta check; when it reports `in-sync`, continue to Step 3.
+- **Deploy anyway** — requires an explicit override. Wait for the exact phrase `deploy without offline` (case-insensitive); a bare `y`/`yes` is not enough, mirroring the environment-mismatch gate in Step 3. Then continue to Step 3 and note the skipped reconciliation in the Step 4 build-history row.
+
+Do not push until the gate is resolved (reconciled to `in-sync`, or explicitly overridden).
+
 ### Step 3 — Deploy
 
 **Resolve and confirm the target environment FIRST.** `npx power-apps push` deploys to the environment configured in `power.config.json`. Resolve that ID to a Dataverse URL so the user catches drift before pushing.
@@ -101,7 +138,7 @@ If deploy fails, report the error and STOP — do not retry silently. Common fix
 | Error | Fix |
 |---|---|
 | `npx power-apps push` auth error, wrong user, or multiple accounts | Follow shared-instructions command-failure handling. `az login` / `az account set` does not switch the standalone Power Apps CLI account. |
-| Environment mismatch | Re-run `npx power-apps init --display-name <name> --environment-id <id> --non-interactive` in a fresh/app root for the intended target|
+| Environment mismatch | Re-run `npx power-apps init -t MobileApp --display-name <name> --environment-id <id> --non-interactive` in a fresh/app root for the intended target|
 | `npx power-apps push` not recognised | Run `npm install` in the project so `@microsoft/power-apps` provides the CLI, or install `@microsoft/power-apps-cli` only as a last-resort prerequisite after user confirmation. |
 
 ### Step 4 — Update memory bank
@@ -152,3 +189,4 @@ If they want to compile a native binary locally, they run the platform-specific 
 
 - [`shared/version-check.md`](${CLAUDE_SKILL_DIR}/../../shared/version-check.md) — min versions (only Always-required tier matters here)
 - [`shared/memory-bank.md`](${CLAUDE_SKILL_DIR}/../../shared/memory-bank.md) — Build history schema
+- [`shared/references/offline-profile-reconciliation.md`](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md) — Step 2.5 offline coverage gate

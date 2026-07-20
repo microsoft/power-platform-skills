@@ -31,7 +31,7 @@ Current dedicated implementations:
 |---|---|---|
 | `camera`, `take-photo`, `photo`, `expo-camera`, `image-picker`, `gallery`, `expo-image-picker`, `barcode-scanner`, `qr-scanner`, `scanner` | [`add-camera`](add-camera/SKILL.md) internal helper | Owns photo capture, gallery image picking, and barcode/QR scanner controls backed by `expo-camera` / `expo-image-picker` |
 | `pdf-report`, `pdf-export`, `generate-pdf`, `print-report`, `evidence-packet` | [`add-pdf-report`](add-pdf-report/SKILL.md) internal helper | Generates app-owned local PDFs with `expo-print` and shares them only when `expo-sharing` is present |
-| `pdf-viewer`, `native-pdf-viewer`, `pdf-control`, `open-pdf`, `@microsoft/power-apps-native-pdf-viewer` | [`add-pdf-viewer`](add-pdf-viewer/SKILL.md) internal helper | Enforces HTTPS-only viewer URLs and native viewer result handling |
+| `pdf-viewer`, `native-pdf-viewer`, `pdf-control`, `open-pdf`, `@microsoft/power-apps-native-pdf-viewer` | [`add-pdf-viewer`](add-pdf-viewer/SKILL.md) internal helper | Enforces `https://` / `file://` viewer inputs and native viewer result handling |
 | `pen-input`, `signature`, `ink`, `draw`, `@microsoft/power-apps-native-pen-input` | [`add-pen-input`](add-pen-input/SKILL.md) internal helper | Captures PNG data URI and documents Dataverse Image/File persistence |
 | `geolocation`, `location-tracking`, `background-location`, `gps-tracking`, `geo-tracking`, `@microsoft/power-apps-native-bglocation` | [`add-geolocation`](add-geolocation/SKILL.md) internal helper | Native background GPS tracking with durable storage and inline Dataverse sync; distinct from one-shot `expo-location` |
 
@@ -48,8 +48,8 @@ Before adding any native control or wrapper, apply every gate: classify the inte
 | Dedicated photo/gallery/scanner workflow | `/add-native camera`, `image-picker`, or `barcode-scanner` | `expo-camera` and/or `expo-image-picker` present | If packages are absent, stop with missing-package guidance |
 | Pick/import/upload a user-selected PDF/document | `/add-native document-picker`, or host `<FilePicker>` for Dataverse File fields | `expo-document-picker` present, or host File control | Do not treat this as `pdf-report` or native PDF viewer |
 | Generate/export/print an app-owned report PDF | `/add-native pdf-report` | `expo-print` present | If `expo-print` is absent, do not add PDF report capability |
-| Share/open a generated local PDF | `pdfReport.ts` share helper | `expo-sharing` present | If `expo-sharing` is absent, allow Dataverse upload only; do not render local share/open UI |
-| Open/preview an existing PDF URL | `/add-native pdf-viewer` | `@microsoft/power-apps-native-pdf-viewer` present and URL is `https://` | Do not pass `file://`, `content://`, `blob:`, `http://`, or generated local URIs to the viewer |
+| Share a generated local PDF | `pdfReport.ts` share helper | `expo-sharing` present | If `expo-sharing` is absent, do not render sharing UI |
+| Open/preview an HTTPS or local file PDF | `/add-native pdf-viewer` | `@microsoft/power-apps-native-pdf-viewer` 0.2.9+ present and input is `https://` or `file://` | Do not pass `content://`, `blob:`, or `http://` URIs to the viewer |
 | Capture signature, ink, drawing, or sign-off | `/add-native pen-input` | `@microsoft/power-apps-native-pen-input` present | If persisted, plan Dataverse Image/File/child Evidence target first |
 | Continuous/background GPS tracking with durable Dataverse upload | `/add-native geolocation` | `@microsoft/power-apps-native-bglocation` present | Do not use one-shot `expo-location` for background tracking; do not use the `GeolocationExtension`/HostingSDK path |
 | Store generated PDF/signature artifact | Generated Dataverse services after parent row exists | File/Image column or child Evidence/Attachment table exists | Never put File bytes in create/update JSON |
@@ -130,7 +130,7 @@ Apply the Native capability gate above. This table is a known capability-to-pack
 | `image-picker`, `gallery`, `expo-image-picker` | `expo-image-picker` | `src/native/imagePicker.ts` | `/add-native` routes internally to `add-camera` |
 | `barcode-scanner`, `qr-scanner`, `scanner`, `barcode`, `qr` | `expo-camera` | `src/native/barcodeScanner.tsx` | `/add-native` routes internally to `add-camera` |
 | `document-picker` | `expo-document-picker` | `src/native/documentPicker.ts` | Picks/imports user-selected files (PDF, docs, etc.) from the device |
-| `pdf-viewer`, `native-pdf-viewer`, `pdf-control`, `open-pdf`, `@microsoft/power-apps-native-pdf-viewer` | `@microsoft/power-apps-native-pdf-viewer` | `src/native/pdfViewer.ts` | `/add-native` routes internally to `add-pdf-viewer`; opens HTTPS PDF URLs only |
+| `pdf-viewer`, `native-pdf-viewer`, `pdf-control`, `open-pdf`, `@microsoft/power-apps-native-pdf-viewer` | `@microsoft/power-apps-native-pdf-viewer` | `src/native/pdfViewer.ts` | `/add-native` routes internally to `add-pdf-viewer`; 0.2.9+ opens HTTPS URLs and file URIs |
 | `pdf-report`, `pdf-export`, `generate-pdf`, `print-report`, `evidence-packet` | `expo-print` (+ optional `expo-sharing`) | `src/native/pdfReport.ts` | `/add-native` routes internally to `add-pdf-report`; generated local files are shared only when `expo-sharing` is present, or uploaded to Dataverse |
 | `pen-input`, `signature`, `ink`, `draw`, `@microsoft/power-apps-native-pen-input` | `@microsoft/power-apps-native-pen-input` | `src/native/penInput.ts` | `/add-native` routes internally to `add-pen-input`; captures PNG data URI |
 | `geolocation`, `location-tracking`, `background-location`, `gps-tracking`, `geo-tracking`, `@microsoft/power-apps-native-bglocation` | `@microsoft/power-apps-native-bglocation` | `src/native/geolocation.ts` | `/add-native` routes internally to `add-geolocation`; native background tracking + durable Dataverse sync. Distinct from one-shot `location` below |
@@ -156,11 +156,11 @@ Apply the Native capability gate above. This table is a known capability-to-pack
 - Do not treat every PDF request as `document-picker`.
 - Use `document-picker` when the user wants to pick, import, or upload a local PDF/document. This remains supported and should still be used for that use case.
 - Use `pdf-report` when the app generates a PDF from records, evidence, inspection data, certificates, receipts, or reports, but only if `expo-print` is present in `package.json`.
-- Use `native-pdf-viewer` / `pdf-control` only when the app opens/previews an HTTPS PDF URL with `@microsoft/power-apps-native-pdf-viewer`. Local `file://`, `content://`, and `blob:` URIs are unsupported by the native viewer path.
+- Use `native-pdf-viewer` / `pdf-control` when the app opens/previews an HTTPS PDF URL or local `file://` URI with `@microsoft/power-apps-native-pdf-viewer` 0.2.9+. `content://`, `blob:`, and `http://` URIs are unsupported.
 - If a request says "view/open PDF" but the Power Apps viewer package is absent, fall back to `pdf-report` only when the app is generating its own report and `expo-print` is present. Do not claim generic PDF viewing support through `expo-print`; it generates local files, it does not view arbitrary PDFs.
 - Use `pen-input` only for signatures, drawn approvals, ink notes, sketches, and handwritten sign-off with `@microsoft/power-apps-native-pen-input`.
 - For other use cases, use the relevant Expo module or other dependency already present in `package.json`; do not force the Power Apps extensions into unrelated flows.
-- For generated local PDFs from `expo-print`, use `expo-sharing` for local share/open behavior only if `expo-sharing` is present. If `expo-sharing` is absent, generated PDFs can still be uploaded to Dataverse File storage; otherwise do not add local share/open behavior.
+- For generated local PDFs from `expo-print`, use native PDF viewer 0.2.9+ for open/preview, `expo-sharing` for sharing, and Dataverse File storage for retention. Do not require `expo-sharing` merely to preview a local PDF.
 - Host `FilePicker` and `ImagePicker` are still correct for user-selected Dataverse File/Image form fields. Generated PDFs and pen captures use native wrappers first, then Dataverse persistence helpers.
 
 ### Dataverse artifact persistence rules

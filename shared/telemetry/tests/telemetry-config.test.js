@@ -96,3 +96,33 @@ test("status: env opt-out overrides a persisted 'on' choice → OFF", () => {
   );
   assert.match(stdout, /Telemetry \(power-pages\): OFF/);
 });
+
+const { appendLocal } = require("../lib/local-log");
+
+test("status names the logs directory and says none yet when empty", () => {
+  const dir = mkTmp();
+  const { status, stdout } = run(["--action", "status", "--plugin", "power-pages"], dir);
+  assert.equal(status, 0);
+  assert.match(stdout, /Logs directory:/);
+  assert.match(stdout, /No local logs yet for power-pages/);
+});
+
+test("status names the most recent session log when one exists", () => {
+  const dir = mkTmp();
+  // Seed a session log under the new layout via the real writer.
+  appendLocal(
+    { name: "X", data: { pluginName: "power-pages", sessionId: "sess-9" } },
+    { configDir: dir }
+  );
+  const { stdout } = run(["--action", "status", "--plugin", "power-pages"], dir);
+  assert.match(stdout, /Most recent session:/);
+  assert.match(stdout, /sess-9/);
+  assert.match(stdout, /Share that file when reporting an issue/);
+});
+
+test("off output names the logs directory too", () => {
+  const dir = mkTmp();
+  const { stdout } = run(["--action", "off", "--plugin", "power-pages"], dir);
+  assert.match(stdout, /local diagnostic log is still kept/i);
+  assert.match(stdout, /Logs directory:/);
+});

@@ -11,6 +11,7 @@ body:
         - canvas-apps
         - code-apps
         - model-apps
+        - power-automate
         - power-pages
     validations:
       required: true

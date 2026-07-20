@@ -652,7 +652,7 @@ The `### Option rules` sections in `manage-firewall` and `scan-site` retain `<!-
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
-| `security-review:2.1.goal` | gate | plan | 2.1 | *"What to review? Access & config / Release readiness / Deployed site"* — branches into 3 different sub-skill sets. | nothing |
+| `security-review:2.1.goal` | gate | plan | 2.1 | *"What to review? Code & config / Release readiness / Deployed site"* — branches into 3 different sub-skill sets. | nothing |
 | `security-review:5.3.next-action` | gate | plan | 5.3 | Post-report prompt — *"Walk me through the fixes / Re-run the review / Done for now"*. Drives whether remediation skills get invoked next. | nothing |
 
 ---
@@ -667,6 +667,18 @@ New skill introduced by PR #144. Orchestrates AI summarization API integration a
 | `add-ai-webapi:4.2.skip-webrole` | gate | consent | 4.2 | *"Continue without a web role (AI endpoints will 403) / Stop here"* — fires only when the user skipped web-role creation and the run is on a known-broken path. | nothing |
 | `add-ai-webapi:5.5.commit` | gate | consent | 5.5 | *"Commit Phase 5 Layer 3 integration changes now? / Skip"* — explicit commit after summarization-service + UI wiring complete. | nothing |
 | `add-ai-webapi:6.4.commit` | gate | consent | 6.4 | *"Commit new Summarization/* site settings? / Skip"* — explicit commit after `ai-webapi-settings-architect` creates the YAMLs. | nothing |
+
+---
+
+### 6.30 `scan-code` (3 gate IDs)
+
+New skill (Power Pages source & dependency security scan). Runs local static analysis and dependency/secret/license scanning, then surfaces findings. All gates are `plan` — every prompt configures a read-only scan, so cancelling never leaves behind state to undo.
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `scan-code:1.agent-review-fallback` | gate | plan | 1.2 | Offer the high-token agent-driven review when a scanning tool is missing. Fires only on a missing tool, interactive mode only. | nothing |
+| `scan-code:2.scope-choice` | gate | plan | 2 (`### Scope selection`, Q1) | *"What to check? Everything / Code only / Packages only"* — selects which scanners run. Skipped in review mode and when the initial request already names the scope. | nothing |
+| `scan-code:2.depth-choice` | gate | plan | 2 (`### Scope selection`, Q2) | *"How thorough? Advanced / Basic"* — sets the code-scan depth. Asked only when code checking is included; skipped in review mode. | nothing |
 
 ---
 
@@ -712,6 +724,7 @@ These need explicit confirmation from the reviewer before SKILL.md edits land. R
 
 - §6.13–§6.24 added — full catalog rows for `create-site`, `deploy-site`, `add-server-logic`, `add-cloud-flow`, `setup-auth`, `integrate-webapi`, `setup-datamodel`, `add-sample-data`, `add-seo`, `create-webroles`, `audit-permissions`, `integrate-backend` (45 gates + 9 not-a-gates).
 - §6.24a–§6.28 added — security skills introduced by PR #151 (`manage-firewall`, `manage-headers`, `scan-site`, `security-review`). The new skills use a runtime-loop prompt pattern; §6.24a documents the marker convention for that pattern. 3 gates + 2 not-a-gates.
+- §6.30 added — `scan-code` (Power Pages source & dependency security scan). 3 `plan` gates (`scan-code:1.agent-review-fallback`, `scan-code:2.scope-choice`, `scan-code:2.depth-choice`); no not-a-gates.
 - Markers added to all non-ALM SKILL.md files (HTML comment + 🚦 block per gate; `not-a-gate` comment per data-gathering prompt or meta-mention).
 - `scripts/lint-skills-alm.js` warn-only branch removed — all skills now hard-fail.
 - `AGENTS.md` Key Patterns updated — Approval Gate convention applies plugin-wide; new skills must extend §6 in the same PR they introduce a prompt.

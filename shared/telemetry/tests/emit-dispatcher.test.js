@@ -13,6 +13,12 @@ function mkTmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-disp-"));
 }
 
+// Local-mirror path for fakeEvent under the per-session layout. fakeEvent has
+// pluginName "power-pages" and NO sessionId, so it falls back to "nosession".
+function mirrorPath(tmp) {
+  return path.join(tmp, "telemetry", "power-pages", "sessions", "nosession", "events.jsonl");
+}
+
 // Writes an ikey.json with `disabled: false` so the dispatcher's kill-switch
 // gate doesn't block emission-path tests. Returns its path.
 function mkEnabledIkey(tmp) {
@@ -185,9 +191,9 @@ test("dispatcher stringifies eventInfo on the wire but keeps it an object in the
   );
   assert.deepEqual(JSON.parse(body.data.eventInfo), eventWithInfo.data.eventInfo);
 
-  const mirrorPath = path.join(tmp, "events.jsonl");
+  const mirror = mirrorPath(tmp);
   const mirrorLine = fs
-    .readFileSync(mirrorPath, "utf8")
+    .readFileSync(mirror, "utf8")
     .trim()
     .split("\n")
     .pop();
@@ -267,7 +273,7 @@ test("dispatcher appends to events.jsonl when iKey is placeholder", () => {
     },
   });
   assert.equal(status, 0);
-  const logFile = path.join(tmp, "events.jsonl");
+  const logFile = mirrorPath(tmp);
   assert.ok(fs.existsSync(logFile), "expected events.jsonl to be written");
   const lines = fs.readFileSync(logFile, "utf8").trim().split("\n");
   assert.equal(lines.length, 1);
@@ -293,7 +299,7 @@ test("dispatcher ALSO appends to events.jsonl when a real iKey POSTs (irrespecti
   });
   assert.equal(status, 0);
   assert.ok(fs.existsSync(probePath), "real iKey must still POST");
-  const logFile = path.join(tmp, "events.jsonl");
+  const logFile = mirrorPath(tmp);
   assert.ok(
     fs.existsSync(logFile),
     "real iKey must ALSO write the local log"
@@ -334,7 +340,7 @@ test("dispatcher honours the repo kill switch (ikey.json disabled:true)", () => 
   assert.equal(status, 0);
   assert.ok(!fs.existsSync(probePath), "kill switch must skip POST");
   assert.ok(
-    !fs.existsSync(path.join(tmp, "events.jsonl")),
+    !fs.existsSync(path.join(tmp, "telemetry")),
     "kill switch must skip local log"
   );
 });
@@ -357,7 +363,7 @@ test("dispatcher fails closed when ikey.json is missing/unreadable", () => {
   assert.equal(status, 0);
   assert.ok(!fs.existsSync(probePath), "missing config must skip POST");
   assert.ok(
-    !fs.existsSync(path.join(tmp, "events.jsonl")),
+    !fs.existsSync(path.join(tmp, "telemetry")),
     "missing config must skip local log"
   );
 });
@@ -380,7 +386,7 @@ test("dispatcher writes the local mirror when opted out via config, but does NOT
   });
   assert.equal(status, 0);
   assert.ok(!fs.existsSync(probePath), "config opt-out must skip the POST");
-  const logFile = path.join(tmp, "events.jsonl");
+  const logFile = mirrorPath(tmp);
   assert.ok(
     fs.existsSync(logFile),
     "config opt-out must still write the local mirror"
@@ -432,7 +438,7 @@ test("local mirror records the same data + time that gets POSTed to Kusto", () =
   assert.equal(status, 0);
   const wire = JSON.parse(JSON.parse(fs.readFileSync(probePath, "utf8")).body);
   const local = JSON.parse(
-    fs.readFileSync(path.join(tmp, "events.jsonl"), "utf8").trim()
+    fs.readFileSync(mirrorPath(tmp), "utf8").trim()
   );
   assert.equal(local.name, wire.name);
   assert.equal(local.time, wire.time);
@@ -545,7 +551,7 @@ test("dispatcher writes the mirror but does NOT POST when neither resolver nor s
   });
   assert.equal(status, 0);
   assert.ok(!fs.existsSync(probePath), "no key resolved → no POST");
-  assert.ok(fs.existsSync(path.join(tmp, "events.jsonl")), "local mirror still written");
+  assert.ok(fs.existsSync(mirrorPath(tmp)), "local mirror still written");
 });
 
 test("env opt-out (no config choice) suppresses the POST but still writes the mirror", () => {
@@ -564,7 +570,7 @@ test("env opt-out (no config choice) suppresses the POST but still writes the mi
   assert.equal(status, 0);
   assert.ok(!fs.existsSync(probePath), "env opt-out must skip the POST");
   assert.ok(
-    fs.existsSync(path.join(tmp, "events.jsonl")),
+    fs.existsSync(mirrorPath(tmp)),
     "env opt-out must still write the local mirror"
   );
 });
@@ -592,7 +598,7 @@ test("env opt-out overrides a persisted 'on' choice (env wins) — no POST", () 
     "env opt-out has highest precedence → must skip the POST even with config 'on'"
   );
   assert.ok(
-    fs.existsSync(path.join(tmp, "events.jsonl")),
+    fs.existsSync(mirrorPath(tmp)),
     "opt-out suppresses transmission only — the local mirror is still written"
   );
 });

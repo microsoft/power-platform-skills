@@ -128,7 +128,7 @@ Capture target Power Platform environment for the remaining flow.
 | 1. User supplies env ID | `scripts/resolve-environment.js <environment-id>` | Ask only if `power.config.json` is missing/empty or user wants a different env |
 | 2. User wants a different account | Follow shared-instructions standalone CLI auth handling | Only if resolution/token acquisition fails or user asks |
 | 3. User wants different env | Ask for another env ID and re-run resolver | Only if user selects "use a different environment" at Step 2 |
-| 4. `npx power-apps init --display-name "$DISPLAY_NAME" --environment-id $ACTIVE_ENV_ID --non-interactive` | Persists choice into `power.config.json` | Only when this skill owns the initial init path |
+| 4. `npx power-apps init -t MobileApp --display-name "$DISPLAY_NAME" --environment-id $ACTIVE_ENV_ID --non-interactive` | Persists choice into `power.config.json` | Only when this skill owns the initial init path |
 
 ```bash
 TARGET_ENV="<environment-id-or-empty>"
@@ -840,11 +840,11 @@ Do not run `npm install` inside Step 5 — in template-only mode dependencies mu
 ### Step 6 — Initialize
 
 **Print before starting:**
-> "→ [Step 6/13] Running `npx power-apps init` to write power.config.json for environment <env-id>. ~15–30 seconds."
+> "→ [Step 6/13] Running `npx power-apps init -t MobileApp` to write power.config.json for environment <env-id>. ~15–30 seconds."
 
 ```bash
 cd <working_dir>
-npx power-apps init --display-name '<displayName>' --environment-id <environment-id> --non-interactive
+npx power-apps init -t MobileApp --display-name '<displayName>' --environment-id <environment-id> --non-interactive
 ```
 
 Verify `power.config.json` was created and `environmentId` matches Step 4. If `npx power-apps init` fails, report the exact error and STOP — do not proceed.
@@ -1097,7 +1097,7 @@ Ask one question, using the resolved tenant:
 Do not default to any option silently. The user must choose because app registration ownership varies by tenant/admin role.
 
 - **(a) Paste existing** — run the client-ID write path in 7.3.
-- **(b) Create new manually** — print the portal URL and checklist in 7.4, then ask for the client ID and run 7.3. If the user cannot finish creation, allow `skip` and follow 7.5.
+- **(b) Create new in Power Apps Wrap** — print the environment-specific Wrap URL in 7.4, then ask for the client ID and run 7.3. If the user cannot finish creation, allow `skip` and follow 7.5.
 - **(c) Skip** — run the skip path in 7.5.
 
 #### 7.3 Write client ID into `auth.config.json`
@@ -1119,17 +1119,18 @@ Print:
 
 Jump to Step 8.
 
-#### 7.4 Create a new app registration manually
+#### 7.4 Create a new app registration in Power Apps Wrap
 
 Resolve the selected Power Platform environment ID from `$ACTIVE_ENV_ID`, then `power.config.json`. Print the public Power Apps Wrap URL:
 
 > "Open the Power Apps Wrap app-registration page for the selected environment:
-> https://make.powerapps.com/environments/<environment-id>/wraps#create-app-registration
+> `https://make.powerapps.com/environments/<environment-id>/wraps#create-app-registration`
 >
-> Create/register the app, then copy the Application (client) ID and paste it here.
+> Create the app registration on that page, then copy the Application (client) ID and paste it here.
+> The Wrap experience configures the native registration for this flow. Do not add redirect URIs or API permissions manually; tenant-wide admin consent is not required.
 > If you cannot create it now, type `skip` and run `/set-app-registration-native` later."
 
-Tell the user the registration must be created/configured from the Power Apps Wrap page for the selected environment.
+Tell the user the registration must be created/configured from the Power Apps Wrap page for the selected environment. Do not direct them to the Entra admin center for manual redirect URI, delegated permission, or admin-consent setup.
 
 After the user creates the registration, run 7.3 to capture and write the client ID.
 

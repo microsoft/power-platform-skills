@@ -1,0 +1,4 @@
+{
+  "_comment": "Feature flags for the /genpage skill. Unreleased features ship OFF so the skill behaves identically to production until the full cross-repo stack is live in PROD.",
+  "connectors": false
+}

@@ -38,7 +38,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 30 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 31 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
 
 ### Site scaffolding and deployment
 
@@ -221,6 +221,16 @@ Runs a security scan on a deployed Power Pages site, fetches the latest scan rep
 - Fetches and explains the latest scan report
 - Surfaces issues grouped by severity
 
+#### `/scan-code`
+
+> "Check my source code and dependencies for security issues"
+
+Scans a Power Pages site project's source files and dependencies for security problems — static analysis of the code plus dependency, secret, and license scanning — then surfaces findings in plain language.
+
+- Runs static analysis (opengrep) and dependency/secret/license scanning (trivy)
+- Groups findings by category — code patterns, vulnerable packages, secrets, licenses
+- Offers an agent-driven review fallback when the scanning tools are not installed
+
 #### `/manage-firewall`
 
 > "Block traffic from a specific country and add a rate limit to /login"
@@ -245,9 +255,9 @@ Inspects and configures the security headers a Power Pages site sends to browser
 
 > "Do a full security review before we ship"
 
-Runs a guided, end-to-end security review of a Power Pages site and consolidates every finding into one HTML report covering the live site, browser headers, firewall, authentication, and role-based permissions.
+Runs a guided, end-to-end security review of a Power Pages site and consolidates every finding into one HTML report covering source code and dependencies, the live site, browser headers, firewall, authentication, and role-based permissions.
 
-- Orchestrates `/scan-site`, `/manage-headers`, `/manage-firewall`, `/audit-permissions`, and auth checks
+- Orchestrates `/scan-code`, `/scan-site`, `/manage-headers`, `/manage-firewall`, `/audit-permissions`, and auth checks
 - Consolidates findings into a single HTML report
 - Suitable for release-readiness or live-site monitoring
 
@@ -527,9 +537,11 @@ inputs, site names, URLs, credentials, usernames, or hostnames.
 ```
 
 When **off**, nothing leaves your machine. A local diagnostic copy of each event
-is still written to `~/.power-platform-skills/events.jsonl` so you can see exactly
-what would have been sent; delete it anytime. The setting is stored at
-`~/.power-platform-skills/config.json`
+is still written under
+`~/.power-platform-skills/telemetry/power-pages/sessions/<sessionId>/events.jsonl`
+so you can see exactly what would have been sent; delete it anytime. Run
+`/power-pages:telemetry status` to see the logs directory and the most recent
+session file. The setting is stored at `~/.power-platform-skills/config.json`
 (`{ "telemetry": { "power-pages": "off" } }`).
 
 For automation / CI, set the per-plugin opt-out environment variable instead of
@@ -542,7 +554,7 @@ POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT=1   # stop sending telemetry
 Set it to `1` or `true` (dotnet `*_TELEMETRY_OPTOUT` convention). This opt-out has
 the **highest precedence** — it overrides a saved `/power-pages:telemetry` choice
 and even `/power-pages:telemetry on`. Like `off` from the command, it suppresses
-transmission only — the local `events.jsonl` mirror is still written.
+transmission only — the local per-session `events.jsonl` mirror is still written.
 
 ## License
 

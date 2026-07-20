@@ -48,7 +48,7 @@ node scripts/resolve-environment.js <environment-id-or-url>
 
 ## When the active env doesn't match
 
-If `power.config.json` says env A and the user says they intended env B, the project metadata wins for this working directory. Re-run `npx power-apps init --display-name '<name>' --environment-id <env-b-id> --non-interactive` in a separate copy if they want a different environment; do not silently edit `power.config.json`.
+If `power.config.json` says env A and the user says they intended env B, the project metadata wins for this working directory. Re-run `npx power-apps init -t MobileApp --display-name '<name>' --environment-id <env-b-id> --non-interactive` in a separate copy if they want a different environment; do not silently edit `power.config.json`.
 
 If `memory-bank.md` says env A and `power.config.json` says env B, `power.config.json` wins (it's the source of truth that drives `npx power-apps` Code Apps commands). Update the memory bank to match.
 
@@ -57,7 +57,7 @@ If `memory-bank.md` says env A and `power.config.json` says env B, `power.config
 A single working directory belongs to exactly one environment. If the user wants to deploy the same app to a different env (e.g., dev → prod):
 
 1. `cp -r <working_dir> <new_dir>` to clone the project.
-2. In the new dir: `npx power-apps init --display-name '<same name>' --environment-id <new-env-id> --non-interactive` will overwrite `power.config.json`.
+2. In the new dir: `npx power-apps init -t MobileApp --display-name '<same name>' --environment-id <new-env-id> --non-interactive` will overwrite `power.config.json`.
 3. Re-run `/list-connections` to verify connection IDs match the new env (they likely won't).
 4. Re-run `/add-connector` for any connector whose connection ID is missing or wrong.
 

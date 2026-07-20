@@ -21,7 +21,7 @@ hook (~5ms when disabled, ~3-5s otherwise — incl. when the user opted out)
             ├─ read ikey.json (null/unreadable → HARD OFF)
             ├─ kill switch (cfg.disabled) → exit   ← HARD OFF: no local log, no POST
             ├─ sanitizeData (FIELD_TYPES allowlist)
-            ├─ appendLocal({time,name,data}) → events.jsonl   ← ALWAYS (the mirror)
+            ├─ appendLocal({time,name,data}) → telemetry/<plugin>/sessions/<sessionId>/events.jsonl   ← ALWAYS (the mirror)
             ├─ user opt-out (env var POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT=1 OR config.json choice "off"; env wins) → exit (mirror written, no POST)
             ├─ resolve destination → iKey + collector_url   ← resolver.js (plugin) or static key
             ├─ iKey missing/placeholder → exit (mirror already written, no POST)
@@ -39,8 +39,14 @@ side effects.
 
 The per-plugin user opt-out (`config.json` `telemetry[<plugin>] === "off"`, set
 via `/<plugin>:telemetry off`) suppresses **transmission**, not the local
-diagnostic mirror — so an opted-out run still writes `events.jsonl` (and pays the
-same event-building cost as an enabled run), it just never POSTs.
+diagnostic mirror — so an opted-out run still writes the session's `events.jsonl`
+(and pays the same event-building cost as an enabled run), it just never POSTs.
+
+The mirror is laid out per-plugin, per-session at
+`~/.power-platform-skills/telemetry/<pluginName>/sessions/<sessionId>/events.jsonl`,
+so a user can hand over one self-contained file per problem. Session directories
+older than 14 days are pruned best-effort whenever a new session starts, and an
+individual session log is rotated to `events.<stamp>.old` if it ever exceeds 10 MB.
 
 ### Custom routing (the resolver contract)
 
@@ -97,7 +103,7 @@ The dispatcher runs a defense-in-depth allowlist filter against `FIELD_TYPES` be
 ## Privacy posture
 
 - **Default-on.** Anonymous telemetry is enabled by default. No first-run prompt.
-- **Opt out of transmission** via `/<plugin>:telemetry off` (per-user, per-plugin). This writes `telemetry[<plugin>] = "off"` into `~/.power-platform-skills/config.json` and stops the network POST to the collector — **nothing leaves the machine** — but the local diagnostic mirror (`events.jsonl`) is still written so the user/developer can see exactly what would have been sent. It is therefore an opt-out of *transmission*, not of local logging. CI/headless can opt out by writing that file directly. Re-enable with `/<plugin>:telemetry on`.
+- **Opt out of transmission** via `/<plugin>:telemetry off` (per-user, per-plugin). This writes `telemetry[<plugin>] = "off"` into `~/.power-platform-skills/config.json` and stops the network POST to the collector — **nothing leaves the machine** — but the local diagnostic mirror (a per-session `events.jsonl`) is still written so the user/developer can see exactly what would have been sent. It is therefore an opt-out of *transmission*, not of local logging. CI/headless can opt out by writing that file directly. Re-enable with `/<plugin>:telemetry on`.
 - **Opt out for automation** via the per-plugin opt-out env var
   `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT` (e.g.
   `POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT=1`). Set it to `1` or `true`
@@ -108,7 +114,7 @@ The dispatcher runs a defense-in-depth allowlist filter against `FIELD_TYPES` be
   suppresses transmission only — the local mirror is still written.
 - **Repo-side kill switch (true hard-off).** `ikey.json` carries a `disabled` flag. When `true` (or when `ikey.json` is missing/unreadable), every entry point — hooks, `emit-from-prompt`, and the dispatcher — short-circuits BEFORE any PAC shellout or process spawn, so there is **no POST and no local log**. Ship `true` and flip to `false` only after the tenant-side Kusto stream and annotation are provisioned.
 
-The `disabled` flag is checked at every layer that could perform user-facing work: the pretool/posttool hooks and `emit-from-prompt.js`. A disabled plugin emits zero side effects. The per-plugin user opt-out, by contrast, is enforced inside the detached dispatcher AFTER the local mirror is written — so an opted-out run still produces `events.jsonl` (and incurs the same event-building cost as an enabled run) but never transmits.
+The `disabled` flag is checked at every layer that could perform user-facing work: the pretool/posttool hooks and `emit-from-prompt.js`. A disabled plugin emits zero side effects. The per-plugin user opt-out, by contrast, is enforced inside the detached dispatcher AFTER the local mirror is written — so an opted-out run still produces the session's `events.jsonl` (and incurs the same event-building cost as an enabled run) but never transmits.
 
 ---
 
@@ -130,7 +136,7 @@ shared/telemetry/
 │  ├─ session.js             # per-process session UUID
 │  ├─ prompt-detector.js     # parses `/plugin:skill` slash commands from prompt text
 │  ├─ scrubber.js            # legacy text-scrubbing helper (unused by default — kept for callers that need it)
-│  └─ local-log.js           # appends every emitted event to ~/.power-platform-skills/events.jsonl (irrespective of iKey), with 10 MB rotation
+│  └─ local-log.js           # appends every emitted event to ~/.power-platform-skills/telemetry/<plugin>/sessions/<sessionId>/events.jsonl (irrespective of iKey), with 14-day session retention and a 10 MB per-session rollover
 └─ tests/                    # node:test coverage for every module above
 ```
 

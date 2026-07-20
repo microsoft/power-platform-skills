@@ -1,6 +1,6 @@
 ---
 name: add-pdf-viewer
-description: Internal implementation skill invoked by /add-native for native PDF control workflows. Handles HTTPS-only PDF viewing with @microsoft/power-apps-native-pdf-viewer.
+description: Internal implementation skill invoked by /add-native for native PDF control workflows. Handles HTTPS and file URI PDF viewing with @microsoft/power-apps-native-pdf-viewer 0.2.9+.
 user-invocable: false
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
@@ -12,7 +12,7 @@ model: sonnet
 
 **Internal helper.** Users should invoke `/add-native pdf-viewer`, `/add-native pdf-control`, or `/add-native @microsoft/power-apps-native-pdf-viewer`; `/add-native` routes here after resolving the capability.
 
-Generate or verify the native PDF viewer wrapper and show how to call its **native React Native API**. This skill supports HTTPS PDF URLs only. Do not use the HostingSDK / PCF path from the package README; that is for a different use case.
+Generate or verify the native PDF viewer wrapper and show how to call its **native React Native API**. Version 0.2.9 and later support HTTPS PDF URLs and local `file://` URIs. Do not use the HostingSDK / PCF path from the package README; that is for a different use case.
 
 ## Steps
 
@@ -27,19 +27,19 @@ If this fails, tell the user to run `/create-mobile-app` first and STOP.
 ### 2. Verify package is already present
 
 ```bash
-node -e "const p=require('./package.json'); const m='@microsoft/power-apps-native-pdf-viewer'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m + ' is not in package.json. The template/app must already ship this native extension. This skill will not install it or edit native config.'); process.exit(1); } console.log('OK: native PDF viewer package present');"
+node -e "const p=require('./package.json'); const m='@microsoft/power-apps-native-pdf-viewer'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m + ' is not in package.json. The template/app must already ship this native extension. This skill will not install it or edit native config.'); process.exit(1); } let v; try { v=require('./node_modules/' + m + '/package.json').version; } catch { console.error('MISSING_INSTALL: cannot verify the installed ' + m + ' version. Run the project package install first.'); process.exit(1); } const [major,minor,patch]=v.split('.').map(Number); if (!(major > 0 || minor > 2 || (minor === 2 && patch >= 9))) { console.error('UNSUPPORTED_VERSION: ' + m + ' ' + v + ' does not support file:// URIs. Version 0.2.9+ is required.'); process.exit(1); } console.log('OK: native PDF viewer ' + v + ' supports https:// and file://');"
 ```
 
-If the check fails, STOP. Do not run `npm install`, `npx expo install`, `pod install`, or edit `app.config.js`. This package contains native iOS/Android code and must already be part of the app's native build.
+If the check fails, STOP. Do not run `npm install`, `npx expo install`, `pod install`, or edit `app.config.js`. Version 0.2.9+ must already be part of the app's native build.
 
 ### 3. Write or verify `src/native/pdfViewer.ts`
 
-Create `src/native/pdfViewer.ts` if it does not exist. If it already exists, inspect it and patch only if it violates the HTTPS-only rule or throws instead of returning a result.
+Create `src/native/pdfViewer.ts` if it does not exist. If it already exists, inspect it and patch only if it violates the supported URI rules or throws instead of returning a result.
 
 The wrapper MUST:
 
-- Accept only `https://` URLs.
-- Reject `file://`, `content://`, `blob:`, `http://`, empty, and malformed URLs before calling native code.
+- Accept `https://` URLs and `file://` URIs.
+- Reject `content://`, `blob:`, `http://`, empty, and malformed URLs before calling native code.
 - Return a discriminated union and never throw.
 - Return `NATIVE_MODULE_MISSING` when the extension is installed in JS but unavailable in the native build.
 - Surface viewer action results (`shared`, `printed`, `dismissed`) when available.
@@ -61,11 +61,13 @@ export async function openHttpsPdf(
   try {
     parsed = new URL(url);
   } catch {
-    return { ok: false, reason: 'INVALID_URL', message: 'PDF URL must be a valid HTTPS URL.' };
+    return { ok: false, reason: 'INVALID_URL', message: 'PDF location must be a valid https:// URL or file:// URI.' };
   }
 
-  if (parsed.protocol !== 'https:') {
-    return { ok: false, reason: 'INVALID_URL', message: 'Native PDF viewer supports HTTPS PDF URLs only.' };
+  const isHttpsUrl = parsed.protocol === 'https:';
+  const isFileUri = parsed.protocol === 'file:' && url.startsWith('file://') && parsed.pathname !== '/';
+  if (!isHttpsUrl && !isFileUri) {
+    return { ok: false, reason: 'INVALID_URL', message: 'Native PDF viewer supports https:// and file:// inputs only.' };
   }
 
   if (!NativePdfViewer?.openPdf) {
@@ -119,11 +121,11 @@ if (response.ok) {
 ```
 
 Notes:
-- URLs must be `https://`. Local `file://`, `content://`, and `blob:` URIs are not supported by this skill.
-- Use `@microsoft/power-apps-native-pdf-viewer` only for this native HTTPS PDF viewing use case.
+- URLs must use `https://` or a non-empty `file://` URI. `content://`, `blob:`, and `http://` are not supported by this skill.
+- Use `@microsoft/power-apps-native-pdf-viewer` only for this native PDF viewing use case.
 - Use `expo-document-picker` for picking/importing/uploading a local PDF or document.
-- Use `/add-native pdf-report` for generated local PDFs. That helper requires `expo-print` and adds local share/open behavior only when `expo-sharing` is already present.
-- Generated local PDFs from `expo-print` must either open through the `pdfReport` share wrapper when `expo-sharing` is present, or be uploaded to Dataverse File storage first and viewed later through a supported HTTPS URL if one is available.
+- Use `/add-native pdf-report` for generated local PDFs. That helper requires `expo-print` and adds sharing behavior only when `expo-sharing` is already present.
+- Generated local PDFs from `expo-print` may be opened by native PDF viewer 0.2.9+ as `file://` URIs.
 - Share and Print are built into the native viewer; there are no separate JS share/print calls.
 - The wrapper returns `{ ok: true } | { ok: false }`; handle every non-ok reason in UI.
 
@@ -157,7 +159,7 @@ Tell the user:
 PDF viewer added
 Package present   : @microsoft/power-apps-native-pdf-viewer
 Wrapper           : src/native/pdfViewer.ts
-URL support       : HTTPS only
+URL support       : HTTPS and file:// (0.2.9+)
 Type-check        : PASS
 Native rebuild    : not performed by this skill
 Usage             : openHttpsPdf(...)

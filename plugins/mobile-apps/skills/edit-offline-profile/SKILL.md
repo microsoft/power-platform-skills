@@ -11,6 +11,7 @@ model: sonnet
 **References:**
 
 - [dataverse-offline-api.md](${CLAUDE_SKILL_DIR}/../../shared/references/dataverse-offline-api.md) §4 / §7 — POST item + PATCH selectedcolumns
+- [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md) — refreshing the `schemaColumns` baseline after a column edit
 
 # Edit Offline Profile
 
@@ -127,7 +128,9 @@ On `400 / 0x80071141` "circular relationship" — same handling as `/setup-offli
 
 ### Step 6 — Update artifacts
 
-Re-read the changed item(s) and rewrite the matching entry in `offline-profile.json`. Append a one-line entry to `memory-bank.md` `## Offline profile` block:
+Re-read the changed item(s) and rewrite the matching entry in `offline-profile.json`. When the edit changed a table's **columns** (`--columns add:/remove:/reset`), also refresh that table entry's `schemaColumns` to the table's current full column set from `.datamodel-manifest.json` (root or `docs/plan-artifacts/`). This re-baselines the schema-reconciliation marker so a delta that was just reconciled clears on the next `scripts/offline-profile-delta.js` run; leave `schemaColumns` untouched for scope/sync/rename-only edits. See [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md).
+
+Append a one-line entry to `memory-bank.md` `## Offline profile` block:
 
 ```yaml
 edits:

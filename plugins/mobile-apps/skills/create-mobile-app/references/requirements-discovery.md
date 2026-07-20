@@ -12,7 +12,7 @@ Scan the user's description and wizard answers for these signals, then confirm i
 | "photo", "attach", "image", "camera" | Camera capability + image column |
 | "pick file", "upload PDF", "import document", "attach file" | Document-picker capability + optional Dataverse File column |
 | "generate PDF", "export report", "print report", "evidence packet", "certificate PDF" | PDF-report capability + optional Dataverse File column when retained |
-| "view PDF", "open PDF", "preview PDF" | Native PDF viewer capability for HTTPS PDF URLs only |
+| "view PDF", "open PDF", "preview PDF" | Native PDF viewer capability for HTTPS URLs or local `file://` URIs with viewer 0.2.9+ |
 | "signature", "sign", "sign off", "approval", "pen", "ink", "draw" | Pen-input capability + Dataverse Image/File storage target |
 | "track location", "background location", "GPS tracking", "follow route", "breadcrumb", "field worker location" | Geolocation capability (`@microsoft/power-apps-native-bglocation`) + Dataverse location table (default `msdyn_locationrecords`) |
 | "current location", "where am I", "tag with coordinates", "one-shot location" | One-shot location capability (`expo-location`) |
@@ -28,8 +28,8 @@ Do not infer capabilities the template does not ship. Resolve every native signa
 
 PDF/pen rules:
 - Do not infer `document-picker` from generic "PDF" alone; use the specific signal rows above.
-- Native PDF viewing supports HTTPS URLs only and requires `@microsoft/power-apps-native-pdf-viewer`.
-- Local generated PDFs require `expo-print`; share/open behavior also requires `expo-sharing`.
+- Native PDF viewing supports HTTPS URLs and local `file://` URIs with `@microsoft/power-apps-native-pdf-viewer` 0.2.9+.
+- Local generated PDFs require `expo-print`; preview requires native PDF viewer 0.2.9+, while sharing requires `expo-sharing`.
 - Retained generated PDFs require a Dataverse File column or child Evidence/Attachment table.
 - Signature/ink capture must record a Dataverse target in `native-app-plan.md`: Image column, File column, or child Evidence/Signature table.
 - Background/continuous location tracking uses the `geolocation` capability (`@microsoft/power-apps-native-bglocation`, MSAL-only) and requires an existing Dataverse target table (default entity set `msdyn_locationrecords`, or a custom `tableName` whose `fieldMap` columns exist). `/add-native geolocation` must verify that table; if it is missing, do not allow the control to be used. The missing control table is not created through `/add-dataverse`; use the geolocation-control table provisioning/setup mechanism, then re-run `/add-native geolocation`. Use one-shot `location` (`expo-location`) for a single foreground coordinate read; do not conflate the two.

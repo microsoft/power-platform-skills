@@ -65,7 +65,7 @@ The `canvas-authoring` MCP server exposes the following tools:
 
 | Tool | Description |
 |------|-------------|
-| `configure` | Configures the MCP server for a specific coauthoring session (environment ID, app ID, cluster category) |
+| `connect` | Connects to a coauthoring session for a specific canvas app (environment ID, app ID, cluster category; optional auth flow, login hint, tenant ID, and forced account selection). Must be called before any other tool; calling again switches environment/app |
 | `compile_canvas` | Validates canvas app YAML files in a directory using the Power Apps authoring service |
 | `describe_api` | Gets detailed information about a specific API (connector) including its operations and parameters |
 | `describe_control` | Gets detailed information about a specific Power Apps control including properties, variants, and metadata |

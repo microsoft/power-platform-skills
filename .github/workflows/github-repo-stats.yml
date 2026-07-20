@@ -7,16 +7,52 @@ on:
         - cron: "0 23 * * *"
     workflow_dispatch: # Allow for running this manually.
 
+permissions:
+    contents: read
+
 jobs:
     j1:
         name: github-repo-stats
         runs-on: ubuntu-latest
         steps:
+            - name: generate app token
+              id: app-token
+              uses: actions/create-github-app-token@v3
+              with:
+                  app-id: 3189942
+                  private-key: ${{ secrets.POWER_PLATFORM_SKILLS_APP_PRIVATE_KEY }}
+                  permission-administration: read
+                  permission-contents: write
+                  permission-metadata: read
+
+            - name: verify traffic API access
+              env:
+                  GH_TOKEN: ${{ steps.app-token.outputs.token }}
+              run: |
+                  set -euo pipefail
+
+                  response_headers="$(mktemp)"
+                  trap 'rm -f "${response_headers}"' EXIT
+                  status="$(
+                      curl -sS -o /dev/null -D "${response_headers}" -w "%{http_code}" \
+                          -H "Authorization: Bearer ${GH_TOKEN}" \
+                          -H "Accept: application/vnd.github+json" \
+                          -H "X-GitHub-Api-Version: 2022-11-28" \
+                          "https://api.github.com/repos/${{ github.repository }}/traffic/popular/referrers"
+                  )"
+
+                  if [ "${status}" != "200" ] && [ "${status}" != "204" ]; then
+                      echo "GitHub traffic API preflight failed with HTTP ${status}."
+                      echo "The github-repo-stats action needs an installation token with repository Administration: read access."
+                      awk 'BEGIN { IGNORECASE = 1 } /^x-accepted-github-permissions:|^x-oauth-scopes:|^x-github-api-version-selected:|^x-ratelimit-/ { print }' "${response_headers}"
+                      exit 1
+                  fi
+
             - name: run-ghrs
               # Use latest release.
               uses: jgehrcke/github-repo-stats@RELEASE
               with:
                   repository: microsoft/power-platform-skills
-                  ghtoken: ${{ secrets.ghrs_github_api_token }}
+                  ghtoken: ${{ steps.app-token.outputs.token }}
                   databranch: github-repo-stats
                   ghpagesprefix: https://microsoft.github.io/power-platform-skills
