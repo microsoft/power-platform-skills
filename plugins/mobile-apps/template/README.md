@@ -65,32 +65,25 @@ connector wiring.
 	When prompted to sign in, use credentials for the tenant where the Dataverse
 	environment belongs.
 
-4. Create a Microsoft Entra app registration and grant admin consent. (simplified experience coming soon)
+4. Create the Microsoft Entra app registration from Power Apps Wrap.
 
-	Create a native/public client app registration for the mobile app, then add
-	the following redirect URIs:
+	Open the app-registration page for the Power Platform environment selected
+	during `/create-mobile-app`:
 
 	```text
-	https://login.microsoftonline.com/common/oauth2/nativeclient
-	msauth.com.microsoft.PreviewApp://auth
+	https://make.powerapps.com/environments/<environment-id>/wraps#create-app-registration
 	```
 
-	Add these API permissions as **Delegated** permissions, then grant admin
-	consent for the tenant:
+	Create the registration on that page, copy its **Application (client) ID**,
+	and paste it when `/create-mobile-app` asks. The Wrap experience configures
+	the native app registration for this flow. You do not need to add redirect
+	URIs or API permissions manually, and tenant-wide admin consent is not
+	required.
 
-	- Azure API Connections
-		- `Runtime.All`
-	- Dynamics CRM
-		- `user_impersonation`
-	- Microsoft Graph
-		- `User.Read`
-	- Power Platform API
-		- `Connectivity.Connections.Read`
-		- `Connectivity.Connections.Write`
-		- `Connectivity.Connectors.Read`
-		- `PowerApps.Apps.Read`
-	- PowerApps Service
-		- `User`
+	If the app was created without a client ID, run
+	`/set-app-registration-native` later from the app folder. It opens the same
+	environment-specific page and writes the pasted client ID to
+	`auth.config.json`.
 
 5. Start mobile app:
 

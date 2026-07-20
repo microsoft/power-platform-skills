@@ -1097,7 +1097,7 @@ Ask one question, using the resolved tenant:
 Do not default to any option silently. The user must choose because app registration ownership varies by tenant/admin role.
 
 - **(a) Paste existing** — run the client-ID write path in 7.3.
-- **(b) Create new manually** — print the portal URL and checklist in 7.4, then ask for the client ID and run 7.3. If the user cannot finish creation, allow `skip` and follow 7.5.
+- **(b) Create new in Power Apps Wrap** — print the environment-specific Wrap URL in 7.4, then ask for the client ID and run 7.3. If the user cannot finish creation, allow `skip` and follow 7.5.
 - **(c) Skip** — run the skip path in 7.5.
 
 #### 7.3 Write client ID into `auth.config.json`
@@ -1119,17 +1119,18 @@ Print:
 
 Jump to Step 8.
 
-#### 7.4 Create a new app registration manually
+#### 7.4 Create a new app registration in Power Apps Wrap
 
 Resolve the selected Power Platform environment ID from `$ACTIVE_ENV_ID`, then `power.config.json`. Print the public Power Apps Wrap URL:
 
 > "Open the Power Apps Wrap app-registration page for the selected environment:
 > https://make.powerapps.com/environments/<environment-id>/wraps#create-app-registration
 >
-> Create/register the app, then copy the Application (client) ID and paste it here.
+> Create the app registration on that page, then copy the Application (client) ID and paste it here.
+> The Wrap experience configures the native registration for this flow. Do not add redirect URIs or API permissions manually; tenant-wide admin consent is not required.
 > If you cannot create it now, type `skip` and run `/set-app-registration-native` later."
 
-Tell the user the registration must be created/configured from the Power Apps Wrap page for the selected environment.
+Tell the user the registration must be created/configured from the Power Apps Wrap page for the selected environment. Do not direct them to the Entra admin center for manual redirect URI, delegated permission, or admin-consent setup.
 
 After the user creates the registration, run 7.3 to capture and write the client ID.
 
