@@ -330,7 +330,7 @@ For each provider, also share the relevant Microsoft Learn documentation link so
 |----------|---------|
 | What is the Client ID from the Google Cloud Console? (e.g., `123456789-abc.apps.googleusercontent.com`) | *(free text)* |
 
-> Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings
+> Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/oauth2-google
 
 **For "OpenID Connect"** (Okta, Auth0, etc.):
 
