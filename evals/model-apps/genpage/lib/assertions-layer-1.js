@@ -338,7 +338,7 @@ WORKFLOW_ASSERTIONS.set(
 );
 
 WORKFLOW_ASSERTIONS.set(
-  'Every pac model genpage upload records --agent-message with escaped # Agent Thoughts, OOB-style Step-by-Step Processing with bold numbered headings, a bulleted # Summary, and # Final Code sections',
+  'Every pac model genpage upload records --agent-message with escaped # Agent Thoughts, OOB-style Step-by-Step Processing with bold numbered headings on new lines, a bulleted # Summary, and # Final Code sections',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
@@ -354,15 +354,19 @@ WORKFLOW_ASSERTIONS.set(
       if (!sections || !sections[1].trim() || !sections[2].trim()) {
         return fail(`upload ${index + 1} agent message must contain non-empty escaped OOB-style Agent Thoughts, Summary, and Final Code sections in order`);
       }
-      const thoughtLines = sections[1].split('\\n').filter((line) => line.trim());
-      const hasBoldNumberedHeading = thoughtLines.some((line) =>
-        /^\*\*\d+\.\s+.+\*\*$/.test(line.trim())
+      const thoughtLines = sections[1].split('\\n');
+      const boldHeadingIndexes = thoughtLines
+        .map((line, lineIndex) => (/^\*\*\d+\.\s+.+\*\*$/.test(line.trim()) ? lineIndex : -1))
+        .filter((lineIndex) => lineIndex >= 0);
+      const hasUnboldedNumberedHeading = thoughtLines.some((line) => /^\d+\.\s+/.test(line.trim()));
+      const hasHeadingWithoutBlankLine = boldHeadingIndexes.some(
+        (lineIndex) => lineIndex === 0 || thoughtLines[lineIndex - 1].trim()
       );
-      const hasUnboldedNumberedHeading = thoughtLines.some((line) =>
-        /^\d+\.\s+/.test(line.trim())
-      );
-      if (!hasBoldNumberedHeading || hasUnboldedNumberedHeading) {
+      if (boldHeadingIndexes.length === 0 || hasUnboldedNumberedHeading) {
         return fail(`upload ${index + 1} Agent Thoughts must bold every numbered heading with Markdown **...**`);
+      }
+      if (hasHeadingWithoutBlankLine) {
+        return fail(`upload ${index + 1} Agent Thoughts must put an escaped blank line before every numbered heading`);
       }
       const summaryLines = sections[2].split('\\n').filter((line) => line.trim());
       if (summaryLines.some((line) => !line.trim().startsWith('- '))) {

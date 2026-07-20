@@ -73,8 +73,8 @@ Layers 1 and 2 are automated. Layer 3 is human judgment by design — visual qua
 - `check-auth.js` runs before `entity-builder` when entities need creating
 - `pac model genpage upload` invocations include `--prompt` with correct scoping
 - Every upload uses an escaped, structured `--agent-message` with OOB-style
-  Step-by-Step Agent Thoughts (bold numbered headings), a bulleted Summary, and
-  Final Code sections
+  Step-by-Step Agent Thoughts (bold numbered headings separated by blank lines),
+  a bulleted Summary, and Final Code sections
 - Prefix discipline holds across plan, entity-creation log, and resolved names
 
 **Runner:** `evals/model-apps/genpage/run-layer-1.js`

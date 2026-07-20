@@ -54,7 +54,7 @@
 - Post-write icon verification: grep `from "@fluentui/react-icons"` in dashboard.tsx; verified `ArrowTrendingRegular`, `PeopleRegular`, `ShoppingBagRegular` against verified-icons.txt — all present
 
 ## Phase 6 — Deployment
-- `pac model genpage upload --app-id 12345678-1234-1234-1234-123456789abc --code-file sales-metrics-dashboard/dashboard.tsx --prompt "Create a dashboard page with mock data showing sales metrics — monthly revenue chart, top 5 customers table, and a KPI summary bar. Use a modern dark theme look." --model claude-sonnet --name "Sales Metrics" --agent-message "# Agent Thoughts\nStep-by-Step Processing\n**1. Requirements Analysis**\n- Applied the requested page changes using verified requirements.\n# Summary\n- Sales metrics dashboard\n# Final Code\n" --add-to-sitemap`
+- `pac model genpage upload --app-id 12345678-1234-1234-1234-123456789abc --code-file sales-metrics-dashboard/dashboard.tsx --prompt "Create a dashboard page with mock data showing sales metrics — monthly revenue chart, top 5 customers table, and a KPI summary bar. Use a modern dark theme look." --model claude-sonnet --name "Sales Metrics" --agent-message "# Agent Thoughts\nStep-by-Step Processing\n\n**1. Requirements Analysis**\n- Applied the requested page changes using verified requirements.\n# Summary\n- Sales metrics dashboard\n# Final Code\n" --add-to-sitemap`
 - (--data-sources omitted — mock-data page)
 - Upload succeeded
 
