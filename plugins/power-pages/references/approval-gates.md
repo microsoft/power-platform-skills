@@ -526,14 +526,16 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 ---
 
-### 6.17 `setup-auth` (6 calls)
+### 6.17 `setup-auth` (8 calls)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
 | `setup-auth:1.3.deploy-first` | gate | plan | 1.3 | `.powerpages-site` missing — *"Deploy now (Required) / Later"* | nothing |
 | `setup-auth:1.4.create-webroles` | gate | plan | 1.4 | No web roles found — *"Create web roles first (Recommended) / Skip"* | nothing |
 | `setup-auth:2.1.requirements` | gate | plan | 2.1 | *"Which auth features? Login+Logout+RBAC / Login+Logout only / RBAC only"* — covers the follow-up "which roles get access" sub-prompt in the same step | nothing |
+| `setup-auth:2.1.2.setup-choice` | not-a-gate | — | 2.1.2 | Guided vs "configure it for me" selection — sub-prompt; the load-bearing consent is the `2.1.2.provision-idp` gate | — |
 | `setup-auth:2.1.2.provision-idp` | gate | consent | 2.1.2 | *"Go ahead and configure the {IDP} app registration in your {IDP} now? Yes / No"* — the configure-it-for-you path only (offered when the provider supports it): creates/configures a real app registration in the user's Okta/Auth0/Entra External ID (or other OIDC) tenant via the provider's CLI/API. Guided setup doesn't reach this gate. | nothing |
+| `setup-auth:2.1.2.open-registration` | not-a-gate | — | 2.1.2 | Open vs Controlled registration — records `OpenRegistrationEnabled`; the load-bearing sign-off is the `2.2.plan-approval` gate | — |
 | `setup-auth:2.2.plan-approval` | gate | plan | 2.2 | *"Approve and proceed / I'd like to make changes"* | nothing |
 | `setup-auth:8.4.deploy` | gate | plan | 8.4 | *"Deploy now (Recommended) / Later"* — auth doesn't work until deployed | nothing |
 
