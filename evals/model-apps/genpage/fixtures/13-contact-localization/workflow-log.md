@@ -64,7 +64,7 @@
 - Post-write icon verification: PeopleRegular verified against verified-icons.txt
 
 ## Phase 6 — Deployment
-- pac model genpage upload --app-id 55555555-4444-5555-6666-777777777777 --code-file contact-localized/page.tsx --data-sources 'contact' --prompt "Build a page showing Contact records with name, email, and phone." --model claude-sonnet --name "Contacts (Localized)" --agent-message "# Agent Thoughts\nStep-by-Step Processing\n1. Requirements Analysis\n- Applied the requested page changes using verified requirements.\n# Summary\nContact list with en-US/ar-SA/fr-FR translations and RTL support\n# Final Code\n" --add-to-sitemap
+- pac model genpage upload --app-id 55555555-4444-5555-6666-777777777777 --code-file contact-localized/page.tsx --data-sources 'contact' --prompt "Build a page showing Contact records with name, email, and phone." --model claude-sonnet --name "Contacts (Localized)" --agent-message "# Agent Thoughts\nStep-by-Step Processing\n**1. Requirements Analysis**\n- Applied the requested page changes using verified requirements.\n# Summary\n- Contact list with en-US/ar-SA/fr-FR translations and RTL support\n# Final Code\n" --add-to-sitemap
 
 ## Phase 8 — Summary
 - 1 page deployed: page.tsx → "Contacts (Localized)" in Sales Hub

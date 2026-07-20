@@ -55,7 +55,7 @@
 - Post-write icon verification: grep `from "@fluentui/react-icons"` in page.tsx; verified `BuildingRegular`, `MailRegular`, `PhoneRegular`, `GlobeRegular` against verified-icons.txt — all present
 
 ## Phase 6 — Deployment
-- `pac model genpage upload --app-id 12345678-1234-1234-1234-123456789abc --code-file account-card-gallery/page.tsx --data-sources 'account' --prompt "Build a page showing Account records as a gallery of cards. Include name, website, email, phone number. Make the gallery scrollable and each card clickable to open the Account record." --model claude-sonnet --name "Accounts Gallery" --agent-message "# Agent Thoughts\nStep-by-Step Processing\n1. Requirements Analysis\n- Designed a responsive card gallery using verified Account columns and click-to-open navigation.\n# Summary\nCreated an Account card gallery with website, email, phone, and record navigation.\n# Final Code\n" --add-to-sitemap`
+- `pac model genpage upload --app-id 12345678-1234-1234-1234-123456789abc --code-file account-card-gallery/page.tsx --data-sources 'account' --prompt "Build a page showing Account records as a gallery of cards. Include name, website, email, phone number. Make the gallery scrollable and each card clickable to open the Account record." --model claude-sonnet --name "Accounts Gallery" --agent-message "# Agent Thoughts\nStep-by-Step Processing\n**1. Requirements Analysis**\n- Designed a responsive card gallery using verified Account columns and click-to-open navigation.\n# Summary\n- Created an Account card gallery with website, email, phone, and record navigation.\n# Final Code\n" --add-to-sitemap`
 - Upload succeeded; page-id = abc12345-...
 
 ## Phase 8 — Summary

@@ -338,7 +338,7 @@ WORKFLOW_ASSERTIONS.set(
 );
 
 WORKFLOW_ASSERTIONS.set(
-  'Every pac model genpage upload records --agent-message with escaped # Agent Thoughts, OOB-style Step-by-Step Processing, # Summary, and # Final Code sections',
+  'Every pac model genpage upload records --agent-message with escaped # Agent Thoughts, OOB-style Step-by-Step Processing with bold numbered headings, a bulleted # Summary, and # Final Code sections',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
@@ -353,6 +353,20 @@ WORKFLOW_ASSERTIONS.set(
       const sections = agentMessage.match(structuredMessage);
       if (!sections || !sections[1].trim() || !sections[2].trim()) {
         return fail(`upload ${index + 1} agent message must contain non-empty escaped OOB-style Agent Thoughts, Summary, and Final Code sections in order`);
+      }
+      const thoughtLines = sections[1].split('\\n').filter((line) => line.trim());
+      const hasBoldNumberedHeading = thoughtLines.some((line) =>
+        /^\*\*\d+\.\s+.+\*\*$/.test(line.trim())
+      );
+      const hasUnboldedNumberedHeading = thoughtLines.some((line) =>
+        /^\d+\.\s+/.test(line.trim())
+      );
+      if (!hasBoldNumberedHeading || hasUnboldedNumberedHeading) {
+        return fail(`upload ${index + 1} Agent Thoughts must bold every numbered heading with Markdown **...**`);
+      }
+      const summaryLines = sections[2].split('\\n').filter((line) => line.trim());
+      if (summaryLines.some((line) => !line.trim().startsWith('- '))) {
+        return fail(`upload ${index + 1} Summary items must be Markdown bullets beginning with "- "`);
       }
     }
     return pass();
