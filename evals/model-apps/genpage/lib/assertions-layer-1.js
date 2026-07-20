@@ -338,20 +338,21 @@ WORKFLOW_ASSERTIONS.set(
 );
 
 WORKFLOW_ASSERTIONS.set(
-  'Every pac model genpage upload records --agent-message with escaped # Agent Thoughts, # Summary, and # Final Code sections',
+  'Every pac model genpage upload records --agent-message with escaped # Agent Thoughts, OOB-style Step-by-Step Processing, # Summary, and # Final Code sections',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
     const uploadLines = log.split('\n').filter((line) => /pac\s+model\s+genpage\s+upload/.test(line));
     if (uploadLines.length === 0) return skip('no upload command recorded');
 
-    const structuredMessage = /^# Agent Thoughts\\n(.*?)\\n# Summary\\n(.*?)\\n# Final Code\\n$/;
+    const structuredMessage =
+      /^# Agent Thoughts\\nStep-by-Step Processing\\n(.*?)\\n# Summary\\n(.*?)\\n# Final Code\\n$/;
     for (const [index, uploadLine] of uploadLines.entries()) {
       const agentMessage = agentMessageFromUpload(uploadLine);
       if (!agentMessage) return fail(`upload ${index + 1} is missing a quoted --agent-message value`);
       const sections = agentMessage.match(structuredMessage);
       if (!sections || !sections[1].trim() || !sections[2].trim()) {
-        return fail(`upload ${index + 1} agent message must contain non-empty escaped Agent Thoughts, Summary, and Final Code sections in order`);
+        return fail(`upload ${index + 1} agent message must contain non-empty escaped OOB-style Agent Thoughts, Summary, and Final Code sections in order`);
       }
     }
     return pass();

@@ -81,7 +81,7 @@
 - Post-write icon verification: grep `from "@fluentui/react-icons"` in page.tsx; verified `PeopleRegular`, `BriefcaseRegular` against verified-icons.txt — all present
 
 ## Phase 6 — Deployment
-- pac model genpage upload --app-id 33333333-2222-3333-4444-555555555555 --code-file job-candidates/page.tsx --data-sources 'cr_candidate,cr_jobrequisition' --prompt "Build a page showing all job candidates with their application status, interview scores, and assigned recruiter. I need new tables for this — cr_candidate and cr_jobrequisition entities don't exist yet in my environment." --model claude-sonnet --name "Candidates" --agent-message "# Agent Thoughts\nApplied the requested page changes using verified requirements.\n# Summary\nCandidate list with status, scores, and recruiter assignments\n# Final Code\n" --add-to-sitemap
+- pac model genpage upload --app-id 33333333-2222-3333-4444-555555555555 --code-file job-candidates/page.tsx --data-sources 'cr_candidate,cr_jobrequisition' --prompt "Build a page showing all job candidates with their application status, interview scores, and assigned recruiter. I need new tables for this — cr_candidate and cr_jobrequisition entities don't exist yet in my environment." --model claude-sonnet --name "Candidates" --agent-message "# Agent Thoughts\nStep-by-Step Processing\n1. Requirements Analysis\n- Applied the requested page changes using verified requirements.\n# Summary\nCandidate list with status, scores, and recruiter assignments\n# Final Code\n" --add-to-sitemap
 - Upload succeeded
 
 ## Phase 8 — Summary

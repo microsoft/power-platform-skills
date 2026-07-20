@@ -180,7 +180,7 @@ pac model genpage upload `
   --connectors "<working-dir>/connectors.json" `
   --prompt "<User's edit request — only the changes, not the full page>" `
   --model "<current-model-id>" `
-  --agent-message "# Agent Thoughts\n<1-3 concise, user-facing sentences describing the edit approach>\n# Summary\n<Description of what changed in this upload>\n# Final Code\n"
+  --agent-message "# Agent Thoughts\nStep-by-Step Processing\n1. Requirements Analysis\n- <requested changes>\n2. Assumptions\n- <explicit assumptions; omit when none>\n3. Major Functions\n- <implementation and preserved behavior>\n4. Layout, Styling, and Theming\n- <applicable UX decisions>\n5. Accessibility, Localization, and Overflow\n- <applicable decisions>\n6. Final Verifications\n- <checks against the edit request and GenPage rules>\n# Summary\n<Description of what changed in this upload>\n# Final Code\n"
 ```
 
 Use `--page-id` for updates. Omit `--add-to-sitemap` (the page is already in
@@ -188,8 +188,9 @@ the sitemap).
 Omit `--data-sources` when `config.json.dataSources` was empty.
 Omit `--connectors` when connector bindings are unchanged.
 Use literal `\n` escape sequences in `--agent-message`, not actual newlines.
-Agent Thoughts must be a brief user-facing rationale, never private
-chain-of-thought or sensitive information.
+Agent Thoughts must be a concise OOB-style, user-facing implementation summary.
+Include only applicable sections, distinguish requirements from assumptions, and
+never include private chain-of-thought or sensitive information.
 
 ## Edit Phase 7: Verify (Optional)
 
