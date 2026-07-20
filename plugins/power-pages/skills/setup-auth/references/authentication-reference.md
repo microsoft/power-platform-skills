@@ -1888,7 +1888,7 @@ Pattern: `Authentication/OpenIdConnect/{ProviderName}/{SettingName}`
 |---------|-------------|
 | `Authority` | The OIDC authority URL (metadata endpoint base) |
 | `ClientId` | The registered application's client ID |
-| `ClientSecret` | The registered application's client secret -- **never commit to source control** |
+| `ClientSecret` | **Optional** — only for a confidential-client override; the default no-secret `code id_token` flow needs none. When used, store via Key Vault / Secret env var and **never commit to source control**. |
 | `RedirectUri` | The callback URL (typically `{site-url}/signin-{ProviderName-lowercased}`) |
 | `AuthenticationType` | Unique identifier for this provider (used as the `provider` value in ExternalLogin) |
 | `Caption` | Display name shown on the login button |
