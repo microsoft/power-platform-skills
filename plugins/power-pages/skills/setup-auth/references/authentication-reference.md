@@ -1889,7 +1889,7 @@ Pattern: `Authentication/OpenIdConnect/{ProviderName}/{SettingName}`
 | `Authority` | The OIDC authority URL (metadata endpoint base) |
 | `ClientId` | The registered application's client ID |
 | `ClientSecret` | The registered application's client secret -- **never commit to source control** |
-| `RedirectUri` | The callback URL (typically `{site-url}/signin-{provider}`) |
+| `RedirectUri` | The callback URL (typically `{site-url}/signin-{ProviderName-lowercased}`) |
 | `AuthenticationType` | Unique identifier for this provider (used as the `provider` value in ExternalLogin) |
 | `Caption` | Display name shown on the login button |
 | `ExternalLogoutEnabled` | `true` to sign out of the IdP on logout |
@@ -1943,7 +1943,7 @@ Pattern: `Authentication/SAML2/{ProviderName}/{SettingName}`
 | `MetadataAddress` | URL of the SAML IdP metadata XML |
 | `AuthenticationType` | Unique identifier for this provider |
 | `ServiceProviderRealm` | The SP entity ID (typically the site URL) |
-| `AssertionConsumerServiceUrl` | The ACS URL (typically `{site-url}/signin-{provider}`) |
+| `AssertionConsumerServiceUrl` | The ACS URL (typically `{site-url}/signin-{ProviderName-lowercased}`) |
 | `Caption` | Display name shown on the login button |
 | `SignAuthenticationRequests` | `true` to sign SAML authn requests |
 | `ExternalLogoutEnabled` | `true` to enable SAML Single Logout (SLO) |
@@ -2054,7 +2054,7 @@ Entra External ID uses the same OpenID Connect site setting path:
 | `Authority` | External ID authority URL (e.g., `https://{tenant}.ciamlogin.com/{tenant}.onmicrosoft.com/v2.0/` or custom domain like `https://login.contoso.com/{tenant-id}/v2.0/`) |
 | `ClientId` | Application (client) ID from the External ID app registration |
 | `AuthenticationType` | Unique identifier for this provider (typically the authority URL) |
-| `RedirectUri` | Callback URL (e.g., `{site-url}/signin-{provider}`) |
+| `RedirectUri` | Callback URL (e.g., `{site-url}/signin-{ProviderName-lowercased}`) |
 | `ExternalLogoutEnabled` | `true` to sign out of External ID on logout |
 | `Caption` | Display name shown on the login button |
 

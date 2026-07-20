@@ -880,7 +880,7 @@ Phase 8.1 will write BOTH `RPInitiatedLogout=true` AND `PostLogoutRedirectUri={P
 | `Scope` | Space-separated OAuth scopes (e.g., `openid profile email`) | `openid` |
 | `ResponseType` | OAuth response type (`code`, `id_token`, `code id_token`) | `code id_token` |
 | `ResponseMode` | How the IdP returns the response (`form_post`, `query`, `fragment`) | `form_post` for code flow |
-| `RedirectUri` | Override the callback URL | `{site-url}/signin-{provider}` |
+| `RedirectUri` | Override the callback URL | `{site-url}/signin-{ProviderName-lowercased}` |
 | `PostLogoutRedirectUri` | URL to redirect to after federated logout completes at the IdP. **Required when `RPInitiatedLogout=true`** — server has a fallback that derives from `RedirectUri` authority, but a separate flag (`PostLogoutRedirectUriEnabled`) requires the explicit site setting to be present before the fallback is used. Without an explicit value, the IdP logout URL omits the parameter and users get stranded. | Unset (server default — but use the Logout mode question above to write it correctly) |
 | `RPInitiatedLogout` | Use RP-initiated logout via `end_session_endpoint` with `id_token_hint`. **Mutually exclusive with `ExternalLogoutEnabled`** — when `true`, the server forces `ExternalLogoutEnabled` to `false` regardless of that setting. **Prefer the "Logout mode" question above** instead of setting this directly — that flow pairs it with `PostLogoutRedirectUri` (required) and the Entra app-registration step. | `false` |
 | `RegistrationClaimsMapping` | **Comma-separated `contactfield=claimtype` pairs** (NOT JSON). Applied **once** at first sign-in, before the contact is created. Example for Entra External ID: `firstname=given_name,lastname=family_name,emailaddress1=email`. The server silently skips malformed pairs — verify in Application Insights if claims aren't populating. | None |
@@ -911,7 +911,7 @@ Phase 8.1 will write BOTH `RPInitiatedLogout=true` AND `PostLogoutRedirectUri={P
 
 | Setting | Description | Default |
 |---------|-------------|---------|
-| `AssertionConsumerServiceUrl` | ACS URL (typically `{site-url}/signin-{provider}`) | Derived from site URL |
+| `AssertionConsumerServiceUrl` | ACS URL (typically `{site-url}/signin-{ProviderName-lowercased}`) | Derived from site URL |
 | `RegistrationClaimsMapping` | **Comma-separated `contactfield=claimtype` pairs**. SAML assertion types are URIs (e.g., `firstname=http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname,lastname=http://schemas.xmlsoap.org/ws/2005/05/identity/claims/surname`). Applied once at first sign-in. | None |
 | `LoginClaimsMapping` | Same format. Applied every login (overwrites contact fields). | None |
 | `ExternalLogoutEnabled` | Enable SAML Single Logout (SLO) | `true` |
@@ -1619,7 +1619,7 @@ name: Code-Site-Shell-Header
 
 > **About the two new entries (`/register` and `/account/login/register`):** these handle a specific external-auth flow that's hard to discover otherwise. When an external user (Entra External ID, OIDC, SAML2, social) clicks the "Sign in" button WITHOUT first clicking an invitation email link, and they don't have an existing contact in Dataverse, the server forces them through a server-rendered invitation flow:
 >
-> 1. `POST /Account/Login/ExternalLogin` → IdP → `/signin-{provider}` → `/Account/Login/ExternalLoginCallback`
+> 1. `POST /Account/Login/ExternalLogin` → IdP → `/signin-{ProviderName-lowercased}` → `/Account/Login/ExternalLoginCallback`
 > 2. `ExternalLoginCallback` finds no contact + no invitation → redirects to `/Register?ReturnUrl=/` (the RedeemInvitation form, server-rendered)
 > 3. User enters invitation code → server validates → redirects to `/Account/Login/Register?invitationCode=...` (the local Register Web Forms page, which has external provider buttons rendered on it)
 > 4. User clicks an external provider button on the Register page → `/Account/Login/ExternalLogin?InvitationCode=...` → external auth round 2 with invitation in URL → contact created + invitation redeemed
@@ -2995,14 +2995,14 @@ After deployment (or if skipped), remind the user with provider-specific guidanc
 - **Test on deployed site**: Auth only works on the deployed Power Pages site, not on `localhost`
 - **Identity provider configuration**: Provider-specific setup is required:
   - **Entra ID**: Configure the identity provider in the Power Pages admin center
-  - **OpenID Connect**: Register a client application with the OIDC provider and update the `ClientId` site setting. Set the redirect URI in the provider to `{site-url}/signin-{provider}`
+  - **OpenID Connect**: Register a client application with the OIDC provider and update the `ClientId` site setting. Set the redirect URI in the provider to `{site-url}/signin-{ProviderName-lowercased}`
   - **SAML2**: Register the site as a service provider (SP) with the SAML IdP. The `ServiceProviderRealm` and `AssertionConsumerServiceUrl` must match the site URL
   - **WS-Federation**: Register the site as a relying party with the WS-Fed provider
   - **Local Authentication**: No external provider needed — users register and log in with username/password directly on the site
   - **Microsoft Account**: Register an application in the Azure portal and update the `ClientSecret` environment variable via the Power Apps maker portal -- do not commit secrets to source control
   - **Facebook**: Register an application in the Facebook Developer Console and update the `AppSecret` environment variable via the Power Apps maker portal -- do not commit secrets to source control
   - **Google**: Register an application in the Google Cloud Console and update the `ClientSecret` environment variable via the Power Apps maker portal -- do not commit secrets to source control
-  - **Entra External ID**: Register the application in the Entra External ID tenant. Update the `ClientId` site setting. Set the redirect URI to `{site-url}/signin-{provider}`. The authority URL may use `{tenant}.ciamlogin.com` or a custom domain.
+  - **Entra External ID**: Register the application in the Entra External ID tenant. Update the `ClientId` site setting. Set the redirect URI to `{site-url}/signin-{ProviderName-lowercased}`. The authority URL may use `{tenant}.ciamlogin.com` or a custom domain.
 - **Auth failure handling (keep users in SPA)**: When OIDC/SAML2/WS-Fed auth fails, the server redirects to `/Account/Login/ExternalAuthenticationFailed` — a server-rendered page that breaks the SPA. To keep users in the SPA on failure, edit the Dataverse content snippets `Account/Register/ExternalAuthenticationFailed` and `Account/Register/ExternalAuthenticationFailed/AccessDenied` in the Power Pages admin center to inject a `<script>` that redirects to `/login?message={error-code}`. The SPA's `getAuthError()` will then display the error inline. See authentication-reference.md for the exact script.
 - **User profile display**: After login, the auth service's `getUserDisplayName()` falls back through `firstName + lastName` → `firstName` → `lastName` → `email` → `userName` → `'User'`. **Email beats userName** because for external providers (Entra External ID, OIDC) the `userName` field is the OIDC subject identifier — a long opaque string like `vs25QwNe1ZAHqlWK1Naw9dVEBe-TbF5tZEpb0XjAEZQ` that's ugly and meaningless in a navigation bar. Power Pages populates `firstName`/`lastName`/`email` from standard OIDC claims (`given_name`, `family_name`, `email`). Entra External ID user flows often don't include `given_name`/`family_name` in the returned claims by default — if you want names populated, ensure the user flow has both attributes selected under "User attributes to collect" AND "Application claims" / "User attributes to return as claims" (see Phase 2.1 Entra External ID Step 3). The `email` claim is almost always emitted, so emails reliably populate even when names don't. `getUserInitials()` follows the same priority chain using the first character of each fallback source.
 - **Two-Factor Authentication**: This skill does NOT scaffold Power Pages built-in 2FA — the `SendCode`/`VerifyCode` flow is server-rendered and cannot be integrated into the SPA experience. For MFA needs, configure it at the identity provider layer (Entra External ID conditional access, B2C user flow MFA, Auth0 Guardian, Okta Verify, etc.) — IdP-level MFA is transparent to Power Pages and stays inside the IdP's branded experience.
