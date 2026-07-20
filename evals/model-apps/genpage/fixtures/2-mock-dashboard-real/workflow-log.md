@@ -99,7 +99,7 @@ Design notes:
 
 ## Phase 6 — Deploy
 
-- Command: `pac model genpage upload --app-id 35913103-4e59-f111-a821-000d3a37616d --code-file D:/temp/sales-dashboard/sales-dashboard.tsx --name "Sales dashboard" --prompt "Create a dashboard page with mock data showing sales metrics — monthly revenue chart, top 5 customers table, and a KPI summary bar. Use a modern dark theme look." --model "claude-opus-4-7" --agent-message "Built a dark-themed sales dashboard with KPI bar (4 tiles + sparklines), 12-month revenue chart (custom inline SVG with hover tooltip), and top-5 customers table. Time-range toggle (6M/12M/YTD) and refresh button re-seed mock data. No Dataverse entities; pure mock data via deterministic mulberry32 RNG." --add-to-sitemap`
+- Command: `pac model genpage upload --app-id 35913103-4e59-f111-a821-000d3a37616d --code-file D:/temp/sales-dashboard/sales-dashboard.tsx --name "Sales dashboard" --prompt "Create a dashboard page with mock data showing sales metrics — monthly revenue chart, top 5 customers table, and a KPI summary bar. Use a modern dark theme look." --model "claude-opus-4-7" --agent-message "# Agent Thoughts\nApplied the requested page changes using verified requirements.\n# Summary\nBuilt a dark-themed sales dashboard with KPI bar (4 tiles + sparklines), 12-month revenue chart (custom inline SVG with hover tooltip), and top-5 customers table. Time-range toggle (6M/12M/YTD) and refresh button re-seed mock data. No Dataverse entities; pure mock data via deterministic mulberry32 RNG.\n# Final Code\n" --add-to-sitemap`
 - Result: page-id = `7fa4f8d8-156f-4e0b-bae7-c1bb1deede15`, status = success (transpilation OK, project published, added to sitemap)
 - Skipped `add-table-to-app.js` — no `--data-sources` on this upload (mock data page).
 

@@ -180,13 +180,16 @@ pac model genpage upload `
   --connectors "<working-dir>/connectors.json" `
   --prompt "<User's edit request — only the changes, not the full page>" `
   --model "<current-model-id>" `
-  --agent-message "Description of what was changed in this upload"
+  --agent-message "# Agent Thoughts\n<1-3 concise, user-facing sentences describing the edit approach>\n# Summary\n<Description of what changed in this upload>\n# Final Code\n"
 ```
 
 Use `--page-id` for updates. Omit `--add-to-sitemap` (the page is already in
 the sitemap).
 Omit `--data-sources` when `config.json.dataSources` was empty.
 Omit `--connectors` when connector bindings are unchanged.
+Use literal `\n` escape sequences in `--agent-message`, not actual newlines.
+Agent Thoughts must be a brief user-facing rationale, never private
+chain-of-thought or sensitive information.
 
 ## Edit Phase 7: Verify (Optional)
 

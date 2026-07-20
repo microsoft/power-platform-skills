@@ -329,6 +329,53 @@ test('Phase 6 flags: fail when --agent-message missing', () => {
   assert.match(result.reason, /--agent-message/);
 });
 
+test('agent message contract: passes every upload with escaped structured sections', () => {
+  const check = WORKFLOW_ASSERTIONS.get('Every pac model genpage upload records --agent-message with escaped # Agent Thoughts, # Summary, and # Final Code sections');
+  const log = `pac model genpage upload --agent-message "# Agent Thoughts\\nReviewed the page requirements.\\n# Summary\\nBuilt the page.\\n# Final Code\\n"`;
+  const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
+  assert.equal(result.status, 'pass');
+});
+
+test('agent message contract: fails a plain description', () => {
+  const check = WORKFLOW_ASSERTIONS.get('Every pac model genpage upload records --agent-message with escaped # Agent Thoughts, # Summary, and # Final Code sections');
+  const log = `pac model genpage upload --agent-message "Built the page"`;
+  const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
+  assert.equal(result.status, 'fail');
+  assert.match(result.reason, /Agent Thoughts, Summary, and Final Code/);
+});
+
+test('agent message contract: validates only the --agent-message value', () => {
+  const check = WORKFLOW_ASSERTIONS.get('Every pac model genpage upload records --agent-message with escaped # Agent Thoughts, # Summary, and # Final Code sections');
+  const log = `pac model genpage upload --prompt "# Agent Thoughts\\nPlan.\\n# Summary\\nDone.\\n# Final Code\\n" --agent-message "Built the page"`;
+  const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
+  assert.equal(result.status, 'fail');
+});
+
+test('agent message contract: fails when a later re-upload is plain', () => {
+  const check = WORKFLOW_ASSERTIONS.get('Every pac model genpage upload records --agent-message with escaped # Agent Thoughts, # Summary, and # Final Code sections');
+  const log = [
+    `pac model genpage upload --agent-message "# Agent Thoughts\\nPlanned the page.\\n# Summary\\nBuilt the page.\\n# Final Code\\n"`,
+    `pac model genpage upload --page-id 1 --agent-message "Fixed navigation"`,
+  ].join('\n');
+  const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
+  assert.equal(result.status, 'fail');
+  assert.match(result.reason, /upload 2/);
+});
+
+test('agent message contract: fails when Agent Thoughts are empty', () => {
+  const check = WORKFLOW_ASSERTIONS.get('Every pac model genpage upload records --agent-message with escaped # Agent Thoughts, # Summary, and # Final Code sections');
+  const log = `pac model genpage upload --agent-message "# Agent Thoughts\\n\\n# Summary\\nBuilt the page.\\n# Final Code\\n"`;
+  const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
+  assert.equal(result.status, 'fail');
+});
+
+test('agent message contract: fails when Summary is whitespace-only', () => {
+  const check = WORKFLOW_ASSERTIONS.get('Every pac model genpage upload records --agent-message with escaped # Agent Thoughts, # Summary, and # Final Code sections');
+  const log = `pac model genpage upload --agent-message "# Agent Thoughts\\nPlanned the page.\\n# Summary\\n   \\n# Final Code\\n"`;
+  const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
+  assert.equal(result.status, 'fail');
+});
+
 test('Phase 6 mock-data: pass when upload omits --data-sources', () => {
   const check = PHASE_EXPECTATIONS.get('Phase 6: Deployment omits --data-sources flag (mock data page)');
   const log = `pac model genpage upload --app-id 1 --code-file p.tsx --prompt "x" --add-to-sitemap`;

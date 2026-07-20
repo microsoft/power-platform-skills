@@ -47,7 +47,7 @@ function mockEval2Artifacts() {
 - read samples/8-dashboard-with-charts.tsx
 - icon verification: grep "react-icons", verified icons against verified-icons.txt
 ## Phase 6
-- pac model genpage upload --app-id 1 --code-file p.tsx --prompt "x" --model claude-sonnet --name "p" --agent-message "m" --add-to-sitemap
+- pac model genpage upload --app-id 1 --code-file p.tsx --prompt "x" --model claude-sonnet --name "p" --agent-message "# Agent Thoughts\\nPlanned the dashboard layout.\\n# Summary\\nBuilt the dashboard.\\n# Final Code\\n" --add-to-sitemap
 `,
     'genpage-plan.md': `# Genpage Plan
 ## User Requirements
