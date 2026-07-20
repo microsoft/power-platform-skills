@@ -1124,7 +1124,7 @@ Jump to Step 8.
 Resolve the selected Power Platform environment ID from `$ACTIVE_ENV_ID`, then `power.config.json`. Print the public Power Apps Wrap URL:
 
 > "Open the Power Apps Wrap app-registration page for the selected environment:
-> https://make.powerapps.com/environments/<environment-id>/wraps#create-app-registration
+> `https://make.powerapps.com/environments/<environment-id>/wraps#create-app-registration`
 >
 > Create the app registration on that page, then copy the Application (client) ID and paste it here.
 > The Wrap experience configures the native registration for this flow. Do not add redirect URIs or API permissions manually; tenant-wide admin consent is not required.
