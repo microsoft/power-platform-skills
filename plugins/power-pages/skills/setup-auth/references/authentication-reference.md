@@ -904,7 +904,7 @@ const AUTH_PROVIDER: AuthProviderConfig = {
 };
 ```
 
-### OpenID Connect (Generic)
+### OpenID Connect
 
 ```typescript
 const AUTH_PROVIDER: AuthProviderConfig = {

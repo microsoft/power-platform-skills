@@ -334,6 +334,14 @@ For each provider, also share the relevant Microsoft Learn documentation link so
 
 **For "OpenID Connect"** (Okta, Auth0, etc.):
 
+**First, identify the specific OIDC provider** — setup steps and the docs to read differ per vendor:
+
+| Question | Options |
+|----------|---------|
+| Which OpenID Connect provider are you using? | Okta, Auth0, Other (any OIDC-compliant provider) |
+
+Use the answer as `{provider}` in the questions below and for Phase 2.1.2 Step A (reading the provider's docs). For **Other**, capture the provider's name from the user.
+
 **Orient the user first — don't jump straight to inputs.** Now that they've picked {provider}, set expectations: you'll set up an app registration at {provider} for this site. The **first thing** you'll do is **read {provider}'s own documentation** — how it's set up depends on the provider. Then, depending on what {provider} supports, you'll either walk the user through the steps in the {provider} console, or — when {provider} supports it — configure it for the user. Either way you derive the metadata, Redirect URI, and claims automatically, and the app uses the no-secret `code id_token` flow — no client secret to manage.
 
 Ask for the {provider} tenant — the sign-in domain (Okta: `your-tenant.okta.com`, Auth0: `your-tenant.us.auth0.com`):
@@ -342,8 +350,9 @@ Ask for the {provider} tenant — the sign-in domain (Okta: `your-tenant.okta.co
 |----------|---------|
 | What's your {provider} tenant? | *(free text)* |
 | What display name should the login button show? (default: `Sign in`) | *(free text, defaulted)* |
+| Do you already have an app registration for this site at {provider}? | No — set one up in Phase 2.1.2 (Recommended), Yes — I already have one |
 
-The Client ID is **not** asked upfront — it comes from **Phase 2.1.2**, where you set up the app (guided, or configured for the user when the provider supports it) and derive the metadata from the provider's discovery document. **Only fall back to asking for an existing Client ID / Metadata Address if the user already has an app registration.**
+If the user answered **"Yes — I already have one"**, ask for the existing **Client ID** and **Metadata Address** now (Phase 8.1 needs them) and skip the Phase 2.1.2 app-registration setup. Otherwise the Client ID is **not** asked upfront — it comes from **Phase 2.1.2**, where you set up the app (guided, or configured for the user when the provider supports it) and derive the metadata from the provider's discovery document.
 
 > Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings
 
@@ -1014,7 +1023,7 @@ For a provider that offers no such CLI, go Guided.
 
 | Question | Header | Options |
 |----------|--------|---------|
-| How would you like to set up the {IDP} app registration? | Setup | Guided (Recommended) — walk me through the steps in the {IDP} console, Configure it for me — I set it up for you in {IDP} |
+| How would you like to set up the {provider} app registration? | Setup | Guided (Recommended) — I walk you through the steps in the {provider} console, Configure it for me — I set it up in your {provider} using its CLI |
 
 **Step C — the app configuration Power Pages needs (inform, then approve).** Power Pages' default is the no-secret **`code id_token`** flow, so the app is a **Web application with no client secret**. Present the target configuration and let the user approve or adjust:
 
@@ -1046,7 +1055,7 @@ In **Guided**, this is the checklist the user applies in the console. When you *
 
 | Question | Options |
 |----------|---------|
-| Go ahead and configure the {IDP} app registration in your {IDP} now? | Yes — configure it for me, No — switch to Guided setup |
+| Go ahead and configure the {provider} app registration in your {provider} now? | Yes — configure it for me, No — switch to Guided setup |
 
 **If "No"**: switch to the Guided flow.
 
@@ -1056,7 +1065,7 @@ In **Guided**, this is the checklist the user applies in the console. When you *
 
 | Question | Header | Options |
 |----------|--------|---------|
-| Should anyone who signs in through {IDP} get an account created automatically, or only pre-provisioned users? | Registration | Open — self-service (Recommended for customer sites) — auto-create a contact for any authenticated user, Controlled — pre-provisioned only — only admit users whose email matches an existing contact |
+| Should anyone who signs in through {provider} get an account created automatically, or only pre-provisioned users? | Registration | Open — self-service (Recommended for customer sites) — auto-create a contact for any authenticated user, Controlled — pre-provisioned only — only admit users whose email matches an existing contact |
 
 Store as `OPEN_REGISTRATION_CHOICE`. Phase 8.1 writes `Authentication/Registration/OpenRegistrationEnabled` (`true` for Open, `false` for Controlled). Pair this with the contact-linking (`AllowContactMappingWithEmail`) choice already collected in Phase 2.1.
 
@@ -2235,7 +2244,7 @@ node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
 
 Where `{Type}` is `OpenIdConnect`, `SAML2`, `WsFederation`, or `OpenAuth`. This is a **per-provider toggle** that's distinct from the global `Authentication/Registration/ExternalLoginEnabled` — set both to `true` for registration to work. Use case for setting one provider's `RegistrationEnabled=false`: temporarily block new users from a given IdP while still letting existing users sign in.
 
-**Per-provider `Caption` — required for EVERY provider.** Write `Authentication/{Type}/{ProviderName}/Caption` (the login button label) for each configured provider, using the display name from Phase 2.1:
+**Per-provider `Caption` — required for every provider.** Write `Authentication/{Type}/{ProviderName}/Caption` (the login button label) for each configured provider (`{Type}` = `OpenIdConnect`/`SAML2`/`WsFederation`/`OpenAuth`; Local Authentication has no login button and needs no `Caption`), using the display name from Phase 2.1:
 
 ```powershell
 node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
