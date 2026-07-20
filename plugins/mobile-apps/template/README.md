@@ -84,7 +84,14 @@ connector wiring.
 
 5. Start mobile app:
 
-	Run the below command in a new terminal from the app directory.
+	`/create-mobile-app` starts Metro automatically through a project-local
+	session managed by the plugin. It stores sanitized process state and logs
+	under `.expo/metro-session/`, allowing `/debug-app` to work across VS Code,
+	Copilot CLI, and Claude Code without a terminal ID.
+
+	To start Metro manually instead, run the command below from the app directory.
+	Manual sessions support normal Expo development, but `/debug-app` continuous
+	monitoring requires a wrapper-owned session and offers to start one if needed.
 
 	```bash
 	npm run dev

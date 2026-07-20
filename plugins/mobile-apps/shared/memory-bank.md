@@ -18,8 +18,9 @@ This file is the per-project notebook the agent maintains across `/create-mobile
 | Working directory | |
 | Plugin version that created the project | |
 | Created | _<ISO date>_ |
-| Metro terminal id | _<background-shell id from Step 12 — `/debug-app` reads this terminal's output for symptom-driven native debugging only. If empty/dead, re-launch with `cd <working_dir> && npm run dev` and update this field._ |
-| Metro launch command | _e.g. `cd <working_dir> && npm run dev`_ |
+| Metro session state | `.expo/metro-session/state.json` — runtime status, heartbeat, PIDs, and native Metro URL; do not copy ephemeral values into this file |
+| Metro log | `.expo/metro-session/metro.log` — sanitized source used by `/debug-app` |
+| Metro launch command | _plugin wrapper: `node "<plugin-root>/scripts/metro-session.js" start --project-root "<working_dir>"`_ |
 
 ## Power Platform context
 

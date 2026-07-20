@@ -80,11 +80,23 @@ connector wiring.
 
 5. Start mobile app:
 
-	Run the below command in a new terminal from the app directory.
+	`/create-mobile-app` starts Metro automatically through the plugin's
+    project-local session manager. It stores sanitized logs and process state in
+    `.expo/metro-session/`, so `/debug-app` works after switching between VS Code,
+    Copilot CLI, and Claude Code without asking for a terminal ID.
+
+	To start Metro manually instead, run the command below from the app directory.
+    Manual sessions support normal Expo development, but `/debug-app` continuous
+    monitoring requires a wrapper-owned session. If one is not running,
+    `/debug-app` offers to start it.
 
     ```bash
     npm run dev
     ```
+
+    The wrapper removes common credentials, tokens, keys, and signed-query
+    values before writing `metro.log`. The complete `.expo/` folder is ignored
+    by the template's `.gitignore`.
 
 6. Preview the app by scanning the QR code with the Power Apps Developer app
 
@@ -106,7 +118,7 @@ After the prereq sanity check passes:
 > /create-mobile-app build me a small notes app
 ```
 
-Expected: ~6 prompts (wizard + gates), then ~5 minutes of scaffolding, table creation, and parallel screen builds. End state: a working Notes app with `npm run dev` ready to go. If anything fails, the [memory bank](#glossary) remembers where you left off — re-run the same command and it resumes.
+Expected: ~6 prompts (wizard + gates), then ~5 minutes of scaffolding, table creation, and parallel screen builds. End state: a working Notes app with a project-local Metro session ready to scan and debug. If anything fails, the [memory bank](#glossary) remembers where you left off — re-run the same command and it resumes.
 
 ## Quick examples
 
@@ -125,7 +137,7 @@ What happens:
 4. **4 approval gates** — data model → native capabilities → connectors → screens (with a visual `_plan_preview.html` of every screen before any code is written)
 5. **Design system** — brand inputs (logo, brand doc, website, or free-text) → cost picker → style picker → component reference sheet → branded screen previews
 6. **Scaffold + build** — validates the prepared template folder, runs `npx power-apps init`, verifies installed dependencies, generates schemas, builds Dataverse tables, wires connectors, spawns N parallel screen-builders for the TSX
-7. **Dev server** — `npm run dev` starts Metro; scan the QR with your native dev client on a device
+7. **Dev server** — the plugin starts a portable Metro session; scan the QR with your native dev client and use `/debug-app` against its persisted sanitized log
 
 End state: a working app you can iterate on with hot reload. ~5–12 minutes for the planning gates, then scaffolding runs.
 
@@ -213,6 +225,7 @@ Example edit flows:
 | `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
 | `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `npx power-apps add-data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |
 | `/edit-app` | ✅ v0 | Post-generation app editor — updates affected sections of `native-app-plan.md`, applies Dataverse/native/design/connector changes, rebuilds affected screens, runs verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. `--plan-only` preserves the old docs-only behavior. |
+| `/debug-app` | ✅ v0 | Monitors the wrapper-owned `.expo/metro-session/metro.log` with a durable byte cursor, diagnoses runtime and silent data-path failures, applies bounded fixes, and verifies against newly appended output without depending on host terminal IDs. |
 | `/deploy` | ✅ v0 | Build + push — `npm run build` then `npx power-apps push` to the env in `power.config.json`. **Does not** drive `expo run:ios` or `expo run:android` (out of scope for v0). |
 | `/open-wrap-url` | ✅ v0 | Opens the Wrap URL in browser for an app ID using `https://make.powerapps.com/environments/<envID>/wrap?appID=<appID>`. Requires both `--app-id` and `--env-id`. |
 | `/report-issue` | ✅ v0 | Read-only diagnostic — collects env / Expo / Node versions, project context, recent errors, and renders a copy-paste-ready GitHub issue body. Sanitizes secrets. |

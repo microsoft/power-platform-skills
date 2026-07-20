@@ -101,7 +101,7 @@ npx power-apps add-flow --flow-id <flow-guid> --non-interactive
 npx power-apps remove-flow --flow-id <flow-guid> --non-interactive
 ```
 
-Do not use local Expo web-player testing from mobile-app skills. Mobile-app runtime diagnosis uses the native dev-client flow and `/debug-app` reading Metro terminal output.
+Do not use local Expo web-player testing from mobile-app skills. Mobile-app runtime diagnosis uses the native dev-client flow and `/debug-app` reading the wrapper-owned sanitized `.expo/metro-session/metro.log`.
 
 ## Inspecting large generated files
 

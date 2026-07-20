@@ -1,0 +1,41 @@
+# Functional tests for cross-host mobile-app scripts. The OS matrix catches
+# process, path, signal, and filesystem differences in wrapper behavior.
+name: mobile-apps-script-tests
+
+on:
+    pull_request:
+        branches:
+            - main
+        paths:
+            - "plugins/mobile-apps/scripts/**"
+            - "plugins/mobile-apps/skills/create-mobile-app/SKILL.md"
+            - "plugins/mobile-apps/skills/debug-app/SKILL.md"
+            - ".github/workflows/mobile-apps-script-tests.yml"
+
+jobs:
+    test-mobile-app-scripts:
+        name: test-mobile-app-scripts (${{ matrix.os }})
+        runs-on: ${{ matrix.os }}
+        strategy:
+            fail-fast: false
+            matrix:
+                os:
+                    - ubuntu-latest
+                    - windows-latest
+                    - macos-latest
+        steps:
+            - name: checkout
+              uses: actions/checkout@v4
+
+            - name: setup-node
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+
+            - name: syntax-check-mobile-scripts
+              shell: bash
+              run: node --check plugins/mobile-apps/scripts/metro-session.js
+
+            - name: run-mobile-script-tests
+              shell: bash
+              run: node --test plugins/mobile-apps/scripts/tests/*.test.js

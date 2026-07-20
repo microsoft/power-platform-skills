@@ -2,7 +2,7 @@
 name: create-mobile-app
 description: Use when the user wants to start a new Power Apps mobile app (Expo / React Native / TypeScript, targeting iOS and Android) from scratch.
 user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Task, EnterPlanMode, ExitPlanMode
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Skill, Task, EnterPlanMode, ExitPlanMode
 model: opus
 ---
 
@@ -1848,66 +1848,78 @@ After `tsc` passes, offer a static HTML preview. The dev server starts next (Ste
 
 ---
 
-### Step 12 — Start dev server (background)
+### Step 12 — Start dev server (project-local session)
 
 **Print before starting:**
-> "→ [Step 12/13] Launching Metro dev server in the background so you can scan the QR."
+> "→ [Step 12/13] Launching Metro as a project-local session so you can scan the QR and debug across hosts."
 
-This skill **launches** Metro in an async/background terminal so:
+This skill launches Metro through the bundled `scripts/metro-session.js` wrapper so:
 
-1. The QR code prints in the terminal — the user can scan with their dev client immediately.
+1. The native Metro URL is persisted — the user can scan a generated QR immediately.
 2. Hot-reload works on file edits — no restart needed for screen tweaks.
-3. **The agent owns the terminal** — when the user says "the screen is blank" / "data isn't showing" / "it crashed", the agent can read Metro's `console.log`, BUNDLE errors, and red-box stack traces directly via `BashOutput` (or its equivalent terminal-output tool) without asking the user to copy-paste.
+3. `/debug-app` reads one project-local sanitized log regardless of whether the host is VS Code, Copilot CLI, or Claude Code. It never needs an opaque terminal ID.
+
+The wrapper stores runtime-only state under `<working_dir>/.expo/metro-session/`:
+
+- `state.json` — session ID, PIDs, lifecycle status, timestamps, and native Metro URL
+- `metro.log` — ANSI-free Metro/app output with common tokens, secrets, keys, and signed-query values redacted before persistence
+
+`.expo/` is already gitignored by the template. Do not copy these files into `memory-bank.md` or commit them.
 
 **Launch commands:**
 
 ```bash
-cd <working_dir>
+cd "<working_dir>"
 npm run generate-schemas    # refresh schema map for any data sources added since last run (idempotent)
 npx tsc --noEmit            # final gate — dev server starts only from a clean TypeScript state
 ```
 
-Run the schema regen and final `tsc` synchronously and check both exits. If either fails, do not launch Metro. Capture the full output once, batch-fix by root cause, rerun the final gate, and continue only when clean. Then launch Metro async:
+Run the schema regen and final `tsc` synchronously and check both exits. If either fails, do not launch Metro. Capture the full output once, batch-fix by root cause, rerun the final gate, and continue only when clean. Then launch Metro through the wrapper:
 
 ```bash
-# Async / background — DO NOT block on this. Capture the terminal id.
-npx expo start
+node "${CLAUDE_SKILL_DIR}/../../scripts/metro-session.js" start \
+  --project-root "<working_dir>" \
+  --wait-ready-ms 8000
 ```
 
-Use `npx expo start` here instead of `npm run dev` because the orchestrator has already run `npm run generate-schemas` for the final gate. The template keeps `predev: npm run generate-schemas` as a safety net for humans running `npm run dev` manually, but the orchestrated path should not regenerate schemas twice.
+The wrapper resolves and executes the project-local Expo CLI directly, then returns while its detached runner continues. Do not launch this command itself with a host background/async flag; doing so would recreate the host-terminal dependency this wrapper removes.
 
-When invoking the Bash tool: set `run_in_background: true` (or the equivalent async flag in your tool surface). Capture the returned terminal/shell id as `$METRO_TERMINAL_ID`.
+It invokes `expo start` directly rather than `npm run dev` because the orchestrator already ran `npm run generate-schemas` for the final gate. The template keeps `predev: npm run generate-schemas` as a safety net for humans starting Metro manually.
 
-**After launch, wait ≤8s for the "Metro waiting on" line, then:**
+Parse the returned JSON as `$METRO_SESSION`. Branch as follows:
 
-1. Read the terminal output once (`BashOutput` with the captured id).
-2. **Extract the native Metro URL** from the terminal output:
-   - Locate the line beginning `› Metro:` — it has the form `exp+<scheme>://expo-development-client/?url=<encoded-http-url>`. Capture the full Metro URL.
-3. **Generate QR code PNG and present it to the user** (chat-first, deterministic fallback):
-  - Run `npx --yes qrcode -o <working_dir>/.expo/metro-qr.png "<metro-url>"` to generate the PNG. If the project's npm config requires auth and the fetch fails with `E401`, retry once with `npm_config_registry=https://registry.npmjs.org/ npm_config_always_auth=false` prefixed.
-  - Verify the PNG was created: `test -f <working_dir>/.expo/metro-qr.png` (exit code 0 = success). If it fails, print the qrcode error and continue to step 4.
-  - **Chat-first render (best effort):** read and base64-encode the file (`base64 <working_dir>/.expo/metro-qr.png`) and embed in markdown as a data URI (`![QR](data:image/png;base64,<data>)`) so hosts that support inline image markdown show the QR directly in chat.
-  - **Guaranteed visible fallback:** if inline chat image rendering is unavailable in the host UI, open the PNG directly in the default system image viewer/browser (`open <working_dir>/.expo/metro-qr.png` on macOS, `xdg-open ...` on Linux, `start "" ...` on Windows). This fallback is required whenever chat image rendering is unavailable.
+| State | Action |
+|---|---|
+| `status: running` and `metroUrl` present | Continue with QR generation. |
+| `alreadyRunning: true` | Reuse the existing session and `metroUrl`; do not start a second Metro process. |
+| `status: starting` and no `metroUrl` after 8s | Run `status --project-root "<working_dir>"` once. If the URL is still absent, print the log/state paths and tell the user Metro is still starting; continue without a QR rather than guessing a URL. |
+| `status: failed` or non-zero exit | Run `tail --project-root "<working_dir>" --lines 120`, surface the sanitized launch error, and STOP. |
+
+**When `$METRO_SESSION.metroUrl` is present:**
+
+1. **Generate QR code PNG and present it to the user** (chat-first, deterministic fallback):
+  - Define `METRO_QR="<working_dir>/.expo/metro-qr.png"` and run `npx --yes qrcode -o "$METRO_QR" "<metro-url>"`. If the project's npm config requires auth and the fetch fails with `E401`, retry once with `npm_config_registry=https://registry.npmjs.org/ npm_config_always_auth=false` prefixed.
+  - Verify the PNG with a host-neutral Node check: `node -e "const fs=require('node:fs'); process.exit(fs.existsSync(process.argv[1]) ? 0 : 1)" "$METRO_QR"`. If it fails, print the qrcode error and continue without the image.
+  - **Chat-first render (best effort):** read and base64-encode the file with Node (`node -e "process.stdout.write(require('node:fs').readFileSync(process.argv[1]).toString('base64'))" "$METRO_QR"`) and embed in markdown as a data URI (`![QR](data:image/png;base64,<data>)`) so hosts that support inline image markdown show the QR directly in chat.
+  - **Guaranteed visible fallback:** if inline chat image rendering is unavailable, use the host's file-open tool when present. Otherwise use the quoted OS command (`open "$METRO_QR"` on macOS, `xdg-open "$METRO_QR"` on Linux, or `cmd /c start "" "$METRO_QR"` on Windows). If opening fails, print the quoted path. Never interpolate an unquoted project path.
   - Surface only the native Metro URL immediately after the image/fallback message.
-4. **Optional: ASCII terminal QR for power users.** Extract and print the terminal's ASCII QR banner as a secondary/backup option:
-   - Locate the first line composed of unicode block glyphs (`▀ ▄ █`) — that is the top of the QR.
-  - Print every line from that line through the `› Metro:` line.
-   - Cap at 30 lines as a safety net. Print as-is inside a fenced code block so terminal renderers preserve glyph alignment.
-  - If the ASCII QR banner is not yet in the output, re-read `BashOutput` once more after another 4s before giving up. If still absent, skip the ASCII QR — PNG delivery from step 3 is the primary path.
-5. Follow with:
+2. Follow with:
 
-   > "✓ Metro is running in background terminal `<id>`.
+  > "✓ Metro is running as project-local session `<sessionId>`.
   > 📱 Scan the QR code shown above (or opened from `<working_dir>/.expo/metro-qr.png`) with your native dev client to load the app. Metro URL: `<metro-url>`
-  > 🔄 Edits hot-reload automatically."
+  > 🔄 Edits hot-reload automatically. Debug log: `<working_dir>/.expo/metro-session/metro.log`."
 
-**Persist the terminal id to memory bank** so resumed sessions and downstream skills (`/preview-screens`, `/edit-app`, `/add-*`) can find it:
+**Persist only stable discovery paths to memory bank** so resumed sessions and downstream skills can find the session without coupling to a host terminal:
 
 ```markdown
 ## Project facts
 ...
-- Metro terminal id: <id> (started <ISO date>)
-- Metro launch cmd: cd <working_dir> && npx expo start
+- Metro session state: .expo/metro-session/state.json
+- Metro log: .expo/metro-session/metro.log
+- Metro launch cmd: node "<plugin-root>/scripts/metro-session.js" start --project-root "<working_dir>"
 ```
+
+Do not persist PIDs, session IDs, or Metro URLs to the memory bank. They are ephemeral and are resolved from `state.json` when needed.
 
 This skill stops after Step 12 so the user can iterate locally. Production build + tenant push is a separate, explicit user action via the `/deploy` skill.
 
@@ -1917,9 +1929,9 @@ Do not perform screen-by-screen runtime verification. Do not crawl routes, open 
 
 After Metro is running and the QR has been presented, offer a single optional debug handoff:
 
-> "If the app shows an error or a workflow looks wrong after you load it in the native dev client, tell me the symptom and I can run `/debug-app "<symptom>"` using the Metro terminal logs."
+> "If the app shows an error or a workflow looks wrong after you load it in the native dev client, tell me the symptom and I can run `/debug-app "<symptom>"` using the project-local Metro log."
 
-Only invoke `/debug-app` if the user asks for debugging or gives a concrete symptom. `/debug-app` must use the captured Metro terminal output as its diagnostic source; it must not probe `localhost`, request a bundle URL, or run any React Native Web setup. If the user gives no symptom, proceed directly to Step 13.
+Only invoke `/debug-app` if the user asks for debugging or gives a concrete symptom. `/debug-app` uses `.expo/metro-session/metro.log` as its primary diagnostic source; it must not probe `localhost`, request a bundle URL, or run any React Native Web setup. If the user gives no symptom, proceed directly to Step 13.
 
 When the user is ready to deploy:
 
@@ -1941,8 +1953,8 @@ Data model    : <N tables — M reuse, K extend, L create>
 Native caps   : <list>
 Connectors    : <list>
 Screens       : <N total — M from template, K built in parallel>
-Dev server    : npx expo start — running in background terminal <id>
-                (scan QR there when you want to run locally)
+Dev server    : Metro session <sessionId> — running
+Debug log     : .expo/metro-session/metro.log
 ─────────────────────────────────────────────
 ```
 
