@@ -48,9 +48,144 @@ jobs:
                       exit 1
                   fi
 
+            - name: checkout repository
+              uses: actions/checkout@v4
+
+            - name: checkout github-repo-stats action
+              uses: actions/checkout@v4
+              with:
+                  repository: jgehrcke/github-repo-stats
+                  ref: RELEASE
+                  path: .github/actions/github-repo-stats
+
+            - name: patch github-repo-stats stargazer fetch
+              shell: bash
+              run: |
+                  python3 <<'PY'
+                  from pathlib import Path
+
+                  path = Path(".github/actions/github-repo-stats/fetch.py")
+                  text = path.read_text()
+                  import_line = "from github import Github, Repository  # type: ignore"
+                  if import_line not in text:
+                      raise RuntimeError("Expected PyGithub import line was not found")
+                  text = text.replace(
+                      import_line,
+                      "from github import Github, Repository, GithubException  # type: ignore",
+                  )
+
+                  old_stargazer_fetch = "\n".join(
+                      [
+                          "    # TODO for addressing the 10ks challenge: save state to disk, and refresh",
+                          "    # using reverse order iteration. See for repo in user.get_repos().reversed",
+                          "    for count, gazer in enumerate(repo.get_stargazers_with_dates(), 1):",
+                          "        # Store `PullRequest` object with integer key in dictionary.",
+                          "        gazers.append(gazer)",
+                          "        if count % 200 == 0:",
+                          '            log.info("%s gazers fetched", count)',
+                      ]
+                  ) + "\n"
+                  if old_stargazer_fetch not in text:
+                      raise RuntimeError("Expected REST stargazer fetch block was not found")
+                  new_stargazer_fetch = "\n".join(
+                      [
+                          "    # GitHub restricted the REST stargazers listing in July 2026 to admins and",
+                          "    # collaborators. Installation tokens with repository Administration access",
+                          "    # can still read the same timestamp data through GraphQL, so keep the",
+                          "    # upstream REST path for normal tokens and fall back only for that specific",
+                          "    # restriction.",
+                          "    # See:",
+                          "    # - https://docs.github.com/en/rest/activity/starring#list-stargazers",
+                          "    # - https://github.blog/changelog/2026-06-30-upcoming-access-restrictions-to-public-api-endpoints-and-ui-views/",
+                          "    try:",
+                          "        # TODO for addressing the 10ks challenge: save state to disk, and refresh",
+                          "        # using reverse order iteration. See for repo in user.get_repos().reversed",
+                          "        for count, gazer in enumerate(repo.get_stargazers_with_dates(), 1):",
+                          "            gazers.append(gazer)",
+                          "            if count % 200 == 0:",
+                          '                log.info("%s gazers fetched", count)',
+                          "    except GithubException as exc:",
+                          '        if exc.status != 403 or "permission to view the stargazers" not in str(exc):',
+                          "            raise",
+                          '        log.warning("REST stargazer endpoint denied access; retry via GraphQL")',
+                          "        gazers = get_stargazers_with_dates_graphql(repo.full_name)",
+                      ]
+                  ) + "\n"
+                  text = text.replace(old_stargazer_fetch, new_stargazer_fetch)
+
+                  graphql_helper = r'''
+                  def get_stargazers_with_dates_graphql(repo_full_name):
+                      owner, name = repo_full_name.split("/", 1)
+                      query = """
+                      query($owner: String!, $name: String!, $cursor: String) {
+                        repository(owner: $owner, name: $name) {
+                          stargazers(
+                            first: 100
+                            after: $cursor
+                            orderBy: {field: STARRED_AT, direction: ASC}
+                          ) {
+                            pageInfo {
+                              hasNextPage
+                              endCursor
+                            }
+                            edges {
+                              starredAt
+                            }
+                          }
+                        }
+                      }
+                      """
+
+                      class StargazerEvent:
+                          def __init__(self, starred_at):
+                              # Match PyGithub's REST shape here: get_stargazers_with_dates()
+                              # exposes starred_at as a UTC timestamp without tzinfo. The caller
+                              # localizes it to UTC before building the pandas index.
+                              self.starred_at = starred_at
+
+                      gazers = []
+                      cursor = None
+                      while True:
+                          response = requests.post(
+                              "https://api.github.com/graphql",
+                              headers={
+                                  "Authorization": f"Bearer {os.environ['GHRS_GITHUB_API_TOKEN'].strip()}",
+                                  "Content-Type": "application/json",
+                              },
+                              json={"query": query, "variables": {"owner": owner, "name": name, "cursor": cursor}},
+                              timeout=60,
+                          )
+                          response.raise_for_status()
+                          payload = response.json()
+                          if payload.get("errors"):
+                              raise RuntimeError(f"GitHub GraphQL stargazer fetch failed: {payload['errors']}")
+
+                          stargazers = payload["data"]["repository"]["stargazers"]
+                          for edge in stargazers["edges"]:
+                              starred_at = datetime.fromisoformat(
+                                  edge["starredAt"].replace("Z", "+00:00")
+                              ).replace(tzinfo=None)
+                              gazers.append(StargazerEvent(starred_at))
+                              if len(gazers) % 200 == 0:
+                                  log.info("%s gazers fetched", len(gazers))
+
+                          if not stargazers["pageInfo"]["hasNextPage"]:
+                              return gazers
+                          cursor = stargazers["pageInfo"]["endCursor"]
+
+
+                  def handle_rate_limit_error(exc):
+                  '''
+                  helper_insert_point = "\ndef handle_rate_limit_error(exc):\n"
+                  if helper_insert_point not in text:
+                      raise RuntimeError("Expected helper insertion point was not found")
+                  text = text.replace(helper_insert_point, "\n" + graphql_helper.strip() + "\n")
+                  path.write_text(text)
+                  PY
+
             - name: run-ghrs
-              # Use latest release.
-              uses: jgehrcke/github-repo-stats@RELEASE
+              # Run the checked-out RELEASE action after applying the stargazer fallback patch above.
+              uses: ./.github/actions/github-repo-stats
               with:
                   repository: microsoft/power-platform-skills
                   ghtoken: ${{ steps.app-token.outputs.token }}
