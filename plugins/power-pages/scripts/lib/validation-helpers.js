@@ -251,8 +251,6 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
 /** Cloud → Power Platform API base URL mapping */
 const CLOUD_TO_API = {
   'Public': 'https://api.powerplatform.com',
-  // TEMP (manage-governance test): remove before merging.
-  'Preprod': 'https://api.preprod.powerplatform.com',
   'UsGov': 'https://api.gov.powerplatform.microsoft.us',
   'UsGovHigh': 'https://api.high.powerplatform.microsoft.us',
   'UsGovDod': 'https://api.appsplatform.us',
