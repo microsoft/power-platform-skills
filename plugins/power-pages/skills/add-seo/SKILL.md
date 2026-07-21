@@ -9,7 +9,7 @@ allowed-tools: Read, Write, Edit, Grep, Glob, Bash, AskUserQuestion, Task, TaskC
 model: sonnet
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Add SEO
 
@@ -55,7 +55,7 @@ Read `powerpages.config.json` to get the site name and config.
 
 #### 1.3 Detect Framework & Discover Routes
 
-Read `package.json` to determine the framework and locate key files. See `${CLAUDE_PLUGIN_ROOT}/references/framework-conventions.md` for the full framework → public directory → index HTML mapping and route discovery patterns.
+Read `package.json` to determine the framework and locate key files. See `${PLUGIN_ROOT}/references/framework-conventions.md` for the full framework → public directory → index HTML mapping and route discovery patterns.
 
 Build a list of all routes (e.g., `/`, `/about`, `/contact`, `/blog`).
 
@@ -73,6 +73,8 @@ Build a list of all routes (e.g., `/`, `/about`, `/contact`, `/blog`).
 
 ### Actions
 
+<!-- not-a-gate: data-gathering — production URL + exclusion list shape the upcoming Phase 3 plan but don't write anything on their own -->
+
 Use `AskUserQuestion` to collect SEO preferences:
 
 #### Call 1
@@ -81,6 +83,8 @@ Use `AskUserQuestion` to collect SEO preferences:
 |----------|--------|---------|
 | What is the production URL for your site? (e.g., <https://contoso.powerappsportals.com>) | Site URL | *(free text — use single generic option so user types via "Other")* |
 | Which pages should be excluded from search engine indexing? | Exclusions | None — index all pages (Recommended), Admin/auth pages only, Let me specify |
+
+<!-- not-a-gate: data-gathering — meta description + OG tag choice shape the upcoming Phase 3 plan but don't write anything on their own -->
 
 #### Call 2
 
@@ -110,6 +114,14 @@ Present the SEO additions that will be made as a clear, inline summary:
 2. **sitemap.xml content** — all discovered routes with the production URL and priority assignments
 3. **Meta tags to add to index.html** — title, description, viewport, charset, Open Graph, Twitter Card
 4. **Favicon** — link tag and placeholder SVG
+
+<!-- gate: add-seo:3.plan-approval | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · add-seo:3.plan-approval):** Final sign-off on the SEO additions before any `robots.txt` / `sitemap.xml` / `index.html` write.
+>
+> **Trigger:** Phase 3 has presented the full plan inline (robots.txt, sitemap.xml, meta tags, favicon).
+> **Why we ask:** SEO assets land on disk with the wrong production URL, wrong exclusions, or unwanted OG tags — fixable but noisy in git history.
+> **Cancel leaves:** Nothing — no file writes yet.
 
 After presenting the plan, use `AskUserQuestion` to get approval:
 
@@ -296,7 +308,7 @@ If a dev server is running (or start one):
 
 #### 7.3 Record Skill Usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "AddSeo"`.
 

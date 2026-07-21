@@ -11,10 +11,13 @@ const {
   validateSettings,
   classifyEntry,
   classifyValueFormat,
-  readEntriesPreservingStage,
   KV_URI_PATTERN,
   KV_RESOURCE_ID_PATTERN,
 } = require('../lib/validate-deployment-settings');
+// The duplicated readSettingsFile was removed in favor of
+// verify-env-var-values#readSettingsFile, which now returns stageLabel on
+// each entry. Tests below exercise the unified parser via its new home.
+const { readSettingsFile } = require('../lib/verify-env-var-values');
 
 function withTempDir(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'validate-settings-'));
@@ -229,7 +232,7 @@ test('classifyEntry: unknown type with regular value falls back to unknown-type'
 // File parsing — preserving stage attribution
 // ────────────────────────────────────────────────────────────────────────────
 
-test('readEntriesPreservingStage handles top-level shape (no stages)', (t) => {
+test('readSettingsFile handles top-level shape (no stages)', (t) => {
   const dir = withTempDir(t);
   const file = writeSettings(dir, {
     EnvironmentVariables: [
@@ -237,12 +240,12 @@ test('readEntriesPreservingStage handles top-level shape (no stages)', (t) => {
       { SchemaName: 'b', Value: 'vb' },
     ],
   });
-  const entries = readEntriesPreservingStage(file);
+  const entries = readSettingsFile(file);
   assert.equal(entries.length, 2);
   assert.equal(entries[0].stageLabel, null);
 });
 
-test('readEntriesPreservingStage preserves stage names in Stages[] shape', (t) => {
+test('readSettingsFile preserves stage names in Stages[] shape', (t) => {
   const dir = withTempDir(t);
   const file = writeSettings(dir, {
     Stages: [
@@ -250,13 +253,13 @@ test('readEntriesPreservingStage preserves stage names in Stages[] shape', (t) =
       { Name: 'Production', EnvironmentVariables: [{ SchemaName: 'b', Value: 'pb' }] },
     ],
   });
-  const entries = readEntriesPreservingStage(file);
+  const entries = readSettingsFile(file);
   assert.equal(entries.length, 2);
   assert.equal(entries[0].stageLabel, 'Staging');
   assert.equal(entries[1].stageLabel, 'Production');
 });
 
-test('readEntriesPreservingStage filters by stageLabel (case-insensitive)', (t) => {
+test('readSettingsFile filters by stageLabel (case-insensitive)', (t) => {
   const dir = withTempDir(t);
   const file = writeSettings(dir, {
     Stages: [
@@ -264,7 +267,7 @@ test('readEntriesPreservingStage filters by stageLabel (case-insensitive)', (t) 
       { Name: 'Production', EnvironmentVariables: [{ SchemaName: 'b', Value: 'pb' }] },
     ],
   });
-  const entries = readEntriesPreservingStage(file, 'production');
+  const entries = readSettingsFile(file, 'production');
   assert.equal(entries.length, 1);
   assert.equal(entries[0].schemaName, 'b');
 });

@@ -2,7 +2,7 @@
 
 Reference document for the `setup-datamodel` skill. Contains full JSON body templates for creating tables, columns, and relationships via the Dataverse OData Web API (v9.2).
 
-> **Authentication, error handling, and retry patterns** are in the shared reference: `${CLAUDE_PLUGIN_ROOT}/references/odata-common.md`. Read that file first for headers, token refresh, HTTP status codes, and retry logic.
+> **Authentication, error handling, and retry patterns** are in the shared reference: `${PLUGIN_ROOT}/references/odata-common.md`. Read that file first for headers, token refresh, HTTP status codes, and retry logic.
 
 ---
 
@@ -270,7 +270,7 @@ Lookups are NOT created as standalone columns. They are created as part of a rel
 Use the same column JSON bodies as above. The column is added to the specified table.
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "api/data/v9.2/EntityDefinitions(LogicalName='cr123_project')/Attributes" --body '<column JSON>'
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "api/data/v9.2/EntityDefinitions(LogicalName='cr123_project')/Attributes" --body '<column JSON>'
 ```
 
 ---
@@ -370,7 +370,7 @@ After creating tables, columns, and relationships, publish them so they become a
 ```
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "api/data/v9.2/PublishXml" --body '{"ParameterXml":"<importexportxml><entities><entity>cr123_project</entity><entity>cr123_task</entity></entities></importexportxml>"}'
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "api/data/v9.2/PublishXml" --body '{"ParameterXml":"<importexportxml><entities><entity>cr123_project</entity><entity>cr123_task</entity></entities></importexportxml>"}'
 ```
 
 ### Publish All Customizations (Fallback)
@@ -397,4 +397,4 @@ If publishing specific tables fails, publish everything:
 
 ## Error Handling
 
-See `${CLAUDE_PLUGIN_ROOT}/references/odata-common.md` for HTTP status codes, error response format, Dataverse error codes, and retry patterns.
+See `${PLUGIN_ROOT}/references/odata-common.md` for HTTP status codes, error response format, Dataverse error codes, and retry patterns.

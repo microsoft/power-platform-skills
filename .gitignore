@@ -48,3 +48,6 @@ ENV/
 Thumbs.db
 
 .playwright-mcp/
+
+# oh-my-claudecode scratch state
+.omc/

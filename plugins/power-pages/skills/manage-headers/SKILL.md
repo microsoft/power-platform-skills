@@ -15,7 +15,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, TaskCreate,
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Manage Headers
 
@@ -97,6 +97,14 @@ MUST use plain language only. Never lead with words like CSP, CORS, HSTS, or MIM
 
 Read `references/headers-reference.md` for recommended values and guidance. **Present the most important gaps first** — headers that are missing or misconfigured relative to the recommended values.
 
+<!-- gate: manage-headers:3.per-finding | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · manage-headers:3.per-finding):** Per-finding loop — for each header gap, prompt accept / customize / skip. Fires PER FINDING in the loop; skipped findings leave the header at its current value, accepted/customized findings get an Edit / create-script call in Phase 4.
+>
+> **Trigger:** Phase 3 entry has tallied header gaps against `references/headers-reference.md`.
+> **Why we ask:** Auto-accepting can apply CSP/CORS values that break the site (legitimate scripts blocked, third-party widgets refused); auto-skipping leaves the site missing important headers.
+> **Cancel leaves:** Nothing — Phase 4's Edit / create-script call only fires on accepted findings.
+
 For each finding, present via `AskUserQuestion`:
 - A plain-language explanation of why the change matters
 - The recommended value
@@ -129,7 +137,7 @@ For **existing** settings: use `Edit` on the YAML file directly — change the `
 For **new** settings: use the shared create script:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "<setting-name>" \
   --value "<value>" \
@@ -161,7 +169,7 @@ Use `references/headers-reference.md` for authoritative descriptions and validat
 Then run the transform:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-headers/scripts/transform-headers.js" \
+node "${PLUGIN_ROOT}/skills/manage-headers/scripts/transform-headers.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --annotations "<REVIEW_DIR>/header-annotations.json"
 ```
@@ -176,7 +184,7 @@ Plain-language summary: what was changed, what gaps remain, and what is already 
 
 ### 5.3 Record skill usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 >
 > Use `--skillName "ManageHeaders"`.
 

@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, LSP, TaskCreate, TaskUpdate,
 model: opus
 ---
 
-**📋 Shared Instructions: [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns.
+**📋 Shared Instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns.
 
 **References:**
 
@@ -23,7 +23,7 @@ model: opus
 
 ### Step 0: Check Memory Bank
 
-Check for `memory-bank.md` per [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md). Skip completed steps.
+Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md). Skip completed steps.
 
 ### Step 1: Validate Prerequisites
 
@@ -105,7 +105,7 @@ npx power-apps init -n '{user-provided-app-name}' -e <environment-id>
 
 **Authentication:** On first run, a browser window opens for Microsoft sign-in. Complete the login and the command continues. No separate auth setup is needed.
 
-See [preferred-environment.md](${CLAUDE_PLUGIN_ROOT}/shared/preferred-environment.md) for environment selection details.
+See [preferred-environment.md](${PLUGIN_ROOT}/shared/preferred-environment.md) for environment selection details.
 
 **`npx power-apps init` failure:**
 
@@ -167,7 +167,7 @@ Each `/add-*` skill runs `npm run build` to catch errors. Do NOT deploy yet.
 
 **This is the core step.** Build the actual app features described in the plan from Step 3.
 
-1. **Review generated services**: Use `Grep` to find methods in generated service files (they can be very large -- see [connector-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/connector-reference.md#inspecting-large-generated-files)). Do NOT read entire generated files.
+1. **Review generated services**: Use `Grep` to find methods in generated service files (they can be very large -- see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#inspecting-large-generated-files)). Do NOT read entire generated files.
 2. **Build components**: Create React components for each screen/feature in the plan
 3. **Connect data**: Wire components to generated services (use `*Service.getAll()`, `*Service.create()`, etc.)
 4. **Apply theme**: Use the user's theme preference (default: dark theme per development standards)
@@ -176,7 +176,7 @@ Each `/add-*` skill runs `npm run build` to catch errors. Do NOT deploy yet.
 **Key rules:**
 
 - Use generated services for all data access -- never use fetch/axios directly
-- Read [dataverse-reference.md](${CLAUDE_PLUGIN_ROOT}/skills/add-dataverse/references/dataverse-reference.md) if working with Dataverse (picklist fields, virtual fields, lookups have critical gotchas)
+- Read [dataverse-reference.md](${PLUGIN_ROOT}/skills/add-dataverse/references/dataverse-reference.md) if working with Dataverse (picklist fields, virtual fields, lookups have critical gotchas)
 - Remove unused imports before building (TS6133 strict mode)
 - Don't edit files in `src/generated/` unless fixing known issues
 

@@ -145,7 +145,7 @@ change the navigation flow across the app.
 
 ### Phase 4a — Simple: Direct Edit
 
-Read `${CLAUDE_PLUGIN_ROOT}/references/TechnicalGuide.md` before making changes.
+Read `${PLUGIN_ROOT}/references/TechnicalGuide.md` before making changes.
 
 Apply the changes directly:
 
@@ -172,8 +172,8 @@ plan document.
 
 Read both reference documents before designing the plan:
 
-- `${CLAUDE_PLUGIN_ROOT}/references/TechnicalGuide.md`
-- `${CLAUDE_PLUGIN_ROOT}/references/DesignGuide.md`
+- `${PLUGIN_ROOT}/references/TechnicalGuide.md`
+- `${PLUGIN_ROOT}/references/DesignGuide.md`
 
 Internalize both. These govern every design decision you will make.
 
@@ -281,7 +281,7 @@ Example prompt:
 > - Reference image: [observations, or "none provided"]
 >
 > Working directory: [absolute path from Phase 0]
-> Plugin root: ${CLAUDE_PLUGIN_ROOT}
+> Plugin root: ${PLUGIN_ROOT}
 >
 > Follow the instructions in your agent file. Discover resources, gather control
 > definitions, write App.pa.yaml and canvas-app-plan.md to the working directory. Return
@@ -308,7 +308,7 @@ Example prompt:
 > - Screens: [list of existing screens and their key controls]
 >
 > Working directory: [absolute working directory path]
-> Plugin root: ${CLAUDE_PLUGIN_ROOT}
+> Plugin root: ${PLUGIN_ROOT}
 > Synced files: [list of .pa.yaml filenames]
 >
 > Follow the instructions in your agent file. Discover resources for new controls, gather

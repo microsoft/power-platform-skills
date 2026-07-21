@@ -197,7 +197,7 @@ LLMs are probabilistic. When an LLM constructs inline bash commands for Datavers
 |--------|---------|
 | `validation-helpers.js` | `runValidation()`, `findPath()`, `findProjectRoot()`, `approve()`, `block()` — shared boilerplate for all validators |
 | `powerpages-config.js` | Loads `.powerpages-site` YAML files (table permissions, site settings, web roles) with consistent parsing |
-| `powerpages-hook-utils.js` | Maps skill names to validator scripts for the hook dispatcher |
+| `powerpages-hook-utils.js` | Discovers skill folders and optional validator scripts for the hook dispatcher |
 | `powerpages-schema-validator.js` | Validates permission/site-setting YAML schema |
 | `table-permissions-validator.js` | Validates table permission YAML |
 | `web-roles-validator.js` | Validates web role YAML |
@@ -227,7 +227,7 @@ LLMs are probabilistic. When an LLM constructs inline bash commands for Datavers
 Skills invoke scripts via `node` with CLI arguments:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" \
+node "${PLUGIN_ROOT}/scripts/create-table-permission.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --permissionName "<Permission Name>" \
   --tableName "<table_logical_name>" \
@@ -270,7 +270,7 @@ Every skill pauses for user approval at three junctures:
 
 Between checkpoints, skills work **autonomously** — no mid-analysis questions.
 
-> **Approval Gates — canonical catalog.** Every individual `AskUserQuestion` that meets the gate test (would Cancel leave partial or complete-but-wrong state behind?) is an **Approval Gate**. See `references/approval-gates.md` for the canonical terminology, the six categories (`intent` / `plan` / `progress` / `consent` / `final` / `pause`), the marker syntax (`<!-- gate: skill:phase | category=X | cancel-leaves=Y -->` + human-readable `> 🚦 **Gate (...)**` block), the per-skill catalog, and the lint rules (`GATE-must-have-marker`, `GATE-id-must-be-unique`, `GATE-must-be-in-catalog`, `GATE-intent-must-call-helper`, `GATE-cancel-leaves-known-vocab`). ALM skills enforce these rules with `severity: 'error'`; non-ALM skills currently warn-only until the catalog extends.
+> **Approval Gates — canonical catalog.** Every individual `AskUserQuestion` that meets the gate test (would Cancel leave partial or complete-but-wrong state behind?) is an **Approval Gate**. See `references/approval-gates.md` for the canonical terminology, the six categories (`intent` / `plan` / `progress` / `consent` / `final` / `pause`), the marker syntax (`<!-- gate: skill:phase | category=X | cancel-leaves=Y -->` + human-readable `> 🚦 **Gate (...)**` block), the per-skill catalog, and the seven gate-related lint rules: `GATE-must-have-marker`, `GATE-id-must-be-unique`, `GATE-must-be-in-catalog`, `GATE-intent-must-call-helper`, `GATE-cancel-leaves-known-vocab`, `GATE-prose-block-required` (marker followed by 🚦 prose block within 10 lines, outside any code fence), and `CATALOG-row-must-have-marker` (every `kind: gate` catalog row must have a corresponding marker in some SKILL.md — the reverse of `GATE-must-be-in-catalog`). **Every skill in this plugin** is enforced at `severity: 'error'` — there is no ALM vs non-ALM carve-out. When you add a new skill that introduces an `AskUserQuestion`, you must extend `references/approval-gates.md` §6 with the new gate-id(s) in the same PR; CI will block otherwise. Data-gathering prompts (free-text fallbacks, configuration sub-prompts) take a `<!-- not-a-gate: <reason> -->` comment instead.
 
 ### Approval in Practice
 
@@ -410,7 +410,7 @@ echo '{"reason":"ni-dev — ALM handled by infra"}' > .alm-deferred
 
 PostToolUse on the `Skill` tool fires **once per skill invocation**. Stop fires on **every assistant pause** (including user-input waits — every "Continue?" prompt fires it).
 
-This plugin uses PostToolUse via `hooks/hooks.json` → `run-skill-posttool-validation.js` → per-skill validator. Skill frontmatter must NOT declare its own `hooks: Stop:` block — those duplicate the centralized PostToolUse hook and fire too often. To wire validation for a new skill, register it in the `TRACKED_SKILLS` map in `scripts/lib/powerpages-hook-utils.js` (see `AGENTS.md` → "Hooks" for the registration steps).
+This plugin uses PostToolUse via `hooks/hooks.json` → `run-skill-posttool-validation.js` → per-skill validator. Skill frontmatter must NOT declare its own `hooks: Stop:` block — those duplicate the centralized PostToolUse hook and fire too often. `scripts/lib/powerpages-hook-utils.js` automatically tracks every `skills/*/SKILL.md` folder and discovers an optional `skills/<skill>/scripts/validate*.js` validator, so new skills do not need manual hook registration.
 
 #### 4. Skills write explicit status, not just artifact presence
 

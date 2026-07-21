@@ -1,5 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const { compareSemver, formatUpdateMessage, readMarketplaceName } = require('../check-version');
 
@@ -65,6 +68,17 @@ test('readMarketplaceName reads from the git root marketplace.json', () => {
   const gitRoot = execSync('git rev-parse --show-toplevel', { encoding: 'utf8' }).trim();
   const name = readMarketplaceName(gitRoot);
   assert.equal(name, 'power-platform-skills');
+});
+
+test('readMarketplaceName falls back to legacy marketplace path', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'power-pages-version-'));
+  fs.mkdirSync(path.join(tempDir, '.claude-plugin'));
+  fs.writeFileSync(
+    path.join(tempDir, '.claude-plugin', 'marketplace.json'),
+    JSON.stringify({ name: 'legacy-marketplace' })
+  );
+
+  assert.equal(readMarketplaceName(tempDir), 'legacy-marketplace');
 });
 
 test('readMarketplaceName returns null for nonexistent path', () => {

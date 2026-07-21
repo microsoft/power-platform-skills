@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "flowagent": {
+      "command": "node",
+      "args": [
+        "-e",
+        "const p=require('node:path'),fs=require('node:fs');const r=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT||process.cwd();const src=process.env.PLUGIN_ROOT?'PLUGIN_ROOT':process.env.CLAUDE_PLUGIN_ROOT?'CLAUDE_PLUGIN_ROOT':'cwd';const mjs=p.resolve(r,'server','mcp.mjs');if(!fs.existsSync(mjs)){console.error('FlowAgent MCP not found at '+mjs+' (resolved via '+src+'='+r+'). Run /setup to fix.');process.exit(1);}(async()=>{try{await import(require('node:url').pathToFileURL(mjs).href)}catch(e){console.error(e);process.exit(1)}})();"
+      ]
+    }
+  }
+}

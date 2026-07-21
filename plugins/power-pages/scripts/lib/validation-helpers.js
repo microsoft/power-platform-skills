@@ -89,14 +89,24 @@ function findPath(dir, target) {
 }
 
 /**
- * Finds the project root directory (containing powerpages.config.json).
+ * Finds the project root directory of a Power Pages site.
+ *
+ * A project root is marked by EITHER:
+ *   - `powerpages.config.json` — code/SPA sites (`pac pages download-code-site`), OR
+ *   - a `.powerpages-site/` directory — declarative design-studio sites
+ *     (`pac pages download`; standard or enhanced data model). These have NO
+ *     `powerpages.config.json`.
+ *
+ * Code sites have both markers; declarative sites have only
+ * `.powerpages-site/`. Checking for either makes root discovery work for both site types.
+ *
  * @returns {string|null} Project root path, or null
  */
 function findProjectRoot(dir) {
   let current = path.resolve(dir);
   while (true) {
-    const configPath = path.join(current, 'powerpages.config.json');
-    if (fs.existsSync(configPath)) {
+    if (fs.existsSync(path.join(current, 'powerpages.config.json')) ||
+        fs.existsSync(path.join(current, '.powerpages-site'))) {
       return current;
     }
 
@@ -107,8 +117,11 @@ function findProjectRoot(dir) {
     current = parent;
   }
 
+  // Fallback: search subdirectories for either marker (config first, then .powerpages-site/).
   const fallbackConfigPath = findPath(dir, 'powerpages.config.json');
-  return fallbackConfigPath ? path.dirname(fallbackConfigPath) : null;
+  if (fallbackConfigPath) return path.dirname(fallbackConfigPath);
+  const fallbackSiteDir = findPath(dir, '.powerpages-site');
+  return fallbackSiteDir ? path.dirname(fallbackSiteDir) : null;
 }
 
 /**
@@ -167,11 +180,25 @@ function getAuthToken(resourceUrl, tenantId) {
  * Gets the environment URL from `pac env who`.
  * @returns {string|null} Environment URL, or null
  */
+// Pure parser (exported for unit testing — getEnvironmentUrl() shells out, so the
+// regex itself is tested here against raw banner text rather than through execSync).
+// PAC CLI labels the environment URL differently across versions / commands:
+// `pac env who` on 2.8.x prints it under "Org URL:" (inside "Organization
+// Information"); older/other builds emit "Environment URL:". Match EITHER — with
+// only the "Environment URL:" form this returned null on 2.8.x and every caller
+// relying on the pac-env-who fallback (verify-alm-prerequisites when --envUrl is
+// omitted, the datamodel / solution / permissions validators) silently failed.
+// Example 2.8.1 line: `  Org URL:    https://org4a2942d9.crm17.dynamics.com/`
+function parseEnvironmentUrl(whoOutput) {
+  if (!whoOutput) return null;
+  const match = whoOutput.match(/(?:Org URL|Environment URL):\s*(https:\/\/[^\s]+)/i);
+  return match ? match[1].replace(/\/+$/, '') : null;
+}
+
 function getEnvironmentUrl() {
   try {
     const output = execSync('pac env who', { encoding: 'utf8', timeout: 15000 });
-    const match = output.match(/Environment URL:\s*(https:\/\/[^\s]+)/i);
-    return match ? match[1].replace(/\/+$/, '') : null;
+    return parseEnvironmentUrl(output);
   } catch {
     return null;
   }
@@ -248,6 +275,64 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
   });
 }
 
+/**
+ * Single Dataverse OData GET (v9.2 headers, `Prefer: odata.maxpagesize=5000`),
+ * throws on non-2xx. `url` is absolute — pass an `@odata.nextLink` straight back in.
+ * @param {string} url - absolute URL
+ * @param {string} token - bearer token
+ * @param {Function} [request=makeRequest] - injectable for tests
+ * @returns {Promise<object>} parsed JSON body
+ */
+async function odataGet(url, token, request = makeRequest) {
+  const res = await request({
+    url,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json',
+      'OData-MaxVersion': '4.0',
+      'OData-Version': '4.0',
+      Prefer: 'odata.maxpagesize=5000',
+    },
+    timeout: 30000,
+  });
+  if (res.error) throw new Error(`OData request failed: ${res.error}`);
+  if (res.statusCode < 200 || res.statusCode >= 300) {
+    throw new Error(`HTTP ${res.statusCode} from ${url}: ${(res.body || '').slice(0, 400)}`);
+  }
+  return JSON.parse(res.body);
+}
+
+/**
+ * Follows `@odata.nextLink`, aggregating every page's `value[]` into one array.
+ * `maxPages` is a runaway-loop safety cap (100 × 5000 ≈ 500K rows). FAILS CLOSED:
+ * if the cap is reached while `@odata.nextLink` is still present, throws rather than
+ * silently returning a truncated set — a partial result would produce wrong
+ * table/env-var counts for ALM sizing/splitting with no signal. Callers that want
+ * partial results must catch and downgrade accuracy intentionally.
+ * @param {string} url - absolute starting URL
+ * @param {string} token - bearer token
+ * @param {Function} [request=makeRequest] - injectable for tests
+ * @param {number} [maxPages=100]
+ * @returns {Promise<object[]>}
+ */
+async function odataGetAll(url, token, request = makeRequest, maxPages = 100) {
+  const out = [];
+  let next = url;
+  let p = 0;
+  for (; p < maxPages && next; p++) {
+    const page = await odataGet(next, token, request);
+    if (Array.isArray(page.value)) out.push(...page.value);
+    next = page['@odata.nextLink'] || null;
+  }
+  if (next) {
+    throw new Error(
+      `odataGetAll hit the ${maxPages}-page cap with @odata.nextLink still present ` +
+      `(${out.length} rows so far) — result would be truncated. Raise maxPages or narrow the query.`,
+    );
+  }
+  return out;
+}
+
 /** Cloud → Power Platform API base URL mapping */
 const CLOUD_TO_API = {
   'Public': 'https://api.powerplatform.com',
@@ -277,7 +362,10 @@ module.exports = {
   UUID_REGEX,
   getAuthToken,
   makeRequest,
+  odataGet,
+  odataGetAll,
   getEnvironmentUrl,
+  parseEnvironmentUrl,
   getPacAuthInfo,
   CLOUD_TO_API,
   CLOUD_TO_SITE_DOMAIN,

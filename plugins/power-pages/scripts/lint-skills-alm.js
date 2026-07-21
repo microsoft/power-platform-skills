@@ -29,9 +29,10 @@
 //              (matched by `` `AskUserQuestion` `` near a `:`).
 //     Require: the same section contains at least one preceding
 //              `<!-- gate: ... -->` or `<!-- not-a-gate: ... -->` marker.
-//     Scope:   ALM skills (see ALM_SKILLS) → severity 'error'.
-//              Non-ALM skills → severity 'warning' (warn-only until the
-//              catalog in references/approval-gates.md is extended).
+//     Scope:   Every SKILL.md under plugins/power-pages/skills/ → severity 'error'.
+//              (v2 had a warn-only branch for non-ALM skills; v3 removed it once
+//              the catalog in references/approval-gates.md was extended to cover
+//              the full skill set — see §10 landing history.)
 //     Waivable: yes, inline `<!-- alm-lint-ignore: GATE-must-have-marker -->`
 //               or `.almlintignore` entry.
 //
@@ -45,7 +46,8 @@
 //     Trigger: any gate-id used in a SKILL.md marker.
 //     Require: the same gate-id appears (backticked) somewhere in
 //              references/approval-gates.md (the catalog).
-//     Scope:   ALM skills → 'error'. Non-ALM → 'warning'.
+//     Scope:   Every SKILL.md → 'error'. (Same v3 enforcement note as
+//              GATE-must-have-marker above.)
 //     Waivable: yes (inline + allowlist).
 //
 //   GATE-intent-must-call-helper
@@ -64,10 +66,34 @@
 //     Waivable: yes — custom slugs allowed; rule flags only typos /
 //               non-kebab values.
 //
+//   CATALOG-row-must-have-marker
+//     Trigger: every `| `<gate-id>` | gate | ...` row in §6 of the catalog
+//              (references/approval-gates.md). Only rows tagged `gate` —
+//              `not-a-gate` rows are skipped because not-a-gate markers in
+//              SKILL.md don't carry an ID to match against.
+//     Require: at least one `<!-- gate: <gate-id> ... -->` marker in some
+//              SKILL.md under plugins/power-pages/skills/.
+//     Waivable: `.almlintignore` allowlist only — this rule operates on the
+//               catalog as a whole (not per SKILL.md), so inline
+//               `<!-- alm-lint-ignore: ... -->` comments are not honored.
+//               To suppress an orphan-row finding, add an allowlist entry like:
+//                   references/approval-gates.md CATALOG-row-must-have-marker <reason>
+//
+//   GATE-prose-block-required
+//     Trigger: any `<!-- gate: ID ... -->` marker.
+//     Require: within the next 10 lines, a line carrying the 🚦 sentinel
+//              appears. Catches the "future PR deletes the prose block"
+//              drift case without forcing the v3 3-label structure on 80+
+//              legacy v2 single-line markers. The richer structured fields
+//              (Trigger / Why we ask / Cancel leaves) are recommended in
+//              §4.1 of references/approval-gates.md but not enforced.
+//     Waivable: yes — inline ignore comment.
+//
 // Usage:
 //   node scripts/lint-skills-alm.js [--plugin-root <path>]
-//   Exit 0 when no findings (or only warnings); exit 1 when at least one
-//   finding has severity 'error'. stderr lists errors; stdout lists warnings.
+//   Exit 0 only when there are zero findings. Exit 1 on any finding —
+//   v3 is hard-fail uniform, so every finding has severity 'error' and
+//   every output goes to stderr.
 //
 // The script is pure-Node, has no dependencies, and returns findings
 // programmatically so the tests can assert behavior without spawning processes.
@@ -185,24 +211,8 @@ const KNOWN_RULES = new Set([
   'GATE-must-be-in-catalog',
   'GATE-intent-must-call-helper',
   'GATE-cancel-leaves-known-vocab',
-]);
-
-// ALM skills get hard-fail severity; everything else gets warn-only until
-// the approval-gates catalog is extended to non-ALM skills (see §8 of
-// references/approval-gates.md). Folder name = skill name.
-const ALM_SKILLS = new Set([
-  'plan-alm',
-  'setup-solution',
-  'setup-pipeline',
-  'deploy-pipeline',
-  'export-solution',
-  'import-solution',
-  'configure-env-variables',
-  'ensure-pipelines-host',
-  'force-link-environment',
-  'activate-site',
-  'test-site',
-  'diagnose-deployment',
+  'CATALOG-row-must-have-marker',
+  'GATE-prose-block-required',
 ]);
 
 // `category=intent` markers must be backed by a real helper invocation.
@@ -428,23 +438,24 @@ function findPromptLines(content) {
   return out;
 }
 
-function skillNameFromFile(file) {
-  // Expect .../skills/<skill-name>/SKILL.md
-  const parts = file.split(/[\\/]/);
-  const idx = parts.lastIndexOf('skills');
-  if (idx < 0 || idx + 1 >= parts.length) return null;
-  return parts[idx + 1];
-}
-
-function severityForSkill(skillName) {
-  return ALM_SKILLS.has(skillName) ? 'error' : 'warning';
-}
+// v3: hard-fail uniformly across every SKILL.md under plugins/power-pages/skills/.
+// Kept as a named constant so every finding-push site references the same
+// source of truth; flipping severity for a future rule class would touch a
+// single line here rather than rewriting every literal.
+const SKILL_SEVERITY = 'error';
 
 // Parse the catalog file (references/approval-gates.md) and extract all
 // backticked gate-id strings. Returns a Set, or null if the catalog isn't
 // present (downgrades GATE-must-be-in-catalog to no-op so the lint isn't
 // hard-broken when the catalog is removed/renamed).
-const CATALOG_GATE_ID_PATTERN = /`([a-z][a-z0-9-]*:[A-Za-z0-9._-]+)`/g;
+//
+// Case-insensitive on the skill-name segment to align with GATE_MARKER_PATTERN
+// — SKILL.md gate markers allow any case in the skill-name segment, so the
+// catalog scan must too, otherwise a CamelCase skill would fail
+// GATE-must-be-in-catalog even with a correct catalog row. Underscores are
+// intentionally NOT allowed — current naming convention is kebab-case for
+// skill names; allow only [A-Za-z][A-Za-z0-9-]* on that segment.
+const CATALOG_GATE_ID_PATTERN = /`([A-Za-z][A-Za-z0-9-]*:[A-Za-z0-9._-]+)`/g;
 
 function loadCatalogGateIds(pluginRoot) {
   const catalogFile = path.join(pluginRoot, 'references', 'approval-gates.md');
@@ -454,6 +465,31 @@ function loadCatalogGateIds(pluginRoot) {
   CATALOG_GATE_ID_PATTERN.lastIndex = 0;
   let m;
   while ((m = CATALOG_GATE_ID_PATTERN.exec(content)) !== null) {
+    ids.add(m[1]);
+  }
+  return ids;
+}
+
+// Catalog row pattern: matches `| `<id>` | gate | ...` rows in §6 tables.
+// Only rows tagged `gate` (not `not-a-gate`) need a matching marker — not-a-gate
+// markers in SKILL.md don't carry an ID (they're free-text reasons), so the
+// reverse check is meaningless for them.
+//
+// Leading whitespace tolerance: GFM accepts up to 3 spaces of indentation
+// before the leading `|`, so we allow `^\s{0,3}\|`. Without this, a future
+// markdown reformat that nests §6 tables under a parent list silently
+// disables orphan detection for the indented rows.
+const CATALOG_GATE_ROW_PATTERN =
+  /^\s{0,3}\|\s*`([A-Za-z][A-Za-z0-9-]*:[A-Za-z0-9._-]+)`\s*\|\s*gate\s*\|/gm;
+
+function loadCatalogGateRows(pluginRoot) {
+  const catalogFile = path.join(pluginRoot, 'references', 'approval-gates.md');
+  if (!fs.existsSync(catalogFile)) return null;
+  const content = fs.readFileSync(catalogFile, 'utf8');
+  const ids = new Set();
+  CATALOG_GATE_ROW_PATTERN.lastIndex = 0;
+  let m;
+  while ((m = CATALOG_GATE_ROW_PATTERN.exec(content)) !== null) {
     ids.add(m[1]);
   }
   return ids;
@@ -476,7 +512,11 @@ function checkSectionPairing(content) {
       (l) => sectionStart - 1 + l
     );
     for (const promptLine of prompts) {
-      const hasPreceding = fileMarkerLines.some((m) => m <= promptLine);
+      // Marker must be on a line STRICTLY BEFORE the prompt line.
+      // `<=` would let a marker sit on the same line as the prompt (or be
+      // smuggled inside the prompt's line via inline HTML), which trivially
+      // satisfies the rule without matching its intent.
+      const hasPreceding = fileMarkerLines.some((m) => m < promptLine);
       if (!hasPreceding) unmatched.push({ heading: section.heading, lineNum: promptLine });
     }
   }
@@ -511,15 +551,13 @@ function collectFindings({ pluginRoot }) {
   for (const file of skillFiles) {
     const content = fs.readFileSync(file, 'utf8');
     const ignores = extractIgnores(content);
-    const skillName = skillNameFromFile(file);
-    const skillSeverity = severityForSkill(skillName);
 
     if (!ignores.has('SKILL-must-read-manifest')) {
       const touches = touchesDataverseWrites(content);
       if (touches && !hasManifestRead(content)) {
         findings.push({
           rule: 'SKILL-must-read-manifest',
-          severity: 'error',
+          severity: SKILL_SEVERITY,
           file,
           message:
             'Skill creates Dataverse records but does not reference `.solution-manifest.json`. ' +
@@ -536,7 +574,7 @@ function collectFindings({ pluginRoot }) {
         if (!knownPpcTypes.has(typeValue)) {
           findings.push({
             rule: 'DISCOVER-coverage',
-            severity: 'error',
+            severity: SKILL_SEVERITY,
             file,
             message:
               `Skill references powerpagecomponenttype=${typeValue} but that value is not in ` +
@@ -558,7 +596,7 @@ function collectFindings({ pluginRoot }) {
       for (const u of unmatched) {
         findings.push({
           rule: 'GATE-must-have-marker',
-          severity: skillSeverity,
+          severity: SKILL_SEVERITY,
           file,
           message:
             `Phase section "${u.heading}" contains an \`AskUserQuestion\` prompt (line ${u.lineNum}) ` +
@@ -576,7 +614,7 @@ function collectFindings({ pluginRoot }) {
         if (!callsHelper) {
           findings.push({
             rule: 'GATE-intent-must-call-helper',
-            severity: 'error',
+            severity: SKILL_SEVERITY,
             file,
             message:
               `Skill declares ${intentMarkers.length} \`category=intent\` gate(s) ` +
@@ -584,6 +622,77 @@ function collectFindings({ pluginRoot }) {
               `known helper script (${INTENT_HELPERS.join(', ')}). ` +
               `\`intent\` gates must be backed by deterministic state from a helper — not by LLM reasoning.`,
             hint: 'See references/approval-gates.md §3.1.',
+          });
+        }
+      }
+    }
+
+    // GATE-prose-block-required — every `<!-- gate: -->` must be followed
+    // within 10 lines (inclusive of the marker's own line, to support a
+    // single-line marker-plus-🚦 style if a future contributor chooses it)
+    // by a line carrying the 🚦 sentinel OUTSIDE any fenced code block.
+    // This is the minimum viable check against "future PR deletes the
+    // human-readable block" drift: it catches deletion + ID-line tampering
+    // without forcing a structural rewrite of legacy v2 single-line prose.
+    // The richer structured fields (`> **Trigger:**`, `> **Why we ask:**`,
+    // `> **Cancel leaves:**`) are recommended in §4.1 of references/approval-
+    // gates.md for new markers but not lint-enforced — keeping the rule
+    // tight enough that 80+ existing v2 markers don't need to be rewritten
+    // in the same PR.
+    //
+    // Code-fence awareness: a literal 🚦 inside a ```bash``` example or
+    // similar should NOT satisfy the rule, otherwise a contributor who
+    // deletes the real Gate prose block but leaves an example 🚦 within
+    // the window silently passes. We track fence state across the FULL
+    // file (not just the window) so the in/out determination is correct
+    // when the window opens mid-fence.
+    if (!ignores.has('GATE-prose-block-required')) {
+      const lines = content.split(/\r?\n/);
+      // Pre-compute: for each line, is it inside a fenced code block?
+      // A fence-toggle line is one that starts with ``` (optionally followed
+      // by an info string). Bare ``` or ```lang both toggle, but only when
+      // appearing at column 0 (after trimming up to 3 spaces of indent per
+      // CommonMark fenced-code rules — approximated with /^\s{0,3}```/).
+      //
+      // The fence-delimiter LINE ITSELF (both opening and closing) is marked
+      // OUTSIDE — it's Markdown syntax, not code content. Only the content
+      // lines strictly between two delimiters are INSIDE. This makes both
+      // delimiters classified consistently with each other (a previous
+      // version flipped `inside` BEFORE recording, which left the opening
+      // fence INSIDE and the closing fence OUTSIDE — asymmetric).
+      const inFence = new Array(lines.length).fill(false);
+      let inside = false;
+      const FENCE_PATTERN = /^\s{0,3}```/;
+      for (let i = 0; i < lines.length; i++) {
+        if (FENCE_PATTERN.test(lines[i])) {
+          inFence[i] = false; // delimiter line itself: not inside
+          inside = !inside;
+        } else {
+          inFence[i] = inside;
+        }
+      }
+      for (const gm of gateMarkers) {
+        const startIdx = gm.lineNum - 1; // 0-based
+        const endExclusive = Math.min(startIdx + 10, lines.length);
+        let hasSentinel = false;
+        for (let i = startIdx; i < endExclusive; i++) {
+          if (lines[i].includes('🚦') && !inFence[i]) {
+            hasSentinel = true;
+            break;
+          }
+        }
+        if (!hasSentinel) {
+          findings.push({
+            rule: 'GATE-prose-block-required',
+            severity: SKILL_SEVERITY,
+            file,
+            message:
+              `Gate \`${gm.gateId}\` (line ${gm.lineNum}) is missing the 🚦 ` +
+              `prose block within 10 lines (a line carrying the 🚦 sentinel ` +
+              `outside any fenced code block). Every gate marker must be ` +
+              `followed by a \`> 🚦 **Gate (...)**\` line so humans see ` +
+              `the same context the lint sees.`,
+            hint: 'See references/approval-gates.md §4.1 for the marker + prose template.',
           });
         }
       }
@@ -597,7 +706,7 @@ function collectFindings({ pluginRoot }) {
         if (KEBAB_CASE_PATTERN.test(v)) continue;
         findings.push({
           rule: 'GATE-cancel-leaves-known-vocab',
-          severity: 'error',
+          severity: SKILL_SEVERITY,
           file,
           message:
             `Gate \`${gm.gateId}\` has \`cancel-leaves=${v}\` which is neither a known vocabulary value ` +
@@ -614,7 +723,7 @@ function collectFindings({ pluginRoot }) {
         if (!catalogGateIds.has(gm.gateId)) {
           findings.push({
             rule: 'GATE-must-be-in-catalog',
-            severity: skillSeverity,
+            severity: SKILL_SEVERITY,
             file,
             message:
               `Gate \`${gm.gateId}\` is declared in SKILL.md but is not in the catalog ` +
@@ -640,13 +749,37 @@ function collectFindings({ pluginRoot }) {
       .join(', ');
     findings.push({
       rule: 'GATE-id-must-be-unique',
-      severity: 'error',
+      severity: SKILL_SEVERITY,
       file: occurrences[0].file,
       message:
         `Gate id \`${gateId}\` is declared in ${occurrences.length} places: ${locs}. ` +
         `Gate IDs must be globally unique across the plugin.`,
       hint: 'Re-anchor one of the markers to a different phase id, or merge them into a single gate.',
     });
+  }
+
+  // CATALOG-row-must-have-marker — every `kind: gate` catalog row must have at
+  // least one matching <!-- gate: ID --> marker in a SKILL.md. This is the
+  // reverse of GATE-must-be-in-catalog and prevents the orphan-row class of
+  // bug that v3 closed by hand: catalog rows that describe gates with no
+  // corresponding SKILL.md anchor accumulate silently otherwise.
+  const catalogGateRows = loadCatalogGateRows(pluginRoot);
+  if (catalogGateRows) {
+    const markerIdSet = new Set(allGateMarkers.map((m) => m.gateId));
+    const catalogFile = path.join(pluginRoot, 'references', 'approval-gates.md');
+    for (const gateId of catalogGateRows) {
+      if (markerIdSet.has(gateId)) continue;
+      findings.push({
+        rule: 'CATALOG-row-must-have-marker',
+        severity: SKILL_SEVERITY,
+        file: catalogFile,
+        message:
+          `Catalog row \`${gateId}\` (kind: gate) has no matching ` +
+          `\`<!-- gate: ${gateId} ... -->\` marker in any SKILL.md. Either add ` +
+          `the marker to the owning skill, or remove/retag the catalog row.`,
+        hint: 'See references/approval-gates.md §7 (How to add a new gate) and §10 (catalog completeness).',
+      });
+    }
   }
 
   // Rule 2 — SCRIPT-must-use-resolver.
@@ -659,7 +792,7 @@ function collectFindings({ pluginRoot }) {
 
     findings.push({
       rule: 'SCRIPT-must-use-resolver',
-      severity: 'error',
+      severity: SKILL_SEVERITY,
       file,
       message:
         'Script creates Dataverse records (AddSolutionComponent / publisher / solution / env var definition) ' +
@@ -697,32 +830,33 @@ function main(argv) {
   }
 
   const findings = collectFindings({ pluginRoot });
-  const errors = findings.filter((f) => f.severity === 'error');
-  const warnings = findings.filter((f) => f.severity === 'warning');
 
   if (findings.length === 0) {
     process.stdout.write('alm-lint: 0 findings\n');
     return 0;
   }
 
-  // Warnings go to stdout (informational); errors go to stderr.
-  for (const f of warnings) process.stdout.write(formatFinding(f, pluginRoot));
-  for (const f of errors) process.stderr.write(formatFinding(f, pluginRoot));
-
-  if (errors.length === 0) {
-    process.stdout.write(
-      `\nalm-lint: ${warnings.length} warning(s) in ${pluginRoot} (no errors)\n`
-    );
-    return 0;
-  }
-  process.stderr.write(
-    `\nalm-lint: ${errors.length} error(s), ${warnings.length} warning(s) in ${pluginRoot}\n`
-  );
+  // v3: every finding is `severity: 'error'`. The warn-only branch existed
+  // pre-v3 for non-ALM skills; once the catalog covered every skill the
+  // branch became unreachable. Any future re-introduction of a 'warning'
+  // severity should restore the stdout-vs-stderr split here.
+  //
+  // Single concatenation + one write call avoids the Node-on-Windows
+  // truncation case where many small synchronous writes to a piped stderr
+  // (CI redirecting to a log file) can drop trailing data when process.exit
+  // fires before the OS has drained the pipe.
+  const out =
+    findings.map((f) => formatFinding(f, pluginRoot)).join('') +
+    `\nalm-lint: ${findings.length} error(s) in ${pluginRoot}\n`;
+  process.stderr.write(out);
   return 1;
 }
 
 if (require.main === module) {
-  process.exit(main(process.argv));
+  // Use exitCode instead of process.exit so the event loop drains stderr
+  // before the process terminates — important for CI runs that pipe stderr
+  // to a log file.
+  process.exitCode = main(process.argv);
 }
 
 module.exports = {
@@ -732,7 +866,6 @@ module.exports = {
   parseAllowlist,
   allowlistPathMatches,
   KNOWN_RULES,
-  ALM_SKILLS,
   INTENT_HELPERS,
   CANCEL_LEAVES_VOCAB,
   // Approval Gate parsing helpers (exported for tests):

@@ -30,7 +30,7 @@ You will be invoked by the `/genpage` skill with a prompt that includes:
 
 - The user's requirements (`$ARGUMENTS`)
 - The working directory (absolute path where artifacts should be written)
-- The plugin root directory (`${CLAUDE_PLUGIN_ROOT}`)
+- The plugin root directory (`${PLUGIN_ROOT}`)
 
 ---
 
@@ -197,7 +197,36 @@ If any entities need creating, note that entity creation requires:
 - A target solution (the planner asks you to pick one in the next step)
 
 Detection uses `pac model list-tables` natively; creation runs through the
-plugin's own Web API scripts under `${CLAUDE_PLUGIN_ROOT}/scripts/`.
+plugin's own Web API scripts under `${PLUGIN_ROOT}/scripts/`.
+
+### Connector Detection (delegated to genpage-connector-builder)
+
+If the request implies a non-Dataverse source (SharePoint, Teams, weather,
+Office 365, SQL via connector, or a custom REST connector), delegate ALL
+connector work to the `genpage-connector-builder` agent via the `Task` tool. Do
+**not** run the feature-gate probe or any connector discovery inline — that agent
+is the single owner of the connectors feature gate, connection / connection-ref
+discovery, connection-reference creation, and the binding contract.
+
+Invoke `genpage-connector-builder` with a prompt containing:
+
+- **Mode:** `create`
+- **Working directory**, **Plugin root** (`${PLUGIN_ROOT}`), **Environment URL**
+- **Intent:** the source(s) the request implies (e.g. "SharePoint documents",
+  "current weather")
+
+It writes two files into the working directory:
+
+- `connector-bindings.md` — the exact body for the plan's `## Connector Bindings`
+  section (either `No connector bindings.` or the binding table).
+- `connectors.json` — the bare-array binding file for deployment.
+
+Read `connector-bindings.md` and splice its contents verbatim into the
+`## Connector Bindings` section of `genpage-plan.md`.
+
+If the request implies **only** Dataverse and/or mock data (no connector source),
+skip the agent entirely and write `## Connector Bindings` as exactly
+`No connector bindings.`.
 
 ### App Detection
 
@@ -241,7 +270,7 @@ Query the env for non-managed solutions (excluding the always-present "Default" 
 "Active"):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
   "solutions?\$select=uniquename,friendlyname&\$expand=publisherid(\$select=customizationprefix)&\$filter=ismanaged eq false and uniquename ne 'Default' and uniquename ne 'Active' and isvisible eq true&\$top=10"
 ```
 
@@ -289,9 +318,9 @@ in the plan's `## Environment`. Specifics:
 - **Existing solution** → use it directly; capture its prefix from the Step 2 query.
 - **Create new under publisher `<prefix>`** → resolve publisher uniquename, then create:
   ```bash
-  PUB=$(node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
+  PUB=$(node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
     "publishers?\$select=uniquename&\$filter=customizationprefix eq '<prefix>'&\$top=1")
-  node "${CLAUDE_PLUGIN_ROOT}/scripts/create-solution.js" "$ENV_URL" \
+  node "${PLUGIN_ROOT}/scripts/create-solution.js" "$ENV_URL" \
     "<UniqueName>" "<Friendly Name>" --publisher "<publisherUniqueName>"
   ```
   Omit `--publisher` to use the env's Default Publisher (prefix `new`).
@@ -326,6 +355,7 @@ Enter plan mode (`EnterPlanMode`) and present:
 - Entities needed: [list]
 - Entities that exist: [list]
 - Entities to create: [list — with columns, types, relationships, choices]
+- Connector bindings: [ready-to-bind connectionreference logical names, or "none"]
 - Sample data: will ask after entity creation
 
 ### App
@@ -357,7 +387,7 @@ of truth** for all downstream agents. It must be fully self-contained.
 downstream agents parse by name. See:
 
 ```
-${CLAUDE_PLUGIN_ROOT}/references/plan-schema.md
+${PLUGIN_ROOT}/references/plan-schema.md
 ```
 
 Read that file before writing the plan. Every required section must be present with
@@ -391,7 +421,7 @@ single-visit dashboards, or mock-data pages. The page-builder reads this field
 to decide whether to load `references/data-caching.md`.
 
 For the `## Relevant Samples` section: pick the most structurally relevant sample
-from `${CLAUDE_PLUGIN_ROOT}/samples/` (e.g., 7-responsive-cards.tsx for card
+from `${PLUGIN_ROOT}/samples/` (e.g., 7-responsive-cards.tsx for card
 layouts, 2-wizard-multi-step.tsx for wizards, 12-dialog-form-overlay.tsx for any
 page with a modal/dialog — create/edit forms, confirm-delete, detail-in-a-dialog).
 Do NOT list reference docs as samples — only files under `samples/`.

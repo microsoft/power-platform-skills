@@ -111,7 +111,7 @@ full skill.
 
 ```
 plugins/model-apps/
-├── .claude-plugin/plugin.json         <-- version, name, keywords
+├── .plugin/plugin.json                <-- version, name, keywords
 ├── AGENTS.md / CLAUDE.md              <-- agent guidance (this is the source)
 ├── README.md                          <-- user-facing intro
 ├── CHANGELOG.md                       <-- Keep-a-Changelog

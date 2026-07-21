@@ -1,0 +1,23 @@
+name: validate-keyword-case
+
+on:
+    pull_request:
+        branches:
+            - main
+    workflow_dispatch:
+
+jobs:
+    validate-keyword-case:
+        name: validate-keyword-case
+        runs-on: ubuntu-latest
+        steps:
+            - name: checkout
+              uses: actions/checkout@v4
+
+            - name: setup-node
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 20
+
+            - name: validate-keyword-tags-kebab-case
+              run: node scripts/validate-keyword-case.js

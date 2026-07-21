@@ -26,20 +26,35 @@ You will be invoked with a prompt that includes:
 - **Page name** — e.g., "Candidate Tracker"
 - **Target file** — e.g., "candidate-tracker.tsx"
 - **Plan document path** — absolute path to `genpage-plan.md`
-- **Data mode** — either `dataverse` or `mock`
+- **Data mode** — the **Dataverse axis**: `dataverse` (page reads Dataverse tables
+  via RuntimeTypes) or `mock` (no Dataverse tables). This is **orthogonal to
+  connectors**: a page may *also* carry connector bindings (the plan's
+  `## Connector Bindings`), which layer connector-backed data on top of either mode.
+  The effective shapes are `dataverse`, `mock`, `dataverse + connectors`, or
+  `mock + connectors` — a **connector-only page is `mock` data mode with connector
+  bindings**.
 - **RuntimeTypes path** — absolute path to `RuntimeTypes.ts` (present only when Data mode is `dataverse`)
 - **Working directory** — where to write the `.tsx` file
-- **Plugin root** — `${CLAUDE_PLUGIN_ROOT}` for reading references and samples
+- **Plugin root** — `${PLUGIN_ROOT}` for reading references and samples
 
-The **Data mode** flag is authoritative — use it to decide whether to perform Step 2
-(read RuntimeTypes.ts) or skip it. Do not infer data mode from the plan document.
+The **Data mode** flag is authoritative for the Dataverse axis — use it to decide
+whether to perform Step 2 (read RuntimeTypes.ts) or skip it. Do not infer data mode
+from the plan document.
+
+**Connectors are decided separately from Data mode** by the plan's `## Connector
+Bindings` (see the connector-detection step below): when it has an actual binding
+table, the page uses `props.dataApi` connector methods (`queryConnectorTable` /
+`executeConnectorOperation`) **even in `mock` data mode** — the "mock data forbids
+`dataApi`" rule applies only to *non-connector* panels, which still use realistic
+inline data. Never fabricate connector rows/fields; use only the discovered
+`Fields`/`Parameters`/`Response` from the plan.
 
 ## Step 1 — Read the Plan Document
 
 Read `genpage-plan.md` at the path provided in your invocation prompt.
 
 The plan document follows a strict schema. See
-`${CLAUDE_PLUGIN_ROOT}/references/plan-schema.md` for the full contract.
+`${PLUGIN_ROOT}/references/plan-schema.md` for the full contract.
 
 Locate and extract:
 
@@ -70,7 +85,7 @@ For **mock data pages:** Skip this step. Generate realistic sample data inline.
 ## Step 2.5 — Icon-name validation (Grep-based)
 
 The plugin ships a verified icon list at
-`${CLAUDE_PLUGIN_ROOT}/references/verified-icons.txt` (~5000 names from
+`${PLUGIN_ROOT}/references/verified-icons.txt` (~5000 names from
 `@fluentui/react-icons`). **Do NOT load the full file into context** — it's
 ~26K tokens of dead weight. Instead, use `Grep` to validate names on demand.
 
@@ -96,13 +111,25 @@ import has been Grep-validated against the verified list.
 Read the code generation rules reference:
 
 ```
-${CLAUDE_PLUGIN_ROOT}/references/rules.md
+${PLUGIN_ROOT}/references/rules.md
 ```
+
+Only when the plan's `## Connector Bindings` section contains an actual binding
+table (a `| Logical Name | …` header with at least one data row) do you treat the
+page as connector-backed and also read:
+
+```
+${PLUGIN_ROOT}/references/connectors.md
+```
+
+If the `## Connector Bindings` section is the literal `No connector bindings.`, is
+empty, is missing entirely, or contains no binding row, the page has **no
+connectors** — do not read connectors.md and do not emit any connector code.
 
 Read the relevant sample file identified in the plan:
 
 ```
-${CLAUDE_PLUGIN_ROOT}/samples/[sample-name].tsx
+${PLUGIN_ROOT}/samples/[sample-name].tsx
 ```
 
 If **Data mode** is `dataverse` AND the page fits the "list / detail / pages
@@ -110,7 +137,7 @@ the user navigates back to" profile (per the plan's Per-Page Specification),
 also read the data caching reference:
 
 ```
-${CLAUDE_PLUGIN_ROOT}/references/data-caching.md
+${PLUGIN_ROOT}/references/data-caching.md
 ```
 
 Skip the caching reference for forms, single-visit dashboards, mock-data pages,
@@ -217,7 +244,8 @@ export default GeneratedComponent;
 - **Responsive design** — flexbox, relative units, never `100vh`/`100vw`
 - **WCAG AA accessibility** — ARIA labels, keyboard navigation, semantic HTML
 - **Error handling** — all async `dataApi` calls wrapped in try-catch
-- **Lookup fields** — use `@OData.Community.Display.V1.FormattedValue` for display names
+- **Lookup fields** — read display names via `@OData.Community.Display.V1.FormattedValue`; *set* a lookup on create/update with `_<field>_value: "/logicalSingular(guid)"`, never `@odata.bind` (the DataAPI silently drops it → orphaned row). See rules.md DataAPI Rule 13.
+- **All hooks above early returns** — every `useMemo`/`useState`/`useEffect`/`useCallback` must precede any loading/empty `return`, or detail pages crash with React error #310 on first open. See rules.md Critical Rule 19.
 - **Entity logical names** — singular lowercase (e.g., `"account"`)
 - **No placeholders** — no TODOs, no ellipses, no "implement later" comments
 - **Top-level functions** — components and utilities as separate top-level functions, no nesting
@@ -250,7 +278,7 @@ pattern (translation dictionary, RTL support, formatting helpers, usersettings
 fetch):
 
 ```
-${CLAUDE_PLUGIN_ROOT}/references/localization.md
+${PLUGIN_ROOT}/references/localization.md
 ```
 
 For English-only environments, skip this entirely — do not load the reference
@@ -284,6 +312,58 @@ const mockRecords = [
   { id: "2", name: "Fabrikam Inc", revenue: 2300000, status: "Active" },
   // ... 5-10 realistic records
 ];
+```
+
+### Connector-backed data
+
+When the plan has `## Connector Bindings`, use only the logical name, connector
+id, dataset, table GUID, display name, operation, Fields, Parameters, and
+Response values from that section. Never guess a `connectorLogicalName`,
+connector field name, parameter name, or response field name that is not in the
+plan. Read
+`${PLUGIN_ROOT}/references/connectors.md` and emit connector calls with the
+verified runtime patterns below. Connector methods are optional at runtime, so
+every call must be presence-checked and wrapped in `try`/`catch` with a graceful
+empty or error state.
+
+Connector rows are not covered by RuntimeTypes. Before using
+`queryConnectorTable`, declare an inline row interface from the plan's discovered
+`Fields` list and mark every property optional. Use the field spelling and types
+exactly as recorded in the plan; if a type is unclear, use `unknown`. SharePoint
+choice fields use the `{ Value?: string }` shape. Example:
+
+```typescript
+type PetRow = { ID?: number; PetName?: string; OwnerName?: string; PetType?: { Value?: string }; Created?: string };
+```
+
+Tabular connectors use `queryConnectorTable`. Tables must be the plan's list
+GUIDs, and datasets must be the plan's dataset value (SharePoint site URL):
+
+```typescript
+const connectorApi = dataApi as unknown as { queryConnectorTable?: (connectorLogicalName: string, dataset: string, table: string, options: Record<string, unknown>) => Promise<{ rows: PetRow[] }>; };
+if (typeof connectorApi.queryConnectorTable !== 'function') { return; }
+const result = await connectorApi.queryConnectorTable('new_uxtest_sharepoint', 'https://host.sharepoint.com/sites/x', '<list-guid>', { top: 50 });
+```
+
+REST/action connector operation names, parameter names, and response field names
+must come from the plan's discovered `Operations`, `Parameters`, and `Response`
+schema. Before calling `executeConnectorOperation`, declare the response
+interface from the plan and mark every response field optional. Build the
+parameter object from discovered parameters plus maker-provided values; never
+invent parameter or response field names. Check `response.ok` before casting or
+using the body:
+
+```typescript
+type WeatherResponse = { temperature?: number; conditions?: string; humidity?: number };
+const parameters: { Location: string; units?: string } = { Location: 'Seattle', units: 'C' };
+```
+
+```typescript
+const connectorApi = dataApi as unknown as { executeConnectorOperation?: (connectorLogicalName: string, operationName: string, parameters: Record<string, unknown>) => Promise<{ ok: boolean; body: unknown }>; };
+if (typeof connectorApi.executeConnectorOperation !== 'function') { return; }
+const response = await connectorApi.executeConnectorOperation('new_uxtest_msnweather', 'CurrentWeather', parameters);
+if (!response.ok) { return; }
+const weather = response.body as WeatherResponse;
 ```
 
 ## Step 6 — Write the .tsx File
