@@ -2,14 +2,14 @@
 
 How to set up an OIDC identity-provider **app registration** for Power Pages — the provider-agnostic contract plus links to each provider's official docs.
 
-> **Scope — app-registration settings only.** This reference covers just the IDP **app-registration** side: the Power Pages ↔ IDP contract and the app site settings it yields (`ClientId`, `Authority`, `MetadataAddress`, `AuthenticationType`, `RedirectUri`). The other auth site settings the skill writes — login-button `Caption`, claims mapping (`RegistrationClaimsMapping` / `LoginClaimsMapping`), and registration gating (`OpenRegistrationEnabled`) — are **not** app-registration settings; they live in the skill's Phase 8.1 and `authentication-reference.md`.
+> **Scope — app-registration settings only.** This reference covers just the IDP **app-registration** side: the Power Pages ↔ IDP contract and the app site settings it yields (`ClientId`, `Authority`, `MetadataAddress`, `AuthenticationType`, `RedirectUri`, plus an optional `ClientSecret` only when the user opts into a confidential client). The other auth site settings the skill writes — login-button `Caption`, claims mapping (`RegistrationClaimsMapping` / `LoginClaimsMapping`), and registration gating (`OpenRegistrationEnabled`) — are **not** app-registration settings; they live in the skill's Phase 8.1 and `authentication-reference.md`.
 
 How the app is set up depends entirely on the provider, so **always read the provider's current documentation first** to learn the configuration steps **and** any CLI it offers for automating them (Okta, Auth0, and Entra External ID each provide one — see [Per-IDP setup docs](#per-idp-setup-docs)). The setup-auth skill's **Phase 2.1.2** drives the actual setup; this reference is the provider-agnostic contract it applies.
 
 ## Contents
 
 - [The Power Pages ↔ IDP contract](#the-power-pages--idp-contract)
-- [The no-secret code id_token flow](#the-no-secret-code-id_token-flow)
+- [Client secret: code id_token is the default](#client-secret-code-id_token-is-the-default)
 - [Per-IDP setup docs](#per-idp-setup-docs)
 - [Resulting site settings](#resulting-site-settings)
 
@@ -19,20 +19,20 @@ Power Pages redirects the user to the IDP, receives the response at the **Redire
 
 - **Redirect URI** = `{SITE_URL}/signin-{ProviderName-lowercased}` — lowercase the provider slug in this path; the resulting URI must then be referenced **exactly** as registered at the IDP (the `signin-` prefix and the full string must match character-for-character).
 - **ID token issuance enabled** — Power Pages' default response type is `code id_token`, so the app must return an ID token from the authorize endpoint.
-- **Web application, no client secret** — see below.
+- **Web application; client secret optional** — `code id_token` needs none by default. See below.
 - **Scopes** `openid profile email` — so the token carries the claims Power Pages maps to the contact.
 
 Everything Power Pages needs downstream (Authority, MetadataAddress, ClientId) is derived from these — see [Resulting site settings](#resulting-site-settings).
 
-## The no-secret code id_token flow
+## Client secret: code id_token is the default
 
-Power Pages' default OIDC response type is **`code id_token`**, which does **not** require a client secret: the ID token is returned on the front channel and validated directly. Register the app as a **Web application** and manage **no client secret**.
+Power Pages' default OIDC response type is **`code id_token`**: the ID token returns on the front channel, so the app is a **Web application** that needs **no client secret**. A confidential-client app with a client secret is equally valid and secure — the only tradeoff is storing and rotating the secret (Phase 8.1.1 Key Vault).
 
-This is the platform default. Do not add a client secret unless the user explicitly needs one.
+**Default to `code id_token`; configure a client secret only when the user prefers a confidential client.**
 
 ## Per-IDP setup docs
 
-Ground each step in the provider's **current** docs before acting. Mirror the fully worked example in `authentication-reference.md` → "Entra External ID — Tenant and App Registration Prerequisites". For every provider: register an OIDC app as a **Web application** with no secret, set the Redirect URI, enable ID-token issuance, and request `openid profile email`.
+Ground each step in the provider's **current** docs before acting. Mirror the fully worked example in `authentication-reference.md` → "Entra External ID — Tenant and App Registration Prerequisites". For every provider: register an OIDC app as a **Web application** (`code id_token`, no client secret by default), set the Redirect URI, enable ID-token issuance, and request `openid profile email`.
 
 ### Okta
 

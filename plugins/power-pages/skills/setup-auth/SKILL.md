@@ -302,7 +302,7 @@ If the user has NOT specified which provider(s) they want, use `AskUserQuestion`
 
 | Question | Options |
 |----------|---------|
-| Which identity provider(s) do you want to use? (select all that apply) | Entra External ID (Recommended) — Customer identity with self-service sign-up (CIAM), Microsoft Entra ID — Azure AD / Entra ID for internal/employee sites, OpenID Connect — Okta, Auth0, or any OIDC-compliant provider, SAML2 — SAML 2.0 identity provider (ADFS, Shibboleth, etc.), WS-Federation — WS-Federation identity provider, Microsoft Account — Sign in with Microsoft personal/work account, Facebook — Sign in with Facebook, Google — Sign in with Google |
+| Which identity provider(s) do you want to use? (select all that apply) | Entra External ID (Recommended) — Customer identity with self-service sign-up (CIAM), Microsoft Entra ID — Azure AD / Entra ID for internal/employee sites, OpenID Connect — Okta, Auth0, or any OIDC-compliant provider, SAML2 — SAML 2.0 identity provider (ADFS, Shibboleth, Login.gov, etc.), WS-Federation — WS-Federation identity provider, Microsoft Account — Sign in with Microsoft personal/work account, Facebook — Sign in with Facebook, Google — Sign in with Google |
 
 **Then, for EACH selected provider, ask the mandatory follow-up questions below.** Do not skip any provider — every selected provider needs its configuration collected before proceeding.
 
@@ -577,9 +577,10 @@ If "No", re-prompt for the specific value the user wants to change.
 | Question | Options |
 |----------|---------|
 | What is the metadata endpoint URL for your SAML2 identity provider? (e.g., `https://adfs.contoso.com/FederationMetadata/2007-06/FederationMetadata.xml`) | *(free text)* |
-| What display name should the login button show? (e.g., `Sign in with ADFS`) | *(free text)* |
+| What display name should the login button show? (e.g., `Sign in with ADFS`, `Sign in with Login.gov`) | *(free text)* |
 
 > Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/saml2-settings
+> Login.gov (US government SAML IdP) — get its metadata endpoint from the SAML developer guide: https://developers.login.gov/saml/getting-started/
 
 **For "WS-Federation"**:
 
@@ -631,6 +632,8 @@ Ask whether to auto-link external sign-ins to existing contacts by email.
 Store as `CONTACT_LINKING_CHOICE`. This drives `AllowContactMappingWithEmail` (`true` for "link", `false` for "create new").
 
 > **Why "Link to the existing contact" is the default**: the common flow is that admins pre-create contact records in Dataverse (often via invitation or import) and then expect those exact contacts to be picked up when the user signs in for the first time via the configured IdP. Without linking, the server creates a brand-new contact and the pre-created record sits orphaned — confusing for users and easy to misdiagnose. Linking by verified email is the well-known pattern for joining IdP identity to an existing CRM record.
+>
+> **⚠ Auto-link is for migration / pre-provisioned contacts**: turn linking on when contacts already exist in Dataverse (data migration, admin import, invitations) and must be matched by email. On a greenfield site with no pre-existing contacts, normal first-sign-in contact creation works the same — linking simply has nothing to match.
 >
 > **⚠ Multi-tenant safety**: For **multi-tenant Entra External ID** (Authority uses `/organizations/` or `/common/`, or `IssuerFilter` is a wildcard), the Power Pages server **forcibly disables** `AllowContactMappingWithEmail` regardless of the site setting (`BlockContactMappingSettingForMultitenantApp` feature flag in `LoginController.cs:2578-2587`). Reason: email claims can't be trusted across tenants. If the user selects "Link to the existing contact" but the Authority is multi-tenant, warn them that linking won't work and recommend single-tenant Authority.
 >
