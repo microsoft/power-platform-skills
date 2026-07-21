@@ -26,7 +26,7 @@ Everything Power Pages needs downstream (Authority, MetadataAddress, ClientId) i
 
 ## Client secret: code id_token is the default
 
-Power Pages' default OIDC response type is **`code id_token`**: the ID token returns on the front channel, so the app is a **Web application** that needs **no client secret**. A confidential-client app with a client secret is equally valid and secure — the only tradeoff is storing and rotating the secret (Phase 8.1.1 Key Vault).
+Power Pages' default OIDC response type is **`code id_token`**: the ID token returns on the front channel, so the app is a **Web application** that needs **no client secret**.
 
 **Default to `code id_token`; configure a client secret only when the user prefers a confidential client.**
 
