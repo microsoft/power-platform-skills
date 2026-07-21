@@ -1,0 +1,10 @@
+Screens:
+  Home:
+    Children:
+      - Title:
+          Control: Label@2.5.1
+          Properties:
+            Text: ="Orders"
+      - Map:
+          Control: CodeComponent
+          ComponentName: contoso_Maps.Control

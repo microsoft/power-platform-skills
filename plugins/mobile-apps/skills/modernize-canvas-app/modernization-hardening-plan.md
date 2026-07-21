@@ -1,10 +1,10 @@
 # Canvas-to-Native Modernization Hardening Plan
 
-**Status:** Proposed  
+**Status:** In progress
 **Scope:** `mobile-apps` Canvas/MSAPP modernization pipeline  
-**Last updated:** 2026-07-15  
+**Last updated:** 2026-07-20
 **Primary audience:** Mobile-app plugin maintainers, conversion-pipeline reviewers, agent authors, and release owners  
-**Implementation state:** This document describes proposed work. Unless explicitly identified as current behavior, the contracts and artifacts below are not yet implemented.
+**Implementation state:** This document mixes current behavior with proposed hardening. Safe modern-MSAPP extraction and official Power Apps YAML v3.0 schema preflight are implemented. Unless a section explicitly identifies current behavior, its contracts and artifacts remain proposed.
 
 ## Related documents and implementation
 
@@ -14,6 +14,8 @@
 - [Current screen-builder contract](../../agents/screen-builder.md)
 - [Current workflow-builder contract](../../agents/workflow-builder.md)
 - [Behavior-contract implementation](../../scripts/lib/behavior-contract.js)
+- [Official Power Apps YAML validator](../../scripts/validate-power-apps-yaml.js)
+- [Pinned schema provenance](../../scripts/schemas/power-apps-yaml/v3.0/provenance.json)
 - [Workflow Gate 2c summary projection](../../scripts/lib/workflow-gate-summary.js)
 - [Migration-package validator](../../scripts/validate-mobile-plugin-input.js)
 - [Current modernization tests](../../scripts/tests/msapp-conversion.test.cjs)
@@ -1222,6 +1224,10 @@ Existing safe ZIP-reader logic should be factored into a shared archive helper r
 
 ### 11.3 Schema pinning
 
+**Current branch status:** implemented. The official v3.0 schema is committed byte-for-byte from PowerApps-Tooling commit `a03a42b966f7308cd3f888304e56330edea155ec`; `provenance.json` records the immutable URL, retrieval date, byte count, and SHA-256 digest `fc2816840271186d3b3057a1316bdb682bf6d95f4ae4849eab1fd47e2149ed13`. Runtime validation verifies the digest before compiling the schema and never fetches a schema dynamically.
+
+The published schema contains one malformed `CodeComponent-ComponentName` regex with an unmatched closing parenthesis. The official snapshot remains unchanged; the validator applies one exact-value, digest-bound correction in memory and fails closed if a future schema changes that value. The correction is recorded in provenance and covered by a PCF fixture.
+
 Bundle a reviewed snapshot of the official v3 schema with:
 
 - Original URL
@@ -1233,6 +1239,8 @@ Bundle a reviewed snapshot of the official v3 schema with:
 Do not fetch a new schema dynamically during customer conversion.
 
 ### 11.4 Validation stages
+
+**Current branch status:** implemented for v3 source. The zero-install validator bundles a non-executing YAML parser and Draft-07 evaluator, rejects duplicate keys, aliases/anchors/merges, tags/directives, complex or quoted keys, flow maps, nonempty flow sequences, multi-document ambiguity, excessive files/bytes/lines/depth/nodes, and validates both each recursive module and the logically merged app. Validation and extraction consume one shared module inventory. The extractor invokes this gate before `loadSources()` and records successful schema provenance in `app-brief.json`; the adapter and package validator require the exact attestation in `mobile-plugin-input.json`.
 
 1. Validate archive/source-tree safety.
 2. Parse YAML with a non-executing parser.
@@ -1578,7 +1586,7 @@ Tasks:
 3. Define v4 artifact schemas.
 4. Freeze TWEED baseline metrics.
 5. Assemble the first 20 sanitized corpus fixtures or fixture references.
-6. Add official schema snapshot metadata.
+6. ~~Add official schema snapshot metadata.~~ **Implemented:** immutable v3.0 snapshot, provenance, digest verification, and license notices.
 
 Exit criteria:
 
@@ -1659,8 +1667,8 @@ Exit criteria:
 
 Tasks:
 
-1. Add safe direct modern-MSAPP extraction.
-2. Add official schema validation.
+1. ~~Add safe direct modern-MSAPP extraction.~~ **Implemented** through `extract-msapp-source.js` and `safe-zip.js`.
+2. ~~Add official schema validation.~~ **Implemented** through `validate-power-apps-yaml.js` and extractor preflight.
 3. Expand corpus toward 50 apps.
 4. Generate source-derived semantic test plans.
 5. Add workflow failure and connector/write tests.
@@ -1792,7 +1800,7 @@ Rejected as the sole oracle. Tests would reproduce implementation assumptions ra
 3. What initial task budgets best balance cost and high-risk fidelity?
 4. After the required local-only calibration phase, should a separately approved remote mobile-plugin telemetry release be default-on or opt-in?
 5. Where will a mobile-specific instrumentation key and Kusto schema be provisioned?
-6. Which YAML parser/schema validator can be bundled without introducing runtime network or install requirements?
+6. **Resolved 2026-07-20:** bundle `yaml@2.9.0` and `ajv@8.20.0` into a reviewed offline CommonJS runtime with checked-in notices; customer conversion performs no package install or network access.
 7. How long should v3 migration-package compatibility remain supported?
 8. Which corpus apps may be committed publicly versus held in approved private storage?
 9. Which Android/iOS runners and target environments will own release E2E?

@@ -1,0 +1,21 @@
+{
+  "$schema": "power-apps-yaml-schema-provenance-v1",
+  "schemaVersion": "3.0",
+  "schemaId": "http://powerapps.com/schemas/pa-yaml/v3.0/pa.schema",
+  "sourceRepository": "https://github.com/microsoft/PowerApps-Tooling",
+  "sourcePath": "schemas/pa-yaml/v3.0/pa.schema.yaml",
+  "sourceCommit": "a03a42b966f7308cd3f888304e56330edea155ec",
+  "sourceUrl": "https://raw.githubusercontent.com/microsoft/PowerApps-Tooling/a03a42b966f7308cd3f888304e56330edea155ec/schemas/pa-yaml/v3.0/pa.schema.yaml",
+  "retrievedAt": "2026-07-20",
+  "sha256": "fc2816840271186d3b3057a1316bdb682bf6d95f4ae4849eab1fd47e2149ed13",
+  "bytes": 19539,
+  "license": "MIT",
+  "compatibilityCorrections": [
+    {
+      "jsonPointer": "/definitions/CodeComponent-ComponentName/pattern",
+      "reason": "The published pattern has an unmatched closing parenthesis because the optional publisher-prefix group closes before its underscore.",
+      "publishedValue": "^([a-zA-Z][a-zA-Z0-9]{1,7})_)?(\\w+\\.)+(\\w+)(\\([0-9a-f-]{36}\\))?$",
+      "runtimeValue": "^([a-zA-Z][a-zA-Z0-9]{1,7}_)?(\\w+\\.)+(\\w+)(\\([0-9a-f-]{36}\\))?$"
+    }
+  ]
+}

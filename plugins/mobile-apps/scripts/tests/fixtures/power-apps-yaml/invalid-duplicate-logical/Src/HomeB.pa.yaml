@@ -1,0 +1,5 @@
+Screens:
+  Home:
+    Properties:
+      Fill: =Color.White
+    Children: []

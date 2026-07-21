@@ -1,0 +1,8 @@
+Screens:
+  Home:
+    Properties: &shared
+      Fill: =Color.White
+    Children: []
+  Other:
+    Properties: *shared
+    Children: []

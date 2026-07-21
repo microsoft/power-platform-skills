@@ -34,6 +34,11 @@
 const fs = require('fs');
 const path = require('path');
 const { buildArtifactNameMap, pathContains } = require('./lib/modernizer-paths.js');
+const {
+  formatValidationReport,
+  listPowerAppsYamlSourceFiles,
+  validatePowerAppsYamlSource,
+} = require('./lib/power-apps-yaml-schema.js');
 const { openZipReader } = require('./lib/safe-zip.js');
 
 const MAX_SOURCE_TEXT_BYTES = 64 * 1024 * 1024;
@@ -100,6 +105,12 @@ function main() {
 
   console.log(`[brief] extracted = ${args.extracted}`);
   console.log(`[brief] out       = ${args.out}`);
+
+  // Source files are untrusted and the semantic scanner intentionally accepts
+  // only a strict subset of Power Apps YAML. Validate the complete source
+  // against the immutable official schema before reading formulas or controls.
+  const schemaValidation = validatePowerAppsYamlSource(args.extracted);
+  console.log(`[brief] schema    = ${formatValidationReport(schemaValidation)}`);
 
   const sources = loadSources(args.extracted);
   const parsedScreens = parseAllScreens(sources.screenFiles);
@@ -269,11 +280,20 @@ function main() {
     version: '1',
     generatedAt: canonicalSourceTimestamp(sources.header?.LastSavedDateTimeUTC),
     source: {
-      extractedPath: path.relative(args.out, args.extracted).replace(/\\/g, '/') || '.',
+      extractedPath: 'local-canvas-source',
       msappName: sources.header?.Name,
       msappVersion: sources.header?.DocVersion,
       msappLastSavedUtc: sources.header?.LastSavedDateTimeUTC,
       format: sources.format,
+      schemaValidation: {
+        schema: schemaValidation.$schema,
+        version: schemaValidation.schema.version,
+        id: schemaValidation.schema.id,
+        sourceCommit: schemaValidation.schema.sourceCommit,
+        sha256: schemaValidation.schema.sha256,
+        sourceFileCount: schemaValidation.sourceFileCount,
+        sectionCounts: schemaValidation.sectionCounts,
+      },
     },
     app: {
       name: args.appName || deriveAppName(sources) || 'UnknownApp',
@@ -392,16 +412,17 @@ function loadSources(extractedRoot) {
   const testsRoot = firstExistingDir(extractedRoot, ['Tests', 'tests']) || path.join(extractedRoot, 'Tests');
   const pkgsRoot = path.join(extractedRoot, 'pkgs');
 
-  const screenFiles = listFiles(srcRoot, '.pa.yaml').filter(
-    (file) => path.basename(file) !== '_EditorState.pa.yaml'
-  );
-  const editorStateFile = path.join(srcRoot, '_EditorState.pa.yaml');
-  const editorState = fs.existsSync(editorStateFile)
+  // Use the same recursive inventory that passed schema validation. Parsing
+  // every logical module for each supported top-level section ensures nested
+  // official layouts cannot validate successfully and then disappear from the
+  // semantic brief.
+  const sourceFiles = listPowerAppsYamlSourceFiles(extractedRoot);
+  const screenFiles = sourceFiles.filter((file) => path.basename(file) !== '_EditorState.pa.yaml');
+  const componentFiles = screenFiles;
+  const editorStateFile = sourceFiles.find((file) => path.basename(file) === '_EditorState.pa.yaml');
+  const editorState = editorStateFile
     ? parseEditorStateYaml(readSourceText(editorStateFile))
     : { screensOrder: [], componentDefinitionsOrder: [] };
-  const componentFiles = fs.existsSync(componentsRoot)
-    ? listFiles(componentsRoot, '.pa.yaml')
-    : [];
   // Tests may be `.fx.yaml` (Test Studio) or `.pa.yaml` (newer).
   const testFiles = fs.existsSync(testsRoot)
     ? [...listFiles(testsRoot, '.fx.yaml'), ...listFiles(testsRoot, '.pa.yaml')]
@@ -675,7 +696,9 @@ function assertSourceTreeSafe(root) {
       if (entries > MAX_SOURCE_ENTRIES) throw new Error(`source tree exceeds ${MAX_SOURCE_ENTRIES} entries`);
       if (/[\u0000-\u001f\u007f]/.test(entry.name)) throw new Error('control characters are not allowed in Canvas source paths');
       const full = path.join(dir, entry.name);
-      if (entry.isSymbolicLink()) throw new Error(`symbolic links are not allowed in Canvas source: ${full}`);
+      if (entry.isSymbolicLink()) {
+        throw new Error(`symbolic links are not allowed in Canvas source: ${path.relative(root, full).replace(/\\/g, '/')}`);
+      }
       if (entry.isDirectory()) walk(full);
     }
   }
@@ -5137,7 +5160,7 @@ if (require.main === module) {
   try {
     main();
   } catch (err) {
-    console.error('[brief] FAILED:', err && err.stack ? err.stack : err);
+    console.error(`[brief] FAILED: ${err && err.message ? err.message : String(err)}`);
     process.exit(1);
   }
 }

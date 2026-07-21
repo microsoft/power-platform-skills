@@ -2,7 +2,7 @@
 
 This document defines the local artifact contract between:
 
-1. `scripts/extract-msapp-brief.v2.cjs` (Canvas source → canonical brief)
+1. `scripts/validate-power-apps-yaml.js` + `scripts/extract-msapp-brief.v2.cjs` (official schema validation + Canvas source → canonical brief)
 2. `scripts/adapt-app-brief-for-mobile-plugin.js` (canonical brief → migration package)
 3. `/create-mobile-app --adapted-from <migration-package>` (migration package → current native app)
 
@@ -20,6 +20,7 @@ Do not build, invoke, generate, or introduce a deterministic Canvas-to-TypeScrip
 
 ```text
 Canvas source (`Src/*.pa.yaml`, optional supported sidecars)
+  → immutable official Power Apps YAML v3.0 schema validation
   → app-brief/
       app-brief.json
       app-brief.md
@@ -83,7 +84,13 @@ Top-level shape:
   "schemaVersion": "3",
   "source": {
     "appBriefPath": "<local path>",
-    "generatedAt": "<ISO timestamp>"
+    "generatedAt": "<ISO timestamp>",
+    "powerAppsYamlSchemaValidation": {
+      "schema": "power-apps-yaml-validation-report-v1",
+      "version": "3.0",
+      "sourceCommit": "<immutable PowerApps-Tooling commit>",
+      "sha256": "<pinned schema digest>"
+    }
   },
   "app": {
     "name": "Example",
@@ -105,6 +112,8 @@ Top-level shape:
 
 Required validation:
 
+- Source YAML passed the immutable official v3.0 schema preflight before semantic extraction; the canonical brief and migration package retain the validated schema commit/digest.
+- Source YAML used the canonical block-style subset consumed by semantic extraction; tags, aliases/anchors/merges, directives, complex or quoted keys, flow maps, and nonempty flow sequences were rejected rather than interpreted differently across stages.
 - `app.name` and `app.startScreen` are non-empty.
 - `screenPlan.screens[]` is non-empty for runnable apps.
 - Every screen has an existing `planFile`.

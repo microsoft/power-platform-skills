@@ -7,7 +7,27 @@
   "properties": {
     "version": { "const": "1" },
     "generatedAt": { "type": "string" },
-    "source": { "type": "object" },
+    "source": {
+      "type": "object",
+      "required": ["schemaValidation"],
+      "properties": {
+        "schemaValidation": {
+          "type": "object",
+          "required": ["schema", "version", "id", "sourceCommit", "sha256", "sourceFileCount", "sectionCounts"],
+          "properties": {
+            "schema": { "const": "power-apps-yaml-validation-report-v1" },
+            "version": { "const": "3.0" },
+            "id": { "const": "http://powerapps.com/schemas/pa-yaml/v3.0/pa.schema" },
+            "sourceCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+            "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "sourceFileCount": { "type": "integer", "minimum": 1 },
+            "sectionCounts": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": true
+    },
     "app": {
       "type": "object",
       "required": ["name", "startScreen"],

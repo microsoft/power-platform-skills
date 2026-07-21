@@ -12,6 +12,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathContains } = require('./lib/modernizer-paths.js');
+const { validatePowerAppsYamlAttestation } = require('./lib/power-apps-yaml-schema.js');
 const {
   WORKFLOW_APPROVAL_STATUSES,
   WORKFLOW_EXECUTION_OWNERS,
@@ -255,6 +256,9 @@ function main() {
     if (!validSourceLabel(input.app?.name)) errors.push('app.name is missing or contains unsafe control characters');
     if (!input.app?.startScreen && !input.migrationCheck) errors.push('app.startScreen is missing');
     if (input.app?.auth != null && !['entra', 'none'].includes(input.app.auth)) errors.push(`unsupported app.auth mode: ${input.app.auth}`);
+    errors.push(...validatePowerAppsYamlAttestation(input.source?.powerAppsYamlSchemaValidation, {
+      label: 'source.powerAppsYamlSchemaValidation',
+    }));
     const briefPath = input.source?.appBriefPath;
     if (briefPath && (path.isAbsolute(briefPath) || /^[A-Za-z]:[\\/]/.test(briefPath) || /[\u0000-\u001f\u007f]/.test(briefPath))) {
       errors.push('source.appBriefPath must be a portable relative path');

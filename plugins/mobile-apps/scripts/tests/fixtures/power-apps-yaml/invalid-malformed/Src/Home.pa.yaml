@@ -1,0 +1,5 @@
+Screens:
+  Home:
+    Children:
+      - Label
+          Control: Label@2.5.1

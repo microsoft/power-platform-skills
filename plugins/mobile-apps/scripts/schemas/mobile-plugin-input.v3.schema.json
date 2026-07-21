@@ -6,7 +6,27 @@
   "required": ["schemaVersion", "source", "app", "dataModelPlan", "screenPlan", "nativePlan", "pcfPlan", "workflowPlan", "behaviorPlan", "riskReport", "unsupported"],
   "properties": {
     "schemaVersion": { "const": "3" },
-    "source": { "type": "object" },
+    "source": {
+      "type": "object",
+      "required": ["powerAppsYamlSchemaValidation"],
+      "properties": {
+        "powerAppsYamlSchemaValidation": {
+          "type": "object",
+          "required": ["schema", "version", "id", "sourceCommit", "sha256", "sourceFileCount", "sectionCounts"],
+          "properties": {
+            "schema": { "const": "power-apps-yaml-validation-report-v1" },
+            "version": { "const": "3.0" },
+            "id": { "const": "http://powerapps.com/schemas/pa-yaml/v3.0/pa.schema" },
+            "sourceCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+            "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "sourceFileCount": { "type": "integer", "minimum": 1 },
+            "sectionCounts": { "type": "object", "minProperties": 1, "additionalProperties": { "type": "integer", "minimum": 0 } }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": true
+    },
     "app": {
       "type": "object",
       "required": ["name", "startScreen"],

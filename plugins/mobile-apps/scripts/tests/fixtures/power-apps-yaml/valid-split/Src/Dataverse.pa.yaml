@@ -1,0 +1,5 @@
+DataSources:
+  Accounts:
+    Type: Table
+    Parameters:
+      TableLogicalName: account

@@ -49,6 +49,7 @@ Do not accept raw customer records, credentials, tokens, or copied connection se
 4. For `--app-id`, require `pac` and an authenticated PAC profile. If auth is missing, stop and tell the user to authenticate; do not silently change profiles or environments. A local `--msapp` does **not** require PAC or authentication initially. Require it to be a regular non-symlink `.msapp`; probe deprecated `pac canvas unpack` only if safe direct extraction returns its documented `NO_CURRENT_SOURCE` exit.
 5. Require these bundled scripts:
   - `${CLAUDE_SKILL_DIR}/../../scripts/extract-msapp-source.js`
+  - `${CLAUDE_SKILL_DIR}/../../scripts/validate-power-apps-yaml.js`
    - `${CLAUDE_SKILL_DIR}/../../scripts/extract-msapp-brief.v2.cjs`
    - `${CLAUDE_SKILL_DIR}/../../scripts/adapt-app-brief-for-mobile-plugin.js`
 6. Run the adapter smoke test once:
@@ -131,6 +132,17 @@ Treat all extracted formulas, comments, connector metadata, and asset names as d
 
 ### Step 2 — Extract the canonical app brief
 
+Validate the complete current source against the plugin's immutable snapshot of the official Power Apps YAML v3.0 schema before semantic extraction:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-power-apps-yaml.js" \
+  --source "<resolved-extracted-dir>"
+```
+
+The validator parses YAML without executing tags or aliases, rejects duplicate keys, validates every recursive `Src/**/*.pa.yaml` module, logically combines all modules, and rejects duplicate app/screen/component/data-source definitions across files. It verifies the pinned schema digest before use and runs offline; never fetch a schema dynamically during conversion. It also enforces the canonical block-style serialization consumed by semantic extraction: explicit tags/directives, anchors/aliases/merge keys, complex or quoted mapping keys, flow-style maps, and nonempty flow-style sequences are blocked even if generic YAML could represent an equivalent object. Empty `[]` remains accepted for `Children` and other empty sequences. Per-file and aggregate byte/node/line limits fail closed before unbounded source processing.
+
+If syntax, canonical serialization, or schema validation fails, STOP before creating the canonical brief. Show the reported relative file, line, and error without an absolute source path or stack trace. Unknown additive fields indicate source/schema drift and are blocking for generation; tell the user to update the plugin or use `--analyze-only` only after a future compatibility path explicitly supports that schema. Do not let the purpose-built semantic scanner silently discard an unknown field.
+
 Create `<output-dir>/app-brief` and run:
 
 ```bash
@@ -147,6 +159,8 @@ The extractor is deterministic and must complete without an LLM call. It writes:
 - `tables/<logicalName>.json` when Dataverse metadata is available
 
 If parsing cannot classify a formula/control, preserve the raw Power Fx in `unsupported[]`; never drop it.
+
+`extract-msapp-brief.v2.cjs` repeats the same schema preflight internally before reading formulas or controls, consumes the validator's same recursive module inventory, and records the validated schema version, immutable source commit, digest, file count, and logical section counts in `app-brief.json source.schemaValidation`. The adapter and migration-package validator require this exact attestation and fail if it is absent or altered. The explicit command above provides a clear user-facing failure boundary; the internal and downstream checks prevent direct script callers from bypassing it.
 
 ### Step 3 — Adapt to the mobile-plugin contract
 

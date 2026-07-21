@@ -1,5 +1,11 @@
 'use strict';
 
+// CI invokes this canonical modernization suite. Register the acquisition and
+// schema-preflight regressions here so the existing cross-OS workflow exercises
+// the complete intake pipeline without maintaining shell-specific command lists.
+require('./msapp-source-acquisition.test.cjs');
+require('./power-apps-yaml-schema.test.cjs');
+
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -225,7 +231,8 @@ test('workflow Gate 2c validation blocks pending plans and rejects behavior or p
     '      - ConfirmButton:',
     '          Control: Button@1.0.0',
     '          Properties:',
-    '            OnSelect: =Confirm("Submit order?"); Patch(Orders, Defaults(Orders), {name: var_name}); ForAll(col_lines As line, Patch(OrderLines, Defaults(OrderLines), {name: line.name})); \'Approval Flow\'.Run(var_orderId); Set(var_submitted, true); Refresh(Orders); Notify("Order submitted"); Navigate(OrderComplete)',
+    '            OnSelect: |-',
+    '              =Confirm("Submit order?"); Patch(Orders, Defaults(Orders), {name: var_name}); ForAll(col_lines As line, Patch(OrderLines, Defaults(OrderLines), {name: line.name})); \'Approval Flow\'.Run(var_orderId); Set(var_submitted, true); Refresh(Orders); Notify("Order submitted"); Navigate(OrderComplete)',
     '  OrderComplete:',
     '    Children: []',
     '',
@@ -436,7 +443,7 @@ test('extractor accepts lowercase src directory on case-sensitive filesystems', 
   assert.equal(brief.generatedAt, '1970-01-01T00:00:00.000Z');
   assert.equal(brief.app.name, 'Lowercase Source App');
   assert.deepEqual(brief.screens.map((screen) => screen.name), ['Home']);
-  assert.equal(path.isAbsolute(brief.source.extractedPath), false);
+  assert.equal(brief.source.extractedPath, 'local-canvas-source');
   assert.equal(brief.app.settings.hasInstrumentationKey, true);
   assert.equal(brief.app.settings.hasAuthorMetadata, true);
   assert.equal(brief.app.settings.hasManualOfflineProfile, true);

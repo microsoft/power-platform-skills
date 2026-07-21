@@ -1,0 +1,11 @@
+ComponentDefinitions:
+  Badge:
+    DefinitionType: CanvasComponent
+    CustomProperties:
+      Label:
+        PropertyKind: Input
+        DataType: Text
+        Default: =""
+    Properties:
+      Width: =100
+    Children: []

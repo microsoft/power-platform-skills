@@ -64,6 +64,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { validatePowerAppsYamlAttestation } = require('./lib/power-apps-yaml-schema.js');
 const crypto = require('crypto');
 const {
   buildArtifactNameMap,
@@ -133,11 +134,28 @@ function parseArgs(argv) {
   args.screensDir = args.screensDir
     ? path.resolve(args.screensDir)
     : path.resolve(path.dirname(args.input), 'screens');
+  // Canonicalize existing ancestors so macOS `/var` and `/private/var` aliases
+  // cannot turn a sibling brief reference into a host-specific traversal.
+  args.outDir = canonicalizeProspectivePath(args.outDir);
+  args.screensDir = fs.existsSync(args.screensDir) ? fs.realpathSync(args.screensDir) : args.screensDir;
   const outContainsInput = pathContains(args.outDir, args.input);
   const outContainsScreens = pathContains(args.outDir, args.screensDir);
   const screensContainOut = pathContains(args.screensDir, args.outDir);
   if (outContainsInput || outContainsScreens || screensContainOut) usage('Output, input, and screens directories must not overlap');
   return args;
+}
+
+function canonicalizeProspectivePath(target) {
+  const missing = [];
+  let cursor = target;
+  while (!fs.existsSync(cursor)) {
+    missing.unshift(path.basename(cursor));
+    const parent = path.dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+  const canonicalParent = fs.existsSync(cursor) ? fs.realpathSync(cursor) : cursor;
+  return path.join(canonicalParent, ...missing);
 }
 
 // ---------- IO helpers ----------
@@ -7686,6 +7704,7 @@ function buildPluginInput(brief, inputPath, screenRows, connectors, tables, risk
       appBriefPath: inputPath,
       generatedAt: GENERATION_TIMESTAMP,
       appBriefGeneratedAt: brief.generatedAt || null,
+      powerAppsYamlSchemaValidation: brief.source?.schemaValidation || null,
     },
     app: {
       name: (brief.app && brief.app.name) || null,
@@ -8027,6 +8046,12 @@ function main() {
     process.exit(0);
   }
   const brief = readJson(args.input);
+  const schemaAttestationErrors = validatePowerAppsYamlAttestation(brief?.source?.schemaValidation, {
+    label: 'app-brief source.schemaValidation',
+  });
+  if (schemaAttestationErrors.length > 0) {
+    throw new Error(`${schemaAttestationErrors.join('; ')}. Rerun extract-msapp-brief.v2.cjs before adaptation.`);
+  }
 
   // Detect publisher prefix + translation collection logical name from the
   // brief itself — keeps the adapter app-agnostic (no hardcoded publisher identifiers).
@@ -8301,7 +8326,14 @@ function main() {
   console.log('Next: review native-app-plan.md, then run /create-mobile-app --working-dir <fresh-template> --adapted-from ' + args.outDir);
 }
 
-if (require.main === module) main();
+if (require.main === module) {
+  try {
+    main();
+  } catch (error) {
+    console.error(`[adapter] FAILED: ${error && error.message ? error.message : String(error)}`);
+    process.exitCode = 1;
+  }
+}
 
 module.exports = {
   main,

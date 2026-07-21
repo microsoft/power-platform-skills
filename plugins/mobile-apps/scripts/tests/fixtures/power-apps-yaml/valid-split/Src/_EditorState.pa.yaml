@@ -1,0 +1,5 @@
+EditorState:
+  ScreensOrder:
+    - Home
+  ComponentDefinitionsOrder:
+    - Badge

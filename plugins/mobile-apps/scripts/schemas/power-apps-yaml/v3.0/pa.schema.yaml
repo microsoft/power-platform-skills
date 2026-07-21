@@ -1,0 +1,584 @@
+$schema: http://json-schema.org/draft-07/schema#
+$id: http://powerapps.com/schemas/pa-yaml/v3.0/pa.schema
+title: Microsoft Power Apps schema for app source yaml files (v3.0).
+description: >-
+  The schema for all *.pa.yaml files which are used to describe a Power Apps canvas app.
+  All *.pa.yaml files in an *.msapp are logically combined into a single *.pa.yaml file.
+
+type: object
+additionalProperties: false
+properties:
+  App:
+    $ref: "#/definitions/App-instance"
+  Screens:
+    $ref: "#/definitions/Screens-name-instance-map"
+  ComponentDefinitions:
+    $ref: "#/definitions/ComponentDefinitions-name-instance-map"
+  DataSources:
+    $ref: "#/definitions/DataSources-name-instance-map"
+  EditorState:
+    $ref: "#/definitions/EditorState"
+
+defaultSnippets:
+  - label: App
+    body:
+      App:
+        Properties:
+          StartScreen: =${1:Screen1}
+  - label: Screens
+    body:
+      Screens:
+        ${1:Screen1}:
+          Children:
+            - $0
+
+definitions:
+  App-instance:
+    description: Represents the top-level App entity.
+    type: object
+    additionalProperties: false
+    properties:
+      Properties: { $ref: "#/definitions/Properties-formula-map" }
+
+  Screens-name-instance-map:
+    description: |-
+      Unordered map where keys are the names of each screen.
+    type: object
+    propertyNames: { $ref: "#/definitions/Screen-name" }
+    additionalProperties:
+      $ref: "#/definitions/Screen-instance"
+    defaultSnippets:
+      - label: Add a Screen
+        body:
+          ${1:Screen1}:
+            Children:
+              - $0
+
+  Screen-name:
+    $ref: "#/definitions/entity-name"
+
+  Screen-instance:
+    type: object
+    additionalProperties: false
+    properties:
+      Properties: { $ref: "#/definitions/Properties-formula-map" }
+      Children: { $ref: "#/definitions/Children-Control-instance-sequence" }
+
+  Children-Control-instance-sequence:
+    description: >-
+      A sequence of control instances, where each item is a control's name with a control instance.
+      The order of the control instances in the sequence indicates the effective z-index of the control in the app.
+    type: array
+    items:
+      type: object
+      minProperties: 1
+      maxProperties: 1
+      propertyNames: { $ref: "#/definitions/Control-instance-name" }
+      additionalProperties:
+        $ref: "#/definitions/Control-instance"
+      defaultSnippets:
+        - label: Add Control
+          body:
+            '${2:Control1}':
+              Control: ${1:Label}
+              Properties:
+                X: =10
+                Y: =10$0
+        - label: Add custom `Component` instance
+          body:
+            '${2:${1}1}':
+              Control: Component
+              ComponentName: ${1:MyComponent}
+              Properties:
+                X: =10
+                Y: =10$0
+        - label: Add `CodeComponent` instance (aka PCF control)
+          body:
+            '${2:${1}1}':
+              Control: CodeComponent
+              ComponentName: ${1:MyComponent}
+              Properties:
+                X: =10
+                Y: =10$0
+
+  Control-instance-name:
+    $ref: "#/definitions/entity-name"
+
+  ControlTypeId:
+    description: The invariant identifier for the type of control being instantiated.
+    allOf:
+      - $ref: "#/definitions/ControlTypeId-pattern"
+    not:
+      anyOf:
+        - $ref: "#/definitions/ControlTypeId-disallowed-types"
+        - $ref: "#/definitions/ControlTypeId-not-yet-supported"
+    oneOf:
+      - $ref: "#/definitions/ControlTypeId-oneOf-3P-types"
+      - $ref: "#/definitions/ControlTypeId-1P-controls"
+
+  ControlTypeId-pattern:
+    $comment: Defines reusable schema for validating the pattern allowed for control type identifiers.
+    type: string
+    pattern: |-
+      ^([A-Z][a-zA-Z0-9]*/)?[A-Z][a-zA-Z0-9]*(@\d+\.\d+\.\d+)?$
+
+  ControlTypeId-disallowed-types:
+    enum:
+      - AppInfo
+      - HostControl
+      - Screen
+      - AppTest
+      - TestCase
+      - TestSuite
+
+  ControlTypeId-not-yet-supported:
+    enum:
+      - CommandComponent
+      - DataComponent
+      - FunctionComponent
+
+  ControlTypeId-oneOf-3P-types:
+    $comment: The set of ControlTypeIds that represent third-party controls.
+    oneOf:
+      - $ref: "#/definitions/ControlTypeId-CanvasComponent"
+      - $ref: "#/definitions/ControlTypeId-CodeComponent"
+
+
+  ControlTypeId-CanvasComponent:
+    description: |-
+      Identifies a canvas component instance. This control type requires additional properties to be specified.
+    type: string
+    const: CanvasComponent
+
+  ControlTypeId-CodeComponent:
+    description: |-
+      Identifies a custom code component (aka PCF control) instance. This control type requires additional properties to be specified.
+    type: string
+    const: CodeComponent
+
+  ControlTypeId-1P-controls:
+    description: The invariant identifier of a first-party control published by Power Apps (aka the 'Control Library').
+    allOf:
+      - $ref: "#/definitions/ControlTypeId-pattern"
+      - $ref: "#/definitions/ControlTypeId-1P-controls-enum"
+    not:
+      $comment: Exclude built-in control identifiers as these are not defined in the 'Control Library'.
+      $ref: "#/definitions/ControlTypeId-oneOf-3P-types"
+
+  ControlTypeId-1P-controls-enum:
+    true
+
+  Control-instance:
+    type: object
+    required: [Control]
+    properties:
+      Control: { $ref: "#/definitions/ControlTypeId" }
+      Group: { $ref: "#/definitions/Control-Group-name" }
+      Properties: { $ref: "#/definitions/Properties-formula-map" }
+    if:
+      required: [Control]
+      properties:
+        Control: { $ref: "#/definitions/ControlTypeId-oneOf-3P-types" }
+    then:
+      allOf:
+        - if:
+            properties:
+              Control: { $ref: "#/definitions/ControlTypeId-CanvasComponent" }
+          then:
+            required: [ComponentName]
+            additionalProperties: false
+            properties:
+              Control: true
+              ComponentLibraryUniqueName: { $ref: "#/definitions/ComponentLibrary-unique-name" }
+              ComponentName: { $ref: "#/definitions/ComponentDefinition-name" }
+              Group: true
+              Properties: true
+        - if:
+            properties:
+              Control: { $ref: "#/definitions/ControlTypeId-CodeComponent" }
+          then:
+            required: [ComponentName]
+            additionalProperties: false
+            properties:
+              Control: true
+              ComponentName: { $ref: "#/definitions/CodeComponent-ComponentName" }
+              Group: true
+              Properties: true
+              Children: { $ref: "#/definitions/Children-Control-instance-sequence" }
+    else:
+      additionalProperties: false
+      properties:
+        Control: true
+        Variant:
+          type: string
+          minLength: 1
+        MetadataKey:
+          type: string
+          minLength: 1
+        Layout:
+          type: string
+          minLength: 1
+        IsLocked:
+          type: boolean
+        Group: true
+        Properties: true
+        Children: { $ref: "#/definitions/Children-Control-instance-sequence" }
+
+  Control-Group-name:
+    description: |-
+      The name of the group of controls to associate this control with.
+
+      Groups do not impact the behavior of an app, but are used in the Studio to organize controls when editing.
+    allOf:
+      - { $ref: "#/definitions/Control-instance-name" }
+
+  CodeComponent-ComponentName:
+    description: |-
+      The unique name of the Code Component (aka PCF control) as it occurs in Dataverse.
+      The format is: ( <publisher-prefix> '_' )? ( <JS-Namespace> '.' )+ <JS-ClassName> ( '(' <GUID> ')' )?
+    type: string
+    pattern: |-
+      ^([a-zA-Z][a-zA-Z0-9]{1,7})_)?(\w+\.)+(\w+)(\([0-9a-f-]{36}\))?$
+
+  ComponentDefinitions-name-instance-map:
+    type: object
+    propertyNames: { $ref: "#/definitions/ComponentDefinition-name" }
+    additionalProperties:
+      $ref: "#/definitions/ComponentDefinition-instance"
+
+  ComponentDefinition-name:
+    $ref: "#/definitions/entity-name"
+
+  ComponentDefinition-instance:
+    type: object
+    required: [DefinitionType]
+    properties:
+      DefinitionType:
+        enum:
+          - CanvasComponent
+          - CommandComponent
+      Description:
+        description: The description for this component definition.
+        type: string
+      AllowCustomization:
+        description: >
+          Only applicable for components defined in a component library.
+          This keyword should always be specified for component definitions in a component library.
+        type: boolean
+    allOf:
+      - if:
+          properties:
+            DefinitionType: { const: "CanvasComponent" }
+        then:
+          additionalProperties: false
+          properties:
+            DefinitionType: true
+            Description: true
+            AllowCustomization: true
+            AccessAppScope:
+              description: >
+                Indicates whether this component can access app level information.
+                Only applicable for canvas components that are NOT defined in a component library.
+              type: boolean
+            CustomProperties:
+              type: object
+              propertyNames:
+                $ref: "#/definitions/ComponentDefinition-CustomProperty-name"
+              additionalProperties:
+                $ref: "#/definitions/ComponentDefinition-CustomProperty"
+            Properties:
+              type: object
+              propertyNames:
+                allOf:
+                  - $ref: "#/definitions/ComponentDefinition-CustomProperty-name"
+                  - not:
+                      enum:
+                        - X
+                        - Y
+                        - Visible
+              additionalProperties: { $ref: "#/definitions/pfx-formula" }
+              properties:
+                ContentLanguage: { $ref: "#/definitions/pfx-formula" }
+                ChildTabPriority: { $ref: "#/definitions/pfx-formula" }
+                EnableChildFocus: { $ref: "#/definitions/pfx-formula" }
+                Fill: { $ref: "#/definitions/pfx-formula" }
+                Height: { $ref: "#/definitions/pfx-formula" }
+                OnReset: { $ref: "#/definitions/pfx-formula" }
+                Width: { $ref: "#/definitions/pfx-formula" }
+            Children: { $ref: "#/definitions/Children-Control-instance-sequence" }
+      - if:
+          properties:
+            DefinitionType: { const: "CommandComponent" }
+        then:
+          additionalProperties: false
+          properties:
+            DefinitionType: true
+            Description: true
+            AllowCustomization: true
+            Properties:
+              type: object
+              additionalProperties: false
+              properties:
+                AutoSave: { $ref: "#/definitions/pfx-formula" }
+                DataSource: { $ref: "#/definitions/pfx-formula" }
+                Icon: { $ref: "#/definitions/pfx-formula" }
+                OnSelect: { $ref: "#/definitions/pfx-formula" }
+                Title: { $ref: "#/definitions/pfx-formula" }
+                Tooltip: { $ref: "#/definitions/pfx-formula" }
+                Visible: { $ref: "#/definitions/pfx-formula" }
+
+  ComponentDefinition-CustomProperty-name:
+    $ref: "#/definitions/entity-property-name"
+
+  ComponentDefinition-CustomProperty:
+    type: object
+    required: [PropertyKind]
+    properties:
+      PropertyKind:
+        description: The kind of property that is added to the custom component.
+        type: string
+        oneOf:
+          - const: Input
+            description: This kind of property can send or receive values between the app and the component. The formula for this property is defined in the app where the component is used.
+          - const: Output
+            description: This kind of property can send or receive values between the app and the component. The formula for this property is defined once in the component.
+          - const: InputFunction
+            description: This kind of property can be called as a function with parameters. The formula for this property is defined in the app where the component is used.
+          - const: OutputFunction
+            description: This kind of property can be called as a function with parameters. The formula for this property is defined once in the component.
+          - const: Event
+            description: This kind of property allows you to create an event that the component can trigger, and then be handled by the app.
+          - const: Action
+            description: This kind of property can be called as a function with parameters, and can contain logic that changes state (side effects).
+      DisplayName:
+        description: DEPRECATED. This is not used anywhere and will be removed.
+        type: string
+      Description:
+        type: string
+      Default:
+        description: The default formula to use for this property when an instance does not explicitly set it.
+        allOf:
+          - $ref: "#/definitions/pfx-formula"
+    allOf:
+      - if:
+          properties:
+            PropertyKind: { const: "Input" }
+        then:
+          required: [DataType]
+          additionalProperties: false
+          properties:
+            PropertyKind: true
+            DisplayName: true
+            Description: true
+            DataType: { $ref: "#/definitions/pfx-data-type" }
+            RaiseOnReset:
+              description: If turned on, the component's OnReset behavior will run when the input property's value changes.
+              type: boolean
+            Default: true
+      - if:
+          properties:
+            PropertyKind: { const: "Output" }
+        then:
+          required: [DataType]
+          additionalProperties: false
+          properties:
+            PropertyKind: true
+            DisplayName: true
+            Description: true
+            DataType: { $ref: "#/definitions/pfx-data-type" }
+      - if:
+          properties:
+            PropertyKind: { const: "InputFunction" }
+        then:
+          required: [ReturnType]
+          additionalProperties: false
+          properties:
+            PropertyKind: true
+            DisplayName: true
+            Description: true
+            ReturnType: { $ref: "#/definitions/pfx-function-return-type" }
+            Default: true
+            Parameters: { $ref: "#/definitions/pfx-function-parameters" }
+      - if:
+          properties:
+            PropertyKind: { const: "OutputFunction" }
+        then:
+          required: [ReturnType]
+          additionalProperties: false
+          properties:
+            PropertyKind: true
+            DisplayName: true
+            Description: true
+            ReturnType: { $ref: "#/definitions/pfx-function-return-type" }
+            Parameters: { $ref: "#/definitions/pfx-function-parameters" }
+      - if:
+          properties:
+            PropertyKind: { const: "Event" }
+        then:
+          required: [ReturnType]
+          additionalProperties: false
+          properties:
+            PropertyKind: true
+            DisplayName: true
+            Description: true
+            ReturnType: { $ref: "#/definitions/pfx-function-return-type" }
+            Default: true
+            Parameters: { $ref: "#/definitions/pfx-function-parameters" }
+      - if:
+          properties:
+            PropertyKind: { const: "Action" }
+        then:
+          required: [ReturnType]
+          additionalProperties: false
+          properties:
+            PropertyKind: true
+            DisplayName: true
+            Description: true
+            ReturnType: { $ref: "#/definitions/pfx-function-return-type" }
+            Parameters: { $ref: "#/definitions/pfx-function-parameters" }
+
+  ComponentLibrary-unique-name:
+    description: |-
+      The unique name of the component library within Dataverse.
+      It has the form "{PublisherPrefix}_{ComponentLibraryName}".
+    type: string
+    pattern: |-
+      ^([a-z][a-z0-9]{1,7})_(\S.{0,63})$
+    not:
+      description: |-
+        Cannot contain any of the following invalid chars `.\/:*?"<>|`.
+      pattern: |-
+        [.\\/:*?"<>|]
+
+  DataSources-name-instance-map:
+    type: object
+    propertyNames: { $ref: "#/definitions/DataSource-name" }
+    additionalProperties:
+      $ref: "#/definitions/DataSource-instance"
+
+  DataSource-name:
+    $ref: "#/definitions/entity-name"
+
+  DataSource-instance:
+    type: object
+    required:
+      - Type
+    additionalProperties: false
+    properties:
+      Type:
+        type: string
+        enum:
+          - Table
+          - Actions
+      ConnectorId:
+        type: string
+      Parameters:
+        type: object
+        additionalProperties:
+          type: string
+    oneOf:
+      - required: [Type]
+        additionalProperties: false
+        properties:
+          Type:
+            const: Table
+          Parameters:
+            type: object
+            required: [TableLogicalName]
+            additionalProperties: false
+            properties:
+              TableLogicalName:
+                type: string
+      - required: [Type]
+        additionalProperties: false
+        properties:
+          Type:
+            const: Actions
+
+  Properties-formula-map:
+    description: >-
+      A map of property names to formulas.
+      The allowed property names are dependant on the entity instance type.
+      The values are Power Fx formula expressions.
+    type: object
+    propertyNames:
+      $ref: "#/definitions/entity-property-name"
+    additionalProperties:
+      $ref: "#/definitions/pfx-formula"
+
+  EditorState:
+    description: Represents metadata related to the editor state of the application that enhances the editing experience.
+    type: object
+    additionalProperties: false
+    properties:
+      ScreensOrder:
+        description: Ordered list of screen names representing the order in the editor.
+        type: array
+        items:
+          $ref: "#/definitions/Screen-name"
+      ComponentDefinitionsOrder:
+        description: Ordered list of component definition names representing the order in the editor.
+        type: array
+        items:
+          $ref: "#/definitions/ComponentDefinition-name"
+
+  entity-name:
+    description: The base requirements for a named entity in an app.
+    type: string
+    minLength: 1
+
+  entity-property-name:
+    description: The base requirements for a property of an entity in an app.
+    type: string
+    minLength: 1
+
+  pfx-function-parameters:
+    type: array
+    items:
+      type: object
+      minProperties: 1
+      maxProperties: 1
+      propertyNames: { $ref: "#/definitions/pfx-function-parameter-name" }
+      additionalProperties:
+        type: object
+        required: [DataType]
+        additionalProperties: false
+        properties:
+          Description: { type: string }
+          IsOptional: { type: boolean }
+          DataType: { $ref: "#/definitions/pfx-data-type" }
+          Default:
+            description: The default formula to use for this parameter when not explicitly specified.
+            allOf:
+              - $ref: "#/definitions/pfx-formula"
+
+  pfx-function-parameter-name:
+    description: The name of a Power Fx function parameter.
+    type: string
+
+  pfx-function-return-type:
+    oneOf:
+      - $ref: "#/definitions/pfx-data-type"
+      - description: aka `void`
+        enum: [None]
+
+  pfx-data-type:
+    type: string
+    enum:
+      - Text
+      - Number
+      - Boolean
+      - DateAndTime
+      - Screen
+      - Record
+      - Table
+      - Image
+      - VideoOrAudio
+      - Color
+      - Currency
+
+  pfx-formula:
+    oneOf:
+      - type: string
+        pattern: ^=.*
+      - type: 'null'
