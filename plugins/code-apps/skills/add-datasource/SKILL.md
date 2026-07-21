@@ -40,6 +40,7 @@ Map the user's goal to the appropriate skill:
 | Work with SharePoint lists or document libraries | SharePoint Online connector | `/add-sharepoint` |
 | Send emails, read inbox, manage calendar events | Office 365 Outlook connector | `/add-office365` |
 | Invoke an AI agent or copilot built in Copilot Studio | Copilot Studio connector | `/add-mcscopilot` |
+| Trigger or integrate a Power Automate cloud flow | Logic Flows connector | `/add-flow` |
 | Something else or not sure | Generic connector (we'll figure it out) | `/add-connector` |
 
 **Important routing rules:**

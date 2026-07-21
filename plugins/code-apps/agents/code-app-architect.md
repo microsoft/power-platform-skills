@@ -61,6 +61,7 @@ The Power Apps CLI is installed automatically via `npm install` from the app tem
 | Read lists or manage documents in SharePoint         | SharePoint (`/add-sharepoint`)        |
 | Send emails, read inbox, manage calendar             | Office 365 Outlook (`/add-office365`) |
 | Invoke a Copilot Studio agent                        | MCS Copilot (`/add-mcscopilot`)       |
+| Trigger or integrate a Power Automate cloud flow     | Logic Flows (`/add-flow`)             |
 | Connect to any other service                         | Generic connector (`/add-connector`)  |
 
 **If none of the specific skills match**, invoke `/add-connector` — it handles any connector not covered above. Browse available connectors at https://learn.microsoft.com/en-us/connectors/connector-reference/ to find the correct API name. **If no connector exists for the required functionality, tell the user clearly and do not implement a direct API call as a workaround — it will not work in production.**

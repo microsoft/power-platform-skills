@@ -61,6 +61,10 @@ skills/
     SKILL.md                      <- Add Office 365 Outlook connector
   add-mcscopilot/
     SKILL.md                      <- Add Copilot Studio agent connector
+  list-flows/
+    SKILL.md                      <- List solution-aware Power Automate flows to get flow IDs
+  add-flow/
+    SKILL.md                      <- Add a Power Automate cloud flow with generated TypeScript service
 ```
 
 ## Skills
@@ -80,6 +84,8 @@ skills/
 | `/add-office365` | Add Office 365 Outlook connector |
 | `/add-mcscopilot` | Add Copilot Studio agent connector |
 | `/add-connector` | Add any other Power Platform connector |
+| `/list-flows` | List solution-aware Power Automate flows to find flow IDs |
+| `/add-flow` | Add a Power Automate cloud flow with generated TypeScript service |
 
 ## Key Concepts
 
