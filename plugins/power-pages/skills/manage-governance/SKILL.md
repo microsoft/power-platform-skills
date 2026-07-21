@@ -2,20 +2,26 @@
 name: manage-governance
 description: >-
   Apply, inspect, and monitor Power Pages governance policies across a tenant.
-  Supports the two tenant-level policies that switch off legacy authentication
-  on Power Pages sites — PowerPages_DisableAuthenticationOpenIdConnect and
-  PowerPages_DisableAuthenticationSAML20. Lets the admin set the policy
-  (environment-wide or for a specific portal), watches the rollout until it
+  Supports twelve tenant-level policies — two that switch off legacy
+  authentication on Power Pages sites (PowerPages_DisableAuthenticationOpenIdConnect
+  and PowerPages_DisableAuthenticationSAML20), one that toggles Maker Copilot
+  for existing sites (EnableMakerCopilotForExistingSites), and nine that
+  enable/disable Power Pages authentication features (EnableProtocolOpenIdConnect,
+  EnableProtocolSAML20, EnableProtocolWsFederation, EnableProtocolOpenAuth,
+  EnableIdpOAuthFacebook, EnableIdpOAuthGoogle, EnableIdpOAuthMicrosoft,
+  EnableAuthenticationLocalLogin, EnableExternalAuthProviders). Lets the admin set a
+  policy (environment-wide or for specific portals), watches the rollout until it
   reports complete, and reads the current state at the environment or portal
   level. Use when the user wants to "turn off OpenID Connect on Power Pages",
-  "disable SAML on a portal", "block legacy auth on portals", "check which
-  portals have legacy auth disabled", "see the governance status of my Power
-  Pages portals", or otherwise wants to manage Power Pages governance policies
-  on a tenant — even if they only name the policy or the side effect without
-  saying "governance".
+  "disable SAML on a portal", "block legacy auth on portals", "enable/disable
+  Maker Copilot for existing sites", "enable Google/Facebook/Microsoft sign-in",
+  "turn off local login", "disable a sign-in protocol", "check which portals have
+  legacy auth disabled", "see the governance status of my Power Pages portals", or
+  otherwise wants to manage Power Pages governance policies on a tenant — even if
+  they only name the policy or the side effect without saying "governance".
 user-invocable: true
 argument-hint: "[optional policy or operation hint]"
-allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
+allowed-tools: Read, Write, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList
 model: opus
 ---
 
@@ -23,14 +29,24 @@ model: opus
 
 # Manage Power Pages Governance Policies
 
-Apply and inspect Power Pages tenant-level governance policies. Two policies are supported today, both targeted at disabling legacy authentication providers on Power Pages portals:
+Apply and inspect Power Pages tenant-level governance policies. Twelve policies are supported today. Two disable legacy authentication providers on Power Pages portals, one toggles Maker Copilot for existing sites, and nine enable/disable Power Pages authentication features (sign-in protocols, social identity providers, local login, and external providers):
 
 | Policy | What it does |
 |--------|--------------|
 | `PowerPages_DisableAuthenticationOpenIdConnect` | Turns off OpenID Connect (OIDC) authentication on Power Pages portals. |
 | `PowerPages_DisableAuthenticationSAML20` | Turns off SAML 2.0 authentication on Power Pages portals. |
+| `EnableMakerCopilotForExistingSites` | Turns Maker Copilot on (or off) for existing Power Pages sites in the environment. |
+| `EnableProtocolOpenIdConnect` | Enables (or disables) the OpenID Connect sign-in protocol on Power Pages sites. |
+| `EnableProtocolSAML20` | Enables (or disables) the SAML 2.0 sign-in protocol on Power Pages sites. |
+| `EnableProtocolWsFederation` | Enables (or disables) the WS-Federation sign-in protocol on Power Pages sites. |
+| `EnableProtocolOpenAuth` | Enables (or disables) the OAuth 2.0 sign-in protocol on Power Pages sites. |
+| `EnableIdpOAuthFacebook` | Enables (or disables) Facebook sign-in on Power Pages sites. |
+| `EnableIdpOAuthGoogle` | Enables (or disables) Google sign-in on Power Pages sites. |
+| `EnableIdpOAuthMicrosoft` | Enables (or disables) Microsoft sign-in on Power Pages sites. |
+| `EnableAuthenticationLocalLogin` | Enables (or disables) local (username & password) sign-in on Power Pages sites. |
+| `EnableExternalAuthProviders` | Enables (or disables) all external (social / federated) identity providers on Power Pages sites. |
 
-These are **admin-only** operations — applying a policy stops the relevant authentication path for the targeted scope (environment or portal). Always confirm with the user before posting a Set call.
+These are **admin-only** operations — applying an auth policy stops or starts the relevant authentication path for the targeted scope, and the Maker Copilot policy toggles the Copilot authoring experience for existing sites (environment or portal scope). All nine `Enable*` authentication policies use the **same configuration and Enable/Disable experience** as `PowerPages_DisableAuthenticationOpenIdConnect` — uniform governance (every site / no sites / only specific sites / all except specific sites), the same consent gate, and the same verify tables. Always confirm with the user before posting a Set call.
 
 **Initial request:** $ARGUMENTS
 
@@ -40,17 +56,19 @@ These are **admin-only** operations — applying a policy stops the relevant aut
 - **Two identifier shapes per portal.** The portal-scoped APIs take `portalId` (the value in the `Id` field on the `/websites` response). The Dataverse `WebsiteRecordId` shown in PAC and YAML is **not** what these APIs accept. The skill resolves portals via the same `/websites` listing that `manage-firewall` uses.
 - **Env override is required.** The skill lets the user pick any environment they have access to. Each script accepts `--envId <guid>` and overrides the env in the Power Platform API base URL. When `--envId` is omitted, the script falls back to the env the user is signed into via PAC.
 - **Set is async; poll until terminal.** `POST /governance` returns immediately but the policy roll-out is asynchronous. Status comes from `GET /governance/status/{policy}`. The `set-governance.js` script polls this endpoint until the status reaches a terminal value (`Succeeded` / `Completed` for success, `Failed` for failure) or the timeout elapses.
-- **Policy names are case-sensitive.** Use the exact policy strings — `PowerPages_DisableAuthenticationOpenIdConnect` and `PowerPages_DisableAuthenticationSAML20`. Anything else will be rejected by the API.
-- **Plain language with the user.** Talk about "turning off the OpenID Connect / SAML sign-in path on Power Pages portals". Only show the policy string when the user asks for the technical name.
-- **No silent overrides.** Applying a Disable* policy will sign existing users out of any portal that uses the targeted provider. Surface that consequence at the consent gate before posting.
+- **Policy names are case-sensitive.** Use the exact policy strings — `PowerPages_DisableAuthenticationOpenIdConnect`, `PowerPages_DisableAuthenticationSAML20`, `EnableMakerCopilotForExistingSites`, `EnableProtocolOpenIdConnect`, `EnableProtocolSAML20`, `EnableProtocolWsFederation`, `EnableProtocolOpenAuth`, `EnableIdpOAuthFacebook`, `EnableIdpOAuthGoogle`, `EnableIdpOAuthMicrosoft`, `EnableAuthenticationLocalLogin`, and `EnableExternalAuthProviders`. Anything else will be rejected by the API.
+- **Plain language with the user.** Talk about "turning off the OpenID Connect / SAML sign-in path on Power Pages portals" or "enabling Google sign-in on your sites". Only show the policy string when the user asks for the technical name.
+- **Disambiguate OpenID Connect / SAML.** Two policy families both mention OpenID Connect and SAML: the legacy block rules (`PowerPages_DisableAuthentication*`) and the newer per-protocol toggles (`EnableProtocol*`). When the user says only "OpenID Connect" or "SAML" with no other qualifier, the bare shorthand maps to the legacy `PowerPages_DisableAuthentication*` block rule for backward compatibility. If the user says "enable …", "the … protocol", or otherwise signals the newer toggle — or if it's genuinely unclear — ask which they mean before proceeding.
+- **No silent overrides.** Applying a `Disable*` policy (or **disabling** any `Enable*` authentication policy — `EnableProtocol*`, `EnableIdp*`, `EnableAuthenticationLocalLogin`, `EnableExternalAuthProviders`) will sign existing users out of any portal that uses the targeted provider. Surface that consequence at the consent gate before posting. (The Maker Copilot policy has no such sign-out side effect.)
 
 ## Workflow
 
 1. **Prerequisites** — Confirm PAC CLI + Azure CLI sign-in
-2. **Pick a policy** — OIDC or SAML
-3. **Pick an operation** — Set / Fetch (Env) / Fetch (Portal)
-4. **Run the operation** — branches on the choice in step 3
-5. **Loop or finish** — Offer the next operation against the same policy, or exit
+2. **Understand the request** — parse the user's free-text intent (policy,
+   enable/disable, environment, scope) via Phase 2.1
+3. **Resolve missing pieces + consent** — env picker, scope, consent gate
+4. **Run the operation** — Apply / Fetch Env / Fetch Site
+5. **Loop or finish** — Offer the next operation, or exit
 
 ## Task Tracking
 
@@ -58,8 +76,8 @@ Create tasks in three groups. Mark each `in_progress` when starting, `completed`
 
 | Group | When to create | Tasks |
 |-------|----------------|-------|
-| 1 | At start | Check prerequisites · Pick policy · Pick operation |
-| 2 | After operation chosen | Run operation (Set / Fetch Env / Fetch Portal) |
+| 1 | At start | Check prerequisites · Parse intent · Resolve env/scope |
+| 2 | After operation resolved | Run operation (Apply / Fetch Env / Fetch Site) |
 | 3 | After operation result | Summarize and offer follow-up |
 
 ---
@@ -75,7 +93,7 @@ If either is missing, tell the user which CLI to sign in to and stop. Do **not**
 
 ---
 
-## 2. Top-level menu + background pre-warm
+## 2. Entry point + background pre-warm
 
 The moment the skill is invoked:
 
@@ -83,23 +101,25 @@ The moment the skill is invoked:
    time the user needs to specify an env. The first user-facing prompt
    should not block on it. Cache the result in `/tmp/governance-envs.json`
    for the rest of the run.
-2. Show a single `AskUserQuestion` with two options:
+2. **Go straight to the Phase 2.1 free-text intent prompt.** Do **NOT** show a
+   top-level `AskUserQuestion` menu (no "Manage a Governance Setting" / "Done"
+   choice list, and no numbered/multiple-choice entry menu of any kind). The
+   very first user-facing prompt is the Phase 2.1 prose question — ask it
+   directly.
 
-| Top-level label | Description (shown to the user) | Internal value |
-|-----------------|----------------------------------|----------------|
-| External Auth Governance Setting | Enable or disable Power Pages authentication Protocols and Identity Provider for sites in an environment. | `external-auth` |
-| Done | End the skill. | `done` |
-
-If the user picks `Done`, exit cleanly without doing anything else.
+If the user replies that they are done (e.g. "done", "that's all", "exit",
+"nothing"), exit cleanly without doing anything else.
 
 ## 2.1 Free-text intent prompt
 
-When `External Auth Governance Setting` is chosen, ask the user (prose, free
-text — NOT an `AskUserQuestion`):
+Ask the user (prose, free text — NOT an `AskUserQuestion`):
 
 > *"Tell me what you'd like to do. Examples:*
 > *- 'Enable OpenID Connect for all portals in Sachin-Jun-2nd'*
 > *- 'Disable OpenID Connect on Site 1 and Site 2'*
+> *- 'Enable Maker Copilot on all sites in this environment'*
+> *- 'Enable Google sign-in on all sites in this environment'*
+> *- 'Disable local login on Site 1'*
 > *- 'Show the SAML 2.0 status in this environment'*
 > *- 'Is OpenID Connect enabled on the 8-june site?'"*
 
@@ -121,27 +141,47 @@ Parse the reply into a structured intent. The parser's output shape:
 }
 ```
 
-The parser MUST recognize the three supported policy display names + their
-shorthand variants:
+The parser MUST recognize all twelve supported policy display names + their
+shorthand variants. All policies share the **same** uniform Enable/Disable
+experience — the auth `Enable*` family below is configured exactly like
+`PowerPages_DisableAuthenticationOpenIdConnect`.
 
 | User shorthand | Resolves to |
 |----------------|-------------|
-| "OpenID Connect" / "OIDC" / "OpenIdConnect" | `PowerPages_DisableAuthenticationOpenIdConnect` |
-| "SAML" / "SAML 2.0" / "SAML20" | `PowerPages_DisableAuthenticationSAML20` |
+| "OpenID Connect" / "OIDC" / "OpenIdConnect" (bare, no other qualifier) | `PowerPages_DisableAuthenticationOpenIdConnect` |
+| "SAML" / "SAML 2.0" / "SAML20" (bare, no other qualifier) | `PowerPages_DisableAuthenticationSAML20` |
+| "Maker Copilot" / "Copilot" / "Maker Copilot for existing sites" | `EnableMakerCopilotForExistingSites` |
+| "OpenID Connect protocol" / "OIDC protocol" / "enable OpenID Connect" | `EnableProtocolOpenIdConnect` |
+| "SAML 2.0 protocol" / "SAML protocol" / "enable SAML" | `EnableProtocolSAML20` |
+| "WS-Federation" / "WsFederation" / "WsFed" | `EnableProtocolWsFederation` |
+| "OpenAuth" / "OAuth 2.0 protocol" / "OAuth protocol" | `EnableProtocolOpenAuth` |
+| "Facebook" / "Facebook login" / "Facebook sign-in" | `EnableIdpOAuthFacebook` |
+| "Google" / "Google login" / "Google sign-in" | `EnableIdpOAuthGoogle` |
+| "Microsoft" / "Microsoft account" / "Microsoft sign-in" | `EnableIdpOAuthMicrosoft` |
+| "local login" / "local authentication" / "username and password" | `EnableAuthenticationLocalLogin` |
+| "external auth providers" / "external identity providers" | `EnableExternalAuthProviders` |
+
+> **OpenID Connect / SAML disambiguation.** A **bare** "OpenID Connect" / "SAML"
+> maps to the legacy `PowerPages_DisableAuthentication*` block rule for
+> backward compatibility. When the user says "enable …", "the … protocol", or
+> otherwise signals the newer per-protocol toggle — or when it's genuinely
+> unclear — ask which policy they mean before proceeding. Never guess between
+> the two silently.
+
+> **Read the shorthands from the JSON.** The authoritative shorthand list for
+> every policy lives in `references/governance-mapping.json` under each policy's
+> `userShorthands`. The table above is a convenience summary — resolve against
+> the JSON at parse time.
 
 And map the `intentDirection` + scope qualifier to a `policyValue`. The
 mapping is **uniform across all policies** — the verb attaches to the
 Governance Setting itself, not to the underlying protocol or feature.
 
-> **Source of truth**: read these mappings from `references/governance-mapping.json` (`intentToPolicyValue.rows`). The table below is a copy for readability; if the two disagree, the JSON wins.
-
-
-| intentDirection | scope qualifier                              | policyValue | ToBeAdded   |
-|-----------------|----------------------------------------------|-------------|-------------|
-| `enable`        | "for all portals" / "everywhere"             | `All`       | `[]`        |
-| `enable`        | "only X" / "for X and Y" / "specific sites"  | `Include`   | `[X, Y, …]` |
-| `disable`       | "for all portals" / "everywhere"             | `None`      | `[]`        |
-| `disable`       | "only X" / "for X and Y" / "specific sites"  | `Exclude`   | `[X, Y, …]` |
+> **Source of truth (READ IT):** load `references/governance-mapping.json` and
+> use the `intentToPolicyValue` array for this mapping. Each row gives
+> `intentDirection` + `scope` (`all` / `specific`) + `scopeQualifiers` →
+> `policyValue` + `toBeAdded` (`empty` or `pickedIds`). Do not rely on an
+> inline copy — read the JSON at parse time.
 
 The consent gate's **Effect** line restates **the user's operation in
 plain English** — what they typed, normalized. It is the user-facing
@@ -150,23 +190,14 @@ line already shows the technical translation (`policyValue` + ToBeAdded),
 so the Effect line does NOT need to repeat that detail; it covers the
 intent side.
 
-Effect-line template — pick the row that matches the parsed
-`intentDirection` × scope:
+Effect-line template — read the `effectLineTemplates` array from
+`governance-mapping.json` and pick the row matching the parsed
+`intentDirection` × `scope` (`all` / `specific`). Substitute `{Subject}`,
+`{EnvDisplay}`, and `{SiteNameList}` into the template.
 
-| intentDirection | scope qualifier  | Effect-line template |
-|-----------------|------------------|----------------------|
-| `enable`        | all portals      | *"&lt;Subject&gt; will be enabled on all portals in &lt;ENV_DISPLAY&gt;."* |
-| `enable`        | specific portals | *"&lt;Subject&gt; will be enabled on the listed portals in &lt;ENV_DISPLAY&gt;: &lt;site name list&gt;."* |
-| `disable`       | all portals      | *"&lt;Subject&gt; will be disabled on all portals in &lt;ENV_DISPLAY&gt;."* |
-| `disable`       | specific portals | *"&lt;Subject&gt; will be disabled on the listed portals in &lt;ENV_DISPLAY&gt;: &lt;site name list&gt;."* |
-
-`<Subject>` = the plain-English name of the thing being enabled / disabled,
-derived from the policy:
-
-| Policy | `<Subject>` |
-|--------|------------|
-| `PowerPages_DisableAuthenticationOpenIdConnect` | "OpenID Connect sign-in" |
-| `PowerPages_DisableAuthenticationSAML20` | "SAML 2.0 sign-in" |
+`{Subject}` = the plain-English name of the thing being enabled / disabled —
+read it from the matching policy's `subject` field in
+`governance-mapping.json` (`policies[].subject`).
 
 Concrete renderings:
 
@@ -186,9 +217,9 @@ ambiguous ones — never re-ask for what the user already specified.
 
 | Field | Missing → ask user | Invalid → reject + reprompt |
 |-------|--------------------|------------------------------|
-| `policy` | "Which governance setting? OpenID Connect or SAML 2.0?" | "I don't recognize '\<X\>' — supported settings are: OpenID Connect, SAML 2.0. Try again." |
+| `policy` | "Which governance setting? For example OpenID Connect, SAML 2.0, Maker Copilot, a sign-in protocol (WS-Federation / OAuth), a social provider (Google / Facebook / Microsoft), local login, or external providers?" | "I don't recognize '\<X\>' — supported settings are the twelve governance policies (OpenID Connect, SAML 2.0, Maker Copilot, the OpenID Connect / SAML 2.0 / WS-Federation / OAuth 2.0 protocols, Google / Facebook / Microsoft sign-in, local login, external providers). Try again." |
 | `intentDirection` | "Do you want to enable or disable it?" | — |
-| `envId` | Use the standardized env picker (see "Env picker pattern" below). Track the env from the most recent successful operation as `<RECENT_ENV>` so option 1 can show it; persist the chosen env id as `<ENV_ID>` and the display name as `<ENV_DISPLAY>`. | "I couldn't find an env matching '\<X\>'. Pick from the list or paste an id." |
+| `envId` | Use the env picker (see "Env picker pattern" below): list all envs and default to the previously-used env. Track the env from the most recent successful operation as `<RECENT_ENV>` so it becomes the default selection; persist the chosen env id as `<ENV_ID>` and the display name as `<ENV_DISPLAY>`. | "I couldn't find an env matching '\<X\>'. Pick a row from the list or paste an id." |
 | `scope` (when `apply`) | "Apply to all sites in \<env\>, no sites, only selected sites, or all except selected?" — only when the user's phrasing was genuinely ambiguous | — |
 | `siteIds` (when scope is `Include`/`Exclude`) | "Which sites? Names or IDs, comma-separated. Here's the list: …" | "I couldn't find a site named '\<X\>' in \<env\>." |
 | `portalId` (when intent=`fetchSite`) | "Which site? Names or IDs…" | "Couldn't find '\<X\>' in \<env\>." |
@@ -201,30 +232,93 @@ Phrases the parser treats as unambiguous and skips the scope prompt for:
 - "for just X" / "only on X" / "for X and Y" → `Include` with the named sites
 - "for everything except X" / "all except X" → `Exclude` with the named sites
 
-### Env picker pattern (standardized 4-option)
+### Env picker pattern (list-all + default-to-previous)
 
-When an env is missing or ambiguous, the orchestrator MUST show this exact
-`AskUserQuestion` shape. Do NOT inline specific env names in the labels
-(except option 1, which echoes the most recent env). The labels stay stable
-run-to-run; the dynamic part is option 1's display name.
+When an env is needed (missing or ambiguous), the orchestrator MUST:
 
-| # | Label | Description shown to the user | Branch |
-|---|-------|-------------------------------|--------|
-| 1 | Use the recent environment: \<RECENT_ENV_DISPLAY\> | "Reuse the env from your previous operation in this session: \<RECENT_ENV_DISPLAY\> (\<RECENT_ENV_ID\>)." | Skip ahead with the cached env |
-| 2 | Pick from the full environment list | "I'll render the full list of environments you have admin access to (pre-fetched) and you pick a row by number or name." | Render the table from `governance-envs.json` with **exactly two data columns — Environment Name and Environment ID** (plus a leading row number for picking); do NOT include URL, type, region, or any other field. User replies with row number, name, or id. |
-| 3 | Provide an environment name or ID | "Paste a name like 'Sachin-Jun-2nd' or an env id like '202c4f04-2eb7-eef3-a26d-14c77c8c13c5'. I'll resolve it against the env list." | Free-text reply; orchestrator resolves with fuzzy match |
-| 4 | End the request | "Cancel the current request. No API call will be made." | Exit cleanly without POST or read |
+1. **List all environments.** ALWAYS render the **complete** env list by
+   running the `render-env-table.js` helper and emitting its output **verbatim
+   inside a fenced code block** (so the monospace box stays aligned). Never
+   hand-build a Markdown table for the env picker.
+
+   **Show every row, on every pick.** This applies to the **first** pick AND to
+   **every subsequent pick** (including "Apply/Check the same policy somewhere
+   else" and any re-entry into the env picker). Emit **all** rows the helper
+   prints — do NOT truncate, abbreviate, summarize, or collapse the table to
+   only the default / current-selection row. The user must always see the full
+   list so they can switch to any environment. The `keep`/default row is a
+   convenience, not a replacement for showing the list.
+
+   **Render the env picker on EVERY new user request / operation.** Every time
+   the user submits a new input that starts or re-enters an operation (Apply,
+   Fetch Env, Fetch Site — including each loop iteration and each new intent the
+   user types), the orchestrator MUST render the full env-list table again
+   **before** doing anything else for that request. NEVER silently reuse
+   `<RECENT_ENV>` and skip straight to the site list / operation. The recent env
+   is only pre-flagged as the default (`>`); the user still sees the whole list
+   and confirms with `keep` or switches. Showing the site picker or running any
+   `get-*` / `set-*` call without first re-rendering the env list is a defect.
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-env-table.js" \
+     --envsFile <cached-governance-envs.json> [--current "<RECENT_ENV_ID>"]
+   ```
+
+   The helper prints a fixed-width ASCII box table with exactly a row-number
+   column, a marker column, **Environment Name**, and **Environment ID** — no
+   URL, type, or region. It is **ASCII-only on purpose**: emoji / wide glyphs
+   break monospace alignment, so do NOT add ✅ / ➡️ or any other wide markers
+   to the rows.
+2. **Default to the previously-used env.** When `<RECENT_ENV>` is set (an env
+   was chosen earlier in this session), pass its id as `--current` so the
+   helper flags that row with a `>` marker and a `<-- CURRENT SELECTION
+   (default)` tag. Then state: *"Reply 'keep' to continue with
+   `<RECENT_ENV_DISPLAY>`, or reply with a row number, name, or ID to switch."*
+   Do **NOT** tell the user to "press Enter" or send an empty message — this
+   chat surface cannot send an empty reply, so an empty message is not a valid
+   confirmation. The user MUST type `keep` (or a row/name/id) explicitly. If the
+   user says "keep", reuse `<RECENT_ENV>` and skip ahead. On the **first** pick
+   of a session (no `<RECENT_ENV>` yet), omit `--current` — no row is flagged.
+3. **Allow selecting another env.** The user may reply with any row number,
+   environment name, or environment id to switch. Resolve fuzzy /
+   case-insensitive matches against the cached list. To cancel the request
+   entirely, the user replies `cancel` (no API call is made — run the
+   loop-end summary).
 
 Rules:
 
-- **Option 1 only appears when `<RECENT_ENV>` is set.** On the very first env
-  pick of a session, the picker shows options 2–4 only.
-- **No top-3 guesses.** Don't list "Sachin-Jun-2nd / Sachin-2026-May22 /
-  Test_Test_…" inline. Only option 1's recent env is named.
-- **Option 4 exits the request entirely**, not just the env pick. Honor it
-  as a cancel and run the loop-end summary.
-- After option 2 or 3 resolves to a valid env, update `<RECENT_ENV>` so the
-  next request can reuse it via option 1.
+- **First env pick of a session** (no `<RECENT_ENV>` yet): there is no default —
+  render the full list and require the user to pick a row number, name, or id
+  (there is nothing to "keep").
+- **Subsequent picks**: the previous env is pre-selected as the default, but
+  the orchestrator STILL renders the **entire** env list (every row) — the
+  default is only pre-flagged with `>`; it does not replace showing the full
+  list. The user only has to reply if they want to switch.
+- After a pick resolves to a valid env (whether kept or switched), update
+  `<RECENT_ENV>` so the next request defaults to it.
+- Render the list **directly in the chat** as the fixed-width ASCII box table
+  produced by `render-env-table.js`, wrapped in a fenced code block (not an
+  `AskUserQuestion` — the list is typically larger than 4 rows). After the
+  table add one line combining the keep/switch/cancel instructions above.
+
+Canonical rendering (subsequent pick, `<RECENT_ENV>` = Sachin-preprod-July) —
+the `render-env-table.js --current 2a0887a0-…` output looks like the box below.
+**Note:** the `..` / `...` rows here are only an abbreviation **for this
+document** — in an actual reply you MUST emit every environment row the helper
+prints, never these placeholders.
+
+```
++----+---+-----------------------------------------------------+--------------------------------------+
+| #  |   | Environment Name                                    | Environment ID                       |
++----+---+-----------------------------------------------------+--------------------------------------+
+| 1  |   | Ashmigration                                        | e364969c-d426-eb11-b9d2-c9e20c2cd15a |
+| .. |   | ...                                                 | ...                                  |
+| 28 | > | Sachin-preprod-July  <-- CURRENT SELECTION (default)| 2a0887a0-6366-ef59-9992-118cfcd2fa2b |
+| .. |   | ...                                                 | ...                                  |
++----+---+-----------------------------------------------------+--------------------------------------+
+```
+
+*"Reply 'keep' to continue with Sachin-preprod-July, or reply with a row number, environment name, or environment ID to switch. Reply 'cancel' to stop."*
 
 ### Consent gate (always before POST) — structured summary, not a one-liner
 
@@ -242,31 +336,50 @@ The summary MUST include:
 | Action | from `intentDirection` + policy display name | "Disable the OpenId Connect Protocol" |
 | Environment | display name + envId (small, for transparency) | "Sachin-Jun-2nd (`202c4f04-…`)" |
 | Scope (plain language) | derived from policyValue + site list | "Every site in this environment" / "Only Site 1 and 8-june" / "Every site except Site 2" / "No sites (clears the policy)" |
-| Affected sites | rendered as a small table (name + URL + ID) when Include/Exclude | (see below) |
+| Affected sites | rendered as a table with **Name, URL, Portal ID, Current State, New State** (see below) | (see below) |
 | What this changes | one-line plain-language consequence | "OpenID Connect sign-in will be blocked on all 3 sites." |
 
-Render it then ask via `AskUserQuestion`:
+**Current State / New State columns (required).** Before rendering the
+consent summary, resolve the **Current State** of each affected site by
+reading the live policy state (`get-env.js` for the env value + `get-portal.js`
+for the inclusion/exclusion lists, then apply the Phase 4.4.3 site-state
+table). **New State** is what that site becomes after the requested operation
+(enable → Enabled, disable → Disabled, for the sites in scope). Render both
+cells with the green/red convention (`🟢 Enabled` / `🔴 Disabled`) from
+`governance-mapping.json` `stateColors`. This lets the user see the exact
+transition before approving. If a live read fails, render Current State as
+`Unknown` (never block the gate on a read error) and say so in a footnote.
+
+Render it then ask for explicit go-ahead as a **free-text** prompt (NOT an
+`AskUserQuestion` — do not present numbered/multiple-choice options). End with
+one prose line: *"Reply **Apply now** to proceed, or **cancel** to stop."* Do
+**NOT** prepend any lead-in line, heading, or label of any kind — e.g.
+ "Impact summary:", "Here's the impact summary:", "SUMMARY of the change I'll
+make:", "Impact summary:", or similar. Start the impact summary directly at the
+`Action:` row.
 
 ```
-SUMMARY of the change I'll make:
-
   Action:        Disable the OpenId Connect Protocol
   Environment:   Sachin-Jun-2nd  (202c4f04-2eb7-eef3-a26d-14c77c8c13c5)
   Scope:         Every site in this environment
   Sites in env:
-                 | Name   | URL                                       |
-                 |--------|-------------------------------------------|
-                 | Site 1 | https://site-dmq4c.powerappsportals.com   |
-                 | Site 2 | https://site-uo75u.powerappsportals.com   |
-                 | 8-june | https://site-pjpuy.powerappsportals.com   |
+                 | Portal Name   | Portal URL                              | Portal ID    | Current State | New State   |
+                 |---------------|-----------------------------------------|--------------|---------------|-------------|
+                 | Site 1        | https://site-dmq4c.powerappsportals.com | 3e13d603-…   | 🟢 Enabled    | 🔴 Disabled |
+                 | Site 2        | https://site-uo75u.powerappsportals.com | ea51fc54-…   | 🟢 Enabled    | 🔴 Disabled |
+                 | 8-june        | https://site-pjpuy.powerappsportals.com | fe624c02-…   | 🔴 Disabled   | 🔴 Disabled |
   Effect:        OpenID Connect sign-in will be blocked on all 3 sites.
-
-  Q: Apply this change?    [ Apply now ]  [ Cancel ]
 ```
 
+*Reply **Apply now** to proceed, or **cancel** to stop.*
+
+Also do **NOT** precede the summary with any introductory sentence (e.g.
+"Here it is re-rendered:", "Here's the impact:", "Below is the summary:") —
+emit the `Action:` row as the very first line of the reply.
+
 Same pattern adapts to Include / Exclude scopes — render only the sites
-that match the scope as the "Sites covered" table, plus a one-line note
-about what's NOT covered.
+that match the scope as the "Sites covered" table (with the same Current
+State / New State columns), plus a one-line note about what's NOT covered.
 
 If the user picks **Cancel**, exit cleanly with *"No change made. Send a
 new request or pick a different operation."*. Do not POST.
@@ -285,6 +398,16 @@ For the consent gate and verification render, refer to this table:
 |---------------------|-----------------------|
 | Disable the OpenId Connect Protocol | `PowerPages_DisableAuthenticationOpenIdConnect` |
 | Disable the SAML 2.0 Protocol | `PowerPages_DisableAuthenticationSAML20` |
+| Enable Maker Copilot for existing sites | `EnableMakerCopilotForExistingSites` |
+| Enable the OpenID Connect protocol | `EnableProtocolOpenIdConnect` |
+| Enable the SAML 2.0 protocol | `EnableProtocolSAML20` |
+| Enable the WS-Federation protocol | `EnableProtocolWsFederation` |
+| Enable the OAuth 2.0 protocol | `EnableProtocolOpenAuth` |
+| Enable Facebook sign-in | `EnableIdpOAuthFacebook` |
+| Enable Google sign-in | `EnableIdpOAuthGoogle` |
+| Enable Microsoft sign-in | `EnableIdpOAuthMicrosoft` |
+| Enable local login | `EnableAuthenticationLocalLogin` |
+| Enable external authentication providers | `EnableExternalAuthProviders` |
 
 ### policyValue meaning — uniform across all policies
 
@@ -306,28 +429,28 @@ Quick rule of thumb (full detail in the JSON):
 
 ### NLP intent → policyValue mapping (uniform)
 
-The same uniform mapping applies on every policy — see Phase 2.1 for the
-canonical version. Reproduced here for the Apply-flow author:
-
-| User said | scope qualifier                                  | policyValue | ToBeAdded   |
-|-----------|--------------------------------------------------|-------------|-------------|
-| Enable    | "for all portals" / "everywhere" / "live portals"| `All`       | `[]`        |
-| Enable    | "only X" / "for X and Y" / "specific sites"      | `Include`   | `[X, Y, …]` |
-| Disable   | "for all portals" / "everywhere"                 | `None`      | `[]`        |
-| Disable   | "only X" / "for X and Y" / "specific sites"      | `Exclude`   | `[X, Y, …]` |
+The same uniform mapping applies on every policy — read the
+`intentToPolicyValue` array from `governance-mapping.json` (the canonical
+source, also used in Phase 2.1).
 
 "Everywhere except X" phrasing is **not** auto-inverted — ask the user to
-re-phrase as either *"Enable for X"* or *"Disable for X"*.
+re-phrase as either *"Enable for X"* or *"Disable for X"* (see
+`ambiguousPhrasings` in the JSON).
 
 ### Scope picker (when scope is missing or ambiguous)
 
-When the user's intent has no scope qualifier, ask with these **two**
-options. Labels stay neutral — they don't leak `Include` / `Exclude`:
+When the user's intent has no scope qualifier, do **NOT** use an
+`AskUserQuestion`. Instead follow the **Phase 4.2.1** flow: list the sites
+(top 10 via `orderPortalsForDisplay()`), then take a single **free-text**
+reply — `all` for every site, or a **comma-separated** list of site names / IDs
+for specific sites. Map the reply (with the known verb) to `policyValue`:
 
-| # | Label | Description shown to the user | Maps to |
-|---|-------|-------------------------------|---------|
-| 1 | All portals in environment | Apply the chosen Enable/Disable action to every site in the env. Clears any inclusion / exclusion list. | `policyValue=All` (enable) or `policyValue=None` (disable). `ToBeAdded=[]`. |
-| 2 | Specific portals | I'll list the sites; you reply with the names or IDs (comma-separated). | `policyValue=Include` (enable) or `policyValue=Exclude` (disable). `ToBeAdded=[picked ids]`. |
+| User reply | Verb | Maps to |
+|------------|------|---------|
+| `all` | enable | `policyValue=All`, `ToBeAdded=[]` |
+| `all` | disable | `policyValue=None`, `ToBeAdded=[]` |
+| comma-separated names/IDs | enable | `policyValue=Include`, `ToBeAdded=[picked ids]` |
+| comma-separated names/IDs | disable | `policyValue=Exclude`, `ToBeAdded=[picked ids]` |
 
 The uniform NLP table above is the **source of truth** for the consent-gate
 summary. The summary MUST translate `policyValue` back to plain language —
@@ -337,21 +460,38 @@ the Phase 2.1 "Enable / Disable" table.
 
 ---
 
-## 3. Pick an operation
+## 3. Determine the operation
 
-Use `AskUserQuestion` with three options. Interpolate `<POLICY_DISPLAY_NAME>`
-(from Phase 2) into option #1's label and option #3's description so the user
-sees concrete language tied to the policy they picked.
+`<OP>` comes from the parsed intent (Phase 2.1) — do **not** ask the user to
+re-pick it when the intent is already clear:
 
-| User-facing label (interpolated) | `description` on the question | Internal operation |
-|----------------------------------|-------------------------------|--------------------|
-| Apply "&lt;POLICY_DISPLAY_NAME&gt;" Governance Policy | Configure and persist the policy value at the environment level. | Apply (POST + watch + verify) |
-| Retrieve Environment-Level Policy Status | Evaluate the effective policy status for the environment by reading the environment-level configuration and site-level mappings when the policy is configured as selective enabled/disable. | Fetch Env |
-| Retrieve Site-Level Policy Status | Determine whether the "&lt;POLICY_DISPLAY_NAME&gt;" policy is enabled or disabled for a specific site. | Fetch Site |
+| Parsed `intent` | `<OP>` | Section |
+|-----------------|--------|---------|
+| `apply` | Set | 4.2 |
+| `fetchEnv` | Fetch Env | 4.3 |
+| `fetchSite` | Fetch Portal | 4.4 |
+
+Only when the intent is genuinely ambiguous, ask the user to clarify with a
+**free-text** prompt (NOT an `AskUserQuestion` — no numbered/multiple-choice
+options). Describe the three operations in plain prose and let the user reply in
+their own words, interpolating `<POLICY_DISPLAY_NAME>` (from Phase 2) so the
+language is concrete:
+
+> *"Do you want to **apply / change** the "&lt;POLICY_DISPLAY_NAME&gt;" setting,
+> **check its status across the environment**, or **check its status on a
+> specific site**? Reply in your own words."*
+
+Map the free-text reply to an operation:
+
+| Free-text reply resolves to | Internal operation |
+|-----------------------------|--------------------|
+| apply / change / enable / disable / configure the policy | Set (POST + watch + verify) |
+| check / status across the environment / env-wide | Fetch Env |
+| check / status on a specific site / one portal | Fetch Portal |
 
 Persist the chosen operation as `<OP>`.
 
-(The status endpoint is still used internally — `set-governance.js` polls it during Apply and surfaces it via the verify call. It is intentionally not exposed as a standalone operation in the user-facing menu.)
+(The status endpoint is still used internally — `set-governance.js` polls it during Apply and surfaces it via the verify call. It is intentionally not exposed as a standalone operation.)
 
 ---
 
@@ -359,51 +499,78 @@ Persist the chosen operation as `<OP>`.
 
 ### 4.1 Common — pick an environment
 
-For all three operations the user picks an environment first.
+For all three operations the user picks an environment first. Follow the
+**canonical "Env picker pattern"** in Phase 2.2 — render the **full** env-list
+table (every row, every request) via `render-env-table.js`, default to
+`<RECENT_ENV>` when set, and let the user `keep` / switch / `cancel`. Never
+skip the list by silently reusing the previously-chosen env.
+
+The env list comes from `list-envs.js` (cached as `governance-envs.json`):
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-envs.js"
 ```
 
-Output is `{ status: "ok", envs: [ { envId, displayName, envUrl, type, region } ] }`. When you render the list to the user, show **only** `displayName` (as "Environment Name") and `envId` (as "Environment ID") — plus a leading row number for picking. Do NOT show `envUrl`, `type`, `region`, or any other field. Render as a **Markdown table** (not a fenced code-block / monospace table) so the chat UI renders proper table styling. Do NOT use `AskUserQuestion` — the list is typically larger than 4 rows. The user replies with a row number, the environment name, or the environment id; resolve fuzzy / case-insensitive matches against the cached list. Persist the choice as `<ENV_ID>` and `<ENV_DISPLAY>`.
-
-Canonical rendering template — emit this **directly in the chat message** (no surrounding fences, no `node ... | head`), one row per environment:
-
-```markdown
-| # | Environment Name | Environment ID |
-|---|------------------|----------------|
-| 1 | Ashmigration | e364969c-d426-eb11-b9d2-c9e20c2cd15a |
-| 2 | automationtesting | 6db95a21-0ea2-e287-823a-f9522414f0b7 |
-| … | … | … |
-```
-
-After the table, add one line: *"Reply with a row number, environment name, or environment ID."* Do NOT also print the raw monospace table.
+Output is `{ status: "ok", envs: [ { envId, displayName, envUrl, type, region } ] }`. Pipe it (or the cached file) through `render-env-table.js` and emit the box table **verbatim inside a fenced code block**. Resolve the user's row-number / name / id reply against the cached list (fuzzy, case-insensitive). Persist the choice as `<ENV_ID>` and `<ENV_DISPLAY>`, and update `<RECENT_ENV>`.
 
 ### 4.2 Apply the policy (`<OP>` = Set)
 
-#### 4.2.1 Pick the scope (4 plain-language options)
+#### 4.2.1 Pick the scope (site list + free-text input)
 
-Use `AskUserQuestion` with exactly four options that name both axes
-explicitly: the **verb** (Enable/Disable) on the Governance Setting AND the
-**scope** (all sites vs specific sites). The labels and descriptions shown
-to the user MUST be the plain-language variants in the "User-facing label"
-column; map them to the internal `policyValue` strings on the right purely
-for the API call.
+Do **NOT** use an `AskUserQuestion` for the scope. Instead, show the site
+list and take a single **free-text** reply. The **verb** (Enable / Disable)
+is already known from the parsed intent (`<INTENT_DIRECTION>`); this step only
+resolves **scope** (all sites vs specific sites).
 
-`Include` and `Exclude` are **internal-only** terms — they must never appear in
-any `AskUserQuestion` label, description, or summary the user reads.
+**Step A — resolve the verb.** Use `<INTENT_DIRECTION>` from the NLP parse.
+Only if it is genuinely missing, ask a single short **free-text** prompt (NOT an
+`AskUserQuestion`): *"Do you want to **enable** or **disable** it? Reply
+'enable' or 'disable'."* Map the reply to the verb, then continue.
 
-| User-facing label | What it does (plain language) | Internal `policyValue` | Trigger portal picker? |
-|-------------------|-------------------------------|------------------------|------------------------|
-| **Enable on all sites in this environment** | Turn the Governance Setting ON for every site in the env. Clears any prior site-level list. | `All` | No |
-| **Disable on all sites in this environment** | Turn the Governance Setting OFF for every site in the env. Clears any prior site-level list. | `None` | No |
-| **Enable on specific sites** | Turn the Governance Setting ON only for the listed sites; every other site is unaffected. | `Include` | Yes |
-| **Disable on specific sites** | Turn the Governance Setting OFF only for the listed sites; every other site stays under the policy. | `Exclude` | Yes |
+**Step B — list the sites (top 10).** Always show the site list first so the
+free-text input is safe (admins recognise site **names**, not GUIDs):
 
-Persist the chosen `policyValue` as `<POLICY_VALUE>`.
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-portals.js" --envId "<ENV_ID>" \
+  [--useAdminPortal --token "<TOKEN>"]
+```
 
-If `<POLICY_VALUE>` is `All` or `None`, jump to **4.2.3** (consent gate). No
-portal picker is needed.
+Render as a plain-text table. **Display cap (10 rows):** when the env has more
+than 10 sites, show only the top 10 via `orderPortalsForDisplay()` (Production
+→ `StateConfigured` → oldest `createdOn`) and add "Showing 10 of &lt;total&gt;
+sites — type any site name or ID (including ones not listed), or 'all'." With
+10 or fewer, show them all.
+
+```
+| # | Portal Name   | Portal URL                                | Portal ID                             |
+|---|---------------|-------------------------------------------|---------------------------------------|
+| 1 | Site 1        | https://site-dmq4c.powerappsportals.com   | 3e13d603-2607-43e0-90aa-d15bacaa8787  |
+| 2 | Site 2        | https://site-uo75u.powerappsportals.com   | ea51fc54-94e0-47fc-ab13-d3db18567809  |
+| 3 | 8-june        | https://site-pjpuy.powerappsportals.com   | fe624c02-8793-4423-84f0-3546d80dee49  |
+```
+
+**Step C — prompt for scope (prose, free text — NOT an `AskUserQuestion`).**
+Ask, using the known verb:
+
+> *"Reply **all** to &lt;enable/disable&gt; Maker Copilot on **every** site in
+> &lt;ENV_DISPLAY&gt;, or reply with a **comma-separated** list of site names
+> or IDs to &lt;enable/disable&gt; only those. Reply 'cancel' to stop."*
+
+**Step D — map the reply to `<POLICY_VALUE>`:**
+
+| User reply | Verb | Internal `policyValue` | Next |
+|------------|------|------------------------|------|
+| `all` (or "every site") | enable | `All` | → 4.2.3 consent gate |
+| `all` | disable | `None` | → 4.2.3 consent gate |
+| comma-separated names/IDs | enable | `Include` | → 4.2.2 parse the list |
+| comma-separated names/IDs | disable | `Exclude` | → 4.2.2 parse the list |
+
+`Include` / `Exclude` are **internal-only** terms — never show them to the
+user. Persist the resolved `policyValue` as `<POLICY_VALUE>`.
+
+If the reply is `all`, jump straight to **4.2.3** (consent gate) — no further
+site parsing needed. If the reply is a comma-separated list, go to **4.2.2** to
+validate and resolve the named sites.
 
 #### 4.2.2 Site picker (Specific Sites / All-except-specific only)
 
@@ -420,12 +587,21 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-portals.js" --
 Render the result as a plain-text table the user can copy from:
 
 ```
-| # | Name      | URL                                       | Portal ID                              |
-|---|-----------|-------------------------------------------|----------------------------------------|
-| 1 | Site 1    | https://site-dmq4c.powerappsportals.com   | 3e13d603-2607-43e0-90aa-d15bacaa8787  |
-| 2 | Site 2    | https://site-uo75u.powerappsportals.com   | ea51fc54-94e0-47fc-ab13-d3db18567809  |
-| 3 | 8-june    | https://site-pjpuy.powerappsportals.com   | fe624c02-8793-4423-84f0-3546d80dee49  |
+| # | Portal Name      | Portal URL                                | Portal ID                              |
+|---|------------------|-------------------------------------------|----------------------------------------|
+| 1 | Site 1           | https://site-dmq4c.powerappsportals.com   | 3e13d603-2607-43e0-90aa-d15bacaa8787   |
+| 2 | Site 2           | https://site-uo75u.powerappsportals.com   | ea51fc54-94e0-47fc-ab13-d3db18567809   |
+| 3 | 8-june           | https://site-pjpuy.powerappsportals.com   | fe624c02-8793-4423-84f0-3546d80dee49   |
 ```
+
+> **Display cap (10 rows).** When the environment has **more than 10**
+> portals, render only the top 10 using `orderPortalsForDisplay()` from
+> `list-portals.js` — Production sites first, then `StateConfigured` status,
+> then oldest-first by `createdOn`. Add a line "Showing 10 of &lt;total&gt;
+> sites — type any site name or ID (including ones not listed) to pick it."
+> With 10 or fewer, show them all in the original order. The user can still
+> reference any site by name/ID because the parser validates against the full
+> list.
 
 If the list is empty, tell the user there are no portals in that environment and back the user up to **4.2.1**.
 
@@ -450,7 +626,11 @@ Persist `<PORTAL_IDS>` (comma-joined) for downstream steps. Persist `<PORTAL_NAM
 
 #### 4.2.3 Confirm before posting (consent gate)
 
-`AskUserQuestion` — show the picked portals **by name** so the user verifies their intent:
+Confirm as a **free-text** prompt (NOT an `AskUserQuestion` — no numbered /
+multiple-choice options). Render the structured impact summary from Phase 2.2
+(start directly at the `Action:` row — no lead-in label or introductory
+sentence), then show the picked portals **by name** so the user verifies their
+intent.
 
 ```
 Apply <POLICY_PLAIN_LABEL> to <ENV_DISPLAY>?
@@ -473,7 +653,8 @@ Pick the row that matches `intentDirection` × scope:
 `<Subject>` is mapped from the policy per the table in Phase 2.1
 ("OpenID Connect sign-in" / "SAML 2.0 sign-in").
 
-Options: `Apply now` / `Cancel`. Do not proceed without explicit `Apply now`.
+Options: reply **Apply now** to proceed, or **cancel** to stop. Do not proceed
+without an explicit free-text `Apply now`.
 
 #### 4.2.4 Apply and watch
 
@@ -501,12 +682,56 @@ Exit codes:
 
 #### 4.2.5 Confirm after rollout
 
-After the script exits, re-read the current state at the same scope and show it to the user:
+After the script exits, re-read the current state at the same scope and show it
+to the user. This is a verify step — never trust the polling outcome alone.
 
 - `policyValue` was `All` or `None` → run **`get-env.js`**.
 - `policyValue` was `Include` or `Exclude` → run **`get-portal.js`** (which reads the policyRecord, then check that each picked portal lands on the expected list).
 
-This is a verify step — never trust the polling outcome alone.
+**Render the verification as a state table (canonical structure).** After the
+read confirms the new state, render a headline + table that lists **every site
+the operation touched**. **Do NOT hand-build a Markdown table with emoji / ANSI
+inside the cells — that breaks column alignment and the Status header.** Instead
+render the table with the **`render-portal-table.js`** helper (the same
+fixed-width ASCII-box approach the env picker uses), piping the sites through it
+and emitting the output **verbatim inside a fenced code block**:
+
+```bash
+echo '<PORTALS_JSON>' | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --no-color
+```
+
+`<PORTALS_JSON>` is a JSON array of `{ "name", "url", "portalId", "state" }`
+where `state` is `true` (Enabled) / `false` (Disabled) — compute each site's
+state from the read via the Phase 4.4.3 site-state table. Use `--no-color` for
+chat surfaces (ANSI is stripped there and would show as raw escapes); the helper
+auto-colorizes the State column green / red only in a real terminal. The helper
+emits a fixed-width box with columns `# | Name | URL | Site ID | State` and
+stays aligned because widths are computed on the visible text.
+
+**The State cell MUST show the status icon** — 🟢 for Enabled, 🔴 for Disabled.
+The helper prepends these by default (pass `--no-icons` only if you explicitly
+need them off). NEVER render a state table without the 🟢 / 🔴 icon.
+
+Pick the headline + row set by scope:
+
+- **`All` (env-wide enable)** — headline *"This Governance setting is 🟢 Enabled for these Sites:"*; list **all** sites in the env (from `list-portals.js`), every `state=true`.
+- **`None` (env-wide disable)** — headline *"This Governance setting is 🔴 Disabled for these Sites:"*; list **all** sites in the env, every `state=false`.
+- **`Include` / `Exclude`** — list only the sites the operation targeted; compute each site's state via the Phase 4.4.3 site-state table. Use the singular *"…for this Site:"* headline when exactly one site was targeted.
+
+Env-wide (`None`) example — every site rendered via the helper (icons on):
+
+```
+This Governance setting is 🔴 Disabled for these Sites:
+
++---+----------+-----------------------------------------+--------------------------------------+-------------+
+| # | Name     | URL                                     | Site ID                              | State       |
++---+----------+-----------------------------------------+--------------------------------------+-------------+
+| 1 | Portal_1 | https://site-3axiv.powerappsportals.com | d1df518c-8e39-4bd5-8410-eb1c0c28e56c | 🔴 Disabled |
+| 2 | Portal_2 | https://site-37umu.powerappsportals.com | bf8ead09-df94-488a-b78c-d4065899e1a4 | 🔴 Disabled |
++---+----------+-----------------------------------------+--------------------------------------+-------------+
+```
+
+Then give the one-line Phase 5 loop summary.
 
 ### 4.3 Check current state across an environment (`<OP>` = Fetch Env)
 
@@ -528,16 +753,33 @@ Render in plain language. Use the friendly mapping the loop section calls out:
 | `Include` | "the sites on the allow-list" |
 | `Exclude` | "every site except the ones on the exception list" |
 
-#### 4.3.1 When `body` is `Include` or `Exclude`, ALWAYS show the list of sites
+**Highlight the status summary.** The one-line plain-language summary MUST be
+**emphasized** (bold) and lead with the env-level state icon so the user can
+scan it at a glance — 🟢 when the setting is on env-wide (`All`) or on some
+sites (`Include`/`Exclude`), 🔴 when it is off everywhere (`None`). Render it as
+a bold line, e.g.:
 
-A bare summary like *"applied to the sites on the allow-list"* leaves the user
-guessing. When the env value is `Include` or `Exclude`, the orchestrator MUST
-also fetch the policy record + the env's full site list, resolve names, and
-render a table.
+- `All` → **🟢 Maker Copilot is enabled on every site in `<env>`.**
+- `None` → **🔴 Maker Copilot is disabled on every site in `<env>`.**
+- `Include` → **🟢 Maker Copilot is enabled on the listed sites in `<env>`.**
+- `Exclude` → **🟢 Maker Copilot is enabled on every site in `<env>` except the listed ones.**
+
+Use the policy's `summaryLabel` / `subject` from `governance-mapping.json` for
+the label, and the `stateColors` emoji for the icon. Never render the Fetch Env
+summary as an un-emphasized plain sentence.
+
+#### 4.3.1 ALWAYS show the portal details table (every env value)
+
+A bare summary leaves the user guessing which sites are affected. For **every**
+env value (`All`, `None`, `Include`, `Exclude`), the orchestrator MUST also
+fetch the env's full site list, compute each site's state, and render the
+portal-details state table via **`render-portal-table.js`** (icons on) so the
+user sees every portal's name, URL, Site ID, and 🟢/🔴 state.
 
 Steps:
 
-1. Fetch the policy record:
+1. Fetch the policy record (needed for `Include`/`Exclude` membership; harmless
+   for `All`/`None`):
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-portal.js" \
      --envId "<ENV_ID>" \
@@ -556,29 +798,29 @@ Steps:
      [--useAdminPortal --token "<TOKEN>"]
    ```
 
-3. Pick the list that applies (`InclusionList` for `Include`, `ExclusionList` for
-   `Exclude`), resolve each id to a site name + URL from the list-portals
-   output, and render **one** table with the appropriate header:
-
-   - `Include` → header: *"Policy is enabled for these sites:"*
-   - `Exclude` → header: *"Policy is disabled for these sites:"*
-
+3. Compute each site's state via the Phase 4.4.3 site-state table (using the env
+   `body` + the inclusion/exclusion lists), then render the **full** portal
+   list through the helper, emitting its output **verbatim inside a fenced code
+   block**:
+   ```bash
+   echo '<PORTALS_JSON>' | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --no-color
    ```
-   Policy is enabled for these sites:
-   | Name   | URL                                       | Site ID                                |
-   |--------|-------------------------------------------|----------------------------------------|
-   | 8-june | https://site-pjpuy.powerappsportals.com   | fe624c02-8793-4423-84f0-3546d80dee49  |
-   ```
+   `<PORTALS_JSON>` is a JSON array of `{ "name", "url", "portalId", "state" }`
+   (`state` true=Enabled / false=Disabled) for **every** site in the env. The
+   State cell MUST show the 🟢 / 🔴 icon (helper default). Pick the headline by
+   env value:
 
-   Do not also show the "other sites" table — the user asked for the simpler
-   one-table form.
+   - `All` → *"This Governance setting is 🟢 Enabled for these Sites:"* (all rows 🟢)
+   - `None` → *"This Governance setting is 🔴 Disabled for these Sites:"* (all rows 🔴)
+   - `Include` → *"This Governance setting is 🟢 Enabled for these Sites:"* (listed sites 🟢, the rest 🔴)
+   - `Exclude` → *"This Governance setting is 🟢 Enabled for these Sites:"* (excepted sites 🔴, the rest 🟢)
 
-   If a list contains an id that does NOT appear in `list-portals` (e.g., the
-   site was deleted after being added to the policy), still show it in the
-   table with `(site not found)` for the name and an empty URL.
+   If a policy-list id does NOT appear in `list-portals` (e.g., the site was
+   deleted after being added), still show it in the table with `(site not
+   found)` for the name and an empty URL.
 
-4. Finally, give the one-line plain-language summary (the same pattern as in
-   Phase 5).
+4. Finally, give the highlighted (bold + icon) one-line summary from Phase 4.3
+   above.
 
 ### 4.4 Check current state on one portal (`<OP>` = Fetch Portal)
 
@@ -600,6 +842,11 @@ Render the output as a plain-text table (same format as 4.2.2):
 | 2 | Site 2    | https://site-uo75u.powerappsportals.com   | ea51fc54-94e0-47fc-ab13-d3db18567809  |
 | 3 | 8-june    | https://site-pjpuy.powerappsportals.com   | fe624c02-8793-4423-84f0-3546d80dee49  |
 ```
+
+> **Display cap (10 rows).** Same rule as Phase 4.2.2 — when the env has more
+> than 10 sites, render only the top 10 via `orderPortalsForDisplay()`
+> (Production → `StateConfigured` → oldest `createdOn`) and note "Showing 10
+> of &lt;total&gt;". The user may still name any site not in the visible 10.
 
 If the list is empty, tell the user there are no sites in this environment and stop.
 
@@ -649,47 +896,103 @@ When you render the Governance Setting state to the user (in any table
 cell, summary, or sentence — env-level or site-level), MUST follow the
 **Governance Setting state → user-facing paraphrase** mapping per policy.
 The paraphrasing labels track the user's natural-English mental model of
-the feature:
-
-| Policy | Governance Setting **Enabled** | Governance Setting **Disabled** |
-|--------|--------------------------------|----------------------------------|
-| `PowerPages_DisableAuthenticationOpenIdConnect` | "OIDC Protocol sign-in Enabled" | "OIDC Protocol sign-in Blocked" |
-| `PowerPages_DisableAuthenticationSAML20` | "SAML Protocol sign-in Enabled" | "SAML Protocol sign-in Blocked" |
+the feature. Read the paraphrase strings from `governance-mapping.json` —
+the matching policy's `stateParaphrase.Enabled` / `stateParaphrase.Disabled`.
 
 Render the cell with the state label first, then the paraphrase in
 parentheses:
 
 ```
-| 1 | Site 1 | …url… | Enabled  (OIDC sign-in Enabled) |
-| 2 | 8-june | …url… | Disabled (OIDC sign-in Blocked) |
+| 1 | Site 1 | …url… | 🟢 Enabled  (OIDC sign-in Enabled) |
+| 2 | 8-june | …url… | 🔴 Disabled (OIDC sign-in Blocked) |
 ```
+
+##### Color convention (green = Enabled, red = Disabled)
+
+When rendering the Governance Setting state in **any summary, verification, or
+state table** (the consent-gate summary, the post-Set verify table, Fetch Env,
+Fetch Site, and the Phase 5 loop summary), colour-code the **Status** column
+using **ANSI SGR escape codes** so the state renders green / red in an
+ANSI-capable terminal. Keep the emoji marker inside the coloured span as a
+fallback for surfaces that strip ANSI.
+
+Wrap the **entire** Status cell — emoji + label + paraphrase — in the colour
+code, and **reset after every cell** with `\x1b[0m`:
+
+| State | ANSI open | Rendered cell (wrapped) |
+|-------|-----------|--------------------------|
+| Enabled | `\x1b[32m` (green) | `\x1b[32m🟢 Enabled (<paraphrase>)\x1b[0m` |
+| Disabled | `\x1b[31m` (red) | `\x1b[31m🔴 Disabled (<paraphrase>)\x1b[0m` |
+
+ANSI codes (also in `references/governance-mapping.json` → `stateColors.ansi`):
+
+- Green: `\x1b[32m`
+- Red: `\x1b[31m`
+- Reset: `\x1b[0m`  ← **always** close each Status cell with this.
+
+Example (Fetch Site status table):
+
+```text
+| # | Site Name | URL   | Status |
+|---|-----------|-------|--------|
+| 1 | Site 1    | …url… | \x1b[32m🟢 Enabled (OIDC sign-in Enabled)\x1b[0m |
+| 2 | 8-june    | …url… | \x1b[31m🔴 Disabled (OIDC sign-in Blocked)\x1b[0m |
+```
+
+Read the codes + emoji from `references/governance-mapping.json` under
+`stateColors` (`stateColors.ansi.green` / `.red` / `.reset`, and each state's
+`emoji`) — do not hard-code them elsewhere. Apply this uniformly to every
+Status cell and to the consent-gate **Action / Effect** rows (green when the
+operation enables, red when it disables).
+
+> **Terminal vs. stripped surfaces.** ANSI escapes render as colour only in an
+> ANSI-capable terminal. Surfaces that strip ANSI (some chat renderers) show
+> the escape text or drop it — in those the emoji (🟢 / 🔴) remains the visible
+> green / red indicator, which is why the emoji stays inside the coloured span.
 
 This applies uniformly — env-level renders, per-site renders, the
 Phase 5 loop summary, and any verification table. Do NOT invert or
 re-interpret these labels based on the underlying API direction; the
 user has chosen this mental model and we render it consistently.
 
-Then render the result as a one-line headline + table, **never as
-multi-sentence prose**:
+Then render the result as a one-line headline + **the fixed-width ASCII-box
+table produced by `render-portal-table.js`** (icons on) — **never** a
+hand-built Markdown table with emoji / ANSI in the cells (that breaks the
+Status header and column alignment), and never multi-sentence prose. Pipe the
+single site through the helper:
+
+```bash
+echo '[{"name":"<PORTAL_NAME>","url":"<URL>","portalId":"<PORTAL_ID>","state":<true|false>}]' \
+  | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --no-color
+```
+
+`state` is `true` when the Phase 4.4.3 site-state table resolves to Enabled,
+`false` when Disabled. **The State cell MUST show the icon** — 🟢 Enabled /
+🔴 Disabled (the helper adds it by default). Emit the helper output verbatim in
+a fenced code block.
 
 For **Enabled**:
 
 ```
-This Governance setting is Enabled for this Site:
+This Governance setting is 🟢 Enabled for this Site:
 
-| Name      | URL                                       | Site ID                                |
-|-----------|-------------------------------------------|----------------------------------------|
-| 8-june    | https://site-pjpuy.powerappsportals.com   | fe624c02-8793-4423-84f0-3546d80dee49  |
++---+--------+-----------------------------------------+--------------------------------------+------------+
+| # | Name   | URL                                     | Site ID                              | State      |
++---+--------+-----------------------------------------+--------------------------------------+------------+
+| 1 | 8-june | https://site-pjpuy.powerappsportals.com | fe624c02-8793-4423-84f0-3546d80dee49 | 🟢 Enabled |
++---+--------+-----------------------------------------+--------------------------------------+------------+
 ```
 
 For **Disabled**:
 
 ```
-This Governance setting is Disabled for this Site:
+This Governance setting is 🔴 Disabled for this Site:
 
-| Name   | URL                                       | Site ID                                |
-|--------|-------------------------------------------|----------------------------------------|
-| Site 1 | https://site-dmq4c.powerappsportals.com   | 3e13d603-2607-43e0-90aa-d15bacaa8787  |
++---+--------+-----------------------------------------+--------------------------------------+-------------+
+| # | Name   | URL                                     | Site ID                              | State       |
++---+--------+-----------------------------------------+--------------------------------------+-------------+
+| 1 | Site 1 | https://site-dmq4c.powerappsportals.com | 3e13d603-2607-43e0-90aa-d15bacaa8787 | 🔴 Disabled |
++---+--------+-----------------------------------------+--------------------------------------+-------------+
 ```
 
 Do not surface internal terms (`policyValue`, `InclusionList`, `ExclusionList`,
@@ -745,12 +1048,8 @@ language. Do not surface internal terms — exit codes, `policyValue`, `attempts
 | Fetch Site | *"\<Plain policy label\> is currently \<applied to / not applied to\> \<site name\>."* |
 | Fetch Status | *"The last rollout on \<env\> \<finished successfully / failed / is still in flight\>."* |
 
-Map `<plain policy label>` from the policy display name in Phase 2:
-
-| Policy display name | `<plain policy label>` in summaries |
-|---------------------|--------------------------------------|
-| Disable the OpenId Connect Protocol | "OpenID Connect block rule" |
-| Disable the SAML 2.0 Protocol | "SAML 2.0 block rule" |
+Map `<plain policy label>` from the matching policy's `summaryLabel` field in
+`governance-mapping.json` (`policies[].summaryLabel`).
 
 These labels read naturally in the loop-summary patterns above. E.g.
 "*The OpenID Connect block rule now applies to every site in &lt;env&gt;*"
@@ -768,16 +1067,17 @@ Fetch Env:
 | `Include` | "the sites on the allow-list" |
 | `Exclude` | "every site except the ones on the exception list" |
 
-Then offer follow-ups via a single `AskUserQuestion`:
+Then, instead of an `AskUserQuestion` menu, **re-prompt the user with the
+free-text intent prompt from Phase 2.1** — the same *"Tell me what you'd like to
+do…"* prose with the examples. Do **NOT** present the old four-option menu
+("Apply the same policy somewhere else" / "Check the same policy somewhere else"
+/ "Switch to a different policy" / "Done"). The user simply types their next
+request in natural language (a new policy, env, direction, or scope), and the
+orchestrator re-enters at **Phase 2.1** to parse it — re-rendering the full env
+list per the "Always show the env list" rule. If the user says they're done
+(e.g. "done", "that's all", "exit"), end the skill cleanly.
 
-| Option | What it does |
-|--------|--------------|
-| Apply the same policy somewhere else | Re-enters **4.2** with the same `<POLICY>`. |
-| Check the same policy somewhere else | Re-enters **4.1** with the same `<POLICY>` and asks Env or Portal scope. |
-| Switch to the other policy | Re-enters **2**. |
-| Done | Exits cleanly. |
-
-Loop until the user picks Done.
+Loop until the user indicates they are done.
 
 Skill tracking:
 
@@ -789,12 +1089,19 @@ Skill tracking:
 
 ## Constraints
 
-- **Plain language** — talk about "turning off the OpenID Connect / SAML sign-in path on portals". Use the policy strings only as labels in `AskUserQuestion` `description` fields when the user has shown they want the technical name.
-- **Explicit consent for Set** — never POST `/governance` without a Set-specific `AskUserQuestion` confirmation that spells out which sign-in path is being turned off and what happens to currently-signed-in users.
+- **Plain language** — talk about "turning off the OpenID Connect / SAML sign-in path on portals", "turning Maker Copilot on / off for existing sites", or "enabling Google sign-in on your sites". Show the policy strings only when the user has shown they want the technical name.
+- **Explicit consent for Set** — never POST `/governance` without a Set-specific **free-text** confirmation (the user replies `Apply now`; do NOT use an `AskUserQuestion` with numbered options) that spells out which sign-in path / feature is being turned off and what happens to currently-signed-in users.
 - **Always verify after Set** — run the matching `get-*` call after the polling script exits, even when it reports success.
+- **Always show the env list** — for **every** new user request / operation
+  (Apply, Fetch Env, Fetch Site — including each loop iteration and every new
+  intent the user types), the orchestrator MUST render the **full** env-list
+  table (via `render-env-table.js`, every row) and let the user confirm `keep`
+  or switch **before** running the site picker or any `get-*` / `set-*` call.
+  Never silently reuse the previously-chosen env and skip the env list — the
+  recent env is only pre-flagged as the default (`>`).
 - **No env defaults on Set** — never default the env or portal pick. Both must be chosen explicitly.
 - **Background polling** — run `set-governance.js` with `run_in_background: true`. Stream stderr to the user at most once every 30 seconds.
-- **Policy strings are hard-coded** — only the two policies named in Phase 2.3 are valid (`PowerPages_DisableAuthenticationOpenIdConnect`, `PowerPages_DisableAuthenticationSAML20`). Reject any custom policy name with a clear "this skill only supports those two governance policies today" message.
+- **Policy strings are hard-coded** — only the twelve policies named in Phase 2.3 are valid (`PowerPages_DisableAuthenticationOpenIdConnect`, `PowerPages_DisableAuthenticationSAML20`, `EnableMakerCopilotForExistingSites`, `EnableProtocolOpenIdConnect`, `EnableProtocolSAML20`, `EnableProtocolWsFederation`, `EnableProtocolOpenAuth`, `EnableIdpOAuthFacebook`, `EnableIdpOAuthGoogle`, `EnableIdpOAuthMicrosoft`, `EnableAuthenticationLocalLogin`, `EnableExternalAuthProviders`). This list is the frozen `SUPPORTED_POLICIES` array in `scripts/policies.js`. Reject any custom policy name with a clear "this skill only supports those twelve governance policies today" message.
 - **Sign-in failures** — exit code `2` from any script means PAC or Azure CLI is signed out. Tell the user which command to run (`pac auth create` or `az login`) and stop.
 
 ## References

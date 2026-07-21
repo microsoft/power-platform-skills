@@ -15,7 +15,7 @@ const {
 const DEFAULT_POLL_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 const AZ_TIMEOUT_MS = 15_000;
-const API_VERSION = '2022-03-01-preview';
+const API_VERSION = process.env.PP_API_VERSION || '2022-03-01-preview';
 
 function getTenantId() {
   // PAC CLI does not expose tenant id; pull it from Azure CLI which shares

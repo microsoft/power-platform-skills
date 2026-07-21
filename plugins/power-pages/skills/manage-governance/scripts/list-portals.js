@@ -58,12 +58,15 @@ Exit codes:
 Stdout (JSON):
   { "status": "ok", "transport": "gateway"|"admin-portal",
     "portals": [ { "portalId", "name", "websiteUrl", "websiteRecordId",
-                   "type", "environmentName" } ] }
+                   "type", "status", "createdOn", "environmentName" } ] }
 `;
 
-const FIELDS = ['Id', 'Name', 'WebsiteUrl', 'WebsiteRecordId', 'Type'].join(',');
+const FIELDS = ['Id', 'Name', 'WebsiteUrl', 'WebsiteRecordId', 'Type', 'Status', 'CreatedOn'].join(',');
 const MAX_PAGES = 500;
 const ADMIN_REQUEST_TIMEOUT_MS = 60_000;
+
+// Default display cap for the portal picker: show at most this many rows.
+const DISPLAY_LIMIT = 10;
 
 function nextSkipFrom(nextLink) {
   if (typeof nextLink !== 'string') return null;
@@ -74,12 +77,17 @@ function nextSkipFrom(nextLink) {
 }
 
 function normalize(site) {
+  // The gateway /websites response is camelCase on preprod (id, name,
+  // websiteUrl, ...) but PascalCase on some rings. Accept either casing so the
+  // portal list isn't silently filtered to empty.
   return {
-    portalId: site.Id || null,
-    name: site.Name || null,
-    websiteUrl: site.WebsiteUrl || null,
-    websiteRecordId: site.WebsiteRecordId || null,
-    type: site.Type || null,
+    portalId: site.id || site.Id || null,
+    name: site.name || site.Name || null,
+    websiteUrl: site.websiteUrl || site.WebsiteUrl || null,
+    websiteRecordId: site.websiteRecordId || site.WebsiteRecordId || null,
+    type: site.type || site.Type || null,
+    status: site.status || site.Status || null,
+    createdOn: site.createdOn || site.CreatedOn || site.created || site.Created || null,
   };
 }
 
@@ -92,9 +100,45 @@ function normalizeAdminPortal(site) {
     websiteUrl: site.PortalUrl || null,
     websiteRecordId: site.WebsiteRecordId || null,
     type: site.PackageUniqueName || null,
+    status: site.Status || site.State || null,
+    createdOn: site.Created || site.CreatedOn || null,
     environmentName: site.EnvironmentName || null,
     environmentId: site.EnvironmentId || null,
   };
+}
+
+// Prioritized ordering for the portal picker. When the environment has more
+// than `limit` portals, the full list is too long to render — so we surface
+// the most relevant `limit` rows using the ordering the skill defines:
+//   1. Production application type first (type === "Production").
+//   2. Then StateConfigured status (status === "StateConfigured").
+//   3. Then oldest-first by createdOn (ascending).
+// When the env has `limit` portals or fewer, the original order is preserved
+// (the special ordering only kicks in when we actually have to truncate).
+// Returns { shown, total, truncated, limit } — `shown` is the capped list to
+// render; `total` is the full count so the caller can note "showing N of M".
+function compareForDisplay(a, b) {
+  const isProd = (p) => String(p.type || '').trim().toLowerCase() === 'production';
+  const isConfigured = (p) => String(p.status || '').trim().toLowerCase() === 'stateconfigured';
+  const createdMs = (p) => {
+    const t = Date.parse(p.createdOn || '');
+    return Number.isNaN(t) ? Number.POSITIVE_INFINITY : t;
+  };
+  const prodRank = (isProd(a) ? 0 : 1) - (isProd(b) ? 0 : 1);
+  if (prodRank !== 0) return prodRank;
+  const configuredRank = (isConfigured(a) ? 0 : 1) - (isConfigured(b) ? 0 : 1);
+  if (configuredRank !== 0) return configuredRank;
+  return createdMs(a) - createdMs(b);
+}
+
+function orderPortalsForDisplay(portals, limit = DISPLAY_LIMIT) {
+  const list = Array.isArray(portals) ? portals.slice() : [];
+  const total = list.length;
+  if (total <= limit) {
+    return { shown: list, total, truncated: false, limit };
+  }
+  list.sort(compareForDisplay);
+  return { shown: list.slice(0, limit), total, truncated: true, limit };
 }
 
 function readPacIdentity() {
@@ -224,6 +268,6 @@ async function main() {
   );
 }
 
-module.exports = { nextSkipFrom, normalize, normalizeAdminPortal };
+module.exports = { nextSkipFrom, normalize, normalizeAdminPortal, compareForDisplay, orderPortalsForDisplay, DISPLAY_LIMIT };
 
 runCli(module, main);

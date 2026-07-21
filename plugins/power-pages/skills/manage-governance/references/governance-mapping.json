@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "governance-mapping.json",
-  "version": "5.0.0",
+  "version": "6.0.0",
   "policyModes": {
     "uniformGovernance": [
       {
@@ -77,8 +77,183 @@
         "policyValueTriggers": ["All", "Include"],
         "message": "Any users currently signed in via SAML on the affected sites will be signed out and won't be able to sign back in via this method."
       }
+    },
+    {
+      "policyName": "EnableMakerCopilotForExistingSites",
+      "policyMode": "uniformGovernance",
+      "displayName": "Enable Maker Copilot for existing sites",
+      "subject": "Maker Copilot",
+      "summaryLabel": "Maker Copilot rule",
+      "userShorthands": ["maker copilot", "copilot", "maker copilot for existing sites", "existing sites copilot", "MakerCopilot", "EnableMakerCopilotForExistingSites"],
+      "stateParaphrase": {
+        "Enabled": "Maker Copilot Enabled",
+        "Disabled": "Maker Copilot Disabled"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": [],
+        "message": ""
+      }
+    },
+    {
+      "policyName": "EnableProtocolOpenIdConnect",
+      "policyMode": "uniformGovernance",
+      "displayName": "Enable the OpenID Connect protocol",
+      "subject": "OpenID Connect sign-in",
+      "summaryLabel": "OpenID Connect protocol",
+      "userShorthands": ["openid connect protocol", "oidc protocol", "enable openid connect", "enable oidc", "openid connect sign-in", "EnableProtocolOpenIdConnect"],
+      "stateParaphrase": {
+        "Enabled": "OpenID Connect sign-in Enabled",
+        "Disabled": "OpenID Connect sign-in Blocked"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": ["None", "Exclude"],
+        "message": "Disabling this signs out any users currently authenticated via OpenID Connect on the affected sites and blocks that sign-in method until it's re-enabled."
+      }
+    },
+    {
+      "policyName": "EnableProtocolSAML20",
+      "policyMode": "uniformGovernance",
+      "displayName": "Enable the SAML 2.0 protocol",
+      "subject": "SAML 2.0 sign-in",
+      "summaryLabel": "SAML 2.0 protocol",
+      "userShorthands": ["saml 2.0 protocol", "saml protocol", "saml20 protocol", "enable saml", "enable saml 2.0", "EnableProtocolSAML20"],
+      "stateParaphrase": {
+        "Enabled": "SAML 2.0 sign-in Enabled",
+        "Disabled": "SAML 2.0 sign-in Blocked"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": ["None", "Exclude"],
+        "message": "Disabling this signs out any users currently authenticated via SAML 2.0 on the affected sites and blocks that sign-in method until it's re-enabled."
+      }
+    },
+    {
+      "policyName": "EnableProtocolWsFederation",
+      "policyMode": "uniformGovernance",
+      "displayName": "Enable the WS-Federation protocol",
+      "subject": "WS-Federation sign-in",
+      "summaryLabel": "WS-Federation protocol",
+      "userShorthands": ["ws-federation", "wsfederation", "ws federation", "wsfed", "enable ws-federation", "EnableProtocolWsFederation"],
+      "stateParaphrase": {
+        "Enabled": "WS-Federation sign-in Enabled",
+        "Disabled": "WS-Federation sign-in Blocked"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": ["None", "Exclude"],
+        "message": "Disabling this signs out any users currently authenticated via WS-Federation on the affected sites and blocks that sign-in method until it's re-enabled."
+      }
+    },
+    {
+      "policyName": "EnableProtocolOpenAuth",
+      "policyMode": "uniformGovernance",
+      "displayName": "Enable the OAuth 2.0 protocol",
+      "subject": "OAuth 2.0 sign-in",
+      "summaryLabel": "OAuth 2.0 protocol",
+      "userShorthands": ["openauth", "open auth", "oauth 2.0 protocol", "oauth protocol", "openauth protocol", "enable openauth", "EnableProtocolOpenAuth"],
+      "stateParaphrase": {
+        "Enabled": "OAuth 2.0 sign-in Enabled",
+        "Disabled": "OAuth 2.0 sign-in Blocked"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": ["None", "Exclude"],
+        "message": "Disabling this signs out any users currently authenticated via OAuth 2.0 on the affected sites and blocks that sign-in method until it's re-enabled."
+      }
+    },
+    {
+      "policyName": "EnableIdpOAuthFacebook",
+      "policyMode": "uniformGovernance",
+      "displayName": "Enable Facebook sign-in",
+      "subject": "Facebook sign-in",
+      "summaryLabel": "Facebook sign-in provider",
+      "userShorthands": ["facebook", "facebook login", "facebook sign-in", "facebook oauth", "facebook idp", "enable facebook", "EnableIdpOAuthFacebook"],
+      "stateParaphrase": {
+        "Enabled": "Facebook sign-in Enabled",
+        "Disabled": "Facebook sign-in Blocked"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": ["None", "Exclude"],
+        "message": "Disabling this signs out any users currently authenticated with Facebook on the affected sites and blocks that sign-in method until it's re-enabled."
+      }
+    },
+    {
+      "policyName": "EnableIdpOAuthGoogle",
+      "policyMode": "uniformGovernance",
+      "displayName": "Enable Google sign-in",
+      "subject": "Google sign-in",
+      "summaryLabel": "Google sign-in provider",
+      "userShorthands": ["google", "google login", "google sign-in", "google oauth", "google idp", "enable google", "EnableIdpOAuthGoogle"],
+      "stateParaphrase": {
+        "Enabled": "Google sign-in Enabled",
+        "Disabled": "Google sign-in Blocked"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": ["None", "Exclude"],
+        "message": "Disabling this signs out any users currently authenticated with Google on the affected sites and blocks that sign-in method until it's re-enabled."
+      }
+    },
+    {
+      "policyName": "EnableIdpOAuthMicrosoft",
+      "policyMode": "uniformGovernance",
+      "displayName": "Enable Microsoft sign-in",
+      "subject": "Microsoft sign-in",
+      "summaryLabel": "Microsoft sign-in provider",
+      "userShorthands": ["microsoft", "microsoft account", "microsoft login", "microsoft sign-in", "microsoft oauth", "microsoft idp", "enable microsoft", "EnableIdpOAuthMicrosoft"],
+      "stateParaphrase": {
+        "Enabled": "Microsoft sign-in Enabled",
+        "Disabled": "Microsoft sign-in Blocked"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": ["None", "Exclude"],
+        "message": "Disabling this signs out any users currently authenticated with a Microsoft account on the affected sites and blocks that sign-in method until it's re-enabled."
+      }
+    },
+    {
+      "policyName": "EnableAuthenticationLocalLogin",
+      "policyMode": "uniformGovernance",
+      "displayName": "Enable local login",
+      "subject": "Local (username & password) sign-in",
+      "summaryLabel": "Local login setting",
+      "userShorthands": ["local login", "local authentication", "local sign-in", "username and password", "username/password login", "enable local login", "EnableAuthenticationLocalLogin"],
+      "stateParaphrase": {
+        "Enabled": "Local sign-in Enabled",
+        "Disabled": "Local sign-in Blocked"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": ["None", "Exclude"],
+        "message": "Disabling this blocks username & password sign-in on the affected sites; users who rely on local accounts won't be able to sign in until it's re-enabled."
+      }
+    },
+    {
+      "policyName": "EnableExternalAuthProviders",
+      "policyMode": "uniformGovernance",
+      "displayName": "Enable external authentication providers",
+      "subject": "External authentication providers",
+      "summaryLabel": "External auth providers setting",
+      "userShorthands": ["external auth providers", "external authentication providers", "external identity providers", "external providers", "enable external providers", "EnableExternalAuthProviders"],
+      "stateParaphrase": {
+        "Enabled": "External providers Enabled",
+        "Disabled": "External providers Blocked"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": ["None", "Exclude"],
+        "message": "Disabling this turns off all external (social / federated) identity providers on the affected sites; users who sign in through them will be signed out until it's re-enabled."
+      }
     }
   ],
+
+  "readValueAliases": {
+    "AllSites": "All",
+    "IncludedSites": "Include",
+    "AllSitesExceptExcluded": "Exclude",
+    "ExcludedSites": "Exclude",
+    "None": "None"
+  },
+
+  "stateColors": {
+    "description": "Color convention for rendering Governance Setting state in summary/verification/state tables. The Status column is wrapped in ANSI SGR codes so it renders green/red in an ANSI-capable terminal; the emoji marker is kept as a fallback indicator for surfaces that strip ANSI (e.g. some chat renderers). Wrap the whole Status cell as `<ansi><emoji> <label> (<paraphrase>)<reset>`.",
+    "ansi": { "green": "\u001b[32m", "red": "\u001b[31m", "reset": "\u001b[0m" },
+    "Enabled": { "color": "green", "emoji": "🟢", "ansi": "\u001b[32m" },
+    "Disabled": { "color": "red", "emoji": "🔴", "ansi": "\u001b[31m" }
+  },
 
   "intentToPolicyValue": [
     {

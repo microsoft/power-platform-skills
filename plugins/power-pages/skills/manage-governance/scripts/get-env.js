@@ -12,7 +12,7 @@ const {
   fail,
   runCli,
 } = require('../../../scripts/lib/power-platform-api');
-const { SUPPORTED_POLICIES, assertPolicy } = require('./policies');
+const { SUPPORTED_POLICIES, assertPolicy, normalizeEnvValue } = require('./policies');
 const { callGovernance } = require('./governance-transport');
 
 const HELP = `get-env.js — Reads the environment-level governance policy state.
@@ -41,7 +41,8 @@ Exit codes:
 
 Stdout (JSON):
   { "status": "ok", "policy": "<name>", "envId": "<guid>",
-    "transport": "gateway"|"admin-portal", "body": <raw> }
+    "transport": "gateway"|"admin-portal",
+    "value": "All"|"None"|"Include"|"Exclude", "body": <raw> }
 `;
 
 async function main() {
@@ -83,6 +84,7 @@ async function main() {
         policy: args.policy,
         envId: args.envId,
         transport: res.transport,
+        value: normalizeEnvValue(res.body),
         body: res.body,
       },
       null,

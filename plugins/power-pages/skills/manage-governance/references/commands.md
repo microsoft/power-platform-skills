@@ -33,10 +33,37 @@ in `scripts/policies.js`):
 |---------------|------------------------|
 | `PowerPages_DisableAuthenticationOpenIdConnect` | Turns off the OpenID Connect (OIDC) sign-in path on Power Pages portals. |
 | `PowerPages_DisableAuthenticationSAML20` | Turns off the SAML 2.0 sign-in path on Power Pages portals. |
+| `EnableMakerCopilotForExistingSites` | Turns Maker Copilot on for existing Power Pages sites in the environment. |
+| `EnableProtocolOpenIdConnect` | Enables/disables the OpenID Connect sign-in protocol on Power Pages sites. |
+| `EnableProtocolSAML20` | Enables/disables the SAML 2.0 sign-in protocol on Power Pages sites. |
+| `EnableProtocolWsFederation` | Enables/disables the WS-Federation sign-in protocol on Power Pages sites. |
+| `EnableProtocolOpenAuth` | Enables/disables the OAuth 2.0 sign-in protocol on Power Pages sites. |
+| `EnableIdpOAuthFacebook` | Enables/disables Facebook sign-in on Power Pages sites. |
+| `EnableIdpOAuthGoogle` | Enables/disables Google sign-in on Power Pages sites. |
+| `EnableIdpOAuthMicrosoft` | Enables/disables Microsoft sign-in on Power Pages sites. |
+| `EnableAuthenticationLocalLogin` | Enables/disables local (username & password) sign-in on Power Pages sites. |
+| `EnableExternalAuthProviders` | Enables/disables all external (social / federated) identity providers on Power Pages sites. |
+
+The nine `Enable*` authentication policies (`EnableProtocol*`, `EnableIdp*`,
+`EnableAuthenticationLocalLogin`, `EnableExternalAuthProviders`) share the
+**same configuration and API contract** as
+`PowerPages_DisableAuthenticationOpenIdConnect`: uniform governance with the
+canonical `policyValue` vocabulary (`All` / `None` / `Include` / `Exclude`) and
+the default api-version. Only `EnableMakerCopilotForExistingSites` uses the
+env-level `applyTo` (`*Sites`) read vocabulary.
 
 A new policy is added by appending its string to `SUPPORTED_POLICIES` in
 `scripts/policies.js` — every script validates against that list before
 calling the API.
+
+> **Read-value vocabulary.** The auth `Disable*` policies and the nine auth
+> `Enable*` policies report their environment-level state on read using the
+> canonical `policyValue` strings (`All` / `None` / `Include` / `Exclude`).
+> Only `EnableMakerCopilotForExistingSites` instead reports the `applyTo` enum
+> form (e.g. `AllSites`). `get-env.js` normalizes this via `normalizeEnvValue()`
+> and returns a canonical `value` field alongside the raw `body`; the alias
+> table lives in `scripts/policies.js` (`ENV_VALUE_ALIASES`) and mirrors
+> `readValueAliases` in `references/governance-mapping.json`.
 
 ---
 
@@ -177,14 +204,34 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-portals.js" \
   "portals": [
     { "portalId": "<guid>", "name": "<portal name>",
       "websiteUrl": "<url>", "websiteRecordId": "<guid>",
-      "type": "Production" }
+      "type": "Production", "status": "StateConfigured",
+      "createdOn": "2026-07-19T07:30:42" }
   ]
 }
 ```
 
 The user-facing identifier is `portalId` — that is what the governance
 endpoints accept. `websiteRecordId` is shown for cross-reference with PAC
-and the Dataverse website record.
+and the Dataverse website record. `type` (`Production` / `Trial`), `status`
+(e.g. `StateConfigured`), and `createdOn` drive the display ordering below.
+
+### Display ordering (picker cap)
+
+The script always returns **every** portal in the environment (unbounded) so
+name/id resolution and the Fetch-Env site tables stay complete. The
+**orchestrator caps the rendered picker to 10 rows**. When an environment has
+more than 10 portals, render the top 10 using `orderPortalsForDisplay()`
+(exported from `list-portals.js`), which prioritizes:
+
+1. `type === "Production"` first,
+2. then `status === "StateConfigured"`,
+3. then oldest-first by `createdOn` (ascending).
+
+When there are 10 portals or fewer, the original order is preserved (no
+re-sort). The helper returns `{ shown, total, truncated, limit }`; when
+`truncated` is true, note "showing 10 of `total`" to the user. Because
+`parse-portal-input.js` validates against the full list, the user can still
+pick a site that isn't among the visible 10 by typing its name or id.
 
 ### Exit codes
 
@@ -293,12 +340,15 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-env.js" \
 ### Response (stdout)
 
 ```json
-{ "status": "ok", "policy": "<name>", "envId": "<guid>", "body": <raw> }
+{ "status": "ok", "policy": "<name>", "envId": "<guid>",
+  "value": "All"|"None"|"Include"|"Exclude", "body": <raw> }
 ```
 
-The skill orchestrator renders `body` in plain language for the user. Its
-shape depends on the API and is left raw on purpose so updates to the API
-contract do not require a script change.
+The skill orchestrator renders `value` (the canonical, normalized state) in
+plain language for the user. `body` is the raw API value, left untouched on
+purpose so updates to the API contract do not require a script change — for
+env-level policies it may be an `applyTo` enum string (e.g. `AllSites`) that
+`value` has already normalized.
 
 ### Exit codes
 
