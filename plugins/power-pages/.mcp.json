@@ -1,12 +1,15 @@
 {
-    "playwright": {
-        "command": "node",
-        "args": [
-            "${CLAUDE_PLUGIN_ROOT}/scripts/launch-playwright-mcp.js"
-        ]
-    },
-    "microsoft-learn": {
-        "type": "http",
-        "url": "https://learn.microsoft.com/api/mcp"
+    "mcpServers": {
+        "playwright": {
+            "command": "node",
+            "args": [
+                "-e",
+                "const fs=require('node:fs'); const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT||process.cwd(); const entry=path.resolve(root,'scripts','launch-playwright-mcp.js'); if(!fs.existsSync(entry)) throw new Error('Could not resolve Power Pages plugin root; set PLUGIN_ROOT or launch from the plugin root'); const mod=require(entry); if(!mod||typeof mod.launch!=='function') throw new Error('Power Pages Playwright MCP launcher did not export launch()'); mod.launch();"
+            ]
+        },
+        "microsoft-learn": {
+            "type": "http",
+            "url": "https://learn.microsoft.com/api/mcp"
+        }
     }
 }

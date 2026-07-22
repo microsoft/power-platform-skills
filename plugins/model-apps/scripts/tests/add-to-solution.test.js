@@ -18,6 +18,14 @@ test('add-to-solution.js builds canonical request body', () => {
   assert.match(scriptSrc, /SolutionUniqueName: solutionUniqueName/);
 });
 
+test('add-to-solution.js documents connection reference component type', () => {
+  assert.match(scriptSrc, /10158\s*=\s*Connection Reference/);
+});
+
+test('add-to-solution.js notes uxagentproject travels via appmodule', () => {
+  assert.match(scriptSrc, /uxagentproject/i);
+});
+
 test('add-to-solution.js: missing args exits 1 with usage', () => {
   const res = spawnSync(process.execPath, [scriptPath], { encoding: 'utf8' });
   assert.equal(res.status, 1);

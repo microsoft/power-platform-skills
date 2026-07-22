@@ -1,7 +1,7 @@
 # Backend Integration Decision Framework
 
 Use this framework to recommend the right backend integration approach for a Power Pages code site. A single user request may map to one approach or a combination.
-## The Three Approaches
+## The Four Approaches
 
 ### Web API (`/integrate-webapi`)
 
@@ -33,6 +33,47 @@ Use this framework to recommend the right backend integration approach for a Pow
 - Real-time, synchronous responses
 - Requires table permissions for every Dataverse table accessed
 - CSRF token required for mutations (POST, PATCH, DELETE)
+
+---
+
+### AI Web API (`/add-ai-webapi`)
+
+**What it is:** A specialization of Web API for AI-augmented reads. Two endpoints: **Search Summary** (`/_api/search/v1.0/summary`) produces a grounded AI answer over the site's search index, and **Data Summarization** (`/_api/summarization/data/v1.0/<entitySet>(<id>)?$select=...`) produces an AI summary of one record or a collection. Microsoft also documents a ready-made Data Summarization configuration for the standard `incident` table (the support-case Copilot summary recipe) — that's an example of Data Summarization, not a separate API.
+
+**How it works:** Same browser-to-portal auth model as Web API — cookie session + CSRF token from `/_layout/tokenhtml`. Data Summarization reads via the portal's `_api` layer, so it respects the same table permissions, column permissions, and Web API field settings as regular Web API. The server adds a generative-AI pass that returns a text summary instead of raw records. Read-only by definition — neither endpoint mutates Dataverse.
+
+**Best for:**
+- AI summary of a record on its detail page (e.g., "summarize this case including its portal comments")
+- AI summary of a list of records (e.g., "summarize open cases on the dashboard", "trends in this week's orders")
+- Related-record discovery on a detail page (e.g., "suggest KB articles relevant to this case", "similar products")
+- AI-grounded site search with citations (replaces or augments keyword-only search UIs)
+
+**Not suitable when:**
+- The output needs to be deterministic or exact (AI output is probabilistic; use Web API for exact data)
+- The operation writes data (these endpoints are read-only — use Web API or Server Logic)
+- The data isn't in Dataverse (Search Summary indexes site content; Data Summarization requires a Dataverse entity set)
+- The tenant doesn't have generative AI features enabled (these APIs are preview; until an admin enables them, **Data Summarization** returns HTTP 400 with `error.code = 90041001`, while **Search Summary** returns HTTP 200 with an embedded `{ Code, Message }` envelope instead)
+- The site uses the Microsoft-shipped search control and just wants AI-summarised search results on it — that's a workspace toggle (`Search/Summary/Title` content snippet), not a code integration
+
+**Key characteristics:**
+- Layered on Web API — Data Summarization requires the same `Webapi/<table>/enabled`, `Webapi/<table>/fields`, and table permissions as regular Web API reads. Search Summary has no per-table prereqs.
+- Code runs in the browser; the AI pass happens server-side
+- Read-only — no validate-and-execute concerns (Secure Action Principle does not apply)
+- Preview feature — requires tenant admin to enable generative AI, and (for Search Summary) a site-level Copilot workspace toggle. APIs and admin toggles may change before GA.
+- `/add-ai-webapi` delegates Layer 1/2 to `/integrate-webapi` in AI-only read mode — if a Web API item already covers the same table, the AI item detects the existing prereqs and skips the delegation
+
+**Relationship to Web API:** AI Web API items for a given Dataverse table should be ordered **after** any regular Web API item for the same table (Web API sets up Layer 1/2; AI adds Layer 3 on top). Search Summary items can stand alone since they have no per-table prereqs.
+
+**Field-list drift caveat (when both items exist for the same table):** if `/integrate-webapi`
+has already configured `Webapi/<table>/fields` for full CRUD (including primary key and
+lookup write forms), the follow-up `/add-ai-webapi` run detects Layer 1/2 as `ready` and
+skips its delegation — leaving the broader CRUD allowlist in place. The AI surface still
+works, but the fields list is broader than AI-only mode would produce. The
+`ai-webapi-settings-architect` agent flags this as an advisory in its plan; the user can
+narrow the allowlist after the AI surface lands by editing the YAML directly. If a strict
+read-only posture matters from day one, run `/add-ai-webapi` *before* `/integrate-webapi`
+on the same table — the AI skill will then write the minimal fields list and the later
+Web API run will widen it.
 
 ---
 
@@ -117,20 +158,24 @@ Use this framework to recommend the right backend integration approach for a Pow
 
 Use these questions to narrow down the recommendation:
 
-| Question | Web API | Server Logic | Cloud Flow |
-|----------|:-------:|:------------:|:----------:|
-| Does the UI need to display data from Dataverse? | **Yes** | Possible | No |
-| Does it call external APIs (non-Dataverse)? | No | **Yes** | Possible |
-| Are credentials/secrets involved? | No | **Yes** | Possible |
-| Must business logic be hidden from the browser? | No | **Yes** | N/A |
-| Does the write depend on a business rule that must be tamper-proof? | No | **Yes (validate-and-execute)** | No |
-| Is the operation async/background (user doesn't wait)? | No | No | **Yes** |
-| Is it a simple Dataverse CRUD with no extra logic? | **Yes** | Overkill | Overkill |
-| Does it need 400+ connectors (Teams, Outlook, SAP)? | No | No | **Yes** |
-| Should the response render immediately in the UI? | **Yes** | **Yes** | No |
-| Does it batch multiple queries for performance? | No | **Yes** | No |
-| Is it a long-running process (>120 seconds)? | No | No | **Yes** |
-| Should non-developers be able to modify the logic? | No | No | **Yes** |
+| Question | Web API | AI Web API | Server Logic | Cloud Flow |
+|----------|:-------:|:----------:|:------------:|:----------:|
+| Does the UI need to display data from Dataverse? | **Yes** | Possible | Possible | No |
+| Does the UI need an AI-generated summary of Dataverse data? | No | **Yes** | No | No |
+| Does the UI need AI-grounded search with citations? | No | **Yes** | No | No |
+| Does a detail page need related-record discovery (e.g., suggested KB articles)? | No | **Yes** | Possible | No |
+| Does it call external APIs (non-Dataverse)? | No | No | **Yes** | Possible |
+| Are credentials/secrets involved? | No | No | **Yes** | Possible |
+| Must business logic be hidden from the browser? | No | No | **Yes** | N/A |
+| Does the write depend on a business rule that must be tamper-proof? | No | N/A (read-only) | **Yes (validate-and-execute)** | No |
+| Is the operation async/background (user doesn't wait)? | No | No | No | **Yes** |
+| Is it a simple Dataverse CRUD with no extra logic? | **Yes** | Overkill | Overkill | Overkill |
+| Does it need 400+ connectors (Teams, Outlook, SAP)? | No | No | No | **Yes** |
+| Should the response render immediately in the UI? | **Yes** | **Yes** | **Yes** | No |
+| Does it batch multiple queries for performance? | No | No | **Yes** | No |
+| Is it a long-running process (>120 seconds)? | No | No | No | **Yes** |
+| Should non-developers be able to modify the logic? | No | No | No | **Yes** |
+| Does the output need to be deterministic / exact? | **Yes** | No (probabilistic) | **Yes** | **Yes** |
 
 ## The Secure Action Principle
 
@@ -206,10 +251,13 @@ Many real-world scenarios use multiple approaches together:
 
 | Combination | When to use | Example |
 |-------------|-------------|---------|
+| **Web API + AI Web API** | UI displays raw Dataverse records directly and also surfaces an AI-generated summary of the same data. Most common AI pattern. | Case detail page shows incident fields and portal comments via Web API, plus a Copilot summary card via AI Web API. Dashboard shows a list of orders and an AI summary of trends. |
 | **Web API + Server Logic** | UI reads/writes non-sensitive fields directly, but security-sensitive operations go through server logic that validates and executes | Dashboard displays records via Web API; status transitions go through server logic that validates and writes |
+| **AI Web API + Server Logic** | AI-augmented read surface over data that was computed or prepared by server-side logic | Server logic aggregates raw claims into a curated incident record (validate-and-execute); AI Web API summarises the curated record on the detail page |
 | **Server Logic + Cloud Flow** | Real-time endpoint validates and executes the action, then async processing follows | Server logic validates transition and writes the new status, then a Cloud Flow sends the notification email |
 | **Web API + Cloud Flow** | UI manages data directly (no business rules on the write), and some actions trigger background workflows | User edits a description via Web API; a separate "Submit for Approval" action triggers a Cloud Flow |
-| **All three** | Complex application with safe direct writes, secure server-side actions, and automation | Web API for browsing/editing non-sensitive fields, Server Logic for state transitions and payment processing, Cloud Flow for notifications |
+| **Web API + AI Web API + Cloud Flow** | Users browse and edit records, see AI summaries, and trigger async workflows | Support portal: list/edit cases (Web API), Copilot case summary with suggested KB articles (AI Web API), async assignment email (Cloud Flow) |
+| **All four** | Complex application with safe direct writes, AI-augmented reads, secure server-side actions, and automation | Web API for browsing/editing non-sensitive fields, AI Web API for summaries and grounded search, Server Logic for state transitions and payment processing, Cloud Flow for notifications |
 
 ## Mapping User Intent to Approach
 
@@ -217,6 +265,10 @@ Many real-world scenarios use multiple approaches together:
 |--------------|-----------------|-----------|
 | "Show data from Dataverse" / "display records" / "CRUD" | Web API | Direct data access, real-time UI binding |
 | "Filter and sort products" / "search contacts" | Web API | Standard OData queries, no server logic needed |
+| "Summarize this case" / "AI summary on the detail page" / "Copilot summary" | AI Web API | Data Summarization on a single record (the Microsoft-shipped support-case recipe is one option for the standard `incident` table) |
+| "Summarize open cases" / "AI summary of this list" / "highlight trends in these records" | AI Web API | Data Summarization over a collection (list-summary pattern) |
+| "Show relevant KB articles" / "suggest similar cases" / "related products" | AI Web API | Search Summary for related-record discovery — grounded retrieval returns AI-ranked citations from the site's search index |
+| "AI search" / "semantic search" / "search with summary" | AI Web API | Search Summary endpoint returns a grounded AI answer plus citations for a user query |
 | "Call an external API" / "integrate with Stripe/Twilio/etc." | Server Logic | External API calls with credential protection |
 | "Add validation on the server" / "prevent bypassing" | Server Logic | Server-side enforcement (security) |
 | "Rate limit submissions" / "prevent abuse" | Server Logic | Server-side enforcement (security) |

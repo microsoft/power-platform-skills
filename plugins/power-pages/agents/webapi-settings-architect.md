@@ -208,7 +208,7 @@ Extract the `Environment URL` (e.g., `https://org12345.crm.dynamics.com`).
 Verify Dataverse access and obtain an auth token:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
+node "${PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
 ```
 
 This outputs JSON with `token`, `userId`, `organizationId`, and `tenantId`. The token is used automatically by the `dataverse-request.js` script below.
@@ -218,7 +218,7 @@ This outputs JSON with `token`, `userId`, `organizationId`, and `tenantId`. The 
 For each table that needs Web API access, fetch its columns:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_logical_name>')/Attributes?\$select=LogicalName,DisplayName,AttributeType,IsPrimaryId,SchemaName&\$filter=IsCustomAttribute eq true or IsPrimaryId eq true"
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_logical_name>')/Attributes?\$select=LogicalName,DisplayName,AttributeType,IsPrimaryId,SchemaName&\$filter=IsCustomAttribute eq true or IsPrimaryId eq true"
 ```
 
 The script outputs JSON: `{ "status": <code>, "data": { "value": [...] } }`. Each entry in `value` contains `LogicalName`, `SchemaName`, `DisplayName`, `AttributeType`, and `IsPrimaryId`.
@@ -340,13 +340,13 @@ For each table that needs Web API access, prepare the exact `create-site-setting
 **1. Enable setting:**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table_logical_name>/enabled" --value "true" --description "Enable Web API access for <table_logical_name> table" --type "boolean"
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table_logical_name>/enabled" --value "true" --description "Enable Web API access for <table_logical_name> table" --type "boolean"
 ```
 
 **2. Fields setting:**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table_logical_name>/fields" --value "<comma-separated-validated-column-logicalnames>" --description "Allowed fields for <table_logical_name> Web API access"
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table_logical_name>/fields" --value "<comma-separated-validated-column-logicalnames>" --description "Allowed fields for <table_logical_name> Web API access"
 ```
 
 **CRITICAL: For normal CRUD/read scenarios, the `--value` for fields settings MUST use exact Dataverse LogicalNames (all lowercase), comma-separated, with NO spaces after commas. NEVER use SchemaName (PascalCase) or any other casing variant. Every column name must have been validated against Dataverse in Step 5. If the table has File or Image columns accessed via the Web API, OR the site uses aggregate OData queries (`$apply`, `aggregate`, grouped totals), use `*` instead — the `/$value` download endpoint internally does `SELECT *`, so an explicit column list causes 403.**
@@ -362,7 +362,7 @@ Example (with lookup column `cra5b_productcategoryid`):
 **3. Optionally**, if `Webapi/error/innererror` does not already exist, suggest it for debugging:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/error/innererror" --value "true" --description "Enable detailed error messages for debugging" --type "boolean"
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/error/innererror" --value "true" --description "Enable detailed error messages for debugging" --type "boolean"
 ```
 
 ### 6.2 Rationale, Summary, and Next Steps
@@ -401,10 +401,10 @@ After the user approves the plan, create the site setting files using the `creat
 
 ```bash
 # Enable setting
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table>/enabled" --value "true" --description "Enable Web API access for <table> table" --type "boolean"
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table>/enabled" --value "true" --description "Enable Web API access for <table> table" --type "boolean"
 
 # Fields setting
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table>/fields" --value "<validated-columns>" --description "Allowed fields for <table> Web API access"
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table>/fields" --value "<validated-columns>" --description "Allowed fields for <table> Web API access"
 ```
 
 The script handles UUID generation, alphabetical field ordering, correct YAML formatting (unquoted booleans/strings/UUIDs), and file naming automatically.
@@ -427,3 +427,15 @@ After creating all files, return a summary to the calling context:
 - **Dataverse is the authority**: Column names from code, type definitions, or manifests are NOT authoritative. Only the `LogicalName` returned by the Dataverse `EntityDefinitions/Attributes` API is authoritative. If Dataverse is unavailable, warn prominently that column names are unvalidated.
 - **No questions**: Do NOT use `AskUserQuestion`. Autonomously analyze the site and environment, then present your findings via plan mode.
 - **Security**: Never log or display the full auth token. Use it only in API request headers.
+
+## AI-only read mode
+
+When the invoking skill's prompt signals **AI-only read mode** (e.g. `/add-ai-webapi` delegating through `/integrate-webapi`), the fields-list rules tighten for every table in scope:
+
+- **Fields list = exactly the primary's `$select` / `$expand` columns.** No more, no less. Extra columns expand the allowlist without any caller using them.
+- **Omit the primary key column.** The Power Pages summarization endpoint carries the record id in the URL path, not in `$select`. Microsoft's shipped case preset ships `Webapi/incident/fields = description,title` with no `incidentid` — match that pattern.
+- **Lookup columns use the `_<col>_value` OData read form only.** Do NOT include the LogicalName write form (`<col>`) unless the same table has non-AI mutation code elsewhere in the site. In pure AI-only targets there are no writes, so the write form adds attackable surface without any reader.
+- **Case-sensitivity and Dataverse-as-authority rules still apply** — all the above LogicalNames must still be the exact lowercase forms returned by the Dataverse metadata API.
+- **File/Image and aggregate exceptions still apply** — if the summarised table also has File/Image columns or aggregate OData elsewhere, `*` still wins.
+
+The forcing function is the invoking skill's prompt. This section documents the contract so reviewers can verify it without reading downstream skill files.

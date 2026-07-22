@@ -80,6 +80,7 @@
 const fs = require('fs');
 const path = require('path');
 const helpers = require('./validation-helpers');
+const { planDataPath, planHtmlPath } = require('./alm-paths');
 
 // Heartbeat window — how recent `lastInvocationAt` must be for the plan to count
 // as actively executing. 60 minutes is comfortably larger than the longest single
@@ -185,8 +186,8 @@ function readDeferralLocal(projectRoot) {
 
 async function checkAlmPlan({ projectRoot, envUrl, token, solutionId, makeRequest, writeHeartbeat = true, now }) {
   if (!projectRoot) throw new Error('--projectRoot is required');
-  const planPath = path.join(projectRoot, 'docs', '.alm-plan-data.json');
-  const htmlPath = path.join(projectRoot, 'docs', 'alm-plan.html');
+  const planPath = planDataPath(projectRoot);
+  const htmlPath = planHtmlPath(projectRoot);
   const nowMs = (typeof now === 'number') ? now : Date.now();
 
   // Deferral marker check — runs first, regardless of plan presence.
@@ -233,8 +234,40 @@ async function checkAlmPlan({ projectRoot, envUrl, token, solutionId, makeReques
   // way each in-chain skill's Phase 0 call both observes the prior heartbeat
   // (for its own decision) AND keeps the chain alive for the next skill.
   const priorLastInvocationAt = planData.LAST_INVOCATION_AT || null;
-  const planStatus = planData.PLAN_STATUS || null;
-  const inExecution = computeInExecution(planStatus, priorLastInvocationAt, nowMs);
+  const priorPlanStatus = planData.PLAN_STATUS || null;
+
+  // Classify `inExecution` from the PRIOR on-disk status, BEFORE any promotion.
+  // An Approved plan is NOT yet an active orchestration — the user has just
+  // approved it and this is the first execution skill to reach its Phase 0 gate.
+  // If we promoted to "In Execution" first and then classified, computeInExecution
+  // would return status:"active" (the "first heartbeat" branch) — and callers that
+  // skip Phase 0 gates whenever inExecution.status === "active" (see deploy-pipeline
+  // SKILL.md Phase 0) would take the active shortcut and bypass the stale-plan
+  // confirmation that this helper computes further below. That would mask stale:true
+  // on the FIRST execution after approval — defeating the ALM freshness gate exactly
+  // when the source solution was modified between plan generation and approval. So
+  // the first Approved->In Execution entry reports inExecution:"not-running", keeping
+  // THIS caller on the normal Phase 0 path where it still honors stale:true. The
+  // promotion is persisted below, so the NEXT in-chain skill reads "In Execution"
+  // and correctly classifies as "active".
+  const inExecution = computeInExecution(priorPlanStatus, priorLastInvocationAt, nowMs);
+
+  // Promote Approved -> In Execution on the FIRST execution-skill Phase 0 entry and
+  // persist it (+ the first heartbeat) so the NEXT in-chain skill sees an active
+  // orchestration. plan-alm is plan-only: it leaves the plan "Approved" and the user
+  // runs the execution skills themselves, so the first execution skill to reach its
+  // Phase 0 gate is what actually starts execution — this is the transition that
+  // activates the heartbeat/active-chain machinery (nothing else sets it). The
+  // heartbeat write below then persists both the new status AND the first heartbeat
+  // in one atomic write. This promotion intentionally does NOT change `inExecution`
+  // for THIS caller (classified above from the prior status). Gated on `writeHeartbeat`
+  // so read-only callers (--no-heartbeat: audits, tests, and plan-alm's own deferral
+  // check) never mutate the plan's status.
+  let planStatus = priorPlanStatus;
+  if (writeHeartbeat && planStatus === 'Approved') {
+    planStatus = 'In Execution';
+    planData.PLAN_STATUS = 'In Execution';
+  }
 
   if (writeHeartbeat && planStatus === 'In Execution') {
     try {

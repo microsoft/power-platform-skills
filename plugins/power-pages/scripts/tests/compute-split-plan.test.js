@@ -39,11 +39,27 @@ function baseEstimate(overrides = {}) {
     botCount: 0,
     envVarCount: 5,
     mediaRatio: 0.3,
-    siteType: 'code-site',
+    siteType: 'code',
     tables: [],
     ...overrides,
   };
 }
+
+// --- buildSizeAnalysis: tableCountScope passthrough -------------------------
+
+test('buildSizeAnalysis carries tableCountScope onto sizeAnalysis.tableCount.scope', () => {
+  const thresholds = baseConfig().thresholds;
+  const a = buildSizeAnalysis(baseEstimate({ tableCount: 0, tableCountScope: 'unavailable' }), thresholds);
+  assert.equal(a.tableCount.value, 0);
+  assert.equal(a.tableCount.scope, 'unavailable', 'scope must pass through so the renderer can disambiguate a real 0 from "could not enumerate"');
+
+  const b = buildSizeAnalysis(baseEstimate({ tableCount: 7, tableCountScope: 'site-referenced' }), thresholds);
+  assert.equal(b.tableCount.scope, 'site-referenced');
+
+  // Older estimate blobs without the field → null (renderer omits the note).
+  const c = buildSizeAnalysis(baseEstimate({ tableCount: 3 }), thresholds);
+  assert.equal(c.tableCount.scope, null);
+});
 
 // --- selectStrategy branches ------------------------------------------------
 
@@ -183,23 +199,121 @@ test('computeSplitPlan Strategy 3 uses explicit config.domains when present', ()
   assert.equal(result.proposedSolutions[3].isFutureBuffer, true);
 });
 
-test('computeSplitPlan Strategy 3 falls back to prefix heuristic when no domains configured', () => {
+test('computeSplitPlan Strategy 3 packs tables by capacity (no domains configured) — bounded, not per-table', () => {
   const result = computeSplitPlan({
     estimate: baseEstimate({
       tableCount: 22,
-      schemaAttrCount: 16000,
+      schemaAttrCount: 16000, // > maxSchemaAttrs(15000) -> 2 buckets by attrs
       tables: [
-        { logicalName: 'tst_product' },
-        { logicalName: 'tst_productVariant' },
-        { logicalName: 'tst_order' },
-        { logicalName: 'tst_orderLine' },
+        { logicalName: 'tst_product', attributeCount: 4000 },
+        { logicalName: 'tst_productVariant', attributeCount: 4000 },
+        { logicalName: 'tst_order', attributeCount: 4000 },
+        { logicalName: 'tst_orderLine', attributeCount: 4000 },
       ],
     }),
     config: baseConfig(),
     meta: { baseName: 'Test', siteName: 'Test Site' },
   });
   assert.equal(result.splitStrategy, 'strategy-3-schema-segmentation');
-  assert.ok(result.proposedSolutions.length >= 2);
+  const tableSolutions = result.proposedSolutions.filter(
+    (s) => Array.isArray(s.componentTypes) && s.componentTypes.length === 1 && s.componentTypes[0] === 'Table',
+  );
+  assert.equal(tableSolutions.length, 2, '16000 attrs / 15000 cap -> 2 Table solutions, not one-per-table');
+});
+
+test('computeSplitPlan Strategy 3 never overflows the attr cap when independent clusters fragment', () => {
+  // Regression for the FFD under-allocation bug: 4 INDEPENDENT (no-edge) tables of
+  // 8000 attrs each = 32000 total. Seeding the packer from the lower bound
+  // ceil(32000/15000)=3 gave only 3 bins, so the 4th cluster fell into the
+  // least-loaded bucket -> 16000 attrs (> 15000 cap), unwarned. The packer must
+  // instead open a 4th bin (clusters.length permits it) so no bucket busts the cap.
+  const result = computeSplitPlan({
+    estimate: baseEstimate({
+      tableCount: 4,
+      schemaAttrCount: 32000,
+      tables: [
+        { logicalName: 'tst_alpha', attributeCount: 8000 },
+        { logicalName: 'tst_beta', attributeCount: 8000 },
+        { logicalName: 'tst_gamma', attributeCount: 8000 },
+        { logicalName: 'tst_delta', attributeCount: 8000 },
+      ],
+      tableRelationships: [], // no edges -> 4 singleton clusters
+    }),
+    config: baseConfig(),
+    meta: { baseName: 'Test', siteName: 'Test Site' },
+  });
+  assert.equal(result.splitStrategy, 'strategy-3-schema-segmentation');
+  const tableSolutions = result.proposedSolutions.filter(
+    (s) => Array.isArray(s.componentTypes) && s.componentTypes.length === 1 && s.componentTypes[0] === 'Table',
+  );
+  // 4 independent 8000-attr tables -> 4 single-table solutions (each 8000 < 15000),
+  // NOT 3 with one 16000-attr overflow bucket.
+  assert.equal(tableSolutions.length, 4, '4 independent 8000-attr tables -> 4 Table solutions (no attr-cap overflow)');
+  for (const s of tableSolutions) {
+    assert.equal(s.tableLogicalNames.length, 1, `${s.uniqueName} must hold exactly one table — no bucket over the attr cap`);
+  }
+});
+
+test('computeSplitPlan WARNS when >maxSchemaSplitSolutions independent attr-heavy clusters bust the attr cap (ceiling boundary)', () => {
+  // 9 INDEPENDENT (no-edge) 14000-attr tables, ceiling=8: the packer can open at
+  // most 8 buckets, so FFD's least-loaded fallback co-locates 2 tables in one
+  // solution -> 28000 attrs > maxSchemaAttrs(15000). The table-count guard misses
+  // it (each solution has <=2 tables, well under maxTableCount). The attr guard
+  // must surface it. (Regression for the ceiling-boundary silent overflow.)
+  const tables = Array.from({ length: 9 }, (_, i) => ({ logicalName: `tst_t${i}`, attributeCount: 14000 }));
+  const result = computeSplitPlan({
+    estimate: baseEstimate({ tableCount: 9, schemaAttrCount: 9 * 14000, tables, tableRelationships: [] }),
+    config: baseConfig(),
+    meta: { baseName: 'Test', siteName: 'Test Site' },
+  });
+  assert.equal(result.splitStrategy, 'strategy-3-schema-segmentation');
+  const attrWarn = (result.recommendations || []).find((r) => /columns — above the .* per-solution cap/i.test(r.message || ''));
+  assert.ok(attrWarn, 'expected an oversized-schema (attr-cap) warning when a Table solution exceeds maxSchemaAttrs at the ceiling');
+});
+
+test('computeSplitPlan: a Table domain componentCount is a schema-component proxy (sum attrs + 1/table), not the table count', () => {
+  // Counting 1-per-table severely undercounts solution components and can let an
+  // over-cap solution slip past validateSplits. Proxy = sum(attributeCount) + 1/table.
+  const result = computeSplitPlan({
+    // tableCount:34 makes the schema "red" so Strategy 3 fires; the proxy reads the
+    // per-table attributeCount from tables[] (500 + 300), independent of the global count.
+    estimate: baseEstimate({
+      tableCount: 34,
+      schemaAttrCount: 32000,
+      tables: [
+        { logicalName: 'tst_product', attributeCount: 500 },
+        { logicalName: 'tst_category', attributeCount: 300 },
+      ],
+    }),
+    config: baseConfig({ domains: [{ name: 'Catalog', tableLogicalNames: ['tst_product', 'tst_category'] }] }),
+    meta: { baseName: 'Test', siteName: 'Test Site' },
+  });
+  assert.equal(result.splitStrategy, 'strategy-3-schema-segmentation');
+  const catalog = result.proposedSolutions.find((s) => s.uniqueName === 'Test_Catalog');
+  assert.ok(catalog, 'Catalog Table domain solution exists');
+  assert.equal(catalog.componentCount, 802, 'sum(500+300) + 2 tables = 802 (proxy), not 2 (table count)');
+});
+
+test('computeSplitPlan: schema-component proxy + attr-cap guard are CASE-INSENSITIVE on table names', () => {
+  // estimate.tables carry Dataverse LogicalName casing (e.g. bp_Inspection), but a
+  // user-authored .alm-config.json domain may list them in another case. The proxy
+  // (and the attr-cap guard) must match case-insensitively — otherwise the lookups
+  // miss, attrs read as 0, and the count collapses to the bare table count.
+  const result = computeSplitPlan({
+    estimate: baseEstimate({
+      tableCount: 34,
+      schemaAttrCount: 32000,
+      tables: [
+        { logicalName: 'bp_Inspection', attributeCount: 500 }, // Dataverse casing
+        { logicalName: 'bp_Permit', attributeCount: 300 },
+      ],
+    }),
+    config: baseConfig({ domains: [{ name: 'Core', tableLogicalNames: ['bp_inspection', 'bp_permit'] }] }), // lower-case
+    meta: { baseName: 'Test', siteName: 'Test Site' },
+  });
+  const core = result.proposedSolutions.find((s) => s.uniqueName === 'Test_Core');
+  assert.ok(core, 'Core domain solution exists');
+  assert.equal(core.componentCount, 802, 'case-insensitive proxy: 500+300+2 = 802, not 2 (missed lookups)');
 });
 
 test('computeSplitPlan additive Strategy 4 prepends EnvVars solution', () => {
@@ -600,4 +714,88 @@ test('partitionBySchema uses breakdown.tables to size domain solutions', () => {
   assert.equal(solutions[1].sizeMB, 20);
   // Site solution absorbs the remainder
   assert.equal(solutions[2].sizeMB, 60);
+});
+
+// --- dependency-aware capacity packing (the "21 solutions" fix) --------------
+
+function makeTables(n, attrsEach, prefix = 'tbl') {
+  return Array.from({ length: n }, (_, i) => ({ logicalName: `${prefix}_${i}`, attributeCount: attrsEach }));
+}
+
+test('Strategy 3: 34 distinct tables / 32.3k cols -> a HANDFUL of solutions, never ~34', () => {
+  const tables = makeTables(34, 950); // 34 * 950 = 32300
+  const result = computeSplitPlan({
+    estimate: baseEstimate({ totalSizeMB: 68, tableCount: 34, schemaAttrCount: 32300, componentCountSiteTotal: 3000, tables, tableRelationships: [] }),
+    config: baseConfig(),
+    meta: { baseName: 'Big', siteName: 'Big Site' },
+  });
+  assert.equal(result.splitStrategy, 'strategy-3-schema-segmentation');
+  const tableSolutions = result.proposedSolutions.filter((s) => s.componentTypes && s.componentTypes[0] === 'Table' && s.componentTypes.length === 1);
+  assert.ok(tableSolutions.length >= 2 && tableSolutions.length <= 8, `expected a handful of Table solutions, got ${tableSolutions.length}`);
+  // Every Table solution stays under the per-solution table cap.
+  for (const s of tableSolutions) {
+    assert.ok(s.tableLogicalNames.length <= 20, `Table solution ${s.uniqueName} has ${s.tableLogicalNames.length} tables (> cap)`);
+  }
+  // All 34 tables are placed exactly once across the Table solutions.
+  const placed = tableSolutions.flatMap((s) => s.tableLogicalNames);
+  assert.equal(placed.length, 34);
+  assert.equal(new Set(placed).size, 34);
+});
+
+test('Strategy 3: 22 tables with low cols -> 2 Table solutions (count-driven), not 22', () => {
+  const tables = makeTables(22, 50);
+  const result = computeSplitPlan({
+    estimate: baseEstimate({ tableCount: 22, schemaAttrCount: 1100, tables, tableRelationships: [] }),
+    config: baseConfig(),
+    meta: { baseName: 'M', siteName: 'M' },
+  });
+  assert.equal(result.splitStrategy, 'strategy-3-schema-segmentation');
+  const tableSolutions = result.proposedSolutions.filter((s) => s.componentTypes && s.componentTypes[0] === 'Table' && s.componentTypes.length === 1);
+  assert.equal(tableSolutions.length, 2, '22 tables / 20-per-solution -> 2 Table solutions');
+});
+
+test('Strategy 3 does NOT trigger for <=20 tables with low cols -> single', () => {
+  const tables = makeTables(18, 50);
+  const { primary } = selectStrategy(baseEstimate({ tableCount: 18, schemaAttrCount: 900, tables }), baseConfig());
+  assert.equal(primary, 'single');
+});
+
+test('Strategy 3: dependency clusters are never split across solutions', () => {
+  // Cluster A (4 tables) + Cluster B (2 tables) + 20 standalone = 26 tables, low cols.
+  const clusterA = ['rel_a0', 'rel_a1', 'rel_a2', 'rel_a3'];
+  const clusterB = ['rel_b0', 'rel_b1'];
+  const standalone = makeTables(20, 50, 'solo').map((t) => t.logicalName);
+  const tables = [...clusterA, ...clusterB, ...standalone].map((n) => ({ logicalName: n, attributeCount: 50 }));
+  const edges = [
+    ['rel_a0', 'rel_a1'], ['rel_a1', 'rel_a2'], ['rel_a2', 'rel_a3'], // A connected
+    ['rel_b0', 'rel_b1'],                                              // B connected
+  ];
+  const result = computeSplitPlan({
+    estimate: baseEstimate({ tableCount: 26, schemaAttrCount: 1300, tables, tableRelationships: edges }),
+    config: baseConfig(),
+    meta: { baseName: 'Dep', siteName: 'Dep' },
+  });
+  assert.equal(result.splitStrategy, 'strategy-3-schema-segmentation');
+  const tableSolutions = result.proposedSolutions.filter((s) => s.componentTypes && s.componentTypes[0] === 'Table' && s.componentTypes.length === 1);
+  const home = (name) => tableSolutions.findIndex((s) => s.tableLogicalNames.includes(name));
+  // Every table in cluster A shares one solution; same for B.
+  assert.ok(home('rel_a0') !== -1);
+  assert.ok(clusterA.every((n) => home(n) === home('rel_a0')), 'cluster A must not be split across solutions');
+  assert.ok(clusterB.every((n) => home(n) === home('rel_b0')), 'cluster B must not be split across solutions');
+});
+
+test('Strategy 3: an oversized single cluster (>cap) stays whole + raises a warning', () => {
+  // 25 tables all chained into ONE connected cluster -> cannot be split.
+  const names = makeTables(25, 50, 'big').map((t) => t.logicalName);
+  const tables = names.map((n) => ({ logicalName: n, attributeCount: 50 }));
+  const edges = names.slice(1).map((n, i) => [names[i], n]); // chain a0-a1-a2-...-a24
+  const result = computeSplitPlan({
+    estimate: baseEstimate({ tableCount: 25, schemaAttrCount: 1250, tables, tableRelationships: edges }),
+    config: baseConfig(),
+    meta: { baseName: 'Mega', siteName: 'Mega' },
+  });
+  const tableSolutions = result.proposedSolutions.filter((s) => s.componentTypes && s.componentTypes[0] === 'Table' && s.componentTypes.length === 1);
+  assert.equal(tableSolutions.length, 1, 'one indivisible cluster -> one Table solution');
+  assert.equal(tableSolutions[0].tableLogicalNames.length, 25);
+  assert.ok(result.recommendations.some((r) => /dependency cluster that cannot be split/.test(r.message)), 'oversized-cluster warning must fire');
 });

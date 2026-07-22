@@ -1,6 +1,6 @@
 {
   "skill_name": "genpage",
-  "eval_instructions": "See eval-runbook.md in this folder for how to run these evals, how the 3-layer check works (workflow → code quality → UX rubric), and what pass/fail means. Every eval run MUST save a workflow-log.md file documenting all phases attempted — agents invoked, commands run, questions asked, files read, decisions made.",
+  "eval_instructions": "See EVAL_GUIDE.md in this folder for how to run these evals, how the 3-layer check works (workflow → code quality → UX rubric), and what pass/fail means. Every eval run MUST save a workflow-log.md file documenting all phases attempted — agents invoked, commands run, questions asked, files read, decisions made.",
   "common_workflow_assertions": [
     "A workflow-log.md file is saved to the working directory documenting all phases attempted",
     "Phase 0: A working directory is created with a kebab-case name derived from the user's description",
@@ -23,6 +23,7 @@
     "Generated .tsx destructures props including `pageInput` (e.g., `const { dataApi, pageInput } = props;`)",
     "Generated .tsx imports types from `./RuntimeTypes` (for Dataverse pages) or uses realistic inline mock data (for mock pages)",
     "Generated .tsx uses `makeStyles` with tokens for styling — no inline styles for static values",
+    "Generated .tsx nests `@media` queries inside `makeStyles` slots — no media query used as a top-level slot key",
     "Generated .tsx does NOT use `100vh` or `100vw`",
     "Generated .tsx does NOT import `createTheme`, `mergeThemes`, or `useTheme` (these do not exist in Fluent UI V9)",
     "Generated .tsx does NOT wrap content in a top-level `<FluentProvider>` (already provided at root)",
@@ -36,7 +37,8 @@
     "For DataGrids, generated .tsx imports `createTableColumn` from `@fluentui/react-components` and configures column sizing (columnSizingOptions or resizableColumns)",
     "For Dataverse pages with fetching, separate setState calls inside async callbacks are batched into a single setData(...) call (Rule 14)",
     "For Dataverse list/detail pages, the inline IIFE + window cache + cache-guard pattern from references/data-caching.md is used (Rule 15); no useCallback for data-fetching functions",
-    "For multi-page builds, cross-page navigation uses quoted `\"PAGEREF_<filename>\"` placeholders that the orchestrator's Phase 6.5 resolves to real GUIDs"
+    "For multi-page builds, cross-page navigation uses quoted `\"PAGEREF_<filename>\"` placeholders that the orchestrator's Phase 6.5 resolves to real GUIDs",
+    "For Dataverse pages that call dataApi.queryTable, the result is accessed via .rows (DataTable<T> = { rows: T[], hasMoreRows, loadMoreRows() }) — never used directly as an array (Rule 11)"
   ],
   "evals": [
     {
@@ -57,7 +59,7 @@
         "Phase 2: Entity-builder is SKIPPED (no entities to create)",
         "Phase 4: pac model genpage generate-types --data-sources 'account' --output-file <working-dir>/RuntimeTypes.ts is run",
         "Phase 5b (single-page fast path): Plan has 1 page so orchestrator inlines the build — NO Task subagent dispatched for the page-builder",
-        "Phase 5b: Orchestrator reads ${CLAUDE_PLUGIN_ROOT}/references/verified-icons.txt before writing the .tsx",
+        "Phase 5b: Orchestrator reads ${PLUGIN_ROOT}/references/verified-icons.txt before writing the .tsx",
         "Phase 5b: A relevant sample file is read (e.g., 7-responsive-cards.tsx for card layout)",
         "Phase 5b: Generated .tsx uses only column names verified from RuntimeTypes.ts — no guessed names",
         "Phase 5b: After writing, orchestrator greps the .tsx for `from \"@fluentui/react-icons\"` imports and verifies each named import against verified-icons.txt — rewrites if any are missing",
@@ -436,6 +438,54 @@
         "Phase 1 (Planner): File names in ## Pages are unique",
         "Phase 1 (Planner): Because the account entity exists, ## Entity Creation Required contains the literal string 'No entity creation required — all entities already exist.'",
         "Phase 1 (Planner): ## Existing Entities contains the entity logical name used for RuntimeTypes generation (account)"
+      ]
+    },
+    {
+      "id": 17,
+      "tier": "smoke",
+      "prompt": "Build a dashboard showing the current weather for Seattle with temperature, conditions, and humidity.",
+      "data": {
+        "question_answers": {
+          "new_or_edit": "Create new page(s)",
+          "data_source": "Mock data",
+          "specific_requirements": "current weather panel"
+        },
+        "app_selection": "user selects an existing app from pac model list"
+      },
+      "expectations": [
+        "Phase 1 (Planner): With the connectors feature flag OFF, the feature gate (scripts/lib/feature-flags.js) is checked, connector discovery (list-connections.js) is NOT run, and the plan's ## Connector Bindings is exactly 'No connector bindings.'",
+        "Phase 2: Entity-builder is SKIPPED (mock data)",
+        "Phase 4: RuntimeTypes generation is SKIPPED (mock data)",
+        "Phase 5 (Page Builder): genpage-page-builder is invoked with Data mode: mock",
+        "Phase 5b (single-page fast path): Plan has 1 page so orchestrator inlines the build — NO Task subagent dispatched for the page-builder",
+        "Phase 5b: Orchestrator reads ${PLUGIN_ROOT}/references/verified-icons.txt before writing the .tsx",
+        "Phase 5b: A relevant sample file is read (e.g., 7-responsive-cards.tsx for card layout)",
+        "Phase 5b: After writing, orchestrator greps the .tsx for `from \"@fluentui/react-icons\"` imports and verifies each named import against verified-icons.txt — rewrites if any are missing",
+        "Phase 6: Deployment omits --data-sources flag (mock data page)"
+      ]
+    },
+    {
+      "id": 18,
+      "tier": "full",
+      "prompt": "Build a page listing documents from our SharePoint team site.",
+      "data": {
+        "question_answers": {
+          "new_or_edit": "Create new page(s)",
+          "data_source": "SharePoint (connector)",
+          "specific_requirements": "list documents"
+        },
+        "feature_flags": {
+          "connectors": "ON (GENPAGE_ENABLE_CONNECTORS=1)"
+        }
+      },
+      "expectations": [
+        "Phase 1 (Planner): With the connectors feature flag ON, the feature gate passes (enabled) and list-connections.js is run for connector discovery, and the plan's ## Connector Bindings records at least one binding (not 'No connector bindings.')",
+        "Phase 4.5 / Phase 6 (connectors ON): connectors.json is written as a bare array (not the config.json object wrapper) and the upload includes --connectors",
+        "Phase 2: Entity-builder is SKIPPED (no entities to create)",
+        "Phase 5b (single-page fast path): Plan has 1 page so orchestrator inlines the build — NO Task subagent dispatched for the page-builder",
+        "Phase 5b: Orchestrator reads ${PLUGIN_ROOT}/references/verified-icons.txt before writing the .tsx",
+        "Phase 5b: A relevant sample file is read (e.g., 7-responsive-cards.tsx for card layout)",
+        "Phase 5b: After writing, orchestrator greps the .tsx for `from \"@fluentui/react-icons\"` imports and verifies each named import against verified-icons.txt — rewrites if any are missing"
       ]
     }
   ]

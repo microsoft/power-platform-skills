@@ -9,9 +9,19 @@
  * Functions are also exported for testing.
  */
 
-const { execSync } = require('child_process');
+const { execFileSync, execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+
+const MARKETPLACE_PATHS = [
+  'marketplace.json',
+  '.plugin/marketplace.json',
+  '.claude-plugin/marketplace.json',
+];
+const PLUGIN_MANIFEST_PATHS = [
+  '.plugin/plugin.json',
+  '.claude-plugin/plugin.json',
+];
 
 /**
  * Compare two semver strings (major.minor.patch).
@@ -43,17 +53,42 @@ function formatUpdateMessage(pluginName, localVersion, remoteVersion, marketplac
 }
 
 /**
- * Read the marketplace name from .claude-plugin/marketplace.json at the git root.
+ * Read the marketplace name from the git root.
  * Returns null if not found.
  */
 function readMarketplaceName(gitRoot) {
-  try {
-    const marketplacePath = path.join(gitRoot, '.claude-plugin', 'marketplace.json');
-    const marketplace = JSON.parse(fs.readFileSync(marketplacePath, 'utf8'));
-    return marketplace.name || null;
-  } catch {
-    return null;
+  const marketplace = readFirstJson(gitRoot, MARKETPLACE_PATHS);
+  return marketplace?.name || null;
+}
+
+function firstExistingPath(root, relativePaths) {
+  for (const relativePath of relativePaths) {
+    const filePath = path.join(root, relativePath);
+    if (fs.existsSync(filePath)) return filePath;
   }
+  return null;
+}
+
+function readFirstJson(root, relativePaths) {
+  const filePath = firstExistingPath(root, relativePaths);
+  if (!filePath) return null;
+  return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+}
+
+function readJsonFromGit(ref, relativePaths) {
+  for (const relativePath of relativePaths) {
+    try {
+      const content = execFileSync('git', ['show', `${ref}:${relativePath}`], {
+        encoding: 'utf8',
+        timeout: 5000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      return JSON.parse(content);
+    } catch {
+      // Try the next manifest path.
+    }
+  }
+  return null;
 }
 
 module.exports = { compareSemver, formatUpdateMessage, readMarketplaceName };
@@ -61,7 +96,8 @@ module.exports = { compareSemver, formatUpdateMessage, readMarketplaceName };
 if (require.main === module) {
   try {
     const pluginRoot = path.resolve(__dirname, '..');
-    const pluginJsonPath = path.join(pluginRoot, '.claude-plugin', 'plugin.json');
+    const pluginJsonPath = firstExistingPath(pluginRoot, PLUGIN_MANIFEST_PATHS);
+    if (!pluginJsonPath) process.exit(0);
 
     const localPlugin = JSON.parse(fs.readFileSync(pluginJsonPath, 'utf8'));
     const localVersion = localPlugin.version;
@@ -73,7 +109,9 @@ if (require.main === module) {
       stdio: ['pipe', 'pipe', 'pipe'],
     }).trim();
 
-    const relPath = path.relative(gitRoot, pluginJsonPath).replace(/\\/g, '/');
+    const remoteManifestPaths = PLUGIN_MANIFEST_PATHS.map((manifestPath) =>
+      path.relative(gitRoot, path.join(pluginRoot, manifestPath)).replace(/\\/g, '/')
+    );
 
     // Best-effort fetch
     try {
@@ -86,12 +124,8 @@ if (require.main === module) {
       // Use cached origin/main
     }
 
-    const remoteContent = execSync(`git show origin/main:${relPath}`, {
-      encoding: 'utf8',
-      timeout: 5000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    const remotePlugin = JSON.parse(remoteContent);
+    const remotePlugin = readJsonFromGit('origin/main', remoteManifestPaths);
+    if (!remotePlugin) process.exit(0);
     const remoteVersion = remotePlugin.version;
     if (!remoteVersion) process.exit(0);
 

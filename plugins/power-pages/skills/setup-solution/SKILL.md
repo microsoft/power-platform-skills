@@ -11,7 +11,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, Task
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # setup-solution
 
@@ -42,7 +42,7 @@ When `inExecution.status` is anything other than `"active"` (`"not-running"`, `"
 **Step 1 — Run the gate helper.**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" --projectRoot "."
+node "${PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" --projectRoot "."
 ```
 
 The helper returns JSON with `{ exists, deferred, stale, staleness: { reason, detail }, generatedAt, planStatus, ... }`. Sync mode (when `.solution-manifest.json` already exists) may additionally pass `--envUrl`, `--token`, `--solutionId` once Phase 1 has acquired them, but for the initial gate the existence-only check is sufficient.
@@ -69,7 +69,7 @@ The helper returns JSON with `{ exists, deferred, stale, staleness: { reason, de
 |---|---|---|
 | Run `/power-pages:plan-alm` first? | ALM plan gate | Yes — run /power-pages:plan-alm now (Recommended), Continue without a plan (advanced — I know what I'm doing), Cancel |
 
-- **Yes (Recommended)** → invoke `/power-pages:plan-alm`. plan-alm's Phase 7 dispatches back into this skill at the appropriate stage.
+- **Yes (Recommended)** → invoke `/power-pages:plan-alm`. It builds the plan and returns — `plan-alm` is a planner and does not deploy. This skill then re-runs the Phase 0 check (now `exists:true`) and proceeds to Phase 1.
 - **Continue without a plan** → set `BYPASSED_PLAN_GATE = true` and proceed to Phase 1.
 - **Cancel** → exit cleanly.
 
@@ -109,9 +109,9 @@ Steps:
 1. Run `pac env who` — extract `environmentUrl`, `organizationId` (shown to user for confirmation)
 2. Run `verify-alm-prerequisites.js` to confirm PAC CLI auth, acquire a token, and verify API access:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --envUrl "{environmentUrl}"
+   node "${PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --envUrl "{environmentUrl}"
    ```
-   Capture output as JSON; extract `.envUrl` (store as `envUrl`) and `.token` (store as `token`). If the script exits non-zero, stop and explain what is missing (reference `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md`).
+   Capture output as JSON; extract `.envUrl` (store as `envUrl`) and `.token` (store as `token`). If the script exits non-zero, stop and explain what is missing (reference `${PLUGIN_ROOT}/references/dataverse-prerequisites.md`).
 3. Locate `powerpages.config.json` — read `siteName` and `websiteRecordId`
 4. Confirm `.powerpages-site/` folder exists (required to find component records)
 5. **Check for ALM plan context** — look for `docs/alm/alm-plan-context.json`:
@@ -148,13 +148,13 @@ Steps:
 
 ### Phase 1.5 — Ground in current ALM documentation
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/alm-docs-grounding.md`
+> Reference: `${PLUGIN_ROOT}/references/alm-docs-grounding.md`
 
 Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line note and continue — this skill must remain runnable offline.
 
 1. Run `microsoft_docs_search` with the query: `Power Pages solution publisher creation Dataverse component types ALM`.
 2. Fetch `https://learn.microsoft.com/en-us/power-platform/alm/solution-concepts-alm` (and at most one sister page if the search surfaces a relevant new tutorial — e.g. multi-solution layering, managed-properties guidance) in parallel via `microsoft_docs_fetch`.
-3. Extract a one-paragraph summary of what Microsoft Learn currently says about solution components, publisher prefix immutability, managed vs unmanaged choice, and component-type integers. Compare against `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` and flag any divergence (new component types, changed action signatures, deprecated patterns).
+3. Extract a one-paragraph summary of what Microsoft Learn currently says about solution components, publisher prefix immutability, managed vs unmanaged choice, and component-type integers. Compare against `${PLUGIN_ROOT}/references/solution-api-patterns.md` and flag any divergence (new component types, changed action signatures, deprecated patterns).
 4. Use the summary to inform Phase 2+ decisions. Do not silently change skill behavior — surface any divergence to the user as a soft warning before Phase 4 (Create Publisher and Solution).
 
 ### Phase 2 — Gather Solution Configuration
@@ -187,7 +187,7 @@ Before creating anything, check if publisher and solution already exist:
    (No dedicated script for publishers — query the OData endpoint directly.)
 2. Check solution existence using `verify-solution-exists.js`:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-solution-exists.js" \
+   node "${PLUGIN_ROOT}/scripts/lib/verify-solution-exists.js" \
      --envUrl "{envUrl}" \
      --uniqueName "{solutionUniqueName}" \
      --token "{token}"
@@ -208,7 +208,7 @@ Wait for user confirmation before proceeding.
 > **Version bump in sync mode**: before any add operations in Phase 5, bump the existing solution's patch segment so the post-sync manifest and any subsequent export cleanly supersede the prior version. Use the shared helper — it is the single source of truth for the bump rule (pad-with-zero for missing segments, integer-numeric `1.0.0.9 → 1.0.0.10`, reject `1.0.0.a`, reject more-than-4 segments). The same helper is called from `export-solution` Phase 4 Step 4.0 — both skills must produce identical bumps for the same input version.
 >
 > ```bash
-> node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/bump-solution-version.js" \
+> node "${PLUGIN_ROOT}/scripts/lib/bump-solution-version.js" \
 >   --envUrl "{envUrl}" \
 >   --token "{token}" \
 >   --solutionId "{solutionId}" \
@@ -217,7 +217,7 @@ Wait for user confirmation before proceeding.
 >
 > Capture output as JSON; the helper returns `{ previous, next, bumped: true, manifestUpdated, manifestUpdateReason }`. Passing `--projectRoot "."` lets the helper update `.solution-manifest.json`'s `solution.version` (single-solution) or matching `solutions[].version` (multi-solution) field automatically — without it, the manifest drifts behind every bump. Update `existingSolution.solution.version` locally to `.next` so the final manifest write reflects the bump. Do this **before** Step 5.6's component adds, so the manifest stays consistent if the skill is interrupted midway. **Do not inline the PATCH** — diverging the rule between this skill and `export-solution` is exactly the bug class the helper exists to prevent.
 
-Refer to `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` for exact request body templates.
+Refer to `${PLUGIN_ROOT}/references/solution-api-patterns.md` for exact request body templates.
 
 1. **Create publisher** (if not existing):
    - `POST {envUrl}/api/data/v9.2/publishers` with publisher body
@@ -229,7 +229,7 @@ Refer to `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` for exact r
 
    **Single-solution mode** (`MULTI_SOLUTION_MODE = false`) — call `create-solution.js`. Omit `--token` so the helper refreshes via `getAuthToken(envUrl)` at call time (passing a possibly-stale cached token would surface as a 401 the helper doesn't retry):
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-solution.js" \
+   node "${PLUGIN_ROOT}/scripts/lib/create-solution.js" \
      --envUrl "{envUrl}" \
      --uniqueName "{solutionUniqueName}" \
      --friendlyName "{solutionFriendlyName}" \
@@ -242,7 +242,7 @@ Refer to `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` for exact r
    **Multi-solution mode** (`MULTI_SOLUTION_MODE = true`) — call `create-solutions-batch.js`, which fans out all `PROPOSED_SOLUTIONS` in parallel via `Promise.allSettled` (typical 5-6 solution splits complete in ~2s vs ~10s serial). The helper skips `isFutureBuffer: true` entries automatically (the reserved buffer is created later when the user actually adds new components) and handles 409 races idempotently via `verify-solution-exists.js`. Write the specs to a tmp JSON file, then invoke:
    ```bash
    node -e "require('fs').writeFileSync('./docs/alm/.solutions-batch.json', JSON.stringify({{PROPOSED_SOLUTIONS_AS_SPECS}}))"
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-solutions-batch.js" \
+   node "${PLUGIN_ROOT}/scripts/lib/create-solutions-batch.js" \
      --envUrl "{envUrl}" \
      --token "{token}" \
      --publisherId "{publisherId}" \
@@ -256,7 +256,7 @@ Refer to `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` for exact r
 
 ### Phase 5 — Add Site Components
 
-Refer to `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` for `AddSolutionComponent` body templates and `powerpagecomponents` discovery patterns.
+Refer to `${PLUGIN_ROOT}/references/solution-api-patterns.md` for `AddSolutionComponent` body templates and `powerpagecomponents` discovery patterns.
 
 > **Sync-mode behavior**: When `syncMode = true`, run the discovery helper with `--solutionId` populated and use the returned `missing.*` arrays as the candidate set. Everything else in this phase (dynamic component-type lookup in 5.1, categorization in 5.3, OAuth secret conversion in 5.4, env var adoption in 5.4b, **orphan ppc adoption in 5.4c**, manifest summary in 5.5, bulk add in 5.6) runs the same way, just with a pre-filtered "only things that aren't already in the solution" list. The goal of sync mode is: a user who added a server logic, bot, flow, env var, or page *after* `setup-solution` last ran can re-invoke the skill and get those components adopted without any fresh-setup prompts.
 >
@@ -268,7 +268,7 @@ Refer to `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` for `AddSol
 
 Run `discover-component-types.js` with the website record ID plus one sample powerpagecomponent ID and one site language ID (obtained from the preliminary discovery queries in Step 5.2 below — run those first if not yet available):
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-component-types.js" \
+node "${PLUGIN_ROOT}/scripts/lib/discover-component-types.js" \
   --envUrl "{envUrl}" \
   --token "{token}" \
   --websiteRecordId "{websiteRecordId}" \
@@ -287,7 +287,7 @@ Run six discovery queries in parallel:
 ```
 GET {envUrl}/api/data/v9.2/GlobalOptionSetDefinitions(Name='powerpagecomponenttype')
 ```
-Build a `typeLabel` map: `{ [Value]: Label.UserLocalizedLabel.Label }`. Fall back to the static table in `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` Section 3b if this fails.
+Build a `typeLabel` map: `{ [Value]: Label.UserLocalizedLabel.Label }`. Fall back to the static table in `${PLUGIN_ROOT}/references/solution-api-patterns.md` Section 3b if this fails.
 
 **B. All Power Pages sub-components for this site**:
 ```
@@ -304,14 +304,18 @@ GET {envUrl}/api/data/v9.2/powerpagesitelanguages?$filter=_powerpagesiteid_value
 ```
 Store all language IDs.
 
-**D. Dataverse tables** — always discover from the environment, don't rely on a manifest file alone:
+**D. Dataverse tables** — discover the tables the **site actually references**, NOT every table sharing the publisher prefix.
 
-1. Read `.datamodel-manifest.json` if present (for the known list of tables created by `setup-datamodel`)
-2. **Also** query the environment directly for all custom unmanaged tables, filtering by the publisher prefix:
+> **Why not publisher prefix:** prefix-matching over-counts catastrophically with a shared/default publisher (`new_`, env default) — a 6-table site can match 22 unrelated tables — and it also *misses* the site's real tables when they come from a different prefix (e.g. a `bp_*` template under an `edm` publisher). The authoritative signal (SME-confirmed) is the site's **table permissions**: "If a table is used in the site there will be permissions for it."
+
+Run the shared discovery helper, which scopes custom tables to the site's table permissions (+ datamodel manifest) intersected with the env's custom-unmanaged tables:
+```bash
+node "${PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
+  --envUrl "{envUrl}" --token "{token}" --siteId "{websiteRecordId}" \
+  --projectRoot "." \
+  {if .datamodel-manifest.json elsewhere: --datamodelManifest "<path>"}
 ```
-GET {envUrl}/api/data/v9.2/EntityDefinitions?$select=LogicalName,MetadataId,IsManaged,IsCustomEntity
-```
-Filter client-side: `IsCustomEntity === true && IsManaged === false`. Group by publisher prefix (characters before first `_`). Present only tables whose prefix matches the site publisher — or if no prefix match, present all custom unmanaged tables and let the user decide.
+Use the returned `customTables[]` (each `{ id, logicalName, schemaName, displayName }` — `id` is the MetadataId for the `AddSolutionComponent` call). This is already the correct, site-scoped list — do **not** re-filter by prefix.
 
 > **Important note on tables**: Dataverse solutions carry **schema only** — entity definitions, columns, relationships, forms, and views. Table **data/records** do NOT travel with the solution. If the target environment needs seed/reference data, that requires a separate data migration step.
 
@@ -365,7 +369,7 @@ Skip this query if Query E returned `cloudFlows = []`.
 
 3. **Resolve the connection-reference componenttype at runtime** — the value is environment-specific (observed values include `10137` and `10160` across tenants; do NOT hardcode):
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-component-types.js" \
+   node "${PLUGIN_ROOT}/scripts/lib/discover-component-types.js" \
      --envUrl "{envUrl}" --token "{token}" \
      --websiteRecordId "{websiteRecordId}" \
      --objectIds "{firstConnectionReferenceId}"
@@ -380,7 +384,7 @@ If Query G returns no references (the cloud flows don't use connectors, or the p
 
 **If `preloadedSettings` is available** (user chose "Use pre-loaded choices from plan" in Phase 1 Step 5), skip the classification below — use `preloadedSettings.keepAsIs`, `preloadedSettings.promoteToEnvVar`, `preloadedSettings.authNoValue`, and `preloadedSettings.credentialNeedsDecision` directly. (Plans generated before 2026-05-08 use the older `excluded` bucket — treat its contents as `credentialNeedsDecision` for backward compatibility.)
 
-**Otherwise**, run the shared classifier — `${CLAUDE_PLUGIN_ROOT}/scripts/lib/classify-site-settings.js` — which is the **single source of truth** for the credential regex + tier mapping shared with `plan-alm` Phase 1 Step 7. Either invoke the CLI (pipe JSON to stdin) or `require()` it inline. The output is the same four-bucket shape `plan-alm` produces:
+**Otherwise**, run the shared classifier — `${PLUGIN_ROOT}/scripts/lib/classify-site-settings.js` — which is the **single source of truth** for the credential regex + tier mapping shared with `plan-alm` Phase 1 Step 7. Either invoke the CLI (pipe JSON to stdin) or `require()` it inline. The output is the same four-bucket shape `plan-alm` produces:
 
 ```js
 {
@@ -421,9 +425,9 @@ Ask via `AskUserQuestion` with `multiSelect: true`, listing each `promoteToEnvVa
 - Plus options: **"Promote all of them to env vars"** and **"Keep all as plain site settings"**
 
 For each setting the user selects to promote:
-1. Generate the canonical schema name with `${CLAUDE_PLUGIN_ROOT}/scripts/lib/generate-env-var-schema-name.js` so it matches what `configure-env-variables` and `deploy-pipeline` will expect later:
+1. Generate the canonical schema name with `${PLUGIN_ROOT}/scripts/lib/generate-env-var-schema-name.js` so it matches what `configure-env-variables` and `deploy-pipeline` will expect later:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/generate-env-var-schema-name.js" \
+   node "${PLUGIN_ROOT}/scripts/lib/generate-env-var-schema-name.js" \
      --publisherPrefix "{prefix}" \
      --settingName "{settingName}"
    ```
@@ -431,7 +435,7 @@ For each setting the user selects to promote:
 
 2. Create an `environmentvariabledefinition` using the resolved schema name:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-env-var-definition.js" \
+   node "${PLUGIN_ROOT}/scripts/lib/create-env-var-definition.js" \
      --envUrl "{envUrl}" \
      --token "{token}" \
      --schemaName "{schemaName from step 1}" \
@@ -442,7 +446,7 @@ For each setting the user selects to promote:
 2. Record the `definitionId` for inclusion in the components list (Step 5.6, `ComponentType: 380`).
 3. **Link the site setting to the env var** using `link-site-setting-to-env-var.js`:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/link-site-setting-to-env-var.js" \
+   node "${PLUGIN_ROOT}/scripts/lib/link-site-setting-to-env-var.js" \
      --envUrl "{envUrl}" \
      --token "{token}" \
      --siteSettingId "{settingId}" \
@@ -464,7 +468,7 @@ These are credential-style site settings (ConsumerKey / ClientSecret / etc.) tha
 
 **Step 5.4.C.1 — Auto-classify by name pattern.**
 
-Call `autoClassifyCredential(name)` from `${CLAUDE_PLUGIN_ROOT}/scripts/lib/classify-site-settings.js` for each setting. The helper applies these regexes in order (the **single source of truth** — do not duplicate them here):
+Call `autoClassifyCredential(name)` from `${PLUGIN_ROOT}/scripts/lib/classify-site-settings.js` for each setting. The helper applies these regexes in order (the **single source of truth** — do not duplicate them here):
 
 | Default | Matcher in helper | When it fires |
 |---|---|---|
@@ -504,16 +508,16 @@ Branching logic:
 
 For each setting routed to env-var-backed handling:
 
-1. Generate the canonical schema name with `${CLAUDE_PLUGIN_ROOT}/scripts/lib/generate-env-var-schema-name.js` (same helper Step 5.4.A uses — single source of truth so configure-env-variables and deploy-pipeline can reference the same schema names later):
+1. Generate the canonical schema name with `${PLUGIN_ROOT}/scripts/lib/generate-env-var-schema-name.js` (same helper Step 5.4.A uses — single source of truth so configure-env-variables and deploy-pipeline can reference the same schema names later):
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/generate-env-var-schema-name.js" \
+   node "${PLUGIN_ROOT}/scripts/lib/generate-env-var-schema-name.js" \
      --publisherPrefix "{prefix}" \
      --settingName "{settingName}"
    ```
 
 2. Create an `environmentvariabledefinition` using the resolved schema name:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-env-var-definition.js" \
+   node "${PLUGIN_ROOT}/scripts/lib/create-env-var-definition.js" \
      --envUrl "{envUrl}" \
      --token "{token}" \
      --schemaName "{schemaName from step 1}" \
@@ -536,7 +540,7 @@ Separately from the OAuth-secret conversion above, other skills (notably `setup-
 Run the shared discovery helper to get the complete site inventory in one call:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
+node "${PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
   --envUrl "{envUrl}" --token "{token}" \
   --siteId "{websiteRecordId}" \
   --publisherPrefix "{publisherPrefix}" \
@@ -584,7 +588,7 @@ Symmetric to 5.4b but for `powerpagecomponent` rows. Catches components on the s
 Use the shared discovery helper to collect the orphan list (it already excludes Vite/Rollup bundle chunks — `Home-XYZ.js`, `index-XYZ.css`, etc. — so the prompt doesn't drown the user in hash-named noise):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
+node "${PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
   --envUrl "{envUrl}" --token "{token}" \
   --siteId "{websiteRecordId}" \
   --publisherPrefix "{publisherPrefix}" \
@@ -628,10 +632,12 @@ If both `missing.powerpagecomponents` (after filtering) and `missing.siteLanguag
 
 **This is the key decision point.** Build a full manifest of everything that will be added and present it to the user before writing anything.
 
-If custom tables were discovered, ask via `AskUserQuestion` with `multiSelect: true` **before** showing the final manifest:
-- First option: **"Include all N tables (Recommended)"** — pre-selected default
+If custom tables were discovered (the site-referenced set from step D), ask via `AskUserQuestion` with `multiSelect: true` **before** showing the final manifest:
+- First option: **"Include all N referenced tables (Recommended)"** — pre-selected default. N is the count of tables the site actually references (not an env-wide prefix list).
 - Then one option per table: `{logicalName} ({DisplayName})`
 - Last option: **"Exclude all tables"**
+
+> The default list is already scoped to the site's real tables (step D). If the user knows of an additional table the site needs that has no permission yet, they can add it manually — but the default must never be a publisher-prefix dump.
 
 Present as a structured summary:
 
@@ -733,7 +739,7 @@ The components array should be built in this order:
 
 **Single-solution mode** (`MULTI_SOLUTION_MODE = false`): write the array to a temp file (e.g., `C:/Users/{user}/AppData/Local/Temp/components-to-add.json`), then run:
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/add-components-to-solution.js" \
+node "${PLUGIN_ROOT}/scripts/lib/add-components-to-solution.js" \
   --envUrl "{envUrl}" \
   --componentsFile "C:/Users/{user}/AppData/Local/Temp/components-to-add.json" \
   --solutionUniqueName "{solutionUniqueName}"
@@ -743,7 +749,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/add-components-to-solution.js" \
 1. Filter the unified component array down to components whose Dataverse type-name maps into this solution's `componentTypes` array. The mapping from numeric `componentType` → name is the same one `discover-component-types.js` and `discover-site-components.js` use (`PPC_TYPE_LABELS`). Tables route to the solution whose `tableLogicalNames` includes the table's logical name (Strategy 3) or to whichever solution claims `'Table'` (Strategies 1 and 2).
 2. Write the per-solution sub-array to a temp file (e.g., `C:/Users/{user}/AppData/Local/Temp/components-{uniqueName}.json`), then invoke the helper with all three required flags:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/add-components-to-solution.js" \
+   node "${PLUGIN_ROOT}/scripts/lib/add-components-to-solution.js" \
      --envUrl "{envUrl}" \
      --componentsFile "C:/Users/{user}/AppData/Local/Temp/components-{uniqueName}.json" \
      --solutionUniqueName "{proposedSolutions[i].uniqueName}"
@@ -764,7 +770,7 @@ The script handles token refresh every 20 calls, treats "already in solution" as
 
    ```bash
    node -e "require('fs').mkdirSync('docs/alm',{recursive:true})"
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-env-var-definitions.js" \
+   node "${PLUGIN_ROOT}/scripts/lib/discover-env-var-definitions.js" \
      --envUrl "{envUrl}" \
      --publisherPrefix "{publisherPrefix}" \
      --websiteRecordId "{websiteRecordId}" \
@@ -777,7 +783,7 @@ The script handles token refresh every 20 calls, treats "already in solution" as
    The sidecar's shape mirrors what `discover-env-var-definitions.js` already returns: `{ envVars: [{ schemaName, type, defaultValue, siteSetting }], count }`. Don't transform — the renderer reads these fields directly.
 
 3. Write `.solution-manifest.json` to project root (alongside `powerpages.config.json`):
-   - See manifest format in `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` Section 7
+   - See manifest format in `${PLUGIN_ROOT}/references/solution-api-patterns.md` Section 7
    - If cloud flows were confirmed, include a `cloudFlows` array: `[{ "workflowId": "...", "name": "...", "status": "active|inactive" }]`
    - If bot components were confirmed, include a `botComponents` array: `[{ "botId": "...", "name": "..." }]`
    - Omit these arrays entirely if no flows/bots were discovered or confirmed (absence = not tracked; `[]` = tracked but none selected)
@@ -871,20 +877,27 @@ If the user selects **option 3**, show:
 
 ### Record Skill Usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "SetupSolution"`.
 
 ### Refresh the ALM plan (if one exists)
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --projectRoot "." \
   --phase setup-solution \
   --render
 ```
 
-The helper resets `planData.plannedEnvVarCount` to 0 (the planned env vars have either been created or skipped at the user's request) and re-renders `docs/alm-plan.html` so the Overview stat card and Env Variables tab reflect post-setup state. When `docs/.alm-plan-data.json` is absent (standalone invocation, not via plan-alm), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+The helper resets `planData.plannedEnvVarCount` to 0 (the planned env vars have either been created or skipped at the user's request) and re-renders `docs/alm-plan.html` so the Overview stat card and Env Variables tab reflect post-setup state. When `docs/.alm-plan-data.json` is absent (standalone invocation, not part of an ALM plan), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+
+**Point the user at the next step (user-driven sequencing).** The helper's stdout JSON includes `nextStep: { name, skill: string | null } | null`. `skill` is `null` when the next pending step has no user-invocable command (e.g. an internal "Finalize" step) — so branch on it:
+
+- **`nextStep.skill` is non-null** → "Plan updated. Next in your plan: **{nextStep.name}** → run `{nextStep.skill}` when you're ready."
+- **`nextStep.skill` is `null`** → name the step only, with no command: "Plan updated. Next in your plan: **{nextStep.name}**." Never print `run null`.
+
+When `nextStep` itself is `null` (every planned step is done) or the helper returned `ok:false` (no plan on disk), say nothing about a next step. **Never auto-invoke the next skill** — `plan-alm` is a planner and the user drives execution one skill at a time.
 
 ## Key Decision Points (Wait for User)
 

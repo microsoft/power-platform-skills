@@ -326,45 +326,20 @@ function parseArgs(argv) {
   return out;
 }
 
-// Read entries from the settings file, preserving stage attribution so
-// findings can report which stage a bad value lives in (matters in
-// multi-stage files where the same schema may be valid for one stage
-// and broken for another).
-function readEntriesPreservingStage(filePath, stageLabel) {
-  // verify-env-var-values.js exports readSettingsFile, which returns
-  // `[{ schemaName, value }]` after filtering by stageLabel — but loses
-  // the stage attribution. Re-read here so we can tag each finding with
-  // its stage when it came from a Stages[]-shaped file without a filter.
-  const fs = require('fs');
-  let parsed;
-  try {
-    parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  } catch (err) {
-    throw new Error(`could not read --settingsFile ${filePath}: ${err.message}`);
-  }
-  const out = [];
-  if (Array.isArray(parsed.Stages)) {
-    for (const stage of parsed.Stages) {
-      if (stageLabel && (stage.Name || '').toLowerCase() !== stageLabel.toLowerCase()) continue;
-      if (!Array.isArray(stage.EnvironmentVariables)) continue;
-      for (const ev of stage.EnvironmentVariables) {
-        out.push({ schemaName: ev.SchemaName, value: ev.Value, stageLabel: stage.Name || null });
-      }
-    }
-    return out;
-  }
-  if (Array.isArray(parsed.EnvironmentVariables)) {
-    for (const ev of parsed.EnvironmentVariables) {
-      out.push({ schemaName: ev.SchemaName, value: ev.Value, stageLabel: null });
-    }
-    return out;
-  }
-  return [];
-}
-
+// Entry reader: delegates to verify-env-var-values.js#readSettingsFile,
+// which handles all three deployment-settings.json shapes and returns
+// `{ schemaName, value, stageLabel }` on each entry.
+//
+// `preserveAllStages: true` is critical here — without it, the default
+// readSettingsFile path dedupes by schemaName (keeping only the first
+// stage's value for each env var). For VALIDATION we must inspect every
+// stage's value independently: the same schema can be valid in Staging
+// and invalid in Production, and the validator must catch both.
 async function validateSettings({ settingsFile, envUrl, stageLabel, token }) {
   if (!settingsFile) throw new Error('--settingsFile is required');
-  const entries = readEntriesPreservingStage(settingsFile, stageLabel);
+  const entries = readSettingsFile(settingsFile, stageLabel, {
+    preserveAllStages: true,
+  });
 
   // Collect unique schema names for the type lookup pass.
   const uniqueSchemas = Array.from(new Set(entries.map((e) => e.schemaName).filter(Boolean)));
@@ -452,7 +427,6 @@ module.exports = {
   classifyEntry,
   classifyValueFormat,
   lookupTypes,
-  readEntriesPreservingStage,
   KV_URI_PATTERN,
   KV_RESOURCE_ID_PATTERN,
   KV_PLACEHOLDER_PATTERNS,

@@ -9,7 +9,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate,
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Create Web Roles
 
@@ -18,12 +18,31 @@ Create web roles for a Power Pages code site. Web roles define the permissions a
 ## Core Principles
 
 - **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
-- **Always use the UUID script**: Never generate UUIDs manually — always use `${CLAUDE_PLUGIN_ROOT}/scripts/generate-uuid.js` to produce valid UUID v4 values for each web role.
+- **Always use the UUID script**: Never generate UUIDs manually — always use `${PLUGIN_ROOT}/scripts/generate-uuid.js` to produce valid UUID v4 values for each web role.
 - **Preserve uniqueness constraints**: Only one role can have `anonymoususersrole: true` and only one can have `authenticatedusersrole: true`. Always check existing roles before setting these flags.
+- **Caller-suppress mode is opt-in**: When invoked by another skill (e.g. `/add-ai-webapi`) with the `[CALLED-BY-PARENT-SKILL]` sentinel in `$ARGUMENTS`, suppress this skill's deploy prompts (Phase 1's missing-deploy ask, Phase 6's deploy ask (step 3), and the closing reminder) and return as soon as roles are created. The caller batches the deploy at end-of-orchestration. Human invocations never trigger this mode. See Phase 0 below for parsing.
 
 > **Prerequisite:** The site must be deployed at least once before web roles can be created, since deployment creates the `.powerpages-site` folder structure that stores web role definitions.
 
 **Initial request:** $ARGUMENTS
+
+## Phase 0: Detect caller-suppress mode
+
+Inspect `$ARGUMENTS`. If the text contains the sentinel `[CALLED-BY-PARENT-SKILL]`, set an
+internal flag **caller-suppress = true** that downstream phases consult. The optional token
+`caller=<skill-name>` may follow the sentinel for diagnostic purposes (e.g.
+`caller=add-ai-webapi`); record it for the final summary but do not branch on it.
+
+When the flag is set, skip every deploy prompt this skill would otherwise issue:
+
+- **Phase 1 missing-deploy ask**: if `.powerpages-site` is absent, do NOT ask the user to
+  deploy now. Stop with a clear contract-violation message back to the caller — the caller
+  was supposed to gate on this before invoking us.
+- **Phase 6 deploy ask (step 3)** and the closing "Please run `/deploy-site`"
+  reminder: skip both. The caller batches the single deploy decision at end-of-orchestration.
+
+When the sentinel is absent, proceed exactly as today (full interactive flow). This is the
+regression guard — no human invocation changes behavior.
 
 ---
 
@@ -46,7 +65,18 @@ Create web roles for a Power Pages code site. Web roles define the permissions a
 
 1. Locate the project root (`**/powerpages.config.json`) and check for `.powerpages-site/web-roles/`.
 
-2. **If `.powerpages-site` does NOT exist:** Ask the user to deploy first via `AskUserQuestion` (options: "Yes, deploy now (Recommended)", "No, I'll do it later"). If yes, invoke `/deploy-site` then resume from Phase 2. If no, stop.
+<!-- gate: create-webroles:1.deploy-first | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · create-webroles:1.deploy-first):** `.powerpages-site` missing — skill cannot proceed without that folder. Prompt to deploy first or stop.
+>
+> **Trigger:** Phase 1 found no `.powerpages-site` directory.
+> **Why we ask:** Web role YAML files written to a non-existent path will never get picked up by deploy; user thinks roles were created but they weren't.
+> **Cancel leaves:** Nothing — no YAML files written.
+
+2. **If `.powerpages-site` does NOT exist:**
+   - **In caller-suppress mode** (Phase 0 flag): stop with a contract-violation message —
+     the calling skill should have gated on this folder existing before invoking us.
+   - **Otherwise**: ask the user to deploy first via `AskUserQuestion` (options: "Yes, deploy now (Recommended)", "No, I'll do it later"). If yes, invoke `/deploy-site` then resume from Phase 2. If no, stop.
 
 3. **If `.powerpages-site` exists but `web-roles/` does NOT:** Create the `<PROJECT_ROOT>/.powerpages-site/web-roles/` directory.
 
@@ -93,6 +123,14 @@ Create web roles for a Power Pages code site. Web roles define the permissions a
 
 **Actions**:
 
+<!-- gate: create-webroles:3.role-selection | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · create-webroles:3.role-selection):** Multi-select over suggested + custom web roles. Drives the Phase 4 YAML file writes.
+>
+> **Trigger:** Phase 2 inventoried existing roles; Phase 3 suggests new ones.
+> **Why we ask:** Wrong roles get created locally — fixable but adds churn to the `.powerpages-site/web-roles/` folder.
+> **Cancel leaves:** Nothing — no YAML files written yet.
+
 1. Based on the site's purpose and the existing roles, suggest appropriate web roles. Use `AskUserQuestion` to confirm with the user.
 
    Common web roles for Power Pages sites include:
@@ -130,7 +168,7 @@ For each new web role the user approved, create a YAML file in `.powerpages-site
 For each role, generate a UUID using the Node script. **NEVER generate UUIDs yourself — always use the script.**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/generate-uuid.js"
+node "${PLUGIN_ROOT}/scripts/generate-uuid.js"
 ```
 
 ### 4.2 Create the YAML File
@@ -190,7 +228,7 @@ name: <Role Name>
 
 1. Record skill usage:
 
-   > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+   > Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
    Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "CreateWebroles"`.
 
@@ -203,7 +241,20 @@ name: <Role Name>
    > | Content Editors | `a1b2c3d4-...` | false | false |
    > | *(etc.)* |
 
-3. Then ask the user if they want to deploy the site to apply the new roles:
+<!-- gate: create-webroles:6.deploy | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · create-webroles:6.deploy):** Final post-create prompt — deploy now to make the new roles take effect, or defer.
+>
+> **Trigger:** Phase 5 validation succeeded.
+> **Why we ask:** Auto-invoking `/deploy-site` would push the site to whatever env PAC CLI happens to point at — wrong-env push is messy to undo.
+> **Cancel leaves:** Nothing — the YAML files stay on disk; no deploy fired.
+
+3. **In caller-suppress mode** (Phase 0 flag): skip the deploy ask and the closing reminder
+   entirely. Return the created-roles summary to the caller and stop. The caller owns the
+   single end-of-orchestration deploy decision; nesting deploy reminders inside delegations
+   gives the user 2–3 redundant prompts per parent-skill run.
+
+   **Otherwise**, ask the user if they want to deploy the site to apply the new roles:
 
    | Question | Options |
    |----------|---------|

@@ -9,6 +9,11 @@
  *   SITE_NAME, GENERATED_AT, STRATEGY, PLAN_STATUS, APPROVED_BY, APPROVAL_DATE,
  *   stages, steps, risks
  *
+ * Optional lifecycle key:
+ *   COMPLETED_AT — present only once the plan reaches PLAN_STATUS "Completed";
+ *   the renderer emits the footer "Completed" line when it exists and omits it
+ *   otherwise (an in-flight plan has no COMPLETED_AT).
+ *
  * Optional v2 keys (added for split-solutions support):
  *   sizeAnalysis, assetAdvisory, proposedSolutions, appliedStrategies,
  *   recommendations, envVars, breakdown, estimationMethod, estimationAccuracyPct
@@ -348,6 +353,18 @@ function buildSignalCards() {
       ) {
         signalExtras += `<div class="signal-sample-info" style="font-size:11px;margin-top:6px;padding-top:6px;border-top:1px solid var(--surface2);color:var(--text-dim);">Aggregate extrapolated from a stratified sample of <strong>${webFileSampleSize}</strong> of <strong>${webFileCount.toLocaleString()}</strong> web files.</div>`;
       }
+    }
+    // Tables signal annotation: a 0 / low count means different things depending
+    // on HOW the tables were discovered. "site-referenced" is the complete signal
+    // (table-permissions ∩ env custom tables); the other two scopes can under-report
+    // — surface that so a reviewer doesn't read a 0 as a confirmed empty schema.
+    if (s.key === 'tableCount' && a.scope && a.scope !== 'site-referenced') {
+      const scopeNote = a.scope === 'unavailable'
+        ? 'Custom-table discovery was <strong>unavailable</strong> (no table-permission source resolved) &mdash; this count defaults to 0, <strong>not</strong> a confirmed empty schema.'
+        : a.scope === 'manifest-only'
+          ? 'Counted from the datamodel manifest only (the live environment table list was unavailable) &mdash; may differ from what is actually deployed.'
+          : `Discovery scope: <strong>${escapeHtml(a.scope)}</strong>.`;
+      signalExtras += `<div class="signal-scope-info" style="font-size:11px;margin-top:6px;padding-top:6px;border-top:1px solid var(--surface2);color:var(--text-dim);">${scopeNote}</div>`;
     }
     return `<div class="signal-card">
   <div class="signal-name">${s.label}</div>
@@ -898,7 +915,7 @@ function buildValidationTab(d) {
   // Renders the full "Site Validation" tab body. One sub-tab per target stage.
   // Each sub-tab shows a summary grid + per-category test cards.
   //
-  // Data shape (from plan-alm Phase 7 Step C, ingesting test-site's docs/alm/last-test-site.json):
+  // Data shape (populated by test-site's own final-phase refresh, ingesting docs/alm/last-test-site.json):
   //   data.validationRuns = {
   //     "<stageName>": null | {
   //       url, runAt, durationSec, runOutcome,
@@ -1448,6 +1465,12 @@ const replacements = {
   PLAN_STATUS: escapeHtml(data.PLAN_STATUS || 'Draft'),
   APPROVED_BY: escapeHtml(data.APPROVED_BY || ''),
   APPROVAL_DATE: escapeHtml(data.APPROVAL_DATE || ''),
+  // Completion footer line — only rendered once the plan reaches "Completed"
+  // (refresh-alm-plan-data.js stamps COMPLETED_AT when every step is done).
+  // Empty string otherwise, so the placeholder is always replaced (no orphan token).
+  COMPLETED_LINE: data.COMPLETED_AT
+    ? `<br><strong>Completed:</strong> <span id="completed-at">${escapeHtml(data.COMPLETED_AT)}</span>`
+    : '',
   OVERVIEW_SUMMARY: buildOverviewSummary(),
   STAT_COMPONENTS: (componentCount || 0).toLocaleString(),
   STAT_ENVVARS: envVarStatDisplay(),

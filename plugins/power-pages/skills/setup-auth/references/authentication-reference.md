@@ -10,7 +10,7 @@ Power Pages supports the following authentication mechanisms:
 |---------------|-------------|----------------|---------------------|
 | **Microsoft Entra ID** | Azure AD / Entra ID via OpenID Connect | `/Account/Login/ExternalLogin` | `https://login.windows.net/{tenantId}/` |
 | **Entra External ID** | Customer identity (CIAM) with self-service sign-up. Uses OIDC — authority may be `ciamlogin.com` or a custom domain. **This is NOT Microsoft Account** — it is a separate OIDC provider for customer-facing apps. | `/Account/Login/ExternalLogin` | Site setting `Authentication/OpenIdConnect/{name}/AuthenticationType` |
-| **OpenID Connect (Generic)** | Any OIDC-compliant provider (Okta, Auth0, Ping, etc.) | `/Account/Login/ExternalLogin` | Site setting `Authentication/OpenIdConnect/{name}/AuthenticationType` |
+| **OpenID Connect** | Any OIDC-compliant provider (Okta, Auth0, etc.) | `/Account/Login/ExternalLogin` | Site setting `Authentication/OpenIdConnect/{name}/AuthenticationType` |
 | **SAML2** | SAML 2.0 identity providers (ADFS, Shibboleth, etc.) | `/Account/Login/ExternalLogin` | Site setting `Authentication/SAML2/{name}/AuthenticationType` |
 | **WS-Federation** | WS-Federation identity providers | `/Account/Login/ExternalLogin` | Site setting `Authentication/WsFederation/{name}/AuthenticationType` |
 | **Local Authentication** | Username/password login without external provider | `/Account/Login/Login` | N/A (direct credential POST) |
@@ -904,7 +904,7 @@ const AUTH_PROVIDER: AuthProviderConfig = {
 };
 ```
 
-### OpenID Connect (Generic)
+### OpenID Connect
 
 ```typescript
 const AUTH_PROVIDER: AuthProviderConfig = {
@@ -1888,8 +1888,8 @@ Pattern: `Authentication/OpenIdConnect/{ProviderName}/{SettingName}`
 |---------|-------------|
 | `Authority` | The OIDC authority URL (metadata endpoint base) |
 | `ClientId` | The registered application's client ID |
-| `ClientSecret` | The registered application's client secret -- **never commit to source control** |
-| `RedirectUri` | The callback URL (typically `{site-url}/signin-{provider}`) |
+| `ClientSecret` | **Optional** — only for a confidential-client override; the default no-secret `code id_token` flow needs none. When used, store via Key Vault / Secret env var and **never commit to source control**. |
+| `RedirectUri` | The callback URL (typically `{site-url}/signin-{ProviderName-lowercased}`) |
 | `AuthenticationType` | Unique identifier for this provider (used as the `provider` value in ExternalLogin) |
 | `Caption` | Display name shown on the login button |
 | `ExternalLogoutEnabled` | `true` to sign out of the IdP on logout |
@@ -1943,7 +1943,7 @@ Pattern: `Authentication/SAML2/{ProviderName}/{SettingName}`
 | `MetadataAddress` | URL of the SAML IdP metadata XML |
 | `AuthenticationType` | Unique identifier for this provider |
 | `ServiceProviderRealm` | The SP entity ID (typically the site URL) |
-| `AssertionConsumerServiceUrl` | The ACS URL (typically `{site-url}/signin-{provider}`) |
+| `AssertionConsumerServiceUrl` | The ACS URL (typically `{site-url}/signin-{ProviderName-lowercased}`) |
 | `Caption` | Display name shown on the login button |
 | `SignAuthenticationRequests` | `true` to sign SAML authn requests |
 | `ExternalLogoutEnabled` | `true` to enable SAML Single Logout (SLO) |
@@ -2054,7 +2054,7 @@ Entra External ID uses the same OpenID Connect site setting path:
 | `Authority` | External ID authority URL (e.g., `https://{tenant}.ciamlogin.com/{tenant}.onmicrosoft.com/v2.0/` or custom domain like `https://login.contoso.com/{tenant-id}/v2.0/`) |
 | `ClientId` | Application (client) ID from the External ID app registration |
 | `AuthenticationType` | Unique identifier for this provider (typically the authority URL) |
-| `RedirectUri` | Callback URL (e.g., `{site-url}/signin-{provider}`) |
+| `RedirectUri` | Callback URL (e.g., `{site-url}/signin-{ProviderName-lowercased}`) |
 | `ExternalLogoutEnabled` | `true` to sign out of External ID on logout |
 | `Caption` | Display name shown on the login button |
 

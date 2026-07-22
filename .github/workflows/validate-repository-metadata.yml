@@ -1,0 +1,32 @@
+name: validate-repository-metadata
+
+on:
+    pull_request:
+        branches:
+            - main
+    workflow_dispatch:
+
+jobs:
+    validate-repository-metadata:
+        name: validate-repository-metadata
+        runs-on: ubuntu-latest
+        steps:
+            - name: checkout
+              uses: actions/checkout@v4
+
+            - name: setup-node
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 20
+
+            - name: validate-open-plugin-names
+              run: node scripts/validate-plugin-names.js
+
+            - name: validate-legacy-compatibility
+              run: node scripts/validate-legacy-compatibility.js
+
+            - name: validate-skill-descriptions
+              run: node scripts/validate-skill-descriptions.js
+
+            - name: validate-telemetry-ikeys
+              run: node scripts/validate-telemetry-ikeys.js

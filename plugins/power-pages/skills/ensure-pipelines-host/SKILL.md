@@ -21,7 +21,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, Task
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 <!-- alm-lint-ignore: SKILL-must-read-manifest — this skill manages the Pipelines host environment (deploymentenvironments / deploymentpipelines tables on the host), not the source-env solution. The site's .solution-manifest.json is irrelevant to host lifecycle: a host can be provisioned before any solution exists, and a single host is shared across many solutions. ALM-aware-by-default does not apply. -->
 
@@ -184,13 +184,13 @@ Steps:
 
 1. Run `verify-alm-prerequisites.js`:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js"
+   node "${PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js"
    ```
    Capture `.envUrl` (`devEnvUrl`), `.token` (`DEV_TOKEN`), `.userId`, `.tenantId`, `.organizationId`. Stop on auth failure with the script's remediation message.
 
 2. Run `detect-project-context.js` (non-fatal — skill is also valid outside a Power Pages project):
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/detect-project-context.js"
+   node "${PLUGIN_ROOT}/scripts/lib/detect-project-context.js"
    ```
    Capture `.siteName` and `.solutionManifest` for messaging.
 
@@ -221,13 +221,13 @@ Steps:
 
 ### Phase 1.5 — Ground in current Pipelines host documentation
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/alm-docs-grounding.md`
+> Reference: `${PLUGIN_ROOT}/references/alm-docs-grounding.md`
 
 Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line note and continue — this skill must remain runnable offline.
 
 1. Run `microsoft_docs_search` with the query: `Power Platform Pipelines host environment Platform Host Custom Host`.
 2. Fetch `https://learn.microsoft.com/en-us/power-platform/alm/pipelines` (and at most one sister page on host setup, default-custom-host configuration, or admin role requirements) in parallel via `microsoft_docs_fetch`.
-3. Extract a one-paragraph summary of what Microsoft Learn currently says about Platform vs Custom Host trade-offs, the resolution order (org-db setting → BAP env metadata → tenant default), and admin role requirements. Compare against this skill's own *Resolution order* section and `${CLAUDE_PLUGIN_ROOT}/references/cicd-pipeline-patterns.md`; flag any divergence (e.g. new Platform-Host SKU, changed default-custom-host setting name, new tenant policy controls).
+3. Extract a one-paragraph summary of what Microsoft Learn currently says about Platform vs Custom Host trade-offs, the resolution order (org-db setting → BAP env metadata → tenant default), and admin role requirements. Compare against this skill's own *Resolution order* section and `${PLUGIN_ROOT}/references/cicd-pipeline-patterns.md`; flag any divergence (e.g. new Platform-Host SKU, changed default-custom-host setting name, new tenant policy controls).
 4. Use the summary to inform Phase 2+ decisions. Do not silently change skill behavior — surface any divergence to the user as a soft warning before Phase 3 (Confirm action with user).
 
 ### Phase 2 — Run resolution order to find host
@@ -272,7 +272,7 @@ Steps:
 3. **If `isPlatform === true`**, mirror the default-custom-tenant-setting check (lines 148–213 in tsx). Reuse the existing `discover-pipelines-host.js`:
 
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-pipelines-host.js" \
+   node "${PLUGIN_ROOT}/scripts/lib/discover-pipelines-host.js" \
      --envUrl "{devEnvUrl}" --token "{DEV_TOKEN}" --userId "{userId}"
    ```
    - `found: false` → tenant has no admin default custom host. `finalHostEnvId = orgSettingHostEnvId` (the PE). Set `RESOLUTION.status = "AvailableUsingPlatformHost"`.
@@ -422,6 +422,22 @@ A PE already exists in the tenant (one is provisioned automatically the first ti
 
 #### 3.C — Status `NoHost` (host-type decision tree)
 
+<!-- gate: ensure-pipelines-host:3.C.host-type | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · ensure-pipelines-host:3.C.host-type):** Top-level host-type prompt — pick Platform Host / Custom Host / PPAC manual / Manual export-import strategy / Cancel. Drives the rest of Phase 3 and Phase 4 routing.
+>
+> **Trigger:** Status `NoHost` AND no upstream `hostResolution.willProvision*` flag carries the answer.
+> **Why we ask:** Auto-picking provisions an env (PE or Custom Host) without consent; PE is tenant-singleton and admin-non-deletable.
+> **Cancel leaves:** Nothing — no provisioning fired yet.
+
+<!-- gate: ensure-pipelines-host:3.C.env-pick | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · ensure-pipelines-host:3.C.env-pick):** Sub-prompt under 3.C top-level option "Custom Host" — present the eligible-env list (capped at 5) with role labels (`dev env`, `source env`, `staging env`, `production env`) and the "Other (paste URL)" fallback. Fires only on the Custom-Host branch of the host-type menu.
+>
+> **Trigger:** User picked "Custom Host" in 3.C top-level.
+> **Why we ask:** Auto-picking the wrong env routes pipelines through a host the user didn't intend.
+> **Cancel leaves:** Nothing — no app install fired.
+
 The prompt asks the user to pick the **host type** first (Platform Host, Custom Host, PPAC manual, or cancel). Picking Custom Host opens a sub-prompt for the install method (existing env vs. create-new). The Platform-Host path is the lowest-friction default and is presented first.
 
 **Skip rule — caller already collected the answer.** When this skill is invoked from `setup-pipeline` and `docs/alm/last-pipeline.json` carries a `hostResolution` block populated by plan-alm Phase 2 Q4, inspect those flags before showing the prompt:
@@ -508,7 +524,7 @@ Track the total eligible count separately — when `eligible.length > 5`, surfac
 - `eligible.length <= 5` → empty string (no suffix; all envs visible).
 - `eligible.length > 5` → ` Showing top 5 of {N}; the remaining {N-5} eligible env(s) can be reached via the "Other (paste URL)" entry.` (leading space).
 
-When the user picks "Other (paste URL)", **pre-fill** the URL input with `pac env list --output json` results so they can paste-or-pick from the full tenant inventory rather than typing a URL by hand.
+When the user picks "Other (paste URL)", **pre-fill** the URL input with the environment list from `node "${PLUGIN_ROOT}/scripts/lib/list-environments.js"` (parses `pac env list` into JSON `{ displayName, environmentId, environmentUrl, uniqueName, active }`; the old `pac env list --output json` is invalid on current PAC CLI) so they can paste-or-pick from the inventory rather than typing a URL by hand.
 
 **Test scenarios to verify when changing this prompt:**
 - 0 eligible → sub-option `a` dropped (sub-prompt shows only `b` / `c`).
@@ -570,11 +586,19 @@ Surface the specific failure to the user. Out of automated remediation scope. Re
 
 #### 4.0 — Fast-path: Platform Host via `getOrCreate`
 
+<!-- gate: ensure-pipelines-host:4.0.pre-call | category=consent | cancel-leaves=nothing -->
+
+> 🚦 **Gate (consent · ensure-pipelines-host:4.0.pre-call):** Echo the tenant identity in the request body before firing the BAP `getOrCreate` Platform Host call. NON-SKIPPABLE even when upstream `hostResolution.willProvisionPlatform === true`. PE is tenant-singleton and admin-non-deletable — this gate is the principal wrong-tenant mitigation.
+>
+> **Trigger:** Phase 4.0 entry (routed in from 3.C or upstream).
+> **Why we ask:** PE provisioned in wrong tenant; cannot be deleted by tenant admin.
+> **Cancel leaves:** Nothing — no provisioning fired yet.
+
 The lowest-friction host-provisioning path. Calls the idempotent BAP `getOrCreate` endpoint with a `D365_1stPartyAdminApps` + `Platform` body. Same call `make.powerapps.com → Pipelines` page makes when a user clicks "Get started" — we just invoke it directly. Spec from `useGetOrCreatePlatformEnvironment.v4.ts`. New helper `provision-platform-host.js`.
 
 **No sub-prompts.** BAP picks tenant home geo + default display name; no admin role required.
 
-**Pre-call confirmation (NON-SKIPPABLE single consent gate):**
+**Pre-call confirmation via `AskUserQuestion`** — NON-SKIPPABLE single consent gate:
 
 > "About to provision a Platform Host for tenant **{TENANT_DISPLAY_NAME}** (`{tenantId}`).
 >
@@ -589,7 +613,7 @@ The lowest-friction host-provisioning path. Calls the idempotent BAP `getOrCreat
 **Call:**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/provision-platform-host.js" \
+node "${PLUGIN_ROOT}/scripts/lib/provision-platform-host.js" \
   --bapToken "{BAP_TOKEN}" \
   --correlationId "{uuid v4}"
 ```
@@ -605,15 +629,31 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/provision-platform-host.js" \
 
 #### 4.A — Fast-path: Custom Host via `D365_ProjectHost` template
 
+<!-- gate: ensure-pipelines-host:4.A.pre-call | category=consent | cancel-leaves=nothing -->
+
+> 🚦 **Gate (consent · ensure-pipelines-host:4.A.pre-call):** Echo the BAP env-create request body (region + display name + template) before firing the Custom Host create call. NON-SKIPPABLE even when upstream `hostResolution.willProvisionCustom === true`. Last chance to catch a wrong-tenant/wrong-region provisioning. Bug fixed 2026-05-05 was caused by skipping this gate.
+>
+> **Trigger:** Phase 4.A entry; sub-prompts (display name, region, admin attestation) collected.
+> **Why we ask:** Custom Host provisioned in wrong tenant or wrong region; consumes Azure capacity quota; potentially attributes the env to the wrong organization.
+> **Cancel leaves:** Nothing — no provisioning fired yet.
+
+<!-- gate: ensure-pipelines-host:4.sandbox-confirm | category=consent | cancel-leaves=nothing -->
+
+> 🚦 **Gate (consent · ensure-pipelines-host:4.sandbox-confirm):** When the picked install-target env has `environmentSku=Sandbox`, surface the sandbox-limits warning and require explicit re-confirmation before installing. Fires once per Sandbox-SKU env selected.
+>
+> **Trigger:** Phase 4.B / Phase 3.C sub-option a — picked env is Sandbox SKU.
+> **Why we ask:** Installing Pipelines onto a Sandbox env without consent — sandbox envs are deletable on inactivity and have reduced capacity; pipelines may break unexpectedly.
+> **Cancel leaves:** Nothing — no app install fired.
+
 Standard env-create API with the `D365_ProjectHost` template (eng.ms-documented; same template PPAC `New custom host` uses internally). New helper `provision-custom-host.js`.
 
-**Sub-prompts (collected before the API call):**
+**Sub-prompts (collected before the API call) via `AskUserQuestion`:**
 
 1. Display name (default suggestion: `"{tenant displayName} Pipelines Host"`)
 2. Region (default: tenant home geo from BAP `tenant` endpoint; offer override)
 3. Confirm caller is admin — single AskUserQuestion *"Are you a Global / Power Platform / Dynamics admin in this tenant? Yes / No / Not sure"*. If No or Not sure, recommend Path 4.B/4.C and fall back.
 
-**Pre-call confirmation (NON-SKIPPABLE second consent gate):**
+**Pre-call confirmation via `AskUserQuestion`** — NON-SKIPPABLE second consent gate:
 
 > "About to call `POST https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/environments?api-version=2021-04-01` for tenant `{tenantId}` with body:
 > ```json
@@ -730,7 +770,7 @@ This path was previously a manual click-through to PPAC. As of 2026-05-08 it's f
 **Call the helper:**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/install-pipelines-app.js" \
+node "${PLUGIN_ROOT}/scripts/lib/install-pipelines-app.js" \
   --bapToken "{BAP_TOKEN}" \
   --envId "{envId}" \
   --instanceApiUrl "{instanceApiUrl}" \
@@ -751,11 +791,19 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/install-pipelines-app.js" \
 
 #### 4.C — Guided manual: PPAC `New custom host`
 
+<!-- gate: ensure-pipelines-host:4.C.ppac-done | category=progress | cancel-leaves=host-binding -->
+
+> 🚦 **Gate (progress · ensure-pipelines-host:4.C.ppac-done):** External-system wait gate — user must complete the PPAC "New custom host" flow manually, then return to confirm. Skill polls BAP afterward for the new env.
+>
+> **Trigger:** Phase 4.C entry; PPAC URL printed.
+> **Why we ask:** Skill proceeds without confirming the new env exists; downstream `setup-pipeline` then fails with no host. Worse, if PPAC creation succeeded partway and the user cancelled the gate, the host binding is partially established (a `D365_ProjectHost`-templated env exists in tenant).
+> **Cancel leaves:** `host-binding` — a manually-created env may be left in tenant; user must clean up via PPAC.
+
 1. Print: `https://admin.powerplatform.microsoft.com/deployments` and instructions: *"Click 'New custom host' → fill name (suggested: '{tenant} Pipelines Host') → choose Production environment in tenant home region → Create. Provisioning takes 5–10 min."*
 
    > Per eng.ms doc: *"the panel will default to the Production environment type. Adding Dataverse is also required... template and sample apps options are hidden here, as we use a specific organization template for this scenario."* (The template is `D365_ProjectHost` — same one Path 4.A automates.)
 
-2. Two-option AskUserQuestion: *"Done — provisioning kicked off"* / *"Cancel"*.
+2. Two-option `AskUserQuestion`: *"Done — provisioning kicked off"* / *"Cancel"*.
 3. After confirmation, poll BAP `list-tenant-envs.js` every 15s looking for a new env with the Pipelines marker. On detection, capture URLs, `actionTaken = "user-created-custom-ppac"`. Proceed to Phase 5.
 
 #### Common: Timeout handling
@@ -848,9 +896,20 @@ This file is consumed by `setup-pipeline` and `deploy-pipeline`.
 
 Record skill usage:
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "EnsurePipelinesHost"`.
+
+**Refresh the ALM plan (if one exists):**
+
+```bash
+node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase ensure-pipelines-host \
+  --render
+```
+
+This updates `planData.hostResolution` from the `docs/alm/last-host-check.json` you just wrote (host-only — no pipeline yet) and drops the pre-run NoHost risks, then re-renders `docs/alm-plan.html`. **Do this here, not just in setup-pipeline Phase 7** — a host install can take 18+ minutes and cross a session boundary, so deferring the refresh risks the plan never reflecting the host. When `docs/.alm-plan-data.json` is absent (standalone, not part of an ALM plan), the helper returns `ok:false` as a soft no-op. The centralized PostToolUse hook also reconciles the plan as a backstop, but refreshing at the source keeps the rendered plan current immediately.
 
 Present summary table:
 

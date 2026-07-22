@@ -11,7 +11,7 @@ allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Skill, Task
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Add Server Logic
 
@@ -69,7 +69,7 @@ Read `powerpages.config.json` to get the site name and configuration:
 
 ### 1.3 Detect Framework
 
-Read `package.json` to determine the frontend framework (React, Vue, Angular, or Astro). This is needed for Phase 8 (client-side integration guidance). See `${CLAUDE_PLUGIN_ROOT}/references/framework-conventions.md` for the full framework detection mapping.
+Read `package.json` to determine the frontend framework (React, Vue, Angular, or Astro). This is needed for Phase 8 (client-side integration guidance). See `${PLUGIN_ROOT}/references/framework-conventions.md` for the full framework detection mapping.
 
 ### 1.4 Explore Existing Server Logic and Frontend Code
 
@@ -102,6 +102,14 @@ Look for the `.powerpages-site` folder:
 **If not found**: The site **must** be deployed before server logic can be created — server logic files live inside `.powerpages-site/server-logic/`. Tell the user:
 
 > "The `.powerpages-site` folder was not found. Server logic files are stored inside this folder, so the site must be deployed at least once before creating server logic. Would you like to deploy now?"
+
+<!-- gate: add-server-logic:1.5.deploy-first | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · add-server-logic:1.5.deploy-first):** `.powerpages-site` missing — server logic files live inside it. Deploy first or stop.
+>
+> **Trigger:** Phase 1.5 found no `.powerpages-site` directory.
+> **Why we ask:** Server logic `.js`/`.yml` files written to a non-existent path won't deploy.
+> **Cancel leaves:** Nothing — no server logic files written yet.
 
 Use `AskUserQuestion`:
 
@@ -168,7 +176,7 @@ If any planned server logic item involves Dataverse operations, check whether th
 **Step 1 — Fetch custom actions:**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/list-custom-actions.js" "<ENV_URL>"
+node "${PLUGIN_ROOT}/scripts/list-custom-actions.js" "<ENV_URL>"
 ```
 
 The script outputs a JSON object with:
@@ -181,6 +189,14 @@ Each entry includes: `name`, `displayName`, `description`, `type` (`action` or `
 **Step 2 — Present and ask the user:**
 
 If custom actions are found (`total > 0`), present a summary to the user grouped by binding type (unbound vs. entity-bound) and ask whether any should be used:
+
+<!-- gate: add-server-logic:2.1.2.use-custom-actions | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · add-server-logic:2.1.2.use-custom-actions):** Custom actions discovered — decide whether to wrap existing Dataverse Custom APIs/Process Actions or build server logic from scratch. Choice changes the Phase 5 implementation shape.
+>
+> **Trigger:** `list-custom-actions.js` returned at least one entry.
+> **Why we ask:** Auto-wrapping could attach the wrong action; auto-skipping duplicates logic that already exists in Dataverse.
+> **Cancel leaves:** Nothing — no server logic files written yet.
 
 Use `AskUserQuestion`:
 
@@ -195,6 +211,8 @@ If the user says **No**, skip to Phase 2.2.
 **Step 3 — Map custom actions to server logic items:**
 
 If the user says **Yes**, for each server logic item being created, ask which custom action (if any) it should wrap:
+
+<!-- not-a-gate: per-item custom-action mapping — data-gathering sub-prompt under the Phase 2.1.2 Yes path; final intent is locked in by the Phase 4.4 plan gate -->
 
 Use `AskUserQuestion` for each server logic item:
 
@@ -248,6 +266,14 @@ These values will be used in Phase 7 to create the environment variables and sit
 
 If secrets were identified in Phase 2.3, ask the user now whether they want to use Azure Key Vault. This decision must happen before Phase 4 so the implementation plan can show the chosen secret management approach.
 
+<!-- gate: add-server-logic:2.3.1.keyvault | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · add-server-logic:2.3.1.keyvault):** Pick secret-storage mechanism (Key Vault vs plain env var). Choice changes the Phase 4 rendered plan and the Phase 7 implementation pipeline.
+>
+> **Trigger:** Phase 2.3 identified at least one secret value.
+> **Why we ask:** Plain env var creation can expose secrets in solution exports; auto-picking Key Vault forces additional Azure setup.
+> **Cancel leaves:** Nothing — no env var definitions written yet.
+
 Use `AskUserQuestion`:
 
 | Question | Options |
@@ -257,6 +283,8 @@ Use `AskUserQuestion`:
 Record the user's choice — it will be shown in the HTML plan (Phase 4) and executed in Phase 7.
 
 ### 2.4 Confirm with User
+
+<!-- not-a-gate: requirement clarification — multi-question data-gathering that shapes the upcoming Phase 4.4 plan gate -->
 
 If the requirements are ambiguous, use `AskUserQuestion` to clarify:
 
@@ -285,7 +313,7 @@ This step is critical because Server Logic is a preview feature and the SDK surf
 
 Use the reference document below as the source of truth for how to discover, classify, fetch, and reconcile Server Logic documentation:
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/skills/add-server-logic/references/server-logic-docs.md`
+> Reference: `${PLUGIN_ROOT}/skills/add-server-logic/references/server-logic-docs.md`
 
 Follow that reference to:
 
@@ -319,7 +347,7 @@ From the fetched docs, extract and note the items that matter for the current ta
 
 Build the server logic plan data and render the HTML plan before asking for approval.
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/skills/add-server-logic/references/server-logic-plan-data-format.md`
+> Reference: `${PLUGIN_ROOT}/skills/add-server-logic/references/server-logic-plan-data-format.md`
 
 The rendered plan should summarize:
 
@@ -346,7 +374,7 @@ Create the `docs/` folder if it does not already exist. Keep this HTML file insi
 Do **not** hand-author the HTML. Use the render script:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/render-serverlogic-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
+node "${PLUGIN_ROOT}/scripts/render-serverlogic-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
 ```
 
 The render script refuses to overwrite existing files. Before calling it, check if the default output path (`<PROJECT_ROOT>/docs/serverlogic-plan.html`) already exists. If it does, choose a new descriptive filename based on context — e.g., `serverlogic-plan-exchange-rate.html`, `serverlogic-plan-apr-2026.html`. Pass the chosen name via `--output`.
@@ -366,6 +394,14 @@ In the CLI, give only a brief summary that points the user to the HTML plan open
 Do not restate the per-server-logic breakdown, rationale, role assignments, or function details inline in the CLI unless the user explicitly asks for a text version. Tell the user where the detailed HTML plan file was saved, that it has been opened in the browser for review, and that the repo copy of the plan will be committed with the implementation artifacts unless the user asks to discard it.
 
 ### 4.4 Confirm with User
+
+<!-- gate: add-server-logic:4.4.plan-approval | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · add-server-logic:4.4.plan-approval):** Final sign-off on the rendered HTML plan before Phase 5 writes any `.serverlogic.yml` / `.js` files or Phase 7 creates env vars.
+>
+> **Trigger:** Phase 4.2 rendered the HTML plan; Phase 4.3 surfaced the CLI summary.
+> **Why we ask:** Server logic files committed under wrong names / wrong roles; env var definitions created against the wrong secret-storage mode.
+> **Cancel leaves:** Nothing — no server logic files written yet.
 
 Use `AskUserQuestion`:
 
@@ -686,7 +722,7 @@ function get() {
 
 When a function returns the result of a `Server.Connector.Dataverse.*` method, the client sees a double-wrapped payload — the most common cause of broken frontend integrations. Before writing the function, pick one of three response shapes and record the choice for Phase 9: **Approach A — raw passthrough** (return the connector result as-is), **Approach B — envelope that wraps the connector result** (return `{ status, data: result }` without unwrapping `Body`), or **Approach C — fully normalized** (parse `Body` server-side and return a feature-specific shape — recommended for non-generic endpoints).
 
-See `${CLAUDE_PLUGIN_ROOT}/skills/add-server-logic/references/frontend-integration-reference.md` → "Dataverse Connector Response Format" for the double-wrapping explanation, the `CreateRecord` / `entityid` header behavior, and server- and client-side examples for each shape.
+See `${PLUGIN_ROOT}/skills/add-server-logic/references/frontend-integration-reference.md` → "Dataverse Connector Response Format" for the double-wrapping explanation, the `CreateRecord` / `entityid` header behavior, and server- and client-side examples for each shape.
 
 #### Referencing Secrets in Code
 
@@ -707,7 +743,7 @@ Do **not** duplicate Microsoft Learn SDK usage patterns inline in this skill. Us
 For each approved server logic item where the plan status is `create`, generate the metadata file with the deterministic writer script instead of hand-authoring the YAML. The script generates the UUID, writes the fields in the correct order, and returns the created file path as JSON. **Skip this step for `update` / `reuse` items** — the YAML already exists and should be updated manually if needed.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/add-server-logic/scripts/create-serverlogic-metadata.js" --projectRoot "<PROJECT_ROOT>" --name "<name>" --displayName "<human-readable display name>" --description "<description of what this server logic does>" --webRoleIds "<uuid1,uuid2,uuid3>"
+node "${PLUGIN_ROOT}/skills/add-server-logic/scripts/create-serverlogic-metadata.js" --projectRoot "<PROJECT_ROOT>" --name "<name>" --displayName "<human-readable display name>" --description "<description of what this server logic does>" --webRoleIds "<uuid1,uuid2,uuid3>"
 ```
 
 The generated `<PROJECT_ROOT>/.powerpages-site/server-logic/<name>/<name>.serverlogic.yml` file has this structure:
@@ -787,7 +823,7 @@ Extract the entity set name (first argument) from each method call. Build a mapp
 
 ### 6.2 Use the Table Permissions Architect
 
-When any approved server logic item uses `Server.Connector.Dataverse`, invoke the `table-permissions-architect` agent at `${CLAUDE_PLUGIN_ROOT}/agents/table-permissions-architect.md` to determine and create the required table permissions.
+When any approved server logic item uses `Server.Connector.Dataverse`, invoke the `table-permissions-architect` agent at `${PLUGIN_ROOT}/agents/table-permissions-architect.md` to determine and create the required table permissions.
 
 **Prompt:**
 
@@ -837,7 +873,7 @@ If the user chose Azure Key Vault in Phase 2.3.1:
 **Step 1 — List available Key Vaults:**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/list-azure-keyvaults.js"
+node "${PLUGIN_ROOT}/scripts/list-azure-keyvaults.js"
 ```
 
 The script outputs a JSON array of Key Vaults (`name`, `resourceGroup`, `location`) from the user's Azure subscription.
@@ -845,6 +881,8 @@ The script outputs a JSON array of Key Vaults (`name`, `resourceGroup`, `locatio
 **Step 2 — Select or create a Key Vault:**
 
 If Key Vaults were found, present the list and ask which one to use:
+
+<!-- not-a-gate: Key Vault selection — data-gathering for the secret-store call under the Phase 2.3.1 Key Vault branch -->
 
 Use `AskUserQuestion`:
 
@@ -854,6 +892,14 @@ Use `AskUserQuestion`:
 
 If **no Key Vaults are found**, ask the user how to proceed:
 
+<!-- gate: add-server-logic:7.2a.no-vaults | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · add-server-logic:7.2a.no-vaults):** No Key Vaults found in the user's subscription — create one or fall back to plain env vars. Branches the secret-storage flow.
+>
+> **Trigger:** Phase 2.3.1 chose Key Vault but `list-azure-keyvaults.js` returned an empty list.
+> **Why we ask:** Auto-creating a Key Vault provisions Azure resources without explicit consent; auto-falling-back stores secrets as plain env vars after the user explicitly opted in to Key Vault.
+> **Cancel leaves:** Nothing — no Azure or Dataverse writes yet.
+
 Use `AskUserQuestion`:
 
 | Question | Options |
@@ -862,6 +908,8 @@ Use `AskUserQuestion`:
 
 **If "Create a new Key Vault"**: Ask for a vault name, resource group, and location, then create it:
 
+<!-- not-a-gate: Key Vault provisioning parameters — data-gathering for the create-azure-keyvault.js call under the Phase 7.2a "Create new" path -->
+
 Use `AskUserQuestion`:
 
 | Question | Context |
@@ -869,7 +917,7 @@ Use `AskUserQuestion`:
 | What name, resource group, and Azure region would you like for the new Key Vault? | Vault names must be 3-24 characters, globally unique, start with a letter, and contain only alphanumerics and hyphens. Suggest a name based on the project/site name. |
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-azure-keyvault.js" \
+node "${PLUGIN_ROOT}/scripts/create-azure-keyvault.js" \
   --name "<vault-name>" \
   --resourceGroup "<resource-group>" \
   --location "<location>"
@@ -893,7 +941,7 @@ Present the commands as a numbered list the user can copy and run. Use the stdin
 For each secret, run the following command (replacing <YOUR_SECRET_VALUE> with the actual value):
 
 1. <secret-name>:
-   printf '%s' '<YOUR_SECRET_VALUE>' | node "${CLAUDE_PLUGIN_ROOT}/scripts/store-keyvault-secret.js" \
+   printf '%s' '<YOUR_SECRET_VALUE>' | node "${PLUGIN_ROOT}/scripts/store-keyvault-secret.js" \
      --vaultName "<selected-vault>" \
      --secretName "<secret-name>"
 ```
@@ -927,7 +975,7 @@ Tell the user the Secret Identifier URI looks like `https://<vault-name>.vault.a
 After the user shares the `secretUri` output from each command, create an environment variable definition in Dataverse that references the Key Vault secret. Use the `secret` type:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
+node "${PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
   --schemaName "<prefix_SecretName>" \
   --displayName "<Secret Display Name>" \
   --type "secret" \
@@ -939,7 +987,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" 
 For each environment variable, create a site setting YAML that maps to it:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "<SiteSetting/Name>" \
   --envVarSchema "<schemaName-from-step-4>"
@@ -956,7 +1004,7 @@ If the user chose not to use Azure Key Vault:
 For each secret identified in Phase 2.3, create the environment variable in Dataverse with a placeholder value:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
+node "${PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
   --schemaName "<prefix_SecretName>" \
   --displayName "<Secret Display Name>" \
   --value "PLACEHOLDER_SET_ACTUAL_VALUE"
@@ -965,7 +1013,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" 
 **Step 2 — Create site setting for the environment variable:**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "<SiteSetting/Name>" \
   --envVarSchema "<schemaName-from-step-1>"
@@ -1017,7 +1065,7 @@ The following site settings control server logic behavior. Only create settings 
 Use the existing site setting creation script:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "ServerLogic/AllowedDomains" --value "api.example.com,api.other.com" --description "Restrict server logic external API calls to these domains"
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "ServerLogic/AllowedDomains" --value "api.example.com,api.other.com" --description "Restrict server logic external API calls to these domains"
 ```
 
 ### 8.2 Git Commit
@@ -1040,6 +1088,14 @@ Server logic creates the backend — but without frontend code to call it, the e
 
 ### 9.1 Ask User About Integration Scope
 
+<!-- gate: add-server-logic:9.1.frontend-scope | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · add-server-logic:9.1.frontend-scope):** Decide whether the skill also wires the server logic into the frontend UI or stops at the backend.
+>
+> **Trigger:** Phase 8 completed (server logic deployed-ready).
+> **Why we ask:** Auto-integrating mutates UI files the user wanted to handle themselves; auto-skipping leaves the endpoints unreachable from the app.
+> **Cancel leaves:** Nothing — server logic backend is already on disk; this prompt only decides frontend follow-through.
+
 Use `AskUserQuestion`:
 
 | Question | Options |
@@ -1052,7 +1108,7 @@ Use `AskUserQuestion`:
 
 Use the reference below for the frontend integration approach, examples, and framework-specific patterns:
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/skills/add-server-logic/references/frontend-integration-reference.md`
+> Reference: `${PLUGIN_ROOT}/skills/add-server-logic/references/frontend-integration-reference.md`
 
 Based on the Explore agent's findings from Phase 1.4 and the approved plan, choose the integration approach from that reference and apply it consistently across all server logic endpoints being wired into the frontend.
 
@@ -1146,7 +1202,7 @@ Use the frontend integration reference from Phase 9 for the exact calling patter
 
 ### 11.1 Record Skill Usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "AddServerLogic"`.
 
@@ -1170,11 +1226,27 @@ Present a summary of everything that was done:
 
 ### 11.3 Ask to Deploy
 
+<!-- gate: add-server-logic:11.3.deploy | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · add-server-logic:11.3.deploy):** Post-implementation deploy prompt — server logic endpoints aren't reachable until deployed.
+>
+> **Trigger:** All server logic artifacts written and committed.
+> **Why we ask:** Auto-deploy picks wrong env.
+> **Cancel leaves:** Nothing — artifacts stay on disk; no deploy fired.
+
 Use `AskUserQuestion`:
 
 | Question | Options |
 |----------|---------|
 | The server logic work is ready. To make it live, the site needs to be deployed. Would you like to deploy now? | Yes, deploy now (Recommended), No, I'll deploy later |
+
+<!-- gate: add-server-logic:11.3.test | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · add-server-logic:11.3.test):** Post-deploy validation prompt — invokes `/test-site` to exercise the new endpoints live.
+>
+> **Trigger:** Deploy from the previous gate succeeded.
+> **Why we ask:** Skipping is harmless (manual test still possible); auto-invoking `/test-site` adds runtime.
+> **Cancel leaves:** Nothing — deploy has already completed.
 
 **If "Yes, deploy now"**: Invoke the `/deploy-site` skill to deploy the site.
 

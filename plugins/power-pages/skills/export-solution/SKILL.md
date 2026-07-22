@@ -11,7 +11,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, Task
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # export-solution
 
@@ -42,7 +42,7 @@ When `inExecution.status` is anything other than `"active"` (`"not-running"`, `"
 **Step 1 — Run the gate helper.**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" \
+node "${PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" \
   --projectRoot "." \
   --envUrl "{envUrl from .solution-manifest.json or pac env who, if available}" \
   --token "{token, if Phase 1 already acquired one}" \
@@ -73,7 +73,7 @@ The helper returns JSON with `{ exists, deferred, stale, staleness: { reason, de
 |---|---|---|
 | Run `/power-pages:plan-alm` first? | ALM plan gate | Yes — run /power-pages:plan-alm now (Recommended), Continue without a plan (advanced — I know what I'm doing), Cancel |
 
-- **Yes (Recommended)** → invoke `/power-pages:plan-alm`. plan-alm's Phase 7 dispatches back into this skill at the appropriate stage.
+- **Yes (Recommended)** → invoke `/power-pages:plan-alm`. It builds the plan and returns — `plan-alm` is a planner and does not deploy. This skill then re-runs the Phase 0 check (now `exists:true`) and proceeds to Phase 1.
 - **Continue without a plan** → set `BYPASSED_PLAN_GATE = true` and proceed to Phase 1.
 - **Cancel** → exit cleanly.
 
@@ -112,27 +112,37 @@ Tasks to create:
 Steps:
 1. Run `verify-alm-prerequisites.js` with `--require-manifest` to confirm PAC CLI auth, acquire a token, verify API access, and validate that `.solution-manifest.json` exists:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --require-manifest
+   node "${PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --require-manifest
    ```
-   Capture output as JSON; extract `.envUrl` (store as `envUrl`) and `.token` (store as `token`). If the script exits non-zero, stop and explain what is missing (reference `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md`).
+   Capture output as JSON; extract `.envUrl` (store as `envUrl`) and `.token` (store as `token`). If the script exits non-zero, stop and explain what is missing (reference `${PLUGIN_ROOT}/references/dataverse-prerequisites.md`).
 
 ### Phase 1.5 — Ground in current ALM documentation
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/alm-docs-grounding.md`
+> Reference: `${PLUGIN_ROOT}/references/alm-docs-grounding.md`
 
 Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line note and continue — this skill must remain runnable offline.
 
 1. Run `microsoft_docs_search` with the query: `Power Pages solution export managed unmanaged ExportSolutionAsync ALM`.
 2. Fetch `https://learn.microsoft.com/en-us/power-platform/alm/solution-concepts-alm` (and at most one sister page on managed vs unmanaged or solution layering) in parallel via `microsoft_docs_fetch`.
-3. Extract a one-paragraph summary of what Microsoft Learn currently says about export semantics, managed vs unmanaged implications, and async export polling. Compare against `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` and flag any divergence in `ExportSolutionAsync` / `DownloadSolutionExportData` signatures.
+3. Extract a one-paragraph summary of what Microsoft Learn currently says about export semantics, managed vs unmanaged implications, and async export polling. Compare against `${PLUGIN_ROOT}/references/solution-api-patterns.md` and flag any divergence in `ExportSolutionAsync` / `DownloadSolutionExportData` signatures.
 4. Use the summary to inform Phase 2+ decisions. Do not silently change skill behavior — surface any divergence to the user as a soft warning before Phase 3.
 
 ### Phase 2 — Identify Solution
 
+<!-- gate: export-solution:2.identify | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · export-solution:2.identify):** No `.solution-manifest.json` in project root — user must pick or paste a solution unique name before export proceeds. Fires only on the "not found" branch (step 3 below).
+>
+> **Trigger:** Phase 2 step 1 didn't find a manifest.
+> **Why we ask:** Auto-picking the wrong solution exports a managed zip that ships the wrong table/site/flow set to staging.
+> **Cancel leaves:** Nothing — no ExportSolutionAsync call yet.
+
 1. Look for `.solution-manifest.json` in project root (use `findProjectRoot` or `glob('**/.solution-manifest.json')`)
 2. If found: read `solution.uniqueName`, `solution.solutionId`, `environmentUrl`
    - Verify environment URLs match (warn if different — may be cross-environment export)
-3. If not found: ask user for solution unique name via `AskUserQuestion`
+3. If not found, use `AskUserQuestion` to pick the solution:
+   - Query Dataverse for available unmanaged solutions and present them as options
+   - Free-text fallback ("Other") for pasting the unique name directly
 4. Confirm solution exists in environment:
    ```
    GET {envUrl}/api/data/v9.2/solutions?$filter=uniquename eq '{solutionName}'&$select=solutionid,uniquename,friendlyname,version,ismanaged
@@ -144,11 +154,12 @@ Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line n
 Before exporting, run the shared site-inventory helper to detect any components that exist on the site but are not in the solution. Catching this here avoids shipping an incomplete package to staging/prod.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
+node "${PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
   --envUrl "{envUrl}" --token "{token}" \
   --siteId "{websiteRecordId}" \
   --publisherPrefix "{publisherPrefix from .solution-manifest.json}" \
-  --solutionId "{solutionId}"
+  --solutionId "{solutionId}" \
+  --projectRoot "."
 ```
 
 Parse stdout and evaluate `missing`. **Before doing anything else**, capture the **pre-sync state** so a post-sync re-confirmation gate can show what changed:
@@ -225,8 +236,17 @@ Invoke `AskUserQuestion` immediately — do NOT describe this choice as chat tex
 
 Use the answer to set `"Managed": true` or `"Managed": false` in the `ExportSolutionAsync` request body.
 
-Also ask (separate `AskUserQuestion`):
+<!-- gate: export-solution:3.overwrite | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · export-solution:3.overwrite):** Output directory and overwrite-vs-new-name decision for the produced zip. If an existing zip is detected at the target path, the prompt offers Overwrite / pick new name / cancel.
+>
+> **Trigger:** Phase 3 after Managed/Unmanaged is picked.
+> **Why we ask:** Auto-overwriting replaces a previous export that may have been hand-tested already.
+> **Cancel leaves:** Nothing — no zip written.
+
+Also ask via `AskUserQuestion`:
 - Output directory (default: current project root)
+- If a zip already exists at the resolved output path: *"Overwrite / Pick new name / Cancel"*
 
 ### Phase 4 — Trigger Async Export
 
@@ -237,7 +257,7 @@ Before exporting, bump the patch segment (4th segment) of the source solution's 
 > **Why always-on, not "only when sync mode added components"**: `setup-solution` only bumps when it has new components to add. A user who modifies content of an already-in-solution component (a web template, a site setting value, a web file) and then re-exports must still get a strictly-increasing version label — otherwise the manual export/import path quietly ships stale-version zips. See the `Why this step exists` callout in `setup-solution` Phase 4.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/bump-solution-version.js" \
+node "${PLUGIN_ROOT}/scripts/lib/bump-solution-version.js" \
   --envUrl "{envUrl}" \
   --token "{token}" \
   --uniqueName "{solutionUniqueName}" \
@@ -255,7 +275,7 @@ Capture output as JSON; store `.previous` as `PRE_EXPORT_VERSION`, `.next` as `E
 Run `scripts/lib/export-solution-async.js` to POST `ExportSolutionAsync`, poll until terminal state, and return the `AsyncOperationId`:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/export-solution-async.js" \
+node "${PLUGIN_ROOT}/scripts/lib/export-solution-async.js" \
   --envUrl "{envUrl}" \
   --token "{token}" \
   --solutionName "{solutionUniqueName}" \
@@ -276,7 +296,7 @@ Handle script exit code:
 Run `scripts/lib/download-export-data.js` to POST `DownloadSolutionExportData`, decode the base64 zip, and write it to disk:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/download-export-data.js" \
+node "${PLUGIN_ROOT}/scripts/lib/download-export-data.js" \
   --envUrl "{envUrl}" \
   --token "{token}" \
   --asyncOperationId "{asyncOperationId}" \
@@ -345,20 +365,22 @@ The path is registered in `scripts/lib/alm-paths.js` under the key `lastExport` 
 
 ### Record Skill Usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "ExportSolution"`.
 
 ### Refresh the ALM plan (if one exists)
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --projectRoot "." \
   --phase export-solution \
   --render
 ```
 
-Re-renders `docs/alm-plan.html` so any step-status updates the agent made during this skill (`Export solution` → `status-completed`) flow through. When `docs/.alm-plan-data.json` is absent (standalone invocation, not via plan-alm), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+Re-renders `docs/alm-plan.html` so any step-status updates the agent made during this skill (`Export solution` → `status-completed`) flow through. When `docs/.alm-plan-data.json` is absent (standalone invocation, not part of an ALM plan), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+
+**Point the user at the next step (user-driven sequencing).** The helper's stdout JSON includes `nextStep: { name, skill: string | null } | null`. When non-null, branch on `skill`: when `skill` is non-null, tell the user *"Plan updated. Next in your plan: **{nextStep.name}** → run `{nextStep.skill}` when you're ready."*; when `skill` is `null` (an internal step such as Finalize, no user command), name the step only — *"Plan updated. Next in your plan: **{nextStep.name}**."* — and never print `run null`. (Typically: review the exported zip, then run `/power-pages:import-solution` for the first target.) When `null` or the helper returned `ok:false`, say nothing about a next step. **Never auto-invoke the next skill** — the user drives execution.
 
 ## Key Decision Points (Wait for User)
 

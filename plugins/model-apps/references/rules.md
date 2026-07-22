@@ -14,13 +14,17 @@ Comprehensive rules for generating generative page code. Read this file during c
 6. **Entity Logical Names**: Use singular lowercase (e.g., `"account"` not `"accounts"`)
 7. **Styling**: Use `makeStyles` with tokens; avoid inline styles except for dynamic values
 8. **Responsive Design**: Use flexbox and relative units; NEVER use `100vh`/`100vw`
-9. **Icons — verified names only**: Import from `@fluentui/react-icons`; use unsized variants only (e.g., `AddRegular` not `Add24Regular`). Icon names are frequently hallucinated — names like `MedicalRegular`, `PawRegular`, `AnimalRabbitRegular`, `BirdRegular` do not exist. **Always Read `${CLAUDE_PLUGIN_ROOT}/references/verified-icons.txt`** (~5000 names) and cross-check every icon import against that list. After writing, Grep your own output for `from "@fluentui/react-icons"` and verify each named import. If an icon you want is not in the list, pick the closest semantic substitute that is. Never guess a name.
+9. **Icons — verified names only**: Import from `@fluentui/react-icons`; use unsized variants only (e.g., `AddRegular` not `Add24Regular`). Icon names are frequently hallucinated — names like `MedicalRegular`, `PawRegular`, `AnimalRabbitRegular`, `BirdRegular` do not exist. **Always Read `${PLUGIN_ROOT}/references/verified-icons.txt`** (~5000 names) and cross-check every icon import against that list. After writing, Grep your own output for `from "@fluentui/react-icons"` and verify each named import. If an icon you want is not in the list, pick the closest semantic substitute that is. Never guess a name.
 10. **No External Libraries**: No routing libraries (React Router) or assumptions of implicit dependencies
 11. **No FluentProvider**: Already provided at root — adding another causes a double-render flicker in React 17. For dark mode/theme overrides, use the `themeToVars` two-div pattern in **Special Patterns > Dark Mode Toggle**.
 12. **Forbidden Functions**: Don't use `createTheme`, `mergeThemes`, `useTheme` (don't exist in Fluent UI V9)
 13. **Navigation**: Use the `Xrm.Navigation.navigateTo` API for all in-app navigation. Never construct raw URLs or manipulate `window.location` — see **Special Patterns > Generative Page Navigation**.
 14. **Batched async state — no intermediate renders**: React 17 does NOT batch `setState` calls inside async functions. Every separate `setState` triggers its own render. When a component fetches multiple pieces of data (e.g., a record plus related records), use a **single state object** and a **single `setData(...)` call** at the end: `const [{ record, related, loading, error }, setData] = useState({...})`. For multi-entity fetches, use `Promise.all` or `Promise.allSettled` so one `setData` completes the entire load. Never call `setLoading(false)` in a `finally` block when the data setters are in the `try` block — this always produces an intermediate render. **PageInput exception:** initial `useState({ loading: !!recordId, ... })` (PageInput rendering pattern) does NOT violate this rule — that's a synchronous initial value, not a separate `setState` call after fetch. The rule is per-effect: independent effects (e.g., usersettings fetch + record fetch) can each have their own single batched `setData`.
 15. **Data fetching — inline IIFE + cache guard (Dataverse list/detail pages)**: For pages where the user navigates away and returns (list paired with detail, tabbed UIs), use the module-level `window` cache + inline async IIFE pattern documented in `references/data-caching.md`. Never use `useCallback` for data-fetching functions — `dataApi` gets a new object reference after the initial render, so a `useCallback` recreates, re-fires the effect, and any `setData(loading: true)` call resets the spinner causing flicker. The cache guard (`if (cache.has(key)) return`) is the fix. **Do NOT apply this pattern to forms, single-visit dashboards, or mock-data pages.** See the reference for the full pattern.
+16. **Overlays must be confined to the page container (`mountNode`)**: The generated page shares the DOM with the genpage *designer* — the preview is NOT an isolated iframe. Every Fluent surface that renders through a portal (`Dialog` via `DialogSurface`, `Popover`, `Menu`, `Tooltip`, `Combobox`/`Dropdown` listbox, `DatePicker`, `TimePicker`) defaults to portalling to `document.body` of the **designer**, so without a `mountNode` it escapes the preview and can cover the designer chrome — including the coding-agent panel. Establish a single `containerRef`/`mountNode` on the page root and thread it to every overlay. See **Special Patterns > Dialogs and Overlays**.
+17. **No full-viewport modal scrims; prefer non-modal or in-page panels**: A default `<Dialog>` is `modalType="modal"` — it draws a `position: fixed` backdrop and traps focus across the whole window, which in the designer blankets the agent panel and locks the user out (they can't even ask the agent to remove it). Default dialogs to `modalType="non-modal"` **and** pass `mountNode`, or use an in-page absolutely-positioned panel. The page root must establish a containing block (`position: relative` + `contain: layout`) so even a fixed-position overlay is clipped to the page. Never size overlays to the viewport. See **Special Patterns > Dialogs and Overlays**.
+18. **Never nest a `<Dialog>` inside another `<Dialog>`**: Stacked modal scrims and nested focus traps make dialogs impossible to dismiss reliably. Render sibling dialogs as separate top-level surfaces switched by state, never one `<Dialog>` as a child of another's JSX.
+19. **All hooks above every early return — no conditional hook calls**: Detail/record pages crash with **minified React error #310** ("rendered more/fewer hooks than the previous render") on the *first* open of a record, then work on the second click. Cause: a hook — usually a `useMemo` deriving chart points or display rows from loaded data — sits *below* a loading/empty early return (`if (data.loading) return <Spinner/>`). On the first render data is still loading, the component early-returns and never reaches that `useMemo` (fewer hooks); when data arrives it renders past the return and calls the extra hook → the hook count differs between renders → #310. The "works the second time" intermittency (the cached render skips the loading branch) is the signature of this bug. **Fix:** place every `useMemo`/`useState`/`useEffect`/`useCallback` **above all early returns**, and make derived memos tolerate not-yet-loaded data (read from an always-initialized value, e.g. `data.rows ?? []`). Early returns are fine — they just must come *after* the last hook call. This is the React rules of hooks: never call a hook below a conditional `return`.
 
 ---
 
@@ -90,7 +94,24 @@ export default GeneratedComponent;
 - Use relative units (%, rem, em); avoid fixed widths
 - Root container is flex column; use flex properties to fill space
 - `boxSizing: border-box`; images: `max-width: 100%, height: auto`
-- NEVER use `100vh`/`100vw`
+- NEVER use `100vh`/`100vw` — the page is hosted inside the designer, not the full window; viewport units (and `position: fixed` overlays) size to the whole designer and bleed over the agent panel
+- **Media queries go INSIDE the slot they modify** — never as a top-level
+  `makeStyles` key. Griffel compiles each top-level key as an independent
+  class, so a top-level `'@media (...)'` slot generates an unused class
+  (its overrides never apply) and also fails type-checking. Nest the query
+  in each slot and override only that slot's properties:
+```typescript
+const useStyles = makeStyles({
+  // CORRECT: @media nested inside the slot
+  grid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, 1fr)',
+    '@media (max-width: 768px)': { gridTemplateColumns: '1fr' },
+  },
+  // WRONG: @media as a top-level key reaching into other slots
+  // '@media (max-width: 768px)': { grid: { gridTemplateColumns: '1fr' } },
+});
+```
 
 ### Page Layout
 - Page-level functions (nav, search, filters) in header opposite title
@@ -150,7 +171,7 @@ Localization guidance has been moved to a separate reference that is loaded
 configured languages OR any non-English language. For English-only environments,
 skip this entirely.
 
-See: `${CLAUDE_PLUGIN_ROOT}/references/localization.md`
+See: `${PLUGIN_ROOT}/references/localization.md`
 
 
 ---
@@ -227,6 +248,54 @@ const [lng] = useState(toNumberOrDefault(pageInput?.data?.longitude, 0));
 ---
 
 ## Special Patterns
+
+### Dialogs and Overlays
+
+**Why this matters:** the generated page renders into the **same document as the genpage designer** — the preview is not a sandboxed iframe. Any Fluent component that renders through a portal (`Dialog`, `Popover`, `Menu`, `Tooltip`, `Combobox`/`Dropdown` listbox, `DatePicker`, `TimePicker`) defaults to portalling to `document.body`. In a normal app that's the page; in the designer that's the **whole tool**. A default `<Dialog>` (`modalType="modal"`) additionally paints a `position: fixed` backdrop and traps focus across the entire window. The result is the #1 reported genpage failure: a modal that **covers the designer and the coding-agent panel on the left, and can't be dismissed** — the user is locked out and can't even ask the agent to remove it.
+
+Three rules prevent it:
+
+1. **Thread a `mountNode` to every overlay** so the portal stays inside the page's own container.
+2. **Make the page root a containing block** (`position: relative` + `contain: layout`) so any `position: fixed` descendant is clipped to the page, never the designer.
+3. **Default dialogs to `modalType="non-modal"`** (no blocking scrim), or use an in-page panel. Never nest a `<Dialog>` inside another `<Dialog>`.
+
+```typescript
+const GeneratedComponent = (props: GeneratedComponentProps) => {
+    const [mountNode, setMountNode] = useState<HTMLElement | null>(null);
+    // Callback ref captures the container the instant it mounts (before paint), so
+    // mountNode is set before any user-opened dialog renders — no window where the
+    // portal falls back to the designer's document.body. (Prefer this over a useEffect,
+    // whose first-paint gap leaves mountNode null if a dialog opens immediately.)
+    const setContainer = useCallback((node: HTMLDivElement | null) => setMountNode(node), []);
+
+    const [open, setOpen] = useState(false);
+
+    return (
+        // contain: 'layout' makes this div the containing block for any fixed-position overlay
+        <div ref={setContainer} style={{ position: "relative", contain: "layout", height: "100%", overflow: "hidden" }}>
+            {/* ...page content... */}
+
+            {/* Sibling dialog at top level — NOT nested inside another Dialog */}
+            <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)} modalType="non-modal">
+                <DialogSurface mountNode={mountNode}>
+                    <DialogBody>
+                        <DialogTitle>Edit item</DialogTitle>
+                        {/* ...fields... */}
+                        <DialogActions>
+                            <Button appearance="secondary" onClick={() => setOpen(false)}>Cancel</Button>
+                            <Button appearance="primary" onClick={() => setOpen(false)}>Save</Button>
+                        </DialogActions>
+                    </DialogBody>
+                </DialogSurface>
+            </Dialog>
+        </div>
+    );
+};
+```
+
+- `mountNode` goes on **`DialogSurface`** (not `Dialog`). For `Popover`/`Menu`/`Tooltip` pass `mountNode` to the component; for `Combobox`/`Dropdown` use the same `mountNode`; for `DatePicker`/`TimePicker` the `mountNode` prop is already required (see sample 6).
+- If a dialog genuinely must block the page (rare), keep `modalType="modal"` **but still** pass `mountNode` and rely on the `contain: layout` root so the scrim is clipped to the page, not the designer.
+- **Multiple dialogs:** declare each as a separate top-level `<Dialog>` switched by its own state flag. Never render one `<Dialog>` inside another's JSX tree.
 
 ### Generative Page Navigation
 
@@ -320,6 +389,19 @@ import { webDarkTheme, webLightTheme } from "@fluentui/react-components";
 ```
 
 **Root div scrolling:** The inner `styles.root` div must have `height: "100%"` and `overflowY: "auto"` so the page content is scrollable. The genpage host provides a fixed-height container — if neither the outer nor inner div establishes a scroll context, content below the fold is unreachable.
+
+**Inherited text color does NOT follow the variable override.** `themeToVars` overrides CSS *variables*, but Fluent typography (`Text`, `Title`, `Body`, etc.) mostly **inherits** its `color` from the light-theme FluentProvider root — and inheritance passes the already-resolved value, so flipping `--colorNeutralForeground1` to white does not recolor inherited text (you get near-black text on a dark background, contrast ~1.07, effectively invisible). **Fix:** set `color: tokens.colorNeutralForeground1` on the page root (`styles.root`) so every descendant inherits the variable-resolved foreground. Raw `<button>` elements (e.g. custom "attention" rows) default to black `buttontext` and need an explicit `color` too. Status-color CSS vars (`--colorStatusDangerForeground1`, etc.) *do* resolve in inline styles via the `themeToVars` wrapper, so status tokens work fine.
+
+**Pages opened via `navigateTo` are separate documents — they don't inherit the dashboard's dark mode.** A detail/dialog page reached through `Xrm.Navigation.navigateTo({ pageType: "generative", ... })` mounts fresh with no theme context. Pass the flag through `data` (`data: { darkMode: isDarkMode }`) and, on the target, read it from `pageInput.data` (see **Generative Page Navigation > Receiving navigation state**) and wrap the component in its own `themeToVars` two-div. A thin outer wrapper component is cleanest when the target page has multiple early-returns.
+
+### Styling gotchas (Fluent + Griffel)
+
+Recurring CSS bugs that type-check and compile but render wrong. Check for these before finishing a page:
+
+1. **A bar/progress fill `<span>` with a `width`/`height` % but no `display` is invisible.** A `<span>` defaults to `display: inline`, which ignores width/height → a 0×0 box, so the colored fill never paints (only the track shows — looks like "the color got lost"). Symptom: computed `backgroundColor` is correct but `offsetWidth`/`offsetHeight` is `0`. Fix: add `display: "block"` (or `inline-block`) to the fill — or use a `<div>` for fills.
+2. **Concatenated `makeStyles` classes lose status/warning colors to a shorthand-vs-longhand collision.** ``className={`${base} ${warning}`}`` (plain template string, not `mergeClasses`) where `base` sets a shorthand `border:` / `backgroundColor: "transparent"` and `warning` sets the longhand `borderColor` / `backgroundColor` — Griffel's atomic output plus the shorthand-vs-longhand cascade lets the base win, so the amber bg/border/text silently fall back to neutral. Fix: apply the status colors **inline** (`style={{ backgroundColor: tokens.colorStatusWarningBackground1, borderColor: tokens.colorStatusWarningBorder1 }}` — inline wins) or use `mergeClasses` instead of string concatenation.
+3. **`tokens.fontFamilyNumeric` is Bahnschrift, not Segoe UI.** Using it for tabular numbers (counts, %, ranks, dates) renders those digits in Bahnschrift — visibly mismatched against Segoe UI everywhere else. Fix: use `tokens.fontFamilyBase` and keep `fontVariantNumeric: "tabular-nums"` for aligned digits.
+4. **Gradient hero with white text: `colorPalette*Background2/3` tokens are light tints, not dark.** A gradient built from e.g. `colorPalettePurpleBackground3` / `colorPaletteTealBackground2` with `color: colorNeutralForegroundOnBrand` (white) renders white-on-light → unreadable; those `Background2/3` palette tokens are pale. Fix: build the gradient from the dark, saturated `colorPalette*Foreground2` stops (e.g. `colorPalettePurpleForeground2`, `colorPaletteTealForeground2`), which are dark enough for white text to pass AA.
 
 ### Data Caching Across Navigations
 
@@ -431,6 +513,17 @@ select: ["subject", "_regardingobjectid_value"]
 const name = row["_regardingobjectid_value@OData.Community.Display.V1.FormattedValue"];
 ```
 
+13. **Setting a lookup on create/update — use `_<field>_value`, never `@odata.bind`** - To *write* a lookup via `createRow`/`updateRow`, set the FK key `_<field>_value` to a string of the form `/<entityLogicalNameSingular>(<guid>)` — singular logical name (e.g. `/account(<id>)`, `/systemuser(<id>)`). Clear it with `_<field>_value: null`. The writable row type in RuntimeTypes proves the shape — the FK column is typed as a template literal, e.g. `` _primarycontactid_value: `/contact(${string})` ``. **The trap:** the raw Dataverse Web API binds lookups with `"<PascalCaseNavProp>@odata.bind": "/<entitySetPlural>(<id>)"`. The DataAPI **silently ignores** any `@odata.bind` key (unknown property → dropped, no error) and creates the row **orphaned**, with the lookup null. Symptom: `createRow` resolves with no error, but the row isn't linked, so a child list filtered by that parent stays empty — looks like "the write didn't save." Don't mix the conventions: **DataAPI → `_field_value: "/logicalSingular(id)"`**; `@odata.bind` + `/setPlural(id)` is for raw Web API only.
+
+```typescript
+// WRONG — DataAPI silently drops @odata.bind → row created with null lookup (orphaned)
+await dataApi.createRow("task", { subject: "Call", "Regarding@odata.bind": "/accounts(<id>)" });
+
+// CORRECT — set the FK _value to "/logicalSingular(guid)"
+await dataApi.createRow("task", { subject: "Call", _regardingobjectid_value: `/account(${accountId})` });
+await dataApi.updateRow("task", id, { _regardingobjectid_value: null }); // clear it
+```
+
 ### DataGrid Requirements
 - Import `createTableColumn` from Fluent UI V9
 - Define all columns using `createTableColumn`
@@ -477,6 +570,14 @@ What you can rely on from RuntimeTypes:
 - `GeneratedComponentProps` — the top-level props (includes `dataApi`, `pageInput`)
 - `BaseUxAgentDataApi<TR, ER>` — the dataApi interface with `createRow`,
   `updateRow`, `deleteRow`, `retrieveRow`, `queryTable`, `getChoices`
+
+### Connector DataAPI (optional — only when the plan has Connector Bindings)
+
+When the plan's `## Connector Bindings` is non-empty, the page may call Power
+Platform connectors via `queryConnectorTable` (tabular) and
+`executeConnectorOperation` (REST). These are optional runtime methods — always
+presence-check before calling. See [connectors.md](./connectors.md) for the
+required patterns and the binding contract.
 
 ---
 
@@ -571,4 +672,28 @@ const useStyles = makeStyles({
 });
 const styles = useStyles();
 <div className={styles.container}>
+```
+
+### 4. Media Queries as Top-Level makeStyles Keys
+Each top-level `makeStyles` key is compiled to an independent class. A media
+query placed at the top level becomes a class literally named
+`@media (...)`, whose nested slot overrides are never applied to any element
+— the responsive behavior silently does nothing, and it fails type-checking
+(`'<prop>' does not exist in type 'string[]'` when a slot name collides with a
+CSS shorthand). Nest the query inside each slot instead.
+```typescript
+// Error: media query as a top-level key, reaching into other slots
+const useStyles = makeStyles({
+  grid: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)" },
+  "@media (max-width: 768px)": { grid: { gridTemplateColumns: "1fr" } }
+});
+
+// Fix: nest the media query inside the slot it modifies
+const useStyles = makeStyles({
+  grid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(3, 1fr)",
+    "@media (max-width: 768px)": { gridTemplateColumns: "1fr" }
+  }
+});
 ```

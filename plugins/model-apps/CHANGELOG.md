@@ -2,6 +2,70 @@
 
 All notable changes to the **model-apps** plugin.
 
+## [Unreleased] — 2.2.0
+
+Local-dev ergonomics, sample coverage, and an automated eval suite with
+real and synthetic fixtures. Builds on v2.1; no breaking changes.
+
+### Added
+- **Phase 0.5 — local-dev manifest.** Working dirs now get `package.json`
+  and `genpage.d.ts` so `npm install` + editor IntelliSense work after
+  generation. Versions in `references/supported-dependencies.md`.
+- **Eval suite runners.** `run-layer-1.js` (workflow assertions) and
+  `run-layer-2.js` (code assertions) emit TAP v13. `EVAL_GUIDE.md` covers
+  types, tiers, capture flow.
+- **10 fixtures** under `evals/.../fixtures/` (6 synthetic + 4 real
+  captures; all green under the tightened v2.2 spec).
+- `scripts/capture-fixture.js` — copies `/genpage` working dirs into
+  fixtures and runs both layers.
+- `samples/11-kanban-with-dnd.tsx` — native HTML5 drag-and-drop sample.
+- `samples/12-dialog-form-overlay.tsx` + **Dialogs and Overlays** guidance
+  (rules.md rules 16–18 and Special Patterns section, plus a troubleshooting
+  entry): confine portalled Fluent surfaces (`Dialog`, `Popover`, `Menu`,
+  `Tooltip`, `Combobox`/`Dropdown`) to the page via `mountNode` +
+  `contain: layout`, default dialogs to `modalType="non-modal"`, and never nest
+  dialogs — so a modal can't escape the preview and cover the designer /
+  coding-agent panel.
+- **Feature-flag gate for connectors (default OFF).** `feature-flags.json` at the
+  plugin root plus `scripts/lib/feature-flags.js` gate connector support so the
+  skill can ship ahead of its cross-repo dependencies (pac connector verbs, the
+  GenUX authoring control, and the maker/admin setting) reaching PROD. When OFF,
+  the planner skips connector discovery and records `No connector bindings.`, and
+  the connector scripts (`list-connections.js`, `create-connection-reference.js`)
+  fail closed with exit 3. Precedence: env `GENPAGE_ENABLE_CONNECTORS` overrides
+  the committed file; default is OFF (fail-closed). Flip the file to `true` once
+  the dependencies are GA.
+- **`genpage-connector-builder` agent — single owner of connector work.** Connector
+  discovery, connection-reference creation, the feature gate, and the
+  `## Connector Bindings` contract now live in one agent invoked from **both** the
+  create flow (planner) and the edit flow (edit-planner) — so edits can add/replace
+  connectors (previously only preserve/clear worked) and the gate can't drift across
+  markdown. Hardened per review: deploy (SKILL Phase 4.5) **re-probes** the flag and
+  treats an absent/malformed `## Connector Bindings` as no bindings; the page-builder
+  emits connector code only for an actual binding table; the `--connection-refs`
+  branch of `add-page-to-solution.js` is gated; scripts share `exitIfConnectorsDisabled()`;
+  and `feature-flags.js` gains `--list`, `describe()`, and config validation.
+
+### Changed
+- Spec tightening so workflow-logs are command-verbatim and `pageInput`
+  destructure is required even on mock pages (planner, page-builder,
+  SKILL.md Phase 6 + Phase 8).
+- 8 runner regex relaxations to accept functionally-equivalent agent
+  patterns (typed `(window as any).Xrm` aliases, `pac solution list`,
+  local enum mapping, etc.) — no rule loosening.
+
+### Fixed
+- **Synthetic fixtures + sample 11 now follow Rule 11 (queryTable returns
+  DataTable, not an array).** 7 files were iterating `result` directly
+  (`setTasks(result)`, `result.map(...)`) instead of `result.rows`,
+  producing `X.map is not a function` at runtime. Fixed in
+  `samples/11-kanban-with-dnd.tsx` and 6 fixture `.tsx` files.
+  New Layer 2 assertion catches this pattern going forward: any Dataverse
+  file calling `dataApi.queryTable` must access `.rows` somewhere.
+
+### Tests
+- 215 passing across `scripts/tests/` + `evals/.../tests/`.
+
 ## 2.1.0 — 2026-05-13
 
 Replaces the Dataverse MCP server + Python SDK fallback with Node.js Web API

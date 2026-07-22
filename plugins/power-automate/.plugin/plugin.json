@@ -1,0 +1,20 @@
+{
+  "name": "power-automate",
+  "version": "2.0.0",
+  "description": "Build, edit, run, and debug Power Automate cloud flows via the FlowAgent MCP server — connection lifecycle, surgical edits, copy across environments, run management, and validated expressions.",
+  "author": {
+    "name": "Microsoft",
+    "url": "https://www.microsoft.com"
+  },
+  "homepage": "https://github.com/microsoft/power-platform-skills/",
+  "repository": "https://github.com/microsoft/power-platform-skills/",
+  "license": "MIT",
+  "keywords": [
+    "power-automate",
+    "cloud-flows",
+    "flows",
+    "mcp",
+    "power-platform",
+    "flowagent"
+  ]
+}

@@ -125,7 +125,7 @@ Use HTML entity references for icons if needed: `&#x1F6E1;&#xFE0F;` (shield), `&
 Run the render script (it creates the output directory if needed):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/render-permissions-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
+node "${PLUGIN_ROOT}/scripts/render-permissions-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
 ```
 
 The render script refuses to overwrite existing files. Before calling it, check if the default output path (`<PROJECT_ROOT>/docs/permissions-plan.html`) already exists. If it does, choose a new descriptive filename based on context — e.g., `permissions-plan-support-tables.html`, `permissions-plan-apr-2026.html`. Pass the chosen name via `--output`.

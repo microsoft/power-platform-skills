@@ -11,7 +11,7 @@ allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Skill, Task
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Add Cloud Flow
 
@@ -76,6 +76,14 @@ Look for the `.powerpages-site` folder in the project root.
 
 **If not found**:
 
+<!-- gate: add-cloud-flow:1.3.deploy-first | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · add-cloud-flow:1.3.deploy-first):** `.powerpages-site` missing — cloud flow YAML lives inside it. Deploy first or stop.
+>
+> **Trigger:** Phase 1.3 found no `.powerpages-site` directory.
+> **Why we ask:** Cloud flow YAML written to a non-existent path will never deploy.
+> **Cancel leaves:** Nothing — no YAML files written.
+
 Use `AskUserQuestion`:
 
 | Question | Options |
@@ -100,7 +108,7 @@ Store these as the **already-registered flows** list. These flows already have m
 
 ### 1.6 Detect Frontend Framework
 
-Read `package.json` to detect the framework (React, Vue, Angular, Astro). Note the framework and its conventions for Phase 7. See `${CLAUDE_PLUGIN_ROOT}/references/framework-conventions.md` for the detection mapping.
+Read `package.json` to detect the framework (React, Vue, Angular, Astro). Note the framework and its conventions for Phase 7. See `${PLUGIN_ROOT}/references/framework-conventions.md` for the detection mapping.
 
 **Output**: Project root, site name, framework, available web roles, already-registered flows (with processid, name, and web roles)
 
@@ -115,7 +123,7 @@ Read `package.json` to detect the framework (React, Vue, Angular, Astro). Note t
 Run the list-cloud-flows script (reads environment from `pac auth who` internally):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/add-cloud-flow/scripts/list-cloud-flows.js"
+node "${PLUGIN_ROOT}/skills/add-cloud-flow/scripts/list-cloud-flows.js"
 ```
 
 This calls the **Power Automate Flow RP API** with the filter `properties/definitionSummary/triggers/any(t: t/kind eq 'powerpages')`. Results include:
@@ -190,6 +198,14 @@ Already registered (available for additional frontend integration):
   3. Support Ticket Handler — Already connected, can be wired into more pages
 ```
 
+<!-- gate: add-cloud-flow:3.1.select-flows | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · add-cloud-flow:3.1.select-flows):** Multi-select over discovered + already-registered flows. Drives the rest of Phases 4–7.
+>
+> **Trigger:** Phase 2 list-cloud-flows returned at least one flow.
+> **Why we ask:** Wrong flows get registered (new `.cloudflowconsumer.yml` files written) or wrong existing flows get re-wired into the frontend.
+> **Cancel leaves:** Nothing — no YAML or client code written yet.
+
 Use `AskUserQuestion`:
 
 | Question | Options |
@@ -217,6 +233,8 @@ For each selected flow, identify its scenario from the name and description:
 | **User self-service** | Profile update, request, leave application | Authenticated users only |
 | **Admin action** | Bulk processing, content approval, data export | Admins / specific roles only |
 | **Background / system** | Scheduled sync, enrichment | Not triggered by portal users directly |
+
+<!-- not-a-gate: per-flow scenario clarification — data-gathering for Phase 4 role assignment; no destructive action -->
 
 If a flow's scenario is unclear, use `AskUserQuestion` per flow:
 
@@ -325,12 +343,11 @@ Assemble the plan JSON (kept in memory — not written to disk). Include all sel
 ```
 
 For **`integration-only`** flows, `webRoles` should reflect the existing roles from the `.cloudflowconsumer.yml` (read-only — not being changed). The `rationale` should describe where the flow will be additionally integrated (e.g., "Wiring existing Contact Form flow into the support page").
-```
 
 ### 5.2 Render HTML Plan
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/render-cloudflow-plan.js" \
+node "${PLUGIN_ROOT}/scripts/render-cloudflow-plan.js" \
   --output "<PROJECT_ROOT>/docs/cloud-flow-plan.html" \
   --data-inline '<json>'
 ```
@@ -342,6 +359,14 @@ Open the rendered file in the default browser (`open` on macOS, `start` on Windo
 ### 5.3 Confirm with User
 
 Give a brief CLI summary: number of flows, scenarios, role count, any anonymous-role warnings.
+
+<!-- gate: add-cloud-flow:5.3.plan-approval | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · add-cloud-flow:5.3.plan-approval):** Final sign-off on the rendered HTML plan before any web role / `.cloudflowconsumer.yml` / client code is written.
+>
+> **Trigger:** Phase 5.2 rendered the HTML plan.
+> **Why we ask:** Wrong web role assignments committed (especially Anonymous Users on auth-protected flows); orphaned YAML files in `.powerpages-site/cloud-flow-consumer/`.
+> **Cancel leaves:** Nothing — no YAML or frontend changes yet.
 
 Use `AskUserQuestion`:
 
@@ -385,7 +410,7 @@ Repeat steps 6.3–6.4 for every **`new`** flow in the approved plan.
 ### 6.4 Run the Create Metadata Script
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/add-cloud-flow/scripts/create-cloud-flow-metadata.js" \
+node "${PLUGIN_ROOT}/skills/add-cloud-flow/scripts/create-cloud-flow-metadata.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --fileSlug "<url-safe-slug>" \
   --flowName "<flow-display-name>" \
@@ -564,7 +589,7 @@ If any check fails, fix the issue in the service file or UI before continuing.
 
 ### 8.2 Record Skill Usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Use `--skillName "AddCloudFlow"`.
 
@@ -583,11 +608,27 @@ Use `--skillName "AddCloudFlow"`.
 
 ### 8.4 Ask to Deploy
 
+<!-- gate: add-cloud-flow:8.4.deploy | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · add-cloud-flow:8.4.deploy):** Post-implementation deploy prompt — flows don't trigger until deployed.
+>
+> **Trigger:** All flow YAML + client integration in place.
+> **Why we ask:** Auto-deploy picks wrong env.
+> **Cancel leaves:** Nothing — artifacts stay on disk; no deploy fired.
+
 Use `AskUserQuestion`:
 
 | Question | Options |
 |----------|---------|
 | Everything is ready. Deploy the site to make the flows live? | Yes, deploy now (Recommended), No, I'll deploy later |
+
+<!-- gate: add-cloud-flow:8.4.test | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · add-cloud-flow:8.4.test):** Post-deploy validation prompt — invokes `/test-site` to confirm the flow trigger endpoint returns 202/200.
+>
+> **Trigger:** Deploy from the previous gate succeeded.
+> **Why we ask:** Skipping is harmless (manual test still possible); auto-invoking `/test-site` adds runtime and Playwright traffic.
+> **Cancel leaves:** Nothing — deploy has already completed.
 
 **If "Yes"**: Invoke `/deploy-site`. After it succeeds, use `AskUserQuestion`:
 

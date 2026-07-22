@@ -16,7 +16,7 @@ allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskU
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Scan Site
 
@@ -73,7 +73,7 @@ If missing, the site has not been deployed. Tell the user and recommend `/deploy
 Resolve to portalId:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/website.js" --websiteId "<WEBSITE_ID>"
+node "${PLUGIN_ROOT}/scripts/website.js" --websiteId "<WEBSITE_ID>"
 ```
 
 Capture `Id` (portalId), `Type`, `Name`, `WebsiteUrl`. If exit code `2` → sign-in required (`pac auth create` or `az login`). If `null` → site not found in this environment. Stop in either case.
@@ -83,7 +83,7 @@ Capture `Id` (portalId), `Type`, `Name`, `WebsiteUrl`. If exit code `2` → sign
 ## 2. Check scan state
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/poll-deep-scan.js" --portalId "<PORTAL_ID>" --once
+node "${PLUGIN_ROOT}/skills/scan-site/scripts/poll-deep-scan.js" --portalId "<PORTAL_ID>" --once
 ```
 
 `--once` does a single status check, exits 0, and prints:
@@ -94,7 +94,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/poll-deep-scan.js" --portal
 Then call `get-latest-report.js` to know whether a completed report exists:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/get-latest-report.js" --portalId "<PORTAL_ID>"
+node "${PLUGIN_ROOT}/skills/scan-site/scripts/get-latest-report.js" --portalId "<PORTAL_ID>"
 ```
 
 `{ "status": "ok" }` means a report is available. `{ "status": "empty" }` means no completed scan exists.
@@ -109,7 +109,15 @@ MUST use plain language only. Never use words like CSP, CORS, OWASP, hardening, 
 
 ### Default approach
 
-Analyze the site's current state and **recommend the single most relevant action**. Present the recommendation with a plain-language explanation of why. The user can accept or choose differently.
+<!-- gate: scan-site:3.action-choice | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · scan-site:3.action-choice):** Recommend an action based on the site's scan state (running, idle, has report, no report), then ask the user to accept or choose differently. Starting a new scan triggers a multi-minute backend run; using an existing report is free.
+>
+> **Trigger:** Phase 3 entry (interactive mode only — review mode bypasses to step 4).
+> **Why we ask:** Auto-starting a new scan wastes minutes if a recent report already answers the question; auto-using a stale report misses recent findings.
+> **Cancel leaves:** Nothing — no scan triggered, no report consumed.
+
+Analyze the site's current state and **recommend the single most relevant action** via `AskUserQuestion`:
 
 - Scan running, no completed report → recommend waiting for the running scan to finish.
 - Scan running, report exists → recommend showing the latest results while the new scan continues.
@@ -119,6 +127,8 @@ Analyze the site's current state and **recommend the single most relevant action
 If the site's state does not warrant a specific recommendation, do not force one — ask what the user wants to do.
 
 ### Option rules
+
+<!-- not-a-gate: meta-documentation describing how to structure `AskUserQuestion` options in this skill — not a literal call site. The actual prompt ("use existing report / run a fresh scan") fires dynamically in §3 Default approach. See approval-gates.md §6.24a + §6.27. -->
 
 When presenting options via `AskUserQuestion`:
 - Keep `label` to 1–5 words. Include `description` on every option.
@@ -138,7 +148,7 @@ In interactive mode, skip if the user chose to view the latest results.
 Start the scan:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/start-deep-scan.js" --portalId "<PORTAL_ID>"
+node "${PLUGIN_ROOT}/skills/scan-site/scripts/start-deep-scan.js" --portalId "<PORTAL_ID>"
 ```
 
 If stdout is `{ "status": "already-running" }`, skip ahead to polling — there is already a scan in progress.
@@ -146,7 +156,7 @@ If stdout is `{ "status": "already-running" }`, skip ahead to polling — there 
 Then poll for completion:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/poll-deep-scan.js" --portalId "<PORTAL_ID>"
+node "${PLUGIN_ROOT}/skills/scan-site/scripts/poll-deep-scan.js" --portalId "<PORTAL_ID>"
 ```
 
 Run polling with `run_in_background: true` so the user can keep working. The script exits when the scan finishes or the timeout passes (default 20 minutes). If it times out, fetch whatever report is available and note the timeout in the summary.
@@ -158,7 +168,7 @@ Run polling with `run_in_background: true` so the user can keep working. The scr
 ### 5.1 Fetch and transform the report
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/transform-report.js" --portalId "<PORTAL_ID>"
+node "${PLUGIN_ROOT}/skills/scan-site/scripts/transform-report.js" --portalId "<PORTAL_ID>"
 ```
 
 Parse the stdout JSON. The status field can be:
@@ -180,7 +190,7 @@ Skip in **review mode**.
 Render uses the same shared template as the consolidated security review. Build a single-section review-data payload, then render:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/build-review-data.js" \
+node "${PLUGIN_ROOT}/scripts/build-review-data.js" \
   --reportName "Site Scan" \
   --inputDir "<TEMP_DIR>" \
   --siteName "<SITE_NAME>" \
@@ -189,7 +199,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/build-review-data.js" \
   --summary "<SUMMARY_TEXT>" \
   --output "<TEMP_DIR>/data.json"
 
-node "${CLAUDE_PLUGIN_ROOT}/scripts/render-review.js" \
+node "${PLUGIN_ROOT}/scripts/render-review.js" \
   --data "<TEMP_DIR>/data.json" \
   --output "<PROJECT_ROOT>/docs/site-scan-<YYYY-MM-DD-HHMMSS>.html"
 ```
@@ -202,7 +212,7 @@ Plain-language summary in the chat: total findings, count by severity, and what 
 
 ### 5.5 Record skill usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 >
 > Use `--skillName "ScanSite"`.
 
