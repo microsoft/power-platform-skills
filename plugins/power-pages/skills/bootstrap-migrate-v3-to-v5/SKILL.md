@@ -13,6 +13,8 @@ allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Task, TaskC
 model: opus
 ---
 
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
 > **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Migrate a Traditional Power Pages Site from Bootstrap 3 to Bootstrap 5
