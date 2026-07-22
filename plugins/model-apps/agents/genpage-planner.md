@@ -140,8 +140,18 @@ when reporting the environment to the user.
    - If entities: ask which entities and fields (use logical names — singular, lowercase)
    - If mock data: confirm you'll generate realistic sample data
 
-4. **"Any specific requirements?"** — styling, features (search, filtering, sorting),
-   accessibility, responsive behavior, interactions
+4. **"Any specific requirements?"** — styling or design reference (screenshot/mockup,
+   existing website/brand, or text description), features (search, filtering, sorting),
+   accessibility, responsive behavior, interactions.
+   - If visual direction is provided, capture it as a hard requirement. Extract concrete
+     layout/hierarchy, palette, typography, density/spacing, shape, borders/shadows,
+     imagery/iconography, and interaction states instead of summarizing it as
+     "custom styling."
+   - If the user supplies only a website reference and it cannot be inspected with
+     available tools, ask for a screenshot or concrete style details. Do not silently
+     fall back to MDA styling.
+   - Do not ask for styling when the original request already provides enough visual
+     direction.
 
 **Skip logic:**
 - If the user provided a description with the `/genpage` command, skip question 2.
@@ -368,7 +378,11 @@ Enter plan mode (`EnterPlanMode`) and present:
 - [list detected languages, or "English only — no localization needed"]
 
 ### Design
-- [styling preferences, features, accessibility notes from requirements]
+- Design source: [screenshot/mockup, website/brand reference, text description,
+  existing page, or "none — use Fluent defaults"]
+- Fidelity requirements: [concrete layout, palette, typography, density, shape,
+  imagery, and interaction details that must survive code generation]
+- [features and accessibility notes from requirements]
 ```
 
 Then call `ExitPlanMode` to request user approval.

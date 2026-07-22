@@ -326,12 +326,17 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
    `${PLUGIN_ROOT}/references/localization.md`
 6. Read `genpage-plan.md` (already in working directory) and `RuntimeTypes.ts`
    if Data mode is dataverse
-7. Write the `.tsx` file to `<working-dir>/<filename>.tsx` following all rules
-8. After writing, Grep every named import from `@fluentui/react-icons` against
+7. Treat `## Design Preferences` as acceptance criteria. User screenshots, mockups,
+   website/brand references, and explicit text styling override default MDA visuals.
+   Preserve their concrete hierarchy, layout, palette, typography, density, shape,
+   imagery, and interaction states; use Fluent components for behavior/accessibility,
+   not as a reason to reset the design to stock MDA styling.
+8. Write the `.tsx` file to `<working-dir>/<filename>.tsx` following all rules
+9. After writing, Grep every named import from `@fluentui/react-icons` against
    `${PLUGIN_ROOT}/references/verified-icons.txt` (one Grep per name).
    Rewrite any unverified names with the closest verified alternative; do not
    load the full icon list into context
-9. Proceed to Phase 6
+10. Proceed to Phase 6
 
 This saves ~5-15s of Task overhead and ~3K tokens that would otherwise be
 duplicated in a subagent context.

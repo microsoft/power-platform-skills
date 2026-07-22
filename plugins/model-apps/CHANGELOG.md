@@ -7,6 +7,12 @@ All notable changes to the **model-apps** plugin.
 Local-dev ergonomics, sample coverage, and an automated eval suite with
 real and synthetic fixtures. Builds on v2.1; no breaking changes.
 
+### Changed
+- `/genpage` now treats user-provided screenshots, website/brand references, and
+  text styling descriptions as design acceptance criteria across create and edit
+  flows. Fluent UI remains the accessible component foundation, but no longer
+  implies resetting explicit visual direction to default model-driven app styling.
+
 ### Added
 - **Phase 0.5 — local-dev manifest.** Working dirs now get `package.json`
   and `genpage.d.ts` so `npm install` + editor IntelliSense work after

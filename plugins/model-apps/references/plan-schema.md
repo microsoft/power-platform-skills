@@ -129,9 +129,14 @@ connector bindings." sentinel).]
 - Connection references: [comma-separated connectionreference logical names to include, or "none"]
 
 ## Design Preferences
-- Styling: [user's styling preferences — colors, theme, visual aesthetic]
+- Design source: [screenshot/mockup, website/brand reference, text description,
+  existing page, or "none — use Fluent defaults"]
+- Styling: [concrete visual requirements — layout/hierarchy, palette, typography,
+  density/spacing, radii, borders/shadows, imagery/iconography, and interaction states]
 - Features: [specific features mentioned — search, filtering, sorting, navigation, etc.]
 - Accessibility: [any specific accessibility requirements beyond WCAG AA defaults]
+- Fidelity notes: [which details are essential to match; any smallest-necessary
+  deviations required for accessibility, responsiveness, or genpage host safety]
 
 ## Relevant Samples
 | Page | Sample | Reason |

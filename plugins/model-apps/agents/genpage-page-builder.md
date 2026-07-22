@@ -60,7 +60,8 @@ Locate and extract:
 
 - The **Per-Page Specification** subsection for your assigned page (purpose, entities,
   features, components, layout, data binding, interactions)
-- The **Design Preferences** section (styling, features, accessibility notes)
+- The **Design Preferences** section (design source, concrete styling and fidelity
+  requirements, features, accessibility notes)
 - The **Environment** section (languages for localization)
 - The **Relevant Samples** table (which sample to read for your page)
 
@@ -159,6 +160,18 @@ Mark it as in_progress immediately.
 Generate a complete, production-ready TypeScript file following ALL rules from
 rules.md:
 
+### Design Fidelity
+
+Treat the plan's Design Preferences as acceptance criteria. User-provided screenshots,
+mockups, website/brand references, and text styling descriptions override default MDA
+visual conventions. Reproduce the specified hierarchy, layout, palette, typography,
+density, radii, borders, shadows, imagery, and interaction states. Use Fluent UI V9
+for supported components and accessible behavior, but style component slots with
+`makeStyles` (including explicit CSS values or custom properties when required) rather
+than normalizing the result to stock Fluent/MDA cards, command bars, form sections,
+spacing, or blue accents. Only accessibility, responsiveness, and genpage host-safety
+rules may require deviations; keep those deviations as small as possible.
+
 ### Component Structure
 
 **Data mode = `dataverse`** — import types from RuntimeTypes:
@@ -231,7 +244,8 @@ export default GeneratedComponent;
   - TimePicker from `@fluentui/react-timepicker-compat`
 - **Single-file architecture** — all components, utilities, styles in one `.tsx` file
 - **No external libraries** — only React, Fluent UI V9, approved Fluent icons, D3.js for charts
-- **makeStyles with tokens** — no inline styles for static values
+- **makeStyles** — no inline styles for static values. Use tokens for unspecified
+  defaults; preserve explicit design values with CSS literals/custom properties.
   ```typescript
   const useStyles = makeStyles({
     container: {
