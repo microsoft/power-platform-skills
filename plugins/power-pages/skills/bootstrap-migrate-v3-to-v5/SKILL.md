@@ -1,7 +1,7 @@
 ---
-name: migrate-to-v5
+name: bootstrap-migrate-v3-to-v5
 description: >-
-  Migrates a classic Power Pages site from Bootstrap 3 to Bootstrap 5. Downloads the
+  Migrates a traditional Power Pages site from Bootstrap 3 to Bootstrap 5. Downloads the
   site, runs the pac pages bootstrap-migrate engine, reviews the change report, applies
   AI-assisted fixes for the residual hierarchy/CSS changes the engine only flags, uploads
   the migrated site (which auto-enables the Bootstrap 5 runtime flag), verifies the flag,
@@ -15,9 +15,9 @@ model: opus
 
 > **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
-# Migrate a Classic Power Pages Site from Bootstrap 3 to Bootstrap 5
+# Migrate a Traditional Power Pages Site from Bootstrap 3 to Bootstrap 5
 
-Guide the user through migrating a **classic / native** Power Pages site from Bootstrap 3
+Guide the user through migrating a **traditional / native** Power Pages site from Bootstrap 3
 to Bootstrap 5. Follow a systematic approach: verify tooling, acquire and back up the site,
 assess scope, run the `pac pages bootstrap-migrate` engine, review the change report, apply
 the residual fixes the engine can only flag, upload (which auto-enables the runtime flag),
@@ -25,7 +25,7 @@ verify, and validate.
 
 ## Core Principles
 
-- **Classic sites only**: This skill targets classic Power Pages sites (Liquid web templates,
+- **Traditional sites only**: This skill targets traditional Power Pages sites (Liquid web templates,
   `*.webtemplate.source.html`, `*.html/.aspx/.ascx`, `*.css`, `sitesetting.yml`). It does **NOT**
   apply to code sites (React/Vue/Angular/Astro) — they are never Bootstrap-3-based. If the target
   is a code site, stop and tell the user this skill doesn't apply.
@@ -92,14 +92,14 @@ and `upload` confirmed available, `PAC_LOG` path captured.
 
 ## Phase 2: Acquire the Site & Back Up
 
-**Goal**: Get a local copy of the classic site to migrate, and establish a restore point.
+**Goal**: Get a local copy of the traditional site to migrate, and establish a restore point.
 
 **Actions**:
 
 ### 2.1 Locate or download the site
 
 - **If the user provided a local site folder path** (or `$ARGUMENTS` names one): verify it exists
-  and looks like a downloaded classic site (contains `website.yml` and `sitesetting.yml`). Use it
+  and looks like a downloaded traditional site (contains `website.yml` and `sitesetting.yml`). Use it
   as `SITE_FOLDER`.
 - **Otherwise**: list available websites and download the chosen one.
 
@@ -115,11 +115,11 @@ and `upload` confirmed available, `PAC_LOG` path captured.
 
   Use the downloaded directory as `SITE_FOLDER`.
 
-> Confirm this is a **classic** site, not a code site. A code-site project has `powerpages.config.json`
-> and a framework `package.json`; a classic site has `website.yml`, `sitesetting.yml`, and
+> Confirm this is a **traditional** site, not a code site. A code-site project has `powerpages.config.json`
+> and a framework `package.json`; a traditional site has `website.yml`, `sitesetting.yml`, and
 > `*.webtemplate.source.html` files. If it's a code site, stop — this skill does not apply.
 
-### 2.3 Confirm the site is ACTIVATED (not just a website record)
+### 2.2 Confirm the site is ACTIVATED (not just a website record)
 
 `pac pages list` shows **website records** (`adx_website`). A website record can exist with **no
 provisioned/active Power Pages site (portal)** behind it — created by data import/clone, deactivated,
@@ -127,23 +127,36 @@ or orphaned. The Phase 7 flag flip (`SetPortalBootstrapV5Enabled`) targets the *
 website record, so **if no active portal exists the flip silently skips and the live site won't
 render** — and you won't find this out until after uploading unless you check now.
 
-Resolve the site URL from `websitebinding.yml` (`adx_sitename`) and probe it:
+Resolve the site URL from `websitebinding.yml` (`adx_sitename`) and probe the **final** status code
+(`-L` follows redirects so a sign-in / canonical-host redirect resolves to its real code):
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}" "https://<adx_sitename>/"
+curl -sL -o /dev/null -w "%{http_code}" "https://<adx_sitename>/"
 ```
 
-- **`200`** → active portal; proceed.
-- **`5xx` with a Dataverse-connection null-ref** (`Object reference not set …` /
-  `CrmOnlineOrganizationService.ToOrganizationService` on the error page) or a persistent `404/503`
-  → **the site is most likely NOT activated**. This is the same condition that makes the Phase 7
-  flag flip log `no portal found for website <id> via Power Pages API`.
+- **`2xx` or a redirect that resolves to `2xx`/`3xx`** → active portal; proceed. A private or
+  protected site legitimately redirects to sign-in or a canonical host, so a resolved `3xx` is
+  **active**, not a failure.
+- **`4xx`/`5xx`** → inconclusive from the status alone. A private site can return a non-`200` without
+  being unactivated, so **do not conclude "not activated" from the code alone** — fetch the error
+  body (or open the URL in a browser) to look for the unactivated signature:
 
-If the site is not active, **stop and tell the user to activate/provision it first** (Power Pages
-admin center, or the `/power-pages:activate-site` skill). Migrating content into an unactivated
+  ```bash
+  curl -sL "https://<adx_sitename>/" | head -c 4000
+  ```
+
+  If the body shows a Dataverse-connection null-ref (`Object reference not set …` /
+  `CrmOnlineOrganizationService.ToOrganizationService`), or the URL fails to render a portal page in
+  the browser, **the site is most likely NOT activated**. This is the same condition that makes the
+  Phase 7 flag flip log `no portal found for website <id> via Power Pages API`. A `4xx`/`5xx` **without**
+  that signature is more likely an auth wall or transient error on an active site — treat as active and
+  note it for the user rather than blocking.
+
+If the site is confirmed not active, **stop and tell the user to activate/provision it first** (Power
+Pages admin center, or the `/power-pages:activate-site` skill). Migrating content into an unactivated
 website still uploads, but the runtime flag can't flip and the site can't be verified.
 
-### 2.2 Snapshot the source
+### 2.3 Snapshot the source
 
 Create a restore point before any migration:
 
@@ -155,7 +168,7 @@ git init -q && git add -A && git commit -q -m "Pre-migration snapshot (Bootstrap
 If the folder is already a git repo, just commit any pending changes so the pre-migration state
 is captured.
 
-**Output**: `SITE_FOLDER` resolved, confirmed classic, source snapshot committed.
+**Output**: `SITE_FOLDER` resolved, confirmed traditional, source snapshot committed.
 
 ---
 
@@ -289,12 +302,12 @@ Bootstrap 5 runtime."). On consent:
 pac pages upload --path "<MIGRATED_FOLDER>"
 ```
 
-Leave `--modelVersion` at its default (`Standard`) for a classic site. `pac pages upload` uploads the
+Leave `--modelVersion` at its default (`Standard`) for a traditional site. `pac pages upload` uploads the
 content **and** auto-flips the server-side Bootstrap 5 flag via its post-processor (triggered by the
 `Site/BootstrapV5Enabled=true` setting).
 
 > Use `pac pages upload` — **not** `upload-code-site` (that is the code-site path and will corrupt a
-> classic site).
+> traditional site).
 
 ### 7.3 Verify the flag flip (mandatory)
 
@@ -313,7 +326,7 @@ Three possible outcomes:
 | Log line | Meaning | Action |
 |----------|---------|--------|
 | `Set … BootstrapV5Enabled` / success (`INF`) | Flip **applied** | ✅ Proceed; optionally confirm on the live site. |
-| `Skipping SetPortalBootstrapV5Enabled: no portal found for website <id> via Power Pages API` (`WRN`) | **No active portal** — flip never attempted | ❌ The site isn't activated. Activate it (see Phase 2.3 / `/power-pages:activate-site`), then re-run `pac pages upload`. |
+| `Skipping SetPortalBootstrapV5Enabled: no portal found for website <id> via Power Pages API` (`WRN`) | **No active portal** — flip never attempted | ❌ The site isn't activated. Activate it (see Phase 2.2 / `/power-pages:activate-site`), then re-run `pac pages upload`. |
 | `ERR`/exception from the post-processor | Flip **attempted but failed** (auth/HTTP) | ❌ Re-confirm 7.1 manifest + permissions, then re-run upload. |
 
 Then **corroborate on the live site** (only meaningful if the log shows *applied*): re-render a known
@@ -339,7 +352,7 @@ restart.
 2. **Before/after visual check** — spot-check the highest-traffic pages (home, navbar, any
    panels/cards, forms, pagination) for layout regressions introduced by the migration.
 3. **Record skill usage** — follow `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
-   with `--skillName "MigrateToV5"`.
+   with `--skillName "BootstrapMigrateV3ToV5"`.
 4. **Summary** — present:
    - Files changed per category (auto-applied vs assisted vs flagged-for-manual).
    - Residual items that still need human attention.
@@ -365,7 +378,7 @@ restart.
 ### Key Decision Points (Wait for User)
 
 1. Phase 1: If not authenticated, get environment URL; confirm/switch target environment.
-2. Phase 2: If multiple sites, which website to download; confirm classic (not code) site.
+2. Phase 2: If multiple sites, which website to download; confirm traditional (not code) site.
 3. Phase 4: Consent to run the migration engine.
 4. Phase 6: Per-category consent before applying residual fixes.
 5. Phase 7: Final consent before uploading (outward-facing).
@@ -377,7 +390,7 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
 | Verify prerequisites | Verifying prerequisites | PAC CLI, auth, environment, and command availability (`bootstrap-migrate`, `upload`) |
-| Acquire site and back up | Acquiring site | Download/locate the classic site; snapshot the source |
+| Acquire site and back up | Acquiring site | Download/locate the traditional site; snapshot the source |
 | Pre-migration assessment | Assessing scope | Inventory Bootstrap-3 usage; flag custom CSS / Liquid risk |
 | Run migration engine | Running migration | `pac pages bootstrap-migrate` → `<folder>V5` |
 | Review change report | Reviewing report | Parse `logs.txt`; group auto-applied vs hierarchy/manual |

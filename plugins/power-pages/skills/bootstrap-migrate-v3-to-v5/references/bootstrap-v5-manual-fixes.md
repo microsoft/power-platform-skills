@@ -3,7 +3,7 @@
 `pac pages bootstrap-migrate` auto-applies the well-known class renames but can only **flag**
 structural ("hierarchy") changes and changes that require new CSS. Those appear in `logs.txt`
 as `Need hierarchy change for …` lines or as "replaced with styles" notes. This reference is the
-recipe book the `/migrate-to-v5` skill uses in **Phase 6** to apply (or flag) each one.
+recipe book the `/bootstrap-migrate-v3-to-v5` skill uses in **Phase 6** to apply (or flag) each one.
 
 **Apply with per-category consent. Never blindly rewrite Liquid-entangled markup — flag it instead.**
 After each edit, re-check the affected lines against the file's `<file>-diff.json` so you don't
