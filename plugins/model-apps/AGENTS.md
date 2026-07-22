@@ -312,8 +312,17 @@ edit produces a byte-identical `lib/*.js`, so the bundle only needs rebuilding w
 changes.
 
 **Vendored-SDK contract invariants (regression net).** When you bump the SDK and re-vendor, the
-skill relies on behaviors that must survive. `scripts/tests/vendor-sdk-smoke.test.js` locks them
-(the `CONTRACT:` tests) — run them against every rebuilt bundle:
+skill relies on behaviors that must survive. Two test files lock them — run both against every
+rebuilt bundle:
+
+`scripts/tests/sdk-surface-contract.test.js` — the **method-presence** guard. Asserts every SDK
+method the engines call (`SKILL_SDK_SURFACE`, kept in sync with the `provision.*` / `sdk.*` call
+sites by a source-scan test) is a function on the real vendored bundle. A re-vendored SDK that
+**renames or removes** a method the skill uses fails HERE, listing the exact names — instead of
+silently at build time (the mock-based `sdk-build`/`sdk-teardown` suites can't catch that, since the
+mock mimics the old interface). Update `SKILL_SDK_SURFACE` **and** migrate the call sites together.
+
+`scripts/tests/vendor-sdk-smoke.test.js` — the **behavior/return-shape** `CONTRACT:` tests:
 - **Raw OData filters pass through, single-encoded** — the skill builds raw `$filter` strings
   (quoted string literals via `lib/odata.js`, and **unquoted GUID literals** like `objectid eq <guid>`);
   a query builder may transport-encode them but must not double-encode.
@@ -325,6 +334,8 @@ skill relies on behaviors that must survive. `scripts/tests/vendor-sdk-smoke.tes
 - **`deleteAppCascade` returns a structured `{ success, deleted, failures }` result** — teardown
   reads `failures` to report orphaned sitemap/genpage rows instead of claiming a clean delete; the
   bundle must keep returning the result (not void) after a re-vendor.
+- **`seedRecordGraph` returns `{ createdIds: { <entityLogical>: [ids] } }`** — the sample-data phase
+  reads `createdIds[<entity>]` to bind children; the bundle must keep that shape (not a bare id array).
 
 **Live end-to-end (app-builder — writes to a real Dataverse env; optional).** All build/verify/
 teardown scripts are **dry-run by default**; add `--apply` to write.

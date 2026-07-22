@@ -291,3 +291,42 @@ test('CONTRACT: vendored deleteAppCascade returns a structured { success, delete
   assert.ok(Array.isArray(result.failures) && result.failures.some((f) => f.type === 'sitemap'), 'the orphaned sitemap cleanup failure is surfaced in failures[]');
 });
 
+test('CONTRACT: vendored seedRecordGraph returns { createdIds: { <entity>: [ids] } } (the sample-data phase reads createdIds to bind children)', async () => {
+  // The build's sample-data phase (entity-provision.js) calls
+  //   sdk.seedRecordGraph([{ entityLogical, primaryAttribute, records:[{ body, binds }] }],
+  //                       { entitySetFor, createdIds })
+  // and destructures `createdIds`, then reads createdIds[<entityLogical>] to bind children — so
+  // the bundle MUST keep returning that exact shape (not a bare id array) across a re-vendor.
+  // Stub CreateMultiple ({ Ids:[...] }) + an empty resolve-by-name GET; entitySetFor supplies the
+  // set name so no EntityDefinitions lookup is needed.
+  const client = {
+    get: async (url) => {
+      // The SDK resolves the collection URL from EntityDefinitions when no set name is cached.
+      const meta = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(url);
+      if (meta) return { status: 200, headers: {}, body: { EntitySetName: `${meta[1]}s`, LogicalName: meta[1] } };
+      return { status: 200, headers: {}, body: { value: [] } };
+    },
+    post: async (url, body) => {
+      if (/CreateMultiple/.test(url)) {
+        const n = ((body && body.Targets) || []).length;
+        return { status: 200, headers: {}, body: { Ids: Array.from({ length: n }, (_, i) => `wid-${i}`) } };
+      }
+      return { status: 204, headers: {}, body: {} };
+    },
+    patch: async () => ({ status: 204, headers: {}, body: {} }),
+    delete: async () => ({ status: 204, headers: {}, body: {} }),
+    put: async () => ({ status: 204, headers: {}, body: {} }),
+  };
+  const sdk = sdkWith(client);
+  const group = {
+    entityLogical: 'new_widget',
+    primaryAttribute: 'new_name',
+    records: [{ body: { new_name: 'A' }, binds: [] }, { body: { new_name: 'B' }, binds: [] }],
+  };
+  const result = await sdk.seedRecordGraph([group], { createdIds: {} });
+  assert.ok(result && typeof result === 'object', 'seedRecordGraph returns a structured result');
+  assert.ok(result.createdIds && typeof result.createdIds === 'object', 'result carries a createdIds map keyed by entity logical name');
+  assert.deepStrictEqual(result.createdIds.new_widget, ['wid-0', 'wid-1'], 'createdIds[<entity>] lists the new row ids in order');
+});
+
+
