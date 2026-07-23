@@ -30279,7 +30279,7 @@ var FlowClient = class _FlowClient {
     const headers = {
       Authorization: `Bearer ${token}`,
       Accept: "application/json",
-      "User-Agent": "power-automate-plugin/2.0.0",
+      "User-Agent": "power-automate-plugin/2.2.0",
       ...extraHeaders
     };
     if (body !== void 0) {
