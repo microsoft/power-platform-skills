@@ -5,8 +5,10 @@ const { fetchCatalog, DEFAULT_OWNER, DEFAULT_REPO, DEFAULT_REF, DEFAULT_CATALOG_
 const { parseTemplateRepoArgs, runBestEffortJsonCli } = require('./lib/template-cli-args');
 
 // Accepted argv shape:
-//   --owner microsoft --repo power-pages-samples --ref main
+//   --owner microsoft --repo power-pages-samples --ref latest-release
 //   --catalogPath templates/manifest.json --cacheRoot /tmp/powerpages-templates
+// `--ref` defaults to `latest-release`, which resolves GitHub's latest Release
+// tag and then pins that tag to an immutable commit SHA for the run.
 // All flags are optional; unknown flags are ignored so future callers can add
 // wrapper-only options without breaking the best-effort catalog fetch.
 function parseArgs(argv) {

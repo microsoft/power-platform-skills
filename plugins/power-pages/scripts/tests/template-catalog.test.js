@@ -11,6 +11,7 @@ const { PassThrough } = require('stream');
 const {
   buildRawUrl,
   buildCommitUrl,
+  buildLatestReleaseUrl,
   cacheDirForSha,
   artifactCachePath,
   requestJson,
@@ -54,6 +55,10 @@ test('builds raw and commit URLs from repo, ref and template-relative paths', ()
     'https://api.github.com/repos/microsoft/power-pages-samples/commits/release%2Fv1'
   );
   assert.equal(
+    buildLatestReleaseUrl({ owner: 'microsoft', repo: 'power-pages-samples' }),
+    'https://api.github.com/repos/microsoft/power-pages-samples/releases/latest'
+  );
+  assert.equal(
     buildRawUrl({ owner: 'microsoft', repo: 'power-pages-samples', sha: SHA, filePath: 'templates/spa/hr portal/manifest.json' }),
     `https://raw.githubusercontent.com/microsoft/power-pages-samples/${SHA}/templates/spa/hr%20portal/manifest.json`
   );
@@ -67,16 +72,19 @@ test('rejects non-commit refs where a pinned sha is required', () => {
   );
 });
 
-test('fetchCatalog resolves a ref to a sha, fetches the catalog at that sha, and creates a sha cache dir', async (t) => {
+test('fetchCatalog resolves the latest release to a sha, fetches the catalog at that sha, and creates a sha cache dir', async (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const seen = [];
   const catalog = { manifestVersion: '1.0', templates: [VALID_TEMPLATE] };
 
-  const result = await fetchCatalog({ owner: 'o', repo: 'r', ref: 'main', cacheRoot: dir }, {
+  const result = await fetchCatalog({ owner: 'o', repo: 'r', cacheRoot: dir }, {
     requestJson: async (url) => {
       seen.push(url);
-      if (url === 'https://api.github.com/repos/o/r/commits/main') return { sha: SHA };
+      if (url === 'https://api.github.com/repos/o/r/releases/latest') {
+        return { tag_name: 'templates-v1.0.0', name: 'Templates v1.0.0', html_url: 'https://example.test/release' };
+      }
+      if (url === 'https://api.github.com/repos/o/r/commits/templates-v1.0.0') return { sha: SHA };
       if (url === `https://raw.githubusercontent.com/o/r/${SHA}/templates/manifest.json`) return catalog;
       throw new Error(`unexpected url: ${url}`);
     },
@@ -86,19 +94,47 @@ test('fetchCatalog resolves a ref to a sha, fetches the catalog at that sha, and
     ok: true,
     owner: 'o',
     repo: 'r',
-    ref: 'main',
+    ref: 'latest-release',
+    resolvedRef: 'templates-v1.0.0',
     sha: SHA,
+    releaseName: 'Templates v1.0.0',
+    releaseUrl: 'https://example.test/release',
     catalogPath: 'templates/manifest.json',
     catalogLocalPath: path.join(dir, SHA, 'templates/manifest.json'),
     cacheDir: path.join(dir, SHA),
     catalog,
   });
   assert.deepEqual(seen, [
-    'https://api.github.com/repos/o/r/commits/main',
+    'https://api.github.com/repos/o/r/releases/latest',
+    'https://api.github.com/repos/o/r/commits/templates-v1.0.0',
     `https://raw.githubusercontent.com/o/r/${SHA}/templates/manifest.json`,
   ]);
   assert.equal(fs.existsSync(path.join(dir, SHA)), true);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, SHA, 'templates/manifest.json'), 'utf8')), catalog);
+});
+
+test('fetchCatalog still accepts an explicit ref override for tests or pinned rollouts', async (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const catalog = { manifestVersion: '1.0', templates: [VALID_TEMPLATE] };
+  const seen = [];
+
+  const result = await fetchCatalog({ owner: 'o', repo: 'r', ref: 'templates-v0.9.0', cacheRoot: dir }, {
+    requestJson: async (url) => {
+      seen.push(url);
+      if (url === 'https://api.github.com/repos/o/r/commits/templates-v0.9.0') return { sha: SHA };
+      if (url === `https://raw.githubusercontent.com/o/r/${SHA}/templates/manifest.json`) return catalog;
+      throw new Error(`unexpected url: ${url}`);
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.ref, 'templates-v0.9.0');
+  assert.equal(result.resolvedRef, 'templates-v0.9.0');
+  assert.deepEqual(seen, [
+    'https://api.github.com/repos/o/r/commits/templates-v0.9.0',
+    `https://raw.githubusercontent.com/o/r/${SHA}/templates/manifest.json`,
+  ]);
 });
 
 test('fetchCatalog returns ok:false so create-site can fall back when the catalog is unreachable', async (t) => {
@@ -355,6 +391,10 @@ test('fetch-template-catalog CLI parser accepts repo/ref/cache options', () => {
     catalogPath: 'templates/custom.json',
     cacheRoot: '/tmp/cache',
   });
+});
+
+test('fetch-template-catalog CLI parser defaults ref to latest-release', () => {
+  assert.equal(parseCatalogArgs([]).ref, 'latest-release');
 });
 
 test('fetch-template-solution CLI parser maps solutionPath to artifactPath', () => {

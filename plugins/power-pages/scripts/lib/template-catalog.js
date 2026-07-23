@@ -8,7 +8,7 @@ const { execFileSync } = require('child_process');
 
 const DEFAULT_OWNER = 'microsoft';
 const DEFAULT_REPO = 'power-pages-samples';
-const DEFAULT_REF = 'main';
+const DEFAULT_REF = 'latest-release';
 const DEFAULT_CATALOG_PATH = 'templates/manifest.json';
 
 function getDefaultCacheRoot() {
@@ -28,6 +28,10 @@ function buildRawUrl({ owner = DEFAULT_OWNER, repo = DEFAULT_REPO, sha, filePath
 
 function buildCommitUrl({ owner = DEFAULT_OWNER, repo = DEFAULT_REPO, ref = DEFAULT_REF }) {
   return `https://api.github.com/repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}`;
+}
+
+function buildLatestReleaseUrl({ owner = DEFAULT_OWNER, repo = DEFAULT_REPO }) {
+  return `https://api.github.com/repos/${owner}/${repo}/releases/latest`;
 }
 
 function cacheDirForSha(cacheRoot, sha) {
@@ -179,6 +183,29 @@ async function resolveRefToSha(options = {}, deps = {}) {
   return result.sha;
 }
 
+async function resolveLatestRelease(options = {}, deps = {}) {
+  const request = deps.requestJson || ((url) => requestJson(url, deps));
+  // GitHub Releases API shape used here:
+  //   { "tag_name": "templates-v1.0.0", "name": "Templates v1.0.0",
+  //     "html_url": "https://github.com/.../releases/tag/templates-v1.0.0" }
+  // `tag_name` is the only required field; name/url are carried through for
+  // diagnostics but not required for fetching.
+  const result = await request(buildLatestReleaseUrl(options));
+  if (!result || !isNonEmptyString(result.tag_name)) {
+    throw new Error('GitHub latest release response did not include tag_name');
+  }
+  const sha = await resolveRefToSha({ ...options, ref: result.tag_name }, { ...deps, requestJson: request });
+  return { ref: result.tag_name, sha, releaseName: result.name || '', releaseUrl: result.html_url || '' };
+}
+
+async function resolveCatalogRef(options = {}, deps = {}) {
+  const ref = options.ref || DEFAULT_REF;
+  if (ref === 'latest-release') {
+    return resolveLatestRelease(options, deps);
+  }
+  return { ref, sha: await resolveRefToSha({ ...options, ref }, deps) };
+}
+
 async function fetchCatalog(options = {}, deps = {}) {
   const {
     owner = DEFAULT_OWNER,
@@ -191,7 +218,8 @@ async function fetchCatalog(options = {}, deps = {}) {
   const request = deps.requestJson || ((url) => requestJson(url, deps));
 
   try {
-    const sha = await resolveRefToSha({ owner, repo, ref }, { ...deps, requestJson: request });
+    const resolved = await resolveCatalogRef({ owner, repo, ref }, { ...deps, requestJson: request });
+    const { sha } = resolved;
     const cacheDir = cacheDirForSha(cacheRoot, sha);
     const catalog = await request(buildRawUrl({ owner, repo, sha, filePath: catalogPath }));
     const catalogError = validateCatalogShape(catalog);
@@ -200,7 +228,20 @@ async function fetchCatalog(options = {}, deps = {}) {
     const catalogLocalPath = artifactCachePath({ cacheRoot, sha, artifactPath: catalogPath });
     fsImpl.mkdirSync(path.dirname(catalogLocalPath), { recursive: true });
     fsImpl.writeFileSync(catalogLocalPath, JSON.stringify(catalog, null, 2), 'utf8');
-    return { ok: true, owner, repo, ref, sha, catalogPath, catalogLocalPath, cacheDir, catalog };
+    return {
+      ok: true,
+      owner,
+      repo,
+      ref,
+      resolvedRef: resolved.ref,
+      sha,
+      releaseName: resolved.releaseName,
+      releaseUrl: resolved.releaseUrl,
+      catalogPath,
+      catalogLocalPath,
+      cacheDir,
+      catalog,
+    };
   } catch (err) {
     return { ok: false, owner, repo, ref, catalogPath, error: err.message };
   }
@@ -303,11 +344,14 @@ module.exports = {
   getDefaultCacheRoot,
   buildRawUrl,
   buildCommitUrl,
+  buildLatestReleaseUrl,
   cacheDirForSha,
   artifactCachePath,
   requestJson,
   downloadFile,
   resolveRefToSha,
+  resolveLatestRelease,
+  resolveCatalogRef,
   fetchCatalog,
   validateZipContainsSolution,
   downloadArtifact,

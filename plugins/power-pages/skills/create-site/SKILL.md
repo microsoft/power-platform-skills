@@ -129,6 +129,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    ```bash
    node "${PLUGIN_ROOT}/scripts/fetch-template-catalog.js"
    ```
+   By default this resolves the latest GitHub Release in `microsoft/power-pages-samples` to its tag, then pins that tag to an immutable commit SHA for the rest of the run. Pass `--ref <tag-or-branch>` only for a deliberate test or rollback.
 
    Evaluate the JSON result:
    - **If `ok: false`**: tell the user templates are temporarily unavailable and continue with the from-scratch path. This is additive; a catalog failure must never block `create-site`.
