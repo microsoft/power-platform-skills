@@ -228,6 +228,32 @@ test('a table-icon web resource is torn down AFTER its table, and the generated 
   assert.ok(wrNames.includes(`${appUniqueName(spec)}_icon`), 'the generated default app icon web resource is torn down (no orphan)');
 });
 
+// Regression (found by live teardown): a QuickView form referenced by another form's quickViews[]
+// must be deleted AFTER its host form. The host embeds a quick-view CONTROL referencing the QV form,
+// so deleting the QV form first makes Dataverse 400 ("referenced by 1 other component"); the later
+// table cascade does not reliably clean it (a QV form on a surviving/reused table would leak).
+test('a QuickView form referenced by another form is torn down AFTER its host form', () => {
+  const spec = {
+    solution: { uniqueName: 'QvSln', publisherPrefix: 'new' },
+    app: { name: 'QV App' },
+    entities: [
+      { schemaName: 'new_customer', primaryAttribute: { schemaName: 'new_name' }, columns: [] },
+      { schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_subject' }, columns: [] },
+    ],
+    relationships: [{ type: 'OneToMany', referenced: 'new_customer', referencing: 'new_ticket', lookup: { schemaName: 'new_CustomerId', displayName: 'Customer' } }],
+    forms: [
+      // The QV form is listed BEFORE its host in the spec array — the plan must still order it last.
+      { entity: 'new_customer', name: 'Customer QV', formType: 'QuickView' },
+      { entity: 'new_ticket', name: 'Ticket Main', formType: 'Main', quickViews: [{ lookup: 'new_customerid', targetEntity: 'new_customer', form: 'Customer QV', label: 'Customer' }] },
+    ],
+  };
+  const formNames = planTeardown(spec).filter((s) => s.kind === 'form').map((s) => s.target.name);
+  const hostIdx = formNames.indexOf('Ticket Main');
+  const qvIdx = formNames.indexOf('Customer QV');
+  assert.ok(hostIdx !== -1 && qvIdx !== -1, 'both forms are planned');
+  assert.ok(hostIdx < qvIdx, 'the host form is torn down before the QuickView form it references');
+});
+
 test('the generated app-icon teardown step is skipped when the spec sets an explicit app.icon', () => {
   const spec = {
     solution: { uniqueName: 'IconSln2', publisherPrefix: 'new' },

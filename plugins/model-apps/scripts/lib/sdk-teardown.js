@@ -280,8 +280,20 @@ function planTeardown(spec) {
   for (const entity of Object.keys(commandsByEntity(spec))) {
     steps.push({ kind: 'commands', phase: 'commands', label: `command bar for ${entity}`, target: { entity } });
   }
-  for (const f of spec.forms || []) {
-    if (!f.name) continue; // only forms the spec named can be resolved
+  // Delete forms so a QuickView form referenced by another form's `quickViews[]` is removed AFTER its
+  // HOST form. The host embeds a quick-view CONTROL that references the QV form, so deleting the QV
+  // form first makes Dataverse 400 ("cannot be deleted because it is referenced by 1 other
+  // component"). Relying on the later table-delete cascade to clean the orphan is fragile (it does
+  // not fire for a QV form on a REUSED/surviving table), so order the delete: hosts first, referenced
+  // quick-view forms last.
+  const referencedQvForms = new Set();
+  for (const f of spec.forms || []) for (const qv of f.quickViews || []) if (qv && qv.form) referencedQvForms.add(qv.form);
+  const namedForms = (spec.forms || []).filter((f) => f.name);
+  const orderedForms = [
+    ...namedForms.filter((f) => !referencedQvForms.has(f.name)),
+    ...namedForms.filter((f) => referencedQvForms.has(f.name)),
+  ];
+  for (const f of orderedForms) {
     // Main forms get promoted to the entity default at build time; teardown reverses that before
     // deleting (restoreStockMainForm), so flag them here.
     const isMain = String(f.formType || f.type || 'main').toLowerCase() === 'main';
