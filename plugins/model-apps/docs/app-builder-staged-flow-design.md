@@ -212,11 +212,12 @@ persistence is therefore **foundational**, and the mechanism is **decided** (not
   carrying the full design-time metadata — `{ schemaVersion, pages: [{ key, name, pageId, purpose,
   dataSources, navigatesTo, pageInput }], design }` — not just id/name, so the round-trip below
   actually restores purpose/navigation/design. It travels inside the solution and survives download.
-- **Lifecycle is explicit.** On first build the manifest web resource is created and **added to the
-  solution**; on rebuild it is **updated in place** via `updateWebResource` (`MakerSdk.ts:529-543`) —
-  the engine today reuses an existing web resource *without* updating its content
-  (`sdk-build.js:565-580`), so the manifest needs the update path, not plain reuse. `planTeardown`
-  removes it (it currently deletes only the app icon, `sdk-teardown.js:338-348`).
+- **Lifecycle is explicit.** On first build the manifest web resource is created; its **solution
+  membership is re-asserted every run** (idempotent add, not only on first creation); on rebuild its
+  content is **updated in place** via `updateWebResource` (`MakerSdk.ts:529-543`) — the engine today
+  reuses an existing web resource *without* updating its content (`sdk-build.js:565-580`), so the
+  manifest needs the update path, not plain reuse. `planTeardown` removes it (it currently deletes
+  only the app icon, `sdk-teardown.js:338-348`).
 - **`pageId`s are validated deployment state, not blind portable identity.** Manifest ids are
   environment-specific and can be stale after import to another env, so they are **reconciled against
   the fail-closed current-app enumeration** (§9) before use — the manifest keeps `key ↔ name`
@@ -434,8 +435,9 @@ safe).
 
 **Retry idempotency fix (R2/R3).** Because full-build re-run is the recovery mechanism, commands and
 dashboards — today **re-created without discovery** (`sdk-build.js:951-975`) — must become
-**discover-reconcile** (`findArtifact`/`fetchArtifact` + generic mutations by a stable child identity:
-command by entity+name, dashboard tile by identity), or a retried run 2 duplicates them. **v1 is
+**discover-reconcile** (`findArtifact`/`fetchArtifact` + generic mutations by a **stable child
+identity** — commands need an explicit stable `key`, since the command schema today has `label`, not
+`name` (`app-spec-schema.md:234-243`); dashboard tiles keyed by tile identity), or a retried run 2 duplicates them. **v1 is
 additive-only** (discover, add what's missing, **never remove**) so reconciliation cannot strip
 Maker-authored commands or dashboard tiles. Spec-driven *removal* of a command/dashboard/tile is
 deferred and, if added later, routes through `op-diff` destructive consent (§11) — exactly like
