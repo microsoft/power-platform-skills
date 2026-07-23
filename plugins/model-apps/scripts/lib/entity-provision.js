@@ -124,6 +124,24 @@ function makeRunner({ emit, total }) {
   return { run, mapLimit, skip, emit, total };
 }
 
+// Route every artifact push (form/view/chart/app/command/dashboard) through this. The SDK's
+// pushArtifact RESOLVES (it does NOT throw) with { success:false, error:VersionConflictError } on a
+// 412 — the artifact changed in Maker since our last fetch. The engine previously ignored push
+// results, so a conflict silently reported success while DROPPING the edit. Halt loudly and require
+// a fresh download instead of auto refetch-and-overlay (which would clobber a concurrent Maker edit
+// and violates the SDK's rebuild-from-model tenet, architecture-spec T6). A 412 is the only failure
+// pushArtifact signals by return value; every other failure still throws. See MakerSdk.pushArtifact.
+function requireSuccessfulPush(result, what) {
+  if (result && result.success === false) {
+    const detail = (result.error && result.error.message) || 'version conflict (412)';
+    throw new BuildHalt(
+      `push ${what || (result && result.type) || 'artifact'} failed: ${detail} — the artifact changed in Maker since it was fetched; re-download the app and rebuild (never overwrite a concurrent edit)`,
+      { phase: 'push', code: 'version-conflict', recoverable: true, cause: result && result.error }
+    );
+  }
+  return result;
+}
+
 // Discover-then-create the solution + publisher (idempotent). No-op emit-wise if present.
 async function provisionSolution({ sdk, provision, runner, solution }) {
   await runner.run('solution', `solution ${solution.uniqueName}`, async () => {
@@ -302,9 +320,32 @@ function matchesRecord(rec, match) {
 // relationship's lookup nav property, and resolve a custom statusReason into statuscode/statecode
 // (halting if its option value wasn't captured during the data-model phase). The SDK's
 // seedRecordGraph owns the @odata.bind URL formation and resolve-by-name idempotency.
+// Choose the seedRecordGraph idempotency key (matchOn) for an entity's sample rows. The SDK dedups /
+// reuses an existing row ONLY when matchOn is supplied, and it NEVER falls back to the primary
+// display name — Dataverse permits duplicate names, so name-based resolve is a silent-wrong-id bug
+// (see types/recordGraph.ts `SeedEntityGroup.matchOn`). To keep the old resolve-by-name idempotency
+// WITHOUT regressing correctness:
+//   1. prefer a single-column ALTERNATE KEY (Dataverse enforces its uniqueness — a safe key);
+//   2. else fall back to the primary NAME column (the key the retired `primaryAttribute` used), which
+//      carries the documented duplicate-name risk but preserves prior behavior;
+// and in BOTH cases only when EVERY seeded record has a non-empty value for the chosen key — otherwise
+// omit matchOn (insert every record, no dedup) rather than resolve on a partially-empty key, which
+// would collapse or mis-bind rows. `body` values are the resolved Web-API values the SDK will filter on.
+function chooseMatchOn(e, seedRecords) {
+  const hasNonEmpty = (attr) =>
+    seedRecords.length > 0 &&
+    seedRecords.every((r) => { const v = r.body[attr]; return v !== undefined && v !== null && v !== ''; });
+  for (const k of e.alternateKeys || []) {
+    const cols = (k.columns || []).map((c) => String(c).toLowerCase());
+    if (cols.length === 1 && hasNonEmpty(cols[0])) return cols[0];
+  }
+  const primary = e.primaryAttribute.schemaName.toLowerCase();
+  if (hasNonEmpty(primary)) return primary;
+  return undefined;
+}
+
 function buildSeedGroup({ spec, e, records, statusReasonValues }) {
   const resolved = resolveSampleRecords(e, records, spec);
-  const primary = e.primaryAttribute.schemaName.toLowerCase();
   const seedRecords = [];
   for (let i = 0; i < resolved.length; i++) {
     const raw = records[i];
@@ -334,7 +375,9 @@ function buildSeedGroup({ spec, e, records, statusReasonValues }) {
     }
     seedRecords.push({ body, binds });
   }
-  return { entityLogical: e.schemaName.toLowerCase(), primaryAttribute: primary, records: seedRecords };
+  // matchOn (opt-in) replaces the retired `primaryAttribute`; see chooseMatchOn for the key policy.
+  const matchOn = chooseMatchOn(e, seedRecords);
+  return { entityLogical: e.schemaName.toLowerCase(), ...(matchOn ? { matchOn } : {}), records: seedRecords };
 }
 
 // Create sample rows topologically via the SDK's record-graph seeder. The plugin owns the App
@@ -365,4 +408,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, makeEntitySetResolver, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE };
+module.exports = { makeRunner, requireSuccessfulPush, makeEntitySetResolver, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE };

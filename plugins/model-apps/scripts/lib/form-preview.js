@@ -3,7 +3,7 @@
 // via formDef) as an ASCII wireframe — tabs, sections, fields with type-appropriate widget
 // hints, the Notes/timeline block, and sub-grids — so the user can *see* a form during the
 // interactive authoring turn before approving it. Pure (no I/O); the CLI is preview-form.js.
-const { formDef } = require('./sdk-build.js');
+const { compileFormIntent } = require('./artifact-intent.js');
 
 const INNER = 63; // content width inside the box borders
 
@@ -64,18 +64,31 @@ function topBorder(title) {
 }
 const BOTTOM = `└${'─'.repeat(INNER + 2)}┘`;
 
+// Display label for a field logical name. compileFormIntent emits push-ready cells that OMIT the
+// label (the SDK adapter derives it from attribute metadata at push, per T4), so the preview
+// resolves the display name itself from the spec entity (falling back to the logical name).
+function labelFor(entity, fn) {
+  if (!entity) return fn;
+  if (entity.primaryAttribute && entity.primaryAttribute.schemaName.toLowerCase() === fn) return entity.primaryAttribute.displayName || 'Name';
+  const c = (entity.columns || []).find((x) => x.schemaName.toLowerCase() === fn);
+  return (c && (c.displayName || c.schemaName)) || fn;
+}
+
 // "Label * [widget]" for one field cell.
 function fieldLabel(entity, cell) {
   const fn = cell.control.fieldName;
   const req = cell.control.isRequired ? ' *' : '';
   const widget = WIDGET[fieldType(entity, fn)] || WIDGET.Text;
-  return `${cell.control.label || fn}${req}  ${widget}`;
+  return `${cell.control.label || labelFor(entity, fn)}${req}  ${widget}`;
 }
 
 // Render one form to an ASCII wireframe string.
 function renderFormWireframe(spec, f) {
   const entity = entityByLogical(spec, f.entity);
-  const def = formDef(spec, f);
+  // compileFormIntent is the single source of form topology (new SDK shape
+  // tabs[].columns[].sections[]). notesClassId is irrelevant to the preview (it keys the notes
+  // section by name, not classId), so a placeholder is fine.
+  const def = compileFormIntent(spec, f, {});
   const lines = [];
   const typeTag = def.formType && def.formType !== 'Main' ? ` [${def.formType}]` : '';
   lines.push(topBorder(`${def.name || f.entity}${typeTag}`));
@@ -88,19 +101,23 @@ function renderFormWireframe(spec, f) {
 
   for (const tab of def.tabs) {
     if (tabLabels.length > 1) lines.push(row(`▾ ${tab.label || 'General'}`));
-    for (const sec of tab.sections || []) {
-      if (sec.name === 'section_notes') {
-        lines.push(rule('▤ Notes / Timeline'));
-        lines.push(row('   (activity timeline + notes — type to add a note)'));
-        continue;
-      }
-      lines.push(rule(sec.label || 'Details'));
-      for (const r of sec.rows || []) {
-        const cells = (r.cells || []).filter((c) => c.control && c.control.type !== 'notes');
-        if (!cells.length) continue;
-        const colW = Math.floor((INNER - 3) / Math.max(1, cells.length));
-        const parts = cells.map((c) => vpad(clip(`  ${fieldLabel(entity, c)}`, colW), colW));
-        lines.push(row(parts.join('')));
+    // New topology inserts a FormColumn layer between tab and section.
+    for (const col of tab.columns || []) {
+      for (const sec of col.sections || []) {
+        if (sec.name === 'section_notes') {
+          lines.push(rule('▤ Notes / Timeline'));
+          lines.push(row('   (activity timeline + notes — type to add a note)'));
+          continue;
+        }
+        lines.push(rule(sec.label || 'Details'));
+        for (const r of sec.rows || []) {
+          // A bound field cell has control.fieldName; the notes control has none.
+          const cells = (r.cells || []).filter((c) => c.control && c.control.fieldName);
+          if (!cells.length) continue;
+          const colW = Math.floor((INNER - 3) / Math.max(1, cells.length));
+          const parts = cells.map((c) => vpad(clip(`  ${fieldLabel(entity, c)}`, colW), colW));
+          lines.push(row(parts.join('')));
+        }
       }
     }
   }

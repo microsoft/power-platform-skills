@@ -27,6 +27,7 @@ const {
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 const {
   makeRunner,
+  requireSuccessfulPush,
   makeEntitySetResolver,
   provisionSolution,
   provisionDataModel,
@@ -34,6 +35,17 @@ const {
   BuildHalt: _BuildHalt,
   SDK_COLUMN_TYPE: _SDK_COLUMN_TYPE,
 } = require('./entity-provision.js');
+// Pure App Spec -> canonical SDK intent compiler (new form topology + generic-surface intents).
+const {
+  compileFormIntent,
+  formFieldLogicals,
+  firstSectionRowsPointer,
+  findFieldCellPointer,
+  subgridCellIntent,
+  quickViewCellIntent,
+  formEventsRegionIntent,
+  viewColumnsIntent,
+} = require('./artifact-intent.js');
 const { makeGenpageCli } = require('./genpage-cli.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
 const { buildPromptSpec } = require('./ai-prompt.js');
@@ -43,16 +55,28 @@ const { odataLit } = require('./odata.js');
 const BuildHalt = _BuildHalt;
 const SDK_COLUMN_TYPE = _SDK_COLUMN_TYPE;
 
-// Standard field control classId (Dataverse picks the widget by attribute type) and the
-// classic Notes/timeline control classId.
-const STD_FIELD_CLASS_ID = '4273EDBD-AC1D-40d3-9FB2-095C621B552D';
-const NOTES_CLASS_ID = '06375649-C143-495E-A496-C962E5B4488E';
+// Dataverse control class ids. The vendored bundle does NOT export the SDK's ControlClassId enum, so
+// these stable platform GUIDs are pinned here (matching the SDK's
+// @maker-studio/cds-designer-models ControlClassIds) and passed as intent to the generic addElement
+// surface — the SDK adapter derives a BOUND FIELD's classId from its attribute type (T4), but a
+// notes/subgrid/quick-view control's classId IS the intent, so the caller supplies it.
+const NOTES_CLASS_ID = '06375649-C143-495E-A496-C962E5B4488E'; // ControlClassId.TimelineControl
+const SUBGRID_CLASS_ID = 'E7A81278-8635-4D9E-8D4D-59480B391C5B'; // ControlClassId.SubgridControl
+const QUICK_VIEW_CLASS_ID = '5C5600E0-1D6E-4205-A272-BE80DA87FD42'; // ControlClassId.QuickViewControl
+// Dashboard tile control class ids (DashboardAdapter TILE_CLASS_ID). chart and list share the grid
+// control id; ChartGridMode (Chart vs Grid) disambiguates them.
+const TILE_CLASS_ID = {
+  chart: 'E7A81278-8635-4D9E-8D4D-59480B391C5B',
+  list: 'E7A81278-8635-4D9E-8D4D-59480B391C5B',
+  iframe: 'FD2A7985-3187-444E-908D-6624B21F69C0',
+  webresource: '9FDF5F91-88B1-47F4-AD53-C11EFC01A01D',
+};
 const COMPONENT_TYPE = { view: 26, chart: 59, form: 60, dashboard: 60, webResource: 61, sitemap: 62, app: 80 };
 
 // Web-resource kinds (App Spec `type`) -> SDK createWebResource `type` token. The SDK maps
 // the token to the Dataverse webresourcetype code (js=3, html=1, css=2, …).
 const WEB_RESOURCE_KINDS = new Set(['js', 'html', 'css', 'xml', 'png', 'jpg', 'gif', 'xsl', 'ico', 'svg', 'resx']);
-// Form-event kinds the SDK can wire (addFormEventHandler).
+// Form-event kinds the engine can wire (onload/onsave/onchange) via the /bag/c <events> region.
 const FORM_EVENTS = new Set(['onload', 'onsave', 'onchange']);
 
 const PHASES = ['solution', 'data-model', 'sample-data', 'web-resources', 'views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell', 'pages', 'ai-features', 'publish'];
@@ -76,6 +100,32 @@ function dashboardTileOpts(spec, tile, result) {
   }
   if (tile.type === 'iframe') return span({ type: 'iframe', name: tile.name, url: tile.url });
   return span({ type: 'webresource', name: tile.name, webResourceName: tile.webResource });
+}
+
+// Map a resolved dashboard tile (dashboardTileOpts output) to a canonical DashboardComponent for
+// addElement('dashboard', id, '/components', …). The adapter mints the cell/control ids and lays the
+// grid out from `position`; the caller supplies the classId (chart/list share the grid control id —
+// ChartGridMode disambiguates), the `<parameters>` map, and the placement. Tiles stack vertically
+// (one per row in the first section). Param keys match the Dataverse control XML (a chart tile keys
+// its visualization as `ChartId`, see DashboardAdapter / dashboard.workflow.test.ts).
+function dashboardComponent(t, index) {
+  const parameters = {};
+  if (t.type === 'chart') {
+    parameters.TargetEntityType = t.targetEntity; parameters.ViewId = t.viewId;
+    parameters.ChartId = t.visualizationId; parameters.ChartGridMode = 'Chart';
+  } else if (t.type === 'list') {
+    parameters.TargetEntityType = t.targetEntity; parameters.ViewId = t.viewId;
+    parameters.IsUserView = 'false'; parameters.ChartGridMode = 'Grid'; parameters.RecordsPerPage = '10';
+  } else if (t.type === 'iframe') {
+    parameters.Url = t.url;
+  } else {
+    parameters.WebResourceName = t.webResourceName;
+  }
+  return {
+    type: t.type, name: t.name || '', classId: TILE_CLASS_ID[t.type] || TILE_CLASS_ID.webresource,
+    position: { tabIndex: 0, columnIndex: 0, sectionIndex: 0, rowIndex: index, cellIndex: 0 },
+    colspan: t.colspan || 1, rowspan: t.rowspan || 1, parameters,
+  };
 }
 
 // Command-bar locations (CommandBarJson.location). MainTab = the entity's form/grid command bar.
@@ -175,15 +225,6 @@ function webResourceOpts(wr, appDir) {
   else if (wr.content !== undefined) o.content = wr.content;
   else if (wr.contentPath) o.content = fs.readFileSync(path.isAbsolute(wr.contentPath) ? wr.contentPath : path.join(appDir || '.', wr.contentPath), 'utf8');
   else o.content = '';
-  return o;
-}
-
-// Map an App Spec form event to SDK addFormEventHandler options.
-function formEventOpts(ev) {
-  const o = { event: ev.event, libraryName: ev.library, functionName: ev.function,
-    enabled: ev.enabled !== false, passExecutionContext: ev.passExecutionContext !== false };
-  if (ev.attribute) o.attribute = String(ev.attribute).toLowerCase();
-  if (ev.parameters !== undefined) o.parameters = ev.parameters;
   return o;
 }
 
@@ -350,103 +391,16 @@ function chartDef(spec, ch) {  const entityLogical = ch.entity.toLowerCase();
     categories: [{ attribute: String(ch.groupBy).toLowerCase() }], presentation: { showLegend: true, title: ch.name } };
 }
 
-function fieldCell(logical, label, required) {
-  return { visible: true, colspan: 1, rowspan: 1,
-    control: { id: logical, classId: STD_FIELD_CLASS_ID, fieldName: logical, type: 'standard', isRequired: !!required, isReadOnly: false, label, showLabel: true, parameters: {} } };
-}
-function notesCell() {
-  return { visible: true, colspan: 1, rowspan: 1,
-    control: { id: 'notescontrol', classId: NOTES_CLASS_ID, fieldName: null, type: 'notes', isRequired: false, isReadOnly: false, label: 'Notes', showLabel: false, parameters: {} } };
-}
-// Arrange field cells into `columns` cells-per-row.
-function rowsFromCells(cells, columns) {
-  const cols = Math.max(1, Math.min(4, columns || 1));
-  const rows = [];
-  for (let i = 0; i < cells.length; i += cols) rows.push({ cells: cells.slice(i, i + cols) });
-  return rows;
-}
+// Form intent construction (compileFormIntent), field cells, notes cells, row grouping, and
+// formFieldLogicals now live in the pure ./artifact-intent.js compiler (new SDK topology
+// tabs[].columns[].sections[]). The engine imports them at the top of this file.
 
-// Build a Main-form definition. Honors explicit `tabs`/`sections`/`columns` from the spec;
-// otherwise lays the primary + scalar columns into a "General" section (2-column when the
-// table is field-heavy). Adds a Notes section when the form/entity opts in.
-function formDef(spec, f) {
-  const entityLogical = f.entity.toLowerCase();
-  const entity = entityByLogical(spec, entityLogical);
-  const labelFor = (logical) => {
-    if (entity && logical === entity.primaryAttribute.schemaName.toLowerCase()) return entity.primaryAttribute.displayName || 'Name';
-    const c = entity && (entity.columns || []).find((x) => x.schemaName.toLowerCase() === logical);
-    return (c && (c.displayName || c.schemaName)) || logical;
-  };
-  const requiredFor = (logical) => {
-    if (entity && logical === entity.primaryAttribute.schemaName.toLowerCase()) return true;
-    const c = entity && (entity.columns || []).find((x) => x.schemaName.toLowerCase() === logical);
-    return !!(c && c.required === true);
-  };
+// Build a Main-form definition -> moved to ./artifact-intent.js `compileFormIntent`
+// (new SDK topology tabs[].columns[].sections[]; the adapter derives classId/label per T4).
 
-  let tabs;
-  const formType = f.formType || 'Main';
-  // Quick Create forms must use single-column sections — Dataverse rejects a multi-column
-  // (columns="11"/"111") quick-create section with "Columns in a section must be set to '1'".
-  const maxCols = formType === 'QuickCreate' ? 1 : 4;
-  const explicit = Array.isArray(f.tabs) || f.layout === 'explicit';
-  if (explicit && Array.isArray(f.tabs)) {
-    // Honor the authored layout verbatim.
-    tabs = f.tabs.map((t, ti) => ({
-      name: t.name || `tab_${ti}`, label: t.label || 'General', expanded: true, visible: true,
-      sections: (t.sections || []).map((s, si) => {
-        const cells = (s.fields || []).map((fl) => { const lg = String(fl).toLowerCase(); return fieldCell(lg, labelFor(lg), requiredFor(lg)); });
-        const secCols = Math.min(s.columns || 1, maxCols);
-        return { name: s.name || `section_${ti}_${si}`, label: s.label || 'Details', visible: true, showLabel: s.showLabel !== false, columns: secCols, rows: rowsFromCells(cells, secCols) };
-      }),
-    }));
-  } else {
-    // Auto: primary + every scalar column, then 1:N parent lookups. 2-column when field-heavy (> 6), else 1.
-    const cells = [];
-    if (entity) {
-      cells.push(fieldCell(entity.primaryAttribute.schemaName.toLowerCase(), entity.primaryAttribute.displayName || 'Name', true));
-      for (const c of entity.columns || []) { if (!SDK_COLUMN_TYPE[c.type || 'Text']) continue; cells.push(fieldCell(c.schemaName.toLowerCase(), c.displayName || c.schemaName, c.required === true)); }
-      // Parent lookups live on relationships[], not columns[] — surface them so the parent link is
-      // visible on the form (otherwise a first build shows no way to set the record's parent).
-      for (const lk of lookupColumnsFor(spec, entityLogical)) cells.push(fieldCell(lk.logical, lk.displayName, false));
-    }
-    const columns = Math.min(cells.length > 6 ? 2 : 1, maxCols);
-    tabs = [{ name: 'tab_general', label: 'General', expanded: true, visible: true,
-      sections: [{ name: 'section_general', label: 'General', visible: true, showLabel: false, columns, rows: rowsFromCells(cells, columns) }] }];
-  }
 
-  // Notes section (opt-in: form.notes or entity.hasNotes) — Main forms only; quick-create /
-  // quick-view forms don't host the activity timeline.
-  const wantNotes = formType === 'Main' && (f.notes === true || (entity && entity.hasNotes === true));
-  if (wantNotes) {
-    tabs[0].sections.push({ name: 'section_notes', label: 'Notes', visible: true, showLabel: true, columns: 1, rows: [{ cells: [notesCell()] }] });
-  }
-
-  return { entityLogicalName: entityLogical, name: f.name || `${f.entity} form`, formType, status: 'Active', tabs, __explicitLayout: explicit, __primaryField: entity ? entity.primaryAttribute.schemaName.toLowerCase() : undefined };
-}
-
-// The ordered field logical names a form definition places (across tabs/sections/rows/cells),
-// excluding the notes/timeline control (which has no bound field). The form update-in-place
-// reconcile re-applies each of these via the SDK's idempotent addField, so editing a deployed
-// form's field set actually lands. Deduped, lowercased.
-function formFieldLogicals(def) {
-  const seen = new Set();
-  const out = [];
-  for (const t of def.tabs || []) {
-    for (const s of t.sections || []) {
-      for (const r of s.rows || []) {
-        for (const c of r.cells || []) {
-          const fn = c.control && c.control.fieldName;
-          if (!fn) continue;
-          const logical = String(fn).toLowerCase();
-          if (seen.has(logical)) continue;
-          seen.add(logical);
-          out.push(logical);
-        }
-      }
-    }
-  }
-  return out;
-}
+// The ordered field logical names a form places -> moved to ./artifact-intent.js `formFieldLogicals`
+// (walks the new tabs[].columns[].sections[] topology).
 
 // The app module's uniquename, derived deterministically from the publisher prefix + app name
 // (same rule the builder writes with). Shared with the teardown engine so it can resolve the
@@ -650,32 +604,123 @@ async function runSdkBuild(spec, opts = {}) {
     }
   }
 
-  // Reconcile an EXISTING form to the spec: fetch it, then re-apply every spec field + sub-grid via
-  // the SDK's IDEMPOTENT addField/addSubGrid (no duplicates), push, publish, and ensure it's a
-  // solution component. This is what makes editing a deployed form actually land — the build used
-  // to reuse a form by name and skip the push, silently dropping layout edits.
+  // --- Form authoring via the SDK's generic surface (addElement/updateElement/removeElement) -------
+  // The new SDK removed the per-artifact form mutators; a form is built as canonical intent
+  // (./artifact-intent.js) and applied through the generic surface.
+
+  // Create a NEW form body: create a MINIMAL form (the adapter seeds one default tab), append each
+  // compiled tab (addElement recursively mints cell/section/tab ids — updateElement does NOT, so a
+  // coarse whole-tab insert is the adapter-blessed path), then drop the seed tab at index 0. Every
+  // intermediate state keeps >=1 tab, so the structural validator never rejects an empty form.
+  const createFormShell = (def) => {
+    const art = provision.createArtifact('form', { name: def.name, entityLogicalName: def.entityLogicalName, formType: def.formType, status: def.status });
+    for (const tab of def.tabs || []) provision.addElement('form', art.id, '/tabs', tab);
+    provision.removeElement('form', art.id, '/tabs/0'); // drop the seed tab (my tabs were appended after it)
+    return art.id;
+  };
+
+  const normClassId = (id) => String(id || '').replace(/[{}]/g, '').toUpperCase();
+
+  // A form hosts at most one sub-grid per relationship, so a sub-grid's semantic identity is its
+  // RelationshipName. Scan the fetched form's controls so a rebuild does not splice a duplicate.
+  const hasSubgrid = (formJson, relationshipName) => {
+    for (const t of formJson.tabs || []) for (const col of t.columns || []) for (const s of col.sections || []) for (const r of s.rows || []) for (const c of r.cells || []) {
+      const ctrl = c.control;
+      if (ctrl && normClassId(ctrl.classId) === SUBGRID_CLASS_ID && ctrl.parameters && ctrl.parameters.RelationshipName === relationshipName) return true;
+    }
+    return false;
+  };
+
+  // Add each sub-grid cell to the form's first section, skipping any already present (idempotent
+  // rebuild). Re-reads the form between adds so firstSectionRowsPointer stays valid.
+  const addSubgrids = (formId, subs) => {
+    for (const sg of subs || []) {
+      if (hasSubgrid(provision.getArtifact('form', formId) || {}, sg.relationshipName)) continue;
+      const rowsPtr = firstSectionRowsPointer(provision.getArtifact('form', formId) || {});
+      if (!rowsPtr) continue;
+      provision.addElement('form', formId, rowsPtr, { cells: [subgridCellIntent({ subgridClassId: SUBGRID_CLASS_ID, targetEntity: sg.targetEntity, relationshipName: sg.relationshipName, viewId: sg.viewId, label: sg.label })] });
+    }
+  };
+
+  // A quick-view's semantic identity is the lookup field it renders through (one quick-view per lookup).
+  const hasQuickView = (formJson, lookupFieldName) => {
+    for (const t of formJson.tabs || []) for (const col of t.columns || []) for (const s of col.sections || []) for (const r of s.rows || []) for (const c of r.cells || []) {
+      const ctrl = c.control;
+      if (ctrl && normClassId(ctrl.classId) === QUICK_VIEW_CLASS_ID && String(ctrl.fieldName || '').toLowerCase() === String(lookupFieldName).toLowerCase()) return true;
+    }
+    return false;
+  };
+
+  // Wire onload/onsave/onchange handlers into the form's root-bag <events> region. First build: the
+  // region doesn't exist -> add it whole. Rebuild: MERGE (append only handlers not already present,
+  // keyed by event+function+library) so a re-run never duplicates a handler or appends a second
+  // <events> root. The adapter mints each handlerUniqueId at serialize (we omit it).
+  const wireFormEvents = (formId, events) => {
+    const wanted = (events || []).filter((ev) => FORM_EVENTS.has(ev.event) && ev.library && ev.function);
+    if (!wanted.length) return false;
+    const form = provision.getArtifact('form', formId) || {};
+    const bagC = (form.bag && form.bag.c) || [];
+    const regionIdx = bagC.findIndex((e) => e && e.node && e.node.n === 'events');
+    if (regionIdx < 0) {
+      const nextI = bagC.reduce((m, e) => Math.max(m, e.i), -1) + 1;
+      provision.addElement('form', formId, '/bag/c', { i: nextI, node: formEventsRegionIntent(wanted) });
+      return true;
+    }
+    // Existing region: append only handlers not already wired.
+    const region = bagC[regionIdx].node;
+    const attrOf = (node, key) => ((node.a || []).find((a) => a[0] === key) || [])[1];
+    const existing = new Set();
+    for (const evNode of region.c || []) {
+      const handler = (((evNode.c || [])[0] || {}).c || [])[0];
+      existing.add(`${attrOf(evNode, 'name')}|${handler && attrOf(handler, 'functionName')}|${handler && attrOf(handler, 'libraryName')}`);
+    }
+    let added = false;
+    for (const ev of wanted) {
+      if (existing.has(`${ev.event}|${ev.function}|${ev.library}`)) continue;
+      provision.addElement('form', formId, `/bag/c/${regionIdx}/node/c`, formEventsRegionIntent([ev]).c[0]);
+      added = true;
+    }
+    return added;
+  };
+
+  // Reconcile an EXISTING form to the spec: fetch it, ADD any spec field/sub-grid not already placed
+  // (semantic identity = bound fieldName / relationship, so a rebuild never duplicates), PRUNE fields
+  // an explicit layout dropped, then push (halt on a 412 conflict), publish, and ensure it's a
+  // solution component. This is what makes editing a deployed form actually land.
   const reconcileForm = async (formId, def) => {
     await provision.fetchArtifact('form', formId);
+    // The def's field cells are already push-ready ({ control: { fieldName, isRequired? } }); index by
+    // logical so a missing field is re-added with the same intent the create path would emit.
+    const wantCellByLogical = {};
+    for (const t of def.tabs || []) for (const col of t.columns || []) for (const s of col.sections || []) for (const r of s.rows || []) for (const c of r.cells || []) {
+      const fn = c.control && c.control.fieldName;
+      if (fn) wantCellByLogical[String(fn).toLowerCase()] = c;
+    }
     const want = formFieldLogicals(def);
-    for (const fieldName of want) await provision.addField(formId, { fieldName });
-    for (const sg of def.__subgrids || []) provision.addSubGrid(formId, sg);
-    // Prune fields the deployed form still carries that the spec's EXPLICIT layout dropped, so
-    // editing a form to REMOVE a field actually lands — the old add-only reconcile could never
-    // delete one, silently keeping stale fields. Gated to an author-controlled layout (explicit
-    // `tabs`): an AUTO layout stays additive so we never strip a column a user added in Maker.
-    // Never remove the entity's primary field — a main form must keep it, even if an explicit
-    // layout omits it (the author usually relies on the header's primary field). Uses the SDK's
-    // idempotent removeField (no-op when the field is already gone).
-    if (def.__explicitLayout && typeof provision.removeField === 'function') {
-      const current = provision.getArtifact('form', formId) || {};
+    const have = new Set(formFieldLogicals(provision.getArtifact('form', formId) || {}));
+    for (const logical of want) {
+      if (have.has(logical)) continue; // idempotent: already on the form
+      const rowsPtr = firstSectionRowsPointer(provision.getArtifact('form', formId) || {});
+      if (!rowsPtr) break;
+      provision.addElement('form', formId, rowsPtr, { cells: [wantCellByLogical[logical]] });
+      have.add(logical);
+    }
+    addSubgrids(formId, def.__subgrids);
+    // Prune fields the deployed form carries that the spec's EXPLICIT layout dropped, so editing a
+    // form to REMOVE a field lands. Gated to an author-controlled layout (explicit `tabs`); an AUTO
+    // layout stays additive (never strip a column a user added in Maker). Never remove the primary.
+    // removeElement is non-idempotent and shifts sibling indices, so re-locate each cell pointer from
+    // a fresh read before removing it.
+    if (def.__explicitLayout) {
       const wantSet = new Set(want);
       const primary = def.__primaryField ? String(def.__primaryField).toLowerCase() : null;
-      for (const logical of formFieldLogicals(current)) {
+      for (const logical of formFieldLogicals(provision.getArtifact('form', formId) || {})) {
         if (wantSet.has(logical) || logical === primary) continue;
-        await provision.removeField(formId, { fieldName: logical });
+        const ptr = findFieldCellPointer(provision.getArtifact('form', formId) || {}, logical);
+        if (ptr) provision.removeElement('form', formId, ptr);
       }
     }
-    await provision.pushArtifact('form', formId);
+    requireSuccessfulPush(await provision.pushArtifact('form', formId), `form ${def.name}`);
     await provision.publishArtifact('form', formId);
     await provision.addSolutionComponent({ componentId: formId, componentType: COMPONENT_TYPE.form, solutionUniqueName: sol.uniqueName });
     return formId;
@@ -695,8 +740,8 @@ async function runSdkBuild(spec, opts = {}) {
       have.add(n);
       merged.push({ name: n, width: col.width || 100, order: merged.length });
     }
-    provision.setViewColumns(viewId, merged);
-    await provision.pushArtifact('view', viewId);
+    provision.updateElement('view', viewId, '/columns', merged);
+    requireSuccessfulPush(await provision.pushArtifact('view', viewId), `view ${def.name}`);
     await provision.publishArtifact('view', viewId);
     await provision.addSolutionComponent({ componentId: viewId, componentType: COMPONENT_TYPE.view, solutionUniqueName: sol.uniqueName });
     return viewId;
@@ -736,9 +781,18 @@ async function runSdkBuild(spec, opts = {}) {
       const existingId = await provision.findArtifact('view', { name: def.name, entity: def.entityLogicalName });
       if (existingId) return reconcileView(existingId, def);
     }
-    const art = provision.createArtifact(type, def);
-    if (type === 'form' && def.__subgrids) for (const sg of def.__subgrids) provision.addSubGrid(art.id, sg);
-    const pushed = await provision.pushArtifact(type, art.id);
+    // A form cannot be created from a full authored definition (the adapter's createDefault
+    // serializes authored tabs BEFORE minting ids and throws on the id-less cells); build its body
+    // through the generic surface instead (createFormShell), then place sub-grids. Other artifact
+    // types (view/chart/command/dashboard/app) still serialize unchanged from a full createArtifact.
+    let id;
+    if (type === 'form') {
+      id = createFormShell(def);
+      addSubgrids(id, def.__subgrids);
+    } else {
+      id = provision.createArtifact(type, def).id;
+    }
+    const pushed = requireSuccessfulPush(await provision.pushArtifact(type, id), `${type} ${def.name}`);
     await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE[type], solutionUniqueName: sol.uniqueName });
     return pushed.id;
   });
@@ -781,7 +835,7 @@ async function runSdkBuild(spec, opts = {}) {
       }
       return runner.run('charts', `chart "${def.name}"`, async () => {
         const art = provision.createArtifact('chart', def);
-        const pushed = await provision.pushArtifact('chart', art.id);
+        const pushed = requireSuccessfulPush(await provision.pushArtifact('chart', art.id), `chart ${def.name}`);
         await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.chart, solutionUniqueName: sol.uniqueName });
         return pushed.id;
       });
@@ -794,7 +848,7 @@ async function runSdkBuild(spec, opts = {}) {
   //    retain its formxml), inject onload/onsave/onchange handlers, push + publish.
   if (has('forms')) {
     const defs = await Promise.all((spec.forms || []).map(async (f) => {
-      const def = formDef(spec, f);
+      const def = compileFormIntent(spec, f, { notesClassId: NOTES_CLASS_ID });
       const subs = [];
       // Gap 7: opt-in auto sub-grids. `forms[].autoSubgrids: true` adds a sub-grid for every child
       // relationship of this form's entity (1:N where it's the parent + N:N) that isn't already
@@ -836,13 +890,16 @@ async function runSdkBuild(spec, opts = {}) {
           String(entSpec.schemaName).toLowerCase().startsWith(String(prefix).toLowerCase() + '_'));
         if (isOwnCustomTable) await promoteDefaultForm(id);
       }
-      const events = (d.f.events || []).filter((ev) => FORM_EVENTS.has(ev.event) && ev.library && ev.function);
-      if (events.length) {
-        await runner.run('forms', `wire ${events.length} event handler(s) on ${d.f.entity}`, async () => {
+      const wantedEvents = (d.f.events || []).filter((ev) => FORM_EVENTS.has(ev.event) && ev.library && ev.function);
+      if (wantedEvents.length) {
+        await runner.run('forms', `wire ${wantedEvents.length} event handler(s) on ${d.f.entity}`, async () => {
           await provision.fetchArtifact('form', id);
-          for (const ev of events) provision.addFormEventHandler(id, formEventOpts(ev));
-          await provision.pushArtifact('form', id);
-          await provision.publishArtifact('form', id);
+          // Merge into the root-bag <events> region (idempotent — a rebuild only pushes if a NEW
+          // handler was appended, so re-runs don't duplicate a handler or a second <events> root).
+          if (wireFormEvents(id, wantedEvents)) {
+            requireSuccessfulPush(await provision.pushArtifact('form', id), `form ${d.f.name || d.f.entity} events`);
+            await provision.publishArtifact('form', id);
+          }
         });
       }
       return id;
@@ -850,10 +907,10 @@ async function runSdkBuild(spec, opts = {}) {
     // Key the entity's MAIN form by entity (the app wires one form per entity below); quick-create
     // / quick-view forms are still built + added to the solution, just not the entity's app form.
     defs.forEach((d, i) => { if ((d.f.formType || 'Main') === 'Main') result.created.forms[d.f.entity.toLowerCase()] = ids[i]; });
-    // Quick-view placement: embed a built QuickView form onto a host form via a lookup column
-    // (addQuickViewControl), referencing the quick-view form by name. Runs after ALL forms are
-    // built so a host can reference a QuickView form created concurrently. The control renders
-    // from plain formxml (no <controlDescriptions>), so it persists via push + publish.
+    // Quick-view placement: embed a built QuickView form onto a host form via a lookup column,
+    // added as a canonical quick-view control cell (semantic identity = the lookup field, so a
+    // rebuild doesn't duplicate it). Runs after ALL forms are built so a host can reference a
+    // QuickView form created concurrently. Placed in the host's first section.
     const formIdByName = {};
     defs.forEach((d, i) => { if (d.f.name) formIdByName[d.f.name] = ids[i]; });
     for (let i = 0; i < defs.length; i++) {
@@ -863,13 +920,21 @@ async function runSdkBuild(spec, opts = {}) {
       const hostId = ids[i];
       await runner.run('forms', `place ${qvs.length} quick-view(s) on ${f.entity}`, async () => {
         await provision.fetchArtifact('form', hostId);
+        let changed = false;
         for (const qv of qvs) {
           const qvFormId = formIdByName[qv.form];
           if (!qvFormId) throw new Error(`form "${f.name || f.entity}" quick-view references form '${qv.form}' which wasn't built — declare it in forms[] with formType: "QuickView" and a matching name`);
-          provision.addQuickViewControl(hostId, { lookupFieldName: String(qv.lookup).toLowerCase(), targetEntity: String(qv.targetEntity).toLowerCase(), quickViewFormId: qvFormId, label: qv.label, sectionName: qv.section, displayAsCard: qv.displayAsCard });
+          const lookup = String(qv.lookup).toLowerCase();
+          if (hasQuickView(provision.getArtifact('form', hostId) || {}, lookup)) continue; // idempotent
+          const rowsPtr = firstSectionRowsPointer(provision.getArtifact('form', hostId) || {});
+          if (!rowsPtr) continue;
+          provision.addElement('form', hostId, rowsPtr, { cells: [quickViewCellIntent({ quickViewClassId: QUICK_VIEW_CLASS_ID, lookupFieldName: lookup, targetEntity: String(qv.targetEntity).toLowerCase(), quickViewFormId: qvFormId, label: qv.label })] });
+          changed = true;
         }
-        await provision.pushArtifact('form', hostId);
-        await provision.publishArtifact('form', hostId);
+        if (changed) {
+          requireSuccessfulPush(await provision.pushArtifact('form', hostId), `form ${f.name || f.entity} quick-views`);
+          await provision.publishArtifact('form', hostId);
+        }
       });
     }
   }
@@ -884,22 +949,22 @@ async function runSdkBuild(spec, opts = {}) {
       await runner.run('commands', `command bar for ${entityLogical} (${cmds.length} button(s))`, async () => {
         const def = commandDef(entityLogical, cmds, result.created.webResources);
         const art = provision.createArtifact('command', def);
-        const pushed = await provision.pushArtifact('command', art.id);
+        const pushed = requireSuccessfulPush(await provision.pushArtifact('command', art.id), `command ${entityLogical}`);
         result.created.commands[entityLogical] = pushed.id;
       });
     }
   }
 
-  // 6c. Dashboards. createArtifact('dashboard') seeds a dashboard; addDashboardTile synthesizes
-  //     each chart/list/iframe/webresource tile (referencing the views/charts already built), then
-  //     push + add to the solution (systemform, component type 60). Global (no entity); placement in
-  //     the app sitemap is manual for now.
+  // 6c. Dashboards. createArtifact('dashboard') seeds a dashboard; each chart/list/iframe/webresource
+  //     tile is added as a canonical component via addElement('/components') (referencing the
+  //     views/charts already built), then push + add to the solution (systemform, component type 60).
+  //     Global (no entity); placement in the app sitemap is manual for now.
   if (has('dashboards')) {
     for (const dash of spec.dashboards || []) {
       await runner.run('dashboards', `dashboard "${dash.name}" (${(dash.tiles || []).length} tile(s))`, async () => {
         const art = provision.createArtifact('dashboard', { name: dash.name });
-        for (const tile of dash.tiles || []) provision.addDashboardTile(art.id, dashboardTileOpts(spec, tile, result));
-        const pushed = await provision.pushArtifact('dashboard', art.id);
+        (dash.tiles || []).forEach((tile, ti) => provision.addElement('dashboard', art.id, '/components', dashboardComponent(dashboardTileOpts(spec, tile, result), ti)));
+        const pushed = requireSuccessfulPush(await provision.pushArtifact('dashboard', art.id), `dashboard ${dash.name}`);
         await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.dashboard, solutionUniqueName: sol.uniqueName });
         result.created.dashboards[dash.name] = pushed.id;
       });
@@ -923,16 +988,24 @@ async function runSdkBuild(spec, opts = {}) {
       const existingId = await provision.findArtifact('app', { uniqueName: def.uniqueName });
       if (existingId) {
         await provision.fetchArtifact('app', existingId);
-        provision.setAppDefinition(existingId, { siteMap: def.siteMap, components: def.components });
-        await provision.pushArtifact('app', existingId);
+        // Update the nav tree via the generic surface. On push the adapter re-derives the app's
+        // ENTITY + DashBoard components from the sitemap (T4), so a sitemap edit's tables/dashboards
+        // stay pinned. Explicit forms/views/charts pins are applied at CREATE (below); a fetched app
+        // has no `components` path to updateElement and model-driven apps auto-include a table's
+        // forms/views, so we do not re-pin them on edit (the retired setAppDefinition's edit-time
+        // re-pin is subsumed by sitemap-derived components + platform auto-inclusion).
+        provision.updateElement('app', existingId, '/siteMap', def.siteMap);
+        requireSuccessfulPush(await provision.pushArtifact('app', existingId), `app ${def.name}`);
         // Page-backed apps get their authoritative sitemap (incl. GenPage subareas) + publish from
         // the pages finalizer below; publish here only when there are no page subareas to wait for.
         if (!appHasPageSubareas(spec)) await provision.publishArtifact('app', existingId);
         await ensureSitemapInSolution(provision, sol, def.uniqueName);
         return existingId;
       }
+      // Create: the full def (siteMap + explicit components + iconWebResourceId) serializes unchanged
+      // through createArtifact, and push emits appmodule -> sitemap -> AddAppComponents -> publish.
       const art = provision.createArtifact('app', def);
-      const pushed = await provision.pushArtifact('app', art.id);
+      const pushed = requireSuccessfulPush(await provision.pushArtifact('app', art.id), `app ${def.name}`);
       await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.app, solutionUniqueName: sol.uniqueName });
       // The app module and its sitemap are DISTINCT solution components — adding the appmodule does
       // NOT pull the sitemap in (it lands only in the Default solution), so export/import from the
@@ -964,8 +1037,8 @@ async function runSdkBuild(spec, opts = {}) {
       await runner.run('pages', 'finalize sitemap (genpage subareas)', async () => {
         await provision.fetchArtifact('app', result.created.app);
         const full = appDef(spec, result.created);
-        provision.setAppDefinition(result.created.app, { siteMap: full.siteMap, components: full.components });
-        await provision.pushArtifact('app', result.created.app);
+        provision.updateElement('app', result.created.app, '/siteMap', full.siteMap);
+        requireSuccessfulPush(await provision.pushArtifact('app', result.created.app), 'app sitemap finalize');
         await provision.publishArtifact('app', result.created.app);
         return result.created.app;
       });
@@ -1014,4 +1087,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, chartDef, dashboardTileOpts, formDef, formFieldLogicals, appDef, appUniqueName, commandsByEntity, webResourceOpts, formEventOpts, WEB_RESOURCE_KINDS, FORM_EVENTS };
+module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, chartDef, dashboardTileOpts, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS };

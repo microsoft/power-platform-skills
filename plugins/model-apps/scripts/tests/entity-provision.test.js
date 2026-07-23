@@ -2,7 +2,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
-const { makeRunner, provisionDataModel, buildSeedGroup } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
+const { makeRunner, requireSuccessfulPush, provisionDataModel, buildSeedGroup } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
 
 function mockSdk(existing = {}) {
   const calls = [];
@@ -240,7 +240,11 @@ test('buildSeedGroup resolves choice labels to option ints in the body', () => {
   const spec = seedSpec();
   const group = buildSeedGroup({ spec, e: spec.entities[0], records: spec.sampleData.new_customer, statusReasonValues: {} });
   assert.strictEqual(group.entityLogical, 'new_customer');
-  assert.strictEqual(group.primaryAttribute, 'new_name');
+  // matchOn (opt-in idempotency key) replaced the retired primaryAttribute. new_customer's sample
+  // record sets a non-empty new_name, and the entity declares no alternate key, so the primary name
+  // column is the backward-compatible key.
+  assert.strictEqual(group.matchOn, 'new_name');
+  assert.strictEqual(group.primaryAttribute, undefined, 'retired key must not be emitted');
   assert.strictEqual(group.records[0].body.new_tier, 100000001, 'Pro -> 100000001');
   assert.deepStrictEqual(group.records[0].binds, []);
 });
@@ -269,5 +273,36 @@ test('buildSeedGroup halts when a statusReason value was not captured (data-mode
   assert.throws(
     () => buildSeedGroup({ spec, e: spec.entities[1], records: spec.sampleData.new_ticket, statusReasonValues: {} }),
     /status value wasn't captured/
+  );
+});
+
+test('buildSeedGroup prefers a single-column alternate key as matchOn over the primary name', () => {
+  const spec = seedSpec();
+  // Declare a single-column alternate key on new_customer; its column is set (non-empty) in the sample.
+  spec.entities[0].alternateKeys = [{ schemaName: 'new_codekey', columns: ['new_code'] }];
+  spec.sampleData.new_customer = [{ new_name: 'Acme', new_tier: 'Pro', new_code: 'AC-1' }];
+  const group = buildSeedGroup({ spec, e: spec.entities[0], records: spec.sampleData.new_customer, statusReasonValues: {} });
+  assert.strictEqual(group.matchOn, 'new_code', 'alt-key column wins over primary name');
+});
+
+test('buildSeedGroup omits matchOn (no dedup) when the key value is empty in a record', () => {
+  const spec = seedSpec();
+  // A record with no primary name value and no alternate key -> no safe dedup key -> omit matchOn.
+  spec.sampleData.new_customer = [{ new_tier: 'Pro' }];
+  const group = buildSeedGroup({ spec, e: spec.entities[0], records: spec.sampleData.new_customer, statusReasonValues: {} });
+  assert.strictEqual(group.matchOn, undefined, 'no non-empty key -> every record inserted');
+  assert.ok(!('primaryAttribute' in group));
+});
+
+test('requireSuccessfulPush passes a successful result through unchanged', () => {
+  const ok = { type: 'form', id: 'f1', success: true };
+  assert.strictEqual(requireSuccessfulPush(ok, 'form f1'), ok);
+});
+
+test('requireSuccessfulPush halts (BuildHalt) on a 412 version-conflict result', () => {
+  const conflict = { type: 'app', id: 'a1', success: false, error: new Error('version conflict') };
+  assert.throws(
+    () => requireSuccessfulPush(conflict, 'app a1'),
+    (err) => err.name === 'BuildHalt' && /re-download the app and rebuild/.test(err.message) && err.code === 'version-conflict'
   );
 });
