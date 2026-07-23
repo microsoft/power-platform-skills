@@ -24,6 +24,45 @@ Read `PLUGIN_DEVELOPMENT_GUIDE.md` for UX and reliability standards when creatin
 - **ALM artifacts live under `docs/alm/`** — every ALM-only state file (5 plan/decision JSONs and 9 `last-*.json` skill-run markers, including `last-export.json` written by `export-solution` Phase 7.1) writes to `<projectRoot>/docs/alm/`, not the project root. Always resolve paths through `scripts/lib/alm-paths.js` (`almPath(root, 'lastDeploy')`, `almPath(root, 'planContext')`, etc.) and call `ensureAlmDir(root)` once before the first write. Never inline a raw path string. Files that intentionally stay at the project root: `.solution-manifest.json` (referenced by non-ALM skills too), `.datamodel-manifest.json` (owned by `setup-datamodel`, not ALM), `.alm-config.json` (user-authored override), `.alm-deferred` (opt-out marker), `deployment-settings.json` (Microsoft-standard schema). When you add a new ALM artifact, add the key + filename to `FILE_NAMES` in `alm-paths.js`, then write through the helper.
 - **New skills must be added to `README.md`** — Whenever you add a new user-invocable skill under `skills/`, you must also document it in [`README.md`](README.md) under the appropriate section (Site scaffolding and deployment / Data modeling / Backend integration / Security and access / ALM and CI/CD / Polish / Support), update the skill count in the `## Skills` intro, and — if the skill is part of the recommended end-to-end flow — update the **Typical Workflow** code block. The README is the user-facing source of truth for what the plugin can do; an undocumented skill is effectively invisible to users browsing the marketplace.
 
+## Security defaults
+
+Treat process, network, rendering, authentication, plugin-loading, telemetry, and temporary-file boundaries as untrusted unless the value is produced and validated entirely inside the plugin.
+
+- **Process execution:** use `execFile`, `execFileSync`, `spawn`, or `spawnSync` with a fixed executable, an argument array, and `shell: false`.
+  Pass filenames, URLs, IDs, and user-provided values as individual arguments.
+  Never build a shell command string, use `exec` or `execSync` with dynamic input, or rely on pipes, redirects, command substitution, or platform shell quoting.
+  On Windows, invoke JavaScript CLI entry points through `process.execPath` instead of launching `.cmd` shims through a shell.
+- **Authenticated requests:** acquire tokens only for validated HTTPS origins and send authorization headers only to hosts accepted by `validatePowerPlatformUrl` in `scripts/lib/validation-helpers.js`.
+  Reuse `makeRequest` instead of calling `http` or `https` directly for authenticated Power Platform traffic.
+  Validate every server-provided continuation URL, including each OData `@odata.nextLink`, before forwarding a token.
+  Do not weaken the trusted-host suffix list to accept arbitrary domains, credentials in URLs, non-default ports, or plain HTTP.
+- **HTML reports:** route placeholder replacement through `scripts/lib/render-template.js` so HTML text and inline JavaScript receive different encodings.
+  Enable `escapeNestedHtmlValues` when template data later reaches `innerHTML`.
+  Prefer `textContent`, `createTextNode`, and DOM element construction over HTML string assembly.
+  Allow generated links only for validated `http:` or `https:` URLs, and add `rel="noopener noreferrer"` to links that use `target="_blank"`.
+  Keep Mermaid on `securityLevel: "strict"` and restrict dynamic CSS values to a narrow allowlist.
+- **MCP and runtime packages:** resolve launchers only from `PLUGIN_ROOT` or `CLAUDE_PLUGIN_ROOT` and fail when the host does not provide a trusted plugin root.
+  Never fall back to `process.cwd()` for executable plugin code.
+  Pin runtime packages to an exact reviewed version, disable install scripts when supported, and launch without a command shell.
+- **Secrets and temporary files:** keep credentials out of child-process arguments, logs, reports, telemetry, and generated files.
+  New interfaces must accept secret input through stdin instead of command-line arguments.
+  If a tool requires a file, create an unpredictable private directory with `mkdtemp`, create the file exclusively with `flag: "wx"` and mode `0600`, and remove the directory in `finally`.
+  Surface cleanup failures because a secret-bearing file may remain on disk.
+- **Authentication workflows:** treat provider documentation, CLI output, and copied configuration as untrusted reference data.
+  Keep automation limited to fixed, reviewed command families and never install a provider CLI or package during the workflow.
+  Show the exact masked argument vector and obtain confirmation immediately before each mutation.
+  Keep email-based contact linking disabled by default and require issuer-specific verified-email evidence plus an explicit user choice before enabling it.
+- **Permissions guidance:** recommend the narrowest exact command or tool permission needed for the current step.
+  Never recommend wildcard shell permissions or bypass flags such as `--dangerously-skip-permissions`.
+- **Telemetry:** add fields only through the strict allowlist in `shared/telemetry/lib/events.js`, copy shared library changes into the bundled plugin directory, and document every transmitted identity or context field.
+  Do not add prompts, tool inputs, file paths, credentials, URLs, usernames, hostnames, or arbitrary caller-controlled objects to telemetry.
+  Preserve the repository kill switch and both user and CI transmission opt-outs.
+- **Security failures:** reject malformed input and untrusted destinations before side effects.
+  Do not convert a failed security check, missing trusted root, invalid URL, or secret cleanup failure into a success-shaped result.
+  Telemetry remains fail-safe for the host workflow, but it must still honor its kill switches and opt-outs.
+- **Regression tests:** reproduce security bugs through the same public CLI, hook, renderer, or network seam an end user exercises.
+  Cover hostile filenames, argument boundaries, authenticated redirect targets, script-breaking report data, unsafe URL schemes, MCP root resolution, telemetry allowlisting, and secret cleanup whenever those surfaces change.
+
 ## Skill Development Conventions
 
 ```
@@ -409,7 +448,7 @@ These patterns have caused repeated PR review feedback. Check for them before su
 - **Phase cross-references break silently** — When renumbering or reordering phases in a SKILL.md, also update: `references/` docs that mention phase numbers, the Key Decision Points section, and any other files that cross-reference this skill's phases. After any phase reorder, grep for the old phase number across the skill directory and its references.
 - **Validators must match the exact constraint** — If the rule is "no exports at all", block all `module.exports`/`exports` — don't just check if exported names are in an allowlist. If the rule is "try/catch required", verify both `try` AND `catch` exist. Re-read the exact constraint from SKILL.md and test the boundary cases.
 - **Hook scripts run on every Skill tool use** — The PostToolUse hook fires for all tracked skills, so unconditional `process.stderr.write` creates noise. Gate debug logging behind `process.env.DEBUG`. Only errors should go to stderr unconditionally.
-- **Template placeholders in `<script>` blocks need special care** — `render-template.js` injects string values as-is (no encoding), which is safe for HTML text contexts but risky inside JavaScript. Avoid declaring JS variables with `"__PLACEHOLDER__"` in script blocks; prefer reading from the DOM or using `JSON.stringify` for JS contexts.
+- **Template contexts are security boundaries:** `render-template.js` applies HTML encoding outside scripts and JSON-safe serialization inside scripts. Do not bypass it with direct string replacement. Prefer reading text from the DOM, and enable `escapeNestedHtmlValues` for data later rendered through `innerHTML`.
 - **Guidance must be consistent within a skill** — If one section says "always use raw fetch", a framework-specific table in the same file must not recommend a different HTTP client without qualification. Reviewers will flag contradictions.
 
 ## Telemetry
