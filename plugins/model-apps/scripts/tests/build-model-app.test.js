@@ -12,9 +12,18 @@ const desk = JSON.parse(
   fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.support-desk.json'), 'utf8')
 );
 
+// Minimal JsonPointer + form-seed helpers so the mock can simulate the SDK's generic mutation
+// surface (addElement/updateElement/removeElement/getArtifact) the build engine now uses.
+function jpGet(o, p) { let c = o; for (const t of (p === '' ? [] : p.split('/').slice(1))) { if (c == null) return undefined; c = c[t]; } return c; }
+function jpSet(o, p, v) { const ts = p.split('/').slice(1); const l = ts.pop(); let c = o; for (const t of ts) c = c[t]; c[l] = v; }
+function jpRemove(o, p) { const ts = p.split('/').slice(1); const l = ts.pop(); let c = o; for (const t of ts) c = c[t]; if (Array.isArray(c)) c.splice(Number(l), 1); else delete c[l]; }
+const jclone = (v) => JSON.parse(JSON.stringify(v));
+function seedForm(id) { return { id, tabs: [{ columns: [{ sections: [{ name: 'section_general', columns: 1, rows: [] }] }] }], bag: { a: [], c: [] } }; }
+
 function mockSdk() {
   const calls = [];
   let idc = 0;
+  const store = {};
   const sdk = {
     queryRecords: async (e) => (e === 'solution' ? [] : [{ publisherid: 'pub-1' }]),
     createPublisher: async () => ({ id: 'pub-new' }),
@@ -28,14 +37,21 @@ function mockSdk() {
     createRecordsBulk: async (e, rows) => { calls.push(['createRecordsBulk', e]); return rows.map((_, i) => `${e}-${i}`); },
     seedRecordGraph: async (groups) => { calls.push(['seedRecordGraph', groups]); const createdIds = {}; for (const g of groups) createdIds[g.entityLogical] = g.records.map((_, i) => `${g.entityLogical}-${i}`); return { createdIds }; },
     enrichDefaultViews: async (logical) => { calls.push(['enrichDefaultViews', logical]); return { updated: [`defview-${logical}`] }; },
-    createArtifact: (t, def) => { calls.push(['createArtifact', t]); return Object.assign({ id: `${t}-${++idc}` }, def); },
+    createArtifact: (t, def) => {
+      calls.push(['createArtifact', t]);
+      const id = `${t}-${++idc}`;
+      const art = t === 'form' ? Object.assign(seedForm(id), { name: def.name, entityLogicalName: def.entityLogicalName, formType: def.formType, status: def.status })
+        : t === 'dashboard' ? Object.assign({ id, components: [] }, def) : Object.assign({ id }, def);
+      art.id = id; store[`${t}:${id}`] = art; return jclone(art);
+    },
     createWebResource: async (o) => { calls.push(['createWebResource', o.name]); return { id: `wr-${++idc}`, name: o.name }; },
     pushArtifact: async (t, id) => ({ type: t, id, success: true }),
-    addSubGrid: () => ({}),
-    getArtifact: (t, id) => ({ id, columns: [] }),
-    addField: async () => ({}),
+    fetchArtifact: async (t, id) => { if (!store[`${t}:${id}`]) store[`${t}:${id}`] = t === 'form' ? seedForm(id) : t === 'app' ? { id, siteMap: { areas: [] } } : { id, columns: [] }; return store[`${t}:${id}`]; },
+    getArtifact: (t, id) => store[`${t}:${id}`] || { id, columns: [] },
+    addElement: (t, id, ptr, el) => { const a = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id }); const arr = jpGet(a, ptr); if (Array.isArray(arr)) arr.push(jclone(el)); return jclone(a); },
+    updateElement: (t, id, ptr, patch) => { const a = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id }); jpSet(a, ptr, jclone(patch)); return jclone(a); },
+    removeElement: (t, id, ptr) => { const a = store[`${t}:${id}`]; if (a) jpRemove(a, ptr); return jclone(a || { id }); },
     updateRecord: async () => undefined,
-    setViewColumns: () => ({}),
     addSolutionComponent: async () => undefined,
     publishArtifact: async () => undefined,
     findArtifact: async (kind, identity) => null,
