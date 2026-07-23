@@ -286,8 +286,9 @@ the `MIGRATED_FOLDER` files.
    - Apply the recipe from the manual-fixes reference using `Edit`.
    - Re-check the affected lines against the file's `*-diff.json` to confirm you didn't disturb
      auto-applied changes.
-   - Commit per category: `git -C "<MIGRATED_FOLDER>" add -A && git commit -m "v5 fixes: <category>"`
-     (init the V5 folder as a repo first if needed).
+   - Commit per category: `git -C "<MIGRATED_FOLDER>" add -A && git -C "<MIGRATED_FOLDER>" commit -m "v5 fixes: <category>"`
+     (init the V5 folder as a repo first if needed). Use `-C "<MIGRATED_FOLDER>"` on **both**
+     `add` and `commit` so they run against the V5 copy, not the current working directory.
 3. For **ambiguous / Liquid-entangled** cases, do **not** rewrite — list them for the user with the
    file and line and a suggested manual change.
 
@@ -374,8 +375,12 @@ restart.
    render, and capture console/network errors.
 2. **Before/after visual check** — spot-check the highest-traffic pages (home, navbar, any
    panels/cards, forms, pagination) for layout regressions introduced by the migration.
-3. **Record skill usage** — follow `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
-   with `--skillName "BootstrapMigrateV3ToV5"`.
+3. **Record skill usage** — follow `${PLUGIN_ROOT}/references/skill-tracking-reference.md`, passing
+   `--projectRoot "<MIGRATED_FOLDER>"` (the folder containing `powerpages.config.json`) and
+   `--skillName "BootstrapMigrateV3ToV5"`. Tracking only writes when the project is a **code site**
+   (`.powerpages-site/site-settings/` exists); for a traditional/native download the script exits
+   silently as a no-op — that is expected, so call it unconditionally and don't treat the no-op as an
+   error. If tracking files are written, include them in the final commit.
 4. **Summary** — present:
    - Files changed per category (auto-applied vs assisted vs flagged-for-manual).
    - Residual items that still need human attention.
