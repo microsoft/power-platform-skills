@@ -10,6 +10,8 @@ const path = require('node:path');
 const fs = require('node:fs');
 
 const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
+// The migration's pure intent helpers, used to drive the generic surface in the CONTRACT tests below.
+const { formEventsRegionIntent, findFieldCellPointer } = require('../lib/artifact-intent.js');
 
 // Track temp workspace dirs created by the smoke tests and remove them once the suite finishes,
 // so repeated runs don't leak directories into the test runner's temp folder.
@@ -45,8 +47,9 @@ function freshSdk(capture) {
 
 test('vendored bundle exports createMakerSdk', () => {
   const mod = require(BUNDLE);
+  // hardening-2 exposes the FACTORY (the only entry the engine uses); the MakerSdk class is no
+  // longer a public export.
   assert.strictEqual(typeof mod.createMakerSdk, 'function');
-  assert.strictEqual(typeof mod.MakerSdk, 'function');
 });
 
 test('createArtifact serializes every artifact type headlessly (no browser)', () => {
@@ -101,33 +104,41 @@ test('vendored SDK exposes the consolidation methods', () => {
   }
 });
 
-test('addFormEventHandler injects a handler into the retained FormXML headlessly (Tier 2)', () => {
+test('CONTRACT: a canonical /bag/c <events> region wires a handler into the retained FormXML headlessly (Tier 2)', () => {
   const { createMakerSdk } = require(BUNDLE);
   const ws = mkTempWorkspace('sdk-evt-');
+  const FID = '22222222-2222-2222-2222-222222222222';
   const formXml = '<form><tabs><tab name="general"><columns><column><sections><section><rows /></section></sections></column></columns></tab></tabs></form>';
+  let pushedXml = '';
   const httpClient = {
-    get: async () => ({ status: 200, headers: { etag: 'W/"1"' }, body: { formid: '22222222-2222-2222-2222-222222222222', name: 'F', type: 2, objecttypecode: 'account', formxml: formXml } }),
+    get: async () => ({ status: 200, headers: { etag: 'W/"1"' }, body: { formid: FID, name: 'F', type: 2, objecttypecode: 'account', formxml: formXml } }),
     post: async () => ({ status: 204, headers: {}, body: {} }),
-    patch: async () => ({ status: 204, headers: {}, body: {} }),
+    patch: async (url, body) => { pushedXml = String((body && body.formxml) || ''); return { status: 204, headers: {}, body: {} }; },
     delete: async () => ({ status: 204, headers: {}, body: {} }),
     put: async () => ({ status: 204, headers: {}, body: {} }),
   };
   const sdk = createMakerSdk({ workspacePath: ws, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
   sdk.initWorkspace();
-  return sdk.fetchArtifact('form', '22222222-2222-2222-2222-222222222222').then((fetched) => {
+  return sdk.fetchArtifact('form', FID).then(async (fetched) => {
     assert.ok(fetched, 'form fetched');
-    sdk.addFormEventHandler('22222222-2222-2222-2222-222222222222', { event: 'onload', libraryName: 'new_smoke.js', functionName: 'Ticket.onLoad', passExecutionContext: true });
-    const raw = sdk.getArtifact('form', '22222222-2222-2222-2222-222222222222');
-    assert.ok(raw, 'form still readable after wiring a handler');
+    // The engine wires form JS by adding the root-bag <events> region via the generic surface (the
+    // retired addFormEventHandler is gone). The adapter mints the handlerUniqueId at serialize.
+    const bagC = (fetched.bag && fetched.bag.c) || [];
+    const nextI = bagC.reduce((m, e) => Math.max(m, e.i), -1) + 1;
+    sdk.addElement('form', FID, '/bag/c', { i: nextI, node: formEventsRegionIntent([{ event: 'onload', library: 'new_smoke.js', function: 'Ticket.onLoad' }]) });
+    await sdk.pushArtifact('form', FID);
+    assert.match(pushedXml, /Ticket\.onLoad/, 'the handler function is baked into the pushed formxml');
+    assert.match(pushedXml, /handlerUniqueId/, 'the adapter minted the handlerUniqueId the caller omitted');
   });
 });
 
-test('CONTRACT: vendored removeField drops a bound field from a fetched form (reconcile can DELETE a field, not only add)', async () => {
+test('CONTRACT: removeElement drops a bound field from a fetched form (reconcile can DELETE a field, not only add)', async () => {
   const { createMakerSdk } = require(BUNDLE);
   const ws = mkTempWorkspace('sdk-rmfield-');
   const FID = '22222222-2222-2222-2222-222222222222';
   // A fetched form whose retained formxml carries two bound fields (name + tier). The skill's form
-  // reconcile removes a field the edited spec dropped — this locks that the bundle can do it.
+  // reconcile removes a field the edited spec dropped — findFieldCellPointer locates the cell and
+  // removeElement drops it. This locks that the bundle can do it via the generic surface.
   const formXml =
     '<form><tabs><tab id="{11111111-1111-1111-1111-111111111111}" name="general"><columns><column><sections>' +
     '<section id="{55555555-5555-5555-5555-555555555555}" name="sec" columns="1"><rows>' +
@@ -145,7 +156,9 @@ test('CONTRACT: vendored removeField drops a bound field from a fetched form (re
   const sdk = createMakerSdk({ workspacePath: ws, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
   sdk.initWorkspace();
   await sdk.fetchArtifact('form', FID);
-  sdk.removeField(FID, { fieldName: 'new_tier' });
+  const ptr = findFieldCellPointer(sdk.getArtifact('form', FID), 'new_tier');
+  assert.ok(ptr, 'the cell hosting the dropped field is located in the canonical tree');
+  sdk.removeElement('form', FID, ptr);
   await sdk.pushArtifact('form', FID);
   assert.ok(/datafieldname="new_name"/.test(pushedXml), 'the kept field survives the push');
   assert.ok(!/datafieldname="new_tier"/.test(pushedXml), 'the removed field is gone from the pushed formxml');
@@ -233,8 +246,8 @@ test('CONTRACT: name-based SDK methods accept logical/unique names verbatim (nev
   assert.match(wire, /LogicalName='account'/i, 'deleteTable accepted a table logical name');
 });
 
-test('CONTRACT: free-text sitemap titles/URLs are XML-escaped, not rejected (a safe DOM factory must escape VALUES, only validate NAMES)', () => {
-  const { AppAdapter } = require(BUNDLE);
+test('CONTRACT: free-text sitemap titles/URLs are XML-escaped, not rejected (a safe DOM factory must escape VALUES, only validate NAMES)', async () => {
+  const { createMakerSdk } = require(BUNDLE);
   const { appDef } = require('../lib/sdk-build.js');
   const spec = {
     solution: { uniqueName: 'EscA', publisherPrefix: 'new' },
@@ -246,13 +259,25 @@ test('CONTRACT: free-text sitemap titles/URLs are XML-escaped, not rejected (a s
     ] }] }] },
   };
   const def = appDef(spec, { forms: {}, views: {}, charts: {}, dashboards: {} });
-  const adapter = new AppAdapter();
-  const art = { id: 'app-esc', name: spec.app.name, uniqueName: 'new_escapp', description: spec.app.description, siteMap: def.siteMap, components: def.components };
-  let xml;
-  assert.doesNotThrow(() => { xml = adapter.toApiPayload(art).sitemapxml; }, 'special-char titles/URLs must serialize, not throw');
-  assert.match(xml, /&amp;/, 'ampersands in titles/URLs are escaped');
-  assert.match(xml, /a=1&amp;b=2/, 'URL query separators are escaped in the attribute value (not lost or left raw)');
-  assert.ok(!/<Title[^>]*>[^<]*&(?!amp;|lt;|gt;|quot;|apos;|#)/.test(xml), 'no raw unescaped ampersand inside a Title');
+  // Drive the PUBLIC surface (the AppAdapter class is no longer a bundle export): create the app and
+  // capture the sitemapxml the push serializes.
+  let sitemapXml = '';
+  const ws = mkTempWorkspace('sdk-esc-');
+  const httpClient = {
+    get: async () => ({ status: 200, headers: {}, body: {} }),
+    post: async (url, body) => { if (/\/sitemaps\b/.test(url) && body && body.sitemapxml) sitemapXml = String(body.sitemapxml); return { status: 204, headers: { 'odata-entityid': 'https://x/y(11111111-1111-1111-1111-111111111111)' }, body: {} }; },
+    patch: async () => ({ status: 204, headers: {}, body: {} }),
+    delete: async () => ({ status: 204, headers: {}, body: {} }),
+    put: async () => ({ status: 204, headers: {}, body: {} }),
+  };
+  const sdk = createMakerSdk({ workspacePath: ws, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+  sdk.initWorkspace();
+  const art = sdk.createArtifact('app', { name: spec.app.name, uniqueName: 'new_escapp', description: spec.app.description, siteMap: def.siteMap, components: def.components });
+  await assert.doesNotReject(sdk.pushArtifact('app', art.id), 'special-char titles/URLs must serialize, not throw');
+  assert.ok(sitemapXml, 'the sitemap was serialized and posted');
+  assert.match(sitemapXml, /&amp;/, 'ampersands in titles/URLs are escaped');
+  assert.match(sitemapXml, /a=1&amp;b=2/, 'URL query separators are escaped in the attribute value (not lost or left raw)');
+  assert.ok(!/<Title[^>]*>[^<]*&(?!amp;|lt;|gt;|quot;|apos;|#)/.test(sitemapXml), 'no raw unescaped ampersand inside a Title');
 });
 
 test('CONTRACT: vendored deleteAppCascade returns a structured { success, deleted, failures } result surfacing child-cleanup failures (teardown relies on this to report orphaned sitemap/genpage rows)', async () => {
@@ -293,7 +318,7 @@ test('CONTRACT: vendored deleteAppCascade returns a structured { success, delete
 
 test('CONTRACT: vendored seedRecordGraph returns { createdIds: { <entity>: [ids] } } (the sample-data phase reads createdIds to bind children)', async () => {
   // The build's sample-data phase (entity-provision.js) calls
-  //   sdk.seedRecordGraph([{ entityLogical, primaryAttribute, records:[{ body, binds }] }],
+  //   sdk.seedRecordGraph([{ entityLogical, matchOn?, records:[{ body, binds }] }],
   //                       { entitySetFor, createdIds })
   // and destructures `createdIds`, then reads createdIds[<entityLogical>] to bind children — so
   // the bundle MUST keep returning that exact shape (not a bare id array) across a re-vendor.
@@ -320,7 +345,7 @@ test('CONTRACT: vendored seedRecordGraph returns { createdIds: { <entity>: [ids]
   const sdk = sdkWith(client);
   const group = {
     entityLogical: 'new_widget',
-    primaryAttribute: 'new_name',
+    matchOn: 'new_name',
     records: [{ body: { new_name: 'A' }, binds: [] }, { body: { new_name: 'B' }, binds: [] }],
   };
   const result = await sdk.seedRecordGraph([group], { createdIds: {} });

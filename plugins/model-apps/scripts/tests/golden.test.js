@@ -19,8 +19,9 @@ for (const name of ['project-tracker', 'support-desk']) {
   });
 }
 
-test('sitemap-XML golden: area + subarea icons', () => {
-  const { AppAdapter } = require('../vendor/cds-maker-sdk.cjs');
+test('sitemap-XML golden: area + subarea icons', async () => {
+  const { createMakerSdk } = require('../vendor/cds-maker-sdk.cjs');
+  const os = require('node:os');
   const spec = {
     solution: { uniqueName: 'GoldA', publisherPrefix: 'new' },
     app: { name: 'Golden App', description: 'golden' },
@@ -37,8 +38,21 @@ test('sitemap-XML golden: area + subarea icons', () => {
     },
   };
   const def = appDef(spec, { forms: {}, views: {}, charts: {}, dashboards: {} });
-  const adapter = new AppAdapter();
-  const art = { id: 'app-golden', name: spec.app.name, uniqueName: 'new_goldenapp', description: '', siteMap: def.siteMap, components: def.components };
-  const xml = adapter.toApiPayload(art).sitemapxml;
+  // Drive the PUBLIC surface (the AppAdapter class is no longer a bundle export): create the app and
+  // capture the sitemapxml the push serializes.
+  let xml = '';
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'golden-sitemap-'));
+  const httpClient = {
+    get: async () => ({ status: 200, headers: {}, body: {} }),
+    post: async (url, body) => { if (/\/sitemaps\b/.test(url) && body && body.sitemapxml) xml = String(body.sitemapxml); return { status: 204, headers: { 'odata-entityid': 'https://x/y(11111111-1111-1111-1111-111111111111)' }, body: {} }; },
+    patch: async () => ({ status: 204, headers: {}, body: {} }),
+    delete: async () => ({ status: 204, headers: {}, body: {} }),
+    put: async () => ({ status: 204, headers: {}, body: {} }),
+  };
+  const sdk = createMakerSdk({ workspacePath: ws, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+  sdk.initWorkspace();
+  const art = sdk.createArtifact('app', { name: spec.app.name, uniqueName: 'new_goldenapp', description: '', siteMap: def.siteMap, components: def.components });
+  await sdk.pushArtifact('app', art.id);
+  fs.rmSync(ws, { recursive: true, force: true });
   assertGolden('sitemap.icons.xml', xml + '\n');
 });

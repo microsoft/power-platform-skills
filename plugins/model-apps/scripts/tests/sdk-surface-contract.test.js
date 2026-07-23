@@ -32,12 +32,8 @@ const SCRIPTS_DIR = path.resolve(__dirname, '..');
 // the source-scan test below. Keep it ALPHABETICAL and one-method-per-line for clean diffs —
 // this list is the living contract of what a re-vendored bundle MUST keep exposing.
 const SKILL_SDK_SURFACE = [
-  'addDashboardTile',
-  'addField',
-  'addFormEventHandler',
-  'addQuickViewControl',
+  'addElement',
   'addSolutionComponent',
-  'addSubGrid',
   'configureRowSummary',
   'createAlternateKey',
   'createArtifact',
@@ -69,14 +65,13 @@ const SKILL_SDK_SURFACE = [
   'publishArtifact',
   'pushArtifact',
   'queryRecords',
-  'removeField',
+  'removeElement',
   'removeRowSummary',
   'resolveArtifact',
   'seedRecordGraph',
   'setAppAiFeatures',
-  'setAppDefinition',
   'setEntityIcon',
-  'setViewColumns',
+  'updateElement',
   'updateRecord',
 ];
 
@@ -118,6 +113,9 @@ function calledSdkMethods() {
     path.join(LIB_DIR, 'sdk-build.js'),
     path.join(LIB_DIR, 'sdk-teardown.js'),
     path.join(LIB_DIR, 'entity-provision.js'),
+    // artifact-intent.js is PURE (no SDK calls) by design, but scan it too so a future SDK call
+    // added to the compiler is caught by this guard rather than slipping past the mock-based tests.
+    path.join(LIB_DIR, 'artifact-intent.js'),
   ].filter((f) => fs.existsSync(f));
   const re = /\b(?:provision|sdk)\.([A-Za-z][A-Za-z0-9]*)\s*\(/g;
   const found = new Set();
@@ -144,20 +142,15 @@ test('CONTRACT: SKILL_SDK_SURFACE stays in sync with the engines — no SDK call
 });
 
 // Guard-the-guard: prove the presence check actually FAILS when a method the skill needs is
-// absent, so it can never silently rot into a no-op. Simulates the exact shape of the
-// cds-maker-sdk-hardening-2 refactor, which dropped these convenience mutators from MakerSdk
-// (they moved to the generic addElement/updateElement/removeElement tree API). If the guard
-// stopped detecting a removal, THIS test fails too.
+// absent, so it can never silently rot into a no-op. Simulates a FUTURE bundle that drops the
+// generic mutation surface the hardening-2 migration now depends on (addElement/updateElement/
+// removeElement — which replaced the retired per-artifact mutators). If the guard stopped
+// detecting a removal, THIS test fails too.
 test('CONTRACT (meta): the presence check flags a bundle that dropped skill-critical methods (simulated SDK swap)', () => {
   const removedByRefactor = [
-    'addField',
-    'removeField',
-    'addSubGrid',
-    'addQuickViewControl',
-    'addFormEventHandler',
-    'addDashboardTile',
-    'setViewColumns',
-    'setAppDefinition',
+    'addElement',
+    'removeElement',
+    'updateElement',
   ];
   // A stand-in SDK exposing the whole surface EXCEPT the methods a swap removed.
   const fakeSdk = {};
