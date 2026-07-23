@@ -9,13 +9,11 @@ description: >-
   Bootstrap 5. NOT for code sites (React/Vue/Angular/Astro) — those are never Bootstrap-3.
 user-invocable: true
 argument-hint: Optional website name or local site folder path
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList
+allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Skill, Task, TaskCreate, TaskUpdate, TaskList
 model: opus
 ---
 
 > **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
-
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Migrate a Traditional Power Pages Site from Bootstrap 3 to Bootstrap 5
 
@@ -61,9 +59,16 @@ confirmed, and the required commands are available.
 2. Run `pac help` to confirm PAC CLI is installed and on PATH. If missing, point the user to
    `https://aka.ms/PowerPlatformCLI` (`dotnet tool install --global Microsoft.PowerApps.CLI.Tool`)
    and re-verify.
+<!-- not-a-gate: data-gathering — free-text environment URL when PAC CLI isn't authenticated; the prompt itself writes nothing -->
+
 3. Run `pac auth who`. If not authenticated, ask for the environment URL via `AskUserQuestion`,
    then `pac auth create --environment "<URL>"` and re-verify. Capture the environment name, URL,
    and ID.
+
+<!-- gate: bootstrap-migrate-v3-to-v5:1.confirm-env | category=consent | cancel-leaves=nothing -->
+
+> 🚦 **Gate (consent · bootstrap-migrate-v3-to-v5:1.confirm-env):** Confirm the target environment before any download, migration, or upload. Running the migration against the wrong environment is destructive, so this confirmation is mandatory.
+
 4. Confirm the target environment with the user (`AskUserQuestion`: use this environment / choose
    another via `pac org list` + `pac org select`).
 5. **Probe command availability** — both verbs are required:
@@ -108,6 +113,10 @@ and `upload` confirmed available, `PAC_LOG` path captured.
   ```bash
   pac pages list
   ```
+
+<!-- gate: bootstrap-migrate-v3-to-v5:2.1.select-site | category=plan | cancel-leaves=nothing -->
+
+  > 🚦 **Gate (plan · bootstrap-migrate-v3-to-v5:2.1.select-site):** Choose which website to download when more than one exists. Canceling leaves nothing changed.
 
   Present the websites via `AskUserQuestion`, then download the selected site:
 
@@ -205,6 +214,10 @@ running the engine.
 
 **Actions**:
 
+<!-- gate: bootstrap-migrate-v3-to-v5:4.run-engine | category=consent | cancel-leaves=nothing -->
+
+> 🚦 **Gate (consent · bootstrap-migrate-v3-to-v5:4.run-engine):** Explicit consent before running `pac pages bootstrap-migrate`. The engine writes a new `<SITE_FOLDER>V5` copy and never edits the source, so canceling leaves nothing changed.
+
 1. Get explicit consent to run the engine (`AskUserQuestion`: "Run the Bootstrap 5 migration on
    `<SITE_FOLDER>`? This creates a new `<SITE_FOLDER>V5` copy and does not modify the original.").
 2. Run:
@@ -264,6 +277,10 @@ the `MIGRATED_FOLDER` files.
 
 1. Group the residual items by category (grid hierarchy, navbar structure, panel/card styling,
    page-header, pager, btn-block, Liquid edge cases, partial paths).
+<!-- gate: bootstrap-migrate-v3-to-v5:6.residual-fixes | category=progress | cancel-leaves=nothing -->
+
+> 🚦 **Gate (progress · bootstrap-migrate-v3-to-v5:6.residual-fixes):** Per-category consent before applying each residual fix to the `MIGRATED_FOLDER` files. Changes are local to the V5 copy and committed per category; canceling leaves nothing outward-facing changed.
+
 2. For **each category**, get per-category consent (`AskUserQuestion`: "Apply the `<category>` fixes
    to `<N>` file(s)?"). On consent:
    - Apply the recipe from the manual-fixes reference using `Edit`.
@@ -296,6 +313,10 @@ Verify both (`Grep`/`Read`). If either is missing, the flag flip silently no-ops
 
 ### 7.2 Final consent gate, then upload
 
+<!-- gate: bootstrap-migrate-v3-to-v5:7.2.upload | category=final | cancel-leaves=nothing -->
+
+> 🚦 **Gate (final · bootstrap-migrate-v3-to-v5:7.2.upload):** Final sign-off before the first outward-facing change. `pac pages upload` publishes the Bootstrap 5 site and auto-enables the runtime flag. Canceling before upload leaves the live site untouched.
+
 This is the first **outward-facing** change. Get explicit consent (`AskUserQuestion`: "Upload
 `<MIGRATED_FOLDER>` to environment `<ENV_NAME>`? This publishes the Bootstrap 5 site and enables the
 Bootstrap 5 runtime."). On consent:
@@ -320,7 +341,7 @@ site can be misleading (an unactivated site throws a 500 that has nothing to do 
 
 ```bash
 # grep the PAC diagnostic log for the post-processor's result (most recent run is last)
-grep -i "BootstrapV5UploadPostProcessor\|SetPortalBootstrapV5Enabled" "<PAC_LOG>"
+grep -iE "BootstrapV5UploadPostProcessor|SetPortalBootstrapV5Enabled" "<PAC_LOG>"
 ```
 
 Three possible outcomes:
@@ -353,7 +374,7 @@ restart.
    render, and capture console/network errors.
 2. **Before/after visual check** — spot-check the highest-traffic pages (home, navbar, any
    panels/cards, forms, pagination) for layout regressions introduced by the migration.
-3. **Record skill usage** — follow `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+3. **Record skill usage** — follow `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
    with `--skillName "BootstrapMigrateV3ToV5"`.
 4. **Summary** — present:
    - Files changed per category (auto-applied vs assisted vs flagged-for-manual).

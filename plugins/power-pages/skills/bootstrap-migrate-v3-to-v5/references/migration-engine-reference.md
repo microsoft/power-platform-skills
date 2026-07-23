@@ -125,7 +125,7 @@ is **no per-folder upload log**; the only record is the rolling PAC diagnostic l
 
 ```bash
 pac telemetry status   # prints: The diagnostic logs can be found at: <…>\logs\pac-log.txt
-grep -i "BootstrapV5UploadPostProcessor\|SetPortalBootstrapV5Enabled" "<pac-log.txt>"
+grep -iE "BootstrapV5UploadPostProcessor|SetPortalBootstrapV5Enabled" "<pac-log.txt>"
 ```
 
 Three outcomes: **applied** (`INF`) → on; **`Skipping … no portal found`** (`WRN`) → site not
