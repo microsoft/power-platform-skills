@@ -38,7 +38,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 32 skills that cover the full lifecycle of a Power Pages site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, auditing, and Bootstrap 3→5 migration. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 33 skills that cover the full lifecycle of a Power Pages site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, auditing, and Bootstrap 3→5 migration. Each skill is invoked conversationally — just describe what you want to do.
 
 ### Site scaffolding and deployment
 
