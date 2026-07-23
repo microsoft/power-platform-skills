@@ -2,7 +2,7 @@
 
 All notable changes to the **model-apps** plugin.
 
-## [Unreleased] — 2.3.0
+## 2.3.0 — 2026-07-23
 
 Plugin observability + authoring guardrails: default-on (but ship-disabled)
 anonymous telemetry with a local diagnostic log, PostToolUse validators, and a
