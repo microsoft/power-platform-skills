@@ -185,6 +185,36 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       ```
       Use the returned `environmentUrl` and `token` for the import request and poller. If `ok: false`, surface the error, emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop before import.
 
+   3. Preflight-check whether `.js` is blocked in the target environment:
+      ```bash
+      node "${PLUGIN_ROOT}/scripts/lib/fix-blocked-attachments.js" --envUrl "<environmentUrl>" --extensions js --dry-run --quiet
+      ```
+      Evaluate the JSON result:
+      - **`wasBlocked` does not include `js`**: continue; JavaScript attachments are allowed.
+      - **`wasBlocked` includes `js`**: fire the `.js` unblock consent gate below.
+
+<!-- gate: create-site:1.5.unblock-js | category=consent | cancel-leaves=attachment-block-modified -->
+
+> 🚦 **Gate (consent · create-site:1.5.unblock-js):** Preflight unblock of `.js` from the target environment's `blockedattachments` setting before importing a template solution.
+>
+> **Trigger:** Phase 1.5 when `fix-blocked-attachments.js --dry-run --extensions js` reports `.js` is blocked in the target environment.
+> **Why we ask:** Template solutions include JavaScript web files/code-site assets. If `.js` remains blocked, `ImportSolutionAsync` is expected to fail. Unblocking changes an environment-level security setting that affects more than this skill.
+> **Cancel leaves:** `attachment-block-modified` is possible only if the user approved and the update partially completed. Pure Cancel here leaves the original `blockedattachments` value untouched and no solution import has started.
+
+      Use `AskUserQuestion`:
+
+      | Question | Header | Options |
+      |----------|--------|---------|
+      | This environment currently blocks `.js` attachments. Template import is expected to fail unless `.js` is unblocked. Remove only `js` from `blockedattachments` now? | Unblock JavaScript | Yes, unblock `.js` and continue (Recommended), No, start from scratch, Cancel |
+
+      - **Yes**: run the helper without `--dry-run`, preserving every other blocked extension:
+        ```bash
+        node "${PLUGIN_ROOT}/scripts/lib/fix-blocked-attachments.js" --envUrl "<environmentUrl>" --extensions js --quiet
+        ```
+        Confirm the JSON result has `removed` containing `js` or `changed: true`, then rerun the dry-run check and continue only if `.js` is no longer blocked.
+      - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions. Do not import the template.
+      - **Cancel**: emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop before import.
+
 <!-- gate: create-site:1.5.template-import | category=consent | cancel-leaves=template-cache -->
 
 > 🚦 **Gate (consent · create-site:1.5.template-import):** Confirm importing the selected template solution into the current Power Platform environment.
@@ -193,7 +223,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 > **Why we ask:** The next step imports an unmanaged Dataverse solution into the user's org. Wrong environment or wrong template is disruptive and cannot be cleanly undone.
 > **Cancel leaves:** `template-cache` — the selected solution zip and preview images may remain in the SHA-keyed temp cache; no org mutation has occurred.
 
-   3. Present the template and environment, then ask:
+   4. Present the template and environment, then ask:
 
       | Question | Header | Options |
       |----------|--------|---------|
@@ -201,7 +231,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
       - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to step 8.
       - **Cancel**: emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop; no org mutation has happened.
-   4. Inspect the selected solution zip and check whether that solution is already installed:
+   5. Inspect the selected solution zip and check whether that solution is already installed:
       ```bash
       node "${PLUGIN_ROOT}/scripts/inspect-template-solution.js" --zipPath "<SELECTED_TEMPLATE_SOLUTION_ZIP>"
       node "${PLUGIN_ROOT}/scripts/check-solution-installed.js" --solutionName "<uniqueName>" --envUrl "<environmentUrl>"
@@ -292,13 +322,13 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         - **Start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions.
         - **Stop**: emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop before import; no org mutation has happened.
 
-   5. Capture a pre-import site list snapshot:
+   6. Capture a pre-import site list snapshot:
       ```bash
       node "${PLUGIN_ROOT}/scripts/capture-pages-list.js" --output "<temp-before-pages-list.txt>"
       ```
       If the result is `ok: false`, surface the error, emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop before import.
-   6. Mark **Verify prerequisites and confirm template import** as `completed` and **Import template solution** as `in_progress`.
-   7. Import the unmanaged solution inline, without invoking `/import-solution` and without writing ALM artifacts:
+   7. Mark **Verify prerequisites and confirm template import** as `completed` and **Import template solution** as `in_progress`.
+   8. Import the unmanaged solution inline, without invoking `/import-solution` and without writing ALM artifacts:
       ```bash
       node "${PLUGIN_ROOT}/scripts/encode-solution-file.js" --zipPath "<SELECTED_TEMPLATE_SOLUTION_ZIP>"
       node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "<environmentUrl>" POST "ImportSolutionAsync" \
@@ -334,8 +364,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
       If the error is `AttachmentBlocked`, point to `/import-solution` Phase 5b remediation.
       Only continue to the next step when the import poll result is `Succeeded`.
-   8. Mark **Import template solution** as `completed` and **Show imported inactive site** as `in_progress`.
-   9. Capture a post-import site list snapshot and identify the newly-imported site:
+   9. Mark **Import template solution** as `completed` and **Show imported inactive site** as `in_progress`.
+   10. Capture a post-import site list snapshot and identify the newly-imported site:
       ```bash
       node "${PLUGIN_ROOT}/scripts/capture-pages-list.js" --output "<temp-after-pages-list.txt>"
       node "${PLUGIN_ROOT}/scripts/diff-pages-list.js" --before "<temp-before-pages-list.txt>" --after "<temp-after-pages-list.txt>"
@@ -343,8 +373,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       - **`status: "found"` and `inactive: true`**: set `IMPORTED_SITE_NAME`, `IMPORTED_WEBSITE_RECORD_ID`, and `IMPORTED_SITE_STATE`, then tell the user: "Template `<displayName>` was imported as `<IMPORTED_SITE_NAME>` (`<IMPORTED_WEBSITE_RECORD_ID>`). Current state from `pac pages list -v`: `<IMPORTED_SITE_STATE>`. The site exists in your environment but is not live yet; activation is the next step."
       - **`status: "found"` but `inactive: false`**: show the diff result, emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=success`, `activationOutcome=skipped`, and `seedApplied=false`, then explain that the import succeeded but the inactive state could not be verified automatically. Stop before activation; the next slice will handle recovery.
       - **`status: "none"` or `"multiple"`**: show the diff result, emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=success`, `activationOutcome=skipped`, and `seedApplied=false`, then explain that the import succeeded but the newly-imported site could not be identified automatically. Stop before activation; the next slice will handle recovery.
-   10. Mark **Show imported inactive site** as `completed`.
-   11. If `SELECTED_TEMPLATE.seedDataPath` is present, mark **Apply template seed data** as `in_progress` and run:
+   11. Mark **Show imported inactive site** as `completed`.
+   12. If `SELECTED_TEMPLATE.seedDataPath` is present, mark **Apply template seed data** as `in_progress` and run:
        ```bash
        node "${PLUGIN_ROOT}/scripts/fetch-template-seed-data.js" --sha "<catalog-sha>" --seedDataPath "<SELECTED_TEMPLATE.seedDataPath>"
        ```
@@ -354,8 +384,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        ```
        Surface the JSON summary (`inserted`, `failed`, `skipped`, `errors`). For a lightweight read-only verification path, query each seeded `entitySetName` with `dataverse-request.js` using `GET "<entitySetName>?$top=1"` and report whether the seeded table is reachable. Seeding is best-effort: even if `failed > 0`, `ok: false`, or read-only verification cannot run, continue to activation.
        If `seedDataPath` is absent, skip this task.
-   12. Mark **Apply template seed data** as `completed` or skipped, then mark **Activate imported site** as `in_progress`.
-   13. Invoke `/activate-site`, passing the resolved identity in the request so it skips local-project discovery:
+   13. Mark **Apply template seed data** as `completed` or skipped, then mark **Activate imported site** as `in_progress`.
+   14. Invoke `/activate-site`, passing the resolved identity in the request so it skips local-project discovery:
        ```text
        Activate imported template site:
        - siteName: <IMPORTED_SITE_NAME>
@@ -365,8 +395,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        ```
        The activate-site skill owns subdomain selection, final activation confirmation, provisioning, polling, and recovery.
        If activation ultimately fails, tell the user the site is imported but not live yet and can be activated later by rerunning `/activate-site` with the imported site identity. Emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=success`, `activationOutcome=failure`, and the actual `seedApplied` boolean, then stop. Do **not** treat this as a failed import.
-   14. When `/activate-site` returns a `siteUrl`, mark **Activate imported site** as `completed` and **Show live template site** as `in_progress`.
-   15. Open the live site URL in the user's default browser:
+   15. When `/activate-site` returns a `siteUrl`, mark **Activate imported site** as `completed` and **Show live template site** as `in_progress`.
+   16. Open the live site URL in the user's default browser:
        ```bash
        node "${PLUGIN_ROOT}/scripts/open-url.js" --url "<siteUrl>"
        ```
@@ -375,7 +405,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        - **`ok: false`**: tell the user the browser could not be opened automatically and show the `siteUrl` for manual opening.
 
        Always surface the activate-site DNS propagation caveat: the site may take a few minutes to load even after activation succeeds.
-   16. Emit the template-outcome telemetry event (fail-closed):
+   17. Emit the template-outcome telemetry event (fail-closed):
        ```bash
        node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
          --mode template \
@@ -387,7 +417,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
          --seedApplied "<true|false>"
        ```
        Do not include site name, URL, subdomain, free-text purpose, or any other user-identifying value.
-   17. Mark **Show live template site** and **Select template or choose from-scratch** as `completed`, then present the template-path summary:
+   18. Mark **Show live template site** and **Select template or choose from-scratch** as `completed`, then present the template-path summary:
        - Template name and framework
        - Imported site name and Website Record ID
        - Live site URL
@@ -1048,7 +1078,7 @@ After Phase 1.5 selects the template path, append only the common template confi
 
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
-| Verify prerequisites and confirm template import | Confirming template import | Verify PAC/Azure auth, resolve the target environment, and ask for import consent |
+| Verify prerequisites and confirm template import | Confirming template import | Verify PAC/Azure auth, resolve the target environment, preflight `.js` blocked attachments, and ask for import consent |
 
 After the reinstall policy chooses a normal import/update/import-anyway path, append:
 
