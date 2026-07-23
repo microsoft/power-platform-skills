@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/microsoft/power-platform-skills/main/plugins/mobile-apps/scripts/schemas/component-library-assessment.v1.schema.json",
+  "title": "Canvas component-library migration assessment",
+  "type": "object",
+  "required": ["schemaVersion", "migrationCheck", "sourceApp", "componentLibrary", "dataModelPlan", "nativePlan"],
+  "properties": {
+    "schemaVersion": { "const": "component-library-assessment-v1" },
+    "migrationCheck": { "const": "component-library-only — port selected contracts into an existing app via /edit-app; do not run /create-mobile-app" },
+    "sourceApp": {
+      "type": "object",
+      "required": ["name", "format", "documentAppType"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "format": { "type": ["string", "null"] },
+        "documentAppType": { "type": ["string", "number", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "componentLibrary": {
+      "type": "object",
+      "required": ["components", "externalLibraries", "componentCount"],
+      "properties": {
+        "components": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "type", "controlCount", "inputs", "outputs"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "type": { "type": "string", "minLength": 1 },
+              "controlCount": { "type": "integer", "minimum": 0 },
+              "inputs": { "type": "integer", "minimum": 0 },
+              "outputs": { "type": "integer", "minimum": 0 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "externalLibraries": { "type": "array" },
+        "componentCount": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "dataModelPlan": {
+      "type": "object",
+      "required": ["connectorInventory"],
+      "properties": {
+        "connectorInventory": { "type": "array" }
+      },
+      "additionalProperties": false
+    },
+    "nativePlan": {
+      "type": "object",
+      "required": ["capabilities", "demotedCapabilities"],
+      "properties": {
+        "capabilities": { "type": "array" },
+        "demotedCapabilities": { "type": "array" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

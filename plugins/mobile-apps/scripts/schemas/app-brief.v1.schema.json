@@ -13,14 +13,17 @@
       "properties": {
         "schemaValidation": {
           "type": "object",
-          "required": ["schema", "version", "id", "sourceCommit", "sha256", "sourceFileCount", "sectionCounts"],
+          "required": ["schema", "version", "id", "sourceCommit", "sha256", "sourceTreeSha256", "sourceFileCount", "sourceInputSha256", "sourceInputFileCount", "sectionCounts"],
           "properties": {
             "schema": { "const": "power-apps-yaml-validation-report-v1" },
             "version": { "const": "3.0" },
             "id": { "const": "http://powerapps.com/schemas/pa-yaml/v3.0/pa.schema" },
             "sourceCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
             "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "sourceTreeSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
             "sourceFileCount": { "type": "integer", "minimum": 1 },
+            "sourceInputSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "sourceInputFileCount": { "type": "integer", "minimum": 1 },
             "sectionCounts": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } }
           },
           "additionalProperties": false

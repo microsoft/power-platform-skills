@@ -35,6 +35,8 @@ const COLLISION_PATHS = [
   'state',
   'behaviors.json',
   'behavior-contract.json',
+  'critical-obligations.json',
+  'source-deltas.json',
   'behavior-shards',
   'workflow-shards',
   'workflows.json',
@@ -48,6 +50,7 @@ const REQUIRED_SOURCE_FILES = [
   'mobile-plugin-input.json',
   'behaviors.json',
   'behavior-contract.json',
+  'critical-obligations.json',
   'workflows.json',
   'workflow-gate-summary.json',
   'pcf-plan.json',
@@ -275,6 +278,23 @@ function main() {
   for (const relative of COLLISION_PATHS) {
     if (fs.existsSync(path.join(target, relative))) throw new Error(`target is not fresh; collision at ${relative}`);
   }
+  assertRegularFile(path.join(source, 'mobile-plugin-input.json'), 'mobile-plugin-input.json', source);
+  assertRegularFile(path.join(source, 'native-app-plan.md'), 'native-app-plan.md', source);
+  const outputMarker = path.join(source, '.mobile-app-modernizer-output');
+  assertRegularFile(outputMarker, 'adapter ownership marker', source);
+  if (fs.readFileSync(outputMarker, 'utf8') !== ADAPTER_OUTPUT_MARKER) {
+    throw new Error('migration package has an invalid adapter ownership marker; regenerate it with adapt-app-brief-for-mobile-plugin.js');
+  }
+
+  const validator = path.join(__dirname, 'validate-mobile-plugin-input.js');
+  const validation = spawnSync(process.execPath, [validator, '--dir', source, '--json'], { encoding: 'utf8' });
+  if (validation.status !== 0) throw new Error(`migration package validation failed:\n${validation.stderr || validation.stdout}`);
+  const validationResult = JSON.parse(validation.stdout);
+  const input = JSON.parse(fs.readFileSync(path.join(source, 'mobile-plugin-input.json'), 'utf8'));
+  if (validationResult.packageKind === 'component-library-assessment') {
+    throw new Error('migration package is a valid component-library assessment, not a runnable app; port selected contracts through /edit-app');
+  }
+
   for (const relative of REQUIRED_SOURCE_FILES) assertRegularFile(path.join(source, relative), `required migration artifact ${relative}`);
   const behaviorShardsSource = path.join(source, 'behavior-shards');
   if (!fs.existsSync(behaviorShardsSource)
@@ -283,22 +303,10 @@ function main() {
     throw new Error(`required behavior-shards directory is missing or unsafe: ${behaviorShardsSource}`);
   }
   const workflowShardsSource = path.join(source, 'workflow-shards');
-  const outputMarker = path.join(source, '.mobile-app-modernizer-output');
-  assertRegularFile(outputMarker, 'adapter ownership marker', source);
-  if (fs.readFileSync(outputMarker, 'utf8') !== ADAPTER_OUTPUT_MARKER) {
-    throw new Error('migration package has an invalid adapter ownership marker; regenerate it with adapt-app-brief-for-mobile-plugin.js');
-  }
   if (fs.existsSync(path.join(source, 'assets.json')) && fs.existsSync(path.join(target, 'assets', 'images'))) {
     throw new Error('target is not fresh for adapted assets; assets/images already exists');
   }
 
-  const input = JSON.parse(fs.readFileSync(path.join(source, 'mobile-plugin-input.json'), 'utf8'));
-  if (input.migrationCheck) throw new Error('migration package is component-library-only and not a runnable app');
-
-  const validator = path.join(__dirname, 'validate-mobile-plugin-input.js');
-  const validation = spawnSync(process.execPath, [validator, '--dir', source, '--json'], { encoding: 'utf8' });
-  if (validation.status !== 0) throw new Error(`migration package validation failed:\n${validation.stderr || validation.stdout}`);
-  const validationResult = JSON.parse(validation.stdout);
   validateSourceEntries(source);
   const pcfPlanPath = path.join(source, input.pcfPlan.file);
   assertRegularFile(pcfPlanPath, 'PCF migration artifact', source);

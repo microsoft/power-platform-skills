@@ -408,6 +408,7 @@ function validatePowerAppsYamlSource(sourceRoot, options = {}) {
   const absoluteRoot = fs.realpathSync(requestedRoot);
   const runtime = readPinnedSchemaRuntime();
   const sourceFiles = listPowerAppsYamlSourceFiles(absoluteRoot);
+  const sourceTreeHasher = crypto.createHash('sha256');
   const parsedFiles = [];
   const errors = [];
   let totalBytes = 0;
@@ -430,6 +431,9 @@ function validatePowerAppsYamlSource(sourceRoot, options = {}) {
       break;
     }
     const parsed = parseYamlDocument(fs.readFileSync(filePath, 'utf8'), relativeFile);
+    const sourceBytes = fs.readFileSync(filePath);
+    sourceTreeHasher.update(Buffer.from(`${relativeFile}\0${sourceBytes.length}\0`, 'utf8'));
+    sourceTreeHasher.update(sourceBytes);
     totalNodes += parsed.nodeCount || 0;
     if (totalNodes > MAX_TOTAL_YAML_NODES) {
       errors.push(diagnostic(relativeFile, null, `Canvas YAML source exceeds ${MAX_TOTAL_YAML_NODES} aggregate nodes`, 'YAML_TOTAL_NODE_LIMIT'));
@@ -474,6 +478,7 @@ function validatePowerAppsYamlSource(sourceRoot, options = {}) {
       sha256: runtime.provenance.sha256,
     },
     sourceFileCount: sourceFiles.length,
+    sourceTreeSha256: sourceTreeHasher.digest('hex'),
     sectionCounts,
     errors: errors.sort(compareDiagnostics),
   };
@@ -500,6 +505,15 @@ function validatePowerAppsYamlAttestation(attestation, options = {}) {
   }
   if (!Number.isInteger(attestation.sourceFileCount) || attestation.sourceFileCount < 1) {
     errors.push(`${label}.sourceFileCount must be a positive integer`);
+  }
+  if (!/^[0-9a-f]{64}$/.test(String(attestation.sourceTreeSha256 || ''))) {
+    errors.push(`${label}.sourceTreeSha256 must be a lowercase SHA-256 digest`);
+  }
+  if (!/^[0-9a-f]{64}$/.test(String(attestation.sourceInputSha256 || ''))) {
+    errors.push(`${label}.sourceInputSha256 must be a lowercase SHA-256 digest`);
+  }
+  if (!Number.isInteger(attestation.sourceInputFileCount) || attestation.sourceInputFileCount < 1) {
+    errors.push(`${label}.sourceInputFileCount must be a positive integer`);
   }
   if (!attestation.sectionCounts || typeof attestation.sectionCounts !== 'object' || Array.isArray(attestation.sectionCounts)
       || Object.keys(attestation.sectionCounts).length === 0) {

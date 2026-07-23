@@ -33,6 +33,7 @@ Canvas source (`Src/*.pa.yaml`, optional supported sidecars)
       state/app-state.md
       behaviors.json
       behavior-contract.json
+      critical-obligations.json
       behavior-shards/*.json
       workflow-shards/*.json
       workflows.json
@@ -57,6 +58,7 @@ All artifacts remain local. Do not include credentials, access tokens, customer 
 | `state/app-state.md` | Source variable/collection readers, writers, and recommended native placement | Bootstrap and builders |
 | `behaviors.json` | Lossless normalized global ledger: actions, visibility, validation, derivations, unmatched formulas | Deterministic validation and final coverage only; never builders |
 | `behavior-contract.json` | Conservative dependency closure, core/regenerable disposition, raw-free native intent mapping, shard index | Validator, report, coverage gate, orchestrator routing |
+| `critical-obligations.json` | Deterministic 100% contract for shared component commands, every source placement, navigation, saved-view/security semantics, source start screen, and high-confidence source design baseline | Validator, shared-code orchestration, bounded screen feeds, design system, final obligation gate |
 | `behavior-shards/<Screen>.json` | One screen's compact builder-owned exact core behavior, structured native intent hints, semantic control rows, and unmatched statements | One screen builder; `App` shard feeds bootstrap |
 | `workflow-shards/<Workflow>.json` | One pathological handler's exact workflow-owned actions and intent hints | Workflow orchestrator only; never screen builders |
 | `workflows.json` | Pathological event detection, ordered named-step proposals, exception-only questions, user approval | Gate 2c, shared workflow generation, builders, workflow coverage gate |
@@ -82,6 +84,7 @@ Top-level shape:
 ```jsonc
 {
   "schemaVersion": "3",
+  "migrationMode": "faithful | modernize | repair-modernize",
   "source": {
     "appBriefPath": "<local path>",
     "generatedAt": "<ISO timestamp>",
@@ -101,6 +104,7 @@ Top-level shape:
   "bootstrap": {},
   "forms": [],
   "behaviorPlan": {},
+  "criticalObligations": {},
   "dataModelPlan": {},
   "screenPlan": {},
   "nativePlan": {},
@@ -303,9 +307,29 @@ Each row carries:
 
 Gallery roles are contextual rather than control-kind-only: `record-list`, `navigation-menu`, `picker-options`, `dashboard-sections`, or conservative `repeating-records-review`. Evidence includes only categories/signals such as Items source kind, action intents, child count, row-binding presence, and dynamic-destination presence—not source formulas.
 
-Canvas component instances similarly resolve to `domain-component`, `shared-app-chrome`, `navigation-component`, `form-composite`, `disposable-canvas-scaffolding`, or `component-review`. A component is disposable only when deterministic evidence shows a single layout-scaffold instance with no data, output, event, function, action, navigation, internal-control, app-scope, or external-library contract. The source brief does not expose internal component formulas, so any definition with internal controls remains review/preserve rather than disposable. Ambiguity never becomes disposable.
+Canvas component instances similarly resolve to `domain-component`, `shared-app-chrome`, `navigation-component`, `form-composite`, `disposable-canvas-scaffolding`, or `component-review`. Component root/child event formulas are deterministically classified into `internalHandlers[]`, then projected as shared `componentCommands[]` with every source instance placement. A component is disposable only when deterministic evidence shows a single layout-scaffold instance with no data, output, public event, function, action, navigation, internal handler, internal control, app-scope, or external-library contract. Ambiguity never becomes disposable.
 
 Every high-risk row must have a native implementation, explicit unsupported UI, or named blocker.
+
+## Critical obligation contract
+
+`critical-obligations.json` closes the false-success gap left by weighted coverage: behavior/control/workflow ledgers can validate only facts that entered their denominator. This contract independently requires 100% disposition for:
+
+- one shared native command/use case per internal component handler
+- one real invocation/composition at every source component placement
+- every source screen as a real native route with its approved workflow/data purpose
+- every source navigation edge and context-key contract
+- every Dataverse saved-view predicate, ownership, and security scope
+- the source start workflow and native entry route
+- every high-confidence source palette/typography/dimension baseline
+
+Stable `obl-…` IDs are derived from normalized source and target requirements. Package validation rebuilds the complete contract from `mobile-plugin-input.json` plus `behaviors.json` and rejects any mismatch or stale digest.
+
+Equivalent target behavior uses exact `// source-obligation: <id>` comments at the strongest real proof site. Shared command markers live at exported shared implementations; placement/navigation/view/start markers live in their declared route files; design evidence lives immediately above `brand/tokens.ts`'s real export. A marker beside a TODO, placeholder, log, unrelated import, or wrong target file is invalid.
+
+Semantic changes use `// source-delta: <id>` only with a target-side `source-deltas.json` row containing `status: approved`, `approvedBy: user`, ISO `approvedAt`, a concrete rationale, and concrete target behavior. The migration package never pre-approves deltas. Builders cannot self-authorize them; they return `NEEDS_CONTEXT` so the orchestrator asks the user. `check-critical-obligations.js --strict` rejects unresolved obligations, misplaced/unknown markers, AI-only approvals, and stale approvals.
+
+Source design is not a generic styling hint. In adapted mode, `/design-system` uses `app.sourceDesignBaseline` before industry presets. `faithful` preserves identity; `modernize` improves native hierarchy/accessibility within that identity; `repair-modernize` may propose repairs, but material identity changes still require a user-approved delta.
 
 ## PCF disposition contract
 
@@ -363,6 +387,7 @@ STRICT=1 npm run check:i18n
 MIN_COVERAGE=80 npm run check:coverage
 STRICT=1 npm run check:pcf
 STRICT=1 npm run check:workflows
+STRICT=1 npm run check:obligations
 STRICT=1 npm run check:scaffold
 npx tsc --noEmit
 ```

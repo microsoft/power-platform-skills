@@ -233,6 +233,9 @@ function directClassification(group, entry, writes, reads, identifiers) {
     return { tier: 'core', reasonCodes: ['DECLARATIVE_RULE'] };
   }
   const intent = String(entry && entry.intent || 'unknown');
+  if (entry && entry.componentCommandId && STATE_ACTION_INTENTS.has(intent)) {
+    return { tier: 'core', reasonCodes: ['SHARED_COMPONENT_STATE_WRITE'] };
+  }
   if (CORE_ACTION_INTENTS.has(intent)) {
     return { tier: 'core', reasonCodes: ['LOAD_BEARING_SIDE_EFFECT'] };
   }
@@ -541,6 +544,7 @@ function buildBehaviorArtifacts(behaviors, screens, generatedAt = '1970-01-01T00
       coreConsumers: [],
       intentHintId: null,
       shardFile: null,
+      implementationFile: row.entry.implementationFile || null,
     });
   }
 
@@ -685,7 +689,20 @@ function buildBehaviorArtifacts(behaviors, screens, generatedAt = '1970-01-01T00
       behaviorContract: 'behavior-contract.json',
       screenIntent: (() => {
         const source = screenByName.get(screen);
-        if (!source) return screen === 'App' ? { kind: 'app-bootstrap' } : null;
+        if (!source) {
+          if (screen === 'App') return { kind: 'app-bootstrap' };
+          const commands = toArray(behaviors && behaviors.componentCommands)
+            .filter((command) => command.behaviorOwner === screen)
+            .map((command) => ({
+              commandId: command.commandId,
+              component: command.component,
+              control: command.control,
+              event: command.event,
+              target: command.target,
+              behaviorIds: command.behaviorIds,
+            }));
+          return commands.length > 0 ? { kind: 'shared-component-commands', commands } : null;
+        }
         return {
           route: source.route || null,
           file: source.file || null,
@@ -765,6 +782,8 @@ function buildBehaviorArtifacts(behaviors, screens, generatedAt = '1970-01-01T00
       file: 'behaviors.json',
       schema: behaviors && behaviors.$schema || 'behaviors-v1',
       sha256: sourceLedgerHash(behaviors),
+      sourceTreeSha256: behaviors && behaviors.sourceTreeSha256 || null,
+      sourceInputSha256: behaviors && behaviors.sourceInputSha256 || null,
     },
     stats,
     classifications,

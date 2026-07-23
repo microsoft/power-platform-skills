@@ -33,6 +33,13 @@ if (!fs.existsSync(BEHAVIORS_PATH)) {
 
 const data = JSON.parse(fs.readFileSync(BEHAVIORS_PATH, 'utf8'));
 const SCREEN_FILE_BY_SOURCE = new Map();
+for (const command of data.componentCommands || []) {
+  if (!command?.behaviorOwner || typeof command.target?.module !== 'string') continue;
+  const resolved = path.resolve(ROOT, command.target.module);
+  const relative = path.relative(ROOT, resolved);
+  const contained = relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+  if (contained) SCREEN_FILE_BY_SOURCE.set(command.behaviorOwner, resolved);
+}
 const pluginInputPath = path.join(ROOT, 'mobile-plugin-input.json');
 let pluginInput = null;
 if (fs.existsSync(pluginInputPath)) {

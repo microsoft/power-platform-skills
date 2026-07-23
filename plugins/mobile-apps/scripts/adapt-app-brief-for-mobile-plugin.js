@@ -85,6 +85,10 @@ const {
   projectPcfControlIntents,
   recomputeRoleStats,
 } = require('./lib/pcf-control-intent.js');
+const {
+  MIGRATION_MODES,
+  buildCriticalObligations,
+} = require('./lib/critical-obligations.js');
 const MAX_INPUT_JSON_BYTES = 64 * 1024 * 1024;
 const DETERMINISTIC_EPOCH = '1970-01-01T00:00:00.000Z';
 let GENERATION_TIMESTAMP = DETERMINISTIC_EPOCH;
@@ -110,6 +114,7 @@ function parseArgs(argv) {
     splitThreshold: 1500,
     selfTest: false,
     fullSchema: false,
+    mode: 'modernize',
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -119,10 +124,14 @@ function parseArgs(argv) {
     else if (a === '--split-threshold') args.splitThreshold = Number(argv[++i]) || 1500;
     else if (a === '--self-test') args.selfTest = true;
     else if (a === '--full-schema') args.fullSchema = true;
+    else if (a === '--mode') args.mode = argv[++i];
     else if (a === '--help' || a === '-h') usage();
     else usage('Unknown argument: ' + a);
   }
   if (args.selfTest) return args;
+  if (!MIGRATION_MODES.includes(args.mode)) {
+    usage(`Invalid --mode '${args.mode}'. Use ${MIGRATION_MODES.join(', ')}.`);
+  }
   if (!args.input) usage('Missing --input');
   args.input = path.resolve(args.input);
   if (!fs.existsSync(args.input)) usage('Input file not found: ' + args.input);
@@ -594,6 +603,15 @@ function collectTables(brief, tablesDir, fullSchema) {
           .map((v) => ({
             name: (v && v.name) || null,
             displayName: (v && v.displayName) || null,
+            viewId: (v && v.viewId) || null,
+            viewKind: (v && v.viewKind) || 'unknown',
+            queryType: v && Number.isInteger(v.queryType) ? v.queryType : null,
+            predicate: (v && v.predicate) || null,
+            orderBy: toArray(v && v.orderBy),
+            columns: toArray(v && v.columns),
+            resolutionStatus: (v && v.resolutionStatus) || 'needs-target-view-resolution',
+            sourceInventory: (v && v.sourceInventory) || null,
+            screens: toArray(v && v.screens),
           }))
           .filter((v) => v.name || v.displayName),
         columns,
@@ -1048,7 +1066,7 @@ function buildRisks(brief, connectors, tables) {
 
 const VAR_WRITE_RE = /\b(?:Set|UpdateContext)\s*\(\s*\{?\s*([A-Za-z_][A-Za-z0-9_]*)/g;
 const COL_WRITE_RE = /\b(?:Collect|ClearCollect|Clear|Patch|RemoveIf|Remove|Update)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)/g;
-const VAR_READ_RE = /\b(var_[A-Za-z0-9_]+)\b/g;
+const VAR_READ_RE = /\b((?:var_|_)[A-Za-z0-9_]+)\b/g;
 const COL_READ_RE = /\b(col_[A-Za-z0-9_]+)\b/g;
 
 function scanFormulasForState(formula, screenName, controlName, state) {
@@ -1058,7 +1076,6 @@ function scanFormulasForState(formula, screenName, controlName, state) {
   VAR_WRITE_RE.lastIndex = 0;
   while ((m = VAR_WRITE_RE.exec(text)) !== null) {
     const name = m[1];
-    if (!name.startsWith('var_')) continue;
     if (!state.vars[name]) state.vars[name] = { writtenIn: new Set(), readIn: new Set() };
     state.vars[name].writtenIn.add(screenName + ':' + controlName);
   }
@@ -1083,7 +1100,7 @@ function scanFormulasForState(formula, screenName, controlName, state) {
   }
 }
 
-function collectAppState(screens) {
+function collectAppState(screens, components = []) {
   const state = { vars: {}, cols: {} };
   for (const sc of screens) {
     const screenName = sc.name;
@@ -1095,6 +1112,16 @@ function collectAppState(screens) {
       for (const k of Object.keys(c.properties || {})) {
         scanFormulasForState(c.properties[k], screenName, ctlName + '.' + k, state);
       }
+    }
+  }
+  for (const component of toArray(components)) {
+    for (const handler of toArray(component.internalHandlers)) {
+      scanFormulasForState(
+        handler.formula,
+        `Component:${component.name}`,
+        `${handler.path || handler.control}.${handler.event}`,
+        state
+      );
     }
   }
   return state;
@@ -1951,7 +1978,7 @@ function classifyDerivation(formula, key) {
   };
 }
 
-function extractBehaviors(loadedScreens, brief) {
+function extractBehaviors(loadedScreens, brief, components = []) {
   const actions = [];
   const unmatchedFormulas = [];
   const byIntent = {};
@@ -1959,7 +1986,7 @@ function extractBehaviors(loadedScreens, brief) {
   const screensWithBehaviors = new Set();
   let sourceEventActionCount = 0;
 
-  function addEventActions({ screenName, controlName, controlPath, controlTemplate, evtName, actionList, sourceFormula }) {
+  function addEventActions({ screenName, controlName, controlPath, controlTemplate, evtName, actionList, sourceFormula, componentCommandId = null, implementationFile = null }) {
     const hasSourceFormula = typeof sourceFormula === 'string' && stripLeadingEq(sourceFormula).trim() !== '';
     const actionsForEvent = Array.isArray(actionList) ? actionList : [];
     if (actionsForEvent.length === 0) {
@@ -1978,6 +2005,7 @@ function extractBehaviors(loadedScreens, brief) {
             sourceStatement,
             raw: sourceStatement,
             reason: 'event-formula-not-classified',
+            ...(componentCommandId ? { componentCommandId, implementationFile } : {}),
           });
         });
         byEvent[evtName] = (byEvent[evtName] || 0) + statements.length;
@@ -2020,6 +2048,7 @@ function extractBehaviors(loadedScreens, brief) {
           sourceStatementIndex: Number.isInteger(a.sourceStatementIndex) ? a.sourceStatementIndex : null,
           controlFlow: Array.isArray(a.controlFlow) ? a.controlFlow : [],
           reason: 'unclassified-intent',
+          ...(componentCommandId ? { componentCommandId, implementationFile } : {}),
         });
         return;
       }
@@ -2043,6 +2072,7 @@ function extractBehaviors(loadedScreens, brief) {
         sourceFormula: hasSourceFormula ? stripLeadingEq(sourceFormula) : null,
         sourceStatement,
         hint: rescued ? rescued.hint : hintForIntent(intent),
+        ...(componentCommandId ? { componentCommandId, implementationFile } : {}),
       };
       normalizedAction.behaviorId = behaviorId('action', normalizedAction);
       actions.push(normalizedAction);
@@ -2093,6 +2123,21 @@ function extractBehaviors(loadedScreens, brief) {
         });
       }
     }
+  }
+
+  const componentCommandSources = collectComponentCommands(components);
+  for (const command of componentCommandSources) {
+    addEventActions({
+      screenName: command.behaviorOwner,
+      controlName: command.control,
+      controlPath: command.definitionPath,
+      controlTemplate: `Component:${command.component}`,
+      evtName: command.event,
+      actionList: command.intents,
+      sourceFormula: command.sourceFormula,
+      componentCommandId: command.commandId,
+      implementationFile: command.target.module,
+    });
   }
 
   // Property-formula classifiers — visibility, validations, derivations.
@@ -2172,8 +2217,11 @@ function extractBehaviors(loadedScreens, brief) {
     }
   }
 
+  const componentCommands = collectComponentCommands(components, actions, unmatchedFormulas);
   return {
     $schema: 'behaviors-v1',
+    sourceTreeSha256: brief?.source?.schemaValidation?.sourceTreeSha256 || null,
+    sourceInputSha256: brief?.source?.schemaValidation?.sourceInputSha256 || null,
     stats: {
       totalActions: actions.length,
       totalUnmatched: unmatchedFormulas.length,
@@ -2186,8 +2234,10 @@ function extractBehaviors(loadedScreens, brief) {
       visibility: visibility.length,
       validations: validations.length,
       derivations: derivations.length,
+      componentCommands: componentCommands.length,
     },
     actions,
+    componentCommands,
     visibility,
     validations,
     derivations,
@@ -2471,6 +2521,9 @@ function buildWorkflowDecisions(workflowId, actions, unmatched, metrics) {
 function buildWorkflowPlan(behaviors, screenRows, behaviorContract = null) {
   const handlers = new Map();
   const screenFiles = new Map(toArray(screenRows).map((screen) => [screen.name, screen.file]));
+  const commandTargetByHandler = new Map(toArray(behaviors && behaviors.componentCommands)
+    .filter((command) => command?.behaviorOwner && command?.target?.module)
+    .map((command) => [JSON.stringify([command.behaviorOwner, command.definitionPath, command.event]), command.target]));
   const classificationById = new Map(toArray(behaviorContract && behaviorContract.classifications)
     .map((row) => [row.behaviorId, row]));
   const hintByBehaviorId = new Map();
@@ -2569,7 +2622,9 @@ function buildWorkflowPlan(behaviors, screenRows, behaviorContract = null) {
       module: targetModule,
       importPath: `@/${targetModule.replace(/^src\//, '').replace(/\.tsx?$/, '')}`,
       exportName,
-      callSiteFile: handler.screen === 'App' ? 'src/bootstrap.ts' : (screenFiles.get(handler.screen) || null),
+      callSiteFile: handler.screen === 'App'
+        ? 'src/bootstrap.ts'
+        : (commandTargetByHandler.get(handler.key)?.module || screenFiles.get(handler.screen) || null),
     };
     const requiredDecisions = buildWorkflowDecisions(workflowId, handler.actions, handler.unmatched, metrics);
     const complexityScore = handler.actions.length
@@ -2844,6 +2899,7 @@ function collectComponentInstances(screens, brief) {
         ...toArray(def.outputFunctions),
       ],
       actions: toArray(def.actions),
+      internalHandlers: toArray(def.internalHandlers),
       instances: [],
       definedOnly: true, // flipped to false the moment we see an instance below
     });
@@ -2874,6 +2930,7 @@ function collectComponentInstances(screens, brief) {
           events: [],
           functions: [],
           actions: [],
+          internalHandlers: [],
           instances: [],
           definedOnly: false,
         });
@@ -2911,10 +2968,80 @@ function collectComponentInstances(screens, brief) {
       events: info.events,
       functions: info.functions,
       actions: info.actions,
+      internalHandlers: info.internalHandlers,
       instances: info.instances,
       definedOnly: info.definedOnly,
     }))
     .sort((a, b) => b.instanceCount - a.instanceCount || a.name.localeCompare(b.name));
+}
+
+function componentCommandId(componentName, handler) {
+  return stableContractId('cmd', [
+    componentName,
+    handler.path || handler.control,
+    handler.event,
+    stripLeadingEq(handler.formula || ''),
+  ]);
+}
+
+function componentBehaviorOwner(componentName) {
+  return `Component:${componentName}`;
+}
+
+function componentCommandTarget(componentName, handler, commandId) {
+  const componentStem = routeStem(componentName || 'component');
+  const controlStem = routeStem(handler.control || 'control');
+  const eventStem = routeStem(handler.event || 'event');
+  const suffix = commandId.slice(-8);
+  const module = `src/features/components/commands/${componentStem}-${controlStem}-${eventStem}-${suffix}.ts`;
+  return {
+    module,
+    importPath: `@/${module.replace(/^src\//, '').replace(/\.tsx?$/, '')}`,
+    exportName: `run${pascalIdentifier(componentName, 'Component')}${pascalIdentifier(handler.control, 'Control')}${pascalIdentifier(handler.event, 'Event')}Command${suffix}`,
+  };
+}
+
+function collectComponentCommands(components, behaviorActions = [], unmatchedFormulas = [], behaviorContract = null) {
+  const commands = [];
+  for (const component of toArray(components)) {
+    for (const handler of toArray(component.internalHandlers)) {
+      const intents = toArray(handler.intents);
+      const commandId = componentCommandId(component.name, handler);
+      const behaviorOwner = componentBehaviorOwner(component.name);
+      const target = componentCommandTarget(component.name, handler, commandId);
+      commands.push({
+        commandId,
+        behaviorOwner,
+        component: component.name,
+        accessAppScope: component.accessAppScope === true,
+        control: handler.control || component.name,
+        definitionPath: handler.path || component.name,
+        event: handler.event,
+        sourceFormula: handler.formula ? stripLeadingEq(handler.formula) : null,
+        intents,
+        navigateTargets: unique(
+          intents
+            .filter((intent) => intent && intent.intent === 'navigate')
+            .map((intent) => intent.target)
+        ),
+        invocations: toArray(component.instances).map((instance) => ({
+          screen: instance.screen,
+          instance: instance.name,
+          path: instance.path,
+        })),
+        implementationOwner: 'shared-command',
+        target,
+        behaviorIds: toArray(behaviorActions)
+          .filter((action) => action.componentCommandId === commandId)
+          .map((action) => action.behaviorId),
+        unmatchedCount: toArray(unmatchedFormulas)
+          .filter((entry) => entry.componentCommandId === commandId).length,
+        behaviorShard: toArray(behaviorContract && behaviorContract.shards)
+          .find((shard) => shard.screen === behaviorOwner)?.file || null,
+      });
+    }
+  }
+  return commands.sort((a, b) => a.commandId.localeCompare(b.commandId));
 }
 
 // ---------- Per-screen rendering ----------
@@ -3896,6 +4023,7 @@ function componentIntentClassification(control, screen, componentCatalog, totalS
   const events = toArray(info && info.events);
   const functions = toArray(info && info.functions);
   const actions = toArray(info && info.actions);
+  const internalHandlers = toArray(info && info.internalHandlers);
   const instance = toArray(info && info.instances).find((row) => row.path === control.path && row.screen === screen?.name);
   const bindings = instance && instance.bindings || {};
   const meaningfulInputs = inputs.filter((input) => !COMPONENT_PRESENTATION_NAME_RE.test(String(input && input.name || '')));
@@ -3912,6 +4040,7 @@ function componentIntentClassification(control, screen, componentCatalog, totalS
     || events.length > 0
     || functions.length > 0
     || actions.length > 0
+    || internalHandlers.length > 0
     || toArray(bindings.events).length > 0
     || intents.length > 0;
   const navigationNamed = hasSemanticWord(nameText, 'navigation', 'nav', 'menu', 'sidebar', 'drawer', 'tabs', 'breadcrumb', 'stepper');
@@ -3925,12 +4054,12 @@ function componentIntentClassification(control, screen, componentCatalog, totalS
     .some((name) => /(?:save|submit|change|valid|success|failure)/i.test(String(name || '')));
   const dynamicNavigationTarget = eventActionsFor([control], 'navigate').some((action) =>
     /(?:thisitem|selected|\.screen\b|\.route\b|\.target\b)/i.test(String(action.target || '')));
-  // The screen brief does not carry a component definition's internal child
-  // formulas. Therefore a layout-looking component with children, app-scope
-  // access, an external library owner, or a missing definition can never be
-  // proven disposable from instance bindings alone.
+  // Internal definition handlers are source behavior even when the component
+  // exposes no public custom Event. A layout-looking component is disposable
+  // only when the extracted definition proves it has no controls or handlers.
   const definitionProvesEmptyScaffold = info?.definitionFound === true
     && info.controlCount === 0
+    && internalHandlers.length === 0
     && info.accessAppScope !== true
     && !control?.componentLibraryUniqueName;
   const dimensions = {
@@ -3943,6 +4072,7 @@ function componentIntentClassification(control, screen, componentCatalog, totalS
       events: events.length,
       functions: functions.length,
       actions: actions.length,
+      internalHandlers: internalHandlers.length,
     },
     hasDataContract,
     hasBehaviorContract,
@@ -4353,6 +4483,56 @@ function buildControlIntentCoverage(loadedScreens, options = {}) {
     }
   }
 
+  const existingPaths = new Set(rows.map((row) => row.path));
+  for (const extracted of toArray(options.brief && options.brief.app && options.brief.app.pcfControls)) {
+    if (!extracted?.screen || !extracted.path || existingPaths.has(extracted.path)) continue;
+    const screen = toArray(loadedScreens).find((candidate) => candidate.name === extracted.screen) || { name: extracted.screen };
+    const control = {
+      name: extracted.control,
+      path: extracted.path,
+      kind: 'CodeComponent',
+      template: extracted.templateName,
+      templateName: extracted.templateName,
+      templateId: extracted.templateId,
+      isPcf: true,
+      isPremiumPcf: !!extracted.isPremiumPcf,
+      properties: extracted.properties || {},
+      events: extracted.events || {},
+    };
+    const eventNames = eventNamesWithSource(control);
+    const roleResult = classifyControlIntentRole(control, { screen, componentCatalog, totalScreens: toArray(loadedScreens).length });
+    const mustPreserve = controlMustPreserve(control, roleResult.role, eventNames);
+    rows.push({
+      screen: extracted.screen,
+      control: extracted.control,
+      path: extracted.path,
+      canvasType: 'CodeComponent',
+      template: extracted.templateName || null,
+      role: roleResult.role,
+      roleEvidence: roleResult.evidence,
+      support: supportForControlIntent(control, roleResult.role),
+      businessRisk: 'high',
+      uiFreedom: 'gate-approval-required',
+      nativeSuggestion: nativeSuggestionForRole(roleResult.role),
+      nativeHints: [],
+      mustPreserve,
+      sourceEvents: eventNames,
+      dataBindings: ['Items', 'Default', 'DataField', 'DataSource', 'Text', 'Required', 'DisplayMode', 'Visible']
+        .filter((key) => control.properties[key] != null),
+      layoutIntent: { parent: null, group: null, layout: null, nestingDepth: indentDepth(extracted.path, extracted.screen) },
+      flags: { isPcf: true, isComponentInternal: true, requiresSemanticReview: true },
+      component: extracted.componentName ? { name: extracted.componentName, definitionPath: extracted.definitionPath || null } : undefined,
+      notesForAI: 'This PCF is nested inside a reusable component definition. Preserve its approved disposition at this exact source placement; do not host PCF code.',
+    });
+    stats.totalControls += 1;
+    stats.behavioralControls += 1;
+    stats.pcfControls += 1;
+    stats.highRiskControls += 1;
+    byKind.set('CodeComponent', (byKind.get('CodeComponent') || 0) + 1);
+    byRole.set(roleResult.role, (byRole.get(roleResult.role) || 0) + 1);
+    existingPaths.add(extracted.path);
+  }
+
   const coverage = recomputeRoleStats({
     $schema: 'control-intent-coverage-v1',
     generatedAt: GENERATION_TIMESTAMP,
@@ -4562,7 +4742,30 @@ function buildPcfPlan(brief, loadedScreens, connectionRequirements, bundledDeps)
   }
 
   const controls = [];
-  for (const screen of toArray(loadedScreens)) {
+  const screensWithProjectedPcfs = toArray(loadedScreens).map((screen) => ({ ...screen, controls: [...toArray(screen && screen.controls)] }));
+  const screenByName = new Map(screensWithProjectedPcfs.map((screen) => [screen.name, screen]));
+  const existingPaths = new Set(screensWithProjectedPcfs.flatMap((screen) => toArray(screen.controls).map((control) => control.path)));
+  for (const extracted of toArray(brief && brief.app && brief.app.pcfControls)) {
+    if (!extracted?.screen || !extracted.path || existingPaths.has(extracted.path)) continue;
+    const screen = screenByName.get(extracted.screen);
+    if (!screen) continue;
+    screen.controls.push({
+      name: extracted.control,
+      path: extracted.path,
+      kind: 'CodeComponent',
+      template: extracted.templateName,
+      templateName: extracted.templateName,
+      templateId: extracted.templateId,
+      isPcf: true,
+      isPremiumPcf: !!extracted.isPremiumPcf,
+      properties: extracted.properties || {},
+      events: extracted.events || {},
+      componentName: extracted.componentName || null,
+      componentDefinitionPath: extracted.definitionPath || null,
+    });
+    existingPaths.add(extracted.path);
+  }
+  for (const screen of screensWithProjectedPcfs) {
     for (const control of toArray(screen && screen.controls)) {
       if (!control || !control.isPcf) continue;
       const extracted = extractedByPath.get(control.path)
@@ -6769,7 +6972,7 @@ function buildAssetsSectionLines(brief) {
   return lines;
 }
 
-function buildMasterPlan(brief, screenRows, connectors, tables, risks, screenFiles, swapAggregate, playbook, structuredForms, nativeExecution, demotedCapabilities, upgradeHintsAggregate, serverSideAssets, pcfPlan, workflowPlan, behaviorContract) {
+function buildMasterPlan(brief, screenRows, connectors, tables, risks, screenFiles, swapAggregate, playbook, structuredForms, nativeExecution, demotedCapabilities, upgradeHintsAggregate, serverSideAssets, pcfPlan, workflowPlan, behaviorContract, criticalObligations, migrationMode) {
   const appName = (brief.app && brief.app.name) || 'Converted Canvas App';
   const startScreen = (brief.app && brief.app.startScreen) || 'Unknown';
   const nativeCaps = toArray(nativeExecution && nativeExecution.capabilities);
@@ -6815,6 +7018,7 @@ function buildMasterPlan(brief, screenRows, connectors, tables, risks, screenFil
   // Overview
   lines.push('## Overview');
   lines.push(`- **App name:** ${appName}`);
+  lines.push(`- **Migration mode:** \`${migrationMode}\``);
   // Source-app metadata surfaced by og-script update. Each is rendered only
   // when non-null so a sparse brief stays clean.
   const appDescription = brief.app && brief.app.settings && brief.app.settings.appDescription;
@@ -6825,7 +7029,10 @@ function buildMasterPlan(brief, screenRows, connectors, tables, risks, screenFil
   lines.push('- **Target platforms:** ios, android');
   lines.push(buildFormFactorLine(brief));
   const brand = (brief.app && brief.app.brand) || {};
-  lines.push(`- **Aesthetic:** <fill in — source primary ${brand.primaryColor || 'unknown'}>`);
+  const designBaseline = brief.app && brief.app.designBaseline;
+  const baselineColors = toArray(designBaseline && designBaseline.colors).map((color) => color.value).filter(Boolean);
+  const dominantFont = designBaseline && designBaseline.typography && designBaseline.typography.dominantFont;
+  lines.push(`- **Aesthetic:** source baseline ${baselineColors.slice(0, 5).join(', ') || brand.primaryColor || 'unknown'}${dominantFont ? `; font ${dominantFont}` : ''}. Preserve or record a user-approved design delta.`);
   lines.push('- **Environment:** <fill in — resolved from `power.config.json` at scaffold time>');
   lines.push(`- **Start screen:** ${startScreen}`);
   lines.push(`- **Source format:** ${brief.source && brief.source.format || 'unknown'}`);
@@ -6860,6 +7067,7 @@ function buildMasterPlan(brief, screenRows, connectors, tables, risks, screenFil
   lines.push('- Every regenerable behavior is represented by its exact `source-intent` hint marker. The global ledger remains lossless; intent hints may replace only behavior proven disconnected from every core sink.');
   lines.push('- `npm run check:pcf -- --strict` passes: every explicitly approved PCF disposition is implemented with the exact PCF ID/disposition marker or approved visible unsupported UX.');
   lines.push('- `npm run check:workflows -- --strict` passes: every approved pathological handler is implemented as an invoked named-step module with exact workflow, step, and behavior markers.');
+  lines.push(`- \`npm run check:obligations -- --strict\` passes with 100% disposition for all ${criticalObligations?.stats?.critical || 0} critical source obligations. Weighted behavior coverage cannot waive this gate.`);
   lines.push('- `npm run check:scaffold -- --strict` passes: final screens must not expose conversion/debug scaffolding such as `CapabilityPanel`, `RelatedSources`, generic data-source lists, generic service registries (`serviceRegistry.ts`, `DATA_SOURCES`, `useDataSourceRows`), source/clone labels, or screen-config-driven next actions.');
   lines.push('- Screen implementations live directly in Expo Router files under `app/(app)/...`; do not generate `src/appScreens/*Screen.tsx` plus thin wrappers. Do not create `src/appScreens/` or `src/data/` support-code folders either — reusable mobile code belongs in domain folders such as `src/components/`, `src/hooks/`, `src/navigation/`, and `src/features/`.');
   lines.push('- `npx tsc --noEmit` is clean.');
@@ -7340,10 +7548,12 @@ function buildRequirementsBrief(brief, screenRows, connectors, tables) {
   return lines.join('\n') + '\n';
 }
 
-function buildMigrationChecklist(brief, connectors, tables, risks, serverSideAssets, pcfPlan, workflowPlan, behaviorContract) {
+function buildMigrationChecklist(brief, connectors, tables, risks, serverSideAssets, pcfPlan, workflowPlan, behaviorContract, criticalObligations, migrationMode) {
   const lines = [];
   const flows = toArray(brief.dataModel && brief.dataModel.flows);
   lines.push('# Migration Checklist To Working Mobile App');
+  lines.push('');
+  lines.push(`Migration mode: \`${migrationMode}\``);
   lines.push('');
   let step = 1;
   lines.push(`${step++}. Prepare fresh Expo template folder and run \`npm install\`.`);
@@ -7373,6 +7583,7 @@ function buildMigrationChecklist(brief, connectors, tables, risks, serverSideAss
     lines.push(`${step++}. **HARD GATE:** answer only the ${workflowPlan.stats.requiredDecisions} correctness-critical workflow question(s), then approve all ${workflowPlan.stats.total} named-step decompositions in Gate 2c before connector/screen work.`);
   }
   lines.push(`${step++}. Use the ${behaviorContract?.stats?.shards || 0} compact screen/App shard(s) plus ${behaviorContract?.stats?.workflowShards || 0} workflow implementation shard(s): ${behaviorContract?.stats?.builderCoreBehaviors ?? behaviorContract?.stats?.coreBehaviors ?? 0} builder-owned and ${behaviorContract?.stats?.workflowCoreBehaviors || 0} workflow-owned exact core behavior(s), with complete global coverage kept model-invisible in \`behaviors.json\`.`);
+  lines.push(`${step++}. Implement ${criticalObligations?.stats?.componentCommands || 0} shared component command(s) once, compose them at ${criticalObligations?.stats?.componentCommandPlacements || 0} source placement(s), and preserve every remaining navigation, saved-view/security, start-screen, and design obligation from \`critical-obligations.json\`.`);
   if (tables.length > 0) {
     const assetCount = serverSideAssets && serverSideAssets.stats ? serverSideAssets.stats.total : 0;
     lines.push(`${step++}. Confirm Dataverse server-side logic in the target environment: business rules, calculated/rollup columns, plug-ins, custom APIs/actions, and classic workflows that the source app depends on${assetCount ? ` (${assetCount} column-level assets inventoried in \`server-side-assets.json\`)` : ''}.`);
@@ -7402,6 +7613,7 @@ function buildMigrationChecklist(brief, connectors, tables, risks, serverSideAss
   lines.push('- Every `behavior-contract.json` regenerable entry has a real `source-intent` implementation; every exact core entry remains governed by `source-behavior`/`source-unsupported` accounting.');
   lines.push('- `npm run check:pcf -- --strict` passes. Every approved PCF has an exact native/server implementation marker or approved visible unsupported state; pending/blocker PCFs are forbidden.');
   lines.push('- `npm run check:workflows -- --strict` passes. Every approved pathological handler has an invoked named-step module with exact workflow, step, and behavior markers; pending/blocked workflows are forbidden.');
+  lines.push(`- \`npm run check:obligations -- --strict\` passes at 100% for all ${criticalObligations?.stats?.critical || 0} critical obligations. Deltas require exact markers plus a matching \`source-deltas.json\` row with \`approvedBy: user\`.`);
   lines.push('- `npm run check:scaffold -- --strict` passes. The final UI must be workflow-specific, not a visible inventory of data sources, capabilities, screen config, or conversion notes.');
   lines.push('- Every row in `control-intent-coverage.json` is either implemented as native semantics, explicitly unsupported, or surfaced as a follow-up. Do not copy Canvas UI chrome; do preserve `mustPreserve` data/event/layout intent.');
   lines.push('- `npx tsc --noEmit` is clean.');
@@ -7413,6 +7625,7 @@ function buildMigrationChecklist(brief, connectors, tables, risks, serverSideAss
   lines.push(`- Dataverse tables: ${tables.length}`);
   lines.push(`- Pathological event workflows: ${workflowPlan?.stats?.total || 0} (${workflowPlan?.stats?.requiredDecisions || 0} correctness-critical decisions)`);
   lines.push(`- Behavior feed: ${behaviorContract?.stats?.coreBehaviors || 0} exact core / ${behaviorContract?.stats?.regenerableBehaviors || 0} native intent across ${behaviorContract?.stats?.shards || 0} shards`);
+  lines.push(`- Critical obligations: ${criticalObligations?.stats?.critical || 0} total (${criticalObligations?.stats?.sourceScreens || 0} screens, ${criticalObligations?.stats?.componentCommands || 0} shared commands, ${criticalObligations?.stats?.componentCommandPlacements || 0} placements, ${criticalObligations?.stats?.navigation || 0} navigation, ${criticalObligations?.stats?.savedViews || 0} saved views, ${criticalObligations?.stats?.designBaselines || 0} design baseline)`);
   if (serverSideAssets && serverSideAssets.stats) {
     lines.push(`- Server-side Dataverse column assets: ${serverSideAssets.stats.total} (${serverSideAssets.stats.rollupColumns} rollup, ${serverSideAssets.stats.calculatedColumns} calculated, ${serverSideAssets.stats.serverComputedColumns + serverSideAssets.stats.serverManagedColumns} write-restricted/computed)`);
   }
@@ -7535,6 +7748,25 @@ function buildComponentsMd(components) {
       renderIoTable('Events', c.events);
       renderIoTable('Functions', c.functions);
       renderIoTable('Actions', c.actions);
+    }
+  }
+  const withInternalHandlers = components.filter((component) => toArray(component.internalHandlers).length > 0);
+  if (withInternalHandlers.length > 0) {
+    lines.push('');
+    lines.push('## Internal component commands');
+    lines.push('');
+    lines.push('These source handlers live inside reusable Canvas definitions, including components with no declared custom Event properties. Implement each command once through shared native application/domain code, then compose it at every listed source instance.');
+    lines.push('');
+    for (const component of withInternalHandlers) {
+      lines.push(`### \`${component.name}\` internal commands`);
+      lines.push('');
+      lines.push('| Command ID | Control | Event | Intents | Source instances |');
+      lines.push('|---|---|---|---|---|');
+      for (const command of collectComponentCommands([component])) {
+        const intents = unique(toArray(command.intents).map((intent) => intent.intent || 'unknown')).join(', ') || 'unclassified';
+        lines.push(`| \`${command.commandId}\` | \`${command.control}\` | \`${command.event}\` | ${intents} | ${command.invocations.length} |`);
+      }
+      lines.push('');
     }
   }
   lines.push('');
@@ -7661,7 +7893,7 @@ function buildAppStateMd(state) {
   return lines.join('\n') + '\n';
 }
 
-function buildPluginInput(brief, inputPath, screenRows, connectors, tables, risks, screenFiles, structuredForms, nativeExecution, demotedCapabilities, loadedScreens, serverSideAssets, controlIntentCoverage, pcfPlan, workflowPlan, behaviorContract) {
+function buildPluginInput(brief, inputPath, screenRows, connectors, tables, risks, screenFiles, structuredForms, nativeExecution, demotedCapabilities, loadedScreens, serverSideAssets, controlIntentCoverage, pcfPlan, workflowPlan, behaviorContract, criticalObligations, migrationMode) {
   // Per-screen upgrade-hints index — keyed by screen name so the screenRows
   // map below can attach hints without re-walking the brief.
   const upgradeHintsByScreen = new Map();
@@ -7700,6 +7932,7 @@ function buildPluginInput(brief, inputPath, screenRows, connectors, tables, risk
   return {
     $schema: 'https://raw.githubusercontent.com/microsoft/power-platform-skills/main/plugins/mobile-apps/scripts/schemas/mobile-plugin-input.v3.schema.json',
     schemaVersion: '3',
+    migrationMode,
     source: {
       appBriefPath: inputPath,
       generatedAt: GENERATION_TIMESTAMP,
@@ -7730,6 +7963,7 @@ function buildPluginInput(brief, inputPath, screenRows, connectors, tables, risk
       // External canvas-component library aggregate (schema-completion pass).
       // Empty array on apps that don't pull any external libs.
       componentLibraries: toArray(brief.app && brief.app.componentLibraries),
+      sourceDesignBaseline: (brief.app && brief.app.designBaseline) || null,
     },
     bootstrap: {
       onStartIntents: toArray(brief.app && brief.app.onStartIntents),
@@ -7766,6 +8000,13 @@ function buildPluginInput(brief, inputPath, screenRows, connectors, tables, risk
       appShard: behaviorContract.appShard,
       stats: behaviorContract.stats,
     },
+    criticalObligations: {
+      file: 'critical-obligations.json',
+      schema: criticalObligations.$schema,
+      rule: criticalObligations.rule,
+      sourceDigest: criticalObligations.sourceDigest,
+      stats: criticalObligations.stats,
+    },
     localization: (brief && brief.localization) || null,
     assets: (brief && brief.assets) || null,
     qualityGates: {
@@ -7776,6 +8017,7 @@ function buildPluginInput(brief, inputPath, screenRows, connectors, tables, risk
         'npm run check:coverage -- --min 80',
         'npm run check:pcf -- --strict',
         'npm run check:workflows -- --strict',
+        'npm run check:obligations -- --strict',
         'npm run check:scaffold -- --strict',
         'npx tsc --noEmit',
       ],
@@ -7783,6 +8025,13 @@ function buildPluginInput(brief, inputPath, screenRows, connectors, tables, risk
         minCoveragePercent: 80,
         countSharedScreenBases: true,
         nativeEquivalentIntents: ['setContext', 'reset', 'clearCollect', 'patch', 'updateIf'],
+      },
+      criticalObligations: {
+        requiredDispositionPercent: 100,
+        weightedCoverageMayNotWaive: true,
+        equivalentMarker: 'source-obligation: <id>',
+        approvedDeltaMarker: 'source-delta: <id>',
+        approvalLedger: 'source-deltas.json',
       },
       localization: {
         allowOnlyCatalogKeys: true,
@@ -7956,6 +8205,7 @@ function buildComponentLibraryStub(brief, args) {
   const externalLibs = toArray(brief && brief.app && brief.app.componentLibraries);
   const connectorInv = sanitizeConnectorInventoryForTarget(collectConnectorInventory(brief));
   const stubInput = {
+    schemaVersion: 'component-library-assessment-v1',
     migrationCheck: 'component-library-only — port selected contracts into an existing app via /edit-app; do not run /create-mobile-app',
     sourceApp: {
       name: appName,
@@ -8121,8 +8371,8 @@ function main() {
   );
 
   const components = collectComponentInstances(loadedScreens, brief);
-  const appState = collectAppState(loadedScreens);
-  const behaviors = extractBehaviors(loadedScreens, brief);
+  const appState = collectAppState(loadedScreens, components);
+  const behaviors = extractBehaviors(loadedScreens, brief, components);
   const flows = extractFlows(brief, loadedScreens);
   const connectorInv = collectConnectorInventory(brief);
   const targetConnectorInv = sanitizeConnectorInventoryForTarget(connectorInv);
@@ -8136,6 +8386,12 @@ function main() {
   const behaviorArtifacts = buildBehaviorArtifacts(behaviors, screenRows, GENERATION_TIMESTAMP, controlIntentCoverage);
   const workflowPlan = buildWorkflowPlan(behaviors, screenRows, behaviorArtifacts.contract);
   attachWorkflowRefs(behaviorArtifacts, workflowPlan);
+  behaviors.componentCommands = collectComponentCommands(
+    components,
+    behaviors.actions,
+    behaviors.unmatchedFormulas,
+    behaviorArtifacts.contract
+  );
 
   // §10.1 / §8.3 / §14 pipeline: hydrate forms[] into the structured shape,
   // then run the image-picker downgrade so {camera, attachment, image-picker,
@@ -8147,6 +8403,20 @@ function main() {
   const downgrade = applyImagePickerDowngrade(structuredForms, brief, screenRows);
   const nativeExecution = buildNativeExecutionPlan(downgrade.capabilities, bundledDeps);
   const serverSideAssets = buildServerSideAssets(tables);
+  const criticalObligations = buildCriticalObligations({
+    generatedAt: GENERATION_TIMESTAMP,
+    sourceTreeSha256: brief.source?.schemaValidation?.sourceTreeSha256,
+    sourceInputSha256: brief.source?.schemaValidation?.sourceInputSha256,
+    migrationMode: args.mode,
+    componentCommands: behaviors.componentCommands,
+    app: {
+      startScreen: brief.app && brief.app.startScreen,
+      sourceDesignBaseline: brief.app && brief.app.designBaseline,
+    },
+    screens: screenRows,
+    navigationEdges: brief.navigation && brief.navigation.edges,
+    tables,
+  });
 
   const masterPlan = buildMasterPlan(
     brief,
@@ -8164,10 +8434,12 @@ function main() {
     serverSideAssets,
     pcfPlan,
     workflowPlan,
-    behaviorArtifacts.contract
+    behaviorArtifacts.contract,
+    criticalObligations,
+    args.mode
   );
   const requirementsMd = buildRequirementsBrief(brief, screenRows, connectors, tables);
-  const checklistMd = buildMigrationChecklist(brief, connectors, tables, risks, serverSideAssets, pcfPlan, workflowPlan, behaviorArtifacts.contract);
+  const checklistMd = buildMigrationChecklist(brief, connectors, tables, risks, serverSideAssets, pcfPlan, workflowPlan, behaviorArtifacts.contract, criticalObligations, args.mode);
   for (const component of components) {
     component.semanticRoles = unique(controlIntentCoverage.rows
       .filter((row) => row.component?.name === component.name)
@@ -8192,7 +8464,9 @@ function main() {
     controlIntentCoverage,
     pcfPlan,
     workflowPlan,
-    behaviorArtifacts.contract
+    behaviorArtifacts.contract,
+    criticalObligations,
+    args.mode
   );
 
   writeFile(path.join(args.outDir, 'native-app-plan.md'), masterPlan);
@@ -8202,6 +8476,7 @@ function main() {
   writeFile(path.join(args.outDir, 'state', 'app-state.md'), stateMd);
   writeFile(path.join(args.outDir, 'server-side-assets.json'), JSON.stringify(serverSideAssets, null, 2) + '\n');
   writeFile(path.join(args.outDir, 'control-intent-coverage.json'), JSON.stringify(controlIntentCoverage, null, 2) + '\n');
+  writeFile(path.join(args.outDir, 'critical-obligations.json'), JSON.stringify(criticalObligations, null, 2) + '\n');
   writeFile(path.join(args.outDir, 'pcf-plan.json'), JSON.stringify(pcfPlan, null, 2) + '\n');
   writeFile(path.join(args.outDir, 'mobile-plugin-input.json'), JSON.stringify(pluginInput, null, 2) + '\n');
   writeFile(path.join(args.outDir, 'behaviors.json'), JSON.stringify(behaviors, null, 2) + '\n');
@@ -8246,6 +8521,10 @@ function main() {
     ' (' + controlIntentCoverage.stats.totalControls + ' controls, ' +
     controlIntentCoverage.stats.behavioralControls + ' behavioral, ' +
     controlIntentCoverage.stats.highRiskControls + ' high-risk)');
+  console.log('- ' + path.join(args.outDir, 'critical-obligations.json') +
+    ' (' + criticalObligations.stats.critical + ' critical, ' +
+    criticalObligations.stats.componentCommands + ' shared component commands, ' +
+    criticalObligations.stats.componentCommandPlacements + ' invocation placements)');
   console.log('- ' + path.join(args.outDir, 'pcf-plan.json') +
     ' (' + pcfPlan.stats.total + ' PCFs, ' + pcfPlan.stats.proposed.blocker +
     ' proposed blockers, explicit approval required)');
@@ -8321,7 +8600,7 @@ function main() {
     for (const f of rt.failures) console.error('  - ' + f);
     process.exitCode = 3;
   }
-  console.log('Summary: ' + screenRows.length + ' screens, ' + tables.length + ' tables, ' + connectors.length + ' connectors, ' + risks.length + ' risks');
+  console.log('Summary: ' + screenRows.length + ' screens, ' + tables.length + ' tables, ' + connectors.length + ' connectors, ' + risks.length + ' risks, mode=' + args.mode);
   console.log('');
   console.log('Next: review native-app-plan.md, then run /create-mobile-app --working-dir <fresh-template> --adapted-from ' + args.outDir);
 }
@@ -8358,6 +8637,8 @@ module.exports = {
   buildWorkflowPlan,
   buildControlIntentCoverage,
   collectComponentInstances,
+  collectComponentCommands,
+  buildCriticalObligations,
   projectPcfControlIntents,
   extractBehaviors,
   extractFlows,

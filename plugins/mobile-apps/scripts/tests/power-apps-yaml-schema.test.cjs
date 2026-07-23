@@ -165,7 +165,10 @@ test('extractor validates before semantic extraction and records schema provenan
     id: 'http://powerapps.com/schemas/pa-yaml/v3.0/pa.schema',
     sourceCommit: 'a03a42b966f7308cd3f888304e56330edea155ec',
     sha256: 'fc2816840271186d3b3057a1316bdb682bf6d95f4ae4849eab1fd47e2149ed13',
+    sourceTreeSha256: '300605f4281641d82510e5e7ae57ac8b9f2536dd4ba05f6b0d2cd79914e87270',
     sourceFileCount: 5,
+    sourceInputSha256: '666c7fd02ebdfe50690afdc341fb4f3301196d7641013a67bb1a11472cd80f98',
+    sourceInputFileCount: 5,
     sectionCounts: {
       App: 1,
       Screens: 1,
@@ -188,6 +191,27 @@ test('extractor validates before semantic extraction and records schema provenan
 
   const validPackage = spawnSync(process.execPath, [PACKAGE_VALIDATOR, '--dir', adaptedOut, '--json'], { encoding: 'utf8' });
   assert.equal(validPackage.status, 0, validPackage.stderr || validPackage.stdout);
+  const validPackageWithSource = spawnSync(process.execPath, [PACKAGE_VALIDATOR, '--dir', adaptedOut, '--source-root', fixture('valid-split'), '--json'], { encoding: 'utf8' });
+  assert.equal(validPackageWithSource.status, 0, validPackageWithSource.stderr || validPackageWithSource.stdout);
+  const changedSource = path.join(tmp, 'changed-source');
+  fs.cpSync(fixture('valid-split'), changedSource, { recursive: true });
+  const changedHomePath = path.join(changedSource, 'Src', 'Home.pa.yaml');
+  fs.writeFileSync(changedHomePath, fs.readFileSync(changedHomePath, 'utf8').replace('="Orders"', '="Changed Orders"'));
+  const mismatchedSource = spawnSync(process.execPath, [PACKAGE_VALIDATOR, '--dir', adaptedOut, '--source-root', changedSource, '--json'], { encoding: 'utf8' });
+  assert.equal(mismatchedSource.status, 1);
+  assert.match(JSON.parse(mismatchedSource.stdout).errors.join('\n'), /sourceTreeSha256 differs/);
+  const changedSidecarSource = path.join(tmp, 'changed-sidecar-source');
+  fs.cpSync(fixture('valid-split'), changedSidecarSource, { recursive: true });
+  fs.mkdirSync(path.join(changedSidecarSource, 'References'), { recursive: true });
+  fs.writeFileSync(path.join(changedSidecarSource, 'References', 'Themes.json'), JSON.stringify({
+    CurrentTheme: 'changed-theme',
+    CustomThemes: [],
+  }));
+  const mismatchedSidecar = spawnSync(process.execPath, [PACKAGE_VALIDATOR, '--dir', adaptedOut, '--source-root', changedSidecarSource, '--json'], { encoding: 'utf8' });
+  assert.equal(mismatchedSidecar.status, 1);
+  const mismatchedSidecarErrors = JSON.parse(mismatchedSidecar.stdout).errors.join('\n');
+  assert.match(mismatchedSidecarErrors, /sourceInputSha256 differs/);
+  assert.doesNotMatch(mismatchedSidecarErrors, /sourceTreeSha256 differs/);
   const pluginInputPath = path.join(adaptedOut, 'mobile-plugin-input.json');
   delete pluginInput.source.powerAppsYamlSchemaValidation;
   fs.writeFileSync(pluginInputPath, JSON.stringify(pluginInput, null, 2));

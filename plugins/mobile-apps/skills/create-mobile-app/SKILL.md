@@ -74,6 +74,7 @@ npm run check:i18n -- --strict
 npm run check:coverage -- --min 80
 npm run check:pcf -- --strict
 npm run check:workflows -- --strict
+npm run check:obligations -- --strict
 npm run check:scaffold -- --strict
 ```
 
@@ -85,8 +86,19 @@ The scripts are installed at Step 10.8 only for projects that enter adapted mode
 - `behaviors.json` remains the lossless global audit ledger and is read only by deterministic checks. Builders receive one screen shard with exact core entries plus raw-free intent hints; ambiguous or core-dependent state is never demoted.
 - Every approved PCF disposition must have an exact native/server implementation marker or approved visible unsupported state; pending/blocker PCFs fail the gate.
 - Every pathological event handler must use its approved named-step workflow module and call site. Pending decisions, monolithic callbacks, missing step/behavior markers, or uninvoked modules fail the gate.
+- Every critical source obligation must have an exact implementation marker in its declared target file or an exact semantic-delta marker backed by `source-deltas.json` with `approvedBy: user`. Weighted behavior coverage cannot waive a missing shared command, source placement, navigation edge, saved-view/security scope, start-screen contract, or source design baseline.
 - Conversion/debug scaffolding must not remain visible in final screens.
 - Every source behavior that writes data, navigates, validates, authorizes, invokes a connector, or invokes a flow must be implemented or explicitly reported as unsupported; it must never disappear silently.
+
+### Semantic-delta approval protocol
+
+Migration mode never pre-approves a semantic change. When a builder/design/workflow step returns `NEEDS_CONTEXT: semantic delta approval required for <obligationId>`, the orchestrator owns the only approval path:
+
+1. Show the exact obligation ID, source requirement, proposed target behavior, rationale, affected target files, and observable user/business impact.
+2. Ask the user to approve or reject that one delta. Do not bundle unrelated deltas and do not infer approval from plan/design/preview acceptance.
+3. On explicit approval, append one row to `source-deltas.json` with `$schema: source-deltas-v1`, `obligationId`, `status: approved`, `approvedBy: user`, ISO `approvedAt`, both `sourceTreeSha256` and `sourceInputSha256` from the obligation contract, an `approvalReceipt` referencing the captured user-interaction turn/checkpoint, concrete `rationale`, and concrete `targetBehavior`. The first hash binds validated PA YAML; the second binds every supported sidecar/theme/resource/component/PCF/asset input used by extraction. Preserve existing approved rows; reject duplicate/conflicting IDs. Never accept a hand-authored `approvedBy: user` string without this source-bound interaction receipt.
+4. Re-dispatch the owning implementation step. It may then use the exact `// source-delta: <id>` marker at the real target behavior. Builders never edit the ledger themselves.
+5. On rejection, preserve the source semantics or stop if no equivalent implementation is possible. Never lower the obligation threshold.
 
 ---
 
@@ -137,6 +149,7 @@ Skip this step unless `$ARGUMENTS` contains `--adapted-from <dir>`. This mode co
   - `<displayName>=$IMPORTED_APP_NAME`, `<slug>=$IMPORTED_APP_SLUG`, target platforms `ios, android`, aesthetic `modernize existing app`
   - `<visual_companion>=yes` unless the caller explicitly disabled previews
   - `<design_vibe_opt_in>=skip` when `--no-design` is present, otherwise `deferred` so the unchanged Step 6.75 design workflow still owns the decision
+  - `<migration_mode>` from `mobile-plugin-input.json.migrationMode`; only `faithful`, `modernize`, or `repair-modernize` are valid
 
 3. **Stash companion paths when their files exist:**
 
@@ -147,6 +160,7 @@ Skip this step unless `$ARGUMENTS` contains `--adapted-from <dir>`. This mode co
   | `components.md` | `$ADAPTED_COMPONENTS_MD` | Shared component scaffolding and builders |
   | `behaviors.json` | `$ADAPTED_BEHAVIORS` | Global lossless ledger for deterministic coverage only; never pass to builders |
   | `behavior-contract.json` | `$ADAPTED_BEHAVIOR_CONTRACT` | Dependency classification, intent mapping, and shard index |
+  | `critical-obligations.json` | `$ADAPTED_CRITICAL_OBLIGATIONS` | Strict shared-command, placement, navigation, saved-view/security, start-screen, and source-design obligations |
   | `behavior-shards/` | `$ADAPTED_BEHAVIOR_SHARDS_DIR` | Per-screen exact-core + native-intent builder feeds |
   | `mobile-plugin-input.json behaviorPlan.appShard` | `$ADAPTED_APP_BEHAVIOR_SHARD` | Compact App bootstrap builder-owned core/intent + workflow-call feed |
   | `workflows.json` | `$ADAPTED_WORKFLOWS` | Gate 2c, orchestrator-owned workflow modules, workflow coverage; builders use shard `workflowRefs[]` |
@@ -404,7 +418,7 @@ Set tentative defaults (used by Step 3b before `/design-system` runs):
 - `<visual_companion> = yes` — open `_plan_preview.html` in browser at Gate 4 by default. `/design-system` at Step 6.75 may downgrade this to `no` (path (d) in its cost picker), persisted to memory-bank for future runs.
 - `<design_vibe_opt_in> = deferred` — Step 6.75 sets the real value. While `deferred`, the planner does NOT prompt for a direction; it writes a placeholder `## Design Direction: <deferred — set by /design-system>` block so screen-planner can still run.
 
-**`--no-design` escape hatch.** For headless / token-constrained runs, set `--no-design` in `$ARGUMENTS`. It forces `<visual_companion> = no`, skips the style-picker handoff at Step 3a entirely, and short-circuits Step 6.75 to a no-op (placeholder block stays in `native-app-plan.md`; screen-builders fall back to industry-inferred defaults).
+**`--no-design` escape hatch.** For headless / token-constrained runs, set `--no-design` in `$ARGUMENTS`. It forces `<visual_companion> = no` and skips style exploration. Greenfield runs may short-circuit Step 6.75; adapted runs with a `design-baseline` obligation still execute the minimal source-baseline token path so source identity is not replaced by industry defaults.
 
 ### Step 2c — Plan preview (rough, always shown)
 
@@ -727,7 +741,7 @@ This fires before Gate 1 — it's not a gate, just a confidence check so the wro
 
 - The planner writes a placeholder `## Design Direction: <deferred — set by /design-system>` block into `native-app-plan.md` at Gate 4 and proceeds without asking the user. Step 6.75 rewrites the placeholder with the real direction.
 - If a legacy planner output emits `DESIGN_VIBE_REQUESTED:` as its first line, write the placeholder block yourself (insert before `## Design`, or before `## Screens` if `## Design` is absent), then re-spawn the planner with `Design vibe opt-in: done`. Do NOT run a vibe picker here — Step 6.75 owns that.
-- If `--no-design` is in `$ARGUMENTS`, write the placeholder block, mark `<design_vibe_opt_in> = skip`, and Step 6.75 also no-ops. Screen-builders fall back to industry-inferred defaults from `universal-patterns.md`.
+- If `--no-design` is in `$ARGUMENTS`, write the placeholder block and mark `<design_vibe_opt_in> = skip`. Step 6.75 no-ops only for greenfield runs or adapted runs without a design obligation; otherwise it writes source-baseline tokens without style exploration.
 
 If the planner's first return is anything other than `DESIGN_VIBE_REQUESTED:` — i.e. it ran all gates including Gate 4 normally — skip directly to Step 3b.
 
@@ -1156,7 +1170,7 @@ visual_companion: <yes|no>   # set in Step 2b — controls whether browser previ
 **Print before starting:**
 > "→ [Step 6.75/13] Locking your design system — source of truth for every screen built next. Takes 5 sec to 3 min depending on path."
 
-**Skip this step if `--no-design` is in `$ARGUMENTS`** — placeholder `## Design Direction: <deferred>` block stays in the plan, screen-builders fall back to industry-inferred defaults from `universal-patterns.md`.
+**Skip this step if `--no-design` is in `$ARGUMENTS` only for greenfield runs or adapted runs with no `design-baseline` obligation.** When `$ADAPTED_CRITICAL_OBLIGATIONS` contains a design baseline, `--no-design` means no style exploration/preview: invoke `/design-system` in its minimal adapted-baseline path, write source-derived `brand/tokens.ts`, and emit the exact obligation marker. Never fall back to industry defaults or leave the design obligation unresolved merely because previews were disabled.
 
 **Otherwise**, invoke `/design-system` (ships with this plugin):
 
@@ -1165,6 +1179,7 @@ Invoke skill: /design-system
 
 Arguments:
   --working-dir <working_dir>
+  --adapted-baseline-only  # only when --no-design plus a design-baseline obligation
 ```
 
 The skill detects orchestrator mode (`CODE_APPS_NATIVE_ORCHESTRATING=1`), collects brand inputs, presents the cost picker (a/b/c/d), runs the internal style picker, writes `brand/design-system.md` + `brand/tokens.ts`, renders `brand/design-system.html`, and returns with status.
@@ -1383,6 +1398,26 @@ npx tsc --noEmit
 
 If this fails, do not continue to native capabilities, connectors, navigation, or screens. Capture the full error list once, batch-fix generated-service/model or alias-map issues, then rerun the gate. If the failure is a hidden Dataverse collision already recovered via an alias (for example `aircraft` → `aircraftv2`), make sure the alias is reflected in `native-app-plan.md`, `memory-bank.md`, and the Generated Services snapshot before rerunning.
 
+#### Step 8.1 — Resolve source-used saved views (adapted mode)
+
+Skip when `$ADAPTED_FROM` is unset or `mobile-plugin-input.json dataModelPlan.dataverseTables[].views[]` is empty. Otherwise resolve every source-used system or personal view against the selected target environment **before** navigation, shared commands, workflows, or screen builders run:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-saved-views.js" \
+  --dir "$WORKING_DIR" \
+  --environment-url "<resolved-target-dataverse-url>"
+
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-plugin-input.js" \
+  --dir "$WORKING_DIR" \
+  --require-pcf-approval \
+  --require-workflow-approval \
+  [--source-root "$ADAPTED_SOURCE_ROOT"]
+```
+
+The resolver queries `savedqueries` and `userqueries`, matches by stable source GUID first and then by one unique exact name + table match, preserves FetchXML/layout columns/order/query type/returned table/security scope, and atomically refreshes `mobile-plugin-input.json` plus `critical-obligations.json`. Refresh `$ADAPTED_CRITICAL_OBLIGATIONS` from the rewritten file after success.
+
+This is a hard semantic gate. STOP on a missing, ambiguous, malformed, unauthorized, wrong-table, or still-unresolved view. Do not replace a source view with a broad `getAll`, silently pick the first same-name view, weaken it to a label-only contract, or ask a screen builder to infer target predicates. A deliberate view behavior change must use the one-obligation semantic-delta approval protocol.
+
 ### Step 8.5 — Seed sample data (auto)
 
 **Adapted-mode exception.** When `$ADAPTED_FROM` is set, skip automatic sample-data insertion. A migration package deliberately excludes customer records, and reused/extended target tables may be real production or test data even when they currently contain fewer than five rows. Print:
@@ -1527,6 +1562,8 @@ Run sequentially — each generates files under `src/generated/`. Parallel write
 ### Step 10b — Wire navigation layout
 
 Read `## Screens → Navigation Pattern` from `native-app-plan.md`.
+
+In adapted mode, read the single `start-screen` obligation before branching on navigation pattern. Verify `app/index.tsx` performs the existing auth-aware redirect to that obligation's `targetRoute` (normally `/(app)/home`) and place its exact `// source-obligation: <id>` marker immediately above the real redirect/route decision. If the source start screen cannot map to the approved native entry route, return to the semantic-delta approval protocol; do not leave the marker on an unchanged or wrong redirect.
 
 - **Stack** — skip. `app/(app)/_layout.tsx` already renders `<Stack>`. Nothing to do.
 - **Tabs** or **Tabs + Stack** — write outer `<Tabs>` in `app/(app)/_layout.tsx` AND a per-folder inner `<Stack>` in each `app/(app)/<folder>/_layout.tsx`.
@@ -1738,6 +1775,16 @@ Skip when `$ADAPTED_COMPONENTS_MD` is unset. Read the instantiated-component inv
 - Preserve exact per-instance input/output/event bindings for Step 11. A component event is behavior, not decoration; a builder may not render the component while dropping its callback.
 - Generate an honest native placeholder only when the source component cannot yet be reconstructed. Mark the missing rendering—not its typed contract or events—as a follow-up.
 - De-duplicate by destination filename before the ordinary 10.8a analysis creates inferred cross-screen components.
+
+When `$ADAPTED_CRITICAL_OBLIGATIONS` is set, materialize shared component commands **before** component JSX or screen skeletons:
+
+1. Read only `componentCommands[]` plus obligations with `category: component-command`. Implement every command exactly once in shared application/domain code under `src/features/<domain>/commands/` or the nearest established feature folder. Put the command obligation's exact `// source-obligation: <id>` immediately above the exported command/use-case function.
+2. Compose platform adapters, generated services, route helpers, and domain types inside that command. Do not generate one Canvas handler clone per source screen, a generic step interpreter, or a runtime dependency on migration JSON.
+3. Make each preserved component callback call the shared command. Per-screen composition remains owned by the screen builder through `component-command-availability` obligations.
+4. A source command that cannot be implemented without a correctness-critical choice is `BLOCKED:`. Routine TypeScript structure, helper names, native progress/error UX, and state placement remain AI-owned and are not user questions.
+5. Verify every `component-command` obligation marker appears at a real exported implementation, never beside a TODO, placeholder, or log.
+
+Create bounded builder feeds under `<working_dir>/.tmp/critical-obligations/` before Step 11. For each Screen Map row, write one JSON file containing only critical obligations whose `requirement.targetFiles[]` includes that row's exact target file. Include `id`, `category`, `source`, `requirement`, and `evidence`; omit all other screens and global component-command source formulas. These files are generation context only and remain outside runtime architecture.
 
 #### 10.8a — Analyze plan for cross-screen patterns
 
@@ -1976,6 +2023,7 @@ Skip when `$ADAPTED_FROM` is unset. Copy the maintained scripts from `${CLAUDE_S
 - `check-behavior-coverage.js`
 - `check-pcf-coverage.js`
 - `check-workflow-coverage.js`
+- `check-critical-obligations.js`
 - `check-conversion-scaffolding.js`
 
 Patch `package.json` idempotently with these commands:
@@ -1987,11 +2035,12 @@ Patch `package.json` idempotently with these commands:
   "check:coverage": "node scripts/check-behavior-coverage.js",
   "check:pcf": "node scripts/check-pcf-coverage.js",
   "check:workflows": "node scripts/check-workflow-coverage.js",
+  "check:obligations": "node scripts/check-critical-obligations.js",
   "check:scaffold": "node scripts/check-conversion-scaffolding.js"
 }
 ```
 
-Do not replace existing scripts. Add `npm run gen:assets` to `predev` only if it is not already present. Run all six once in baseline mode; missing companion manifests are a clean no-op, low pre-build behavior/workflow coverage is expected, and syntax/runtime failures in the scripts are blocking.
+Do not replace existing scripts. Add `npm run gen:assets` to `predev` only if it is not already present. Run all seven once in baseline mode. Unresolved obligations are expected before screen fan-out, but malformed contracts, unknown IDs, stale delta approvals, unsafe target files, or checker syntax/runtime failures are blocking.
 
 #### 10.8d — Navigation/skeleton TypeScript gate
 
@@ -2092,19 +2141,20 @@ Each prompt:
   # Include only when Step 0.5 provided the corresponding file:
   adapted_components: <$ADAPTED_COMPONENTS_MD>
   adapted_behavior_shard: <working_dir>/<that row's behaviorShard; REQUIRED in adapted mode>
+  adapted_critical_obligations: <working_dir>/.tmp/critical-obligations/<safe-screen-stem>.json
   adapted_state: <$ADAPTED_STATE>
   adapted_server_side_assets: <$ADAPTED_SERVER_SIDE_ASSETS>
   adapted_localization: <$ADAPTED_LOCALIZATION>
   adapted_assets: <$ADAPTED_ASSETS>
 
-  Follow screen-builder.md. Build from the user's compact per-screen spec, shared conventions, and design direction — inherited defaults are intentional, and samples are API/import references only, not layouts to copy. A typed skeleton already exists at your target_file with all imports and hook calls pre-resolved from the Generated Services table + per-screen `**Data**` field — fill in the JSX, do not discard imports. The skeleton file IS the import source of truth. Read the one adapted_behavior_shard before writing: apply its shard-level `intentGuidance`, `controlRoleGuidance`, and `controlIntentDefaults`; preserve every exact builder-owned core behavior; implement every builder-owned native intent hint; honor compact `workflowRefs[]`; and implement the binding approved PCF projection carried by `controlIntents[].pcf`. Workflow-owned exact actions/hints live only in each ref's `implementationShard` and were already materialized by the orchestrator—never request or read those files. Never request/read global `behaviors.json`, `workflows.json`, `pcf-plan.json`, or verbose screen/control formula files. Regenerate the best native UI rather than cloning Canvas pixels. Approved pathological handlers are already implemented in orchestrator-owned modules referenced by the shard; invoke and present typed result/progress UX, but never inline, duplicate, or rewrite core operations. Return per AGENTS.md rule #10: literal first line is `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:`, then a blank line, then the one-line summary.
+  Follow screen-builder.md. Build from the user's compact per-screen spec, shared conventions, and design direction — inherited defaults are intentional, and samples are API/import references only, not layouts to copy. A typed skeleton already exists at your target_file with all imports and hook calls pre-resolved from the Generated Services table + per-screen `**Data**` field — fill in the JSX, do not discard imports. Read the one adapted_behavior_shard and bounded adapted_critical_obligations feed before writing. Preserve every exact builder-owned core behavior, native intent hint, workflow ref, approved PCF projection, and every obligation in the bounded feed. Put each exact `source-obligation` marker at the real route/view/query/component composition it proves. Workflow-owned exact actions/hints live only in each ref's `implementationShard` and were already materialized by the orchestrator—never request or read those files. Never request/read global `behaviors.json`, global `critical-obligations.json`, `workflows.json`, `pcf-plan.json`, or verbose screen/control formula files. Regenerate the best native UI rather than cloning Canvas pixels. Return per AGENTS.md rule #10.
 ```
 
 **`target_file` resolution (HARD):** read the **File** column from the Screen Map row for this screen and prefix it with `<working_dir>/`. The path may be nested (e.g. `<working_dir>/app/(app)/inspections/[id].tsx`). The folder is guaranteed to exist because Step 10b.2 created it and wrote the inner `_layout.tsx`. **Do NOT compute the path as `<working_dir>/app/(app)/<screen-name>.tsx`** — that strips the folder structure and produces phantom-tab files. If the Screen Map row has no File column (older planner output), fall back to the flat path and surface a `DONE_WITH_CONCERNS: Screen Map missing File column — used flat fallback paths, expect phantom tabs` after the wave.
 
 **Cap at 5 concurrent.** If the plan has more than 5 new screens, batch them in waves of 5.
 
-**Prompt isolation preflight:** before each wave, inspect the constructed builder prompt keys. Allowed adapted paths are only `adapted_components`, `adapted_behavior_shard`, `adapted_state`, `adapted_server_side_assets`, `adapted_localization`, and `adapted_assets`. STOP if the prompt includes global `adapted_behaviors`, `adapted_behavior_contract`, `adapted_workflows`, `adapted_workflow_gate_summary`, `adapted_pcf_plan`, or any `workflow-shards/` path. This is a hard context-boundary check, not advisory wording.
+**Prompt isolation preflight:** before each wave, inspect the constructed builder prompt keys. Allowed adapted paths are only `adapted_components`, `adapted_behavior_shard`, bounded `adapted_critical_obligations`, `adapted_state`, `adapted_server_side_assets`, `adapted_localization`, and `adapted_assets`. STOP if the prompt includes global `adapted_behaviors`, global `critical-obligations.json`, `adapted_behavior_contract`, `adapted_workflows`, `adapted_workflow_gate_summary`, `adapted_pcf_plan`, or any `workflow-shards/` path. This is a hard context-boundary check, not advisory wording.
 
 **Progress streaming — print one line per builder as the wave returns, then a wave summary.** The `Task` tool returns all parallel results together, but you can still narrate per-builder by iterating the returned results in order before doing the status-switch branching. Format:
 
@@ -2144,6 +2194,16 @@ Common wave-gate repair classes to batch instead of fixing line-by-line:
 - Stale connector TODOs: remove `TODO(connector-not-yet-added)` when the service exists in the Generated Services snapshot.
 
 **After all waves return and the last wave gate is clean**, run one final `npx tsc --noEmit` before Step 12 to catch cross-screen issues that only appear when all screens exist. If it fails, use the same consolidated batch-repair flow.
+
+#### 11.3 — Critical semantic obligation gate (adapted mode)
+
+Immediately after the final screen wave and TypeScript gate, before the stylistic sweep, preview, smoke test, or Metro, run:
+
+```bash
+npm run check:obligations -- --strict
+```
+
+This is a hard 100% gate. Repair equivalent implementations at their owning shared-command/design/screen layer and rerun. Unknown/misplaced/unattached markers, unresolved obligations, stale approvals, or deltas without explicit user approval stop the flow. The 80% weighted behavior score is never a waiver.
 
 **Sticky tsc/build error policy (run-level).** The first time a `tsc` or `npm run build` failure surfaces in this run, ask the user once:
 
@@ -2254,6 +2314,7 @@ npm run check:i18n -- --strict
 npm run check:coverage -- --min 80
 npm run check:pcf -- --strict
 npm run check:workflows -- --strict
+npm run check:obligations -- --strict
 npm run check:scaffold -- --strict
 ```
 

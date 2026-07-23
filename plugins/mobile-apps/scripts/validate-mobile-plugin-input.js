@@ -13,6 +13,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { pathContains } = require('./lib/modernizer-paths.js');
 const { validatePowerAppsYamlAttestation } = require('./lib/power-apps-yaml-schema.js');
+const { validatePowerAppsYamlSource } = require('./lib/power-apps-yaml-schema.js');
+const { computeCanvasSourceInputDigest } = require('./lib/canvas-source-input-digest.js');
 const {
   WORKFLOW_APPROVAL_STATUSES,
   WORKFLOW_EXECUTION_OWNERS,
@@ -29,6 +31,13 @@ const {
   derivePcfStats,
   projectPcfControlIntents,
 } = require('./lib/pcf-control-intent.js');
+const {
+  MIGRATION_MODES,
+  buildCriticalObligations,
+} = require('./lib/critical-obligations.js');
+const { validateJsonSchema } = require('./lib/json-schema-subset.js');
+const RUNNABLE_INPUT_SCHEMA = require('./schemas/mobile-plugin-input.v3.schema.json');
+const COMPONENT_LIBRARY_SCHEMA = require('./schemas/component-library-assessment.v1.schema.json');
 const MAX_PACKAGE_FILE_BYTES = 64 * 1024 * 1024;
 // Leave substantial room in a 200k-class context for the screen spec, typed
 // skeleton, component/state contracts, and generated code. Oversized feeds
@@ -36,15 +45,24 @@ const MAX_PACKAGE_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_MARKDOWN_ENTRIES = 10000;
 const MAX_MARKDOWN_DEPTH = 8;
 
+function validateBundledInputSchema(input) {
+  const schema = input?.schemaVersion === 'component-library-assessment-v1'
+    ? COMPONENT_LIBRARY_SCHEMA
+    : RUNNABLE_INPUT_SCHEMA;
+  return validateJsonSchema(schema, input, 'mobile-plugin-input.json')
+    .map((error) => `JSON Schema: ${error}`);
+}
+
 function parseArgs(argv) {
-  const args = { dir: '', json: false, requirePcfApproval: false, requireWorkflowApproval: false };
+  const args = { dir: '', sourceRoot: '', json: false, requirePcfApproval: false, requireWorkflowApproval: false };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--dir') args.dir = argv[++i] || '';
+    else if (argv[i] === '--source-root') args.sourceRoot = argv[++i] || '';
     else if (argv[i] === '--json') args.json = true;
     else if (argv[i] === '--require-pcf-approval') args.requirePcfApproval = true;
     else if (argv[i] === '--require-workflow-approval') args.requireWorkflowApproval = true;
     else if (argv[i] === '--help' || argv[i] === '-h') {
-      process.stdout.write('Usage: node scripts/validate-mobile-plugin-input.js --dir <mobile-plugin-input-dir> [--json] [--require-pcf-approval] [--require-workflow-approval]\n');
+      process.stdout.write('Usage: node scripts/validate-mobile-plugin-input.js --dir <mobile-plugin-input-dir> [--source-root <validated-canvas-source>] [--json] [--require-pcf-approval] [--require-workflow-approval]\n');
       process.exit(0);
     } else {
       throw new Error(`Unknown argument: ${argv[i]}`);
@@ -131,7 +149,11 @@ function validWorkflowModule(value) {
 }
 
 function validWorkflowCallSite(value) {
-  return value === 'src/bootstrap.ts' || validTargetFile(value);
+  return value === 'src/bootstrap.ts' || validTargetFile(value) || validWorkflowModule(value);
+}
+
+function validCriticalEvidenceFile(value) {
+  return value === 'brand/tokens.ts' || validWorkflowCallSite(value);
 }
 
 function validTypeScriptIdentifier(value) {
@@ -232,6 +254,46 @@ function main() {
   }
 
   const input = readJson(path.join(root, 'mobile-plugin-input.json'), errors, 'mobile-plugin-input.json');
+  if (input) errors.push(...validateBundledInputSchema(input));
+
+  if (input?.schemaVersion === 'component-library-assessment-v1') {
+    const planFile = path.join(root, 'native-app-plan.md');
+    if (!fs.existsSync(planFile)) errors.push('native-app-plan.md is missing');
+    else {
+      const stat = fs.lstatSync(planFile);
+      if (stat.isSymbolicLink() || !stat.isFile()) errors.push('native-app-plan.md must be a regular file');
+      else if (stat.size > MAX_PACKAGE_FILE_BYTES) errors.push(`native-app-plan.md exceeds ${MAX_PACKAGE_FILE_BYTES} bytes`);
+    }
+    if (input.componentLibrary?.componentCount !== input.componentLibrary?.components?.length) {
+      errors.push('componentLibrary.componentCount must equal components.length');
+    }
+    if (args.sourceRoot) warnings.push('--source-root is not applicable to a component-library assessment');
+    if (args.requirePcfApproval || args.requireWorkflowApproval) {
+      errors.push('runnable approval gates cannot be requested for a component-library assessment');
+    }
+    scanSecrets(input, 'mobile-plugin-input', errors);
+    const markdownState = { count: 0, exceeded: false };
+    scanMarkdownTree(planFile, 'native-app-plan.md', errors, markdownState);
+    const result = {
+      ok: errors.length === 0,
+      packageDir: root,
+      packageKind: 'component-library-assessment',
+      app: input.sourceApp?.name || null,
+      components: input.componentLibrary?.componentCount || 0,
+      errors,
+      warnings,
+    };
+    if (args.json) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    else {
+      process.stdout.write(`Component-library assessment: ${result.ok ? 'VALID' : 'INVALID'}\n`);
+      process.stdout.write(`App: ${result.app || '(unknown)'} | components ${result.components} | runnable no | next /edit-app\n`);
+      warnings.forEach((warning) => process.stdout.write(`WARN: ${warning}\n`));
+      errors.forEach((error) => process.stderr.write(`ERROR: ${error}\n`));
+    }
+    process.exitCode = result.ok ? 0 : 1;
+    return;
+  }
+
   const behaviors = readJson(path.join(root, 'behaviors.json'), errors, 'behaviors.json');
   const coverage = readJson(path.join(root, 'control-intent-coverage.json'), errors, 'control-intent-coverage.json');
   const serverSideAssets = readJson(path.join(root, 'server-side-assets.json'), errors, 'server-side-assets.json');
@@ -239,6 +301,7 @@ function main() {
   let pcfPlan = null;
   let workflowPlan = null;
   let workflowGateSummary = null;
+  let criticalObligations = null;
 
   for (const required of ['native-app-plan.md', path.join('state', 'app-state.md'), 'migration-checklist.md']) {
     const file = path.join(root, required);
@@ -253,6 +316,7 @@ function main() {
   let knownScreens = new Set();
   if (input) {
     if (String(input.schemaVersion) !== '3') errors.push(`unsupported mobile-plugin-input schemaVersion: ${input.schemaVersion}`);
+    if (!MIGRATION_MODES.includes(input.migrationMode)) errors.push(`unsupported migrationMode: ${input.migrationMode || 'missing'}`);
     if (!validSourceLabel(input.app?.name)) errors.push('app.name is missing or contains unsafe control characters');
     if (!input.app?.startScreen && !input.migrationCheck) errors.push('app.startScreen is missing');
     if (input.app?.auth != null && !['entra', 'none'].includes(input.app.auth)) errors.push(`unsupported app.auth mode: ${input.app.auth}`);
@@ -271,6 +335,8 @@ function main() {
     if (workflowGateSummaryFile) workflowGateSummary = readJson(workflowGateSummaryFile, errors, 'workflow-gate-summary.json');
     const behaviorContractFile = safePackagePath(root, input.behaviorPlan?.file, errors, 'behaviorPlan.file');
     if (behaviorContractFile) behaviorContract = readJson(behaviorContractFile, errors, 'behavior-contract.json');
+    const criticalObligationsFile = safePackagePath(root, input.criticalObligations?.file, errors, 'criticalObligations.file');
+    if (criticalObligationsFile) criticalObligations = readJson(criticalObligationsFile, errors, 'critical-obligations.json');
 
     const screens = input.screenPlan?.screens;
     if (!Array.isArray(screens)) errors.push('screenPlan.screens must be an array');
@@ -338,10 +404,85 @@ function main() {
       if (!(flow.flowId || flow.id)) warnings.push(`flow needs an ID before generation: ${flow.name || flow.displayName || '(unnamed)'}`);
     }
     scanSecrets(input, 'mobile-plugin-input', errors);
+    if (args.sourceRoot) {
+      try {
+        const sourceReport = validatePowerAppsYamlSource(args.sourceRoot);
+        if (sourceReport.sourceTreeSha256 !== input.source?.powerAppsYamlSchemaValidation?.sourceTreeSha256) {
+          errors.push('migration package sourceTreeSha256 differs from the supplied Canvas source root');
+        }
+        const sourceInputs = computeCanvasSourceInputDigest(args.sourceRoot);
+        if (sourceInputs.sourceInputSha256 !== input.source?.powerAppsYamlSchemaValidation?.sourceInputSha256) {
+          errors.push('migration package sourceInputSha256 differs from the supplied Canvas source root');
+        }
+        if (sourceInputs.sourceInputFileCount !== input.source?.powerAppsYamlSchemaValidation?.sourceInputFileCount) {
+          errors.push('migration package sourceInputFileCount differs from the supplied Canvas source root');
+        }
+      } catch (error) {
+        errors.push(`supplied Canvas source root failed validation: ${error.message}`);
+      }
+    }
+  }
+
+  if (input && behaviors && criticalObligations) {
+    if (criticalObligations.$schema !== 'critical-obligations-v1') errors.push(`unsupported critical-obligations.json schema: ${criticalObligations.$schema || 'missing'}`);
+    if (input.criticalObligations?.file !== 'critical-obligations.json') errors.push('mobile-plugin-input criticalObligations.file must be critical-obligations.json');
+    if (input.criticalObligations?.schema !== 'critical-obligations-v1') errors.push('mobile-plugin-input criticalObligations.schema must be critical-obligations-v1');
+    let expected = null;
+    try {
+      expected = buildCriticalObligations({
+        generatedAt: criticalObligations.generatedAt,
+        sourceTreeSha256: input.source?.powerAppsYamlSchemaValidation?.sourceTreeSha256,
+        sourceInputSha256: input.source?.powerAppsYamlSchemaValidation?.sourceInputSha256,
+        migrationMode: input.migrationMode,
+        componentCommands: behaviors.componentCommands,
+        app: {
+          startScreen: input.app?.startScreen,
+          sourceDesignBaseline: input.app?.sourceDesignBaseline,
+        },
+        screens: input.screenPlan?.screens,
+        navigationEdges: input.screenPlan?.navigationEdges,
+        tables: input.dataModelPlan?.dataverseTables,
+      });
+    } catch (error) {
+      errors.push(`critical obligation analysis failed: ${error.message}`);
+    }
+    if (expected) {
+      if (canonicalJson(criticalObligations) !== canonicalJson(expected)) {
+        errors.push('critical-obligations.json differs from deterministic source obligation analysis');
+      }
+      if (canonicalJson(input.criticalObligations?.stats) !== canonicalJson(expected.stats)) {
+        errors.push('mobile-plugin-input criticalObligations.stats differs from critical-obligations.json');
+      }
+      if (input.criticalObligations?.sourceDigest !== expected.sourceDigest) {
+        errors.push('mobile-plugin-input criticalObligations.sourceDigest differs from critical-obligations.json');
+      }
+      if (criticalObligations.sourceTreeSha256 !== input.source?.powerAppsYamlSchemaValidation?.sourceTreeSha256) {
+        errors.push('critical-obligations sourceTreeSha256 differs from validated source attestation');
+      }
+      if (criticalObligations.sourceInputSha256 !== input.source?.powerAppsYamlSchemaValidation?.sourceInputSha256) {
+        errors.push('critical-obligations sourceInputSha256 differs from validated source attestation');
+      }
+    }
+    for (const [index, obligation] of (expected?.obligations || criticalObligations.obligations || []).entries()) {
+      if (!/^obl-[0-9a-f]{16}$/.test(String(obligation.id || ''))) errors.push(`critical-obligations.obligations[${index}].id is invalid`);
+      for (const targetFile of obligation.requirement?.targetFiles || []) {
+        if (!validCriticalEvidenceFile(targetFile)) {
+          errors.push(`critical obligation ${obligation.id} has unsafe target file: ${targetFile}`);
+        }
+      }
+    }
+    scanSecrets(criticalObligations, 'critical-obligations', errors);
+  } else if (input && !criticalObligations) {
+    errors.push('critical-obligations.json is required');
   }
 
   const behaviorById = new Map();
   const behaviorOrder = new Map();
+  const componentCommands = behaviors?.componentCommands || [];
+  const componentBehaviorOwners = new Set(componentCommands.map((command) => command?.behaviorOwner).filter(Boolean));
+  const componentCommandByHandler = new Map(componentCommands
+    .filter((command) => command?.behaviorOwner && command?.definitionPath && command?.event)
+    .map((command) => [JSON.stringify([command.behaviorOwner, command.definitionPath, command.event]), command]));
   if (behaviors) {
     if ((behaviors.stats?.droppedEventActionCount || 0) !== 0) {
       errors.push(`behaviors.json droppedEventActionCount is ${behaviors.stats.droppedEventActionCount}; expected 0`);
@@ -357,7 +498,7 @@ function main() {
     const allowedControlFlowKinds = new Set(['if', 'switch', 'ifError', 'forAll', 'with', 'concurrent']);
     for (const group of ['actions', 'visibility', 'validations', 'derivations', 'unmatchedFormulas']) {
       for (const [index, entry] of (behaviors[group] || []).entries()) {
-        if (entry.screen && entry.screen !== 'App' && !knownScreens.has(entry.screen)) {
+        if (entry.screen && entry.screen !== 'App' && !knownScreens.has(entry.screen) && !componentBehaviorOwners.has(entry.screen)) {
           errors.push(`behaviors.${group}[${index}] references unknown screen: ${entry.screen}`);
         }
         if (group !== 'unmatchedFormulas') {
@@ -572,7 +713,7 @@ function main() {
       else workflowIds.add(workflow.workflowId);
 
       const source = workflow?.source || {};
-      if (source.screen !== 'App' && !knownScreens.has(source.screen)) errors.push(`${at}.source.screen references unknown screen: ${source.screen || 'missing'}`);
+      if (source.screen !== 'App' && !knownScreens.has(source.screen) && !componentBehaviorOwners.has(source.screen)) errors.push(`${at}.source.screen references unknown screen: ${source.screen || 'missing'}`);
       if (!validSourceLabel(source.control || '__screen__')) errors.push(`${at}.source.control is unsafe or missing`);
       if (!validSourceLabel(source.event)) errors.push(`${at}.source.event is unsafe or missing`);
       const handlerKey = JSON.stringify([source.screen, source.controlPath || source.control, source.event]);
@@ -669,7 +810,10 @@ function main() {
       if (target.importPath !== expectedImport) errors.push(`${at}.proposal.target.importPath must match target.module`);
       if (!validTypeScriptIdentifier(target.exportName)) errors.push(`${at}.proposal.target.exportName is invalid`);
       if (!validWorkflowCallSite(target.callSiteFile)) errors.push(`${at}.proposal.target.callSiteFile is unsafe or invalid`);
-      const expectedCallSite = source.screen === 'App' ? 'src/bootstrap.ts' : screenFiles.get(source.screen);
+      const expectedCallSite = source.screen === 'App'
+        ? 'src/bootstrap.ts'
+        : (componentCommandByHandler.get(JSON.stringify([source.screen, source.controlPath || source.control, source.event]))?.target?.module
+          || screenFiles.get(source.screen));
       if (expectedCallSite && target.callSiteFile !== expectedCallSite) errors.push(`${at}.proposal.target.callSiteFile must be ${expectedCallSite}`);
 
       const steps = Array.isArray(proposal.steps) ? proposal.steps : [];
@@ -983,6 +1127,7 @@ function main() {
     ok: errors.length === 0,
     packageDir: root,
     app: input?.app?.name || null,
+    migrationMode: input?.migrationMode || null,
     screens: input?.screenPlan?.screens?.length || 0,
     tables: input?.dataModelPlan?.dataverseTables?.length || 0,
     connectors: input?.dataModelPlan?.connectionRequirements?.length || 0,
@@ -995,6 +1140,9 @@ function main() {
     pcfDiscoveryComplete: pcfPlan?.discovery?.complete !== false,
     workflows: workflowPlan?.workflows?.length || 0,
     workflowDecisionsUnresolved: workflowPlan?.stats?.unresolvedDecisions || 0,
+    criticalObligations: criticalObligations?.stats?.critical || 0,
+    sharedComponentCommands: criticalObligations?.stats?.componentCommands || 0,
+    componentCommandPlacements: criticalObligations?.stats?.componentCommandPlacements || 0,
     errors,
     warnings,
   };
@@ -1002,7 +1150,7 @@ function main() {
   if (args.json) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   else {
     process.stdout.write(`Migration package: ${result.ok ? 'VALID' : 'INVALID'}\n`);
-    process.stdout.write(`App: ${result.app || '(unknown)'} | screens ${result.screens} | tables ${result.tables} | connectors ${result.connectors} | behaviors ${result.totalBehaviors} (${result.coreBehaviors} core / ${result.regenerableBehaviors} intent) | controls ${result.controls} | PCFs ${result.pcfs} | workflows ${result.workflows}\n`);
+    process.stdout.write(`App: ${result.app || '(unknown)'} | mode ${result.migrationMode || 'unknown'} | screens ${result.screens} | tables ${result.tables} | connectors ${result.connectors} | behaviors ${result.totalBehaviors} (${result.coreBehaviors} core / ${result.regenerableBehaviors} intent) | obligations ${result.criticalObligations} | controls ${result.controls} | PCFs ${result.pcfs} | workflows ${result.workflows}\n`);
     warnings.forEach((warning) => process.stdout.write(`WARN: ${warning}\n`));
     errors.forEach((error) => process.stderr.write(`ERROR: ${error}\n`));
   }

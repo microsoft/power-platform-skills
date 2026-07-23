@@ -21,6 +21,10 @@ const behaviorContractLib = require('../lib/behavior-contract.js');
 const modernizerPaths = require('../lib/modernizer-paths.js');
 const pcfControlIntentLib = require('../lib/pcf-control-intent.js');
 const workflowPlanLib = require('../lib/workflow-plan.js');
+const savedViewResolution = require('../lib/saved-view-resolution.js');
+const jsonSchemaSubset = require('../lib/json-schema-subset.js');
+const componentLibrarySchema = require('../schemas/component-library-assessment.v1.schema.json');
+const obligationChecker = require('../../shared/samples/scripts/check-critical-obligations.js');
 
 function withoutControlFlowId(frame) {
   const { id, ...rest } = frame;
@@ -547,6 +551,24 @@ test('extractor accepts lowercase src directory on case-sensitive filesystems', 
   assert.equal(fs.readFileSync(path.join(adaptedDir, 'mobile-plugin-input.json'), 'utf8'), firstPluginInput);
   assert.equal(fs.readFileSync(path.join(adaptedDir, 'native-app-plan.md'), 'utf8'), firstNativePlan);
 
+  const criticalObligationsPath = path.join(adaptedDir, 'critical-obligations.json');
+  const originalCriticalObligations = fs.readFileSync(criticalObligationsPath, 'utf8');
+  const tamperedCriticalObligations = JSON.parse(originalCriticalObligations);
+  tamperedCriticalObligations.obligations[0].requirement.policy = 'Ignore this source requirement.';
+  fs.writeFileSync(criticalObligationsPath, JSON.stringify(tamperedCriticalObligations));
+  const tamperedObligationsValidation = spawnSync(process.execPath, [validatorPath, '--dir', adaptedDir, '--json'], { encoding: 'utf8' });
+  assert.equal(tamperedObligationsValidation.status, 1);
+  assert.match(JSON.parse(tamperedObligationsValidation.stdout).errors.join('\n'), /critical-obligations\.json differs from deterministic source obligation analysis/);
+  fs.writeFileSync(criticalObligationsPath, originalCriticalObligations);
+
+  const tamperedObligationSummary = JSON.parse(firstPluginInput);
+  tamperedObligationSummary.criticalObligations.stats.critical += 1;
+  fs.writeFileSync(path.join(adaptedDir, 'mobile-plugin-input.json'), JSON.stringify(tamperedObligationSummary));
+  const tamperedObligationSummaryValidation = spawnSync(process.execPath, [validatorPath, '--dir', adaptedDir, '--json'], { encoding: 'utf8' });
+  assert.equal(tamperedObligationSummaryValidation.status, 1);
+  assert.match(JSON.parse(tamperedObligationSummaryValidation.stdout).errors.join('\n'), /criticalObligations\.stats differs from critical-obligations\.json/);
+  fs.writeFileSync(path.join(adaptedDir, 'mobile-plugin-input.json'), firstPluginInput);
+
   const pcfPlanPath = path.join(adaptedDir, 'pcf-plan.json');
   const coveragePath = path.join(adaptedDir, 'control-intent-coverage.json');
   const originalPcfPlan = fs.readFileSync(pcfPlanPath, 'utf8');
@@ -754,7 +776,8 @@ test('extractor accepts lowercase src directory on case-sensitive filesystems', 
   assert.equal(report.status, 0, report.stderr || report.stdout);
   const reportHtml = fs.readFileSync(reportPath, 'utf8');
   assert.match(reportHtml, /Lowercase Source App/);
-  assert.match(reportHtml, /behavior ledger/i);
+  assert.match(reportHtml, /Canvas → native \/ modernize/i);
+  assert.match(reportHtml, /Critical source obligations/i);
   assert.match(reportHtml, /Ready for guided generation|Ready with review/);
 
   const protectedOut = path.join(tmp, 'protected-output');
@@ -1230,7 +1253,9 @@ test('control intent classifies Gallery and component semantics conservatively',
     component('NavigationRail', { events: [{ name: 'OnSelect' }] }),
     component('AddressForm', { inputs: [{ name: 'Street', dataType: 'Text' }, { name: 'City', dataType: 'Text' }], events: [{ name: 'OnSave' }] }),
     component('InspectionCard', { inputs: [{ name: 'InspectionRecord', dataType: 'Record' }], events: [{ name: 'OnSelect' }] }),
-    component('LayoutWrapper'),
+    component('LayoutWrapper', {
+      internalHandlers: [{ control: 'OpenButton', event: 'OnSelect', intents: [{ intent: 'navigate', target: 'Detail' }] }],
+    }),
     component('MysteryWidget'),
     component('InternalLayoutWrapper', { controlCount: 3 }),
   ];
@@ -1247,7 +1272,7 @@ test('control intent classifies Gallery and component semantics conservatively',
   assert.equal(roleOf('Navigation1'), 'navigation-component');
   assert.equal(roleOf('Address1'), 'form-composite');
   assert.equal(roleOf('Inspection1'), 'domain-component');
-  assert.equal(roleOf('Wrapper1'), 'disposable-canvas-scaffolding');
+  assert.equal(roleOf('Wrapper1'), 'domain-component');
   assert.equal(roleOf('Widget1'), 'component-review');
   assert.equal(roleOf('InternalWrapper1'), 'component-review');
   assert.equal(coverage.stats.semanticReviewControls, 4);
@@ -1267,7 +1292,7 @@ test('control intent classifies Gallery and component semantics conservatively',
   assert.equal(Object.hasOwn(compactPicker, 'screen'), false);
   assert.equal(Object.hasOwn(compactPicker, 'notesForAI'), false);
   assert.equal(typeof homeShard.controlRoleGuidance['picker-options'].notesForAI, 'string');
-  assert.equal(homeShard.controlIntents.find((row) => row.control === 'Wrapper1').role, 'disposable-canvas-scaffolding');
+  assert.equal(homeShard.controlIntents.find((row) => row.control === 'Wrapper1').role, 'domain-component');
 });
 
 test('PCF approvals project every terminal semantic role without raw formulas', () => {
@@ -1573,6 +1598,740 @@ test('adapter behaviors retain extractor control-flow and leaf source statement'
     ],
   }], { app: {} });
   assert.equal(new Set(duplicateNames.actions.map((action) => action.behaviorId)).size, 4);
+});
+
+test('component root and child handlers are classified as source behavior', () => {
+  const components = new Map([[
+    'Footer',
+    {
+      name: 'Footer',
+      properties: { OnReset: '=Set(var_reset, true)' },
+      controlsFlat: [{
+        name: 'Button_calendar',
+        path: 'Footer/Button_calendar',
+        properties: {
+          OnSelect: '=Set(_dateSelected, Today()); Navigate(PersonalCalendarView, ScreenTransition.Fade)',
+          OnUndoRemoveFile: '=Notify("Undo attachment")',
+        },
+      }],
+    },
+  ]]);
+
+  extractor.classifyComponentDefinitionEvents(components, []);
+
+  assert.deepEqual(
+    components.get('Footer').internalHandlers.map((handler) => ({
+      control: handler.control,
+      event: handler.event,
+      intents: handler.intents.map((intent) => intent.intent),
+    })),
+    [
+      { control: 'Footer', event: 'OnReset', intents: ['setVar'] },
+      { control: 'Button_calendar', event: 'OnSelect', intents: ['setVar', 'navigate'] },
+      { control: 'Button_calendar', event: 'OnUndoRemoveFile', intents: ['notify'] },
+    ]
+  );
+});
+
+test('quoted App.Formulas preserve CHANEL-style design records', () => {
+  const formulas = extractor.parseNamedFormulas(
+    '"=nf_uiColors =\\r\\n{\\r\\n color1: RGBA(0, 0, 0, 1),\\r\\n color2: ColorValue(\\"#7654D8\\"),\\r\\n color3: ColorValue(\\"#EFEDF4\\")\\r\\n};\\r\\nnf_borderRadius = Round(App.Height * 0.012, 0)"'
+  );
+  assert.deepEqual(formulas.map((formula) => formula.name), ['nf_uiColors', 'nf_borderRadius']);
+
+  const baseline = extractor.buildSourceDesignBaseline(
+    { primaryColor: 'rgba(56, 96, 178, 1)' },
+    formulas,
+    [{
+      controlsFlat: [
+        { properties: { Font: '=Font.Lato' } },
+        { properties: { Font: "=Font.'Lato Black'" } },
+        { properties: { Font: '=Font.Lato' } },
+      ],
+    }],
+    new Map()
+  );
+
+  assert.deepEqual(
+    baseline.colors.map(({ name, value }) => ({ name, value })),
+    [
+      { name: 'primaryColor', value: 'rgba(56, 96, 178, 1)' },
+      { name: 'color1', value: 'rgba(0, 0, 0, 1)' },
+      { name: 'color2', value: '#7654D8' },
+      { name: 'color3', value: '#EFEDF4' },
+    ]
+  );
+  assert.equal(baseline.typography.dominantFont, 'Lato');
+  assert.deepEqual(baseline.dimensions, [{
+    name: 'nf_borderRadius',
+    expression: 'Round(App.Height * 0.012, 0)',
+  }]);
+
+  const nested = extractor.buildSourceDesignBaseline(
+    {
+      themeName: 'TWEED',
+      themeId: 'tweed-theme',
+      primaryColor: '#102030',
+      palette: {
+        colors: [{ name: 'TextMainColor', value: '#202020', raw: 'ColorValue("#202020")' }],
+        sizes: [{ name: 'ControlRadius', value: 6 }],
+        fontFaces: [{ name: 'BodyFont', value: 'Aptos' }],
+      },
+      fonts: ['Aptos'],
+    },
+    extractor.parseNamedFormulas('=nf_design = { palette: { accent: ColorValue("#C71585") }, spacing: { sm: 8, lg: 16 }, card: { radius: 4, title: { color: ColorValue("#111111") } } }'),
+    [],
+    new Map()
+  );
+  assert.equal(nested.confidence, 'high');
+  assert.equal(nested.typography.dominantFont, 'Aptos');
+  assert.deepEqual(
+    nested.colors.filter((color) => color.collection === 'nf_design').map((color) => [color.path, color.value]),
+    [['palette.accent', '#C71585'], ['card.title.color', '#111111']]
+  );
+  assert.deepEqual(
+    nested.dimensions.filter((dimension) => dimension.collection === 'nf_design').map((dimension) => [dimension.path, dimension.expression]),
+    [['spacing.sm', '8'], ['spacing.lg', '16'], ['card.radius', '4']]
+  );
+  assert.equal(nested.namedRecords[0].kind, 'mixed-record');
+
+  const themeOnly = extractor.buildSourceDesignBaseline({
+    themeName: 'ThemeOnly',
+    themeId: 'theme-only',
+    palette: {
+      colors: [{ name: 'PrimaryColor1', value: '#445566', raw: 'ColorValue("#445566")' }],
+      sizes: [],
+      fontFaces: [{ name: 'BodyFont', value: 'Segoe UI' }],
+    },
+    fonts: ['Segoe UI'],
+  }, [], [], new Map());
+  assert.equal(themeOnly.confidence, 'high');
+  assert.equal(themeOnly.colors[0].value, '#445566');
+  assert.equal(themeOnly.typography.dominantFont, 'Segoe UI');
+});
+
+test('component handlers become shared commands with every source invocation', () => {
+  const components = [{
+    name: 'Footer',
+    accessAppScope: true,
+    internalHandlers: [{
+      control: 'Button_calendar',
+      path: 'Footer/Button_calendar',
+      event: 'OnSelect',
+      formula: '=Set(_dateSelected, Today()); Navigate(PersonalCalendarView, ScreenTransition.Fade)',
+      intents: [
+        { intent: 'setVar', name: '_dateSelected', expression: 'Today()' },
+        { intent: 'navigate', target: 'PersonalCalendarView', transition: 'ScreenTransition.Fade' },
+      ],
+    }],
+    instances: [
+      { screen: 'CustomerList', name: 'Footer_1', path: 'CustomerList/Footer_1' },
+      { screen: 'OrdersList', name: 'Footer_2', path: 'OrdersList/Footer_2' },
+    ],
+  }];
+  const behaviors = adapter.extractBehaviors([], { app: {} }, components);
+  const commands = behaviors.componentCommands;
+
+  assert.equal(commands.length, 1);
+  assert.match(commands[0].commandId, /^cmd-[0-9a-f]{16}$/);
+  assert.deepEqual(commands[0].navigateTargets, ['PersonalCalendarView']);
+  assert.equal(commands[0].implementationOwner, 'shared-command');
+  assert.equal(commands[0].behaviorOwner, 'Component:Footer');
+  assert.match(commands[0].target.module, /^src\/features\/components\/commands\/footer-button-calendar-on-select-[0-9a-f]{8}\.ts$/);
+  assert.match(commands[0].target.exportName, /^runFooterButtonCalendarOnSelectCommand[0-9a-f]{8}$/);
+  assert.equal(commands[0].behaviorIds.length, 2);
+  assert.equal(behaviors.actions.every((action) => action.screen === 'Component:Footer'), true);
+  assert.equal(behaviors.actions.every((action) => action.implementationFile === commands[0].target.module), true);
+  assert.deepEqual(commands[0].invocations, [
+    { screen: 'CustomerList', instance: 'Footer_1', path: 'CustomerList/Footer_1' },
+    { screen: 'OrdersList', instance: 'Footer_2', path: 'OrdersList/Footer_2' },
+  ]);
+
+  const artifacts = adapter.buildBehaviorArtifacts(behaviors, [], '1970-01-01T00:00:00.000Z');
+  const byId = new Map(artifacts.contract.classifications.map((row) => [row.behaviorId, row]));
+  const dateWriter = behaviors.actions.find((action) => action.intent === 'setVar');
+  const navigation = behaviors.actions.find((action) => action.intent === 'navigate');
+  assert.equal(byId.get(dateWriter.behaviorId).tier, 'core');
+  assert.equal(byId.get(navigation.behaviorId).tier, 'regenerable');
+  assert.equal(byId.get(dateWriter.behaviorId).reasonCodes.includes('SHARED_COMPONENT_STATE_WRITE'), true);
+  assert.equal(byId.get(dateWriter.behaviorId).implementationFile, commands[0].target.module);
+  const componentShard = artifacts.shards.get(artifacts.contract.shards.find((row) => row.screen === 'Component:Footer').file);
+  assert.equal(componentShard.screenIntent.kind, 'shared-component-commands');
+  assert.deepEqual(componentShard.screenIntent.commands[0].behaviorIds, commands[0].behaviorIds);
+});
+
+test('component mutations, flows, and nested control flow enter workflow accounting', () => {
+  const formula = '=If(var_ready, ForAll(col_lines As line, Patch(Orders, Defaults(Orders), {name: line.name})); Patch(Orders, Defaults(Orders), {name: "summary"}); \'Approval Flow\'.Run(var_orderId); Notify("Done"); Navigate(OrderComplete), Notify("Not ready"))';
+  const components = [{
+    name: 'OrderFooter',
+    accessAppScope: true,
+    internalHandlers: [{
+      control: 'SubmitButton',
+      path: 'OrderFooter/SubmitButton',
+      event: 'OnSelect',
+      formula,
+      intents: extractor.classifyFormulaIntents(formula),
+    }],
+    instances: [{ screen: 'OrderConfirm', name: 'OrderFooter_1', path: 'OrderConfirm/OrderFooter_1' }],
+  }];
+  const behaviors = adapter.extractBehaviors([], { app: {} }, components);
+  const artifacts = adapter.buildBehaviorArtifacts(behaviors, [{ name: 'OrderConfirm', file: 'app/(app)/order-confirm.tsx' }], '1970-01-01T00:00:00.000Z');
+  const workflowPlan = adapter.buildWorkflowPlan(behaviors, [{ name: 'OrderConfirm', file: 'app/(app)/order-confirm.tsx' }], artifacts.contract);
+
+  assert.equal(behaviors.actions.some((action) => action.intent === 'patch'), true);
+  assert.equal(behaviors.actions.some((action) => action.intent === 'flowCall'), true);
+  assert.equal(behaviors.actions.some((action) => action.controlFlow.some((frame) => frame.kind === 'forAll')), true);
+  assert.equal(workflowPlan.workflows.length, 1);
+  assert.equal(workflowPlan.workflows[0].source.screen, 'Component:OrderFooter');
+  assert.equal(workflowPlan.workflows[0].proposal.target.callSiteFile, behaviors.componentCommands[0].target.module);
+  assert.equal(workflowPlan.workflows[0].source.behaviorIds.length, behaviors.actions.length);
+});
+
+test('critical obligations cover shared commands, placements, navigation, views, design, and start', () => {
+  const commands = adapter.collectComponentCommands([{
+    name: 'Footer',
+    accessAppScope: true,
+    internalHandlers: [{
+      control: 'Button_calendar',
+      path: 'Footer/Button_calendar',
+      event: 'OnSelect',
+      formula: '=Navigate(PersonalCalendarView)',
+      intents: [{ intent: 'navigate', target: 'PersonalCalendarView' }],
+    }],
+    instances: [
+      { screen: 'CustomerList', name: 'Footer_1', path: 'CustomerList/Footer_1' },
+      { screen: 'OrdersList', name: 'Footer_2', path: 'OrdersList/Footer_2' },
+    ],
+  }]);
+  const contract = adapter.buildCriticalObligations({
+    generatedAt: '2026-07-22T00:00:00.000Z',
+    sourceTreeSha256: 'a'.repeat(64),
+    sourceInputSha256: 'b'.repeat(64),
+    migrationMode: 'modernize',
+    componentCommands: commands,
+    app: {
+      startScreen: 'CustomerList',
+      sourceDesignBaseline: {
+        confidence: 'high',
+        colors: [{ name: 'color2', value: '#7654D8' }],
+        typography: { dominantFont: 'Lato' },
+      },
+    },
+    screens: [
+      { name: 'CustomerList', route: '/(app)/home', file: 'app/(app)/home.tsx' },
+      { name: 'CustomerDetails', route: '/(app)/customers/[id]', file: 'app/(app)/customers/[id].tsx' },
+      { name: 'OrdersList', route: '/(app)/orders', file: 'app/(app)/orders.tsx' },
+    ],
+    navigationEdges: [{ from: 'CustomerList', to: 'CustomerDetails', viaControl: 'OpenCustomer' }],
+    tables: [{
+      logicalName: 'account',
+      screens: ['CustomerList'],
+      views: [{
+        name: 'MyCustomerView',
+        displayName: 'My Customer - TWEED - App-002',
+        viewId: 'view-guid',
+        viewKind: 'system',
+        sourceInventory: 'default.cds_account_views',
+        screens: ['CustomerList'],
+        predicate: null,
+        orderBy: [],
+        columns: [],
+        resolutionStatus: 'needs-target-view-resolution',
+      }],
+    }],
+  });
+
+  assert.equal(contract.stats.componentCommands, 1);
+  assert.equal(contract.stats.componentCommandPlacements, 2);
+  assert.equal(contract.stats.sourceScreens, 3);
+  assert.equal(contract.stats.navigation, 1);
+  assert.equal(contract.stats.savedViews, 1);
+  assert.equal(contract.stats.designBaselines, 1);
+  assert.equal(contract.stats.startScreens, 1);
+  assert.equal(contract.stats.total, 10);
+  assert.match(contract.sourceDigest, /^[0-9a-f]{64}$/);
+  assert.ok(contract.obligations.every((obligation) => /^obl-[0-9a-f]{16}$/.test(obligation.id)));
+  assert.equal(
+    contract.obligations.find((obligation) => obligation.category === 'navigation').requirement.targetFiles[0],
+    'app/(app)/home.tsx'
+  );
+  assert.deepEqual(
+    contract.obligations.find((obligation) => obligation.category === 'component-command').requirement.targetFiles,
+    [commands[0].target.module]
+  );
+  assert.deepEqual(
+    contract.obligations.find((obligation) => obligation.category === 'start-screen').requirement.targetFiles,
+    ['app/index.tsx']
+  );
+
+  const permuted = adapter.buildCriticalObligations({
+    generatedAt: '2026-07-22T00:00:00.000Z',
+    sourceTreeSha256: 'a'.repeat(64),
+    sourceInputSha256: 'b'.repeat(64),
+    migrationMode: 'modernize',
+    componentCommands: [...commands].reverse(),
+    app: {
+      startScreen: 'CustomerList',
+      sourceDesignBaseline: {
+        confidence: 'high',
+        colors: [{ name: 'color2', value: '#7654D8' }],
+        typography: { dominantFont: 'Lato' },
+      },
+    },
+    screens: [
+      { name: 'OrdersList', route: '/changed/orders', file: 'app/(app)/changed-orders.tsx' },
+      { name: 'CustomerDetails', route: '/changed/customers/[id]', file: 'app/(app)/changed-customers/[id].tsx' },
+      { name: 'CustomerList', route: '/changed/home', file: 'app/(app)/changed-home.tsx' },
+    ],
+    navigationEdges: [{ from: 'CustomerList', to: 'CustomerDetails', viaControl: 'OpenCustomer' }],
+    tables: [{
+      logicalName: 'account',
+      screens: ['CustomerList'],
+      views: [{
+        name: 'MyCustomerView',
+        displayName: 'My Customer - TWEED - App-002',
+        viewId: 'view-guid',
+        viewKind: 'system',
+        sourceInventory: 'default.cds_account_views',
+        screens: ['CustomerList'],
+        predicate: '<fetch />',
+        orderBy: ['name asc'],
+        columns: ['name'],
+        resolutionStatus: 'resolved',
+      }],
+    }],
+  });
+  const sourceId = (row) => `${row.category}:${row.source.commandId || row.source.screen || row.source.from || row.source.viewId || row.source.view}`;
+  assert.deepEqual(
+    permuted.obligations.map((row) => [sourceId(row), row.id]).sort(),
+    contract.obligations.map((row) => [sourceId(row), row.id]).sort()
+  );
+  assert.equal(permuted.sourceDigest, contract.sourceDigest);
+});
+
+test('saved-view resolver preserves source identity and resolves exact target semantics', () => {
+  const systemId = '11111111-1111-4111-8111-111111111111';
+  const personalId = '22222222-2222-4222-8222-222222222222';
+  const remote = {
+    savedqueries: [{
+      savedqueryid: systemId,
+      name: 'My Customers',
+      fetchxml: '<fetch><entity name="account"><attribute name="name"/><attribute name="accountnumber"/><filter><condition attribute="statecode" operator="eq" value="0"/></filter><order attribute="name" descending="false"/></entity></fetch>',
+      layoutxml: '<grid><row><cell name="accountnumber"/></row></grid>',
+      querytype: 0,
+      returnedtypecode: 'account',
+    }],
+    userqueries: [{
+      userqueryid: personalId,
+      name: 'My Contacts',
+      fetchxml: '<fetch><entity name="contact"><attribute name="fullname"/><order attribute="createdon" descending="true"/></entity></fetch>',
+      layoutxml: '<grid><row><cell name="fullname"/></row></grid>',
+      querytype: 0,
+      returnedtypecode: 'contact',
+    }],
+  };
+  const input = {
+    dataModelPlan: {
+      dataverseTables: [{
+        logicalName: 'account',
+        views: [{
+          name: 'SourceCustomers',
+          displayName: 'My Customers',
+          viewId: systemId,
+          viewKind: 'system',
+          sourceInventory: 'default.cds_account_views',
+          screens: ['Customers'],
+        }],
+      }, {
+        logicalName: 'contact',
+        views: [{
+          name: 'SourceContacts',
+          displayName: 'My Contacts',
+          viewId: null,
+          viewKind: 'personal',
+          sourceInventory: 'default.cds_contact_views',
+          screens: ['Contacts'],
+        }],
+      }],
+    },
+  };
+  const result = savedViewResolution.resolvePackageViews(input, remote);
+  assert.equal(result.resolved, 2);
+  const [system, personal] = result.input.dataModelPlan.dataverseTables.map((table) => table.views[0]);
+  assert.equal(system.resolutionMatch, 'source-guid');
+  assert.equal(system.targetViewId, systemId);
+  assert.equal(system.executionParameter, 'savedQuery');
+  assert.equal(system.securityScope, 'organization');
+  assert.deepEqual(system.columns, ['accountnumber', 'name']);
+  assert.deepEqual(system.orderBy, ['name asc']);
+  assert.equal(personal.resolutionMatch, 'exact-name-and-table');
+  assert.equal(personal.targetViewId, personalId);
+  assert.equal(personal.executionParameter, 'userQuery');
+  assert.equal(personal.securityScope, 'owner-and-sharing');
+  assert.deepEqual(personal.orderBy, ['createdon desc']);
+  assert.equal(input.dataModelPlan.dataverseTables[0].views[0].targetViewId, undefined, 'resolver must not mutate input');
+
+  assert.throws(() => savedViewResolution.resolvePackageViews(input, {
+    savedqueries: remote.savedqueries,
+    userqueries: [remote.userqueries[0], { ...remote.userqueries[0], userqueryid: '33333333-3333-4333-8333-333333333333' }],
+  }), /ambiguous target matches/);
+  assert.throws(() => savedViewResolution.parseFetchXml('<fetch><entity name="account"><filter></entity></fetch>'), /unbalanced XML tags/);
+  assert.throws(() => savedViewResolution.parseFetchXml('<!DOCTYPE fetch><fetch><entity name="account"/></fetch>'), /unsupported XML declarations/);
+});
+
+test('bundled JSON schemas execute for runnable and component-library contracts', (t) => {
+  const assessment = {
+    schemaVersion: 'component-library-assessment-v1',
+    migrationCheck: 'component-library-only — port selected contracts into an existing app via /edit-app; do not run /create-mobile-app',
+    sourceApp: { name: 'Shared Controls', format: 'power-apps-yaml-v3', documentAppType: 2 },
+    componentLibrary: {
+      components: [{ name: 'Footer', type: 'CanvasComponent', controlCount: 4, inputs: 1, outputs: 0 }],
+      externalLibraries: [],
+      componentCount: 1,
+    },
+    dataModelPlan: { connectorInventory: [] },
+    nativePlan: { capabilities: [], demotedCapabilities: [] },
+  };
+  assert.deepEqual(jsonSchemaSubset.validateJsonSchema(componentLibrarySchema, assessment, 'assessment'), []);
+  assert.match(
+    jsonSchemaSubset.validateJsonSchema(componentLibrarySchema, {
+      ...assessment,
+      componentLibrary: { ...assessment.componentLibrary, componentCount: '1' },
+    }, 'assessment').join('\n'),
+    /componentCount must be integer/
+  );
+  assert.match(
+    jsonSchemaSubset.validateJsonSchema(componentLibrarySchema, { ...assessment, unexpected: true }, 'assessment').join('\n'),
+    /unexpected is not allowed/
+  );
+  assert.throws(() => jsonSchemaSubset.validateSchemaDefinition({ type: 'object', anyOf: [] }), /unsupported JSON Schema keyword: anyOf/);
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'component-assessment-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(tmp, 'mobile-plugin-input.json'), `${JSON.stringify(assessment, null, 2)}\n`);
+  fs.writeFileSync(path.join(tmp, 'native-app-plan.md'), '# Shared Controls\n\nUse /edit-app.\n');
+  const validation = spawnSync(process.execPath, [
+    path.resolve(__dirname, '..', 'validate-mobile-plugin-input.js'),
+    '--dir', tmp,
+    '--json',
+  ], { encoding: 'utf8' });
+  assert.equal(validation.status, 0, validation.stderr);
+  const result = JSON.parse(validation.stdout);
+  assert.equal(result.ok, true);
+  assert.equal(result.packageKind, 'component-library-assessment');
+  assert.equal(result.components, 1);
+});
+
+test('critical obligation checker requires exact placement and explicit user-approved deltas', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'critical-obligations-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const homeFile = 'app/(app)/home.tsx';
+  const tokenFile = 'brand/tokens.ts';
+  fs.mkdirSync(path.join(root, 'app/(app)'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'brand'), { recursive: true });
+  fs.writeFileSync(path.join(root, homeFile), '// source-obligation: obl-0123456789abcdef\nexport default function Home() { return null; }\n');
+  fs.writeFileSync(path.join(root, tokenFile), '// source-delta: obl-fedcba9876543210\nexport const tokens = { color: { primary: "#7654D8" } };\n');
+  const contract = {
+    sourceTreeSha256: 'a'.repeat(64),
+    sourceInputSha256: 'b'.repeat(64),
+    obligations: [
+      { id: 'obl-0123456789abcdef', category: 'navigation', criticality: 'critical', requirement: { targetFiles: [homeFile] } },
+      { id: 'obl-fedcba9876543210', category: 'design-baseline', criticality: 'critical', requirement: { targetFiles: [tokenFile] } },
+    ],
+  };
+  const markers = [
+    ...obligationChecker.parseMarkersFromText(fs.readFileSync(path.join(root, homeFile), 'utf8'), homeFile),
+    ...obligationChecker.parseMarkersFromText(fs.readFileSync(path.join(root, tokenFile), 'utf8'), tokenFile),
+  ];
+  const factsById = new Map([
+    ['obl-0123456789abcdef', {
+      attached: true,
+      placeholder: false,
+      imports: [],
+      callNames: ['router.push'],
+      stringLiterals: ['/customers'],
+      propertyNames: [],
+      identifiers: ['Home'],
+      exportedNames: ['Home'],
+      hasJsx: true,
+      hasNonNullReturn: true,
+      hasDefaultExport: true,
+      hasExecutableBody: true,
+      hasNavigation: true,
+      hasQueryOperation: false,
+    }],
+    ['obl-fedcba9876543210', {
+      attached: true,
+      placeholder: false,
+      imports: [],
+      callNames: [],
+      stringLiterals: ['#7654D8', 'Lato'],
+      propertyNames: ['color'],
+      identifiers: ['tokens'],
+      exportedNames: ['tokens'],
+      hasJsx: false,
+      hasNonNullReturn: false,
+      hasDefaultExport: false,
+      hasExecutableBody: true,
+      hasNavigation: false,
+      hasQueryOperation: false,
+    }],
+  ]);
+  const evidenceVerifier = (marker, obligation) => obligationChecker.verifyEvidenceFacts(marker, obligation, factsById.get(marker.id));
+
+  const invalid = obligationChecker.auditCriticalObligations(contract, markers, {
+    deltas: [{
+      obligationId: 'obl-fedcba9876543210',
+      status: 'approved',
+      approvedBy: 'ai',
+      approvedAt: '2026-07-22T00:00:00.000Z',
+      sourceTreeSha256: 'a'.repeat(64),
+      sourceInputSha256: 'b'.repeat(64),
+      approvalReceipt: 'turn:test-invalid-approval',
+      rationale: 'Suggested redesign.',
+      targetBehavior: 'Use a new palette.',
+    }],
+  }, { root, allSourceFiles: [homeFile, tokenFile], evidenceVerifier });
+  assert.equal(invalid.ok, false);
+  assert.equal(invalid.invalidDeltas[0].error, 'approvedBy must be "user"');
+
+  const valid = obligationChecker.auditCriticalObligations(contract, markers, {
+    $schema: 'source-deltas-v1',
+    deltas: [{
+      obligationId: 'obl-fedcba9876543210',
+      status: 'approved',
+      approvedBy: 'user',
+      approvedAt: '2026-07-22T00:00:00.000Z',
+      sourceTreeSha256: 'a'.repeat(64),
+      sourceInputSha256: 'b'.repeat(64),
+      approvalReceipt: 'turn:test-valid-approval',
+      rationale: 'Product owner approved a native visual refresh.',
+      targetBehavior: 'Use approved native tokens while preserving status semantics and hierarchy.',
+    }],
+  }, { root, allSourceFiles: [homeFile, tokenFile], evidenceVerifier });
+  assert.equal(valid.ok, true);
+  assert.equal(valid.implemented.length, 1);
+  assert.equal(valid.approvedDeltas.length, 1);
+
+  const misplaced = obligationChecker.auditCriticalObligations(contract, [
+    { type: 'implementation', id: 'obl-0123456789abcdef', file: tokenFile, line: 1 },
+    markers[1],
+  ], {
+    deltas: [{
+      obligationId: 'obl-fedcba9876543210',
+      status: 'approved',
+      approvedBy: 'user',
+      approvedAt: '2026-07-22T00:00:00.000Z',
+      sourceTreeSha256: 'a'.repeat(64),
+      sourceInputSha256: 'b'.repeat(64),
+      approvalReceipt: 'turn:test-misplaced-approval',
+      rationale: 'Approved.',
+      targetBehavior: 'Approved target.',
+    }],
+  }, { root, allSourceFiles: [homeFile, tokenFile], evidenceVerifier });
+  assert.equal(misplaced.ok, false);
+  assert.equal(misplaced.misplacedEvidence.length, 1);
+
+  const duplicate = obligationChecker.auditCriticalObligations(contract, [
+    markers[0],
+    { ...markers[0], line: markers[0].line + 2 },
+    markers[1],
+  ], {
+    deltas: [{
+      obligationId: 'obl-fedcba9876543210',
+      status: 'approved',
+      approvedBy: 'user',
+      approvedAt: '2026-07-22T00:00:00.000Z',
+      sourceTreeSha256: 'a'.repeat(64),
+      sourceInputSha256: 'b'.repeat(64),
+      approvalReceipt: 'turn:test-duplicate-evidence',
+      rationale: 'Approved.',
+      targetBehavior: 'Approved target.',
+    }],
+  }, { root, allSourceFiles: [homeFile, tokenFile], evidenceVerifier });
+  assert.equal(duplicate.ok, false);
+  assert.equal(duplicate.duplicateEvidence.length, 1);
+
+  const sharedCommandContract = {
+    sourceTreeSha256: 'a'.repeat(64),
+    sourceInputSha256: 'b'.repeat(64),
+    obligations: [{
+      id: 'obl-aabbccddeeff0011',
+      category: 'component-command',
+      criticality: 'critical',
+      requirement: { targetRoots: ['src/features', 'src/navigation'] },
+    }],
+  };
+  const wrongRoot = obligationChecker.auditCriticalObligations(sharedCommandContract, [{
+    type: 'implementation',
+    id: 'obl-aabbccddeeff0011',
+    file: homeFile,
+    line: 1,
+    attachedToCode: true,
+  }], null, { root, allSourceFiles: [homeFile, tokenFile], evidenceVerifier });
+  assert.equal(wrongRoot.ok, false);
+  assert.equal(wrongRoot.misplacedEvidence.length, 1);
+
+  assert.match(
+    obligationChecker.verifyEvidenceFacts({ type: 'implementation' }, {
+      category: 'screen-presence',
+      requirement: {},
+    }, { attached: true, placeholder: false, hasDefaultExport: true, hasJsx: false, hasNonNullReturn: false }),
+    /non-null JSX return/
+  );
+  assert.match(
+    obligationChecker.verifyEvidenceFacts({ type: 'implementation' }, {
+      category: 'navigation',
+      requirement: { targetRoute: '/(app)/customers', contextKeys: ['customerId'] },
+    }, { attached: true, placeholder: false, hasNavigation: true, stringLiterals: ['/(app)/customers'], propertyNames: [], identifiers: [] }),
+    /context key is missing/
+  );
+  assert.equal(
+    obligationChecker.verifyEvidenceFacts({ type: 'implementation' }, {
+      category: 'component-command-availability',
+      requirement: { commandImportPath: '@/features/customer/commands/open', commandExportName: 'openCustomer' },
+    }, {
+      attached: true,
+      placeholder: false,
+      imports: [{ module: '@/features/customer/commands/open', names: ['openCustomer'] }],
+      callNames: ['openCustomer'],
+    }),
+    null
+  );
+  assert.match(
+    obligationChecker.verifyEvidenceFacts({ type: 'implementation' }, {
+      category: 'saved-view-semantics',
+      source: { viewId: 'view-guid' },
+      requirement: { requiresLiveResolution: false, columns: [], orderBy: [] },
+    }, { attached: true, placeholder: false, hasQueryOperation: true, stringLiterals: [], identifiers: [] }),
+    /use resolved target view ID/
+  );
+});
+
+test('TypeScript AST evidence anchors markers to category-specific implementations', (t) => {
+  let ts;
+  try {
+    ts = require('typescript');
+  } catch {
+    return t.skip('typescript compiler API is installed in generated targets, not this pre-install plugin checkout');
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'critical-ast-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'app', '(app)'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'src', 'commands'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'brand'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'src', 'commands', 'calendar.ts'), [
+    '// source-obligation: obl-1000000000000000',
+    'export function openCalendar() {',
+    '  return { pathname: "/(app)/calendar", dateSelected: "today" };',
+    '}',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(root, 'app', '(app)', 'home.tsx'), [
+    'import { useRouter } from "expo-router";',
+    'import { useQuery } from "@tanstack/react-query";',
+    'import { openCalendar } from "../../src/commands/calendar";',
+    'const dateSelected = "today";',
+    '// source-obligation: obl-2000000000000000',
+    'export default function Home() {',
+    '  const router = useRouter();',
+    '  // source-obligation: obl-3000000000000000',
+    '  openCalendar();',
+    '  // source-obligation: obl-4000000000000000',
+    '  router.push({ pathname: "/(app)/calendar", params: { dateSelected } });',
+    '  // source-obligation: obl-5000000000000000',
+    '  useQuery({ queryKey: ["savedQuery", "22222222-2222-4222-8222-222222222222", "name"], queryFn: () => Promise.resolve([]) });',
+    '  return <main>Home</main>;',
+    '}',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(root, 'app', '(app)', 'empty.tsx'), [
+    '// source-obligation: obl-6000000000000000',
+    'export default function Empty() { return null; }',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(root, 'brand', 'tokens.ts'), [
+    '// source-obligation: obl-7000000000000000',
+    'export const tokens = { color: { primary: "#7654D8" }, font: { body: "Lato" } };',
+    '',
+  ].join('\n'));
+
+  const obligations = [{
+    id: 'obl-1000000000000000',
+    category: 'component-command',
+    criticality: 'critical',
+    source: {},
+    requirement: { targetFiles: ['src/commands/calendar.ts'], targetExport: 'openCalendar' },
+  }, {
+    id: 'obl-2000000000000000',
+    category: 'screen-presence',
+    criticality: 'critical',
+    source: { screen: 'Home' },
+    requirement: { targetFiles: ['app/(app)/home.tsx'] },
+  }, {
+    id: 'obl-3000000000000000',
+    category: 'component-command-availability',
+    criticality: 'critical',
+    source: {},
+    requirement: {
+      targetFiles: ['app/(app)/home.tsx'],
+      commandImportPath: '../../src/commands/calendar',
+      commandExportName: 'openCalendar',
+    },
+  }, {
+    id: 'obl-4000000000000000',
+    category: 'navigation',
+    criticality: 'critical',
+    source: {},
+    requirement: { targetFiles: ['app/(app)/home.tsx'], targetRoute: '/(app)/calendar', contextKeys: ['dateSelected'] },
+  }, {
+    id: 'obl-5000000000000000',
+    category: 'saved-view-semantics',
+    criticality: 'critical',
+    source: { viewId: 'source-view' },
+    requirement: {
+      targetFiles: ['app/(app)/home.tsx'],
+      targetViewId: '22222222-2222-4222-8222-222222222222',
+      executionParameter: 'savedQuery',
+      columns: ['name'],
+      orderBy: [],
+      requiresLiveResolution: false,
+    },
+  }, {
+    id: 'obl-6000000000000000',
+    category: 'screen-presence',
+    criticality: 'critical',
+    source: { screen: 'Empty' },
+    requirement: { targetFiles: ['app/(app)/empty.tsx'] },
+  }, {
+    id: 'obl-7000000000000000',
+    category: 'design-baseline',
+    criticality: 'critical',
+    source: { colors: [{ value: '#7654D8' }], typography: { dominantFont: 'Lato' } },
+    requirement: { targetFiles: ['brand/tokens.ts'] },
+  }];
+  const markers = obligationChecker.collectMarkers(root);
+  const sourceFiles = obligationChecker.walkSourceFiles(root)
+    .map((file) => path.relative(root, file).split(path.sep).join('/'));
+  const report = obligationChecker.auditCriticalObligations({
+    $schema: 'critical-obligations-v1',
+    sourceTreeSha256: 'a'.repeat(64),
+    sourceInputSha256: 'b'.repeat(64),
+    obligations,
+  }, markers, null, {
+    root,
+    allSourceFiles: sourceFiles,
+    evidenceVerifier: obligationChecker.createTypeScriptEvidenceVerifier(root, ts),
+  });
+  assert.equal(report.implemented.length, 6, JSON.stringify({
+    markers,
+    invalidEvidence: report.invalidEvidence.map((row) => ({ id: row.obligation.id, reason: row.reason })),
+    unresolved: report.unresolved.map((row) => ({ id: row.obligation.id, issues: row.issues })),
+  }, null, 2));
+  assert.equal(report.invalidEvidence.length, 1);
+  assert.equal(report.invalidEvidence[0].obligation.id, 'obl-6000000000000000');
+  assert.match(report.invalidEvidence[0].reason, /non-null JSX return/);
+  assert.equal(report.ok, false);
 });
 
 test('behavior dependency analysis keeps load-bearing state exact and shards disconnected UI plumbing as intent', () => {

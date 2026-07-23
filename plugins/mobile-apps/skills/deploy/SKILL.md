@@ -12,7 +12,7 @@ model: sonnet
 
 Builds the mobile app in the current directory and pushes it to the Power Platform environment recorded in `power.config.json`.
 
-This skill uses the standard 4-step deployment flow for this plugin: check memory bank, build, deploy, then update memory bank.
+This skill uses the standard 4-step deployment flow for this plugin: check memory bank and release contracts, build, deploy, then update memory bank.
 
 ## Out of scope (deliberately)
 
@@ -35,6 +35,36 @@ Read `memory-bank.md` from the project root if present. Capture:
 - Current version
 
 If absent, continue — the project may have been created without the plugin. Re-derive env from `power.config.json` if needed.
+
+#### Step 1.1 — Adapted semantic release gate
+
+If `mobile-plugin-input.json`, `behaviors.json`, `behavior-contract.json`, and `critical-obligations.json` exist, this is an adapted Canvas/MSAPP project. Resolve the environment from `power.config.json` now, before building, and run:
+
+```bash
+ENV_ID=$(node -e "console.log(require('./power.config.json').environmentId)")
+ENV_JSON=$(node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$ENV_ID")
+ENV_URL=$(node -e "const value=JSON.parse(process.argv[1]); console.log(value.environmentUrl || '')" "$ENV_JSON")
+
+node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-saved-views.js" \
+	--dir "$PWD" \
+	--environment-url "$ENV_URL"
+
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-plugin-input.js" \
+	--dir "$PWD" \
+	--require-pcf-approval \
+	--require-workflow-approval
+
+npm run gen:assets
+npm run check:i18n -- --strict
+npm run check:coverage -- --min 80
+npm run check:pcf -- --strict
+npm run check:workflows -- --strict
+npm run check:obligations -- --strict
+npm run check:scaffold -- --strict
+npx tsc --noEmit
+```
+
+STOP before the production build on any package drift, environment mismatch, unresolved/ambiguous saved view, missing AST-backed obligation evidence, stale source-delta approval, or behavior/workflow/PCF failure. Deployment confirmation cannot waive these gates. Do not edit the generated app inside `/deploy`; hand failures back to `/edit-app` with the exact command output.
 
 ### Step 2 — Build
 

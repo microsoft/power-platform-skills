@@ -2,7 +2,7 @@
 name: modernize-canvas-app
 description: Use when the user wants to migrate, convert, port, rebuild, or modernize an existing Power Apps Canvas app or .msapp into the Expo/React Native Power Apps mobile-app template. Analyzes Canvas source, preserves data/connector/flow/behavior intent, produces a migration package and coverage report, then optionally invokes /create-mobile-app through its adapted-input path.
 user-invocable: true
-argument-hint: "--extracted <dir> | --msapp <file> | --app-id <id-or-name> [--environment <id-or-url>] --working-dir <fresh-template-dir> [--analyze-only]"
+argument-hint: "--extracted <dir> | --msapp <file> | --app-id <id-or-name> [--environment <id-or-url>] --working-dir <fresh-template-dir> [--mode faithful|modernize|repair-modernize] [--analyze-only]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Skill
 model: opus
 ---
@@ -33,6 +33,7 @@ Also accept:
 - `--output-dir <dir>` — migration workspace. If omitted, propose a sibling `canvas-mobile-migration/<app-name-or-timestamp>` directory and ask before creating it.
 - `--app-name <name>` — display-name override for the extracted brief.
 - `--full-schema` — include all Dataverse columns in the adapter payload instead of the used slice.
+- `--mode faithful|modernize|repair-modernize` — semantic/design policy. `faithful` preserves source identity and workflows with native primitives; `modernize` preserves semantics and source identity while improving native UX/architecture; `repair-modernize` also permits explicit user-approved repairs for broken/inconsistent source behavior or design. Default: `modernize`. Infer `faithful` only from explicit preserve/as-is wording and `repair-modernize` only from explicit repair/fix-broken wording; otherwise use the default.
 - `--analyze-only` — generate and review migration artifacts without invoking `/create-mobile-app`.
 
 Do not accept raw customer records, credentials, tokens, or copied connection secrets as prompt input. The pipeline reads local app metadata and keeps generated artifacts local.
@@ -171,6 +172,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/adapt-app-brief-for-mobile-plugin.js" \
   --input "<output-dir>/app-brief/app-brief.json" \
   --screens-dir "<output-dir>/app-brief/screens" \
   --out-dir "<output-dir>/mobile-plugin-input" \
+  --mode "<faithful|modernize|repair-modernize>" \
   [--full-schema]
 ```
 
@@ -184,6 +186,7 @@ Require these primary outputs:
 - `screens/`
 - `behaviors.json`
 - `behavior-contract.json`
+- `critical-obligations.json`
 - `behavior-shards/` (one compact builder-owned core + native-intent + workflow-ref shard per screen plus `App`)
 - `workflows.json`
 - `workflow-gate-summary.json` (bounded Gate 2c review feed; no exact formulas)
@@ -202,7 +205,8 @@ Then run the bundled package validator:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-plugin-input.js" \
-  --dir "<output-dir>/mobile-plugin-input"
+  --dir "<output-dir>/mobile-plugin-input" \
+  --source-root "<resolved-extracted-dir>"
 ```
 
 Do not proceed when it exits nonzero.
@@ -223,8 +227,9 @@ Read the generated JSON and check:
 10. Every high-risk control-intent row has a native strategy or explicit unsupported status. Gallery/component rows carry contextual `roleEvidence`; `repeating-records-review` and `component-review` remain explicit review gates, and only a verified empty layout definition may be `disposable-canvas-scaffolding`.
 11. `pcf-plan.json` has exactly one row per PCF control. If source metadata reports PCF content but discovery cannot enumerate controls, treat `discovery.complete: false` as a hard blocker rather than assuming zero PCFs. Every proposal is one of `native-replacement`, `server-dependency`, or `blocker`; the adapter never silently proposes unsupported loss. Every matching control row and screen shard must contain the deterministic pending/approved/blocked PCF projection produced by `sync-pcf-control-intents.js`.
 12. `workflows.json` contains every event handler that crossed the deterministic pathological-handler threshold and has at least one core behavior. Each workflow maps exact core behavior into named steps and maps regenerable source behavior to intent-hint IDs. `workflow-gate-summary.json` must exactly match its deterministic bounded projection and remain under 512 KiB; Gate 2c reads the summary, not exact global workflow payloads. Only correctness-critical unresolved business policies appear in `requiredDecisions[]`; routine code structure and native UX remain AI-owned proposal details.
-13. Server-computed/calculated/rollup columns are marked read-only for app writes.
-14. No output contains secrets, access tokens, private registry credentials, or customer record payloads.
+13. `critical-obligations.json` deterministically accounts for shared component commands, every source placement, navigation reachability/context, saved-view ownership/security semantics, the source start screen, and any high-confidence source design baseline. Its full projection and digest match `mobile-plugin-input.json`; weighted behavior coverage cannot waive any row.
+14. Server-computed/calculated/rollup columns are marked read-only for app writes.
+15. No output contains secrets, access tokens, private registry credentials, or customer record payloads.
 
 If `migrationCheck` reports a component library, stop after the assessment. Do not route it into `/create-mobile-app`; component libraries have no runnable screen graph.
 

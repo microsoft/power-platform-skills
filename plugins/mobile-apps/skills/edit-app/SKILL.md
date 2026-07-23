@@ -100,6 +100,17 @@ Run these existing-app health checks before any mutation:
 | `src/generated/` compiles when the edit depends on generated services | Regenerate schemas/services first, or block before screen work |
 | `node_modules` and package scripts needed for verification exist | If missing, ask user to run install; do not pretend verification passed |
 
+**Adapted-project detection and ownership gate.** If `mobile-plugin-input.json`, `behaviors.json`, `behavior-contract.json`, and `critical-obligations.json` exist, set `$ADAPTED_PROJECT=true`. Before planning or mutation, run:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-plugin-input.js" \
+  --dir "<working_dir>" \
+  --require-pcf-approval \
+  --require-workflow-approval
+```
+
+STOP if the package, behavior/workflow/PCF contract, source digest, or critical obligations drifted. For every touched source-derived screen, resolve its one `behavior-contract.json screenShards[]` entry and only its matching `critical-obligations.json` rows before Step 2. Never pass either global ledger to a planner/builder. Treat existing `source-obligation`, `source-delta`, `source-behavior`, `source-intent`, workflow, and PCF markers as owned behavior: an edit may move them to an equivalent real implementation, but may not delete, duplicate, or replace them with placeholder code.
+
 If the worktree has uncommitted changes that overlap likely edit targets, show the affected files and ask before continuing. Do not revert or stash automatically.
 
 If the app already fails `npx tsc --noEmit`, capture the errors once. Continue only when the failures are in files this edit will touch or are generated-service drift this edit can repair; otherwise surface the pre-existing failure and ask whether to proceed. If the edit would add screens or generated services, clean the prerequisite gate before continuing.
@@ -292,6 +303,8 @@ Reuse the same planning primitives as `/create-mobile-app`, but only for the aff
 
 Read each affected section verbatim from `native-app-plan.md` and pass it as input to the relevant read-only agent. Use the plugin namespace for every `Task` invocation.
 
+When `$ADAPTED_PROJECT=true`, append the touched screen's bounded behavior shard and bounded critical-obligation rows to its planning input. If the request intentionally changes any source obligation, stop at that one obligation and use `/create-mobile-app`'s semantic-delta approval protocol before updating the plan or source code. General edit-plan approval does not approve a semantic delta.
+
 Before the first `Task`, run a silent preflight for the leaf agent you need (`mobile-app:data-model-architect`, `mobile-app:screen-planner`, or `mobile-app:screen-builder` preflight later). If the host cannot spawn agents, print once:
 
 > "→ Planner agents unavailable in this host — running inline planning. (No action needed; this is automatic.)"
@@ -426,6 +439,7 @@ Before spawning builders:
 - For brand-new screens, write typed skeleton files using `/create-mobile-app` Step 10.8b patterns before calling builders.
 - For existing screens, do not overwrite with skeletons. Pass the current file content and the change request to the builder in edit mode. If imports/data hooks changed, update them surgically before the builder fills or revises JSX.
 - For removed screens, delete route files and remove layout entries only when the user approved deletion in Step 3.
+- When `$ADAPTED_PROJECT=true`, materialize a temporary bounded feed per affected screen containing only that screen's behavior shard, critical obligations whose `requirement.targetFiles[]` include its target file, approved PCF projection, and workflow refs already present in the shard. Include source-owned start/design/shared-command obligations only with their actual owner step, never broadcast them to every screen.
 
 Navigation/layout algorithm:
 
@@ -479,9 +493,14 @@ route: <route>
 target_file: <absolute path>
 plan_path: <absolute path>/native-app-plan.md
 current_file: <paste current file content if the file exists>
+adapted_behavior_shard: <bounded shard path or unset>
+adapted_critical_obligations: <bounded screen obligation feed or unset>
 
 Preserve unaffected behavior from the existing screen. Apply the approved plan diff. If this is an existing screen and no skeleton marker is present, update the screen from current_file instead of falling back to sample layout.
+When adapted feeds are present, preserve every owned marker at a real implementation and implement every changed obligation. Do not read or request global behaviors.json, behavior-contract.json, critical-obligations.json, workflows.json, pcf-plan.json, or workflow-shards/. Do not author source-deltas.json; return NEEDS_CONTEXT for a semantic delta.
 ```
+
+When `$ADAPTED_PROJECT=true`, run `npm run check:coverage -- --min 80`, `npm run check:pcf -- --strict`, `npm run check:workflows -- --strict`, and `npm run check:obligations -- --strict` after each affected wave, after `tsc` and before launching the next wave. A marker lost from an untouched owner file is still a failure; repair the ownership break before continuing.
 
 ### Step 7 — Verify
 
@@ -494,6 +513,20 @@ npm run generate-schemas      # if any data source/schema/connector changed
 npx tsc --noEmit              # always after app mutation
 npm run check-routes --if-present
 ```
+
+When `$ADAPTED_PROJECT=true`, also run the complete adapted release gates before reporting success:
+
+```bash
+npm run gen:assets
+npm run check:i18n -- --strict
+npm run check:coverage -- --min 80
+npm run check:pcf -- --strict
+npm run check:workflows -- --strict
+npm run check:obligations -- --strict
+npm run check:scaffold -- --strict
+```
+
+Do not downgrade an adapted gate failure to a concern. Missing or stale source evidence, unresolved target views, an unapproved semantic delta, or behavior/workflow/PCF accounting drift blocks completion.
 
 If `npm run check-routes` is absent but `scripts/check-routes.js` exists, run:
 

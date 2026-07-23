@@ -36,6 +36,7 @@ Design-system and Tamagui integration are complementary, not alternatives. `/des
 
 - `working_dir` — absolute path to project root (auto-detected or passed by orchestrator)
 - Optional flags: `--brand-doc`, `--logo`, `--from-url`, `--design-spec`, `--from-canvas-app`, `--from-code-app`, `--from-figma`, `--stylesheet`, `--power-pages-mode`
+- Optional orchestrator flag: `--adapted-baseline-only` — when an imported non-low-confidence source design obligation exists, skip style/depth exploration and previews but still write source-derived `brand/tokens.ts` with exact evidence.
 - Optional: `--refresh <dimension>` — palette | typography | components | density | negatives | motion
 - Optional: `--reskin` — full theme swap
 - Optional: `--add-dark-mode` — derive + wire dark theme
@@ -74,6 +75,14 @@ Detect invocation mode:
 
 For Mode A/B, set `working_dir` to cwd. For Mode C, confirm with user.
 
+**Adapted Canvas/MSAPP baseline (Mode A/B):** If `<working_dir>/mobile-plugin-input.json` and `<working_dir>/critical-obligations.json` exist, read both before Sub-step 1. Validate `migrationMode` is `faithful`, `modernize`, or `repair-modernize`; find the single `design-baseline` obligation; and treat `app.sourceDesignBaseline` as first-party brand input when its confidence is not `low`.
+
+- Extract named source colors, dominant/declaration fonts, dimensions/radius evidence, and active theme into a compact baseline summary. Never fall back to polished-inspection, Power-Platform green, or another industry preset while this evidence exists.
+- `faithful`: preserve source palette, typography, semantic status meaning, density/hierarchy, and recognizable identity while translating Canvas controls into native composition.
+- `modernize`: preserve source palette/typography as the baseline, improve contrast/accessibility/native hierarchy, and keep material identity changes behind explicit approval.
+- `repair-modernize`: preserve valid source identity by default; propose repairs only where source evidence is internally inconsistent, inaccessible, or explicitly reported broken. Material identity changes still require approval.
+- The design obligation declares `brand/tokens.ts` as its target. Equivalent output must contain its exact `// source-obligation: <id>` marker immediately above the exported tokens. Do not write this marker before real source-derived tokens exist.
+
 **Drift detection (Mode B only — existing brand/ present):**
 
 If `brand/design-system.md` AND `brand/tokens.ts` both exist:
@@ -89,7 +98,7 @@ If `brand/design-system.md` AND `brand/tokens.ts` both exist:
 **Print:**
 > "→ [design-system] Checking for brand inputs…"
 
-**MUST stop and wait for user response.** Do NOT skip this step.
+**MUST stop and wait for user response** unless adapted mode already supplied a design obligation whose source baseline confidence is not `low`. In that case, use it automatically as brand input, print its summary, and ask only the preserve/change decision below.
 
 Ask user for optional brand input. See [`references/input-modes.md`](./references/input-modes.md) for full processing details.
 
@@ -127,17 +136,36 @@ If flag was passed on invocation, skip asking — process directly.
 **On input provided:** Extract palette/typography tokens immediately (~3-5k tokens). Print extracted summary:
 > "→ [design-system] Extracted from {{input}}: {{primary color}}, {{font family}}, {{N}} tokens."
 
+**On adapted source baseline:** Print:
+> "→ [design-system] Source Canvas identity found: {{primary/named colors}}, {{dominant font}}, {{N}} design tokens (mode: {{migrationMode}})."
+
+Then ask one semantic decision:
+
+```
+Use the source visual identity as the native baseline?
+
+(a) Preserve baseline — recommended
+  Keep recognizable colors/type/status meaning; modernize native hierarchy and accessibility within that identity.
+
+(b) Change identity
+  Describe the intended target identity and why. This records a semantic design delta requiring your explicit approval.
+```
+
+Default: **a**. For `faithful`, option (b) must explicitly acknowledge that it changes the requested faithful policy. For option (b), show source baseline and proposed target behavior side by side, then return `NEEDS_CONTEXT: semantic delta approval required for <id> — <source identity> → <proposed target identity>`. In orchestrated Mode A, `/create-mobile-app` owns the approval ledger and re-invokes this skill after explicit user approval. This skill must not write or approve `source-deltas.json` in Mode A. After reinvocation with an existing approved row, put `// source-delta: <id>` immediately above the real token export. Never infer approval from choosing a cost/depth option, accepting a preview, or providing free-text brand notes.
+
 **On skip:** Continue with no brand context.
 
 **Priority order** when multiple inputs given:
-1. `--design-spec` (highest — skips Sub-steps 3 AND 4)
-2. `--brand-doc` (locks direction, skips Sub-step 3)
-3. `--from-figma` (locks palette + typography + components)
-4. `--from-code-app` (highest fidelity sibling)
-5. `--from-canvas-app` (locks palette + typography + conventions)
-6. `--logo` (extracts palette, applied as tint)
-7. `--from-url` / `--stylesheet` (palette extractors)
-8. Free-text notes (always applied as overrides on top)
+1. Explicitly user-approved adapted-source design delta (highest)
+2. Non-low-confidence adapted source baseline with a design obligation (default in conversion mode)
+3. `--design-spec` (skips Sub-steps 3 AND 4)
+4. `--brand-doc` (locks direction, skips Sub-step 3)
+5. `--from-figma` (locks palette + typography + components)
+6. `--from-code-app` (highest fidelity sibling)
+7. `--from-canvas-app` (locks palette + typography + conventions)
+8. `--logo` (extracts palette, applied as tint)
+9. `--from-url` / `--stylesheet`
+10. Free-text notes (material overrides to an adapted baseline require design-delta approval)
 
 ---
 
@@ -190,6 +218,8 @@ Persist choice to `memory-bank.md`: `visual_companion: <yes|no|skip>`
   3. **Return DONE** so Step 9b of the orchestrator picks up `brand/tokens.ts` and applies [`references/tamagui-integration.md`](./references/tamagui-integration.md) in brand-import mode.
 
   **Never return DONE without writing `brand/tokens.ts`.** The label promises "applied defaults"; the implementation must deliver tokens AND a preview, otherwise the user has no way to verify the look short of waiting for full screen-builders + emulator boot. The preview is fast (HTML, no JS execution) and uses the same renderer Sub-step 6.5 uses for paths (a)/(b).
+
+**Adapted baseline override:** Regardless of cost-picker branch, a design obligation with non-low source confidence always writes `brand/tokens.ts` before preview/return. `--adapted-baseline-only` skips Sub-steps 2, 3, 5, and 6, writes the minimal source-derived token bundle plus exact obligation marker, records `direction: source-canvas-baseline`, and proceeds directly to Sub-step 7. It never selects an industry preset. Medium confidence may mean theme/layout evidence is partial; preserve every concrete token and ask for missing choices without replacing known evidence with a preset.
 
 **On ANY input failure during Sub-step 1**, after printing "BLOCKED: {{input}} — {{reason}}":
 
@@ -307,6 +337,7 @@ Generated: {{ISO timestamp}} | Direction: {{direction name}}
 ```typescript
 // Auto-generated by /design-system — do not hand-edit without running drift check
 // Direction: {{direction}} | Generated: {{timestamp}}
+// source-obligation: {{design obligation id}}
 
 export const tokens = {
   color: {
@@ -358,6 +389,7 @@ export const tokens = {
   },
 } as const;
 
+In adapted mode, replace the marker line with `// source-delta: {{design obligation id}}` only when the matching user-approved `source-deltas.json` entry exists. Keep the marker immediately above the real `export const tokens` declaration. If baseline confidence is low and no design obligation exists, omit both markers and use the ordinary brand-input flow.
 export type BrandTokens = typeof tokens;
 ```
 
@@ -483,6 +515,8 @@ Overwrites `_plan_preview.html` with branded versions. Opens browser.
 
 **Print:**
 > "→ [design-system] Done. Design system locked."
+
+Before returning DONE in adapted mode, verify `brand/tokens.ts` contains exactly one marker for the design obligation, the exported tokens are real, and any `source-delta` marker has a matching `approvedBy: user` ledger entry. Missing evidence is `BLOCKED: design baseline obligation unresolved`, not a concern.
 
 **Update memory-bank.md:**
 

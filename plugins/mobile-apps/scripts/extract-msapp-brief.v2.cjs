@@ -40,6 +40,7 @@ const {
   validatePowerAppsYamlSource,
 } = require('./lib/power-apps-yaml-schema.js');
 const { openZipReader } = require('./lib/safe-zip.js');
+const { computeCanvasSourceInputDigest } = require('./lib/canvas-source-input-digest.js');
 
 const MAX_SOURCE_TEXT_BYTES = 64 * 1024 * 1024;
 const MAX_SOURCE_ENTRIES = 100000;
@@ -110,6 +111,7 @@ function main() {
   // only a strict subset of Power Apps YAML. Validate the complete source
   // against the immutable official schema before reading formulas or controls.
   const schemaValidation = validatePowerAppsYamlSource(args.extracted);
+  const sourceInputDigest = computeCanvasSourceInputDigest(args.extracted);
   console.log(`[brief] schema    = ${formatValidationReport(schemaValidation)}`);
 
   const sources = loadSources(args.extracted);
@@ -119,7 +121,9 @@ function main() {
   // component-instance ↔ definition GUID join) onto YAML controls when present.
   // No-op when the extracted dir is YAML-only.
   enrichControlsFromSidecar(parsedScreens.screens, sources.jsonSidecar);
+  enrichComponentControlsFromSidecar(parsedComponents, sources.jsonSidecar);
   const dataSources = parseDataSources(sources.properties, sources.dataSourcesRefs);
+  classifyComponentDefinitionEvents(parsedComponents, dataSources);
   // Phase 4: full per-table Dataverse schema (attributes / relationships /
   // option sets), the connector inventory (LocalConnectionReferences merged
   // with non-Dataverse DataSources rows), and the Dataverse environment
@@ -162,6 +166,12 @@ function main() {
   const appIntents = parsedScreens.appNode
     ? classifyAppEvents(parsedScreens.appNode)
     : { OnStart: [], OnError: [], Formulas: [] };
+  const designBaseline = buildSourceDesignBaseline(
+    themeInfo.brand,
+    appIntents.Formulas,
+    parsedScreens.screens,
+    parsedComponents
+  );
 
   // Per-screen rollups.
   const screensRolled = parsedScreens.screens.map((screen) =>
@@ -205,8 +215,8 @@ function main() {
 
   // Extended extractors (16-gap fill).
   const settings = extractAppSettings(sources);
-  const identity = buildIdentitySurface(parsedScreens, parsedScreens.appNode);
-  const deepLinks = extractDeepLinkParams(parsedScreens, parsedScreens.appNode);
+  const identity = buildIdentitySurface(parsedScreens, parsedScreens.appNode, parsedComponents);
+  const deepLinks = extractDeepLinkParams(parsedScreens, parsedScreens.appNode, parsedComponents);
   const permissions = inferPermissions(nativeCapabilities, identity);
   const flowsCalled = extractFlowsCalled(screensRolled, appIntents, dataSources);
   const aiCalls = extractAiCalls(screensRolled, appIntents);
@@ -291,7 +301,10 @@ function main() {
         id: schemaValidation.schema.id,
         sourceCommit: schemaValidation.schema.sourceCommit,
         sha256: schemaValidation.schema.sha256,
+        sourceTreeSha256: schemaValidation.sourceTreeSha256,
         sourceFileCount: schemaValidation.sourceFileCount,
+        sourceInputSha256: sourceInputDigest.sourceInputSha256,
+        sourceInputFileCount: sourceInputDigest.sourceInputFileCount,
         sectionCounts: schemaValidation.sectionCounts,
       },
     },
@@ -301,6 +314,7 @@ function main() {
       startScreen,
       documentLayout: parsedScreens.documentLayout,
       brand: themeInfo.brand,
+      designBaseline,
       auth: dataModel.dataverseTables.length > 0 ? 'entra' : 'none',
       onStartIntents: appIntents.OnStart,
       onErrorIntents: appIntents.OnError,
@@ -312,7 +326,7 @@ function main() {
       identity,
       permissions,
       deepLinks,
-      pcfControls: collectPcfControls(parsedScreens.screens),
+      pcfControls: collectPcfControls(parsedScreens.screens, parsedComponents),
       // External canvas-component libraries referenced by the app. Derived
       // from `ComponentLibraryUniqueName` on control instances (official
       // schema field). Empty when the app uses only local components.
@@ -594,7 +608,9 @@ function loadJsonSidecar(source) {
 
   // Pass 1: scan Components/*.json to build a GUID → definition-name map.
   const defByGuid = new Map(); // guid -> { name, file, isPcf, isPremiumPcf }
+  const byComponent = new Map(); // component definition name -> Map<controlName, entry>
   const defFiles = source.listFiles('Components', '.json');
+  const componentRoots = [];
   for (const file of defFiles) {
     const j = source.readJson(file);
     const tp = j?.TopParent;
@@ -607,6 +623,12 @@ function loadJsonSidecar(source) {
       isPcf: tp.Template?.FirstParty === false,
       isPremiumPcf: !!tp.Template?.IsPremiumPcfControl,
     });
+    componentRoots.push(tp);
+  }
+  for (const tp of componentRoots) {
+    const componentMap = new Map();
+    walkSidecarNode(tp, componentMap, defByGuid);
+    byComponent.set(tp.Name, componentMap);
   }
 
   // Pass 2: scan Controls/*.json. Each top-level node is a screen (or `App`).
@@ -623,7 +645,7 @@ function loadJsonSidecar(source) {
     byScreen.set(screenName, map);
   }
 
-  return { byScreen, defByGuid };
+  return { byScreen, byComponent, defByGuid };
 }
 
 function walkSidecarNode(node, outMap, defByGuid) {
@@ -1206,7 +1228,27 @@ function countIndent(line) {
 
 function stripFormula(value) {
   if (!value) return '';
-  return String(value).replace(/^=/, '').trim();
+  return decodeQuotedScalar(value).replace(/^=/, '').trim();
+}
+
+function decodeQuotedScalar(value) {
+  const text = String(value).trim();
+  if (text.length < 2) return text;
+  if (text[0] === '"' && text[text.length - 1] === '"') {
+    try {
+      return JSON.parse(text);
+    } catch (_err) {
+      return text.slice(1, -1)
+        .replace(/\\r/g, '\r')
+        .replace(/\\n/g, '\n')
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, '\\');
+    }
+  }
+  if (text[0] === "'" && text[text.length - 1] === "'") {
+    return text.slice(1, -1).replace(/''/g, "'");
+  }
+  return text;
 }
 
 /** Flatten a nested control tree into a path-keyed list for easy iteration. */
@@ -1277,6 +1319,7 @@ function parseDataSources(properties, dataSourcesRefs) {
   // Dataverse saved views surfaced through `ViewInfo` — keyed by table
   // logical name so we can attach view names to the table rollup.
   const viewsByLogical = new Map();
+  const viewsByReference = new Map();
 
   // 1) LocalDatabaseReferences (the canonical Dataverse table inventory).
   if (properties && properties.LocalDatabaseReferences) {
@@ -1408,14 +1451,45 @@ function parseDataSources(properties, dataSourcesRefs) {
       // rollup can find them regardless of which field studio populated.
       if (ds.Type === 'ViewInfo' && ds.Name) {
         const tableKey = ds.RelatedEntityName || ds.TableName || null;
-        const entry = {
-          name: ds.Name,
-          displayName: ds.DisplayName || ds.Name,
-          tableLogical: tableKey,
-        };
         if (tableKey) {
           const list = viewsByLogical.get(tableKey) || [];
-          list.push(entry);
+          const mappings = ds.ViewInfoNameMapping && typeof ds.ViewInfoNameMapping === 'object'
+            ? Object.entries(ds.ViewInfoNameMapping)
+            : [];
+          if (mappings.length > 0) {
+            for (const [viewId, displayName] of mappings) {
+              const view = {
+                name: displayName || viewId,
+                displayName: displayName || viewId,
+                viewId,
+                viewKind: 'system',
+                queryType: null,
+                predicate: null,
+                orderBy: [],
+                columns: [],
+                resolutionStatus: 'needs-target-view-resolution',
+                sourceInventory: ds.Name,
+                tableKey,
+              };
+              list.push(view);
+              viewsByReference.set(`${ds.Name}\u0000${view.displayName}`, view);
+              viewsByReference.set(`${ds.DisplayName || ds.Name}\u0000${view.displayName}`, view);
+            }
+          } else {
+            list.push({
+              name: ds.Name,
+              displayName: ds.DisplayName || ds.Name,
+              viewId: null,
+              viewKind: 'unknown',
+              queryType: null,
+              predicate: null,
+              orderBy: [],
+              columns: [],
+              resolutionStatus: 'needs-target-view-resolution',
+              sourceInventory: ds.Name,
+              tableKey,
+            });
+          }
           viewsByLogical.set(tableKey, list);
         }
       }
@@ -1440,6 +1514,7 @@ function parseDataSources(properties, dataSourcesRefs) {
     flowNames: new Set(flowsByName.keys()),
     sharepointLists: sharepointLists.sort((a, b) => a.name.localeCompare(b.name)),
     viewsByLogical,
+    viewsByReference,
     serviceInfoByDataSource,
   };
 }
@@ -2174,6 +2249,7 @@ function buildComponentDefEntry(name, metadataDef, parsed) {
     inputs,
     outputs,
     events,
+    internalHandlers: parsed?.internalHandlers || [],
   };
   if (inputFunctions.length) entry.inputFunctions = inputFunctions;
   if (outputFunctions.length) entry.outputFunctions = outputFunctions;
@@ -2223,6 +2299,8 @@ function parseColorValue(raw) {
   if (typeof raw !== 'string') return { value: null, raw };
   const rgba = normalizeRgba(raw);
   if (rgba) return { value: rgba, raw };
+  const colorValue = raw.match(/ColorValue\s*\(\s*"(#[0-9a-f]{3,8})"\s*\)/i);
+  if (colorValue) return { value: colorValue[1].toUpperCase(), raw };
   const reserved = raw.match(/%Color\.RESERVED%\.(\w+)/);
   if (reserved) return { value: reserved[1].toLowerCase(), raw };
   // Leave ColorFade(...) and other expressions as-is so the generator can resolve them.
@@ -2397,10 +2475,34 @@ function classifyControlEvents(control, dataSources, parsedComponents) {
   const events = {};
   const props = control.properties || {};
   for (const [propName, formula] of Object.entries(props)) {
-    if (!CONTROL_EVENT_PROPERTIES.has(propName)) continue;
+    if (!CONTROL_EVENT_PROPERTIES.has(propName) && !/^On[A-Z][A-Za-z0-9_]*$/.test(propName)) continue;
+    if (typeof formula !== 'string' || stripFormula(formula).trim() === '') continue;
     events[propName] = classifyFormulaIntents(formula, dataSources, parsedComponents);
   }
   return events;
+}
+
+function classifyComponentDefinitionEvents(parsedComponents, dataSources) {
+  for (const component of parsedComponents.values()) {
+    const handlerOwners = [component, ...(component.controlsFlat || [])];
+    const internalHandlers = [];
+
+    for (const owner of handlerOwners) {
+      const events = classifyControlEvents(owner, dataSources, parsedComponents);
+      owner.events = events;
+      for (const [event, intents] of Object.entries(events)) {
+        internalHandlers.push({
+          control: owner.name || component.name,
+          path: owner.path || component.name,
+          event,
+          formula: owner.properties?.[event] || null,
+          intents,
+        });
+      }
+    }
+
+    component.internalHandlers = internalHandlers;
+  }
 }
 
 function classifyAppEvents(appNode) {
@@ -2420,7 +2522,7 @@ function classifyAppEvents(appNode) {
 
 function parseNamedFormulas(blob) {
   const formulas = [];
-  const stripped = stripFormula(blob);
+  const stripped = stripBlockComments(stripFormula(blob));
   // Split on ; not inside parens or quotes — a soft splitter is good enough for V1.
   const segments = splitTopLevelStatements(stripped, ';');
   for (const seg of segments) {
@@ -2428,6 +2530,131 @@ function parseNamedFormulas(blob) {
     if (m) formulas.push({ name: m[1], expression: m[2].trim() });
   }
   return formulas;
+}
+
+const DIMENSION_TOKEN_PATTERN = /size|spacing|space|radius|dimension|layout|gap|padding|margin|width|height/i;
+
+function collectRecordDesignTokens(collection, record, pathParts = []) {
+  const colors = [];
+  const dimensions = [];
+  const entries = [];
+  for (const [name, raw] of Object.entries(record || {})) {
+    const tokenPath = [...pathParts, name];
+    const nested = parseRecordLiteral(stripBlockComments(raw).trim());
+    if (nested) {
+      const child = collectRecordDesignTokens(collection, nested, tokenPath);
+      colors.push(...child.colors);
+      dimensions.push(...child.dimensions);
+      entries.push(...child.entries);
+      continue;
+    }
+    const path = tokenPath.join('.');
+    const parsed = parseColorValue(raw);
+    if (parsed.value) {
+      const color = { collection, name, path, value: parsed.value, raw };
+      colors.push(color);
+      entries.push({ kind: 'color', ...color });
+      continue;
+    }
+    if ([collection, ...tokenPath].some((part) => DIMENSION_TOKEN_PATTERN.test(part))) {
+      const dimension = { collection, name, path, expression: raw };
+      dimensions.push(dimension);
+      entries.push({ kind: 'dimension', ...dimension });
+    }
+  }
+  return { colors, dimensions, entries };
+}
+
+function buildSourceDesignBaseline(themeBrand, namedFormulas, screens, parsedComponents) {
+  const colors = [];
+  const dimensions = [];
+  const namedRecords = [];
+
+  const themeCollection = `theme:${themeBrand?.themeId || themeBrand?.themeName || 'active'}`;
+  for (const color of themeBrand?.palette?.colors || []) {
+    if (!color?.name || !color?.value) continue;
+    colors.push({ collection: themeCollection, name: color.name, path: color.name, value: color.value, raw: color.raw || color.value });
+  }
+  for (const [name, value] of [
+    ['primaryColor', themeBrand?.primaryColor],
+    ['backgroundColor', themeBrand?.backgroundColor],
+    ['textColor', themeBrand?.textColor],
+  ]) {
+    if (value) colors.push({ collection: themeCollection, name, path: name, value, raw: value });
+  }
+  for (const size of themeBrand?.palette?.sizes || []) {
+    if (!size?.name || size.value === undefined || size.value === null) continue;
+    dimensions.push({ collection: themeCollection, name: size.name, path: size.name, expression: String(size.value) });
+  }
+
+  for (const formula of namedFormulas || []) {
+    const expression = stripBlockComments(formula.expression || '').trim();
+    const record = parseRecordLiteral(expression);
+    if (record) {
+      const tokens = collectRecordDesignTokens(formula.name, record);
+      colors.push(...tokens.colors);
+      dimensions.push(...tokens.dimensions);
+      if (tokens.entries.length) {
+        const hasColors = tokens.colors.length > 0;
+        const hasDimensions = tokens.dimensions.length > 0;
+        namedRecords.push({
+          name: formula.name,
+          kind: hasColors && hasDimensions ? 'mixed-record' : hasColors ? 'color-record' : 'dimension-record',
+          entries: tokens.entries,
+        });
+      }
+      continue;
+    }
+
+    if (DIMENSION_TOKEN_PATTERN.test(formula.name)) {
+      dimensions.push({ name: formula.name, expression });
+    }
+  }
+
+  const fontCounts = new Map();
+  const owners = [];
+  for (const screen of screens || []) owners.push(...(screen.controlsFlat || []));
+  for (const component of parsedComponents.values()) owners.push(...(component.controlsFlat || []));
+  for (const owner of owners) {
+    const raw = owner.properties?.Font;
+    if (typeof raw !== 'string') continue;
+    const formula = stripFormula(raw);
+    const match = formula.match(/^Font\.(?:'([^']+)'|([A-Za-z][A-Za-z0-9 ]*))$/);
+    const family = match && (match[1] || match[2]);
+    if (family) fontCounts.set(family, (fontCounts.get(family) || 0) + 1);
+  }
+  const themeFonts = [...new Set([
+    ...(themeBrand?.fonts || []),
+    ...(themeBrand?.palette?.fontFaces || []).map((font) => font?.value),
+  ].filter(Boolean))];
+  const fontDeclarations = [...fontCounts.entries()]
+    .map(([family, count]) => ({ family, count, source: 'control' }));
+  for (const family of themeFonts) {
+    if (!fontCounts.has(family)) fontDeclarations.push({ family, count: 0, source: 'theme' });
+  }
+  fontDeclarations.sort((a, b) => b.count - a.count || themeFonts.indexOf(a.family) - themeFonts.indexOf(b.family) || a.family.localeCompare(b.family));
+
+  const uniqueColors = [...new Map(colors.map((color) => [JSON.stringify([color.collection, color.path, color.value]), color])).values()];
+  const uniqueDimensions = [...new Map(dimensions.map((dimension) => [JSON.stringify([dimension.collection || null, dimension.path || dimension.name, dimension.expression]), dimension])).values()];
+  const hasThemeEvidence = Boolean(themeBrand?.themeId
+    || (themeBrand?.themeName && themeBrand.themeName !== 'PowerAppsTheme')
+    || themeBrand?.palette?.colors?.length
+    || themeBrand?.palette?.sizes?.length
+    || themeFonts.length);
+  const dominantFont = fontCounts.size > 0 ? fontDeclarations[0]?.family || null : themeFonts[0] || null;
+
+  return {
+    source: 'Canvas theme, App.Formulas, and control properties',
+    theme: themeBrand || null,
+    namedRecords,
+    colors: uniqueColors,
+    dimensions: uniqueDimensions,
+    typography: {
+      dominantFont,
+      fontDeclarations,
+    },
+    confidence: uniqueColors.length > 0 || dominantFont ? 'high' : uniqueDimensions.length > 0 || hasThemeEvidence ? 'medium' : 'low',
+  };
 }
 
 function classifyFormulaIntents(formulaText, _dataSources, _parsedComponents) {
@@ -3027,6 +3254,7 @@ function rollupScreen(screen, dataSources, parsedComponents, resources) {
   const collectionsTouched = new Set();
   const variablesTouched = new Set();
   const unsupported = [];
+  const viewsUsed = new Map();
   const imageAssets = new Set();
   const assetReferences = new Set();
 
@@ -3156,6 +3384,7 @@ function rollupScreen(screen, dataSources, parsedComponents, resources) {
     const fx = stripFormula(formula);
     if (!fx) continue;
     collectTableAndColumnRefs(fx, dataSources, dataverseUsed);
+    collectViewRefs(fx, dataSources, viewsUsed);
     collectResourceRefs(fx, resources, imageAssets, assetReferences);
     collectParamRefs(fx, paramsRead);
     collectIdentityRefs(fx, identitySignals);
@@ -3176,6 +3405,7 @@ function rollupScreen(screen, dataSources, parsedComponents, resources) {
       const fx = stripFormula(formula);
       if (!fx) continue;
       collectTableAndColumnRefs(fx, dataSources, dataverseUsed);
+      collectViewRefs(fx, dataSources, viewsUsed);
       collectResourceRefs(fx, resources, imageAssets, assetReferences);
       collectParamRefs(fx, paramsRead);
       collectIdentityRefs(fx, identitySignals);
@@ -3195,20 +3425,33 @@ function rollupScreen(screen, dataSources, parsedComponents, resources) {
     // (which itself references `mtr_logo`) would have an empty `imageAssets`.
     if (control.isComponentInstance && control.componentName) {
       const compDef = parsedComponents.get(control.componentName);
-      if (compDef && Array.isArray(compDef.controlsFlat)) {
-        for (const compCtrl of compDef.controlsFlat) {
-          for (const formula of Object.values(compCtrl.properties || {})) {
-            const fx = stripFormula(formula);
-            if (!fx) continue;
-            collectResourceRefs(fx, resources, imageAssets, assetReferences);
-          }
-        }
-        // Also walk the component's top-level properties (Image, Fill, etc.).
-        for (const formula of Object.values(compDef.properties || {})) {
-          const fx = stripFormula(formula);
-          if (!fx) continue;
-          collectResourceRefs(fx, resources, imageAssets, assetReferences);
-        }
+      if (compDef) scanComponentDefinition(compDef, control.path, new Set());
+    }
+  }
+
+  function scanComponentDefinition(component, instancePath, visited) {
+    const componentKey = component.name || component.file || instancePath;
+    if (visited.has(componentKey)) return;
+    visited.add(componentKey);
+    const owners = [component, ...(component.controlsFlat || [])];
+    for (const owner of owners) {
+      addNativeCapForKind(owner.kind, nativeCapsSet);
+      const ownerPath = `${instancePath}/${owner.path || owner.name || componentKey}`;
+      for (const formula of Object.values(owner.properties || {})) {
+        const fx = stripFormula(formula);
+        if (!fx) continue;
+        collectTableAndColumnRefs(fx, dataSources, dataverseUsed);
+        collectViewRefs(fx, dataSources, viewsUsed);
+        collectResourceRefs(fx, resources, imageAssets, assetReferences);
+        collectParamRefs(fx, paramsRead);
+        collectIdentityRefs(fx, identitySignals);
+      }
+      for (const intents of Object.values(owner.events || {})) {
+        for (const intent of intents) applyIntent(intent, ownerPath);
+      }
+      if (owner !== component && owner.isComponentInstance && owner.componentName) {
+        const nested = parsedComponents.get(owner.componentName);
+        if (nested) scanComponentDefinition(nested, ownerPath, new Set(visited));
       }
     }
   }
@@ -3263,7 +3506,30 @@ function rollupScreen(screen, dataSources, parsedComponents, resources) {
     imageAssets: [...imageAssets].sort(),
     assetReferences: [...assetReferences].sort(),
     unsupported,
+    viewsUsed: [...viewsUsed.values()].sort((a, b) => String(a.viewId || a.name).localeCompare(String(b.viewId || b.name))),
   };
+}
+
+function collectViewRefs(formula, dataSources, viewsUsed) {
+  const pattern = /'([^']+\s+\(Views\))'\s*\.\s*'([^']+)'/g;
+  for (const match of String(formula || '').matchAll(pattern)) {
+    const key = `${match[1]}\u0000${match[2]}`;
+    const view = dataSources.viewsByReference?.get(key) || null;
+    const id = view?.viewId || key;
+    viewsUsed.set(id, view ? { ...view } : {
+      name: match[2],
+      displayName: match[2],
+      viewId: null,
+      viewKind: 'unknown',
+      queryType: null,
+      predicate: null,
+      orderBy: [],
+      columns: [],
+      resolutionStatus: 'needs-target-view-resolution',
+      sourceInventory: match[1],
+      tableKey: match[1].replace(/\s+\(Views\)$/, ''),
+    });
+  }
 }
 
 function addNativeCapForKind(kind, capsSet) {
@@ -3481,7 +3747,7 @@ function extractAppSettings(sources) {
   };
 }
 
-function buildIdentitySurface(parsedScreens, appNode) {
+function buildIdentitySurface(parsedScreens, appNode, parsedComponents = new Map()) {
   const signals = new Set();
   function scanProps(props) {
     for (const v of Object.values(props || {})) collectIdentityRefs(stripFormula(v), signals);
@@ -3490,6 +3756,10 @@ function buildIdentitySurface(parsedScreens, appNode) {
   for (const screen of parsedScreens.screens) {
     scanProps(screen.properties);
     for (const c of screen.controlsFlat) scanProps(c.properties);
+  }
+  for (const component of parsedComponents.values()) {
+    scanProps(component.properties);
+    for (const control of component.controlsFlat || []) scanProps(control.properties);
   }
   return {
     requiresUserProfile: signals.has('User()') || signals.has('Office365Users.MyProfile'),
@@ -3501,7 +3771,7 @@ function buildIdentitySurface(parsedScreens, appNode) {
   };
 }
 
-function extractDeepLinkParams(parsedScreens, appNode) {
+function extractDeepLinkParams(parsedScreens, appNode, parsedComponents = new Map()) {
   const params = new Map(); // name -> Set(location)
   function scanNode(node, prefix) {
     for (const [k, v] of Object.entries(node.properties || {})) {
@@ -3518,6 +3788,10 @@ function extractDeepLinkParams(parsedScreens, appNode) {
   for (const screen of parsedScreens.screens) {
     scanNode(screen, screen.name);
     for (const c of screen.controlsFlat) scanNode(c, c.path);
+  }
+  for (const component of parsedComponents.values()) {
+    scanNode(component, `Component:${component.name}`);
+    for (const control of component.controlsFlat || []) scanNode(control, `Component:${component.name}/${control.path}`);
   }
   return [...params.entries()]
     .map(([name, locs]) => ({ name, usedIn: [...locs].sort() }))
@@ -4120,22 +4394,33 @@ function buildDataModelRollup(screensRolled, dataSources, appIntents, appNode) {
     if (intent.intent === 'setVar' && intent.name) variableSet.add(intent.name);
   }
 
-  // Attach Dataverse saved views (from `ViewInfo` rows) to their respective
-  // table entries. ViewInfo's `RelatedEntityName` is the table's *display*
-  // name (e.g. `AGP_GovOrg`) — not its logical name — so we key the lookup
-  // on displayName and fall back to logicalName for safety.
-  const viewsByLogical = dataSources.viewsByLogical || new Map();
-  if (viewsByLogical.size) {
-    for (const table of dataverseTables) {
-      const list =
-        viewsByLogical.get(table.displayName) ||
-        viewsByLogical.get(table.logicalName);
-      if (list && list.length) {
-        table.views = list
-          .map((v) => ({ name: v.name, displayName: v.displayName }))
-          .sort((a, b) => a.name.localeCompare(b.name));
+  // Attach only views actually referenced by source formulas. ViewInfo is an
+  // environment-wide inventory; treating every available view as an app
+  // dependency creates false blockers and obscures the views that matter.
+  const appViewsUsed = new Map();
+  for (const formula of Object.values(appNode?.properties || {})) {
+    const fx = stripFormula(formula);
+    if (fx) collectViewRefs(fx, dataSources, appViewsUsed);
+  }
+  for (const table of dataverseTables) {
+    const byId = new Map();
+    for (const screen of screensRolled) {
+      for (const view of screen.viewsUsed || []) {
+        if (view.tableKey !== table.displayName && view.tableKey !== table.logicalName) continue;
+        const key = view.viewId || `${view.sourceInventory}:${view.name}`;
+        const existing = byId.get(key) || { ...view, screens: [] };
+        existing.screens = [...new Set([...(existing.screens || []), screen.name])].sort();
+        byId.set(key, existing);
       }
     }
+    for (const view of appViewsUsed.values()) {
+      if (view.tableKey !== table.displayName && view.tableKey !== table.logicalName) continue;
+      const key = view.viewId || `${view.sourceInventory}:${view.name}`;
+      const existing = byId.get(key) || { ...view, screens: [] };
+      existing.screens = [...new Set([...(existing.screens || []), 'App'])].sort();
+      byId.set(key, existing);
+    }
+    if (byId.size > 0) table.views = [...byId.values()].sort((a, b) => String(a.viewId || a.name).localeCompare(String(b.viewId || b.name)));
   }
 
   // SharePoint lists discovered via `ConnectedDataSourceInfo`. These are a
@@ -4424,6 +4709,27 @@ function enrichComponentDefsFromSidecar(componentDefs, sidecar, screens) {
   }
 }
 
+function enrichComponentControlsFromSidecar(parsedComponents, sidecar) {
+  if (!sidecar || !sidecar.byComponent) return;
+  for (const [componentName, component] of parsedComponents) {
+    const map = sidecar.byComponent.get(componentName);
+    if (!map) continue;
+    for (const control of [component, ...(component.controlsFlat || [])]) {
+      const entry = map.get(control.name);
+      if (!entry) continue;
+      control.isPcf = entry.isPcf;
+      control.isPremiumPcf = entry.isPremiumPcf;
+      control.templateName = entry.templateName;
+      control.templateId = entry.templateId;
+      control.isComponentInstance = entry.isComponentInstance;
+      if (entry.componentDefinitionName) {
+        control.componentName = entry.componentDefinitionName;
+        control.componentDefinitionGuid = entry.componentDefinitionGuid;
+      }
+    }
+  }
+}
+
 /**
  * Collect every PCF code component on every screen as a converter-ready spec.
  *
@@ -4438,21 +4744,43 @@ function enrichComponentDefsFromSidecar(componentDefs, sidecar, screens) {
  * Output shape per entry: `{ screen, control, templateName, templateId,
  * isPremiumPcf, properties, nativeReplacementHint }`.
  */
-function collectPcfControls(screens) {
+function collectPcfControls(screens, parsedComponents = new Map()) {
   const out = [];
+  function add(screenName, control, path, componentName = null, definitionPath = null) {
+    out.push({
+      screen: screenName,
+      control: control.name,
+      path,
+      componentName,
+      definitionPath,
+      templateName: control.templateName || control.template || null,
+      templateId: control.templateId || null,
+      isPremiumPcf: !!control.isPremiumPcf,
+      properties: pickPcfContract(control.properties || {}),
+      events: control.events || {},
+      nativeReplacementHint: guessNativeReplacement(control.templateName || control.template),
+    });
+  }
+  function walkComponent(screenName, instancePath, component, visited) {
+    const key = component.name || component.file || instancePath;
+    if (visited.has(key)) return;
+    visited.add(key);
+    for (const control of component.controlsFlat || []) {
+      const projectedPath = `${instancePath}/${control.path || control.name}`;
+      if (control.isPcf) add(screenName, control, projectedPath, component.name, control.path || control.name);
+      if (control.isComponentInstance && control.componentName) {
+        const nested = parsedComponents.get(control.componentName);
+        if (nested) walkComponent(screenName, projectedPath, nested, new Set(visited));
+      }
+    }
+  }
   for (const screen of screens) {
     for (const c of screen.controlsFlat) {
-      if (!c.isPcf) continue;
-      out.push({
-        screen: screen.name,
-        control: c.name,
-        path: c.path,
-        templateName: c.templateName || c.template || null,
-        templateId: c.templateId || null,
-        isPremiumPcf: !!c.isPremiumPcf,
-        properties: pickPcfContract(c.properties || {}),
-        nativeReplacementHint: guessNativeReplacement(c.templateName || c.template),
-      });
+      if (c.isPcf) add(screen.name, c, c.path);
+      if (c.isComponentInstance && c.componentName) {
+        const component = parsedComponents.get(c.componentName);
+        if (component) walkComponent(screen.name, c.path, component, new Set());
+      }
     }
   }
   return out;
@@ -5171,6 +5499,9 @@ module.exports = {
   createSourceReader,
   parseAllScreens,
   parseCanvasYaml,
+  parseNamedFormulas,
+  buildSourceDesignBaseline,
+  classifyComponentDefinitionEvents,
   classifyFormulaIntents,
   classifyStatement,
   splitTopLevelArgs,
