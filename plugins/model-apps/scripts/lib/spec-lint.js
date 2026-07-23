@@ -122,6 +122,17 @@ function lintAppSpec(spec) {
     if (!['Main', 'QuickCreate', 'QuickView'].includes(formType)) E(`Form ${f.entity} has invalid formType '${f.formType}' (use Main/QuickCreate/QuickView)`);
     if (formType !== 'Main' && (f.subgrids || []).length) E(`Form ${f.entity} is a ${formType} form but declares sub-grids — sub-grids are Main-form only`);
     if (formType === 'QuickView' && !placedQuickViewForms.has(f.name)) W(`Form ${f.entity} is a QuickView form but isn't placed on any host form — add a quickViews[] entry (lookup + form) on the parent form to surface it`);
+    // An EXPLICIT layout must supply real structure. An empty `tabs: []` compiles to a form with no
+    // authored tab (only the adapter's seed tab survives), and a tab with no sections has nowhere to
+    // place fields/sub-grids/quick-views — the build would silently drop them (firstSectionRowsPointer
+    // returns ''). Catch both at the plan gate instead.
+    const isExplicit = Array.isArray(f.tabs) || f.layout === 'explicit';
+    if (isExplicit) {
+      if (!Array.isArray(f.tabs) || f.tabs.length === 0) E(`Form ${f.entity} uses an explicit layout but declares no tabs — add at least one tab with a section, or use layout:'auto'`);
+      else for (const t of f.tabs) {
+        if (!Array.isArray(t.sections) || t.sections.length === 0) E(`Form ${f.entity} explicit tab '${t.label || t.name || ''}' has no sections — add at least one section with fields`);
+      }
+    }
     for (const sg of f.subgrids || []) {
       const has1N = (spec.relationships || []).some(
         (r) => r.type === 'OneToMany' && lc(r.referenced) === lc(f.entity) && lc(r.referencing) === lc(sg.childEntity)

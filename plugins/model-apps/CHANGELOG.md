@@ -28,6 +28,13 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   single-column alternate key, else the primary name column, validated non-empty — the SDK no longer
   resolves by primary display name implicitly (duplicate names are a silent-wrong-id hazard).
 
+### Known limitations
+- **App EDIT does not re-pin a new chart as an explicit app component.** Adding a brand-new chart to an
+  already-deployed app and rebuilding leaves the chart in the solution and on its table's chart pane, but
+  not pinned as an explicit app `components` entry (the retired `setAppDefinition` did this; the SDK's
+  generic surface can't add a missing `components` object to a fetched app). Rebuild the app fresh, or
+  surface the chart via a dashboard/sitemap subarea, if it must be an explicit component.
+
 ### Added
 - **Editing a form can now REMOVE a field, not just add one.** The form reconcile was add-only, so
   dropping a field from an explicit `tabs` layout and rebuilding silently kept the stale field on the

@@ -993,11 +993,16 @@ async function runSdkBuild(spec, opts = {}) {
       if (existingId) {
         await provision.fetchArtifact('app', existingId);
         // Update the nav tree via the generic surface. On push the adapter re-derives the app's
-        // ENTITY + DashBoard components from the sitemap (T4), so a sitemap edit's tables/dashboards
-        // stay pinned. Explicit forms/views/charts pins are applied at CREATE (below); a fetched app
-        // has no `components` path to updateElement and model-driven apps auto-include a table's
-        // forms/views, so we do not re-pin them on edit (the retired setAppDefinition's edit-time
-        // re-pin is subsumed by sitemap-derived components + platform auto-inclusion).
+        // ENTITY + DashBoard components from the sitemap, so a sitemap edit's tables and dashboards
+        // stay pinned. Explicit forms/views/charts component pins are applied at CREATE only (below):
+        // a FETCHED app exposes no `components` path for updateElement, and the generic surface can't
+        // add a missing top-level object, so the retired setAppDefinition's edit-time re-pin is not
+        // reproducible here. This is acceptable because a table's forms/views are auto-available once
+        // the table is in the app, and every chart is independently added to the SOLUTION
+        // (charts-phase addSolutionComponent) and shows on its table's chart pane. Preview limitation:
+        // a NEW chart added to an ALREADY-DEPLOYED app on an edit rebuild is NOT re-pinned as an
+        // explicit app component (rebuild the app fresh, or add the chart via a dashboard/sitemap, if
+        // it must be an explicit component). See docs/app-builder-roadmap.md.
         provision.updateElement('app', existingId, '/siteMap', def.siteMap);
         requireSuccessfulPush(await provision.pushArtifact('app', existingId), `app ${def.name}`);
         // Page-backed apps get their authoritative sitemap (incl. GenPage subareas) + publish from

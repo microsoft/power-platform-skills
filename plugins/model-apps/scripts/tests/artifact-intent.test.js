@@ -513,6 +513,27 @@ test('formFieldLogicals: walks new topology (columns layer), dedupes, excludes n
   assert.deepStrictEqual(result, ['new_name', 'new_status']);
 });
 
+test('formFieldLogicals: EXCLUDES a quick-view control though it binds a lookup fieldName (regression: reconcile must not delete the quick-view on rebuild)', () => {
+  const QUICK_VIEW = '5C5600E0-1D6E-4205-A272-BE80DA87FD42';
+  const SUBGRID = 'E7A81278-8635-4D9E-8D4D-59480B391C5B';
+  const NOTES = '06375649-C143-495E-A496-C962E5B4488E';
+  const formJson = {
+    tabs: [{ columns: [{ sections: [{ rows: [
+      { cells: [{ control: { fieldName: 'new_name' } }] },
+      // a quick-view control binds the host lookup as fieldName — it is NOT a form field
+      { cells: [{ control: { classId: QUICK_VIEW, fieldName: 'new_customerid' } }] },
+      // a sub-grid control (no fieldName) and a notes control — excluded as before
+      { cells: [{ control: { classId: SUBGRID, parameters: { RelationshipName: 'r' } } }] },
+      { cells: [{ control: { classId: NOTES, fieldName: null } }] },
+    ] }] }] }],
+  };
+  assert.deepStrictEqual(formFieldLogicals(formJson), ['new_name'], 'only the real bound field is counted');
+  // The prune resolves a dropped logical to a cell via findFieldCellPointer — it must NEVER resolve
+  // the quick-view's lookup to the quick-view control cell (which would delete the quick-view).
+  assert.strictEqual(findFieldCellPointer(formJson, 'new_customerid'), null, 'the quick-view lookup is not a removable field cell');
+  assert.match(findFieldCellPointer(formJson, 'new_name'), /\/rows\/0\/cells\/0$/, 'a genuine bound field still resolves');
+});
+
 test('formFieldLogicals: works end-to-end on compileFormIntent output', () => {
   const spec = {
     solution: { uniqueName: 'S', publisherPrefix: 'new' }, app: { name: 'A' },

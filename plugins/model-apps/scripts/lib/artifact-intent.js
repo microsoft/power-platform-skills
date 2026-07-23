@@ -317,11 +317,28 @@ function compileFormIntent(spec, formSpec, opts) {
   };
 }
 
+// Dataverse control class ids for NON-field controls that nonetheless occupy a field cell — the
+// quick-view control even carries a bound `fieldName` (its host lookup). The field-set walk below must
+// NOT count these as bound form fields: otherwise the reconcile prune would resolve a quick-view's
+// lookup (absent from the authored field list) to the quick-view CONTROL and delete it on every
+// rebuild. These are stable platform ids (SDK ControlClassIds); a fetched BOUND field's classId is
+// attribute-derived and never matches this set (Notes/subgrid already have no fieldName, but excluding
+// them here too keeps findFieldCellPointer from ever targeting a non-field control).
+const NON_FIELD_CONTROL_CLASS_IDS = new Set([
+  '5C5600E0-1D6E-4205-A272-BE80DA87FD42', // QuickView
+  'E7A81278-8635-4D9E-8D4D-59480B391C5B', // Subgrid / Grid
+  '06375649-C143-495E-A496-C962E5B4488E', // Notes / Timeline
+]);
+function isNonFieldControl(control) {
+  return !!(control && control.classId && NON_FIELD_CONTROL_CLASS_IDS.has(String(control.classId).replace(/[{}]/g, '').toUpperCase()));
+}
+
 // Ordered, de-duped, lowercased list of bound-field logical names across all
 // tabs → columns → sections → rows → cells in a form intent/artifact with the NEW topology.
-// Excludes controls with no fieldName (notes, subgrid, quick-view, etc.).
+// Excludes controls with no fieldName (notes, subgrid) AND non-field controls that DO carry a
+// fieldName (a quick-view binds a lookup — see NON_FIELD_CONTROL_CLASS_IDS).
 // Ported from sdk-build.js formFieldLogicals but walks the inserted columns layer.
-// Used by the engine's field-set reconcile: addField/removeField need the ordered list.
+// Used by the engine's field-set reconcile: the add/prune accounting needs the ordered list.
 function formFieldLogicals(formJson) {
   const seen = new Set();
   const out = [];
@@ -332,6 +349,8 @@ function formFieldLogicals(formJson) {
           for (const c of (r.cells || [])) {
             const fn = c.control && c.control.fieldName;
             if (!fn) continue;
+            // A quick-view control carries the host lookup as fieldName — it is NOT a form field.
+            if (isNonFieldControl(c.control)) continue;
             const logical = String(fn).toLowerCase();
             if (seen.has(logical)) continue;
             seen.add(logical);
@@ -366,10 +385,10 @@ function sectionRowsPointer(ti, ci, si) {
   return '/tabs/' + ti + '/columns/' + ci + '/sections/' + si + '/rows';
 }
 
-// JsonPointer to the cell hosting the bound field `logical`, or null if not present.
-// Used by the engine's field-removal reconcile (removeElement(pointer) on the SDK).
-// Scans in declaration order — the first match wins (duplicates are not expected but
-// the dedup in formFieldLogicals means the engine never tries to remove a duplicate).
+// JsonPointer to the cell hosting the BOUND field `logical`, or null if not present.
+// Used by the engine's field-removal reconcile (removeElement(pointer) on the SDK). Non-field
+// controls are skipped even if their fieldName matches, so a prune never targets a quick-view whose
+// host lookup collides with a bound field name. Scans in declaration order — the first match wins.
 function findFieldCellPointer(formJson, logical) {
   const lg = String(logical || '').toLowerCase();
   const tabs = formJson.tabs || [];
@@ -383,7 +402,7 @@ function findFieldCellPointer(formJson, logical) {
           const cells = rows[ri].cells || [];
           for (let celli = 0; celli < cells.length; celli++) {
             const fn = cells[celli].control && cells[celli].control.fieldName;
-            if (fn && String(fn).toLowerCase() === lg) {
+            if (fn && String(fn).toLowerCase() === lg && !isNonFieldControl(cells[celli].control)) {
               return '/tabs/' + ti + '/columns/' + ci + '/sections/' + si + '/rows/' + ri + '/cells/' + celli;
             }
           }
