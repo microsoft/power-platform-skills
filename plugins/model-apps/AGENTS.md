@@ -62,10 +62,16 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   (`createSolution`/`createTable`/`createColumn`/`createRelationship`), seeds sample data via
   `seedRecordGraph` (SDK-owned parent-bind + resolve-by-name idempotency), enriches default
   Active/Inactive views via `enrichDefaultViews`, then
-  `createWebResource` for form JS, `createArtifact`+`pushArtifact` for views/charts/forms/app,
-  `addSubGrid` for sub-grids, `addField`/`removeField` to reconcile a form's field set on edit (add the
-  spec's fields, and — for an author-controlled **explicit** layout — prune fields it dropped, never the
-  primary), `addFormEventHandler` for form events) — so new, existing, and mixed
+  `createWebResource` for form JS, then builds each artifact through the SDK's **generic mutation
+  surface** (`createArtifact`+`addElement`/`updateElement`/`removeElement`+`pushArtifact`) driven by the
+  pure **`scripts/lib/artifact-intent.js`** compiler: a form is a minimal `createArtifact` plus a coarse
+  `addElement` of each authored tab (sub-grids/quick-views are canonical control cells; form JS is the
+  root-bag `/bag/c` `<events>` region), a view is `updateElement('/columns')`, an app is
+  `updateElement('/siteMap')`, a dashboard tile is `addElement('/components')`. Form reconcile adds the
+  spec's fields and — for an author-controlled **explicit** layout — prunes fields it dropped (never the
+  primary) via `findFieldCellPointer`+`removeElement`, keyed by a declared semantic identity so a rebuild
+  never duplicates a control. Every push routes through `requireSuccessfulPush` (a 412 version conflict
+  halts the build for a fresh download instead of silently dropping the edit) — so new, existing, and mixed
   envs all work. The data model is **complete** (all column types, global choices, status reasons,
   alternate keys, N:N). It also builds **quick-create/quick-view forms** (`formType`) with **quick-view
   placement** (`forms[].quickViews[]` — embed a QuickView form via a lookup), **modern command-bar
@@ -196,6 +202,7 @@ scripts/
     dataverse-auth.js          ← Shared auth + HTTP helpers (uses `az account get-access-token`)
     supported-dependencies.js  ← Single source of truth for runtime + dev deps versions
     sdk-build.js               ← app-builder build engine (idempotent; incl. the pages phase)
+    artifact-intent.js         ← pure App Spec → canonical SDK intent compiler (new form topology; no SDK calls)
     sdk-teardown.js            ← app-builder teardown engine (planTeardown is pure)
     sdk-http-client.js         ← az-token HttpClient for the vendored SDK
     spec-lint.js / app-spec.js ← App Spec guardrail lint + validation
@@ -312,17 +319,31 @@ edit produces a byte-identical `lib/*.js`, so the bundle only needs rebuilding w
 changes.
 
 **Vendored-SDK contract invariants (regression net).** When you bump the SDK and re-vendor, the
-skill relies on behaviors that must survive. Two test files lock them — run both against every
+skill relies on behaviors that must survive. Three test files lock them — run all against every
 rebuilt bundle:
 
 `scripts/tests/sdk-surface-contract.test.js` — the **method-presence** guard. Asserts every SDK
 method the engines call (`SKILL_SDK_SURFACE`, kept in sync with the `provision.*` / `sdk.*` call
-sites by a source-scan test) is a function on the real vendored bundle. A re-vendored SDK that
-**renames or removes** a method the skill uses fails HERE, listing the exact names — instead of
-silently at build time (the mock-based `sdk-build`/`sdk-teardown` suites can't catch that, since the
-mock mimics the old interface). Update `SKILL_SDK_SURFACE` **and** migrate the call sites together.
+sites by a source-scan test that also covers `artifact-intent.js`) is a function on the real vendored
+bundle. A re-vendored SDK that **renames or removes** a method the skill uses fails HERE, listing the
+exact names — instead of silently at build time (the mock-based `sdk-build`/`sdk-teardown` suites
+can't catch that, since the mock mimics the old interface). The skill drives Dataverse through the
+SDK's **generic** surface (`createArtifact`/`addElement`/`updateElement`/`removeElement`/`getArtifact`/
+`fetchArtifact`/`pushArtifact`), NOT per-artifact mutators — a bundle that drops the generic surface
+fails here. Update `SKILL_SDK_SURFACE` **and** migrate the call sites together.
 
-`scripts/tests/vendor-sdk-smoke.test.js` — the **behavior/return-shape** `CONTRACT:` tests:
+`scripts/tests/hardening2-real-bundle.test.js` — **compiler↔adapter integration** against the real
+bundle: it drives `artifact-intent.js` + the generic surface exactly as the engine does and asserts
+the real wire output — **parity** with a pre-swap golden (`fixtures/parity-golden.json`, via the pure
+`wire-facts.js` normalizer), multi-tab/section create, **metadata-derived control classIds** (a Lookup
+and a String field get DIFFERENT classids — the adapter defaults them from attribute type, T4, so the
+plugin must NOT precompute classId), sub-grid relationship/target/view serialization, `/bag/c` events
+**merge** (exactly one `<events>` root on a rebuild), field removal, and the **412 → failed
+`PushResult`** signal `requireSuccessfulPush` halts on. The mock-based `sdk-build.test.js` covers the
+engine ORCHESTRATION (call order, idempotency, phase selection); this covers what a mock cannot.
+
+`scripts/tests/vendor-sdk-smoke.test.js` — the **behavior/return-shape** `CONTRACT:` tests (drive the
+public `createMakerSdk` factory — the `MakerSdk`/`AppAdapter` classes are no longer bundle exports):
 - **Raw OData filters pass through, single-encoded** — the skill builds raw `$filter` strings
   (quoted string literals via `lib/odata.js`, and **unquoted GUID literals** like `objectid eq <guid>`);
   a query builder may transport-encode them but must not double-encode.
@@ -334,8 +355,10 @@ mock mimics the old interface). Update `SKILL_SDK_SURFACE` **and** migrate the c
 - **`deleteAppCascade` returns a structured `{ success, deleted, failures }` result** — teardown
   reads `failures` to report orphaned sitemap/genpage rows instead of claiming a clean delete; the
   bundle must keep returning the result (not void) after a re-vendor.
-- **`seedRecordGraph` returns `{ createdIds: { <entityLogical>: [ids] } }`** — the sample-data phase
-  reads `createdIds[<entity>]` to bind children; the bundle must keep that shape (not a bare id array).
+- **`seedRecordGraph` returns `{ createdIds: { <entityLogical>: [ids] } }`** and dedups only on an
+  explicit **`matchOn`** key (it NEVER falls back to the primary display name — `buildSeedGroup`
+  supplies `matchOn` from a single-column alternate key or the primary name, validated non-empty).
+
 
 **Live end-to-end (app-builder — writes to a real Dataverse env; optional).** All build/verify/
 teardown scripts are **dry-run by default**; add `--apply` to write.

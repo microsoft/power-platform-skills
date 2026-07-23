@@ -2,19 +2,39 @@
 
 All notable changes to the **model-apps** plugin.
 
-## [Unreleased] — 2.2.0
+## [Unreleased] — 2.3.0
 
 A new **`/app-builder`** skill (Preview) that builds and edits whole model-driven apps,
 plus local-dev ergonomics, sample coverage, and an automated eval suite with
 real and synthetic fixtures. Builds on v2.1; no breaking changes.
 
+### Changed
+- **`/app-builder` migrated to the `cds-maker-sdk` `hardening-2` bundle (no user-visible change).** The
+  SDK removed its per-artifact mutators (`addField`/`removeField`/`addSubGrid`/`addQuickViewControl`/
+  `addFormEventHandler`/`addDashboardTile`/`setViewColumns`/`setAppDefinition`) and changed the form
+  model (a `columns` layer between tab and section). The build engine now compiles the App Spec to the
+  SDK's **canonical desired-state intent** (`scripts/lib/artifact-intent.js`, pure/no-SDK) and applies it
+  through the SDK's **generic** `addElement`/`updateElement`/`removeElement` surface: forms are a minimal
+  create + a coarse whole-tab `addElement`, sub-grids/quick-views are canonical control cells, form JS is
+  the `/bag/c` `<events>` region, views/apps use `updateElement`, dashboard tiles use `addElement`. Bound
+  fields omit `classId`/`label` so the adapter derives them from attribute metadata. **App Spec and CLI
+  are unchanged** — no user migration. New regression nets: a pre-swap **parity oracle**
+  (`scripts/tests/wire-facts.js` + `fixtures/parity-golden.json`) and a real-bundle integration suite
+  (`scripts/tests/hardening2-real-bundle.test.js`).
+- **Every artifact push is checked (`requireSuccessfulPush`).** A 412 version conflict (the artifact
+  changed in Maker since it was fetched) now **halts** the build for a fresh download instead of silently
+  reporting success while dropping the edit.
+- **Sample-data idempotency key is now explicit (`seedRecordGraph.matchOn`).** `buildSeedGroup` prefers a
+  single-column alternate key, else the primary name column, validated non-empty — the SDK no longer
+  resolves by primary display name implicitly (duplicate names are a silent-wrong-id hazard).
+
 ### Added
-- **Editing a form can now REMOVE a field, not just add one (`sdk-build.js` + SDK `removeField`).** The
-  form reconcile was add-only, so dropping a field from an explicit `tabs` layout and rebuilding silently
-  kept the stale field on the deployed form. The build now prunes fields the deployed form still carries
-  that the spec's **explicit** layout no longer lists (via the new idempotent SDK `removeField` /
-  `removeFieldFromForm`). Scoped to author-controlled explicit layouts only — an **auto** layout stays
-  additive (a field added in Maker survives) — and the entity **primary** field is never pruned.
+- **Editing a form can now REMOVE a field, not just add one.** The form reconcile was add-only, so
+  dropping a field from an explicit `tabs` layout and rebuilding silently kept the stale field on the
+  deployed form. The build now prunes fields the deployed form still carries that the spec's **explicit**
+  layout no longer lists (via `findFieldCellPointer` + the SDK's generic `removeElement`). Scoped to
+  author-controlled explicit layouts only — an **auto** layout stays additive (a field added in Maker
+  survives) — and the entity **primary** field is never pruned.
 - **Meaningful table icons by default (authoring flow).** The `/app-builder` authoring flow now assigns
   each **custom** table a clean, original, Fluent-style **SVG** icon by default (an `svg` `webResources[]`
   entry + `entities[].vectorIcon`), so a freshly built app's nav shows a recognizable glyph instead of the
