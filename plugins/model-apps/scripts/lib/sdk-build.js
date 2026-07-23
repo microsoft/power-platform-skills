@@ -614,8 +614,12 @@ async function runSdkBuild(spec, opts = {}) {
   // intermediate state keeps >=1 tab, so the structural validator never rejects an empty form.
   const createFormShell = (def) => {
     const art = provision.createArtifact('form', { name: def.name, entityLogicalName: def.entityLogicalName, formType: def.formType, status: def.status });
-    for (const tab of def.tabs || []) provision.addElement('form', art.id, '/tabs', tab);
-    provision.removeElement('form', art.id, '/tabs/0'); // drop the seed tab (my tabs were appended after it)
+    const tabs = def.tabs || [];
+    for (const tab of tabs) provision.addElement('form', art.id, '/tabs', tab);
+    // Drop the adapter's seed tab (my tabs were appended after it) — but ONLY if I actually added at
+    // least one tab, so a degenerate spec with an empty `tabs: []` still leaves the valid seed tab
+    // rather than a tab-less form the designer can't open.
+    if (tabs.length > 0) provision.removeElement('form', art.id, '/tabs/0');
     return art.id;
   };
 
