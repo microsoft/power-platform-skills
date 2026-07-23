@@ -90,7 +90,7 @@ test("resolve: no orgId uses PAC environment geo before the default region", asy
   const result = await resolve({
     orgId: "",
     cloud: "Public",
-    geoName: "Europe",
+    geoName: "eu",
     regionsMap: REGIONS,
     defaultRegion: "us",
     _fetchGeo: () => Promise.resolve(null),
@@ -187,7 +187,7 @@ test("resolve: Artemis failure uses PAC environment geo", async () => {
   const result = await resolve({
     orgId: "11111111-1111-1111-1111-111111111111",
     cloud: "Public",
-    geoName: "Europe",
+    geoName: "eu",
     regionsMap: REGIONS,
     defaultRegion: "us",
     _fetchGeo: () => Promise.resolve(null),

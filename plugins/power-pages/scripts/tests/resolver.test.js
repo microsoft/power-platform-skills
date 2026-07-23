@@ -43,7 +43,7 @@ test("resolve uses the environment geo for EU routing", async () => {
     event: { data: {} },
     cfg: { default_region: "us", regions: REGIONS },
     cloud: "Public",
-    geoName: "Europe",
+    geoName: "eu",
   });
   assert.equal(r.iKey, "ikeyeu");
   assert.equal(r.collectorUrl, "https://eu.invalid/");
@@ -58,7 +58,7 @@ test("resolve uses the cached Artemis region for the event organization", async 
     event: { data: { orgId } },
     cfg: { default_region: "us", regions: REGIONS },
     cloud: "Public",
-    geoName: "NorthAmerica",
+    geoName: "us",
     configDir,
   });
 
