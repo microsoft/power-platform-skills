@@ -208,9 +208,20 @@ One `pages[]` collection; implementation state is **explicit**, not a nullable f
 `download` returns **resolved, GUID-bearing** source (`download-model-app.js:86-106`). Stable-key
 persistence is therefore **foundational**, and the mechanism is **decided** (not left open):
 
-- **Durable page manifest.** The `app` stage writes a `<app>_pagemanifest` web resource holding
-  `[{ key, name, pageId }]` (portable — it travels inside the solution and survives download). It is
-  the authoritative `key ↔ pageId ↔ name` map, so a display-name change never orphans a page.
+- **Durable page manifest (versioned).** The `app` stage writes a `<app>_pagemanifest` web resource
+  carrying the full design-time metadata — `{ schemaVersion, pages: [{ key, name, pageId, purpose,
+  dataSources, navigatesTo, pageInput }], design }` — not just id/name, so the round-trip below
+  actually restores purpose/navigation/design. It travels inside the solution and survives download.
+- **Lifecycle is explicit.** On first build the manifest web resource is created and **added to the
+  solution**; on rebuild it is **updated in place** via `updateWebResource` (`MakerSdk.ts:529-543`) —
+  the engine today reuses an existing web resource *without* updating its content
+  (`sdk-build.js:565-580`), so the manifest needs the update path, not plain reuse. `planTeardown`
+  removes it (it currently deletes only the app icon, `sdk-teardown.js:338-348`).
+- **`pageId`s are validated deployment state, not blind portable identity.** Manifest ids are
+  environment-specific and can be stale after import to another env, so they are **reconciled against
+  the fail-closed current-app enumeration** (§9) before use — the manifest keeps `key ↔ name`
+  durable (so a display-name change never orphans a page), while the *deployed* id is confirmed live
+  each run.
 - **Canonical symbolic source is retained** in the working dir / app-spec sidecar (the `.tsx` with
   `PAGEREF_<key>`); the resolved deployment derivative is never written back over it.
 - **Download reconstructs keys** from the manifest and **reverse-normalizes** sibling page-GUID
@@ -421,10 +432,14 @@ Run 1 **omits `--sample-data`** so sample rows are created **once** in run 2 (de
 conditional — `matchOn` can be absent, `entity-provision.js` — so running sample-data twice is not
 safe).
 
-**Retry idempotency fix (R2).** Because full-build re-run is the recovery mechanism, commands and
+**Retry idempotency fix (R2/R3).** Because full-build re-run is the recovery mechanism, commands and
 dashboards — today **re-created without discovery** (`sdk-build.js:951-975`) — must become
-**discover-reconcile** (`findArtifact`/`fetchArtifact` + generic mutations), or a retried run 2
-duplicates them. This is a tightly-coupled correctness fix, in scope here.
+**discover-reconcile** (`findArtifact`/`fetchArtifact` + generic mutations by a stable child identity:
+command by entity+name, dashboard tile by identity), or a retried run 2 duplicates them. **v1 is
+additive-only** (discover, add what's missing, **never remove**) so reconciliation cannot strip
+Maker-authored commands or dashboard tiles. Spec-driven *removal* of a command/dashboard/tile is
+deferred and, if added later, routes through `op-diff` destructive consent (§11) — exactly like
+explicit-form field pruning. This is a tightly-coupled correctness fix, in scope here.
 
 ## 15. Blast radius / unchanged
 
@@ -481,6 +496,12 @@ passed I2/I3/I5 + both Minors. The remaining PARTIALs + new findings are closed 
 - **Full-build retry idempotency** → §14: commands/dashboards become discover-reconcile.
 - **Validation/verification boundaries** → §7.1 per-caller profile matrix; §13.1 verify each nav
   edge → actual target `GenPageId`.
+
+**R3 (convergence pass)** confirmed the execution model sound and closed the last two items: the
+**page manifest** is now a versioned durable contract with full semantic metadata + an explicit
+create/update/add-to-solution/teardown lifecycle + `pageId`s validated against enumeration (§7.3),
+and **command/dashboard reconcile** is **additive-only** in v1 with removals deferred to `op-diff`
+(§14).
 
 ## 18. SDK-alignment (target after rework)
 
