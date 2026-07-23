@@ -1,11 +1,11 @@
 # Design — `/app-builder` flow refinement
 
-> **Status: PROPOSAL awaiting review.** This is the brainstorming output for refining the
-> `/app-builder` flow. R0 (objective doc-drift fixes) is already applied. R1–R3 are proposed
-> refinements — **not yet implemented**; they change the skill's interactive flow and need approval
-> before implementation (per the brainstorming design gate). Authored async (user unavailable for the
-> normal one-question-at-a-time brainstorm), so it is written to be decision-ready: approve/reject each
-> item and I'll turn the approved set into an implementation plan.
+> **Status: IMPLEMENTED.** R0–R3 have landed on the branch. R1 turned out to need **no code change**
+> (the linter is already clean on a data-model-only spec — verified empirically — so the proposed
+> `scope` option was unnecessary, YAGNI); it is a doc/flow change. R2 is a doc/flow change (plan mode
+> now carries the build dry-run and is the single build approval). R3 adds an opt-in `--verify` flag to
+> `build-model-app.js` (auto-reconcile after apply) with unit tests. This document is retained as the
+> rationale record. See **Implementation notes** at the end.
 
 ## The flow today (baseline)
 
@@ -122,3 +122,23 @@ the narration.
 Each is independent — approve any subset. On approval I'll take the approved set into `writing-plans`
 for an implementation plan (TDD, with `spec-lint`/build/verify unit coverage and a doc-sync pass across
 SKILL.md, authoring-flow.md, and architecture.md).
+
+---
+
+## Implementation notes (what actually shipped)
+
+- **R0** — SKILL.md doc-drift fixed (retired `addSubGrid`/`addFormEventHandler`; teardown web-resource
+  ordering).
+- **R1** — **doc/flow only.** Empirically, `lintAppSpec` on a data-model-only spec surfaces *only*
+  data-model findings (every artifact loop guards with `|| []`) and still catches the collision error —
+  so no `scope` option was needed. `authoring-flow.md` now runs the lint at the end of Level (a) as an
+  early hard gate; Step 5 is re-framed as the full-spec re-check; SKILL.md Phase 1 mirrors it.
+- **R2** — **doc/flow only.** `authoring-flow.md` Step 6 now runs the build **dry-run** and presents its
+  phase-grouped plan inside plan mode as the **single build approval**; SKILL.md Phase 2 applies
+  directly (the redundant second dry-run/go-ahead is removed, with a documented exception for
+  resume/edit re-runs); the architecture diagram is updated.
+- **R3** — **code.** `build-model-app.js` gains `--verify`: after a successful `--apply` it runs the
+  read-only reconcile (reusing `verifySpec` + the SDK `readerFor`, DRY), appends a `verify PASS/FAIL`
+  line, records a `verify` journal event, attaches `r.verify`, and the CLI **exits non-zero** on a
+  silent partial. `deps.verify` is injectable; 4 unit tests cover pass / fail-surfaced / opt-in /
+  throws-is-a-warning. SKILL.md Phase 2–3 and AGENTS.md document the flag; the live-e2e command uses it.

@@ -6,7 +6,7 @@
 //
 // Usage:
 //   node build-model-app.js --env <orgUrl> --spec @<app-folder>/app-spec.json [--apply]
-//        [--sample-data] [--publish]
+//        [--sample-data] [--publish] [--verify]
 //        [--only <phases>] [--skip <phases>] [--from <phase>] [--to <phase>]
 //        [--workspace <dir>]
 //   phases: solution,data-model,sample-data,web-resources,views,charts,forms,commands,dashboards,app-shell,pages,ai-features,publish
@@ -18,6 +18,12 @@ const { runSdkBuild, planFor, resolvePhases, appUniqueName } = require('./lib/sd
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
+// R3 (auto-verify): after a successful --apply the build can reconcile the spec against what actually
+// deployed, so a silent partial build surfaces in the same run instead of only on a separate manual
+// `verify-model-app.js` pass. Reuses the read-only reconcile core + the SDK reader (DRY — same code the
+// standalone verifier runs). The sibling CLI is safe to require (it has a `require.main` guard).
+const { verifySpec } = require('./lib/verify-spec.js');
+const { readerFor } = require('./verify-model-app.js');
 
 // Construct the SDK against the vendored bundle + an az-token HttpClient. Two clients:
 //   sdk          — carries solutionUniqueName (metadata + record writes auto-join the
@@ -149,7 +155,25 @@ async function buildModelApp(spec, opts, deps) {
   }
   if (opts.apply && r && r.ok && !r.dryRun) {
     log(`\n✓ build complete — ${counts.ok} created, ${counts.skip} skipped, ${counts.error} failed (${counts.ok + counts.skip + counts.error} steps)`);
-    if (journal) journal.close({ status: 'complete', ...counts, appId: r.created && r.created.app });
+    // R3 — auto-verify: reconcile the spec against what actually deployed so a silent partial build
+    // (an artifact created but not wired, or a phase that quietly produced nothing) surfaces now
+    // instead of only when the user opens the app. Read-only; injected (deps.verify) so tests drive it.
+    // A verify failure does NOT undo the build (it already ran) — it is reported and returned in
+    // r.verify so the CLI can exit non-zero. Never throws out of the build: a verify that can't run is
+    // a warning, not a build failure.
+    if (opts.verify && deps.verify) {
+      try {
+        const vr = await deps.verify(spec);
+        const present = vr.checks.length - vr.missing.length;
+        log(`\n${vr.ok ? '✓ verify PASS' : `✗ verify FAIL — ${vr.missing.length} missing`} (${present}/${vr.checks.length} present)`);
+        if (!vr.ok) for (const m of vr.missing) log(`  ✗ ${m.kind}: ${m.name}`);
+        r.verify = { ok: vr.ok, present, total: vr.checks.length, missing: vr.missing.map((m) => `${m.kind}:${m.name}`) };
+        if (journal) journal.record({ phase: 'verify', status: vr.ok ? 'ok' : 'error', label: `verify ${present}/${vr.checks.length} present`, ...(vr.ok ? {} : { detail: r.verify.missing.join(', ') }) });
+      } catch (e) {
+        log(`\n⚠ verify step could not run (build itself succeeded): ${(e && e.message) || e}`);
+      }
+    }
+    if (journal) journal.close({ status: 'complete', ...counts, appId: r.created && r.created.app, ...(r.verify ? { verify: r.verify.ok ? 'pass' : 'fail' } : {}) });
   } else if (journal) {
     journal.close({ status: r && r.dryRun ? 'dry-run' : 'done', ...counts });
   }
@@ -186,7 +210,7 @@ async function main() {
   const specArg = flags.spec || positional[0];
   if (!env || !specArg) {
     process.stderr.write(
-      'Usage: node build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--only|--skip <phases>] [--from|--to <phase>] [--workspace <dir>]\n'
+      'Usage: node build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--only|--skip <phases>] [--from|--to <phase>] [--workspace <dir>]\n'
     );
     process.exit(1);
   }
@@ -197,6 +221,7 @@ async function main() {
     apply: flags.apply === true,
     sampleData: flags['sample-data'] === true,
     publish: flags.publish === true,
+    verify: flags.verify === true,
     phases: resolvePhases({ only: list(flags.only), skip: list(flags.skip), from: flags.from, to: flags.to }),
     appDir: path.dirname(specPath),
     env,
@@ -211,13 +236,23 @@ async function main() {
     : null;
   let r;
   try {
-    const deps = { log: (m) => process.stderr.write(m + '\n'), sdk, provisionSdk, journal };
+    // deps.verify (R3): the real reconcile, wired to the live provision SDK. Only invoked when
+    // opts.verify AND the build applied successfully. Constructed here (not in buildModelApp) so the
+    // core stays free of SDK-reader wiring and fully injectable for tests.
+    const deps = {
+      log: (m) => process.stderr.write(m + '\n'),
+      sdk, provisionSdk, journal,
+      verify: (s) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s))),
+    };
     r = await buildModelApp(spec, opts, deps);
   } finally {
     cleanup();
   }
-  // emitResult() calls process.exit(), so emit AFTER cleanup() has run.
-  emitResult(r.ok, r);
+  // emitResult() calls process.exit(), so emit AFTER cleanup() has run. A build that applied cleanly
+  // but whose auto-verify found missing artifacts exits NON-ZERO (the silent-partial signal R3 exists
+  // to raise), while r still carries the full build + verify detail.
+  const ok = r.ok && (!r.verify || r.verify.ok);
+  emitResult(ok, r);
 }
 
 if (require.main === module) {

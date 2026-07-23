@@ -143,8 +143,8 @@ deterministic, idempotent, narrated SDK build. Create and **edit share one path*
                               v
               ┌────────────────────────────┐   runs in the MAIN loop
               │ Phase 1 — authoring        │   references/authoring-flow.md
-              │  env select (pac auth/org) │   → spec-lint.js guardrail
-              │  App Spec in 2 confirmed   │   → plan-mode approval
+              │  env select (pac auth/org) │   → early + full spec-lint gates
+              │  App Spec in 2 confirmed   │   → plan-mode approval (single build gate)
               │  levels (data model, then  │
               │  forms/views/charts+data)  │
               └──────────────┬─────────────┘
@@ -161,8 +161,8 @@ deterministic, idempotent, narrated SDK build. Create and **edit share one path*
                   │  ALL Dataverse access via the vendored headless SDK
                   v          scripts/vendor/cds-maker-sdk.cjs
    ┌────────────────────────┐   (metadata cached under <app-folder>/.maker-workspace/)
-   │ Phase 3 — verify &     │   scripts/verify-model-app.js (read-only reconcile;
-   │           iterate      │   exits non-zero on anything missing)
+   │ Phase 3 — verify &     │   build --apply --verify auto-reconciles the spec vs deployed;
+   │           iterate      │   verify-model-app.js re-checks (read-only; non-zero on anything missing)
    └────────────────────────┘
 
    Edit  = same path:  download-model-app.js  pulls a deployed app → editable spec → re-run Phase 2

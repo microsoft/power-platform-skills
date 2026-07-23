@@ -316,8 +316,19 @@ Standard/reused tables (Account, Contact, systemuser, …) already ship an icon 
 See [`references/app-spec-schema.md`](./app-spec-schema.md) → `entities[].vectorIcon` and
 `webResources[]`.
 
-Persist the agreed data model to `<working-dir>/app-spec.json` before
-proceeding to Level (b).
+Persist the agreed data model to `<working-dir>/app-spec.json`, then run an **early data-model lint**
+on it before proceeding to Level (b) — this catches structural data-model errors (e.g. the
+relationship-name-vs-lookup-name collision Dataverse rejects) **before** the user authors forms/views
+on top of a broken model, the most expensive point to unwind:
+
+```bash
+node -e "const{lintAppSpec}=require('${PLUGIN_ROOT}/scripts/lib/spec-lint.js');const s=require('<abs-path-to-app-spec.json>');const r=lintAppSpec(s);console.log(JSON.stringify(r,null,2));"
+```
+
+On a data-model-only spec the linter surfaces **only** data-model findings (the forms/views/app checks
+are no-ops until those sections exist), so treat any `errors[]` here as a **hard gate**: fix the data
+model and re-run before moving to Level (b). Warnings teach — surface and proceed. (The full lint at
+Step 5 re-checks the complete spec once artifacts are added.)
 
 ### Level (b) — Artifacts and sample data
 
@@ -443,7 +454,9 @@ Persist the fully agreed spec to `<working-dir>/app-spec.json` before Step 5.
 
 ## Step 5 — Guardrail Lint (Hard Gate Before Plan Mode)
 
-Before entering plan mode, run the lint on the agreed spec:
+Before entering plan mode, run the **full** lint on the complete agreed spec (this re-checks the whole
+spec — the data model was already gated by the early lint at the end of Level (a), so here you are
+validating the artifacts/sample-data/app layered on top):
 
 ```bash
 node -e "const{lintAppSpec}=require('${PLUGIN_ROOT}/scripts/lib/spec-lint.js');const s=require('<abs-path-to-app-spec.json>');const r=lintAppSpec(s);console.log(JSON.stringify(r,null,2));"
@@ -531,6 +544,18 @@ even though the underlying spec stores the schemaName as provided:
 - Security roles, quick-create forms, and standard system views are
   out of scope for this phase and can be added later.
 ```
+
+**Include the engine's real build plan (this is the SINGLE build approval).** Before `ExitPlanMode`,
+run the build **dry-run** (no `--apply`) and show its phase-grouped plan beneath the summary above:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/build-model-app.js" --env <envUrl> --spec @<working-dir>/app-spec.json
+```
+
+This reflects the idempotent detect-existing logic (what will be **created** vs **skipped**), so the
+user approves the plan the engine will *actually* run — not a hand-rendered approximation. On
+`ExitPlanMode` approval, **Phase 2 applies directly** — do **not** take a second dry-run + go-ahead in
+Phase 2 (that redundant double-gate is removed; plan mode is the one build approval).
 
 Then call `ExitPlanMode` to request user approval.
 

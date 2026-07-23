@@ -84,6 +84,48 @@ test('apply threads through to the SDK engine (solution + tables created)', asyn
   assert.ok(calls.some((c) => c[0] === 'createSolution'));  assert.ok(calls.filter((c) => c[0] === 'createTable').length >= 1);
 });
 
+// R3 — auto-verify after a successful --apply (opt-in; deps.verify injected)
+test('auto-verify (opts.verify) runs the injected reconcile and attaches r.verify on pass', async () => {
+  const { sdk } = mockSdk();
+  let received = null;
+  const verify = async (s) => { received = s; return { ok: true, checks: [{ kind: 'entity', name: 'a', present: true }, { kind: 'form', name: 'b', present: true }], missing: [] }; };
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x', verify: true }, { sdk, verify });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(received, desk, 'the injected verifier received the spec');
+  assert.deepStrictEqual(r.verify, { ok: true, present: 2, total: 2, missing: [] });
+});
+
+test('auto-verify surfaces a silent partial build (verify FAIL) in r.verify and the log; the build itself still succeeded', async () => {
+  const { sdk } = mockSdk();
+  const cap = logCapture();
+  const verify = async () => ({ ok: false, checks: [{ kind: 'entity', name: 'a', present: true }, { kind: 'view', name: 'v', present: false }], missing: [{ kind: 'view', name: 'v' }] });
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x', verify: true }, { sdk, verify, log: cap.log });
+  assert.strictEqual(r.ok, true, 'the build itself succeeded — verify is a separate signal');
+  assert.strictEqual(r.verify.ok, false);
+  assert.deepStrictEqual(r.verify.missing, ['view:v']);
+  assert.ok(cap.logs.some((l) => /verify FAIL/.test(l)), 'the failure is narrated');
+  assert.ok(cap.logs.some((l) => /view: v/.test(l)), 'the missing artifact is listed');
+});
+
+test('auto-verify is opt-in — no reconcile runs without opts.verify', async () => {
+  const { sdk } = mockSdk();
+  let called = false;
+  const verify = async () => { called = true; return { ok: true, checks: [], missing: [] }; };
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x' }, { sdk, verify });
+  assert.strictEqual(called, false, 'verify is opt-in via --verify');
+  assert.strictEqual(r.verify, undefined);
+});
+
+test('a verify that throws is a warning, not a build failure', async () => {
+  const { sdk } = mockSdk();
+  const cap = logCapture();
+  const verify = async () => { throw new Error('reader boom'); };
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x', verify: true }, { sdk, verify, log: cap.log });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.verify, undefined, 'no verify result attached when it could not run');
+  assert.ok(cap.logs.some((l) => /verify step could not run/.test(l)));
+});
+
 test('apply emits one status-marked [n/total] line per step, with phase headers + a summary', async () => {
   const { sdk } = mockSdk();
   const cap = logCapture();

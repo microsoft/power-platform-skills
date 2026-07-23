@@ -87,7 +87,9 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   (`solution·data-model·sample-data·web-resources·views·charts·forms·commands·dashboards·app-shell·pages·ai-features·publish`) are
   selectable with `--only`/`--skip`/`--from`/`--to`; independent ops run with bounded parallelism.
   Emits `[n/total]` events the orchestrator narrates + a `BuildHalt` it gates on. Dry-run by
-  default; `--apply` writes, `--sample-data` / `--publish` opt-in.
+  default; `--apply` writes, `--sample-data` / `--publish` opt-in. `--verify` (opt-in) auto-runs the
+  read-only reconcile after a successful apply and exits non-zero on a silent partial build (the same
+  check `verify-model-app.js` runs standalone).
 - **`scripts/teardown-model-app.js` → `scripts/lib/sdk-teardown.js`** — the first-class, **classifier-safe**
   teardown (reverse of the build), for cleaning up live-verification probes or a failed build. Deletes
   exactly the artifacts a given App Spec declares, in dependency-safe order (**app → dashboards →
@@ -366,7 +368,7 @@ teardown scripts are **dry-run by default**; add `--apply` to write.
 ```bash
 az account set --subscription <sub-id>
 node scripts/check-auth.js --env <envUrl>       # az token + WhoAmI preflight (pac optional; --require-pac for genpage)
-node scripts/build-model-app.js   --env <envUrl> --spec @<dir>/app-spec.json [--sample-data --publish] --apply
+node scripts/build-model-app.js   --env <envUrl> --spec @<dir>/app-spec.json [--sample-data --publish] --apply --verify
 node scripts/verify-model-app.js  --env <envUrl> --spec @<dir>/app-spec.json
 node scripts/teardown-model-app.js --env <envUrl> --spec @<dir>/app-spec.json --apply
 ```

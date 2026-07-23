@@ -95,8 +95,10 @@ running every prompt yourself via `AskUserQuestion`. In short:
    shape (do this once; don't go spelunking through scripts):
    [`references/app-spec-schema.md`](../../references/app-spec-schema.md) and the worked sample
    [`samples/app-spec.support-desk.json`](../../samples/app-spec.support-desk.json). Then propose
-   the **data model** (entities, columns, relationships); confirm via `AskUserQuestion` before
-   moving on. Then propose **forms + views + charts + sample data** together; confirm. **Classify each surface per the
+   the **data model** (entities, columns, relationships); confirm via `AskUserQuestion`, then run an
+   **early data-model lint** (`spec-lint.js` on the partial spec — catches model errors like the
+   relationship-vs-lookup collision before forms are authored on top; a data-model-only spec surfaces
+   only data-model findings) before moving on. Then propose **forms + views + charts + sample data** together; confirm. **Classify each surface per the
    genpage-first policy above** — record CRUD → a model-driven form/view; overview/dashboard/analytics/
    landing → a generative `page` in `pages[]` (author its `.tsx` `codeFile` following
    [`references/rules.md`](../../references/rules.md)); emit a classic `dashboards[]` only on explicit
@@ -107,12 +109,14 @@ running every prompt yourself via `AskUserQuestion`. In short:
    approving: `node "${PLUGIN_ROOT}/scripts/preview-form.js" --spec @<working-dir>/app-spec.json`.
    **Don't pre-create tables/columns** during authoring — the build does it idempotently (adds
    only what's missing).
-5. **Guardrail lint (hard gate)** — run `spec-lint.js`; **errors block**, warnings teach:
+5. **Guardrail lint (hard gate)** — run the **full** `spec-lint.js` on the complete spec; **errors block**, warnings teach:
    ```bash
    node -e "const{lintAppSpec}=require('${PLUGIN_ROOT}/scripts/lib/spec-lint.js');const s=require('<working-dir>/app-spec.json');const r=lintAppSpec(s);console.log(JSON.stringify(r,null,2));process.exit(r.ok?0:1)"
    ```
-6. **Plan-mode approval** — present the plan (`EnterPlanMode`), then `ExitPlanMode` to get the
-   user's go-ahead. Write `model-app-plan.md`.
+6. **Plan-mode approval (the single build approval)** — present the plan **including the build
+   dry-run's phase-grouped plan** (run `build-model-app.js` without `--apply`) inside `EnterPlanMode`,
+   then `ExitPlanMode` to get the user's go-ahead. On approval, Phase 2 **applies directly** (no second
+   dry-run/go-ahead). Write `model-app-plan.md`.
 
 ### Phase 2 — Build (narrated, main loop)
 
@@ -120,21 +124,21 @@ running every prompt yourself via `AskUserQuestion`. In short:
 > (skips existing solution/tables/columns/relationships — so new, existing, and mixed envs all
 > just work), so you don't pre-create anything or special-case existing tables.
 
-**Dry-run first** (no `--apply` → prints the ordered plan grouped by phase, writes nothing):
-
-```bash
-node "${PLUGIN_ROOT}/scripts/build-model-app.js" --env <envUrl> --spec @<working-dir>/app-spec.json
-```
-
-The output is the broken-down build plan — phases as `▶ <phase>` headers, each step as
-`[n/total] ▢ <label>`. Show it. On the user's go-ahead, **apply** — each step then streams its
-status live (`[n/total] ✓ created` / `⊘ skipped` / `✗ failed — <error>`) and a closing
-`✓ build complete — X created, Y skipped, Z failed` summary:
+**The build plan was already presented and approved in plan mode** (Phase 1 Step 6 shows the engine's
+real dry-run plan), so on approval **apply directly** — one build approval, no second go-ahead. Add
+`--verify` so the build self-checks after applying (see Phase 3):
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/build-model-app.js" \
-  --env <envUrl> --spec @<working-dir>/app-spec.json --apply [--sample-data] [--publish]
+  --env <envUrl> --spec @<working-dir>/app-spec.json --apply --verify [--sample-data] [--publish]
 ```
+
+Each step streams its status live (`[n/total] ✓ created` / `⊘ skipped` / `✗ failed — <error>`) and a
+closing `✓ build complete — X created, Y skipped, Z failed` summary.
+
+(**Reaching Phase 2 without a fresh plan-mode approval** — resuming a failed build, or a quick edit
+re-run — do a **dry-run first** (drop `--apply`), show the phase-grouped plan, and get a go-ahead
+before applying.)
 
 **Run only what's needed** with phase selectors (the agent decides from detect-existing):
 `--only <phases>` · `--skip <phases>` · `--from <phase>` · `--to <phase>`
@@ -156,9 +160,11 @@ it reuses every artifact already created and only fills the gaps (or use `--from
 ahead). Resume is a re-run, not a replayed checkpoint; the journal is the diagnostic record.
 
 ### Phase 3 — Verify & iterate
-**Reconcile the spec against what actually deployed** — catch silent partial builds — with the
-read-only verifier (exits non-zero and lists anything missing: entities/columns/views/charts/forms
-and sitemap subareas + icons):
+**`--apply --verify` already reconciled the spec against what deployed** (Phase 2) — the build appends a
+`verify PASS` / `verify FAIL — N missing` line and **exits non-zero on a silent partial** (an artifact
+created but not wired, or a phase that quietly produced nothing). To **re-check later** — e.g. after a
+Maker change, without rebuilding — run the standalone read-only verifier (entities/columns/views/charts/
+forms and sitemap subareas + icons; exits non-zero and lists anything missing):
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/verify-model-app.js" --env <envUrl> --spec @<working-dir>/app-spec.json

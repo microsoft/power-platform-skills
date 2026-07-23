@@ -9,6 +9,15 @@ plus local-dev ergonomics, sample coverage, and an automated eval suite with
 real and synthetic fixtures. Builds on v2.1; no breaking changes.
 
 ### Changed
+- **`/app-builder` flow refinements (fewer gates, earlier + automatic checks).** (1) The guardrail lint
+  now runs **after the data-model level too**, so a structural model error (e.g. the
+  relationship-name-vs-lookup-name collision) is caught before forms/views are authored on top. (2) The
+  **plan-mode gate now carries the build's real dry-run plan and is the single build approval** — the
+  redundant second dry-run/go-ahead before `--apply` is removed (resume/edit re-runs still dry-run
+  first). (3) `build-model-app.js` gains **`--verify`**: after a successful `--apply` it auto-reconciles
+  the spec against what deployed, appends a `verify PASS/FAIL` line, and exits non-zero on a silent
+  partial build. Also fixed two doc-drift spots in the skill (retired-method references; teardown
+  web-resource ordering).
 - **`/app-builder` migrated to the `cds-maker-sdk` `hardening-2` bundle (no user-visible change).** The
   SDK removed its per-artifact mutators (`addField`/`removeField`/`addSubGrid`/`addQuickViewControl`/
   `addFormEventHandler`/`addDashboardTile`/`setViewColumns`/`setAppDefinition`) and changed the form
