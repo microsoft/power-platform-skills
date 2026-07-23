@@ -332,6 +332,7 @@ test('downloadSeedDataDirectory discovers JSON files from the pinned tree and ca
       return {
         tree: [
           { type: 'blob', path: 'templates/spa/company/seed-data/020-posts.json' },
+          { type: 'blob', path: 'templates/spa/company/seed-data/files/invoice.pdf' },
           { type: 'blob', path: 'templates/spa/company/README.md' },
           { type: 'blob', path: 'templates/spa/company/seed-data/010-categories.json' },
         ],
@@ -345,7 +346,7 @@ test('downloadSeedDataDirectory discovers JSON files from the pinned tree and ca
   });
 
   assert.equal(result.ok, true);
-  assert.deepEqual(downloaded, ['010-categories.json', '020-posts.json']);
+  assert.deepEqual(downloaded, ['010-categories.json', '020-posts.json', 'invoice.pdf']);
   assert.equal(result.localDir, path.join(dir, SHA, 'templates/spa/company/seed-data'));
 });
 

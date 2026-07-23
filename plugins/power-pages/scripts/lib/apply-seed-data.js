@@ -3,6 +3,17 @@
 const fs = require('fs');
 const path = require('path');
 const { getAuthToken, makeRequest } = require('./validation-helpers');
+const generateUuid = require('../generate-uuid');
+
+const FILE_BLOCK_SIZE_BYTES = 4 * 1024 * 1024;
+// Large attachment seed runs can issue many Dataverse calls (record create +
+// InitializeFileBlocksUpload + one UploadBlock per 4 MiB + Commit). Refreshing
+// every 25 requests keeps long runs away from stale Azure CLI tokens without
+// hammering `az account get-access-token` on every block. If refresh fails,
+// callers receive the normal best-effort seed summary error; telemetry or site
+// activation must never depend on seed upload success.
+const TOKEN_REFRESH_EVERY_REQUESTS = 25;
+const ALLOWED_ATTACHMENT_EXTENSIONS = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.txt', '.csv', '.json', '.docx', '.xlsx']);
 
 function emptySummary() {
   return { ok: true, inserted: 0, failed: 0, skipped: 0, errors: [] };
@@ -43,23 +54,218 @@ function readSeedFile(filePath, deps = {}) {
   return parsed;
 }
 
-async function postRecord({ envUrl, token, entitySetName, record }, deps = {}) {
-  const request = deps.makeRequest || makeRequest;
+function splitReservedFiles(record) {
+  const { __files: files = null, ...recordBody } = record;
+  return { recordBody, files };
+}
+
+function validateFilesContract({ seedDir, seed, record }, deps = {}) {
+  // Attachment-bearing seed records use this raw shape:
+  //   {
+  //     "entitySetName": "cr123_invoices",
+  //     "primaryKey": "cr123_invoiceid",
+  //     "records": [{
+  //       "cr123_invoiceid": "<guid>",
+  //       "__files": { "cr123_invoicepdf": "files/invoices/inv-001.pdf" }
+  //     }]
+  //   }
+  // `__files` is reserved metadata and must never be sent in the record POST.
+  // Paths are seed-data-root-relative; absolute paths and `..` segments are
+  // rejected so a template cannot read arbitrary local files.
+  if (!Object.prototype.hasOwnProperty.call(record, '__files')) return null;
+  if (!record.__files || typeof record.__files !== 'object' || Array.isArray(record.__files)) {
+    return '__files must be an object mapping file column logical names to seed-data-relative paths';
+  }
+  if (!seed.primaryKey) return 'Seed file with __files must declare primaryKey';
+  const recordId = record[seed.primaryKey];
+  if (typeof recordId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(recordId)) {
+    return `Record with __files must include GUID primary key ${seed.primaryKey}`;
+  }
+  for (const [columnName, relativePath] of Object.entries(record.__files)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(columnName)) return `Invalid file column name: ${columnName}`;
+    if (typeof relativePath !== 'string' || path.isAbsolute(relativePath) || relativePath.split(/[\\/]+/).includes('..')) {
+      return `Attachment path must stay under seed-data root: ${relativePath}`;
+    }
+    const seedRoot = path.resolve(seedDir);
+    const absolutePath = path.resolve(seedDir, relativePath);
+    if (!absolutePath.startsWith(seedRoot + path.sep)) return `Attachment path must stay under seed-data root: ${relativePath}`;
+  }
+  return null;
+}
+
+function readFilePrefix(filePath, length, deps = {}) {
+  const fsImpl = deps.fs || fs;
+  if (typeof fsImpl.openSync === 'function' && typeof fsImpl.readSync === 'function' && typeof fsImpl.closeSync === 'function') {
+    const buffer = Buffer.alloc(length);
+    const handle = fsImpl.openSync(filePath, 'r');
+    try {
+      const bytesRead = fsImpl.readSync(handle, buffer, 0, length, 0);
+      return buffer.subarray(0, bytesRead).toString('utf8');
+    } finally {
+      fsImpl.closeSync(handle);
+    }
+  }
+  const content = fsImpl.readFileSync(filePath);
+  return (Buffer.isBuffer(content) ? content : Buffer.from(String(content))).subarray(0, length).toString('utf8');
+}
+
+function validateAttachmentFile(filePath, deps = {}) {
+  const fsImpl = deps.fs || fs;
+  const ext = path.extname(filePath).toLowerCase();
+  if (!ALLOWED_ATTACHMENT_EXTENSIONS.has(ext)) return `Attachment extension is not allowed: ${ext || '(none)'}`;
+  if (!fsImpl.existsSync(filePath)) return `Attachment file not found: ${filePath}`;
+  const stat = fsImpl.statSync(filePath);
+  if (!stat.isFile()) return `Attachment path is not a file: ${filePath}`;
+  // Git LFS pointer files start with:
+  //   version https://git-lfs.github.com/spec/v1
+  // Spec: https://github.com/git-lfs/git-lfs/blob/main/docs/spec.md
+  // The real binary content is not present in that case. Reading only the
+  // prefix is sufficient because the signature is the first line. Tests can
+  // inject a minimal fs shim that only supports readFileSync; production uses
+  // open/read/close to avoid loading large attachments just for pointer checks.
+  const prefix = readFilePrefix(filePath, 200, deps);
+  if (/^version https:\/\/git-lfs\.github\.com\/spec\/v1/m.test(prefix)) {
+    return `Attachment file appears to be a Git LFS pointer: ${filePath}`;
+  }
+  return null;
+}
+
+async function postRecord({ envUrl, tokenProvider, entitySetName, record }, deps = {}) {
   // Dataverse Web API creates records by POSTing to the entity set collection:
   //   POST /api/data/v9.2/accounts
   // See: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/create-entity-web-api
+  return postDataverseJson({ envUrl, tokenProvider, apiPath: entitySetName, body: record, includeHeaders: true }, deps);
+}
+
+function defaultBlockId() {
+  return Buffer.from(generateUuid()).toString('base64');
+}
+
+function contentTypeForFile(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  const types = {
+    '.pdf': 'application/pdf',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.txt': 'text/plain',
+    '.csv': 'text/csv',
+    '.json': 'application/json',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  };
+  return types[ext] || 'application/octet-stream';
+}
+
+function entityLogicalNameFromPrimaryKey(primaryKey) {
+  // Dataverse primary keys conventionally use the table logical name plus `id`,
+  // e.g. `accountid` -> `account`, `cr123_invoiceid` -> `cr123_invoice`.
+  // See Microsoft's Web API examples for file-column upload targets:
+  // https://learn.microsoft.com/power-apps/developer/data-platform/file-column-data
+  return primaryKey.replace(/id$/i, '');
+}
+
+async function uploadFileColumn({ envUrl, tokenProvider, primaryKey, recordId, columnName, filePath }, deps = {}) {
+  const fileName = path.basename(filePath);
+  const entityLogicalName = entityLogicalNameFromPrimaryKey(primaryKey);
+  // Dataverse file columns use actions rather than setting bytes in the record:
+  //   InitializeFileBlocksUpload -> UploadBlock* -> CommitFileBlocksUpload
+  // See: https://learn.microsoft.com/power-apps/developer/data-platform/file-column-data
+  const init = await postDataverseAction({ envUrl, tokenProvider, actionName: 'InitializeFileBlocksUpload', body: {
+      Target: {
+        [primaryKey]: recordId,
+        '@odata.type': `Microsoft.Dynamics.CRM.${entityLogicalName}`,
+      },
+      FileName: fileName,
+      FileAttributeName: columnName,
+    } }, deps);
+  if (init.error || init.statusCode < 200 || init.statusCode >= 300) {
+    throw new Error(init.error || init.body || `InitializeFileBlocksUpload failed (${init.statusCode})`);
+  }
+  // InitializeFileBlocksUpload returns a JSON payload shaped as:
+  //   { "FileContinuationToken": "<opaque token>" }
+  // Older/proxy-failed responses can be empty or non-JSON even with an HTTP
+  // status, so parse defensively and report a missing token as an upload error.
+  let tokenPayload;
+  try {
+    tokenPayload = JSON.parse(init.body || '{}');
+  } catch (err) {
+    throw new Error(`InitializeFileBlocksUpload returned invalid JSON: ${err.message}`);
+  }
+  const continuation = tokenPayload.FileContinuationToken;
+  if (!continuation) throw new Error('InitializeFileBlocksUpload did not return FileContinuationToken');
+
+  const blockIds = [];
+  const randomBlockId = deps.randomBlockId || defaultBlockId;
+  const fsImpl = deps.fs || fs;
+  const fileSize = fsImpl.statSync(filePath).size || 0;
+  const fileHandle = typeof fsImpl.openSync === 'function' ? fsImpl.openSync(filePath, 'r') : null;
+  try {
+    let offset = 0;
+    while (offset < fileSize) {
+      const block = Buffer.alloc(Math.min(FILE_BLOCK_SIZE_BYTES, fileSize - offset));
+      if (fileHandle !== null && typeof fsImpl.readSync === 'function') {
+        fsImpl.readSync(fileHandle, block, 0, block.length, offset);
+      } else {
+        fsImpl.readFileSync(filePath).copy(block, 0, offset, offset + block.length);
+      }
+      offset += block.length;
+      const blockId = randomBlockId();
+      blockIds.push(blockId);
+      const res = await postDataverseAction({ envUrl, tokenProvider, actionName: 'UploadBlock', body: {
+          BlockId: blockId,
+          BlockData: block.toString('base64'),
+          FileContinuationToken: continuation,
+        } }, deps);
+      if (res.error || res.statusCode < 200 || res.statusCode >= 300) {
+        throw new Error(res.error || res.body || `UploadBlock failed (${res.statusCode})`);
+      }
+    }
+  } finally {
+    if (fileHandle !== null && typeof fsImpl.closeSync === 'function') fsImpl.closeSync(fileHandle);
+  }
+  const commit = await postDataverseAction({ envUrl, tokenProvider, actionName: 'CommitFileBlocksUpload', body: {
+      BlockList: blockIds,
+      FileContinuationToken: continuation,
+      FileName: fileName,
+      MimeType: contentTypeForFile(filePath),
+    } }, deps);
+  if (commit.error || commit.statusCode < 200 || commit.statusCode >= 300) {
+    throw new Error(commit.error || commit.body || `CommitFileBlocksUpload failed (${commit.statusCode})`);
+  }
+}
+
+function postDataverseAction({ envUrl, tokenProvider, actionName, body }, deps = {}) {
+  return postDataverseJson({ envUrl, tokenProvider, apiPath: actionName, body }, deps);
+}
+
+function postDataverseJson({ envUrl, tokenProvider, apiPath, body, includeHeaders = false }, deps = {}) {
+  const request = deps.makeRequest || makeRequest;
   return request({
-    url: `${envUrl.replace(/\/+$/, '')}/api/data/v9.2/${entitySetName}`,
+    url: `${envUrl.replace(/\/+$/, '')}/api/data/v9.2/${apiPath}`,
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${tokenProvider()}`,
       Accept: 'application/json',
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify(record),
-    includeHeaders: true,
+    body: JSON.stringify(body),
+    includeHeaders,
     timeout: 30000,
   });
+}
+
+function createTokenProvider({ envUrl, initialToken, resolveToken, refreshEvery = TOKEN_REFRESH_EVERY_REQUESTS }) {
+  let token = initialToken;
+  let calls = 0;
+  return () => {
+    if (!token || calls >= refreshEvery) {
+      token = resolveToken(envUrl);
+      calls = 0;
+    }
+    calls += 1;
+    return token;
+  };
 }
 
 async function applySeedData({ seedDir, envUrl }, deps = {}) {
@@ -84,17 +290,31 @@ async function applySeedData({ seedDir, envUrl }, deps = {}) {
       for (const record of seed.records) {
         const context = { file: path.basename(filePath), entitySetName: seed.entitySetName };
         try {
-          const res = await postRecord({ envUrl, token, entitySetName: seed.entitySetName, record }, deps);
+          const validationError = validateFilesContract({ seedDir, seed, record }, deps);
+          const { recordBody, files } = splitReservedFiles(record);
+          if (validationError) {
+            summary.failed += 1;
+            summary.errors.push({ ...context, message: validationError });
+            continue;
+          }
+          const tokenProvider = deps.tokenProvider || createTokenProvider({ envUrl, initialToken: token, resolveToken, refreshEvery: deps.tokenRefreshEvery || TOKEN_REFRESH_EVERY_REQUESTS });
+          const res = await postRecord({ envUrl, tokenProvider, entitySetName: seed.entitySetName, record: recordBody }, deps);
+          let shouldUploadFiles = false;
           if (res.error) {
             summary.failed += 1;
             summary.errors.push({ ...context, message: res.error });
           } else if (isDuplicateConflict(res)) {
             summary.skipped += 1;
+            shouldUploadFiles = true;
           } else if (res.statusCode >= 200 && res.statusCode < 300) {
             summary.inserted += 1;
+            shouldUploadFiles = true;
           } else {
             summary.failed += 1;
             summary.errors.push({ ...context, statusCode: res.statusCode, message: res.body || `HTTP ${res.statusCode}` });
+          }
+          if (shouldUploadFiles && files) {
+            await uploadRecordFiles({ seedDir, seed, record, files, envUrl, tokenProvider, summary, context }, deps);
           }
         } catch (err) {
           summary.failed += 1;
@@ -110,4 +330,45 @@ async function applySeedData({ seedDir, envUrl }, deps = {}) {
   return summary;
 }
 
-module.exports = { applySeedData, emptySummary, listSeedFiles, readSeedFile, postRecord, isDuplicateConflict };
+async function uploadRecordFiles({ seedDir, seed, record, files, envUrl, tokenProvider, summary, context }, deps = {}) {
+  for (const [columnName, relativePath] of Object.entries(files)) {
+    try {
+      const filePath = path.join(seedDir, relativePath);
+      const fileError = validateAttachmentFile(filePath, deps);
+      if (fileError) throw new Error(fileError);
+      await uploadFileColumn({
+        envUrl,
+        tokenProvider,
+        primaryKey: seed.primaryKey,
+        recordId: record[seed.primaryKey],
+        columnName,
+        filePath,
+      }, deps);
+    } catch (err) {
+      summary.failed += 1;
+      summary.errors.push({ ...context, columnName, attachmentPath: relativePath, message: err.message });
+    }
+  }
+}
+
+module.exports = {
+  applySeedData,
+  emptySummary,
+  listSeedFiles,
+  readSeedFile,
+  postRecord,
+  isDuplicateConflict,
+  splitReservedFiles,
+  validateFilesContract,
+  validateAttachmentFile,
+  uploadFileColumn,
+  uploadRecordFiles,
+  postDataverseJson,
+  createTokenProvider,
+  entityLogicalNameFromPrimaryKey,
+  contentTypeForFile,
+  postDataverseAction,
+  FILE_BLOCK_SIZE_BYTES,
+  ALLOWED_ATTACHMENT_EXTENSIONS,
+  TOKEN_REFRESH_EVERY_REQUESTS,
+};

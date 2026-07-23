@@ -322,8 +322,11 @@ async function downloadSeedDataDirectory(options = {}, deps = {}) {
   try {
     const tree = await request(`https://api.github.com/repos/${owner}/${repo}/git/trees/${sha}?recursive=1`);
     const prefix = seedDataPath.replace(/\/+$/, '') + '/';
+    // Seed data can include JSON record files plus binary attachment files
+    // referenced by `__files`. Download every blob under seed-data so
+    // apply-seed-data can resolve seed-data-root-relative attachment paths.
     const files = (tree.tree || [])
-      .filter((entry) => entry.type === 'blob' && entry.path.startsWith(prefix) && entry.path.toLowerCase().endsWith('.json'))
+      .filter((entry) => entry.type === 'blob' && entry.path.startsWith(prefix))
       .map((entry) => entry.path)
       .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
     const downloaded = [];
