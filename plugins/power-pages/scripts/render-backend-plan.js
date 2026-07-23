@@ -70,7 +70,7 @@ function sanitizeBackendData(data) {
 
 let dataObject;
 const dataPath = args.data ? path.resolve(args.data) : null;
-if (!args['data-inline'] && !fs.existsSync(dataPath)) {
+if (!args['data-inline'] && (!dataPath || !fs.existsSync(dataPath))) {
   console.error(`Data file not found: ${dataPath}`);
   process.exit(1);
 }
