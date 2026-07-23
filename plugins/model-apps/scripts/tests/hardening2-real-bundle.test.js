@@ -94,6 +94,11 @@ test('multi-tab / multi-section explicit layout serializes every tab, section an
   await sdk.pushArtifact('form', id);
   const formxml = String((cap.find((c) => /systemforms/.test(c.url)) || {}).body.formxml);
   for (const f of ['new_name', 'new_a', 'new_b', 'new_c']) assert.match(formxml, new RegExp(`datafieldname="${f}"`), `${f} present in formxml`);
+  // Every <column> MUST carry the required `width` attribute — the SDK's normalizeColumn does not
+  // default it, so a missing width makes live Dataverse reject the form ("required attribute 'width'
+  // is missing"). The fake httpClient does not schema-validate, so this assertion is the offline guard.
+  assert.ok((formxml.match(/<column\b[^>]*>/g) || []).length > 0, 'formxml has columns');
+  assert.ok(!/<column\b(?![^>]*\bwidth=)/.test(formxml), 'every <column> carries a width attribute');
   assert.match(formxml, /Title="General"|<label description="General"/, 'General tab labelled');
   assert.match(formxml, /Details|<label description="Details"/, 'Details tab present');
 });

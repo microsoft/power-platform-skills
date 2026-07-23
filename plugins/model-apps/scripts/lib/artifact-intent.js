@@ -236,7 +236,11 @@ function compileFormIntent(spec, formSpec, opts) {
         label: t.label || 'General',
         expanded: true,
         visible: true,
+        // Each tab is one FormColumn. width is set explicitly ('100%') because the SDK's
+        // normalizeColumn does NOT default it and columnToRaw omits an undefined width, which makes
+        // Dataverse reject the pushed formxml ("required attribute 'width' is missing").
         columns: [{
+          width: '100%',
           sections: (t.sections || []).map(function (s, si) {
             const cells = (s.fields || []).map(function (fl) {
               const lg = String(fl).toLowerCase();
@@ -282,7 +286,9 @@ function compileFormIntent(spec, formSpec, opts) {
       label: 'General',
       expanded: true,
       visible: true,
+      // width '100%' is required on the wire — the SDK's normalizeColumn does not default it.
       columns: [{
+        width: '100%',
         sections: [{
           name: 'section_general',
           label: 'General',
