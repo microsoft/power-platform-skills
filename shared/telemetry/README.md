@@ -68,8 +68,9 @@ module.exports = {
 The dispatcher discovers it by convention (a `resolver.js` sibling of `ikey.json`)
 and resolves the destination by precedence: env override (test seam) →
 `resolver.js` → static `instrumentationKey`/`collector_url` in `ikey.json` → none.
-The power-pages plugin ships a `resolver.js` that does Artemis geo + cloud-stamp
-region routing; that implementation lives entirely in
+The power-pages plugin ships a `resolver.js` that resolves the Dataverse
+organization through Artemis, with PAC cloud and environment geo as a fallback.
+That implementation lives entirely in
 `plugins/power-pages/scripts/lib/telemetry/region/` — the shared library knows
 nothing about it.
 

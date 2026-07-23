@@ -50,6 +50,7 @@ function entryFromMap(regionsMap, region) {
 async function resolve({
   orgId,
   cloud,
+  geoName,
   regionsMap,
   defaultRegion,
   configDir,
@@ -58,7 +59,10 @@ async function resolve({
 }) {
   const cache = _cache || defaultCache;
   const fetchGeo = typeof _fetchGeo === "function" ? _fetchGeo : defaultFetchGeo;
-  const fallback = entryFromMap(regionsMap, defaultRegion);
+  const fallbackRegion = mapToRegion(cloud, geoName, defaultRegion);
+  const fallback =
+    entryFromMap(regionsMap, fallbackRegion) ||
+    entryFromMap(regionsMap, defaultRegion);
 
   if (!orgId) return fallback;
 

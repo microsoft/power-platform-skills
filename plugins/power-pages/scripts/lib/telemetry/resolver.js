@@ -1,20 +1,18 @@
 "use strict";
 
-// Power-pages telemetry resolver: route by the cloud and environment-geo
-// classifications returned by `pac auth who`.
-const { mapToRegion } = require("./region/region-resolver");
+// Resolve the Dataverse organization through Artemis first. PAC cloud and
+// environment geo remain a fallback when the org lookup is unavailable.
+const { resolve: resolveRegion } = require("./region/region-resolver");
 
-async function resolve({ cfg, cloud, geoName }) {
-  const regions = (cfg && cfg.regions) || {};
-  const defaultRegion = (cfg && cfg.default_region) || "us";
-  const region = mapToRegion(cloud, geoName, defaultRegion);
-  const entry = regions[region] || regions[defaultRegion];
-  if (!entry || !entry.instrumentation_key) return null;
-  return {
-    region,
-    iKey: entry.instrumentation_key,
-    collectorUrl: entry.collector_url || "",
-  };
+async function resolve({ event, cfg, cloud, geoName, configDir }) {
+  return resolveRegion({
+    orgId: (event && event.data && event.data.orgId) || "",
+    cloud,
+    geoName,
+    regionsMap: (cfg && cfg.regions) || {},
+    defaultRegion: (cfg && cfg.default_region) || "us",
+    configDir,
+  });
 }
 
 // Sync fast-gate: is the default region's key configured? Lets the hooks skip

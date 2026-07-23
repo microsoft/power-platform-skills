@@ -2,8 +2,12 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 
 const resolver = require("../lib/telemetry/resolver");
+const regionCache = require("../lib/telemetry/region/region-cache");
 
 const REGIONS = {
   us: { instrumentation_key: "ikeyus", collector_url: "https://us.invalid/" },
@@ -43,4 +47,21 @@ test("resolve uses the environment geo for EU routing", async () => {
   });
   assert.equal(r.iKey, "ikeyeu");
   assert.equal(r.collectorUrl, "https://eu.invalid/");
+});
+
+test("resolve uses the cached Artemis region for the event organization", async () => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "resolver-org-"));
+  const orgId = "11111111-1111-1111-1111-111111111111";
+  regionCache.write(orgId, { region: "eu" }, configDir);
+
+  const r = await resolver.resolve({
+    event: { data: { orgId } },
+    cfg: { default_region: "us", regions: REGIONS },
+    cloud: "Public",
+    geoName: "NorthAmerica",
+    configDir,
+  });
+
+  assert.equal(r.region, "eu");
+  assert.equal(r.iKey, "ikeyeu");
 });

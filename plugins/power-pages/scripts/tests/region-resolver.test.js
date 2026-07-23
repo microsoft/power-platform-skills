@@ -86,6 +86,20 @@ test("resolve: no orgId → default region without calling Artemis or cache", as
   assert.equal(cacheReadCalled, false);
 });
 
+test("resolve: no orgId uses PAC environment geo before the default region", async () => {
+  const result = await resolve({
+    orgId: "",
+    cloud: "Public",
+    geoName: "Europe",
+    regionsMap: REGIONS,
+    defaultRegion: "us",
+    _fetchGeo: () => Promise.resolve(null),
+    _cache: noopCache,
+  });
+  assert.equal(result.region, "eu");
+  assert.equal(result.iKey, "ik-eu");
+});
+
 test("resolve: cache hit maps the cached region to THIS plugin's iKey (not a cached key)", async () => {
   let fetchCalled = false;
   // Cache holds region only. The iKey must come from regionsMap, never the cache —
@@ -167,6 +181,20 @@ test("resolve: cache miss + Artemis null → default region, no cache write", as
   assert.equal(result.region, "us");
   assert.equal(result.iKey, "ik-us");
   assert.equal(writeCalled, false);
+});
+
+test("resolve: Artemis failure uses PAC environment geo", async () => {
+  const result = await resolve({
+    orgId: "11111111-1111-1111-1111-111111111111",
+    cloud: "Public",
+    geoName: "Europe",
+    regionsMap: REGIONS,
+    defaultRegion: "us",
+    _fetchGeo: () => Promise.resolve(null),
+    _cache: noopCache,
+  });
+  assert.equal(result.region, "eu");
+  assert.equal(result.iKey, "ik-eu");
 });
 
 test("resolve: regions map missing the resolved key → falls back to default", async () => {
