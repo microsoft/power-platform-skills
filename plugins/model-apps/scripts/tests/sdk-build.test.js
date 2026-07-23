@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { runSdkBuild, planFor, resolvePhases, formDef, formFieldLogicals, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, dashboardTileOpts, PHASES } = require('../lib/sdk-build.js');
+const { runSdkBuild, planFor, resolvePhases, compileFormIntent, formFieldLogicals, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, dashboardTileOpts, PHASES } = require('../lib/sdk-build.js');
 
 // Customer 1:N Tickets: a Choice column, sample data with $parent, a view, a Choice chart,
 // and a parent form with a child sub-grid.
@@ -27,11 +27,30 @@ function makeSpec(extra = {}) {
   }, extra);
 }
 
+// --- Minimal JsonPointer + artifact-store helpers so the mock SDK can simulate the generic
+// mutation surface (addElement/updateElement/removeElement/getArtifact) the engine now uses. Ids
+// are NOT minted here (the engine/tests don't assert on minted layout ids — the real bundle mints
+// them; see the real-bundle tests). This keeps the mock hermetic and fast.
+function jpTokens(ptr) { return ptr === '' ? [] : ptr.split('/').slice(1).map((t) => t.replace(/~1/g, '/').replace(/~0/g, '~')); }
+function jpGet(obj, ptr) { let cur = obj; for (const t of jpTokens(ptr)) { if (cur == null) return undefined; cur = cur[t]; } return cur; }
+function jpSet(obj, ptr, val) { const toks = jpTokens(ptr); const last = toks.pop(); let cur = obj; for (const t of toks) cur = cur[t]; cur[last] = val; }
+function jpRemove(obj, ptr) { const toks = jpTokens(ptr); const last = toks.pop(); let cur = obj; for (const t of toks) cur = cur[t]; if (Array.isArray(cur)) cur.splice(Number(last), 1); else delete cur[last]; }
+const clone = (v) => JSON.parse(JSON.stringify(v));
+// A form with the given bound fields laid out in one tab/column/section (NEW SDK topology). Used to
+// seed both a freshly-created form's default shell and a "fetched existing" form for reconcile tests.
+function seedForm(id, fields) {
+  return { id, tabs: [{ id: 'seedtab', name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ sections: [{ id: 'seedsec', name: 'section_general', label: 'General', visible: true, showLabel: false, columns: 1,
+      rows: (fields || []).map((fn) => ({ cells: [{ control: { fieldName: fn } }] })) }] }] }],
+    bag: { a: [], c: [] } };
+}
+
 // `existingTables`: { logical: { entitySetName, columns:[logical...], relationships:[schema...] } }
 function mockSdk(opts = {}) {
   const calls = [];
   let idc = 0;
   const ex = opts.existingTables || {};
+  const store = {}; // `${type}:${id}` -> in-memory artifact (form/view/app), mutated by the generic surface
   const sdk = {
     queryRecords: async (e, o) => {
       calls.push({ name: 'queryRecords', args: [e, o] });
@@ -65,8 +84,17 @@ function mockSdk(opts = {}) {
       return null;
     },
     createWebResource: async (o) => { calls.push({ name: 'createWebResource', args: [o] }); return { id: `wr-${++idc}`, name: o.name }; },
-    fetchArtifact: async (t, id) => { calls.push({ name: 'fetchArtifact', args: [t, id] }); return { id }; },
-    addFormEventHandler: (id, o) => { calls.push({ name: 'addFormEventHandler', args: [id, o] }); return {}; },
+    fetchArtifact: async (t, id) => {
+      calls.push({ name: 'fetchArtifact', args: [t, id] });
+      // Seed the store to mimic a fetched, deployed artifact so reconcile can read + mutate it.
+      if (!store[`${t}:${id}`]) {
+        if (t === 'form') store[`${t}:${id}`] = seedForm(id, opts.existingFormFields || []);
+        else if (t === 'view') store[`${t}:${id}`] = { id, columns: (opts.existingViewColumns || []).slice() };
+        else if (t === 'app') store[`${t}:${id}`] = { id, siteMap: { areas: [] } };
+        else store[`${t}:${id}`] = { id };
+      }
+      return store[`${t}:${id}`];
+    },
     createPublisher: async (o) => { calls.push({ name: 'createPublisher', args: [o] }); return { id: 'pub-new' }; },
     createSolution: async (o) => { calls.push({ name: 'createSolution', args: [o] }); return { id: 'sol-1' }; },
     findTables: async (q, o) => { calls.push({ name: 'findTables', args: [q, o] }); const t = ex[String(q).toLowerCase()]; return t ? [{ logicalName: String(q).toLowerCase(), schemaName: q, displayName: q, entitySetName: t.entitySetName, isCustom: true }] : []; },
@@ -92,28 +120,47 @@ function mockSdk(opts = {}) {
       return { createdIds };
     },
     enrichDefaultViews: async (logical, cols, o2) => { calls.push({ name: 'enrichDefaultViews', args: [logical, cols, o2] }); return { updated: [`defview-${logical}`] }; },
-    createArtifact: (t, def) => { calls.push({ name: 'createArtifact', args: [t, def] }); return Object.assign({ id: `${t}-${++idc}` }, def); },
+    createArtifact: (t, def) => {
+      calls.push({ name: 'createArtifact', args: [t, def] });
+      const id = `${t}-${++idc}`;
+      let art;
+      if (t === 'form') { art = seedForm(id, []); art.name = def.name; art.entityLogicalName = def.entityLogicalName; art.formType = def.formType; art.status = def.status; }
+      else if (t === 'dashboard') art = Object.assign({ id, components: [] }, def);
+      else art = Object.assign({ id }, def);
+      art.id = id;
+      store[`${t}:${id}`] = art;
+      return clone(art);
+    },
     getArtifact: (t, id) => {
       calls.push({ name: 'getArtifact', args: [t, id] });
-      // A form reconcile reads the deployed form's current fields (to prune ones the spec dropped);
-      // seed them from opts.existingFormFields (logical names) as a minimal tabs->sections->rows tree.
-      if (t === 'form') {
-        const fields = opts.existingFormFields || [];
-        return { id, tabs: [{ sections: [{ rows: fields.map((fn) => ({ cells: [{ control: { fieldName: fn } }] })) }] }] };
-      }
-      return { id, columns: (opts.existingViewColumns || []) };
+      return store[`${t}:${id}`] || { id };
+    },
+    // Generic mutation surface (mirrors the SDK). The mock does NOT mint layout ids (tests don't
+    // assert on them); it just maintains a coherent in-memory tree so getArtifact/firstSectionRowsPointer
+    // and reconcile see the effects of adds/removes.
+    addElement: (t, id, ptr, el) => {
+      calls.push({ name: 'addElement', args: [t, id, ptr, el] });
+      const art = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id });
+      const arr = jpGet(art, ptr);
+      if (Array.isArray(arr)) arr.push(clone(el));
+      return clone(art);
+    },
+    updateElement: (t, id, ptr, patch) => {
+      calls.push({ name: 'updateElement', args: [t, id, ptr, patch] });
+      const art = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id });
+      jpSet(art, ptr, clone(patch));
+      return clone(art);
+    },
+    removeElement: (t, id, ptr) => {
+      calls.push({ name: 'removeElement', args: [t, id, ptr] });
+      const art = store[`${t}:${id}`];
+      if (art) jpRemove(art, ptr);
+      return clone(art || { id });
     },
     updateRecord: async (e, id, data) => { calls.push({ name: 'updateRecord', args: [e, id, data] }); },
-    addField: async (formId, o) => { calls.push({ name: 'addField', args: [formId, o] }); return {}; },
-    removeField: async (formId, o) => { calls.push({ name: 'removeField', args: [formId, o] }); return {}; },
     pushArtifact: async (t, id) => { calls.push({ name: 'pushArtifact', args: [t, id] }); return { type: t, id, success: true }; },
-    setViewColumns: (id, cols) => { calls.push({ name: 'setViewColumns', args: [id, cols] }); return { id }; },
-    addSubGrid: (formId, o) => { calls.push({ name: 'addSubGrid', args: [formId, o] }); return {}; },
-    addQuickViewControl: (formId, o) => { calls.push({ name: 'addQuickViewControl', args: [formId, o] }); return {}; },
-    addDashboardTile: (id, o) => { calls.push({ name: 'addDashboardTile', args: [id, o] }); return {}; },
     addSolutionComponent: async (o) => { calls.push({ name: 'addSolutionComponent', args: [o] }); },
     publishArtifact: async (t, id) => { calls.push({ name: 'publishArtifact', args: [t, id] }); },
-    setAppDefinition: (id, def) => { calls.push({ name: 'setAppDefinition', args: [id, def] }); return { id }; },
     setEntityIcon: async (logical, icons) => { calls.push({ name: 'setEntityIcon', args: [logical, icons] }); return { id: logical }; },
     getAiReadiness: async (opts) => { calls.push({ name: 'getAiReadiness', args: [opts] }); return { enabled: true }; },
     setAppAiFeatures: async (appUnique, flags, opts) => { calls.push({ name: 'setAppAiFeatures', args: [appUnique, flags, opts] }); return { applied: Object.keys(flags).filter((k) => flags[k]), skipped: [] }; },
@@ -185,10 +232,19 @@ test('sample data translates $parent into a lookup bind (entity-set resolved via
 test('form sub-grid references the child view id and relationship name', async () => {
   const { sdk, calls } = mockSdk();
   await runSdkBuild(makeSpec(), { sdk, apply: true });
-  const sub = find(calls, 'addSubGrid')[0].args[1];
-  assert.strictEqual(sub.targetEntity, 'new_ticket');
-  assert.strictEqual(sub.relationshipName, 'new_customer_new_ticket');
-  assert.strictEqual(sub.viewId, 'view-1');
+  // Sub-grid is now a control cell added via addElement (generic SDK surface)
+  const SUBGRID_CLS = 'E7A81278-8635-4D9E-8D4D-59480B391C5B';
+  const normCls = (c) => String(c || '').replace(/[{}]/g, '').toUpperCase();
+  const subCtrls = find(calls, 'addElement')
+    .map((c) => (c.args[3] && c.args[3].cells) || [])
+    .flat()
+    .map((cell) => cell.control)
+    .filter((ctrl) => ctrl && normCls(ctrl.classId) === SUBGRID_CLS);
+  const sub = subCtrls.find((ctrl) => ctrl.parameters.TargetEntityType === 'new_ticket');
+  assert.ok(sub, 'sub-grid control found');
+  assert.strictEqual(sub.parameters.TargetEntityType, 'new_ticket');
+  assert.strictEqual(sub.parameters.RelationshipName, 'new_customer_new_ticket');
+  assert.strictEqual(sub.parameters.ViewId, 'view-1');
 });
 
 test('idempotent: an existing table is reused — no createTable, and only missing columns added', async () => {
@@ -370,14 +426,22 @@ test('Tier 2: form events are wired (fetch -> addFormEventHandler -> push -> pub
   await runSdkBuild(specWithFormJs(), { sdk, apply: true });
   const formId = find(calls, 'createArtifact').find((c) => c.args[0] === 'form').args; // ['form', def]
   assert.ok(has(calls, 'fetchArtifact'), 'form fetched before wiring handlers');
-  const handlers = find(calls, 'addFormEventHandler').map((c) => c.args[1]);
-  assert.strictEqual(handlers.length, 2);
-  const onload = handlers.find((h) => h.event === 'onload');
-  assert.strictEqual(onload.libraryName, 'new_ticket.js');
-  assert.strictEqual(onload.functionName, 'Ticket.onLoad');
-  assert.strictEqual(onload.passExecutionContext, true);
-  const onchange = handlers.find((h) => h.event === 'onchange');
-  assert.strictEqual(onchange.attribute, 'new_tier', 'onchange attribute lower-cased');
+  // Form events are now wired by adding an <events> region to /bag/c (generic SDK surface)
+  const attrOf = (node, key) => ((node.a || []).find((a) => a[0] === key) || [])[1];
+  const evRegionCall = find(calls, 'addElement').find((c) =>
+    c.args[0] === 'form' && c.args[2] === '/bag/c' && c.args[3] && c.args[3].node && c.args[3].node.n === 'events'
+  );
+  assert.ok(evRegionCall, 'events region added to /bag/c');
+  const evNodes = evRegionCall.args[3].node.c;
+  assert.strictEqual(evNodes.length, 2, '2 event nodes');
+  const onloadNode = evNodes.find((e) => attrOf(e, 'name') === 'onload');
+  const onchangeNode = evNodes.find((e) => attrOf(e, 'name') === 'onchange');
+  assert.ok(onloadNode, 'onload event node found');
+  assert.strictEqual(attrOf(onloadNode.c[0].c[0], 'libraryName'), 'new_ticket.js');
+  assert.strictEqual(attrOf(onloadNode.c[0].c[0], 'functionName'), 'Ticket.onLoad');
+  assert.strictEqual(attrOf(onloadNode.c[0].c[0], 'passExecutionContext'), 'true');
+  assert.ok(onchangeNode, 'onchange event node found');
+  assert.strictEqual(attrOf(onchangeNode, 'attribute'), 'new_tier', 'onchange attribute lower-cased');
   // a form with events publishes itself after the re-push
   assert.ok(find(calls, 'publishArtifact').some((c) => c.args[0] === 'form'), 'form published after wiring');
   assert.ok(formId, 'form artifact created');
@@ -409,24 +473,26 @@ test('formDef forces single-column sections for a field-heavy QuickCreate form',
   const spec = makeSpec();
   const cust = spec.entities.find((e) => e.schemaName === 'new_customer');
   cust.columns = Array.from({ length: 8 }, (_, i) => ({ schemaName: `new_c${i}`, displayName: `C${i}`, type: 'Text' }));
-  const main = formDef(spec, { entity: 'new_customer', name: 'M', formType: 'Main', layout: 'auto' });
-  const qc = formDef(spec, { entity: 'new_customer', name: 'QC', formType: 'QuickCreate', layout: 'auto' });
-  assert.strictEqual(main.tabs[0].sections[0].columns, 2, 'Main form is 2-column when field-heavy (>6 fields)');
-  assert.strictEqual(qc.tabs[0].sections[0].columns, 1, 'QuickCreate form is forced to a single column');
+  const main = compileFormIntent(spec, { entity: 'new_customer', name: 'M', formType: 'Main', layout: 'auto' });
+  const qc = compileFormIntent(spec, { entity: 'new_customer', name: 'QC', formType: 'QuickCreate', layout: 'auto' });
+  // New topology: tab → columns[0] → sections[0]
+  assert.strictEqual(main.tabs[0].columns[0].sections[0].columns, 2, 'Main form is 2-column when field-heavy (>6 fields)');
+  assert.strictEqual(qc.tabs[0].columns[0].sections[0].columns, 1, 'QuickCreate form is forced to a single column');
 });
 
 test('formDef clamps an explicitly authored multi-column section to 1 for QuickCreate', () => {
   const spec = makeSpec();
-  const qc = formDef(spec, { entity: 'new_customer', name: 'QC', formType: 'QuickCreate',
+  const qc = compileFormIntent(spec, { entity: 'new_customer', name: 'QC', formType: 'QuickCreate',
     tabs: [{ label: 'G', sections: [{ label: 'S', columns: 3, fields: ['new_name', 'new_tier'] }] }] });
-  assert.strictEqual(qc.tabs[0].sections[0].columns, 1, 'authored 3-column section clamped to 1 on a QuickCreate form');
+  // New topology: tab → columns[0] → sections[0]
+  assert.strictEqual(qc.tabs[0].columns[0].sections[0].columns, 1, 'authored 3-column section clamped to 1 on a QuickCreate form');
 });
 
 // --- Gap 3: auto-derive 1:N parent lookups into forms + default views ------------------------
+// Walk the new topology (tab → columns[] → sections[]) to extract bound field names.
 function autoFormFields(def) {
-  return def.tabs.flatMap((t) =>
-    t.sections.flatMap((s) => s.rows.flatMap((r) => r.cells.map((c) => c.control && c.control.fieldName).filter(Boolean)))
-  );
+  return def.tabs.flatMap((t) => (t.columns || []).flatMap((col) =>
+    col.sections.flatMap((s) => s.rows.flatMap((r) => r.cells.map((c) => c.control && c.control.fieldName).filter(Boolean)))));
 }
 const lookupSpec = () => ({
   solution: { uniqueName: 'S', publisherPrefix: 'new' },
@@ -441,12 +507,12 @@ const lookupSpec = () => ({
 });
 
 test('formDef auto-layout places the 1:N parent lookup on the child form (lookups come from relationships[], not columns[])', () => {
-  const def = formDef(lookupSpec(), { entity: 'new_task', name: 'Task', layout: 'auto' });
+  const def = compileFormIntent(lookupSpec(), { entity: 'new_task', name: 'Task', layout: 'auto' });
   assert.ok(autoFormFields(def).includes('new_projectid'), 'parent lookup new_projectid is auto-placed on the child form');
 });
 
 test('formDef auto-layout does NOT add a lookup on the parent side (parent has no lookup column)', () => {
-  const def = formDef(lookupSpec(), { entity: 'new_project', name: 'Project', layout: 'auto' });
+  const def = compileFormIntent(lookupSpec(), { entity: 'new_project', name: 'Project', layout: 'auto' });
   assert.ok(!autoFormFields(def).includes('new_projectid'), 'the parent form has no child lookup');
 });
 
@@ -468,9 +534,17 @@ test('an N:N sub-grid uses the ManyToMany relationship schema name', async () =>
   spec.forms[0].subgrids.push({ childEntity: 'new_tag', view: 'All Tags', label: 'Tags' });
   const { sdk, calls } = mockSdk();
   await runSdkBuild(spec, { sdk, apply: true });
-  const sub = find(calls, 'addSubGrid').map((c) => c.args[1]).find((s) => s.targetEntity === 'new_tag');
+  // Sub-grid is now a control cell added via addElement (generic SDK surface)
+  const SUBGRID_CLS28 = 'E7A81278-8635-4D9E-8D4D-59480B391C5B';
+  const normCls28 = (c) => String(c || '').replace(/[{}]/g, '').toUpperCase();
+  const subCtrls28 = find(calls, 'addElement')
+    .map((c) => (c.args[3] && c.args[3].cells) || [])
+    .flat()
+    .map((cell) => cell.control)
+    .filter((ctrl) => ctrl && normCls28(ctrl.classId) === SUBGRID_CLS28);
+  const sub = subCtrls28.find((ctrl) => ctrl.parameters.TargetEntityType === 'new_tag');
   assert.ok(sub, 'N:N sub-grid is placed on the form');
-  assert.strictEqual(sub.relationshipName, 'new_customer_new_tag');
+  assert.strictEqual(sub.parameters.RelationshipName, 'new_customer_new_tag');
 });
 
 test('a sub-grid with no explicit or built view falls back to the child default public view', async () => {
@@ -481,9 +555,17 @@ test('a sub-grid with no explicit or built view falls back to the child default 
   spec.forms[0].subgrids.push({ childEntity: 'new_tag', label: 'Tags' }); // no `view`
   const { sdk, calls } = mockSdk();
   await runSdkBuild(spec, { sdk, apply: true });
-  const sub = find(calls, 'addSubGrid').map((c) => c.args[1]).find((s) => s.targetEntity === 'new_tag');
+  // Sub-grid is now a control cell added via addElement (generic SDK surface)
+  const SUBGRID_CLS29 = 'E7A81278-8635-4D9E-8D4D-59480B391C5B';
+  const normCls29 = (c) => String(c || '').replace(/[{}]/g, '').toUpperCase();
+  const subCtrls29 = find(calls, 'addElement')
+    .map((c) => (c.args[3] && c.args[3].cells) || [])
+    .flat()
+    .map((cell) => cell.control)
+    .filter((ctrl) => ctrl && normCls29(ctrl.classId) === SUBGRID_CLS29);
+  const sub = subCtrls29.find((ctrl) => ctrl.parameters.TargetEntityType === 'new_tag');
   assert.ok(sub, 'sub-grid still placed (not skipped)');
-  assert.ok(sub.viewId, 'a view id was resolved from the default public view');
+  assert.ok(sub.parameters.ViewId, 'a view id was resolved from the default public view');
   assert.ok(has(calls, 'queryRecords'), 'the child default view was looked up');
 });
 
@@ -508,9 +590,17 @@ test('Gap 7: forms[].autoSubgrids adds a sub-grid for each child relationship no
   custForm.subgrids = []; // no explicit sub-grids — the auto pass supplies them
   const { sdk, calls } = mockSdk();
   await runSdkBuild(spec, { sdk, apply: true });
-  const sub = find(calls, 'addSubGrid').map((c) => c.args[1]).find((s) => s.targetEntity === 'new_ticket');
+  // Sub-grid is now a control cell added via addElement (generic SDK surface)
+  const SUBGRID_CLS31 = 'E7A81278-8635-4D9E-8D4D-59480B391C5B';
+  const normCls31 = (c) => String(c || '').replace(/[{}]/g, '').toUpperCase();
+  const subCtrls31 = find(calls, 'addElement')
+    .map((c) => (c.args[3] && c.args[3].cells) || [])
+    .flat()
+    .map((cell) => cell.control)
+    .filter((ctrl) => ctrl && normCls31(ctrl.classId) === SUBGRID_CLS31);
+  const sub = subCtrls31.find((ctrl) => ctrl.parameters.TargetEntityType === 'new_ticket');
   assert.ok(sub, 'a sub-grid for the child (new_ticket) was auto-added to the parent form');
-  assert.strictEqual(sub.relationshipName, 'new_customer_new_ticket');
+  assert.strictEqual(sub.parameters.RelationshipName, 'new_customer_new_ticket');
 });
 
 test('a junction sample row binds multiple parents via $parents', async () => {
@@ -616,10 +706,24 @@ test('quick-create / quick-view forms build with their formType; Notes stays on 
   assert.strictEqual(byName('Customer').formType, 'Main', 'default form type is Main');
   assert.strictEqual(byName('Ticket Quick Create').formType, 'QuickCreate');
   assert.strictEqual(byName('Ticket Card').formType, 'QuickView');
-  const hasNotes = (d) => d.tabs.some((t) => t.sections.some((s) => s.name === 'section_notes'));
-  assert.ok(hasNotes(byName('Ticket')), 'Main form carries the Notes section');
-  assert.ok(!hasNotes(byName('Ticket Quick Create')), 'QuickCreate form has no Notes section');
-  assert.ok(!hasNotes(byName('Ticket Card')), 'QuickView form has no Notes section');
+  // Notes check: map form name → form id (idc increments per createArtifact + createWebResource in mock)
+  // then look at addElement('/tabs', tab) calls to find the Notes section in the new topology.
+  let idcCount = 0;
+  const formIdByName = {};
+  for (const c of calls) {
+    if (c.name === 'createArtifact') { idcCount++; if (c.args[0] === 'form') formIdByName[c.args[1].name] = `form-${idcCount}`; }
+    else if (c.name === 'createWebResource') idcCount++;
+  }
+  const formHasNotes = (name) => {
+    const fid = formIdByName[name];
+    return find(calls, 'addElement').some((c) =>
+      c.args[0] === 'form' && c.args[1] === fid && c.args[2] === '/tabs' &&
+      (c.args[3].columns || []).some((col) => (col.sections || []).some((s) => s.name === 'section_notes'))
+    );
+  };
+  assert.ok(formHasNotes('Ticket'), 'Main form carries the Notes section');
+  assert.ok(!formHasNotes('Ticket Quick Create'), 'QuickCreate form has no Notes section');
+  assert.ok(!formHasNotes('Ticket Card'), 'QuickView form has no Notes section');
 });
 
 test('commands: a functional button is built with a JS on-click action + static visibility', async () => {
@@ -659,15 +763,18 @@ test('dashboards: chart + list tiles resolve the created view/visualization ids'
   await runSdkBuild(spec, { sdk, apply: true });
   const dash = find(calls, 'createArtifact').find((c) => c.args[0] === 'dashboard');
   assert.ok(dash && dash.args[1].name === 'Ops', 'dashboard artifact created');
-  const tiles = find(calls, 'addDashboardTile').map((c) => c.args[1]);
-  assert.strictEqual(tiles.length, 2);
-  const chart = tiles.find((t) => t.type === 'chart');
-  assert.strictEqual(chart.targetEntity, 'new_ticket', 'entity derived from the view');
-  assert.ok(chart.viewId, 'view id resolved');
-  assert.ok(chart.visualizationId, 'chart visualization id resolved');
-  const list = tiles.find((t) => t.type === 'list');
+  // Dashboard tiles are now added via addElement('/components', dashboardComponent(...))
+  const tileComps = find(calls, 'addElement')
+    .filter((c) => c.args[0] === 'dashboard' && c.args[2] === '/components')
+    .map((c) => c.args[3]);
+  assert.strictEqual(tileComps.length, 2);
+  const chart = tileComps.find((t) => t.type === 'chart');
+  assert.strictEqual(chart.parameters.TargetEntityType, 'new_ticket', 'entity derived from the view');
+  assert.ok(chart.parameters.ViewId, 'view id resolved');
+  assert.ok(chart.parameters.ChartId, 'chart visualization id resolved');
+  const list = tileComps.find((t) => t.type === 'list');
   assert.strictEqual(list.name, 'Recent');
-  assert.ok(list.viewId);
+  assert.ok(list.parameters.ViewId);
   // added to the solution as a systemform (60) and pushed
   assert.ok(find(calls, 'pushArtifact').some((c) => c.args[0] === 'dashboard'));
   assert.ok(find(calls, 'addSolutionComponent').some((c) => c.args[0].componentType === 60));
@@ -693,12 +800,22 @@ test('quick-view placement: a QuickView form is embedded on a host form via a lo
   ];
   const { sdk, calls } = mockSdk();
   await runSdkBuild(spec, { sdk, apply: true });
-  const qv = find(calls, 'addQuickViewControl');
-  assert.strictEqual(qv.length, 1, 'one quick-view control placed');
-  const [hostId, o] = qv[0].args;
-  assert.strictEqual(o.lookupFieldName, 'new_customerid', 'lookup lower-cased');
-  assert.strictEqual(o.targetEntity, 'new_customer');
-  assert.ok(o.quickViewFormId && o.quickViewFormId !== hostId, 'resolved to the QuickView form id (not the host)');
+  // Quick-view is now a control cell added via addElement (generic SDK surface)
+  const QUICKVIEW_CLS = '5C5600E0-1D6E-4205-A272-BE80DA87FD42';
+  const normClsQV = (c) => String(c || '').replace(/[{}]/g, '').toUpperCase();
+  const qvCall = find(calls, 'addElement').find((c) =>
+    c.args[0] === 'form' && (c.args[3] && c.args[3].cells || []).some((cell) => cell.control && normClsQV(cell.control.classId) === QUICKVIEW_CLS)
+  );
+  assert.ok(qvCall, 'one quick-view control placed');
+  const qvCtrl = (qvCall.args[3].cells || []).find((cell) => cell.control && normClsQV(cell.control.classId) === QUICKVIEW_CLS).control;
+  const hostId = qvCall.args[1];
+  assert.strictEqual(qvCtrl.fieldName, 'new_customerid', 'lookup lower-cased');
+  // targetEntity is encoded in the QuickForms XML (entityname attribute)
+  assert.ok(qvCtrl.parameters.QuickForms.includes('entityname="new_customer"'), 'target entity in QuickForms XML');
+  // quickViewFormId is in the QuickForms XML; must not equal the host form's id
+  const qvFormIdMatch = qvCtrl.parameters.QuickForms.match(/<QuickFormId[^>]*>([^<]+)<\/QuickFormId>/);
+  const quickViewFormId = qvFormIdMatch && qvFormIdMatch[1];
+  assert.ok(quickViewFormId && quickViewFormId !== hostId, 'resolved to the QuickView form id (not the host)');
   assert.ok(find(calls, 'fetchArtifact').some((c) => c.args[0] === 'form'), 'host form fetched before placement');
   assert.ok(find(calls, 'publishArtifact').some((c) => c.args[0] === 'form'), 'host form published after placement');
   assert.ok(planFor(spec, { phases: PHASES }).some((p) => /place 1 quick-view\(s\) on new_ticket/.test(p.label)), 'plan lists the placement step');
@@ -801,9 +918,10 @@ test('pages phase uploads each page (no --add-to-sitemap) then finalizes the sit
   await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir: process.cwd(), genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
   assert.strictEqual(uploads.length, 1, 'one page uploaded');
   assert.strictEqual(uploads[0].name, 'Overview');
-  const setDef = find(calls, 'setAppDefinition')[0];
-  assert.ok(setDef, 'sitemap finalized via setAppDefinition');
-  const subs = setDef.args[1].siteMap.areas[0].groups[0].subAreas;
+  // sitemap is now finalized via updateElement('app', id, '/siteMap', siteMap)
+  const setDef = find(calls, 'updateElement').find((c) => c.args[2] === '/siteMap');
+  assert.ok(setDef, 'sitemap finalized via updateElement(/siteMap)');
+  const subs = setDef.args[3].areas[0].groups[0].subAreas;
   assert.ok(subs.some((s) => s.type === 'GenPage' && s.genPageId === 'gp-1'), 'GenPage subarea in the finalized sitemap');
 });
 
@@ -903,7 +1021,11 @@ test('form update-in-place: an existing form is reconciled (addField per spec fi
   const { sdk, calls } = mockSdk({ artifactsExist: true });
   await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'views', 'charts', 'forms'] });
   assert.ok(!find(calls, 'createArtifact').some((c) => c.args[0] === 'form'), 'no new form created on edit');
-  assert.ok(find(calls, 'addField').length > 0, 'spec fields re-applied via the idempotent addField');
+  // Fields are now applied via the generic addElement surface (addField was retired)
+  const fieldCells = find(calls, 'addElement')
+    .map((c) => (c.args[3] && c.args[3].cells) || []).flat()
+    .filter((cell) => cell.control && cell.control.fieldName && !cell.control.classId);
+  assert.ok(fieldCells.length > 0, 'spec fields re-applied via the idempotent addElement (field cells, no classId)');
   assert.ok(find(calls, 'fetchArtifact').some((c) => c.args[0] === 'form' && c.args[1] === 'form-existing'), 'form fetched before reconcile');
   assert.ok(find(calls, 'publishArtifact').some((c) => c.args[0] === 'form'), 'form published so the edit goes live');
 });
@@ -916,15 +1038,16 @@ test('form reconcile: an explicit-layout edit REMOVES a field dropped from the s
   // The deployed form still carries an extra field the edited spec no longer lists.
   const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier', 'new_obsolete'] });
   await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
-  const removed = find(calls, 'removeField').map((c) => c.args[1].fieldName);
-  assert.deepStrictEqual(removed, ['new_obsolete'], 'only the field dropped from the spec is removed');
+  // Fields are removed via removeElement (retired removeField); pointer encodes field position
+  const removals = find(calls, 'removeElement');
+  assert.deepStrictEqual(removals.map((c) => c.args[2]), ['/tabs/0/columns/0/sections/0/rows/2/cells/0'], 'only the cell for new_obsolete (row 2) is removed');
 });
 
 test('form reconcile: an AUTO layout is additive — a deployed field not in the spec is NOT pruned (Maker adds survive)', async () => {
   // makeSpec's new_customer form is layout:auto; a manual Maker field must not be stripped.
   const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier', 'new_manual'] });
   await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
-  assert.strictEqual(find(calls, 'removeField').length, 0, 'auto layout never removes fields');
+  assert.strictEqual(find(calls, 'removeElement').length, 0, 'auto layout never removes fields');
 });
 
 test('form reconcile: the entity primary field is never pruned, even when an explicit layout omits it', async () => {
@@ -934,9 +1057,10 @@ test('form reconcile: the entity primary field is never pruned, even when an exp
     tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_tier'] }] }] }];
   const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier', 'new_extra'] });
   await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
-  const removed = find(calls, 'removeField').map((c) => c.args[1].fieldName);
-  assert.ok(!removed.includes('new_name'), 'the primary field (new_name) is protected from pruning');
-  assert.ok(removed.includes('new_extra'), 'a genuinely dropped field is still removed');
+  // Fields removed via removeElement; pointer row index identifies the field
+  const removedPtrs = find(calls, 'removeElement').map((c) => c.args[2]);
+  assert.ok(!removedPtrs.some((ptr) => /\/rows\/0\//.test(ptr)), 'the primary field (row 0, new_name) is protected from pruning');
+  assert.ok(removedPtrs.some((ptr) => /\/rows\/2\//.test(ptr)), 'a genuinely dropped field (row 2, new_extra) is still removed');
 });
 
 test('Gap 2: our (custom) main form is promoted to the entity default (isdefault) and NOTHING is deactivated', async () => {
@@ -967,9 +1091,10 @@ test('view update-in-place: an existing view has its columns reconciled (existin
   const { sdk, calls } = mockSdk({ artifactsExist: true, existingViewColumns: [{ name: 'new_manual', width: 100, order: 0 }] });
   await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'views'] });
   assert.ok(!find(calls, 'createArtifact').some((c) => c.args[0] === 'view'), 'no new view created on edit');
-  const setCols = find(calls, 'setViewColumns');
-  assert.ok(setCols.length > 0, 'view columns reconciled via setViewColumns');
-  assert.ok(setCols[0].args[1].map((c) => c.name).includes('new_manual'), 'a manually-added column is preserved (union, not replace)');
+  // View columns are now reconciled via updateElement('/columns') (setViewColumns was retired)
+  const setCols = find(calls, 'updateElement').filter((c) => c.args[2] === '/columns');
+  assert.ok(setCols.length > 0, 'view columns reconciled via updateElement(/columns)');
+  assert.ok(setCols[0].args[3].map((c) => c.name).includes('new_manual'), 'a manually-added column is preserved (union, not replace)');
 });
 
 test('chart update-in-place is unsupported: an existing chart is skipped with a reason, not silently rebuilt', async () => {
@@ -986,7 +1111,7 @@ test('formFieldLogicals extracts bound field names (excludes the notes control),
     entities: [{ schemaName: 'new_task', primaryAttribute: { schemaName: 'new_name', displayName: 'T' }, columns: [{ schemaName: 'new_priority', displayName: 'P', type: 'Text' }], hasNotes: true }],
     relationships: [{ type: 'OneToMany', referenced: 'new_project', referencing: 'new_task', lookup: { schemaName: 'new_ProjectId', displayName: 'Project' } }],
   };
-  const def = formDef(spec, { entity: 'new_task', name: 'T', layout: 'auto', notes: true });
+  const def = compileFormIntent(spec, { entity: 'new_task', name: 'T', layout: 'auto', notes: true }, { notesClassId: 'notes-classid' });
   assert.deepStrictEqual(formFieldLogicals(def), ['new_name', 'new_priority', 'new_projectid']);
 });
 
@@ -999,9 +1124,10 @@ test('edit flow: an existing (page-less) app has its sitemap rewritten so subare
   // No duplicate app is created...
   assert.ok(!find(calls, 'createArtifact').some((c) => c.args[0] === 'app'), 'no duplicate app created');
   // ...but the sitemap + components are rewritten from the current spec.
-  const setDef = find(calls, 'setAppDefinition').find((c) => c.args[0] === 'app-existing');
-  assert.ok(setDef, 'existing app sitemap rewritten via setAppDefinition');
-  const subs = setDef.args[1].siteMap.areas[0].groups[0].subAreas;
+  // Sitemap is now updated via updateElement('app', id, '/siteMap', siteMap) (setAppDefinition retired)
+  const setDef = find(calls, 'updateElement').find((c) => c.args[1] === 'app-existing' && c.args[2] === '/siteMap');
+  assert.ok(setDef, 'existing app sitemap rewritten via updateElement(/siteMap)');
+  const subs = setDef.args[3].areas[0].groups[0].subAreas;
   assert.ok(subs.some((s) => s.type === 'Entity' && s.entity === 'new_customer'), 'entity subarea present in rewritten sitemap');
   // Fetched into this session's workspace before push (also fixes cross-session publish), then
   // pushed + published so the nav change actually goes live.
@@ -1077,8 +1203,8 @@ test('view filters: no-value ops, in/not-in groups, and Choice-label resolution'
 });
 
 test('formDef honors explicit tabs/sections/columns', () => {
-  const def = formDef(makeSpec(), { entity: 'new_customer', name: 'C', tabs: [{ label: 'Main', sections: [{ label: 'Details', columns: 2, fields: ['new_name', 'new_tier'] }] }] });
-  const sec = def.tabs[0].sections[0];
+  const def = compileFormIntent(makeSpec(), { entity: 'new_customer', name: 'C', tabs: [{ label: 'Main', sections: [{ label: 'Details', columns: 2, fields: ['new_name', 'new_tier'] }] }] }, {});
+  const sec = def.tabs[0].columns[0].sections[0];
   assert.strictEqual(sec.label, 'Details');
   assert.strictEqual(sec.columns, 2);
   assert.strictEqual(sec.rows[0].cells.length, 2, '2-column section packs 2 cells per row');
@@ -1103,10 +1229,10 @@ test('data-model + sample-data emit a stable phase/label sequence (parity anchor
 test('formDef auto lays out primary + columns; adds Notes when the entity has notes', () => {
   const spec = makeSpec();
   spec.entities[0].hasNotes = true;
-  const def = formDef(spec, { entity: 'new_customer', name: 'C', layout: 'auto' });
-  const fields = def.tabs[0].sections[0].rows.flatMap((r) => r.cells).map((c) => c.control.fieldName);
+  const def = compileFormIntent(spec, { entity: 'new_customer', name: 'C', layout: 'auto' }, { notesClassId: 'notes-classid' });
+  const fields = def.tabs[0].columns[0].sections[0].rows.flatMap((r) => r.cells).map((c) => c.control.fieldName);
   assert.deepStrictEqual(fields, ['new_name', 'new_tier']);
-  assert.ok(def.tabs[0].sections.some((s) => s.name === 'section_notes'), 'a Notes section is added');
+  assert.ok(def.tabs[0].columns[0].sections.some((s) => s.name === 'section_notes'), 'a Notes section is added');
 });
 
 test('publish (opt-in) publishes one artifact per entity + the app', async () => {
