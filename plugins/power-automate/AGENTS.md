@@ -29,7 +29,39 @@ this plugin's `.mcp.json` / the install steps in `README.md`.
   connection patterns, error troubleshooting)
 - `.claude-plugin/plugin.json` + `.plugin/plugin.json` — Claude / Copilot
   manifests
-- `.mcp.json` — MCP server wiring
+- `.mcp.json` — MCP server wiring (FlowAgent + Microsoft Learn)
 
 The flow-definition rules, auth model, error reference, and known issues live in
 the [FlowAgent repo CLAUDE.md](https://github.com/matow_microsoft/flow-agent/blob/main/CLAUDE.md) and apply whether you call via MCP or shell.
+
+## Documentation lookup (hybrid pattern)
+
+This plugin uses a **two-tier knowledge architecture**:
+
+### Tier 1: Local references (fast, offline, plugin-specific)
+The `references/*.md` files are curated, plugin-specific docs covering:
+- Flow definition rules (`$authentication`, `$connections`, `OpenApiConnection`)
+- Connection reference patterns (`Embedded` vs `Invoker`, logical names)
+- Error-to-fix mapping (the exact API errors FlowAgent users hit)
+- CLI command reference
+
+**Always check `references/*.md` first** — they contain hard-won knowledge that
+Learn docs don't cover or bury across many articles.
+
+### Tier 2: Microsoft Learn MCP (live, comprehensive, up-to-date)
+The `.mcp.json` wires `microsoft-learn` (`https://learn.microsoft.com/api/mcp`)
+which provides:
+- `microsoft_docs_search` — search Learn docs by topic
+- `microsoft_docs_fetch` — fetch a complete article by URL
+- `microsoft_code_sample_search` — find code examples
+
+**Use Learn MCP when:**
+- The user asks about a connector or action you don't recognize
+- An expression function isn't in the local expression reference
+- You need the latest API changes or preview features
+- The user asks "how do I..." for a scenario not in references/
+- You need to verify whether a pattern is officially supported
+- Error troubleshooting needs more context than the local table provides
+
+**Scoping tip:** Prefix queries with "Power Automate" or "cloud flow" for
+relevance. For connector docs, use the connector name directly.
