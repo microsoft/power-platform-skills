@@ -3,7 +3,7 @@
 const crypto = require('crypto');
 const os = require('os');
 const path = require('path');
-const { buildTemplateOutcome } = require('./telemetry/lib/events');
+const { pick } = require('./telemetry/lib/events');
 const { fireAndForget } = require('./telemetry/lib/emit-spawn');
 const { readPacAuth } = require('./telemetry/lib/pac-auth');
 
@@ -12,6 +12,23 @@ const FRAMEWORKS = new Set(['react', 'vue', 'angular', 'astro']);
 const AUDIENCES = new Set(['internal', 'external']);
 const OUTCOMES = new Set(['success', 'failure']);
 const ACTIVATION_OUTCOMES = new Set(['success', 'failure', 'skipped']);
+const COMMON_FIELDS = [
+  'pluginName',
+  'pluginVersion',
+  'sessionId',
+  'correlationId',
+  'osName',
+  'osVersion',
+  'nodeVersion',
+  'orgId',
+  'tenantId',
+  'pacCliVersion',
+  'aiAgentName',
+  'aiAgentVersion',
+  'eventInfo',
+];
+const SKILL_FIELDS = ['skillName'];
+const COMPLETED_FIELDS = ['outcome', 'durationMs', 'errorClass', 'errorDescription'];
 
 function normalizeBool(value) {
   return value === true || value === 'true' || value === '1';
@@ -53,7 +70,16 @@ function buildTemplateOutcomeEvent(fields = {}, deps = {}) {
   if (pacAuth && pacAuth.orgId) payload.orgId = pacAuth.orgId;
   if (pacAuth && pacAuth.tenantId) payload.tenantId = pacAuth.tenantId;
 
-  return buildTemplateOutcome(EVENT_STREAM, payload);
+  const severity = payload.outcome === 'failure' ? 'Error' : 'Info';
+  return {
+    name: EVENT_STREAM,
+    data: {
+      eventName: 'template_outcome',
+      eventType: 'Trace',
+      severity,
+      ...pick(payload, [...COMMON_FIELDS, ...SKILL_FIELDS, ...COMPLETED_FIELDS]),
+    },
+  };
 }
 
 function emitTemplateOutcome(fields = {}, deps = {}) {
