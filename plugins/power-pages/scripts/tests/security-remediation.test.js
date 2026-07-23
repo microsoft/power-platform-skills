@@ -13,6 +13,14 @@ function tmpDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
+test('escapeNestedHtml encodes entity initiators before innerHTML parsing', () => {
+  const { escapeNestedHtml } = require('../lib/render-template');
+  assert.equal(
+    escapeNestedHtml('&lt;img src=x onerror=globalThis.PWNED=1&gt;'),
+    '&amp;lt;img src=x onerror=globalThis.PWNED=1&amp;gt;',
+  );
+});
+
 test('validate-export treats a discovered ZIP filename as data, not shell syntax', {
   skip: process.platform === 'win32' ? 'The original shell-injection reproduction uses POSIX filenames.' : false,
 }, () => {
@@ -37,6 +45,46 @@ test('validate-export treats a discovered ZIP filename as data, not shell syntax
 
   assert.notEqual(result.status, null);
   assert.equal(fs.existsSync(marker), false, result.stderr);
+});
+
+test('validate-export accepts normal unzip listings with a root solution.xml', {
+  skip: process.platform === 'win32' ? 'Uses a POSIX executable fixture.' : false,
+}, () => {
+  const sourceDir = tmpDir('validate-export-listing-');
+  const binDir = path.join(sourceDir, 'bin');
+  fs.mkdirSync(binDir);
+  fs.writeFileSync(path.join(sourceDir, 'valid_managed.zip'), Buffer.alloc(2048));
+  const fakeUnzip = path.join(binDir, 'unzip');
+  fs.writeFileSync(
+    fakeUnzip,
+    [
+      '#!/bin/sh',
+      "printf '%s\\n' 'Archive: valid_managed.zip'",
+      "printf '%s\\n' '     1473  05-26-2026 11:31   solution.xml'",
+      '',
+    ].join('\n'),
+    { mode: 0o700 },
+  );
+
+  const cli = path.join(
+    PLUGIN_ROOT,
+    'skills',
+    'export-solution',
+    'scripts',
+    'validate-export.js',
+  );
+  const result = spawnSync(process.execPath, [cli], {
+    cwd: sourceDir,
+    input: JSON.stringify({ cwd: sourceDir }),
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}`,
+    },
+    timeout: 10_000,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test('MCP configuration fails closed when plugin-root variables are missing', () => {

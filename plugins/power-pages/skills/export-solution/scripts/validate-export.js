@@ -54,7 +54,7 @@ runValidation(async (cwd) => {
       // `unzip -l` emits one entry per line, for example:
       //   1473  05-26-2026 11:31   solution.xml
       // Inspect stdout in JavaScript instead of piping through a shell.
-      if (!/(?:^|[\\/])solution\.xml\s*$/im.test(output)) {
+      if (!/(?:^|[\s\\/])solution\.xml\s*$/im.test(output)) {
         return block(`Solution zip '${path.basename(zipPath)}' does not contain solution.xml. The export appears corrupt.`);
       }
     } catch {

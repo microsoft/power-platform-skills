@@ -60,8 +60,9 @@ function readPacAuth(opts = {}) {
   //   Tenant Id:           11111111-1111-1111-1111-111111111111
   //   Entra ID Object Id:  aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
   //   Organization Id:     33333333-3333-3333-3333-333333333333
-  // Values are optional across PAC versions and auth profile types, so preserve
-  // the stable result shape with empty strings when a label is absent.
+  // Identity and geo labels are optional across PAC versions and auth profile
+  // types, so missing values become empty strings. Cloud is required because
+  // the telemetry resolver cannot select the correct sovereign route without it.
   const tenantId = pickLine(output, "Tenant Id");
   const orgId = pickLine(output, "Organization Id");
   const cloud = pickLine(output, "Cloud");

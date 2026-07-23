@@ -118,9 +118,10 @@ function escapeHtml(value) {
 function escapeNestedHtml(value) {
   if (typeof value === 'string') {
     // Nested values are later interpolated into innerHTML by legacy report
-    // templates. Escaping tag and attribute delimiters here makes those values
-    // text without changing ordinary ampersands.
+    // templates. Escape `&` first so an input such as `&lt;img ...&gt;` stays
+    // text when the browser parses the generated innerHTML.
     return value
+      .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
