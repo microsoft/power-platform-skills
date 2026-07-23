@@ -98,12 +98,13 @@ full build     (engine, run 2)  build --apply (FULL, idempotent) → ui + app + 
   dashboards). **This is the exact path that already makes `create == edit` work** — an edit is a
   full idempotent rebuild — so it is proven, not new.
 - **Parity by construction (answers the reviewer's parity test).** Run 2 *is* today's monolithic
-  full build; run 1 is an idempotent **prefix** (the `data` stage). Because `data-model` is
-  discover-reconcile — as are forms/views/charts (`sdk-build.js:782-786,835-838`) — and
-  `sample-data` dedups via `matchOn`, run 1 + run 2 reach the **identical** end state as one
+  full build; run 1 is an idempotent **prefix** (solution + data-model only). Because `data-model`
+  is discover-reconcile — as are forms/views/charts (`sdk-build.js:782-786,835-838`) — run 1's
+  tables are transparently rediscovered by run 2, which then does everything else (including
+  `sample-data`) **exactly once**. So run 1 + run 2 reach the **identical** end state as one
   monolithic build. (Dashboards/commands are re-created rather than reconciled on a rebuild — a
-  *pre-existing* idempotency nuance at `sdk-build.js:966-975,951-958`, unchanged here since run 2
-  equals the monolithic build.) Only the no-write main-loop code-gen sits between the runs.
+  *pre-existing* idempotency nuance at `sdk-build.js:966-975,951-958` — which §14 fixes so a
+  full-build retry stays idempotent.) Only the no-write main-loop code-gen sits between the runs.
 - **Simpler than the reviewer's per-range rehydration context.** We reuse the proven full-rebuild
   discovery instead of adding a bespoke rehydrator per phase-range. The cost is that run 2 re-runs
   data-model *discovery* (a few metadata reads, no writes) — acceptable and DRY.
@@ -121,7 +122,7 @@ invocations. `data` executes in run 1; `generate-pages` in the main loop; `ui`/`
 | Stage | Executes in | Owns | Engine phases |
 |---|---|---|---|
 | **author** | main loop | design-only spec, lint, consent, plan-mode | *(none)* |
-| **data** | run 1 (engine) | tables, columns, relationships, sample data | `solution`→`data-model`→`sample-data` |
+| **data** | run 1 (schema) + run 2 (rows) | tables, columns, relationships, sample data | `solution`→`data-model` (run 1); `sample-data` (run 2) |
 | **generate-pages** | main loop + agents | `RuntimeTypes` + page `.tsx` (symbolic, `PAGEREF_`) | *(none — writes files)* |
 | **ui** | run 2 (engine) | web-resources, views, charts, forms, commands, dashboards | `web-resources`…`dashboards` |
 | **app** | run 2 (engine) | app module, sitemap, **page upload + `PAGEREF_` resolve** | `app-shell`→`pages`(upload)→`ai-features` |
@@ -134,10 +135,11 @@ both was ambiguous (reviewer Minor 2). **One namespace** is used for stage names
 narration, journal, and CLI.
 
 **`--stage <name>` sugar** on `build-model-app.js` maps a stage to its phase range internally
-(over the existing `--from/--to`). It is used for run 1 (`--stage data`) and diagnostics; **run 2
-is a full build**, not a `--from` range, per §5. Unknown stage/phase selectors are **rejected**
-(today `resolvePhases` silently ignores unknown endpoints, `sdk-build.js:191-198` — tightened to
-error).
+(over the existing `--from/--to`). Run 1 uses `--stage data` **without `--sample-data`** (solution +
+data-model only); sample rows are created once in run 2 (§14), so the `data` stage's schema lands in
+run 1 and its rows in run 2. **Run 2 is a full build**, not a `--from` range, per §5. Unknown
+stage/phase selectors are **rejected** (today `resolvePhases` silently ignores unknown endpoints,
+`sdk-build.js:191-198` — tightened to error).
 
 ---
 
@@ -158,6 +160,17 @@ write. Introduce **profiles**:
 - **`deploy`** — every page must be implemented (`source.kind === 'tsx'` with a workspace-confined
   `codeFile`); all `PAGEREF_` targets resolvable. Run 2 uses `deploy` and **fails fast** if any
   page is still intent (i.e., `generate-pages` was skipped).
+
+**Profile per caller** (every `validateAppSpec` call site takes an explicit profile — none stays
+unconditional; `build-model-app.js:97-101`, `teardown-model-app.js:62-65`, `verify-model-app.js:59-65`):
+
+| Caller | Profile |
+|---|---|
+| author plan / full dry-run (`planFor`) | `plan` |
+| run-1 data apply (`--stage data`) | `plan` (pages still intent) |
+| run-2 full apply + verify | `deploy` |
+| teardown / partial cleanup | `structural` (no `codeFile` required) |
+| default programmatic build | `deploy` |
 
 ### 7.2 Page shape — discriminated source (resolves I1, C4 key ambiguity)
 
@@ -191,10 +204,20 @@ One `pages[]` collection; implementation state is **explicit**, not a nullable f
 ### 7.3 Round-trip (download → edit → rebuild)
 
 `download-model-app.js`/`hydrate-spec.js` currently retain only name/dataSources/prompt/codeFile
-(`hydrate-spec.js:61-66`) and lose original filenames/intent. The design adds: persist `key`,
-`purpose`, `navigatesTo`, `pageInput`, and `design` in a sidecar (or app metadata) so an edit
-round-trips without losing design/navigation metadata; downloaded pages hydrate as
-`source.kind === 'tsx'`.
+(`hydrate-spec.js:61-66`) and lose keys/intent; PAC lists pages by **name** (not key) and
+`download` returns **resolved, GUID-bearing** source (`download-model-app.js:86-106`). Stable-key
+persistence is therefore **foundational**, and the mechanism is **decided** (not left open):
+
+- **Durable page manifest.** The `app` stage writes a `<app>_pagemanifest` web resource holding
+  `[{ key, name, pageId }]` (portable — it travels inside the solution and survives download). It is
+  the authoritative `key ↔ pageId ↔ name` map, so a display-name change never orphans a page.
+- **Canonical symbolic source is retained** in the working dir / app-spec sidecar (the `.tsx` with
+  `PAGEREF_<key>`); the resolved deployment derivative is never written back over it.
+- **Download reconstructs keys** from the manifest and **reverse-normalizes** sibling page-GUID
+  literals in downloaded source back to `PAGEREF_<key>`; absent a manifest (legacy app), it falls
+  back to name matching and assigns fresh keys. Downloaded pages hydrate as `source.kind === 'tsx'`.
+- **Migration:** specs without `schemaVersion`/keys (name-referenced) are upgraded on load — keys
+  minted from names, `navigatesTo`/`appShell` references rewritten name→key.
 
 ---
 
@@ -234,18 +257,32 @@ Reuse `/genpage`'s navigation contract (`references/rules.md` 299–356): naviga
 
 **Source stays symbolic.** Code-gen emits `PAGEREF_<page-key>` and the **canonical `.tsx` is never
 mutated** with a GUID (mutation would bake environment-specific ids into source and break
-cross-env deploy / recreate — reviewer C4, SDK **T5** opaque-identity). Instead, the **`app`
-stage** resolves references into an **in-memory deployment derivative**:
+cross-env deploy / recreate — reviewer C4, SDK **T5** opaque-identity). Because `genpageCli.upload`
+takes a **file path**, not in-memory content (`genpage-cli.js:77-86`), the resolver writes a
+**staging file** (a deployment copy adjacent to `RuntimeTypes.ts`); the canonical source is left
+untouched.
 
-1. after initial uploads (`sdk-build.js:1037-1044`), build the `key → genPageId` map;
-2. **validate the whole navigation graph** (every `PAGEREF_<key>` resolves; no dangling targets);
-3. produce a per-page **deployment copy** with `PAGEREF_<key>` → `genPageId` substituted;
-4. re-upload the deployment copies, then finalize the sitemap (`:1045-1054`).
+**Deployment protocol (safe recovery — new Critical from R2).** `listPages` currently turns any PAC
+failure into `[]` (`genpage-cli.js:67-70`), which the engine treats as "no pages" — risking
+duplicates and orphans. The `app` stage instead:
 
-- **Commit point = sitemap finalize.** Recovery is **forward-only idempotent recompute**, not
-  rollback (a re-run rebuilds the map and re-substitutes deterministically).
-- **Pure module.** The resolver is extracted to `pageref-resolver.js` (pure: `(sources, keyMap)
-  → deploymentSources`), unit-tested offline against fixtures (I6, §14).
+1. **Enumerate fail-closed** — page listing retries and **distinguishes failure from empty**; a
+   failed enumeration halts (never "no pages exist"). Seed the `key → pageId` map from the durable
+   manifest (§7.3) first.
+2. **Create only absent pages** (no known `pageId`) by uploading their symbolic source to mint ids —
+   brand-new pages have no live navigation to disturb. Persist each returned `key → pageId` to
+   pipeline state **and the manifest immediately**.
+3. Once **all** ids are known, **resolve** the graph (validate every `PAGEREF_<key>`; fail on any
+   dangling target) and write per-page **staging files** with GUIDs substituted.
+4. **Upload resolved content exactly once** per page (existing pages get their resolved content in a
+   single update — no symbolic intermediate that could break live nav).
+5. **Finalize the sitemap** (`sdk-build.js:1045-1054`) — the true commit point, only after all
+   resolved uploads succeed.
+
+- **Recovery is forward-only idempotent recompute:** a re-run re-seeds ids from the manifest,
+  re-resolves, and re-uploads deterministically (no rollback).
+- **Pure resolver module** `pageref-resolver.js` (`(sources, keyMap) → deploymentSources`) is
+  unit-tested offline (dangling-target failure, stable substitution) (§14).
 
 ---
 
@@ -276,17 +313,26 @@ gated by `--apply` alone (`teardown-model-app.js:62-95`).
 
 **The fix — a read-only operation-diff planner (`op-diff.js`, new pure module):**
 
-- Before any write, classify each intended operation as **create / update-additive /
-  update-destructive / remove-delete** by diffing the spec against discovered Dataverse state
-  (read-only). Destructive = pruning declared-away form fields, dropping sitemap subareas,
-  table/column/form deletion, teardown.
-- **Hard gate:** if the plan contains any destructive op and `--allow-destructive` is **not**
-  supplied, **halt before writes** (fail-closed) — including teardown. Unattended **create fails on
-  app/solution collision** (no silent overwrite).
-- **Approval binding:** an approved plan is bound to **env/app identity + spec hash + op hash** so
-  it cannot be replayed against a different target.
-- **Env var suppresses questions only** — it **never** grants destructive authority; that always
-  requires the explicit `--allow-destructive` flag, even in autopilot.
+- **Read-only classification, reusing existing logic** — not a duplicate differ. Diff the spec
+  against discovered artifacts via the same reconciliation the build uses (and the SDK's generic
+  `diffArtifact`), so the planner can't drift from build behavior.
+- **v1 scope = the realistically detectable destructive ops** (do **not** claim table/column/form
+  *deletion* classification — the build has no such delete path today):
+  - **unexpected app collision** (see below);
+  - **explicit-layout form-field removals** (`sdk-build.js:690-725`);
+  - **sitemap target removals** (`:995-1007`);
+  - **all `planTeardown` operations** — already a pure plan (`sdk-teardown.js:269-358`).
+- **Collision is scoped, not blanket.** Existing *solutions* (including Default) and the run 1 →
+  run 2 sequence are normal, so solution existence must **not** fail unattended. Bind approval to
+  **pipeline-owned ids**; fail only on an **unexpected app collision** or an **incompatible solution
+  identity**.
+- **Hard gate + TOCTOU:** any destructive op without `--allow-destructive` **halts before writes**
+  (incl. teardown). Recompute the diff **immediately before apply** so a state change between plan
+  and apply can't slip through.
+- **Approval binding:** bound to **env/app identity + spec hash + op hash**; not replayable against a
+  different target.
+- **Env var suppresses questions only** — never grants destructive authority; `--allow-destructive`
+  is always explicit, even in autopilot.
 
 | Gate | Interactive | Autopilot / eval |
 |---|---|---|
@@ -311,9 +357,11 @@ working dir when autopilot. The user approves the whole app shape at once.
 
 `verifySpec` has no `sa.page` branch and never checks page content or unresolved `PAGEREF_`
 (`verify-spec.js:39-67`); a verify that can't run is only a warning (`build-model-app.js:161-175`).
-Add strict page checks (page exists, `GenPageId` bound in the sitemap, **no unresolved
-`PAGEREF_`** in deployed code) and make the **`verify` stage mandatory and fail-closed** — it
-fails if verification cannot run.
+Add strict page checks — page exists, `GenPageId` bound in the sitemap, and (crucially) **every
+navigation edge resolves to the *actual* target page's `GenPageId`**, not merely "no `PAGEREF_`
+text remains" (a stale/wrong GUID has no placeholder yet is still broken). This needs the verify
+reader to list/download page content (`verify-model-app.js:40-46` lacks it today). Make the
+**`verify` stage mandatory and fail-closed** — it fails if verification cannot run.
 
 ### 13.2 Structural eval oracles — not `.tsx` snapshots (I3)
 
@@ -354,10 +402,29 @@ prerequisite enforcement: "run 2 refuses to start unless every page is implement
 remains **idempotent recomputation**, not journal replay. Commit the `intent→tsx` transition only
 after all pages validate (§8).
 
-**Concurrency.** `generate-pages` and `ui` share only the deployed tables; after run 1 +
-type-gen they form a small **DAG** (page-builders parallel; `ui` independent), not a forced serial
-chain — but both must complete before the `app` stage (upload needs `.tsx`; sitemap needs
-component ids).
+**No cross-run DAG (R2).** `generate-pages` (main loop) must fully complete **before** the single
+full run 2; running `ui` concurrently would require splitting/pausing run 2 and revives C1. For v1
+the only parallelism is **within** a stage (page-builders run in parallel; the engine already
+parallelizes independent artifacts).
+
+**`--stage` is apply-safe only for `data`.** Other stage selectors are **dry-run-only or rejected**
+(their phase ranges aren't dependency-closed — e.g. `--stage publish --apply` would publish against
+an empty result map, `sdk-build.js:1083-1093`). The pipeline is exactly:
+
+```
+run 1:  build --stage data --apply            # solution + data-model only (NO --sample-data)
+code-gen (main loop)
+run 2:  build --apply --verify [--sample-data] [--publish]   # the full monolithic build
+```
+
+Run 1 **omits `--sample-data`** so sample rows are created **once** in run 2 (dedup via `matchOn` is
+conditional — `matchOn` can be absent, `entity-provision.js` — so running sample-data twice is not
+safe).
+
+**Retry idempotency fix (R2).** Because full-build re-run is the recovery mechanism, commands and
+dashboards — today **re-created without discovery** (`sdk-build.js:951-975`) — must become
+**discover-reconcile** (`findArtifact`/`fetchArtifact` + generic mutations), or a retried run 2
+duplicates them. This is a tightly-coupled correctness fix, in scope here.
 
 ## 15. Blast radius / unchanged
 
@@ -388,14 +455,32 @@ contract/round-trip/agent files most affected**: `app-spec.js`, `hydrate-spec.js
 | **C1** | Phase ranges not composable across invocations (`result.created` per run) | §5 — data pre-build → code-gen → **one full idempotent build**; run 2's discovery rehydrates `result.created` (the proven `create==edit` path). Stages are vocabulary, not write invocations. |
 | **C2** | Intent spec fails validation; `--verify`/`--only publish`/data examples are no-ops | §7.1 validation **profiles** (`design`/`plan`/`deploy`); standalone verify via `verify-model-app.js`; §6 correct stage→command mapping with required flags. |
 | **C3** | Destructive ops not fail-closed | §11 read-only **`op-diff.js`** planner; hard `--allow-destructive` gate incl. teardown; create fails on collision; approval bound to env/app/spec-hash/op-hash; env var suppresses questions only. |
-| **C4** | `PAGEREF_` source mutation not portable/idempotent | §9 stable `key`; **symbolic source preserved**; in-memory **deployment derivative**; graph validated pre-upload; pure `pageref-resolver.js`; commit at sitemap finalize; forward-only recovery. |
+| **C4** | `PAGEREF_` source mutation not portable/idempotent | §9 stable `key`; **symbolic source preserved**; **staging-file** deployment derivative; fail-closed enumeration + create-absent-first + single resolved upload; pure `pageref-resolver.js`; sitemap-finalize commit; forward-only recovery. |
 | **I1** | Bare optional `codeFile` weakens contract | §7.2 discriminated `source:{intent|tsx}` + `schemaVersion` + stable keys + path confinement + duplicate checks; `sitemapSlot` dropped (appShell authoritative). |
 | **I2** | Reused agents don't fit the boundary | §8 generate a page-build contract for `page-builder` (owns new+edit); `edit-planner` becomes headless (no consent tools); add `Task` to SKILL `allowed-tools`. |
 | **I3** | `.tsx` snapshots are the wrong oracle | §13.2 structural/compile/nav/verified-column/token oracles; new `schema-facts` extractor for data-model. |
 | **I4** | Verify doesn't cover page invariants | §13.1 page existence/`GenPageId`/no-unresolved-`PAGEREF_` checks; verify stage mandatory + fail-closed. |
 | **I5** | Shell-theme alignment unsupported | §10 scope `spec.design` to a **page** contract + Fluent-token mapping + validation; shell theme deferred. |
-| **I6** | Stage state / perf / module ownership | §14 pipeline id + stage-attempt metadata; extract `stages.js`/`pageref-resolver.js`/`op-diff.js`/`schema-facts.js`; reject unknown selectors; generate-pages/ui DAG. |
+| **I6** | Stage state / perf / module ownership | §14 pipeline id + stage-attempt metadata; extract `stages.js`/`pageref-resolver.js`/`op-diff.js`/`schema-facts.js`; reject unknown selectors; **DAG removed** (single full run 2). |
 | **Minor 1/2** | Doc-sync gaps; 6-vs-7 stage ambiguity | §16 expanded doc-sync; §6 rename to `generate-pages`, one namespace, author counted as the design stage. |
+
+### 17.1 Sol R2 (confirming pass) → resolutions
+
+R2 **verified C1 sound** (run 2 rehydrates every `appDef` dependency, incl. existing pages) and
+passed I2/I3/I5 + both Minors. The remaining PARTIALs + new findings are closed as:
+
+- **New Critical — safe page deployment/recovery** → §9 protocol (staging files; fail-closed
+  enumeration; create-absent-first + immediate manifest persist; single resolved upload;
+  sitemap-finalize commit).
+- **Execution-semantics contradiction (DAG vs single run 2)** → §14: DAG removed; `--stage`
+  apply-safe only for `data`; run 1 omits `--sample-data`.
+- **Safety-plan realism** → §11: v1 scope limited to detectable ops; reuse reconciliation /
+  `diffArtifact`; scoped (not blanket) collision; TOCTOU re-check.
+- **Stable-key persistence (foundational)** → §7.3: durable `<app>_pagemanifest` web resource +
+  download reverse-normalization + legacy migration.
+- **Full-build retry idempotency** → §14: commands/dashboards become discover-reconcile.
+- **Validation/verification boundaries** → §7.1 per-caller profile matrix; §13.1 verify each nav
+  edge → actual target `GenPageId`.
 
 ## 18. SDK-alignment (target after rework)
 
@@ -411,9 +496,11 @@ contract/round-trip/agent files most affected**: `app-spec.js`, `hydrate-spec.js
 ## 19. Open decisions
 
 - **`ai-features`** stays inside the `app` stage (app-scoped, after app-shell).
-- **`op-diff.js` v1 scope**: the highest-risk detectable destructive ops (teardown, collision,
-  form-field pruning, sitemap-subarea drops); extensible to table/column drops. (Confirm scope.)
-- **Round-trip persistence** of design/nav metadata: sidecar file vs app metadata. (Confirm.)
+- **`op-diff.js` v1 scope** (decided, §11): unexpected-app collision, explicit-layout form-field
+  removals, sitemap-target removals, and `planTeardown` ops — reusing existing reconciliation /
+  `diffArtifact`. Table/column/form *deletion* is **out of scope** until the build supports it.
+- **Round-trip persistence** (decided, §7.3): a durable `<app>_pagemanifest` web resource (not an
+  ephemeral sidecar), plus retained canonical symbolic source and download reverse-normalization.
 
 ## 20. Testing strategy
 
