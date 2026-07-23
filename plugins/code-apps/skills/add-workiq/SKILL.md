@@ -224,10 +224,10 @@ export class McpSession {
   ): Promise<JsonRpcResponse> {
     const req: JsonRpcRequest = { jsonrpc: '2.0', id: String(this.nextId++), method, params }
 
-    // Send the current session id only if we have one (undefined on the initial
-    // handshake and for this stateless-tolerant server).
+    // Send no session id on `initialize` (server treats any id as existing-session lookup).
+    const sessionId = method === 'initialize' ? undefined : this.sessionId
     const raw = (await WorkIQCopilotMCPService.mcp_m365copilot(
-      this.sessionId,
+      sessionId,
       req as unknown as QueryRequest
     )) as unknown as IOperationResult<unknown>
 
