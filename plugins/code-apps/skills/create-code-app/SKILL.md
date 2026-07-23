@@ -61,6 +61,7 @@ Once you have their description:
    - Based on their answers, recommend the best approach:
      - **Store and manage custom business data** (tables, forms, CRUD) → Dataverse (`/add-dataverse`)
      - **Interact with specific services** (send emails, post messages, manage files) → the appropriate connector
+     - **Search M365 data or get AI-powered answers** (emails, files, people, company knowledge) → Work IQ (`/add-workiq`)
    - If they mention existing Dataverse tables, SharePoint lists, or connectors by name, use those directly
 3. Ask about UI requirements: key screens, layout, interactions, theme preference
 4. Ask any clarifying questions now -- resolve all ambiguity before entering plan mode
@@ -157,6 +158,7 @@ Invoke the `/add-*` skills identified in the plan (Step 3). Run each in sequence
 | Work with SharePoint lists or docs         | `/add-sharepoint`  |
 | Send emails, read inbox, manage calendar   | `/add-office365`   |
 | Invoke a Copilot Studio agent              | `/add-mcscopilot`  |
+| Search M365 data or get AI-powered answers | `/add-workiq`      |
 | Connect to another service                 | `/add-connector`   |
 
 Each `/add-*` skill runs `npm run build` to catch errors. Do NOT deploy yet.
@@ -208,6 +210,7 @@ Provide:
   - `/add-teams` -- send and read Teams messages
   - `/add-sharepoint` -- work with SharePoint lists or documents
   - `/add-office365` -- send emails, manage calendar
+  - `/add-workiq` -- search M365 data or get AI-powered answers about company info
   - `/add-connector` -- connect to any other service
 - Manage at https://make.powerapps.com/environments/<environment-id>/home
 
