@@ -168,7 +168,7 @@ Then open the app in the browser. Refine `app-spec.json` and re-run Phase 2 to i
 
 **Teardown (cleanup).** To remove everything an App Spec built — e.g. a live-verification probe or a
 failed build — run the classifier-safe teardown. It deletes only the artifacts the spec declares, in
-dependency order (**app [+ its generative pages and the orphaned sitemap] → dashboards → commands → forms → charts → views → relationships → web-resources → AI row summaries → tables [children-first] → global choices → solution**).
+dependency order (**app [+ its generative pages and the orphaned sitemap] → dashboards → commands → forms → charts → views → relationships → AI row summaries → tables [children-first] → web-resources → global choices → solution**).
 Forms/charts/views/relationships are deleted **explicitly before tables** (a table delete does not
 reliably cascade cross-references; it does remove the table's own columns). Command teardown removes
 the whole command bar for any entity the spec authored commands on. **Teardown only deletes tables
@@ -264,7 +264,8 @@ SDK (`findTables` / `findColumns` / `fetchEntityMetadata`) and create only what'
 (`createTable` / `createColumn` / `createRelationship`) → **sample data** (opt-in; relational/
 topological, `$parent`→`@odata.bind` using the entity-set name) → **web resources** (opt-in;
 `createWebResource` for form JS/HTML/CSS) → **views** → **charts** → **forms** (primary + columns
-laid out, explicit `tabs` honored, `addSubGrid` per sub-grid, `addFormEventHandler` per `events[]`)
+laid out, explicit `tabs` honored; sub-grids, quick-views, and form JS (`events[]`) applied as
+canonical control cells / the `/bag/c` events region via the SDK's generic `addElement` surface)
 → **app module + sitemap** → **generative pages** (upload each `pages[]` page via `pac model genpage upload`,
 no `--add-to-sitemap`; then the SDK rewrites the sitemap once to add the `GenPage` subareas) → publish
 (opt-in). When the app has generative-page subareas the app module is created first WITHOUT them (they can't
