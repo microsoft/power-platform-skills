@@ -1,19 +1,20 @@
 "use strict";
 
-// Power-pages telemetry resolver: region routing via Artemis geo + cloud stamp.
-// Implements the shared dispatcher's resolver contract. All artemis/region code
-// lives in ./region/ — shared/telemetry knows nothing about it.
-const { resolve: resolveRegion } = require("./region/region-resolver");
+// Power-pages telemetry resolver: route by the cloud and environment-geo
+// classifications returned by `pac auth who`.
+const { mapToRegion } = require("./region/region-resolver");
 
-// Resolve the destination iKey/collector for THIS event's org region.
-async function resolve({ event, cfg, cloud, configDir }) {
-  return resolveRegion({
-    orgId: (event && event.data && event.data.orgId) || "",
-    cloud,
-    regionsMap: (cfg && cfg.regions) || {},
-    defaultRegion: (cfg && cfg.default_region) || "us",
-    configDir,
-  });
+async function resolve({ cfg, cloud, geoName }) {
+  const regions = (cfg && cfg.regions) || {};
+  const defaultRegion = (cfg && cfg.default_region) || "us";
+  const region = mapToRegion(cloud, geoName, defaultRegion);
+  const entry = regions[region] || regions[defaultRegion];
+  if (!entry || !entry.instrumentation_key) return null;
+  return {
+    region,
+    iKey: entry.instrumentation_key,
+    collectorUrl: entry.collector_url || "",
+  };
 }
 
 // Sync fast-gate: is the default region's key configured? Lets the hooks skip

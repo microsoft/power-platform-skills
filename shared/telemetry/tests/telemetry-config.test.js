@@ -29,7 +29,9 @@ test("off writes the per-plugin opt-out and confirms", () => {
   const { status, stdout } = run(["--action", "off", "--plugin", "power-pages"], dir);
   assert.equal(status, 0);
   assert.match(stdout, /OFF/);
-  assert.match(stdout, /No personal data is collected/);
+  assert.match(stdout, /Dataverse organization ID/);
+  assert.match(stdout, /Entra tenant ID/);
+  assert.match(stdout, /principal's Entra object ID/);
   const cfg = JSON.parse(fs.readFileSync(path.join(dir, "config.json"), "utf8"));
   assert.equal(cfg.telemetry["power-pages"], "off");
 });
@@ -49,7 +51,7 @@ test("status reports ON by default and never reads ikey.json", () => {
   const { status, stdout } = run(["--action", "status", "--plugin", "power-pages"], dir);
   assert.equal(status, 0);
   assert.match(stdout, /Telemetry \(power-pages\): ON/);
-  assert.match(stdout, /No personal data is collected/);
+  assert.match(stdout, /Dataverse organization ID/);
 });
 
 test("status reports OFF after opt-out", () => {

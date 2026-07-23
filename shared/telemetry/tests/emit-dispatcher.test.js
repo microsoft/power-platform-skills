@@ -161,7 +161,7 @@ test("dispatcher writes a probe file when fake-https points to one (happy path)"
   assert.deepEqual(body.data, fakeEvent.data);
 });
 
-test("dispatcher stringifies eventInfo on the wire but keeps it an object in the local mirror", () => {
+test("dispatcher stringifies eventInfo on the wire and keeps it structured in the local mirror", () => {
   const tmp = mkTmp();
   const probePath = path.join(tmp, "probe.json");
   const eventWithInfo = {
@@ -184,11 +184,7 @@ test("dispatcher stringifies eventInfo on the wire but keeps it an object in the
 
   const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
   const body = JSON.parse(probe.body);
-  assert.equal(
-    typeof body.data.eventInfo,
-    "string",
-    "wire envelope must carry eventInfo as a JSON string leaf"
-  );
+  assert.equal(typeof body.data.eventInfo, "string");
   assert.deepEqual(JSON.parse(body.data.eventInfo), eventWithInfo.data.eventInfo);
 
   const mirror = mirrorPath(tmp);
@@ -198,11 +194,6 @@ test("dispatcher stringifies eventInfo on the wire but keeps it an object in the
     .split("\n")
     .pop();
   const mirrorRecord = JSON.parse(mirrorLine);
-  assert.equal(
-    typeof mirrorRecord.data.eventInfo,
-    "object",
-    "local mirror must keep eventInfo as a real object"
-  );
   assert.deepEqual(mirrorRecord.data.eventInfo, eventWithInfo.data.eventInfo);
 });
 

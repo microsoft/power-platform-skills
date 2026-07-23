@@ -33,3 +33,14 @@ test("resolve falls back to the default region with no orgId (no network)", asyn
   assert.equal(r.iKey, "ikeyus");
   assert.equal(r.collectorUrl, "https://us.invalid/");
 });
+
+test("resolve uses the environment geo for EU routing", async () => {
+  const r = await resolver.resolve({
+    event: { data: {} },
+    cfg: { default_region: "us", regions: REGIONS },
+    cloud: "Public",
+    geoName: "Europe",
+  });
+  assert.equal(r.iKey, "ikeyeu");
+  assert.equal(r.collectorUrl, "https://eu.invalid/");
+});

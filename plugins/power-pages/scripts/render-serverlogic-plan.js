@@ -48,4 +48,5 @@ renderTemplate({
     'SERVER_LOGICS_DATA',
     'RATIONALE_DATA',
   ],
+  escapeNestedHtmlValues: true,
 });

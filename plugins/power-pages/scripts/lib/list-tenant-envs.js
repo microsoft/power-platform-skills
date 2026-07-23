@@ -38,7 +38,6 @@
 
 'use strict';
 
-const { execSync } = require('child_process');
 const helpers = require('./validation-helpers');
 const { verifyHostReadiness } = require('./verify-host-readiness');
 const { listEnvsViaPac } = require('./pac-bap-shim');
@@ -175,11 +174,11 @@ async function listEnvsBySource({ source, bapToken, apiVersion, bapBase, listImp
 }
 
 function getDataverseToken(originUrl, getTokenImpl) {
-  // Pluggable for tests. Default impl shells out to `az`.
+  // Pluggable for tests. The shared helper validates the resource origin before
+  // invoking Azure CLI with an argument array.
   if (typeof getTokenImpl === 'function') return getTokenImpl(originUrl);
   try {
-    const out = execSync(`az account get-access-token --resource "${originUrl}" --query accessToken -o tsv`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-    return out.trim();
+    return helpers.getAuthToken(originUrl);
   } catch (e) {
     throw new Error(`az token acquisition failed for ${originUrl}: ${e.message || e.stderr?.toString() || 'unknown'}`);
   }
@@ -459,4 +458,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { listTenantEnvs, preFilter, originOf };
+module.exports = { listTenantEnvs, preFilter, originOf, getDataverseToken };

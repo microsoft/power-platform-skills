@@ -7,37 +7,28 @@ const test = require('node:test');
 
 const pluginRoot = path.resolve(__dirname, '..', '..');
 
-function createFakeNpx(dir) {
-  const commandPath = path.join(dir, process.platform === 'win32' ? 'npx.cmd' : 'npx');
-  const script = process.platform === 'win32'
-    ? '@echo off\r\necho fake-npx %*\r\n'
-    : '#!/bin/sh\necho "fake-npx $*"\n';
-
-  fs.writeFileSync(commandPath, script, { mode: 0o755 });
-  return commandPath;
-}
-
-test('playwright MCP bootstrap resolves the plugin root without host-provided env vars', (t) => {
+test('playwright MCP bootstrap resolves only the host-provided plugin root', (t) => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'power-pages-mcp-'));
   t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
-
-  createFakeNpx(tempDir);
+  const scriptsDir = path.join(tempDir, 'scripts');
+  fs.mkdirSync(scriptsDir);
+  fs.writeFileSync(
+    path.join(scriptsDir, 'launch-playwright-mcp.js'),
+    'module.exports = { launch() { process.stdout.write("trusted-launcher"); } };\n',
+  );
 
   const config = JSON.parse(fs.readFileSync(path.join(pluginRoot, '.mcp.json'), 'utf8'));
   const server = config.mcpServers.playwright;
-  const pathSeparator = process.platform === 'win32' ? ';' : ':';
   const result = spawnSync(server.command, server.args, {
-    cwd: pluginRoot,
+    cwd: os.tmpdir(),
     encoding: 'utf8',
     env: {
-      HOME: process.env.HOME,
-      PATH: `${tempDir}${pathSeparator}${process.env.PATH || ''}`,
-      USERPROFILE: process.env.USERPROFILE,
+      ...process.env,
+      PLUGIN_ROOT: tempDir,
     },
     timeout: 5_000,
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /fake-npx/);
-  assert.doesNotMatch(result.stderr, /PLUGIN_ROOT is not set/);
+  assert.equal(result.stdout, 'trusted-launcher');
 });

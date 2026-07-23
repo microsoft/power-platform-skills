@@ -12,7 +12,9 @@ const SAMPLE_DATA = {
     siteName: 'Contoso Portal',
     reportDate: '2026-05-27',
     framework: 'React',
-    nextStepsHtml: '<ol><li>Deploy with <code>pac pages upload-code-site</code>.</li></ol>',
+    nextSteps: [
+      { text: 'Deploy the site with:', command: 'pac pages upload-code-site' },
+    ],
   },
   PROVIDERS_DATA: [
     {
@@ -155,7 +157,7 @@ test('render-auth-report handles empty arrays and null LOCAL_AUTH_DATA cleanly',
       siteName: 'Empty Site',
       reportDate: '2026-05-27',
       framework: '',
-      nextStepsHtml: '',
+      nextSteps: [],
     },
     PROVIDERS_DATA: [],
     LOCAL_AUTH_DATA: null,
@@ -175,4 +177,32 @@ test('render-auth-report handles empty arrays and null LOCAL_AUTH_DATA cleanly',
   assert.match(html, /Empty Site/);
   // No unreplaced template placeholders in the output
   assert.doesNotMatch(html, /__[A-Z][A-Z0-9_]+__/);
+});
+
+test('render-auth-report treats next-step content as text, not HTML', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-report-xss-'));
+  const dataPath = path.join(tempDir, 'data.json');
+  const outputPath = path.join(tempDir, 'auth-report.html');
+  const malicious = {
+    ...SAMPLE_DATA,
+    META_DATA: {
+      ...SAMPLE_DATA.META_DATA,
+      nextSteps: [{
+        text: '<img src=x onerror=window.__textPwned=1>',
+        command: '</script><script>window.__commandPwned=1</script>',
+      }],
+    },
+  };
+  fs.writeFileSync(dataPath, JSON.stringify(malicious), 'utf8');
+
+  const result = spawnSync(process.execPath, [scriptPath, '--output', outputPath, '--data', dataPath], {
+    encoding: 'utf8',
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const html = fs.readFileSync(outputPath, 'utf8');
+  assert.doesNotMatch(html, /<img src=x onerror=/);
+  assert.doesNotMatch(html, /<\/script><script>window\.__commandPwned/);
+  assert.doesNotMatch(html, /next-steps'\)\.innerHTML/);
+  assert.match(html, /\\u003cimg src=x onerror=window\.__textPwned=1\\u003e/);
 });

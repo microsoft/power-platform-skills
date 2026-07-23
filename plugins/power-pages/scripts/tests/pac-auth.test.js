@@ -2,10 +2,7 @@
 
 // Unit coverage for the bundled telemetry pac-auth copy. The plugin ships a
 // physical copy of shared/telemetry/lib/pac-auth.js (no symlink), so this test
-// asserts the copy parses `pac auth who` the same way — including the optional
-// "Entra ID Object Id" line surfaced as `objectId`. The emit-* hook tests are
-// spawn-based integration tests that call real `pac`, so they can't inject a
-// fake object id; this is the deterministic seam for that field.
+// asserts the copy keeps the routing fields and documented identifiers.
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
@@ -30,7 +27,7 @@ Organization Unique Name:    contoso
 Organization Friendly Name:  Contoso
 `;
 
-test("parses orgId, tenantId, cloud, and Entra ID objectId", () => {
+test("parses routing fields and documented identifiers", () => {
   pacAuth._resetCache();
   const result = pacAuth.readPacAuth({ _exec: () => SAMPLE_OUTPUT });
   assert.deepEqual(result, {
@@ -38,24 +35,28 @@ test("parses orgId, tenantId, cloud, and Entra ID objectId", () => {
     tenantId: "11111111-1111-1111-1111-111111111111",
     cloud: "Public",
     objectId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    geoName: "NorthAmerica",
   });
 });
 
-test("objectId is '' when the Entra ID Object Id line is missing", () => {
+test("returns a cloud without requiring tenant or organization identifiers", () => {
   pacAuth._resetCache();
   const result = pacAuth.readPacAuth({
-    _exec: () =>
-      "Cloud: Public\n" +
-      "Tenant Id: 11111111-1111-1111-1111-111111111111\n" +
-      "Organization Id: 33333333-3333-3333-3333-333333333333\n",
+    _exec: () => "Cloud: Public\n",
   });
-  assert.equal(result.objectId, "");
+  assert.deepEqual(result, {
+    orgId: "",
+    tenantId: "",
+    cloud: "Public",
+    objectId: "",
+    geoName: "",
+  });
 });
 
-test("returns null when neither Tenant Id nor Organization Id is found", () => {
+test("returns null when Cloud is missing", () => {
   pacAuth._resetCache();
   const result = pacAuth.readPacAuth({
-    _exec: () => "Type: Universal\nCloud: Public\n",
+    _exec: () => "Type: Universal\nTenant Id: tenant-id\n",
   });
   assert.equal(result, null);
 });

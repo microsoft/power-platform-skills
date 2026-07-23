@@ -259,6 +259,16 @@ const RATIONALE = __RATIONALE_DATA__;
 const DATA_FLOWS = __DATA_FLOWS_DATA__;
 
 function esc(str) { const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
+function safeHttpUrl(value) {
+  try {
+    const url = new URL(value);
+    return (url.protocol === 'https:' || url.protocol === 'http:') && !url.username && !url.password
+      ? url.href
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 const CONCEPTS = [
   {
@@ -418,7 +428,10 @@ conceptsContainer.innerHTML = CONCEPTS.map(c => {
     ${c.whenAvoid.map(w => `<div class="concept-when-item avoid">${w}</div>`).join('')}
   </div>`;
 
-  const docsHtml = c.docs.map(d => `<a class="concept-link" href="${d.url}" target="_blank">&#128214; ${d.label}</a>`).join('');
+  const docsHtml = c.docs.map(d => {
+    const url = safeHttpUrl(d.url);
+    return url ? `<a class="concept-link" href="${url}" target="_blank" rel="noopener noreferrer">&#128214; ${d.label}</a>` : '';
+  }).join('');
 
   return `<div class="concept-card">
     <div class="concept-header">
@@ -581,9 +594,10 @@ itemsContainer.innerHTML = ITEMS.map(item => {
 
   const depHtml = item.depends ? `<div class="dep-tag">${item.depends}</div>` : '';
 
-  const docsHtml = (item.docs || []).map(d =>
-    `<a class="concept-link" href="${d.url}" target="_blank">&#128214; ${d.label}</a>`
-  ).join('');
+  const docsHtml = (item.docs || []).map(d => {
+    const url = safeHttpUrl(d.url);
+    return url ? `<a class="concept-link" href="${url}" target="_blank" rel="noopener noreferrer">&#128214; ${d.label}</a>` : '';
+  }).join('');
 
   return `<div class="card" style="border-left:3px solid ${m.color};">
     <div class="item-header">

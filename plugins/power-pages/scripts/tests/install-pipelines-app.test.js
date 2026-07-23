@@ -5,6 +5,7 @@ const {
   installPipelinesApp,
   discoverPackage,
   isTerminalSucceeded,
+  tryPacFallback,
   PIPELINES_PACKAGE_UNIQUE_NAMES,
   PIPELINES_SOLUTION_UNIQUE_NAME,
 } = require('../lib/install-pipelines-app');
@@ -80,6 +81,30 @@ test('isTerminalSucceeded recognises both "Succeeded" and "Installed" terminal s
   assert.equal(isTerminalSucceeded('Installed'), true);
   assert.equal(isTerminalSucceeded('installing'), false);
   assert.equal(isTerminalSucceeded(''), false);
+});
+
+test('tryPacFallback invokes PAC with an argument array and no shell', () => {
+  let captured;
+  const result = tryPacFallback({
+    envId: 'env-id"; touch PWNED; #',
+    packageUniqueName: PACKAGE_NAME,
+    execFileImpl(file, args, options) {
+      captured = { file, args, options };
+      return 'Installed';
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(captured.file, 'pac');
+  assert.deepEqual(captured.args, [
+    'application',
+    'install',
+    '--environment-id',
+    'env-id"; touch PWNED; #',
+    '--application-list',
+    PACKAGE_NAME,
+  ]);
+  assert.equal(captured.options.shell, false);
 });
 
 // ── Required-args guard ───────────────────────────────────────────────────────

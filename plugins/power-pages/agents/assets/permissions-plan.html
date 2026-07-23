@@ -250,8 +250,11 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
   });
 });
 
+function safeColor(value) {
+  return /^#[0-9a-f]{3,8}$/i.test(String(value || '')) ? value : '#8890a4';
+}
 function getRoleName(id) { return ROLES.find(r => r.id === id)?.name || id; }
-function getRoleColor(id) { return ROLES.find(r => r.id === id)?.color || "#8890a4"; }
+function getRoleColor(id) { return safeColor(ROLES.find(r => r.id === id)?.color); }
 
 const scopeColors = {
   Global: 'var(--critical)', Contact: 'var(--pass)', Account: 'var(--accent)',
@@ -312,7 +315,7 @@ function renderRoles() {
     html += `<div class="card" style="cursor:default;${r.isNew ? 'background:var(--accent-bg);border-color:var(--accent-border);' : ''}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;">
         <div style="display:flex;align-items:center;gap:10px;">
-          <div style="width:10px;height:10px;border-radius:50%;background:${r.color};flex-shrink:0;"></div>
+          <div style="width:10px;height:10px;border-radius:50%;background:${safeColor(r.color)};flex-shrink:0;"></div>
           <div>
             <span style="font-size:14px;font-weight:700;color:var(--text-bright)">${r.name}</span>
             ${r.builtin ? '<span class="builtin-badge">BUILT-IN</span>' : r.isNew ? '<span class="new-badge">PROPOSED</span>' : '<span class="existing-badge">EXISTING</span>'}

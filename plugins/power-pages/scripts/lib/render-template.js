@@ -17,9 +17,16 @@ const path = require('path');
  * @param {string} [options.dataPath]    - Absolute path to a JSON data file. Ignored if dataObject is provided.
  * @param {Object} [options.dataObject]  - Data object passed directly. If provided, takes precedence over dataPath.
  * @param {string[]} options.requiredKeys - Keys that must be present in the data
- * @param {boolean} [options.escapeStringValues=false] - Escape string values for HTML text contexts
+ * @param {boolean} [options.escapeNestedHtmlValues=false] - Encode nested strings that templates later pass to innerHTML
  */
-function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requiredKeys, escapeStringValues = false }) {
+function renderTemplate({
+  templatePath,
+  outputPath,
+  dataPath,
+  dataObject,
+  requiredKeys,
+  escapeNestedHtmlValues = false,
+}) {
   // Validate inputs exist
   if (!fs.existsSync(templatePath)) {
     console.error(`Template not found: ${templatePath}`);
@@ -45,18 +52,17 @@ function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requir
     process.exit(1);
   }
 
-  // Replace all __KEY__ placeholders with corresponding values from the data object.
-  // For non-string values (arrays/objects serialized to JSON), escape `<` as `\u003c`
-  // so a literal `</script>` inside string data cannot close a containing <script> tag.
-  // Templates that place string placeholders in HTML text contexts can opt in to
-  // string escaping with escapeStringValues.
+  // A placeholder can appear in HTML text and inline JavaScript in the same
+  // template. Replace script occurrences with JSON literals and HTML occurrences
+  // with entity-encoded text rather than applying one encoding to both contexts.
   let result = template;
   for (const [key, value] of Object.entries(data)) {
-    const placeholder = `__${key}__`;
-    const replacement = typeof value === 'string'
-      ? (escapeStringValues ? escapeHtml(value) : value)
-      : JSON.stringify(value).replace(/</g, '\\u003c');
-    result = result.split(placeholder).join(replacement);
+    result = replacePlaceholderByContext(
+      result,
+      `__${key}__`,
+      value,
+      { escapeNestedHtmlValues },
+    );
   }
 
   // Warn about any unreplaced placeholders (helps catch typos)
@@ -101,10 +107,75 @@ function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requir
 }
 
 function escapeHtml(value) {
-  return value
+  return String(value)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function escapeNestedHtml(value) {
+  if (typeof value === 'string') {
+    // Nested values are later interpolated into innerHTML by legacy report
+    // templates. Escaping tag and attribute delimiters here makes those values
+    // text without changing ordinary ampersands.
+    return value
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+  if (Array.isArray(value)) {
+    return value.map(escapeNestedHtml);
+  }
+  if (value && typeof value === 'object') {
+    const escaped = {};
+    for (const [key, nestedValue] of Object.entries(value)) {
+      escaped[key] = escapeNestedHtml(nestedValue);
+    }
+    return escaped;
+  }
+  return value;
+}
+
+function serializeForInlineScript(value, { escapeNestedHtmlValues = false } = {}) {
+  const serializable = (
+    escapeNestedHtmlValues &&
+    value !== null &&
+    typeof value === 'object'
+  )
+    ? escapeNestedHtml(value)
+    : value;
+  const serialized = JSON.stringify(serializable);
+  return (serialized === undefined ? 'null' : serialized)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
+function replacePlaceholderByContext(template, placeholder, value, options) {
+  const scriptReplacement = serializeForInlineScript(value, options);
+  const scriptPattern = /<script\b[^>]*>[\s\S]*?<\/script>/gi;
+
+  const withScriptsReplaced = template.replace(scriptPattern, (scriptBlock) => {
+    let replaced = scriptBlock;
+    // Existing templates wrap some string placeholders in JavaScript quotes or
+    // template literals. Replace the delimiters too so JSON supplies the only
+    // string quoting and escaping.
+    for (const quote of ['"', "'", '`']) {
+      replaced = replaced.split(`${quote}${placeholder}${quote}`).join(scriptReplacement);
+    }
+    return replaced.split(placeholder).join(scriptReplacement);
+  });
+
+  const htmlValue = typeof value === 'string'
+    ? value
+    : JSON.stringify(value);
+  return withScriptsReplaced
+    .split(placeholder)
+    .join(escapeHtml(htmlValue === undefined ? '' : htmlValue));
 }
 
 function parseArgs(argv) {
@@ -117,4 +188,10 @@ function parseArgs(argv) {
   return args;
 }
 
-module.exports = { renderTemplate, parseArgs };
+module.exports = {
+  renderTemplate,
+  parseArgs,
+  escapeHtml,
+  escapeNestedHtml,
+  serializeForInlineScript,
+};

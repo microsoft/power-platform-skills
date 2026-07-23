@@ -23,7 +23,7 @@ Organization Unique Name:    contoso
 Organization Friendly Name:  Contoso
 `;
 
-test("returns { orgId, tenantId } parsed from `pac auth who` output", () => {
+test("returns routing data and documented identifiers parsed from `pac auth who` output", () => {
   pacAuth._resetCache();
   const result = pacAuth.readPacAuth({ _exec: () => SAMPLE_OUTPUT });
   assert.deepEqual(result, {
@@ -31,10 +31,11 @@ test("returns { orgId, tenantId } parsed from `pac auth who` output", () => {
     tenantId: "11111111-1111-1111-1111-111111111111",
     cloud: "Public",
     objectId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    geoName: "NorthAmerica",
   });
 });
 
-test("returns objectId: '' when the Entra ID Object Id line is missing", () => {
+test("returns available identifiers and leaves missing values empty", () => {
   pacAuth._resetCache();
   const result = pacAuth.readPacAuth({
     _exec: () =>
@@ -42,10 +43,16 @@ test("returns objectId: '' when the Entra ID Object Id line is missing", () => {
       "Tenant Id: 11111111-1111-1111-1111-111111111111\n" +
       "Organization Id: 33333333-3333-3333-3333-333333333333\n",
   });
-  assert.equal(result.objectId, "");
+  assert.deepEqual(result, {
+    orgId: "33333333-3333-3333-3333-333333333333",
+    tenantId: "11111111-1111-1111-1111-111111111111",
+    cloud: "Public",
+    objectId: "",
+    geoName: "",
+  });
 });
 
-test("returns { orgId: '', tenantId } when only Tenant Id line present", () => {
+test("returns the cloud when only Cloud and Tenant Id are present", () => {
   pacAuth._resetCache();
   const result = pacAuth.readPacAuth({
     _exec: () =>
@@ -56,10 +63,11 @@ test("returns { orgId: '', tenantId } when only Tenant Id line present", () => {
     tenantId: "11111111-1111-1111-1111-111111111111",
     cloud: "Public",
     objectId: "",
+    geoName: "",
   });
 });
 
-test("returns { tenantId: '', orgId } when only Organization Id line present", () => {
+test("returns the cloud when only Cloud and Organization Id are present", () => {
   pacAuth._resetCache();
   const result = pacAuth.readPacAuth({
     _exec: () =>
@@ -70,15 +78,22 @@ test("returns { tenantId: '', orgId } when only Organization Id line present", (
     tenantId: "",
     cloud: "Public",
     objectId: "",
+    geoName: "",
   });
 });
 
-test("returns null when neither Tenant Id nor Organization Id is found", () => {
+test("returns the cloud without requiring identity fields", () => {
   pacAuth._resetCache();
   const result = pacAuth.readPacAuth({
     _exec: () => "Type: Universal\nCloud: Public\n",
   });
-  assert.equal(result, null);
+  assert.deepEqual(result, {
+    orgId: "",
+    tenantId: "",
+    cloud: "Public",
+    objectId: "",
+    geoName: "",
+  });
 });
 
 test("returns null when pac is missing (ENOENT)", () => {
@@ -147,18 +162,13 @@ test("respects _exec=false short-circuit (returns null without forking)", () => 
   assert.equal(result, null);
 });
 
-test("parses values with extra whitespace and mixed casing in label", () => {
+test("returns null when Cloud is absent even if identity fields are present", () => {
   pacAuth._resetCache();
   const result = pacAuth.readPacAuth({
     _exec: () =>
       "tenant ID:   11111111-1111-1111-1111-111111111111\nORGANIZATION ID:    33333333-3333-3333-3333-333333333333\n",
   });
-  assert.deepEqual(result, {
-    orgId: "33333333-3333-3333-3333-333333333333",
-    tenantId: "11111111-1111-1111-1111-111111111111",
-    cloud: "",
-    objectId: "",
-  });
+  assert.equal(result, null);
 });
 
 test("readPacAuth parses Cloud line", () => {
@@ -171,13 +181,13 @@ test("readPacAuth parses Cloud line", () => {
   assert.equal(result.cloud, "Public");
 });
 
-test("readPacAuth returns empty cloud when Cloud line is missing", () => {
+test("readPacAuth returns null when Cloud line is missing", () => {
   pacAuth._resetCache();
   const fakeExec = () =>
     "Tenant Id:        11111111-1111-1111-1111-111111111111\n" +
     "Organization Id:  22222222-2222-2222-2222-222222222222\n";
   const result = pacAuth.readPacAuth({ _exec: fakeExec });
-  assert.equal(result.cloud, "");
+  assert.equal(result, null);
 });
 
 test("readPacAuth parses Cloud with sovereign values", () => {

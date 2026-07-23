@@ -51,7 +51,19 @@ if (args['data-inline']) {
     console.error('Error: --data-inline value is not valid JSON');
     process.exit(1);
   }
-  renderTemplate({ templatePath, outputPath: path.resolve(args.output), dataObject, requiredKeys });
+  renderTemplate({
+    templatePath,
+    outputPath: path.resolve(args.output),
+    dataObject,
+    requiredKeys,
+    escapeNestedHtmlValues: true,
+  });
 } else {
-  renderTemplate({ templatePath, outputPath: path.resolve(args.output), dataPath: path.resolve(args.data), requiredKeys });
+  renderTemplate({
+    templatePath,
+    outputPath: path.resolve(args.output),
+    dataPath: path.resolve(args.data),
+    requiredKeys,
+    escapeNestedHtmlValues: true,
+  });
 }

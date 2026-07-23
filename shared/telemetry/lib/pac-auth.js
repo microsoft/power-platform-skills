@@ -17,8 +17,8 @@ const { execFileSync } = require("node:child_process");
 
 // Cold-start `pac auth who` on Windows is consistently ~3.5-4s (.NET runtime
 // startup + cached-token validation). 3s was too tight and produced silent
-// timeouts that surfaced as missing orgId/tenantId in every event. 8s gives
-// comfortable headroom while staying well under the hook's 30s budget.
+// cloud-routing misses. 8s gives comfortable headroom while staying well under
+// the hook's 30s budget.
 const TIMEOUT_MS = 8000;
 
 let cache;
@@ -56,19 +56,27 @@ function readPacAuth(opts = {}) {
     cache = null;
     return null;
   }
+  // `pac auth who` emits a label/value block, for example:
+  //   Tenant Id:           11111111-1111-1111-1111-111111111111
+  //   Entra ID Object Id:  aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
+  //   Organization Id:     33333333-3333-3333-3333-333333333333
+  // Values are optional across PAC versions and auth profile types, so preserve
+  // the stable result shape with empty strings when a label is absent.
   const tenantId = pickLine(output, "Tenant Id");
   const orgId = pickLine(output, "Organization Id");
   const cloud = pickLine(output, "Cloud");
   const objectId = pickLine(output, "Entra ID Object Id");
-  if (!tenantId && !orgId) {
+  const geoName = pickLine(output, "Environment Geo");
+  if (!cloud) {
     cache = null;
     return null;
   }
   cache = {
     orgId: orgId || "",
     tenantId: tenantId || "",
-    cloud: cloud || "",
+    cloud,
     objectId: objectId || "",
+    geoName: geoName || "",
   };
   return cache;
 }

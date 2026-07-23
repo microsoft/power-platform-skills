@@ -127,6 +127,7 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
   try {
     emit(event, {
       cloud: (pacAuth && pacAuth.cloud) || "",
+      geoName: (pacAuth && pacAuth.geoName) || "",
       configDir: process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "",
       fakeProbe: process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "",
       ikeyJsonPath: ikeyPath,

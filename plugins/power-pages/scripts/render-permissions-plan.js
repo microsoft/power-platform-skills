@@ -26,4 +26,5 @@ renderTemplate({
   outputPath: path.resolve(args.output),
   dataPath: path.resolve(args.data),
   requiredKeys: ['SITE_NAME', 'SUMMARY', 'ROLES_DATA', 'PERMISSIONS_DATA', 'RATIONALE_DATA'],
+  escapeNestedHtmlValues: true,
 });

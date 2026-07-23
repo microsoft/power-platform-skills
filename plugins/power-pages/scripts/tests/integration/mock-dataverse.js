@@ -4,7 +4,9 @@
 //
 // Built once per test: give it a map of URL-path → response body (or a handler
 // function that returns { statusCode, body }). Start it, use the URL it binds
-// to, stop it when done.
+// to, stop it when done. The test transport intentionally speaks HTTP to
+// localhost; production makeRequest rejects that destination before sending
+// an access token.
 //
 // Why this exists: `discover-site-components.js`, `resolve-target-solution.js`,
 // and `estimate-solution-size.js` are exercised via unit tests with injected
@@ -62,10 +64,38 @@ async function startMock(routes) {
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const port = server.address().port;
+  const makeRequest = (options, body = null) => new Promise((resolve) => {
+    const parsed = new URL(options.url);
+    const req = http.request({
+      hostname: parsed.hostname,
+      port: parsed.port,
+      path: `${parsed.pathname}${parsed.search}`,
+      method: options.method || 'GET',
+      headers: options.headers || {},
+    }, (res) => {
+      let responseBody = '';
+      res.on('data', (chunk) => { responseBody += chunk; });
+      res.on('end', () => resolve({
+        statusCode: res.statusCode,
+        headers: res.headers,
+        body: responseBody,
+      }));
+    });
+    req.on('error', (error) => resolve({ error: error.message }));
+    if (options.timeout) {
+      req.setTimeout(options.timeout, () => {
+        req.destroy();
+        resolve({ error: 'Request timed out' });
+      });
+    }
+    if (body) req.write(body);
+    req.end();
+  });
   return {
     baseUrl: `http://127.0.0.1:${port}`,
     port,
     calls,
+    makeRequest,
     close: () =>
       new Promise((resolve) => {
         server.close(() => resolve());

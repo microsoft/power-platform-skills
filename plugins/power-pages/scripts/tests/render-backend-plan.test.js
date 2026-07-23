@@ -148,3 +148,30 @@ test('render-backend-plan refuses to overwrite existing file', () => {
   assert.match(result2.stderr, /Output file already exists/);
   assert.equal(fs.readFileSync(outputPath, 'utf8'), original);
 });
+
+test('render-backend-plan drops non-HTTP documentation URLs', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'backend-plan-url-'));
+  const outputPath = path.join(tempDir, 'backend-plan.html');
+  const malicious = {
+    ...SAMPLE_DATA,
+    ITEMS_DATA: [{
+      ...SAMPLE_DATA.ITEMS_DATA[0],
+      docs: [
+        { label: 'Unsafe', url: 'javascript:window.__urlPwned=1' },
+        { label: 'Safe', url: 'https://learn.microsoft.com/power-pages/' },
+      ],
+    }],
+  };
+
+  const result = spawnSync(
+    process.execPath,
+    [scriptPath, '--output', outputPath, '--data-inline', JSON.stringify(malicious)],
+    { encoding: 'utf8' },
+  );
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const html = fs.readFileSync(outputPath, 'utf8');
+  assert.doesNotMatch(html, /javascript:window\.__urlPwned/);
+  assert.match(html, /https:\/\/learn\.microsoft\.com\/power-pages\//);
+  assert.match(html, /rel="noopener noreferrer"/);
+});

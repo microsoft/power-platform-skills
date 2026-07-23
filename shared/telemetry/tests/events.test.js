@@ -60,18 +60,22 @@ test("buildSkillCompleted with failure outcome → severity Error", () => {
   assert.equal(ev.data.errorClass, "TypeError");
 });
 
-test("buildSkillStarted drops fields not in allowlist", () => {
+test("buildSkillStarted keeps documented identity fields and drops unknown fields", () => {
   const ev = buildSkillStarted(ENVELOPE, {
     ...common,
     skillName: "add-seo",
     tenantId: "11111111-1111-1111-1111-111111111111",
     orgId: "22222222-2222-2222-2222-222222222222",
+    eventInfo: { aadObjectId: "33333333-3333-3333-3333-333333333333" },
     leaked_field: "SHOULD_NOT_APPEAR",
     file_path: "/etc/passwd",
     error_message: "secret",
   });
   assert.equal(ev.data.tenantId, "11111111-1111-1111-1111-111111111111");
   assert.equal(ev.data.orgId, "22222222-2222-2222-2222-222222222222");
+  assert.deepEqual(ev.data.eventInfo, {
+    aadObjectId: "33333333-3333-3333-3333-333333333333",
+  });
   assert.equal(ev.data.leaked_field, undefined);
   assert.equal(ev.data.file_path, undefined);
   assert.equal(ev.data.error_message, undefined);
@@ -123,14 +127,13 @@ test("data has stable key set across calls (no key drift)", () => {
   assert.deepEqual(Object.keys(ev.data).sort(), expectedKeys);
 });
 
-test("eventInfo passes through as a dynamic object (not stringified)", () => {
+test("eventInfo carries documented structured identity data", () => {
   const eventInfo = { region: "us-west", attempt: 3, nested: { a: 1 } };
   const ev = buildSkillStarted(ENVELOPE, {
     ...common,
     skillName: "add-seo",
     eventInfo,
   });
-  assert.equal(typeof ev.data.eventInfo, "object");
   assert.deepEqual(ev.data.eventInfo, eventInfo);
 });
 
@@ -253,7 +256,7 @@ test("eventInfo drops non-object values (no Kusto dynamic-type confusion)", () =
   }
 });
 
-test("eventInfo accepts arrays (valid JSON for dynamic column)", () => {
+test("eventInfo arrays are accepted as structured data", () => {
   const ev = buildSkillStarted(ENVELOPE, {
     ...common,
     skillName: "x",
@@ -318,8 +321,8 @@ test("FIELD_TYPES is exported and covers every field used in builders", () => {
   const usedFields = [
     "pluginName", "pluginVersion", "sessionId", "correlationId",
     "osName", "osVersion", "nodeVersion",
-    "orgId", "tenantId", "pacCliVersion", "aiAgentName", "aiAgentVersion",
-    "eventInfo",
+    "orgId", "tenantId", "eventInfo",
+    "pacCliVersion", "aiAgentName", "aiAgentVersion",
     "skillName",
     "outcome", "durationMs", "errorClass", "errorDescription",
   ];

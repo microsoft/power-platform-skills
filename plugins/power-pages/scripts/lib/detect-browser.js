@@ -4,7 +4,7 @@
 // Returns a Playwright channel name ('msedge', 'chrome', 'chromium').
 // Used by the Playwright MCP launcher and the axe-core audit script.
 
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -15,7 +15,7 @@ function exists(filePath) {
 
 function whichExists(cmd) {
   try {
-    execSync(`which ${cmd}`, { stdio: 'ignore' });
+    execFileSync('which', [cmd], { stdio: 'ignore', shell: false });
     return true;
   } catch {
     return false;

@@ -13,6 +13,7 @@
  */
 
 const path = require('path');
+const fs = require('fs');
 const { renderTemplate, parseArgs } = require('./lib/render-template');
 
 const args = parseArgs(process.argv);
@@ -43,15 +44,49 @@ const requiredKeys = [
   'DATA_FLOWS_DATA',
 ];
 
-if (args['data-inline']) {
-  let dataObject;
+function safeDocumentationUrl(value) {
   try {
-    dataObject = JSON.parse(args['data-inline']);
+    const url = new URL(String(value));
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) return null;
+    return url.href;
   } catch {
-    console.error('Error: --data-inline value is not valid JSON');
-    process.exit(1);
+    return null;
   }
-  renderTemplate({ templatePath, outputPath: path.resolve(args.output), dataObject, requiredKeys });
-} else {
-  renderTemplate({ templatePath, outputPath: path.resolve(args.output), dataPath: path.resolve(args.data), requiredKeys });
 }
+
+function sanitizeBackendData(data) {
+  const items = Array.isArray(data.ITEMS_DATA)
+    ? data.ITEMS_DATA.map((item) => ({
+      ...item,
+      docs: Array.isArray(item.docs)
+        ? item.docs
+          .map((doc) => ({ ...doc, url: safeDocumentationUrl(doc.url) }))
+          .filter((doc) => doc.url)
+        : item.docs,
+    }))
+    : data.ITEMS_DATA;
+  return { ...data, ITEMS_DATA: items };
+}
+
+let dataObject;
+const dataPath = args.data ? path.resolve(args.data) : null;
+if (!args['data-inline'] && !fs.existsSync(dataPath)) {
+  console.error(`Data file not found: ${dataPath}`);
+  process.exit(1);
+}
+try {
+  dataObject = args['data-inline']
+    ? JSON.parse(args['data-inline'])
+    : JSON.parse(fs.readFileSync(dataPath, 'utf8'));
+} catch {
+  console.error(`Error: ${args['data-inline'] ? '--data-inline value' : '--data file'} is not valid JSON`);
+  process.exit(1);
+}
+
+renderTemplate({
+  templatePath,
+  outputPath: path.resolve(args.output),
+  dataObject: sanitizeBackendData(dataObject),
+  requiredKeys,
+  escapeNestedHtmlValues: true,
+});

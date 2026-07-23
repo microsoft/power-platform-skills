@@ -36,8 +36,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
-
 const helpers = require('./validation-helpers');
 const { almPath } = require('./alm-paths');
 const { checkEnvHostBinding } = require('./check-env-host-binding');
@@ -96,10 +94,7 @@ function originOf(url) {
 function getDataverseToken(originUrl, getTokenImpl) {
   if (typeof getTokenImpl === 'function') return getTokenImpl(originUrl);
   try {
-    return execSync(`az account get-access-token --resource "${originUrl}" --query accessToken -o tsv`, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim();
+    return helpers.getAuthToken(originUrl);
   } catch (e) {
     throw new Error(`az token acquisition failed for ${originUrl}: ${e.message || e.stderr?.toString() || 'unknown'}`);
   }
@@ -350,4 +345,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { detect, tryCacheFastPath };
+module.exports = { detect, tryCacheFastPath, getDataverseToken };

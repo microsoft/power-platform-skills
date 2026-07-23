@@ -5,33 +5,83 @@ const childProcess = require('child_process');
 
 const helpersPath = path.join(__dirname, '..', 'lib', 'validation-helpers.js');
 
-test('getAuthToken calls az account get-access-token without --allow-no-subscriptions (only az login accepts that flag)', (t) => {
-  const originalExecSync = childProcess.execSync;
-  let capturedCommand = null;
-
-  childProcess.execSync = (command, options) => {
-    capturedCommand = command;
+test('getAuthToken passes the validated resource as an argv element without a shell', () => {
+  let capturedCall = null;
+  const fakeExecFile = (file, args, options) => {
+    capturedCall = { file, args, options };
     const out = 'fake-token-value\n';
     return options && options.encoding ? out : Buffer.from(out);
   };
-  delete require.cache[require.resolve(helpersPath)];
-
-  t.after(() => {
-    childProcess.execSync = originalExecSync;
-    delete require.cache[require.resolve(helpersPath)];
-  });
 
   const { getAuthToken } = require(helpersPath);
-  const token = getAuthToken('https://example.crm.dynamics.com');
+  const token = getAuthToken('https://example.crm.dynamics.com/', fakeExecFile);
 
   assert.equal(token, 'fake-token-value');
-  assert.match(capturedCommand, /^az account get-access-token /);
-  assert.doesNotMatch(
-    capturedCommand,
-    /--allow-no-subscriptions/,
-    'az account get-access-token rejects --allow-no-subscriptions on recent CLI versions; the helper must omit it.',
+  assert.equal(capturedCall.file, 'az');
+  assert.deepEqual(
+    capturedCall.args,
+    [
+      'account',
+      'get-access-token',
+      '--resource',
+      'https://example.crm.dynamics.com',
+      '--query',
+      'accessToken',
+      '-o',
+      'tsv',
+    ],
   );
-  assert.match(capturedCommand, /--resource "https:\/\/example\.crm\.dynamics\.com"/);
+  assert.equal(capturedCall.options.shell, false);
+  assert.equal(capturedCall.args.includes('--allow-no-subscriptions'), false);
+});
+
+test('getAuthToken rejects shell metacharacters and non-Microsoft resource hosts before execution', () => {
+  const { getAuthToken } = require(helpersPath);
+  let called = false;
+  const fakeExecFile = () => {
+    called = true;
+    return 'should-not-run';
+  };
+
+  assert.throws(
+    () => getAuthToken('https://example.crm.dynamics.com/"; touch PWNED; #', fakeExecFile),
+    /origin URL|path|query|fragment/i,
+  );
+  assert.throws(
+    () => getAuthToken('https://attacker.example', fakeExecFile),
+    /trusted Microsoft Power Platform host/i,
+  );
+  assert.equal(called, false);
+});
+
+test('validatePowerPlatformUrl accepts supported public and sovereign cloud hosts', () => {
+  const { validatePowerPlatformUrl } = require(helpersPath);
+  const urls = [
+    'https://org.crm.dynamics.com',
+    'https://org.crm9.dynamics.com/api/data/v9.2/WhoAmI',
+    'https://org.crm.dynamics.cn',
+    'https://org.crm.microsoftdynamics.us',
+    'https://org.crm.appsplatform.us',
+    'https://api.powerplatform.com',
+    'https://api.gov.powerplatform.microsoft.us',
+    'https://api.powerplatform.partner.microsoftonline.cn',
+    'https://api.bap.microsoft.com',
+  ];
+
+  for (const url of urls) {
+    assert.doesNotThrow(() => validatePowerPlatformUrl(url), url);
+  }
+});
+
+test('makeRequest blocks bearer-token delivery to an untrusted URL', async () => {
+  const { makeRequest } = require(helpersPath);
+  await assert.rejects(
+    () => makeRequest({
+      url: 'https://attacker.example/collect',
+      bearerToken: 'sensitive-token',
+    }),
+    /trusted Microsoft Power Platform host/i,
+  );
 });
 
 // --- findProjectRoot: EDM / data-model site awareness ------------------------
@@ -42,7 +92,7 @@ test('findProjectRoot: recognizes a .powerpages-site/ directory as a project roo
   const { findProjectRoot } = require(helpersPath);
 
   // EDM/data-model site: .powerpages-site/ present, NO powerpages.config.json.
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fpr-edm-'));
+  const root = fs.mkdtempSync(path.join(__dirname, 'fpr-edm-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, '.powerpages-site'), { recursive: true });
   fs.writeFileSync(path.join(root, '.powerpages-site', 'website.yml'), 'id: x\nname: y\n');
@@ -55,7 +105,7 @@ test('findProjectRoot: still recognizes powerpages.config.json (code sites)', (t
   const os = require('os');
   const { findProjectRoot } = require(helpersPath);
 
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fpr-code-'));
+  const root = fs.mkdtempSync(path.join(__dirname, 'fpr-code-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, 'powerpages.config.json'), '{}');
 
@@ -67,7 +117,7 @@ test('findProjectRoot: returns null when neither marker is present', (t) => {
   const os = require('os');
   const { findProjectRoot } = require(helpersPath);
 
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fpr-none-'));
+  const root = fs.mkdtempSync(path.join(__dirname, 'fpr-none-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
 
   assert.equal(findProjectRoot(root), null);
@@ -144,11 +194,11 @@ test('parseEnvironmentUrl returns null when no URL label is present (and on empt
   assert.equal(parseEnvironmentUrl(null), null);
 });
 
-test('getEnvironmentUrl parses the 2.8.x "Org URL:" output via mocked execSync', (t) => {
-  const originalExecSync = childProcess.execSync;
-  childProcess.execSync = () => '  Org URL:   https://orgABC.crm.dynamics.com/\n';
-  t.after(() => { childProcess.execSync = originalExecSync; });
-  // Re-require fresh so the module binds the mocked execSync.
+test('getEnvironmentUrl parses the 2.8.x "Org URL:" output via mocked execFileSync', (t) => {
+  const originalExecFileSync = childProcess.execFileSync;
+  childProcess.execFileSync = () => '  Org URL:   https://orgABC.crm.dynamics.com/\n';
+  t.after(() => { childProcess.execFileSync = originalExecFileSync; });
+  // Re-require fresh so the module binds the mocked execFileSync.
   delete require.cache[require.resolve(helpersPath)];
   const { getEnvironmentUrl } = require(helpersPath);
   assert.equal(getEnvironmentUrl(), 'https://orgABC.crm.dynamics.com');

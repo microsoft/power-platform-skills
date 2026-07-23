@@ -5,8 +5,15 @@ const defaultCache = require("./region-cache");
 
 // Public-cloud geoName values → routing region. Anything not listed falls
 // through to defaultRegion. Sovereign clouds short-circuit via the stamp.
-const PUBLIC_US_GEOS = new Set(["us", "br", "jp", "in", "au", "ca", "as", "za", "ae", "kr"]);
-const PUBLIC_EU_GEOS = new Set(["eu", "uk", "de", "fr", "no", "ch"]);
+const PUBLIC_US_GEOS = new Set([
+  "us", "br", "jp", "in", "au", "ca", "as", "za", "ae", "kr",
+  "northamerica", "southamerica", "asia", "australia", "japan", "india",
+  "canada", "unitedstates", "brazil", "korea", "uae", "southafrica",
+]);
+const PUBLIC_EU_GEOS = new Set([
+  "eu", "uk", "de", "fr", "no", "ch",
+  "europe", "unitedkingdom", "germany", "france", "norway", "switzerland",
+]);
 
 // Derive the plugin-INDEPENDENT routing region from the org's cloud stamp + geo,
 // or null when the public geo is unrecognized (caller falls back to its own

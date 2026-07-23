@@ -121,6 +121,12 @@ test("exits 0 and emits skill_started to probe when skill is tracked (provisione
   assert.equal(body.data.eventName, "skill_started");
   assert.equal(body.data.pluginName, "power-pages");
   assert.equal(body.data.skillName, "create-site");
+  if (body.data.orgId !== undefined) assert.equal(typeof body.data.orgId, "string");
+  if (body.data.tenantId !== undefined) assert.equal(typeof body.data.tenantId, "string");
+  if (body.data.eventInfo !== undefined) {
+    assert.equal(typeof body.data.eventInfo, "string");
+    assert.equal(typeof JSON.parse(body.data.eventInfo).aadObjectId, "string");
+  }
 });
 
 test("pretool hook exits 0 when ikey.json has regions but default_region entry has no key", () => {

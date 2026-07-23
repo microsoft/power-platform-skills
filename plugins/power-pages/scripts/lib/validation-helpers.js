@@ -4,8 +4,41 @@
 // Provides common boilerplate so each validator only contains its unique logic.
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
+
+// Bearer tokens acquired by this plugin are scoped to Microsoft cloud services.
+// Restrict token acquisition and authenticated requests to the service domains
+// the plugin supports so a hostile manifest cannot redirect a token elsewhere.
+const TRUSTED_POWER_PLATFORM_HOST_SUFFIXES = [
+  'dynamics.com',
+  'dynamics.cn',
+  'microsoftdynamics.us',
+  'appsplatform.us',
+  'powerplatform.com',
+  'powerplatform.microsoft.us',
+  'powerplatform.partner.microsoftonline.cn',
+  'bap.microsoft.com',
+  'bap.microsoft.us',
+  'powerapps.com',
+  'powerapps.us',
+  'powerapps.cn',
+  'powerappsportals.com',
+  'powerappsportals.us',
+  'powerappsportals.cn',
+  'flow.microsoft.com',
+  'flow.microsoft.us',
+  'flow.microsoft.cn',
+  'logic.azure.com',
+  'vault.azure.net',
+  'vault.azure.com',
+  'vault.usgovcloudapi.net',
+  'vault.azure.cn',
+  'management.azure.com',
+  'management.usgovcloudapi.net',
+  'management.chinacloudapi.cn',
+];
 
 // Exit 0 = success (allow). Exit 2 = blocking error (stderr is fed back to Claude).
 const approve = () => { process.exit(0); };
@@ -103,8 +136,15 @@ function findPath(dir, target) {
  * @returns {string|null} Project root path, or null
  */
 function findProjectRoot(dir) {
-  let current = path.resolve(dir);
+  const start = path.resolve(dir);
+  const tempRoot = path.resolve(os.tmpdir());
+  let current = start;
   while (true) {
+    // Test runners and other applications share the system temporary root.
+    // Do not let a stale `.powerpages-site` under that shared ancestor claim
+    // unrelated temporary workspaces as children of one Power Pages project.
+    if (current === tempRoot && start !== tempRoot) break;
+
     if (fs.existsSync(path.join(current, 'powerpages.config.json')) ||
         fs.existsSync(path.join(current, '.powerpages-site'))) {
       return current;
@@ -145,11 +185,59 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
  * signing in via `az login --allow-no-subscriptions`.
  * @returns {string|null} Access token, or null if unavailable
  */
-function getAuthToken(resourceUrl) {
+function isTrustedPowerPlatformHost(hostname) {
+  const normalized = String(hostname || '').toLowerCase();
+  return TRUSTED_POWER_PLATFORM_HOST_SUFFIXES.some(
+    (suffix) => normalized === suffix || normalized.endsWith(`.${suffix}`),
+  );
+}
+
+function validatePowerPlatformUrl(value, { requireOrigin = false } = {}) {
+  let parsed;
   try {
-    return execSync(
-      `az account get-access-token --resource "${resourceUrl}" --query accessToken -o tsv`,
-      { encoding: 'utf8', timeout: 15000 }
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`Invalid Power Platform URL: ${value}`);
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error(`Power Platform URL must use HTTPS: ${value}`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error(`Power Platform URL must not contain credentials: ${value}`);
+  }
+  if (parsed.port && parsed.port !== '443') {
+    throw new Error(`Power Platform URL must use the default HTTPS port: ${value}`);
+  }
+  if (!isTrustedPowerPlatformHost(parsed.hostname)) {
+    throw new Error(`Power Platform URL is not a trusted Microsoft Power Platform host: ${value}`);
+  }
+  if (requireOrigin && (parsed.pathname !== '/' || parsed.search || parsed.hash)) {
+    throw new Error(`Power Platform token resource must be an origin URL without a path, query, or fragment: ${value}`);
+  }
+  return parsed;
+}
+
+function getAuthToken(resourceUrl, execFileImpl = execFileSync) {
+  const resource = validatePowerPlatformUrl(resourceUrl, { requireOrigin: true }).origin;
+  try {
+    return execFileImpl(
+      'az',
+      [
+        'account',
+        'get-access-token',
+        '--resource',
+        resource,
+        '--query',
+        'accessToken',
+        '-o',
+        'tsv',
+      ],
+      {
+        encoding: 'utf8',
+        timeout: 15000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: false,
+      },
     ).trim();
   } catch {
     return null;
@@ -177,7 +265,11 @@ function parseEnvironmentUrl(whoOutput) {
 
 function getEnvironmentUrl() {
   try {
-    const output = execSync('pac env who', { encoding: 'utf8', timeout: 15000 });
+    const output = execFileSync('pac', ['env', 'who'], {
+      encoding: 'utf8',
+      timeout: 15000,
+      shell: false,
+    });
     return parseEnvironmentUrl(output);
   } catch {
     return null;
@@ -190,7 +282,11 @@ function getEnvironmentUrl() {
  */
 function getPacAuthInfo() {
   try {
-    const output = execSync('pac auth who', { encoding: 'utf8', timeout: 15000 });
+    const output = execFileSync('pac', ['auth', 'who'], {
+      encoding: 'utf8',
+      timeout: 15000,
+      shell: false,
+    });
     const envMatch = output.match(/Environment ID:\s*([0-9a-fA-F-]+)/i);
     const cloudMatch = output.match(/Cloud:\s*(\S+)/i);
     if (!envMatch) return null;
@@ -215,16 +311,25 @@ function getPacAuthInfo() {
  * @param {number} [options.timeout=15000] - Timeout in ms
  * @returns {Promise<{ statusCode: number, body: string, headers?: object } | { error: string }>}
  */
-function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHeaders = false, timeout = 15000 }) {
+function makeRequest({ url, method = 'GET', bearerToken, headers = {}, body = null, includeHeaders = false, timeout = 15000 }) {
   return new Promise((resolve) => {
     const https = require('https');
     const http = require('http');
+    const authorization = bearerToken
+      ? `Bearer ${bearerToken}`
+      : (headers.Authorization || headers.authorization || '');
+    if (authorization) {
+      validatePowerPlatformUrl(url);
+    }
     const u = new URL(url);
     const mod = u.protocol === 'https:' ? https : http;
+    const requestHeaders = bearerToken
+      ? { ...headers, Authorization: authorization }
+      : headers;
     const req = mod.request(
       {
         method,
-        headers,
+        headers: requestHeaders,
         hostname: u.hostname,
         port: u.port || undefined,
         path: u.pathname + u.search,
@@ -335,6 +440,7 @@ module.exports = {
   findProjectRoot,
   findPowerPagesSiteDir,
   UUID_REGEX,
+  validatePowerPlatformUrl,
   getAuthToken,
   makeRequest,
   odataGet,

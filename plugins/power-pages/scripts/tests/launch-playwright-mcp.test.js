@@ -7,7 +7,6 @@ const { EventEmitter } = require('node:events');
 const {
   buildMcpArgs,
   launch,
-  quoteShellArg,
 } = require('../launch-playwright-mcp');
 
 test('buildMcpArgs launches Playwright MCP with fullscreen config', () => {
@@ -15,18 +14,22 @@ test('buildMcpArgs launches Playwright MCP with fullscreen config', () => {
   const args = buildMcpArgs('chrome');
   const configIndex = args.indexOf('--config');
 
-  assert.deepEqual(args.slice(0, 4), ['-y', '@playwright/mcp@latest', '--browser', 'chrome']);
+  assert.deepEqual(
+    args.slice(0, 5),
+    ['--yes', '--ignore-scripts', '--package=@playwright/mcp@0.0.78', 'playwright-mcp', '--browser'],
+  );
+  assert.equal(args[5], 'chrome');
   assert.equal(args.includes('--viewport-size'), false);
   assert.notEqual(configIndex, -1);
-  assert.equal(args[configIndex + 1], quoteShellArg(expectedConfigPath));
+  assert.equal(args[configIndex + 1], expectedConfigPath);
 });
 
-test('buildMcpArgs quotes Windows config paths containing spaces', () => {
+test('buildMcpArgs preserves Windows config paths as one argv element', () => {
   const configPath = 'C:\\Users\\Power User\\.claude\\plugins\\power-pages\\scripts\\playwright-mcp-fullscreen.config.json';
   const args = buildMcpArgs('msedge', { configPath, platform: 'win32' });
   const configIndex = args.indexOf('--config');
 
-  assert.equal(args[configIndex + 1], `"${configPath}"`);
+  assert.equal(args[configIndex + 1], configPath);
 });
 
 test('fullscreen config maximizes the browser and uses the real viewport size', () => {
@@ -43,6 +46,7 @@ test('launch wires spawn and process exit handling', () => {
 
   launch({
     browser: 'msedge',
+    npxCliPath: '/trusted/npm/bin/npx-cli.js',
     spawnFn(command, args, options) {
       spawnCall = { command, args, options };
       return child;
@@ -52,9 +56,20 @@ test('launch wires spawn and process exit handling', () => {
     },
   });
 
-  assert.equal(spawnCall.command, 'npx');
-  assert.deepEqual(spawnCall.args.slice(0, 4), ['-y', '@playwright/mcp@latest', '--browser', 'msedge']);
-  assert.deepEqual(spawnCall.options, { stdio: 'inherit', shell: true });
+  assert.equal(spawnCall.command, process.execPath);
+  assert.deepEqual(
+    spawnCall.args.slice(0, 7),
+    [
+      '/trusted/npm/bin/npx-cli.js',
+      '--yes',
+      '--ignore-scripts',
+      '--package=@playwright/mcp@0.0.78',
+      'playwright-mcp',
+      '--browser',
+      'msedge',
+    ],
+  );
+  assert.deepEqual(spawnCall.options, { stdio: 'inherit', shell: false });
 
   child.emit('exit', 7);
   assert.equal(spawnCall.exitCode, 7);

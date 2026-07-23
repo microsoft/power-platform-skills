@@ -1,5 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
@@ -99,4 +101,51 @@ test('store-keyvault-secret rejects empty stdin', () => {
   ], { input: '' });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Secret value is empty/);
+});
+
+test('store-keyvault-secret uses a private random directory and cleans it after Azure CLI failure', {
+  skip: process.platform === 'win32' ? 'Uses a POSIX executable fixture.' : false,
+}, () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kv-secret-security-'));
+  const binDir = path.join(root, 'bin');
+  const tempDir = path.join(root, 'tmp');
+  const capturePath = path.join(root, 'captured-path.txt');
+  fs.mkdirSync(binDir);
+  fs.mkdirSync(tempDir);
+
+  const fakeAz = path.join(binDir, 'az');
+  fs.writeFileSync(
+    fakeAz,
+    [
+      '#!/bin/sh',
+      'previous=""',
+      'for arg in "$@"; do',
+      '  if [ "$previous" = "--file" ]; then',
+      `    printf '%s' "$arg" > ${JSON.stringify(capturePath)}`,
+      '  fi',
+      '  previous="$arg"',
+      'done',
+      'exit 1',
+      '',
+    ].join('\n'),
+    { mode: 0o700 },
+  );
+
+  const result = runStoreKeyvaultSecret([
+    '--vaultName', 'my-vault',
+    '--secretName', 'my-secret',
+    '--secretValue', 'super-secret',
+  ], {
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}`,
+      TMPDIR: tempDir,
+    },
+  });
+
+  assert.equal(result.status, 1);
+  const secretPath = fs.readFileSync(capturePath, 'utf8');
+  assert.equal(path.dirname(secretPath) === tempDir, false);
+  assert.match(path.dirname(secretPath), new RegExp(`^${tempDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  assert.deepEqual(fs.readdirSync(tempDir), []);
 });

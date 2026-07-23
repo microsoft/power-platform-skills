@@ -154,6 +154,7 @@ function readStdin() {
       eventsLib.buildSkillStarted(eventStreamName, fields),
       {
         cloud: (pacAuth && pacAuth.cloud) || "",
+        geoName: (pacAuth && pacAuth.geoName) || "",
         configDir,
         fakeProbe,
         // Point the dispatcher at the same ikey.json readIkey() used — the

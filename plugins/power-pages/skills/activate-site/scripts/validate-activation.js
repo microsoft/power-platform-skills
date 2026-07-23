@@ -6,7 +6,7 @@
 // instead of relying on an intermediate file.
 
 const path = require('path');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const { approve, block, runValidation, findPath } = require('../../../scripts/lib/validation-helpers');
 
 runValidation(async (cwd) => {
@@ -18,9 +18,10 @@ runValidation(async (cwd) => {
 
   let result;
   try {
-    const output = execSync(`node "${checkScript}" --projectRoot "${projectRoot}"`, {
+    const output = execFileSync(process.execPath, [checkScript, '--projectRoot', projectRoot], {
       encoding: 'utf8',
       timeout: 30000,
+      shell: false,
     });
     result = JSON.parse(output);
   } catch {

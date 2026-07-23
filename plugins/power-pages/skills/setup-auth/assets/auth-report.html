@@ -201,9 +201,9 @@ td.col-fixed{width:38%;white-space:nowrap;}
 <footer style="position:fixed;bottom:0;left:0;right:0;text-align:center;padding:10px;font-size:12px;color:#605e5c;border-top:1px solid #c8c6c4;background:#ffffff;z-index:100;">AI-generated content may be incorrect</footer>
 
 <script>
-// All user-controlled data goes through .textContent — never innerHTML with
-// unsanitized values. META.nextStepsHtml is the one exception: it's authored by
-// the skill (not the user) and intentionally renders as HTML.
+// Report data is always inserted through DOM text nodes. Provider metadata can
+// originate in external documentation, so skill-authored data is not a trusted
+// HTML boundary.
 
 const META = __META_DATA__;
 const PROVIDERS = __PROVIDERS_DATA__;
@@ -216,7 +216,7 @@ const FILES = __FILES_DATA__;
 const SITE_NAME = META.siteName || '';
 const REPORT_DATE = META.reportDate || '';
 const FRAMEWORK = META.framework || '';
-const NEXT_STEPS_HTML = META.nextStepsHtml || '';
+const NEXT_STEPS = Array.isArray(META.nextSteps) ? META.nextSteps : [];
 
 document.title = 'Authentication Setup Report — ' + (SITE_NAME || 'Power Pages');
 document.getElementById('topbar-date').textContent = REPORT_DATE;
@@ -453,8 +453,29 @@ if (FILES.length === 0) {
   filesEl.appendChild(t);
 }
 
-// --- Next steps (HTML, skill-authored) ---
-document.getElementById('next-steps').innerHTML = NEXT_STEPS_HTML || '<p class="empty">No follow-up actions recorded.</p>';
+// --- Next steps ---
+const nextStepsEl = document.getElementById('next-steps');
+if (NEXT_STEPS.length === 0) {
+  const empty = document.createElement('p');
+  empty.className = 'empty';
+  empty.textContent = 'No follow-up actions recorded.';
+  nextStepsEl.appendChild(empty);
+} else {
+  const list = document.createElement('ol');
+  for (const step of NEXT_STEPS) {
+    const item = document.createElement('li');
+    const text = typeof step === 'string' ? step : (step && step.text) || '';
+    item.appendChild(document.createTextNode(text));
+    if (step && typeof step === 'object' && step.command) {
+      item.appendChild(document.createTextNode(' '));
+      const command = document.createElement('code');
+      command.textContent = step.command;
+      item.appendChild(command);
+    }
+    list.appendChild(item);
+  }
+  nextStepsEl.appendChild(list);
+}
 
 // --- Tab switching ---
 const navButtons = document.querySelectorAll('.nav-btn');

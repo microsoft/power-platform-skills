@@ -21,6 +21,7 @@ const DEFAULT_LOCAL_DIR = path.join(os.homedir(), ".power-platform-skills");
 const FAKE_PROBE = process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "";
 const CONFIG_DIR_ENV = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "";
 const CLOUD_ENV = process.env.POWER_PLATFORM_SKILLS_CLOUD || "";
+const GEO_ENV = process.env.POWER_PLATFORM_SKILLS_GEO || "";
 // Override env vars — TEST seams only. Production resolves the iKey/collector
 // via the plugin resolver / static config in ikey.json and never sets these.
 const IKEY_OVERRIDE = process.env.POWER_PLATFORM_SKILLS_IKEY || "";
@@ -30,7 +31,7 @@ function localConfigDir() {
   return CONFIG_DIR_ENV || DEFAULT_LOCAL_DIR;
 }
 
-// Anonymous telemetry is default-on. The user opt-out is per-plugin and lives in
+// Telemetry is default-on. The user opt-out is per-plugin and lives in
 // config.json (telemetry[<pluginName>] === "off"), written by the telemetry skill.
 // It suppresses TRANSMISSION only; the local mirror is written before this gate.
 function isUserOptedOut(pluginName) {
@@ -85,15 +86,11 @@ function sanitizeData(data) {
   return filtered;
 }
 
-// Build the CS4.0 envelope from a pre-sanitized payload + timestamp. `sanitized`
-// is shared with the local mirror so `data`/`time` stay byte-identical for
-// every field except `eventInfo`: the tenant-side field mapping flattens
-// `data.<key>` to a single `data_<key>` leaf and doesn't recurse into nested
-// objects, so `eventInfo` is stringified just for the wire to survive that
-// flattening. Kusto reads it back with `parse_json()`/`todynamic()`; the
-// local mirror keeps the real object for human readability.
 function buildEnvelope(eventName, time, sanitized, resolvedIKey, eventStreamName) {
   const wireData = { ...sanitized };
+  // The tenant-side field mapping flattens each data property to one leaf and
+  // does not recurse into dynamic values. Serialize eventInfo only for the wire;
+  // the local mirror keeps the structured value for diagnostics.
   if (wireData.eventInfo !== undefined) {
     wireData.eventInfo = JSON.stringify(wireData.eventInfo);
   }
@@ -145,9 +142,8 @@ process.stdin.on("end", async () => {
     return exitSilently();
   }
 
-  // Compute the sanitized payload + timestamp ONCE. The sanitized data is
-  // exactly what lands in Kusto (its field names ARE the Kusto column names),
-  // except `eventInfo` which buildEnvelope() re-serializes for the wire only.
+  // Compute the sanitized payload and timestamp once so the local mirror
+  // records exactly what is eligible for transmission.
   const time = new Date().toISOString();
   const sanitized = sanitizeData(event.data);
   const localRecord = { time, name: event.name, data: sanitized };
@@ -178,6 +174,7 @@ process.stdin.on("end", async () => {
           event,
           cfg,
           cloud: CLOUD_ENV,
+          geoName: GEO_ENV,
           configDir: CONFIG_DIR_ENV || undefined,
         });
       } catch {

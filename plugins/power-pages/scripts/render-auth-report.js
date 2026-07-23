@@ -7,7 +7,7 @@
  *   node render-auth-report.js --output <path> --data <json-file>
  *
  * Required keys in the JSON data file:
- *   META_DATA             — { siteName, reportDate, framework, nextStepsHtml }
+ *   META_DATA             - { siteName, reportDate, framework, nextSteps }
  *   PROVIDERS_DATA        — array of provider objects (may be empty)
  *   LOCAL_AUTH_DATA       — object or null
  *   OPTIONAL_FEATURES_DATA — object (may be empty)

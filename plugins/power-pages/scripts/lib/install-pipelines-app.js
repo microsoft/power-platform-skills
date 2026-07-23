@@ -59,7 +59,7 @@
 'use strict';
 
 const crypto = require('crypto');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const helpers = require('./validation-helpers');
 
 const DEFAULT_API_VERSION = '2022-03-01-preview';
@@ -208,7 +208,7 @@ function normalizePackage(pkg) {
 
 // PAC fallback path: shells out to `pac application install`. Used when the
 // BAP install POST returns 401/403/5xx.
-function tryPacFallback({ envId, packageUniqueName }) {
+function tryPacFallback({ envId, packageUniqueName, execFileImpl = execFileSync }) {
   // Best-effort. PAC's argument names have varied across versions, so we try
   // the modern form first and fall through to legacy on stderr signals.
   const candidates = [
@@ -218,10 +218,14 @@ function tryPacFallback({ envId, packageUniqueName }) {
   ];
   let lastErr = null;
   for (const argv of candidates) {
-    const cmd = ['pac', ...argv].map((a) => (/[\s"']/.test(a) ? `"${a}"` : a)).join(' ');
     try {
-      const out = execSync(cmd, { encoding: 'utf8', timeout: 600000, stdio: ['ignore', 'pipe', 'pipe'] });
-      return { ok: true, command: cmd, stdout: out };
+      const out = execFileImpl('pac', argv, {
+        encoding: 'utf8',
+        timeout: 600000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: false,
+      });
+      return { ok: true, command: { file: 'pac', args: argv }, stdout: out };
     } catch (err) {
       lastErr = err;
       // Try next candidate if PAC reports an unrecognized arg / subcommand.
@@ -509,6 +513,7 @@ module.exports = {
   isTerminalSucceeded,
   isTerminalFailed,
   readRetryAfterSec,
+  tryPacFallback,
   PIPELINES_PACKAGE_UNIQUE_NAMES,
   PIPELINES_PACKAGE_DISPLAY_PATTERNS,
   PIPELINES_SOLUTION_UNIQUE_NAME,

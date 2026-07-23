@@ -35,7 +35,7 @@
 
 'use strict';
 
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 
 function parseArgs(argv) {
   const args = argv.slice(2);
@@ -60,13 +60,14 @@ function log(msg, quiet) {
   if (!quiet) process.stderr.write(`[fix-blocked-attachments] ${msg}\n`);
 }
 
-function makePacRunner(execImpl) {
-  const exec = execImpl || execSync;
-  return function runPac(cmd) {
+function makePacRunner(execFileImpl) {
+  const execFile = execFileImpl || execFileSync;
+  return function runPac(args) {
     try {
-      const out = exec(`pac ${cmd}`, {
+      const out = execFile('pac', args, {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
+        shell: false,
       });
       return { ok: true, stdout: typeof out === 'string' ? out : (out || '') };
     } catch (e) {
@@ -90,13 +91,18 @@ function parseBlockedAttachmentsFromPacOutput(pacOutput) {
   return null;
 }
 
-async function fixBlockedAttachments({ envUrl, extensions, dryRun, quiet, execImpl } = {}) {
-  const runPac = makePacRunner(execImpl);
-  // Build pac command args for env targeting
-  const envArg = envUrl ? `--environment "${envUrl}"` : '';
+async function fixBlockedAttachments({ envUrl, extensions, dryRun, quiet, execFileImpl } = {}) {
+  const runPac = makePacRunner(execFileImpl);
+  const envArgs = envUrl ? ['--environment', envUrl] : [];
 
   log(`Reading blockedattachments from ${envUrl || '(current active env)'}`, quiet);
-  const listResult = runPac(`env list-settings ${envArg} --filter blockedattachments`);
+  const listResult = runPac([
+    'env',
+    'list-settings',
+    ...envArgs,
+    '--filter',
+    'blockedattachments',
+  ]);
   if (!listResult.ok) {
     throw new Error(`pac env list-settings failed: ${listResult.stderr || listResult.error}`);
   }
@@ -133,7 +139,15 @@ async function fixBlockedAttachments({ envUrl, extensions, dryRun, quiet, execIm
   log(`Will remove [${wasBlocked.join(', ')}] from blockedattachments`, quiet);
 
   if (!dryRun) {
-    const updateResult = runPac(`env update-settings ${envArg} --name blockedattachments --value "${newValue}"`);
+    const updateResult = runPac([
+      'env',
+      'update-settings',
+      ...envArgs,
+      '--name',
+      'blockedattachments',
+      '--value',
+      newValue,
+    ]);
     if (!updateResult.ok) {
       throw new Error(`pac env update-settings failed: ${updateResult.stderr || updateResult.error}`);
     }

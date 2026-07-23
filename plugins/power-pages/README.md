@@ -465,33 +465,14 @@ A common end-to-end workflow looks like this:
 
 Steps can be run independently — you don't need to follow this exact order. Each skill checks its own prerequisites and will tell you if something is missing. If something goes wrong, `/diagnose-deployment` pattern-matches deployment errors and `/report-issue` opens a pre-filled GitHub issue.
 
-## Running Without Interruption
+## Command permissions
 
-The plugin invokes multiple tools during a session. To reduce approval prompts:
+Keep your agent's normal permission checks enabled.
+Review commands case-by-case, especially commands that use `pac`, `az`, `git`, package managers, or identity-provider CLIs.
 
-**Option 1 — Permission mode (recommended)**
-
-```jsonc
-// .claude/settings.json
-{
-  "defaultMode": "acceptEdits",
-  "permissions": {
-    "allow": [
-      "Bash(npm run *)",
-      "Bash(git *)",
-      "Bash(pac *)",
-      "Bash(az *)",
-      "Bash(node *)"
-    ]
-  }
-}
-```
-
-**Option 2 — Auto-accept all**
-
-```bash
-claude --dangerously-skip-permissions
-```
+If your agent supports saved permissions, allow only an exact command or a narrowly scoped plugin script after you have reviewed it.
+Do not add wildcard shell permissions for broad executable families such as `node`, `npm`, `git`, `pac`, or `az`.
+Disabling permission checks gives plugin instructions and external content unrestricted command execution on your machine.
 
 ## ALM prompts you may see
 

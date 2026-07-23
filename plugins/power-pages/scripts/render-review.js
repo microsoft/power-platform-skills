@@ -38,6 +38,7 @@ function main() {
     outputPath: path.resolve(args.output),
     dataPath: path.resolve(args.data),
     requiredKeys: REQUIRED_KEYS,
+    escapeNestedHtmlValues: true,
   });
 }
 

@@ -608,7 +608,12 @@ function toggleErCompact() {
 }
 
 // Init
-mermaid.initialize({ startOnLoad: false, theme: 'default', er: { fontSize: 16, useMaxWidth: true } });
+mermaid.initialize({
+  startOnLoad: false,
+  securityLevel: 'strict',
+  theme: 'default',
+  er: { fontSize: 16, useMaxWidth: true },
+});
 renderRationale();
 renderTables();
 renderErDiagram();

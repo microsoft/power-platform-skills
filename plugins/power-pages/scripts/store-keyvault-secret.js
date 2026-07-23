@@ -83,13 +83,14 @@ if (!secretValue) {
   process.exit(1);
 }
 
-// Write the secret to a temp file with restrictive permissions (owner-only read/write).
-// This avoids passing the secret as a CLI argument to `az`, which would be visible
-// in process listings (ps, /proc) to other users on the same machine.
-const tmpFile = path.join(os.tmpdir(), `kv-secret-${process.pid}-${Date.now()}`);
+// Create an unpredictable owner-only directory, then create the secret file
+// exclusively inside it. A predictable filename in the shared temp directory
+// would let another local process pre-create a symlink before this write.
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kv-secret-'));
+const tmpFile = path.join(tmpDir, 'secret');
 
 try {
-  fs.writeFileSync(tmpFile, secretValue, { mode: 0o600 });
+  fs.writeFileSync(tmpFile, secretValue, { mode: 0o600, flag: 'wx' });
 
   const result = spawnSync('az', [
     'keyvault', 'secret', 'set',
@@ -103,25 +104,30 @@ try {
 
   if (result.error) {
     process.stderr.write('Failed to run Azure CLI. Ensure `az` is installed and available on PATH.\n');
-    process.exit(1);
-  }
-
-  if (result.status !== 0) {
+    process.exitCode = 1;
+  } else if (result.status !== 0) {
     process.stderr.write(
       `Failed to store secret in Key Vault "${vaultName}". Ensure you have access and the vault exists.\n`
     );
     if (result.stderr) process.stderr.write(result.stderr);
-    process.exit(1);
-  }
-
-  try {
-    const parsed = JSON.parse(result.stdout);
-    process.stdout.write(JSON.stringify(parsed));
-  } catch {
-    process.stderr.write('Failed to parse Azure CLI output.\n');
-    process.exit(1);
+    process.exitCode = 1;
+  } else {
+    try {
+      const parsed = JSON.parse(result.stdout);
+      process.stdout.write(JSON.stringify(parsed));
+    } catch {
+      process.stderr.write('Failed to parse Azure CLI output.\n');
+      process.exitCode = 1;
+    }
   }
 } finally {
-  // Always clean up the temp file
-  try { fs.unlinkSync(tmpFile); } catch { /* ignore cleanup errors */ }
+  // Remove the whole private directory even when Azure CLI fails or emits
+  // malformed output, so no secret-bearing file survives an error path.
+  try {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  } catch {
+    process.stderr.write('Failed to remove the temporary secret file. Delete the reported temporary directory before retrying.\n');
+    process.stderr.write(`Temporary directory: ${tmpDir}\n`);
+    process.exitCode = 1;
+  }
 }

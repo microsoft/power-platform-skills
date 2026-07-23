@@ -10,10 +10,8 @@
 //                  or negative values clamp to 0. Sent as number, not string.
 //   "object"     — Kusto column type `dynamic` (JSON). Plain objects and
 //                  arrays pass through; primitives, Date, RegExp, etc. are
-//                  dropped to avoid Kusto type confusion. Validated here as a
-//                  real object; emit-dispatcher.js re-serializes it to a JSON
-//                  string just before it hits the wire (see buildEnvelope),
-//                  so the Kusto side must `parse_json()` / `todynamic()` it.
+//                  dropped to avoid Kusto type confusion. The dispatcher
+//                  serializes this value for the flat wire mapping.
 //   "enum:a|b|c" — Kusto column type `string`. Only the listed values are
 //                  accepted; anything else is dropped.
 //
@@ -28,13 +26,12 @@ const FIELD_TYPES = {
   osName: "string",
   osVersion: "string",
   nodeVersion: "string",
-  // Common — PAC + agent
+  // Common — PAC identity + agent/runtime
   orgId: "string",
   tenantId: "string",
   pacCliVersion: "string",
   aiAgentName: "string",
   aiAgentVersion: "string",
-  // Common — caller-supplied dynamic JSON
   eventInfo: "object",
   // Skill
   skillName: "string",
@@ -67,9 +64,6 @@ const COMPLETED_FIELDS = ["outcome", "durationMs", "errorClass", "errorDescripti
 function isPlainStructured(v) {
   if (v === null || typeof v !== "object") return false;
   if (Array.isArray(v)) return true;
-  // Only plain objects (prototype Object.prototype or null) pass through —
-  // class instances like Date, RegExp, Map, Set, and Error are rejected so
-  // the dynamic `eventInfo` field can't carry unexpected shapes.
   const proto = Object.getPrototypeOf(v);
   return proto === Object.prototype || proto === null;
 }

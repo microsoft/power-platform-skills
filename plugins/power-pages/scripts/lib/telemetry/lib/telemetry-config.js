@@ -7,12 +7,12 @@ const path = require("node:path");
 const { setTelemetryChoice, effectiveTelemetryChoice } = require("./user-config");
 const { pluginLogDir, latestSessionLog } = require("./local-log");
 
-const ANONYMITY =
-  "ℹ️  No personal data is collected. Telemetry is anonymous — it records only\n" +
-  "   operational fields like skill name, plugin version, OS/Node versions,\n" +
-  "   PAC CLI and agent versions, and Dataverse org/tenant IDs when available.\n" +
-  "   It never includes file paths, prompts, tool inputs, site names, URLs,\n" +
-  "   credentials, usernames, or hostnames.";
+const DATA_DISCLOSURE =
+  "Telemetry records operational fields such as skill name, plugin version,\n" +
+  "OS/Node versions, PAC CLI and agent versions. When PAC is authenticated,\n" +
+  "it also records the Dataverse organization ID, Entra tenant ID, and signed-in\n" +
+  "principal's Entra object ID. It never includes file paths, prompts, tool inputs,\n" +
+  "site names, URLs, credentials, usernames, or hostnames.";
 
 function getArg(name) {
   const i = process.argv.indexOf(`--${name}`);
@@ -74,14 +74,14 @@ function main() {
     const on = effectiveTelemetryChoice(dir, plugin) !== "off"; // default ON; honors env override when no stored choice
     if (on) {
       out(`Telemetry (${plugin}): ON`);
-      out(ANONYMITY);
+      out(DATA_DISCLOSURE);
       emitLogLocations(dir, plugin);
     } else {
       out(`Telemetry (${plugin}): OFF — nothing is transmitted.`);
       out(`A local diagnostic log is still kept.`);
       emitLogLocations(dir, plugin);
       out(`Re-enable anytime with /${plugin}:telemetry on.`);
-      out(ANONYMITY);
+      out(DATA_DISCLOSURE);
     }
     process.exit(0);
   }
@@ -98,7 +98,7 @@ function main() {
   } else {
     out(`Telemetry (${plugin}): ON`);
   }
-  out(ANONYMITY);
+  out(DATA_DISCLOSURE);
   process.exit(0);
 }
 

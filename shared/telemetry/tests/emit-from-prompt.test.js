@@ -121,7 +121,7 @@ test("emits skill_started with envelope name from ikey.json", () => {
   assert.match(captured.event.data.nodeVersion, /^v\d+$/);
 });
 
-test("populates orgId/tenantId when PAC auth is present", () => {
+test("includes orgId and tenantId when PAC auth is present", () => {
   const telemetryDir = mkTelemetryDir({
     instrumentationKey: "x",
     collectorUrl: "https://x",
@@ -141,7 +141,7 @@ test("populates orgId/tenantId when PAC auth is present", () => {
   assert.equal(captured.event.data.tenantId, "11111111-1111-1111-1111-111111111111");
 });
 
-test("puts the Entra objectId into eventInfo.aadObjectId when present", () => {
+test("includes the Entra objectId in eventInfo when present", () => {
   const telemetryDir = mkTelemetryDir({
     instrumentationKey: "x",
     collectorUrl: "https://x",
@@ -290,7 +290,7 @@ test("forwards the plugin ikey.json path into spawn opts (so the dispatcher read
   assert.equal(captured.spawnOpts.ikeyJsonPath, path.join(telemetryDir, "ikey.json"));
 });
 
-test("forwards pacAuth.cloud into spawn opts", () => {
+test("forwards PAC cloud and geo into spawn opts", () => {
   const telemetryDir = mkTelemetryDir({
     instrumentationKey: "x",
     collectorUrl: "https://x",
@@ -301,9 +301,10 @@ test("forwards pacAuth.cloud into spawn opts", () => {
     promptText: "/power-pages:add-seo",
     telemetryDir,
     captured,
-    pacAuth: { cloud: "UsGov" },
+    pacAuth: { cloud: "UsGov", geoName: "NorthAmerica" },
   });
   assert.equal(captured.spawnOpts.cloud, "UsGov");
+  assert.equal(captured.spawnOpts.geoName, "NorthAmerica");
   assert.equal(captured.spawnOpts.iKey, undefined);
   assert.equal(captured.spawnOpts.collectorUrl, undefined);
 });
@@ -322,6 +323,7 @@ test("spawn opts include empty cloud when pacAuth has no cloud", () => {
     pacAuth: null,
   });
   assert.equal(captured.spawnOpts.cloud, "");
+  assert.equal(captured.spawnOpts.geoName, "");
 });
 
 test("does not throw when ikey.json is missing", () => {

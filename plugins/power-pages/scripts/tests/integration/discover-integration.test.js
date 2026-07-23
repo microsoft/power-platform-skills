@@ -79,6 +79,7 @@ test('integration: discover follows @odata.nextLink pagination against a real HT
       token: 'fake-integration-token',
       siteId: 'site-42',
       solutionId: 'sol-integration',
+      makeRequest: mock.makeRequest,
     });
 
     assert.equal(result.powerpagecomponents.total, 4, 'should aggregate both pages');
@@ -117,7 +118,12 @@ test('integration: discover surfaces HTTP 500 with a clear error', async () => {
   ]);
   try {
     await assert.rejects(
-      discoverSiteComponents({ envUrl: mock.baseUrl, token: 'x', siteId: 'site-42' }),
+      discoverSiteComponents({
+        envUrl: mock.baseUrl,
+        token: 'x',
+        siteId: 'site-42',
+        makeRequest: mock.makeRequest,
+      }),
       /HTTP 500/
     );
   } finally {
@@ -135,6 +141,7 @@ test('integration: discover survives an empty site (no components, no solutionId
       envUrl: mock.baseUrl,
       token: 'x',
       siteId: 'site-empty',
+      makeRequest: mock.makeRequest,
     });
     assert.equal(result.powerpagecomponents.total, 0);
     assert.deepEqual(Object.keys(result.powerpagecomponents.byType), []);
@@ -169,6 +176,7 @@ test('integration: countSolutionMembership cross-site safety check flags ppcs no
       'sol-xyz',
       'fake-token',
       sitePpcIdSet,
+      mock.makeRequest,
     );
     assert.equal(result.total, 5);
     assert.equal(result.byComponentType[10373], 3);
@@ -196,6 +204,7 @@ test('integration: countSolutionMembership returns empty crossSitePpcs when site
       'sol-xyz',
       'fake-token',
       null,
+      mock.makeRequest,
     );
     assert.deepEqual(result.crossSitePpcs, [],
       'no cross-site check when caller did not supply the site set');
@@ -257,6 +266,7 @@ test('integration: discover with publisherPrefix queries env vars + tables endpo
       siteId: 'site-42',
       publisherPrefix: 'contoso',
       projectRoot,
+      makeRequest: mock.makeRequest,
     });
     assert.equal(result.envVars.length, 1);
     assert.equal(result.envVars[0].schemaName, 'contoso_FeatureFlag');
