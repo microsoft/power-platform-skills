@@ -958,6 +958,19 @@ async function runSdkBuild(spec, opts = {}) {
   //     on the entity's command bar in the app regardless).
   if (has('commands')) {
     for (const [entityLogical, cmds] of Object.entries(commandsByEntity(spec))) {
+      // Additive discover-reconcile (design §14): one command artifact per entity (identity = entity).
+      // Re-pushing the appaction on every rebuild risks a duplicate command bar on the entity, so
+      // discover-then-skip like charts/dashboards. Discovery is `resolveArtifact('command', { entity })`
+      // (findArtifact has no command kind; the vendored resolveArtifact — what teardown uses to find a
+      // per-entity command — does). Button EDITS are not reapplied on a rebuild — recreate to change.
+      // Never removes buttons (additive only).
+      const existing = await provision.resolveArtifact('command', { entity: entityLogical });
+      const existingId = existing && existing[0] && existing[0].id;
+      if (existingId) {
+        runner.skip('commands', `command bar for ${entityLogical} (exists — reuse; button edits aren't applied on rebuild, recreate to change)`);
+        result.created.commands[entityLogical] = existingId;
+        continue;
+      }
       await runner.run('commands', `command bar for ${entityLogical} (${cmds.length} button(s))`, async () => {
         const def = commandDef(entityLogical, cmds, result.created.webResources);
         const art = provision.createArtifact('command', def);
@@ -973,6 +986,19 @@ async function runSdkBuild(spec, opts = {}) {
   //     Global (no entity); placement in the app sitemap is manual for now.
   if (has('dashboards')) {
     for (const dash of spec.dashboards || []) {
+      // Additive discover-reconcile (design §14): a dashboard is global (identity = name), so a rebuild
+      // or retry must REUSE the existing one instead of createArtifact-ing a duplicate every run (the old
+      // behavior). Discovery is `resolveArtifact('dashboard', { name })` — findArtifact does NOT support
+      // the dashboard kind (only view/chart/form/app), but the vendored bundle's resolveArtifact does (it
+      // is what the teardown engine uses to find dashboards, sdk-teardown.js). Like charts, dashboard TILE
+      // EDITS are not reapplied on a rebuild — recreate the dashboard to change it. Never removes tiles.
+      const existing = await provision.resolveArtifact('dashboard', { name: dash.name });
+      const existingId = existing && existing[0] && existing[0].id;
+      if (existingId) {
+        runner.skip('dashboards', `dashboard "${dash.name}" (exists — reuse; tile edits aren't applied on rebuild, recreate to change)`);
+        result.created.dashboards[dash.name] = existingId;
+        continue;
+      }
       await runner.run('dashboards', `dashboard "${dash.name}" (${(dash.tiles || []).length} tile(s))`, async () => {
         const art = provision.createArtifact('dashboard', { name: dash.name });
         (dash.tiles || []).forEach((tile, ti) => provision.addElement('dashboard', art.id, '/components', dashboardComponent(dashboardTileOpts(spec, tile, result), ti)));

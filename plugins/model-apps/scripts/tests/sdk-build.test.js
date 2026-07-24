@@ -83,6 +83,26 @@ function mockSdk(opts = {}) {
       if (kind === 'app') return 'app-existing';
       return null;
     },
+    // Discovery seam mirrored from the vendored bundle. The teardown engine — and now the additive
+    // commands/dashboards reconcile — uses resolveArtifact for the `dashboard`/`command` kinds that
+    // findArtifact does NOT support. Returns [{ id, name?/entity? }]. Honors seeded existing artifacts
+    // (opts.existingDashboards / opts.existingCommands) AND anything created into `store` this run, so a
+    // rebuild in the same test observes the first run's artifacts — proving the reconcile never duplicates.
+    resolveArtifact: async (kind, identity) => {
+      calls.push({ name: 'resolveArtifact', args: [kind, identity] });
+      const out = [];
+      if (kind === 'dashboard') {
+        for (const n of opts.existingDashboards || []) out.push({ id: `dashboard-existing-${n}`, name: n });
+        for (const k of Object.keys(store)) if (k.startsWith('dashboard:') && store[k].name) out.push({ id: store[k].id, name: store[k].name });
+        return identity && identity.name != null ? out.filter((o) => o.name === identity.name) : out;
+      }
+      if (kind === 'command') {
+        for (const e of opts.existingCommands || []) out.push({ id: `command-existing-${e}`, entity: e });
+        for (const k of Object.keys(store)) if (k.startsWith('command:') && store[k].entityLogicalName) out.push({ id: store[k].id, entity: store[k].entityLogicalName });
+        return identity && identity.entity != null ? out.filter((o) => o.entity === identity.entity) : out;
+      }
+      return [];
+    },
     createWebResource: async (o) => { calls.push({ name: 'createWebResource', args: [o] }); return { id: `wr-${++idc}`, name: o.name }; },
     fetchArtifact: async (t, id) => {
       calls.push({ name: 'fetchArtifact', args: [t, id] });
@@ -778,6 +798,49 @@ test('dashboards: chart + list tiles resolve the created view/visualization ids'
   // added to the solution as a systemform (60) and pushed
   assert.ok(find(calls, 'pushArtifact').some((c) => c.args[0] === 'dashboard'));
   assert.ok(find(calls, 'addSolutionComponent').some((c) => c.args[0].componentType === 60));
+});
+
+test('dashboards: an existing dashboard is reused (no duplicate) and reported in result.created', async () => {
+  const spec = makeSpec();
+  spec.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Tickets', name: 'Recent' }] }];
+  const { sdk, calls } = mockSdk({ existingDashboards: ['Ops'] });
+  const result = await runSdkBuild(spec, { sdk, apply: true });
+  // The old code create-duplicated every run; the reconcile must NOT create when one already exists.
+  assert.ok(!find(calls, 'createArtifact').some((c) => c.args[0] === 'dashboard'), 'no duplicate dashboard created');
+  // The existing id is still threaded into result.created so downstream references resolve.
+  assert.strictEqual(result.created.dashboards.Ops, 'dashboard-existing-Ops');
+  assert.ok(find(calls, 'resolveArtifact').some((c) => c.args[0] === 'dashboard' && c.args[1].name === 'Ops'), 'discovered via resolveArtifact');
+});
+
+test('dashboards: a new dashboard is still created + pushed + added to the solution', async () => {
+  const spec = makeSpec();
+  spec.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Tickets', name: 'Recent' }] }];
+  const { sdk, calls } = mockSdk(); // nothing pre-exists
+  const result = await runSdkBuild(spec, { sdk, apply: true });
+  assert.ok(find(calls, 'createArtifact').some((c) => c.args[0] === 'dashboard'), 'dashboard created when absent');
+  assert.ok(find(calls, 'pushArtifact').some((c) => c.args[0] === 'dashboard'), 'dashboard pushed');
+  assert.ok(result.created.dashboards.Ops, 'created id recorded');
+});
+
+test('commands: an existing command bar is reused (no duplicate) and reported in result.created', async () => {
+  const spec = makeSpec();
+  spec.webResources = [{ name: 'new_ticket.js', type: 'js', content: 'var T={a:function(){}};' }];
+  spec.commands = [{ entity: 'new_ticket', label: 'A', library: 'new_ticket.js', function: 'T.a' }];
+  const { sdk, calls } = mockSdk({ existingCommands: ['new_ticket'] });
+  const result = await runSdkBuild(spec, { sdk, apply: true });
+  assert.ok(!find(calls, 'createArtifact').some((c) => c.args[0] === 'command'), 'no duplicate command created');
+  assert.strictEqual(result.created.commands.new_ticket, 'command-existing-new_ticket');
+  assert.ok(find(calls, 'resolveArtifact').some((c) => c.args[0] === 'command' && c.args[1].entity === 'new_ticket'), 'discovered via resolveArtifact');
+});
+
+test('commands: a new command bar is still created + pushed', async () => {
+  const spec = makeSpec();
+  spec.webResources = [{ name: 'new_ticket.js', type: 'js', content: 'var T={a:function(){}};' }];
+  spec.commands = [{ entity: 'new_ticket', label: 'A', library: 'new_ticket.js', function: 'T.a' }];
+  const { sdk, calls } = mockSdk();
+  const result = await runSdkBuild(spec, { sdk, apply: true });
+  assert.ok(find(calls, 'createArtifact').some((c) => c.args[0] === 'command'), 'command created when absent');
+  assert.strictEqual(typeof result.created.commands.new_ticket, 'string');
 });
 
 test('commands: planFor lists a command bar per entity', () => {
