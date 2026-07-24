@@ -1071,11 +1071,16 @@ async function runSdkBuild(spec, opts = {}) {
         // a NEW chart added to an ALREADY-DEPLOYED app on an edit rebuild is NOT re-pinned as an
         // explicit app component (rebuild the app fresh, or add the chart via a dashboard/sitemap, if
         // it must be an explicit component). See docs/app-builder-roadmap.md.
-        provision.updateElement('app', existingId, '/siteMap', def.siteMap);
-        requireSuccessfulPush(await provision.pushArtifact('app', existingId), `app ${def.name}`);
-        // Page-backed apps get their authoritative sitemap (incl. GenPage subareas) + publish from
-        // the pages finalizer below; publish here only when there are no page subareas to wait for.
-        if (!appHasPageSubareas(spec)) await provision.publishArtifact('app', existingId);
+        // C2: the pages finalizer is the ONLY existing-app sitemap write for a page-backed app. Pushing
+        // the omitUnbuiltPages def HERE would persist a draft sitemap with every GenPage subarea stripped,
+        // so an enumeration/upload failure before the finalizer would leave the deployed app with broken
+        // nav. Defer the entire sitemap write (update + push + publish) to the finalizer, which pushes the
+        // FULL def (entity + resolved GenPage subareas). With no page subareas, keep today's behavior.
+        if (!appHasPageSubareas(spec)) {
+          provision.updateElement('app', existingId, '/siteMap', def.siteMap);
+          requireSuccessfulPush(await provision.pushArtifact('app', existingId), `app ${def.name}`);
+          await provision.publishArtifact('app', existingId);
+        }
         await ensureSitemapInSolution(provision, sol, def.uniqueName);
         return existingId;
       }

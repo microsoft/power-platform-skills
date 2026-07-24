@@ -132,7 +132,7 @@ function mockSdk(opts = {}) {
       if (!store[`${t}:${id}`]) {
         if (t === 'form') store[`${t}:${id}`] = seedForm(id, opts.existingFormFields || []);
         else if (t === 'view') store[`${t}:${id}`] = { id, columns: (opts.existingViewColumns || []).slice() };
-        else if (t === 'app') store[`${t}:${id}`] = { id, siteMap: { areas: [] } };
+        else if (t === 'app') store[`${t}:${id}`] = { id, siteMap: opts.existingSitemap ? JSON.parse(JSON.stringify(opts.existingSitemap)) : { areas: [] } };
         else store[`${t}:${id}`] = { id };
       }
       return store[`${t}:${id}`];
@@ -1547,4 +1547,50 @@ test('planFor emits one step per page + a manifest step (alignment)', () => {
   const labels = planFor(spec, { phases: PHASES }).map((p) => p.label);
   assert.strictEqual(labels.filter((l) => /^page "/.test(l)).length, 2, 'one step per page');
   assert.ok(labels.includes(`page manifest ${appUniqueName(spec)}_pagemanifest`), 'plan lists the manifest step');
+});
+
+// A prior deployed sitemap that ALREADY carries a GenPage subarea (the previous good deployment).
+const PRIOR_SITEMAP = { areas: [{ title: 'Main', groups: [{ title: 'Pages', subAreas: [{ type: 'GenPage', genPageId: 'gp-prev', title: 'Overview' }] }] }] };
+const hasGenPage = (sm, id) => (sm.areas || []).some((a) => (a.groups || []).some((g) => (g.subAreas || []).some((s) => s.type === 'GenPage' && s.genPageId === id)));
+
+test('C2: an EXISTING page-backed app does NOT push its sitemap in app-shell — an enumeration failure PRESERVES the prior sitemap', async () => {
+  const spec = makeSpec();
+  spec.schemaVersion = 2;
+  spec.pages = [{ key: 'overview', name: 'Overview', source: { kind: 'tsx', codeFile: 'o.tsx' } }];
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'overview', title: 'Overview' });
+  const appDir = stagePages(spec.pages);
+  try {
+    const { sdk, calls } = mockSdk({ artifactsExist: true, existingSitemap: PRIOR_SITEMAP });
+    const genpageCli = { list: async () => [], enumerate: async () => ({ ok: false, pages: [], error: 'boom' }), upload: async () => ({ pageId: 'gp-1' }) };
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+      (e) => e && e.code === 'pages-enumeration-failed'
+    );
+    assert.ok(!find(calls, 'updateElement').some((c) => c.args[2] === '/siteMap'), 'NO sitemap write in app-shell (deferred) and the finalizer was never reached');
+    const deployed = await sdk.fetchArtifact('app', 'app-existing');
+    assert.ok(hasGenPage(deployed.siteMap, 'gp-prev'), 'the PRIOR deployed sitemap (gp-prev) is intact — nav was not stripped');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('C2: an EXISTING page-backed app writes its sitemap ONCE, in the finalizer, with GenPage subareas resolved', async () => {
+  const spec = makeSpec();
+  spec.schemaVersion = 2;
+  spec.pages = [{ key: 'overview', name: 'Overview', source: { kind: 'tsx', codeFile: 'o.tsx' } }];
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'overview', title: 'Overview' });
+  const appDir = stagePages(spec.pages);
+  try {
+    const { sdk, calls } = mockSdk({ artifactsExist: true, existingSitemap: PRIOR_SITEMAP });
+    const genpageCli = { list: async () => [], enumerate: async () => ({ ok: true, pages: [], empty: true }), upload: async () => ({ pageId: 'gp-1' }) };
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+    const sitemapWrites = find(calls, 'updateElement').filter((c) => c.args[2] === '/siteMap');
+    assert.strictEqual(sitemapWrites.length, 1, 'exactly one sitemap write — the finalizer');
+    assert.ok(sitemapWrites[0].args[3].areas[0].groups[0].subAreas.some((s) => s.type === 'GenPage' && s.genPageId === 'gp-1'));
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('C2: an EXISTING app with NO page subareas still pushes its sitemap in app-shell (unchanged behavior)', async () => {
+  const spec = makeSpec(); // entity subarea only, no pages
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingSitemap: PRIOR_SITEMAP });
+  await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir: process.cwd(), phases: ['solution', 'data-model', 'app-shell'] });
+  assert.ok(find(calls, 'updateElement').some((c) => c.args[2] === '/siteMap'), 'a no-page existing app keeps pushing its sitemap in app-shell');
 });
