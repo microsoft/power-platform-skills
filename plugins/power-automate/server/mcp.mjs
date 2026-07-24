@@ -29256,8 +29256,19 @@ var FlowClient = class _FlowClient {
         logger.warn(`PPAPI endpoint unavailable for environment ${envId} (DNS not provisioned). Falling back to classic Flow RP API.`);
         return this.classicFlowRpRequest(envId, ppapiPath, method, body);
       }
+      if (this.isCdsPermissionError(err)) {
+        logger.warn(`PPAPI returned InsufficientCdsPermissions for environment ${envId}. Falling back to classic Flow RP API (different auth path).`);
+        return this.classicFlowRpRequest(envId, ppapiPath, method, body);
+      }
       throw err;
     }
+  }
+  /** Check if an error is an InsufficientCdsPermissions response from PPAPI. */
+  isCdsPermissionError(err) {
+    if (!err || typeof err !== "object")
+      return false;
+    const msg = err.message ?? String(err);
+    return msg.includes("InsufficientCdsPermissions") || msg.includes("InsufficientPermissions");
   }
   /**
    * Execute a flow operation via the classic Flow RP API
@@ -40986,8 +40997,10 @@ init_flow_definition();
 
 // packages/core/dist/mcp/response.js
 var MAX_RESPONSE_CHARS = 5e4;
+var MAX_SINGLE_ITEM_CHARS = 2e5;
 var TRUNCATION_NOTICE = "\n\n[Response truncated. Use more specific filters or get individual items for full details.]";
-function safeResult(data) {
+var SINGLE_ITEM_TRUNCATION_NOTICE = '\n\n[Response truncated due to size. Use get_flow with a `path` parameter to retrieve specific sections, e.g. path: "definition.actions.MyAction" or path: "properties.connectionReferences".]';
+function safeResult(data, opts) {
   let text;
   try {
     if (data == null) {
@@ -40998,8 +41011,10 @@ function safeResult(data) {
   } catch {
     text = JSON.stringify({ error: "Failed to serialize response" });
   }
-  if (text.length > MAX_RESPONSE_CHARS) {
-    text = text.slice(0, MAX_RESPONSE_CHARS - TRUNCATION_NOTICE.length) + TRUNCATION_NOTICE;
+  const limit = opts?.singleItem ? MAX_SINGLE_ITEM_CHARS : MAX_RESPONSE_CHARS;
+  const notice = opts?.singleItem ? SINGLE_ITEM_TRUNCATION_NOTICE : TRUNCATION_NOTICE;
+  if (text.length > limit) {
+    text = text.slice(0, limit - notice.length) + notice;
   }
   return { content: [{ type: "text", text }] };
 }
@@ -41381,11 +41396,22 @@ async function createMcpServer(authProvider, deps = {}) {
       return safeError(e);
     }
   });
-  server2.tool("get_flow", "Get a flow's full definition + connection refs + metadata. Use this when you need to inspect or modify a specific flow. For metadata across many flows, prefer list_flows (4\xD7 faster \u2014 doesn't fetch the full definition per row).", { env: external_exports.string().optional().describe("Environment ID"), flow: external_exports.string().describe("Flow ID") }, { readOnlyHint: true, title: "Get Flow" }, async ({ env, flow }) => {
+  server2.tool("get_flow", 'Get a flow\'s full definition + connection refs + metadata. Use this when you need to inspect or modify a specific flow. For large flows, use `path` to scope the response (e.g. path: "definition.actions.MyAction" or path: "properties.connectionReferences"). For metadata across many flows, prefer list_flows (4\xD7 faster \u2014 doesn\'t fetch the full definition per row).', { env: external_exports.string().optional().describe("Environment ID"), flow: external_exports.string().describe("Flow ID"), path: external_exports.string().optional().describe('Dot-separated path to extract a sub-section of the response (e.g. "definition.actions", "properties.connectionReferences"). Omit for the full flow.') }, { readOnlyHint: true, title: "Get Flow" }, async ({ env, flow, path: subPath }) => {
     try {
       const envId = ctx.resolveEnv(env);
       ctx.rememberEnv(envId);
-      return safeResult(await ctx.getClient().getFlow(envId, flow));
+      let result = await ctx.getClient().getFlow(envId, flow);
+      if (subPath) {
+        for (const segment of subPath.split(".")) {
+          if (result == null)
+            break;
+          result = result[segment];
+        }
+        if (result === void 0) {
+          return safeResult({ error: `Path "${subPath}" not found in flow response. Available top-level keys: ${Object.keys(await ctx.getClient().getFlow(envId, flow)).join(", ")}` });
+        }
+      }
+      return safeResult(result, { singleItem: true });
     } catch (e) {
       return safeError(e);
     }
