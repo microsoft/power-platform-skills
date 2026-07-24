@@ -62,3 +62,40 @@ test('structural profile ignores page implementation entirely', () => {
   s.pages = [{ key: 'ov', name: 'Overview', source: { kind: 'intent' } }];
   assert.strictEqual(validateAppSpec(s, { profile: 'structural' }).ok, true);
 });
+
+// Minor #7 additions ------------------------------------------------------------------
+
+test('unknown profile returns a clear error immediately', () => {
+  const r = validateAppSpec(base(), { profile: 'nonexistent' });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /unknown validation profile 'nonexistent'/.test(e)),
+    `expected unknown-profile error, got: ${JSON.stringify(r.errors)}`);
+});
+
+test('structural profile accepts a page with no source at all (src === null)', () => {
+  const s = base();
+  s.pages = [{ key: 'ov', name: 'Overview' }]; // no source field
+  const r = validateAppSpec(s, { profile: 'structural' });
+  assert.strictEqual(r.ok, true, `unexpected errors: ${JSON.stringify(r.errors)}`);
+});
+
+test('deploy profile: tsx page with no codeFile emits ONE error (structural), not two', () => {
+  const s = base();
+  s.pages = [{ key: 'ov', name: 'Overview', source: { kind: 'tsx' } }]; // tsx but no codeFile
+  const r = validateAppSpec(s); // deploy (default)
+  assert.strictEqual(r.ok, false);
+  // Only the structural "needs a codeFile" error — NOT the deploy "must be implemented" too.
+  const codeFileErr = r.errors.filter((e) => /source.kind 'tsx' needs a codeFile/.test(e));
+  const deployErr   = r.errors.filter((e) => /must be implemented/.test(e));
+  assert.strictEqual(codeFileErr.length, 1, 'structural codeFile error emitted once');
+  assert.strictEqual(deployErr.length, 0, 'deploy error suppressed when structural error already covers it');
+});
+
+test('whitespace-only codeFile is treated as absent (structural error)', () => {
+  const s = base();
+  s.pages = [{ key: 'ov', name: 'Overview', source: { kind: 'tsx', codeFile: '   ' } }];
+  const r = validateAppSpec(s, { profile: 'plan' });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /source.kind 'tsx' needs a codeFile/.test(e)),
+    `expected codeFile error for whitespace, got: ${JSON.stringify(r.errors)}`);
+});

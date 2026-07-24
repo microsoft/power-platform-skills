@@ -229,14 +229,23 @@ const VALIDATION_PROFILES = ['design', 'plan', 'deploy', 'structural'];
 // Normalize a page's implementation source into a discriminated shape:
 //   { kind: 'tsx', codeFile } | { kind: 'intent' } | null
 // A legacy top-level `codeFile` (schemaVersion < 2) is treated as an implemented tsx page. `null`
-// means the page declares neither a source nor a codeFile.
+// means the page declares neither a source nor a codeFile. Whitespace-only codeFile values are
+// treated as absent (codeFile trimmed to undefined) so a blank value fails the structural check
+// rather than silently being treated as an implemented page.
 function normalizePageSource(page) {
   if (page && page.source && typeof page.source === 'object') {
     if (page.source.kind === 'intent') return { kind: 'intent' };
-    if (page.source.kind === 'tsx') return { kind: 'tsx', codeFile: page.source.codeFile };
+    if (page.source.kind === 'tsx') {
+      // Trim so '   ' is treated identically to undefined — blank is not an implemented codeFile.
+      const codeFile = typeof page.source.codeFile === 'string' ? page.source.codeFile.trim() || undefined : page.source.codeFile;
+      return { kind: 'tsx', codeFile };
+    }
     return { kind: page.source.kind }; // malformed — surfaced by the validator below
   }
-  if (page && typeof page.codeFile === 'string') return { kind: 'tsx', codeFile: page.codeFile };
+  // Treat a whitespace-only legacy codeFile as absent so it fails the implemented check.
+  if (page && typeof page.codeFile === 'string' && page.codeFile.trim()) {
+    return { kind: 'tsx', codeFile: page.codeFile.trim() };
+  }
   return null;
 }
 
@@ -466,19 +475,26 @@ function validateAppSpec(spec, opts = {}) {
     if (!p || !p.name) { errors.push('a page is missing a name'); continue; }
     pageNamesSet.add(p.name);
     const src = normalizePageSource(p);
+    // Track whether a structural source error was emitted so the profile check below doesn't
+    // double-report (e.g. source:{kind:'tsx'} with no codeFile should get ONE error, not two).
+    let structuralSourceOk = true;
     if (src && src.kind !== 'intent' && src.kind !== 'tsx') {
       errors.push(`page '${p.key || p.name}': source.kind must be 'intent' or 'tsx'`);
+      structuralSourceOk = false;
     } else if (src && src.kind === 'tsx' && (typeof src.codeFile !== 'string' || !src.codeFile)) {
       errors.push(`page '${p.key || p.name}': source.kind 'tsx' needs a codeFile (path to the .tsx)`);
+      structuralSourceOk = false;
     }
-    if (profile === 'deploy') {
-      if (!(src && src.kind === 'tsx' && typeof src.codeFile === 'string' && src.codeFile)) {
-        errors.push(`page '${p.key || p.name}': must be implemented (source.kind 'tsx' with a codeFile) for a deploy build — run generate-pages`);
+    if (structuralSourceOk) {
+      if (profile === 'deploy') {
+        if (!(src && src.kind === 'tsx' && typeof src.codeFile === 'string' && src.codeFile)) {
+          errors.push(`page '${p.key || p.name}': must be implemented (source.kind 'tsx' with a codeFile) for a deploy build — run generate-pages`);
+        }
+      } else if (profile !== 'structural' && src === null) {
+        // design/plan still require SOME declared source (intent or tsx) — a page with neither is a
+        // spec error, not a valid design.
+        errors.push(`page '${p.key || p.name}': needs a source ({ kind: 'intent' } or { kind: 'tsx', codeFile })`);
       }
-    } else if (profile !== 'structural' && src === null) {
-      // design/plan still require SOME declared source (intent or tsx) — a page with neither is a
-      // spec error, not a valid design.
-      errors.push(`page '${p.key || p.name}': needs a source ({ kind: 'intent' } or { kind: 'tsx', codeFile })`);
     }
     // schemaVersion 2 adds a required, unique stable key per page so pages can be referenced by an
     // identity that survives renames. The key is also what navigatesTo.targetKey and appShell page
@@ -489,17 +505,19 @@ function validateAppSpec(spec, opts = {}) {
       else pageKeysSet.add(p.key);
     }
   }
-  // Navigation graph: every navigatesTo.targetKey must resolve to a known page key. pageInput shape
-  // is validated here too (object, not array/null). Both are independent of profile — they are spec
-  // structural errors, not implementation-state errors.
-  for (const p of spec.pages || []) {
-    for (const nav of p.navigatesTo || []) {
-      if (!nav || typeof nav.targetKey !== 'string') { errors.push(`page '${p.key || p.name}': navigatesTo entry needs a targetKey`); continue; }
-      if (isV2 && !pageKeysSet.has(nav.targetKey)) errors.push(`page '${p.key || p.name}': navigatesTo target '${nav.targetKey}' is not a known page key`);
-      if (nav.data !== undefined && (typeof nav.data !== 'object' || nav.data === null || Array.isArray(nav.data))) errors.push(`page '${p.key || p.name}': navigatesTo.data must be an object`);
-    }
-    if (p.pageInput !== undefined) {
-      if (typeof p.pageInput !== 'object' || p.pageInput === null || Array.isArray(p.pageInput)) errors.push(`page '${p.key || p.name}': pageInput must be an object`);
+  // Navigation graph (v2 only — these fields don't exist in hand-authored legacy specs):
+  // every navigatesTo.targetKey must resolve to a known page key. pageInput shape is validated
+  // here too (object, not array/null).
+  if (isV2) {
+    for (const p of spec.pages || []) {
+      for (const nav of p.navigatesTo || []) {
+        if (!nav || typeof nav.targetKey !== 'string') { errors.push(`page '${p.key || p.name}': navigatesTo entry needs a targetKey`); continue; }
+        if (!pageKeysSet.has(nav.targetKey)) errors.push(`page '${p.key || p.name}': navigatesTo target '${nav.targetKey}' is not a known page key`);
+        if (nav.data !== undefined && (typeof nav.data !== 'object' || nav.data === null || Array.isArray(nav.data))) errors.push(`page '${p.key || p.name}': navigatesTo.data must be an object`);
+      }
+      if (p.pageInput !== undefined) {
+        if (typeof p.pageInput !== 'object' || p.pageInput === null || Array.isArray(p.pageInput)) errors.push(`page '${p.key || p.name}': pageInput must be an object`);
+      }
     }
   }
   // Icons are chrome, not a target: a web-resource `icon` must reference a declared IMAGE web
@@ -648,9 +666,10 @@ function validateAppSpec(spec, opts = {}) {
       }
     }
   }
-  // Page design contract (optional). Shape-only in this plan; the token→Fluent mapping and
-  // generated-page validation land in the Pages plan. Reject unknown keys so typos fail early.
-  if (spec.design !== undefined) {
+  // Page design contract (optional, v2 only). Shape-only in this plan; the token→Fluent mapping
+  // and generated-page validation land in the Pages plan. Reject unknown keys so typos fail early.
+  // Gated on isV2 so a hand-authored legacy spec is not rejected for a v2-only field.
+  if (isV2 && spec.design !== undefined) {
     if (typeof spec.design !== 'object' || spec.design === null || Array.isArray(spec.design)) {
       errors.push('design must be an object');
     } else {
@@ -674,12 +693,21 @@ function slugify(name) {
 //   - rewrite name-based references (appShell page subareas + navigatesTo.targetKey) to keys
 // Idempotent: a spec already at schemaVersion >= 2 is returned as-is. Runs on load before validate,
 // so downstream code only ever sees the v2 shape. See docs/app-builder-staged-flow-design.md §7.3.
+//
+// Two-pass design: pass 1 mints ALL keys first so nameToKey is fully populated before any
+// rewrite. A single rewrite pass (pass 2) then replaces every name-ref exactly once, preventing
+// the double-rewrite bug that occurred when a minted key collided with another page's name
+// (e.g. pages "Detail" → key "detail" and "detail" → key "detail-2": the old two-pass code
+// would rewrite a "Detail" name-ref to "detail" in pass 1, then re-apply nameToKey in pass 2
+// and wrongly map "detail" (now a key, but also the name of the second page) to "detail-2").
 function migrateAppSpec(spec) {
   if (!spec || typeof spec !== 'object' || (spec.schemaVersion || 0) >= 2) return spec;
   const out = JSON.parse(JSON.stringify(spec));
   out.schemaVersion = 2;
   const nameToKey = new Map();
   const used = new Set();
+  // Pass 1: mint every key and wrap legacy codeFile→source. nameToKey is fully populated
+  // after this loop so the rewrite pass below needs only a single scan (no forward-ref gaps).
   for (const p of out.pages || []) {
     let key = slugify(p.name);
     let n = 1;
@@ -688,10 +716,12 @@ function migrateAppSpec(spec) {
     p.key = key;
     nameToKey.set(p.name, key);
     if (!p.source && typeof p.codeFile === 'string') { p.source = { kind: 'tsx', codeFile: p.codeFile }; delete p.codeFile; }
+  }
+  // Pass 2: rewrite name-refs to keys exactly once. Because nameToKey is complete, forward refs
+  // (a page referencing a later-declared page) resolve correctly without a repeated second pass.
+  for (const p of out.pages || []) {
     for (const nav of p.navigatesTo || []) { if (nav && nameToKey.has(nav.targetKey)) nav.targetKey = nameToKey.get(nav.targetKey); }
   }
-  // Second pass for navigatesTo targets that referenced a page declared later than the source page.
-  for (const p of out.pages || []) for (const nav of p.navigatesTo || []) { if (nav && nameToKey.has(nav.targetKey)) nav.targetKey = nameToKey.get(nav.targetKey); }
   for (const a of (out.appShell && out.appShell.areas) || []) {
     for (const g of a.groups || []) {
       for (const sa of g.subAreas || []) { if (sa && sa.page && nameToKey.has(sa.page)) sa.page = nameToKey.get(sa.page); }

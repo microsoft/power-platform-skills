@@ -62,3 +62,28 @@ test('mints a fallback key for a page with a blank name', () => {
   const legacy = { solution: { uniqueName: 'c', publisherPrefix: 'c' }, app: { name: 'C' }, entities: [], pages: [{ name: '', codeFile: 'a.tsx' }] };
   assert.strictEqual(migrateAppSpec(legacy).pages[0].key, 'page');
 });
+
+// IMPORTANT #2 regression: a navigatesTo name-ref whose target name collides with a minted key
+// for a DIFFERENT page must resolve to the correct (first) page and not be double-rewritten.
+//
+// Scenario: page "Detail" (key: "detail") and page "detail" (key: "detail-2", because "detail"
+// is already taken). A navigatesTo with targetKey: "Detail" must become "detail" (the first
+// page's key). The old two-pass code re-applied nameToKey in pass 2: it found the already-
+// rewritten "detail" in the map (it's also the NAME of the second page) and wrongly mapped it
+// to "detail-2".
+test('collision: navigatesTo name-ref to "Detail" resolves to "detail" (first page), not "detail-2"', () => {
+  const legacy = {
+    solution: { uniqueName: 'c', publisherPrefix: 'c' }, app: { name: 'C' }, entities: [],
+    pages: [
+      { name: 'Detail', codeFile: 'detail-1.tsx' },                          // key: "detail"
+      { name: 'detail', codeFile: 'detail-2.tsx',                            // key: "detail-2" (collision dedup)
+        navigatesTo: [{ targetKey: 'Detail' }] },                             // name-ref to the FIRST page
+    ],
+  };
+  const m = migrateAppSpec(legacy);
+  assert.strictEqual(m.pages[0].key, 'detail',   'first page gets "detail"');
+  assert.strictEqual(m.pages[1].key, 'detail-2', 'second page gets "detail-2" (dedup)');
+  // The name-ref "Detail" should resolve to "detail" (the first page), not "detail-2".
+  assert.strictEqual(m.pages[1].navigatesTo[0].targetKey, 'detail',
+    'name-ref to first page stays "detail" after migration — not re-mapped to "detail-2"');
+});

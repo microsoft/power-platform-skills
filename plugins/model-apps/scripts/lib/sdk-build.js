@@ -14,6 +14,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+// normalizePageSource: read the page source from the discriminated `source` field (v2) or the
+// legacy top-level `codeFile` (pre-migration). PHASES: canonical ordered phase list — imported
+// here so the engine and the stage layer can never drift.
 const {
   sampleRecordsFor,
   resolveSampleRecords,
@@ -23,7 +26,9 @@ const {
   relationshipSchemaName,
   manyToManyFor,
   manyToManySchemaName,
+  normalizePageSource,
 } = require('./app-spec.js');
+const { PHASES } = require('./stages.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 const {
   makeRunner,
@@ -78,8 +83,6 @@ const COMPONENT_TYPE = { view: 26, chart: 59, form: 60, dashboard: 60, webResour
 const WEB_RESOURCE_KINDS = new Set(['js', 'html', 'css', 'xml', 'png', 'jpg', 'gif', 'xsl', 'ico', 'svg', 'resx']);
 // Form-event kinds the engine can wire (onload/onsave/onchange) via the /bag/c <events> region.
 const FORM_EVENTS = new Set(['onload', 'onsave', 'onchange']);
-
-const { PHASES } = require('./stages.js');
 
 // Map a dashboard tile (App Spec) to the SDK's AddDashboardTileOptions. chart/list tiles resolve
 // the underlying view (savedqueryid) — and the chart its visualization id — from what the build
@@ -1040,8 +1043,16 @@ async function runSdkBuild(spec, opts = {}) {
       existingByName = new Map((existing || []).filter((p) => p.name).map((p) => [p.name, p.pageId]));
     } catch { existingByName = new Map(); }
     for (const p of spec.pages) {
+      // normalizePageSource handles both the migrated shape (source.codeFile, schemaVersion 2)
+      // and the legacy top-level codeFile. An intent page (no .tsx yet) returns kind:'intent'
+      // or null — skip the upload rather than passing undefined to path.resolve.
+      const src = normalizePageSource(p);
+      if (!src || src.kind !== 'tsx' || !src.codeFile) {
+        runner.skip('pages', `page "${p.name}" (no tsx source)`);
+        continue;
+      }
       await runner.run('pages', `page "${p.name}"`, async () => {
-        const codeFile = path.resolve(opts.appDir || '.', p.codeFile);
+        const codeFile = path.resolve(opts.appDir || '.', src.codeFile);
         const up = await genpageCli.upload({ appId: result.created.app, pageId: existingByName.get(p.name), codeFile, name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources });
         result.created.pages[p.name] = up.pageId;
         return up.pageId;
