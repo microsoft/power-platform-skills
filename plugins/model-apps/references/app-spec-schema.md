@@ -274,7 +274,9 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 ```jsonc
 [ { "key": "overview", "name": "Overview", "purpose": "KPI overview + recent orders",
     "dataSources": ["new_order", "new_customer"],
-    "source": { "kind": "intent" } } ]        // design-time; generate-pages fills the .tsx
+    "source": { "kind": "intent" },                // design-time; generate-pages fills the .tsx
+    "navigatesTo": [{ "targetKey": "detail", "data": { "orderId": "string" } }],
+    "pageInput": { "data": { "orderId": "string" } } } ]
 // after generate-pages: "source": { "kind": "tsx", "codeFile": "overview.tsx" }
 ```
 - **Genpage-first policy** is unchanged. A page's implementation state is an explicit discriminated
@@ -283,18 +285,26 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   accepted and treated as an implemented tsx page.
 - Validation is **profile-scoped**: `design`/`plan` accept intent pages; a `deploy` build (the default)
   requires every page implemented.
+- **`key`** (schemaVersion 2, required, unique) is the page's stable identity — used by
+  `navigatesTo[].targetKey`, the `PAGEREF_<key>` navigation placeholder, and the `page` sitemap
+  subarea. Renaming a page never changes its key.
+- **`navigatesTo`**: `[{ "targetKey": "<page key>", "data": { … } }]` — declared page-to-page
+  navigation (custom ids travel in `data`, read as `pageInput?.data?.<key>` on the target).
+- **`pageInput`**: `{ "data": { … } }` — the input this page expects when navigated to.
 
 ## appShell
 ```jsonc
 { "areas": [ { "label": "Main", "icon": "new_areaicon.svg", "groups": [ { "label": "Records", "subAreas": [
   { "entity": "new_customer", "title": "Customers" },                              // a table (nav icon = its TABLE icon)
   { "dashboard": "Operations", "title": "Overview", "icon": "new_overview.svg" },  // a built dashboard (by name)
-  { "url": "https://…",       "title": "Help" }                                    // an external link
+  { "url": "https://…",       "title": "Help" },                                   // an external link
+  { "page": "overview",       "title": "Overview" }                                // a genpage — KEY (schemaVersion 2)
 ] } ] } ] }
 ```
 - A subarea names exactly **one** target (lint-enforced): `entity` (a table), `dashboard` (the **name**
   of a `dashboards[]` entry — auto-pinned as an app component so the app includes it), `url`, or
-  `page` (the **name** of a `pages[]` generative page — surfaced as a `GenPage` sitemap subarea).
+  `page` (the **`key`** of a `pages[]` generative page at schemaVersion 2; the **name** for legacy specs
+  — surfaced as a `GenPage` sitemap subarea).
 - Any area or subarea may set **`icon`** (a declared image `webResources[]` entry — png/jpg/gif/svg/ico;
   validated). Icons are **chrome, not a target** — they don't count toward the "exactly one target" rule.
 - **Entity nav icons come from the TABLE icon, not the subarea.** For an `entity` subarea, set the table's
@@ -303,6 +313,14 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   pane). For a non-entity subarea (`url`/`page`/`dashboard`), `vectorIcon` must be an **SVG path**
   (e.g. `/_imgs/TableIconsFluentV9/x.svg`) or a **`$webresource:<name>.svg`** reference — not a bare
   Fluent token (lint warns).
+
+## design (optional — page design contract)
+```jsonc
+{ "accentColor": "#0f6cbd", "density": "comfortable", "cornerRadius": "medium",
+  "darkMode": "system", "layout": "cards" }
+```
+- Shared styling tokens threaded to every page so generated pages look consistent with each other
+  and the model-driven shell (both Fluent UI V9). Unknown keys are rejected.
 
 ## sampleData (optional)
 Keyed by entity `schemaName`. Choice values are **labels** (resolved to ints) — for **both** inline

@@ -456,6 +456,11 @@ function validateAppSpec(spec, opts = {}) {
   // (`intent` | `tsx`+codeFile); a legacy top-level `codeFile` is accepted as an implemented tsx.
   // The `deploy` profile requires every page implemented; `design`/`plan` allow intent (the page's
   // .tsx is produced by generate-pages after approval); `structural` ignores implementation.
+  // isV2/pageKeysSet are declared here — before the page loop — so the appShell subarea loop that
+  // follows can also reference them (both loops live in the same function scope). pageNamesSet is
+  // kept for legacy (schemaVersion < 2) appShell page refs; pageRefSet selects the right set.
+  const isV2 = (spec.schemaVersion || 0) >= 2;
+  const pageKeysSet = new Set();
   const pageNamesSet = new Set();
   for (const p of spec.pages || []) {
     if (!p || !p.name) { errors.push('a page is missing a name'); continue; }
@@ -475,6 +480,27 @@ function validateAppSpec(spec, opts = {}) {
       // spec error, not a valid design.
       errors.push(`page '${p.key || p.name}': needs a source ({ kind: 'intent' } or { kind: 'tsx', codeFile })`);
     }
+    // schemaVersion 2 adds a required, unique stable key per page so pages can be referenced by an
+    // identity that survives renames. The key is also what navigatesTo.targetKey and appShell page
+    // subareas use (key-based refs replace name-based refs for v2 specs).
+    if (isV2) {
+      if (!p.key || typeof p.key !== 'string') errors.push(`page '${p.name}': needs a stable key (schemaVersion 2)`);
+      else if (pageKeysSet.has(p.key)) errors.push(`duplicate page key '${p.key}'`);
+      else pageKeysSet.add(p.key);
+    }
+  }
+  // Navigation graph: every navigatesTo.targetKey must resolve to a known page key. pageInput shape
+  // is validated here too (object, not array/null). Both are independent of profile — they are spec
+  // structural errors, not implementation-state errors.
+  for (const p of spec.pages || []) {
+    for (const nav of p.navigatesTo || []) {
+      if (!nav || typeof nav.targetKey !== 'string') { errors.push(`page '${p.key || p.name}': navigatesTo entry needs a targetKey`); continue; }
+      if (isV2 && !pageKeysSet.has(nav.targetKey)) errors.push(`page '${p.key || p.name}': navigatesTo target '${nav.targetKey}' is not a known page key`);
+      if (nav.data !== undefined && (typeof nav.data !== 'object' || nav.data === null || Array.isArray(nav.data))) errors.push(`page '${p.key || p.name}': navigatesTo.data must be an object`);
+    }
+    if (p.pageInput !== undefined) {
+      if (typeof p.pageInput !== 'object' || p.pageInput === null || Array.isArray(p.pageInput)) errors.push(`page '${p.key || p.name}': pageInput must be an object`);
+    }
   }
   // Icons are chrome, not a target: a web-resource `icon` must reference a declared IMAGE web
   // resource; `vectorIcon` is a free-form Fluent token (no web resource, not validated here).
@@ -493,7 +519,9 @@ function validateAppSpec(spec, opts = {}) {
         else if (targets.length > 1) errors.push(`sitemap subArea "${sa.title || ''}" sets multiple targets (${targets.join(', ')}) — pick one`);
         if (sa.entity && !entityNames.has(sa.entity)) errors.push(`sitemap subArea references unknown entity '${sa.entity}'`);
         if (sa.dashboard && !dashNamesSet.has(sa.dashboard)) errors.push(`sitemap subArea references unknown dashboard '${sa.dashboard}' (declare it in dashboards[])`);
-        if (sa.page && !pageNamesSet.has(sa.page)) errors.push(`sitemap subArea references unknown page '${sa.page}' (declare it in pages[])`);
+        // schemaVersion 2 references pages by stable KEY; legacy specs still reference by name.
+        const pageRefSet = isV2 ? pageKeysSet : pageNamesSet;
+        if (sa.page && !pageRefSet.has(sa.page)) errors.push(`sitemap subArea references unknown page '${sa.page}' (declare it in pages[])`);
         checkIcon(sa.icon, `sitemap subArea "${sa.title || ''}"`);
       }
     }
@@ -618,6 +646,16 @@ function validateAppSpec(spec, opts = {}) {
           }
         }
       }
+    }
+  }
+  // Page design contract (optional). Shape-only in this plan; the token→Fluent mapping and
+  // generated-page validation land in the Pages plan. Reject unknown keys so typos fail early.
+  if (spec.design !== undefined) {
+    if (typeof spec.design !== 'object' || spec.design === null || Array.isArray(spec.design)) {
+      errors.push('design must be an object');
+    } else {
+      const allowed = new Set(['accentColor', 'density', 'cornerRadius', 'darkMode', 'layout']);
+      for (const k of Object.keys(spec.design)) if (!allowed.has(k)) errors.push(`design: unknown key '${k}' (allowed: ${[...allowed].join(', ')})`);
     }
   }
   return { ok: errors.length === 0, errors };
