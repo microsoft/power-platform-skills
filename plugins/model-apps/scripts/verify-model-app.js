@@ -58,7 +58,7 @@ async function main() {
   const spec = readJsonArg('@' + specPath);
   // Validate the spec up front (consistent with teardown) so malformed input yields a structured
   // error instead of a later throw when dereferencing spec.entities / schemaName.
-  const v = validateAppSpec(spec);
+  const v = validateAppSpec(spec, { profile: 'deploy' });
   if (!v.ok) { emitResult(false, { ok: false, errors: v.errors }); return; }
   const workspaceDir = flags.workspace || path.join(path.dirname(specPath), '.maker-workspace');
   const sdk = makeProvision(env, workspaceDir);

@@ -270,19 +270,19 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   and added to the solution. To surface it in the app nav, add a `dashboard` sitemap subarea (below) —
   that also auto-pins it as an app component.
 
-## pages[] (optional — generative pages / genux)
+## pages[] (optional — generative pages / genux)  [schemaVersion 2]
 ```jsonc
-[ { "name": "Overview", "dataSources": ["new_order", "new_customer"],
-    "prompt": "A KPI overview with recent orders", "codeFile": "overview.tsx" } ]
+[ { "key": "overview", "name": "Overview", "purpose": "KPI overview + recent orders",
+    "dataSources": ["new_order", "new_customer"],
+    "source": { "kind": "intent" } } ]        // design-time; generate-pages fills the .tsx
+// after generate-pages: "source": { "kind": "tsx", "codeFile": "overview.tsx" }
 ```
-- **Genpage-first policy:** model-driven forms/views are the default for record surfaces; use a
-  generative `page` for overviews/dashboards/analytics/landing surfaces. Each page needs a `name` and
-  a **`codeFile`** (the `.tsx` the build uploads via `pac model genpage upload`, no `--add-to-sitemap`
-  — the SDK owns the sitemap). `dataSources` (tables the page reads) are passed to pac and lint-warned
-  if they aren't declared entities (standard tables are fine). `prompt` is retained on the page.
-- Surface a page in the nav with a **`page`** sitemap subarea (below) — it becomes a `GenPage` subarea
-  keyed by the deployed page's id. Traditional `dashboards[]` remain available for explicit classic
-  dashboards.
+- **Genpage-first policy** is unchanged. A page's implementation state is an explicit discriminated
+  `source`: `{ "kind": "intent" }` (declared but not yet coded) or `{ "kind": "tsx", "codeFile": "…" }`
+  (the `.tsx` the build uploads). A **legacy** top-level `"codeFile"` (no `schemaVersion`) is still
+  accepted and treated as an implemented tsx page.
+- Validation is **profile-scoped**: `design`/`plan` accept intent pages; a `deploy` build (the default)
+  requires every page implemented.
 
 ## appShell
 ```jsonc

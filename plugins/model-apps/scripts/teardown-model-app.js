@@ -60,7 +60,7 @@ function cliEmit(log, opts = {}) {
 }
 
 async function teardownModelApp(spec, opts, deps) {
-  const v = validateAppSpec(spec);
+  const v = validateAppSpec(spec, { profile: 'structural' });
   if (!v.ok) {
     return { ok: false, errors: v.errors };
   }

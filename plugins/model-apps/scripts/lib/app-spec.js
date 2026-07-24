@@ -220,8 +220,32 @@ function resolveChoiceValue(byLabel, v, isMulti) {
   return byLabel[v] !== undefined ? byLabel[v] : v;
 }
 
-function validateAppSpec(spec) {
+// Valid validation profiles. `deploy` (default) is the strictest — every page must be implemented
+// (a real .tsx). `design`/`plan` allow intent-only pages (author designs pages before generate-pages
+// writes their .tsx). `structural` ignores page implementation (teardown/cleanup only cares about refs).
+// See docs/app-builder-staged-flow-design.md §7.1.
+const VALIDATION_PROFILES = ['design', 'plan', 'deploy', 'structural'];
+
+// Normalize a page's implementation source into a discriminated shape:
+//   { kind: 'tsx', codeFile } | { kind: 'intent' } | null
+// A legacy top-level `codeFile` (schemaVersion < 2) is treated as an implemented tsx page. `null`
+// means the page declares neither a source nor a codeFile.
+function normalizePageSource(page) {
+  if (page && page.source && typeof page.source === 'object') {
+    if (page.source.kind === 'intent') return { kind: 'intent' };
+    if (page.source.kind === 'tsx') return { kind: 'tsx', codeFile: page.source.codeFile };
+    return { kind: page.source.kind }; // malformed — surfaced by the validator below
+  }
+  if (page && typeof page.codeFile === 'string') return { kind: 'tsx', codeFile: page.codeFile };
+  return null;
+}
+
+function validateAppSpec(spec, opts = {}) {
+  const profile = opts.profile || 'deploy';
   const errors = [];
+  if (!VALIDATION_PROFILES.includes(profile)) {
+    return { ok: false, errors: [`unknown validation profile '${profile}' (valid: ${VALIDATION_PROFILES.join(', ')})`] };
+  }
   if (!spec || typeof spec !== 'object') {
     return { ok: false, errors: ['spec is not an object'] };
   }
@@ -428,14 +452,29 @@ function validateAppSpec(spec) {
     }
   }
   const dashNamesSet = new Set((spec.dashboards || []).map((d) => d && d.name).filter(Boolean));
-  // Generative pages: each needs a name + a codeFile (the .tsx the build uploads via pac). dataSources
-  // are informational (passed to pac --data-sources) and may reference standard tables, so they are
-  // lint-warned (not hard-validated) against declared entities.
+  // Generative pages. Each needs a name. Implementation state is a discriminated `source`
+  // (`intent` | `tsx`+codeFile); a legacy top-level `codeFile` is accepted as an implemented tsx.
+  // The `deploy` profile requires every page implemented; `design`/`plan` allow intent (the page's
+  // .tsx is produced by generate-pages after approval); `structural` ignores implementation.
   const pageNamesSet = new Set();
   for (const p of spec.pages || []) {
     if (!p || !p.name) { errors.push('a page is missing a name'); continue; }
     pageNamesSet.add(p.name);
-    if (!p.codeFile || typeof p.codeFile !== 'string') errors.push(`page '${p.name}': needs a codeFile (path to the .tsx to upload)`);
+    const src = normalizePageSource(p);
+    if (src && src.kind !== 'intent' && src.kind !== 'tsx') {
+      errors.push(`page '${p.key || p.name}': source.kind must be 'intent' or 'tsx'`);
+    } else if (src && src.kind === 'tsx' && (typeof src.codeFile !== 'string' || !src.codeFile)) {
+      errors.push(`page '${p.key || p.name}': source.kind 'tsx' needs a codeFile (path to the .tsx)`);
+    }
+    if (profile === 'deploy') {
+      if (!(src && src.kind === 'tsx' && typeof src.codeFile === 'string' && src.codeFile)) {
+        errors.push(`page '${p.key || p.name}': must be implemented (source.kind 'tsx' with a codeFile) for a deploy build — run generate-pages`);
+      }
+    } else if (profile !== 'structural' && src === null) {
+      // design/plan still require SOME declared source (intent or tsx) — a page with neither is a
+      // spec error, not a valid design.
+      errors.push(`page '${p.key || p.name}': needs a source ({ kind: 'intent' } or { kind: 'tsx', codeFile })`);
+    }
   }
   // Icons are chrome, not a target: a web-resource `icon` must reference a declared IMAGE web
   // resource; `vectorIcon` is a free-form Fluent token (no web resource, not validated here).
@@ -586,6 +625,8 @@ function validateAppSpec(spec) {
 
 module.exports = {
   validateAppSpec,
+  normalizePageSource,
+  VALIDATION_PROFILES,
   columnTypeMap,
   TYPE_MAP,
   choiceValueMap,

@@ -96,7 +96,7 @@ async function checkCollisions(spec, provision) {
 }
 
 async function buildModelApp(spec, opts, deps) {
-  const v = validateAppSpec(spec);
+  const v = validateAppSpec(spec, { profile: opts.profile || 'deploy' });
   if (!v.ok) {
     return { ok: false, errors: v.errors };
   }
@@ -224,6 +224,7 @@ async function main() {
     publish: flags.publish === true,
     verify: flags.verify === true,
     phases: stagePhasesOrResolve({ stage: flags.stage, only: list(flags.only), skip: list(flags.skip), from: flags.from, to: flags.to }),
+    profile: (flags.apply === true && flags.stage !== 'data') ? 'deploy' : 'plan',
     appDir: path.dirname(specPath),
     env,
   };
