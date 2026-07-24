@@ -217,6 +217,7 @@ async function buildModelApp(spec, opts, deps) {
         appDir: opts.appDir, // resolves web-resource `contentPath` relative to the app folder
         env: opts.env, // for the pages phase (pac model genpage upload --environment)
         genpageCli: deps.genpageCli, // injectable seam for tests; else constructed from env
+        workspaceDir: opts.workspaceDir, // lease/staging live under the real workspace dir
         emit,
       });
       break;
@@ -319,6 +320,7 @@ async function main() {
     nonInteractive: flags['non-interactive'] === true || envTruthy(process.env.POWER_PLATFORM_SKILLS_NONINTERACTIVE),
     appDir: path.dirname(specPath),
     env,
+    workspaceDir,
   };
   // Construct for both dry-run and apply: proves the vendored bundle + adapter wire up
   // (offline), and apply needs it. A spec validation error short-circuits before any write.

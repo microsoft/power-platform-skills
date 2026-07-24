@@ -53,6 +53,9 @@ const {
 } = require('./artifact-intent.js');
 const { makeGenpageCli } = require('./genpage-cli.js');
 const { manifestResourceName, buildManifest, serializeManifest, parseManifestBase64, reconcilePageIds } = require('./page-manifest.js');
+// Structural nav oracle — used in the §9 PAGEREF_ scan/parity/resolve pipeline. `extractNavTargets`
+// classifies every generative navigateTo pageId at a REAL call site (never a decoy string / comment GUID).
+const { extractNavTargets, navReferencedKeys, navMalformedRefs, resolvePageRefs, navTargetParity } = require('./pageref-resolver.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
 const { buildPromptSpec } = require('./ai-prompt.js');
 const { odataLit } = require('./odata.js');
@@ -278,6 +281,7 @@ function planFor(spec, opts) {
   if (has('app-shell')) items.push({ phase: 'app-shell', label: `app module "${spec.app.name}" + sitemap` });
   if (has('app-shell') && !(spec.app && spec.app.icon)) items.push({ phase: 'app-shell', label: `app icon (generated) ${appUniqueName(spec)}_icon` });
   if (has('pages')) for (const p of spec.pages || []) items.push({ phase: 'pages', label: `page "${p.name}"` });
+  if (has('pages') && (spec.pages || []).length && appHasCrossPageNav(spec)) items.push({ phase: 'pages', label: 'resolve cross-page navigation' });
   if (has('pages') && (spec.pages || []).length) items.push({ phase: 'pages', label: `page manifest ${appUniqueName(spec)}_pagemanifest` });
   if (has('pages') && (spec.pages || []).length && appHasPageSubareas(spec)) items.push({ phase: 'pages', label: 'finalize sitemap (genpage subareas)' });
   if (has('ai-features') && spec.ai !== undefined && spec.ai !== null) {
@@ -515,6 +519,45 @@ function appHasPageSubareas(spec) {  for (const a of (spec.appShell && spec.appS
     }
   }
   return false;
+}
+
+// True when any page declares cross-page navigation. Deterministic from the spec, so planFor can plan
+// the single "resolve cross-page navigation" step without runtime state.
+function appHasCrossPageNav(spec) {
+  return ((spec && spec.pages) || []).some((p) => (p.navigatesTo || []).length > 0);
+}
+
+// Write a RESOLVED deployment copy of a page's .tsx into the run-scoped staging dir — NEVER over the
+// canonical source (a GUID baked into canonical breaks cross-env recreate; design §9 / SDK T5). pac
+// genpage upload takes a file PATH, so resolved bytes must exist on disk. The dir is created per RUN
+// under <workspace>/.pageref-deploy/<runId>/ and removed in a finally (never leave env GUIDs on disk,
+// no sanitized-name cross-run collision). The key is sanitized to a safe filename.
+function writeStagingFile(stagingDir, key, code) {
+  fs.mkdirSync(stagingDir, { recursive: true });
+  const file = path.join(stagingDir, `${String(key).replace(/[^A-Za-z0-9_-]/g, '_')}.tsx`);
+  fs.writeFileSync(file, code, 'utf8');
+  return file;
+}
+
+// SINGLE-MACHINE advisory lockfile over the pages protocol (design §9 / review R2 Critical 3, DESCOPED).
+// A courtesy to stop two LOCAL builds of the same app racing to CREATE duplicate pages; correctness does
+// NOT depend on it — the convergence spine (fail-closed enumeration + create-absent-first + persist-after-
+// each-create) makes any re-run idempotent. Atomic exclusive create picks one winner; if the lock already
+// exists we HALT (never steal, no age-reclaim). Release is OWNER-CHECKED: remove only if the file still
+// holds OUR exact token. Cross-machine/worktree concurrency for the SAME app is UNSUPPORTED. `deps` = seam.
+function acquireAppPagesLease(wsDir, appUnique, deps = {}) {
+  const now = deps.now || (() => Date.now());
+  fs.mkdirSync(wsDir, { recursive: true });
+  const lockPath = path.join(wsDir, `pages-${String(appUnique).replace(/[^A-Za-z0-9_-]/g, '_')}.lock`);
+  const token = JSON.stringify({ pid: process.pid, at: now() });
+  try {
+    fs.writeFileSync(lockPath, token, { flag: 'wx' }); // atomic exclusive create — the OS guarantees one winner
+  } catch (e) {
+    if (e.code === 'EEXIST') throw new BuildHalt(`another build is deploying pages for '${appUnique}' — refusing a second concurrent pages deploy (would risk duplicate page creation). Retry after it finishes, or delete ${lockPath} if it is stale.`, { phase: 'pages', code: 'pages-locked', recoverable: true });
+    throw e;
+  }
+  // Owner-checked release: never delete a lock a DIFFERENT live build now holds. No age-reclaim/steal.
+  return { release: () => { try { if (fs.readFileSync(lockPath, 'utf8') === token) fs.rmSync(lockPath, { force: true }); } catch { /* gone/unreadable — best-effort */ } } };
 }
 
 function appDef(spec, result, opts = {}) {
@@ -1097,53 +1140,133 @@ async function runSdkBuild(spec, opts = {}) {
     });
   }
 
-  // 7b. Pages (generative pages). The app now exists; upload each page's content via pac (WITHOUT
-  //     --add-to-sitemap — the SDK owns the sitemap), persisting the durable manifest immediately after
-  //     each create (crash-safety), then finalize the sitemap once so it includes the GenPage subareas.
+  // 7b. Pages (generative pages). The app now exists; implement the full §9 protocol: structural scan/parity
+  //     BEFORE any write (fail-closed) → create-absent-first for nav targets (persist manifest after EVERY
+  //     create, crash-safety) → resolve nav pagerefs into run-scoped staging (never mutate canonical source)
+  //     → upload-once with UPDATE-identity guard (I7) → sitemap finalize. All under a single-machine advisory
+  //     lockfile (courtesy, not a correctness guarantee — convergence spine is the safety guarantee).
   if (has('pages') && (spec.pages || []).length) {
     const genpageCli = opts.genpageCli || makeGenpageCli(opts.env);
     const appUnique = appUniqueName(spec);
     // I1 recovery guard: the app id is only populated by app-shell (this run). If pages runs without it
     // (e.g. --from pages), there is nothing to upload against — HALT and require a FULL rerun.
     if (!result.created.app) throw new BuildHalt('pages phase requires the app (app-shell) in the same run — the app id is not carried across invocations. Re-run a FULL build (do not use --from pages).', { phase: 'pages', code: 'pages-requires-app', recoverable: false });
-    // Fail-closed enumeration: a failed/unreadable/incomplete listing must NOT look like "no pages".
-    const enumd = await genpageCli.enumerate({ appId: result.created.app });
-    if (!enumd.ok) throw new BuildHalt(`page enumeration failed — refusing to (re)create pages against an unknown page set: ${enumd.error || 'pac genpage list returned non-zero'}`, { phase: 'pages', code: 'pages-enumeration-failed', recoverable: true });
-    const { id: readId, manifest, text } = await readPageManifest(provision, appUnique);
-    let manifestId = readId;
-    let lastManifestContent = text;
-    const { keyToId, ambiguous } = reconcilePageIds(spec.pages, manifest, enumd.pages);
-    if (ambiguous.length) throw new BuildHalt(`ambiguous page name(s) ${ambiguous.map((a) => `"${a.name}"`).join(', ')} — multiple live pages share a display name; refusing to overwrite an arbitrary one. Rename or remove the duplicate in Maker, then rebuild.`, { phase: 'pages', code: 'pages-ambiguous-name', recoverable: false });
-    const persistNow = async () => { const p = await persistPageManifest(provision, spec, keyToId, sol, appUnique, manifestId, lastManifestContent); manifestId = p.id; lastManifestContent = p.content; };
-    for (const p of spec.pages) {
-      const src = normalizePageSource(p);
-      if (!src || src.kind !== 'tsx' || !src.codeFile) { runner.skip('pages', `page "${p.name}" (no tsx source)`); continue; }
-      const key = p.key || p.name;
-      await runner.run('pages', `page "${p.name}"`, async () => {
-        const requestedId = keyToId.get(key);
-        const codeFile = path.resolve(opts.appDir || '.', src.codeFile);
-        const up = await genpageCli.upload({ appId: result.created.app, pageId: requestedId, codeFile, name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources });
-        // I7: an UPDATE (requestedId set) must return the SAME id, else a resolved sibling could point at
-        // a stale target. Case-insensitive (Dataverse may echo a differently-cased GUID).
-        if (requestedId && String(up.pageId).toLowerCase() !== String(requestedId).toLowerCase()) throw new BuildHalt(`page "${p.name}" UPDATE returned a different id (${up.pageId} != ${requestedId}) — refusing to finalize with an inconsistent target`, { phase: 'pages', code: 'pages-update-identity-mismatch', recoverable: false });
-        // Key by the STABLE key (p.key||p.name): appDef resolves result.pages[s.page] where s.page is the
-        // migrated KEY (:506). Keying by name left v2 key-referenced subareas unresolved.
-        keyToId.set(key, up.pageId);
-        result.created.pages[key] = up.pageId;
-        await persistNow(); // manifest carries this id BEFORE the next create (crash-safety, design §9 / C5)
-        return up.pageId;
-      });
-    }
-    await runner.run('pages', `page manifest ${manifestResourceName(appUnique)}`, async () => { await persistNow(); return manifestResourceName(appUnique); });
-    if (appHasPageSubareas(spec)) {
-      await runner.run('pages', 'finalize sitemap (genpage subareas)', async () => {
-        await provision.fetchArtifact('app', result.created.app);
-        const full = appDef(spec, result.created);
-        provision.updateElement('app', result.created.app, '/siteMap', full.siteMap);
-        requireSuccessfulPush(await provision.pushArtifact('app', result.created.app), 'app sitemap finalize');
-        await provision.publishArtifact('app', result.created.app);
-        return result.created.app;
-      });
+    const wsDir = opts.workspaceDir || path.join(path.resolve(opts.appDir || '.'), '.maker-workspace');
+    // Advisory lease: acquired OUTSIDE the try so a failed acquire (pages-locked HALT) never triggers the
+    // finally that would release a lease we never held. Correctness rests on the convergence spine, not this.
+    const lease = acquireAppPagesLease(wsDir, appUnique);
+    const stagingDir = path.join(wsDir, '.pageref-deploy', randomUUID());
+    try {
+      // Fail-closed enumeration: a failed/unreadable/incomplete listing must NOT look like "no pages".
+      const enumd = await genpageCli.enumerate({ appId: result.created.app });
+      if (!enumd.ok) throw new BuildHalt(`page enumeration failed — refusing to (re)create pages against an unknown page set: ${enumd.error || 'pac genpage list returned non-zero'}`, { phase: 'pages', code: 'pages-enumeration-failed', recoverable: true });
+      const { id: readId, manifest, text } = await readPageManifest(provision, appUnique);
+      let manifestId = readId;
+      let lastManifestContent = text;
+      const { keyToId, ambiguous } = reconcilePageIds(spec.pages, manifest, enumd.pages);
+      if (ambiguous.length) throw new BuildHalt(`ambiguous page name(s) ${ambiguous.map((a) => `"${a.name}"`).join(', ')} — multiple live pages share a display name; refusing to overwrite an arbitrary one. Rename or remove the duplicate in Maker, then rebuild.`, { phase: 'pages', code: 'pages-ambiguous-name', recoverable: false });
+      const persistNow = async () => { const pr = await persistPageManifest(provision, spec, keyToId, sol, appUnique, manifestId, lastManifestContent); manifestId = pr.id; lastManifestContent = pr.content; };
+
+      const keyOf = (p) => p.key || p.name;
+      const canonicalPath = (p) => path.resolve(opts.appDir || '.', normalizePageSource(p).codeFile);
+      const implemented = [];
+      for (const p of spec.pages) {
+        const src = normalizePageSource(p);
+        if (src && src.kind === 'tsx' && src.codeFile) implemented.push(p);
+        else runner.skip('pages', `page "${p.name}" (no tsx source)`);
+      }
+
+      // (1) STRUCTURAL SCAN of every implemented canonical source BEFORE any write (C1/C4), via the single
+      //     nav oracle (extractNavTargets). Reject a malformed (non-canonical) nav PAGEREF and enforce EXACT
+      //     parity between declared navigatesTo targetKeys and the keys the source references at REAL nav
+      //     call sites — a decoy "PAGEREF_" string or a stray GUID in a comment can never pass.
+      //     new-Important-1 (OVERRIDE 2): additionally reject `dynamic` (variable/expression) and `literal`
+      //     (hardcoded GUID) nav pageIds — a nav target must always be a declared "PAGEREF_<key>" symbol.
+      const sourceByKey = new Map();
+      for (const p of implemented) {
+        const code = fs.readFileSync(canonicalPath(p), 'utf8');
+        sourceByKey.set(keyOf(p), code);
+        const malformed = navMalformedRefs(code);
+        if (malformed.length) throw new BuildHalt(`page "${p.name}" has malformed navigation reference(s): ${malformed.join(', ')} — a cross-page link must be a double-quoted "PAGEREF_<key>" pageId literal`, { phase: 'pages', code: 'pages-malformed-navref', recoverable: false });
+        const { declaredNotReferenced, referencedNotDeclared } = navTargetParity((p.navigatesTo || []).map((n) => n.targetKey), navReferencedKeys(code));
+        if (declaredNotReferenced.length || referencedNotDeclared.length) throw new BuildHalt(`page "${p.name}" navigation parity mismatch — declared-but-absent: [${declaredNotReferenced.join(', ')}], referenced-but-undeclared: [${referencedNotDeclared.join(', ')}]`, { phase: 'pages', code: 'pages-nav-parity', recoverable: false });
+        // new-Important-1 (fail-closed): a nav pageId must be a DECLARED "PAGEREF_<key>" — never a dynamic
+        // expression (unverifiable target) or a hardcoded GUID literal in CANONICAL source (breaks cross-env
+        // recreate and ships nav the design never declared). extractNavTargets classifies each nav call site's
+        // pageId; 'pageref'-not-declared is already caught by navTargetParity, so here reject 'dynamic' + 'literal'.
+        const badNav = extractNavTargets(code).filter((t) => t.kind === 'dynamic' || t.kind === 'literal');
+        if (badNav.length) throw new BuildHalt(`page "${p.name}" has ${badNav.length} undeclared/non-symbolic navigation target(s) (dynamic expression or hardcoded page GUID) — cross-page navigation must use a double-quoted "PAGEREF_<key>" pageId declared via navigatesTo`, { phase: 'pages', code: 'pages-nav-parity', recoverable: false });
+      }
+
+      const navTargets = new Set();
+      for (const p of implemented) for (const n of p.navigatesTo || []) navTargets.add(n.targetKey);
+      const mintedKeys = new Set();
+      const deployment = new Map(); // key -> resolved code (nav sources only)
+
+      // (2+3) Inside ONE "resolve cross-page navigation" step: create-absent-first for ABSENT nav TARGETS
+      //       (upload symbolic source to mint an id; persist the manifest IMMEDIATELY after EVERY create for
+      //       crash-safety, C5), then RESOLVE the graph once every referenced target has an id (fail-closed
+      //       on a dangling target).
+      if (appHasCrossPageNav(spec)) {
+        await runner.run('pages', 'resolve cross-page navigation', async () => {
+          for (const p of implemented) {
+            const key = keyOf(p);
+            if (keyToId.has(key) || !navTargets.has(key)) continue; // only ABSENT targets need pre-minting
+            const up = await genpageCli.upload({ appId: result.created.app, codeFile: canonicalPath(p), name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources });
+            keyToId.set(key, up.pageId);
+            result.created.pages[key] = up.pageId;
+            mintedKeys.add(key);
+            await persistNow();
+          }
+          const navSources = new Map();
+          for (const p of implemented) if ((p.navigatesTo || []).length) navSources.set(keyOf(p), { code: sourceByKey.get(keyOf(p)) });
+          const { deployment: dep, unresolved } = resolvePageRefs(navSources, keyToId);
+          if (unresolved.length) throw new BuildHalt(`unresolved cross-page navigation target(s): ${unresolved.join(', ')} — a page navigates to a key that isn't a built page`, { phase: 'pages', code: 'pages-dangling-navref', recoverable: false });
+          for (const [k, code] of dep) deployment.set(k, code);
+          return `${deployment.size} navigation source(s)`;
+        });
+      }
+
+      // (4) UPLOAD-ONCE — exactly one runner.run/skip per page. A non-nav page already minted in step 2 is
+      //     final (skip). Every UPDATE asserts the returned id matches the requested id (I7). Persist the
+      //     manifest immediately after each create (C5).
+      for (const p of implemented) {
+        const key = keyOf(p);
+        const isNav = (p.navigatesTo || []).length > 0;
+        if (!isNav && mintedKeys.has(key)) { runner.skip('pages', `page "${p.name}" (created)`); continue; }
+        await runner.run('pages', `page "${p.name}"`, async () => {
+          const requestedId = keyToId.get(key);
+          const codeFile = isNav ? writeStagingFile(stagingDir, key, deployment.get(key)) : canonicalPath(p);
+          const up = await genpageCli.upload({ appId: result.created.app, pageId: requestedId, codeFile, name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources });
+          // I7: an UPDATE (requestedId set) must return the SAME id, else a resolved sibling could point at
+          // a stale target. Case-insensitive (Dataverse may echo a differently-cased GUID).
+          if (requestedId && String(up.pageId).toLowerCase() !== String(requestedId).toLowerCase()) throw new BuildHalt(`page "${p.name}" UPDATE returned a different id (${up.pageId} != ${requestedId}) — refusing to finalize with an inconsistent target`, { phase: 'pages', code: 'pages-update-identity-mismatch', recoverable: false });
+          // Key by the STABLE key (p.key||p.name): appDef resolves result.pages[s.page] where s.page is the
+          // migrated KEY (:506). Keying by name left v2 key-referenced subareas unresolved.
+          keyToId.set(key, up.pageId);
+          result.created.pages[key] = up.pageId;
+          await persistNow(); // manifest carries this id BEFORE the next create (crash-safety, design §9 / C5)
+          return up.pageId;
+        });
+      }
+
+      // (5) Persist the FINAL manifest (deduped no-op after per-create persists), then finalize the sitemap
+      //     (the true commit point — only after all resolved uploads succeed).
+      await runner.run('pages', `page manifest ${manifestResourceName(appUnique)}`, async () => { await persistNow(); return manifestResourceName(appUnique); });
+      if (appHasPageSubareas(spec)) {
+        await runner.run('pages', 'finalize sitemap (genpage subareas)', async () => {
+          await provision.fetchArtifact('app', result.created.app);
+          const full = appDef(spec, result.created);
+          provision.updateElement('app', result.created.app, '/siteMap', full.siteMap);
+          requireSuccessfulPush(await provision.pushArtifact('app', result.created.app), 'app sitemap finalize');
+          await provision.publishArtifact('app', result.created.app);
+          return result.created.app;
+        });
+      }
+    } finally {
+      // Always clean up run-scoped staging (never leave env GUIDs on disk) and release the advisory lease.
+      try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+      lease.release();
     }
   }
 
