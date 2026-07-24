@@ -42,3 +42,23 @@ test('does not mutate its input', () => {
   migrateAppSpec(legacy);
   assert.strictEqual(JSON.stringify(legacy), before);
 });
+
+test('rewrites navigatesTo.targetKey name -> key (forward and backward reference)', () => {
+  const legacy = {
+    solution: { uniqueName: 'c', publisherPrefix: 'c' }, app: { name: 'C' }, entities: [],
+    pages: [
+      { name: 'Alpha', codeFile: 'alpha.tsx', navigatesTo: [{ targetKey: 'Beta' }] },  // forward ref (Beta declared later)
+      { name: 'Beta', codeFile: 'beta.tsx', navigatesTo: [{ targetKey: 'Alpha' }] },    // backward ref
+    ],
+  };
+  const m = migrateAppSpec(legacy);
+  assert.strictEqual(m.pages[0].key, 'alpha');
+  assert.strictEqual(m.pages[1].key, 'beta');
+  assert.strictEqual(m.pages[0].navigatesTo[0].targetKey, 'beta');  // Alpha -> Beta (forward ref resolves via 2nd pass)
+  assert.strictEqual(m.pages[1].navigatesTo[0].targetKey, 'alpha'); // Beta -> Alpha (backward ref)
+});
+
+test('mints a fallback key for a page with a blank name', () => {
+  const legacy = { solution: { uniqueName: 'c', publisherPrefix: 'c' }, app: { name: 'C' }, entities: [], pages: [{ name: '', codeFile: 'a.tsx' }] };
+  assert.strictEqual(migrateAppSpec(legacy).pages[0].key, 'page');
+});
