@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// FlowAgent MCP v2.2.0 — fix JSON string coercion for large definitions
+// FlowAgent MCP v2.2.0 — JSON coercion, get_flow path param, CDS fallback, callback fallback
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -29263,12 +29263,19 @@ var FlowClient = class _FlowClient {
       throw err;
     }
   }
-  /** Check if an error is an InsufficientCdsPermissions response from PPAPI. */
+  /** Check if an error is an InsufficientCdsPermissions response from PPAPI (403). */
   isCdsPermissionError(err) {
     if (!err || typeof err !== "object")
       return false;
-    const msg = err.message ?? String(err);
-    return msg.includes("InsufficientCdsPermissions") || msg.includes("InsufficientPermissions");
+    const e = err;
+    if (e.name === "FlowApiError" || e.code === "FlowApiError") {
+      const status = e.statusCode ?? e.status ?? 0;
+      if (status === 403) {
+        const msg = e.message ?? String(err);
+        return msg.includes("InsufficientCdsPermissions") || msg.includes("InsufficientPermissions");
+      }
+    }
+    return false;
   }
   /**
    * Execute a flow operation via the classic Flow RP API
@@ -41400,7 +41407,8 @@ async function createMcpServer(authProvider, deps = {}) {
     try {
       const envId = ctx.resolveEnv(env);
       ctx.rememberEnv(envId);
-      let result = await ctx.getClient().getFlow(envId, flow);
+      const fullResult = await ctx.getClient().getFlow(envId, flow);
+      let result = fullResult;
       if (subPath) {
         for (const segment of subPath.split(".")) {
           if (result == null)
@@ -41408,7 +41416,7 @@ async function createMcpServer(authProvider, deps = {}) {
           result = result[segment];
         }
         if (result === void 0) {
-          return safeResult({ error: `Path "${subPath}" not found in flow response. Available top-level keys: ${Object.keys(await ctx.getClient().getFlow(envId, flow)).join(", ")}` });
+          return safeResult({ error: `Path "${subPath}" not found in flow response. Available top-level keys: ${Object.keys(fullResult).join(", ")}` });
         }
       }
       return safeResult(result, { singleItem: true });
