@@ -96,6 +96,37 @@ test('navMalformedRefs flags a single-quoted PAGEREF_ used as a nav pageId (C4 g
   assert.deepStrictEqual(navReferencedKeys(code), [], 'a malformed ref is NOT a valid canonical reference');
 });
 
+test('navMalformedRefs flags a backtick-quoted PAGEREF_ used as a nav pageId (C4 — backtick cannot be resolved)', () => {
+  // A backtick-quoted PAGEREF cannot be substituted by the resolver (only the canonical
+  // double-quoted token is substitutable), so it is malformed and must HALT.
+  const code = 'Xrm.Navigation.navigateTo({ pageType: "generative", pageId: `PAGEREF_detail` });';
+  assert.deepStrictEqual(navMalformedRefs(code), ['PAGEREF_detail']);
+  assert.deepStrictEqual(navReferencedKeys(code), [], 'a backtick-quoted PAGEREF is NOT a valid canonical reference');
+});
+
+// ─── navReferencedKeys + navTargetParity ─────────────────────────────────────
+
+test('navReferencedKeys returns [] for a literal GUID pageId; parity flags declared edge as unreferenced (M3)', () => {
+  // A deployed/stale GUID in the source is not a canonical PAGEREF, so it is not a referenced
+  // key and parity correctly reports the declared edge as unreferenced.
+  const code = 'Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "5d29d8ce-1111-2222-3333-444455556666" });';
+  assert.deepStrictEqual(navReferencedKeys(code), [], 'a GUID literal is not a canonical PAGEREF key');
+  assert.deepStrictEqual(
+    navTargetParity(['detail'], navReferencedKeys(code)).declaredNotReferenced,
+    ['detail'],
+    'the declared "detail" edge is unreferenced because the source holds a resolved GUID, not PAGEREF_detail'
+  );
+});
+
+test('extractNavTargets classifies a "a" + "b" concat pageId as dynamic, not literal (M4)', () => {
+  // A string concat is not a single literal — the tightened QUOTED regex excludes cross-quote spans
+  // and topLevelValue detects the trailing '+' and widens the span to the full expression.
+  const code = NAV('"a" + "b"');
+  const t = extractNavTargets(code);
+  assert.strictEqual(t.length, 1);
+  assert.strictEqual(t[0].kind, 'dynamic', 'a string concat is not a single literal');
+});
+
 // ─── resolvePageRefs ──────────────────────────────────────────────────────────
 
 test('resolvePageRefs replaces each canonical nav pageId with the quoted genPageId (span-based, no partial collide)', () => {

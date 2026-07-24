@@ -26,7 +26,9 @@
 const NAV_CALL = /navigateTo\s*\(\s*\{/g;
 const CANON = /^"PAGEREF_([A-Za-z0-9_-]+)"$/;  // canonical: double-quoted, both sides
 const PAGEREF_ANY = /PAGEREF_([A-Za-z0-9_-]+)/; // a PAGEREF token in ANY form (used to detect malformed)
-const QUOTED = /^(["'`])([\s\S]*)\1$/;          // a single quoted/back-ticked string literal
+// Content must not span across unescaped quote chars — prevents matching a "foo"+"bar" concat
+// as a single literal when the full expression is somehow presented as a raw string.
+const QUOTED = /^(["'`])((?:[^"'`\\]|\\[\s\S])*)\1$/;
 
 // Replace the body of line comments (//), block comments (/* ... */), and backtick template literals
 // — including any ${...} expressions inside them — with ASCII space characters. Every character offset
@@ -36,10 +38,13 @@ const QUOTED = /^(["'`])([\s\S]*)\1$/;          // a single quoted/back-ticked s
 // Why spaces (not empty or shorter substitution): NAV_CALL.exec() and objectArgAt/topLevelValue use
 // raw offset arithmetic; replacing with equal-length spaces keeps every span valid in both strings.
 //
-// Why blank backtick strings entirely (including the backtick delimiters): we want a navigateTo that
-// appears as TEMPLATE LITERAL TEXT to be invisible to the scanner. Blanking the delimiters means no
-// backtick `inStr` tracking is needed in the parsers below (objectArgAt / topLevelValue), which
-// simplifies them and avoids a second potential bug class.
+// Why blank backtick template-literal BODIES (but KEEP the backtick delimiters): we want a
+// navigateTo that appears as TEMPLATE LITERAL TEXT to be invisible to the scanner — blanking
+// the body achieves this. Keeping the delimiter backtick characters means objectArgAt /
+// topLevelValue correctly detect a backtick-QUOTED VALUE (their `inStr` branches already
+// handle backtick as a string delimiter), so a nav pageId written as `PAGEREF_x` is
+// classified as pageref-malformed instead of falling through to `dynamic` (which would
+// silently bypass the malformed-HALT gate — security finding C4).
 //
 // Template ${} expressions: we track { } depth to correctly identify when a ${...} expression ends.
 // We do NOT track strings-inside-${} (e.g. a `}` inside a "string" inside `${}` would decrement
@@ -65,10 +70,12 @@ function stripNonCode(code) {
         out[i] = ' '; i++;
       }
     } else if (c === '`') {
-      // Template literal: blank the opening backtick, all body content, and the closing backtick.
-      // Track { } depth to correctly span ${...} expressions (so a bare '}' in template text
-      // at depth=0 is just blanked, not mistaken for the end of a ${} expression).
-      out[i] = ' '; i++;
+      // Template literal: keep the opening backtick delimiter, blank the body content, keep the
+      // closing backtick delimiter. The body content (and any ${...} expressions) are blanked so
+      // a navigateTo inside template text is invisible to NAV_CALL. The delimiters are preserved
+      // so objectArgAt / topLevelValue can detect a backtick-QUOTED pageId VALUE via their inStr
+      // branch (see the "Why" comment above). Track { } depth to correctly span ${...} expressions.
+      i++;   // advance past the opening backtick — leave it unchanged in `out`
       let depth = 0;
       while (i < code.length) {
         const cc = code[i];
@@ -85,8 +92,8 @@ function stripNonCode(code) {
         if (depth > 0 && cc === '{') { out[i] = ' '; i++; depth++; continue; }
         if (depth > 0 && cc === '}') { out[i] = ' '; i++; depth--; continue; }
         if (depth === 0 && cc === '`') {
-          // Closing backtick of the template literal.
-          out[i] = ' '; i++; break;
+          // Closing backtick of the template literal — leave it unchanged in `out`, then stop.
+          i++; break;
         }
         out[i] = ' '; i++;
       }
@@ -115,6 +122,8 @@ function objectArgAt(code, open) {
   for (let i = open; i < code.length; i += 1) {
     const c = code[i];
     if (inStr) { if (c === '\\') { i += 1; continue; } if (c === inStr) inStr = null; continue; }
+    // inStr handles backtick-quoted values (delimiters kept by stripNonCode) so their blanked body
+    // doesn't count as unbalanced braces when scanning the object boundary.
     if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
     if (c === '{') depth += 1;
     else if (c === '}') { depth -= 1; if (depth === 0) return { text: code.slice(open, i + 1), end: i + 1 }; }
@@ -125,15 +134,20 @@ function objectArgAt(code, open) {
 // Read the VALUE of a TOP-LEVEL `key:` in an object-literal text (depth 1 only — never a key inside a
 // nested data:{}/pageInput:{}). `objText` begins with '{'. Returns { raw, valueStart, valueEnd } (span
 // relative to objText) or null when the key is absent at the top level. A quoted value captures the
-// whole string literal (escape-aware); an unquoted value runs to the next top-level ',' or the closing
-// '}'. The char-before check rejects a false hit inside a longer identifier (e.g. `myPageId`).
+// whole string literal (escape-aware); an unquoted value (or a quoted string followed by '+', which
+// indicates a concat expression) runs to the next top-level ',' or the closing '}'. The char-before
+// check rejects a false hit inside a longer identifier (e.g. `myPageId`).
 function topLevelValue(objText, key) {
   let depth = 0;
   let inStr = null;
+  // `key` is always a code-controlled literal ('pageType' or 'pageId'), never user-supplied,
+  // so no regex-escape is needed before interpolating into the pattern.
   const keyRe = new RegExp('^' + key + '\\s*:');
   for (let i = 0; i < objText.length; i += 1) {
     const c = objText[i];
     if (inStr) { if (c === '\\') { i += 1; continue; } if (c === inStr) inStr = null; continue; }
+    // inStr handles backtick-quoted values (delimiters kept by stripNonCode) so their blanked body
+    // is not misread as key or bracket content when scanning for the target key.
     if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
     if (c === '{' || c === '[' || c === '(') { depth += 1; continue; }
     if (c === '}' || c === ']' || c === ')') { depth -= 1; continue; }
@@ -150,9 +164,18 @@ function topLevelValue(objText, key) {
       // Quoted value: scan to the matching closing quote, respecting escape sequences.
       let k = j + 1;
       for (; k < objText.length; k += 1) { if (objText[k] === '\\') { k += 1; continue; } if (objText[k] === q) { k += 1; break; } }
-      return { raw: objText.slice(j, k), valueStart: j, valueEnd: k };
+      // If the quoted string is followed (after optional whitespace) by '+', it is a concat
+      // expression — fall through to unquoted scanning to capture the full span, so the
+      // tightened QUOTED regex correctly classifies it as `dynamic` rather than `literal`.
+      let kk = k;
+      while (kk < objText.length && /\s/.test(objText[kk])) kk++;
+      if (!(kk < objText.length && objText[kk] === '+')) {
+        return { raw: objText.slice(j, k), valueStart: j, valueEnd: k };
+      }
+      // Falls through to the unquoted scanning below.
     }
-    // Unquoted value (variable, function call, etc.): scan to the next top-level ',' or '}'.
+    // Unquoted value (variable, function call, concat expression, etc.): scan to the next
+    // top-level ',' or '}'.
     let d2 = 0;
     let k = j;
     for (; k < objText.length; k += 1) {
@@ -176,7 +199,8 @@ function topLevelValue(objText, key) {
 // comment, or backtick template literal is not matched. Spans in the cleaned string are identical to
 // spans in the original because stripping replaces characters with same-length spaces.
 function extractNavTargets(code) {
-  const s = stripNonCode(String(code || ''));
+  const src = String(code || '');
+  const s = stripNonCode(src);
   const out = [];
   NAV_CALL.lastIndex = 0;
   let m;
@@ -191,20 +215,24 @@ function extractNavTargets(code) {
     if (!pv) continue;
     // pv.valueStart / pv.valueEnd are relative to obj.text which starts at `open` in s.
     // Adding `open` makes them absolute offsets into s (and equally into the original code,
-    // since stripNonCode replaces with equal-length spaces).
+    // since stripNonCode replaces with equal-length spaces — offsets are always identical in both).
     const valueStart = open + pv.valueStart;
     const valueEnd = open + pv.valueEnd;
-    const raw = pv.raw;
-    const canon = CANON.exec(raw);
+    // Classify from the ORIGINAL source span (not the stripped text): backtick-quoted values have
+    // their bodies blanked in `s`, so `pv.raw` from `s` is `\`   \`` (spaces) and PAGEREF_ANY would
+    // miss the token. Using `src` at the same offsets recovers the original content (e.g. `\`PAGEREF_x\``)
+    // so the token is found and classified as pageref-malformed instead of silently falling to `dynamic`.
+    const rawOrig = src.slice(valueStart, valueEnd).trim();
+    const canon = CANON.exec(rawOrig);
     if (canon) { out.push({ kind: 'pageref', key: canon[1], valueStart, valueEnd }); continue; }
     // A PAGEREF token in any non-canonical form is malformed (single/back-tick quoted, concatenated)
     // — the resolver can only substitute the canonical double-quoted token, so a malformed one
     // would ship UNRESOLVED. See C4.
-    const anyRef = PAGEREF_ANY.exec(raw);
-    if (anyRef) { out.push({ kind: 'pageref-malformed', key: anyRef[1], raw, valueStart, valueEnd }); continue; }
-    const quoted = QUOTED.exec(raw);
+    const anyRef = PAGEREF_ANY.exec(rawOrig);
+    if (anyRef) { out.push({ kind: 'pageref-malformed', key: anyRef[1], raw: rawOrig, valueStart, valueEnd }); continue; }
+    const quoted = QUOTED.exec(rawOrig);
     if (quoted) { out.push({ kind: 'literal', pageId: quoted[2], quote: quoted[1], valueStart, valueEnd }); continue; }
-    out.push({ kind: 'dynamic', raw, valueStart, valueEnd });
+    out.push({ kind: 'dynamic', raw: rawOrig, valueStart, valueEnd });
   }
   return out;
 }
