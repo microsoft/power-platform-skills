@@ -73,6 +73,7 @@ const SKILL_SDK_SURFACE = [
   'setEntityIcon',
   'updateElement',
   'updateRecord',
+  'updateWebResource',
 ];
 
 function realSdk() {

@@ -5,6 +5,8 @@
 // throws a TypeError and the build halts on any spec with pages[].
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { migrateAppSpec } = require('../lib/app-spec.js');
 const { runSdkBuild } = require('../lib/sdk-build.js');
@@ -53,6 +55,7 @@ function mockSdk() {
     createColumn: async (e, o) => { calls.push({ name: 'createColumn', args: [e, o] }); return { logicalName: o.schemaName.toLowerCase(), metadataId: `col-${o.schemaName}` }; },
     createRelationship: async (o) => { calls.push({ name: 'createRelationship', args: [o] }); return { schemaName: o.schemaName }; },
     createWebResource: async (o) => { calls.push({ name: 'createWebResource', args: [o] }); return { id: `wr-${++idc}`, name: o.name }; },
+    updateWebResource: async (id, o) => { calls.push({ name: 'updateWebResource', args: [id, o] }); return {}; },
     enrichDefaultViews: async () => { calls.push({ name: 'enrichDefaultViews' }); return { updated: [] }; },
     createArtifact: (t, def) => {
       calls.push({ name: 'createArtifact', args: [t, def] });
@@ -88,24 +91,29 @@ test('migrated legacy spec: pages phase does NOT throw and upload receives the c
   const uploads = [];
   const genpageCli = {
     list: async () => [],
+    enumerate: async () => ({ ok: true, pages: [], empty: true }),
     upload: async (o) => { uploads.push(o); return { pageId: 'gp-1' }; },
   };
 
   // (a) The build must NOT throw (before the fix it throws TypeError from path.resolve(dir, undefined)).
-  await assert.doesNotReject(
-    runSdkBuild(migrated, {
-      sdk, apply: true, env: 'https://x.dynamics.com', appDir: process.cwd(),
-      genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'],
-    }),
-    'runSdkBuild should not throw after migrateAppSpec'
-  );
+  const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mig-pages-'));
+  fs.writeFileSync(path.join(appDir, 'overview.tsx'), 'export default function O(){ return null; }', 'utf8');
+  try {
+    await assert.doesNotReject(
+      runSdkBuild(migrated, {
+        sdk, apply: true, env: 'https://x.dynamics.com', appDir,
+        genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'],
+      }),
+      'runSdkBuild should not throw after migrateAppSpec'
+    );
 
-  // (b) The mock upload must receive a codeFile path that ends in the page's .tsx filename.
-  assert.strictEqual(uploads.length, 1, 'exactly one page uploaded');
-  assert.ok(
-    uploads[0].codeFile.endsWith('overview.tsx') || uploads[0].codeFile.endsWith(path.sep + 'overview.tsx'),
-    `upload codeFile should end in 'overview.tsx', got: ${uploads[0].codeFile}`
-  );
+    // (b) The mock upload must receive a codeFile path that ends in the page's .tsx filename.
+    assert.strictEqual(uploads.length, 1, 'exactly one page uploaded');
+    assert.ok(
+      uploads[0].codeFile.endsWith('overview.tsx') || uploads[0].codeFile.endsWith(path.sep + 'overview.tsx'),
+      `upload codeFile should end in 'overview.tsx', got: ${uploads[0].codeFile}`
+    );
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
 // Native v2 spec (no legacy codeFile, source.kind = 'tsx') must also upload correctly.
@@ -118,22 +126,27 @@ test('native v2 spec (source.kind tsx): pages phase resolves codeFile from sourc
   const uploads = [];
   const genpageCli = {
     list: async () => [],
+    enumerate: async () => ({ ok: true, pages: [], empty: true }),
     upload: async (o) => { uploads.push(o); return { pageId: 'gp-v2' }; },
   };
 
-  await assert.doesNotReject(
-    runSdkBuild(v2, {
-      sdk, apply: true, env: 'https://x.dynamics.com', appDir: process.cwd(),
-      genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'],
-    }),
-    'runSdkBuild should not throw for a native v2 spec'
-  );
+  const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mig-pages-'));
+  fs.writeFileSync(path.join(appDir, 'overview.tsx'), 'export default function O(){ return null; }', 'utf8');
+  try {
+    await assert.doesNotReject(
+      runSdkBuild(v2, {
+        sdk, apply: true, env: 'https://x.dynamics.com', appDir,
+        genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'],
+      }),
+      'runSdkBuild should not throw for a native v2 spec'
+    );
 
-  assert.strictEqual(uploads.length, 1, 'exactly one page uploaded');
-  assert.ok(
-    uploads[0].codeFile.endsWith('overview.tsx') || uploads[0].codeFile.endsWith(path.sep + 'overview.tsx'),
-    `upload codeFile should end in 'overview.tsx', got: ${uploads[0].codeFile}`
-  );
+    assert.strictEqual(uploads.length, 1, 'exactly one page uploaded');
+    assert.ok(
+      uploads[0].codeFile.endsWith('overview.tsx') || uploads[0].codeFile.endsWith(path.sep + 'overview.tsx'),
+      `upload codeFile should end in 'overview.tsx', got: ${uploads[0].codeFile}`
+    );
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
 // A page with source.kind 'intent' (not yet implemented) should be SKIPPED without throwing.
@@ -146,6 +159,7 @@ test('intent page (no codeFile) is skipped — no upload, no throw', async () =>
   const uploads = [];
   const genpageCli = {
     list: async () => [],
+    enumerate: async () => ({ ok: true, pages: [], empty: true }),
     upload: async (o) => { uploads.push(o); return { pageId: 'gp-skip' }; },
   };
   const events = [];

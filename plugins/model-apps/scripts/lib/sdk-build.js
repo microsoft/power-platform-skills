@@ -52,6 +52,7 @@ const {
   viewColumnsIntent,
 } = require('./artifact-intent.js');
 const { makeGenpageCli } = require('./genpage-cli.js');
+const { manifestResourceName, buildManifest, serializeManifest, parseManifestBase64, reconcilePageIds } = require('./page-manifest.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
 const { buildPromptSpec } = require('./ai-prompt.js');
 const { odataLit } = require('./odata.js');
@@ -277,6 +278,7 @@ function planFor(spec, opts) {
   if (has('app-shell')) items.push({ phase: 'app-shell', label: `app module "${spec.app.name}" + sitemap` });
   if (has('app-shell') && !(spec.app && spec.app.icon)) items.push({ phase: 'app-shell', label: `app icon (generated) ${appUniqueName(spec)}_icon` });
   if (has('pages')) for (const p of spec.pages || []) items.push({ phase: 'pages', label: `page "${p.name}"` });
+  if (has('pages') && (spec.pages || []).length) items.push({ phase: 'pages', label: `page manifest ${appUniqueName(spec)}_pagemanifest` });
   if (has('pages') && (spec.pages || []).length && appHasPageSubareas(spec)) items.push({ phase: 'pages', label: 'finalize sitemap (genpage subareas)' });
   if (has('ai-features') && spec.ai !== undefined && spec.ai !== null) {
     items.push({ phase: 'ai-features', label: 'enable app AI features' });
@@ -458,6 +460,38 @@ async function ensureAppIcon(spec, created, deps) {
     return name;
   });
   return id;
+}
+
+// Read the durable page manifest (`<appUnique>_pagemanifest`). Looked up by NAME via queryRecords
+// (getWebResource needs the GUID we don't have yet). content is base64; `text` is the decoded serialized
+// content, used by persist's content-dedup. manifest is null when absent/unreadable (fail-closed parse)
+// so the caller relies on the live enumeration. See design §7.3.
+async function readPageManifest(provision, appUnique) {
+  const name = manifestResourceName(appUnique);
+  const rows = await provision.queryRecords('webresource', { select: ['webresourceid', 'content'], filter: `name eq '${odataLit(name)}'`, top: 1 });
+  const wr = rows && rows[0];
+  if (!wr) return { id: undefined, manifest: null, text: undefined };
+  const text = wr.content ? Buffer.from(wr.content, 'base64').toString('utf8') : undefined;
+  return { id: wr.webresourceid, manifest: parseManifestBase64(wr.content), text };
+}
+
+// Create or UPDATE the durable page manifest and (idempotently) re-assert its solution membership EVERY
+// run (design §7.3). CONTENT-DEDUP: the write is SKIPPED when the manifest already holds exactly `content`
+// (== lastContent). Called immediately after EVERY page create (crash-safety, C5) AND once at the end;
+// dedup means a single-page first build issues one create + zero updates, an N-new-page first build one
+// create + (N-1) updates, and a no-op final persist. Stored as type 'js' (webresourcetype 3): there is no
+// 'json' web-resource kind and 'js' round-trips arbitrary text unchanged. Returns { id, content } for the
+// next call. Stable 7-arg signature (Tasks 5 + 8).
+async function persistPageManifest(provision, spec, keyToId, sol, appUnique, existingId, lastContent) {
+  const name = manifestResourceName(appUnique);
+  const content = serializeManifest(buildManifest(spec, keyToId));
+  let id = existingId;
+  if (content !== lastContent) {
+    if (id) await provision.updateWebResource(id, { content });
+    else { const r = await provision.createWebResource({ name, displayName: `${spec.app.name} Page Manifest`, type: 'js', content }); id = r.id; }
+  }
+  if (id) await provision.addSolutionComponent({ componentId: id, componentType: COMPONENT_TYPE.webResource, solutionUniqueName: sol.uniqueName });
+  return { id, content };
 }
 
 // Add the app's sitemap (componenttype 62) to the solution. Adding the app module alone leaves the
@@ -1058,32 +1092,44 @@ async function runSdkBuild(spec, opts = {}) {
     });
   }
 
-  // 7b. Pages (generative pages). The app now exists, so upload each page's content via pac
-  //     (WITHOUT --add-to-sitemap — the SDK owns the sitemap), then rewrite the app's sitemap once
-  //     to include the GenPage subareas. Existing pages (matched by name) update in place.
+  // 7b. Pages (generative pages). The app now exists; upload each page's content via pac (WITHOUT
+  //     --add-to-sitemap — the SDK owns the sitemap), persisting the durable manifest immediately after
+  //     each create (crash-safety), then finalize the sitemap once so it includes the GenPage subareas.
   if (has('pages') && (spec.pages || []).length) {
     const genpageCli = opts.genpageCli || makeGenpageCli(opts.env);
-    let existingByName = new Map();
-    try {
-      const existing = await genpageCli.list({ appId: result.created.app });
-      existingByName = new Map((existing || []).filter((p) => p.name).map((p) => [p.name, p.pageId]));
-    } catch { existingByName = new Map(); }
+    const appUnique = appUniqueName(spec);
+    // I1 recovery guard: the app id is only populated by app-shell (this run). If pages runs without it
+    // (e.g. --from pages), there is nothing to upload against — HALT and require a FULL rerun.
+    if (!result.created.app) throw new BuildHalt('pages phase requires the app (app-shell) in the same run — the app id is not carried across invocations. Re-run a FULL build (do not use --from pages).', { phase: 'pages', code: 'pages-requires-app', recoverable: false });
+    // Fail-closed enumeration: a failed/unreadable/incomplete listing must NOT look like "no pages".
+    const enumd = await genpageCli.enumerate({ appId: result.created.app });
+    if (!enumd.ok) throw new BuildHalt(`page enumeration failed — refusing to (re)create pages against an unknown page set: ${enumd.error || 'pac genpage list returned non-zero'}`, { phase: 'pages', code: 'pages-enumeration-failed', recoverable: true });
+    const { id: readId, manifest, text } = await readPageManifest(provision, appUnique);
+    let manifestId = readId;
+    let lastManifestContent = text;
+    const { keyToId, ambiguous } = reconcilePageIds(spec.pages, manifest, enumd.pages);
+    if (ambiguous.length) throw new BuildHalt(`ambiguous page name(s) ${ambiguous.map((a) => `"${a.name}"`).join(', ')} — multiple live pages share a display name; refusing to overwrite an arbitrary one. Rename or remove the duplicate in Maker, then rebuild.`, { phase: 'pages', code: 'pages-ambiguous-name', recoverable: false });
+    const persistNow = async () => { const p = await persistPageManifest(provision, spec, keyToId, sol, appUnique, manifestId, lastManifestContent); manifestId = p.id; lastManifestContent = p.content; };
     for (const p of spec.pages) {
-      // normalizePageSource handles both the migrated shape (source.codeFile, schemaVersion 2)
-      // and the legacy top-level codeFile. An intent page (no .tsx yet) returns kind:'intent'
-      // or null — skip the upload rather than passing undefined to path.resolve.
       const src = normalizePageSource(p);
-      if (!src || src.kind !== 'tsx' || !src.codeFile) {
-        runner.skip('pages', `page "${p.name}" (no tsx source)`);
-        continue;
-      }
+      if (!src || src.kind !== 'tsx' || !src.codeFile) { runner.skip('pages', `page "${p.name}" (no tsx source)`); continue; }
+      const key = p.key || p.name;
       await runner.run('pages', `page "${p.name}"`, async () => {
+        const requestedId = keyToId.get(key);
         const codeFile = path.resolve(opts.appDir || '.', src.codeFile);
-        const up = await genpageCli.upload({ appId: result.created.app, pageId: existingByName.get(p.name), codeFile, name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources });
-        result.created.pages[p.name] = up.pageId;
+        const up = await genpageCli.upload({ appId: result.created.app, pageId: requestedId, codeFile, name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources });
+        // I7: an UPDATE (requestedId set) must return the SAME id, else a resolved sibling could point at
+        // a stale target. Case-insensitive (Dataverse may echo a differently-cased GUID).
+        if (requestedId && String(up.pageId).toLowerCase() !== String(requestedId).toLowerCase()) throw new BuildHalt(`page "${p.name}" UPDATE returned a different id (${up.pageId} != ${requestedId}) — refusing to finalize with an inconsistent target`, { phase: 'pages', code: 'pages-update-identity-mismatch', recoverable: false });
+        // Key by the STABLE key (p.key||p.name): appDef resolves result.pages[s.page] where s.page is the
+        // migrated KEY (:506). Keying by name left v2 key-referenced subareas unresolved.
+        keyToId.set(key, up.pageId);
+        result.created.pages[key] = up.pageId;
+        await persistNow(); // manifest carries this id BEFORE the next create (crash-safety, design §9 / C5)
         return up.pageId;
       });
     }
+    await runner.run('pages', `page manifest ${manifestResourceName(appUnique)}`, async () => { await persistNow(); return manifestResourceName(appUnique); });
     if (appHasPageSubareas(spec)) {
       await runner.run('pages', 'finalize sitemap (genpage subareas)', async () => {
         await provision.fetchArtifact('app', result.created.app);

@@ -1,7 +1,25 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { runSdkBuild, planFor, resolvePhases, compileFormIntent, formFieldLogicals, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, dashboardTileOpts, PHASES } = require('../lib/sdk-build.js');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { runSdkBuild, planFor, resolvePhases, compileFormIntent, formFieldLogicals, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, dashboardTileOpts, PHASES, appUniqueName } = require('../lib/sdk-build.js');
+
+// Stage a fresh temp appDir with a minimal valid .tsx for each IMPLEMENTED page. Task 8's pages-phase
+// scan READS canonical source from disk, so any pages-phase test must have real files (not a bare
+// 'o.tsx' string). Optional `bodyByCodeFile` overrides a page's source (e.g. to inject navigation).
+function stagePages(pages, bodyByCodeFile = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdkb-pages-'));
+  for (const p of pages || []) {
+    const cf = (p.source && p.source.codeFile) || p.codeFile;
+    if (!cf) continue;
+    const f = path.join(dir, cf);
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, bodyByCodeFile[cf] || 'export default function P(){ return null; }', 'utf8');
+  }
+  return dir;
+}
 
 // Customer 1:N Tickets: a Choice column, sample data with $parent, a view, a Choice chart,
 // and a parent form with a child sub-grid.
@@ -56,7 +74,10 @@ function mockSdk(opts = {}) {
       calls.push({ name: 'queryRecords', args: [e, o] });
       const filter = (o && o.filter) || '';
       if (e === 'solution') return opts.solutionExists ? [{ solutionid: 's' }] : [];
-      if (e === 'webresource') return opts.existingWebResource ? [{ webresourceid: 'wr-existing' }] : [];
+      if (e === 'webresource') {
+        if (/_pagemanifest'/.test(filter)) return opts.pageManifest ? [{ webresourceid: opts.manifestId || 'wr-manifest', content: opts.pageManifest }] : [];
+        return opts.existingWebResource ? [{ webresourceid: 'wr-existing' }] : [];
+      }
       if (e === 'sitemap') return [{ sitemapid: 'sm-1' }];
       // Main forms for an entity: our reconciled form + a blank stock "Information" form to deactivate.
       if (e === 'systemform') return opts.artifactsExist ? [{ formid: 'form-existing', isdefault: true }, { formid: 'stock-info', isdefault: false }] : [];
@@ -104,6 +125,7 @@ function mockSdk(opts = {}) {
       return [];
     },
     createWebResource: async (o) => { calls.push({ name: 'createWebResource', args: [o] }); return { id: `wr-${++idc}`, name: o.name }; },
+    updateWebResource: async (id, o) => { calls.push({ name: 'updateWebResource', args: [id, o] }); return {}; },
     fetchArtifact: async (t, id) => {
       calls.push({ name: 'fetchArtifact', args: [t, id] });
       // Seed the store to mimic a fetched, deployed artifact so reconcile can read + mutate it.
@@ -975,40 +997,44 @@ test('pages phase uploads each page (no --add-to-sitemap) then finalizes the sit
   const spec = makeSpec();
   spec.pages = [{ name: 'Overview', codeFile: 'o.tsx', prompt: 'kpis', dataSources: ['new_customer'] }];
   spec.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
-  const { sdk, calls } = mockSdk();
-  const uploads = [];
-  const genpageCli = { list: async () => [], upload: async (o) => { uploads.push(o); return { pageId: 'gp-1' }; } };
-  await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir: process.cwd(), genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
-  assert.strictEqual(uploads.length, 1, 'one page uploaded');
-  assert.strictEqual(uploads[0].name, 'Overview');
-  // sitemap is now finalized via updateElement('app', id, '/siteMap', siteMap)
-  const setDef = find(calls, 'updateElement').find((c) => c.args[2] === '/siteMap');
-  assert.ok(setDef, 'sitemap finalized via updateElement(/siteMap)');
-  const subs = setDef.args[3].areas[0].groups[0].subAreas;
-  assert.ok(subs.some((s) => s.type === 'GenPage' && s.genPageId === 'gp-1'), 'GenPage subarea in the finalized sitemap');
+  const appDir = stagePages(spec.pages);
+  try {
+    const { sdk, calls } = mockSdk();
+    const uploads = [];
+    const genpageCli = { list: async () => [], enumerate: async () => ({ ok: true, pages: [], empty: true }), upload: async (o) => { uploads.push(o); return { pageId: 'gp-1' }; } };
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+    assert.strictEqual(uploads.length, 1, 'one page uploaded');
+    const setDef = find(calls, 'updateElement').find((c) => c.args[2] === '/siteMap');
+    assert.ok(setDef.args[3].areas[0].groups[0].subAreas.some((s) => s.type === 'GenPage' && s.genPageId === 'gp-1'), 'GenPage subarea in the finalized sitemap');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
 test('app-shell creates the app WITHOUT unbuilt page subareas (app_early ordering)', async () => {
   const spec = makeSpec();
   spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }];
   spec.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
-  const { sdk, calls } = mockSdk();
-  const genpageCli = { list: async () => [], upload: async () => ({ pageId: 'gp-1' }) };
-  await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir: process.cwd(), genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
-  const appCreate = find(calls, 'createArtifact').find((c) => c.args[0] === 'app');
-  const subs = appCreate.args[1].siteMap.areas[0].groups[0].subAreas;
-  assert.ok(!subs.some((s) => s.type === 'GenPage'), 'no GenPage subarea at app-create time');
-  assert.ok(subs.some((s) => s.type === 'Entity'), 'entity subarea present at create');
+  const appDir = stagePages(spec.pages);
+  try {
+    const { sdk, calls } = mockSdk();
+    const genpageCli = { list: async () => [], enumerate: async () => ({ ok: true, pages: [], empty: true }), upload: async () => ({ pageId: 'gp-1' }) };
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+    const appCreate = find(calls, 'createArtifact').find((c) => c.args[0] === 'app');
+    assert.ok(!appCreate.args[1].siteMap.areas[0].groups[0].subAreas.some((s) => s.type === 'GenPage'), 'no GenPage subarea at app-create time');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
 test('pages phase updates an existing page in place (matched by name -> --page-id)', async () => {
   const spec = makeSpec();
   spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }];
-  const { sdk } = mockSdk();
-  const uploads = [];
-  const genpageCli = { list: async () => [{ pageId: 'gp-existing', name: 'Overview' }], upload: async (o) => { uploads.push(o); return { pageId: 'gp-existing' }; } };
-  await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir: process.cwd(), genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
-  assert.strictEqual(uploads[0].pageId, 'gp-existing', 'existing page updated via --page-id, not duplicated');
+  const appDir = stagePages(spec.pages);
+  try {
+    const { sdk } = mockSdk();
+    const uploads = [];
+    const live = [{ pageId: 'gp-existing', name: 'Overview' }];
+    const genpageCli = { list: async () => live, enumerate: async () => ({ ok: true, pages: live }), upload: async (o) => { uploads.push(o); return { pageId: 'gp-existing' }; } };
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+    assert.strictEqual(uploads[0].pageId, 'gp-existing', 'existing page updated via --page-id, not duplicated');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
 test('defaultViewColumns: primary first (wide) + declared columns, capped at 7, skipping wide types', () => {
@@ -1406,4 +1432,119 @@ test('dashboardTileOpts name-based still resolves from result.created (author-de
   assert.strictEqual(chart.viewId, 'view-id');
   assert.strictEqual(chart.visualizationId, 'chart-id');
   assert.strictEqual(chart.targetEntity, 'new_ohproject');
+});
+
+test('pages phase (v2, page key != name): result.created.pages is keyed by KEY so the sitemap finalize resolves', async () => {
+  const spec = makeSpec();
+  spec.schemaVersion = 2;
+  spec.pages = [{ key: 'overview', name: 'Overview', source: { kind: 'tsx', codeFile: 'o.tsx' } }];
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'overview', title: 'Overview' });
+  const appDir = stagePages(spec.pages);
+  try {
+    const { sdk, calls } = mockSdk();
+    const genpageCli = { list: async () => [], enumerate: async () => ({ ok: true, pages: [], empty: true }), upload: async () => ({ pageId: 'gp-1' }) };
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+    const setDef = find(calls, 'updateElement').find((c) => c.args[2] === '/siteMap');
+    assert.ok(setDef.args[3].areas[0].groups[0].subAreas.some((s) => s.type === 'GenPage' && s.genPageId === 'gp-1'), 'GenPage subarea resolved by KEY (was unresolved when keyed by name)');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('pages phase persists the manifest on a SINGLE-page first build (one create, type js, add-to-solution, ZERO update)', async () => {
+  const spec = makeSpec();
+  spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }];
+  const appDir = stagePages(spec.pages);
+  try {
+    const { sdk, calls } = mockSdk();
+    const genpageCli = { list: async () => [], enumerate: async () => ({ ok: true, pages: [], empty: true }), upload: async () => ({ pageId: 'gp-1' }) };
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+    const created = find(calls, 'createWebResource').map((c) => c.args[0]).find((o) => /_pagemanifest$/.test(o.name));
+    assert.strictEqual(created.type, 'js');
+    assert.deepStrictEqual(JSON.parse(created.content).pages[0], { key: 'Overview', name: 'Overview', pageId: 'gp-1' });
+    assert.strictEqual(find(calls, 'updateWebResource').length, 0, 'one create writes the final content; the final persist is deduped → ZERO updates (I6)');
+    assert.ok(find(calls, 'addSolutionComponent').some((c) => c.args[0].componentType === 61), 'manifest added to the solution');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('pages phase persists the manifest per-create on a MULTI-page first build (one create + one update, I6)', async () => {
+  const spec = makeSpec();
+  spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }, { name: 'Detail', codeFile: 'd.tsx' }];
+  const appDir = stagePages(spec.pages);
+  try {
+    const { sdk, calls } = mockSdk();
+    const genpageCli = { list: async () => [], enumerate: async () => ({ ok: true, pages: [], empty: true }), upload: async (o) => ({ pageId: o.name === 'Detail' ? 'gp-d' : 'gp-o' }) };
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+    assert.strictEqual(find(calls, 'createWebResource').filter((c) => /_pagemanifest$/.test(c.args[0].name)).length, 1, 'manifest created once (first mint)');
+    assert.strictEqual(find(calls, 'updateWebResource').length, 1, 'the second mint UPDATES the manifest in place (immediate persist-after-each-create)');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('pages phase updates the manifest IN PLACE on a rebuild whose page ids changed (no dup create)', async () => {
+  const spec = makeSpec();
+  spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }, { name: 'Detail', codeFile: 'd.tsx' }];
+  const appDir = stagePages(spec.pages);
+  try {
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'Overview', name: 'Overview', pageId: 'gp-o' }] }), 'utf8').toString('base64');
+    const { sdk, calls } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest' });
+    const live = [{ pageId: 'gp-o', name: 'Overview' }];
+    const genpageCli = { list: async () => live, enumerate: async () => ({ ok: true, pages: live }), upload: async (o) => ({ pageId: o.pageId || 'gp-d' }) };
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+    assert.ok(!find(calls, 'createWebResource').some((c) => /_pagemanifest$/.test(c.args[0].name)), 'manifest not re-created on rebuild');
+    assert.ok(find(calls, 'updateWebResource').some((c) => c.args[0] === 'wr-manifest'), 'manifest updated in place');
+    assert.ok(find(calls, 'addSolutionComponent').some((c) => c.args[0].componentType === 61), 'solution membership re-asserted every run');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('pages phase HALTS fail-closed when enumeration fails — never treats it as empty, uploads nothing', async () => {
+  const spec = makeSpec();
+  spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }];
+  const appDir = stagePages(spec.pages);
+  try {
+    const { sdk } = mockSdk();
+    let uploaded = 0;
+    const genpageCli = { list: async () => [], enumerate: async () => ({ ok: false, pages: [], error: 'auth expired' }), upload: async () => { uploaded += 1; return { pageId: 'gp-1' }; } };
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+      (e) => e && e.phase === 'pages' && e.code === 'pages-enumeration-failed'
+    );
+    assert.strictEqual(uploaded, 0);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('pages phase HALTS on ambiguous duplicate live names before any upload (C5 wired)', async () => {
+  const spec = makeSpec();
+  spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }];
+  const appDir = stagePages(spec.pages);
+  try {
+    const { sdk } = mockSdk();
+    let uploaded = 0;
+    const dup = [{ pageId: 'x1', name: 'Overview' }, { pageId: 'x2', name: 'Overview' }];
+    const genpageCli = { list: async () => dup, enumerate: async () => ({ ok: true, pages: dup }), upload: async () => { uploaded += 1; return { pageId: 'x1' }; } };
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+      (e) => e && e.phase === 'pages' && e.code === 'pages-ambiguous-name'
+    );
+    assert.strictEqual(uploaded, 0);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('pages phase HALTS when the app id is absent (I1 recovery guard — do NOT resume from --from pages)', async () => {
+  const spec = makeSpec();
+  spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }];
+  const appDir = stagePages(spec.pages);
+  try {
+    const { sdk } = mockSdk();
+    const genpageCli = { list: async () => [], enumerate: async () => ({ ok: true, pages: [], empty: true }), upload: async () => ({ pageId: 'gp-1' }) };
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['pages'] }),
+      (e) => e && e.phase === 'pages' && e.code === 'pages-requires-app'
+    );
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('planFor emits one step per page + a manifest step (alignment)', () => {
+  const spec = makeSpec();
+  spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }, { name: 'Detail', codeFile: 'd.tsx' }];
+  const labels = planFor(spec, { phases: PHASES }).map((p) => p.label);
+  assert.strictEqual(labels.filter((l) => /^page "/.test(l)).length, 2, 'one step per page');
+  assert.ok(labels.includes(`page manifest ${appUniqueName(spec)}_pagemanifest`), 'plan lists the manifest step');
 });
