@@ -215,7 +215,7 @@ function buildBlockMessage(filePath, issues) {
     `  • bg="$yellow9" color="white"       → bg="$yellow3" color="$yellow11"\n` +
     `  • color="rgba(255,255,255,0.8)" on gradient → color="white" (full alpha)\n` +
     `  • borderColor="rgba(255,255,255,0.4)"       → borderColor="rgba(255,255,255,0.7)" + borderWidth={1.5}\n` +
-    `  • bg="rgba(30,64,175,0.10)" + fg="#1e40af"  → bg="$blue3" + col="$blue11" (auto-adapts)\n`;
+    `  • bg="rgba(30,64,175,0.10)" + fg="#1e40af"  → bg="$blue3" + color="$blue11" (auto-adapts)\n`;
   return userMsg + modelMsg;
 }
 

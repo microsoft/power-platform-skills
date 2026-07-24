@@ -536,7 +536,7 @@ Rules:
 
 1. Run `validate-screen-quality.js --report` and `validate-color-contrast.js --report` when available.
 2. Merge issues by file and rule.
-3. Auto-fix deterministic issues: weak readable tokens, yellow/orange badges with white text, missing icon-only `accessibilityLabel`, missing `accessibilityRole`, tiny icon hit targets, raw hex tokens, missing safe-area padding, `allowFontScaling={false}`.
+3. Auto-fix deterministic issues: weak readable tokens, yellow/orange badges with white text, missing icon-only `aria-label`, missing `role`, tiny icon hit targets, raw hex tokens, missing safe-area padding, `allowFontScaling={false}`. Apply these web-standard accessibility props to Tamagui 2 components; raw React Native components retain their React Native accessibility props.
 4. Treat judgement calls as concerns, not infinite loops: complex safe-area restructuring, ambiguous brand color choices, large hierarchy redesigns, or empty-state rewrites that require large JSX movement.
 5. Re-run the same report validators for touched files. Cap retries at 2 per file per validator.
 6. Run `npx tsc --noEmit` after style fixes. Style concerns may remain, but TypeScript may not.

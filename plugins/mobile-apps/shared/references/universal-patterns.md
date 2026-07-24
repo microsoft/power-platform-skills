@@ -3,6 +3,8 @@
 > Optional reference — read this when building screens that need polish beyond the base design system.
 > These patterns are drawn from top-tier consumer, finance, health, enterprise, and field apps.
 
+Image examples in this reference use `Image` from `expo-image`, so `source` and `contentFit` are intentional Expo APIs rather than Tamagui Image props.
+
 ---
 
 ## 1. Horizontal Scroll Carousel
@@ -14,12 +16,12 @@ Used for: product rows, category browsing, "For You" sections, media galleries.
   <SectionHeader title="For You" action="See all" />
   <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, gap: 12 }}>
     {items.map((item) => (
-      <YStack key={item.id} w={160} gap="$2">
-        <YStack h={160} bg="$color4" br="$4" overflow="hidden">
+      <YStack key={item.id} width={160} gap="$2">
+        <YStack height={160} bg="$color4" rounded="$4" overflow="hidden">
           <Image source={{ uri: item.image }} style={{ width: '100%', height: '100%' }} contentFit="cover" />
         </YStack>
         <Text fontSize="$3" fontWeight="600" numberOfLines={1}>{item.title}</Text>
-        <Text fontSize="$2" col="$color9">{item.subtitle}</Text>
+        <Text fontSize="$2" color="$color9">{item.subtitle}</Text>
       </YStack>
     ))}
   </ScrollView>
@@ -56,17 +58,17 @@ Since we can't use a chart library in every app, approximate with a simple SVG p
 
 **Stat card with sparkline:**
 ```tsx
-<YStack bg="$color2" br="$4" p="$4" w="47%" gap="$2">
-  <Text fontSize="$2" col="$color9">{label}</Text>
-  <XStack ai="center" jc="space-between">
+<YStack bg="$color2" rounded="$4" p="$4" width="47%" gap="$2">
+  <Text fontSize="$2" color="$color9">{label}</Text>
+  <XStack items="center" justify="space-between">
     <Text fontSize="$8" fontWeight="700">{value}</Text>
     <Sparkline data={trendData} trend={trend} />
   </XStack>
-  <XStack ai="center" gap="$1">
-    <Text fontSize="$1" col={trend === 'up' ? '$green10' : '$red10'} fontWeight="600">
+  <XStack items="center" gap="$1">
+    <Text fontSize="$1" color={trend === 'up' ? '$green10' : '$red10'} fontWeight="600">
       {trend === 'up' ? '↑' : '↓'} {changePercent}%
     </Text>
-    <Text fontSize="$1" col="$color8">vs last week</Text>
+    <Text fontSize="$1" color="$color8">vs last week</Text>
   </XStack>
 </YStack>
 ```
@@ -93,7 +95,7 @@ function ShimmerBox({ width, height, borderRadius = 8 }) {
   }))
 
   return (
-    <YStack w={width} h={height} br={borderRadius} bg="$color3" overflow="hidden">
+    <YStack width={width} height={height} rounded={borderRadius} bg="$color3" overflow="hidden">
       <Animated.View style={[{ width: '100%', height: '100%' }, animatedStyle]}>
         <LinearGradient
           colors={['transparent', 'rgba(255,255,255,0.15)', 'transparent']}
@@ -121,15 +123,16 @@ const [showFilters, setShowFilters] = React.useState(false)
 const [filters, setFilters] = React.useState({ status: 'all', dateRange: 'all', category: 'all' })
 
 // Search bar with filter button
-<XStack ai="center" gap="$2" px="$4">
-  <XStack f={1} ai="center" bg="$color3" br="$3" px="$3" gap="$2">
+<XStack items="center" gap="$2" px="$4">
+  <XStack flex={1} items="center" bg="$color3" rounded="$3" px="$3" gap="$2">
     <Search size={18} color="$color9" />
-    <Input f={1} placeholder="Search..." value={search} onChangeText={setSearch}
+    <Input flex={1} placeholder="Search..." value={search}
+      onChange={event => setSearch(event.target?.value ?? event.nativeEvent?.text ?? '')}
       bg="transparent" borderWidth={0} px="$0" />
   </XStack>
   <Button size="$3" icon={SlidersHorizontal} chromeless onPress={() => setShowFilters(true)}>
     {activeFilterCount > 0 && (
-      <YStack pos="absolute" t={-4} r={-4} w={18} h={18} br={9} bg="$blue10" ai="center" jc="center">
+      <YStack position="absolute" t={-4} r={-4} width={18} height={18} rounded={9} bg="$blue10" items="center" justify="center">
         <Text fontSize={10} color="white" fontWeight="700">{activeFilterCount}</Text>
       </YStack>
     )}
@@ -139,21 +142,21 @@ const [filters, setFilters] = React.useState({ status: 'all', dateRange: 'all', 
 // Filter sheet
 <Sheet open={showFilters} onOpenChange={setShowFilters} snapPoints={[50]}>
   <Sheet.Frame p="$4" gap="$4">
-    <XStack ai="center" jc="space-between">
+    <XStack items="center" justify="space-between">
       <H4 fontWeight="700">Filters</H4>
       <Button size="$2" chromeless onPress={clearFilters}>
-        <Text col="$blue10" fontSize="$2">Clear all</Text>
+        <Text color="$blue10" fontSize="$2">Clear all</Text>
       </Button>
     </XStack>
 
     <YStack gap="$3">
-      <Text fontWeight="600" fontSize="$2" col="$color9">Status</Text>
+      <Text fontWeight="600" fontSize="$2" color="$color9">Status</Text>
       <XStack gap="$2" flexWrap="wrap">
         {['All', 'Active', 'Pending', 'Completed'].map((s) => (
           <Button key={s} size="$2"
             bg={filters.status === s.toLowerCase() ? '$blue10' : '$color3'}
-            color={filters.status === s.toLowerCase() ? 'white' : '$color'}
-            onPress={() => setFilters(f => ({ ...f, status: s.toLowerCase() }))}>
+            color={filters.status === s.toLowerCase() ? 'white' : '$color12'}
+            onPress={() => setFilters(current => ({ ...current, status: s.toLowerCase() }))}>
             {s}
           </Button>
         ))}
@@ -162,7 +165,7 @@ const [filters, setFilters] = React.useState({ status: 'all', dateRange: 'all', 
 
     {/* Repeat for dateRange, category, etc. */}
 
-    <Button bg="$blue10" color="$color1" size="$4" onPress={() => setShowFilters(false)}>
+    <Button theme="blue" size="$4" onPress={() => setShowFilters(false)}>
       Apply filters
     </Button>
   </Sheet.Frame>
@@ -190,7 +193,7 @@ function ProgressRing({ progress, size = 120, strokeWidth = 10, color = '$blue10
   const strokeDashoffset = circumference * (1 - progress)
 
   return (
-    <YStack ai="center" jc="center" w={size} h={size}>
+    <YStack items="center" justify="center" width={size} height={size}>
       <Svg width={size} height={size} style={{ transform: [{ rotate: '-90deg' }] }}>
         {/* Background track */}
         <Circle cx={size / 2} cy={size / 2} r={radius}
@@ -202,9 +205,9 @@ function ProgressRing({ progress, size = 120, strokeWidth = 10, color = '$blue10
           strokeLinecap="round" />
       </Svg>
       {/* Center label */}
-      <YStack pos="absolute" ai="center">
+      <YStack position="absolute" items="center">
         <Text fontSize="$8" fontWeight="700">{Math.round(progress * 100)}%</Text>
-        <Text fontSize="$1" col="$color9">Complete</Text>
+        <Text fontSize="$1" color="$color9">Complete</Text>
       </YStack>
     </YStack>
   )
@@ -235,8 +238,8 @@ const [revealed, setRevealed] = React.useState(false)
       <Text fontSize="$9" fontWeight="700" fontFamily="$mono">$12,450.00</Text>
     </Animated.Text>
   ) : (
-    <XStack ai="center" gap="$2">
-      <Text fontSize="$9" fontWeight="700" col="$color6">••••••</Text>
+    <XStack items="center" gap="$2">
+      <Text fontSize="$9" fontWeight="700" color="$color6">••••••</Text>
       <Eye size={20} color="$color10" />
     </XStack>
   )}
@@ -259,15 +262,15 @@ Used for: finance, enterprise, health — any app with auth sessions.
 <AlertDialog open={showTimeout}>
   <AlertDialog.Portal>
     <AlertDialog.Overlay />
-    <AlertDialog.Content p="$5" gap="$4" ai="center">
+    <AlertDialog.Content p="$5" gap="$4" items="center">
       <Clock size={40} color="$color9" />
-      <H4 fontWeight="700" ta="center">Session expiring</H4>
-      <Text col="$color9" ta="center">
+      <H4 fontWeight="700" text="center">Session expiring</H4>
+      <Text color="$color9" text="center">
         Your session will expire in {countdown}s due to inactivity.
       </Text>
-      <XStack gap="$3" w="100%">
-        <Button f={1} size="$4" onPress={logout}>Log out</Button>
-        <Button f={1} size="$4" bg="$blue10" color="$color1" onPress={extendSession}>Stay signed in</Button>
+      <XStack gap="$3" width="100%">
+        <Button flex={1} size="$4" onPress={logout}>Log out</Button>
+        <Button flex={1} size="$4" theme="blue" onPress={extendSession}>Stay signed in</Button>
       </XStack>
     </AlertDialog.Content>
   </AlertDialog.Portal>
@@ -283,21 +286,21 @@ Used for: field apps, any app that works without connectivity.
 ```tsx
 // Sync status bar — sticky at top of list screens
 {pendingCount > 0 && (
-  <XStack bg="$yellow3" px="$4" py="$2" ai="center" jc="space-between">
-    <XStack ai="center" gap="$2">
+  <XStack bg="$yellow3" px="$4" py="$2" items="center" justify="space-between">
+    <XStack items="center" gap="$2">
       <CloudOff size={16} color="$yellow10" />
-      <Text fontSize="$2" col="$yellow10" fontWeight="600">
+      <Text fontSize="$2" color="$yellow10" fontWeight="600">
         {pendingCount} changes pending sync
       </Text>
     </XStack>
     <Button size="$2" chromeless onPress={retrySync}>
-      <Text fontSize="$2" col="$yellow10" fontWeight="600">Retry</Text>
+      <Text fontSize="$2" color="$yellow10" fontWeight="600">Retry</Text>
     </Button>
   </XStack>
 )}
 
 // Per-item sync indicator in list rows
-<XStack ai="center" gap="$1">
+<XStack items="center" gap="$1">
   {item.syncStatus === 'pending' && <CloudOff size={12} color="$yellow10" />}
   {item.syncStatus === 'syncing' && <RefreshCw size={12} color="$blue10" />}
   {item.syncStatus === 'failed' && <AlertTriangle size={12} color="$red10" />}
@@ -315,16 +318,16 @@ Used for: field apps, health alerts, system warnings. Pinned above scrollable co
 {activeAlert && (
   <XStack
     bg={activeAlert.severity === 'critical' ? '$red3' : '$yellow3'}
-    px="$4" py="$3" ai="center" gap="$3">
+    px="$4" py="$3" items="center" gap="$3">
     <AlertTriangle size={20}
       color={activeAlert.severity === 'critical' ? '$red10' : '$yellow10'} />
-    <YStack f={1}>
+    <YStack flex={1}>
       <Text fontWeight="700" fontSize="$2"
-        col={activeAlert.severity === 'critical' ? '$red10' : '$yellow10'}>
+        color={activeAlert.severity === 'critical' ? '$red10' : '$yellow10'}>
         {activeAlert.title}
       </Text>
       <Text fontSize="$1"
-        col={activeAlert.severity === 'critical' ? '$red9' : '$yellow9'}>
+        color={activeAlert.severity === 'critical' ? '$red9' : '$yellow9'}>
         {activeAlert.message}
       </Text>
     </YStack>
@@ -347,11 +350,12 @@ Used for: field apps, health alerts, system warnings. Pinned above scrollable co
 Used for: field data entry with gloved hands, accessibility.
 
 ```tsx
-<XStack ai="center" gap="$2">
-  <Input f={1} placeholder="Enter notes..." value={value} onChangeText={onChange} />
+<XStack items="center" gap="$2">
+  <Input flex={1} placeholder="Enter notes..." value={value}
+    onChange={event => onChange(event.target?.value ?? event.nativeEvent?.text ?? '')} />
   <Button size="$3" circular chromeless
     icon={isListening ? MicOff : Mic}
-    col={isListening ? '$red10' : '$color9'}
+    color={isListening ? '$red10' : '$color9'}
     onPress={toggleVoiceInput}
   />
 </XStack>
@@ -367,11 +371,11 @@ Requires `expo-speech` or platform speech-to-text API. The button is a UI-only p
 ```tsx
 import { Ionicons } from '@expo/vector-icons'
 
-<XStack ai="center" gap="$2" bg="$color2" br="$4" px="$3" py="$2">
+<XStack items="center" gap="$2" bg="$color2" rounded="$4" px="$3" py="$2">
   <Ionicons name="flame" size={24} color="#e55a00" />
   <YStack>
     <Text fontWeight="700" fontSize="$4">{streakDays} days</Text>
-    <Text fontSize="$1" col="$color9">Current streak</Text>
+    <Text fontSize="$1" color="$color9">Current streak</Text>
   </YStack>
 </XStack>
 ```
@@ -383,11 +387,11 @@ import { Ionicons } from '@expo/vector-icons'
 // Trigger after task completion (Peak-End Rule)
 {showCelebration && (
   <Animated.View entering={BounceIn.duration(600)}>
-    <YStack ai="center" gap="$3" p="$5">
+    <YStack items="center" gap="$3" p="$5">
       <Ionicons name="trophy" size={64} color="#e55a00" />
-      <H3 fontWeight="700" ta="center">Milestone reached!</H3>
-      <Text col="$color9" ta="center">{milestoneMessage}</Text>
-      <Button bg="$blue10" color="$color1" size="$4" onPress={dismiss}>Continue</Button>
+      <H3 fontWeight="700" text="center">Milestone reached!</H3>
+      <Text color="$color9" text="center">{milestoneMessage}</Text>
+      <Button theme="blue" size="$4" onPress={dismiss}>Continue</Button>
     </YStack>
   </Animated.View>
 )}
@@ -395,16 +399,16 @@ import { Ionicons } from '@expo/vector-icons'
 
 ### Leaderboard Row
 ```tsx
-<XStack ai="center" gap="$3" p="$3" bg={rank <= 3 ? '$color2' : 'transparent'} br="$3">
-  <Text w={28} fontWeight="700" fontSize="$4" col={rank <= 3 ? '$blue10' : '$color9'} ta="center">
+<XStack items="center" gap="$3" p="$3" bg={rank <= 3 ? '$color2' : 'transparent'} rounded="$3">
+  <Text width={28} fontWeight="700" fontSize="$4" color={rank <= 3 ? '$blue10' : '$color9'} text="center">
     {rank}
   </Text>
-  <YStack w={36} h={36} br={18} bg="$color4" ai="center" jc="center" overflow="hidden">
+  <YStack width={36} height={36} rounded={18} bg="$color4" items="center" justify="center" overflow="hidden">
     {avatar ? <Image source={{ uri: avatar }} style={{ width: 36, height: 36 }} /> : <User size={20} color="$color9" />}
   </YStack>
-  <YStack f={1}>
+  <YStack flex={1}>
     <Text fontWeight="600">{name}</Text>
-    <Text fontSize="$1" col="$color9">{subtitle}</Text>
+    <Text fontSize="$1" color="$color9">{subtitle}</Text>
   </YStack>
   <Text fontWeight="700" fontFamily="$mono">{score}</Text>
 </XStack>
@@ -419,21 +423,21 @@ Used for: enterprise collaboration, CRM, project management.
 ```tsx
 // Activity feed item
 <XStack gap="$3" px="$4" py="$3">
-  <YStack w={32} h={32} br={16} bg="$color4" ai="center" jc="center">
+  <YStack width={32} height={32} rounded={16} bg="$color4" items="center" justify="center">
     <User size={16} color="$color9" />
   </YStack>
-  <YStack f={1} gap="$1">
-    <XStack ai="center" gap="$2">
+  <YStack flex={1} gap="$1">
+    <XStack items="center" gap="$2">
       <Text fontWeight="600" fontSize="$2">{author}</Text>
-      <Text fontSize="$1" col="$color8">{timeAgo}</Text>
+      <Text fontSize="$1" color="$color8">{timeAgo}</Text>
     </XStack>
-    <Text fontSize="$2" col="$color10">{message}</Text>
+    <Text fontSize="$2" color="$color10">{message}</Text>
     {/* Reply thread indicator */}
     {replyCount > 0 && (
       <Pressable onPress={() => expandThread(id)}>
-        <XStack ai="center" gap="$1" mt="$1">
+        <XStack items="center" gap="$1" mt="$1">
           <MessageCircle size={14} color="$blue10" />
-          <Text fontSize="$1" col="$blue10" fontWeight="600">{replyCount} replies</Text>
+          <Text fontSize="$1" color="$blue10" fontWeight="600">{replyCount} replies</Text>
         </XStack>
       </Pressable>
     )}
@@ -461,7 +465,7 @@ function onAddToCart() {
 
 // Cart icon with animated badge
 <YStack>
-  <ShoppingCart size={24} color="$color" />
+  <ShoppingCart size={24} color="$color12" />
   {cartCount > 0 && (
     <Animated.View style={[badgeStyle, useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }))]}>
       <Text fontSize={10} color="white" fontWeight="700">{cartCount}</Text>
@@ -479,19 +483,19 @@ Used for: field inspections, maintenance, real estate.
 ### Before/After Pair
 ```tsx
 <XStack gap="$3">
-  <YStack f={1} gap="$1">
-    <Text fontSize="$1" col="$color8" fontWeight="600" tt="uppercase" ls={1}>Before</Text>
-    <YStack h={180} bg="$color4" br="$3" overflow="hidden">
+  <YStack flex={1} gap="$1">
+    <Text fontSize="$1" color="$color8" fontWeight="600" textTransform="uppercase" letterSpacing={1}>Before</Text>
+    <YStack height={180} bg="$color4" rounded="$3" overflow="hidden">
       <Image source={{ uri: beforeUri }} style={{ width: '100%', height: '100%' }} contentFit="cover" />
     </YStack>
-    <Text fontSize="$1" col="$color8">{beforeDate}</Text>
+    <Text fontSize="$1" color="$color8">{beforeDate}</Text>
   </YStack>
-  <YStack f={1} gap="$1">
-    <Text fontSize="$1" col="$color8" fontWeight="600" tt="uppercase" ls={1}>After</Text>
-    <YStack h={180} bg="$color4" br="$3" overflow="hidden">
+  <YStack flex={1} gap="$1">
+    <Text fontSize="$1" color="$color8" fontWeight="600" textTransform="uppercase" letterSpacing={1}>After</Text>
+    <YStack height={180} bg="$color4" rounded="$3" overflow="hidden">
       <Image source={{ uri: afterUri }} style={{ width: '100%', height: '100%' }} contentFit="cover" />
     </YStack>
-    <Text fontSize="$1" col="$color8">{afterDate}</Text>
+    <Text fontSize="$1" color="$color8">{afterDate}</Text>
   </YStack>
 </XStack>
 ```
@@ -506,19 +510,19 @@ For field/industrial apps where users wear gloves or work in harsh conditions.
 - Standard buttons: `size="$5"` (60pt) instead of `size="$4"` (48pt)
 - Critical actions (emergency stop, submit): `size="$6"` (72pt)
 - Body text: minimum `fontSize="$4"` (16px), prefer `fontSize="$5"` (18px)
-- Row tap targets: `minHeight={64}` instead of 48
+- Row tap targets: `minH={64}` instead of 48
 
 ```tsx
 // Field-sized action button
-<Button size="$5" bg="$blue10" color="$color1" icon={Camera} fontWeight="700">
-  Capture Photo
+<Button size="$5" theme="blue" icon={Camera}>
+  <Text fontWeight="700">Capture Photo</Text>
 </Button>
 
 // Field-sized list row
-<XStack ai="center" gap="$4" p="$4" minHeight={64} pressStyle={{ bg: '$color3' }}>
-  <YStack f={1}>
+<XStack items="center" gap="$4" p="$4" minH={64} pressStyle={{ bg: '$color3' }}>
+  <YStack flex={1}>
     <Text fontSize="$4" fontWeight="600">{title}</Text>
-    <Text fontSize="$3" col="$color9">{subtitle}</Text>
+    <Text fontSize="$3" color="$color9">{subtitle}</Text>
   </YStack>
   <ChevronRight size={24} color="$color10" />
 </XStack>
@@ -534,7 +538,7 @@ Used for: ride-hailing, delivery, field service, real estate — any app where l
 import MapView, { Marker } from 'react-native-maps'
 
 // Full-bleed map as home screen
-<YStack f={1}>
+<YStack flex={1}>
   <MapView
     style={{ flex: 1 }}
     initialRegion={{ latitude: 37.78, longitude: -122.43, latitudeDelta: 0.02, longitudeDelta: 0.02 }}
@@ -547,21 +551,21 @@ import MapView, { Marker } from 'react-native-maps'
   </MapView>
 
   {/* Floating search bar over the map */}
-  <XStack pos="absolute" t={60} l={16} r={16} bg="$background" br="$4" px="$3" py="$2"
-    ai="center" gap="$2" elevation={4}>
+  <XStack position="absolute" t={60} l={16} r={16} bg="$background" rounded="$4" px="$3" py="$2"
+    items="center" gap="$2" boxShadow="0 2px 8px rgba(0, 0, 0, 0.12)">
     <Search size={18} color="$color9" />
-    <Input f={1} placeholder="Search locations..." bg="transparent" borderWidth={0} />
+    <Input flex={1} placeholder="Search locations..." bg="transparent" borderWidth={0} />
   </XStack>
 
   {/* Bottom sheet for selected item or list */}
   <Sheet open={!!selected} onOpenChange={() => setSelected(null)} snapPoints={[35, 70]}>
     <Sheet.Frame p="$4" gap="$3">
-      <YStack w={40} h={4} bg="$color6" br={2} als="center" />
+      <YStack width={40} height={4} bg="$color6" rounded={2} self="center" />
       <H4 fontWeight="700">{selected?.name}</H4>
-      <Text col="$color9">{selected?.address}</Text>
+      <Text color="$color9">{selected?.address}</Text>
       <XStack gap="$3">
-        <Button f={1} bg="$blue10" color="$color1" size="$4" icon={Navigation}>Directions</Button>
-        <Button f={1} size="$4" icon={Phone}>Call</Button>
+        <Button flex={1} theme="blue" size="$4" icon={Navigation}>Directions</Button>
+        <Button flex={1} size="$4" icon={Phone}>Call</Button>
       </XStack>
     </Sheet.Frame>
   </Sheet>
@@ -616,9 +620,9 @@ function BreathingCircle() {
   }))
 
   return (
-    <YStack f={1} ai="center" jc="center" bg="$background">
+    <YStack flex={1} items="center" justify="center" bg="$background">
       <Animated.View style={[{ width: 200, height: 200, borderRadius: 100, backgroundColor: '#3b82f6' }, animatedStyle]} />
-      <Text pos="absolute" fontSize="$6" fontWeight="600" col="$color">{phase}</Text>
+      <Text position="absolute" fontSize="$6" fontWeight="600" color="$color12">{phase}</Text>
     </YStack>
   )
 }
@@ -627,25 +631,25 @@ function BreathingCircle() {
 **Coaching flow pattern:**
 ```tsx
 // Step-by-step guided flow with progress
-<YStack f={1} p="$5" gap="$5">
+<YStack flex={1} p="$5" gap="$5">
   {/* Progress dots */}
-  <XStack ai="center" jc="center" gap="$2">
+  <XStack items="center" justify="center" gap="$2">
     {steps.map((_, i) => (
-      <YStack key={i} w={i === currentStep ? 24 : 8} h={8}
-        br={4} bg={i <= currentStep ? '$blue10' : '$color4'} />
+      <YStack key={i} width={i === currentStep ? 24 : 8} height={8}
+        rounded={4} bg={i <= currentStep ? '$blue10' : '$color4'} />
     ))}
   </XStack>
 
   <Animated.View key={currentStep} entering={FadeInUp.duration(400)}>
-    <YStack ai="center" gap="$4" py="$8">
+    <YStack items="center" gap="$4" py="$8">
       <Text fontSize={64}>{steps[currentStep].emoji}</Text>
-      <H3 fontWeight="700" ta="center">{steps[currentStep].title}</H3>
-      <Paragraph col="$color9" ta="center" px="$4">{steps[currentStep].body}</Paragraph>
+      <H3 fontWeight="700" text="center">{steps[currentStep].title}</H3>
+      <Paragraph color="$color9" text="center" px="$4">{steps[currentStep].body}</Paragraph>
     </YStack>
   </Animated.View>
 
-  <YStack f={1} jc="flex-end">
-    <Button bg="$blue10" color="$color1" size="$5" onPress={nextStep}>
+  <YStack flex={1} justify="flex-end">
+    <Button theme="blue" size="$5" onPress={nextStep}>
       {currentStep === steps.length - 1 ? 'Get started' : 'Next'}
     </Button>
   </YStack>
@@ -664,12 +668,12 @@ function DisclosureSection({ title, subtitle, children }) {
   const [expanded, setExpanded] = React.useState(false)
 
   return (
-    <YStack bg="$color2" br="$4" overflow="hidden">
+    <YStack bg="$color2" rounded="$4" overflow="hidden">
       <Pressable onPress={() => setExpanded(!expanded)}>
-        <XStack ai="center" p="$4" gap="$3">
-          <YStack f={1}>
+        <XStack items="center" p="$4" gap="$3">
+          <YStack flex={1}>
             <Text fontWeight="600">{title}</Text>
-            {!expanded && subtitle && <Text fontSize="$2" col="$color9">{subtitle}</Text>}
+            {!expanded && subtitle && <Text fontSize="$2" color="$color9">{subtitle}</Text>}
           </YStack>
           <ChevronDown size={20} color="$color10"
             style={{ transform: [{ rotate: expanded ? '180deg' : '0deg' }] }} />
@@ -720,21 +724,22 @@ function ValidatedInput({ label, value, onChange, validate, successMessage }) {
 
   return (
     <YStack gap="$1">
-      <Text fontSize="$2" fontWeight="600" col="$color9">{label}</Text>
-      <XStack ai="center" bg="$color3" br="$3" px="$3"
+      <Text fontSize="$2" fontWeight="600" color="$color9">{label}</Text>
+      <XStack items="center" bg="$color3" rounded="$3" px="$3"
         borderWidth={result ? 2 : 0}
         borderColor={result?.valid ? '$green8' : result ? '$red8' : 'transparent'}>
-        <Input f={1} value={value} onChangeText={onChange}
+        <Input flex={1} value={value}
+          onChange={event => onChange(event.target?.value ?? event.nativeEvent?.text ?? '')}
           onBlur={() => setTouched(true)}
           bg="transparent" borderWidth={0} />
         {result?.valid && <CheckCircle2 size={18} color="$green10" />}
         {result && !result.valid && <AlertCircle size={18} color="$red10" />}
       </XStack>
       {result?.valid && successMessage && (
-        <Text fontSize="$1" col="$green10">{successMessage}</Text>
+        <Text fontSize="$1" color="$green10">{successMessage}</Text>
       )}
       {result && !result.valid && (
-        <Text fontSize="$1" col="$red10">{result.message}</Text>
+        <Text fontSize="$1" color="$red10">{result.message}</Text>
       )}
     </YStack>
   )
@@ -779,9 +784,9 @@ const oledTheme = {
 }
 
 // Theme switcher with 3 options
-<XStack gap="$2" bg="$color2" br="$4" p="$1">
+<XStack gap="$2" bg="$color2" rounded="$4" p="$1">
   {['light', 'dark', 'oled'].map((t) => (
-    <Button key={t} f={1} size="$3"
+    <Button key={t} flex={1} size="$3"
       bg={theme === t ? '$color5' : 'transparent'}
       onPress={() => setTheme(t)}>
       <Text fontWeight={theme === t ? '700' : '400'} fontSize="$2">
@@ -825,7 +830,7 @@ function ScrollElevationHeader({ title }) {
   }))
 
   return (
-    <YStack f={1}>
+    <YStack flex={1}>
       <Animated.View style={[{ paddingHorizontal: 16, paddingVertical: 12, backgroundColor: 'var(--background)' }, headerStyle]}>
         <H3 fontWeight="700">{title}</H3>
       </Animated.View>
@@ -853,13 +858,13 @@ Used for: consumer/retail apps where branding matters. Upgrades from icon-only e
 // Branded empty state with SVG illustration
 import EmptyCartIllustration from '@/assets/illustrations/empty-cart.svg'
 
-<YStack f={1} ai="center" jc="center" p="$5" gap="$4">
+<YStack flex={1} items="center" justify="center" p="$5" gap="$4">
   <EmptyCartIllustration width={200} height={160} color="$color6" />
-  <H4 fontWeight="700" ta="center">Your cart is empty</H4>
-  <Paragraph col="$color9" ta="center" px="$4">
+  <H4 fontWeight="700" text="center">Your cart is empty</H4>
+  <Paragraph color="$color9" text="center" px="$4">
     Browse our collection to find something you love.
   </Paragraph>
-  <Button bg="$blue10" color="$color1" size="$4" icon={ShoppingBag} onPress={() => router.push('/shop')}>
+  <Button theme="blue" size="$4" icon={ShoppingBag} onPress={() => router.push('/shop')}>
     Start shopping
   </Button>
 </YStack>
@@ -908,14 +913,14 @@ function WorkTimer({ taskId }) {
 
   const formatTime = (ms) => {
     const s = Math.floor(ms / 1000)
-    const h = Math.floor(s / 3600)
+    const hours = Math.floor(s / 3600)
     const m = Math.floor((s % 3600) / 60)
     const sec = s % 60
-    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`
+    return `${hours.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`
   }
 
   return (
-    <YStack ai="center" gap="$4" p="$5">
+    <YStack items="center" gap="$4" p="$5">
       {/* Elapsed time display */}
       <Text fontSize={48} fontWeight="700" fontFamily="$mono" letterSpacing={2}>
         {formatTime(elapsed)}
@@ -929,7 +934,7 @@ function WorkTimer({ taskId }) {
         onPress={toggle}
         pressStyle={{ scale: 0.95 }}
       />
-      <Text fontSize="$2" col="$color9">
+      <Text fontSize="$2" color="$color9">
         {running ? 'Tap to stop' : elapsed > 0 ? 'Tap to resume' : 'Tap to start'}
       </Text>
 
@@ -937,7 +942,7 @@ function WorkTimer({ taskId }) {
       {!running && elapsed > 0 && (
         <XStack gap="$3" mt="$3">
           <Button size="$3" icon={RotateCcw} onPress={() => setElapsed(0)}>Reset</Button>
-          <Button size="$3" bg="$blue10" color="$color1" icon={Save} onPress={() => saveTime(taskId, elapsed)}>Save</Button>
+          <Button size="$3" theme="blue" icon={Save} onPress={() => saveTime(taskId, elapsed)}>Save</Button>
         </XStack>
       )}
     </YStack>
@@ -961,33 +966,33 @@ Used for: project management, field service workflows, CRM pipelines.
 <ScrollView horizontal showsHorizontalScrollIndicator={false}
   contentContainerStyle={{ paddingHorizontal: 16, gap: 12 }}>
   {columns.map((column) => (
-    <YStack key={column.id} w={280} bg="$color2" br="$4" overflow="hidden">
+    <YStack key={column.id} width={280} bg="$color2" rounded="$4" overflow="hidden">
       {/* Column header */}
-      <XStack ai="center" jc="space-between" p="$3" bg="$color3">
-        <XStack ai="center" gap="$2">
-          <YStack w={8} h={8} br={4} bg={column.color} />
+      <XStack items="center" justify="space-between" p="$3" bg="$color3">
+        <XStack items="center" gap="$2">
+          <YStack width={8} height={8} rounded={4} bg={column.color} />
           <Text fontWeight="700" fontSize="$3">{column.title}</Text>
         </XStack>
-        <Text fontSize="$2" col="$color8" fontFamily="$mono">{column.items.length}</Text>
+        <Text fontSize="$2" color="$color8" fontFamily="$mono">{column.items.length}</Text>
       </XStack>
 
       {/* Column items */}
       <ScrollView style={{ maxHeight: 500 }} contentContainerStyle={{ padding: 8, gap: 8 }}>
         {column.items.map((item) => (
           <Pressable key={item.id} onLongPress={() => startDrag(item)}>
-            <YStack bg="$background" br="$3" p="$3" gap="$2"
+            <YStack bg="$background" rounded="$3" p="$3" gap="$2"
               borderWidth={1} borderColor="$borderColor"
               pressStyle={{ scale: 0.98 }}>
               <Text fontWeight="600" fontSize="$2">{item.title}</Text>
-              {item.subtitle && <Text fontSize="$1" col="$color9">{item.subtitle}</Text>}
-              <XStack ai="center" jc="space-between" mt="$1">
+              {item.subtitle && <Text fontSize="$1" color="$color9">{item.subtitle}</Text>}
+              <XStack items="center" justify="space-between" mt="$1">
                 {item.assignee && (
-                  <YStack w={24} h={24} br={12} bg="$color4" ai="center" jc="center">
+                  <YStack width={24} height={24} rounded={12} bg="$color4" items="center" justify="center">
                     <Text fontSize={10} fontWeight="600">{item.assignee.initials}</Text>
                   </YStack>
                 )}
                 {item.dueDate && (
-                  <Text fontSize="$1" col="$color8" fontFamily="$mono">{item.dueDate}</Text>
+                  <Text fontSize="$1" color="$color8" fontFamily="$mono">{item.dueDate}</Text>
                 )}
               </XStack>
             </YStack>
@@ -1014,29 +1019,29 @@ Used for: retail, lifestyle, brand-heavy consumer apps (Nike, Airbnb style).
 
 ```tsx
 // Hero image with gradient text overlay
-<YStack h={400} overflow="hidden">
+<YStack height={400} overflow="hidden">
   <Image source={{ uri: heroImage }} style={{ width: '100%', height: '100%' }} contentFit="cover" />
   <LinearGradient
     colors={['transparent', 'rgba(0,0,0,0.7)']}
     style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 200 }}
   />
-  <YStack pos="absolute" b={0} l={0} r={0} p="$5" gap="$2">
-    <Text fontSize="$2" color="white" fontWeight="600" tt="uppercase" ls={2}>New arrival</Text>
+  <YStack position="absolute" b={0} l={0} r={0} p="$5" gap="$2">
+    <Text fontSize="$2" color="white" fontWeight="600" textTransform="uppercase" letterSpacing={2}>New arrival</Text>
     <H2 color="white" fontWeight="700">{title}</H2>
     <Text color="rgba(255,255,255,0.8)" fontSize="$3">{subtitle}</Text>
-    <Button bg="$blue10" color="$color1" size="$4" mt="$2" als="flex-start">Shop now</Button>
+    <Button theme="blue" size="$4" mt="$2" self="flex-start">Shop now</Button>
   </YStack>
 </YStack>
 
 // Full-width image card in a feed
 <Pressable onPress={() => router.push(`/product/${id}`)}>
-  <YStack overflow="hidden" br="$4" mb="$3">
-    <YStack h={280} bg="$color4">
+  <YStack overflow="hidden" rounded="$4" mb="$3">
+    <YStack height={280} bg="$color4">
       <Image source={{ uri: image }} style={{ width: '100%', height: '100%' }} contentFit="cover" />
     </YStack>
     <YStack p="$3" gap="$1">
       <Text fontWeight="700" fontSize="$4">{name}</Text>
-      <Text col="$color9" fontSize="$2">{category}</Text>
+      <Text color="$color9" fontSize="$2">{category}</Text>
       <Text fontWeight="700" fontSize="$3" mt="$1">${price}</Text>
     </YStack>
   </YStack>
@@ -1061,18 +1066,22 @@ Used for: streaming, media, e-commerce — any app where content browsing IS the
 // Hero banner + multiple horizontal category rows
 <ScrollView showsVerticalScrollIndicator={false}>
   {/* Hero — full-bleed featured item */}
-  <YStack h={480} overflow="hidden">
+  <YStack height={480} overflow="hidden">
     <Image source={{ uri: hero.image }} style={{ width: '100%', height: '100%' }} contentFit="cover" />
     <LinearGradient
       colors={['transparent', 'rgba(0,0,0,0.85)']}
       style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 260 }}
     />
-    <YStack pos="absolute" b={0} l={0} r={0} p="$5" gap="$3">
-      <Text fontSize="$1" fontWeight="700" tt="uppercase" ls={2} color="rgba(255,255,255,0.7)">{hero.category}</Text>
+    <YStack position="absolute" b={0} l={0} r={0} p="$5" gap="$3">
+      <Text fontSize="$1" fontWeight="700" textTransform="uppercase" letterSpacing={2} color="rgba(255,255,255,0.7)">{hero.category}</Text>
       <H2 color="white" fontWeight="700" lineHeight={32}>{hero.title}</H2>
       <XStack gap="$3" mt="$2">
-        <Button size="$4" bg="white" col="black" icon={Play} fontWeight="700">Play</Button>
-        <Button size="$4" bg="rgba(255,255,255,0.2)" color="white" icon={Plus}>My List</Button>
+        <Button size="$4" bg="white" icon={<Play color="black" />}>
+          <Button.Text color="black" fontWeight="700">Play</Button.Text>
+        </Button>
+        <Button size="$4" bg="rgba(255,255,255,0.2)" icon={<Plus color="white" />}>
+          <Button.Text color="white">My List</Button.Text>
+        </Button>
       </XStack>
     </YStack>
   </YStack>
@@ -1080,14 +1089,14 @@ Used for: streaming, media, e-commerce — any app where content browsing IS the
   {/* Category rows */}
   {categories.map((cat) => (
     <YStack key={cat.id} gap="$3" mb="$5">
-      <Text fontSize="$4" fontWeight="700" px="$4" col="$color">{cat.title}</Text>
+      <Text fontSize="$4" fontWeight="700" px="$4" color="$color12">{cat.title}</Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false}
         contentContainerStyle={{ paddingHorizontal: 16, gap: 10 }}>
         {cat.items.map((item, i) => (
           <Animated.View key={item.id} entering={FadeIn.delay(i * 30)}>
             <Pressable onPress={() => router.push(`/watch/${item.id}`)}>
-              <YStack w={120} gap="$1">
-                <YStack h={180} bg="$color4" br="$3" overflow="hidden"
+              <YStack width={120} gap="$1">
+                <YStack height={180} bg="$color4" rounded="$3" overflow="hidden"
                   style={{ transform: [{ scale: 1 }] }}
                   // pressStyle handled by parent Pressable
                 >
@@ -1119,11 +1128,12 @@ Used for: ride-hailing, food delivery, field service dispatch — any real-time 
 
 ```tsx
 // Map-dominant screen with animated status bar
-<YStack f={1}>
+<YStack flex={1}>
   {/* Full-screen map underneath */}
   <MapView style={{ flex: 1 }} region={region} showsUserLocation>
     <Marker coordinate={driverLocation}>
-      <YStack w={36} h={36} br={18} bg="$blue10" ai="center" jc="center" elevation={4}>
+      <YStack width={36} height={36} rounded={18} bg="$blue10" items="center" justify="center"
+        boxShadow="0 2px 8px rgba(0, 0, 0, 0.12)">
         <Car size={18} color="white" />
       </YStack>
     </Marker>
@@ -1133,30 +1143,30 @@ Used for: ride-hailing, food delivery, field service dispatch — any real-time 
   {/* Status sheet — snaps between 30% (status) and 65% (details) */}
   <Sheet open modal={false} snapPoints={[30, 65]} defaultOpen>
     <Sheet.Frame bg="$background" pt="$3">
-      <YStack w={40} h={4} bg="$color5" br={2} als="center" mb="$4" />
+      <YStack width={40} height={4} bg="$color5" rounded={2} self="center" mb="$4" />
 
       {/* Animated status row */}
-      <XStack px="$5" ai="center" gap="$4" mb="$4">
-        <YStack w={48} h={48} br={24} bg="$color3" ai="center" jc="center" overflow="hidden">
+      <XStack px="$5" items="center" gap="$4" mb="$4">
+        <YStack width={48} height={48} rounded={24} bg="$color3" items="center" justify="center" overflow="hidden">
           <Image source={{ uri: driver.avatar }} style={{ width: 48, height: 48 }} />
         </YStack>
-        <YStack f={1}>
+        <YStack flex={1}>
           <Animated.Text entering={FadeInUp.duration(300)}>
             <Text fontWeight="700" fontSize="$5">{statusLabel}</Text>
           </Animated.Text>
-          <Text col="$color9" fontSize="$3">{driver.name} · {driver.vehicle}</Text>
+          <Text color="$color9" fontSize="$3">{driver.name} · {driver.vehicle}</Text>
         </YStack>
         {/* ETA pill — updates in real time */}
-        <YStack bg="$color2" br="$10" px="$3" py="$1">
+        <YStack bg="$color2" rounded="$10" px="$3" py="$1">
           <Text fontWeight="700" fontSize="$4" fontFamily="$mono">{eta} min</Text>
         </YStack>
       </XStack>
 
       {/* Progress steps */}
-      <XStack px="$5" ai="center" gap="$2">
+      <XStack px="$5" items="center" gap="$2">
         {steps.map((step, i) => (
           <React.Fragment key={step.id}>
-            <YStack w={28} h={28} br={14} ai="center" jc="center"
+            <YStack width={28} height={28} rounded={14} items="center" justify="center"
               bg={i <= currentStep ? '$blue10' : '$color3'}>
               {i < currentStep
                 ? <Check size={14} color="white" />
@@ -1164,15 +1174,15 @@ Used for: ride-hailing, food delivery, field service dispatch — any real-time 
               }
             </YStack>
             {i < steps.length - 1 && (
-              <YStack f={1} h={2} bg={i < currentStep ? '$blue10' : '$color3'} br={1} />
+              <YStack flex={1} height={2} bg={i < currentStep ? '$blue10' : '$color3'} rounded={1} />
             )}
           </React.Fragment>
         ))}
       </XStack>
 
-      <XStack px="$5" jc="space-between" mt="$1">
+      <XStack px="$5" justify="space-between" mt="$1">
         {steps.map((step) => (
-          <Text key={step.id} fontSize="$1" col="$color9" w={60} ta="center">{step.label}</Text>
+          <Text key={step.id} fontSize="$1" color="$color9" width={60} text="center">{step.label}</Text>
         ))}
       </XStack>
     </Sheet.Frame>
@@ -1228,15 +1238,15 @@ function SwipeRow({ item, onDelete, onArchive }) {
   }))
 
   return (
-    <YStack h={ROW_HEIGHT} overflow="hidden">
+    <YStack height={ROW_HEIGHT} overflow="hidden">
       {/* Background actions */}
-      <XStack pos="absolute" inset={0} ai="center" jc="space-between" px="$4">
+      <XStack position="absolute" inset={0} items="center" justify="space-between" px="$4">
         <Animated.View style={[{ flexDirection: 'row', alignItems: 'center', gap: 8 }, deleteOpacity]}>
           <Archive size={20} color="$green10" />
-          <Text col="$green10" fontWeight="600" fontSize="$2">Archive</Text>
+          <Text color="$green10" fontWeight="600" fontSize="$2">Archive</Text>
         </Animated.View>
         <Animated.View style={[{ flexDirection: 'row', alignItems: 'center', gap: 8 }, deleteOpacity]}>
-          <Text col="$red10" fontWeight="600" fontSize="$2">Delete</Text>
+          <Text color="$red10" fontWeight="600" fontSize="$2">Delete</Text>
           <Trash2 size={20} color="$red10" />
         </Animated.View>
       </XStack>
@@ -1244,14 +1254,14 @@ function SwipeRow({ item, onDelete, onArchive }) {
       {/* Foreground row */}
       <GestureDetector gesture={panGesture}>
         <Animated.View style={rowStyle}>
-          <XStack h={ROW_HEIGHT} bg="$background" ai="center" px="$4" gap="$3"
+          <XStack height={ROW_HEIGHT} bg="$background" items="center" px="$4" gap="$3"
             borderBottomWidth={1} borderBottomColor="$borderColor">
             {/* Row content */}
-            <YStack f={1}>
+            <YStack flex={1}>
               <Text fontWeight="600">{item.title}</Text>
-              <Text fontSize="$2" col="$color9" numberOfLines={1}>{item.subtitle}</Text>
+              <Text fontSize="$2" color="$color9" numberOfLines={1}>{item.subtitle}</Text>
             </YStack>
-            <Text fontSize="$1" col="$color8" fontFamily="$mono">{item.time}</Text>
+            <Text fontSize="$1" color="$color8" fontFamily="$mono">{item.time}</Text>
           </XStack>
         </Animated.View>
       </GestureDetector>
@@ -1276,40 +1286,42 @@ Used for: streaming, podcasts, music — persistent playback control bar above t
 
 ```tsx
 // Persistent mini-player — rendered in root layout above tab bar
+const theme = useTheme()
+const playIconColor = isPlaying ? theme.background.val : 'white'
+
 {currentTrack && (
   <Pressable onPress={() => router.push('/player')} style={{ position: 'absolute', bottom: 84, left: 8, right: 8 }}>
     <Animated.View entering={SlideInDown.duration(300)} exiting={SlideOutDown.duration(200)}>
-      <XStack bg="$color2" br="$4" px="$3" py="$2" ai="center" gap="$3"
+      <XStack bg="$color2" rounded="$4" px="$3" py="$2" items="center" gap="$3"
         borderWidth={1} borderColor="$borderColor"
-        style={{ shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 12, shadowOffset: { width: 0, height: 4 } }}>
+        boxShadow="0 4px 12px rgba(0, 0, 0, 0.12)">
 
         {/* Album art */}
-        <YStack w={44} h={44} br="$3" bg="$color4" overflow="hidden">
+        <YStack width={44} height={44} rounded="$3" bg="$color4" overflow="hidden">
           <Image source={{ uri: currentTrack.artwork }} style={{ width: 44, height: 44 }} contentFit="cover" />
         </YStack>
 
         {/* Track info — scrolling ticker if too long */}
-        <YStack f={1}>
+        <YStack flex={1}>
           <Text fontWeight="600" fontSize="$3" numberOfLines={1}>{currentTrack.title}</Text>
-          <Text fontSize="$2" col="$color9" numberOfLines={1}>{currentTrack.artist}</Text>
+          <Text fontSize="$2" color="$color9" numberOfLines={1}>{currentTrack.artist}</Text>
         </YStack>
 
         {/* Controls */}
-        <XStack ai="center" gap="$1">
-          <Button size="$3" circular chromeless icon={SkipBack} col="$color" onPress={previous} />
+        <XStack items="center" gap="$1">
+          <Button size="$3" circular chromeless icon={<SkipBack color={theme.color12.val} />} onPress={previous} />
           <Button size="$3" circular
-            bg={isPlaying ? '$color' : '$blue10'}
-            color={isPlaying ? '$background' : 'white'}
+            bg={isPlaying ? '$color12' : '$blue10'}
             onPress={togglePlay}
-            icon={isPlaying ? Pause : Play}
+            icon={isPlaying ? <Pause color={playIconColor} /> : <Play color={playIconColor} />}
           />
-          <Button size="$3" circular chromeless icon={SkipForward} col="$color" onPress={next} />
+          <Button size="$3" circular chromeless icon={<SkipForward color={theme.color12.val} />} onPress={next} />
         </XStack>
       </XStack>
 
       {/* Progress bar */}
-      <YStack h={2} bg="$color3" mt={-2} mx="$1" br={1} overflow="hidden">
-        <YStack h={2} bg="$blue10" w={`${(position / duration) * 100}%`} />
+      <YStack height={2} bg="$color3" mt={-2} mx="$1" rounded={1} overflow="hidden">
+        <YStack height={2} bg="$blue10" width={`${(position / duration) * 100}%`} />
       </YStack>
     </Animated.View>
   </Pressable>
@@ -1318,40 +1330,42 @@ Used for: streaming, podcasts, music — persistent playback control bar above t
 
 **Full-screen player:**
 ```tsx
-<YStack f={1} bg="$background" ai="center" pt="$10" pb="$8" gap="$6">
+const theme = useTheme()
+
+<YStack flex={1} bg="$background" items="center" pt="$10" pb="$8" gap="$6">
   {/* Large artwork */}
   <Animated.View entering={ZoomIn.duration(400)}>
-    <YStack w={280} h={280} br="$6" bg="$color4" overflow="hidden" elevation={8}
-      style={{ shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 24 }}>
+    <YStack width={280} height={280} rounded="$6" bg="$color4" overflow="hidden"
+      boxShadow="0 8px 24px rgba(0, 0, 0, 0.3)">
       <Image source={{ uri: currentTrack.artwork }} style={{ width: 280, height: 280 }} contentFit="cover" />
     </YStack>
   </Animated.View>
 
   {/* Track info */}
-  <YStack ai="center" gap="$1" px="$6">
-    <H3 fontWeight="700" ta="center">{currentTrack.title}</H3>
-    <Text col="$color9" fontSize="$4">{currentTrack.artist}</Text>
+  <YStack items="center" gap="$1" px="$6">
+    <H3 fontWeight="700" text="center">{currentTrack.title}</H3>
+    <Text color="$color9" fontSize="$4">{currentTrack.artist}</Text>
   </YStack>
 
   {/* Scrubber */}
-  <YStack w="100%" px="$6" gap="$1">
-    <YStack h={4} bg="$color3" br={2} overflow="hidden">
-      <YStack h={4} bg="$blue10" w={`${(position / duration) * 100}%`} />
+  <YStack width="100%" px="$6" gap="$1">
+    <YStack height={4} bg="$color3" rounded={2} overflow="hidden">
+      <YStack height={4} bg="$blue10" width={`${(position / duration) * 100}%`} />
     </YStack>
-    <XStack jc="space-between">
-      <Text fontSize="$1" col="$color9" fontFamily="$mono">{formatTime(position)}</Text>
-      <Text fontSize="$1" col="$color9" fontFamily="$mono">-{formatTime(duration - position)}</Text>
+    <XStack justify="space-between">
+      <Text fontSize="$1" color="$color9" fontFamily="$mono">{formatTime(position)}</Text>
+      <Text fontSize="$1" color="$color9" fontFamily="$mono">-{formatTime(duration - position)}</Text>
     </XStack>
   </YStack>
 
   {/* Playback controls */}
-  <XStack ai="center" gap="$5">
-    <Button size="$4" circular chromeless icon={Shuffle} col={shuffle ? '$blue10' : '$color9'} onPress={toggleShuffle} />
-    <Button size="$5" circular chromeless icon={SkipBack} col="$color" onPress={previous} />
-    <Button size="$6" circular bg="$color12" col="$background" onPress={togglePlay}
-      icon={isPlaying ? Pause : Play} pressStyle={{ scale: 0.95 }} />
-    <Button size="$5" circular chromeless icon={SkipForward} col="$color" onPress={next} />
-    <Button size="$4" circular chromeless icon={Repeat} col={repeat ? '$blue10' : '$color9'} onPress={toggleRepeat} />
+  <XStack items="center" gap="$5">
+    <Button size="$4" circular chromeless icon={<Shuffle color={shuffle ? theme.blue10.val : theme.color9.val} />} onPress={toggleShuffle} />
+    <Button size="$5" circular chromeless icon={<SkipBack color={theme.color12.val} />} onPress={previous} />
+    <Button size="$6" circular bg="$color12" onPress={togglePlay}
+      icon={isPlaying ? <Pause color={theme.background.val} /> : <Play color={theme.background.val} />} pressStyle={{ scale: 0.95 }} />
+    <Button size="$5" circular chromeless icon={<SkipForward color={theme.color12.val} />} onPress={next} />
+    <Button size="$4" circular chromeless icon={<Repeat color={repeat ? theme.blue10.val : theme.color9.val} />} onPress={toggleRepeat} />
   </XStack>
 </YStack>
 ```

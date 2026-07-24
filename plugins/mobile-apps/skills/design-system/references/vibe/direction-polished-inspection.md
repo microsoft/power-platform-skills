@@ -56,7 +56,7 @@ tone: professional-utilitarian
 - **Background:** light by default (`#ffffff` page, `#f9fafb` canvas behind cards)
 - **Theme:** system light/dark — light is the demo default
 - **Cards:** `#ffffff` with 1px hairline border (`#e2e8f0`) AND a 4px **left status stripe** (color = status meaning)
-- **Shadow:** single tier, very subtle — `shadowOpacity: 0.04, shadowRadius: 8` for raised cards. NO heavy drop shadows
+- **Shadow:** single tier, very subtle — Tamagui 2 `boxShadow="0 2px 8px rgba(15, 23, 42, 0.04)"` for raised cards. NO heavy drop shadows
 - **Card spacing:** `gap="$3"` (~12pt) between cards — comfortable, not crammed
 
 ### Palette
@@ -83,13 +83,13 @@ Source pattern from `EquipmentRow.tsx`:
 
 ```tsx
 <Card flexDirection="row" overflow="hidden" borderWidth={1} borderColor="$borderColor">
-  <YStack w={4} bg={statusColor(item.status)} />
+  <YStack width={4} bg={statusColor(item.status)} />
   <YStack flex={1} p="$4" gap="$2">
-    <XStack jc="space-between" ai="center">
-      <Text fontSize="$5" fontWeight="600" col="$color12" flex={1}>{item.title}</Text>
+    <XStack justify="space-between" items="center">
+      <Text fontSize="$5" fontWeight="600" color="$color12" flex={1}>{item.title}</Text>
       <StatusPill status={item.status} />
     </XStack>
-    <Text fontSize="$3" col="$color10">{item.meta}</Text>
+    <Text fontSize="$3" color="$color10">{item.meta}</Text>
   </YStack>
 </Card>
 ```
@@ -102,8 +102,8 @@ Source pattern from `EquipmentRow.tsx`:
 ### Status pills (soft-tinted)
 
 ```tsx
-<YStack bg={statusBg(item.status)} px="$2" py="$1" br="$10">
-  <Text col={statusFg(item.status)} fontSize="$2" fontWeight="600">{label}</Text>
+<YStack bg={statusBg(item.status)} px="$2" py="$1" rounded="$10">
+  <Text color={statusFg(item.status)} fontSize="$2" fontWeight="600">{label}</Text>
 </YStack>
 ```
 

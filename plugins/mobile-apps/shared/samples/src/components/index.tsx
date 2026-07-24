@@ -11,7 +11,7 @@
 
 import React from 'react';
 import { ScrollView } from 'react-native';
-import { YStack, XStack, ZStack, Text, Button } from 'tamagui';
+import { YStack, XStack, ZStack, Text, Button, useTheme } from 'tamagui';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -66,8 +66,8 @@ export function StatusPill({
   const s = STATUS_STYLES[status];
   return (
     <XStack
-      bg={s.bg} px="$2" py="$1" br="$10" ai="center"
-      accessibilityLabel={`Status: ${label ?? s.label}`}
+      bg={s.bg} px="$2" py="$1" rounded="$10" items="center"
+      aria-label={`Status: ${label ?? s.label}`}
     >
       <Text fontSize="$1" fontWeight="600" color={s.text}>{label ?? s.label}</Text>
     </XStack>
@@ -89,19 +89,21 @@ export function StatTile({
   trendUp?: boolean;
   iconName?: IoniconName;
 }) {
+  const theme = useTheme();
+
   return (
     <YStack
-      bg="$color2" br="$4" p="$4" gap="$1" f={1}
+      bg="$color2" rounded="$4" p="$4" gap="$1" flex={1}
       {...shadows.sm}
-      accessibilityLabel={`${label}: ${value}${trend ? ', trend ' + trend : ''}`}
+      aria-label={`${label}: ${value}${trend ? ', trend ' + trend : ''}`}
     >
-      <XStack ai="center" gap="$2">
-        {iconName && <Ionicons name={iconName} size={14} color="$color10" />}
-        <Text fontSize="$2" col="$color10" numberOfLines={1}>{label}</Text>
+      <XStack items="center" gap="$2">
+        {iconName && <Ionicons name={iconName} size={14} color={theme.color10.val} />}
+        <Text fontSize="$2" color="$color10" numberOfLines={1}>{label}</Text>
       </XStack>
-      <Text fontSize="$8" fontWeight="700" col="$color12">{String(value)}</Text>
+      <Text fontSize="$8" fontWeight="700" color="$color12">{String(value)}</Text>
       {trend && (
-        <Text fontSize="$1" col={trendUp ? '$statusComplete' : '$statusOverdue'} fontWeight="600">
+        <Text fontSize="$1" color={trendUp ? '$statusComplete' : '$statusOverdue'} fontWeight="600">
           {trend}
         </Text>
       )}
@@ -125,8 +127,8 @@ export function Hero({
   return (
     <Gradient name={gradient} style={{ borderRadius: 0 }}>
       <YStack px="$5" pt="$6" pb="$5" gap="$1">
-        <XStack ai="center" jc="space-between">
-          <YStack gap="$1" f={1}>
+        <XStack items="center" justify="space-between">
+          <YStack gap="$1" flex={1}>
             <Text fontSize="$7" fontWeight="700" color="white" numberOfLines={1}>
               {title}
             </Text>
@@ -138,12 +140,12 @@ export function Hero({
           </YStack>
           {action && (
             <Button
-              size="$3" chromeless color="white"
+              size="$3" chromeless
               borderColor="rgba(255,255,255,0.7)" borderWidth={1.5}
               onPress={action.onPress}
               icon={action.iconName ? <Ionicons name={action.iconName} size={16} color="white" /> : undefined}
             >
-              {action.label}
+              <Button.Text color="white">{action.label}</Button.Text>
             </Button>
           )}
         </XStack>
@@ -162,11 +164,11 @@ export function SectionHeader({
   action?: { label: string; onPress: () => void };
 }) {
   return (
-    <XStack ai="center" jc="space-between" mb="$2">
-      <Text fontSize="$5" fontWeight="600" col="$color11">{title}</Text>
+    <XStack items="center" justify="space-between" mb="$2">
+      <Text fontSize="$5" fontWeight="600" color="$color11">{title}</Text>
       {action && (
         <Button size="$2" chromeless onPress={action.onPress}>
-          <Text fontSize="$3" col="$blue10">{action.label}</Text>
+          <Text fontSize="$3" color="$blue10">{action.label}</Text>
         </Button>
       )}
     </XStack>
@@ -186,18 +188,18 @@ export function AvatarInitials({
 }) {
   const dim = { sm: 28, md: 36, lg: 48 }[size];
   const fontSize = { sm: '$1', md: '$2', lg: '$4' }[size] as '$1' | '$2' | '$4';
-  const initials = name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
+  const initials = name.split(' ').map(word => word[0]).slice(0, 2).join('').toUpperCase();
   const dotColors = { online: '$statusComplete', away: '$statusPending', offline: '$statusDraft' } as const;
 
   return (
-    <ZStack w={dim} h={dim}>
-      <YStack w={dim} h={dim} br={dim / 2} bg="$blue3" ai="center" jc="center" accessibilityLabel={name}>
-        <Text fontSize={fontSize} fontWeight="600" col="$blue10">{initials}</Text>
+    <ZStack width={dim} height={dim}>
+      <YStack width={dim} height={dim} rounded={dim / 2} bg="$blue3" items="center" justify="center" aria-label={name}>
+        <Text fontSize={fontSize} fontWeight="600" color="$blue10">{initials}</Text>
       </YStack>
       {statusDot && (
         <YStack
-          position="absolute" bottom={0} right={0}
-          w={10} h={10} br={5}
+          position="absolute" b={0} r={0}
+          width={10} height={10} rounded={5}
           bg={dotColors[statusDot]}
           borderWidth={2} borderColor="$background"
         />
@@ -218,12 +220,12 @@ export function InfoRow({
   mono?: boolean;
 }) {
   return (
-    <XStack jc="space-between" py="$2" ai="center">
-      <Text col="$color10" fontSize="$4" f={1}>{label}</Text>
+    <XStack justify="space-between" py="$2" items="center">
+      <Text color="$color10" fontSize="$4" flex={1}>{label}</Text>
       <Text
         fontSize="$4" fontWeight="500"
         fontFamily={mono ? '$mono' : undefined}
-        col="$color12" ta="right" f={1}
+        color="$color12" text="right" flex={1}
         numberOfLines={1}
       >
         {String(value)}
@@ -247,20 +249,28 @@ export function ActionRow({
   onPress: () => void;
   destructive?: boolean;
 }) {
+  const theme = useTheme();
+
   return (
     <XStack
-      ai="center" gap="$3" py="$3" px="$4" minHeight={48}
+      items="center" gap="$3" py="$3" px="$4" minH={48}
       pressStyle={{ bg: '$color3' }}
       onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={label}
+      role="button"
+      aria-label={label}
     >
-      {iconName && <Ionicons name={iconName} size={18} color={destructive ? '$statusOverdue' : '$color10'} />}
-      <YStack f={1} gap="$0.5">
-        <Text fontSize="$4" col={destructive ? '$statusOverdue' : '$color12'}>{label}</Text>
-        {subtitle && <Text fontSize="$2" col="$color10">{subtitle}</Text>}
+      {iconName && (
+        <Ionicons
+          name={iconName}
+          size={18}
+          color={destructive ? theme.statusOverdue.val : theme.color10.val}
+        />
+      )}
+      <YStack flex={1} gap="$0.5">
+        <Text fontSize="$4" color={destructive ? '$statusOverdue' : '$color12'}>{label}</Text>
+        {subtitle && <Text fontSize="$2" color="$color10">{subtitle}</Text>}
       </YStack>
-      <Ionicons name="chevron-forward" size={16} color="$color10" />
+      <Ionicons name="chevron-forward" size={16} color={theme.color10.val} />
     </XStack>
   );
 }
@@ -276,14 +286,14 @@ export function LoadingState({
 }) {
   if (variant === 'detail') {
     return (
-      <YStack f={1} gap="$3" p="$4">
-        <YStack bg="$color4" h={22} w="55%" br="$2" />
-        <YStack bg="$color4" h={14} w="35%" br="$2" />
-        <YStack bg="$color4" h={1} w="100%" my="$2" />
+      <YStack flex={1} gap="$3" p="$4">
+        <YStack bg="$color4" height={22} width="55%" rounded="$2" />
+        <YStack bg="$color4" height={14} width="35%" rounded="$2" />
+        <YStack bg="$color4" height={1} width="100%" my="$2" />
         {Array.from({ length: rows }).map((_, i) => (
-          <XStack key={i} jc="space-between" py="$2">
-            <YStack bg="$color4" h={14} w="30%" br="$2" />
-            <YStack bg="$color4" h={14} w="45%" br="$2" />
+          <XStack key={i} justify="space-between" py="$2">
+            <YStack bg="$color4" height={14} width="30%" rounded="$2" />
+            <YStack bg="$color4" height={14} width="45%" rounded="$2" />
           </XStack>
         ))}
       </YStack>
@@ -293,9 +303,9 @@ export function LoadingState({
   return (
     <YStack gap="$3" p="$4">
       {Array.from({ length: rows }).map((_, i) => (
-        <XStack key={i} ai="center" gap="$3" py="$3" borderBottomWidth={0.5} borderBottomColor="$borderColor">
-          <YStack h={14} f={1} bg="$color4" br="$2" />
-          <YStack h={22} w={48} bg="$color4" br="$10" />
+        <XStack key={i} items="center" gap="$3" py="$3" borderBottomWidth={0.5} borderBottomColor="$borderColor">
+          <YStack height={14} flex={1} bg="$color4" rounded="$2" />
+          <YStack height={22} width={48} bg="$color4" rounded="$10" />
         </XStack>
       ))}
     </YStack>
@@ -313,11 +323,13 @@ export function ErrorState({
   onRetry: () => void;
   title?: string;
 }) {
+  const theme = useTheme();
+
   return (
-    <YStack f={1} ai="center" jc="center" p="$6" gap="$3">
-      <Ionicons name="alert-circle" size={48} color="$statusOverdue" />
-      <Text fontSize="$6" fontWeight="700" col="$color12">{title}</Text>
-      <Text col="$color10" ta="center">{message}</Text>
+    <YStack flex={1} items="center" justify="center" p="$6" gap="$3">
+      <Ionicons name="alert-circle" size={48} color={theme.statusOverdue.val} />
+      <Text fontSize="$6" fontWeight="700" color="$color12">{title}</Text>
+      <Text color="$color10" text="center">{message}</Text>
       <Button onPress={onRetry}>Try again</Button>
     </YStack>
   );
@@ -338,13 +350,17 @@ export function EmptyState({
   actionLabel?: string;
   onAction?: () => void;
 }) {
+  const theme = useTheme();
+
   return (
-    <YStack f={1} ai="center" jc="center" p="$6" gap="$3">
-      <Ionicons name={icon} size={48} color="$color10" />
-      <Text fontSize="$5" fontWeight="600" col="$color12">{title}</Text>
-      <Text col="$color10" ta="center" fontSize="$4">{message}</Text>
+    <YStack flex={1} items="center" justify="center" p="$6" gap="$3">
+      <Ionicons name={icon} size={48} color={theme.color10.val} />
+      <Text fontSize="$5" fontWeight="600" color="$color12">{title}</Text>
+      <Text color="$color10" text="center" fontSize="$4">{message}</Text>
       {actionLabel && onAction && (
-        <Button bg="$blue10" color="$color1" onPress={onAction}>{actionLabel}</Button>
+        <Button bg="$blue10" onPress={onAction}>
+          <Button.Text color="$color1">{actionLabel}</Button.Text>
+        </Button>
       )}
     </YStack>
   );
@@ -386,22 +402,21 @@ export function FloatingActionButton({
   return (
     <Button
       position="absolute"
-      right={20}
-      bottom={insets.bottom + 20}
+      r={20}
+      b={insets.bottom + 20}
       width={extended ? undefined : 56}
       height={56}
       px={extended ? '$4' : 0}
-      borderRadius="$10"
+      rounded="$10"
       bg="$blue10"
-      color="$color1"
-      elevation="$6"
+      boxShadow="0 4px 16px rgba(0, 0, 0, 0.12)"
       onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={label}
+      role="button"
+      aria-label={label}
       icon={<Ionicons name={iconName} size={22} color="white" />}
       pressStyle={{ scale: 0.96 }}
     >
-      {extended ? label : null}
+      {extended ? <Button.Text color="$color1">{label}</Button.Text> : null}
     </Button>
   );
 }
@@ -436,20 +451,19 @@ export function FilterChipRow({
           <Button
             key={option.key}
             size="$3"
-            borderRadius="$10"
+            rounded="$10"
             px="$3"
-            minHeight={36}
+            minH={36}
             bg={selected ? '$blue10' : '$surface2'}
-            color={selected ? '$color1' : '$color11'}
             borderWidth={selected ? 0 : 1}
             borderColor="$borderColor"
             onPress={() => onChange(option.key)}
-            accessibilityRole="button"
-            accessibilityState={{ selected }}
-            accessibilityLabel={label}
+            role="button"
+            aria-pressed={selected}
+            aria-label={label}
             pressStyle={{ scale: 0.98 }}
           >
-            {label}
+            <Button.Text color={selected ? '$color1' : '$color11'}>{label}</Button.Text>
           </Button>
         );
       })}
@@ -476,14 +490,14 @@ export function ScreenHeader({
 }) {
   return (
     <YStack px="$5" pb="$3" gap="$2" borderBottomWidth={1} borderBottomColor="$borderColor">
-      <XStack ai="center" jc="space-between" gap="$3">
-        <YStack f={1} gap="$1">
-          <XStack ai="center" gap="$2" flexWrap="wrap">
+      <XStack items="center" justify="space-between" gap="$3">
+        <YStack flex={1} gap="$1">
+          <XStack items="center" gap="$2" flexWrap="wrap">
             <Text fontSize={28} fontWeight="700" letterSpacing={0}>{title}</Text>
             {status}
           </XStack>
           {subtitle && (
-            <Text fontSize={13} col="$color10" fontWeight="500">{subtitle}</Text>
+            <Text fontSize={13} color="$color10" fontWeight="500">{subtitle}</Text>
           )}
         </YStack>
         {rightAction}
@@ -510,12 +524,12 @@ export function ModalHeader({
   saving?: boolean;
 }) {
   return (
-    <XStack px="$4" pt="$5" pb="$3" ai="center" jc="space-between">
+    <XStack px="$4" pt="$5" pb="$3" items="center" justify="space-between">
       <Button chromeless onPress={onCancel}>Cancel</Button>
       <Text fontSize={17} fontWeight="700">{title}</Text>
       {onSave ? (
-        <Button chromeless onPress={onSave} disabled={saving} fontWeight="600">
-          {saveLabel}
+        <Button chromeless onPress={onSave} disabled={saving}>
+          <Text fontWeight="600">{saveLabel}</Text>
         </Button>
       ) : (
         <YStack width={56} />
@@ -535,7 +549,7 @@ export function FormField({
 }) {
   return (
     <YStack gap="$2">
-      <Text fontSize={11} fontWeight="700" col="$color10" letterSpacing={0.6}>
+      <Text fontSize={11} fontWeight="700" color="$color10" letterSpacing={0.6}>
         {label.toUpperCase()}
       </Text>
       {children}
@@ -558,7 +572,7 @@ export function RowPick({
 }) {
   return (
     <XStack
-      px="$3" py="$3" ai="center" jc="space-between" br="$3"
+      px="$3" py="$3" items="center" justify="space-between" rounded="$3"
       borderWidth={1}
       borderColor={selected ? '$color12' : '$borderColor'}
       bg={selected ? '$color12' : '$background'}

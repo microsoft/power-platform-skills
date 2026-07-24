@@ -13,7 +13,7 @@
  * Allowed icon library: `@expo/vector-icons` only.
  *
  * Forbidden npm-registry packages:
- *   - lucide-react-native, lucide-react, @tamagui/lucide-icons
+ *   - lucide-react-native, lucide-react, @tamagui/lucide-icons, @tamagui/lucide-icons-2
  *   - react-native-vector-icons (use @expo/vector-icons)
  *   - axios, node-fetch (use generated services from src/generated/)
  *
@@ -31,6 +31,7 @@ const FORBIDDEN_DEPS = {
   'lucide-react-native': 'Use `@expo/vector-icons` (Ionicons family).',
   'lucide-react': 'Use `@expo/vector-icons` (Ionicons family).',
   '@tamagui/lucide-icons': 'Use `@expo/vector-icons` (Ionicons family).',
+  '@tamagui/lucide-icons-2': 'Use `@expo/vector-icons` (Ionicons family).',
   'react-native-vector-icons': 'Use `@expo/vector-icons` (Ionicons family).',
   axios: 'Use generated connector services from `src/generated/` (connector-first rule).',
   'node-fetch': 'Use generated connector services from `src/generated/`. The runtime has global fetch.',

@@ -66,19 +66,16 @@ If the user asks how to run on a real device or simulator: point them at the Exp
 
 ## Required SDKs (in `package.json`)
 
-These are pinned in the bundled template at [`plugins/mobile-apps/template/package.json`](https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/template/package.json). If a skill upgrades one, update the bundled template first — do NOT patch the generated app copy in-project. Note: under Expo SDK 55, **all `expo-*` packages share the `55.x.y` version line** — that's how Expo guarantees compatibility. Don't list `expo-router`/`expo-auth-session`/`expo-secure-store` as if they're independently versioned.
 
 | Package | Pinned version | Notes |
 |---|---|---|
 | `expo` | `55.0.26` | SDK 55 |
 | `react-native` | `0.83.6` | matched to Expo SDK 55 |
 | All `expo-*` packages | `55.x.y` | router, auth-session, secure-store, dev-client, etc. — version line tied to SDK |
-| `@microsoft/power-apps` | `1.2.2` | Power Apps code app SDK |
+| `@microsoft/power-apps` | `1.2.7` | Power Apps code app SDK |
 | `@microsoft/power-apps-native-host` | `^0.2.20` | native runtime host |
-| `@microsoft/power-apps-native-offline` | `^0.1.7` | offline runtime package |
-| `@expo/fingerprint` | `0.16.7` | runtime fingerprint support used by `app.config.js` |
-| `@microsoft/power-apps-cli` | `0.9.1` | provides local schema/runtime helper commands such as `generate-connector-schemas` and `native-runtime` |
-| `tamagui`, `@tamagui/*` | `1.144.4` | design system primitives, all `@tamagui/*` packages tracked together |
+| `@microsoft/power-apps-native-offline` | `^0.1.3` | offline runtime package |
+| `tamagui`, `@tamagui/*` | `2.4.5` | design system primitives with Config v5, all `@tamagui/*` packages tracked together |
 
 ## Standard prereq snippet for skills
 

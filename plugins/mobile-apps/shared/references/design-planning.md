@@ -140,12 +140,12 @@ Only used when deviating from default. Map the user's aesthetic + mood to concre
 | Aesthetic | Mood | Font | Font pairing | Brand token | Default theme | Animation | Tone |
 |---|---|---|---|---|---|---|---|
 | Clean + Professional | — | Inter (`@tamagui/font-inter`) | Single-family (weight only) | `$blue9` | System auto | None | Professional |
-| Bold + Vibrant | Professional | `@tamagui/font-inter` bold weights | Single-family (weight only) | Custom `$brand` (strong hue) | Light | Spring (`withSpring`) | Professional |
-| Bold + Vibrant | Playful/Consumer | Custom (`expo-font` + e.g. Nunito) | Single-family rounded | Custom `$brand` (saturated) | Light | Spring + bounce | Warm |
+| Bold + Vibrant | Professional | `@tamagui/font-inter` bold weights | Single-family (weight only) | Custom `$accentBase` (strong hue) | Light | Spring (`withSpring`) | Professional |
+| Bold + Vibrant | Playful/Consumer | Custom (`expo-font` + e.g. Nunito) | Single-family rounded | Custom `$accentBase` (saturated) | Light | Spring + bounce | Warm |
 | Dark + Moody | Technical | `@tamagui/font-mono` | Inter + JetBrains Mono | `$green9` or `$violet9` neon | Dark forced | Fade (`withTiming`) | Utilitarian |
 | Dark + Moody | Elegant | Custom serif (e.g. Playfair via `expo-font`) | Serif heading + Inter body | `$yellow9` gold/copper | Dark forced | Slow fade | Editorial |
-| Warm + Organic | Professional | Inter + warm palette | Single-family (weight only) | Custom `$brand` (terracotta) | System auto | Gentle ease | Warm |
-| Warm + Organic | Playful | Custom rounded (e.g. Nunito, Poppins) | Single-family rounded | Custom `$brand` (coral/sage) | System auto | Springy | Warm |
+| Warm + Organic | Professional | Inter + warm palette | Single-family (weight only) | Custom `$accentBase` (terracotta) | System auto | Gentle ease | Warm |
+| Warm + Organic | Playful | Custom rounded (e.g. Nunito, Poppins) | Single-family rounded | Custom `$accentBase` (coral/sage) | System auto | Springy | Warm |
 
 **Font installation:**
 - `@tamagui/font-inter` / `@tamagui/font-mono` — already listed as optional deps in template, add to `tamagui.config.ts`
@@ -188,7 +188,7 @@ Default stack — no customization needed.
 - tamagui-design-system: add-aliases
 ```
 
-> **`add-aliases` mode** — even on the default path, Step 9b applies `skills/design-system/references/tamagui-integration.md` in alias-only mode to add `$surface0`–`$surface3`, `$accentBase`, `$accentSoft`, `$accentDeep`, and `$accentOnBase` as named aliases over `defaultConfig` values. This keeps `tamagui.config.ts` on `defaultConfig` for everything else, but gives the screen-builder a stable token contract to write against regardless of whether a custom design system was configured.
+> **`add-aliases` mode** — even on the default path, Step 9b applies `skills/design-system/references/tamagui-integration.md` in alias-only mode to add `$surface0`–`$surface3`, `$accentBase`, `$accentSoft`, `$accentDeep`, and `$accentOnAccent` as named theme values over `defaultConfig`. This keeps `tamagui.config.ts` on `defaultConfig` for everything else, but gives the screen-builder a stable semantic contract regardless of whether a custom design system was configured.
 
 ### If deviating:
 

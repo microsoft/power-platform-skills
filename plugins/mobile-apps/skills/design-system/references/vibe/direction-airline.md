@@ -72,22 +72,22 @@ tone: branded-operational
 
 ### Status pills
 
-- Saturated bg keyed to status, white text (or alert-text on amber): `bg="statusCritical" col="white"`.
+- Saturated bg keyed to status, white text (or alert-text on amber): `bg="statusCritical" color="white"`.
 - Pill shape: 4-6px radius, padding `px="$2" py="$1"`.
 - Always paired with an icon for accessibility (color-blind users).
 
 ### Cards / detail screens
 
-- Header: aircraft hero image OR a 4px left status stripe on the top card (`bg="$accent"` — deep navy).
+- Header: aircraft hero image OR a 4px left status stripe on the top card (`bg="$accentBase"` — deep navy).
 - Section dividers: 8pt vertical gap + 1px `surface3` line.
 
 ### Empty state
 
-- Centered icon (24pt), one-line headline (16/600), one-line explanation (14/400 muted), single primary action (`bg="$accent" col="$surface0"`, 56pt height, full-width).
+- Centered icon (24pt), one-line headline (16/600), one-line explanation (14/400 muted), single primary action (`bg="$accentBase" color="$accentOnAccent"`, 56pt height, full-width).
 
 ### Error state
 
-- Same as empty but headline is `col="$statusCriticalText"` and icon is alert.
+- Same as empty but headline is `color="$statusCriticalText"` and icon is alert.
 
 ### Loading
 

@@ -717,7 +717,7 @@ Grep pattern="async (create|getAll|getById|update|delete|upload|downloadFile|dow
 
 If the table has file or image columns, confirm the service includes `upload`, `downloadFile`, `downloadImage`, `deleteFileOrImage` — and the model exposes `<Table>FileColumnName` / `<Table>ImageColumnName` union types.
 
-**File/image column UI controls:** When a generated table has File or Image columns, note this in the summary so screen-builders apply the host controls from `power-apps-native-host`:
+**File/image column UI controls:** When a generated table has File or Image columns, note this in the summary so screen-builders apply the host controls from `@microsoft/power-apps-native-host`:
 - **File columns** → `<FilePicker>`; upload bytes separately via the generated service's upload method after the main create/update.
 - **Image columns** → `<ImagePicker>`; capture `PickedImageInfo` via `onImageChange` and persist through generated `upload(...)` after the main create/update.
 - **Read/view flows** → use generated `downloadFile(...)` / `downloadImage(...)` helpers for existing attachments/previews.

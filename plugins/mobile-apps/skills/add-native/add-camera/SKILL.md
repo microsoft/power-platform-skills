@@ -26,7 +26,7 @@ Two modules are required (must already be in `package.json`):
 - **`expo-camera`** — live viewfinder, barcode scanning
 - **`expo-image-picker`** — gallery selection + quick camera capture (simpler API, no viewfinder)
 
-**Dataverse File/Image boundary:** for normal Dataverse File/Image form fields, screens should use `FilePicker` / `ImagePicker` from `power-apps-native-host` (see [`/add-native` File/Image Picker Ownership](../SKILL.md#fileimage-picker-ownership)). `/add-native camera` owns custom camera/gallery/scanner workflows, such as a dedicated evidence-capture screen, barcode/QR scan gate, or gallery-selected image that is transformed before saving.
+**Dataverse File/Image boundary:** for normal Dataverse File/Image form fields, screens should use `FilePicker` / `ImagePicker` from `@microsoft/power-apps-native-host` (see [`/add-native` File/Image Picker Ownership](../SKILL.md#fileimage-picker-ownership)). `/add-native camera` owns custom camera/gallery/scanner workflows, such as a dedicated evidence-capture screen, barcode/QR scan gate, or gallery-selected image that is transformed before saving.
 
 **Pen/signature boundary:** signature, sign-off, ink, drawing, or pen capture belongs to `/add-native pen-input` (which routes internally to the pen helper). Both camera photos and pen signatures can persist to Dataverse Image/File columns, but the capture wrappers are separate.
 

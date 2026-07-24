@@ -754,8 +754,8 @@ import { Slot } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useColorScheme } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { PowerAppsProvider, lightTheme, darkTheme } from 'power-apps-native-host';
-import type { ThemeTokens } from 'power-apps-native-host';
+import { PowerAppsProvider, lightTheme, darkTheme } from '@microsoft/power-apps-native-host';
+import type { ThemeTokens } from '@microsoft/power-apps-native-host';
 
 import authConfig from '../auth.config.json';
 // @ts-ignore - power.config.json is auto-generated at build time
@@ -764,7 +764,7 @@ import powerConfig from '../power.config.json';
 import { schemaMap } from '../src/generated/connectorSchemas';
 import tamaguiConfig from '../tamagui.config';
 
-// lightTheme / darkTheme are the built-in defaults from power-apps-native-host.
+// lightTheme / darkTheme are the built-in defaults from @microsoft/power-apps-native-host.
 // When brand/tokens.ts exists, the Brand-token wiring block (Step 9b) replaces
 // these props with brand-derived ThemeTokens objects instead.
 
@@ -1233,33 +1233,33 @@ Read the `## Design` section from `native-app-plan.md` and follow the execution 
 
 ```tsx
 import { tokens as brandTokens } from '../brand/tokens';
-import { PowerAppsProvider, lightTheme as hostLightTheme, darkTheme as hostDarkTheme } from 'power-apps-native-host';
-import type { ThemeTokens } from 'power-apps-native-host';
+import { PowerAppsProvider, lightTheme as hostLightTheme, darkTheme as hostDarkTheme } from '@microsoft/power-apps-native-host';
+import type { ThemeTokens } from '@microsoft/power-apps-native-host';
 
 const brandedLightTheme: ThemeTokens = {
   ...hostLightTheme,
-  accentDeep: brandTokens.color.accentDeep ?? hostLightTheme.accentDeep,
-  accentBase: brandTokens.color.accentBase ?? hostLightTheme.accentBase,
-  accentSoft: brandTokens.color.accentSoft ?? hostLightTheme.accentSoft,
-  surface0: brandTokens.color.surface0 ?? hostLightTheme.surface0,
-  surface1: brandTokens.color.surface1 ?? hostLightTheme.surface1,
-  surface2: brandTokens.color.surface2 ?? hostLightTheme.surface2,
-  surface3: brandTokens.color.surface3 ?? hostLightTheme.surface3,
-  text0: brandTokens.color.text0 ?? hostLightTheme.text0,
-  text1: brandTokens.color.text1 ?? hostLightTheme.text1,
+  accentDeep: brandTokens.color.primary,
+  accentBase: brandTokens.color.primary,
+  accentSoft: brandTokens.color.accent,
+  surface0: brandTokens.color.bg,
+  surface1: brandTokens.color.surface,
+  surface2: brandTokens.color.surface,
+  surface3: brandTokens.color.border,
+  text0: brandTokens.color.text,
+  text1: brandTokens.color.textMuted,
 };
 const brandedDarkTheme: ThemeTokens = {
   ...hostDarkTheme,
-  accentBase: brandTokens.color.accentBase_dark ?? hostDarkTheme.accentBase,
-  surface0: brandTokens.color.surface0_dark ?? hostDarkTheme.surface0,
-  // ... same pattern for remaining dark tokens
+  accentDeep: brandTokens.color.primary,
+  accentBase: brandTokens.color.primary,
+  accentSoft: brandTokens.color.accent,
 };
 
 // In RootLayout:
 <PowerAppsProvider ... theme={brandedLightTheme} darkTheme={brandedDarkTheme}>
 ```
 
-Inspect `brand/tokens.ts` for exact key names before writing. Apply the same `?? hostDarkTheme.*` fallback pattern for all dark tokens. For runtime theme switching (in-app theme pickers, per-tenant branding), use `useThemeControl()` from `power-apps-native-host`: `setTheme({ ...hostLightTheme, accentBase: color })` / `resetTheme()`.
+The generated schema has one brand palette, so dark surfaces and text retain the host defaults while brand accents carry across modes. For runtime theme switching (in-app theme pickers, per-tenant branding), use `useThemeControl()` from `@microsoft/power-apps-native-host`: `setTheme({ ...hostLightTheme, accentBase: color })` / `resetTheme()`.
 
 ### Step 10 — Add connectors
 
@@ -1356,7 +1356,7 @@ For each tab, infer a Ionicons icon name from the screen name:
 
 **The Edit to apply:**
 
-Add `import { Tabs } from 'expo-router';`, `import { Ionicons } from '@expo/vector-icons';`, and `import { useThemeTokens } from 'power-apps-native-host';` to the import block if not already present. Inside `AppLayout`, after the auth state is read, add `const theme = useThemeTokens();`. Then replace:
+Add `import { Tabs } from 'expo-router';`, `import { Ionicons } from '@expo/vector-icons';`, and `import { useThemeTokens } from '@microsoft/power-apps-native-host';` to the import block if not already present. Inside `AppLayout`, after the auth state is read, add `const theme = useThemeTokens();`. Then replace:
 
 ```tsx
 return (
@@ -1401,7 +1401,7 @@ Use the same icon mapping table as Tabs (above).
 
 **The Edit to apply:**
 
-Add `import { Drawer } from 'expo-router/drawer';`, `import { Ionicons } from '@expo/vector-icons';`, and `import { useThemeTokens } from 'power-apps-native-host';` to the import block if not already present. Inside `AppLayout`, after the auth state is read, add `const theme = useThemeTokens();`. Then replace the existing `<Stack>` return with:
+Add `import { Drawer } from 'expo-router/drawer';`, `import { Ionicons } from '@expo/vector-icons';`, and `import { useThemeTokens } from '@microsoft/power-apps-native-host';` to the import block if not already present. Inside `AppLayout`, after the auth state is read, add `const theme = useThemeTokens();`. Then replace the existing `<Stack>` return with:
 
 ```tsx
 return (
@@ -1651,11 +1651,11 @@ import React from 'react';
 import { useRouter } from 'expo-router';
 import { YStack, XStack, Text, Button } from 'tamagui';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useAuth } from 'power-apps-native-host';
+import { useAuth } from '@microsoft/power-apps-native-host';
 
 export default function <ScreenName>() {
   const router = useRouter();
-  // AuthState shape (power-apps-native-host): { isLoading, isAuthReady, isSignedIn, error, acquireToken, signIn, signOut }
+  // AuthState shape (@microsoft/power-apps-native-host): { isLoading, isAuthReady, isSignedIn, error, acquireToken, signIn, signOut }
   // There is NO `user` / `account` field. Display name comes from the ID-token claim, not from useAuth().
   const { isSignedIn, signOut } = useAuth();
 
@@ -1828,7 +1828,7 @@ For each available stylistic validator:
 1. Run in `--report` mode against all generated screens. Report mode is non-blocking; it emits JSON issues with `file`, `line`, `rule`, `match`, `fix`, and `autoFixable`.
 2. Merge issues by file and rule. Keep exact line numbers for user/debug output, but do not rely on stale line numbers after the first edit in a file.
 3. Split findings into deterministic auto-fixes and judgement calls:
-  - **Auto-fixable:** weak foreground tokens, white-on-yellow/orange status pairs, missing icon-only `accessibilityLabel`, missing tappable `accessibilityRole`, tiny icon button `hitSlop`, obvious raw hex/token substitutions, top-only safe area with bottom UI, `allowFontScaling={false}`.
+  - **Auto-fixable:** weak foreground tokens, white-on-yellow/orange status pairs, missing icon-only `aria-label`, missing tappable `role`, tiny icon button `hitSlop`, obvious raw hex/token substitutions, top-only safe area with bottom UI, `allowFontScaling={false}`. Apply these web-standard accessibility props to Tamagui 2 components; raw React Native components retain their React Native accessibility props.
   - **Needs review:** complex safe-area restructuring, dominant red detail headers, redundant status cue design, ambiguous brand colors, empty-state restructuring that requires moving JSX across large blocks.
 4. Build one file-level edit batch per affected file. Apply affected files in parallel because screen files are independent. Do not run one edit per issue when multiple issues are in the same file; that reintroduces slow per-write loops and line-number drift.
 5. Re-run the same validator in `--report` mode for the touched files. Cap retries at 2 per file per validator.

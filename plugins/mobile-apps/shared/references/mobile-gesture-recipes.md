@@ -45,12 +45,12 @@ function InspectionRow({ row, onDelete }: Props) {
     <Pressable
       onPress={onDelete}
       bg="$red9"
-      jc="center"
-      ai="center"
+      justify="center"
+      items="center"
       px="$4"
-      minWidth={88}
-      accessibilityLabel={`Delete ${row.title}`}
-      accessibilityRole="button"
+      minW={88}
+      aria-label={`Delete ${row.title}`}
+      role="button"
     >
       <Text color="white" fontWeight="600">Delete</Text>
     </Pressable>
@@ -73,7 +73,7 @@ function InspectionRow({ row, onDelete }: Props) {
 1. `rightThreshold: 80` minimum — prevents accidental delete from list scroll. Smaller values cause false positives on fast scroll.
 2. `overshootRight: false` — destructive actions never auto-trigger. The user must tap the revealed `Delete` button as a second confirmation. Swipe-release alone NEVER deletes.
 3. Provide an overflow `…` menu in the row as a secondary accessibility path, with a `Delete` item.
-4. The `Delete` button MUST have `accessibilityLabel` (VoiceOver/TalkBack users may not swipe — the label is their access path).
+4. The Tamagui `Delete` button MUST have `aria-label` (VoiceOver/TalkBack users may not swipe — the label is their access path).
 
 ---
 

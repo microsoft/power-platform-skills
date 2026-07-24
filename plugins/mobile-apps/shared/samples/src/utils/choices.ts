@@ -29,7 +29,7 @@ export function choiceLabel<T extends number | string>(
  * is Tamagui's tested high-contrast pairing across light + dark.
  *
  * Use with StatusPill or inline styling. Pass these strings directly to Tamagui
- * `bg=` / `col=` props — they resolve to the active theme's color.
+ * `bg=` / `color=` props — they resolve to the active theme's color.
  */
 export const STATUS_TONES = {
   info:    { bg: '$blue3',   fg: '$blue11'   },

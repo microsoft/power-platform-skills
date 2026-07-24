@@ -2,29 +2,44 @@
 
 How to customize tokens and themes without breaking Tamagui's defaults.
 
+These examples target Tamagui 2 with Config v5 and the standalone template's customization markers. Keep custom imports and the `customConfig` value between the marker lines so template upgrades preserve them.
+
 ## Rule #1 — Extend, don't replace
 
 Always spread `defaultConfig` first:
 
 ```ts
-import { defaultConfig } from '@tamagui/config/v4'
+import { createTamagui } from '@tamagui/core'
+import { defaultConfig } from '@tamagui/config/v5'
 
-export const tamaguiConfig = createTamagui({
+// CUSTOMIZATION START - DO NOT REMOVE OR RENAME
+import { animations } from '@tamagui/config/v5-rn'
+
+const customConfig = {
   ...defaultConfig,
-  tokens: { ...defaultConfig.tokens, /* overrides */ },
+  animations,
+  tokens: { ...defaultConfig.tokens, /* non-color overrides */ },
   themes: { ...defaultConfig.themes, /* overrides */ },
-})
+}
+// CUSTOMIZATION END - DO NOT REMOVE OR RENAME
+
+export const tamaguiConfig = createTamagui(customConfig)
 ```
 
 Replacing the whole config means you lose all the built-in themes (light, dark, red, blue, etc.) and have to rebuild them. Don't.
 
 ## Adding brand colors
 
-```ts
-import { defaultConfig } from '@tamagui/config/v4'
-import { createTamagui, createTokens } from 'tamagui'
+Config v5 color values live in themes. Define each custom name in both root themes so `$brand500` follows the active light/dark theme.
 
-const brandColors = {
+```ts
+import { createTamagui } from '@tamagui/core'
+import { defaultConfig } from '@tamagui/config/v5'
+
+// CUSTOMIZATION START - DO NOT REMOVE OR RENAME
+import { animations } from '@tamagui/config/v5-rn'
+
+const lightBrandColors = {
   brand50:  '#FFF4E6',
   brand100: '#FFD9B3',
   brand500: '#FF5A00',  // primary
@@ -32,18 +47,34 @@ const brandColors = {
   brand900: '#7A2A00',
 }
 
-const tokens = createTokens({
-  ...defaultConfig.tokens,
-  color: {
-    ...defaultConfig.tokens.color,
-    ...brandColors,
-  },
-})
+const darkBrandColors = {
+  brand50:  '#2A1408',
+  brand100: '#4A230B',
+  brand500: '#FF7A1A',
+  brand700: '#FF9A4A',
+  brand900: '#FFD9B3',
+}
 
-export const tamaguiConfig = createTamagui({
+const themes = {
+  ...defaultConfig.themes,
+  light: {
+    ...defaultConfig.themes.light,
+    ...lightBrandColors,
+  },
+  dark: {
+    ...defaultConfig.themes.dark,
+    ...darkBrandColors,
+  },
+}
+
+const customConfig = {
   ...defaultConfig,
-  tokens,
-})
+  animations,
+  themes,
+}
+// CUSTOMIZATION END - DO NOT REMOVE OR RENAME
+
+export const tamaguiConfig = createTamagui(customConfig)
 ```
 
 Use it as `<Button bg="$brand500" />`.
@@ -53,26 +84,29 @@ Use it as `<Button bg="$brand500" />`.
 A "theme" in Tamagui is a set of colors keyed to semantic slots. To add a brand theme that works in light and dark:
 
 ```ts
-export const tamaguiConfig = createTamagui({
+const customConfig = {
   ...defaultConfig,
+  animations,
   themes: {
     ...defaultConfig.themes,
 
     // Light brand
-    brand_light: {
-      background: '$brand500',
+    light_brand: {
+      ...defaultConfig.themes.light,
+      background: lightBrandColors.brand500,
       color: '#fff',
-      borderColor: '$brand700',
+      borderColor: lightBrandColors.brand700,
     },
 
     // Dark brand
-    brand_dark: {
-      background: '$brand700',
+    dark_brand: {
+      ...defaultConfig.themes.dark,
+      background: darkBrandColors.brand700,
       color: '#fff',
-      borderColor: '$brand900',
+      borderColor: darkBrandColors.brand900,
     },
   },
-})
+}
 ```
 
 Wrap UI:
@@ -90,12 +124,12 @@ const tokens = createTokens({
   space: {
     ...defaultConfig.tokens.space,
     // e.g. tighten mobile defaults
-    $px: 1,
-    $0: 0,
-    $1: 4,
-    $2: 8,
-    $3: 12,
-    $4: 16,
+    px: 1,
+    0: 0,
+    1: 4,
+    2: 8,
+    3: 12,
+    4: 16,
     // etc. — keep the $1–$10 scale intact
   },
 })
@@ -127,7 +161,7 @@ The same rule applies to `size` and `radius` integer keys.
 ## Fonts
 
 ```ts
-import { createFont } from 'tamagui'
+import { createFont } from '@tamagui/core'
 
 const headingFont = createFont({
   family: 'Inter-Bold',
@@ -137,13 +171,14 @@ const headingFont = createFont({
   letterSpacing: { 4: 0 },
 })
 
-export const tamaguiConfig = createTamagui({
+const customConfig = {
   ...defaultConfig,
+  animations,
   fonts: {
     ...defaultConfig.fonts,
     heading: headingFont,
   },
-})
+}
 ```
 
 Load via `expo-font` in root layout:
@@ -159,14 +194,14 @@ if (!loaded) return null
 ```ts
 radius: {
   ...defaultConfig.tokens.radius,
-  $card: 12,
-  $pill: 999,
+  card: 12,
+  pill: 999,
 }
 ```
 
 ## Status semantic tokens
 
-Named status colors used by `StatusPill` and `StatTile`. Add alongside brand colors:
+Named status colors used by `StatusPill` and `StatTile`. Define mode-specific values, then merge them into the root themes:
 
 ```ts
 const statusColors = {
@@ -186,14 +221,32 @@ const statusColors = {
   statusCancelled:    '#5F6368',
 }
 
-const tokens = createTokens({
-  ...defaultConfig.tokens,
-  color: {
-    ...defaultConfig.tokens.color,
-    ...brandColors,
+const darkStatusColors = {
+  statusOverdueBg:    '#3B1210',
+  statusCompleteBg:   '#12351F',
+  statusInProgressBg: '#102A43',
+  statusPendingBg:    '#3A2A0A',
+  statusDraftBg:      '#28282C',
+  statusCancelledBg:  '#28282C',
+  statusOverdue:      '#FF8A84',
+  statusComplete:     '#75D69C',
+  statusInProgress:   '#8EC8FF',
+  statusPending:      '#F5C46B',
+  statusDraft:        '#B4B4BC',
+  statusCancelled:    '#B4B4BC',
+}
+
+const themes = {
+  ...defaultConfig.themes,
+  light: {
+    ...defaultConfig.themes.light,
     ...statusColors,
   },
-})
+  dark: {
+    ...defaultConfig.themes.dark,
+    ...darkStatusColors,
+  },
+}
 ```
 
 Reference these in `StatusPill` via `$statusOverdue`, `$statusCompleteBg`, etc. Do NOT hardcode hex in screen files.
@@ -220,6 +273,6 @@ Store in `src/tokens/index.ts` (import via `@/tokens`) — used by both `<Gradie
 
 You probably need at most: 4–6 brand color tokens, named status tokens (above), maybe 1 custom font, maybe 2 custom radii. Don't rebuild the entire scale — Tamagui's defaults are tuned. Every deviation is a maintenance cost.
 
-## Migration note
+## Config version
 
-Tamagui v4 config uses `@tamagui/config/v4`. Older tutorials may import `/v3` — use v4 for new projects.
+The standalone template uses Tamagui 2 with `@tamagui/config/v5`. Keep `createTamagui`, `createTokens`, and `createFont` imports on `@tamagui/core`, preserve the template's `declare module '@tamagui/core'` augmentation, and keep customization code between the marker lines. Use `createTokens` for non-color token groups; put color values in `light` and `dark` themes.

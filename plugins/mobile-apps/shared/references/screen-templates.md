@@ -120,8 +120,8 @@ Example:
 - Populated (the happy path)
 
 **Tamagui components:**
-- Wrapper: `YStack f={1} bg="$background"`
-- Header: `XStack ai="center" jc="space-between" p="$4"`
+- Wrapper: `YStack flex={1} bg="$background"`
+- Header: `XStack items="center" justify="space-between" p="$4"`
 - Search: `Input size="$4"` with leading icon
 - List: `FlatList` (React Native built-in)
 - Rows: `ListItem` or custom `XStack` with `pressStyle`
@@ -173,12 +173,14 @@ Example:
     <Controller control={control} name="title" render={({ field, fieldState }) => (
       <YStack gap="$1">
         <Input {...field} size="$4" />
-        {fieldState.error && <Text col="$red10">{fieldState.error.message}</Text>}
+        {fieldState.error && <Text color="$red10">{fieldState.error.message}</Text>}
       </YStack>
     )} />
     <Form.Trigger asChild>
-      <Button bg="$blue10" color="$color1" disabled={!formState.isValid || formState.isSubmitting}>
-        {formState.isSubmitting ? 'Saving…' : 'Save'}
+      <Button bg="$blue10" disabled={!formState.isValid || formState.isSubmitting}>
+        <Button.Text color="$color1">
+          {formState.isSubmitting ? 'Saving…' : 'Save'}
+        </Button.Text>
       </Button>
     </Form.Trigger>
   </YStack>
@@ -292,8 +294,8 @@ Never a full-screen spinner for initial load — always skeleton. Spinners feel 
 
 See `./accessibility-checklist.md`.
 
-- Every icon-only button has `accessibilityLabel`
-- Every pressable has `accessibilityRole`
+- Every icon-only Tamagui button has `aria-label`
+- Every Tamagui pressable has `role`
 - Touch targets ≥ 44×44
 - Text contrast ≥ 4.5:1
 - Focus order matches visual order
@@ -307,9 +309,9 @@ See `./accessibility-checklist.md`.
 
 Every empty state should have a visual element beyond just text. In priority order:
 
-1. **Ionicon** (available via `@expo/vector-icons`, already in the upstream template) — always available, zero config. Use `size={48}` with a muted hex like `#9BA1A6` for a non-competing visual.
+1. **Ionicon** (available via `@expo/vector-icons`, already in the upstream template) — always available, zero config. Resolve a muted theme color first, for example `const theme = useTheme()` and then `color={theme.color10.val}`.
 2. **Custom SVG** — if the brand provides illustrations, import via `react-native-svg`. Place in `assets/illustrations/`.
-3. **Placeholder image** — `<Image source={require('../assets/empty-state.png')} />`. Must provide light + dark variants.
+3. **Placeholder image** — Expo Image `<Image source={require('../assets/empty-state.png')} contentFit="contain" />`. Must provide light + dark variants.
 
 **Never** use: generic stock photos, AI-generated images in the app itself, or emojis as primary illustration.
 
@@ -350,12 +352,12 @@ When the plan's `## Design` specifies a font pairing (e.g., `Typography: paired:
 | Archetype | Title treatment | Body treatment | Special rules |
 |---|---|---|---|
 | **List** | `fontFamily="$heading"` on screen title only; rows use `$body` | Row titles `fontWeight="600"`, descriptions `$color10` | Monospace (`$mono`) for IDs/timestamps in row metadata |
-| **Detail** | `fontFamily="$heading"` on entity title + section headers | Body prose at `lineHeight` 1.6x, `maxWidth={520}` | Negative tracking on hero title (`letterSpacing` -0.5 to -1.0 at `$7`+) |
+| **Detail** | `fontFamily="$heading"` on entity title + section headers | Body prose at `lineHeight` 1.6x, `maxW={520}` | Negative tracking on hero title (`letterSpacing` -0.5 to -1.0 at `$7`+) |
 | **Form** | `fontFamily="$body"` throughout | Labels `fontSize="$3"`, inputs `fontSize="$4"` | No serif in forms — forms are UI chrome, serif slows scanning |
 | **Auth** | `fontFamily="$heading"` on app name/tagline only | Everything else `$body` | Centered title is acceptable here (exception to left-align rule) |
 | **Tab-root** | Inherits from child archetype (usually List) | N/A | Tab bar labels always `$body`, `fontSize="$1"` |
 | **Modal/Sheet** | `fontFamily="$body"` throughout | Compact sizing, tighter line-height | Sheet titles `fontWeight="700"` for emphasis |
-| **Empty/Onboarding** | `fontFamily="$heading"` on headline | Description at generous `lineHeight` 1.6x, `maxWidth={420}` | Centered layout is acceptable here |
+| **Empty/Onboarding** | `fontFamily="$heading"` on headline | Description at generous `lineHeight` 1.6x, `maxW={420}` | Centered layout is acceptable here |
 
 ---
 
@@ -420,9 +422,9 @@ function ListSkeleton() {
   return (
     <YStack gap="$3" p="$4">
       {[...Array(6)].map((_, i) => (
-        <XStack key={i} ai="center" gap="$3">
+        <XStack key={i} items="center" gap="$3">
           <ShimmerBox width={40} height={40} borderRadius={20} />
-          <YStack gap="$2" f={1}>
+          <YStack gap="$2" flex={1}>
             <ShimmerBox width="70%" height={14} />
             <ShimmerBox width="40%" height={12} />
           </YStack>
@@ -472,7 +474,7 @@ Every tappable element needs a visible press state. Use Tamagui's `pressStyle` �
 <Pressable onPress={onPress}>
   {({ pressed }) => (
     <Animated.View style={{ transform: [{ scale: pressed ? 0.98 : 1 }], opacity: pressed ? 0.85 : 1 }}>
-      <YStack bg="$color2" br="$4" p="$4" gap="$2" borderWidth={1} borderColor="$borderColor">
+      <YStack bg="$color2" rounded="$4" p="$4" gap="$2" borderWidth={1} borderColor="$borderColor">
         {/* card content */}
       </YStack>
     </Animated.View>

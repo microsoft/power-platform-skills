@@ -238,20 +238,35 @@ Missing sections → skill surfaces error, asks user to re-run.
 
 ## How Tamagui Integration Uses tokens.ts
 
-`brand/tokens.ts` is a plain TypeScript export. `/create-mobile-app` Step 9b imports it into `tamagui.config.ts` using [`tamagui-integration.md`](./tamagui-integration.md):
+`brand/tokens.ts` is a plain TypeScript export. `/create-mobile-app` Step 9b imports it into `tamagui.config.ts` using [`tamagui-integration.md`](./tamagui-integration.md) and its `withSemanticAliases` helper:
 
 ```ts
+// CUSTOMIZATION START - DO NOT REMOVE OR RENAME
+import { createTokens } from '@tamagui/core';
+import { animations } from '@tamagui/config/v5-rn';
 import { tokens as brandTokens } from './brand/tokens';
 
-const customTokens = createTokens({
+const tokens = createTokens({
   ...defaultConfig.tokens,
-  color: {
-    ...defaultConfig.tokens.color,
-    surface0: brandTokens.color.bg,
-    surface1: brandTokens.color.surface,
-    accentBase: brandTokens.color.primary,
-    accentSoft: brandTokens.color.accent,
-    // ... mapped from brand tokens
-  },
+  space: { ...defaultConfig.tokens.space, ...brandTokens.space },
+  size: { ...defaultConfig.tokens.size, ...brandTokens.size },
+  radius: { ...defaultConfig.tokens.radius, ...brandTokens.radius },
 });
+
+const themes = {
+  ...defaultConfig.themes,
+  light: withSemanticAliases(defaultConfig.themes.light, brandTokens.color),
+  dark: withSemanticAliases(defaultConfig.themes.dark, {
+    primary: brandTokens.color.primary,
+    accent: brandTokens.color.accent,
+  }),
+};
+
+const customConfig = {
+  ...defaultConfig,
+  animations,
+  tokens,
+  themes,
+};
+// CUSTOMIZATION END - DO NOT REMOVE OR RENAME
 ```

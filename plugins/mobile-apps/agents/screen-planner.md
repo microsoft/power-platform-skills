@@ -287,7 +287,7 @@ Pick a layout strategy per screen based on target platform:
 |---|---|
 | Phone-only | Single column, large touch targets, vertical scroll, no horizontal split |
 | Tablet | Two-column where it helps (master/detail), responsive to orientation |
-| Larger screens | Keep the same native workflow and navigation. Use `$gtSm` variants only to prevent overly wide content or awkward empty space; do not introduce pointer-only affordances or split layouts that change the mobile interaction model. |
+| Larger screens | Keep the same native workflow and navigation. Use Config v5 `$sm` variants only to prevent overly wide content or awkward empty space; do not introduce pointer-only affordances or split layouts that change the mobile interaction model. |
 
 **Tamagui × Expo scope rule** (mechanical — referenced in every per-screen spec so the screen-builder applies it without judgment calls):
 
@@ -295,7 +295,7 @@ Pick a layout strategy per screen based on target platform:
 |---|---|
 | Layout containers: `YStack`, `XStack`, `ZStack` | Route layouts: `<Stack>`, `<NativeTabs>` in `_layout.tsx` |
 | Visual primitives: `Text`, `Button`, `Input`, `Form`, `Card`, `Separator`, `Spinner`, `Switch` | Navigation: `<Link>`, `<Link.Preview>`, `<Link.Menu>`, `router.push(...)` |
-| Tokens: `$4`, `$color12`, `$background`, `$gtSm` | Screen options: `presentation`, `headerSearchBarOptions`, `headerLargeTitle` |
+| Tokens: `$4`, `$color12`, `$background`, `$sm` | Screen options: `presentation`, `headerSearchBarOptions`, `headerLargeTitle` |
 | Theme switching, breakpoints (`useMedia()`) | Scroll insets: `<ScrollView contentInsetAdjustmentBehavior="automatic">` |
 |  | Platform branching: `process.env.EXPO_OS`, `useWindowDimensions` |
 |  | Capabilities: `expo-camera`, `expo-document-picker`, `expo-print`, `expo-secure-store`, `expo-file-system`, `expo-sharing`, `@microsoft/power-apps-native-pdf-viewer`, `@microsoft/power-apps-native-pen-input`, `@microsoft/power-apps-native-bglocation` when allowlisted by the plan (see AGENTS.md §2) |

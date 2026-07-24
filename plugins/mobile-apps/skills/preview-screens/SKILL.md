@@ -124,7 +124,7 @@ For each screen in the ordered list from Step 2:
 
 3. **Generate equivalent HTML/CSS** using the mapping from Step 3:
    - `YStack` → `<div style="display:flex; flex-direction:column; ...">`
-   - Map every shorthand prop to its CSS equivalent (`f={1}` → `flex:1`, `bg="$color2"` → `background:var(--color2)`, etc.)
+   - Map every shorthand prop to its CSS equivalent (`flex={1}` → `flex:1`, `bg="$color2"` → `background:var(--color2)`, etc.)
    - Map token values to pixels (`p="$4"` → `padding:16px`)
    - Replace `<Ionicons name="..." />` icons with Unicode equivalents (see mapping reference Section 3, Guideline 4 — the icon substitution table uses Ionicons names)
 

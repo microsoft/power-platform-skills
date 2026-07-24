@@ -97,7 +97,7 @@ The builder reads the block once at Step 1 (after reading its assigned screen sp
 - `status_saturation` → which pill style to use
 - `primary_action_shape` + `primary_action_position` → button placement and shape
 - `empty_state` → which empty-state template to use
-- `accent_color` → resolved into `$brand` token application
+- `accent_color` → resolved into `$accentBase`
 
 If `## Design Direction` is absent, the builder uses today's defaults from `mobile-design-philosophy.md` and `screen-templates.md`.
 

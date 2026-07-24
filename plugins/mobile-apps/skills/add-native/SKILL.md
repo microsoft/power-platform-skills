@@ -43,8 +43,8 @@ Before adding any native control or wrapper, apply every gate: classify the inte
 
 | User intent | Add/use | Required package or control | Do not use / fallback |
 |---|---|---|---|
-| Form field bound to a Dataverse File column | Host `<FilePicker>` in screen JSX | `power-apps-native-host` host control | Do not generate document-picker/file-system/sharing wrappers for this field |
-| Form field bound to a Dataverse Image column | Host `<ImagePicker>` in screen JSX | `power-apps-native-host` host control | Do not use camera/image-picker wrappers for normal form-bound image fields |
+| Form field bound to a Dataverse File column | Host `<FilePicker>` in screen JSX | `@microsoft/power-apps-native-host` host control | Do not generate document-picker/file-system/sharing wrappers for this field |
+| Form field bound to a Dataverse Image column | Host `<ImagePicker>` in screen JSX | `@microsoft/power-apps-native-host` host control | Do not use camera/image-picker wrappers for normal form-bound image fields |
 | Dedicated photo/gallery/scanner workflow | `/add-native camera`, `image-picker`, or `barcode-scanner` | `expo-camera` and/or `expo-image-picker` present | If packages are absent, stop with missing-package guidance |
 | Pick/import/upload a user-selected PDF/document | `/add-native document-picker`, or host `<FilePicker>` for Dataverse File fields | `expo-document-picker` present, or host File control | Do not treat this as `pdf-report` or native PDF viewer |
 | Generate/export/print an app-owned report PDF | `/add-native pdf-report` | `expo-print` present | If `expo-print` is absent, do not add PDF report capability |
@@ -65,17 +65,17 @@ There are two different cases:
 
 | Case | Correct implementation | Owner |
 |---|---|---|
-| Dataverse `File` column | Use `<FilePicker>` from `power-apps-native-host` | screen-builder JSX rule, documented here |
-| Dataverse `Image` column | Use `<ImagePicker>` from `power-apps-native-host` | screen-builder JSX rule, documented here |
+| Dataverse `File` column | Use `<FilePicker>` from `@microsoft/power-apps-native-host` | screen-builder JSX rule, documented here |
+| Dataverse `Image` column | Use `<ImagePicker>` from `@microsoft/power-apps-native-host` | screen-builder JSX rule, documented here |
 | Local device document/file workflow not bound to a Dataverse column | Generate/use `src/native/documentPicker.ts`, `src/native/fileSystem.ts`, and/or `src/native/sharing.ts` wrappers | `/add-native` |
 | App-generated PDF report workflow | `/add-native` routes internally to `add-pdf-report`; uses `expo-print` and optionally `expo-sharing` only if present | `/add-native` |
 | Camera capture, gallery image selection, barcode scanner, or QR scanner workflow | `/add-native` routes internally to `add-camera` | `/add-native` |
 
-**Dataverse File/Image columns use host controls, not raw Expo modules and not app-specific native wrappers.** When a form field binds to a Dataverse **File** column (`FileAttributeMetadata`), render `<FilePicker>` from `power-apps-native-host`. When it binds to a Dataverse **Image** column (`ImageAttributeMetadata`), render `<ImagePicker>` from `power-apps-native-host`. These controls read accent, surface, and text colors from `PowerAppsProvider` / `ThemeProvider` and produce Dataverse-compatible payloads.
+**Dataverse File/Image columns use host controls, not raw Expo modules and not app-specific native wrappers.** When a form field binds to a Dataverse **File** column (`FileAttributeMetadata`), render `<FilePicker>` from `@microsoft/power-apps-native-host`. When it binds to a Dataverse **Image** column (`ImageAttributeMetadata`), render `<ImagePicker>` from `@microsoft/power-apps-native-host`. These controls read accent, surface, and text colors from `PowerAppsProvider` / `ThemeProvider` and produce Dataverse-compatible payloads.
 
 ```tsx
-import { FilePicker, ImagePicker } from 'power-apps-native-host';
-import type { PickedFileInfo, PickedImageInfo } from 'power-apps-native-host';
+import { FilePicker, ImagePicker } from '@microsoft/power-apps-native-host';
+import type { PickedFileInfo, PickedImageInfo } from '@microsoft/power-apps-native-host';
 
 // Image column — seed preview from Dataverse bytes/base64 and capture upload-ready payload.
 <ImagePicker
@@ -241,7 +241,7 @@ Each wrapper exports:
 - All wrappers return a discriminated-union result (`{ ok: true, ... } | { ok: false, reason, message? }`) — **never throw**
 - Unsupported runtime/platform states gracefully degrade or return `{ ok: false, reason: 'unsupported' }` — **never crash**
 - Branch by supported native platform when a capability differs between iOS and Android
-- Screens import these wrappers only for non-Dataverse native workflows. Dataverse File/Image fields use `power-apps-native-host` controls from the File/Image Picker Ownership section above.
+- Screens import these wrappers only for non-Dataverse native workflows. Dataverse File/Image fields use `@microsoft/power-apps-native-host` controls from the File/Image Picker Ownership section above.
 
 **Coding the wrapper:** consult the module's published API docs (linked from its npm page) for method signatures and permission patterns. Use the secure-store skeleton below as the canonical example of the discriminated-union shape — then translate to the target module's API.
 
