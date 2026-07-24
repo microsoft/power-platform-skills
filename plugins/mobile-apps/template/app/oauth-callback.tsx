@@ -1,16 +1,16 @@
 import { useEffect } from 'react';
 import { ActivityIndicator, View } from 'react-native';
-import * as WebBrowser from 'expo-web-browser';
 import { useRouter } from 'expo-router';
+import { completePowerAppsAuthSession } from '@microsoft/power-apps-native-host';
 
-WebBrowser.maybeCompleteAuthSession();
+completePowerAppsAuthSession();
 
 export default function OAuthCallbackScreen() {
   const router = useRouter();
 
   useEffect(() => {
     router.replace('/(app)/home');
-  }, []);
+  }, [router]);
 
   return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>

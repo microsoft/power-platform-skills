@@ -1,6 +1,8 @@
 # Power Apps Standalone App Template
 
-This template is an Expo, React Native, and TypeScript starter for building a standalone mobile app that connects to Power Platform data through `@microsoft/power-apps-native-host`.
+This template is an Expo, React Native, and TypeScript starter for building an
+iOS, Android, or hosted web app that connects to Power Platform data through
+`@microsoft/power-apps-native-host`.
 
 ## Requirements
 
@@ -28,14 +30,9 @@ connector wiring.
 
 	For GitHub Copilot in VS Code:
 
-	1. Open the Command Palette.
-	2. Run **Chat: Install Plugin From Source**.
-	3. Paste the mobile-app plugin manifest URL:
-
-		```text
-		https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/.plugin/plugin.json
-		```
-
+	1. Open the Extensions view.
+	2. Enter `@agentplugin` in the search box.
+	3. Find the Power Platform mobile-app plugin and select **Install**.
 	4. Reload VS Code if prompted, then open Copilot Chat in Agent mode.
 
 	Alternatively, install it from a terminal with GitHub Copilot CLI:
@@ -98,6 +95,62 @@ connector wiring.
 	- App store: https://apps.apple.com/us/app/power-apps-developer/id6753083462
 	- Play store: (coming soon)
 	- App center: https://install.appcenter.ms/orgs/appmagic-player-x6ys/apps/rn-dev-player-preview/distribution_groups/public_distribution/releases
+
+## Upgrade the Native Host
+
+From the app directory, preview the next template upgrade:
+
+```bash
+npx --package @microsoft/power-apps-native-host@latest upgrade-template --dry-run
+```
+
+Apply it:
+
+```bash
+npx --package @microsoft/power-apps-native-host@latest upgrade-template
+```
+
+Each run upgrades one template version, installs compatible dependencies, and
+runs Expo validation. If another version is available, run the command again.
+The current version is stored in `.powerapps-native/version.json`; do not edit
+this file.
+
+Apps created before this version file existed must specify their source template
+version:
+
+```bash
+npx --package @microsoft/power-apps-native-host@latest \
+	upgrade-template --from-version 1
+```
+
+The upgrader never changes `app/`, `src/`, `android/`, or `ios/`. If a root
+configuration change conflicts with your customization, it writes a `.rej` file
+for manual resolution. Failed validation restores files managed by the upgrade.
+
+Supported package managers are npm, pnpm, and Bun. See
+[CUSTOMIZATION.md](CUSTOMIZATION.md) before changing root configuration files.
+
+## Web
+
+Start the browser app:
+
+```bash
+npm run web
+```
+
+The command opens **Local Play** in your default browser and embeds the local
+Expo app in the hosted Power Apps player. Use the same browser profile as your
+Power Platform tenant.
+
+Web builds are supported in Code Apps. They are also supported in Power Pages
+when the app uses Dataverse only.
+
+To publish as a Code App, run `npm run bundle:web`, set `appType` to `CodeApp`
+and `distPath` to `dist-web` in `power.config.json`, then run
+`npx power-apps push`.
+
+To publish to Power Pages, run `npm run bundle:web -- powerpages`, then use the Power Pages
+skills to upload the generated `dist-web` directory.
 
 ## License and notices
 
