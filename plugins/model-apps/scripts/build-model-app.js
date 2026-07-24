@@ -149,11 +149,25 @@ async function buildModelApp(spec, opts, deps) {
     const nonInteractive = opts.nonInteractive === true;
     const allowDestructive = opts.allowDestructive === true;
     let state;
+    let discoveryError = null;
     try {
       state = deps.discoverOpDiffState
         ? await deps.discoverOpDiffState(spec, deps.provisionSdk)
         : await discoverOpDiffState(spec, deps.provisionSdk);
-    } catch { state = null; } // discovery must never crash the build; a read failure = no gate
+    } catch (err) { discoveryError = err; }
+    // Fail-closed: a discovery failure means we CANNOT verify the apply is non-destructive (a transient
+    // 429/timeout/auth error mid-read leaves `state` unknown). Refuse to write — UNLESS the user already
+    // authorized destruction with --allow-destructive, in which case the gate below would not block
+    // anything anyway. Do NOT swallow-and-proceed: that silently disables the safety gate exactly when
+    // the environment is unhealthy, letting an unattended-collision overwrite or a form/sitemap removal
+    // slip through (design §11 — "can't verify safety ⇒ refuse", not "⇒ proceed"). Re-running usually
+    // clears a transient read failure; --allow-destructive is the explicit escape hatch.
+    if (discoveryError && !allowDestructive) {
+      const msg = `preflight safety check could not run (discovery failed: ${(discoveryError && discoveryError.message) || discoveryError}) — refusing to write without verifying the apply is non-destructive. Re-run to retry, or pass --allow-destructive to proceed without the check.`;
+      log(`\n✗ ${msg}`);
+      if (journal) journal.close({ status: 'halt', phase: 'preflight', label: 'discovery-error', detail: String((discoveryError && discoveryError.message) || discoveryError), ...counts });
+      return { ok: false, errors: [msg] };
+    }
     if (state) {
       const col = state.collision || {};
       // (1) Collision gate. Unattended, an existing app is a HARD stop unless authorized — there is no

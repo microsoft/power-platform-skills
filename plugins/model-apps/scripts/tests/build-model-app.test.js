@@ -278,6 +278,37 @@ test('destructive gate: --allow-destructive lets the same build proceed', async 
   assert.ok(calls.some((c) => c[0] === 'createSolution'), 'proceeded past the gate into the build');
 });
 
+test('destructive gate: build halts on a dropped sitemap target without --allow-destructive', async () => {
+  // Integration coverage that the sitemap-removal classifier is wired through buildModelApp (op-diff.test
+  // covers the classifier in isolation; this proves the gate actually halts the build).
+  const { sdk, calls } = mockSdk();
+  const state = { collision: { appExists: true, appUnique: 'new_supportdesk' }, forms: [], sitemap: { deployedTargets: ['entity:new_customer', 'entity:new_ticket'], wantTargets: ['entity:new_customer'] } };
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: false }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => state });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /allow-destructive/.test(e) && /new_ticket/.test(e)), 'names the dropped nav target');
+  assert.ok(!calls.some((c) => c[0] === 'createSolution'), 'halted before any write');
+});
+
+test('safety gate is FAIL-CLOSED: a discovery error halts the build (no unauthorized write)', async () => {
+  // The core fail-closed invariant (design §11): if preflight discovery throws (transient 429/timeout/
+  // auth), we cannot verify the apply is non-destructive, so the build must REFUSE to write rather than
+  // swallow the error and proceed — which would silently disable the gate exactly when the env is unhealthy.
+  const { sdk, calls } = mockSdk();
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => { throw new Error('429 EntityCustomization lock'); } });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /could not run/.test(e) && /allow-destructive/.test(e)), 'explains it could not verify safety and names the escape hatch');
+  assert.ok(!calls.some((c) => c[0] === 'createSolution'), 'halted before any write');
+});
+
+test('safety gate: --allow-destructive lets a build proceed even when discovery fails', async () => {
+  // With destruction already authorized, a discovery failure is moot (the gate would not block anything),
+  // so the build proceeds rather than being blocked by an unrelated transient read error.
+  const { sdk, calls } = mockSdk();
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => { throw new Error('429 transient'); } });
+  assert.notStrictEqual(r.ok, false, 'not blocked by the discovery failure when already authorized');
+  assert.ok(calls.some((c) => c[0] === 'createSolution'), 'proceeded into the build');
+});
+
 test('collision preflight: warns and journals when the app already exists', async () => {
   const { sdk } = mockSdk();
   sdk.queryRecords = async (set) => (set === 'appmodule' ? [{ appmoduleid: 'app-x' }] : set === 'solution' ? [] : [{ publisherid: 'pub-1' }]);
