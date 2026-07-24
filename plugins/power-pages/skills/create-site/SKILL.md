@@ -215,6 +215,26 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions. Do not import the template.
       - **Cancel**: emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop before import.
 
+    4. Preflight-check whether en-US is enabled in the target environment:
+       ```bash
+       node "${PLUGIN_ROOT}/scripts/check-available-languages.js" --envUrl "<environmentUrl>" --token "<token>"
+       ```
+       Evaluate the JSON result:
+       - **`ok: true` and `hasEnUs: true`**: continue; the target environment has en-US (LCID `1033`) enabled.
+       - **`ok: false`**: tell the user the skill could not verify available Dataverse languages, surface the script error, then ask whether to switch to from-scratch or stop. Do not import the template.
+       - **`ok: true` and `hasEnUs: false`**: explain that the selected template solution is authored for en-US metadata and requires Dataverse LCID `1033` to be enabled. Block before any solution import mutation. Do not provide a "proceed anyway" branch.
+
+<!-- not-a-gate: route selection after a blocking preflight; no org mutation has happened and there is no option to override the missing en-US requirement -->
+
+       Use `AskUserQuestion` only when the language preflight cannot continue:
+
+       | Question | Header | Options |
+       |----------|--------|---------|
+       | This template requires en-US (LCID `1033`) to be enabled in Dataverse, but the target environment does not have it available or the language check could not be completed. What would you like to do? | Template Language Requirement | Start from scratch (Recommended), Cancel |
+
+       - **Start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions. Do not import the template.
+       - **Cancel**: emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop before import.
+
 <!-- gate: create-site:1.5.template-import | category=consent | cancel-leaves=template-cache -->
 
 > 🚦 **Gate (consent · create-site:1.5.template-import):** Confirm importing the selected template solution into the current Power Platform environment.
@@ -223,15 +243,15 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 > **Why we ask:** The next step imports an unmanaged Dataverse solution into the user's org. Wrong environment or wrong template is disruptive and cannot be cleanly undone.
 > **Cancel leaves:** `template-cache` — the selected solution zip and preview images may remain in the SHA-keyed temp cache; no org mutation has occurred.
 
-   4. Present the template and environment, then ask:
+   5. Present the template and environment, then ask:
 
       | Question | Header | Options |
       |----------|--------|---------|
       | Install **`<SELECTED_TEMPLATE.displayName>`** into **`<environmentUrl>`**? This imports an unmanaged solution into your org. If the template includes seed data, it will be applied after import and before activation. | Install Template | Yes, import this template (Recommended), No, start from scratch, Cancel |
 
-      - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to step 8.
+      - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions.
       - **Cancel**: emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop; no org mutation has happened.
-   5. Inspect the selected solution zip and check whether that solution is already installed:
+   6. Inspect the selected solution zip and check whether that solution is already installed:
       ```bash
       node "${PLUGIN_ROOT}/scripts/inspect-template-solution.js" --zipPath "<SELECTED_TEMPLATE_SOLUTION_ZIP>"
       node "${PLUGIN_ROOT}/scripts/check-solution-installed.js" --solutionName "<uniqueName>" --envUrl "<environmentUrl>"
