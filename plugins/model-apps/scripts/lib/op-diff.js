@@ -46,7 +46,7 @@ function formRemovals(deployedForm, def) {
   const primary = def.__primaryField;
   const removed = [];
   for (const logical of formFieldLogicals(deployedForm || {})) {
-    if (logical === primary) continue;
+    if (primary && logical === primary) continue;
     if (!want.has(logical)) removed.push(logical);
   }
   return removed;

@@ -59,6 +59,14 @@ test('classifyOps: an existing app is an app-collision op', () => {
   assert.match(r.destructive[0].label, /new_supportdesk/);
 });
 
+test('classifyOps: an existing SOLUTION alone (no app) is NOT a collision — normal run-1->run-2 reuse', () => {
+  // Locks the safety-critical invariant: only appExists is destructive. A regression that started
+  // reading solutionExists would silently block every second build (the solution always exists on
+  // rebuild), yet would pass every other test — so this negative must be asserted explicitly.
+  const r = classifyOps({ app: { name: 'X' } }, { collision: { appExists: false, solutionExists: true, solutionName: 'contoso' } });
+  assert.deepStrictEqual(r, { destructive: [], hasDestructive: false });
+});
+
 test('classifyOps: an explicit-layout form field removal is destructive', () => {
   const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __primaryField: 'new_name' });
   const deployed = formOf(['new_name', 'new_priority']);
@@ -66,6 +74,16 @@ test('classifyOps: an explicit-layout form field removal is destructive', () => 
   assert.strictEqual(r.hasDestructive, true);
   assert.strictEqual(r.destructive[0].kind, 'form-field-removal');
   assert.match(r.destructive[0].detail, /new_priority/);
+});
+
+test('classifyOps: an auto-layout form in discovered.forms is never destructive', () => {
+  // End-to-end guard on the classifyOps form-loop (not just the formRemovals unit): an auto layout
+  // is additive-only, so even with fields on the deployed form that the spec no longer lists, the
+  // gate must NOT flag it.
+  const def = Object.assign(formOf(['new_name']), { __explicitLayout: false, __primaryField: 'new_name' });
+  const deployed = formOf(['new_name', 'new_priority', 'new_stale']);
+  const r = classifyOps({}, { forms: [{ label: 'form "Ticket" (new_ticket)', deployedForm: deployed, def }] });
+  assert.deepStrictEqual(r, { destructive: [], hasDestructive: false });
 });
 
 test('classifyOps: a dropped sitemap target is destructive', () => {
