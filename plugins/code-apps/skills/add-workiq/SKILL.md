@@ -253,7 +253,11 @@ export class McpSession {
       capabilities: {},
       clientInfo: { name: 'Power Apps Code App', version: '1.0.0' },
     })
-    this.initialized = !res.error
+    // Fail fast: surface a failed handshake instead of continuing to `tools/call`.
+    if (res.error) {
+      throw new Error(`MCP initialize failed: ${res.error.message ?? JSON.stringify(res.error)}`)
+    }
+    this.initialized = true
     return res
   }
 
