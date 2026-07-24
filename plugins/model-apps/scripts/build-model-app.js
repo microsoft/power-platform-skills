@@ -14,11 +14,12 @@ const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { validateAppSpec, migrateAppSpec } = require('./lib/app-spec.js');
-const { runSdkBuild, planFor, appUniqueName } = require('./lib/sdk-build.js');
+const { runSdkBuild, planFor, appUniqueName, compileFormIntent } = require('./lib/sdk-build.js');
 const { stagePhasesOrResolve } = require('./lib/stages.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
+const { classifyOps, sitemapTargets } = require('./lib/op-diff.js');
 // R3 (auto-verify): after a successful --apply the build can reconcile the spec against what actually
 // deployed, so a silent partial build surfaces in the same run instead of only on a separate manual
 // `verify-model-app.js` pass. Reuses the read-only reconcile core + the SDK reader (DRY — same code the
@@ -95,6 +96,37 @@ async function checkCollisions(spec, provision) {
   };
 }
 
+// Read-only discovery for the op-diff safety gate. Gathers ONLY what classifyOps needs — the collision
+// result, deployed EXPLICIT-layout forms (an auto layout never prunes, so it can't be destructive), and
+// the deployed app's sitemap targets — using read-only SDK calls (queryRecords via checkCollisions, then
+// findArtifact/fetchArtifact + getArtifact). No writes. `provision` is the header-less SDK client.
+// Returns the `discovered` shape classifyOps consumes.
+async function discoverOpDiffState(spec, provision) {
+  const collision = await checkCollisions(spec, provision);
+  // Explicit-layout forms only. compileFormIntent needs no notesClassId here — that id only affects the
+  // non-field notes cell, never the field-logical set formRemovals compares (artifact-intent.js).
+  const forms = [];
+  for (const f of spec.forms || []) {
+    const def = compileFormIntent(spec, f, {});
+    if (!def.__explicitLayout) continue;
+    const id = await provision.findArtifact('form', { name: def.name, entity: def.entityLogicalName });
+    if (!id) continue; // not deployed yet → nothing to prune
+    await provision.fetchArtifact('form', id); // seed the workspace copy so getArtifact can read it
+    forms.push({ label: `form "${f.name || f.entity}" (${String(f.entity).toLowerCase()})`, deployedForm: provision.getArtifact('form', id) || {}, def });
+  }
+  // Sitemap removals only make sense when the app already exists (a fresh app has no deployed sitemap).
+  let sitemap = null;
+  if (spec.appShell && collision.appExists) {
+    const appId = await provision.findArtifact('app', { uniqueName: collision.appUnique });
+    if (appId) {
+      await provision.fetchArtifact('app', appId);
+      const deployed = provision.getArtifact('app', appId) || {};
+      sitemap = { deployedTargets: sitemapTargets(deployed.siteMap || {}), wantTargets: sitemapTargets(spec.appShell) };
+    }
+  }
+  return { collision, forms, sitemap };
+}
+
 async function buildModelApp(spec, opts, deps) {
   const v = validateAppSpec(spec, { profile: opts.profile || 'deploy' });
   if (!v.ok) {
@@ -108,16 +140,50 @@ async function buildModelApp(spec, opts, deps) {
   const emit = journal ? (e) => { baseEmit(e); journal.record(e); } : baseEmit;
   const sleep = deps.sleep || ((ms) => new Promise((res) => setTimeout(res, ms)));
 
-  // Pre-flight collision warning (apply only; best-effort — never fails the build).
-  if (opts.apply && deps.provisionSdk && opts.checkCollisions !== false) {
+  // Pre-flight safety gate (apply only). Recomputed here — immediately before the write loop — so it
+  // reflects live state (TOCTOU). Best-effort discovery (reads only): if there is no provision client or
+  // discovery is disabled, the gate is skipped. `deps.discoverOpDiffState` is an injection seam for tests.
+  // The gate lives here, in the CLI wrapper, NOT inside runSdkBuild — the pure engine is unaffected.
+  // See design §11 (fail-closed destructive gate) and §14.
+  if (opts.apply && (deps.discoverOpDiffState || (deps.provisionSdk && opts.checkCollisions !== false))) {
+    const nonInteractive = opts.nonInteractive === true;
+    const allowDestructive = opts.allowDestructive === true;
+    let state;
     try {
-      const c = await checkCollisions(spec, deps.provisionSdk);
-      if (c.appExists || c.solutionExists) {
-        const which = [c.appExists ? `app '${c.appUnique}'` : null, c.solutionExists ? `solution '${c.solutionName}'` : null].filter(Boolean).join(' and ');
+      state = deps.discoverOpDiffState
+        ? await deps.discoverOpDiffState(spec, deps.provisionSdk)
+        : await discoverOpDiffState(spec, deps.provisionSdk);
+    } catch { state = null; } // discovery must never crash the build; a read failure = no gate
+    if (state) {
+      const col = state.collision || {};
+      // (1) Collision gate. Unattended, an existing app is a HARD stop unless authorized — there is no
+      //     human to see a warning and Ctrl-C (design §11). Interactively we preserve today's behavior:
+      //     warn + proceed to UPDATE the existing app.
+      if (col.appExists || col.solutionExists) {
+        const which = [col.appExists ? `app '${col.appUnique}'` : null, col.solutionExists ? `solution '${col.solutionName}'` : null].filter(Boolean).join(' and ');
+        if (col.appExists && nonInteractive && !allowDestructive) {
+          const msg = `${which} already exist(s) and this is a non-interactive run — refusing to overwrite an existing app. Re-run with --allow-destructive to authorize, or use a different app name.`;
+          log(`\n✗ ${msg}`);
+          if (journal) journal.close({ status: 'halt', phase: 'preflight', label: which, detail: 'app-collision (non-interactive)', ...counts });
+          return { ok: false, errors: [msg] };
+        }
         log(`\n⚠ ${which} already exist(s) — this build will UPDATE the existing app (idempotent reuse), not create a fresh one. Use a different name for a new app.`);
-        if (journal) journal.record({ phase: 'preflight', status: 'collision', label: which, detail: JSON.stringify({ appExists: c.appExists, solutionExists: c.solutionExists }) });
+        if (journal) journal.record({ phase: 'preflight', status: 'collision', label: which, detail: JSON.stringify({ appExists: col.appExists, solutionExists: col.solutionExists }) });
       }
-    } catch { /* best-effort */ }
+      // (2) Fail-closed destructive-op gate. ANY content removal (explicit-layout form-field prune or a
+      //     dropped sitemap target) requires --allow-destructive, interactive or not — the env var /
+      //     --non-interactive suppress prompts only, they never grant destructive authority. The
+      //     app-collision op is handled above (interactive/non-interactive nuance), so exclude it here.
+      const diff = classifyOps(spec, state, { teardown: false });
+      const removals = diff.destructive.filter((o) => o.kind === 'form-field-removal' || o.kind === 'sitemap-removal');
+      if (removals.length && !allowDestructive) {
+        const lines = removals.map((o) => `  • ${o.label} — ${o.detail}`);
+        const msg = `refusing ${removals.length} destructive operation(s) without --allow-destructive:\n${lines.join('\n')}`;
+        log(`\n✗ ${msg}`);
+        if (journal) journal.close({ status: 'halt', phase: 'preflight', label: 'destructive-ops', detail: removals.map((o) => o.kind).join(','), ...counts });
+        return { ok: false, errors: [msg] };
+      }
+    }
   }
   // Transient env errors (429 EntityCustomization lock, 503 SQL timeout, concurrent-op guards) are
   // retried automatically on --apply: the build is idempotent, so a retry reuses everything already
@@ -201,6 +267,16 @@ function backoffMs(attempt) {
   return Math.min(30000, 3000 * Math.pow(2, attempt - 1)) + Math.floor(Math.random() * 1000);
 }
 
+// Env var truthiness for the unattended opt-in: '1' or 'true' (case-insensitive) count as set; a
+// missing/other value is false. Matches the dotnet-style boolean env convention used elsewhere in this
+// repo (see AGENTS.md "Shared Telemetry"). This gates PROMPT SUPPRESSION ONLY — it never grants
+// destructive authority (only --allow-destructive does).
+function envTruthy(v) {
+  if (v == null) return false;
+  const s = String(v).trim().toLowerCase();
+  return s === '1' || s === 'true';
+}
+
 function list(v) {
   return typeof v === 'string' ? v.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
 }
@@ -211,7 +287,7 @@ async function main() {
   const specArg = flags.spec || positional[0];
   if (!env || !specArg) {
     process.stderr.write(
-      'Usage: node build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--workspace <dir>]\n'
+      'Usage: node build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--non-interactive] [--allow-destructive] [--workspace <dir>]\n'
     );
     process.exit(1);
   }
@@ -225,6 +301,8 @@ async function main() {
     verify: flags.verify === true,
     phases: stagePhasesOrResolve({ stage: flags.stage, only: list(flags.only), skip: list(flags.skip), from: flags.from, to: flags.to }),
     profile: (flags.apply === true && flags.stage !== 'data') ? 'deploy' : 'plan',
+    allowDestructive: flags['allow-destructive'] === true,
+    nonInteractive: flags['non-interactive'] === true || envTruthy(process.env.POWER_PLATFORM_SKILLS_NONINTERACTIVE),
     appDir: path.dirname(specPath),
     env,
   };
@@ -260,4 +338,4 @@ async function main() {
 if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
-module.exports = { buildModelApp, planFor, isTransientHalt, checkCollisions };
+module.exports = { buildModelApp, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy };

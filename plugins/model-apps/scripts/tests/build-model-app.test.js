@@ -225,6 +225,59 @@ test('transient auto-retry: no retries in dry-run', async () => {
   assert.strictEqual(r.dryRun, true);
 });
 
+// Minimal explicit-layout form fixtures for the destructive gate (match formFieldLogicals' walk).
+const cell = (fn) => ({ control: { fieldName: fn } });
+const formOf = (fields) => ({ tabs: [{ columns: [{ sections: [{ rows: fields.map((f) => ({ cells: [cell(f)] })) }] }] }] });
+
+test('envTruthy: only 1/true (case-insensitive) count as set', () => {
+  const { envTruthy } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  assert.strictEqual(envTruthy('1'), true);
+  assert.strictEqual(envTruthy('true'), true);
+  assert.strictEqual(envTruthy('TRUE'), true);
+  assert.strictEqual(envTruthy('0'), false);
+  assert.strictEqual(envTruthy('yes'), false);
+  assert.strictEqual(envTruthy(undefined), false);
+  assert.strictEqual(envTruthy(''), false);
+});
+
+test('collision gate: a non-interactive run refuses an existing app without --allow-destructive', async () => {
+  const { sdk, calls } = mockSdk();
+  sdk.queryRecords = async (set) => (set === 'appmodule' ? [{ appmoduleid: 'app-x' }] : set === 'solution' ? [] : [{ publisherid: 'pub-1' }]);
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, nonInteractive: true }, { sdk, provisionSdk: sdk });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /allow-destructive/.test(e)), 'halt names --allow-destructive');
+  assert.ok(!calls.some((c) => c[0] === 'createSolution'), 'halted before any write');
+});
+
+test('collision gate: --allow-destructive lets a non-interactive run proceed to update the app', async () => {
+  const { sdk, calls } = mockSdk();
+  sdk.queryRecords = async (set) => (set === 'appmodule' ? [{ appmoduleid: 'app-x' }] : set === 'solution' ? [] : [{ publisherid: 'pub-1' }]);
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, nonInteractive: true, allowDestructive: true }, { sdk, provisionSdk: sdk });
+  assert.notStrictEqual(r.ok, false, 'not halted by the gate');
+  assert.ok(calls.some((c) => c[0] === 'createSolution'), 'proceeded past the gate into the build');
+});
+
+test('destructive gate: build halts on a form-field removal without --allow-destructive', async () => {
+  const { sdk, calls } = mockSdk();
+  const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __primaryField: 'new_name' });
+  const deployedForm = formOf(['new_name', 'new_priority']);
+  const state = { collision: { appExists: false, solutionExists: false }, forms: [{ label: 'form "Ticket" (new_ticket)', deployedForm, def }], sitemap: null };
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => state });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /allow-destructive/.test(e) && /new_priority/.test(e)), 'names the field it would remove');
+  assert.ok(!calls.some((c) => c[0] === 'createSolution'), 'halted before any write');
+});
+
+test('destructive gate: --allow-destructive lets the same build proceed', async () => {
+  const { sdk, calls } = mockSdk();
+  const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __primaryField: 'new_name' });
+  const deployedForm = formOf(['new_name', 'new_priority']);
+  const state = { collision: { appExists: false }, forms: [{ label: 'form "Ticket" (new_ticket)', deployedForm, def }], sitemap: null };
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => state });
+  assert.notStrictEqual(r.ok, false);
+  assert.ok(calls.some((c) => c[0] === 'createSolution'), 'proceeded past the gate into the build');
+});
+
 test('collision preflight: warns and journals when the app already exists', async () => {
   const { sdk } = mockSdk();
   sdk.queryRecords = async (set) => (set === 'appmodule' ? [{ appmoduleid: 'app-x' }] : set === 'solution' ? [] : [{ publisherid: 'pub-1' }]);

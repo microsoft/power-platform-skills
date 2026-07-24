@@ -119,7 +119,7 @@ async function main(env, prefix) {
   for (const r of results) process.stdout.write(`  ${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.detail ? `  (${r.detail})` : ''}\n`);
 
   process.stdout.write('\n▶ teardown\n');
-  runNode([pluginScript('teardown-model-app.js'), '--env', env, '--spec', '@' + specPath, '--workspace', ws, '--apply']);
+  runNode([pluginScript('teardown-model-app.js'), '--env', env, '--spec', '@' + specPath, '--workspace', ws, '--apply', '--allow-destructive']);
   fs.rmSync(dir, { recursive: true, force: true });
 
   const failed = results.filter((r) => !r.ok);

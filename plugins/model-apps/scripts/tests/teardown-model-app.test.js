@@ -75,9 +75,26 @@ test('dry-run returns the plan and never touches the SDK', async () => {
   assert.ok(r.plan.some((p) => /^solution /.test(p)));
 });
 
+test('apply without --allow-destructive halts before any delete (fail-closed)', async () => {
+  const sdk = presentSdk();
+  const cap = logCapture();
+  const r = await teardownModelApp(desk, { apply: true }, { sdk, log: cap.log });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /allow-destructive/.test(e)));
+  assert.strictEqual(sdk.calls.length, 0, 'no SDK calls — halted before touching anything');
+  assert.ok(cap.logs.some((l) => /refusing to delete/.test(l)), 'a clear refusal is printed');
+});
+
+test('apply --allow-destructive performs the deletes', async () => {
+  const sdk = presentSdk();
+  const r = await teardownModelApp(desk, { apply: true, allowDestructive: true }, { sdk });
+  assert.strictEqual(r.ok, true);
+  assert.ok(sdk.calls.some((c) => c.method === 'deleteAppCascade'), 'app deleted');
+});
+
 test('apply threads through to the engine (deletes issued) and returns ok', async () => {
   const sdk = presentSdk();
-  const r = await teardownModelApp(desk, { apply: true }, { sdk });
+  const r = await teardownModelApp(desk, { apply: true, allowDestructive: true }, { sdk });
   assert.strictEqual(r.ok, true);
   assert.ok(sdk.calls.some((c) => c.method === 'deleteAppCascade'), 'app deleted via deleteAppCascade');
   assert.ok(sdk.calls.some((c) => c.method === 'deleteTable'));
@@ -87,7 +104,7 @@ test('apply threads through to the engine (deletes issued) and returns ok', asyn
 test('apply emits status-marked [n/total] lines under phase headers + a summary', async () => {
   const sdk = presentSdk();
   const cap = logCapture();
-  await teardownModelApp(desk, { apply: true }, { sdk, log: cap.log });
+  await teardownModelApp(desk, { apply: true, allowDestructive: true }, { sdk, log: cap.log });
   const lines = cap.logs.filter((l) => /\[\d+\/\d+\]/.test(l));
   assert.ok(lines.length >= 4);
   const totals = new Set(lines.map((l) => Number(l.match(/\[\d+\/(\d+)\]/)[1])));

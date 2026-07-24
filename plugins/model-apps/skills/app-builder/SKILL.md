@@ -181,13 +181,28 @@ the whole command bar for any entity the spec authored commands on. **Teardown o
 this build created** — a **system/standard table** (account, contact, …) is auto-detected and
 **skipped** (never deleted), and a **reused custom table** is skipped when its entity is flagged
 `"existing": true` in the spec, so pre-existing data survives cleanup. **Dry-run by default** — it
-lists what it would delete and touches nothing; add `--apply` to actually delete (add
-`--clear-workspace` to also prune `.maker-workspace/`):
+lists what it would delete and touches nothing; add `--apply --allow-destructive` to actually delete
+(add `--clear-workspace` to also prune `.maker-workspace/`). **`--allow-destructive` is required for
+`teardown --apply`** — a teardown without it will print a clear refusal and touch nothing.
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/teardown-model-app.js" \
-  --env <envUrl> --spec @<working-dir>/app-spec.json [--apply] [--clear-workspace]
+  --env <envUrl> --spec @<working-dir>/app-spec.json [--apply] [--allow-destructive] [--clear-workspace]
 ```
+
+**Safety flags (build + teardown).** The apply path is fail-closed against destructive operations:
+
+- **`--allow-destructive`** — authorize destructive operations. For `build --apply`: authorizes
+  overwriting an existing app in unattended mode, and allows explicit-layout form-field removals or
+  sitemap-target drops. For `teardown --apply`: **required** — all deletes are destructive by
+  construction, so teardown without this flag halts before touching anything.
+- **`--non-interactive`** — suppress interactive prompts (for automation / CI). A non-interactive
+  build that encounters an existing app **fails** instead of warning-and-proceeding, unless
+  `--allow-destructive` is also set. Does **not** grant destructive authority on its own — only
+  `--allow-destructive` does.
+- **`POWER_PLATFORM_SKILLS_NONINTERACTIVE=1`** (or `true`) — env-var equivalent of
+  `--non-interactive`. Same semantics: suppresses prompts only, never authorizes destructive ops.
+  Set this in CI job environments to avoid interactive-prompt hangs.
 
 ### AI-first features
 

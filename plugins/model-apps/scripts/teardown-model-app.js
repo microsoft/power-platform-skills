@@ -20,6 +20,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { validateAppSpec, migrateAppSpec } = require('./lib/app-spec.js');
 const { runTeardown } = require('./lib/sdk-teardown.js');
+const { classifyOps } = require('./lib/op-diff.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 
@@ -67,6 +68,19 @@ async function teardownModelApp(spec, opts, deps) {
   const log = deps.log || (() => undefined);
   const counts = { ok: 0, skip: 0, error: 0 };
   const emit = deps.emit || cliEmit(log, { apply: opts.apply, counts });
+  // Fail-closed: a teardown --apply DELETES real artifacts (app, tables, solution), so it now requires
+  // explicit --allow-destructive — the same authorization the builder's destructive gate uses (design
+  // §11). Dry-run is unaffected (it only prints the plan). The op set is the pure planTeardown, reused
+  // via op-diff so the gate and the engine can never disagree about what will be deleted.
+  if (opts.apply && opts.allowDestructive !== true) {
+    const diff = classifyOps(spec, {}, { teardown: true });
+    if (diff.hasDestructive) {
+      const preview = diff.destructive.slice(0, 8).map((o) => `  • ${o.label}`);
+      const more = diff.destructive.length > preview.length ? `\n  … and ${diff.destructive.length - preview.length} more` : '';
+      log(`\n✗ refusing to delete ${diff.destructive.length} artifact(s) without --allow-destructive:\n${preview.join('\n')}${more}\nRe-run with --allow-destructive to authorize teardown.`);
+      return { ok: false, errors: [`teardown of ${diff.destructive.length} artifact(s) requires --allow-destructive`, ...diff.destructive.slice(0, 8).map((o) => o.label)] };
+    }
+  }
   const r = await runTeardown(spec, { apply: opts.apply }, { sdk: deps.sdk, emit });
   if (opts.apply && r && !r.dryRun) {
     log(`\n${r.ok ? '✓' : '✗'} teardown ${r.ok ? 'complete' : 'finished with errors'} — ${counts.ok} deleted, ${counts.skip} not found, ${counts.error} failed (${counts.ok + counts.skip + counts.error} steps)`);
@@ -80,18 +94,19 @@ async function main() {
   const specArg = flags.spec || positional[0];
   if (!env || !specArg) {
     process.stderr.write(
-      'Usage: node teardown-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--clear-workspace] [--workspace <dir>]\n'
+      'Usage: node teardown-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--allow-destructive] [--clear-workspace] [--workspace <dir>]\n'
     );
     process.exit(1);
   }
   const specPath = path.resolve(typeof specArg === 'string' && specArg.startsWith('@') ? specArg.slice(1) : specArg);
   const spec = migrateAppSpec(readJsonArg('@' + specPath));
   const apply = flags.apply === true;
+  const allowDestructive = flags['allow-destructive'] === true;
   const { sdk, cleanup } = makeSdk(env);
   let r;
   try {
     const deps = { log: (m) => process.stderr.write(m + '\n'), sdk };
-    r = await teardownModelApp(spec, { apply }, deps);
+    r = await teardownModelApp(spec, { apply, allowDestructive }, deps);
 
     // Clear the local workspace only after a clean apply — stale metadata there would make a
     // subsequent rebuild skip tables that no longer exist. Filesystem-local, opt-in.
