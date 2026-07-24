@@ -436,6 +436,72 @@ test('childRelationshipsFor returns the child (many) side of each 1:N where the 
   assert.deepStrictEqual(childRelationshipsFor(spec, 'new_task'), []);
 });
 
+// === Task 3 (Plan 3): page-spec validation BEFORE any write (Critical 4) ===
+// These checks run on every validateAppSpec call — author plan, run-1/run-2, teardown, verify —
+// so a malformed page spec is rejected before the pages phase writes anything. Design §7.2.
+
+// A minimal v2 spec that passes everything EXCEPT the page rule under test. schemaVersion 2 so the
+// stable-key rules apply; one entity so the base validation is satisfied.
+function pageSpec(pages) {
+  return {
+    schemaVersion: 2,
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'A' },
+    entities: [{ schemaName: 'new_widget', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
+    pages,
+    appShell: { areas: [] },
+  };
+}
+
+test('validateAppSpec rejects case-insensitive duplicate page names (Critical 4)', () => {
+  const r = validateAppSpec(pageSpec([
+    { key: 'a', name: 'Overview', source: { kind: 'tsx', codeFile: 'a.tsx' } },
+    { key: 'b', name: 'overview', source: { kind: 'tsx', codeFile: 'b.tsx' } },
+  ]), { profile: 'plan' });
+  assert.ok(!r.ok && r.errors.some((e) => /duplicate page name/i.test(e)), r.errors.join('; '));
+});
+
+test('validateAppSpec rejects duplicate implemented codeFile paths (Critical 4)', () => {
+  const r = validateAppSpec(pageSpec([
+    { key: 'a', name: 'A', source: { kind: 'tsx', codeFile: 'pages/x.tsx' } },
+    { key: 'b', name: 'B', source: { kind: 'tsx', codeFile: 'pages/x.tsx' } },
+  ]), { profile: 'plan' });
+  assert.ok(!r.ok && r.errors.some((e) => /duplicate .*codeFile|codeFile .*already/i.test(e)), r.errors.join('; '));
+});
+
+// Addendum Crit 4: path aliases that resolve to the same file must be detected as duplicates.
+// path.normalize('pages/./x.tsx') and path.normalize('pages/x.tsx') resolve identically; without
+// normalization these would evade the duplicate check as different strings.
+test('validateAppSpec rejects normalized path duplicates: pages/x.tsx vs pages/./x.tsx (addendum Crit 4)', () => {
+  const r = validateAppSpec(pageSpec([
+    { key: 'a', name: 'A', source: { kind: 'tsx', codeFile: 'pages/x.tsx' } },
+    { key: 'b', name: 'B', source: { kind: 'tsx', codeFile: 'pages/./x.tsx' } },
+  ]), { profile: 'plan' });
+  assert.ok(!r.ok && r.errors.some((e) => /duplicate .*codeFile|codeFile .*already/i.test(e)), `pages/./x.tsx alias should be detected as duplicate: ${r.errors.join('; ')}`);
+});
+
+test('validateAppSpec rejects a codeFile that escapes the workspace (.. or absolute) (Critical 4)', () => {
+  for (const bad of ['../evil.tsx', '/etc/evil.tsx', 'C:/evil.tsx', 'a/../../evil.tsx']) {
+    const r = validateAppSpec(pageSpec([{ key: 'a', name: 'A', source: { kind: 'tsx', codeFile: bad } }]), { profile: 'plan' });
+    assert.ok(!r.ok && r.errors.some((e) => /codeFile.*(outside|escape|confin|absolute|\.\.)/i.test(e)), `${bad}: ${r.errors.join('; ')}`);
+  }
+});
+
+test('validateAppSpec rejects an invalid stable key grammar (Critical 4)', () => {
+  for (const bad of ['Overview', 'wo_detail', '-lead', 'lead-', 'a b']) {
+    const r = validateAppSpec(pageSpec([{ key: bad, name: 'A', source: { kind: 'tsx', codeFile: 'a.tsx' } }]), { profile: 'plan' });
+    assert.ok(!r.ok && r.errors.some((e) => /key.*grammar|invalid.*key|key '/i.test(e)), `${bad}: ${r.errors.join('; ')}`);
+  }
+});
+
+test('validateAppSpec accepts a unique-name, confined-path, well-keyed page set', () => {
+  const r = validateAppSpec(pageSpec([
+    { key: 'overview', name: 'Overview', source: { kind: 'tsx', codeFile: 'overview.tsx' } },
+    { key: 'wo-detail', name: 'WO Detail', navigatesTo: [{ targetKey: 'overview' }], source: { kind: 'tsx', codeFile: 'pages/wo-detail.tsx' } },
+  ]), { profile: 'deploy' });
+  assert.ok(r.ok, r.errors.join('; '));
+});
+
 test('validateAppSpec rejects $parent with an empty match', () => {
   const bad = cloneDesk();
   bad.sampleData.new_ticket[0].$parent = { entity: 'new_customer', match: {} };

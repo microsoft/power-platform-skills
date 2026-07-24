@@ -1,6 +1,8 @@
 // App Spec schema + validator. The App Spec is the reviewable contract between
 // the app-builder's LLM proposal and the deterministic builder.
 
+const path = require('node:path');
+
 // App Spec column type -> { dv: Dataverse attribute type name }. (The SDK build engine
 // maps App Spec types to the SDK's own ColumnType in lib/sdk-build.js.)
 const TYPE_MAP = {
@@ -471,9 +473,36 @@ function validateAppSpec(spec, opts = {}) {
   const isV2 = (spec.schemaVersion || 0) >= 2;
   const pageKeysSet = new Set();
   const pageNamesSet = new Set();
+  // Stable-key grammar (schemaVersion 2): lowercase slug — alphanumerics + internal single hyphens,
+  // no leading/trailing hyphen, no underscores/spaces/uppercase. migrateAppSpec mints keys via
+  // slugify (:686) which always conforms; a hand-authored v2 key must too, since the key is the
+  // cross-reference identity (navigatesTo.targetKey, PAGEREF_<key>, appShell page subareas).
+  const PAGE_KEY_GRAMMAR = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+  const pageNamesLower = new Set();    // case-insensitive name uniqueness (Critical 4)
+  const pageCodeFilesNorm = new Set(); // implemented-page normalized codeFile uniqueness (Critical 4)
+  // A codeFile must resolve INSIDE the working directory. Use path.normalize to canonicalize before
+  // checking — this catches aliases like 'pages/./x.tsx' and 'pages/../pages/x.tsx' that resolve to
+  // the same file but evade a naive string-split check (addendum Crit 4). path.isAbsolute handles
+  // both POSIX-style (/etc/x) and Windows-style absolute paths (C:\x, C:/x). After normalization, a
+  // path starting with '..' has escaped the workspace root. sdk-build resolves codeFile with
+  // path.resolve(appDir, codeFile) at :1037-1041, so an unconfined path reaches the filesystem
+  // outside the app folder — reject it here, before any write. Design §7.2.
+  const codeFileConfined = (codeFile) => {
+    const cf = String(codeFile);
+    if (path.isAbsolute(cf)) return false;
+    const normalized = path.normalize(cf);
+    // normalized === '..' means the codeFile IS the parent directory.
+    // normalized.startsWith('..' + path.sep) means it is a path beneath the parent directory.
+    return normalized !== '..' && !normalized.startsWith('..' + path.sep);
+  };
   for (const p of spec.pages || []) {
     if (!p || !p.name) { errors.push('a page is missing a name'); continue; }
     pageNamesSet.add(p.name);
+    // Case-insensitive name uniqueness — two pages with names 'Overview' and 'overview' would
+    // collide when the PAC CLI enumerates pages (which is case-insensitive on the server).
+    const nameLower = String(p.name).toLowerCase();
+    if (pageNamesLower.has(nameLower)) errors.push(`duplicate page name '${p.name}' (page names must be unique, case-insensitive)`);
+    else pageNamesLower.add(nameLower);
     const src = normalizePageSource(p);
     // Track whether a structural source error was emitted so the profile check below doesn't
     // double-report (e.g. source:{kind:'tsx'} with no codeFile should get ONE error, not two).
@@ -496,11 +525,25 @@ function validateAppSpec(spec, opts = {}) {
         errors.push(`page '${p.key || p.name}': needs a source ({ kind: 'intent' } or { kind: 'tsx', codeFile })`);
       }
     }
+    // codeFile confinement + path-uniqueness (Critical 4). Only checked for implemented tsx pages
+    // (intent pages have no codeFile; the codeFile presence was already validated above). Normalize
+    // the path before checking so that 'pages/./x.tsx' and 'pages/../pages/x.tsx' are detected as
+    // duplicates of 'pages/x.tsx' (addendum Crit 4). Replace backslashes with forward slashes before
+    // lowercasing for cross-platform-safe comparison in the set.
+    if (src && src.kind === 'tsx' && typeof src.codeFile === 'string' && src.codeFile) {
+      if (!codeFileConfined(src.codeFile)) {
+        errors.push(`page '${p.key || p.name}': codeFile '${src.codeFile}' must be a workspace-confined relative path (no '..' escape, no absolute path)`);
+      }
+      const cfNorm = path.normalize(src.codeFile).replace(/\\/g, '/').toLowerCase();
+      if (pageCodeFilesNorm.has(cfNorm)) errors.push(`page '${p.key || p.name}': duplicate codeFile '${src.codeFile}' (another page already uses this path)`);
+      else pageCodeFilesNorm.add(cfNorm);
+    }
     // schemaVersion 2 adds a required, unique stable key per page so pages can be referenced by an
     // identity that survives renames. The key is also what navigatesTo.targetKey and appShell page
     // subareas use (key-based refs replace name-based refs for v2 specs).
     if (isV2) {
       if (!p.key || typeof p.key !== 'string') errors.push(`page '${p.name}': needs a stable key (schemaVersion 2)`);
+      else if (!PAGE_KEY_GRAMMAR.test(p.key)) errors.push(`page '${p.name}': key '${p.key}' has an invalid key grammar (lowercase slug: ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$)`);
       else if (pageKeysSet.has(p.key)) errors.push(`duplicate page key '${p.key}'`);
       else pageKeysSet.add(p.key);
     }
