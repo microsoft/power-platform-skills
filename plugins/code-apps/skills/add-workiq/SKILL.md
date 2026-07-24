@@ -273,6 +273,12 @@ export class McpSession {
       },
     })
 
+    // Surface MCP/connector errors as thrown exceptions so callers can `try/catch`
+    // instead of string-matching the returned text.
+    if (raw.error) {
+      throw new Error(raw.error.message ?? JSON.stringify(raw.error))
+    }
+
     const parsed = extractCopilotText(raw)
     if (parsed.conversationId) {
       this.conversationId = parsed.conversationId
@@ -314,10 +320,6 @@ export function extractCopilotText(res: JsonRpcResponse): {
   text: string
   conversationId?: string
 } {
-  if (res.error) {
-    return { text: `Error: ${res.error.message ?? JSON.stringify(res.error)}` }
-  }
-
   const rawText = extractContentText(res)
   if (!rawText) {
     return { text: res.result ? JSON.stringify(res.result, null, 2) : '(no content returned)' }
@@ -375,9 +377,6 @@ const workIqSession = new McpSession()
 export async function queryWorkIQ(userPrompt: string): Promise<string> {
   try {
     const { text } = await workIqSession.callCopilotChat(userPrompt)
-    if (text.startsWith('Error:')) {
-      throw new Error(text)
-    }
     return text
   } catch (error) {
     const msg = error instanceof Error ? error.message : 'Work IQ query failed'
