@@ -15,7 +15,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { validateAppSpec, migrateAppSpec } = require('./lib/app-spec.js');
 const { runSdkBuild, planFor, appUniqueName, compileFormIntent } = require('./lib/sdk-build.js');
-const { stagePhasesOrResolve } = require('./lib/stages.js');
+const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
@@ -139,6 +139,22 @@ async function buildModelApp(spec, opts, deps) {
   const baseEmit = deps.emit || cliEmit(log, { apply: opts.apply, counts });
   const emit = journal ? (e) => { baseEmit(e); journal.record(e); } : baseEmit;
   const sleep = deps.sleep || ((ms) => new Promise((res) => setTimeout(res, ms)));
+
+  // I1: on APPLY, the ONLY safe phase selections are the FULL build or EXACTLY the `data` stage
+  // (solution+data-model+sample-data). Every other partial range (--from/--to/--only/--skip, or any other
+  // --stage) is dry-run-only (design §14): its range is not dependency-closed and the app id is not carried
+  // across runs, so applying it would run phases against an incomplete result map. Recovery from a halt is
+  // a FULL rerun (idempotent), never --from pages.
+  if (opts.apply) {
+    const active = opts.phases || PHASES;
+    const sameSet = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+    if (!sameSet(active, PHASES) && !sameSet(active, STAGES.data)) {
+      const msg = `refusing to apply a partial phase range (${active.join(',')}) — on --apply only a FULL build or exactly --stage data is allowed (design §14). The app id is not carried across runs, so recover from a halt with a FULL rerun (idempotent), not --from/--to/--only/--skip.`;
+      log(`\n✗ ${msg}`);
+      if (journal) journal.close({ status: 'halt', phase: 'preflight', label: 'partial-apply-range', detail: active.join(',') });
+      return { ok: false, errors: [msg] };
+    }
+  }
 
   // Pre-flight safety gate (apply only). Recomputed here — immediately before the write loop — so it
   // reflects live state (TOCTOU). Best-effort discovery (reads only): if there is no provision client or

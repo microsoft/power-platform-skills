@@ -326,3 +326,12 @@ test('collision preflight: silent when nothing collides', async () => {
   await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, log: (m) => logs.push(m) });
   assert.ok(!logs.some((l) => /already exist/.test(l)), 'no false-positive collision warning');
 });
+
+test('I1: apply refuses ANY partial phase range except the full build or exactly --stage data', async () => {
+  const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, app: { name: 'A' }, entities: [{ schemaName: 'new_x', primaryAttribute: { schemaName: 'new_name' }, columns: [] }], pages: [{ key: 'p', name: 'P', source: { kind: 'tsx', codeFile: 'p.tsx' } }], appShell: { areas: [] } };
+  for (const phases of [['pages'], ['views', 'charts'], ['app-shell', 'pages', 'ai-features']]) {
+    const r = await buildModelApp(spec, { apply: true, phases }, { log: () => {} });
+    assert.strictEqual(r.ok, false, `should reject apply with phases=${phases}`);
+    assert.ok(/partial|full build|stage data/i.test(r.errors.join(' ')));
+  }
+});

@@ -1312,4 +1312,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, chartDef, dashboardTileOpts, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS };
+module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, chartDef, dashboardTileOpts, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease };
