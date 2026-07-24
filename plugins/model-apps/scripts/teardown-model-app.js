@@ -18,7 +18,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { validateAppSpec } = require('./lib/app-spec.js');
+const { validateAppSpec, migrateAppSpec } = require('./lib/app-spec.js');
 const { runTeardown } = require('./lib/sdk-teardown.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
@@ -85,7 +85,7 @@ async function main() {
     process.exit(1);
   }
   const specPath = path.resolve(typeof specArg === 'string' && specArg.startsWith('@') ? specArg.slice(1) : specArg);
-  const spec = readJsonArg('@' + specPath);
+  const spec = migrateAppSpec(readJsonArg('@' + specPath));
   const apply = flags.apply === true;
   const { sdk, cleanup } = makeSdk(env);
   let r;

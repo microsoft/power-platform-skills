@@ -13,7 +13,7 @@
 const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
-const { validateAppSpec } = require('./lib/app-spec.js');
+const { validateAppSpec, migrateAppSpec } = require('./lib/app-spec.js');
 const { runSdkBuild, planFor, resolvePhases, appUniqueName } = require('./lib/sdk-build.js');
 const { stagePhasesOrResolve } = require('./lib/stages.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
@@ -216,7 +216,7 @@ async function main() {
     process.exit(1);
   }
   const specPath = path.resolve(typeof specArg === 'string' && specArg.startsWith('@') ? specArg.slice(1) : specArg);
-  const spec = readJsonArg('@' + specPath);
+  const spec = migrateAppSpec(readJsonArg('@' + specPath));
   const workspaceDir = flags.workspace || path.join(path.dirname(specPath), '.maker-workspace');
   const opts = {
     apply: flags.apply === true,

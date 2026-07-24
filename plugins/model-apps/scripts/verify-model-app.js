@@ -12,7 +12,7 @@ const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js'
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { verifySpec } = require('./lib/verify-spec.js');
 const { appUniqueName } = require('./lib/sdk-build.js');
-const { validateAppSpec } = require('./lib/app-spec.js');
+const { validateAppSpec, migrateAppSpec } = require('./lib/app-spec.js');
 const { odataLit } = require('./lib/odata.js');
 
 function makeProvision(env, workspaceDir) {
@@ -55,7 +55,7 @@ async function main() {
     process.exit(1);
   }
   const specPath = path.resolve(typeof specArg === 'string' && specArg.startsWith('@') ? specArg.slice(1) : specArg);
-  const spec = readJsonArg('@' + specPath);
+  const spec = migrateAppSpec(readJsonArg('@' + specPath));
   // Validate the spec up front (consistent with teardown) so malformed input yields a structured
   // error instead of a later throw when dereferencing spec.entities / schemaName.
   const v = validateAppSpec(spec, { profile: 'deploy' });

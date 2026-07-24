@@ -661,10 +661,50 @@ function validateAppSpec(spec, opts = {}) {
   return { ok: errors.length === 0, errors };
 }
 
+// Slugify a page name into a stable key candidate: lowercase, non-alphanumerics -> '-', trimmed.
+//   "Sales Overview"  -> "sales-overview"
+//   "KPI / Analytics" -> "kpi-analytics"
+function slugify(name) {
+  return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'page';
+}
+
+// Upgrade a legacy App Spec to schemaVersion 2 in one pure pass (no I/O; returns a deep copy):
+//   - mint a stable, unique `key` per page (slug of name, de-duplicated with a -N suffix)
+//   - wrap a legacy top-level `codeFile` into `source: { kind: 'tsx', codeFile }`
+//   - rewrite name-based references (appShell page subareas + navigatesTo.targetKey) to keys
+// Idempotent: a spec already at schemaVersion >= 2 is returned as-is. Runs on load before validate,
+// so downstream code only ever sees the v2 shape. See docs/app-builder-staged-flow-design.md §7.3.
+function migrateAppSpec(spec) {
+  if (!spec || typeof spec !== 'object' || (spec.schemaVersion || 0) >= 2) return spec;
+  const out = JSON.parse(JSON.stringify(spec));
+  out.schemaVersion = 2;
+  const nameToKey = new Map();
+  const used = new Set();
+  for (const p of out.pages || []) {
+    let key = slugify(p.name);
+    let n = 1;
+    while (used.has(key)) { n += 1; key = `${slugify(p.name)}-${n}`; }
+    used.add(key);
+    p.key = key;
+    nameToKey.set(p.name, key);
+    if (!p.source && typeof p.codeFile === 'string') { p.source = { kind: 'tsx', codeFile: p.codeFile }; delete p.codeFile; }
+    for (const nav of p.navigatesTo || []) { if (nav && nameToKey.has(nav.targetKey)) nav.targetKey = nameToKey.get(nav.targetKey); }
+  }
+  // Second pass for navigatesTo targets that referenced a page declared later than the source page.
+  for (const p of out.pages || []) for (const nav of p.navigatesTo || []) { if (nav && nameToKey.has(nav.targetKey)) nav.targetKey = nameToKey.get(nav.targetKey); }
+  for (const a of (out.appShell && out.appShell.areas) || []) {
+    for (const g of a.groups || []) {
+      for (const sa of g.subAreas || []) { if (sa && sa.page && nameToKey.has(sa.page)) sa.page = nameToKey.get(sa.page); }
+    }
+  }
+  return out;
+}
+
 module.exports = {
   validateAppSpec,
   normalizePageSource,
   VALIDATION_PROFILES,
+  migrateAppSpec,
   columnTypeMap,
   TYPE_MAP,
   choiceValueMap,
