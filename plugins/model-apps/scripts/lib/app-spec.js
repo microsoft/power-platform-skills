@@ -482,14 +482,16 @@ function validateAppSpec(spec, opts = {}) {
   const pageCodeFilesNorm = new Set(); // implemented-page normalized codeFile uniqueness (Critical 4)
   // A codeFile must resolve INSIDE the working directory. Use path.normalize to canonicalize before
   // checking — this catches aliases like 'pages/./x.tsx' and 'pages/../pages/x.tsx' that resolve to
-  // the same file but evade a naive string-split check (addendum Crit 4). path.isAbsolute handles
-  // both POSIX-style (/etc/x) and Windows-style absolute paths (C:\x, C:/x). After normalization, a
-  // path starting with '..' has escaped the workspace root. sdk-build resolves codeFile with
-  // path.resolve(appDir, codeFile) at :1037-1041, so an unconfined path reaches the filesystem
-  // outside the app folder — reject it here, before any write. Design §7.2.
+  // the same file but evade a naive string-split check (addendum Crit 4). path.isAbsolute is
+  // platform-specific (on POSIX it does NOT flag a Windows drive-letter path like 'C:/x'), so we ALSO
+  // match a drive-letter prefix explicitly — a spec authored on Windows must be rejected the same way
+  // on a Linux CI runner. After normalization, a path starting with '..' has escaped the workspace
+  // root. sdk-build resolves codeFile with path.resolve(appDir, codeFile) at :1037-1041, so an
+  // unconfined path reaches the filesystem outside the app folder — reject it here, before any write. Design §7.2.
   const codeFileConfined = (codeFile) => {
     const cf = String(codeFile);
-    if (path.isAbsolute(cf)) return false;
+    // Drive-letter guard (/^[a-zA-Z]:[/\\]/) catches 'C:\x'/'C:/x' on POSIX where path.isAbsolute misses it.
+    if (path.isAbsolute(cf) || /^[a-zA-Z]:[/\\]/.test(cf)) return false;
     const normalized = path.normalize(cf);
     // normalized === '..' means the codeFile IS the parent directory.
     // normalized.startsWith('..' + path.sep) means it is a path beneath the parent directory.
