@@ -58,6 +58,41 @@ function parseList(out) {
   return pages;
 }
 
+// Extract the summary count pac prints on `pac model genpage list`, e.g.
+//   "Found 3 generated page(s):"  → 3
+//   "Found 0 generated page(s):"  → 0
+// Returns the integer, or null when the summary line is absent (unknown format). parseList skips
+// the "Found …" line as metadata; this reads its N so classifyListOutput can prove the listing is
+// COMPLETE (parsed page count == summary N).
+function parseListCount(stdout) {
+  const m = /found\s+(\d+)\s+(?:generated\s+)?page/i.exec(String(stdout || ''));
+  return m ? Number(m[1]) : null;
+}
+
+// Classify a ZERO-EXIT `pac model genpage list` stdout (design §9, I2). A zero exit alone is NOT proof
+// of a valid listing: a changed format, a blank result, a help banner (pac dumps usage on a flag error
+// yet exits 0 on some builds), a TRUNCATED listing (fewer Page IDs than the summary count), or an UNNAMED
+// page would all mis-read as pages/empty and drive duplicate creation or a blind reconcile. Fail-closed:
+//
+//   'pages'        — >=1 "Page ID" parsed, EVERY page has a name, AND the parsed count == the summary
+//                    "Found N page(s)" count (a COMPLETE, authoritative listing).
+//   'empty'        — an EXPLICIT no-pages / "Found 0" marker (only then is [] trustworthy).
+//   'unrecognized' — anything else → the caller treats it as FAILURE, never as "empty".
+//
+// Confirm the exact "Found N generated page(s)" + no-pages phrasing against a live pac run before
+// relying on a new format; any unmatched zero-exit output is (correctly) fail-closed 'unrecognized'.
+function classifyListOutput(stdout) {
+  const s = String(stdout || '');
+  const count = parseListCount(s);
+  // Explicit empty: "Found 0 generated page(s)" OR a "no pages" variant phrase
+  if (count === 0 || /\bno\s+(?:generated\s+)?pages?\b/i.test(s)) return { kind: 'empty', pages: [] };
+  const pages = parseList(s);
+  // A complete, authoritative listing: at least one page, every page has a name, count matches
+  const allNamed = pages.length > 0 && pages.every((p) => p.name && String(p.name).trim());
+  if (allNamed && count !== null && count === pages.length) return { kind: 'pages', pages };
+  return { kind: 'unrecognized', pages: [] };
+}
+
 function makeGenpageCli(env, deps = {}) {
   const run = deps.run || runPac;
   const sleep = deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
@@ -70,10 +105,37 @@ function makeGenpageCli(env, deps = {}) {
     return r.status === 0 ? parseList(r.stdout) : [];
   }
 
+  // Fail-closed page enumeration (design §9, I2). Retries up to `attempts` times (pac genpage list
+  // flakes with transient help-dump exits on some PAC CLI builds). Returns:
+  //   { ok: true, pages, empty: true }  — app genuinely has no pages ("Found 0" or no-pages phrase)
+  //   { ok: true, pages: [...] }        — COMPLETE listing: count matches, all pages named
+  //   { ok: false, pages: [], error }   — persistent non-zero exit OR a persistent zero-exit
+  //                                       UNRECOGNIZED/INCOMPLETE output (count mismatch, blank,
+  //                                       help banner, unnamed page) — never masquerade as empty.
+  // Callers that drive a create decision MUST check ok before trusting pages:[] as "truly empty".
+  async function enumeratePages(appId) {
+    let lastErr = '';
+    for (let i = 0; i < attempts; i += 1) {
+      const r = await run(['model', 'genpage', 'list', '--environment', env, '--app-id', appId]);
+      if (r.status === 0) {
+        const c = classifyListOutput(r.stdout);
+        if (c.kind !== 'unrecognized') return { ok: true, pages: c.pages, empty: c.kind === 'empty' };
+        // Zero-exit but unrecognized/incomplete listing — treat as a retryable failure so transient
+        // help-dump exits don't look like empty apps. Fail-closed: never return ok:true for this.
+        lastErr = 'unrecognized/incomplete `pac genpage list` output (zero exit, no valid page listing or a count mismatch) — refusing to treat as empty';
+      } else {
+        lastErr = lastLine(r);
+      }
+      if (i < attempts - 1) await sleep(500 * (i + 1));
+    }
+    return { ok: false, pages: [], error: `pac genpage list failed after ${attempts} attempt(s): ${lastErr}` };
+  }
+
   return {
     // Create (no pageId) or update (with pageId) a page's content. Returns { pageId }. Retries transient
-    // pac failures; before retrying a CREATE it re-resolves the page by name so a retry UPDATES in place
-    // (a partial first attempt that pushed the page never yields a duplicate).
+    // pac failures. On an UNCERTAIN CREATE (non-zero, or zero-exit with no Page ID) re-enumerates
+    // FAIL-CLOSED before deciding to retry: a blind 2nd CREATE could duplicate a page the first attempt
+    // already created server-side (design §9, C3). Enumeration failure → THROW (no blind retry).
     async upload({ appId, pageId, codeFile, name, prompt, agentMessage, dataSources }) {
       const once = async (pid) => {
         const args = ['model', 'genpage', 'upload', '--environment', env, '--app-id', appId, '--code-file', codeFile];
@@ -91,14 +153,43 @@ function makeGenpageCli(env, deps = {}) {
         const r = await once(pid);
         if (r.status === 0) {
           const id = parsePageId(r.stdout);
-          if (id) return { pageId: id };
+          if (id) {
+            // I7 guard: when performing an UPDATE (pid is set — whether caller-provided or adopted after
+            // uncertain-CREATE reconciliation), the returned Page ID MUST equal the pid we used. A mismatch
+            // means pac silently operated on a different page — halt rather than let a wrong record persist.
+            // Case-insensitive: PAC can normalize GUID casing across writes.
+            if (pid && id.toLowerCase() !== pid.toLowerCase()) {
+              throw new Error(
+                `pac genpage upload for '${name}': UPDATE returned an unexpected Page ID (got ${id}, expected ${pid}) — refusing to persist a mismatched update`
+              );
+            }
+            return { pageId: id };
+          }
           lastErr = `returned no Page ID: ${lastLine(r)}`;
         } else {
           lastErr = lastLine(r);
         }
-        // Before a retry, if this was a CREATE, resolve the page by name so the retry updates in place.
+        // Uncertain outcome: non-zero OR zero-without-Page-ID on a CREATE (pid not yet set).
+        // Re-enumerate FAIL-CLOSED before any retry to prevent a blind duplicate (design §9, C3):
+        //  - enumeration failure           → THROW immediately (can't verify; risk of duplicate)
+        //  - exactly one same-named match  → adopt its pid (CREATE landed; retry as UPDATE in place)
+        //  - multiple same-named matches   → THROW (ambiguous; refuse to add another)
+        //  - zero matches                  → CREATE did NOT land; safe to retry a CREATE
         if (!pid && name) {
-          try { const found = (await listPages(appId)).find((p) => p.name === name); if (found) pid = found.pageId; } catch { /* keep create path */ }
+          const listed = await enumeratePages(appId);
+          if (!listed.ok) {
+            throw new Error(
+              `pac genpage upload for '${name}' had an uncertain result and page enumeration failed — refusing to retry (would risk a duplicate): ${listed.error}`
+            );
+          }
+          const matches = listed.pages.filter((p) => p.name === name);
+          if (matches.length > 1) {
+            throw new Error(
+              `pac genpage upload for '${name}': multiple live pages already share this name — refusing to create another (ambiguous)`
+            );
+          }
+          if (matches.length === 1) pid = matches[0].pageId; // adopt: the create landed; next iteration UPDATEs
+          // if matches.length === 0: pid stays undefined; next iteration retries the CREATE safely
         }
         if (i < attempts - 1) await sleep(500 * (i + 1));
       }
@@ -106,6 +197,9 @@ function makeGenpageCli(env, deps = {}) {
     },
     list({ appId }) {
       return listPages(appId);
+    },
+    enumerate({ appId }) {
+      return enumeratePages(appId);
     },
     // Download every page of the app into `outputDir/<pageId>/{page.tsx,page.js,config.json,prompt.txt}`.
     async download({ appId, outputDir }) {
@@ -116,4 +210,4 @@ function makeGenpageCli(env, deps = {}) {
   };
 }
 
-module.exports = { makeGenpageCli, parsePageId, parseList, quoteArg, buildPacInvocation, runPac };
+module.exports = { makeGenpageCli, parsePageId, parseList, parseListCount, classifyListOutput, quoteArg, buildPacInvocation, runPac };
