@@ -35,6 +35,7 @@
 
 const { topoOrderEntities } = require('./_graph.js');
 const { appUniqueName, commandsByEntity, defaultViewColumns } = require('./sdk-build.js');
+const { manifestResourceName } = require('./page-manifest.js');
 const { relationshipSchemaName, manyToManySchemaName, lookupColumnsFor } = require('./app-spec.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
 
@@ -346,6 +347,15 @@ function planTeardown(spec) {
   if (spec.app && spec.solution && !spec.app.icon) {
     const generatedIcon = `${appUniqueName(spec)}_icon`;
     steps.push({ kind: 'webResource', phase: 'web-resources', label: `web resource ${generatedIcon} (generated app icon)`, target: { name: generatedIcon } });
+  }
+  // The build derives a `<appUnique>_pagemanifest` web resource for EVERY app-bearing spec (not just
+  // those currently declaring pages). Always emit its teardown step so a spec that dropped its pages
+  // still cleans up the derived manifest. The manifest is referenced only by the (already-deleted) app
+  // module, so leaving it behind would orphan it in the solution. A not-found delete is idempotent —
+  // an app that never had pages adds a harmless no-op step. NOT gated on spec.pages (I5).
+  if (spec.app && spec.solution) {
+    const manifestName = manifestResourceName(appUniqueName(spec));
+    steps.push({ kind: 'webResource', phase: 'web-resources', label: `web resource ${manifestName} (page manifest)`, target: { name: manifestName } });
   }
   // Global option sets last (before the solution container): every column that bound one lives
   // on a table deleted above, so the shared choice now has no dependents blocking its delete.

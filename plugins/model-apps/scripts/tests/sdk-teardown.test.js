@@ -203,7 +203,7 @@ test('plan is ordered app -> dashboards -> commands -> forms -> charts -> views 
   const kinds = steps.map((s) => s.kind);
   // Gap 6: resetDefaultViews steps (drop parent lookups from un-deletable default views) precede the
   // relationships. fullSpec's ticket + comment are 1:N children, so both get a reset step.
-  assert.deepStrictEqual(kinds, ['app', 'dashboard', 'commands', 'form', 'form', 'form', 'chart', 'chart', 'view', 'view', 'view', 'resetDefaultViews', 'resetDefaultViews', 'relationship', 'relationship', 'table', 'table', 'table', 'webResource', 'webResource', 'solution']);
+  assert.deepStrictEqual(kinds, ['app', 'dashboard', 'commands', 'form', 'form', 'form', 'chart', 'chart', 'view', 'view', 'view', 'resetDefaultViews', 'resetDefaultViews', 'relationship', 'relationship', 'table', 'table', 'table', 'webResource', 'webResource', 'webResource', 'solution']);
 });
 
 // Regression (found by live teardown): a table's icon web resource is referenced by the table, so
@@ -525,10 +525,10 @@ test('dry-run emits the whole plan as skips and never calls SDK', async () => {
   const throwingSdk = { queryRecords: () => { throw new Error('dry-run must not call SDK'); } };
   const r = await runTeardown(fullSpec(), { apply: false }, { sdk: throwingSdk, emit: (e) => events.push(e) });
   assert.strictEqual(r.dryRun, true);
-  assert.strictEqual(r.plan.length, 21); // +1 generated app-icon WR, +2 resetDefaultViews (ticket, comment)
+  assert.strictEqual(r.plan.length, 22); // +1 generated app-icon WR, +1 page-manifest WR, +2 resetDefaultViews (ticket, comment)
   const terminal = events.filter((e) => e.status !== 'start');
   assert.ok(terminal.every((e) => e.status === 'skip'));
-  assert.strictEqual(terminal.length, 21);
+  assert.strictEqual(terminal.length, 22);
 });
 
 test('apply without an sdk throws', async () => {
@@ -598,7 +598,7 @@ test('not-found artifacts are skipped, not errors, and issue no delete', async (
   // Tables will attempt deleteTable (synthetic item) but get not-found immediately, counted as deleted
   // Relationships will attempt deleteRelationship but get not-found, counted as deleted (tolerateNotFound)
   // Other artifacts (app, dashboard, commands, forms, charts, views, webResource, solution) skip when resolve returns []
-  assert.strictEqual(r.skipped.length, 14); // app, dashboard, commands, 3 forms, 2 charts, 3 views, webResource, generated app-icon WR, solution
+  assert.strictEqual(r.skipped.length, 15); // app, dashboard, commands, 3 forms, 2 charts, 3 views, webResource, generated app-icon WR, page-manifest WR, solution
   assert.strictEqual((r.deleted.table || []).length, 3); // tables counted as deleted (tolerateNotFound)
   assert.strictEqual((r.deleted.relationship || []).length, 2); // relationships counted as deleted (tolerateNotFound)
   // Only table/relationship deletes were attempted (synthetic items); other kinds skipped before delete
@@ -713,6 +713,15 @@ test('forms without names are skipped (cannot be resolved)', () => {
 test('odataStr doubles single quotes (OData literal escaping)', () => {
   assert.strictEqual(odataStr("O'Brien"), "O''Brien");
   assert.strictEqual(odataStr(null), '');
+});
+
+test('the page manifest web resource is ALWAYS torn down (even when the spec no longer declares pages, I5)', () => {
+  const base = { solution: { uniqueName: 'PgSln', publisherPrefix: 'new' }, app: { name: 'Pages App' },
+    entities: [{ schemaName: 'new_widget', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
+    appShell: { areas: [{ label: 'A', groups: [{ label: 'G', subAreas: [{ entity: 'new_widget' }] }] }] } };
+  const manifest = `${appUniqueName(base)}_pagemanifest`;
+  assert.ok(planTeardown({ ...base, pages: [{ key: 'overview', name: 'Overview', source: { kind: 'tsx', codeFile: 'o.tsx' } }] }).some((s) => s.kind === 'webResource' && s.target.name === manifest), 'with pages');
+  assert.ok(planTeardown(base).some((s) => s.kind === 'webResource' && s.target.name === manifest), 'without pages — the derived manifest is still cleaned up');
 });
 
 test('deleteStep tolerates a not-found error for non-tolerateNotFound kinds', async () => {
