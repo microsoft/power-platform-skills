@@ -15,6 +15,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { validateAppSpec } = require('./lib/app-spec.js');
 const { runSdkBuild, planFor, resolvePhases, appUniqueName } = require('./lib/sdk-build.js');
+const { stagePhasesOrResolve } = require('./lib/stages.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
@@ -210,7 +211,7 @@ async function main() {
   const specArg = flags.spec || positional[0];
   if (!env || !specArg) {
     process.stderr.write(
-      'Usage: node build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--only|--skip <phases>] [--from|--to <phase>] [--workspace <dir>]\n'
+      'Usage: node build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--workspace <dir>]\n'
     );
     process.exit(1);
   }
@@ -222,7 +223,7 @@ async function main() {
     sampleData: flags['sample-data'] === true,
     publish: flags.publish === true,
     verify: flags.verify === true,
-    phases: resolvePhases({ only: list(flags.only), skip: list(flags.skip), from: flags.from, to: flags.to }),
+    phases: stagePhasesOrResolve({ stage: flags.stage, only: list(flags.only), skip: list(flags.skip), from: flags.from, to: flags.to }),
     appDir: path.dirname(specPath),
     env,
   };

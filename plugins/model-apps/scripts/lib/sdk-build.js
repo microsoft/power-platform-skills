@@ -79,7 +79,7 @@ const WEB_RESOURCE_KINDS = new Set(['js', 'html', 'css', 'xml', 'png', 'jpg', 'g
 // Form-event kinds the engine can wire (onload/onsave/onchange) via the /bag/c <events> region.
 const FORM_EVENTS = new Set(['onload', 'onsave', 'onchange']);
 
-const PHASES = ['solution', 'data-model', 'sample-data', 'web-resources', 'views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell', 'pages', 'ai-features', 'publish'];
+const { PHASES } = require('./stages.js');
 
 // Map a dashboard tile (App Spec) to the SDK's AddDashboardTileOptions. chart/list tiles resolve
 // the underlying view (savedqueryid) — and the chart its visualization id — from what the build
@@ -188,11 +188,16 @@ function commandsByEntity(spec) {
   return byEntity;
 }
 
-/** Resolve --only/--skip/--from/--to into the ordered set of phases to run. */
+/** Resolve --only/--skip/--from/--to into the ordered set of phases to run. Rejects unknown
+ *  phase names (a typo previously ran a surprising/empty subset — from/to indexOf(-1) was a no-op). */
 function resolvePhases({ only, skip, from, to } = {}) {
+  const known = new Set(PHASES);
+  const named = [from, to, ...[].concat(only || []), ...[].concat(skip || [])].filter(Boolean);
+  const bad = [...new Set(named.filter((p) => !known.has(p)))];
+  if (bad.length) throw new Error(`unknown phase(s): ${bad.join(', ')} (valid: ${PHASES.join(', ')})`);
   let active = PHASES.slice();
-  if (from) { const i = active.indexOf(from); if (i >= 0) active = active.slice(i); }
-  if (to) { const i = active.indexOf(to); if (i >= 0) active = active.slice(0, i + 1); }
+  if (from) { const i = active.indexOf(from); active = active.slice(i); }
+  if (to) { const i = active.indexOf(to); active = active.slice(0, i + 1); }
   const onlySet = only && new Set([].concat(only));
   const skipSet = skip && new Set([].concat(skip));
   return active.filter((p) => (!onlySet || onlySet.has(p)) && (!skipSet || !skipSet.has(p)));
