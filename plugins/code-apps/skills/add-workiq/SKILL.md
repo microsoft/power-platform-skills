@@ -35,10 +35,10 @@ The Power Apps code-app CLI (`@microsoft/power-apps-cli`, invoked as `npx power-
 **Check for an existing connection first:**
 
 ```bash
-npx power-apps list-connections --search "a365copilotchatmcp"
+npx power-apps list-connections
 ```
 
-If a **Work IQ Copilot MCP (Preview)** connection is listed, note its Connection ID and skip to "Add the Data Source" below.
+Look for a **Work IQ Copilot MCP (Preview)** connection (api id `shared_a365copilotchatmcp`) in the output. If one is listed, note its Connection ID and skip to "Add the Data Source" below.
 
 **Otherwise create one** with the native `create-connection` verb:
 
@@ -157,7 +157,9 @@ function parseRpc(result: IOperationResult<unknown>): JsonRpcResponse {
       .split(/\r?\n/)
       .filter((line) => line.startsWith('data:'))
       .map((line) => line.slice(5).trim())
-    const payload = dataLines.length ? dataLines.join('') : data
+    // Per the SSE spec, multiple `data:` lines are joined with newlines — a single
+    // JSON object can be split across lines, so joining with '' would corrupt it.
+    const payload = dataLines.length ? dataLines.join('\n') : data
     try {
       return JSON.parse(payload) as JsonRpcResponse
     } catch {
