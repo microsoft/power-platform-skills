@@ -34,7 +34,7 @@ const {
   fail,
   runCli,
 } = require('../../../scripts/lib/power-platform-api');
-const { SUPPORTED_POLICIES, assertPolicy, classifyStatus } = require('./policies');
+const { SUPPORTED_POLICIES, assertPolicy, classifyStatus, toWritePolicyValue, normalizeEnvValue } = require('./policies');
 const { callGovernance } = require('./governance-transport');
 
 const DEFAULT_TIMEOUT_MIN = 15;
@@ -113,11 +113,18 @@ function buildPolicyPayload(policy, portalIdsArg, policyValueOverride) {
   } else {
     portalIds = [portalIdsArg];
   }
+  // Derive the canonical policyValue (All / None / Include / Exclude) first,
+  // then forward-map it to the gateway WRITE vocabulary. Env-level policies
+  // require the applyTo enum form ("AllSites"); posting the short canonical
+  // form makes the gateway silently reject the upsert ("Website id cannot be
+  // null or empty") and leaves the env unchanged. See policies.js
+  // toWritePolicyValue / WRITE_VALUE_ALIASES for the WHY.
+  const canonicalValue =
+    policyValueOverride || (portalIds.length > 0 ? 'Include' : 'All');
   return [
     {
       policyName: policy,
-      policyValue:
-        policyValueOverride || (portalIds.length > 0 ? 'Include' : 'All'),
+      policyValue: toWritePolicyValue(canonicalValue, policy),
       ToBeAdded: portalIds,
       ToBeRemoved: [],
     },
@@ -168,6 +175,12 @@ async function main() {
   );
 
   const body = buildPolicyPayload(args.policy, portalIds, policyValueOverride);
+  // The canonical scope (All/None/Include/Exclude) we are asking the gateway to
+  // set — mirrors the derivation inside buildPolicyPayload. Used below to verify
+  // the write against the ACTUAL env state, not the (possibly stale) status
+  // endpoint.
+  const requestedCanonical =
+    policyValueOverride || (portalIds.length > 0 ? 'Include' : 'All');
   const start = await callGovernance({
     op: 'apply',
     envId: args.envId,
@@ -182,15 +195,20 @@ async function main() {
 
   // If the POST didn't come back with a clean 2xx, don't bail immediately —
   // the response parsing can produce undefined statusCode for transient blips
-  // even when the gateway accepted the upsert. Consult the status endpoint
-  // (the source of truth) before reporting failure.
+  // even when the gateway accepted the upsert. Verify against the ACTUAL
+  // env-level state (getEnv), NOT the status endpoint. The status endpoint
+  // reflects the LAST rollout and can report "Succeeded" from a previous apply
+  // even when THIS POST was rejected (e.g. the gateway returns
+  // "Website id cannot be null or empty" for a malformed body) — trusting it
+  // masks a real failure as success. getEnv reads the live policy value, so if
+  // the POST was rejected the env still shows the OLD scope and we fail loudly.
   if (start.statusCode !== 200 && start.statusCode !== 202 && start.statusCode !== 204) {
     if (start.error?.code === 'ContextError') {
       fail(`POST governance failed: ${describeFetchError(start)}`, 2);
     }
-    // Status endpoint reality check.
-    const postCheck = await callGovernance({
-      op: 'getStatus',
+    // Live-state reality check: does the env now reflect the scope we asked for?
+    const envCheck = await callGovernance({
+      op: 'getEnv',
       envId: args.envId,
       policy: args.policy,
       useAdminPortal,
@@ -198,20 +216,16 @@ async function main() {
       principalId: args.principalId,
       tenantId: args.tenantId,
     });
-    const postCheckRaw = postCheck.ok ? postCheck.body : null;
-    const postCheckValue =
-      typeof postCheckRaw === 'string'
-        ? postCheckRaw
-        : postCheckRaw?.status ?? postCheckRaw?.state ?? postCheckRaw?.value ?? '';
-    const postCheckCls = classifyStatus(String(postCheckValue));
-    if (postCheckCls === 'success' || postCheckCls === 'in-progress') {
-      // POST landed (or is landing) even though our parsing of the POST
-      // response was off — log and continue to the polling loop.
+    const envValue = envCheck.ok ? normalizeEnvValue(envCheck.body) : null;
+    if (envValue && envValue === requestedCanonical) {
+      // POST landed (env reflects the requested scope) even though our parsing
+      // of the POST response was off — log and continue to the polling loop.
       process.stderr.write(
-        `  POST response was unparseable (${describeFetchError(start)}); status endpoint reports "${postCheckValue}" — continuing to poll.\n`
+        `  POST response was unparseable (${describeFetchError(start)}); env now reports "${envValue}" (matches request) — continuing to poll.\n`
       );
     } else {
-      fail(`POST governance failed (${start.statusCode != null ? start.statusCode : 'no response'}): ${describeFetchError(start)}`, 1);
+      const observed = envValue ? `env still reports "${envValue}"` : 'live state unreadable';
+      fail(`POST governance failed (${start.statusCode != null ? start.statusCode : 'no response'}): ${describeFetchError(start)} — ${observed}, expected "${requestedCanonical}".`, 1);
     }
   }
 

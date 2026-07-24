@@ -1,0 +1,712 @@
+{
+  "$comment": "Request -> Intent training cases for the manage-governance Phase 2.1 parser. Each case pairs a free-text user 'request' with the 'expected' structured parse. Field shape matches SKILL.md Phase 2.1. 'scope' uses the INTERNAL canonical values (All | None | Include | Exclude | null) - never the wire values (AllSites/None/IncludeSites/ExcludeSites), which are applied later by set-governance.js. envId/siteIds are left null because they are resolved interactively against the live env/site lists; only the names the user typed are captured. 'category' groups the case; 'mustAsk' lists the clarifications the parser should raise before acting.",
+  "policyReference": {
+    "PowerPages_DisableAuthenticationOpenIdConnect": "Bare 'OpenID Connect' / 'OIDC' block rule (legacy). No 'protocol'/'enable' qualifier.",
+    "PowerPages_DisableAuthenticationSAML20": "Bare 'SAML' / 'SAML 2.0' block rule (legacy). No 'protocol'/'enable' qualifier.",
+    "EnableMakerCopilotForExistingSites": "Maker Copilot for existing sites.",
+    "EnableProtocolOpenIdConnect": "OpenID Connect SIGN-IN PROTOCOL toggle (qualified: 'protocol' or 'enable OpenID Connect').",
+    "EnableProtocolSAML20": "SAML 2.0 sign-in protocol toggle.",
+    "EnableProtocolWsFederation": "WS-Federation sign-in protocol toggle.",
+    "EnableProtocolOpenAuth": "OAuth 2.0 sign-in protocol toggle.",
+    "EnableIdpOAuthFacebook": "Facebook sign-in.",
+    "EnableIdpOAuthGoogle": "Google sign-in.",
+    "EnableIdpOAuthMicrosoft": "Microsoft sign-in.",
+    "EnableAuthenticationLocalLogin": "Local (username & password) sign-in.",
+    "EnableExternalAuthProviders": "All external/social identity providers master toggle."
+  },
+  "cases": [
+    {
+      "id": "TC001",
+      "category": "happy-path/apply/enable/all",
+      "request": "Enable Google sign-in on all sites in Sachin-preprod-July",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableIdpOAuthGoogle",
+        "policyDisplayName": "Enable Google sign-in",
+        "intentDirection": "enable",
+        "envDisplayName": "Sachin-preprod-July",
+        "scope": "All",
+        "siteNames": [],
+        "confidence": 0.96,
+        "ambiguities": []
+      },
+      "mustAsk": []
+    },
+    {
+      "id": "TC002",
+      "category": "happy-path/apply/disable/all",
+      "request": "Disable local login everywhere in Sachin_july_20",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableAuthenticationLocalLogin",
+        "policyDisplayName": "Enable local login",
+        "intentDirection": "disable",
+        "envDisplayName": "Sachin_july_20",
+        "scope": "None",
+        "siteNames": [],
+        "confidence": 0.95,
+        "ambiguities": []
+      },
+      "mustAsk": []
+    },
+    {
+      "id": "TC003",
+      "category": "happy-path/apply/enable/include",
+      "request": "Enable Facebook sign-in on Portal_1 and Portal_3",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableIdpOAuthFacebook",
+        "policyDisplayName": "Enable Facebook sign-in",
+        "intentDirection": "enable",
+        "envDisplayName": null,
+        "scope": "Include",
+        "siteNames": ["Portal_1", "Portal_3"],
+        "confidence": 0.9,
+        "ambiguities": ["env not specified"]
+      },
+      "mustAsk": ["Which environment?"]
+    },
+    {
+      "id": "TC004",
+      "category": "happy-path/apply/disable/exclude",
+      "request": "Disable Microsoft sign-in on every site except Site 2 in Contoso-Prod",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableIdpOAuthMicrosoft",
+        "policyDisplayName": "Enable Microsoft sign-in",
+        "intentDirection": "disable",
+        "envDisplayName": "Contoso-Prod",
+        "scope": "Exclude",
+        "siteNames": ["Site 2"],
+        "confidence": 0.88,
+        "ambiguities": []
+      },
+      "mustAsk": []
+    },
+    {
+      "id": "TC005",
+      "category": "disambiguation/bare-oidc/legacy-block",
+      "request": "Disable OpenID Connect in Sachin-preprod-July",
+      "expected": {
+        "intent": "apply",
+        "policy": "PowerPages_DisableAuthenticationOpenIdConnect",
+        "policyDisplayName": "Disable the OpenId Connect Protocol",
+        "intentDirection": "disable",
+        "envDisplayName": "Sachin-preprod-July",
+        "scope": null,
+        "siteNames": [],
+        "confidence": 0.55,
+        "ambiguities": ["bare 'OpenID Connect' could mean the legacy block rule OR the per-protocol toggle", "scope not specified"]
+      },
+      "mustAsk": ["Do you mean the legacy OpenID Connect block rule or the OpenID Connect sign-in protocol toggle?", "Apply to all sites, no sites, or specific sites?"]
+    },
+    {
+      "id": "TC006",
+      "category": "disambiguation/qualified-protocol/enable-toggle",
+      "request": "Enable the OpenID Connect protocol on all sites in Sachin_july_20",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableProtocolOpenIdConnect",
+        "policyDisplayName": "Enable the OpenID Connect protocol",
+        "intentDirection": "enable",
+        "envDisplayName": "Sachin_july_20",
+        "scope": "All",
+        "siteNames": [],
+        "confidence": 0.92,
+        "ambiguities": []
+      },
+      "mustAsk": []
+    },
+    {
+      "id": "TC007",
+      "category": "disambiguation/bare-saml/legacy-block",
+      "request": "Turn off SAML on Site 1",
+      "expected": {
+        "intent": "apply",
+        "policy": "PowerPages_DisableAuthenticationSAML20",
+        "policyDisplayName": "Disable the SAML 2.0 Protocol",
+        "intentDirection": "disable",
+        "envDisplayName": null,
+        "scope": "Exclude",
+        "siteNames": ["Site 1"],
+        "confidence": 0.5,
+        "ambiguities": ["bare 'SAML' could mean the legacy block rule OR the per-protocol toggle", "env not specified"]
+      },
+      "mustAsk": ["Do you mean the legacy SAML block rule or the SAML 2.0 sign-in protocol toggle?", "Which environment?"]
+    },
+    {
+      "id": "TC008",
+      "category": "disambiguation/qualified-protocol/saml",
+      "request": "Enable SAML 2.0 protocol for all portals in Contoso-Dev",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableProtocolSAML20",
+        "policyDisplayName": "Enable the SAML 2.0 protocol",
+        "intentDirection": "enable",
+        "envDisplayName": "Contoso-Dev",
+        "scope": "All",
+        "siteNames": [],
+        "confidence": 0.92,
+        "ambiguities": []
+      },
+      "mustAsk": []
+    },
+    {
+      "id": "TC009",
+      "category": "happy-path/apply/enable/wsfed",
+      "request": "Enable WS-Federation on all sites in Sachin_july_20",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableProtocolWsFederation",
+        "policyDisplayName": "Enable the WS-Federation protocol",
+        "intentDirection": "enable",
+        "envDisplayName": "Sachin_july_20",
+        "scope": "All",
+        "siteNames": [],
+        "confidence": 0.93,
+        "ambiguities": []
+      },
+      "mustAsk": []
+    },
+    {
+      "id": "TC010",
+      "category": "happy-path/apply/disable/oauth",
+      "request": "Disable the OAuth 2.0 protocol on Portal_2 in Sachin_july_20",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableProtocolOpenAuth",
+        "policyDisplayName": "Enable the OAuth 2.0 protocol",
+        "intentDirection": "disable",
+        "envDisplayName": "Sachin_july_20",
+        "scope": "Exclude",
+        "siteNames": ["Portal_2"],
+        "confidence": 0.9,
+        "ambiguities": []
+      },
+      "mustAsk": []
+    },
+    {
+      "id": "TC011",
+      "category": "happy-path/apply/enable/maker-copilot/all",
+      "request": "Enable Maker Copilot on all sites in this environment",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableMakerCopilotForExistingSites",
+        "policyDisplayName": "Enable Maker Copilot for existing sites",
+        "intentDirection": "enable",
+        "envDisplayName": null,
+        "scope": "All",
+        "siteNames": [],
+        "confidence": 0.9,
+        "ambiguities": ["'this environment' is deictic - resolve to the picked env"]
+      },
+      "mustAsk": ["Which environment? (show env picker)"]
+    },
+    {
+      "id": "TC012",
+      "category": "happy-path/apply/disable/maker-copilot/all",
+      "request": "restrict maker copilot for all sites in Sachin-preprod-July",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableMakerCopilotForExistingSites",
+        "policyDisplayName": "Enable Maker Copilot for existing sites",
+        "intentDirection": "disable",
+        "envDisplayName": "Sachin-preprod-July",
+        "scope": "None",
+        "siteNames": [],
+        "confidence": 0.9,
+        "ambiguities": []
+      },
+      "mustAsk": [],
+      "notes": "'restrict' is a disable verb (directionVerbs.disable)."
+    },
+    {
+      "id": "TC013",
+      "category": "happy-path/apply/disable/external-providers",
+      "request": "Block all external identity providers in Sachin_july_20",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableExternalAuthProviders",
+        "policyDisplayName": "Enable external authentication providers",
+        "intentDirection": "disable",
+        "envDisplayName": "Sachin_july_20",
+        "scope": "None",
+        "siteNames": [],
+        "confidence": 0.9,
+        "ambiguities": []
+      },
+      "mustAsk": [],
+      "notes": "'block' is a disable verb."
+    },
+    {
+      "id": "TC014",
+      "category": "shorthand/apply/enable/external-providers",
+      "request": "allow external auth providers on Portal_1 only in Sachin_july_20",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableExternalAuthProviders",
+        "policyDisplayName": "Enable external authentication providers",
+        "intentDirection": "enable",
+        "envDisplayName": "Sachin_july_20",
+        "scope": "Include",
+        "siteNames": ["Portal_1"],
+        "confidence": 0.88,
+        "ambiguities": []
+      },
+      "mustAsk": [],
+      "notes": "'allow' is an enable verb; 'only on X' -> Include."
+    },
+    {
+      "id": "TC015",
+      "category": "fetchEnv/view",
+      "request": "Show the SAML 2.0 status in Sachin-preprod-July",
+      "expected": {
+        "intent": "fetchEnv",
+        "policy": "PowerPages_DisableAuthenticationSAML20",
+        "policyDisplayName": "Disable the SAML 2.0 Protocol",
+        "intentDirection": "view",
+        "envDisplayName": "Sachin-preprod-July",
+        "scope": null,
+        "siteNames": [],
+        "confidence": 0.55,
+        "ambiguities": ["bare 'SAML 2.0' could be the legacy block rule OR the protocol toggle"]
+      },
+      "mustAsk": ["Do you mean the legacy SAML block rule or the SAML 2.0 sign-in protocol toggle?"]
+    },
+    {
+      "id": "TC016",
+      "category": "fetchEnv/view/protocol",
+      "request": "Is the OpenID Connect protocol enabled across Sachin_july_20?",
+      "expected": {
+        "intent": "fetchEnv",
+        "policy": "EnableProtocolOpenIdConnect",
+        "policyDisplayName": "Enable the OpenID Connect protocol",
+        "intentDirection": "view",
+        "envDisplayName": "Sachin_july_20",
+        "scope": null,
+        "siteNames": [],
+        "confidence": 0.9,
+        "ambiguities": []
+      },
+      "mustAsk": []
+    },
+    {
+      "id": "TC017",
+      "category": "fetchSite/view",
+      "request": "Is Google sign-in enabled on Portal_3 in Sachin_july_20?",
+      "expected": {
+        "intent": "fetchSite",
+        "policy": "EnableIdpOAuthGoogle",
+        "policyDisplayName": "Enable Google sign-in",
+        "intentDirection": "view",
+        "envDisplayName": "Sachin_july_20",
+        "scope": null,
+        "siteNames": ["Portal_3"],
+        "confidence": 0.92,
+        "ambiguities": []
+      },
+      "mustAsk": []
+    },
+    {
+      "id": "TC018",
+      "category": "fetchSite/view/maker-copilot",
+      "request": "Check Maker Copilot on the 8-june site",
+      "expected": {
+        "intent": "fetchSite",
+        "policy": "EnableMakerCopilotForExistingSites",
+        "policyDisplayName": "Enable Maker Copilot for existing sites",
+        "intentDirection": "view",
+        "envDisplayName": null,
+        "scope": null,
+        "siteNames": ["8-june"],
+        "confidence": 0.85,
+        "ambiguities": ["env not specified"]
+      },
+      "mustAsk": ["Which environment?"]
+    },
+    {
+      "id": "TC019",
+      "category": "ambiguous/everywhere-except-must-rephrase",
+      "request": "Disable OIDC protocol everywhere except Site 1 in Sachin_july_20",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableProtocolOpenIdConnect",
+        "policyDisplayName": "Enable the OpenID Connect protocol",
+        "intentDirection": "disable",
+        "envDisplayName": "Sachin_july_20",
+        "scope": null,
+        "siteNames": ["Site 1"],
+        "confidence": 0.45,
+        "ambiguities": ["'disable everywhere except X' does not map cleanly to the uniform enable/disable model"]
+      },
+      "mustAsk": ["'Disable everywhere except Site 1' is ambiguous - do you want to ENABLE OIDC on Site 1 (and leave the rest), or DISABLE OIDC on Site 1 only? Please rephrase as 'enable for X' or 'disable for X'."],
+      "notes": "Never auto-invert 'everywhere except X'. Ask to rephrase (ambiguousPhrasings)."
+    },
+    {
+      "id": "TC020",
+      "category": "missing-field/policy",
+      "request": "Enable it on all sites in Sachin_july_20",
+      "expected": {
+        "intent": "apply",
+        "policy": null,
+        "policyDisplayName": null,
+        "intentDirection": "enable",
+        "envDisplayName": "Sachin_july_20",
+        "scope": "All",
+        "siteNames": [],
+        "confidence": 0.3,
+        "ambiguities": ["no policy named"]
+      },
+      "mustAsk": ["Which governance setting? (OpenID Connect, SAML 2.0, Maker Copilot, a sign-in protocol, a social provider, local login, or external providers?)"]
+    },
+    {
+      "id": "TC021",
+      "category": "missing-field/direction",
+      "request": "Google sign-in on Portal_1 in Sachin_july_20",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableIdpOAuthGoogle",
+        "policyDisplayName": "Enable Google sign-in",
+        "intentDirection": null,
+        "envDisplayName": "Sachin_july_20",
+        "scope": "Include",
+        "siteNames": ["Portal_1"],
+        "confidence": 0.5,
+        "ambiguities": ["no enable/disable verb"]
+      },
+      "mustAsk": ["Do you want to enable or disable it?"]
+    },
+    {
+      "id": "TC022",
+      "category": "missing-field/env",
+      "request": "Disable Facebook login on all sites",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableIdpOAuthFacebook",
+        "policyDisplayName": "Enable Facebook sign-in",
+        "intentDirection": "disable",
+        "envDisplayName": null,
+        "scope": "None",
+        "siteNames": [],
+        "confidence": 0.7,
+        "ambiguities": ["env not specified"]
+      },
+      "mustAsk": ["Which environment? (show env picker)"]
+    },
+    {
+      "id": "TC023",
+      "category": "missing-field/scope",
+      "request": "Enable Microsoft sign-in in Sachin_july_20",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableIdpOAuthMicrosoft",
+        "policyDisplayName": "Enable Microsoft sign-in",
+        "intentDirection": "enable",
+        "envDisplayName": "Sachin_july_20",
+        "scope": null,
+        "siteNames": [],
+        "confidence": 0.6,
+        "ambiguities": ["scope not specified"]
+      },
+      "mustAsk": ["Apply to all sites, no sites, only selected sites, or all except selected?"]
+    },
+    {
+      "id": "TC024",
+      "category": "invalid/unsupported-policy",
+      "request": "Disable Twitter sign-in on all sites in Sachin_july_20",
+      "expected": {
+        "intent": "apply",
+        "policy": null,
+        "policyDisplayName": null,
+        "intentDirection": "disable",
+        "envDisplayName": "Sachin_july_20",
+        "scope": "None",
+        "siteNames": [],
+        "confidence": 0.2,
+        "ambiguities": ["'Twitter sign-in' is not a supported policy"]
+      },
+      "mustAsk": ["I don't support 'Twitter sign-in'. Supported providers are Google, Facebook, and Microsoft. Did you mean one of those?"]
+    },
+    {
+      "id": "TC025",
+      "category": "shorthand/oidc-acronym",
+      "request": "enable OIDC protocol for live portals in Sachin_july_20",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableProtocolOpenIdConnect",
+        "policyDisplayName": "Enable the OpenID Connect protocol",
+        "intentDirection": "enable",
+        "envDisplayName": "Sachin_july_20",
+        "scope": "All",
+        "siteNames": [],
+        "confidence": 0.9,
+        "ambiguities": []
+      },
+      "mustAsk": [],
+      "notes": "'for live portals' is an unambiguous all-sites phrasing."
+    },
+    {
+      "id": "TC026",
+      "category": "shorthand/username-password",
+      "request": "Turn on username and password sign-in for Portal_1, Portal_2 in Sachin_july_20",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableAuthenticationLocalLogin",
+        "policyDisplayName": "Enable local login",
+        "intentDirection": "enable",
+        "envDisplayName": "Sachin_july_20",
+        "scope": "Include",
+        "siteNames": ["Portal_1", "Portal_2"],
+        "confidence": 0.9,
+        "ambiguities": []
+      },
+      "mustAsk": []
+    },
+    {
+      "id": "TC027",
+      "category": "shorthand/wsfed-abbrev",
+      "request": "disable WsFed on Portal_3 in Sachin_july_20",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableProtocolWsFederation",
+        "policyDisplayName": "Enable the WS-Federation protocol",
+        "intentDirection": "disable",
+        "envDisplayName": "Sachin_july_20",
+        "scope": "Exclude",
+        "siteNames": ["Portal_3"],
+        "confidence": 0.88,
+        "ambiguities": []
+      },
+      "mustAsk": []
+    },
+    {
+      "id": "TC028",
+      "category": "clear/apply/disable/none",
+      "request": "Clear the Google sign-in policy in Sachin_july_20 (apply to no sites)",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableIdpOAuthGoogle",
+        "policyDisplayName": "Enable Google sign-in",
+        "intentDirection": "disable",
+        "envDisplayName": "Sachin_july_20",
+        "scope": "None",
+        "siteNames": [],
+        "confidence": 0.85,
+        "ambiguities": []
+      },
+      "mustAsk": [],
+      "notes": "'for no portals' / 'clear the policy' -> policyValue None."
+    },
+    {
+      "id": "TC029",
+      "category": "fetchEnv/view/external-providers",
+      "request": "What's the external providers setting in Sachin-preprod-July?",
+      "expected": {
+        "intent": "fetchEnv",
+        "policy": "EnableExternalAuthProviders",
+        "policyDisplayName": "Enable external authentication providers",
+        "intentDirection": "view",
+        "envDisplayName": "Sachin-preprod-July",
+        "scope": null,
+        "siteNames": [],
+        "confidence": 0.9,
+        "ambiguities": []
+      },
+      "mustAsk": []
+    },
+    {
+      "id": "TC030",
+      "category": "fetchSite/view/protocol",
+      "request": "Is WS-Federation on for Portal_2 in Sachin_july_20?",
+      "expected": {
+        "intent": "fetchSite",
+        "policy": "EnableProtocolWsFederation",
+        "policyDisplayName": "Enable the WS-Federation protocol",
+        "intentDirection": "view",
+        "envDisplayName": "Sachin_july_20",
+        "scope": null,
+        "siteNames": ["Portal_2"],
+        "confidence": 0.9,
+        "ambiguities": []
+      },
+      "mustAsk": []
+    },
+    {
+      "id": "TC031",
+      "category": "multi-site/include",
+      "request": "Enable OAuth 2.0 protocol on Portal_1, Portal_2 and Portal_3 in Sachin_july_20",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableProtocolOpenAuth",
+        "policyDisplayName": "Enable the OAuth 2.0 protocol",
+        "intentDirection": "enable",
+        "envDisplayName": "Sachin_july_20",
+        "scope": "Include",
+        "siteNames": ["Portal_1", "Portal_2", "Portal_3"],
+        "confidence": 0.92,
+        "ambiguities": []
+      },
+      "mustAsk": []
+    },
+    {
+      "id": "TC032",
+      "category": "legacy-block/enable-direction",
+      "request": "Enable the OpenID Connect block rule on all sites in Sachin_july_20",
+      "expected": {
+        "intent": "apply",
+        "policy": "PowerPages_DisableAuthenticationOpenIdConnect",
+        "policyDisplayName": "Disable the OpenId Connect Protocol",
+        "intentDirection": "enable",
+        "envDisplayName": "Sachin_july_20",
+        "scope": "All",
+        "siteNames": [],
+        "confidence": 0.75,
+        "ambiguities": ["'enable the block rule' = enforce the OIDC block everywhere (policyValue All on the Disable* policy)"]
+      },
+      "mustAsk": [],
+      "notes": "The verb attaches to the governance setting itself: enabling the DISABLE-OIDC block rule enforces the block. Confirm intent at the consent gate."
+    },
+    {
+      "id": "TC033",
+      "category": "verb-synonym/suspend",
+      "request": "Suspend Microsoft sign-in across Sachin_july_20",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableIdpOAuthMicrosoft",
+        "policyDisplayName": "Enable Microsoft sign-in",
+        "intentDirection": "disable",
+        "envDisplayName": "Sachin_july_20",
+        "scope": "None",
+        "siteNames": [],
+        "confidence": 0.85,
+        "ambiguities": []
+      },
+      "mustAsk": [],
+      "notes": "'suspend' is a disable synonym (directionVerbs.disable)."
+    },
+    {
+      "id": "TC034",
+      "category": "verb-synonym/turn-off",
+      "request": "turn off facebook login for Portal_1 in Sachin_july_20",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableIdpOAuthFacebook",
+        "policyDisplayName": "Enable Facebook sign-in",
+        "intentDirection": "disable",
+        "envDisplayName": "Sachin_july_20",
+        "scope": "Exclude",
+        "siteNames": ["Portal_1"],
+        "confidence": 0.88,
+        "ambiguities": []
+      },
+      "mustAsk": []
+    },
+    {
+      "id": "TC035",
+      "category": "done/exit",
+      "request": "that's all, done",
+      "expected": {
+        "intent": null,
+        "policy": null,
+        "policyDisplayName": null,
+        "intentDirection": null,
+        "envDisplayName": null,
+        "scope": null,
+        "siteNames": [],
+        "confidence": 0.99,
+        "ambiguities": []
+      },
+      "mustAsk": [],
+      "notes": "Exit cleanly - 'done'/'that's all'/'exit'/'nothing'."
+    },
+    {
+      "id": "TC036",
+      "category": "invalid/unsupported-policy/custom-string",
+      "request": "Apply PowerPages_EnableProtocolOpenIdConnect to all sites in Sachin_july_20",
+      "expected": {
+        "intent": "apply",
+        "policy": null,
+        "policyDisplayName": null,
+        "intentDirection": "enable",
+        "envDisplayName": "Sachin_july_20",
+        "scope": "All",
+        "siteNames": [],
+        "confidence": 0.4,
+        "ambiguities": ["'PowerPages_EnableProtocolOpenIdConnect' is not a supported policy string - the OIDC protocol policy is 'EnableProtocolOpenIdConnect' (no PowerPages_ prefix)"]
+      },
+      "mustAsk": ["That isn't a policy this skill supports. Did you mean to enable the OpenID Connect sign-in protocol? (internal policy 'EnableProtocolOpenIdConnect')"],
+      "notes": "The 9 auth Enable* policies are UNPREFIXED. A 'PowerPages_Enable...' string is invalid and rejected by the gateway (400 A010). Only PowerPages_DisableAuthentication* carry the prefix."
+    },
+    {
+      "id": "TC037",
+      "category": "env-by-id",
+      "request": "Enable Google sign-in on all sites in 1cf29f7b-04db-e4a6-aeda-74d99b256f85",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableIdpOAuthGoogle",
+        "policyDisplayName": "Enable Google sign-in",
+        "intentDirection": "enable",
+        "envId": "1cf29f7b-04db-e4a6-aeda-74d99b256f85",
+        "envDisplayName": null,
+        "scope": "All",
+        "siteNames": [],
+        "confidence": 0.9,
+        "ambiguities": []
+      },
+      "mustAsk": [],
+      "notes": "User supplied the env as a GUID - capture as envId; still show the env picker to confirm."
+    },
+    {
+      "id": "TC038",
+      "category": "site-by-id/fetchSite",
+      "request": "Is local login on for site cccac324-58af-4708-9d28-c41141bcb568 in Sachin_july_20?",
+      "expected": {
+        "intent": "fetchSite",
+        "policy": "EnableAuthenticationLocalLogin",
+        "policyDisplayName": "Enable local login",
+        "intentDirection": "view",
+        "envDisplayName": "Sachin_july_20",
+        "scope": null,
+        "siteIds": ["cccac324-58af-4708-9d28-c41141bcb568"],
+        "siteNames": [],
+        "confidence": 0.9,
+        "ambiguities": []
+      },
+      "mustAsk": []
+    },
+    {
+      "id": "TC039",
+      "category": "compound/direction-mismatch",
+      "request": "Enable and disable Google sign-in in Sachin_july_20",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableIdpOAuthGoogle",
+        "policyDisplayName": "Enable Google sign-in",
+        "intentDirection": null,
+        "envDisplayName": "Sachin_july_20",
+        "scope": null,
+        "siteNames": [],
+        "confidence": 0.3,
+        "ambiguities": ["conflicting verbs 'enable' and 'disable' in one request"]
+      },
+      "mustAsk": ["You said both enable and disable - which do you want?"]
+    },
+    {
+      "id": "TC040",
+      "category": "happy-path/apply/enable/microsoft/all",
+      "request": "allow Microsoft account sign-in on every portal in Sachin-preprod-July",
+      "expected": {
+        "intent": "apply",
+        "policy": "EnableIdpOAuthMicrosoft",
+        "policyDisplayName": "Enable Microsoft sign-in",
+        "intentDirection": "enable",
+        "envDisplayName": "Sachin-preprod-July",
+        "scope": "All",
+        "siteNames": [],
+        "confidence": 0.92,
+        "ambiguities": []
+      },
+      "mustAsk": []
+    }
+  ]
+}

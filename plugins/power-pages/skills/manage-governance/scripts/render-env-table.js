@@ -12,6 +12,23 @@
 const CURRENT_TAG = '<-- CURRENT SELECTION (default)';
 const CURRENT_MARK = '>';
 
+// Resolve the tenant-default env id straight from the list-envs.js payload so
+// the picker can pre-flag a sensible default WITHOUT a second round-trip. The
+// list already carries `type: "Default"` for the tenant's default environment
+// (Dataverse environments API surfaces the default flag), so deriving it here
+// avoids an extra `pac auth who` invocation — that separate call cold-starts
+// the .NET CLI and can trigger its own tool-approval prompt, which is exactly
+// the friction we want to remove from the "just show the list" step. Match is
+// case-insensitive because casing has varied across CLI versions
+// ("Default" vs "default").
+function resolveDefaultEnvId(envs) {
+  const list = Array.isArray(envs) ? envs : [];
+  const def = list.find(
+    (e) => e && typeof e.type === 'string' && e.type.toLowerCase() === 'default'
+  );
+  return def && def.envId ? def.envId : null;
+}
+
 // Pad an ASCII string to a fixed visible width (right side).
 function pad(str, width) {
   const s = String(str == null ? '' : str);
@@ -72,6 +89,47 @@ function renderEnvTable(envs, opts = {}) {
   return out.join('\n');
 }
 
+// Escape a cell value for GitHub-flavored Markdown table cells. A literal '|'
+// would prematurely close the cell, and a backslash could escape the next
+// pipe — env display names are user-controlled, so both must be neutralized.
+function mdCell(str) {
+  return String(str == null ? '' : str)
+    .replace(/\\/g, '\\\\')
+    .replace(/\|/g, '\\|');
+}
+
+/**
+ * Render the env list as a GitHub-flavored Markdown table. Unlike the ASCII
+ * box (which relies on a monospace font and can collapse to blank on chat
+ * surfaces that don't render fenced code blocks), a Markdown table renders
+ * reliably as a real table in chat UIs. A dedicated "Selected" column flags the
+ * env chosen earlier in the session (the row that applies on "keep").
+ *
+ * @param {Array<{displayName?: string, envId?: string}>} envs
+ * @param {object} [opts]
+ * @param {string|null} [opts.currentEnvId] - envId to flag as current selection.
+ * @returns {string} the rendered Markdown table (no trailing newline).
+ */
+function renderEnvMarkdown(envs, opts = {}) {
+  const currentEnvId = opts.currentEnvId || null;
+  const list = Array.isArray(envs) ? envs : [];
+  const out = [];
+  out.push('| # | Selected | Environment Name | Environment ID |');
+  out.push('|---|---|---|---|');
+  list.forEach((e, i) => {
+    const isCurrent = currentEnvId != null && e && e.envId === currentEnvId;
+    const name = (e && e.displayName) || '(unnamed)';
+    // A dedicated "Selected" column marks the env chosen earlier (the one that
+    // applies on "keep"), so the user can see at a glance which row is the
+    // current default without hunting for an inline tag.
+    const mark = isCurrent ? '**\u2190 selected earlier**' : '';
+    out.push(
+      `| ${i + 1} | ${mark} | ${mdCell(name)} | ${mdCell((e && e.envId) || '')} |`
+    );
+  });
+  return out.join('\n');
+}
+
 function readStdin() {
   return new Promise((resolve) => {
     let data = '';
@@ -93,7 +151,11 @@ Input:
 
 Flags:
   --current <envId>   Flag this env as the current selection (default) row.
+                      When omitted, the env whose "type" is "Default" in the
+                      list-envs.js payload is auto-flagged (no extra lookup).
   --envsFile <path>   Read the JSON from a file instead of stdin.
+  --markdown          Emit a GitHub-flavored Markdown table (renders reliably
+                      in chat UIs) instead of the ASCII box.
   --help              Show this help.
 `;
 
@@ -103,6 +165,7 @@ function parseFlags(argv) {
     const a = argv[i];
     if (a === '--current') out.current = argv[++i];
     else if (a === '--envsFile') out.envsFile = argv[++i];
+    else if (a === '--markdown') out.markdown = true;
     else if (a === '--help') out.help = true;
   }
   return out;
@@ -129,10 +192,22 @@ async function main() {
     return;
   }
   const envs = Array.isArray(parsed) ? parsed : parsed.envs || [];
-  process.stdout.write(renderEnvTable(envs, { currentEnvId: flags.current || null }) + '\n');
+  // Auto-flag the tenant-default env when the caller didn't pin one via
+  // --current. This makes "show me the env list" a single deterministic step:
+  // the list loads and renders with a sensible default already marked, with no
+  // separate lookup command (and therefore no extra approval prompt).
+  const currentEnvId = flags.current || resolveDefaultEnvId(envs);
+  const render = flags.markdown ? renderEnvMarkdown : renderEnvTable;
+  process.stdout.write(render(envs, { currentEnvId }) + '\n');
 }
 
-module.exports = { renderEnvTable, CURRENT_TAG, CURRENT_MARK };
+module.exports = {
+  renderEnvTable,
+  renderEnvMarkdown,
+  resolveDefaultEnvId,
+  CURRENT_TAG,
+  CURRENT_MARK,
+};
 
 if (require.main === module) {
   main();

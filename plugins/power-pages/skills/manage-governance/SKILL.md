@@ -1,24 +1,20 @@
 ---
 name: manage-governance
 description: >-
-  Apply, inspect, and monitor Power Pages governance policies across a tenant.
-  Supports twelve tenant-level policies — two that switch off legacy
-  authentication on Power Pages sites (PowerPages_DisableAuthenticationOpenIdConnect
-  and PowerPages_DisableAuthenticationSAML20), one that toggles Maker Copilot
-  for existing sites (EnableMakerCopilotForExistingSites), and nine that
-  enable/disable Power Pages authentication features (EnableProtocolOpenIdConnect,
-  EnableProtocolSAML20, EnableProtocolWsFederation, EnableProtocolOpenAuth,
-  EnableIdpOAuthFacebook, EnableIdpOAuthGoogle, EnableIdpOAuthMicrosoft,
-  EnableAuthenticationLocalLogin, EnableExternalAuthProviders). Lets the admin set a
-  policy (environment-wide or for specific portals), watches the rollout until it
-  reports complete, and reads the current state at the environment or portal
+  Apply, inspect, and monitor Power Pages tenant governance policies. Covers
+  twelve policies: disabling legacy authentication (OpenID Connect / SAML 2.0)
+  on portals, toggling Maker Copilot for existing sites, and enabling/disabling
+  sign-in protocols (OpenID Connect, SAML 2.0, WS-Federation, OAuth 2.0), social
+  identity providers (Google, Facebook, Microsoft), local login, and external
+  auth providers. Sets a policy environment-wide or per portal, watches the
+  rollout to completion, and reads current state at the environment or portal
   level. Use when the user wants to "turn off OpenID Connect on Power Pages",
   "disable SAML on a portal", "block legacy auth on portals", "enable/disable
   Maker Copilot for existing sites", "enable Google/Facebook/Microsoft sign-in",
   "turn off local login", "disable a sign-in protocol", "check which portals have
-  legacy auth disabled", "see the governance status of my Power Pages portals", or
-  otherwise wants to manage Power Pages governance policies on a tenant — even if
-  they only name the policy or the side effect without saying "governance".
+  legacy auth disabled", or "see the governance status of my Power Pages portals"
+  - even if they only name the policy or its side effect without saying
+  "governance".
 user-invocable: true
 argument-hint: "[optional policy or operation hint]"
 allowed-tools: Read, Write, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList
@@ -234,12 +230,48 @@ Phrases the parser treats as unambiguous and skips the scope prompt for:
 
 ### Env picker pattern (list-all + default-to-previous)
 
+> **Rule 0 — display the environment list table FIRST, every time.** The very
+> first thing the orchestrator emits whenever an env is needed is the
+> **complete** environment list as a rendered Markdown table (produced by
+> `render-env-table.js --markdown`). The table MUST be visible in the **same
+> message** that asks the user to choose — never ask "which environment?" in a
+> message (or a bare `AskUserQuestion`/pop-up) that does not itself contain the
+> full table. Show the table, then, directly beneath it, prompt the user to
+> reply with a **row #**, **environment name**, or **environment ID** (or
+> `keep` to accept the flagged default, `cancel` to stop). If the user re-asks,
+> can't see the list, or submits any new operation, re-render the whole table
+> again before doing anything else. Displaying the table is mandatory and
+> load-bearing — skipping it, truncating it, or asking without it is a defect.
+
+> **Rule 0b — ALWAYS show the site (portal) list immediately after the
+> environment is selected, then ask the user to pick the scope.** The moment an
+> env pick resolves (whether the user typed `keep`, a row #, a name, or an id —
+> and including the case where the env was named directly in the request), the
+> orchestrator's **very next action** is to run `list-portals.js` for that env
+> and render the site list as a table (Portal Name / Portal URL / Portal ID).
+> **Directly beneath the table, prompt the user to choose the scope:** reply
+> **`all`** to apply to every site in the environment, or a **comma-separated
+> list of site names or IDs** to apply to only those specific sites (plus
+> `cancel` to stop). This is unconditional and applies to **every** operation —
+> Apply, Fetch Env, and Fetch Site alike — and to every loop iteration. Do NOT
+> skip straight to the impact summary or any `get-*` / `set-*` call before the
+> site list is visible and the user has chosen `all` vs specific sites in the
+> same or immediately preceding exchange. If the env has more than 10 sites,
+> render the top 10 via `orderPortalsForDisplay()` and note "Showing 10 of
+> &lt;total&gt; — type any site name or ID, or 'all'". Only when the env
+> genuinely has zero sites do you skip the table — and then you say so
+> explicitly. Proceeding without showing the site list and taking the scope
+> reply after env selection is a defect.
+
 When an env is needed (missing or ambiguous), the orchestrator MUST:
 
 1. **List all environments.** ALWAYS render the **complete** env list by
-   running the `render-env-table.js` helper and emitting its output **verbatim
-   inside a fenced code block** (so the monospace box stays aligned). Never
-   hand-build a Markdown table for the env picker.
+   running the `render-env-table.js` helper with `--markdown`, and emit its
+   output **verbatim as a Markdown table** (a real table renders reliably in
+   chat UIs; the ASCII box collapses to blank on surfaces that don't render
+   fenced code blocks). Do not hand-build the table — always produce it via the
+   helper so the rows, numbering, and current-selection marker stay
+   deterministic and testable.
 
    **Show every row, on every pick.** This applies to the **first** pick AND to
    **every subsequent pick** (including "Apply/Check the same policy somewhere
@@ -255,30 +287,52 @@ When an env is needed (missing or ambiguous), the orchestrator MUST:
    user types), the orchestrator MUST render the full env-list table again
    **before** doing anything else for that request. NEVER silently reuse
    `<RECENT_ENV>` and skip straight to the site list / operation. The recent env
-   is only pre-flagged as the default (`>`); the user still sees the whole list
-   and confirms with `keep` or switches. Showing the site picker or running any
-   `get-*` / `set-*` call without first re-rendering the env list is a defect.
+   is only pre-flagged in the **Selected** column; the user still sees the whole
+   list and confirms with `keep` or switches. Showing the site picker or running
+   any `get-*` / `set-*` call without first re-rendering the env list is a
+   defect.
 
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-env-table.js" \
-     --envsFile <cached-governance-envs.json> [--current "<RECENT_ENV_ID>"]
+     --envsFile <cached-governance-envs.json> --markdown [--current "<RECENT_ENV_ID>"]
    ```
 
-   The helper prints a fixed-width ASCII box table with exactly a row-number
-   column, a marker column, **Environment Name**, and **Environment ID** — no
-   URL, type, or region. It is **ASCII-only on purpose**: emoji / wide glyphs
-   break monospace alignment, so do NOT add ✅ / ➡️ or any other wide markers
-   to the rows.
-2. **Default to the previously-used env.** When `<RECENT_ENV>` is set (an env
-   was chosen earlier in this session), pass its id as `--current` so the
-   helper flags that row with a `>` marker and a `<-- CURRENT SELECTION
-   (default)` tag. Then state: *"Reply 'keep' to continue with
-   `<RECENT_ENV_DISPLAY>`, or reply with a row number, name, or ID to switch."*
-   Do **NOT** tell the user to "press Enter" or send an empty message — this
-   chat surface cannot send an empty reply, so an empty message is not a valid
-   confirmation. The user MUST type `keep` (or a row/name/id) explicitly. If the
-   user says "keep", reuse `<RECENT_ENV>` and skip ahead. On the **first** pick
-   of a session (no `<RECENT_ENV>` yet), omit `--current` — no row is flagged.
+   The helper (with `--markdown`) prints a GitHub-flavored Markdown table with
+   exactly a row-number column, a marker column, **Environment Name**, and
+   **Environment ID** — no URL, type, or region. Emit it directly as a table
+   (NOT wrapped in a code fence — that would show the raw pipes instead of a
+   rendered table).
+
+   **Hard rule — the env list is NEVER optional and NEVER hidden.** Displaying
+   the full environment list is a mandatory, load-bearing step of *every* env
+   pick. The orchestrator MUST NOT ask the user to choose an environment
+   without the list visible in the same or immediately preceding message, and
+   MUST NOT fall back to a bare free-text "which environment?" prompt. If the
+   user says they can't see the list, re-render it immediately — do not argue
+   or proceed.
+
+   **Legacy ASCII box (optional).** Running the helper without `--markdown`
+   still prints the fixed-width ASCII box table (row-number, marker,
+   Environment Name, Environment ID). It is ASCII-only on purpose — emoji /
+   wide glyphs break monospace alignment — but because fenced code blocks don't
+   render as monospace on every chat surface, `--markdown` is the default,
+   guaranteed-visible rendering. Only use the box for terminal-only contexts.
+2. **Default to the previously-used env — or, on the first pick, to the
+   tenant-default env.** When `<RECENT_ENV>` is set (an env was chosen earlier in
+   this session), pass its id as `--current` so the helper flags that row in the
+   **Selected** column. On the **first** pick of a session (no `<RECENT_ENV>`
+   yet), **do not run a separate command** to find the default — the
+   `render-env-table.js` helper auto-flags the env whose `type` is `Default` in
+   the `list-envs.js` output when `--current` is omitted. So the env list loads
+   and renders the default in **one step**, with no `pac auth who` round-trip
+   (which would cold-start the CLI and can trigger its own approval prompt). Just
+   pipe `list-envs.js` output straight into the renderer. Either way, state:
+   *"Reply 'keep' to continue with `<flagged env display name>`, or reply with a
+   row number, name, or ID to switch."* Do **NOT** tell the user to "press Enter"
+   or send an empty message — this chat surface cannot send an empty reply, so an
+   empty message is not a valid confirmation. The user MUST type `keep` (or a
+   row/name/id) explicitly. If the user says "keep", reuse the flagged env and
+   skip ahead.
 3. **Allow selecting another env.** The user may reply with any row number,
    environment name, or environment id to switch. Resolve fuzzy /
    case-insensitive matches against the cached list. To cancel the request
@@ -287,40 +341,47 @@ When an env is needed (missing or ambiguous), the orchestrator MUST:
 
 Rules:
 
-- **First env pick of a session** (no `<RECENT_ENV>` yet): there is no default —
-  render the full list and require the user to pick a row number, name, or id
-  (there is nothing to "keep").
-- **Subsequent picks**: the previous env is pre-selected as the default, but
-  the orchestrator STILL renders the **entire** env list (every row) — the
-  default is only pre-flagged with `>`; it does not replace showing the full
-  list. The user only has to reply if they want to switch.
+- **First env pick of a session** (no `<RECENT_ENV>` yet): the default is the
+  **tenant-default env**, auto-flagged by `render-env-table.js` from the
+  `type: Default` row in the `list-envs.js` output (no separate `pac auth who`
+  call). Flag it in the **Selected** column and let the user `keep` it or
+  switch. Always still render the full list.
+- **Subsequent picks**: the previously-chosen env is pre-selected as the
+  default, but the orchestrator STILL renders the **entire** env list (every
+  row) — the default is only pre-flagged in the **Selected** column; it does not
+  replace showing the full list. The user only has to reply if they want to
+  switch.
 - After a pick resolves to a valid env (whether kept or switched), update
   `<RECENT_ENV>` so the next request defaults to it.
-- Render the list **directly in the chat** as the fixed-width ASCII box table
-  produced by `render-env-table.js`, wrapped in a fenced code block (not an
-  `AskUserQuestion` — the list is typically larger than 4 rows). After the
-  table add one line combining the keep/switch/cancel instructions above.
+- Render the list **directly in the chat** as the Markdown table produced by
+  `render-env-table.js --markdown` (not an `AskUserQuestion` — the list is
+  typically larger than 4 rows, and a real table renders reliably in chat).
+  After the table add one line combining the keep/switch/cancel instructions
+  above.
 
 Canonical rendering (subsequent pick, `<RECENT_ENV>` = Sachin-preprod-July) —
-the `render-env-table.js --current 2a0887a0-…` output looks like the box below.
-**Note:** the `..` / `...` rows here are only an abbreviation **for this
+the `render-env-table.js --markdown --current 2a0887a0-…` output looks like the
+table below. **Note:** the `…` rows here are only an abbreviation **for this
 document** — in an actual reply you MUST emit every environment row the helper
 prints, never these placeholders.
 
-```
-+----+---+-----------------------------------------------------+--------------------------------------+
-| #  |   | Environment Name                                    | Environment ID                       |
-+----+---+-----------------------------------------------------+--------------------------------------+
-| 1  |   | Ashmigration                                        | e364969c-d426-eb11-b9d2-c9e20c2cd15a |
-| .. |   | ...                                                 | ...                                  |
-| 28 | > | Sachin-preprod-July  <-- CURRENT SELECTION (default)| 2a0887a0-6366-ef59-9992-118cfcd2fa2b |
-| .. |   | ...                                                 | ...                                  |
-+----+---+-----------------------------------------------------+--------------------------------------+
-```
+| # | Selected | Environment Name | Environment ID |
+|---|---|---|---|
+| 1 |  | Ashmigration | e364969c-d426-eb11-b9d2-c9e20c2cd15a |
+| … |  | … | … |
+| 28 | **← selected earlier** | Sachin-preprod-July | 2a0887a0-6366-ef59-9992-118cfcd2fa2b |
+| … |  | … | … |
 
 *"Reply 'keep' to continue with Sachin-preprod-July, or reply with a row number, environment name, or environment ID to switch. Reply 'cancel' to stop."*
 
 ### Consent gate (always before POST) — structured summary, not a one-liner
+
+> **Deterministic renderer.** The concrete invocation lives in **Phase 4.2.3**,
+> which pipes the resolved request through
+> `scripts/render-impact-summary.js` so the Action / Environment / Scope /
+> Sites / Effect / Side-effect rows stay consistent with this spec and the
+> per-policy data. The format below documents what that helper emits — do not
+> hand-build it when the helper is available.
 
 Once every required field is resolved, render a **structured summary** of
 the request — every entity the parser pulled from the user's input or the
@@ -497,13 +558,23 @@ Persist the chosen operation as `<OP>`.
 
 ## 4. Run the operation
 
-### 4.1 Common — pick an environment
+### 4.1 Common — resolve the environment
 
-For all three operations the user picks an environment first. Follow the
-**canonical "Env picker pattern"** in Phase 2.2 — render the **full** env-list
-table (every row, every request) via `render-env-table.js`, default to
-`<RECENT_ENV>` when set, and let the user `keep` / switch / `cancel`. Never
-skip the list by silently reusing the previously-chosen env.
+**Branch on what the request already provided** (from the Phase 2.1 parse):
+
+- **Environment already provided** (the user named an env or gave an env id in
+  their request, e.g. *"disable OIDC in Contoso-Prod"*): **skip the interactive
+  picker.** Resolve the name/id against the cached env list, confirm it in one
+  line — *"Using environment **&lt;ENV_DISPLAY&gt;** (`<ENV_ID>`)."* — and go
+  straight to the next step (4.2 scope for Set, 4.3 for Fetch Env, 4.4 for
+  Fetch Portal). Do **not** re-render the full env table when the env is
+  unambiguously resolved.
+- **Environment NOT provided** (the common case): render the **full** env-list
+  table (every row, every request) via `render-env-table.js --markdown`,
+  default to `<RECENT_ENV>` when set (flagged in the **Selected** column), and
+  let the user `keep` / switch / `cancel`. Never skip the list by silently
+  reusing the previously-chosen env — the env list is NEVER optional or hidden
+  when a pick is required.
 
 The env list comes from `list-envs.js` (cached as `governance-envs.json`):
 
@@ -511,9 +582,25 @@ The env list comes from `list-envs.js` (cached as `governance-envs.json`):
 node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-envs.js"
 ```
 
-Output is `{ status: "ok", envs: [ { envId, displayName, envUrl, type, region } ] }`. Pipe it (or the cached file) through `render-env-table.js` and emit the box table **verbatim inside a fenced code block**. Resolve the user's row-number / name / id reply against the cached list (fuzzy, case-insensitive). Persist the choice as `<ENV_ID>` and `<ENV_DISPLAY>`, and update `<RECENT_ENV>`.
+Output is `{ status: "ok", envs: [ { envId, displayName, envUrl, type, region } ] }`. Pipe it (or the cached file) through `render-env-table.js --markdown` and emit the Markdown table **verbatim** (as a rendered table, not inside a code fence). Resolve the user's row-number / name / id reply against the cached list (fuzzy, case-insensitive). Persist the choice as `<ENV_ID>` and `<ENV_DISPLAY>`, and update `<RECENT_ENV>`.
 
 ### 4.2 Apply the policy (`<OP>` = Set)
+
+**Entry variants — skip any step the request already resolved.** Branch on
+what the Phase 2.1 parse produced, then run only the remaining steps:
+
+| What the request provided | Steps to run |
+|---------------------------|--------------|
+| **Nothing** (no env, no sites) | 4.1 pick env → 4.2.1 top-10 sites + all/selected → (4.2.2 if selected) → **4.2.3 Impact Summary + consent** → 4.2.4 apply → 4.2.5 verify |
+| **Environment only** | 4.1 resolves env (skips picker) → 4.2.1 top-10 sites + all/selected → (4.2.2 if selected) → **4.2.3 Impact Summary + consent** → 4.2.4 apply → 4.2.5 verify |
+| **Environment + site(s)** | 4.1 resolves env + resolve named site(s) to `<PORTAL_IDS>` (skip 4.2.1/4.2.2) → **4.2.3 Impact Summary + consent** → 4.2.4 apply → 4.2.5 verify |
+
+When sites are already named in the request, resolve them with
+`parse-portal-input.js` (against `list-portals.js` output) to get
+`<PORTAL_IDS>` / `<PORTAL_NAMES_LIST>` and set `<POLICY_VALUE>` = `Include`
+(enable) or `Exclude` (disable), then jump straight to **4.2.3**. The
+**Impact Summary is always shown before the consent gate in every variant** —
+never POST without it.
 
 #### 4.2.1 Pick the scope (site list + free-text input)
 
@@ -624,37 +711,47 @@ When invoking the parser from this step the orchestrator should ignore the parse
 
 Persist `<PORTAL_IDS>` (comma-joined) for downstream steps. Persist `<PORTAL_NAMES_LIST>` (the `resolvedNames` array joined with commas) for the consent gate.
 
-#### 4.2.3 Confirm before posting (consent gate)
+#### 4.2.3 Confirm before posting (Impact Summary + consent gate)
 
 Confirm as a **free-text** prompt (NOT an `AskUserQuestion` — no numbered /
-multiple-choice options). Render the structured impact summary from Phase 2.2
-(start directly at the `Action:` row — no lead-in label or introductory
-sentence), then show the picked portals **by name** so the user verifies their
-intent.
+multiple-choice options). First render the **Impact Summary** deterministically
+with the helper (do NOT hand-build it — the helper keeps the Action /
+Environment / Scope / Sites / Effect / Side-effect rows consistent with the
+committed spec and per-policy data), then ask for explicit go-ahead.
 
+**Step 1 — resolve each affected site's Current State.** Read the live policy
+state so the summary can show the exact transition: run `get-env.js` for the
+env value, and (for `Include` / `Exclude`) `get-portal.js` for the
+inclusion/exclusion lists, then apply the Phase 4.4.3 site-state table to each
+site in scope. If a live read fails, pass `currentState: "Unknown"` (never
+block the gate on a read error).
+
+**Step 2 — render the Impact Summary via the helper.** Build the request JSON
+and pipe it through `render-impact-summary.js`, emitting its output **verbatim**
+(it starts directly at the `Action:` row — do NOT prepend any lead-in label or
+introductory sentence like "Impact summary:"):
+
+```bash
+echo '{
+  "policy": "<POLICY>",
+  "direction": "<INTENT_DIRECTION>",
+  "scope": "<all|specific>",
+  "policyValue": "<POLICY_VALUE>",
+  "env": { "displayName": "<ENV_DISPLAY>", "envId": "<ENV_ID>" },
+  "sites": [ { "name": "...", "url": "...", "portalId": "...", "currentState": "Enabled|Disabled|Unknown" } ]
+}' | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-impact-summary.js"
 ```
-Apply <POLICY_PLAIN_LABEL> to <ENV_DISPLAY>?
-  - policyValue: <POLICY_VALUE>
-  - portals:     <PORTAL_NAMES_LIST>  (or "all" / "none")
-```
 
-The consent gate's **Effect** line MUST restate the **user's operation in
-plain English** using the template from Phase 2.1. It does NOT repeat the
-`policyValue` (the API-mapping line already shows that) and does NOT try
-to describe second-order auth side-effects — it covers the intent side.
+`scope` is `all` when `<POLICY_VALUE>` is `All` / `None`, and `specific` when it
+is `Include` / `Exclude`. Pass **only the sites in scope** in `sites` (every
+site in the env for `all`; the picked sites for `specific`). The helper renders
+the Current State → New State transition per site, marks changed rows, and adds
+the sign-out Side-effect line only when the resulting `policyValue` triggers it.
 
-Pick the row that matches `intentDirection` × scope:
-
-- `enable` + all portals → *"&lt;Subject&gt; will be enabled on all portals in &lt;ENV_DISPLAY&gt;."*
-- `enable` + specific portals → *"&lt;Subject&gt; will be enabled on the listed portals in &lt;ENV_DISPLAY&gt;: &lt;names&gt;."*
-- `disable` + all portals → *"&lt;Subject&gt; will be disabled on all portals in &lt;ENV_DISPLAY&gt;."*
-- `disable` + specific portals → *"&lt;Subject&gt; will be disabled on the listed portals in &lt;ENV_DISPLAY&gt;: &lt;names&gt;."*
-
-`<Subject>` is mapped from the policy per the table in Phase 2.1
-("OpenID Connect sign-in" / "SAML 2.0 sign-in").
-
-Options: reply **Apply now** to proceed, or **cancel** to stop. Do not proceed
-without an explicit free-text `Apply now`.
+**Step 3 — ask for consent.** After the summary, end with one prose line:
+*"Reply **Apply now** to proceed, or **cancel** to stop."* Do not proceed
+without an explicit free-text `Apply now`. If the user replies `cancel`, exit
+cleanly with *"No change made."* and do not POST.
 
 #### 4.2.4 Apply and watch
 
@@ -1095,11 +1192,17 @@ Skill tracking:
 - **Always show the env list** — for **every** new user request / operation
   (Apply, Fetch Env, Fetch Site — including each loop iteration and every new
   intent the user types), the orchestrator MUST render the **full** env-list
-  table (via `render-env-table.js`, every row) and let the user confirm `keep`
-  or switch **before** running the site picker or any `get-*` / `set-*` call.
-  Never silently reuse the previously-chosen env and skip the env list — the
-  recent env is only pre-flagged as the default (`>`).
-- **No env defaults on Set** — never default the env or portal pick. Both must be chosen explicitly.
+  table (via `render-env-table.js --markdown`, every row, as a rendered
+  Markdown table) and let the user confirm `keep` or switch **before** running
+  the site picker or any `get-*` / `set-*` call. Never silently reuse the
+  previously-chosen env and skip the env list — the default env is only
+  pre-flagged in the **Selected** column (the signed-in / tenant-default env on
+  the first pick, or the previously-chosen env on later picks).
+- **No auto-proceed on Set** — flagging a default env in the **Selected** column
+  is allowed, but the pick is never applied automatically: the user must
+  confirm explicitly by typing `keep` (to use the flagged env) or a row
+  number / name / id (to switch). Never POST against a flagged env without that
+  explicit confirmation. The portal pick is never defaulted.
 - **Background polling** — run `set-governance.js` with `run_in_background: true`. Stream stderr to the user at most once every 30 seconds.
 - **Policy strings are hard-coded** — only the twelve policies named in Phase 2.3 are valid (`PowerPages_DisableAuthenticationOpenIdConnect`, `PowerPages_DisableAuthenticationSAML20`, `EnableMakerCopilotForExistingSites`, `EnableProtocolOpenIdConnect`, `EnableProtocolSAML20`, `EnableProtocolWsFederation`, `EnableProtocolOpenAuth`, `EnableIdpOAuthFacebook`, `EnableIdpOAuthGoogle`, `EnableIdpOAuthMicrosoft`, `EnableAuthenticationLocalLogin`, `EnableExternalAuthProviders`). This list is the frozen `SUPPORTED_POLICIES` array in `scripts/policies.js`. Reject any custom policy name with a clear "this skill only supports those twelve governance policies today" message.
 - **Sign-in failures** — exit code `2` from any script means PAC or Azure CLI is signed out. Tell the user which command to run (`pac auth create` or `az login`) and stop.

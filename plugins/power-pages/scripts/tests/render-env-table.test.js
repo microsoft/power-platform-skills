@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 
 const {
   renderEnvTable,
+  renderEnvMarkdown,
+  resolveDefaultEnvId,
   CURRENT_TAG,
   CURRENT_MARK,
 } = require('../../skills/manage-governance/scripts/render-env-table');
@@ -81,4 +83,76 @@ test('unknown currentEnvId tags nothing', () => {
 test('missing displayName falls back to (unnamed)', () => {
   const out = renderEnvTable([{ envId: 'abc' }]);
   assert.ok(out.includes('(unnamed)'));
+});
+
+// --- renderEnvMarkdown (GitHub-flavored Markdown table for chat surfaces) ---
+
+test('markdown: emits header + separator + one row per env', () => {
+  const out = renderEnvMarkdown(SAMPLE);
+  const l = lines(out);
+  // header + separator + 3 rows = 5 lines
+  assert.equal(l.length, 5);
+  assert.equal(l[0], '| # | Selected | Environment Name | Environment ID |');
+  assert.equal(l[1], '|---|---|---|---|');
+  assert.ok(l[2].includes('Automation_runtimeenv'));
+});
+
+test('markdown: row numbers are 1-based and sequential', () => {
+  const out = renderEnvMarkdown(SAMPLE);
+  const body = lines(out).slice(2);
+  assert.match(body[0], /^\|\s*1\s*\|/);
+  assert.match(body[1], /^\|\s*2\s*\|/);
+  assert.match(body[2], /^\|\s*3\s*\|/);
+});
+
+test('markdown: flags exactly the current selection row in the Selected column', () => {
+  const out = renderEnvMarkdown(SAMPLE, {
+    currentEnvId: '2a0887a0-6366-ef59-9992-118cfcd2fa2b',
+  });
+  const tagged = lines(out).filter((s) => s.includes('selected earlier'));
+  assert.equal(tagged.length, 1);
+  assert.ok(tagged[0].includes('Sachin-preprod-July'));
+});
+
+test('markdown: no current selection → no "selected earlier" marker', () => {
+  const out = renderEnvMarkdown(SAMPLE);
+  assert.ok(!out.includes('selected earlier'));
+});
+
+test('markdown: escapes pipe characters in env display names', () => {
+  // A literal '|' in a name would prematurely close the Markdown cell — it must
+  // be escaped so the table structure survives user-controlled env names.
+  const out = renderEnvMarkdown([{ displayName: 'a|b', envId: 'x' }]);
+  assert.ok(out.includes('a\\|b'), 'pipe must be backslash-escaped');
+});
+
+test('markdown: missing displayName falls back to (unnamed)', () => {
+  const out = renderEnvMarkdown([{ envId: 'abc' }]);
+  assert.ok(out.includes('(unnamed)'));
+});
+
+// --- resolveDefaultEnvId (auto-flag the tenant-default env, no extra lookup) ---
+
+test('resolveDefaultEnvId: returns the env whose type is "Default"', () => {
+  const envs = [
+    { envId: 'a', type: 'Production' },
+    { envId: 'b', type: 'Default' },
+  ];
+  assert.equal(resolveDefaultEnvId(envs), 'b');
+});
+
+test('resolveDefaultEnvId: matches type case-insensitively', () => {
+  // Casing has varied across CLI versions ("Default" vs "default").
+  const envs = [{ envId: 'a', type: 'default' }];
+  assert.equal(resolveDefaultEnvId(envs), 'a');
+});
+
+test('resolveDefaultEnvId: returns null when no default env is present', () => {
+  const envs = [{ envId: 'a', type: 'Production' }];
+  assert.equal(resolveDefaultEnvId(envs), null);
+});
+
+test('resolveDefaultEnvId: tolerates non-array / empty input', () => {
+  assert.equal(resolveDefaultEnvId(null), null);
+  assert.equal(resolveDefaultEnvId([]), null);
 });

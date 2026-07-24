@@ -119,6 +119,34 @@ The script always wraps the policy object in a single-element array, but the
 body is an array on purpose — the gateway accepts multiple policy objects in
 one POST.
 
+> **Write vocabulary (canonical → wire).** `--policyValue` and every internal
+> code path use the canonical `All` / `None` / `Include` / `Exclude` strings,
+> but for env-level (`uniformGovernance`) policies the gateway does NOT accept
+> those short forms on WRITE — it silently rejects `policyValue:"All"` with the
+> plain body `Website id cannot be null or empty` and leaves the env unchanged.
+> `set-governance.js buildPolicyPayload` therefore forward-maps the canonical
+> value to the `applyTo` enum vocabulary via `policies.js toWritePolicyValue()`
+> right before the POST:
+>
+> | Canonical (`--policyValue`) | Wire value (env-level policies) |
+> |-----------------------------|---------------------------------|
+> | `All`     | `AllSites` |
+> | `Include` | `IncludeSites` |
+> | `Exclude` | `ExcludeSites` |
+> | `None`    | `None` (disable is conveyed by the value itself) |
+>
+> The two legacy auth toggles — `PowerPages_DisableAuthenticationOpenIdConnect`
+> and `PowerPages_DisableAuthenticationSAML20` — predate the `applyTo` enum and
+> keep the canonical short form on the wire (they are the only policies exempt
+> from the forward-map). This mirrors the read side, where those two policies
+> already return the canonical form while env-level policies return `*Sites`.
+> Verified empirically against Preprod (2024-10-01 gateway): POSTing
+> `policyValue:"AllSites"` for `EnableMakerCopilotForExistingSites` returns
+> `200 "Policy upserts accepted."` and flips the env `None` → `AllSites`;
+> `policyValue:"IncludeSites"` + `ToBeAdded:[siteIds]` returns `200` and the env
+> reads back `IncludeSites` with those sites on the inclusion list — whereas the
+> short forms (`All` / `Include` / `Exclude`) are rejected.
+
 All paths are appended to the base URL:
 `https://api.powerplatform.com/powerpages/environments/{envId}` (or the
 cloud-specific equivalent — see `validation-helpers.js` for the mapping).

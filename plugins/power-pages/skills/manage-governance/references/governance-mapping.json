@@ -18,7 +18,7 @@
         "policyValue": "Include",
         "userIntent": "Enable the Governance Setting only on the listed sites.",
         "apiBehavior": {
-          "applyTo": "IncludedSites",
+          "applyTo": "IncludeSites",
           "enabled": true,
           "siteList": ["site1", "site2"]
         }
@@ -37,7 +37,7 @@
         "policyValue": "Exclude",
         "userIntent": "Disable the Governance Setting only on the listed sites.",
         "apiBehavior": {
-          "applyTo": "AllSitesExceptExcluded",
+          "applyTo": "ExcludeSites",
           "enabled": true,
           "siteList": ["site1", "site2"]
         }
@@ -132,7 +132,7 @@
       "displayName": "Enable the WS-Federation protocol",
       "subject": "WS-Federation sign-in",
       "summaryLabel": "WS-Federation protocol",
-      "userShorthands": ["ws-federation", "wsfederation", "ws federation", "wsfed", "enable ws-federation", "EnableProtocolWsFederation"],
+      "userShorthands": ["ws-federation", "wsfederation", "ws federation", "wsfed", "enable ws-federation", "ws-fed", "EnableProtocolWsFederation"],
       "stateParaphrase": {
         "Enabled": "WS-Federation sign-in Enabled",
         "Disabled": "WS-Federation sign-in Blocked"
@@ -148,7 +148,7 @@
       "displayName": "Enable the OAuth 2.0 protocol",
       "subject": "OAuth 2.0 sign-in",
       "summaryLabel": "OAuth 2.0 protocol",
-      "userShorthands": ["openauth", "open auth", "oauth 2.0 protocol", "oauth protocol", "openauth protocol", "enable openauth", "EnableProtocolOpenAuth"],
+      "userShorthands": ["openauth", "open auth", "oauth 2.0 protocol", "oauth protocol", "openauth protocol", "enable openauth", "oauth2", "oauth 2.0", "EnableProtocolOpenAuth"],
       "stateParaphrase": {
         "Enabled": "OAuth 2.0 sign-in Enabled",
         "Disabled": "OAuth 2.0 sign-in Blocked"
@@ -164,7 +164,7 @@
       "displayName": "Enable Facebook sign-in",
       "subject": "Facebook sign-in",
       "summaryLabel": "Facebook sign-in provider",
-      "userShorthands": ["facebook", "facebook login", "facebook sign-in", "facebook oauth", "facebook idp", "enable facebook", "EnableIdpOAuthFacebook"],
+      "userShorthands": ["facebook", "facebook login", "facebook sign-in", "facebook oauth", "facebook idp", "enable facebook", "fb", "EnableIdpOAuthFacebook"],
       "stateParaphrase": {
         "Enabled": "Facebook sign-in Enabled",
         "Disabled": "Facebook sign-in Blocked"
@@ -180,7 +180,7 @@
       "displayName": "Enable Google sign-in",
       "subject": "Google sign-in",
       "summaryLabel": "Google sign-in provider",
-      "userShorthands": ["google", "google login", "google sign-in", "google oauth", "google idp", "enable google", "EnableIdpOAuthGoogle"],
+      "userShorthands": ["google", "google login", "google sign-in", "google oauth", "google idp", "enable google", "gmail", "EnableIdpOAuthGoogle"],
       "stateParaphrase": {
         "Enabled": "Google sign-in Enabled",
         "Disabled": "Google sign-in Blocked"
@@ -196,7 +196,7 @@
       "displayName": "Enable Microsoft sign-in",
       "subject": "Microsoft sign-in",
       "summaryLabel": "Microsoft sign-in provider",
-      "userShorthands": ["microsoft", "microsoft account", "microsoft login", "microsoft sign-in", "microsoft oauth", "microsoft idp", "enable microsoft", "EnableIdpOAuthMicrosoft"],
+      "userShorthands": ["microsoft", "microsoft account", "microsoft login", "microsoft sign-in", "microsoft oauth", "microsoft idp", "enable microsoft", "msa", "EnableIdpOAuthMicrosoft"],
       "stateParaphrase": {
         "Enabled": "Microsoft sign-in Enabled",
         "Disabled": "Microsoft sign-in Blocked"
@@ -212,7 +212,7 @@
       "displayName": "Enable local login",
       "subject": "Local (username & password) sign-in",
       "summaryLabel": "Local login setting",
-      "userShorthands": ["local login", "local authentication", "local sign-in", "username and password", "username/password login", "enable local login", "EnableAuthenticationLocalLogin"],
+      "userShorthands": ["local login", "local authentication", "local sign-in", "username and password", "username/password login", "enable local login", "password login", "EnableAuthenticationLocalLogin"],
       "stateParaphrase": {
         "Enabled": "Local sign-in Enabled",
         "Disabled": "Local sign-in Blocked"
@@ -228,7 +228,7 @@
       "displayName": "Enable external authentication providers",
       "subject": "External authentication providers",
       "summaryLabel": "External auth providers setting",
-      "userShorthands": ["external auth providers", "external authentication providers", "external identity providers", "external providers", "enable external providers", "EnableExternalAuthProviders"],
+      "userShorthands": ["external auth providers", "external authentication providers", "external identity providers", "external providers", "enable external providers", "external idps", "external idp", "third-party identity providers", "third-party providers", "EnableExternalAuthProviders"],
       "stateParaphrase": {
         "Enabled": "External providers Enabled",
         "Disabled": "External providers Blocked"
@@ -242,6 +242,8 @@
 
   "readValueAliases": {
     "AllSites": "All",
+    "IncludeSites": "Include",
+    "ExcludeSites": "Exclude",
     "IncludedSites": "Include",
     "AllSitesExceptExcluded": "Exclude",
     "ExcludedSites": "Exclude",
