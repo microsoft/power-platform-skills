@@ -41411,8 +41411,14 @@ async function createMcpServer(authProvider, deps = {}) {
       let result = fullResult;
       if (subPath) {
         for (const segment of subPath.split(".")) {
-          if (result == null)
+          if (result == null || typeof result !== "object") {
+            result = void 0;
             break;
+          }
+          if (!Object.prototype.hasOwnProperty.call(result, segment)) {
+            result = void 0;
+            break;
+          }
           result = result[segment];
         }
         if (result === void 0) {
