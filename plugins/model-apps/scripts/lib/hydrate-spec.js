@@ -5,16 +5,21 @@
 // its entities (mapped from metadata), and its solution. hydrateSpec composes these into a spec that
 // round-trips through build() with no changes, so create == edit and nothing (incl. Maker-made
 // pages) is dropped.
+//
+// v2 shape (when downloaded pages carry stable keys from assignPageKeys): schemaVersion 2,
+// pages have key/purpose/navigatesTo/pageInput/source:{kind:'tsx',codeFile}, appShell GenPage
+// subareas resolve by KEY (not name), and design is threaded through. Legacy callers (no keys on
+// pages) get the name-based shape (back-compat).
 
 // Map a sitemap SubAreaJson (from the SDK app read path) back to an app-spec subarea. GenPage
-// subareas resolve to a `page` target by name (from the downloaded pages); DashBoard subareas resolve
-// to a `dashboard` target by name (from the reconstructed dashboards); CustomPage/unmapped are omitted.
-function subAreaToSpec(sa, pageNameById, dashboardNameById) {
+// subareas resolve to a `page` target via `pageRefById` (id → key for v2, id → name for legacy);
+// DashBoard subareas resolve to a `dashboard` target by name; CustomPage/unmapped are omitted.
+function subAreaToSpec(sa, pageRefById, dashboardNameById) {
   const base = { title: sa.title };
   if (sa.icon) base.icon = sa.icon;
   if (sa.vectorIcon) base.vectorIcon = sa.vectorIcon;
   if (sa.type === 'Entity' && sa.entity) return { ...base, entity: sa.entity };
-  if (sa.type === 'GenPage' && sa.genPageId) return { ...base, page: pageNameById.get(String(sa.genPageId).toLowerCase()) || sa.genPageId };
+  if (sa.type === 'GenPage' && sa.genPageId) return { ...base, page: pageRefById.get(String(sa.genPageId).toLowerCase()) || sa.genPageId };
   if (sa.type === 'DashBoard' && sa.dashboardId) {
     const name = dashboardNameById && dashboardNameById.get(String(sa.dashboardId).toLowerCase());
     return name ? { ...base, dashboard: name } : null; // drop only if we couldn't reconstruct the dashboard
@@ -30,8 +35,17 @@ async function hydrateSpec(read) {
   const webResources = (await read.webResources()) || [];
   const dashboards = (read.dashboards ? await read.dashboards() : []) || [];
   const solution = (await read.solution()) || { uniqueName: 'Default', publisherPrefix: 'new' };
+  // `design` is threaded through from the page manifest (§7.3) when present; undefined for legacy apps.
+  const design = read.design ? await read.design() : undefined;
+  // When downloaded pages carry stable keys (assigned by assignPageKeys), emit the v2 shape;
+  // legacy callers without keys fall back to the name-based shape for back-compat.
+  const hasKeys = pages.some((p) => p.key);
+  // v2: GenPage subareas resolve by KEY (stable identity); legacy: by NAME.
+  const pageKeyById = new Map(pages.filter((p) => p.pageId && p.key).map((p) => [String(p.pageId).toLowerCase(), p.key]));
   const pageNameById = new Map(pages.filter((p) => p.pageId && p.name).map((p) => [String(p.pageId).toLowerCase(), p.name]));
   const dashboardNameById = new Map(dashboards.filter((d) => d.id && d.name).map((d) => [String(d.id).toLowerCase(), d.name]));
+  // Dispatch: v2 routes GenPage by key; legacy routes by name.
+  const subMap = hasKeys ? pageKeyById : pageNameById;
 
   const appShell = {
     areas: (app.siteMap.areas || []).map((a) => ({
@@ -40,12 +54,14 @@ async function hydrateSpec(read) {
       ...(a.vectorIcon ? { vectorIcon: a.vectorIcon } : {}),
       groups: (a.groups || []).map((g) => ({
         label: g.title,
-        subAreas: (g.subAreas || []).map((sa) => subAreaToSpec(sa, pageNameById, dashboardNameById)).filter(Boolean),
+        subAreas: (g.subAreas || []).map((sa) => subAreaToSpec(sa, subMap, dashboardNameById)).filter(Boolean),
       })),
     })),
   };
 
   return {
+    // schemaVersion 2 only when pages carry keys (v2 shape); omitted for legacy back-compat.
+    ...(hasKeys ? { schemaVersion: 2 } : {}),
     solution,
     app: { name: app.name, description: app.description || '' },
     entities,
@@ -58,14 +74,31 @@ async function hydrateSpec(read) {
     // view/chart ids), so a rebuild recreates the dashboard against the EXISTING views/charts
     // without needing views[]/charts[] declared (which would else duplicate them or fail validation).
     dashboards: dashboards.map((d) => ({ name: d.name, tiles: d.tiles })),
-    pages: pages.map((p) => ({
-      name: p.name,
-      ...(p.dataSources && p.dataSources.length ? { dataSources: p.dataSources } : {}),
-      ...(p.prompt ? { prompt: p.prompt } : {}),
-      codeFile: p.codeFile,
-    })),
+    pages: pages.map((p) => (hasKeys
+      // v2 shape: key + name + optional semantics + source discriminant (kind:'tsx', codeFile)
+      ? {
+          key: p.key,
+          name: p.name,
+          ...(p.purpose !== undefined ? { purpose: p.purpose } : {}),
+          ...(p.dataSources && p.dataSources.length ? { dataSources: p.dataSources } : {}),
+          ...(p.navigatesTo ? { navigatesTo: p.navigatesTo } : {}),
+          ...(p.pageInput !== undefined ? { pageInput: p.pageInput } : {}),
+          ...(p.prompt ? { prompt: p.prompt } : {}),
+          source: { kind: 'tsx', codeFile: p.codeFile },
+        }
+      // Legacy shape: name + optional fields + top-level codeFile (back-compat with hydrate callers
+      // that predate v2 and do not assign keys to downloaded pages).
+      : {
+          name: p.name,
+          ...(p.dataSources && p.dataSources.length ? { dataSources: p.dataSources } : {}),
+          ...(p.prompt ? { prompt: p.prompt } : {}),
+          codeFile: p.codeFile,
+        })),
     appShell,
+    // design from the page manifest (§7.3) — omit entirely when absent so the spec stays minimal.
+    ...(design !== undefined ? { design } : {}),
   };
 }
 
 module.exports = { hydrateSpec, subAreaToSpec };
+
