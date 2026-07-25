@@ -285,12 +285,20 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   accepted and treated as an implemented tsx page.
 - Validation is **profile-scoped**: `design`/`plan` accept intent pages; a `deploy` build (the default)
   requires every page implemented.
-- **`key`** (schemaVersion 2, required, unique) is the page's stable identity — used by
+- **`key`** (schemaVersion 2, required, unique) is the page's **single stable identity** — used by
   `navigatesTo[].targetKey`, the `PAGEREF_<key>` navigation placeholder, and the `page` sitemap
-  subarea. Renaming a page never changes its key.
+  subarea. Renaming a page never changes its key. It must match `^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`,
+  be unique across all pages in the spec, and (for an implemented page) its `codeFile` path must be
+  unique and workspace-confined (no `..` or absolute-path escape).
 - **`navigatesTo`**: `[{ "targetKey": "<page key>", "data": { … } }]` — declared page-to-page
   navigation (custom ids travel in `data`, read as `pageInput?.data?.<key>` on the target).
 - **`pageInput`**: `{ "data": { … } }` — the input this page expects when navigated to.
+- **Durable page manifest.** The build writes a `<app-unique-name>_pagemanifest` web resource
+  carrying `{ schemaVersion, pages: [{ key, name, pageId, purpose, dataSources, navigatesTo, pageInput }], design }`.
+  This manifest is the source of truth for a download round-trip: download fetches it, enumerates
+  deployed pages fail-closed, and uses `reconcilePageIds` to reconstruct keys and reverse-normalize
+  navigation placeholders back to `"PAGEREF_<key>"` in each page's source. Legacy apps with no
+  manifest get fresh keys assigned on first download.
 
 ## appShell
 ```jsonc

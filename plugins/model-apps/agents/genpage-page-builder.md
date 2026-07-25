@@ -225,22 +225,26 @@ export default GeneratedComponent;
 - **No FluentProvider** — already provided at root
 - **No createTheme/mergeThemes/useTheme** — these don't exist in Fluent UI V9
 - **D3.js for charts** — use `group()` not `nest()`
-- **Cross-page navigation** — when navigating to a sibling generative page that is
-  being built in this same run (i.e., another page in the plan's Pages table), you
-  do NOT have its real GUID yet. Use the placeholder `"PAGEREF_<filename-without-tsx>"`
-  exactly as the `pageId` value. Example:
+- **Cross-page navigation** — when navigating to a sibling generative page, use its
+  **stable key** (the App Spec `pages[].key`, same value as `navigatesTo[].targetKey`).
+  Emit a `"PAGEREF_<key>"` placeholder exactly as the `pageId` value of a
+  `pageType:"generative"` `navigateTo` call — one per declared `navigatesTo` entry.
+  Pass any custom identifier in `data:` (never `recordId`); it arrives on the target
+  as `pageInput?.data?.<field>`. Example:
   ```typescript
   Xrm.Navigation.navigateTo({
     pageType: "generative",
-    pageId: "PAGEREF_pet-detail",   // resolved to real GUID after first upload
-    entityName: "cr_pet",
-    recordId: selectedId,
+    pageId: "PAGEREF_pet-detail",   // stable KEY of the target page; resolved to real GUID post-deploy
+    data: { petId: selectedId },    // custom ids in data (read as pageInput?.data?.petId on the target)
   });
   ```
-  Do NOT invent a fake GUID. Do NOT skip the navigation. The orchestrator's Phase 6.5
-  resolves these placeholders by exact-string substitution after Phase 6 returns the
-  real GUIDs. **Always wrap the placeholder in double quotes** — Phase 6.5 looks for
-  `"PAGEREF_<name>"` as a quoted token to avoid partial-string collisions.
+  Do NOT invent a fake GUID. Do NOT use `recordId` for a custom identifier. Do NOT
+  use the filename or display name — only the stable key. **Always wrap the placeholder
+  in double quotes and place it as the `pageId` value** — the build's single structural
+  resolver only rewrites a `"PAGEREF_<key>"` at a real `navigateTo` call site; a
+  single-quoted, back-ticked, or concatenated form, or any decoy string elsewhere, is
+  rejected by the pre-deploy scan. Every `PAGEREF_<key>` must have a matching
+  `navigatesTo` entry in the spec (the build enforces exact parity).
 
 ### Localization
 

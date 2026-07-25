@@ -330,30 +330,34 @@ const isDark =
 const [isDarkMode, setIsDarkMode] = useState(isDark);
 ```
 
-#### Multi-page builds: use `PAGEREF_` placeholders
+#### Multi-page builds: use `PAGEREF_<key>` placeholders
 
 In a multi-page deployment, page GUIDs don't exist until after first upload. Use a
-`PAGEREF_<filename-without-tsx>` placeholder as the `pageId` — the skill replaces
-these with real GUIDs in a second pass after all pages are deployed.
+`PAGEREF_<key>` placeholder as the `pageId` — where `<key>` is the **stable key** of the
+sibling page (the App Spec `pages[].key`, also used by `navigatesTo[].targetKey`). The build
+replaces these with real GUIDs in a resolved deployment copy after all pages are deployed;
+your canonical `.tsx` keeps the symbolic token (the build never writes a GUID back into it).
 
 ```typescript
-// Navigating to a sibling page — use PAGEREF_ placeholder at build time
+// Navigating to a sibling page — use its stable KEY, and pass any custom id in `data` (never recordId)
 xrm.Navigation.navigateTo({
     pageType: "generative",
-    pageId: "PAGEREF_pet-gallery",    // replaced with real GUID post-deploy
-    entityName: "adopt_pet",
-    recordId: selectedId,
+    pageId: "PAGEREF_pet-gallery",   // <key> of the target page; replaced with the real GUID post-deploy
+    data: { selectedPetId: selectedId },   // custom ids go in data (read as pageInput?.data?.selectedPetId)
 });
 ```
 
-The placeholder format is `PAGEREF_` followed by the sibling page's filename without
-`.tsx` (e.g., `pet-gallery.tsx` → `PAGEREF_pet-gallery`).
+The placeholder format is `PAGEREF_` followed by the target page's stable **key** (e.g. a page
+with `"key": "pet-gallery"` → `PAGEREF_pet-gallery`). The key is rename-stable; a filename or
+display name is not.
 
-**Must be quoted.** The skill's Phase 6.5 fix-up looks for `"PAGEREF_<name>"` as a
-quoted token to avoid partial-string collisions (e.g., `PAGEREF_pet` inside
-`PAGEREF_pet-gallery`). Always emit the placeholder as a string literal inside
-double quotes — assign it to `pageId` as a string, never construct it via
-concatenation.
+**Must be quoted, and it is the pageId.** The build's single structural resolver only rewrites a
+`PAGEREF_<key>` that appears as the **double-quoted `pageId:` value of a `pageType:"generative"`
+`navigateTo` call**. Always emit it exactly there — never single-quoted, back-ticked, concatenated,
+or as a decoy string elsewhere (the pre-deploy scan **rejects** a malformed nav ref and any parity
+mismatch). Every `PAGEREF_<key>` you emit must have a matching `navigatesTo` entry in the page's
+spec, and every declared `navigatesTo.targetKey` must appear as a real nav pageId in the source
+(the build enforces exact parity, and verification confirms each edge resolves to the actual target).
 
 ### Dark Mode Toggle
 

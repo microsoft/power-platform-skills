@@ -45,6 +45,19 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   surface the chart via a dashboard/sitemap subarea, if it must be an explicit component.
 
 ### Added
+- **Fail-closed generative-page deployment.** `PAGEREF_<key>` cross-page navigation is resolved into
+  run-scoped staging copies (the canonical `.tsx` is never GUID-mutated) via a single structural nav
+  oracle that parses actual `navigateTo` call sites. A durable `<app>_pagemanifest` web resource
+  carries page semantics across rebuild and download. Pages are bound to the sitemap key-by-key. A
+  single-machine advisory lock refuses a second concurrent pages deploy on the same machine. Required
+  page-spec validation (unique names/paths, workspace confinement, stable-key grammar) runs before any
+  write.
+- **Mandatory fail-closed page verification + manifest-aware download round-trip.** After apply, the
+  verifier confirms every declared `navigatesTo` edge resolves to the actual target `GenPageId` (exits
+  non-zero if any edge is unresolvable or the verifier cannot run). Download fetches the manifest
+  fail-closed, enumerates pages, and reverse-normalizes GUIDs back to `"PAGEREF_<key>"` in each
+  page's source. `--apply` is restricted to a full build or exactly `--stage data`; recovery from a
+  halted build is a full rerun (idempotent).
 - **Editing a form can now REMOVE a field, not just add one.** The form reconcile was add-only, so
   dropping a field from an explicit `tabs` layout and rebuilding silently kept the stale field on the
   deployed form. The build now prunes fields the deployed form still carries that the spec's **explicit**

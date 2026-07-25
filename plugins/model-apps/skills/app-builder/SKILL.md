@@ -72,6 +72,10 @@ Rules:
   the SDK is the **single sitemap writer**, so a page's nav entry comes from a `page` subarea in `appShell`,
   which the SDK surfaces as a `GenPage` sitemap subarea. See
   [`references/app-spec-schema.md`](../../references/app-spec-schema.md) → `pages[]` for the field shape.
+- **Multi-page navigation uses `PAGEREF_<key>`** (the stable `pages[].key`) as the `pageId` placeholder;
+  the build resolves each placeholder to the real page GUID in a run-scoped staging copy (the canonical
+  `.tsx` is never mutated). After applying, **every nav edge is verified**: the verifier confirms each
+  declared `navigatesTo` target resolves to the actual deployed page's `GenPageId`.
 
 ## Workflow
 
@@ -140,11 +144,10 @@ closing `✓ build complete — X created, Y skipped, Z failed` summary.
 re-run — do a **dry-run first** (drop `--apply`), show the phase-grouped plan, and get a go-ahead
 before applying.)
 
-**Run only what's needed** with phase selectors (the agent decides from detect-existing):
-`--only <phases>` · `--skip <phases>` · `--from <phase>` · `--to <phase>`
-(phases: `solution,data-model,sample-data,web-resources,views,charts,forms,commands,dashboards,app-shell,pages,ai-features,publish`).
-E.g. when all tables already exist: `--apply --skip data-model`. SDK metadata is persisted under
-`<working-dir>/.maker-workspace/` (override with `--workspace`), so edits can reuse it.
+**Phase selectors (`--only/--skip/--from/--to`) are dry-run-only** (inspection). On `--apply`,
+the build accepts ONLY a **full build** (all 13 phases) or exactly `--stage data` (`solution,data-model,sample-data`);
+every other partial range is rejected. Do NOT suggest `--apply --skip data-model` or
+`--apply --from <phase>` — these are not apply-safe.
 
 Narrate progress as it runs. Transient env errors (429 customization-lock, 503 SQL-timeout,
 concurrent-op guards) are **auto-retried** with backoff on `--apply` (the build is idempotent, so a
@@ -152,12 +155,10 @@ retry reuses what's already created). If the build still **halts** (`BuildHalt`)
 unrecoverable error, surface it and ask the user how to proceed via `AskUserQuestion` (adjust the
 spec / cancel), then re-run. Everything is scoped to a dedicated unmanaged solution; `--publish` is opt-in.
 
-**Resuming a failed build:** each `--apply` run appends a durable journal to
-`<working-dir>/.maker-workspace/build-log.jsonl` (one line per step + a terminal `run-end`
-record carrying the halt `phase`/`code` or the completion counts). To resume, inspect the last
-record for where it stopped, then **re-run the exact same command** — the build is idempotent, so
-it reuses every artifact already created and only fills the gaps (or use `--from <phase>` to skip
-ahead). Resume is a re-run, not a replayed checkpoint; the journal is the diagnostic record.
+**Recovery from a failed or halted build: run the full build again.** The build is idempotent —
+every phase re-uses what's already created and only fills the gaps. SDK metadata is persisted under
+`<working-dir>/.maker-workspace/` (override with `--workspace`), so edits reuse it. There is no
+apply-safe `--from <phase>` shortcut; a full rerun is the correct and safe recovery path.
 
 ### Phase 3 — Verify & iterate
 **`--apply --verify` already reconciled the spec against what deployed** (Phase 2) — the build appends a
