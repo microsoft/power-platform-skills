@@ -1,11 +1,11 @@
 ---
 name: app-builder
-version: 0.6.0
-description: (Preview) Builds and edits a model-driven Power Apps app from a natural-language intent — tables, columns, relationships, adaptive forms with sub-grids, views, Choice-column charts, generative pages (genpage-first) for overview/dashboard surfaces, and an app module + sitemap — via the headless cds-maker-sdk. Runs an interactive, multi-turn authoring flow (env selection, App Spec authoring, guardrail lint, plan-mode approval) and a narrated build, and can download a deployed app back into an editable spec to change it. Use when the user says "build an app for X", "create a model-driven app", "make me an app to manage Y", or "edit/add to my app". For a standalone generative page that is not part of an app, use /genpage.
+version: 0.7.0
+description: (Preview) Builds and edits a model-driven Power Apps app from a natural-language intent — tables, columns, relationships, adaptive forms with sub-grids, views, Choice-column charts, generative page intents for overview/dashboard surfaces (page `.tsx` generated in generate-pages after plan approval), and an app module + sitemap — via the headless cds-maker-sdk. Runs an interactive, multi-turn authoring flow (env selection, design-only App Spec authoring with two consent levels, guardrail lint, plan-mode approval, generate-pages, full build) and a narrated build, and can download a deployed app back into an editable spec to change it. Use when the user says "build an app for X", "create a model-driven app", "make me an app to manage Y", or "edit/add to my app". For a standalone generative page that is not part of an app, use /genpage.
 author: Microsoft Corporation
 argument-hint: "<app description>"
 user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, EnterPlanMode, ExitPlanMode, TaskCreate, TaskUpdate, TaskList
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, AskUserQuestion, EnterPlanMode, ExitPlanMode, TaskCreate, TaskUpdate, TaskList
 ---
 
 # app-builder — intent → model-driven app
@@ -65,12 +65,14 @@ Rules:
 - **Prefer generative pages** for overviews/dashboards by default. Propose a Home/overview genpage when
   the app benefits from one — never force-add it.
 - A **traditional `dashboards[]`** is emitted **only on explicit request** (e.g. "use a classic dashboard").
-- Each generative page needs a **`codeFile`** (its `.tsx`). You author that page code **here, at the skill
-  layer**, before the build — a page always resolves to a concrete `codeFile`. Follow the generative-page
-  code rules in [`references/rules.md`](../../references/rules.md).
+- A generative page is authored as a **design intent** (`source: { kind: "intent" }`,
+  `schemaVersion: 2`) during Phase 1 — its `.tsx` is **not** written yet. The page's `.tsx`
+  is produced in **Phase 1.5 — Generate pages** after plan approval and after the data
+  pre-build creates the tables so `pac model genpage generate-types` can emit `RuntimeTypes.ts`.
+  See [`references/authoring-flow.md`](../../references/authoring-flow.md) → *Pages* and design §5/§8.
 - The build's `pages` phase uploads each page via `pac model genpage upload` **without `--add-to-sitemap`** —
-  the SDK is the **single sitemap writer**, so a page's nav entry comes from a `page` subarea in `appShell`,
-  which the SDK surfaces as a `GenPage` sitemap subarea. See
+  the SDK is the **single sitemap writer**, so a page's nav entry comes from a `page` subarea in `appShell`
+  (referenced by the page's **`key`**), which the SDK surfaces as a `GenPage` sitemap subarea. See
   [`references/app-spec-schema.md`](../../references/app-spec-schema.md) → `pages[]` for the field shape.
 - **Multi-page navigation uses `PAGEREF_<key>`** (the stable `pages[].key`) as the `pageId` placeholder;
   the build resolves each placeholder to the real page GUID in a run-scoped staging copy (the canonical
@@ -98,29 +100,60 @@ running every prompt yourself via `AskUserQuestion`. In short:
 4. **Two-level authoring** — **first read the App Spec format** so you author to the exact
    shape (do this once; don't go spelunking through scripts):
    [`references/app-spec-schema.md`](../../references/app-spec-schema.md) and the worked sample
-   [`samples/app-spec.support-desk.json`](../../samples/app-spec.support-desk.json). Then propose
-   the **data model** (entities, columns, relationships); confirm via `AskUserQuestion`, then run an
-   **early data-model lint** (`spec-lint.js` on the partial spec — catches model errors like the
-   relationship-vs-lookup collision before forms are authored on top; a data-model-only spec surfaces
-   only data-model findings) before moving on. Then propose **forms + views + charts + sample data** together; confirm. **Classify each surface per the
-   genpage-first policy above** — record CRUD → a model-driven form/view; overview/dashboard/analytics/
-   landing → a generative `page` in `pages[]` (author its `.tsx` `codeFile` following
-   [`references/rules.md`](../../references/rules.md)); emit a classic `dashboards[]` only on explicit
-   request. Persist
-   `app-spec.json` after each level so the user can hand-edit between turns. Forms default to
-   `layout: "auto"`; use explicit `tabs`/`sections`/`columns` when the user wants real grouping
-   (see the schema). **Show the form wireframe** so the user can see the layout + Notes before
-   approving: `node "${PLUGIN_ROOT}/scripts/preview-form.js" --spec @<working-dir>/app-spec.json`.
-   **Don't pre-create tables/columns** during authoring — the build does it idempotently (adds
-   only what's missing).
+   [`samples/app-spec.support-desk.json`](../../samples/app-spec.support-desk.json). Phase 1 is
+   **design-only**: never emit page `.tsx` here.
+   - **Level (a) — data model**: propose entities/columns/relationships; confirm via
+     `AskUserQuestion`; run the **early data-model lint** (catches structural errors such as the
+     relationship-vs-lookup collision before forms are authored on top).
+   - **Level (b) — artifacts + page-intents + design**: once Level (a) is confirmed, propose
+     forms + views + charts + sample data **and** page **intents** (key/name/purpose/dataSources/
+     navigatesTo/pageInput, `source: { kind: "intent" }`) per the genpage-first policy above, plus
+     the optional `design` contract. **Do not author page `.tsx` here.** Emit `dashboards[]` only
+     on explicit request. Persist `app-spec.json` after each level.
+   - **Whole-app preview** (design gate for Level (b)): `node "${PLUGIN_ROOT}/scripts/preview-app.js" --spec @<working-dir>/app-spec.json`
+     renders data-model + sitemap + form wireframes + page-intents + design contract. For a single
+     form only: `node "${PLUGIN_ROOT}/scripts/preview-form.js" --spec @<working-dir>/app-spec.json`.
+   - **Don't pre-create tables/columns** — the build does it idempotently.
 5. **Guardrail lint (hard gate)** — run the **full** `spec-lint.js` on the complete spec; **errors block**, warnings teach:
    ```bash
    node -e "const{lintAppSpec}=require('${PLUGIN_ROOT}/scripts/lib/spec-lint.js');const s=require('<working-dir>/app-spec.json');const r=lintAppSpec(s);console.log(JSON.stringify(r,null,2));process.exit(r.ok?0:1)"
    ```
 6. **Plan-mode approval (the single build approval)** — present the plan **including the build
-   dry-run's phase-grouped plan** (run `build-model-app.js` without `--apply`) inside `EnterPlanMode`,
-   then `ExitPlanMode` to get the user's go-ahead. On approval, Phase 2 **applies directly** (no second
-   dry-run/go-ahead). Write `model-app-plan.md`.
+   dry-run's phase-grouped plan** (run `build-model-app.js` without `--apply`, using the `plan`
+   profile that allows intent pages) inside `EnterPlanMode`, then `ExitPlanMode` to get the user's
+   go-ahead. On approval, **Phase 1.5** (generate-pages) runs first, then **Phase 2** applies
+   directly (no second dry-run/go-ahead). Write `model-app-plan.md`.
+
+### Phase 1.5 — Generate pages (main loop, headless workers)
+
+After plan-mode approval (before the full build):
+
+1. **Data pre-build** — schema-only build so `generate-types` can resolve real column names:
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/build-model-app.js" \
+     --env <envUrl> --spec @<working-dir>/app-spec.json --stage data --apply
+   ```
+   `--stage data` applies solution + data-model only — **no `--sample-data`** (rows are created
+   once in the full build). Only `--stage data` is apply-safe; all other `--stage` selectors
+   and legacy `--from/--to/--only/--skip` selectors are dry-run inspection only.
+
+2. **Types** — generate Dataverse type bindings:
+   ```bash
+   pac model genpage generate-types
+   ```
+
+3. **Generate** — for each intent page (`source.kind === "intent"`), dispatch the **headless**
+   `page-builder` worker via `Task` with the page intent + `RuntimeTypes.ts` + the optional
+   `design` contract + the navigation graph (`PAGEREF_<key>` for cross-page links). Custom nav
+   ids go in `data:` — never `recordId` (read as `pageInput?.data?.<field>`). Validate each
+   generated page (compile/structure + verified columns + navigation), then flip `source`
+   `intent → { kind: "tsx", codeFile }`. The transition is **all-or-nothing**.
+
+4. Proceed to **Phase 2** (full idempotent build), which validates under the `deploy` profile
+   and **fails fast** if any page is still `source.kind === "intent"`.
+
+> ⚠️ The interactive author **never** runs inside a `Task` subagent. Only pure, headless
+> code-gen workers are dispatched here — all user-facing prompts originate in the main loop.
 
 ### Phase 2 — Build (narrated, main loop)
 
@@ -144,10 +177,11 @@ closing `✓ build complete — X created, Y skipped, Z failed` summary.
 re-run — do a **dry-run first** (drop `--apply`), show the phase-grouped plan, and get a go-ahead
 before applying.)
 
-**Phase selectors (`--only/--skip/--from/--to`) are dry-run-only** (inspection). On `--apply`,
-the build accepts ONLY a **full build** (all 13 phases) or exactly `--stage data` (`solution,data-model,sample-data`);
-every other partial range is rejected. Do NOT suggest `--apply --skip data-model` or
-`--apply --from <phase>` — these are not apply-safe.
+**Stage selector (`--stage <data|ui|app|publish>`)** maps to its phase range. On `--apply`, ONLY
+`--stage data` is accepted (solution + data-model, no rows in run 1; run 2 is a full build). All
+other stages and the legacy `--from/--to/--only/--skip` selectors are dry-run inspection only —
+their phase ranges are not dependency-closed and are rejected on `--apply`. Do NOT suggest
+`--apply --stage ui`, `--apply --from <phase>`, or `--apply --skip data-model`.
 
 Narrate progress as it runs. Transient env errors (429 customization-lock, 503 SQL-timeout,
 concurrent-op guards) are **auto-retried** with backoff on `--apply` (the build is idempotent, so a
@@ -204,6 +238,9 @@ node "${PLUGIN_ROOT}/scripts/teardown-model-app.js" \
 - **`POWER_PLATFORM_SKILLS_NONINTERACTIVE=1`** (or `true`) — env-var equivalent of
   `--non-interactive`. Same semantics: suppresses prompts only, never authorizes destructive ops.
   Set this in CI job environments to avoid interactive-prompt hangs.
+- In **autopilot / eval mode** (`--non-interactive` + `--allow-destructive`), `preview-app.js`
+  is written to disk as the design artifact before plan execution; interactive consent gates are
+  bypassed and the build is fail-closed against any destructive op not explicitly authorized.
 
 ### AI-first features
 
@@ -288,8 +325,9 @@ topological, `$parent`→`@odata.bind` using the entity-set name) → **web reso
 `createWebResource` for form JS/HTML/CSS) → **views** → **charts** → **forms** (primary + columns
 laid out, explicit `tabs` honored; sub-grids, quick-views, and form JS (`events[]`) applied as
 canonical control cells / the `/bag/c` events region via the SDK's generic `addElement` surface)
-→ **app module + sitemap** → **generative pages** (upload each `pages[]` page via `pac model genpage upload`,
-no `--add-to-sitemap`; then the SDK rewrites the sitemap once to add the `GenPage` subareas) → publish
+→ **app module + sitemap** → **generative pages** (each page's `.tsx` was generated in Phase 1.5;
+the build uploads each `pages[]` page via `pac model genpage upload`, no `--add-to-sitemap`;
+then the SDK rewrites the sitemap once to add the `GenPage` subareas) → publish
 (opt-in). When the app has generative-page subareas the app module is created first WITHOUT them (they can't
 resolve until the pages upload), then the pages phase rewrites the sitemap. All Dataverse access goes through the SDK, so the
 downloaded metadata lands in `.maker-workspace/`. Independent ops (columns, views/charts/forms)

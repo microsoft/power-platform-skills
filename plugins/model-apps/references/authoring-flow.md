@@ -244,6 +244,12 @@ hand-edit between turns.
 **Do not present the entire spec at once.** Level (a) must be agreed before
 Level (b) begins.
 
+Phase 1 is a **design-only author**: page `.tsx` is never written here — pages are declared as
+**intents** (`source: { kind: "intent" }`) and their code is generated in **Phase 1.5 — Generate
+pages** (see `SKILL.md` → Phase 1.5) **after** plan approval and after the data pre-build. The
+two confirmed levels are: **(a) data model** and **(b) artifacts + page-intents + design**. The
+author never emits `.tsx`; pages remain intents until generate-pages.
+
 > **Read the spec format once, up front** — don't reverse-engineer it from scripts:
 > [`references/app-spec-schema.md`](./app-spec-schema.md) (every field) and the worked sample
 > [`samples/app-spec.support-desk.json`](../samples/app-spec.support-desk.json). Author to that
@@ -330,11 +336,13 @@ are no-ops until those sections exist), so treat any `errors[]` here as a **hard
 model and re-run before moving to Level (b). Warnings teach — surface and proceed. (The full lint at
 Step 5 re-checks the complete spec once artifacts are added.)
 
-### Level (b) — Artifacts and sample data
+### Level (b) — Artifacts, page-intents, and design
 
 Once the data model is confirmed, propose all of the following **together** in a
 single turn (they are closely related — the user should see charts and sample
-data alongside the forms they reference):
+data alongside the forms they reference). **This level is design-only: do not
+author page `.tsx` here** — propose page intents and defer code generation to
+Phase 1.5.
 
 #### Forms
 
@@ -433,10 +441,39 @@ it with realistic, domain-appropriate records — not "Test Record 1". Include:
   not integer codes.
 
 Present Level (b) as a proposal, then use `AskUserQuestion` to let the user edit
-or remove any section (forms, views, charts, sample data):
+or remove any section (forms, views, charts, sample data, page intents):
 
-> "Here are the proposed forms, views, charts, and sample data for your app. Feel
+> "Here are the proposed forms, views, charts, sample data, and page intents for your app. Feel
 > free to edit any section — or tell me what to change — before I lock the spec."
+
+#### Pages (generative page intents — design only)
+
+Per the **genpage-first policy** (`SKILL.md` → Genpage-first policy): overview/dashboard/analytics/
+landing surfaces → a page **intent** in `pages[]`; record CRUD → a model-driven form + view.
+
+Author the intent shape — **not `.tsx`**:
+
+```json
+{
+  "key": "overview",
+  "name": "Overview",
+  "purpose": "At-a-glance dashboard of open work",
+  "dataSources": ["contoso_workorder"],
+  "navigatesTo": [{ "targetKey": "wo-detail", "data": { "workOrderId": "string" } }],
+  "pageInput": { "data": { "workOrderId": "string" } },
+  "source": { "kind": "intent" }
+}
+```
+
+- **`key`** is the single stable identity: used by `navigatesTo.targetKey`, cross-page
+  `PAGEREF_<key>` placeholders, and `appShell` page subareas. Reference each page from
+  `appShell` by **`key`**. Never use `recordId` for nav; custom ids go in `data:` (read as
+  `pageInput?.data?.<field>`).
+- The optional **`design` contract** (accent/density/cornerRadius/darkMode/layout) threads
+  to every page for a consistent look — propose one when the user cares about visual style.
+- **Do not write `codeFile` here.** The `.tsx` is generated in Phase 1.5 — Generate pages
+  (after plan approval + data pre-build). Pages remain `source: { kind: "intent" }` until then.
+- See [`references/app-spec-schema.md`](./app-spec-schema.md) → `pages[]` and `design`.
 
 #### App shell
 
@@ -559,25 +596,41 @@ Phase 2 (that redundant double-gate is removed; plan mode is the one build appro
 
 Then call `ExitPlanMode` to request user approval.
 
-- If **approved**: proceed to Step 7.
+- If **approved**: proceed to Step 6.5.
 - If **changes requested**: revise the relevant section (loop back to Step 4 if
   the spec needs editing, re-run lint, then re-enter plan mode).
 
 Mark the "Build data model" and "Author artifacts and sample data" tasks complete
 after approval.
 
+## Step 6.5 — Generate pages (after approval — main loop)
+
+Plan-mode approval is the **single build approval**. After the user approves, proceed to
+**Phase 1.5 — Generate pages** as documented in `SKILL.md` → Phase 1.5:
+
+1. **Data pre-build** — `build-model-app.js --stage data --apply` (solution + data-model only;
+   no rows — sample data is created in the full build). Only `--stage data` is apply-safe; do not
+   apply any other stage in isolation.
+2. **Type generation** — `pac model genpage generate-types` → `RuntimeTypes.ts`.
+3. **Page generation** — headless `page-builder` worker (via `Task`) fills each intent page's
+   `.tsx`; all-or-nothing transition `source: intent → { kind: "tsx", codeFile }`.
+
+After generate-pages, proceed to Step 7 and then Phase 2 (the full idempotent build). You are
+still in the main loop — all user-facing narration happens here.
+
 ## Step 7 — Write Artifacts and Return
 
 ### Write app-spec.json
 
-Write the final, lint-clean spec to `<working-dir>/app-spec.json`. This is the
-**machine contract** consumed by the downstream build step — do not abbreviate or
-omit any section.
+After Step 6.5 (generate-pages), `<working-dir>/app-spec.json` has `source: { kind: "tsx", codeFile }`
+for every page. Confirm the file is current — this is the **machine contract** consumed by the
+downstream build step — do not abbreviate or omit any section.
 
 The spec shape follows `plugins/model-apps/samples/app-spec.support-desk.json`:
 
 ```
 {
+  "schemaVersion": 2,
   "solution": { "uniqueName": "...", "displayName": "...", "publisherPrefix": "..." },
   "app": { "name": "...", "description": "..." },
   "entities": [ { "schemaName", "displayName", "pluralName", "primaryAttribute", "columns" } ],
@@ -585,6 +638,8 @@ The spec shape follows `plugins/model-apps/samples/app-spec.support-desk.json`:
   "forms": [ { "entity", "type", "name", "layout", "subgrids?" } ],
   "views": [ { "entity", "type", "name", "columns", "sort", "activeOnly" } ],
   "charts": [ { "entity", "name", "groupBy", "measure", "chartType" } ],
+  "pages": [ { "key", "name", "purpose", "dataSources", "source": { "kind": "tsx", "codeFile": "..." } } ],
+  "design?": { "accent", "density", "cornerRadius", "darkMode", "layout" },
   "appShell": { "areas": [ { "label", "groups": [ { "label", "subAreas": [...] } ] } ] },
   "sampleData": { "<entitySchemaName>": [ { ...fields, "$parent"?: {...} } ] }
 }
@@ -610,6 +665,7 @@ Append a summary entry to `<working-dir>/workflow-log.md`:
 
 ```
 Phase 1 complete.
+Phase 1.5 complete (N intent pages → tsx).
 Spec written: <working-dir>/app-spec.json
 Lint: ok=true, errors=0, warnings=N
 Plan approved: yes
@@ -648,16 +704,18 @@ Mark the "Write app-spec.json and model-app-plan.md" task complete.
 - **Do NOT hand-write metadata XML or solution ZIP files.** The build engine
   (`build-model-app.js` → `lib/sdk-build.js`) produces all FormXml/FetchXml/sitemap and Web API
   writes via the SDK.
-- **Generative pages ARE authored here** for overview/dashboard surfaces (the genpage-first policy):
-  propose a `pages[]` entry and author its `.tsx` `codeFile` following the generative-page code rules in
-  [`rules.md`](rules.md); the build's `pages` phase uploads each page. (A **standalone** page that is not
-  part of an app is the separate `/genpage` skill.)
+- **The author is design-only** — generative pages for overview/dashboard surfaces are authored as
+  **intents** (`source: { kind: "intent" }`, `schemaVersion: 2`); **`.tsx` is never written here**.
+  Pages remain intents until Phase 1.5 — Generate pages (after plan approval + data pre-build). See
+  `SKILL.md` → Phase 1.5. (A **standalone** page not part of an app is the separate `/genpage` skill.)
+- **Only `--stage data` is apply-safe** in the data pre-build (Phase 1.5 step 1); all other `--stage`
+  selectors and `--from/--to/--only/--skip` selectors are rejected on `--apply`.
 - **Interaction points are limited to:**
   1. Step 2 — environment selection (if multiple auth profiles).
   2. Step 3 — app selection and solution selection.
   3. Step 4 — two-level authoring turns (data model confirmation, then
-     artifacts + sample data confirmation). These are the only turns where
-     the spec is shaped.
+     artifacts + page-intents + design confirmation). These are the only turns
+     where the spec is shaped.
   4. Step 5 — lint-warning acknowledgement (if warnings present).
   5. Step 6 — plan-mode gate (`EnterPlanMode` / `ExitPlanMode`).
 - **No other interaction points.** Do not ask questions outside these steps.
