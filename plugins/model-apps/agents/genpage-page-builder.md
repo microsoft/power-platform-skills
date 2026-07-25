@@ -245,6 +245,12 @@ export default GeneratedComponent;
   single-quoted, back-ticked, or concatenated form, or any decoy string elsewhere, is
   rejected by the pre-deploy scan. Every `PAGEREF_<key>` must have a matching
   `navigatesTo` entry in the spec (the build enforces exact parity).
+- **Every linked page must be sitemap-placed.** A page targeted by a `PAGEREF_<key>` nav
+  call must be explicitly placed as a `page` subarea in the app's `appShell`; navigation-
+  only (headless) pages are not supported — validation rejects them. A "detail" page that
+  receives a caller-supplied id or context is a normal sitemap page using `pageInput`.
+  See [`references/rules.md`](../references/rules.md) → *Multi-page builds* and
+  [`references/app-spec-schema.md`](../references/app-spec-schema.md) → `## pages[]`.
 
 ### Localization
 
