@@ -28,10 +28,10 @@
     { "entity": "new_order", "name": "Orders by Status", "groupBy": "new_status", "measure": "count", "chartType": "Pie" }
   ],
   "pages": [
-    { "key": "overview", "name": "overview", "purpose": "KPI overview of orders",
+    { "key": "overview", "name": "Overview", "purpose": "KPI overview of orders",
       "dataSources": ["new_order"], "source": { "kind": "intent" },
       "navigatesTo": [{ "targetKey": "order-detail", "data": { "orderId": "string" } }], "pageInput": { "data": {} } },
-    { "key": "order-detail", "name": "order-detail", "purpose": "One order + line items",
+    { "key": "order-detail", "name": "Order Detail", "purpose": "One order + line items",
       "dataSources": ["new_order"], "source": { "kind": "intent" }, "pageInput": { "data": { "orderId": "string" } } }
   ],
   "appShell": {
