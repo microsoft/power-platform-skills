@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
-const { validateAppSpec, columnTypeMap, relationshipFor, lookupColumnsFor, childRelationshipsFor, relationshipSchemaName, manyToManySchemaName, resolveSampleRecords } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
+const { validateAppSpec, columnTypeMap, relationshipFor, lookupColumnsFor, childRelationshipsFor, relationshipSchemaName, manyToManySchemaName, resolveSampleRecords, migrateAppSpec } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
 
 const sample = JSON.parse(
   fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.project-tracker.json'), 'utf8')
@@ -443,13 +443,18 @@ test('childRelationshipsFor returns the child (many) side of each 1:N where the 
 // A minimal v2 spec that passes everything EXCEPT the page rule under test. schemaVersion 2 so the
 // stable-key rules apply; one entity so the base validation is satisfied.
 function pageSpec(pages) {
+  // Build a subarea per page so the every-page-placed rule (Task 3 / Plan 5) does not add spurious
+  // errors for tests that exercise OTHER page validations (key grammar, codeFile paths, etc.).
+  // Rejection tests already check for their specific error via .some(), so an extra "unknown page"
+  // error for an invalid key does not break them.
+  const subAreas = (pages || []).filter(p => p && p.key).map(p => ({ page: p.key, title: p.name || p.key }));
   return {
     schemaVersion: 2,
     solution: { uniqueName: 'S', publisherPrefix: 'new' },
     app: { name: 'A' },
     entities: [{ schemaName: 'new_widget', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
     pages,
-    appShell: { areas: [] },
+    appShell: { areas: subAreas.length ? [{ label: 'Main', groups: [{ label: 'Main', subAreas }] }] : [] },
   };
 }
 
@@ -560,4 +565,68 @@ test('validateAppSpec rejects an unknown column in ai.summaries.tables columns[]
 test('validateAppSpec passes when ai is absent (no regression)', () => {
   const r = validateAppSpec(cloneDesk());
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+// Task 3 — every page must be an appShell subarea + accept optional pages[].pageId (edit-snapshot).
+// v2PagesSpec builds a minimal schemaVersion-2 spec; subAreas is the sitemap group's subAreas array;
+// extraPageFields is merged into the FIRST page (overview) so we can exercise per-page fields like pageId.
+function v2PagesSpec(subAreas, extraPageFields) {
+  const extra = extraPageFields || {};
+  const spec = {
+    schemaVersion: 2,
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'A' },
+    entities: [{ schemaName: 'new_order', displayName: 'Order', primaryAttribute: { schemaName: 'new_name', displayName: 'Order #' }, columns: [] }],
+    pages: [
+      Object.assign({ key: 'overview', name: 'Overview', source: { kind: 'tsx', codeFile: 'overview.tsx' }, navigatesTo: [{ targetKey: 'order-detail' }] }, extra),
+      { key: 'order-detail', name: 'Order Detail', source: { kind: 'tsx', codeFile: 'order-detail.tsx' } },
+    ],
+    appShell: { areas: [{ label: 'Sales', groups: [{ label: 'Work', subAreas }] }] },
+  };
+  return migrateAppSpec(spec);
+}
+
+test('validateAppSpec REJECTS a headless page (nav target with no sitemap subarea) — deploy profile', () => {
+  // order-detail is a navigatesTo target but has no appShell subarea => headless => must be rejected.
+  const spec = v2PagesSpec([{ page: 'overview', title: 'Overview' }, { entity: 'new_order', title: 'Orders' }]);
+  const r = validateAppSpec(spec, { profile: 'deploy' });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /order-detail/.test(e) && /not placed in the sitemap/i.test(e)), JSON.stringify(r.errors));
+});
+
+test('validateAppSpec ACCEPTS when every page is a sitemap subarea', () => {
+  const spec = v2PagesSpec([{ page: 'overview', title: 'Overview' }, { page: 'order-detail', title: 'Order Detail' }, { entity: 'new_order', title: 'Orders' }]);
+  const r = validateAppSpec(spec, { profile: 'deploy' });
+  assert.ok(r.ok, JSON.stringify(r.errors));
+});
+
+test('the structural profile does NOT enforce page placement (shape-only / eval-harness use)', () => {
+  // order-detail is headless but structural profile skips the membership rule entirely.
+  const spec = v2PagesSpec([{ page: 'overview', title: 'Overview' }]);
+  const r = validateAppSpec(spec, { profile: 'structural' });
+  assert.ok(!r.errors.some((e) => /not placed in the sitemap/.test(e)), JSON.stringify(r.errors));
+});
+
+test('validateAppSpec ACCEPTS a valid pages[].pageId GUID (edit-snapshot, C3)', () => {
+  const spec = v2PagesSpec(
+    [{ page: 'overview', title: 'Overview' }, { page: 'order-detail', title: 'Order Detail' }],
+    { pageId: '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8' }
+  );
+  const r = validateAppSpec(spec, { profile: 'deploy' });
+  assert.ok(r.ok, JSON.stringify(r.errors));
+});
+
+test('validateAppSpec REJECTS a non-GUID pages[].pageId', () => {
+  const badSpec = v2PagesSpec(
+    [{ page: 'overview', title: 'Overview' }, { page: 'order-detail', title: 'Order Detail' }],
+    { pageId: 'not-a-guid' }
+  );
+  const r = validateAppSpec(badSpec, { profile: 'deploy' });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /pageId/.test(e) && /GUID/i.test(e)), JSON.stringify(r.errors));
+  const emptySpec = v2PagesSpec(
+    [{ page: 'overview', title: 'Overview' }, { page: 'order-detail', title: 'Order Detail' }],
+    { pageId: '' }
+  );
+  assert.ok(!validateAppSpec(emptySpec, { profile: 'deploy' }).ok, 'empty pageId is rejected');
 });
