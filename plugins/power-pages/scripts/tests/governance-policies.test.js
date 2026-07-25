@@ -25,10 +25,8 @@ const NEW_AUTH_ENABLE_POLICIES = [
   'EnableExternalAuthProviders',
 ];
 
-test('SUPPORTED_POLICIES includes the auth policies, maker copilot, and the nine auth Enable* policies', () => {
+test('SUPPORTED_POLICIES includes maker copilot and the nine auth Enable* policies', () => {
   assert.deepEqual([...SUPPORTED_POLICIES], [
-    'PowerPages_DisableAuthenticationOpenIdConnect',
-    'PowerPages_DisableAuthenticationSAML20',
     'EnableMakerCopilotForExistingSites',
     ...NEW_AUTH_ENABLE_POLICIES,
   ]);
@@ -115,11 +113,11 @@ test('maker copilot mapping entry has the required render fields', () => {
   assert.ok(maker.sideEffectCallout);
 });
 
-test('each new auth Enable* policy is configured like PowerPages_DisableAuthenticationOpenIdConnect', () => {
+test('each new auth Enable* policy is configured like the reference EnableProtocolOpenIdConnect policy', () => {
   const oidc = mapping.policies.find(
-    (p) => p.policyName === 'PowerPages_DisableAuthenticationOpenIdConnect'
+    (p) => p.policyName === 'EnableProtocolOpenIdConnect'
   );
-  assert.ok(oidc, 'reference OIDC policy entry present');
+  assert.ok(oidc, 'reference OIDC protocol policy entry present');
   for (const name of NEW_AUTH_ENABLE_POLICIES) {
     const entry = mapping.policies.find((p) => p.policyName === name);
     assert.ok(entry, `mapping missing policy ${name}`);
@@ -136,8 +134,7 @@ test('each new auth Enable* policy is configured like PowerPages_DisableAuthenti
     assert.ok(entry.stateParaphrase.Disabled, `${name} stateParaphrase.Disabled`);
     assert.ok(entry.sideEffectCallout, `${name} sideEffectCallout`);
     // These are Enable* auth policies: the sign-out side effect fires when the
-    // auth path is turned OFF (disable = None / Exclude), the mirror of the
-    // Disable* reference policy which fires on All / Include.
+    // auth path is turned OFF (disable = None / Exclude).
     assert.deepEqual(
       entry.sideEffectCallout.policyValueTriggers,
       ['None', 'Exclude'],

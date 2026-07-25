@@ -2,17 +2,16 @@
 name: manage-governance
 description: >-
   Apply, inspect, and monitor Power Pages tenant governance policies. Covers
-  twelve policies: disabling legacy authentication (OpenID Connect / SAML 2.0)
-  on portals, toggling Maker Copilot for existing sites, and enabling/disabling
+  ten policies: toggling Maker Copilot for existing sites, and enabling/disabling
   sign-in protocols (OpenID Connect, SAML 2.0, WS-Federation, OAuth 2.0), social
   identity providers (Google, Facebook, Microsoft), local login, and external
   auth providers. Sets a policy environment-wide or per portal, watches the
   rollout to completion, and reads current state at the environment or portal
   level. Use when the user wants to "turn off OpenID Connect on Power Pages",
-  "disable SAML on a portal", "block legacy auth on portals", "enable/disable
-  Maker Copilot for existing sites", "enable Google/Facebook/Microsoft sign-in",
+  "disable SAML on a portal", "block a sign-in protocol on portals",
+  "enable/disable Maker Copilot for existing sites", "enable Google/Facebook/Microsoft sign-in",
   "turn off local login", "disable a sign-in protocol", "check which portals have
-  legacy auth disabled", or "see the governance status of my Power Pages portals"
+  a sign-in protocol enabled", or "see the governance status of my Power Pages portals"
   - even if they only name the policy or its side effect without saying
   "governance".
 user-invocable: true
@@ -25,12 +24,10 @@ model: opus
 
 # Manage Power Pages Governance Policies
 
-Apply and inspect Power Pages tenant-level governance policies. Twelve policies are supported today. Two disable legacy authentication providers on Power Pages portals, one toggles Maker Copilot for existing sites, and nine enable/disable Power Pages authentication features (sign-in protocols, social identity providers, local login, and external providers):
+Apply and inspect Power Pages tenant-level governance policies. Ten policies are supported today. One toggles Maker Copilot for existing sites, and nine enable/disable Power Pages authentication features (sign-in protocols, social identity providers, local login, and external providers):
 
 | Policy | What it does |
 |--------|--------------|
-| `PowerPages_DisableAuthenticationOpenIdConnect` | Turns off OpenID Connect (OIDC) authentication on Power Pages portals. |
-| `PowerPages_DisableAuthenticationSAML20` | Turns off SAML 2.0 authentication on Power Pages portals. |
 | `EnableMakerCopilotForExistingSites` | Turns Maker Copilot on (or off) for existing Power Pages sites in the environment. |
 | `EnableProtocolOpenIdConnect` | Enables (or disables) the OpenID Connect sign-in protocol on Power Pages sites. |
 | `EnableProtocolSAML20` | Enables (or disables) the SAML 2.0 sign-in protocol on Power Pages sites. |
@@ -42,7 +39,7 @@ Apply and inspect Power Pages tenant-level governance policies. Twelve policies 
 | `EnableAuthenticationLocalLogin` | Enables (or disables) local (username & password) sign-in on Power Pages sites. |
 | `EnableExternalAuthProviders` | Enables (or disables) all external (social / federated) identity providers on Power Pages sites. |
 
-These are **admin-only** operations — applying an auth policy stops or starts the relevant authentication path for the targeted scope, and the Maker Copilot policy toggles the Copilot authoring experience for existing sites (environment or portal scope). All nine `Enable*` authentication policies use the **same configuration and Enable/Disable experience** as `PowerPages_DisableAuthenticationOpenIdConnect` — uniform governance (every site / no sites / only specific sites / all except specific sites), the same consent gate, and the same verify tables. Always confirm with the user before posting a Set call.
+These are **admin-only** operations — applying an auth policy stops or starts the relevant authentication path for the targeted scope, and the Maker Copilot policy toggles the Copilot authoring experience for existing sites (environment or portal scope). All nine `Enable*` authentication policies use the **same configuration and Enable/Disable experience** as `EnableMakerCopilotForExistingSites` — uniform governance (every site / no sites / only specific sites / all except specific sites), the same consent gate, and the same verify tables. Always confirm with the user before posting a Set call.
 
 **Initial request:** $ARGUMENTS
 
@@ -52,10 +49,10 @@ These are **admin-only** operations — applying an auth policy stops or starts 
 - **Two identifier shapes per portal.** The portal-scoped APIs take `portalId` (the value in the `Id` field on the `/websites` response). The Dataverse `WebsiteRecordId` shown in PAC and YAML is **not** what these APIs accept. The skill resolves portals via the same `/websites` listing that `manage-firewall` uses.
 - **Env override is required.** The skill lets the user pick any environment they have access to. Each script accepts `--envId <guid>` and overrides the env in the Power Platform API base URL. When `--envId` is omitted, the script falls back to the env the user is signed into via PAC.
 - **Set is async; poll until terminal.** `POST /governance` returns immediately but the policy roll-out is asynchronous. Status comes from `GET /governance/status/{policy}`. The `set-governance.js` script polls this endpoint until the status reaches a terminal value (`Succeeded` / `Completed` for success, `Failed` for failure) or the timeout elapses.
-- **Policy names are case-sensitive.** Use the exact policy strings — `PowerPages_DisableAuthenticationOpenIdConnect`, `PowerPages_DisableAuthenticationSAML20`, `EnableMakerCopilotForExistingSites`, `EnableProtocolOpenIdConnect`, `EnableProtocolSAML20`, `EnableProtocolWsFederation`, `EnableProtocolOpenAuth`, `EnableIdpOAuthFacebook`, `EnableIdpOAuthGoogle`, `EnableIdpOAuthMicrosoft`, `EnableAuthenticationLocalLogin`, and `EnableExternalAuthProviders`. Anything else will be rejected by the API.
+- **Policy names are case-sensitive.** Use the exact policy strings — `EnableMakerCopilotForExistingSites`, `EnableProtocolOpenIdConnect`, `EnableProtocolSAML20`, `EnableProtocolWsFederation`, `EnableProtocolOpenAuth`, `EnableIdpOAuthFacebook`, `EnableIdpOAuthGoogle`, `EnableIdpOAuthMicrosoft`, `EnableAuthenticationLocalLogin`, and `EnableExternalAuthProviders`. Anything else will be rejected by the API.
 - **Plain language with the user.** Talk about "turning off the OpenID Connect / SAML sign-in path on Power Pages portals" or "enabling Google sign-in on your sites". Only show the policy string when the user asks for the technical name.
-- **Disambiguate OpenID Connect / SAML.** Two policy families both mention OpenID Connect and SAML: the legacy block rules (`PowerPages_DisableAuthentication*`) and the newer per-protocol toggles (`EnableProtocol*`). When the user says only "OpenID Connect" or "SAML" with no other qualifier, the bare shorthand maps to the legacy `PowerPages_DisableAuthentication*` block rule for backward compatibility. If the user says "enable …", "the … protocol", or otherwise signals the newer toggle — or if it's genuinely unclear — ask which they mean before proceeding.
-- **No silent overrides.** Applying a `Disable*` policy (or **disabling** any `Enable*` authentication policy — `EnableProtocol*`, `EnableIdp*`, `EnableAuthenticationLocalLogin`, `EnableExternalAuthProviders`) will sign existing users out of any portal that uses the targeted provider. Surface that consequence at the consent gate before posting. (The Maker Copilot policy has no such sign-out side effect.)
+- **OpenID Connect / SAML map to the protocol toggles.** "OpenID Connect" / "OIDC" resolves to `EnableProtocolOpenIdConnect` and "SAML" / "SAML 2.0" resolves to `EnableProtocolSAML20` — whether or not the user adds a "protocol" / "enable" qualifier. (The legacy `PowerPages_DisableAuthentication*` block rules have been removed.) A "block OpenID Connect" / "block SAML" phrasing means **disabling** that protocol toggle.
+- **No silent overrides.** **Disabling** any `Enable*` authentication policy (`EnableProtocol*`, `EnableIdp*`, `EnableAuthenticationLocalLogin`, `EnableExternalAuthProviders`) will sign existing users out of any portal that uses the targeted provider. Surface that consequence at the consent gate before posting. (The Maker Copilot policy has no such sign-out side effect.)
 
 ## Workflow
 
@@ -137,18 +134,16 @@ Parse the reply into a structured intent. The parser's output shape:
 }
 ```
 
-The parser MUST recognize all twelve supported policy display names + their
+The parser MUST recognize all ten supported policy display names + their
 shorthand variants. All policies share the **same** uniform Enable/Disable
 experience — the auth `Enable*` family below is configured exactly like
-`PowerPages_DisableAuthenticationOpenIdConnect`.
+`EnableMakerCopilotForExistingSites`.
 
 | User shorthand | Resolves to |
 |----------------|-------------|
-| "OpenID Connect" / "OIDC" / "OpenIdConnect" (bare, no other qualifier) | `PowerPages_DisableAuthenticationOpenIdConnect` |
-| "SAML" / "SAML 2.0" / "SAML20" (bare, no other qualifier) | `PowerPages_DisableAuthenticationSAML20` |
 | "Maker Copilot" / "Copilot" / "Maker Copilot for existing sites" | `EnableMakerCopilotForExistingSites` |
-| "OpenID Connect protocol" / "OIDC protocol" / "enable OpenID Connect" | `EnableProtocolOpenIdConnect` |
-| "SAML 2.0 protocol" / "SAML protocol" / "enable SAML" | `EnableProtocolSAML20` |
+| "OpenID Connect" / "OIDC" / "OpenIdConnect" / "OpenID Connect protocol" / "enable OpenID Connect" | `EnableProtocolOpenIdConnect` |
+| "SAML" / "SAML 2.0" / "SAML20" / "SAML 2.0 protocol" / "enable SAML" | `EnableProtocolSAML20` |
 | "WS-Federation" / "WsFederation" / "WsFed" | `EnableProtocolWsFederation` |
 | "OpenAuth" / "OAuth 2.0 protocol" / "OAuth protocol" | `EnableProtocolOpenAuth` |
 | "Facebook" / "Facebook login" / "Facebook sign-in" | `EnableIdpOAuthFacebook` |
@@ -157,12 +152,12 @@ experience — the auth `Enable*` family below is configured exactly like
 | "local login" / "local authentication" / "username and password" | `EnableAuthenticationLocalLogin` |
 | "external auth providers" / "external identity providers" | `EnableExternalAuthProviders` |
 
-> **OpenID Connect / SAML disambiguation.** A **bare** "OpenID Connect" / "SAML"
-> maps to the legacy `PowerPages_DisableAuthentication*` block rule for
-> backward compatibility. When the user says "enable …", "the … protocol", or
-> otherwise signals the newer per-protocol toggle — or when it's genuinely
-> unclear — ask which policy they mean before proceeding. Never guess between
-> the two silently.
+> **OpenID Connect / SAML now map straight to the protocol toggles.** The legacy
+> `PowerPages_DisableAuthentication*` block rules have been removed, so
+> "OpenID Connect" / "OIDC" resolves to `EnableProtocolOpenIdConnect` and
+> "SAML" / "SAML 2.0" resolves to `EnableProtocolSAML20` — with or without a
+> "protocol" / "enable" qualifier. A "block OpenID Connect" / "block SAML"
+> phrasing means **disabling** that protocol toggle (env-wide disable = `None`).
 
 > **Read the shorthands from the JSON.** The authoritative shorthand list for
 > every policy lives in `references/governance-mapping.json` under each policy's
@@ -213,7 +208,7 @@ ambiguous ones — never re-ask for what the user already specified.
 
 | Field | Missing → ask user | Invalid → reject + reprompt |
 |-------|--------------------|------------------------------|
-| `policy` | "Which governance setting? For example OpenID Connect, SAML 2.0, Maker Copilot, a sign-in protocol (WS-Federation / OAuth), a social provider (Google / Facebook / Microsoft), local login, or external providers?" | "I don't recognize '\<X\>' — supported settings are the twelve governance policies (OpenID Connect, SAML 2.0, Maker Copilot, the OpenID Connect / SAML 2.0 / WS-Federation / OAuth 2.0 protocols, Google / Facebook / Microsoft sign-in, local login, external providers). Try again." |
+| `policy` | "Which governance setting? For example OpenID Connect, SAML 2.0, Maker Copilot, a sign-in protocol (WS-Federation / OAuth), a social provider (Google / Facebook / Microsoft), local login, or external providers?" | "I don't recognize '\<X\>' — supported settings are the ten governance policies (Maker Copilot, the OpenID Connect / SAML 2.0 / WS-Federation / OAuth 2.0 protocols, Google / Facebook / Microsoft sign-in, local login, external providers). Try again." |
 | `intentDirection` | "Do you want to enable or disable it?" | — |
 | `envId` | Use the env picker (see "Env picker pattern" below): list all envs and default to the previously-used env. Track the env from the most recent successful operation as `<RECENT_ENV>` so it becomes the default selection; persist the chosen env id as `<ENV_ID>` and the display name as `<ENV_DISPLAY>`. | "I couldn't find an env matching '\<X\>'. Pick a row from the list or paste an id." |
 | `scope` (when `apply`) | "Apply to all sites in \<env\>, no sites, only selected sites, or all except selected?" — only when the user's phrasing was genuinely ambiguous | — |
@@ -394,7 +389,7 @@ The summary MUST include:
 
 | Row | Source | Example value |
 |-----|--------|---------------|
-| Action | from `intentDirection` + policy display name | "Disable the OpenId Connect Protocol" |
+| Action | from `intentDirection` + policy subject | "Disable OpenID Connect sign-in" |
 | Environment | display name + envId (small, for transparency) | "Sachin-Jun-2nd (`202c4f04-…`)" |
 | Scope (plain language) | derived from policyValue + site list | "Every site in this environment" / "Only Site 1 and 8-june" / "Every site except Site 2" / "No sites (clears the policy)" |
 | Affected sites | rendered as a table with **Name, URL, Portal ID, Current State, New State** (see below) | (see below) |
@@ -420,16 +415,24 @@ make:", "Impact summary:", or similar. Start the impact summary directly at the
 `Action:` row.
 
 ```
-  Action:        Disable the OpenId Connect Protocol
-  Environment:   Sachin-Jun-2nd  (202c4f04-2eb7-eef3-a26d-14c77c8c13c5)
-  Scope:         Every site in this environment
-  Sites in env:
-                 | Portal Name   | Portal URL                              | Portal ID    | Current State | New State   |
-                 |---------------|-----------------------------------------|--------------|---------------|-------------|
-                 | Site 1        | https://site-dmq4c.powerappsportals.com | 3e13d603-…   | 🟢 Enabled    | 🔴 Disabled |
-                 | Site 2        | https://site-uo75u.powerappsportals.com | ea51fc54-…   | 🟢 Enabled    | 🔴 Disabled |
-                 | 8-june        | https://site-pjpuy.powerappsportals.com | fe624c02-…   | 🔴 Disabled   | 🔴 Disabled |
-  Effect:        OpenID Connect sign-in will be blocked on all 3 sites.
+Action:        🔴 Disable OpenID Connect sign-in
+Environment:   Sachin-Jun-2nd  (202c4f04-2eb7-eef3-a26d-14c77c8c13c5)
+Scope:         Every site in this environment
+Sites in env:
+
+┌──────────┬─────────────────────────────────────────┬──────────────────────────────────────┬────────────┬──────────────────────┐
+│ Portal   │ Portal URL                              │ Portal ID                            │ Current    │ New State            │
+│ Name     │                                         │                                      │ State      │                      │
+├──────────┼─────────────────────────────────────────┼──────────────────────────────────────┼────────────┼──────────────────────┤
+│ Site 1   │ https://site-dmq4c.powerappsportals.com │ 3e13d603-2607-43e0-90aa-d15bacaa8787 │ 🟢 Enabled │ 🔴 Disabled ←        │
+│          │                                         │                                      │            │ CHANGED              │
+├──────────┼─────────────────────────────────────────┼──────────────────────────────────────┼────────────┼──────────────────────┤
+│ Site 2   │ https://site-uo75u.powerappsportals.com │ ea51fc54-94e0-47fc-ab13-d3db18567809 │ 🟢 Enabled │ 🔴 Disabled ←        │
+│          │                                         │                                      │            │ CHANGED              │
+├──────────┼─────────────────────────────────────────┼──────────────────────────────────────┼────────────┼──────────────────────┤
+│ 8-june   │ https://site-pjpuy.powerappsportals.com │ fe624c02-8793-4423-84f0-3546d80dee49 │ 🔴 Disabled│ 🔴 Disabled          │
+└──────────┴─────────────────────────────────────────┴──────────────────────────────────────┴────────────┴──────────────────────┘
+Effect:        OpenID Connect sign-in will be disabled on all portals in Sachin-Jun-2nd.
 ```
 
 *Reply **Apply now** to proceed, or **cancel** to stop.*
@@ -457,8 +460,6 @@ For the consent gate and verification render, refer to this table:
 
 | Policy display name | Internal `PolicyName` |
 |---------------------|-----------------------|
-| Disable the OpenId Connect Protocol | `PowerPages_DisableAuthenticationOpenIdConnect` |
-| Disable the SAML 2.0 Protocol | `PowerPages_DisableAuthenticationSAML20` |
 | Enable Maker Copilot for existing sites | `EnableMakerCopilotForExistingSites` |
 | Enable the OpenID Connect protocol | `EnableProtocolOpenIdConnect` |
 | Enable the SAML 2.0 protocol | `EnableProtocolSAML20` |
@@ -747,6 +748,57 @@ is `Include` / `Exclude`. Pass **only the sites in scope** in `sites` (every
 site in the env for `all`; the picked sites for `specific`). The helper renders
 the Current State → New State transition per site, marks changed rows, and adds
 the sign-out Side-effect line only when the resulting `policyValue` triggers it.
+
+**Cascade block (downstream-methods checklist).** When the user applies a
+*parent* policy that affects other sign-in methods, the helper appends a numbered
+checklist of those downstream methods directly below the Effect / Side-effect
+line. This is data-driven from `governance-mapping.json`
+`policies[].cascadeOnDisable` (disable) and `policies[].cascadeOnEnable` (enable)
+— no cascade renders for policies without dependents. Today two policies have a
+cascade:
+
+- **Enable external authentication providers** (`EnableExternalAuthProviders`)
+- **Enable the OAuth 2.0 protocol** (`EnableProtocolOpenAuth`)
+
+**On disable** the block lists the methods the parent turns **off**, each marked
+with the red state marker `🔴 Disabled`. The heading is per-policy (read from
+`cascadeOnDisable.heading`):
+
+- External auth providers ("Below Setting will get Disable") → OpenIdConnect,
+  SAML2.0, OAuth2.0, WS_Federation, Facebook, Google, Microsoft.
+- OAuth 2.0 protocol ("The following OAuth 2.0 identity providers will be
+  disabled:") → Facebook, Google, Microsoft (the OAuth-based social identity
+  providers).
+
+**On enable** the block is *informational*: it lists the methods that become
+**available** again (subject to each provider's own configuration). Enabling a
+parent does **not** auto-enable the children, so the social-provider rows are
+annotated "Controlled by the &lt;provider&gt; setting." and — for External Auth —
+a footer note reminds the admin each provider must still be configured:
+
+- External auth providers → OpenID Connect, SAML 2.0, OAuth 2.0, WS-Federation,
+  Facebook, Google, Microsoft (+ "must still be configured" note).
+- OAuth 2.0 protocol → Facebook, Google, Microsoft (not auto-enabled — each
+  managed via its own setting).
+
+An enable item may also declare `state: "Enabled"` in the mapping, which renders
+the green state marker `🟢 Enabled` (the mirror of the disable side's red one).
+
+**Action-line color.** The helper colors the `Action:` row by direction — green
+`🟢 Enable …` when the operation turns something on, red `🔴 Disable …` when it
+turns something off — matching the green=Enabled / red=Disabled state convention.
+
+Emit the block verbatim as the helper prints it — it is part of the consent-gate
+summary the admin approves.
+
+> **Never editorialize about a missing cascade.** For any policy that has **no**
+> `cascadeOnDisable` / `cascadeOnEnable` (e.g. SAML 2.0, WS-Federation, OpenID
+> Connect, local login, the individual social-provider policies), the helper
+> emits **nothing** after the Effect / Side-effect line. Do **NOT** add your own
+> note explaining the absence — no parentheticals like "(SAML 2.0 has no
+> downstream providers, so there's no cascade list.)" or any similar sentence.
+> Emit the helper output exactly as-is and stop; silence is the correct render
+> for a policy without dependents.
 
 **Step 3 — ask for consent.** After the summary, end with one prose line:
 *"Reply **Apply now** to proceed, or **cancel** to stop."* Do not proceed
@@ -1149,10 +1201,10 @@ Map `<plain policy label>` from the matching policy's `summaryLabel` field in
 `governance-mapping.json` (`policies[].summaryLabel`).
 
 These labels read naturally in the loop-summary patterns above. E.g.
-"*The OpenID Connect block rule now applies to every site in &lt;env&gt;*"
-means the block IS enforced everywhere (`policyValue=All` on the OIDC
-policy); "*The OpenID Connect block rule has been cleared on &lt;env&gt;*"
-means the block is NOT enforced anywhere (`policyValue=None`).
+"*OpenID Connect sign-in is now enabled on every site in &lt;env&gt;*"
+means the protocol is on everywhere (`policyValue=All` on the OpenID Connect
+toggle); "*OpenID Connect sign-in has been cleared on &lt;env&gt;*"
+means it is off everywhere (`policyValue=None`).
 
 Map internal `policyValue` values to plain-language phrases when summarizing
 Fetch Env:
@@ -1204,7 +1256,7 @@ Skill tracking:
   number / name / id (to switch). Never POST against a flagged env without that
   explicit confirmation. The portal pick is never defaulted.
 - **Background polling** — run `set-governance.js` with `run_in_background: true`. Stream stderr to the user at most once every 30 seconds.
-- **Policy strings are hard-coded** — only the twelve policies named in Phase 2.3 are valid (`PowerPages_DisableAuthenticationOpenIdConnect`, `PowerPages_DisableAuthenticationSAML20`, `EnableMakerCopilotForExistingSites`, `EnableProtocolOpenIdConnect`, `EnableProtocolSAML20`, `EnableProtocolWsFederation`, `EnableProtocolOpenAuth`, `EnableIdpOAuthFacebook`, `EnableIdpOAuthGoogle`, `EnableIdpOAuthMicrosoft`, `EnableAuthenticationLocalLogin`, `EnableExternalAuthProviders`). This list is the frozen `SUPPORTED_POLICIES` array in `scripts/policies.js`. Reject any custom policy name with a clear "this skill only supports those twelve governance policies today" message.
+- **Policy strings are hard-coded** — only the ten policies named in Phase 2.3 are valid (`EnableMakerCopilotForExistingSites`, `EnableProtocolOpenIdConnect`, `EnableProtocolSAML20`, `EnableProtocolWsFederation`, `EnableProtocolOpenAuth`, `EnableIdpOAuthFacebook`, `EnableIdpOAuthGoogle`, `EnableIdpOAuthMicrosoft`, `EnableAuthenticationLocalLogin`, `EnableExternalAuthProviders`). This list is the frozen `SUPPORTED_POLICIES` array in `scripts/policies.js`. Reject any custom policy name with a clear "this skill only supports those ten governance policies today" message.
 - **Sign-in failures** — exit code `2` from any script means PAC or Azure CLI is signed out. Tell the user which command to run (`pac auth create` or `az login`) and stop.
 
 ## References

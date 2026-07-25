@@ -64,8 +64,8 @@ test('additive edit preserved every original committed shorthand', () => {
   }
 });
 
-test('mapping still exposes all 12 policies and its committed top-level keys', () => {
-  assert.equal(mapping.policies.length, 12);
+test('mapping still exposes all 10 policies and its committed top-level keys', () => {
+  assert.equal(mapping.policies.length, 10);
   for (const key of [
     'policyModes',
     'policies',

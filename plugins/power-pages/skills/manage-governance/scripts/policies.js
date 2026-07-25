@@ -7,8 +7,6 @@
 'use strict';
 
 const SUPPORTED_POLICIES = Object.freeze([
-  'PowerPages_DisableAuthenticationOpenIdConnect',
-  'PowerPages_DisableAuthenticationSAML20',
   'EnableMakerCopilotForExistingSites',
   'EnableProtocolOpenIdConnect',
   'EnableProtocolSAML20',
@@ -24,8 +22,8 @@ const SUPPORTED_POLICIES = Object.freeze([
 // Some policies (env-level ones such as EnableMakerCopilotForExistingSites)
 // report their env-level state on read using the `applyTo` enum vocabulary
 // (e.g. "AllSites" / "IncludeSites" / "ExcludeSites") rather than the short
-// policyValue vocabulary the auth Disable* policies use ("All" / "Include" /
-// "Exclude"). This map normalizes any read value back to the canonical
+// canonical policyValue vocabulary ("All" / "Include" / "Exclude"). This map
+// normalizes any read value back to the canonical
 // policyValue string so every render path can treat them the same. Values
 // already in canonical form pass through unchanged. The mapping mirrors
 // `apiBehavior.applyTo` in references/governance-mapping.json.
@@ -71,16 +69,6 @@ const WRITE_VALUE_ALIASES = Object.freeze({
   None: 'None',
 });
 
-// The two legacy admin-portal auth toggles predate the applyTo enum and both
-// READ and WRITE the short canonical vocabulary ("All"/"None"/"Include"/
-// "Exclude"). They are the only policies exempt from the applyTo forward-map
-// above — mirroring the read-side note on ENV_VALUE_ALIASES that "the auth
-// Disable* policies already return the canonical form".
-const LEGACY_SHORT_FORM_POLICIES = Object.freeze([
-  'PowerPages_DisableAuthenticationOpenIdConnect',
-  'PowerPages_DisableAuthenticationSAML20',
-]);
-
 // Terminal status values the polling helpers treat as "done". The Power Pages
 // runtime is known to report `Succeeded` / `Completed` on success and `Failed`
 // on failure; the skill is tolerant of casing differences.
@@ -111,8 +99,8 @@ function classifyStatus(rawValue) {
 
 // Map a raw env-level governance read value to the canonical policyValue
 // vocabulary (`All` / `None` / `Include` / `Exclude`). Env-level policies may
-// return the `applyTo` enum form ("AllSites"); the auth Disable* policies
-// already return the canonical form. Anything unrecognized passes through
+// return the `applyTo` enum form ("AllSites") on read, which this map folds
+// back to the canonical form. Anything unrecognized passes through
 // unchanged so callers can still render/inspect it.
 function normalizeEnvValue(rawValue) {
   if (rawValue === null || rawValue === undefined) return rawValue;
@@ -123,14 +111,15 @@ function normalizeEnvValue(rawValue) {
 
 // Forward-map a canonical policyValue (`All` / `None` / `Include` / `Exclude`)
 // to the value that actually goes on the wire for a POST /governance upsert.
-// Env-level (uniformGovernance) policies require the applyTo enum vocabulary
-// ("AllSites" etc.); the two legacy Disable* auth policies keep the canonical
-// short form. Unknown values pass through unchanged so callers can still
-// forward experimental / future values without this helper silently dropping
-// them. See WRITE_VALUE_ALIASES / LEGACY_SHORT_FORM_POLICIES above for the WHY
-// and the empirical Preprod verification.
+// Every supported policy is an env-level (uniformGovernance) policy that
+// requires the applyTo enum vocabulary ("AllSites" etc.), so the canonical
+// short form is always forward-mapped before POSTing. Unknown values pass
+// through unchanged so callers can still forward experimental / future values
+// without this helper silently dropping them. `policyName` is retained in the
+// signature for call-site compatibility and possible future per-policy
+// exemptions. See WRITE_VALUE_ALIASES above for the WHY and the empirical
+// Preprod verification.
 function toWritePolicyValue(canonicalValue, policyName) {
-  if (LEGACY_SHORT_FORM_POLICIES.includes(policyName)) return canonicalValue;
   const alias = WRITE_VALUE_ALIASES[canonicalValue];
   return alias || canonicalValue;
 }
@@ -139,7 +128,6 @@ module.exports = {
   SUPPORTED_POLICIES,
   ENV_VALUE_ALIASES,
   WRITE_VALUE_ALIASES,
-  LEGACY_SHORT_FORM_POLICIES,
   TERMINAL_SUCCESS,
   TERMINAL_FAILURE,
   assertPolicy,

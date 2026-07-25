@@ -5,13 +5,12 @@ const { buildPolicyPayload } = require('../../skills/manage-governance/scripts/s
 
 // buildPolicyPayload is the single seam where a canonical policyValue
 // (All / None / Include / Exclude) is forward-mapped to the value that
-// actually goes on the wire. Env-level policies (Maker Copilot + the nine
-// auth Enable* toggles) must emit the applyTo enum vocabulary ("AllSites"
-// etc.); posting the short canonical form makes the gateway silently reject
-// the upsert. The two legacy Disable* auth policies keep the canonical form.
+// actually goes on the wire. Every supported policy is an env-level
+// (uniformGovernance) policy (Maker Copilot + the nine auth Enable* toggles),
+// so they all emit the applyTo enum vocabulary ("AllSites" etc.); posting the
+// short canonical form makes the gateway silently reject the upsert.
 
 const ENV_LEVEL_POLICY = 'EnableMakerCopilotForExistingSites';
-const LEGACY_POLICY = 'PowerPages_DisableAuthenticationOpenIdConnect';
 
 test('env-level policy env-wide enable posts applyTo enum "AllSites"', () => {
   const [entry] = buildPolicyPayload(ENV_LEVEL_POLICY, [], null);
@@ -43,22 +42,6 @@ test('env-level policy defaults to Include enum when portalIds given and no over
   const [entry] = buildPolicyPayload(ENV_LEVEL_POLICY, ['a'], null);
   assert.equal(entry.policyValue, 'IncludeSites');
   assert.deepEqual(entry.ToBeAdded, ['a']);
-});
-
-test('legacy Disable* policy keeps canonical vocabulary (env-wide)', () => {
-  const [entry] = buildPolicyPayload(LEGACY_POLICY, [], null);
-  assert.equal(entry.policyValue, 'All');
-});
-
-test('legacy Disable* policy keeps canonical vocabulary (Include)', () => {
-  const [entry] = buildPolicyPayload(LEGACY_POLICY, ['a', 'b'], 'Include');
-  assert.equal(entry.policyValue, 'Include');
-  assert.deepEqual(entry.ToBeAdded, ['a', 'b']);
-});
-
-test('legacy Disable* policy None passes through', () => {
-  const [entry] = buildPolicyPayload(LEGACY_POLICY, [], 'None');
-  assert.equal(entry.policyValue, 'None');
 });
 
 test('single portalId string is accepted (legacy call shape)', () => {

@@ -31,8 +31,6 @@ in `scripts/policies.js`):
 
 | Policy string | Plain-language meaning |
 |---------------|------------------------|
-| `PowerPages_DisableAuthenticationOpenIdConnect` | Turns off the OpenID Connect (OIDC) sign-in path on Power Pages portals. |
-| `PowerPages_DisableAuthenticationSAML20` | Turns off the SAML 2.0 sign-in path on Power Pages portals. |
 | `EnableMakerCopilotForExistingSites` | Turns Maker Copilot on for existing Power Pages sites in the environment. |
 | `EnableProtocolOpenIdConnect` | Enables/disables the OpenID Connect sign-in protocol on Power Pages sites. |
 | `EnableProtocolSAML20` | Enables/disables the SAML 2.0 sign-in protocol on Power Pages sites. |
@@ -46,18 +44,17 @@ in `scripts/policies.js`):
 
 The nine `Enable*` authentication policies (`EnableProtocol*`, `EnableIdp*`,
 `EnableAuthenticationLocalLogin`, `EnableExternalAuthProviders`) share the
-**same configuration and API contract** as
-`PowerPages_DisableAuthenticationOpenIdConnect`: uniform governance with the
-canonical `policyValue` vocabulary (`All` / `None` / `Include` / `Exclude`) and
-the default api-version. Only `EnableMakerCopilotForExistingSites` uses the
-env-level `applyTo` (`*Sites`) read vocabulary.
+**same configuration and API contract** as `EnableMakerCopilotForExistingSites`:
+uniform governance with the canonical `policyValue` vocabulary
+(`All` / `None` / `Include` / `Exclude`) on read/normalize and the env-level
+`applyTo` (`*Sites`) enum vocabulary on write.
 
 A new policy is added by appending its string to `SUPPORTED_POLICIES` in
 `scripts/policies.js` — every script validates against that list before
 calling the API.
 
-> **Read-value vocabulary.** The auth `Disable*` policies and the nine auth
-> `Enable*` policies report their environment-level state on read using the
+> **Read-value vocabulary.** The nine auth `Enable*` policies report their
+> environment-level state on read using the
 > canonical `policyValue` strings (`All` / `None` / `Include` / `Exclude`).
 > Only `EnableMakerCopilotForExistingSites` instead reports the `applyTo` enum
 > form (e.g. `AllSites`). `get-env.js` normalizes this via `normalizeEnvValue()`
@@ -87,7 +84,7 @@ POST body shape (from the PowerApps-CoreServicesGateway gateway config — verif
 ```json
 [
   {
-    "policyName": "PowerPages_DisableAuthenticationOpenIdConnect",
+    "policyName": "EnableProtocolOpenIdConnect",
     "policyValue": "All",
     "ToBeAdded": [],
     "ToBeRemoved": []
@@ -135,11 +132,10 @@ one POST.
 > | `Exclude` | `ExcludeSites` |
 > | `None`    | `None` (disable is conveyed by the value itself) |
 >
-> The two legacy auth toggles — `PowerPages_DisableAuthenticationOpenIdConnect`
-> and `PowerPages_DisableAuthenticationSAML20` — predate the `applyTo` enum and
-> keep the canonical short form on the wire (they are the only policies exempt
-> from the forward-map). This mirrors the read side, where those two policies
-> already return the canonical form while env-level policies return `*Sites`.
+> The `None` wire value conveys disable by the value itself rather than an
+> `applyTo` enum form. This mirrors the read side, where env-level policies
+> return `*Sites` which `policies.js normalizeEnvValue()` folds back to the
+> canonical form.
 > Verified empirically against Preprod (2024-10-01 gateway): POSTing
 > `policyValue:"AllSites"` for `EnableMakerCopilotForExistingSites` returns
 > `200 "Policy upserts accepted."` and flips the env `None` → `AllSites`;

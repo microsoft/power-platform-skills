@@ -266,7 +266,7 @@ Runs a guided, end-to-end security review of a Power Pages site and consolidates
 
 > "Turn off OpenID Connect sign-in on Power Pages portals in this tenant"
 
-Applies and inspects the two Power Pages tenant governance policies that disable legacy authentication on portals — `PowerPages_DisableAuthenticationOpenIdConnect` and `PowerPages_DisableAuthenticationSAML20`. Tenant-admin skill: it does not require a Power Pages project on disk.
+Applies and inspects the ten Power Pages tenant governance policies that control site authoring and authentication — the Maker Copilot toggle (`EnableMakerCopilotForExistingSites`) plus nine authentication feature toggles: the OpenID Connect / SAML 2.0 / WS-Federation / OAuth 2.0 sign-in protocols, Facebook / Google / Microsoft social sign-in, local (username & password) login, and all external identity providers. Tenant-admin skill: it does not require a Power Pages project on disk.
 
 - Picks any environment the signed-in user has admin access to (via `pac admin list`)
 - Applies a policy environment-wide or for a single selected portal, with an explicit consent gate

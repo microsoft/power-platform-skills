@@ -65,6 +65,109 @@ function stateCell(state, colorOpts) {
   return '⚪ Unknown';
 }
 
+// Emoji-only state label for the Sites BOX table. The bordered box computes
+// column widths on the visible text and wraps cells, so the state cell must be
+// ANSI-free (an escape sequence is zero-width and would desync width math and
+// corrupt a wrapped line). The 🟢 / 🔴 emoji already carry the green/red cue on
+// every surface — including chat that strips ANSI — so no color is applied here.
+// (ANSI color still applies to the Action / Effect rows, which are single-line.)
+function plainStateCell(state) {
+  if (state === 'Enabled') return '🟢 Enabled';
+  if (state === 'Disabled') return '🔴 Disabled';
+  return '⚪ Unknown';
+}
+
+// Visible length of a cell, ignoring ANSI SGR escapes. The box table is rendered
+// ANSI-free today, but strip defensively so width math never counts a zero-width
+// escape (e.g. "\x1b[31m…\x1b[0m") as visible characters.
+function visibleLen(s) {
+  // eslint-disable-next-line no-control-regex
+  return String(s == null ? '' : s).replace(/\x1b\[[0-9;]*m/g, '').length;
+}
+
+// Greedy word-wrap `text` into lines no wider than `width` visible chars. Splits
+// on whitespace; a single token longer than the column (e.g. a long URL or GUID)
+// is hard-broken into width-sized chunks so it can never overflow the border.
+// Always returns at least one line (possibly '') so an empty cell still occupies
+// a row.
+function wrapCell(text, width) {
+  const words = String(text == null ? '' : text).split(/\s+/).filter((w) => w.length);
+  if (!words.length) return [''];
+  const lines = [];
+  let cur = '';
+  for (let word of words) {
+    // Hard-break any token that can't fit on its own line.
+    while (visibleLen(word) > width) {
+      if (cur) {
+        lines.push(cur);
+        cur = '';
+      }
+      lines.push(word.slice(0, width));
+      word = word.slice(width);
+    }
+    if (!cur) cur = word;
+    else if (visibleLen(cur) + 1 + visibleLen(word) <= width) cur += ' ' + word;
+    else {
+      lines.push(cur);
+      cur = word;
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines.length ? lines : [''];
+}
+
+// Render a fixed-width, Unicode-bordered box table with per-cell word wrapping.
+// Mirrors the approved consent-gate mock: narrow columns wrap their headers
+// ("Portal Name" -> "Portal" / "Name"), and the New State cell wraps its
+// "🔴 Disabled ← CHANGED" marker onto a second line. Column widths are computed
+// from the VISIBLE text of the header words + cells, capped per column (`caps`),
+// so a long URL/GUID wraps instead of stretching the whole row.
+//
+// `headers` is a string[]; `rows` is string[][] (already emoji-decorated, no
+// ANSI). Returns the multi-line box (no trailing newline).
+function renderBoxTable(headers, rows, caps) {
+  const widths = headers.map((h, c) => {
+    // The header must be wrappable within the column, so the floor is its widest
+    // single word (a word can never be split across the header lines cleanly).
+    const headerWordMax = Math.max(...String(h).split(/\s+/).map(visibleLen));
+    let cellMax = 0;
+    for (const r of rows) cellMax = Math.max(cellMax, visibleLen(r[c]));
+    const natural = Math.max(headerWordMax, cellMax);
+    return Math.min(caps[c], natural);
+  });
+
+  const rule = (left, mid, right) =>
+    left + widths.map((w) => '─'.repeat(w + 2)).join(mid) + right;
+
+  // Emit one logical row (header or data) as N physical lines — N = the tallest
+  // wrapped cell — padding shorter cells with blank lines so borders stay aligned.
+  const emitRow = (cells) => {
+    const wrapped = cells.map((cell, c) => wrapCell(cell, widths[c]));
+    const height = Math.max(...wrapped.map((w) => w.length));
+    const lines = [];
+    for (let i = 0; i < height; i++) {
+      const parts = wrapped.map((w, c) => {
+        const txt = w[i] || '';
+        return ' ' + txt + ' '.repeat(Math.max(0, widths[c] - visibleLen(txt))) + ' ';
+      });
+      lines.push('│' + parts.join('│') + '│');
+    }
+    return lines;
+  };
+
+  const out = [rule('┌', '┬', '┐')];
+  for (const l of emitRow(headers)) out.push(l);
+  out.push(rule('├', '┼', '┤'));
+  rows.forEach((r, i) => {
+    // Separate every data row with a mid-rule (matching the approved mock), so a
+    // wrapped 2-line row is visually distinct from its neighbour.
+    if (i > 0) out.push(rule('├', '┼', '┤'));
+    for (const l of emitRow(r)) out.push(l);
+  });
+  out.push(rule('└', '┴', '┘'));
+  return out.join('\n');
+}
+
 // Plain-language scope line for the Scope row. Never leaks the internal
 // All/Include/None/Exclude policyValue terms (SKILL.md: "never leak the internal
 // All / Include / None / Exclude terms to the user").
@@ -106,6 +209,90 @@ function sideEffectLine(policy, policyValue) {
   return cb.message;
 }
 
+// Some "parent" policies affect a set of downstream sign-in methods, and the
+// admin needs to see that ripple at the consent gate — it isn't obvious from the
+// single-policy table. Both directions get a checklist under the summary:
+//
+//   * disable -> "Below Setting will get Disable": the downstream methods that
+//     this parent turns OFF (OAuth 2.0 -> Facebook/Google/Microsoft; External
+//     Auth -> every protocol + social IdP), each marked red "🔴 Disabled".
+//   * enable  -> an informational list of the methods that become AVAILABLE
+//     again (subject to their own per-provider config). Enabling a parent does
+//     NOT force-enable the children, so these are annotated (e.g. "Controlled by
+//     the Facebook setting.") and a footer note spells out that each provider
+//     must still be configured — no green "Enabled" marker, because the child's
+//     real state is unchanged by this apply.
+//
+// Both are data-driven from governance-mapping.json policies[].cascadeOnDisable /
+// cascadeOnEnable so adding/removing a downstream method never touches this file.
+// Items may be a bare string (label only) or { label, note } — normalized here.
+// Returns the ready-to-emit lines (blank separator + heading + rows + optional
+// footer) or [] when the policy has no cascade for that direction.
+function cascadeLines(policy, direction, colorOpts) {
+  const isDisable = direction === 'disable';
+  const cascade = isDisable ? policy.cascadeOnDisable : policy.cascadeOnEnable;
+  if (!cascade || !Array.isArray(cascade.items) || cascade.items.length === 0) {
+    return [];
+  }
+  // Normalize each item to { label, note, state } so string and object forms
+  // coexist. `state` (e.g. 'Enabled') is optional and only used on the enable side
+  // to render a green "🟢 Enabled" marker mirroring the disable side's red one.
+  const items = cascade.items.map((it) =>
+    typeof it === 'string'
+      ? { label: it }
+      : { label: it.label, note: it.note, state: it.state }
+  );
+  const lines = [];
+  lines.push('');
+  lines.push(cascade.heading || (isDisable ? 'Below Setting will get Disable' : 'When enabled, the following become available:'));
+  // Left-align the labels into one column so the trailing markers/notes line up,
+  // matching the approved mock. Width is computed on the visible label text.
+  const labelWidth = items.reduce((w, it) => Math.max(w, String(it.label).length), 0);
+  items.forEach((it, i) => {
+    const num = `${i + 1}.`;
+    const label = String(it.label).padEnd(labelWidth, ' ');
+    let marker;
+    if (isDisable) {
+      // Render the state marker through the SAME stateCell() convention the Sites
+      // table uses — "🔴 Disabled" wrapped in ANSI red. The 🔴 emoji is what makes
+      // the "red for Disable" cue visible on chat surfaces that strip ANSI (they
+      // drop the escape codes but keep the red circle); the ANSI red still applies
+      // in a real terminal. Green ("🟢 Enabled") is the symmetric marker for any
+      // enable-side row that declares an explicit `state` (see below).
+      marker = '  ' + stateCell('Disabled', colorOpts);
+    } else if (it.state) {
+      // Enable rows may opt into an explicit state marker (data-driven via the
+      // item's `state` field). "Enabled" renders green "🟢 Enabled" — the mirror
+      // of the disable side — followed by the note when present.
+      marker = '  ' + stateCell(it.state, colorOpts) + (it.note ? ' - ' + it.note : '');
+    } else {
+      // Default enable rows only annotate the provider-controlled entries; protocol
+      // rows (OpenID Connect, SAML 2.0, ...) have no note and render as label-only.
+      // No green "Enabled" marker here because enabling a parent does NOT force the
+      // child on — its real state is unchanged by this apply.
+      marker = it.note ? '  - ' + it.note : '';
+    }
+    // Trim trailing whitespace so label-only enable rows don't carry padding.
+    lines.push(`${num} ${label}${marker}`.replace(/\s+$/, ''));
+  });
+  if (cascade.footer) {
+    lines.push('');
+    lines.push(`Note: ${cascade.footer}`);
+  }
+  return lines;
+}
+
+// Color the consent-gate Action line by direction: green "🟢 Enable …" when the
+// operation turns something ON, red "🔴 Disable …" when it turns something OFF —
+// the same green=enabled / red=disabled convention as the state cells, and per
+// the SKILL.md rule to color the Action row. The emoji carries the cue where ANSI
+// is stripped (chat); the color helper adds ANSI in a real terminal.
+function actionCell(direction, action, colorOpts) {
+  return direction === 'disable'
+    ? red(`🔴 ${action}`, colorOpts)
+    : green(`🟢 ${action}`, colorOpts);
+}
+
 /**
  * Render the consent-gate impact summary block.
  *
@@ -141,35 +328,49 @@ function renderImpactSummary(req, opts = {}) {
   const newState = newStateFor(direction);
 
   const out = [];
-  out.push(`Action:        ${action}`);
+  out.push(`Action:        ${actionCell(direction, action, colorOpts)}`);
   out.push(`Environment:   ${envLine}`);
   out.push(`Scope:         ${scopeLine(scope, siteNames)}`);
 
-  // Sites table with the required Current State / New State columns. A site
-  // whose state actually flips is tagged '<- CHANGED' per the consentGate
-  // rules ("Rows where the per-site state changes MUST be marked '<- CHANGED'").
+  // Sites table with the required Current State / New State columns, rendered as
+  // a fixed-width Unicode box (the approved consent-gate format). A site whose
+  // state actually flips is tagged '← CHANGED' in its New State cell per the
+  // consentGate rules ("Rows where the per-site state changes MUST be marked
+  // CHANGED"); narrow columns wrap, so that marker lands on the cell's 2nd line.
   const sitesLabel = scope === 'specific' ? 'Sites covered:' : 'Sites in env:';
   out.push(sitesLabel);
-  const header = '| Portal Name | Portal URL | Portal ID | Current State | New State |';
-  const divider = '|-------------|------------|-----------|---------------|-----------|';
-  out.push('               ' + header);
-  out.push('               ' + divider);
-  for (const s of sites) {
+  out.push('');
+  const boxHeaders = ['Portal Name', 'Portal URL', 'Portal ID', 'Current State', 'New State'];
+  const boxRows = sites.map((s) => {
     const cur = normalizeState(s && s.currentState);
-    const curCell = stateCell(cur, colorOpts);
-    const newCell = stateCell(newState, colorOpts);
     // Only flag a change when we actually know the current state and it differs.
-    const changed = cur !== 'Unknown' && cur !== newState ? '  <- CHANGED' : '';
-    const name = (s && s.name) || '(unnamed)';
-    const url = (s && s.url) || '';
-    const pid = (s && s.portalId) || '';
-    out.push(`               | ${name} | ${url} | ${pid} | ${curCell} | ${newCell}${changed} |`);
+    const changed = cur !== 'Unknown' && cur !== newState ? ' ← CHANGED' : '';
+    return [
+      (s && s.name) || '(unnamed)',
+      (s && s.url) || '',
+      (s && s.portalId) || '',
+      plainStateCell(cur),
+      plainStateCell(newState) + changed,
+    ];
+  });
+  // Per-column visible-width caps. Name / Current State / New State are kept
+  // narrow so their headers wrap ("Portal"/"Name", "Current"/"State") and the
+  // "🔴 Disabled ← CHANGED" marker wraps onto a second line, matching the mock;
+  // URL and ID are wide enough to hold a full portal URL / GUID on one line.
+  const boxCaps = [14, 44, 38, 12, 20];
+  for (const line of renderBoxTable(boxHeaders, boxRows, boxCaps).split('\n')) {
+    out.push(line);
   }
 
   out.push(`Effect:        ${effectLine(mapping, policy, direction, scope, envDisplay, siteNames)}`);
 
   const se = sideEffectLine(policy, req.policyValue);
   if (se) out.push(`Side effect:   ${se}`);
+
+  // Downstream policies the admin should know about: on disable, the methods
+  // this parent turns off; on enable, the methods it makes available again
+  // (subject to their own config). No-op for every non-parent policy.
+  for (const line of cascadeLines(policy, direction, colorOpts)) out.push(line);
 
   return out.join('\n');
 }
@@ -256,6 +457,8 @@ module.exports = {
   scopeLine,
   effectLine,
   sideEffectLine,
+  cascadeLines,
+  actionCell,
 };
 
 if (require.main === module) {

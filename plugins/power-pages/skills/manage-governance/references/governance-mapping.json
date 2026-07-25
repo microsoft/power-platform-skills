@@ -47,38 +47,6 @@
 
   "policies": [
     {
-      "policyName": "PowerPages_DisableAuthenticationOpenIdConnect",
-      "policyMode": "uniformGovernance",
-      "displayName": "Disable the OpenId Connect Protocol",
-      "subject": "OpenID Connect sign-in",
-      "summaryLabel": "OpenID Connect block rule",
-      "userShorthands": ["OpenID Connect", "OIDC", "OpenIdConnect", "OpenID"],
-      "stateParaphrase": {
-        "Enabled": "OIDC Protocol sign-in Enabled",
-        "Disabled": "OIDC Protocol sign-in Blocked"
-      },
-      "sideEffectCallout": {
-        "policyValueTriggers": ["All", "Include"],
-        "message": "Any users currently signed in via OpenID Connect on the affected sites will be signed out and won't be able to sign back in via this method."
-      }
-    },
-    {
-      "policyName": "PowerPages_DisableAuthenticationSAML20",
-      "policyMode": "uniformGovernance",
-      "displayName": "Disable the SAML 2.0 Protocol",
-      "subject": "SAML 2.0 sign-in",
-      "summaryLabel": "SAML 2.0 block rule",
-      "userShorthands": ["SAML", "SAML 2.0", "SAML20", "SAML2", "SAML2.0"],
-      "stateParaphrase": {
-        "Enabled": "SAML Protocol sign-in Enabled",
-        "Disabled": "SAML Protocol sign-in Blocked"
-      },
-      "sideEffectCallout": {
-        "policyValueTriggers": ["All", "Include"],
-        "message": "Any users currently signed in via SAML on the affected sites will be signed out and won't be able to sign back in via this method."
-      }
-    },
-    {
       "policyName": "EnableMakerCopilotForExistingSites",
       "policyMode": "uniformGovernance",
       "displayName": "Enable Maker Copilot for existing sites",
@@ -100,7 +68,7 @@
       "displayName": "Enable the OpenID Connect protocol",
       "subject": "OpenID Connect sign-in",
       "summaryLabel": "OpenID Connect protocol",
-      "userShorthands": ["openid connect protocol", "oidc protocol", "enable openid connect", "enable oidc", "openid connect sign-in", "EnableProtocolOpenIdConnect"],
+      "userShorthands": ["openid connect protocol", "oidc protocol", "enable openid connect", "enable oidc", "openid connect sign-in", "EnableProtocolOpenIdConnect", "openid connect", "oidc", "openidconnect", "openid"],
       "stateParaphrase": {
         "Enabled": "OpenID Connect sign-in Enabled",
         "Disabled": "OpenID Connect sign-in Blocked"
@@ -116,7 +84,7 @@
       "displayName": "Enable the SAML 2.0 protocol",
       "subject": "SAML 2.0 sign-in",
       "summaryLabel": "SAML 2.0 protocol",
-      "userShorthands": ["saml 2.0 protocol", "saml protocol", "saml20 protocol", "enable saml", "enable saml 2.0", "EnableProtocolSAML20"],
+      "userShorthands": ["saml 2.0 protocol", "saml protocol", "saml20 protocol", "enable saml", "enable saml 2.0", "EnableProtocolSAML20", "saml", "saml 2.0", "saml20", "saml2", "saml2.0"],
       "stateParaphrase": {
         "Enabled": "SAML 2.0 sign-in Enabled",
         "Disabled": "SAML 2.0 sign-in Blocked"
@@ -156,6 +124,18 @@
       "sideEffectCallout": {
         "policyValueTriggers": ["None", "Exclude"],
         "message": "Disabling this signs out any users currently authenticated via OAuth 2.0 on the affected sites and blocks that sign-in method until it's re-enabled."
+      },
+      "cascadeOnDisable": {
+        "heading": "The following OAuth 2.0 identity providers will be disabled:",
+        "items": ["Facebook", "Google", "Microsoft"]
+      },
+      "cascadeOnEnable": {
+        "heading": "Enabling the OAuth 2.0 protocol enables OAuth-based authentication but does not automatically enable individual identity providers. Each provider is managed independently through its own setting:",
+        "items": [
+          { "label": "Facebook", "note": "Controlled by the Facebook setting." },
+          { "label": "Google", "note": "Controlled by the Google setting." },
+          { "label": "Microsoft", "note": "Controlled by the Microsoft setting." }
+        ]
       }
     },
     {
@@ -236,6 +216,23 @@
       "sideEffectCallout": {
         "policyValueTriggers": ["None", "Exclude"],
         "message": "Disabling this turns off all external (social / federated) identity providers on the affected sites; users who sign in through them will be signed out until it's re-enabled."
+      },
+      "cascadeOnDisable": {
+        "heading": "Below Setting will get Disable",
+        "items": ["OpenIdConnect", "SAML2.0", "OAuth2.0", "WS_Federation", "Facebook", "Google", "Microsoft"]
+      },
+      "cascadeOnEnable": {
+        "heading": "When enabled, the following authentication methods become available (subject to their individual configuration):",
+        "items": [
+          { "label": "OpenID Connect" },
+          { "label": "SAML 2.0" },
+          { "label": "OAuth 2.0" },
+          { "label": "WS-Federation" },
+          { "label": "Facebook", "note": "Controlled by the Facebook setting." },
+          { "label": "Google", "note": "Controlled by the Google setting." },
+          { "label": "Microsoft", "note": "Controlled by the Microsoft setting." }
+        ],
+        "footer": "Enabling the External Authentication policy restores support for these authentication methods. However, each authentication provider must still be configured correctly to allow users to sign in."
       }
     }
   ],
