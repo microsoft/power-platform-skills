@@ -48,40 +48,85 @@ function readerFor(sdk, appUnique, opts) {
   opts = opts || {};
   const genpageCli = opts.genpageCli;
   const workspaceDir = opts.workspaceDir;
+  const { fetchSitemap: _fetchSitemap, sitemapGenPageIds: _sitemapGenPageIds } = require('./lib/sitemap-pages.js');
+  const { manifestResourceName: _manifestResourceName, parseManifestBase64: _parseManifestBase64 } = require('./lib/page-manifest.js');
+
   let appIdP;
   // Lazily resolve the app module id — only needed when page reads are requested.
   const appId = () => (appIdP || (appIdP = appIdFor(sdk, appUnique)));
-  let downloadP;
+
+  // Memoize fetchSitemap: both sitemapXml and sitemapPageIds share one live query (Imp7 — one snapshot).
+  let sitemapP;
+  const memoSitemap = () => (sitemapP || (sitemapP = _fetchSitemap(sdk, appUnique)));
+
+  // Per-id page code cache. Downloads by specific id on demand rather than pulling all pages at once
+  // (the old all-pages downloadP). Each id gets its own output dir to avoid directory collision.
   const codeById = new Map();
-  // Download EVERY page ONCE into a local dir, cache by id. Fail-closed: a download failure rejects,
-  // so pageCode() throws and the mandatory page-verify gate turns it into a non-zero build exit.
-  const ensureDownloaded = () => (downloadP || (downloadP = (async () => {
-    const id = await appId();
-    const outDir = path.join(workspaceDir, 'verify-pages');
-    fs.rmSync(outDir, { recursive: true, force: true });
-    fs.mkdirSync(outDir, { recursive: true });
-    await genpageCli.download({ appId: id, outputDir: outDir });
-    for (const entry of fs.readdirSync(outDir)) {
-      const tsx = path.join(outDir, entry, 'page.tsx');
-      if (fs.existsSync(tsx)) codeById.set(String(entry).toLowerCase(), fs.readFileSync(tsx, 'utf8'));
-    }
-  })()));
+
   const base = {
     findTable: async (logical) => { const l = String(logical).toLowerCase(); const t = await sdk.findTables(l); return (t || []).find((x) => String(x.logicalName).toLowerCase() === l) || null; },
     findColumns: async (logical) => sdk.findColumns(logical),
     queryRecords: (set, o) => sdk.queryRecords(set, o),
-    sitemapXml: () => sitemapXmlFor(sdk, appUnique),
+    // sitemapXml (string, fail-closed '') for entity/icon hasElement checks — from the discriminated sitemap
+    // read. Returning '' on failure suppresses entity/icon checks without aborting the whole verify.
+    sitemapXml: async () => { const r = await memoSitemap(); return r.ok ? r.xml : ''; },
   };
-  // Only expose the page reader when a genpageCli is wired — absent it, verifySpec fails closed (C6).
+
+  // Only expose page-authority readers when a genpageCli is wired — absent it, verifySpec fails closed
+  // for a page-bearing spec (Imp7/C6: missing methods → unableToRun).
   if (genpageCli) {
-    base.pages = async () => {
-      const r = await genpageCli.enumerate({ appId: await appId() });
-      if (!r.ok) throw new Error(`page enumeration failed during verify: ${r.error || 'pac genpage list returned non-zero'}`);
-      return r.pages;
+    let existenceP;
+    let manifestP;
+
+    // MEMBERSHIP: the app's live sitemap page ids. Fail-closed: throw when the sitemap is unreadable.
+    // verifySpec catches reader-incapacity via the method-presence check, not a try/catch here; a throw
+    // propagates to the build gate which converts it to a non-zero exit (design §13.1).
+    base.sitemapPageIds = async () => {
+      const r = await memoSitemap();
+      if (!r.ok) throw new Error(`could not read the app sitemap during verify (${r.reason})`);
+      return _sitemapGenPageIds(r.xml);
     };
+
+    // EXISTENCE: env-wide generative-page id set. Memoized (one enumerateEnv per verify run). Throw on
+    // failure — fail-closed: an unknown environment means we cannot tell deployed from absent.
+    base.existenceIds = () => (existenceP || (existenceP = (async () => {
+      const e = await genpageCli.enumerateEnv();
+      if (!e.ok) throw new Error(e.error);
+      return e.ids;
+    })()));
+
+    // IDENTITY: the durable page manifest web resource. Returns null when absent OR corrupt — verifySpec
+    // treats null as unableToRun (page-identity) on a page-bearing spec (Imp7). Memoized (one read).
+    base.manifest = () => (manifestP || (manifestP = (async () => {
+      const name = _manifestResourceName(appUnique);
+      const rows = await sdk.queryRecords('webresource', { select: ['content'], filter: `name eq '${odataLit(name)}'`, top: 1 });
+      const b64 = rows && rows[0] && rows[0].content;
+      // parseManifestBase64 returns null on bad base64, bad JSON, wrong schemaVersion, corrupt entries, or
+      // duplicate keys/pageIds (Imp11). A null manifest on a page-bearing spec → unableToRun in verifySpec.
+      return b64 ? _parseManifestBase64(b64) : null;
+    })()));
+
+    // pageCode(id): download THAT page by id (pageIds:[id]) into a per-id cached directory. Caches result
+    // so repeated calls for the same id never re-download. Fail-closed: a download failure rejects (throws)
+    // so the caller receives a page-code miss rather than silently receiving empty code.
     base.pageCode = async (pageId) => {
-      await ensureDownloaded();
-      return codeById.get(String(pageId).toLowerCase()) || '';
+      const key = String(pageId).toLowerCase();
+      if (codeById.has(key)) return codeById.get(key);
+      const id = await appId();
+      // Per-id output dir so parallel/sequential calls for different ids don't clobber each other.
+      const outDir = path.join(workspaceDir, 'verify-pages', key);
+      fs.rmSync(outDir, { recursive: true, force: true });
+      fs.mkdirSync(outDir, { recursive: true });
+      // Fail-closed: genpageCli.download throws on pac exit != 0 (design §13.1).
+      await genpageCli.download({ appId: id, outputDir: outDir, pageIds: [pageId] });
+      // pac writes to <outDir>/<pageId>/page.tsx; scan subdirs to be case-tolerant (pac may differ in casing).
+      let code = '';
+      for (const entry of fs.readdirSync(outDir)) {
+        const tsx = path.join(outDir, entry, 'page.tsx');
+        if (fs.existsSync(tsx)) { code = fs.readFileSync(tsx, 'utf8'); break; }
+      }
+      codeById.set(key, code);
+      return code;
     };
   }
   return base;

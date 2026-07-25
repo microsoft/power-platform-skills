@@ -65,55 +65,94 @@ async function verifySpec(spec, read) {
     }
   }
 
-  // Pages (design §13.1). When the spec declares implemented pages the reader MUST be able to read them:
-  // if it lacks a page enumeration, verification CANNOT run and must FAIL (fail-closed, C6), not silently
-  // pass. read.pages()/read.pageCode() themselves throw on an enumeration/download failure — the mandatory
-  // build gate turns that into a non-zero exit.
+  // Pages (design §13.1). Match BY ID against three authorities — IDENTITY (manifest), EXISTENCE
+  // (env-wide id set), MEMBERSHIP (app sitemap ids). Reader must supply sitemapPageIds(),
+  // existenceIds(), manifest(), and pageCode(id) when any page has nav. Fail-closed (Imp7):
+  // reader-incapacity OR an absent/uncorrelatable manifest on a page-bearing spec → unableToRun
+  // (NOT "every page missing" — without an id correlation we cannot tell what is there vs. absent).
   const implementedPages = (spec.pages || []).filter((p) => { const s = normalizePageSource(p); return s && s.kind === 'tsx' && s.codeFile; });
-  // Reader-incapacity: the verifier simply cannot enumerate or fetch page code. This is distinct from
-  // an ordinary failed check (page absent from live). unableToRun:true signals the build gate (C6).
-  const unableToRun = !!(implementedPages.length && typeof read.pages !== 'function') ||
-    !!(implementedPages.some((p) => (p.navigatesTo || []).length > 0) && typeof read.pageCode !== 'function');
+  const hasNavPages = implementedPages.some((p) => (p.navigatesTo || []).length > 0);
+  // Reader-incapacity: required methods absent → cannot run, distinct from pages being absent in live.
+  let unableToRun = !!(implementedPages.length && (
+    typeof read.sitemapPageIds !== 'function' ||
+    typeof read.existenceIds !== 'function' ||
+    typeof read.manifest !== 'function'
+  )) || !!(hasNavPages && typeof read.pageCode !== 'function');
   if (implementedPages.length) {
     if (unableToRun) {
-      // Reader is incapable of verifying pages — add a sentinel check and skip the per-page loop.
-      add('page-verify', 'pages', false, 'the verify reader cannot enumerate pages (unable to run)');
+      // Reader is missing required page-authority methods — add a sentinel check and skip the loop.
+      add('page-verify', 'pages', false, 'the verify reader cannot read existence / membership / manifest (unable to run)');
     } else {
-      // read.pages() is left UNWRAPPED so a throw (enumeration failure) propagates out of verifySpec.
-      // The mandatory build gate's try/catch turns it into an unableToRun result (design §13.1).
-      const live = (await read.pages()) || [];
-      const liveByName = new Map(live.filter((p) => p.name && p.pageId).map((p) => [p.name, p.pageId]));
-      // Resolve the live GenPageId for a declared page key: look up the page by key/name and map its
-      // name → live id. Used for nav-edge checks.
-      const idForKey = (key) => { const pg = (spec.pages || []).find((p) => (p.key || p.name) === key); return pg ? liveByName.get(pg.name) : undefined; };
-      for (const p of implementedPages) {
-        const key = p.key || p.name;
-        const pageId = liveByName.get(p.name);
-        add('page', p.name, !!pageId);
-        if (!pageId) continue;
-        // Only emit a page-subarea check when the appShell actually references this page by key —
-        // an unreferenced (headless) page has no sitemap entry to verify.
-        if (appShellReferencesPage(spec, key)) add('page-subarea', p.name, subareaHasGenPage(xml, pageId));
-        const nav = p.navigatesTo || [];
-        if (!nav.length) continue;
-        let code;
-        try {
-          code = (await read.pageCode(pageId)) || '';
-        } catch (e) {
-          // A single page's download blip is a specific verifiable miss, not reader-incapacity.
-          add('page-code', p.name, false, String((e && e.message) || e));
-          continue;
+      // ONE cached snapshot of each authority (Imp7 — never re-query per page). Throws from
+      // sitemapPageIds/existenceIds propagate out of verifySpec; the build gate's try/catch converts them
+      // to a non-zero exit (design §13.1). The caller that constructed the reader bears fail-closed responsibility.
+      const sitemapIds = new Set((await read.sitemapPageIds()).map((id) => String(id).toLowerCase()));
+      const existenceIds = new Set((await read.existenceIds()).map((id) => String(id).toLowerCase()));
+      const man = await read.manifest();
+      // Build key→id from the manifest (IDENTITY authority). A spec page's own pageId (edit-snapshot,
+      // C3) OUTRANKS the manifest entry for the same key — use idOf() consistently.
+      const idByKey = new Map(
+        ((man && man.pages) || [])
+          .filter((p) => p && p.key && p.pageId)
+          .map((p) => [p.key, p.pageId]),
+      );
+      // idOf: spec pageId first (highest authority), then manifest key→id (C3 outranks C1).
+      const idOf = (p) => p.pageId || idByKey.get(p.key || p.name);
+      // Imp7: if NO implemented page can be given an id (manifest empty/absent AND no spec pageIds),
+      // the verifier cannot correlate spec pages to live ids → unableToRun (page-identity), NOT N misses.
+      const resolvable = implementedPages.filter((p) => !!idOf(p));
+      if (resolvable.length === 0) {
+        unableToRun = true;
+        add('page-verify', 'pages', false, 'the page manifest is missing/empty/uncorrelatable — cannot map any spec page to a deployed id (page-identity)');
+      } else {
+        // specIds tracks which live ids are accounted for by spec pages (for set-equality below).
+        const specIds = new Set();
+        for (const p of implementedPages) {
+          const key = p.key || p.name;
+          const id = idOf(p);
+          if (!id) {
+            // Partially-resolvable manifest: some pages have ids, this one doesn't — emit a specific miss.
+            add('page', p.name, false, 'no manifest/spec id for this page (page-identity)');
+            continue;
+          }
+          specIds.add(String(id).toLowerCase());
+          // page present ⟺ id ∈ existenceIds (deployed env-wide) AND id ∈ sitemapIds (placed in this app).
+          // Both conditions required: existence alone doesn't mean the page belongs to this app.
+          const present = existenceIds.has(String(id).toLowerCase()) && sitemapIds.has(String(id).toLowerCase());
+          add('page', p.name, present);
+          if (!present) continue;
+          // page-subarea: verify the sitemap XML specifically carries a GenPageId="<id>" binding.
+          // Only emitted when the appShell references this page key (headless pages have no subarea to verify).
+          if (appShellReferencesPage(spec, key)) add('page-subarea', p.name, subareaHasGenPage(xml, id));
+          const nav = p.navigatesTo || [];
+          if (!nav.length) continue;
+          let code;
+          try {
+            // Download THAT page's code by id (not all pages) — the real reader caches per id.
+            code = (await read.pageCode(id)) || '';
+          } catch (e) {
+            // A single page's download blip is a specific verifiable miss, not reader-incapacity.
+            add('page-code', p.name, false, String((e && e.message) || e));
+            continue;
+          }
+          // THE SINGLE STRUCTURAL ORACLE: parse the deployed page's real navigateTo call sites.
+          // A decoy id in a comment, a stale GUID, or a dynamic pageId all FAIL (C1).
+          const targets = extractNavTargets(code);
+          // No residual/malformed PAGEREF_ in deployed code means the resolve+upload step ran on this page.
+          add('page-no-pageref', p.name, !targets.some((t) => t.kind === 'pageref' || t.kind === 'pageref-malformed'));
+          // Every declared nav edge must resolve to the ACTUAL target's deployed id at a REAL call site.
+          const navLiteralIds = new Set(targets.filter((t) => t.kind === 'literal').map((t) => String(t.pageId).toLowerCase()));
+          for (const edge of nav) {
+            // Target id via the same resolution order (spec pageId > manifest) for nav targets.
+            const targetPage = (spec.pages || []).find((pp) => (pp.key || pp.name) === edge.targetKey);
+            const targetId = targetPage ? idOf(targetPage) : undefined;
+            add('page-nav', `${p.name} -> ${edge.targetKey}`, !!targetId && navLiteralIds.has(String(targetId).toLowerCase()));
+          }
         }
-        // THE SINGLE STRUCTURAL ORACLE: parse the deployed page's real navigateTo call sites.
-        // A decoy id in a comment, a stale GUID, or a dynamic pageId all FAIL (C1).
-        const targets = extractNavTargets(code);
-        // No residual/malformed PAGEREF_ in deployed code means the resolve+upload step ran on this page.
-        add('page-no-pageref', p.name, !targets.some((t) => t.kind === 'pageref' || t.kind === 'pageref-malformed'));
-        // Every declared nav edge must resolve to the ACTUAL target's live GenPageId at a REAL call site.
-        const navLiteralIds = new Set(targets.filter((t) => t.kind === 'literal').map((t) => String(t.pageId).toLowerCase()));
-        for (const edge of nav) {
-          const targetId = idForKey(edge.targetKey);
-          add('page-nav', `${p.name} -> ${edge.targetKey}`, !!targetId && navLiteralIds.has(String(targetId).toLowerCase()));
+        // Set-equality (Imp7): a live sitemap page not mapped by any spec page's id → page-extra.
+        // The deployed app has a page the spec doesn't declare — surface it rather than silently ignore.
+        for (const liveId of sitemapIds) {
+          if (!specIds.has(liveId)) add('page-extra', liveId, false, 'a sitemap page not declared in the spec');
         }
       }
     }
