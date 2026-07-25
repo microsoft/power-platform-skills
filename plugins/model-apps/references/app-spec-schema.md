@@ -8,6 +8,13 @@ deterministic builder (`scripts/build-model-app.js`). Author it to this shape, l
 > — 3 tables, 2 relationships, 3 views, 2 charts, 3 forms (with sub-grids), relational sample
 > data. Read it first; it shows every section in use. `app-spec.project-tracker.json` shows an
 > **explicit form layout** (`tabs`).
+>
+> **Review the whole spec** (data model + sitemap + form wireframes + page-intents + design contract)
+> before approving the build: `node scripts/preview-app.js @<dir>/app-spec.json`. For a single
+> form wireframe: `node scripts/preview-form.js @<dir>/app-spec.json <entityName>`.
+> The eval harness uses the same spec to grade per-stage structural facts offline — see
+> [`evals/model-apps/app-builder/EVAL_GUIDE.md`](../../../evals/model-apps/app-builder/EVAL_GUIDE.md)
+> and [`docs/architecture.md`](../docs/architecture.md) → *`/app-builder` — build pipeline*.
 
 ## Modeling cheatsheet — read this before exploring anything else
 
@@ -299,6 +306,9 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   deployed pages fail-closed, and uses `reconcilePageIds` to reconstruct keys and reverse-normalize
   navigation placeholders back to `"PAGEREF_<key>"` in each page's source. Legacy apps with no
   manifest get fresh keys assigned on first download.
+- **Offline evaluation.** The app-builder eval harness (`evals/model-apps/app-builder/`) grades
+  page-stage structural facts from the spec offline (navigation graph resolution, intent-vs-tsx
+  completeness). See [`evals/model-apps/app-builder/EVAL_GUIDE.md`](../../../evals/model-apps/app-builder/EVAL_GUIDE.md).
 
 ## appShell
 ```jsonc
@@ -329,6 +339,10 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 ```
 - Shared styling tokens threaded to every page so generated pages look consistent with each other
   and the model-driven shell (both Fluent UI V9). Unknown keys are rejected.
+- During **generate-pages** the design contract is passed to each headless `page-builder` agent
+  so all generated `.tsx` files apply the same Fluent UI V9 token set (accent color, density,
+  corner radius, dark-mode policy). Run `node scripts/preview-app.js @<dir>/app-spec.json` to
+  preview the design contract alongside the rest of the app before approving the build.
 
 ## sampleData (optional)
 Keyed by entity `schemaName`. Choice values are **labels** (resolved to ints) — for **both** inline

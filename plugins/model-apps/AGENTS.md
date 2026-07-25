@@ -57,7 +57,12 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   warnings }`): errors block the plan gate (e.g. the relationship-name-vs-lookup-name
   collision Dataverse rejects), warnings teach.
 - **`scripts/build-model-app.js` → `scripts/lib/sdk-build.js`** — the deterministic, **idempotent**
-  build engine, run after approval. Discovers existing tables/columns/relationships via the SDK
+  build engine, run after approval. Runs in two engine invocations (staged flow): (1) `--stage data
+  --apply` materializes tables + columns + relationships (solution·data-model only; sample-data
+  deferred) so `generate-types` can emit `RuntimeTypes.ts`; (2) a full `--apply` build (re-discovers
+  the data model, then ui · app · publish) finalizes everything idempotently. `--stage
+  <data|ui|app|publish>` selects phases by stage name; **apply-safe only for `data`** — the full
+  build (run 2) is always a complete idempotent run. Discovers existing tables/columns/relationships via the SDK
   (`findTables`/`findColumns`/`fetchEntityMetadata`) and creates only what's missing
   (`createSolution`/`createTable`/`createColumn`/`createRelationship`), seeds sample data via
   `seedRecordGraph` (SDK-owned parent-bind + resolve-by-name idempotency), enriches default
@@ -83,13 +88,13 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   `pac model genpage upload` (no `--add-to-sitemap`) and the SDK finalizes the sitemap with `GenPage`
   subareas; classic `dashboards[]` are opt-in.
   **All Dataverse access is via the SDK**, so metadata is persisted under
-  `<app-folder>/.maker-workspace/` for reuse/edits. Phases
-  (`solution·data-model·sample-data·web-resources·views·charts·forms·commands·dashboards·app-shell·pages·ai-features·publish`) are
-  selectable with `--only`/`--skip`/`--from`/`--to`; independent ops run with bounded parallelism.
+  `<app-folder>/.maker-workspace/` for reuse/edits. The 13 phases
+  (`solution·data-model·sample-data·web-resources·views·charts·forms·commands·dashboards·app-shell·pages·ai-features·publish`)
+  are unchanged; independent ops run with bounded parallelism.
   Emits `[n/total]` events the orchestrator narrates + a `BuildHalt` it gates on. Dry-run by
   default; `--apply` writes, `--sample-data` / `--publish` opt-in. `--verify` (opt-in) auto-runs the
   read-only reconcile after a successful apply and exits non-zero on a silent partial build (the same
-  check `verify-model-app.js` runs standalone).
+  check `verify-model-app.js` runs standalone). Recovery from a halted build is a full rerun (idempotent).
 - **`scripts/teardown-model-app.js` → `scripts/lib/sdk-teardown.js`** — the first-class, **classifier-safe**
   teardown (reverse of the build), for cleaning up live-verification probes or a failed build. Deletes
   exactly the artifacts a given App Spec declares, in dependency-safe order (**app → dashboards →
@@ -132,6 +137,9 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
 - **`scripts/preview-form.js` → `scripts/lib/form-preview.js`** — renders an ASCII **form
   wireframe** (tabs, sections, fields with widget hints, the Notes/timeline block, sub-grids, form
   JS) from the App Spec, so the user can review a form visually during authoring before approving.
+  **`scripts/preview-app.js` → `scripts/lib/app-preview.js`** — renders the WHOLE app design
+  (data model + sitemap tree + views/charts + per-form wireframes + page-intents + design contract)
+  as a single ASCII preview — the design gate #2 / plan-mode approval artifact.
 - **`scripts/vendor/cds-maker-sdk.cjs`** — the SDK vendored as a self-contained headless bundle
   (rebuild via `scripts/_vendor-build/`); **`scripts/lib/sdk-http-client.js`** injects an
   `az`-token HttpClient. No browser, no relay — the SDK reuses the designer's own serializers.
@@ -188,11 +196,12 @@ scripts/
   dataverse-request.js         ← General Dataverse Web API wrapper (escape hatch)
   provision-entities.js        ← CLI wrapper for entity provisioning (solution + data-model + sample-data)
   provision-solution.js        ← Creates a Dataverse solution via the SDK
-  build-model-app.js           ← app-builder: narrated, idempotent SDK build (dry-run default)
+  build-model-app.js           ← app-builder: narrated, idempotent SDK build (dry-run default; --stage data|ui|app|publish)
   download-model-app.js        ← app-builder: pull a deployed app into an editable spec (edit flow)
   teardown-model-app.js        ← app-builder: classifier-safe reverse-of-build teardown
   verify-model-app.js          ← app-builder: reconcile the spec against the deployed app
   preview-form.js              ← app-builder: ASCII form wireframe for authoring review
+  preview-app.js               ← app-builder: ASCII whole-app design preview (data model + sitemap + forms + page-intents + design)
   ai-preflight.js              ← app-builder: preflight AI feature availability (admin-gate report)
   run-tests.js                 ← one-command plugin + SDK regression runner
   smoke-eval.js                ← scripted live smoke eval (build → assert → teardown)
@@ -204,6 +213,8 @@ scripts/
     dataverse-auth.js          ← Shared auth + HTTP helpers (uses `az account get-access-token`)
     supported-dependencies.js  ← Single source of truth for runtime + dev deps versions
     sdk-build.js               ← app-builder build engine (idempotent; incl. the pages phase)
+    stages.js                  ← stage→phase-range mapping + PHASES/STAGES constants (Plans 1-2)
+    op-diff.js                 ← destructive-op diff + --allow-destructive / --non-interactive gating (Plan 2)
     artifact-intent.js         ← pure App Spec → canonical SDK intent compiler (new form topology; no SDK calls)
     sdk-teardown.js            ← app-builder teardown engine (planTeardown is pure)
     sdk-http-client.js         ← az-token HttpClient for the vendored SDK
@@ -213,6 +224,10 @@ scripts/
     verify-spec.js             ← spec-vs-deployed reconciliation core
     build-journal.js           ← durable JSONL build journal (resume diagnostics)
     form-preview.js            ← form wireframe renderer
+    app-preview.js             ← whole-app design renderer (data model + sitemap + forms + page-intents + design; Plan 4)
+    schema-facts.js            ← pure data-model provisioning fact extractor for evals (Plan 4)
+    pageref-resolver.js        ← PAGEREF_<key> → GenPageId nav resolver (Plan 3)
+    page-manifest.js           ← durable <app>_pagemanifest read/write (Plan 3)
     ai-candidates.js           ← selects good-candidate tables for auto row-summary mode
     ai-prompt.js               ← generates tailored Copilot row-summary prompts
     _graph.js                  ← entity topological ordering (shared by build + teardown)
@@ -401,4 +416,25 @@ Run on every PR that touches the skill, agents, rules, or evals:
 ```bash
 node evals/model-apps/genpage/run-layer-1.js --tier smoke
 node evals/model-apps/genpage/run-layer-2.js --tier smoke
+```
+
+### /app-builder — offline structural harness
+
+A data-driven, **offline** eval harness at `evals/model-apps/app-builder/`
+(sibling of `genpage/`). Grades **structural per-stage facts** — not `.tsx`
+snapshots — using the plugin's own pure primitives. No live env required.
+
+- `evals.json` + `fixtures/<n>-<slug>/app-spec.json` — data-driven cases
+- `lib/facts.js` — per-stage fact computation (`schema-facts.js` + `app-spec.js` primitives)
+- `lib/assertions.js` — assertion text → check function registry
+- `run-app-builder.js` — TAP v13 runner (run from the repo root)
+- `EVAL_GUIDE.md` — grading guide (see [`evals/model-apps/app-builder/EVAL_GUIDE.md`](../../evals/model-apps/app-builder/EVAL_GUIDE.md))
+
+Per-stage oracles: `author` (validate + lint), `plan` (`planFor`), `data`
+(`schema-facts.js` normalized tables/columns/relationships), `ui` (view/chart/form
+intent facts), `app` (sitemap facts + nav graph), `verify` (`verifySpec` reconcile).
+
+```bash
+# From repo root:
+node evals/model-apps/app-builder/run-app-builder.js
 ```

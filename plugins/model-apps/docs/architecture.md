@@ -141,34 +141,77 @@ deterministic, idempotent, narrated SDK build. Create and **edit share one path*
                      User invokes /app-builder
                               │
                               v
-              ┌────────────────────────────┐   runs in the MAIN loop
+              ┌────────────────────────────┐   STAGE: author  (main loop)
               │ Phase 1 — authoring        │   references/authoring-flow.md
-              │  env select (pac auth/org) │   → early + full spec-lint gates
-              │  App Spec in 2 confirmed   │   → plan-mode approval (single build gate)
-              │  levels (data model, then  │
-              │  forms/views/charts+data)  │
+              │  env select (pac auth/org) │   DESIGN-ONLY: App Spec in 2 confirmed
+              │  Level 1: data model       │   levels — no .tsx emitted here.
+              │  Level 2: artifacts +      │   → early + full spec-lint gates
+              │    page-intents + design   │   → plan-mode approval (single build gate)
               └──────────────┬─────────────┘
                              │  app-spec.json (machine contract) + model-app-plan.md
+                             │
+                             v
+              ┌────────────────────────────┐   STAGE: data  (engine run 1)
+              │ Data pre-build             │   build-model-app.js --stage data --apply
+              │  solution + data-model     │   → tables exist for type-gen
+              │  (NOT sample-data yet)     │   13 phases unchanged; this run covers:
+              │                            │     solution · data-model
+              └──────────────┬─────────────┘
+                             │
+                             v
+              ┌────────────────────────────┐   STAGE: generate-pages  (main loop + agents)
+              │ Generate pages             │   pac model genpage generate-types → RuntimeTypes.ts
+              │  generate-types +          │   headless page-builder agents fill each intent
+              │  page-builder agents       │   page's .tsx; PAGEREF_<key> for cross-page nav
+              │  (Task — parallel)         │   <app>_pagemanifest carries semantics durably
+              └──────────────┬─────────────┘
+                             │  all pages: source { kind:"tsx", codeFile }
                              v
    ┌───────────────────────────────────────────────────────────────────┐
-   │ Phase 2 — build   scripts/build-model-app.js → scripts/lib/sdk-build.js
-   │  phases: solution · data-model · sample-data · web-resources ·      │
-   │          views · charts · forms · commands · dashboards ·           │
-   │          app-shell · pages · ai-features · publish                  │
-   │  idempotent (creates only what's missing); --only/--skip/--from/--to;
-   │  bounded parallelism; emits [n/total] events + a BuildHalt gate      │
+   │ Full idempotent build  build-model-app.js --apply --verify        │  STAGES: ui · app · publish · verify
+   │  (engine run 2 — full; rediscovers data-model, then continues)   │
+   │  13 phases:                                                        │
+   │    solution · data-model · sample-data                (data)      │
+   │    web-resources · views · charts · forms ·                       │
+   │    commands · dashboards                               (ui)        │
+   │    app-shell · pages [upload + PAGEREF_ resolve +                  │
+   │      sitemap finalize] · ai-features                  (app)       │
+   │    publish                                             (publish)   │
+   │  bounded parallelism; emits [n/total] events + BuildHalt gate     │
+   │  --verify: auto-reconciles spec vs deployed after apply           │
    └──────────────┬────────────────────────────────────────────────────┘
                   │  ALL Dataverse access via the vendored headless SDK
                   v          scripts/vendor/cds-maker-sdk.cjs
    ┌────────────────────────┐   (metadata cached under <app-folder>/.maker-workspace/)
-   │ Phase 3 — verify &     │   build --apply --verify auto-reconciles the spec vs deployed;
-   │           iterate      │   verify-model-app.js re-checks (read-only; non-zero on anything missing)
+   │ Verify & iterate       │   STAGE: verify — verify-model-app.js re-checks
+   │                        │   (read-only; non-zero on anything missing)
    └────────────────────────┘
 
-   Edit  = same path:  download-model-app.js  pulls a deployed app → editable spec → re-run Phase 2
-                       (idempotent: reuses app/tables, updates pages in place, keeps GenPage subareas).
+   Edit  = same path:  download-model-app.js  pulls a deployed app → editable spec → re-run full build
+                       (idempotent: reuses app/tables, updates pages in place, keeps GenPage subareas;
+                        fetches <app>_pagemanifest fail-closed, reverse-normalizes PAGEREF_ placeholders).
    Cleanup =           teardown-model-app.js  reverse-of-build, classifier-safe, dry-run by default.
 ```
+
+**Stage → engine-phase legend:**
+
+| Stage | Executes in | Engine phases |
+|---|---|---|
+| **author** | main loop | *(none — design-only)* |
+| **data** | run 1 (schema) + run 2 (rows) | `solution` · `data-model` (run 1); `sample-data` (run 2) |
+| **generate-pages** | main loop + agents | *(none — writes .tsx files)* |
+| **ui** | run 2 | `web-resources` · `views` · `charts` · `forms` · `commands` · `dashboards` |
+| **app** | run 2 | `app-shell` · `pages` · `ai-features` |
+| **publish** | run 2 | `publish` |
+| **verify** | run 2 or standalone | *(reconcile pass)* |
+
+`--stage <data|ui|app|publish>` on `build-model-app.js` maps a stage to its phase range.
+**Apply-safe only for `data`** — the full build (run 2) is always a full idempotent run, not a
+`--from/--to` range.
+
+**Safety:** destructive ops fail-closed without `--allow-destructive` (`op-diff.js`).
+`--non-interactive`/autopilot mode suppresses prompts only — it never bypasses safety gates.
+The durable `<app>_pagemanifest` web resource carries page semantics across download and rebuild.
 
 The plugin owns **judgment** (spec validation, choice/status resolution, candidate selection, prompt
 authoring); the vendored SDK owns the **deterministic Dataverse mechanics** (create/query/delete,
@@ -177,6 +220,8 @@ script's behavioral spec is in [`../AGENTS.md`](../AGENTS.md); the App Spec shap
 [`../references/app-spec-schema.md`](../references/app-spec-schema.md).
 
 ## Eval suite
+
+### /genpage — 3-layer suite
 
 Three layers, graded against captured fixtures:
 
@@ -193,3 +238,37 @@ runners are stateless — they read fixtures, grep + structural-check, write
 results. CI can run both in seconds. Layer 3 (UX rubric) stays manual.
 
 See `evals/model-apps/genpage/EVAL_GUIDE.md` for the full grading flow.
+
+### /app-builder — offline structural harness
+
+A data-driven, **offline** eval harness under `evals/model-apps/app-builder/`
+(sibling of `genpage/`). It grades **structural per-stage facts** — not `.tsx`
+snapshots — using the plugin's own pure primitives and requires no live env.
+
+```
+evals/model-apps/app-builder/
+  evals.json                     <-- data-driven cases + per-stage assertions
+  fixtures/<n>-<slug>/
+    app-spec.json                <-- the spec under test
+  lib/
+    fixture-loader.js            <-- loads each fixture's app-spec.json
+    facts.js                     <-- per-stage fact computation (schema-facts.js etc.)
+    assertions.js                <-- assertion text → check function registry
+  run-app-builder.js             <-- TAP v13 runner (run from repo root)
+  EVAL_GUIDE.md                  <-- grading guide (companion to genpage/EVAL_GUIDE.md)
+  tests/
+    facts.test.js                <-- offline unit tests
+    run-app-builder.test.js      <-- e2e harness tests
+```
+
+Per-stage oracles: `author` (`validateAppSpec`+`lintAppSpec`), `plan` (`planFor`),
+`data` (`schema-facts.js` — normalized tables/columns/relationships), `ui`
+(view/chart/form intent facts), `app` (`appDef` sitemap facts + nav graph),
+`verify` (`verifySpec` reconcile). Run from the repo root:
+
+```bash
+node evals/model-apps/app-builder/run-app-builder.js
+```
+
+See [`evals/model-apps/app-builder/EVAL_GUIDE.md`](../../evals/model-apps/app-builder/EVAL_GUIDE.md)
+for the full grading flow.
