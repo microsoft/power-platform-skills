@@ -160,6 +160,26 @@ test('classifyListOutput: pages / empty / unrecognized (tri-state, COMPLETE-list
   assert.strictEqual(classifyListOutput(`Found 1 generated page(s):\n    Page ID: ${GUID}\n`).kind, 'unrecognized');
 });
 
+// REGRESSION (whole-branch review, Critical fail-OPEN): the "no pages" phrase is tested against the WHOLE
+// stdout (names + descriptions), so a page NAMED or DESCRIBED with "no page(s)" text must NOT force an app
+// WITH live pages to classify as EMPTY. A false 'empty' → reconcile sees zero live → duplicate CREATE on
+// build + silent page-drop on download. Empty requires NO positive page evidence.
+test('classifyListOutput: a page NAMED/DESCRIBED "no pages" does NOT force empty when real pages are listed', () => {
+  // A page literally named "No Pages" with a valid 1-page summary → 'pages', not 'empty'.
+  const namedNoPages = `Found 1 generated page(s):\n\n  No Pages\n    Page ID: ${GUID}\n`;
+  assert.strictEqual(classifyListOutput(namedNoPages).kind, 'pages');
+  assert.deepStrictEqual(classifyListOutput(namedNoPages).pages, [{ pageId: GUID, name: 'No Pages' }]);
+  // A description mentioning "no pages to display" on a real 2-page listing → 'pages'.
+  const OTHER = '11111111-2222-3333-4444-555555555555';
+  const describedNoPages = `Found 2 generated page(s):\n\n  Overview\n    Page ID: ${GUID}\n    Description: shown when there are no pages to display\n\n  Detail\n    Page ID: ${OTHER}\n`;
+  assert.strictEqual(classifyListOutput(describedNoPages).kind, 'pages');
+  assert.strictEqual(classifyListOutput(describedNoPages).pages.length, 2);
+  // enumerate must therefore report ok:true with the pages, NOT empty (the fail-OPEN blast radius).
+  return makeGenpageCli('env', { run: async () => ({ status: 0, stdout: namedNoPages, stderr: '' }), sleep: async () => {} })
+    .enumerate({ appId: 'a' })
+    .then((r) => { assert.strictEqual(r.ok, true); assert.ok(!r.empty, 'a page named "No Pages" is NOT an empty app'); assert.deepStrictEqual(r.pages, [{ pageId: GUID, name: 'No Pages' }]); });
+});
+
 // ── Task 4: enumerate (fail-closed, tri-state, retrying) ─────────────────────────────────────────
 
 test('enumerate returns { ok:true, pages } on a COMPLETE zero-exit list (no retry on success)', async () => {

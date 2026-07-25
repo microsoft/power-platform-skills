@@ -84,9 +84,16 @@ function parseListCount(stdout) {
 function classifyListOutput(stdout) {
   const s = String(stdout || '');
   const count = parseListCount(s);
-  // Explicit empty: "Found 0 generated page(s)" OR a "no pages" variant phrase
-  if (count === 0 || /\bno\s+(?:generated\s+)?pages?\b/i.test(s)) return { kind: 'empty', pages: [] };
   const pages = parseList(s);
+  // EMPTY requires NO positive page evidence. Match the "no pages" phrase ONLY when zero page rows parsed
+  // AND there is no positive summary count. The phrase is tested against the WHOLE stdout, which includes
+  // page NAMES and DESCRIPTIONS — so a page literally named "No Pages" or described "…when there are no
+  // pages to display" must NOT force an app WITH live pages to read as empty. That was a fail-OPEN: a false
+  // 'empty' makes reconcile see zero live pages → a duplicate CREATE on build and a silent page-drop on
+  // download. An explicit "Found 0" is trustworthy only when no row was actually parsed (else it is a
+  // contradictory/truncated listing → fail-closed 'unrecognized').
+  if (count === 0) return pages.length === 0 ? { kind: 'empty', pages: [] } : { kind: 'unrecognized', pages: [] };
+  if (count === null && pages.length === 0 && /\bno\s+(?:generated\s+)?pages?\b/i.test(s)) return { kind: 'empty', pages: [] };
   // A complete, authoritative listing: at least one page, every page has a name, count matches
   const allNamed = pages.length > 0 && pages.every((p) => p.name && String(p.name).trim());
   if (allNamed && count !== null && count === pages.length) return { kind: 'pages', pages };
