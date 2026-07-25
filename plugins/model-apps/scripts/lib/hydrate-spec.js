@@ -79,6 +79,12 @@ async function hydrateSpec(read) {
       ? {
           key: p.key,
           name: p.name,
+          // Carry the deployed GenPageId so the downloaded spec is a self-describing EDIT-SNAPSHOT (C3):
+          // a rebuild reuses this id (reconcilePageIds authority #1) instead of minting a new one, even for
+          // a page the user added in Maker that our manifest never knew about. A portable fresh-authored
+          // spec has no pageIds; a downloaded edit-snapshot does — that is the intended distinction.
+          // See references/app-spec-schema.md and docs/app-builder-staged-flow-plan-5-sitemap-authority.md §C3.
+          ...(p.pageId ? { pageId: p.pageId } : {}),
           ...(p.purpose !== undefined ? { purpose: p.purpose } : {}),
           ...(p.dataSources && p.dataSources.length ? { dataSources: p.dataSources } : {}),
           ...(p.navigatesTo ? { navigatesTo: p.navigatesTo } : {}),

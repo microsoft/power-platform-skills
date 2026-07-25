@@ -15,6 +15,7 @@ const { hydrateSpec } = require('./lib/hydrate-spec.js');
 const { makeGenpageCli } = require('./lib/genpage-cli.js');
 const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require('./lib/page-manifest.js');
 const { reverseResolveNavIds } = require('./lib/pageref-resolver.js');
+const { fetchSitemap, sitemapGenPages } = require('./lib/sitemap-pages.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
 const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7: 'gif', 8: 'xap', 9: 'xsl', 10: 'ico', 11: 'svg', 12: 'resx' };
@@ -199,76 +200,136 @@ function droppedSubareaCount(app, spec) {
   return countSub(app && app.siteMap && app.siteMap.areas) - countSub(spec && spec.appShell && spec.appShell.areas);
 }
 
-async function main() {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
-  const env = flags.env;
-  const appArg = flags.app || positional[0];
-  const outDir = path.resolve(flags.out || flags.output || '.');
-  if (!env || !appArg) {
-    process.stderr.write('Usage: node download-model-app.js --env <url> --app <appId|uniqueName> --out <dir>\n');
-    process.exit(1);
-  }
-  fs.mkdirSync(outDir, { recursive: true });
-  const sdk = makeProvision(env, path.join(outDir, '.maker-workspace'));
-  const appId = await resolveAppId(sdk, appArg);
-  if (!appId) { emitResult(false, { ok: false, error: `app '${appArg}' not found` }); return; }
-
+// Injectable download helper: all live-Dataverse work happens here so tests can inject mock deps.
+// `sdk`        — the MakerSDK (fetchArtifact, queryRecords, fetchEntityMetadata)
+// `genpageCli` — the genpage CLI wrapper (enumerateEnv, download)
+// `outDir`     — output directory root
+// `appId`      — the app's GUID (used for download + solution lookup)
+// `appUnique`  — the app's unique name (for fetchSitemap + manifest lookup); may be undefined for
+//                apps not found by unique name, in which case the sitemap read fails gracefully.
+// Returns { ok:true, spec, pages, entities, webResources, droppedSubareas } or { ok:false, error }.
+// Logical failures (no sitemap, enumeration down, missing download) return { ok:false } without
+// throwing. Unexpected I/O errors propagate as thrown exceptions (caught by main().catch).
+async function runDownload({ sdk, genpageCli, outDir, appId, appUnique }) {
   const app = await sdk.fetchArtifact('app', appId);
   const { entities: entityLogicals, icons } = collectSitemap(app);
 
-  // Pages (all — incl. Maker-authored). AUTHORITATIVE via a fail-closed enumeration (lists every page,
-  // even ones not in the sitemap), NOT the sitemap titles alone. Everything below is fail-closed: an
-  // enumeration failure, a download failure, a missing-page gap, or a read/write error ABORTS with a
-  // structured error rather than silently writing a page-dropping spec (Critical 2 / I3).
-  const genpageCli = makeGenpageCli(env);
-  const enumd = await genpageCli.enumerate({ appId });
-  if (!enumd.ok) { emitResult(false, { ok: false, error: `page enumeration failed during download: ${enumd.error}` }); return; }
+  // MEMBERSHIP: the authoritative set of pages owned by this app, from its SITEMAP XML (fail-closed,
+  // discriminated). The app-scoped `pac genpage list --app-id` is sitemap-scoped anyway but returns
+  // SITEMAP TITLES (not page names), misses headless nav-target pages, and cannot be trusted as the
+  // "real names" source. The raw sitemap XML is the single authoritative membership record.
+  const smResult = appUnique
+    ? await fetchSitemap(sdk, appUnique)
+    : { ok: false, reason: 'app-unique-unresolved' };
+  if (!smResult.ok) {
+    return { ok: false, error: `could not read the app sitemap during download (${smResult.reason}) — refusing to write a spec without the authoritative page set` };
+  }
+  // [{ pageId, title? }] — deduped by id; membership-only (title is the XML-decoded subarea label,
+  // NOT the page's real name — the real name comes from the env-wide list below).
+  const smPages = sitemapGenPages(smResult.xml);
   let pages = [];
   let manifest = null;
-  if (!enumd.empty) {
-    // Durable manifest (keys + v2 semantics), looked up by the app's unique name. Best-effort:
-    // a missing/corrupt manifest means we fall back to fresh-key minting (no v2 semantics).
-    const appRows = await sdk.queryRecords('appmodule', { select: ['uniquename'], filter: `appmoduleid eq ${appId}`, top: 1 });
-    const appUnique = appRows && appRows[0] && appRows[0].uniquename;
+
+  if (smPages.length) {
+    // Durable manifest (stable key→id bindings + v2 semantics). Best-effort: a missing or corrupt
+    // manifest falls back to fresh key minting (no v2 semantics for a first-ever download).
     if (appUnique) {
       const rows = await sdk.queryRecords('webresource', { select: ['content'], filter: `name eq '${manifestResourceName(appUnique).replace(/'/g, "''")}'`, top: 1 });
       if (rows && rows[0] && rows[0].content) manifest = parseManifestBase64(rows[0].content);
     }
-    // Clean the download dir, then download — FAIL on error (genpageCli.download throws → main().catch).
+
+    // Real names from the ENV-WIDE list (addenda new-1: env names ≠ sitemap titles). The env-wide
+    // `pac genpage list` returns each page's actual configured name; the sitemap title is what the
+    // Maker chose for the subarea label, which can differ. Using the sitemap title as the page name
+    // was the root of the name-vs-title mismatch (live-confirmed; see Plan-5 §Background).
+    const envResult = await genpageCli.enumerateEnv();
+    if (!envResult.ok) {
+      return { ok: false, error: `page enumeration failed during download: ${envResult.error}` };
+    }
+    const envNameById = new Map(
+      (envResult.pages || []).filter((p) => p.pageId && p.name)
+        .map((p) => [String(p.pageId).toLowerCase(), p.name])
+    );
+
+    // Download EXACTLY the sitemap's pages (by id — headless-free, no env-wide over-pull). The
+    // sitemap is the MEMBERSHIP authority: we pull precisely this app's pages, no more, no less.
     const pagesRoot = path.join(outDir, 'pages');
     fs.rmSync(pagesRoot, { recursive: true, force: true });
     fs.mkdirSync(pagesRoot, { recursive: true });
-    await genpageCli.download({ appId, outputDir: pagesRoot });
-    // Build the name-by-id map from the AUTHORITATIVE enumeration (not the sitemap), so even
-    // Maker-authored pages (absent from the sitemap) get their correct display name.
-    const nameById = new Map(enumd.pages.filter((p) => p.name).map((p) => [String(p.pageId).toLowerCase(), p.name]));
+    const sitemapIds = smPages.map((p) => p.pageId);
+    try {
+      await genpageCli.download({ appId, outputDir: pagesRoot, pageIds: sitemapIds });
+    } catch (e) {
+      return { ok: false, error: `pac genpage download failed: ${e.message}` };
+    }
+
+    // Name resolver: env-wide name (real, stable) primary; sitemap title (XML-entity-decoded) as
+    // fallback when the env-wide list doesn't cover an id (shouldn't happen in practice — env-wide
+    // lists all pages — but guards against an eventual stale or truncated listing).
+    const nameById = new Map(smPages.map((p) => {
+      const id = String(p.pageId).toLowerCase();
+      return [id, envNameById.get(id) || p.title || p.pageId];
+    }));
     pages = parseDownloadedPages(pagesRoot, outDir, nameById);
-    // EXACT enumerated<->downloaded id equality, BOTH directions (I3). A gap either way means pac
-    // downloaded a different set than enumerated — rebuilding from this spec would drop/add pages.
-    const missing = missingDownloads(enumd.pages, pages);
-    if (missing.length) { emitResult(false, { ok: false, error: `enumerated page(s) not downloaded: ${missing.map((p) => p.name || p.pageId).join(', ')} — refusing to write a spec that would drop them` }); return; }
-    const extra = missingDownloads(pages, enumd.pages);
-    if (extra.length) { emitResult(false, { ok: false, error: `downloaded page(s) not enumerated: ${extra.map((p) => p.pageId).join(', ')} — inconsistent page set` }); return; }
-    // Reconcile ids via the reconcilePageIds authority (ambiguous names HALT), assign stable keys,
-    // reverse-normalize each page.tsx (structural — nav pageId literals only).
-    const { keyToId, ambiguous } = reconcilePageIds((manifest && manifest.pages) || [], manifest, pages);
-    if (ambiguous.length) { emitResult(false, { ok: false, error: `ambiguous page name(s) during download: ${ambiguous.map((a) => a.name).join(', ')} — cannot safely reconstruct keys` }); return; }
+
+    // Bidirectional exact equality: sitemap ids ↔ downloaded ids (I3). A gap either way means pac
+    // fetched a different set than the sitemap declares — rebuilding from this spec would silently
+    // drop or add pages, so download FAILS instead.
+    const missing = missingDownloads(smPages, pages);
+    if (missing.length) {
+      return { ok: false, error: `sitemap page(s) not downloaded: ${missing.map((p) => p.title || p.pageId).join(', ')} — refusing to write a spec that would drop them` };
+    }
+    const extra = missingDownloads(pages, smPages);
+    if (extra.length) {
+      return { ok: false, error: `downloaded page(s) not in the sitemap: ${extra.map((p) => p.pageId).join(', ')} — inconsistent page set` };
+    }
+
+    // Reconcile by MEMBERSHIP. For download, existence AND membership are both the sitemap ids
+    // (the pages we just pulled — if they were downloaded they exist; if not we already aborted
+    // above). This differs from the build path, which uses the env-wide EXISTENCE set (because a
+    // build must find crash-orphaned pages that are not yet in the sitemap).
+    const { keyToId, conflicts } = reconcilePageIds(
+      (manifest && manifest.pages) || [],
+      manifest,
+      sitemapIds, // existenceIds: confirmed present (we just downloaded them)
+      sitemapIds  // sitemapIds: membership = same set as existence for the download path
+    );
+    if (conflicts.length) {
+      return { ok: false, error: `page identity conflict during download: ${conflicts.map((c) => c.pageId || c.key).join(', ')} — cannot safely reconstruct` };
+    }
+
+    // Assign stable keys + carry v2 semantics (navigatesTo/purpose/pageInput) from the manifest.
+    // Pages bound to manifest keys reuse their key and semantics; Maker-added pages (not in the
+    // manifest) get a fresh slug key minted from their env-wide name.
     const idToKey = assignPageKeys(pages, manifest, keyToId);
+
+    // Reverse-resolve nav pageId literals → symbolic PAGEREF_<key> tokens (structural, oracle-safe).
     for (const p of pages) {
       const abs = path.join(outDir, p.codeFile);
       const src = fs.readFileSync(abs, 'utf8');           // FAIL on a read error (no swallow)
       const rev = reverseResolveNavIds(src, idToKey);     // structural — nav pageId literals only
       if (rev !== src) fs.writeFileSync(abs, rev, 'utf8'); // FAIL on a write error (no swallow)
     }
+
+    // Warn about manifest pages no longer in the sitemap (Maker-deleted in the live app). The
+    // rebuilt spec drops these pages; the warning mirrors the droppedSubareaCount WARNING below.
+    const liveSet = new Set(sitemapIds.map((id) => String(id).toLowerCase()));
+    const goneManifestPages = ((manifest && manifest.pages) || []).filter(
+      (mp) => mp.pageId && !liveSet.has(String(mp.pageId).toLowerCase())
+    );
+    if (goneManifestPages.length) {
+      process.stderr.write(`WARNING: ${goneManifestPages.length} manifest page(s) are no longer in the app sitemap (deleted in Maker): ${goneManifestPages.map((p) => p.name || p.pageId).join(', ')} — the rebuilt spec drops them.\n`);
+    }
   }
 
-  // Entities (minimal).
+  // Entities (minimal — the build reuses existing tables/columns idempotently, so column fidelity
+  // isn't required to re-apply an edit).
   const entities = [];
   for (const logical of entityLogicals) {
     try { entities.push(entityFromMetadata(await sdk.fetchEntityMetadata(logical), logical)); } catch { /* skip */ }
   }
 
-  // Icon web resources — looked up by NAME (see iconWebResources).
+  // Icon web resources — looked up by NAME (the sitemap stores the web-resource name, not its id).
   const webResources = await iconWebResources(sdk, icons);
 
   // Dashboards (declared as DashBoard sitemap subareas) — reconstructed with id-passthrough tiles.
@@ -296,10 +357,33 @@ async function main() {
     design: async () => (manifest ? manifest.design : undefined),
   };
   const spec = await hydrateSpec(read);
-  // Warn about any sitemap subareas the edit flow can't yet round-trip (CustomPage subareas and
-  // unmapped/legacy types are not hydrated) — a rebuild from this spec would drop them, so the caller
-  // must re-add them. Entity/GenPage/URL/DashBoard subareas round-trip losslessly.
   const droppedSubareas = droppedSubareaCount(app, spec);
+  return { ok: true, spec, pages, entities, webResources, droppedSubareas };
+}
+
+async function main() {
+  const { positional, flags } = parseArgs(process.argv.slice(2));
+  const env = flags.env;
+  const appArg = flags.app || positional[0];
+  const outDir = path.resolve(flags.out || flags.output || '.');
+  if (!env || !appArg) {
+    process.stderr.write('Usage: node download-model-app.js --env <url> --app <appId|uniqueName> --out <dir>\n');
+    process.exit(1);
+  }
+  fs.mkdirSync(outDir, { recursive: true });
+  const sdk = makeProvision(env, path.join(outDir, '.maker-workspace'));
+  const appId = await resolveAppId(sdk, appArg);
+  if (!appId) { emitResult(false, { ok: false, error: `app '${appArg}' not found` }); return; }
+
+  // Resolve the app's unique name early — needed for fetchSitemap (MEMBERSHIP) + manifest lookup.
+  const appRows = await sdk.queryRecords('appmodule', { select: ['uniquename'], filter: `appmoduleid eq ${appId}`, top: 1 });
+  const appUnique = appRows && appRows[0] && appRows[0].uniquename;
+  const genpageCli = makeGenpageCli(env);
+
+  const result = await runDownload({ sdk, genpageCli, outDir, appId, appUnique });
+  if (!result.ok) { emitResult(false, result); return; }
+
+  const { spec, pages, entities, webResources, droppedSubareas } = result;
   if (droppedSubareas > 0) {
     process.stderr.write(`WARNING: ${droppedSubareas} sitemap subarea(s) could not be round-tripped (e.g. custom pages / legacy types) — a rebuild from this spec will DROP them from the app nav. Re-add them after editing.\n`);
   }
@@ -312,4 +396,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { resolveAppId, collectSitemap, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount };
+module.exports = { resolveAppId, collectSitemap, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount, runDownload };

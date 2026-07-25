@@ -118,3 +118,25 @@ test('hydrateSpec keeps the legacy name-based shape when pages carry no key (bac
   assert.strictEqual(spec.appShell.areas[0].groups[0].subAreas[0].page, 'Overview', 'legacy GenPage subarea resolved by NAME');
 });
 
+// ── Task 6: pageId kept in the v2 edit-snapshot (C3) ─────────────────────────
+test('hydrateSpec emits pageId on v2 pages (edit-snapshot self-describes its ids, C3)', async () => {
+  const GP_O = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
+  const read = {
+    app: async () => ({ name: 'A', description: '', siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ type: 'GenPage', genPageId: GP_O, title: 'Overview' }] }] }] } }),
+    pages: async () => [{ pageId: GP_O, key: 'overview', name: 'Overview', codeFile: 'pages/overview.tsx' }],
+    entities: async () => [], webResources: async () => [], dashboards: async () => [], solution: async () => ({ uniqueName: 'S', publisherPrefix: 'new' }),
+  };
+  const spec = await hydrateSpec(read);
+  assert.strictEqual(spec.schemaVersion, 2, 'v2 shape (pages have keys)');
+  assert.strictEqual(spec.pages[0].key, 'overview');
+  assert.strictEqual(spec.pages[0].pageId, GP_O, 'pageId carried through as C3 edit-snapshot marker');
+  // A legacy page (no key) must NOT get pageId even if one is present on the page object
+  const spec2 = await hydrateSpec({
+    app: async () => ({ name: 'A', description: '', siteMap: { areas: [] } }),
+    pages: async () => [{ pageId: GP_O, name: 'Overview', dataSources: [], codeFile: 'o.tsx' }],
+    entities: async () => [], webResources: async () => [], solution: async () => ({ uniqueName: 'S', publisherPrefix: 'new' }),
+  });
+  assert.strictEqual(spec2.schemaVersion, undefined, 'no schemaVersion for legacy (no key)');
+  assert.strictEqual(spec2.pages[0].pageId, undefined, 'legacy shape has no pageId field');
+});
+
