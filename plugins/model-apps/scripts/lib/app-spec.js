@@ -478,6 +478,12 @@ function validateAppSpec(spec, opts = {}) {
   // slugify (:686) which always conforms; a hand-authored v2 key must too, since the key is the
   // cross-reference identity (navigatesTo.targetKey, PAGEREF_<key>, appShell page subareas).
   const PAGE_KEY_GRAMMAR = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+  // GUID pattern for pages[].pageId — a 36-char hyphenated hex UUID as minted by Dataverse / PAC CLI.
+  // A spec page carrying this field is an EDIT-SNAPSHOT (env-specific, downloaded from a live app);
+  // a portable fresh-authored spec omits it. When present it must be exactly this shape so
+  // reconcilePageIds can use it as the highest identity authority without silently accepting garbage
+  // (e.g. a cross-env GUID that happens to match an unrelated page). Addenda Task 4 / C3.
+  const PAGE_ID_GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
   const pageNamesLower = new Set();    // case-insensitive name uniqueness (Critical 4)
   const pageCodeFilesNorm = new Set(); // implemented-page normalized codeFile uniqueness (Critical 4)
   // A codeFile must resolve INSIDE the working directory. Use path.normalize to canonicalize before
@@ -505,6 +511,13 @@ function validateAppSpec(spec, opts = {}) {
     const nameLower = String(p.name).toLowerCase();
     if (pageNamesLower.has(nameLower)) errors.push(`duplicate page name '${p.name}' (page names must be unique, case-insensitive)`);
     else pageNamesLower.add(nameLower);
+    // A page MAY carry its own deployed `pageId` (edit-snapshot marker). A portable fresh-authored spec
+    // omits it — absence is never an error. When present it MUST be a valid 36-char GUID: the
+    // reconcilePageIds authority logic (addenda Task 4 / C3) consumes it as the HIGHEST identity source,
+    // so silently accepting a malformed / empty value would cause reconcile to bind the wrong page.
+    if (p.pageId !== undefined && !PAGE_ID_GUID.test(String(p.pageId))) {
+      errors.push(`page '${p.key || p.name}': pageId must be a 36-char GUID`);
+    }
     const src = normalizePageSource(p);
     // Track whether a structural source error was emitted so the profile check below doesn't
     // double-report (e.g. source:{kind:'tsx'} with no codeFile should get ONE error, not two).
@@ -586,6 +599,25 @@ function validateAppSpec(spec, opts = {}) {
         const pageRefSet = isV2 ? pageKeysSet : pageNamesSet;
         if (sa.page && !pageRefSet.has(sa.page)) errors.push(`sitemap subArea references unknown page '${sa.page}' (declare it in pages[])`);
         checkIcon(sa.icon, `sitemap subArea "${sa.title || ''}"`);
+      }
+    }
+  }
+  // MEMBERSHIP invariant (Plan 5 v2 / Task 3): every generative page MUST appear as a sitemap subarea.
+  // A model-driven app's membership IS sitemap presence — there is no hidden-but-navigable subarea.
+  // A page that is only a navigatesTo target (no subarea) is NOT owned by the app's navigation: build
+  // will create it, but download enumeration (membership = sitemap) and verify (membership check) will
+  // both miss it, and the next build from a downloaded spec will then re-create it as a duplicate.
+  // Enforced for specs that will be BUILT: deploy / plan / design. The `structural` profile is shape-
+  // only (used by the eval harness and teardown / cleanup) and is explicitly excluded.
+  if (isV2 && profile !== 'structural') {
+    const sitemappedPageKeys = new Set();
+    for (const a of (spec.appShell && spec.appShell.areas) || [])
+      for (const g of a.groups || [])
+        for (const sa of g.subAreas || []) if (sa && sa.page) sitemappedPageKeys.add(sa.page);
+    for (const p of spec.pages || []) {
+      const key = p.key || p.name;
+      if (!sitemappedPageKeys.has(key)) {
+        errors.push(`page '${key}' is not placed in the sitemap — every page must be an appShell subarea (a page reached only by navigation is not owned by the app; add a subarea for it)`);
       }
     }
   }

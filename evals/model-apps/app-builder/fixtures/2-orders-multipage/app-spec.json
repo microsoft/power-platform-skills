@@ -39,6 +39,7 @@
       { "label": "Sales", "groups": [
         { "label": "Work", "subAreas": [
           { "page": "overview", "title": "Overview" },
+          { "page": "order-detail", "title": "Order Detail" },
           { "entity": "new_order", "title": "Orders" },
           { "entity": "new_customer", "title": "Customers" }
         ] }

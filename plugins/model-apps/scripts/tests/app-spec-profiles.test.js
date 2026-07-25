@@ -31,6 +31,8 @@ test('deploy profile (default) requires every page implemented (tsx)', () => {
 test('plan/design profile allows an intent page', () => {
   const s = base();
   s.pages = [{ key: 'ov', name: 'Overview', source: { kind: 'intent' } }];
+  // Every page must appear as a sitemap subarea (Task 3 / Plan 5 v2) for a spec that will be built.
+  s.appShell = { areas: [{ label: 'Main', groups: [{ label: 'Main', subAreas: [{ page: 'ov', title: 'Overview' }] }] }] };
   assert.strictEqual(validateAppSpec(s, { profile: 'plan' }).ok, true, JSON.stringify(validateAppSpec(s, { profile: 'plan' }).errors));
   assert.strictEqual(validateAppSpec(s, { profile: 'design' }).ok, true);
 });
@@ -38,6 +40,8 @@ test('plan/design profile allows an intent page', () => {
 test('deploy profile accepts an implemented page (explicit tsx and legacy codeFile)', () => {
   const s = base();
   s.pages = [{ key: 'ov', name: 'Overview', source: { kind: 'tsx', codeFile: 'overview.tsx' } }];
+  // Place the page in the sitemap so the every-page-placed rule is satisfied.
+  s.appShell = { areas: [{ label: 'Main', groups: [{ label: 'Main', subAreas: [{ page: 'ov', title: 'Overview' }] }] }] };
   assert.strictEqual(validateAppSpec(s).ok, true, JSON.stringify(validateAppSpec(s).errors));
   const legacy = base();
   delete legacy.schemaVersion; // legacy spec, top-level codeFile

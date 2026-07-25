@@ -28,6 +28,8 @@ test('navigatesTo.targetKey must resolve to a known page key', () => {
     { key: 'ov', name: 'Overview', source: { kind: 'intent' }, navigatesTo: [{ targetKey: 'detail', data: { orderId: 'string' } }] },
     { key: 'detail', name: 'Detail', source: { kind: 'intent' }, pageInput: { data: { orderId: 'string' } } },
   ];
+  // Place every page in the sitemap so the every-page-placed rule (Task 3) does not fail this spec.
+  s.appShell.areas[0].groups[0].subAreas.push({ page: 'ov', title: 'Overview' }, { page: 'detail', title: 'Detail' });
   assert.strictEqual(validateAppSpec(s, { profile: 'plan' }).ok, true, JSON.stringify(validateAppSpec(s, { profile: 'plan' }).errors));
 
   const bad = base();
