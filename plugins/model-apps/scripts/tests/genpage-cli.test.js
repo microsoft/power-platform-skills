@@ -5,13 +5,21 @@ const { makeGenpageCli, parsePageId, parseList, quoteArg, buildPacInvocation, cl
 
 const GUID = '6e0c28a2-cdbf-41ec-9186-d10fd5de6e35';
 
-// Real `pac model genpage list` output shapes (assumed from the existing parseList test at :48-54
-// which already uses "Found N generated page(s):" — enumerate now VALIDATES that count matches).
-// CONFIRM the empty phrasing against a live pac run; any unmatched zero-exit output is fail-closed
-// 'unrecognized'. The "Found 0" phrasing for empty is assumed — adjust the regex in classifyListOutput
-// if pac uses a different string (any mismatch is safely fail-closed: unrecognized, not empty).
-const LIST_ONE = `Found 1 generated page(s):\n\n  Overview\n    Page ID: ${GUID}\n    Description: Created 2026-07-07\n`;
-const LIST_EMPTY = 'Found 0 generated page(s):\n';
+// REAL `pac model genpage list` output — a fixed-width TABLE (header + GUID/Name/Published rows), captured
+// LIVE from env aurorabapenv03468 (2026-07). Columns auto-size to the longest name. `listText` reproduces
+// that exact shape; `countOverride` lets a test set the "Found N" summary independently of the rows (to
+// exercise the count-mismatch fail-closed path). NOTE (live): pac lists only SITEMAP-reachable pages.
+function listText(rows, countOverride) {
+  const count = countOverride == null ? rows.length : countOverride;
+  const nameW = Math.max(4, ...rows.map((r) => String(r.name || '').length));
+  const header = 'Page ID'.padEnd(37) + 'Name'.padEnd(nameW + 1) + 'Published';
+  const body = rows.map((r) => `${r.pageId} ${String(r.name || '').padEnd(nameW)} ${r.published || '-'}`).join('\n');
+  return `Connected as tester@contoso.com\nRetrieving generated pages...\nFound ${count} generated page(s):\n\n${header}\n${body}\n`;
+}
+// Empty app: the summary with count 0 and no rows (live-confirmed "Found 0 generated page(s):"; any
+// unmatched zero-exit output is safely fail-closed 'unrecognized', never 'empty').
+const LIST_ONE = listText([{ pageId: GUID, name: 'Overview' }]);
+const LIST_EMPTY = 'Connected as tester@contoso.com\nRetrieving generated pages...\nFound 0 generated page(s):\n';
 
 test('quoteArg quotes args with spaces/specials, leaves plain args', () => {
   assert.strictEqual(quoteArg('Overview'), 'Overview');
@@ -53,12 +61,12 @@ test('parsePageId extracts the guid from upload output', () => {
   assert.strictEqual(parsePageId('no id here'), null);
 });
 
-test('parseList maps names to guids (name line precedes the "Page ID:" line)', () => {
-  const out = `Found 1 generated page(s):\n\n  Overview\n    Page ID: ${GUID}\n    Description: Created: 2026-07-07\n\n  Dashboard\n    Page ID: 11111111-2222-3333-4444-555555555555`;
+test('parseList parses the fixed-width GUID/Name/Published table (a spaced name is not split)', () => {
+  const out = listText([{ pageId: GUID, name: 'Overview' }, { pageId: '11111111-2222-3333-4444-555555555555', name: 'Order Detail' }]);
   const pages = parseList(out);
   assert.strictEqual(pages.length, 2);
   assert.deepStrictEqual(pages[0], { pageId: GUID, name: 'Overview' });
-  assert.strictEqual(pages[1].name, 'Dashboard');
+  assert.strictEqual(pages[1].name, 'Order Detail'); // a name containing a space stays intact
 });
 
 test('upload builds pac args WITHOUT --add-to-sitemap and returns the pageId', async () => {
@@ -104,7 +112,7 @@ test('upload converts a failed CREATE to an UPDATE on retry (resolve by name, no
   const uploadArgs = [];
   let up = 0;
   const run = async (args) => {
-    if (args[2] === 'list') return { status: 0, stdout: `Found 1 generated page(s):\n\n  Overview\n    Page ID: ${GUID}\n`, stderr: '' };
+    if (args[2] === 'list') return { status: 0, stdout: listText([{ pageId: GUID, name: 'Overview' }]), stderr: '' };
     up += 1; uploadArgs.push(args);
     return up === 1 ? { status: 1, stdout: '', stderr: 'flaky' } : { status: 0, stdout: `Page ID: ${GUID}`, stderr: '' };
   };
@@ -153,27 +161,28 @@ test('classifyListOutput: pages / empty / unrecognized (tri-state, COMPLETE-list
   assert.strictEqual(classifyListOutput('').kind, 'unrecognized');
   // unrecognized: help/usage banner (pac dumps usage on a flag error but exits 0 on some builds)
   assert.strictEqual(classifyListOutput('pac model genpage list\nUsage: pac model genpage ...\n').kind, 'unrecognized');
-  // unrecognized: count mismatch — summary says 3 but only 1 Page ID parsed → truncated listing
-  assert.strictEqual(classifyListOutput(`Found 3 generated page(s):\n\n  Overview\n    Page ID: ${GUID}\n`).kind, 'unrecognized');
-  // unrecognized: an UNNAMED page (Page ID with no preceding name line) — fail-closed, would else
-  // reconcile blindly against an unknown page
-  assert.strictEqual(classifyListOutput(`Found 1 generated page(s):\n    Page ID: ${GUID}\n`).kind, 'unrecognized');
+  // unrecognized: count mismatch — summary says 3 but only 1 row parsed → truncated listing
+  assert.strictEqual(classifyListOutput(listText([{ pageId: GUID, name: 'Overview' }], 3)).kind, 'unrecognized');
+  // unrecognized: an UNNAMED row (a GUID with a blank Name column) — fail-closed, would else reconcile
+  // blindly against an unknown page
+  assert.strictEqual(classifyListOutput(listText([{ pageId: GUID, name: '' }])).kind, 'unrecognized');
 });
 
 // REGRESSION (whole-branch review, Critical fail-OPEN): the "no pages" phrase is tested against the WHOLE
 // stdout (names + descriptions), so a page NAMED or DESCRIBED with "no page(s)" text must NOT force an app
 // WITH live pages to classify as EMPTY. A false 'empty' → reconcile sees zero live → duplicate CREATE on
 // build + silent page-drop on download. Empty requires NO positive page evidence.
-test('classifyListOutput: a page NAMED/DESCRIBED "no pages" does NOT force empty when real pages are listed', () => {
-  // A page literally named "No Pages" with a valid 1-page summary → 'pages', not 'empty'.
-  const namedNoPages = `Found 1 generated page(s):\n\n  No Pages\n    Page ID: ${GUID}\n`;
+test('classifyListOutput: a page NAMED "no pages" does NOT force empty when real pages are listed', () => {
+  // A page literally named "No Pages" with a valid 1-page summary → 'pages', not 'empty'. The "no pages"
+  // phrase is tested against the whole stdout (which includes page NAMES), so it must not fire here.
+  const namedNoPages = listText([{ pageId: GUID, name: 'No Pages' }]);
   assert.strictEqual(classifyListOutput(namedNoPages).kind, 'pages');
   assert.deepStrictEqual(classifyListOutput(namedNoPages).pages, [{ pageId: GUID, name: 'No Pages' }]);
-  // A description mentioning "no pages to display" on a real 2-page listing → 'pages'.
+  // A 2-page listing where one page is named "No Pages" → 'pages' (both rows parsed, count matches).
   const OTHER = '11111111-2222-3333-4444-555555555555';
-  const describedNoPages = `Found 2 generated page(s):\n\n  Overview\n    Page ID: ${GUID}\n    Description: shown when there are no pages to display\n\n  Detail\n    Page ID: ${OTHER}\n`;
-  assert.strictEqual(classifyListOutput(describedNoPages).kind, 'pages');
-  assert.strictEqual(classifyListOutput(describedNoPages).pages.length, 2);
+  const twoWithNoPages = listText([{ pageId: GUID, name: 'Overview' }, { pageId: OTHER, name: 'No Pages' }]);
+  assert.strictEqual(classifyListOutput(twoWithNoPages).kind, 'pages');
+  assert.strictEqual(classifyListOutput(twoWithNoPages).pages.length, 2);
   // enumerate must therefore report ok:true with the pages, NOT empty (the fail-OPEN blast radius).
   return makeGenpageCli('env', { run: async () => ({ status: 0, stdout: namedNoPages, stderr: '' }), sleep: async () => {} })
     .enumerate({ appId: 'a' })
@@ -201,7 +210,7 @@ test('enumerate returns { ok:true, pages:[], empty:true } for an app that genuin
 
 test('enumerate is fail-closed on a zero-exit UNRECOGNIZED / INCOMPLETE listing (blank/help/count-mismatch) — NOT empty (I2)', async () => {
   // count-mismatch: summary says 2 but only 1 Page ID parsed — could be a truncated/partial listing
-  const cli = makeGenpageCli('env', { run: async () => ({ status: 0, stdout: `Found 2 generated page(s):\n\n  Overview\n    Page ID: ${GUID}\n`, stderr: '' }), sleep: async () => {}, attempts: 2 });
+  const cli = makeGenpageCli('env', { run: async () => ({ status: 0, stdout: listText([{ pageId: GUID, name: 'Overview' }], 2), stderr: '' }), sleep: async () => {}, attempts: 2 });
   const r = await cli.enumerate({ appId: 'app-1' });
   assert.strictEqual(r.ok, false);
   assert.deepStrictEqual(r.pages, []);

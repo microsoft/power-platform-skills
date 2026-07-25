@@ -41,19 +41,51 @@ function parsePageId(out) {
   return m ? m[1] : null;
 }
 
-// Parse `pac model genpage list` output. The layout is a page-name line followed by an indented
-// "Page ID: <guid>" line (and a Description line), e.g.:
-//   Overview
-//     Page ID: 5d29d8ce-...
-// So the name is the last non-metadata line seen before a "Page ID:" line.
+// Parse `pac model genpage list` output. The real layout is a FIXED-WIDTH TABLE: a header row
+// "Page ID<pad>Name<pad>Published" followed by one row per page, each starting with the 36-char GUID:
+//   Connected as user@contoso.com
+//   Retrieving generated pages...
+//   Found 1 generated page(s):
+//
+//   Page ID                              Name     Published
+//   13ecbc57-a3a4-4132-b0a2-a6c6b12691e8 Overview -
+//
+// Column boundaries are derived from the header's "Name"/"Published" offsets so a Name containing spaces
+// (e.g. "Order Detail") is not split on whitespace. A data row is matched by a leading 36-char GUID.
+// Returns [{ pageId, name }]. NOTE (live-confirmed): pac lists only pages reachable from the app SITEMAP —
+// a headless nav-target page (declared in pages[] but not an appShell subarea) is NOT returned here.
 function parseList(out) {
+  const GUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
+  const rowRe = new RegExp(`^\\s*(${GUID})\\b`);
+  const lines = String(out || '').split('\n');
+  // Locate the header row to find the Name (and Published) column offsets. pac auto-sizes columns to the
+  // longest value, so the offsets must be read from THIS output, not hard-coded.
+  let nameCol = -1;
+  let pubCol = -1;
+  for (const raw of lines) {
+    if (raw.indexOf('Page ID') >= 0 && /\bName\b/.test(raw)) {
+      nameCol = raw.indexOf('Name');
+      pubCol = raw.indexOf('Published'); // -1 when absent
+      break;
+    }
+  }
   const pages = [];
-  let lastName = null;
-  for (const raw of String(out || '').split('\n')) {
-    const line = raw.trim();
-    const idm = /Page ID:\s*([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/.exec(line);
-    if (idm) { pages.push({ pageId: idm[1], name: lastName || undefined }); lastName = null; continue; }
-    if (line && !/^(Description|Connected|Retrieving|Found|Page ID)\b/i.test(line) && !/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}/.test(line)) lastName = line;
+  for (const raw of lines) {
+    const m = rowRe.exec(raw);
+    if (!m) continue;
+    const pageId = m[1];
+    let name;
+    if (nameCol >= 0) {
+      // Fixed-width slice from the Name column to the Published column (or end of line).
+      const end = pubCol > nameCol ? pubCol : raw.length;
+      name = raw.slice(nameCol, end).trim() || undefined;
+    } else {
+      // No header parsed (unexpected) — fall back to the token(s) after the GUID, dropping a trailing
+      // single-token published flag. Single-word names only in this degraded path.
+      const rest = raw.slice(m.index + m[0].length).trim().split(/\s{2,}/);
+      name = (rest[0] || '').trim() || undefined;
+    }
+    pages.push({ pageId, name });
   }
   return pages;
 }
