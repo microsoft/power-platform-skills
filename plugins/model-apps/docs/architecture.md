@@ -188,7 +188,8 @@ deterministic, idempotent, narrated SDK build. Create and **edit share one path*
    └────────────────────────┘
 
    Edit  = same path:  download-model-app.js  pulls a deployed app → editable spec → re-run full build
-                       (idempotent: reuses app/tables, updates pages in place, keeps GenPage subareas;
+                       (sitemap-authoritative enumeration: MEMBERSHIP = app sitemap GenPageId set;
+                        each page's pageId kept in the downloaded spec — edit-snapshot;
                         fetches <app>_pagemanifest fail-closed, reverse-normalizes PAGEREF_ placeholders).
    Cleanup =           teardown-model-app.js  reverse-of-build, classifier-safe, dry-run by default.
 ```
@@ -212,6 +213,21 @@ deterministic, idempotent, narrated SDK build. Create and **edit share one path*
 **Safety:** destructive ops fail-closed without `--allow-destructive` (`op-diff.js`).
 `--non-interactive`/autopilot mode suppresses prompts only — it never bypasses safety gates.
 The durable `<app>_pagemanifest` web resource carries page semantics across download and rebuild.
+
+**Three-authority page identity (pages phase):** generative-page management consults three
+authorities — all matching by id, never by display name:
+(1) **IDENTITY** — the `<app>_pagemanifest` (`key → pageId`); a downloaded spec's own
+`pages[].pageId` outranks it. (2) **EXISTENCE** — env-wide `pac model genpage list` (no
+`--app-id`): decides create-vs-reuse; enables crash-safe convergence (a page present in the env
+after a crash is reused, never re-created). (3) **MEMBERSHIP** — the app's sitemap `GenPageId`
+set, read via `fetchSitemap` (`scripts/lib/sitemap-pages.js`, fail-closed and discriminated: a
+valid-but-page-less sitemap is `{ ok:true, ids:[] }`; a missing component or unreadable XML is
+`{ ok:false, reason }` — never collapsed to empty). Membership alone drives placement, download
+enumeration, and verify. The build halts on safety violations (`pages-removed`,
+`pages-shared-across-apps`, `pages-identity-conflict`, `pages-manifest-corrupt`,
+`pages-existence-failed`, `pages-sitemap-read-failed`, `pages-shared-check-failed`) rather than
+proceeding with potentially wrong state. See
+[`references/app-spec-schema.md`](../references/app-spec-schema.md) → `## pages[]`.
 
 The plugin owns **judgment** (spec validation, choice/status resolution, candidate selection, prompt
 authoring); the vendored SDK owns the **deterministic Dataverse mechanics** (create/query/delete,

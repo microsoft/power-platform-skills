@@ -9,8 +9,22 @@ plus local-dev ergonomics, sample coverage, and an automated eval suite with
 real and synthetic fixtures. Builds on v2.1; no breaking changes.
 
 ### Changed
+- **Three-authority generative-page management + id-based identity.**
+  The `pages` phase is now sitemap-authoritative with crash-safe convergence:
+  (1) **IDENTITY** — the durable `<app>_pagemanifest` (`key → pageId`), outranked by the spec's own
+  `pages[].pageId` for an edit-snapshot (downloaded) spec. (2) **EXISTENCE** — env-wide
+  `pac model genpage list` (no `--app-id`) decides create-vs-reuse: a crash-orphaned page id is reused,
+  never re-created. (3) **MEMBERSHIP** — the app's sitemap `GenPageId` set, read fail-closed via
+  `fetchSitemap` (`scripts/lib/sitemap-pages.js`), drives placement, download enumeration, and verify.
+  All matching is by id. Edit-snapshot `pageId`: `download-model-app.js` now keeps each page's deployed
+  `GenPageId` in the emitted spec so rebuilds reuse the correct existing page. Validation now requires
+  every `pages[]` entry to be sitemap-placed (headless/nav-only pages rejected). Verify and download
+  use exact id set-equality. New safety HALTs: `pages-removed` (re-add or `--allow-destructive` detaches
+  the nav SubArea, page left deployed), `pages-shared-across-apps` (detach in Maker; NOT bypassed by
+  `--allow-destructive`), `pages-identity-conflict`, `pages-manifest-corrupt`, `pages-existence-failed`,
+  `pages-sitemap-read-failed`, `pages-shared-check-failed`. Also fixed live-caught regressions on main:
+  `pac model genpage list` table-format parser; `classifyListOutput` now fail-closed on unrecognized output.
 - **Staged-flow authoring: design-only author, generate-pages step, `--stage` selector.**
-  Phase 1 authoring is now **design-only** — the App Spec is drafted in two confirmed levels
   (Level 1: data model; Level 2: artifacts + page-intents + design contract) without emitting
   `.tsx`. After plan-mode approval: (1) a data pre-build (`build --stage data --apply`) materializes
   tables so `generate-types` can emit `RuntimeTypes.ts`; (2) a **generate-pages** step runs headless

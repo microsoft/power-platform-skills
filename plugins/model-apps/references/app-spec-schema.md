@@ -306,6 +306,36 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   deployed pages fail-closed, and uses `reconcilePageIds` to reconstruct keys and reverse-normalize
   navigation placeholders back to `"PAGEREF_<key>"` in each page's source. Legacy apps with no
   manifest get fresh keys assigned on first download.
+- **Three-authority page identity.** Generative-page management consults three authorities, each
+  for a distinct question — all matching is **by id**, never by display name:
+  1. **IDENTITY** — the `<appUnique>_pagemanifest` (`key → pageId` map). For an *edit-snapshot* spec
+     (downloaded from a live app), the spec's own `pages[].pageId` is the highest authority and
+     outranks the manifest.
+  2. **EXISTENCE** — env-wide `pac model genpage list` (no `--app-id`). This set alone decides
+     create-vs-reuse (crash-safe: a page present in the env but not yet in the sitemap is reused,
+     never re-created). A read failure HALTs (`pages-existence-failed`).
+  3. **MEMBERSHIP** — the app's sitemap `GenPageId` set (read via `fetchSitemap` —
+     fail-closed, discriminated). This set alone decides placement, download enumeration, and verify
+     coverage. A read failure HALTs (`pages-sitemap-read-failed`).
+- **Every page must be in the sitemap.** Validation rejects a page that is not referenced by a
+  `page` subarea in `appShell`. Navigation-only (headless) pages — reachable only by a `PAGEREF_`
+  call but absent from the sitemap — are not supported; they are not owned by the app. A "detail"
+  page is a normal sitemap page that receives caller-supplied context via `pageInput`.
+- **`pageId` (optional — edit-snapshot only).** A spec produced by `download-model-app.js` carries
+  each page's deployed `GenPageId` as `pages[].pageId` (env-specific GUID). A fresh, hand-authored
+  spec **omits** `pageId` — it is portable across environments. On rebuild the spec `pageId` is the
+  highest identity authority (outranks the manifest), confirmed against EXISTENCE — so a downloaded
+  app (including Maker-added pages) rebuilds against the correct existing page without duplication.
+- **Safety HALTs (pages phase).** The build halts on identity/safety violations rather than
+  proceeding with potentially wrong state:
+  - `pages-identity-conflict` — spec `pageId` and manifest disagree on a key, or a duplicate id is
+    detected across two keys. Manual resolution required.
+  - `pages-manifest-corrupt` — the manifest web resource cannot be parsed (two keys mapping to the
+    same id). Fix or delete the manifest and rebuild.
+  - `pages-shared-across-apps` — a page appears in another app's sitemap. Detach it in Maker first.
+    `--allow-destructive` does NOT bypass this halt.
+  - `pages-removed` — a page is live in the env but no longer in the spec. Re-add it to the spec, or
+    pass `--allow-destructive` to detach it from the nav (`SubArea` removed; page record left deployed).
 - **Offline evaluation.** The app-builder eval harness (`evals/model-apps/app-builder/`) grades
   page-stage structural facts from the spec offline (navigation graph resolution, intent-vs-tsx
   completeness). See [`evals/model-apps/app-builder/EVAL_GUIDE.md`](../../../evals/model-apps/app-builder/EVAL_GUIDE.md).

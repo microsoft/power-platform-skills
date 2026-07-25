@@ -359,6 +359,14 @@ mismatch). Every `PAGEREF_<key>` you emit must have a matching `navigatesTo` ent
 spec, and every declared `navigatesTo.targetKey` must appear as a real nav pageId in the source
 (the build enforces exact parity, and verification confirms each edge resolves to the actual target).
 
+**Every `PAGEREF_<key>` target page must be sitemap-placed.** <a id="PAGEREF_sitemap_placement"></a>
+A page referenced by a `PAGEREF_<key>` placeholder must have a matching `page` subarea in the
+app's `appShell`. Navigation-only pages — reachable only via a `PAGEREF_` call but absent from the
+app sitemap — are not supported; validation rejects them. A "detail" page that receives a caller-
+supplied record id or other context is a normal sitemap page; it reads its input via
+`pageInput?.data?.<field>`. See [`app-spec-schema.md`](../references/app-spec-schema.md) → `## pages[]`
+for the three-authority identity model and the `pages[].pageId` edit-snapshot field.
+
 ### Dark Mode Toggle
 
 Instead of `<FluentProvider theme={webDarkTheme}>` (which flickers in React 17 — see Rule 11), use a local `themeToVars` helper to apply theme tokens synchronously as CSS custom properties.

@@ -74,6 +74,17 @@ Rules:
   the SDK is the **single sitemap writer**, so a page's nav entry comes from a `page` subarea in `appShell`
   (referenced by the page's **`key`**), which the SDK surfaces as a `GenPage` sitemap subarea. See
   [`references/app-spec-schema.md`](../../references/app-spec-schema.md) → `pages[]` for the field shape.
+- **Every page in `pages[]` must be sitemap-placed.** Each `pages[]` entry must have a matching `page`
+  subarea in `appShell` — validation rejects any page absent from the sitemap. A "detail" page that
+  receives a caller-supplied id or other context is a normal sitemap page; it reads its input via
+  `pageInput?.data?.<field>`. Navigation-only (headless) pages — reachable only via `PAGEREF_` calls
+  but absent from the sitemap — are not supported; the app does not own them.
+- **Three-authority page identity** (build + download + verify all follow this):
+  (1) **IDENTITY** — the durable `<app>_pagemanifest` (`key → pageId`); a downloaded spec's own
+  `pages[].pageId` outranks it for that rebuild. (2) **EXISTENCE** — env-wide `pac model genpage list`
+  (crash-safe; decides create-vs-reuse; a page orphaned by a prior crash is reused). (3) **MEMBERSHIP**
+  — the app's sitemap `GenPageId` set (placement, download enumeration, verify coverage). All matching
+  is by id — never by display name.
 - **Multi-page navigation uses `PAGEREF_<key>`** (the stable `pages[].key`) as the `pageId` placeholder;
   the build resolves each placeholder to the real page GUID in a run-scoped staging copy (the canonical
   `.tsx` is never mutated). After applying, **every nav edge is verified**: the verifier confirms each
@@ -229,8 +240,22 @@ node "${PLUGIN_ROOT}/scripts/teardown-model-app.js" \
 
 - **`--allow-destructive`** — authorize destructive operations. For `build --apply`: authorizes
   overwriting an existing app in unattended mode, and allows explicit-layout form-field removals or
-  sitemap-target drops. For `teardown --apply`: **required** — all deletes are destructive by
-  construction, so teardown without this flag halts before touching anything.
+  sitemap-target drops; also authorizes DETACHING a `pages-removed` page's nav subarea (the page
+  record is left deployed — it is not deleted). For `teardown --apply`: **required** — all deletes
+  are destructive by construction, so teardown without this flag halts before touching anything.
+- **Pages-phase safety HALTs.** The build halts on identity or safety violations rather than
+  proceeding with potentially wrong state. Surface the HALT reason and follow the recovery hint:
+  - `pages-identity-conflict` — spec `pageId` and manifest disagree on a key, or a duplicate id
+    spans two keys. Resolve the conflict manually (re-download or delete the manifest).
+  - `pages-manifest-corrupt` — the manifest cannot be parsed (two keys map to the same id). Delete
+    the manifest web resource and rebuild from scratch.
+  - `pages-removed` — a live page was dropped from the spec. Re-add it, or pass `--allow-destructive`
+    to detach it from the nav (the page record stays deployed; rebuild finalizes the sitemap).
+  - `pages-shared-across-apps` — the page appears in another app's sitemap. Detach it in Maker.
+    `--allow-destructive` does **not** bypass this halt.
+  - `pages-shared-check-failed` / `pages-existence-failed` / `pages-sitemap-read-failed` — a
+    prerequisite read failed; the build can't proceed safely. Retry on a transient error; check
+    permissions on a persistent one.
 - **`--non-interactive`** — suppress interactive prompts (for automation / CI). A non-interactive
   build that encounters an existing app **fails** instead of warning-and-proceeding, unless
   `--allow-destructive` is also set. Does **not** grant destructive authority on its own — only

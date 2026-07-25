@@ -84,9 +84,14 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   menus** via `type`+`children[]`), and **dashboards** (`dashboards[]` — chart/list/iframe/webresource
   tiles) with **sitemap placement** (a `dashboard` subarea auto-pins the dashboard as an app component).
   Following a **genpage-first policy**, overview/dashboard/analytics surfaces are authored as **generative
-  pages** (`pages[]`) rather than classic dashboards — the build's `pages` phase uploads each via
-  `pac model genpage upload` (no `--add-to-sitemap`) and the SDK finalizes the sitemap with `GenPage`
-  subareas; classic `dashboards[]` are opt-in.
+  pages** (`pages[]`) rather than classic dashboards — the build's `pages` phase uses a **three-authority
+  model**: IDENTITY (durable `<app>_pagemanifest`, outranked by a downloaded spec's `pages[].pageId`),
+  EXISTENCE (env-wide `pac model genpage list` — crash-safe create-vs-reuse via `enumerateEnv`), and
+  MEMBERSHIP (the app's sitemap `GenPageId` set, read fail-closed via `fetchSitemap` in
+  `scripts/lib/sitemap-pages.js` — drives placement, download enumeration, and verify; a read failure
+  HALTs). All page matching is by id. Every `pages[]` entry must be sitemap-placed (validation rejects
+  headless pages). The build halts on safety violations (`pages-removed`, `pages-shared-across-apps`,
+  identity conflicts, read failures). Classic `dashboards[]` are opt-in.
   **All Dataverse access is via the SDK**, so metadata is persisted under
   `<app-folder>/.maker-workspace/` for reuse/edits. The 13 phases
   (`solution·data-model·sample-data·web-resources·views·charts·forms·commands·dashboards·app-shell·pages·ai-features·publish`)
@@ -228,6 +233,7 @@ scripts/
     schema-facts.js            ← pure data-model provisioning fact extractor for evals (Plan 4)
     pageref-resolver.js        ← PAGEREF_<key> → GenPageId nav resolver (Plan 3)
     page-manifest.js           ← durable <app>_pagemanifest read/write (Plan 3)
+    sitemap-pages.js           ← pure GenPageId extractors + fail-closed fetchSitemap MEMBERSHIP reader + cross-app scan (Plan 5)
     ai-candidates.js           ← selects good-candidate tables for auto row-summary mode
     ai-prompt.js               ← generates tailored Copilot row-summary prompts
     _graph.js                  ← entity topological ordering (shared by build + teardown)
