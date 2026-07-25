@@ -13,7 +13,7 @@
 const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
-const { validateAppSpec, migrateAppSpec } = require('./lib/app-spec.js');
+const { validateAppSpec, migrateAppSpec, normalizePageSource } = require('./lib/app-spec.js');
 const { runSdkBuild, planFor, appUniqueName, compileFormIntent } = require('./lib/sdk-build.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
@@ -26,6 +26,7 @@ const { classifyOps, sitemapTargets } = require('./lib/op-diff.js');
 // standalone verifier runs). The sibling CLI is safe to require (it has a `require.main` guard).
 const { verifySpec } = require('./lib/verify-spec.js');
 const { readerFor } = require('./verify-model-app.js');
+const { makeGenpageCli } = require('./lib/genpage-cli.js');
 
 // Construct the SDK against the vendored bundle + an az-token HttpClient. Two clients:
 //   sdk          — carries solutionUniqueName (metadata + record writes auto-join the
@@ -219,11 +220,14 @@ async function buildModelApp(spec, opts, deps) {
   // retried automatically on --apply: the build is idempotent, so a retry reuses everything already
   // created. Non-transient halts (e.g. a bad spec / genuine 400) are NOT retried.
   const maxRetries = opts.maxRetries != null ? opts.maxRetries : (opts.apply ? 3 : 0);
+  // Injectable apply seam: production defaults to runSdkBuild; tests inject a stub to drive verify
+  // without a live SDK.
+  const runBuild = deps.runBuild || runSdkBuild;
   let r;
   for (let attempt = 1; ; attempt++) {
     counts.ok = counts.skip = counts.error = 0; // summary reflects the final (successful) attempt
     try {
-      r = await runSdkBuild(spec, {
+      r = await runBuild(spec, {
         sdk: deps.sdk,
         provisionSdk: deps.provisionSdk,
         apply: opts.apply,
@@ -257,18 +261,53 @@ async function buildModelApp(spec, opts, deps) {
     // (an artifact created but not wired, or a phase that quietly produced nothing) surfaces now
     // instead of only when the user opens the app. Read-only; injected (deps.verify) so tests drive it.
     // A verify failure does NOT undo the build (it already ran) — it is reported and returned in
-    // r.verify so the CLI can exit non-zero. Never throws out of the build: a verify that can't run is
-    // a warning, not a build failure.
-    if (opts.verify && deps.verify) {
-      try {
-        const vr = await deps.verify(spec);
-        const present = vr.checks.length - vr.missing.length;
-        log(`\n${vr.ok ? '✓ verify PASS' : `✗ verify FAIL — ${vr.missing.length} missing`} (${present}/${vr.checks.length} present)`);
-        if (!vr.ok) for (const m of vr.missing) log(`  ✗ ${m.kind}: ${m.name}`);
-        r.verify = { ok: vr.ok, present, total: vr.checks.length, missing: vr.missing.map((m) => `${m.kind}:${m.name}`) };
-        if (journal) journal.record({ phase: 'verify', status: vr.ok ? 'ok' : 'error', label: `verify ${present}/${vr.checks.length} present`, ...(vr.ok ? {} : { detail: r.verify.missing.join(', ') }) });
-      } catch (e) {
-        log(`\n⚠ verify step could not run (build itself succeeded): ${(e && e.message) || e}`);
+    // r.verify so the CLI can exit non-zero.
+    //
+    // MANDATORY + FAIL-CLOSED for page-bearing specs (design §13.1, C6):
+    //   - Page verify runs even without --verify when the spec has implemented pages AND the pages
+    //     phase was applied (appliedPagesPhase). A --stage data apply (pages NOT selected) must NOT
+    //     trigger mandatory verify (RECONCILIATION 2).
+    //   - A verify that CANNOT run (no verifier wired, or verifySpec throws) yields
+    //     r.verify={ok:false,unableToRun:true} → non-zero exit. An unverifiable page set never passes
+    //     silently — distinguish reader-incapacity (unableToRun) from ordinary miss (ok:false only).
+    //   - A page-LESS spec keeps the opt-in (--verify) behavior: a verify that throws is a warning.
+    const hasImplementedPages = (spec.pages || []).some((p) => { const s = normalizePageSource(p); return s && s.kind === 'tsx' && s.codeFile; });
+    // Mandatory trigger: pages are implemented AND the pages phase was part of this apply.
+    // A --stage data apply (STAGES.data) excludes the pages phase, so it must not trigger.
+    const appliedPagesPhase = opts.apply && (opts.phases || PHASES).includes('pages');
+    const mustVerifyPages = hasImplementedPages && appliedPagesPhase;
+    if (opts.verify || mustVerifyPages) {
+      if (!deps.verify) {
+        if (mustVerifyPages) {
+          // Fail-closed: page verify is required but no verifier is wired. Signal unableToRun so
+          // the caller and the exit-code gate (`r.verify.ok===false`) surface a non-zero exit.
+          log('\n✗ page verification is required but no verifier is wired — cannot confirm the deployed pages');
+          r.verify = { ok: false, present: 0, total: 0, missing: ['verify-unrunnable:no verifier'], unableToRun: true };
+          if (journal) journal.record({ phase: 'verify', status: 'error', label: 'verify could not run', detail: 'no verifier wired' });
+        }
+        // opts.verify without mustVerifyPages and no verifier → silently skip (no pages to enforce).
+      } else {
+        try {
+          const vr = await deps.verify(spec);
+          const present = vr.checks.length - vr.missing.length;
+          log(`\n${vr.ok ? '✓ verify PASS' : `✗ verify FAIL — ${vr.missing.length} missing`} (${present}/${vr.checks.length} present)`);
+          if (!vr.ok) for (const m of vr.missing) log(`  ✗ ${m.kind}: ${m.name}`);
+          // Propagate unableToRun from verifySpec (RECONCILIATION 1): verifySpec itself sets
+          // unableToRun when the reader lacks pages/pageCode methods. Only include the property
+          // when truthy so existing callers using deepStrictEqual are not affected on the normal path.
+          r.verify = { ok: vr.ok, present, total: vr.checks.length, missing: vr.missing.map((m) => `${m.kind}:${m.name}`), ...(vr.unableToRun ? { unableToRun: true } : {}) };
+          if (journal) journal.record({ phase: 'verify', status: vr.ok ? 'ok' : 'error', label: `verify ${present}/${vr.checks.length} present`, ...(vr.ok ? {} : { detail: r.verify.missing.join(', ') }) });
+        } catch (e) {
+          if (mustVerifyPages) {
+            // Fail-closed: enumeration/download failure is fatal for a page-bearing applied build.
+            log(`\n✗ page verification could not run (build applied, but the deployed pages are unverifiable): ${(e && e.message) || e}`);
+            r.verify = { ok: false, present: 0, total: 0, missing: [`verify-unrunnable:${(e && e.message) || e}`], unableToRun: true };
+            if (journal) journal.record({ phase: 'verify', status: 'error', label: 'verify could not run', detail: String((e && e.message) || e) });
+          } else {
+            // opts.verify (opt-in), no pages → verify that throws is a warning, not a build failure.
+            log(`\n⚠ verify step could not run (build itself succeeded): ${(e && e.message) || e}`);
+          }
+        }
       }
     }
     if (journal) journal.close({ status: 'complete', ...counts, appId: r.created && r.created.app, ...(r.verify ? { verify: r.verify.ok ? 'pass' : 'fail' } : {}) });
@@ -354,7 +393,7 @@ async function main() {
     const deps = {
       log: (m) => process.stderr.write(m + '\n'),
       sdk, provisionSdk, journal,
-      verify: (s) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s))),
+      verify: (s) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpageCli: makeGenpageCli(env), workspaceDir })),
     };
     r = await buildModelApp(spec, opts, deps);
   } finally {

@@ -335,3 +335,84 @@ test('I1: apply refuses ANY partial phase range except the full build or exactly
     assert.ok(/partial|full build|stage data/i.test(r.errors.join(' ')));
   }
 });
+
+// ---------------------------------------------------------------------------
+// Task 10: mandatory fail-closed page verify gate + RECONCILIATION 1/2
+// ---------------------------------------------------------------------------
+
+const { PHASES, STAGES } = require('../lib/stages.js');
+
+// A minimal page-bearing spec (implemented tsx pages). Used in the mandatory gate tests.
+function pageBearingSpec() {
+  return {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'A' },
+    schemaVersion: 2,
+    entities: [{ schemaName: 'new_x', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
+    pages: [{ key: 'p', name: 'P', source: { kind: 'tsx', codeFile: 'p.tsx' } }],
+    appShell: { areas: [{ label: 'M', groups: [{ label: 'G', subAreas: [{ page: 'p', title: 'P' }] }] }] },
+  };
+}
+
+test('page verify is MANDATORY even without --verify: a failing page verify exits non-zero (C6)', async () => {
+  // The build is apply:true, phases:PHASES (full build) with a page-bearing spec. Even without
+  // opts.verify:true, the gate must run because the pages phase is applied.
+  const deps = {
+    log: () => {},
+    runBuild: async () => ({ ok: true, dryRun: false, created: { app: 'app-1' } }),
+    verify: async () => ({ ok: false, checks: [{ kind: 'page', name: 'P' }], missing: [{ kind: 'page', name: 'P' }] }),
+  };
+  const r = await buildModelApp(pageBearingSpec(), { apply: true, phases: PHASES, verify: false }, deps);
+  assert.strictEqual(r.verify.ok, false, 'page verify ran and failed despite --verify not being set');
+});
+
+test('page verify is FAIL-CLOSED: a verify that throws is fatal for a page-bearing spec (C6 unableToRun)', async () => {
+  // An enumeration/download failure in the verifier MUST produce r.verify={ok:false,unableToRun:true}
+  // — not a warning that leaves r.verify undefined.
+  const deps = {
+    log: () => {},
+    runBuild: async () => ({ ok: true, dryRun: false, created: { app: 'app-1' } }),
+    verify: async () => { throw new Error('page enumeration failed during verify'); },
+  };
+  const r = await buildModelApp(pageBearingSpec(), { apply: true, phases: PHASES, verify: false }, deps);
+  assert.strictEqual(r.verify.ok, false);
+  assert.ok(r.verify.unableToRun, 'an unrunnable verify is fatal for pages');
+});
+
+test('page verify is FAIL-CLOSED: a page-bearing spec with NO verifier wired is unable-to-run (C6)', async () => {
+  // No deps.verify at all — the gate must not silently skip for a page-bearing spec.
+  const deps = {
+    log: () => {},
+    runBuild: async () => ({ ok: true, dryRun: false, created: { app: 'app-1' } }),
+  };
+  const r = await buildModelApp(pageBearingSpec(), { apply: true, phases: PHASES, verify: false }, deps);
+  assert.strictEqual(r.verify.ok, false);
+  assert.ok(r.verify.unableToRun);
+});
+
+test('RECONCILIATION 2: --stage data apply of a page-bearing spec does NOT trigger mandatory page verify', async () => {
+  // pages phase is NOT included in STAGES.data → mandatory verify must NOT be triggered.
+  // A build that fails verify with r.verify.ok===false would mean the gate fired; we assert it did not.
+  const deps = {
+    log: () => {},
+    runBuild: async () => ({ ok: true, dryRun: false, created: {} }),
+    // No deps.verify wired — if the gate fires it would set r.verify.ok:false, so we can detect it.
+  };
+  const r = await buildModelApp(pageBearingSpec(), { apply: true, phases: STAGES.data, verify: false }, deps);
+  assert.ok(!r.verify, '--stage data apply must NOT set r.verify when no pages phase ran');
+  assert.strictEqual(r.ok, true, 'the build itself succeeded');
+});
+
+test('unableToRun is propagated from verifySpec into r.verify (RECONCILIATION 1)', async () => {
+  // verifySpec can itself return unableToRun:true (reader-incapacity). The build gate must
+  // propagate that flag into r.verify so callers can distinguish reader-incapacity from a
+  // normal failed check.
+  const deps = {
+    log: () => {},
+    runBuild: async () => ({ ok: true, dryRun: false, created: { app: 'app-1' } }),
+    verify: async () => ({ ok: false, checks: [{ kind: 'page-verify', name: 'pages', present: false }], missing: [{ kind: 'page-verify', name: 'pages' }], unableToRun: true }),
+  };
+  const r = await buildModelApp(pageBearingSpec(), { apply: true, phases: PHASES, verify: false }, deps);
+  assert.strictEqual(r.verify.ok, false);
+  assert.strictEqual(r.verify.unableToRun, true, 'unableToRun propagated from verifySpec result');
+});

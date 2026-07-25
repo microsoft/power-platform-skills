@@ -14,6 +14,7 @@ const { verifySpec } = require('./lib/verify-spec.js');
 const { appUniqueName } = require('./lib/sdk-build.js');
 const { validateAppSpec, migrateAppSpec } = require('./lib/app-spec.js');
 const { odataLit } = require('./lib/odata.js');
+const { makeGenpageCli } = require('./lib/genpage-cli.js');
 
 function makeProvision(env, workspaceDir) {
   const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
@@ -37,13 +38,53 @@ async function sitemapXmlFor(sdk, appUnique) {
   return (sms && sms[0] && sms[0].sitemapxml) || '';
 }
 
-function readerFor(sdk, appUnique) {
-  return {
+// Resolve the app module id (needed by genpage enumerate/download).
+async function appIdFor(sdk, appUnique) {
+  const rows = await sdk.queryRecords('appmodule', { select: ['appmoduleid'], filter: `uniquename eq '${odataLit(appUnique)}'`, top: 1 });
+  return rows && rows[0] && rows[0].appmoduleid;
+}
+
+function readerFor(sdk, appUnique, opts) {
+  opts = opts || {};
+  const genpageCli = opts.genpageCli;
+  const workspaceDir = opts.workspaceDir;
+  let appIdP;
+  // Lazily resolve the app module id — only needed when page reads are requested.
+  const appId = () => (appIdP || (appIdP = appIdFor(sdk, appUnique)));
+  let downloadP;
+  const codeById = new Map();
+  // Download EVERY page ONCE into a local dir, cache by id. Fail-closed: a download failure rejects,
+  // so pageCode() throws and the mandatory page-verify gate turns it into a non-zero build exit.
+  const ensureDownloaded = () => (downloadP || (downloadP = (async () => {
+    const id = await appId();
+    const outDir = path.join(workspaceDir, 'verify-pages');
+    fs.rmSync(outDir, { recursive: true, force: true });
+    fs.mkdirSync(outDir, { recursive: true });
+    await genpageCli.download({ appId: id, outputDir: outDir });
+    for (const entry of fs.readdirSync(outDir)) {
+      const tsx = path.join(outDir, entry, 'page.tsx');
+      if (fs.existsSync(tsx)) codeById.set(String(entry).toLowerCase(), fs.readFileSync(tsx, 'utf8'));
+    }
+  })()));
+  const base = {
     findTable: async (logical) => { const l = String(logical).toLowerCase(); const t = await sdk.findTables(l); return (t || []).find((x) => String(x.logicalName).toLowerCase() === l) || null; },
     findColumns: async (logical) => sdk.findColumns(logical),
-    queryRecords: (set, opts) => sdk.queryRecords(set, opts),
+    queryRecords: (set, o) => sdk.queryRecords(set, o),
     sitemapXml: () => sitemapXmlFor(sdk, appUnique),
   };
+  // Only expose the page reader when a genpageCli is wired — absent it, verifySpec fails closed (C6).
+  if (genpageCli) {
+    base.pages = async () => {
+      const r = await genpageCli.enumerate({ appId: await appId() });
+      if (!r.ok) throw new Error(`page enumeration failed during verify: ${r.error || 'pac genpage list returned non-zero'}`);
+      return r.pages;
+    };
+    base.pageCode = async (pageId) => {
+      await ensureDownloaded();
+      return codeById.get(String(pageId).toLowerCase()) || '';
+    };
+  }
+  return base;
 }
 
 async function main() {
@@ -62,7 +103,8 @@ async function main() {
   if (!v.ok) { emitResult(false, { ok: false, errors: v.errors }); return; }
   const workspaceDir = flags.workspace || path.join(path.dirname(specPath), '.maker-workspace');
   const sdk = makeProvision(env, workspaceDir);
-  const r = await verifySpec(spec, readerFor(sdk, appUniqueName(spec)));
+  const genpageCli = makeGenpageCli(env);
+  const r = await verifySpec(spec, readerFor(sdk, appUniqueName(spec), { genpageCli, workspaceDir }));
   for (const c of r.checks) process.stderr.write(`  ${c.present ? '✓' : '✗'} ${c.kind}: ${c.name}\n`);
   process.stderr.write(`\n${r.ok ? '✓ verify PASS' : `✗ verify FAIL — ${r.missing.length} missing`} (${r.checks.length - r.missing.length}/${r.checks.length} present)\n`);
   // Include `errors` (alias of missing) so emitResult's failure note reports an accurate count.
@@ -74,4 +116,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { sitemapXmlFor, readerFor };
+module.exports = { sitemapXmlFor, readerFor, appIdFor };

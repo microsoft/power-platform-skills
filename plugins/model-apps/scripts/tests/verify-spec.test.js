@@ -117,3 +117,102 @@ test('sitemapXmlFor returns empty when the app is not found', async () => {
   const sdk = { queryRecords: async () => [] };
   assert.strictEqual(await sitemapXmlFor(sdk, 'new_missing'), '');
 });
+
+// ---------------------------------------------------------------------------
+// Page branch tests (Task 10, C1/C6)
+// ---------------------------------------------------------------------------
+
+// Minimal read mock: satisfies entity/column/sitemap reads + the new page reader. Sitemap binds pages via
+// the GenPageId attribute (the real SDK attribute, vendor cds-maker-sdk.cjs:50).
+function pageRead({ live, code, sitemap }) {
+  return {
+    findTable: async () => ({ logicalName: 'contoso_item' }),
+    findColumns: async () => [],
+    queryRecords: async () => [],
+    sitemapXml: async () => sitemap || '',
+    pages: async () => live,
+    pageCode: async (id) => (code && code[String(id).toLowerCase()]) || '',
+  };
+}
+function pageSpec(navTargets = [{ targetKey: 'detail' }]) {
+  return {
+    entities: [{ schemaName: 'contoso_item', primaryAttribute: { schemaName: 'contoso_name' }, columns: [] }],
+    schemaVersion: 2,
+    pages: [
+      { key: 'overview', name: 'Overview', navigatesTo: navTargets, source: { kind: 'tsx', codeFile: 'overview.tsx' } },
+      { key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'detail.tsx' } },
+    ],
+    appShell: { areas: [{ label: 'M', groups: [{ label: 'G', subAreas: [{ page: 'overview', title: 'Overview' }, { page: 'detail', title: 'Detail' }] }] }] },
+  };
+}
+const SITEMAP_OK = '<SiteMap><Area><Group><SubArea Id="s1" GenPageId="gp-overview"/><SubArea Id="s2" GenPageId="gp-detail"/></Group></Area></SiteMap>';
+const NAV_TO = (id) => `Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "${id}", data: {} });`;
+
+test('verifySpec pages: present + GenPageId-bound + nav edge resolves to the actual target id → ok', async () => {
+  const live = [{ pageId: 'gp-overview', name: 'Overview' }, { pageId: 'gp-detail', name: 'Detail' }];
+  const read = pageRead({ live, sitemap: SITEMAP_OK, code: { 'gp-overview': NAV_TO('gp-detail') } });
+  const r = await verifySpec(pageSpec(), read);
+  assert.ok(r.checks.some((c) => c.kind === 'page' && c.name === 'Overview' && c.present));
+  assert.ok(r.checks.some((c) => c.kind === 'page-subarea' && c.name === 'Overview' && c.present));
+  assert.ok(r.checks.some((c) => c.kind === 'page-nav' && c.name === 'Overview -> detail' && c.present));
+  assert.ok(r.checks.filter((c) => c.kind.startsWith('page')).every((c) => c.present), 'all page checks present');
+});
+
+test('verifySpec pages: a WRONG deployed GUID in the nav literal FAILS the nav check (C1 wrong-GUID)', async () => {
+  const live = [{ pageId: 'gp-overview', name: 'Overview' }, { pageId: 'gp-detail', name: 'Detail' }];
+  const read = pageRead({ live, sitemap: SITEMAP_OK, code: { 'gp-overview': NAV_TO('00000000-dead-beef-0000-000000000000') } });
+  const r = await verifySpec(pageSpec(), read);
+  assert.ok(r.checks.some((c) => c.kind === 'page-nav' && c.name === 'Overview -> detail' && !c.present), 'nav edge must resolve to the ACTUAL target id');
+  assert.strictEqual(r.ok, false);
+});
+
+test('verifySpec pages: the correct target id only in a COMMENT (not a nav call site) FAILS the edge (C1 structural oracle)', async () => {
+  const live = [{ pageId: 'gp-overview', name: 'Overview' }, { pageId: 'gp-detail', name: 'Detail' }];
+  const read = pageRead({ live, sitemap: SITEMAP_OK, code: { 'gp-overview': `// go to gp-detail\n${NAV_TO('some-other-id')}` } });
+  const r = await verifySpec(pageSpec(), read);
+  assert.ok(r.checks.some((c) => c.kind === 'page-nav' && !c.present), 'a decoy id in a comment does not satisfy the edge');
+  assert.strictEqual(r.ok, false);
+});
+
+test('verifySpec pages: a residual PAGEREF_ in deployed nav code FAILS the no-pageref check', async () => {
+  const live = [{ pageId: 'gp-overview', name: 'Overview' }, { pageId: 'gp-detail', name: 'Detail' }];
+  const read = pageRead({ live, sitemap: SITEMAP_OK, code: { 'gp-overview': NAV_TO('PAGEREF_detail') } });
+  const r = await verifySpec(pageSpec(), read);
+  assert.ok(r.checks.some((c) => c.kind === 'page-no-pageref' && !c.present));
+  assert.strictEqual(r.ok, false);
+});
+
+test('verifySpec pages: a page missing from the live enumeration FAILS the page check', async () => {
+  const read = pageRead({ live: [{ pageId: 'gp-detail', name: 'Detail' }], sitemap: '', code: {} });
+  const r = await verifySpec(pageSpec(), read);
+  assert.ok(r.checks.some((c) => c.kind === 'page' && c.name === 'Overview' && !c.present));
+  assert.strictEqual(r.ok, false);
+});
+
+test('verifySpec pages: the sitemap subarea check matches the GenPageId attribute ONLY (a decoy attr does not satisfy it)', async () => {
+  const live = [{ pageId: 'gp-overview', name: 'Overview' }, { pageId: 'gp-detail', name: 'Detail' }];
+  // gp-overview appears in a DECOY attribute, not GenPageId → the subarea binding must be reported missing.
+  const sitemap = '<SiteMap><Area><Group><SubArea Id="s1" Url="gp-overview"/><SubArea Id="s2" GenPageId="gp-detail"/></Group></Area></SiteMap>';
+  const read = pageRead({ live, sitemap, code: { 'gp-overview': NAV_TO('gp-detail') } });
+  const r = await verifySpec(pageSpec(), read);
+  assert.ok(r.checks.some((c) => c.kind === 'page-subarea' && c.name === 'Overview' && !c.present), 'only a GenPageId="…" binding counts');
+});
+
+test('verifySpec pages: FAIL-CLOSED + unableToRun when the reader cannot enumerate pages (C6)', async () => {
+  // A reader without pages() means the verifier is unable to run — this must yield
+  // r.unableToRun===true (distinct from a reader that enumerates and finds a page missing).
+  const read = { findTable: async () => ({ logicalName: 'contoso_item' }), findColumns: async () => [], queryRecords: async () => [], sitemapXml: async () => '' }; // NO pages()
+  const r = await verifySpec(pageSpec(), read);
+  assert.ok(r.checks.some((c) => c.kind === 'page-verify' && !c.present), 'a page-bearing spec with no page reader must fail, not silently pass');
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.unableToRun, true, 'unableToRun must be true for reader-incapacity (distinct from ordinary miss)');
+});
+
+test('verifySpec pages: ordinary miss (reader enumerates but page not found) has unableToRun falsy', async () => {
+  // Distinct from reader-incapacity: the reader CAN enumerate but the page is missing from live.
+  // ok:false but unableToRun is NOT set (it is an ordinary failed check, not a capacity gap).
+  const read = pageRead({ live: [], sitemap: '', code: {} });
+  const r = await verifySpec(pageSpec(), read);
+  assert.strictEqual(r.ok, false);
+  assert.ok(!r.unableToRun, 'ordinary miss (enumerable but absent) must NOT set unableToRun');
+});
