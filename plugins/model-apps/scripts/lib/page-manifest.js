@@ -16,6 +16,10 @@ const MANIFEST_SCHEMA_VERSION = 1;
 // E.g. "overview", "wo-detail", "1st-run" are valid; "Overview", "wo_detail", "-lead" are not.
 const KEY_GRAMMAR = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
+// 36-char GUID pattern used to validate spec-supplied pageIds before treating them as live-page
+// identity. Matches upper- and lower-case hex. See provenance guard (C3) in reconcilePageIds.
+const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
 function manifestResourceName(appUnique) {
   return `${appUnique}_pagemanifest`;
 }
@@ -87,7 +91,8 @@ function parseManifest(text) {
     if (!m.design || typeof m.design !== 'object' || Array.isArray(m.design)) return null;
   }
 
-  const seen = new Set();
+  const seen = new Set();       // duplicate key check
+  const seenPageIds = new Set(); // duplicate pageId check: two keys → same id is a 1:1 violation (Imp11)
   for (const p of m.pages) {
     if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
 
@@ -104,6 +109,14 @@ function parseManifest(text) {
 
     // pageId — when present, must be a non-empty string
     if (p.pageId !== undefined && (typeof p.pageId !== 'string' || !p.pageId)) return null;
+
+    // pageId uniqueness — a manifest where two keys share the same pageId is a 1:1 identity
+    // violation (Imp11). Case-insensitive: 'ABC' and 'abc' are the same live page id.
+    if (p.pageId !== undefined) {
+      const pidLow = p.pageId.toLowerCase();
+      if (seenPageIds.has(pidLow)) return null;
+      seenPageIds.add(pidLow);
+    }
 
     // purpose — when present, must be a string
     if (p.purpose !== undefined && typeof p.purpose !== 'string') return null;
@@ -150,36 +163,38 @@ function parseManifestBase64(b64) {
   return parseManifest(text);
 }
 
-// Reconcile the spec's declared pages against the durable manifest AND the fail-closed live
-// enumeration (§7.3, §9). Authority order, highest first (C5):
+// Reconcile the spec's declared pages against the durable manifest, the env-wide EXISTENCE set,
+// and the app's own sitemap (MEMBERSHIP). Three-authority + provenance model (C3):
 //
-//   1. manifest key→pageId — ONLY when that id is still present in the live enumeration. A confirmed
-//      identity is truth even if the display name drifted, and it must NOT be overridden by a DIFFERENT
-//      live page that merely shares the name (that is the exact overwrite bug C5 fixes).
-//   2. exactly ONE live page with this display name — unique-name adoption / stale-imported-id fallback.
-//   3. absent — needs a create (mint a fresh id).
-//   4. duplicate/ambiguous live names (and no confirmed manifest id) — returned in `ambiguous`; the
-//      caller HALTS. Never silently collapsed into a Map (which would pick an arbitrary page to overwrite).
+//   1. Spec page's own `pageId` — PROVENANCE-GATED (C3, SAFETY-critical):
+//      A spec pageId may ONLY bind when its ownership is proven. Binding an unprovenanced GUID
+//      that merely exists env-wide would silently overwrite an UNRELATED live page.
+//      Binding is allowed ONLY when EITHER: (i) ∈ sitemapIds (proven this app's page via
+//      membership), OR (ii) === manifest id (manifest confirms the same id). AND the id must be
+//      ∈ existenceIds (page still exists). Stale or unprovenanced ids fall through to the manifest.
 //
-// Returns { keyToId: Map<key,id>, absentKeys: string[], ambiguous: [{ key, name, matches:[id…] }] }.
-function reconcilePageIds(pages, manifest, livePages) {
-  const live = livePages || [];
-
-  // Build a case-preserving id lookup from live pages (lower-case key for case-insensitive match).
-  const liveById = new Map(
-    live.filter((p) => p.pageId).map((p) => [String(p.pageId).toLowerCase(), p.pageId]),
-  );
-
-  // Group live pages by name so duplicate names are detected rather than collapsed.
-  // name -> [id…] (all live ids that carry this name)
-  const idsByName = new Map();
-  for (const p of live) {
-    if (p.name && p.pageId) {
-      const arr = idsByName.get(p.name) || [];
-      arr.push(p.pageId);
-      idsByName.set(p.name, arr);
-    }
-  }
+//   2. Manifest key→pageId — confirmed live: id still ∈ existenceIds. Crash-safe: a manifested id
+//      that exists but is not yet in the sitemap (finalizer died) is reused, not recreated (C1).
+//
+//   3. Absent → create (mint a fresh id).
+//
+// `existenceIds` — array/Set of ALL page ids that EXIST in the environment (create-vs-reuse).
+// `sitemapIds`   — array/Set of ids in THIS app's sitemap (membership / ownership proof).
+//
+// Conflicts (caller HALTs `pages-identity-conflict` when conflicts.length > 0):
+//   { key, reason:'invalid-pageid', pageId }          — p.pageId is not a valid 36-char GUID.
+//   { key, reason:'spec-manifest-disagree', pageId, manifestId }
+//                                                     — both ids live and differ (C3).
+//   { pageId, keys:[…] }                              — ≥2 distinct keys → same live id (1:1 violation).
+//
+// Returns { keyToId: Map<key,id>, absentKeys: string[], conflicts: object[] }.
+// No name-based lookup; no `ambiguous` field — id matching is unambiguous.
+function reconcilePageIds(pages, manifest, existenceIds, sitemapIds) {
+  // Normalise id sets to lower-case for case-insensitive membership tests. Original-case ids are
+  // preserved on source objects (mp.pageId, p.pageId) so keyToId and conflict payloads round-trip
+  // the casing the caller provided.
+  const existSet = new Set((existenceIds || []).map((id) => String(id).toLowerCase()));
+  const sitemapSet = new Set((sitemapIds || []).map((id) => String(id).toLowerCase()));
 
   // Manifest pages indexed by key for O(1) lookup.
   const manifestByKey = new Map(
@@ -190,40 +205,74 @@ function reconcilePageIds(pages, manifest, livePages) {
 
   const keyToId = new Map();
   const absentKeys = [];
-  const ambiguous = [];
+  const conflicts = [];
 
   for (const p of pages || []) {
     const key = p.key || p.name;
     const mp = manifestByKey.get(key);
+    // manId: lowercase manifest id for comparison; mp.pageId: original-case for conflict payloads.
+    const manId = mp && mp.pageId ? String(mp.pageId).toLowerCase() : null;
 
-    // (1) manifest key→id, confirmed live (case-insensitive id match)
-    let id = mp && mp.pageId && liveById.has(String(mp.pageId).toLowerCase())
-      ? liveById.get(String(mp.pageId).toLowerCase())
-      : undefined;
+    if (p.pageId !== undefined && p.pageId !== null) {
+      const specId = p.pageId;
 
-    if (!id) {
-      // (2 / 4) look up by display name in the live enumeration
-      const matches = idsByName.get(p.name) || [];
-      if (matches.length > 1) {
-        // (4) HALT — caller must not proceed; returning ambiguous signals this
-        ambiguous.push({ key, name: p.name, matches: matches.slice() });
+      // GUID format validation — a spec pageId that is not a valid 36-char GUID cannot be a real
+      // page id. Reject early to prevent a malformed value from accidentally matching an existenceId.
+      if (!GUID_RE.test(specId)) {
+        conflicts.push({ key, reason: 'invalid-pageid', pageId: specId });
         continue;
       }
-      if (matches.length === 1) {
-        // (2) exactly one live name-match — adopt it
-        id = matches[0];
+
+      const specIdLow = specId.toLowerCase();
+      const specInExistence = existSet.has(specIdLow);
+      // Evaluate manInExistence only when manId is present; avoids false-positive disagreements.
+      const manInExistence = manId !== null && existSet.has(manId);
+
+      // Disagreement HALT (C3): both the spec id and the manifest id are live and differ — binding
+      // either would silently clobber the other's live page content. Caller must resolve.
+      if (manId !== null && manId !== specIdLow && specInExistence && manInExistence) {
+        conflicts.push({ key, reason: 'spec-manifest-disagree', pageId: specId, manifestId: mp.pageId });
+        continue;
       }
+
+      // Provenance-gated binding: adopt the spec pageId only when ownership is proven.
+      //   (i)  ∈ sitemapIds → page is a confirmed member of THIS app.
+      //   (ii) === manId    → manifest agrees (consistent edit-snapshot of this page).
+      // An id that merely exists env-wide but satisfies neither condition is unprovenanced —
+      // it could belong to an entirely different app. Fall through to the manifest instead.
+      if (specInExistence && (sitemapSet.has(specIdLow) || specIdLow === manId)) {
+        keyToId.set(key, specId);
+        continue;
+      }
+
+      // Unprovenanced or stale spec pageId — do not bind; fall through to manifest lookup.
     }
 
-    if (id) {
-      keyToId.set(key, id);
+    // Manifest authority (C1): a manifested id confirmed in existenceIds is reused even when the
+    // sitemap finalizer died before writing the SubArea (crash-safe round-trip correctness).
+    if (manId !== null && existSet.has(manId)) {
+      keyToId.set(key, mp.pageId);
     } else {
-      // (3) not found anywhere — must be created
       absentKeys.push(key);
     }
   }
 
-  return { keyToId, absentKeys, ambiguous };
+  // 1:1 identity guard: two distinct keys resolving to the same live id means the manifest or
+  // spec is corrupt (one page can only belong to one key). Surface as a conflict; caller HALTs.
+  const idToKeys = new Map();
+  for (const [k, id] of keyToId) {
+    const idLow = id.toLowerCase();
+    const arr = idToKeys.get(idLow) || [];
+    arr.push(k);
+    idToKeys.set(idLow, arr);
+  }
+  for (const [, keys] of idToKeys) {
+    if (keys.length > 1) {
+      conflicts.push({ pageId: keyToId.get(keys[0]), keys });
+    }
+  }
+
+  return { keyToId, absentKeys, conflicts };
 }
 
 module.exports = {
