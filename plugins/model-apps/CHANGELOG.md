@@ -9,6 +9,20 @@ plus local-dev ergonomics, sample coverage, and an automated eval suite with
 real and synthetic fixtures. Builds on v2.1; no breaking changes.
 
 ### Changed
+- **Staged-flow authoring: design-only author, generate-pages step, `--stage` selector.**
+  Phase 1 authoring is now **design-only** — the App Spec is drafted in two confirmed levels
+  (Level 1: data model; Level 2: artifacts + page-intents + design contract) without emitting
+  `.tsx`. After plan-mode approval: (1) a data pre-build (`build --stage data --apply`) materializes
+  tables so `generate-types` can emit `RuntimeTypes.ts`; (2) a **generate-pages** step runs headless
+  `page-builder` agents (via `Task`) to fill each intent page's `.tsx` (with `PAGEREF_<key>` for
+  cross-page nav); (3) a full idempotent build (`build --apply --verify`) completes ui · app · publish.
+  `--stage <data|ui|app|publish>` maps to engine-phase ranges; apply-safe only for `data` — run 2 is
+  always a full idempotent build (no `--from/--to/--only/--skip` for staged apply). The 13 engine
+  phases (`solution·data-model·sample-data·web-resources·views·charts·forms·commands·dashboards·
+  app-shell·pages·ai-features·publish`) are unchanged.
+- **Doc-sync across `SKILL.md`, `authoring-flow.md`, `architecture.md`, `AGENTS.md`,
+  `app-spec-schema.md`** to reflect the staged flow, new scripts/modules, eval harness,
+  and safety flags (`--allow-destructive`, `--non-interactive`).
 - **`/app-builder` flow refinements (fewer gates, earlier + automatic checks).** (1) The guardrail lint
   now runs **after the data-model level too**, so a structural model error (e.g. the
   relationship-name-vs-lookup-name collision) is caught before forms/views are authored on top. (2) The
@@ -45,6 +59,20 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   surface the chart via a dashboard/sitemap subarea, if it must be an explicit component.
 
 ### Added
+- **`scripts/lib/schema-facts.js`** — pure, offline data-model provisioning fact extractor
+  (`schemaFacts(spec)`, `isBuildableColumn(c)`). Normalizes tables/columns/relationships/global-choices
+  to stable sorted facts reusing the engine's real derivation rules (`relationshipSchemaName`,
+  `choiceValueMap`, `columnTypeMap`). The data-stage eval oracle: two deep-equal fact sets prove two
+  builds provision the same data model.
+- **`scripts/preview-app.js` + `scripts/lib/app-preview.js`** — renders the WHOLE app design
+  (data model + sitemap tree + views/charts + per-form wireframes + page-intents + design contract)
+  as a single ASCII preview, reusing `form-preview.js`. Used as design gate #2 / plan-mode approval
+  artifact so the user can review the full app before approving the build.
+- **Offline `/app-builder` structural eval harness** (`evals/model-apps/app-builder/`) — a
+  data-driven, offline TAP v13 harness (sibling of `evals/model-apps/genpage/`) that grades
+  per-stage structural facts (`author`/`plan`/`data`/`ui`/`app`/`verify` oracles), not `.tsx`
+  snapshots. Run from the repo root: `node evals/model-apps/app-builder/run-app-builder.js`.
+  See `evals/model-apps/app-builder/EVAL_GUIDE.md`.
 - **Fail-closed generative-page deployment.** `PAGEREF_<key>` cross-page navigation is resolved into
   run-scoped staging copies (the canonical `.tsx` is never GUID-mutated) via a single structural nav
   oracle that parses actual `navigateTo` call sites. A durable `<app>_pagemanifest` web resource
