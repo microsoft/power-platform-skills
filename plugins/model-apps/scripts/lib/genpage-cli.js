@@ -170,11 +170,42 @@ function makeGenpageCli(env, deps = {}) {
     return { ok: false, pages: [], error: `pac genpage list failed after ${attempts} attempt(s): ${lastErr}` };
   }
 
+  // Env-WIDE EXISTENCE enumeration (NO --app-id): returns the set of ALL generative-page ids that exist
+  // in the environment, regardless of which app they belong to or whether they are in any sitemap.
+  // `--include-unpublished` ensures a just-created draft counts before it has been finalized into a
+  // sitemap — this is what makes uncertain-CREATE recovery crash-safe (C2): a page created+manifested
+  // but not yet sitemap-finalized still appears here and is reused on a second run instead of being
+  // created again. Reuses classifyListOutput (fail-closed): an unrecognized/incomplete listing NEVER
+  // masquerades as an empty environment. `ids` are lower-cased for case-insensitive set membership.
+  async function enumerateEnv() {
+    let lastErr = '';
+    for (let i = 0; i < attempts; i += 1) {
+      const r = await run(['model', 'genpage', 'list', '--environment', env, '--include-unpublished']);
+      if (r.status === 0) {
+        const c = classifyListOutput(r.stdout);
+        if (c.kind !== 'unrecognized') {
+          const pages = c.pages || [];
+          return { ok: true, ids: pages.map((p) => String(p.pageId).toLowerCase()), pages };
+        }
+        lastErr = 'unrecognized/incomplete env-wide `pac genpage list` output (zero exit, no valid listing or a count mismatch) — refusing to treat as empty';
+      } else {
+        lastErr = lastLine(r);
+      }
+      if (i < attempts - 1) await sleep(500 * (i + 1));
+    }
+    return { ok: false, ids: [], error: `pac genpage list (env-wide) failed after ${attempts} attempt(s): ${lastErr}` };
+  }
+
   return {
     // Create (no pageId) or update (with pageId) a page's content. Returns { pageId }. Retries transient
-    // pac failures. On an UNCERTAIN CREATE (non-zero, or zero-exit with no Page ID) re-enumerates
-    // FAIL-CLOSED before deciding to retry: a blind 2nd CREATE could duplicate a page the first attempt
-    // already created server-side (design §9, C3). Enumeration failure → THROW (no blind retry).
+    // pac failures. On an UNCERTAIN CREATE (non-zero, or zero-exit with no Page ID) resolves via a
+    // STRICT ENV-WIDE before/after id diff (C2 — addenda overrides the plan here): the env-wide id set
+    // is snapshotted BEFORE the first CREATE so the diff reveals exactly which id appeared.
+    //   newIds.length === 1 → adopt that id (UPDATE it; I7 guard verifies returned id)
+    //   newIds.length === 0 → CREATE did NOT land → safe to retry
+    //   newIds.length > 1   → THROW (ambiguous; concurrent creates or noise — never guess)
+    // NO name matching anywhere in recovery (names are unreliable — app-scoped list misses
+    // pre-sitemap pages; env-wide names drift with sitemap titles). Any enumerateEnv failure → THROW.
     async upload({ appId, pageId, codeFile, name, prompt, agentMessage, dataSources }) {
       const once = async (pid) => {
         const args = ['model', 'genpage', 'upload', '--environment', env, '--app-id', appId, '--code-file', codeFile];
@@ -188,7 +219,20 @@ function makeGenpageCli(env, deps = {}) {
       };
       let pid = pageId;
       let lastErr = '';
+      // Snapshot taken once (lazily on the first CREATE attempt) so the before/after diff is anchored
+      // to the exact env state before this operation. Fail-closed: if we can't snapshot, we can't
+      // safely attribute a later uncertain result — halt to prevent a blind duplicate.
+      let beforeIds = null;
       for (let i = 0; i < attempts; i += 1) {
+        if (!pid && name && beforeIds === null) {
+          const before = await enumerateEnv();
+          if (!before.ok) {
+            throw new Error(
+              `pac genpage upload for '${name}': cannot snapshot the environment before create (${before.error}) — refusing to create (would risk a duplicate)`
+            );
+          }
+          beforeIds = new Set(before.ids);
+        }
         const r = await once(pid);
         if (r.status === 0) {
           const id = parsePageId(r.stdout);
@@ -208,27 +252,26 @@ function makeGenpageCli(env, deps = {}) {
         } else {
           lastErr = lastLine(r);
         }
-        // Uncertain outcome: non-zero OR zero-without-Page-ID on a CREATE (pid not yet set).
-        // Re-enumerate FAIL-CLOSED before any retry to prevent a blind duplicate (design §9, C3):
-        //  - enumeration failure           → THROW immediately (can't verify; risk of duplicate)
-        //  - exactly one same-named match  → adopt its pid (CREATE landed; retry as UPDATE in place)
-        //  - multiple same-named matches   → THROW (ambiguous; refuse to add another)
-        //  - zero matches                  → CREATE did NOT land; safe to retry a CREATE
+        // Uncertain CREATE: no caller pid and result was non-zero or zero-without-Page-ID.
+        // Strict env-wide before/after id diff — never use name matching (names drift; app-scoped
+        // lists miss pre-sitemap pages; a page's list "Name" is its sitemap title, not its identity).
         if (!pid && name) {
-          const listed = await enumeratePages(appId);
-          if (!listed.ok) {
+          const after = await enumerateEnv();
+          if (!after.ok) {
             throw new Error(
-              `pac genpage upload for '${name}' had an uncertain result and page enumeration failed — refusing to retry (would risk a duplicate): ${listed.error}`
+              `pac genpage upload for '${name}' had an uncertain result and env enumeration failed — refusing to retry (would risk a duplicate): ${after.error}`
             );
           }
-          const matches = listed.pages.filter((p) => p.name === name);
-          if (matches.length > 1) {
+          const newIds = after.ids.filter((id) => !beforeIds.has(id));
+          if (newIds.length === 1) {
+            pid = newIds[0]; // CREATE landed → adopt; I7 guard verifies returned id on the UPDATE
+          } else if (newIds.length === 0) {
+            // CREATE did NOT land → safe to retry (pid stays undefined; beforeIds unchanged)
+          } else {
             throw new Error(
-              `pac genpage upload for '${name}': multiple live pages already share this name — refusing to create another (ambiguous)`
+              `pac genpage upload for '${name}': ${newIds.length} new pages appeared after an uncertain create — cannot attribute (ambiguous)`
             );
           }
-          if (matches.length === 1) pid = matches[0].pageId; // adopt: the create landed; next iteration UPDATEs
-          // if matches.length === 0: pid stays undefined; next iteration retries the CREATE safely
         }
         if (i < attempts - 1) await sleep(500 * (i + 1));
       }
@@ -240,9 +283,17 @@ function makeGenpageCli(env, deps = {}) {
     enumerate({ appId }) {
       return enumeratePages(appId);
     },
-    // Download every page of the app into `outputDir/<pageId>/{page.tsx,page.js,config.json,prompt.txt}`.
-    async download({ appId, outputDir }) {
-      const r = await run(['model', 'genpage', 'download', '--environment', env, '--app-id', appId, '--output-directory', outputDir]);
+    enumerateEnv() {
+      return enumerateEnv();
+    },
+    // Download page CONTENT into `outputDir/<pageId>/{page.tsx,page.js,config.json,prompt.txt}`. With
+    // `pageIds` (non-empty) pull exactly those pages via `--page-id <comma>` — the sitemap's id set,
+    // so download is headless-free and fetches only real app content. Omit `pageIds` to download all
+    // app pages (back-compat for any legacy caller that does not provide the sitemap id set).
+    async download({ appId, outputDir, pageIds }) {
+      const args = ['model', 'genpage', 'download', '--environment', env, '--app-id', appId, '--output-directory', outputDir];
+      if (pageIds && pageIds.length) args.push('--page-id', pageIds.join(','));
+      const r = await run(args);
       if (r.status !== 0) throw new Error(`pac genpage download failed: ${lastLine(r)}`);
       return true;
     },
