@@ -13,6 +13,8 @@ const { parseArgs, emitResult } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { hydrateSpec } = require('./lib/hydrate-spec.js');
 const { makeGenpageCli } = require('./lib/genpage-cli.js');
+const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require('./lib/page-manifest.js');
+const { reverseResolveNavIds } = require('./lib/pageref-resolver.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
 const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7: 'gif', 8: 'xap', 9: 'xsl', 10: 'ico', 11: 'svg', 12: 'resx' };
@@ -108,6 +110,61 @@ function parseDownloadedPages(pagesRoot, outDir, nameById) {
   return pages;
 }
 
+// Assign a STABLE key to every downloaded page + carry the manifest's v2 semantics. `keyToId` (from
+// reconcilePageIds — the authority: manifest-confirmed-live id → unique live-name, ambiguous already
+// HALTed upstream) binds manifest keys to live ids; a page bound there reuses that key + purpose/
+// navigatesTo/pageInput/dataSources. A page with NO binding (legacy app / Maker-authored) gets a FRESH
+// unique slug key (design §7.3 — NOT the old name shape, which drifted on rename). Returns idToKey for
+// reverse-normalizing nav literals. Mutates pages. This uses reconcilePageIds, NOT a name-collapsing Map.
+function assignPageKeys(pages, manifest, keyToId) {
+  const idToKey = new Map();
+  const used = new Set();
+  const manifestByKey = new Map(((manifest && manifest.pages) || []).map((m) => [m.key, m]));
+  // Build idToKey (lowercase-id → key) from the reconciled binding so reverseResolveNavIds can
+  // rewrite nav pageId literals back to their symbolic keys (structural, nav literals only).
+  for (const [key, id] of (keyToId || new Map())) { idToKey.set(String(id).toLowerCase(), key); used.add(key); }
+  // Slug-minter: converts a display name to a stable lowercase slug. De-dupes with a -N suffix when
+  // the same slug has already been assigned to another page (collision on rename or duplicate names).
+  const mint = (name) => {
+    const base = String(name || 'page').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'page';
+    let k = base;
+    let i = 2;
+    while (used.has(k)) k = `${base}-${i++}`;
+    used.add(k);
+    return k;
+  };
+  // First pass: assign keys to pages that are bound (manifest-confirmed-live id) + carry v2 semantics.
+  for (const p of pages) {
+    const bound = idToKey.get(String(p.pageId).toLowerCase());
+    if (!bound) continue;
+    p.key = bound;
+    const m = manifestByKey.get(bound);
+    if (m) {
+      if (m.purpose !== undefined) p.purpose = m.purpose;
+      if (m.navigatesTo) p.navigatesTo = m.navigatesTo;
+      if (m.pageInput !== undefined) p.pageInput = m.pageInput;
+      // Only copy manifest dataSources when the download gave us nothing (pac may include them).
+      if (m.dataSources && !(p.dataSources || []).length) p.dataSources = m.dataSources;
+    }
+  }
+  // Second pass: pages that had no binding get a fresh unique slug key.
+  for (const p of pages) {
+    if (!p.key) {
+      p.key = mint(p.name);
+      idToKey.set(String(p.pageId).toLowerCase(), p.key);
+    }
+  }
+  return idToKey;
+}
+
+// Entries of `a` whose pageId is absent from `b`. Used BOTH directions to require exact enumerated<->
+// downloaded id equality (I3). A gap either way means pac downloaded a different set than exists —
+// rebuilding from this spec would silently drop/add pages, so download FAILS instead.
+function missingDownloads(a, b) {
+  const have = new Set((b || []).map((p) => String(p.pageId).toLowerCase()));
+  return (a || []).filter((p) => !have.has(String(p.pageId).toLowerCase()));
+}
+
 // Minimal entity spec (schemaName + primary name column). The build reuses existing tables/columns
 // idempotently, so column fidelity isn't required to re-apply an edit.
 function entityFromMetadata(meta, logical) {
@@ -159,23 +216,50 @@ async function main() {
   const app = await sdk.fetchArtifact('app', appId);
   const { entities: entityLogicals, icons } = collectSitemap(app);
 
-  // Pages (all — incl. Maker-authored). Page names come from the sitemap's GenPage subarea titles
-  // (authoritative — they equal the page --name), keyed by genPageId.
+  // Pages (all — incl. Maker-authored). AUTHORITATIVE via a fail-closed enumeration (lists every page,
+  // even ones not in the sitemap), NOT the sitemap titles alone. Everything below is fail-closed: an
+  // enumeration failure, a download failure, a missing-page gap, or a read/write error ABORTS with a
+  // structured error rather than silently writing a page-dropping spec (Critical 2 / I3).
   const genpageCli = makeGenpageCli(env);
-  const nameById = new Map();
-  for (const a of (app.siteMap && app.siteMap.areas) || []) {
-    for (const g of a.groups || []) {
-      for (const sa of g.subAreas || []) if (sa.type === 'GenPage' && sa.genPageId) nameById.set(String(sa.genPageId).toLowerCase(), sa.title);
-    }
-  }
+  const enumd = await genpageCli.enumerate({ appId });
+  if (!enumd.ok) { emitResult(false, { ok: false, error: `page enumeration failed during download: ${enumd.error}` }); return; }
   let pages = [];
-  if (nameById.size) {
-    try {
-      const pagesRoot = path.join(outDir, 'pages');
-      fs.mkdirSync(pagesRoot, { recursive: true });
-      await genpageCli.download({ appId, outputDir: pagesRoot });
-      pages = parseDownloadedPages(pagesRoot, outDir, nameById);
-    } catch (e) { process.stderr.write(`(pages download skipped: ${e.message})\n`); }
+  let manifest = null;
+  if (!enumd.empty) {
+    // Durable manifest (keys + v2 semantics), looked up by the app's unique name. Best-effort:
+    // a missing/corrupt manifest means we fall back to fresh-key minting (no v2 semantics).
+    const appRows = await sdk.queryRecords('appmodule', { select: ['uniquename'], filter: `appmoduleid eq ${appId}`, top: 1 });
+    const appUnique = appRows && appRows[0] && appRows[0].uniquename;
+    if (appUnique) {
+      const rows = await sdk.queryRecords('webresource', { select: ['content'], filter: `name eq '${manifestResourceName(appUnique).replace(/'/g, "''")}'`, top: 1 });
+      if (rows && rows[0] && rows[0].content) manifest = parseManifestBase64(rows[0].content);
+    }
+    // Clean the download dir, then download — FAIL on error (genpageCli.download throws → main().catch).
+    const pagesRoot = path.join(outDir, 'pages');
+    fs.rmSync(pagesRoot, { recursive: true, force: true });
+    fs.mkdirSync(pagesRoot, { recursive: true });
+    await genpageCli.download({ appId, outputDir: pagesRoot });
+    // Build the name-by-id map from the AUTHORITATIVE enumeration (not the sitemap), so even
+    // Maker-authored pages (absent from the sitemap) get their correct display name.
+    const nameById = new Map(enumd.pages.filter((p) => p.name).map((p) => [String(p.pageId).toLowerCase(), p.name]));
+    pages = parseDownloadedPages(pagesRoot, outDir, nameById);
+    // EXACT enumerated<->downloaded id equality, BOTH directions (I3). A gap either way means pac
+    // downloaded a different set than enumerated — rebuilding from this spec would drop/add pages.
+    const missing = missingDownloads(enumd.pages, pages);
+    if (missing.length) { emitResult(false, { ok: false, error: `enumerated page(s) not downloaded: ${missing.map((p) => p.name || p.pageId).join(', ')} — refusing to write a spec that would drop them` }); return; }
+    const extra = missingDownloads(pages, enumd.pages);
+    if (extra.length) { emitResult(false, { ok: false, error: `downloaded page(s) not enumerated: ${extra.map((p) => p.pageId).join(', ')} — inconsistent page set` }); return; }
+    // Reconcile ids via the reconcilePageIds authority (ambiguous names HALT), assign stable keys,
+    // reverse-normalize each page.tsx (structural — nav pageId literals only).
+    const { keyToId, ambiguous } = reconcilePageIds((manifest && manifest.pages) || [], manifest, pages);
+    if (ambiguous.length) { emitResult(false, { ok: false, error: `ambiguous page name(s) during download: ${ambiguous.map((a) => a.name).join(', ')} — cannot safely reconstruct keys` }); return; }
+    const idToKey = assignPageKeys(pages, manifest, keyToId);
+    for (const p of pages) {
+      const abs = path.join(outDir, p.codeFile);
+      const src = fs.readFileSync(abs, 'utf8');           // FAIL on a read error (no swallow)
+      const rev = reverseResolveNavIds(src, idToKey);     // structural — nav pageId literals only
+      if (rev !== src) fs.writeFileSync(abs, rev, 'utf8'); // FAIL on a write error (no swallow)
+    }
   }
 
   // Entities (minimal).
@@ -209,6 +293,7 @@ async function main() {
     webResources: async () => webResources,
     dashboards: async () => dashboards,
     solution: async () => solution,
+    design: async () => (manifest ? manifest.design : undefined),
   };
   const spec = await hydrateSpec(read);
   // Warn about any sitemap subareas the edit flow can't yet round-trip (CustomPage subareas and
@@ -227,4 +312,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount };
+module.exports = { resolveAppId, collectSitemap, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount };

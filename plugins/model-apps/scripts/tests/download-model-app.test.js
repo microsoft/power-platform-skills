@@ -76,3 +76,67 @@ test('droppedSubareaCount counts subareas the spec could not round-trip (e.g. da
   const same = { appShell: { areas: [{ groups: [{ subAreas: [{}, {}, {}, {}] }] }] } };
   assert.strictEqual(droppedSubareaCount(app, same), 0);
 });
+
+// ── Task 11: assignPageKeys + missingDownloads + full round-trip ──────────────
+const { assignPageKeys, missingDownloads } = require('../download-model-app.js');
+const { reconcilePageIds, buildManifest } = require('../lib/page-manifest.js');
+const { hydrateSpec } = require('../lib/hydrate-spec.js');
+const { validateAppSpec } = require('../lib/app-spec.js');
+const { resolvePageRefs, reverseResolveNavIds } = require('../lib/pageref-resolver.js');
+
+test('assignPageKeys: reuses the manifest key + v2 semantics for a reconcile-bound page, mints fresh keys otherwise (I3/§7.3)', () => {
+  const manifest = { schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: 'gp-o', purpose: 'Home', navigatesTo: [{ targetKey: 'detail' }], pageInput: { data: {} } }] };
+  const downloaded = [
+    { pageId: 'gp-o', name: 'Overview', dataSources: [], codeFile: 'p/gp-o/page.tsx' },
+    { pageId: 'gp-x', name: 'Some Legacy Page', dataSources: [], codeFile: 'p/gp-x/page.tsx' },
+  ];
+  const { keyToId } = reconcilePageIds(manifest.pages, manifest, downloaded);
+  const idToKey = assignPageKeys(downloaded, manifest, keyToId);
+  assert.strictEqual(downloaded[0].key, 'overview');
+  assert.deepStrictEqual(downloaded[0].navigatesTo, [{ targetKey: 'detail' }]);
+  assert.strictEqual(downloaded[0].purpose, 'Home');
+  assert.strictEqual(downloaded[1].key, 'some-legacy-page', 'a page with no manifest binding gets a fresh slug key, not the old name');
+  assert.strictEqual(idToKey.get('gp-o'), 'overview');
+  assert.strictEqual(idToKey.get('gp-x'), 'some-legacy-page');
+});
+
+test('assignPageKeys: mints unique keys (no manifest) with -N de-dup on slug collision', () => {
+  const downloaded = [{ pageId: 'a', name: 'Work Order', dataSources: [], codeFile: 'a' }, { pageId: 'b', name: 'Work Order', dataSources: [], codeFile: 'b' }];
+  assignPageKeys(downloaded, null, new Map());
+  assert.deepStrictEqual(downloaded.map((p) => p.key), ['work-order', 'work-order-2']);
+});
+
+test('missingDownloads flags a gap in EITHER direction (I3 exact enumerated<->downloaded equality)', () => {
+  const enumPages = [{ pageId: 'gp-o', name: 'Overview' }, { pageId: 'gp-d', name: 'Detail' }];
+  const downloaded = [{ pageId: 'gp-o', name: 'Overview' }];
+  assert.deepStrictEqual(missingDownloads(enumPages, downloaded).map((p) => p.pageId), ['gp-d'], 'enumerated-but-not-downloaded');
+  assert.deepStrictEqual(missingDownloads(downloaded, enumPages), [], 'downloaded-and-enumerated → no extra');
+  assert.deepStrictEqual(missingDownloads(enumPages, enumPages), []);
+});
+
+test('ROUND-TRIP: manifest → download → reverse → hydrate → validate → resolve reproduces the deployed ids (Critical 2/I3)', async () => {
+  const manifest = buildManifest({ pages: [{ key: 'overview', name: 'Overview', navigatesTo: [{ targetKey: 'detail' }] }, { key: 'detail', name: 'Detail' }] }, new Map([['overview', 'gp-o'], ['detail', 'gp-d']]));
+  const deployedOverview = 'Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "gp-d", data: {} });';
+  const downloaded = [
+    { pageId: 'gp-o', name: 'Overview', dataSources: [], codeFile: 'overview.tsx', _code: deployedOverview },
+    { pageId: 'gp-d', name: 'Detail', dataSources: [], codeFile: 'detail.tsx', _code: 'export default function D(){ return null; }' },
+  ];
+  const { keyToId, ambiguous } = reconcilePageIds(manifest.pages, manifest, downloaded);
+  assert.deepStrictEqual(ambiguous, []);
+  const idToKey = assignPageKeys(downloaded, manifest, keyToId);
+  for (const p of downloaded) p._reversed = reverseResolveNavIds(p._code, idToKey);
+  assert.ok(downloaded[0]._reversed.includes('"PAGEREF_detail"'), 'overview nav reversed back to the symbolic key');
+  const spec = await hydrateSpec({
+    app: async () => ({ name: 'A', description: '', siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ type: 'GenPage', genPageId: 'gp-o', title: 'Overview' }, { type: 'GenPage', genPageId: 'gp-d', title: 'Detail' }] }] }] } }),
+    pages: async () => downloaded,
+    entities: async () => [{ schemaName: 'contoso_item', primaryAttribute: { schemaName: 'contoso_name' }, columns: [] }],
+    webResources: async () => [], solution: async () => ({ uniqueName: 'S', publisherPrefix: 'new' }),
+    design: async () => manifest.design,
+  });
+  const v = validateAppSpec(spec, { profile: 'plan' });
+  assert.ok(v.ok, v.errors.join('; '));
+  assert.strictEqual(spec.pages.find((p) => p.key === 'overview').navigatesTo[0].targetKey, 'detail');
+  assert.strictEqual(spec.appShell.areas[0].groups[0].subAreas[0].page, 'overview', 'GenPage subarea resolved by KEY');
+  const resolved = resolvePageRefs(new Map([['overview', { code: downloaded[0]._reversed }]]), keyToId).deployment.get('overview');
+  assert.ok(resolved.includes('pageId: "gp-d"') && !/PAGEREF_/.test(resolved), 'reverse∘resolve returns the deployed id — the loop is closed');
+});

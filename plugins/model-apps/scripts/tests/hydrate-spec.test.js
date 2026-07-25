@@ -88,3 +88,33 @@ test('hydrateSpec carries every deployed page into pages[] (incl. Maker-authored
   assert.strictEqual(spec.pages.length, 1);
   assert.deepStrictEqual(spec.pages[0], { name: 'Overview', dataSources: ['new_order'], prompt: 'kpis', codeFile: 'pages/Overview.tsx' });
 });
+
+// ── Task 11: v2 shape emission + legacy back-compat ───────────────────────────
+test('hydrateSpec emits the v2 shape when pages carry keys (schemaVersion 2, source.kind tsx, design, key subareas)', async () => {
+  const read = {
+    app: async () => ({ name: 'A', description: '', siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ type: 'GenPage', genPageId: 'gp-o', title: 'Overview' }] }] }] } }),
+    pages: async () => [{ pageId: 'gp-o', name: 'Overview', key: 'overview', purpose: 'Home', navigatesTo: [{ targetKey: 'detail' }], dataSources: [], codeFile: 'overview.tsx' }],
+    entities: async () => [], webResources: async () => [], solution: async () => ({ uniqueName: 'S', publisherPrefix: 'new' }),
+    design: async () => ({ theme: 'ocean' }),
+  };
+  const spec = await hydrateSpec(read);
+  assert.strictEqual(spec.schemaVersion, 2);
+  assert.deepStrictEqual(spec.design, { theme: 'ocean' });
+  assert.strictEqual(spec.pages[0].source.kind, 'tsx');
+  assert.strictEqual(spec.pages[0].key, 'overview');
+  assert.deepStrictEqual(spec.pages[0].navigatesTo, [{ targetKey: 'detail' }]);
+  assert.strictEqual(spec.appShell.areas[0].groups[0].subAreas[0].page, 'overview', 'GenPage subarea resolved by KEY');
+});
+
+test('hydrateSpec keeps the legacy name-based shape when pages carry no key (back-compat)', async () => {
+  const read = {
+    app: async () => ({ name: 'A', description: '', siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ type: 'GenPage', genPageId: 'gp-o', title: 'Overview' }] }] }] } }),
+    pages: async () => [{ pageId: 'gp-o', name: 'Overview', dataSources: [], codeFile: 'overview.tsx' }],
+    entities: async () => [], webResources: async () => [], solution: async () => ({ uniqueName: 'S', publisherPrefix: 'new' }),
+  };
+  const spec = await hydrateSpec(read);
+  assert.strictEqual(spec.schemaVersion, undefined);
+  assert.strictEqual(spec.pages[0].codeFile, 'overview.tsx');
+  assert.strictEqual(spec.appShell.areas[0].groups[0].subAreas[0].page, 'Overview', 'legacy GenPage subarea resolved by NAME');
+});
+
