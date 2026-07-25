@@ -2,6 +2,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { lintAppSpec } = require('../lib/spec-lint.js');
+const { migrateAppSpec } = require('../lib/app-spec.js');
 
 const base = () => ({
   solution: { uniqueName: 'X', publisherPrefix: 'new' },
@@ -306,4 +307,27 @@ test('lint does not warn/error on specs with no ai block (no regression)', () =>
   const r = lintAppSpec(base());
   assert.strictEqual(r.ok, true);
   assert.strictEqual(r.errors.length, 0);
+});
+
+// REGRESSION: a schemaVersion-2 page subarea references the page by its stable KEY (migrateAppSpec
+// rewrites name-based appShell refs to keys). When key !== name (e.g. key 'order-detail', name 'Order
+// Detail') the guardrail lint must NOT falsely error "references unknown page" — that was a bug where
+// lint only checked page NAMES while validateAppSpec correctly checks KEYS for v2 specs.
+test('lint accepts a v2 page subarea referenced by KEY when key !== name (no false "unknown page")', () => {
+  const raw = {
+    schemaVersion: 2,
+    solution: { uniqueName: 'X', publisherPrefix: 'new' },
+    app: { name: 'A' },
+    entities: [{ schemaName: 'new_order', displayName: 'Order', primaryAttribute: { schemaName: 'new_name', displayName: 'Order #' }, columns: [] }],
+    pages: [{ key: 'order-detail', name: 'Order Detail', source: { kind: 'intent' }, purpose: 'One order', dataSources: ['new_order'] }],
+    appShell: { areas: [{ label: 'Sales', groups: [{ label: 'Work', subAreas: [{ page: 'order-detail', title: 'Order Detail' }] }] }] },
+  };
+  const spec = migrateAppSpec(raw); // sa.page is now the KEY 'order-detail'
+  assert.strictEqual(spec.appShell.areas[0].groups[0].subAreas[0].page, 'order-detail');
+  const r = lintAppSpec(spec);
+  assert.ok(!r.errors.some((e) => /unknown page/i.test(e)), `no false unknown-page error; got: ${JSON.stringify(r.errors)}`);
+  // A genuinely unknown page ref (neither key nor name) is still an error.
+  const bad = JSON.parse(JSON.stringify(spec));
+  bad.appShell.areas[0].groups[0].subAreas[0].page = 'nope-not-a-page';
+  assert.ok(lintAppSpec(bad).errors.some((e) => /unknown page/i.test(e)), 'an unknown page ref still errors');
 });

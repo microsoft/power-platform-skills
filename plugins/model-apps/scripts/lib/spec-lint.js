@@ -208,7 +208,15 @@ function lintAppSpec(spec) {
   // surfaces a built dashboard in the app nav (and auto-pins it as an app component); a page subarea
   // surfaces a generative page (declared in pages[]) as a GenPage subarea.
   const dashNames = new Set((spec.dashboards || []).map((d) => d && d.name).filter(Boolean));
-  const pageNames = new Set((spec.pages || []).map((p) => p && p.name).filter(Boolean));
+  // A page subarea may reference a page by its stable KEY (schemaVersion 2 — migrateAppSpec rewrites
+  // name-based appShell page refs to keys) OR by name (legacy). Accept EITHER so a valid v2 key ref where
+  // key !== name (e.g. key 'order-detail', name 'Order Detail') is not falsely flagged. validateAppSpec is
+  // the strict enforcer (it selects keys-for-v2 / names-for-legacy per schemaVersion, app-spec.js:586); the
+  // guardrail lint just must not error on a correct ref.
+  const pageRefs = new Set([
+    ...(spec.pages || []).map((p) => p && p.key).filter(Boolean),
+    ...(spec.pages || []).map((p) => p && p.name).filter(Boolean),
+  ]);
   // Genpage data sources that aren't declared entities are likely standard tables (fine) or a typo.
   const entityLowerSet = new Set((spec.entities || []).map((e) => lc(e.schemaName)));
   for (const p of spec.pages || []) {
@@ -232,7 +240,7 @@ function lintAppSpec(spec) {
         else if (targets.length > 1) E(`Sitemap subarea "${sa.title || ''}" sets multiple targets (${targets.join(', ')}) — pick one`);
         if (sa.entity && !entityNames.has(lc(sa.entity))) E(`Sitemap subarea references unknown entity '${sa.entity}'`);
         if (sa.dashboard && !dashNames.has(sa.dashboard)) E(`Sitemap subarea references unknown dashboard '${sa.dashboard}' — declare it in dashboards[]`);
-        if (sa.page && !pageNames.has(sa.page)) E(`Sitemap subarea references unknown page '${sa.page}' — declare it in pages[]`);
+        if (sa.page && !pageRefs.has(sa.page)) E(`Sitemap subarea references unknown page '${sa.page}' — declare it in pages[]`);
         if (sa.vectorIcon) {
           if (sa.entity) W(`Sitemap subarea "${sa.title || ''}": vectorIcon is ignored on an entity subarea (dropped from the sitemap so it doesn't break the app designer) — an entity's nav icon comes from the table icon; set entities[].vectorIcon (an SVG web resource) for a custom icon`);
           else if (!validVectorIcon(sa.vectorIcon)) W(`Sitemap subarea "${sa.title || ''}": vectorIcon '${sa.vectorIcon}' is a bare token — the sitemap VectorIcon needs an SVG path (…/x.svg) or a $webresource:<name>.svg reference, not a Fluent token`);

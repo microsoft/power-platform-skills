@@ -1,0 +1,41 @@
+{
+  "skill_name": "app-builder",
+  "eval_instructions": "Offline, deterministic structural evals for /app-builder. See EVAL_GUIDE.md. Each eval's fixture is an App Spec (app-spec.json); the runner computes per-stage facts (author/plan/data/ui/app/verify/page) from the plugin's pure primitives and grades them against the common_stage_assertions + per-eval expect block. No live env, no network.",
+  "common_stage_assertions": [
+    "author: validateAppSpec(plan profile) passes with no errors",
+    "author: spec-lint reports no errors",
+    "plan: every planned item targets a known engine phase",
+    "data: schema-facts provision exactly the expected tables",
+    "data: schema-facts provision exactly the expected relationships",
+    "ui: wire-facts build exactly the expected views and charts",
+    "app: every sitemap subarea resolves to a concrete target (no dangling entity/page/dashboard)",
+    "app: every navigatesTo target resolves to a known page key",
+    "verify: reconcile against an all-present reader returns ok with no missing",
+    "generate-pages: no PAGEREF_ navigation target is left unresolved"
+  ],
+  "evals": [
+    {
+      "id": 1, "tier": "smoke", "spec": "app-spec.json",
+      "prompt": "Support desk: customers, tickets, and comments.",
+      "expect": {
+        "tables": ["new_customer", "new_ticket", "new_comment"],
+        "relationships": ["new_customer_new_ticket", "new_ticket_new_comment"],
+        "views": ["Active Customers", "Active Tickets", "Active Comments"],
+        "charts": ["Tickets by Priority", "Tickets by Status"]
+      },
+      "expectations": []
+    },
+    {
+      "id": 2, "tier": "full", "spec": "app-spec.json",
+      "prompt": "Orders app with an overview page that navigates to an order-detail page.",
+      "expect": {
+        "tables": ["new_customer", "new_order"],
+        "relationships": ["new_customer_new_order"],
+        "views": ["Active Orders"],
+        "charts": ["Orders by Status"],
+        "pages": ["overview", "order-detail"]
+      },
+      "expectations": []
+    }
+  ]
+}
