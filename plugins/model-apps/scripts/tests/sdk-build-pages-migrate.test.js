@@ -11,6 +11,13 @@ const path = require('node:path');
 const { migrateAppSpec } = require('../lib/app-spec.js');
 const { runSdkBuild } = require('../lib/sdk-build.js');
 
+// Real GUIDs for the three-authority sitemap mock (Imp9). These migrate specs have no page subareas, so
+// membership resolves to a page-less EMPTY sitemap; the pages phase reconciles by env-wide EXISTENCE.
+const APP_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
+const SELF_UNIQUE_VALUE = 'c0ffee00-0000-4000-8000-00000000dddd';
+const SELF_SITEMAP_ID = '5111e0f2-0000-4000-8000-0000000000aa';
+const EMPTY_SITEMAP_XML = '<SiteMap><Area><Group></Group></Area></SiteMap>';
+
 // Minimal valid spec that can run solution + data-model + app-shell + pages.
 // No page subareas in the appShell (keeps the test focused: no sitemap-finalize step needed).
 function makeSpec() {
@@ -33,7 +40,17 @@ function mockSdk() {
   const sdk = {
     queryRecords: async (e, o) => {
       calls.push({ name: 'queryRecords', args: [e, o] });
-      if (e === 'sitemap') return [{ sitemapid: 'sm-1' }];
+      const filter = (o && o.filter) || '';
+      if (e === 'appmodule') {
+        const m = filter.match(/uniquename eq '([^']+)'/);
+        if (m) return [{ appmoduleid: APP_ID, appmoduleidunique: SELF_UNIQUE_VALUE, uniquename: m[1] }];
+        return [{ appmoduleid: APP_ID, appmoduleidunique: SELF_UNIQUE_VALUE, uniquename: undefined }];
+      }
+      if (e === 'appmodulecomponent') return [{ objectid: SELF_SITEMAP_ID, componenttype: 62 }];
+      if (e === 'sitemap') {
+        if (/sitemapnameunique eq/.test(filter)) return [{ sitemapid: 'sm-1' }];
+        return [{ sitemapxml: EMPTY_SITEMAP_XML }];
+      }
       if (e === 'solution') return [];
       if (e === 'webresource') return [];
       if (e === 'systemform') return [];
@@ -90,8 +107,7 @@ test('migrated legacy spec: pages phase does NOT throw and upload receives the c
   const { sdk } = mockSdk();
   const uploads = [];
   const genpageCli = {
-    list: async () => [],
-    enumerate: async () => ({ ok: true, pages: [], empty: true }),
+    enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }),
     upload: async (o) => { uploads.push(o); return { pageId: 'gp-1' }; },
   };
 
@@ -125,8 +141,7 @@ test('native v2 spec (source.kind tsx): pages phase resolves codeFile from sourc
   const { sdk } = mockSdk();
   const uploads = [];
   const genpageCli = {
-    list: async () => [],
-    enumerate: async () => ({ ok: true, pages: [], empty: true }),
+    enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }),
     upload: async (o) => { uploads.push(o); return { pageId: 'gp-v2' }; },
   };
 
@@ -158,8 +173,7 @@ test('intent page (no codeFile) is skipped — no upload, no throw', async () =>
   const { sdk } = mockSdk();
   const uploads = [];
   const genpageCli = {
-    list: async () => [],
-    enumerate: async () => ({ ok: true, pages: [], empty: true }),
+    enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }),
     upload: async (o) => { uploads.push(o); return { pageId: 'gp-skip' }; },
   };
   const events = [];

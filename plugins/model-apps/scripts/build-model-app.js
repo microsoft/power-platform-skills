@@ -238,6 +238,7 @@ async function buildModelApp(spec, opts, deps) {
         env: opts.env, // for the pages phase (pac model genpage upload --environment)
         genpageCli: deps.genpageCli, // injectable seam for tests; else constructed from env
         workspaceDir: opts.workspaceDir, // lease/staging live under the real workspace dir
+        allowDestructive: opts.allowDestructive, // pages phase gates destructive page removals (Imp6)
         emit,
       });
       break;

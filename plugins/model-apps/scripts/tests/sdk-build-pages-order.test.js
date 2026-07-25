@@ -9,6 +9,13 @@ const os = require('node:os');
 const path = require('node:path');
 const { runSdkBuild, appUniqueName, acquireAppPagesLease } = require('../lib/sdk-build.js');
 
+// Real GUIDs for the three-authority sitemap mock (Imp9). fetchSitemap(self) resolves via SELF_* to a
+// page-less EMPTY sitemap — these ordering/restart tests converge on EXISTENCE (env list), not membership.
+const APP_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
+const SELF_UNIQUE_VALUE = 'c0ffee00-0000-4000-8000-00000000dddd';
+const SELF_SITEMAP_ID = '5111e0f2-0000-4000-8000-0000000000aa';
+const EMPTY_SITEMAP_XML = '<SiteMap><Area><Group></Group></Area></SiteMap>';
+
 // Stateful harness: enumerate() reflects pages a create appended; the manifest webresource persists in
 // `store`/`manifestB64`; uploads are recorded in the shared `calls` sequence log.
 function harness() {
@@ -19,7 +26,16 @@ function harness() {
   const sdk = {
     queryRecords: async (e, o) => {
       const filter = (o && o.filter) || '';
-      if (e === 'sitemap') return [{ sitemapid: 'sm-1' }];
+      if (e === 'appmodule') {
+        const m = filter.match(/uniquename eq '([^']+)'/);
+        if (m) return [{ appmoduleid: APP_ID, appmoduleidunique: SELF_UNIQUE_VALUE, uniquename: m[1] }];
+        return [{ appmoduleid: APP_ID, appmoduleidunique: SELF_UNIQUE_VALUE, uniquename: undefined }];
+      }
+      if (e === 'appmodulecomponent') return [{ objectid: SELF_SITEMAP_ID, componenttype: 62 }];
+      if (e === 'sitemap') {
+        if (/sitemapnameunique eq/.test(filter)) return [{ sitemapid: 'sm-1' }];
+        return [{ sitemapxml: EMPTY_SITEMAP_XML }];
+      }
       if (e === 'solution') return [];
       if (e === 'webresource') { if (/_pagemanifest'/.test(filter)) return manifestB64 ? [{ webresourceid: 'wr-m', content: manifestB64 }] : []; return []; }
       if (e === 'systemform') return [];
@@ -46,8 +62,8 @@ function harness() {
   };
   const genpageCli = {
     uploads: [],
-    list: async () => live.slice(),
-    enumerate: async () => ({ ok: true, pages: live.slice(), empty: live.length === 0 }),
+    // EXISTENCE reflects pages a create appended to `live` (env-wide, Task 2).
+    enumerateEnv: async () => ({ ok: true, ids: live.map((p) => String(p.pageId).toLowerCase()), pages: live.slice() }),
     upload: async (o) => {
       const pageId = o.pageId || `gp-${String(o.name).toLowerCase()}`;
       genpageCli.uploads.push({ name: o.name, requestedId: o.pageId, resolvedId: pageId });

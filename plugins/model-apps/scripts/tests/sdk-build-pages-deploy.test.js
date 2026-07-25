@@ -14,6 +14,13 @@ const os = require('node:os');
 const path = require('node:path');
 const { runSdkBuild } = require('../lib/sdk-build.js');
 
+// Real GUIDs for the three-authority sitemap mock (Imp9). SELF_* resolve THIS app's appmodule + sitemap so
+// fetchSitemap(appUnique) returns opts.liveSitemapXml; a page-less EMPTY sitemap is the default membership.
+const APP_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
+const SELF_UNIQUE_VALUE = 'c0ffee00-0000-4000-8000-00000000dddd';
+const SELF_SITEMAP_ID = '5111e0f2-0000-4000-8000-0000000000aa';
+const EMPTY_SITEMAP_XML = '<SiteMap><Area><Group></Group></Area></SiteMap>';
+
 function mockSdk(opts = {}) {
   const calls = [];
   let idc = 0;
@@ -22,7 +29,31 @@ function mockSdk(opts = {}) {
     queryRecords: async (e, o) => {
       calls.push({ name: 'queryRecords', args: [e, o] });
       const filter = (o && o.filter) || '';
-      if (e === 'sitemap') return [{ sitemapid: 'sm-1' }];
+      if (e === 'appmodule') {
+        const m = filter.match(/uniquename eq '([^']+)'/);
+        if (m) {
+          const oi = (opts.otherApps || []).findIndex((a) => a.uniquename === m[1]);
+          if (oi >= 0) return [{ appmoduleid: `app-${oi + 2}`, appmoduleidunique: `uv-${oi + 2}`, uniquename: m[1] }];
+          return [{ appmoduleid: APP_ID, appmoduleidunique: SELF_UNIQUE_VALUE, uniquename: m[1] }];
+        }
+        if (opts.failAppList) throw new Error('appmodule list failed');
+        const rows = [{ appmoduleid: APP_ID, appmoduleidunique: SELF_UNIQUE_VALUE, uniquename: opts.selfAppUnique }];
+        (opts.otherApps || []).forEach((a, i) => rows.push({ appmoduleid: `app-${i + 2}`, appmoduleidunique: `uv-${i + 2}`, uniquename: a.uniquename }));
+        return rows;
+      }
+      if (e === 'appmodulecomponent') {
+        const uv = (filter.match(/_appmoduleidunique_value eq (\S+)/) || [])[1];
+        if (uv === SELF_UNIQUE_VALUE) return [{ objectid: SELF_SITEMAP_ID, componenttype: 62 }];
+        const idx = (opts.otherApps || []).findIndex((_, i) => `uv-${i + 2}` === uv);
+        return [{ objectid: `sm-${idx + 2}`, componenttype: 62 }];
+      }
+      if (e === 'sitemap') {
+        if (/sitemapnameunique eq/.test(filter)) return [{ sitemapid: 'sm-1' }];
+        const smId = (filter.match(/sitemapid eq (\S+)/) || [])[1];
+        if (smId === SELF_SITEMAP_ID) return [{ sitemapxml: opts.liveSitemapXml || EMPTY_SITEMAP_XML }];
+        const idx = Number(String(smId).replace('sm-', '')) - 2;
+        return [{ sitemapxml: (opts.otherApps && opts.otherApps[idx] && opts.otherApps[idx].sitemapxml) || '<SiteMap/>' }];
+      }
       if (e === 'solution') return [];
       if (e === 'webresource') { if (/_pagemanifest'/.test(filter)) return opts.pageManifest ? [{ webresourceid: opts.manifestId || 'wr-manifest', content: opts.pageManifest }] : []; return []; }
       if (e === 'systemform') return [];
@@ -60,8 +91,8 @@ function mockGenpageCli(live = []) {
   const uploads = [];
   return {
     uploads,
-    list: async () => live,
-    enumerate: async () => ({ ok: true, pages: live, empty: live.length === 0 }),
+    // EXISTENCE is env-wide (Task 2). `live` seeds the id set a rebuild reuses.
+    enumerateEnv: async () => ({ ok: true, ids: live.map((p) => String(p.pageId).toLowerCase()), pages: live }),
     upload: async (o) => {
       let content = '';
       try { content = fs.readFileSync(o.codeFile, 'utf8'); } catch { /* nothing */ }

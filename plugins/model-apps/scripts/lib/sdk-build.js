@@ -53,6 +53,10 @@ const {
 } = require('./artifact-intent.js');
 const { makeGenpageCli } = require('./genpage-cli.js');
 const { manifestResourceName, buildManifest, serializeManifest, parseManifestBase64, reconcilePageIds } = require('./page-manifest.js');
+// MEMBERSHIP authority (the app's live sitemap) + the cross-app shared-page scan. fetchSitemap is
+// fail-closed & discriminated (C4); fetchAppsForPages is the only way to prove a generative page is not
+// shared, since a genpage has no appmodulecomponent row (Imp5 — grounded live probe).
+const { fetchSitemap, fetchAppsForPages } = require('./sitemap-pages.js');
 // Structural nav oracle — used in the §9 PAGEREF_ scan/parity/resolve pipeline. `extractNavTargets`
 // classifies every generative navigateTo pageId at a REAL call site (never a decoy string / comment GUID).
 const { extractNavTargets, navReferencedKeys, navMalformedRefs, resolvePageRefs, navTargetParity } = require('./pageref-resolver.js');
@@ -468,15 +472,23 @@ async function ensureAppIcon(spec, created, deps) {
 
 // Read the durable page manifest (`<appUnique>_pagemanifest`). Looked up by NAME via queryRecords
 // (getWebResource needs the GUID we don't have yet). content is base64; `text` is the decoded serialized
-// content, used by persist's content-dedup. manifest is null when absent/unreadable (fail-closed parse)
-// so the caller relies on the live enumeration. See design §7.3.
+// content, used by persist's content-dedup. Returns a DISCRIMINATED shape (Imp11 / addenda new-2):
+//   present:false — the web resource is ABSENT (a fresh app, or never authored pages). manifest is null;
+//                   the caller reconciles as "no identity" and creates pages. NOT a corrupt state.
+//   present:true  — the web resource EXISTS with non-empty content. manifest is the parsed payload, OR
+//                   null when the content fails to parse — a CORRUPT manifest. The caller MUST HALT
+//                   fail-closed (`pages-manifest-corrupt`) rather than treat a corrupt payload as "no
+//                   identity → recreate", which would orphan the real (still-live) pages.
+// An empty/whitespace content row is treated as ABSENT (present:false): there is nothing to parse and
+// nothing corrupt, so it must not trigger the corrupt HALT — but we keep `id` so persist reuses the row.
 async function readPageManifest(provision, appUnique) {
   const name = manifestResourceName(appUnique);
   const rows = await provision.queryRecords('webresource', { select: ['webresourceid', 'content'], filter: `name eq '${odataLit(name)}'`, top: 1 });
   const wr = rows && rows[0];
-  if (!wr) return { id: undefined, manifest: null, text: undefined };
-  const text = wr.content ? Buffer.from(wr.content, 'base64').toString('utf8') : undefined;
-  return { id: wr.webresourceid, manifest: parseManifestBase64(wr.content), text };
+  if (!wr) return { id: undefined, manifest: null, text: undefined, present: false };
+  const hasContent = typeof wr.content === 'string' && wr.content.length > 0;
+  const text = hasContent ? Buffer.from(wr.content, 'base64').toString('utf8') : undefined;
+  return { id: wr.webresourceid, manifest: parseManifestBase64(wr.content), text, present: hasContent };
 }
 
 // Create or UPDATE the durable page manifest and (idempotently) re-assert its solution membership EVERY
@@ -1086,6 +1098,13 @@ async function runSdkBuild(spec, opts = {}) {
     }
   }
 
+  // Tracks whether the app-shell phase REUSED an already-deployed app (edit flow / retry) vs created a
+  // fresh one. The pages phase needs this for two reasons: (1) the destructive-removal gate must run for
+  // an EXISTING app even when the new spec has zero pages (an existing app may still reference live pages
+  // the spec dropped — Imp6); (2) for an existing app the sitemap write is DEFERRED entirely to the pages
+  // finalizer (below), so the finalizer must run for an existing app regardless of page subareas.
+  let appWasExisting = false;
+
   // 7. App module + sitemap. When the app has generative-page subareas, create it WITHOUT them
   //    (they can't resolve until pages upload); the pages phase then rewrites the sitemap.
   //    For an app that ALREADY exists (edit flow / retry), its sitemap + components are write-once
@@ -1102,6 +1121,7 @@ async function runSdkBuild(spec, opts = {}) {
     result.created.app = await runner.run('app-shell', `app "${def.name}"`, async () => {
       const existingId = await provision.findArtifact('app', { uniqueName: def.uniqueName });
       if (existingId) {
+        appWasExisting = true;
         await provision.fetchArtifact('app', existingId);
         // Update the nav tree via the generic surface. On push the adapter re-derives the app's
         // ENTITY + DashBoard components from the sitemap, so a sitemap edit's tables and dashboards
@@ -1114,12 +1134,15 @@ async function runSdkBuild(spec, opts = {}) {
         // a NEW chart added to an ALREADY-DEPLOYED app on an edit rebuild is NOT re-pinned as an
         // explicit app component (rebuild the app fresh, or add the chart via a dashboard/sitemap, if
         // it must be an explicit component). See docs/app-builder-roadmap.md.
-        // C2: the pages finalizer is the ONLY existing-app sitemap write for a page-backed app. Pushing
-        // the omitUnbuiltPages def HERE would persist a draft sitemap with every GenPage subarea stripped,
-        // so an enumeration/upload failure before the finalizer would leave the deployed app with broken
-        // nav. Defer the entire sitemap write (update + push + publish) to the finalizer, which pushes the
-        // FULL def (entity + resolved GenPage subareas). With no page subareas, keep today's behavior.
-        if (!appHasPageSubareas(spec)) {
+        // Imp6 (removal-gate safety) + C2 (page-backed deferral): write the existing app's sitemap here
+        // ONLY when the pages phase will NOT run (so there is no removal gate to bypass) AND the spec has
+        // no page subareas (a page-backed sitemap is always resolved in the finalizer). When has('pages')
+        // is true, DEFER entirely: writing the omitUnbuiltPages sitemap now would strip every live GenPage
+        // SubArea BEFORE the pages phase's destructive-removal gate can inspect it, silently orphaning
+        // pages the spec dropped. The finalizer then becomes the sole existing-app sitemap writer and runs
+        // AFTER the removal + shared-page gates. For an app-shell-only run (pages excluded) of a page-less
+        // app, keep today's behavior so a nav/subarea edit still lands (design §7 / Plan-3 C2).
+        if (!has('pages') && !appHasPageSubareas(spec)) {
           provision.updateElement('app', existingId, '/siteMap', def.siteMap);
           requireSuccessfulPush(await provision.pushArtifact('app', existingId), `app ${def.name}`);
           await provision.publishArtifact('app', existingId);
@@ -1145,7 +1168,12 @@ async function runSdkBuild(spec, opts = {}) {
   //     create, crash-safety) → resolve nav pagerefs into run-scoped staging (never mutate canonical source)
   //     → upload-once with UPDATE-identity guard (I7) → sitemap finalize. All under a single-machine advisory
   //     lockfile (courtesy, not a correctness guarantee — convergence spine is the safety guarantee).
-  if (has('pages') && (spec.pages || []).length) {
+  // Run the pages phase when the phase is enabled AND there is page work to do: the spec declares pages,
+  // OR the app already existed (Imp6 — an existing app may still reference live pages the new spec dropped;
+  // the destructive-removal gate below must run even when spec.pages is now empty). A FRESH app with no
+  // spec pages has nothing to build and no pre-existing pages to remove, so it is correctly skipped (this
+  // also avoids spinning up genpage enumeration for every page-less app build).
+  if (has('pages') && ((spec.pages || []).length || appWasExisting)) {
     const genpageCli = opts.genpageCli || makeGenpageCli(opts.env);
     const appUnique = appUniqueName(spec);
     // I1 recovery guard: the app id is only populated by app-shell (this run). If pages runs without it
@@ -1157,20 +1185,80 @@ async function runSdkBuild(spec, opts = {}) {
     const lease = acquireAppPagesLease(wsDir, appUnique);
     const stagingDir = path.join(wsDir, '.pageref-deploy', randomUUID());
     try {
-      // Fail-closed enumeration: a failed/unreadable/incomplete listing must NOT look like "no pages".
-      const enumd = await genpageCli.enumerate({ appId: result.created.app });
-      if (!enumd.ok) throw new BuildHalt(`page enumeration failed — refusing to (re)create pages against an unknown page set: ${enumd.error || 'pac genpage list returned non-zero'}`, { phase: 'pages', code: 'pages-enumeration-failed', recoverable: true });
-      const { id: readId, manifest, text } = await readPageManifest(provision, appUnique);
+      // ── THREE AUTHORITIES (Identity · Existence · Membership) ─────────────────────────────────────
+      // EXISTENCE (env-wide `pac genpage list`, Task 2) drives create-vs-reuse. Fail-closed: a failed
+      // listing must NOT look like "no pages" (that would recreate everything). This is NOT the sitemap —
+      // a page created + manifested but not yet finalized into the sitemap is still in EXISTENCE, so a
+      // crash-after-create converges to REUSE, not a duplicate (C1).
+      const enumd = await genpageCli.enumerateEnv();
+      if (!enumd.ok) throw new BuildHalt(`generative-page existence enumeration failed — refusing to (re)create pages against an unknown page set: ${enumd.error}`, { phase: 'pages', code: 'pages-existence-failed', recoverable: true });
+
+      // MEMBERSHIP (this app's live sitemap, Task 1) — fail-closed & discriminated (C4). Fetched BEFORE
+      // reconcile because reconcile's provenance guard needs the sitemap id set (a spec pageId may bind
+      // only when it is a proven member of THIS app). A page-bearing build has just created or is editing
+      // the app, so the sitemap MUST be readable; ok:false is a real failure, never "empty". A fresh app's
+      // sitemap is validly empty of genpages here → ids:[] (correct). Reused below for the removal gate.
+      const membership = await fetchSitemap(provision, appUnique);
+      if (!membership.ok) throw new BuildHalt(`could not read the app sitemap (${membership.reason}) — refusing to proceed without verifying the app's page set`, { phase: 'pages', code: 'pages-sitemap-read-failed', recoverable: true });
+      const sitemapIds = membership.ids;
+
+      // IDENTITY (the durable manifest, discriminated read). A PRESENT-but-unparseable manifest is CORRUPT
+      // and must HALT fail-closed BEFORE reconcile — reconciling it as "no identity" would recreate the
+      // app's existing pages as orphans. An ABSENT manifest (present:false) is normal for a fresh app.
+      const { id: readId, manifest, text, present } = await readPageManifest(provision, appUnique);
+      if (present && !manifest) throw new BuildHalt(`the page manifest ${manifestResourceName(appUnique)} exists but is corrupt/unparseable — refusing to proceed (would risk recreating existing pages as orphans). Fix or delete the web resource and rebuild.`, { phase: 'pages', code: 'pages-manifest-corrupt', recoverable: false });
       let manifestId = readId;
       let lastManifestContent = text;
-      const { keyToId, ambiguous } = reconcilePageIds(spec.pages, manifest, enumd.pages);
-      if (ambiguous.length) throw new BuildHalt(`ambiguous page name(s) ${ambiguous.map((a) => `"${a.name}"`).join(', ')} — multiple live pages share a display name; refusing to overwrite an arbitrary one. Rename or remove the duplicate in Maker, then rebuild.`, { phase: 'pages', code: 'pages-ambiguous-name', recoverable: false });
+
+      // Reconcile by EXISTENCE (create-vs-reuse) + MEMBERSHIP (spec-pageId provenance, C3). Conflicts (a
+      // spec pageId that is not a GUID, a spec/manifest disagreement where both ids are live, or two keys
+      // → one live id) HALT — refusing to overwrite/misbind an arbitrary page.
+      const { keyToId, conflicts } = reconcilePageIds(spec.pages, manifest, enumd.ids, sitemapIds);
+      if (conflicts.length) throw new BuildHalt(`generative-page identity conflict(s): ${JSON.stringify(conflicts)} — refusing to overwrite/misbind a page. Resolve the duplicate/mismatched id(s) in the spec/manifest and rebuild.`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false });
+
+      // ── Imp6: DESTRUCTIVE-REMOVAL GATE. Runs even when spec.pages is empty, and BEFORE any sitemap write
+      // (the app-shell existing-app write is now deferred to the finalizer below, so nothing has stripped
+      // the live pages yet). The app's CONFIRMED live page set is MEMBERSHIP ∩ EXISTENCE — sitemap ids that
+      // still exist env-wide (a stale SubArea whose page was deleted in Maker is dropped, so it is never
+      // mis-flagged as "removed"). keptIds are the CONFIRMED reconciled ids (keyToId), NOT raw spec pageIds
+      // (an unprovenanced spec pageId is not bound, so it cannot mask a real removal). A live page the spec
+      // no longer keeps would be orphaned by the rebuild → HALT with a report, UNLESS --allow-destructive,
+      // in which case the scope is DETACH-only: the finalizer omits the page's SubArea (no page-record
+      // delete). New (absent) pages aren't in the live set, so they are never flagged.
+      const existenceLower = new Set(enumd.ids.map((id) => String(id).toLowerCase()));
+      const keptIds = new Set(Array.from(keyToId.values()).map((id) => String(id).toLowerCase()));
+      const liveAppIds = sitemapIds.filter((id) => existenceLower.has(String(id).toLowerCase()));
+      const removedIds = liveAppIds.filter((id) => !keptIds.has(String(id).toLowerCase()));
+      if (removedIds.length && opts.allowDestructive !== true) throw new BuildHalt(`refusing to orphan ${removedIds.length} generative page(s) the spec removed but the app still references: ${removedIds.join(', ')}. Re-run with --allow-destructive to detach them (the page records are LEFT deployed; only the app's nav SubAreas are removed), or restore them to the spec.`, { phase: 'pages', code: 'pages-removed', recoverable: false });
+
+      // ── Imp5: SHARED-PAGE DETECTION (report-only, FAIL-CLOSED). A page we are about to UPDATE (a reused
+      // id in keyToId) that ALSO belongs to ANOTHER app's sitemap is shared (`pac genpage add`) — updating
+      // its content would mutate a page another app uses. GROUNDED (live probe): a genpage has NO
+      // appmodulecomponent row, so the ONLY membership signal is the sitemap XML; there is no direct
+      // genpage→apps join, so we scan every OTHER app's sitemap (fetchAppsForPages; `excludeAppUnique` self-
+      // skips, so a single-app env reads zero other sitemaps). FAIL-CLOSED: an env-scan failure OR any app
+      // whose sitemap we cannot read HALTs — an unreadable app could be the one that shares the page, so we
+      // cannot prove non-sharing. On positive detection (id in ≥1 other app) → HALT (never auto-modify);
+      // --allow-destructive does NOT authorize cross-app mutation (this HALT has no escape by design).
+      const updateIds = Array.from(keyToId.values());
+      if (updateIds.length) {
+        const scan = await fetchAppsForPages(provision, updateIds, { excludeAppUnique: appUnique });
+        if (!scan.ok) throw new BuildHalt(`could not scan the environment for pages shared across apps (${scan.error}) — refusing to UPDATE a page without verifying it is not shared. Re-run to retry.`, { phase: 'pages', code: 'pages-shared-check-failed', recoverable: true });
+        if (scan.unreadable.length) throw new BuildHalt(`cannot verify pages are not shared across apps — ${scan.unreadable.length} app(s) had an unreadable sitemap (${scan.unreadable.join(', ')}); one of them could share a page we are about to UPDATE. Fix or remove the unreadable app(s), then rebuild.`, { phase: 'pages', code: 'pages-shared-check-failed', recoverable: true });
+        if (scan.byId.size) {
+          const shared = Array.from(scan.byId, ([id, apps]) => `${id} (also in ${apps.join(', ')})`);
+          throw new BuildHalt(`generative page(s) shared across apps: ${shared.join('; ')} — refusing to UPDATE a page another app's sitemap references (a rebuild would mutate shared content). Detach it in Maker, or give this app its own page.`, { phase: 'pages', code: 'pages-shared-across-apps', recoverable: false });
+        }
+      }
+
       const persistNow = async () => { const pr = await persistPageManifest(provision, spec, keyToId, sol, appUnique, manifestId, lastManifestContent); manifestId = pr.id; lastManifestContent = pr.content; };
 
       const keyOf = (p) => p.key || p.name;
       const canonicalPath = (p) => path.resolve(opts.appDir || '.', normalizePageSource(p).codeFile);
       const implemented = [];
-      for (const p of spec.pages) {
+      // `spec.pages || []` — the phase can run with no spec pages (a removal-only / detach run reaches here
+      // for the removal gate + sitemap finalize), so never assume spec.pages is an array.
+      for (const p of spec.pages || []) {
         const src = normalizePageSource(p);
         if (src && src.kind === 'tsx' && src.codeFile) implemented.push(p);
         else runner.skip('pages', `page "${p.name}" (no tsx source)`);
@@ -1250,10 +1338,20 @@ async function runSdkBuild(spec, opts = {}) {
         });
       }
 
-      // (5) Persist the FINAL manifest (deduped no-op after per-create persists), then finalize the sitemap
-      //     (the true commit point — only after all resolved uploads succeed).
-      await runner.run('pages', `page manifest ${manifestResourceName(appUnique)}`, async () => { await persistNow(); return manifestResourceName(appUnique); });
-      if (appHasPageSubareas(spec)) {
+      // (5) Persist the FINAL manifest (deduped no-op after per-create persists). Skipped for a page-less
+      //     (removal-only / detach) run — there is no page identity to record, and writing an empty manifest
+      //     would needlessly create/update the web resource. The scan/create/upload steps above are already
+      //     no-ops when spec.pages is empty (they iterate over spec.pages / implemented).
+      if ((spec.pages || []).length) {
+        await runner.run('pages', `page manifest ${manifestResourceName(appUnique)}`, async () => { await persistNow(); return manifestResourceName(appUnique); });
+      }
+      // (6) Finalize the sitemap (the true commit point — only after all resolved uploads succeed). For a
+      //     page-backed app this writes the resolved GenPage SubAreas. For an EXISTING app the app-shell
+      //     write was deferred, so this is the SOLE existing-app sitemap write — including the intentionally
+      //     page-less sitemap on an authorized removal/detach (result.created.pages is empty, so appDef emits
+      //     no GenPage SubAreas). A FRESH page-less app already had its sitemap written by the app-shell
+      //     create path, so it needs no finalize here.
+      if (appHasPageSubareas(spec) || appWasExisting) {
         await runner.run('pages', 'finalize sitemap (genpage subareas)', async () => {
           await provision.fetchArtifact('app', result.created.app);
           const full = appDef(spec, result.created);

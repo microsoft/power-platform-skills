@@ -6,6 +6,16 @@ const os = require('node:os');
 const path = require('node:path');
 const { runSdkBuild, planFor, resolvePhases, compileFormIntent, formFieldLogicals, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, dashboardTileOpts, PHASES, appUniqueName } = require('../lib/sdk-build.js');
 
+// Real GUIDs (Imp9) for the three-authority sitemap mock. SELF_* identify THIS app's appmodule + sitemap
+// so fetchSitemap(appUnique) resolves to opts.liveSitemapXml; otherApps get synthetic ids. Ids that flow
+// through the GenPageId/GUID extractors in a test MUST be real 36-char GUIDs.
+const APP_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
+const SELF_UNIQUE_VALUE = 'c0ffee00-0000-4000-8000-00000000dddd';
+const SELF_SITEMAP_ID = '5111e0f2-0000-4000-8000-0000000000aa';
+// A valid, page-less sitemap (passes sitemap-pages.isMalformed) — the default membership for a build that
+// does not seed opts.liveSitemapXml.
+const EMPTY_SITEMAP_XML = '<SiteMap><Area><Group></Group></Area></SiteMap>';
+
 // Stage a fresh temp appDir with a minimal valid .tsx for each IMPLEMENTED page. Task 8's pages-phase
 // scan READS canonical source from disk, so any pages-phase test must have real files (not a bare
 // 'o.tsx' string). Optional `bodyByCodeFile` overrides a page's source (e.g. to inject navigation).
@@ -78,7 +88,38 @@ function mockSdk(opts = {}) {
         if (/_pagemanifest'/.test(filter)) return opts.pageManifest ? [{ webresourceid: opts.manifestId || 'wr-manifest', content: opts.pageManifest }] : [];
         return opts.existingWebResource ? [{ webresourceid: 'wr-existing' }] : [];
       }
-      if (e === 'sitemap') return [{ sitemapid: 'sm-1' }];
+      // appmodule / appmodulecomponent / sitemap answer the fetchSitemap + fetchAppsForPages reads (Imp9).
+      // FILTERED appmodule (fetchSitemap for one app) echoes a resolvable row for ANY uniquename — self
+      // resolves to SELF_SITEMAP_ID (→ opts.liveSitemapXml); a named otherApp resolves to its own sitemap.
+      // UNFILTERED appmodule (fetchAppsForPages) lists self + otherApps; self is skipped by excludeAppUnique
+      // (or, when opts.selfAppUnique is unset, by fetchAppsForPages's own falsy-uniquename guard).
+      if (e === 'appmodule') {
+        const m = filter.match(/uniquename eq '([^']+)'/);
+        if (m) {
+          const oi = (opts.otherApps || []).findIndex((a) => a.uniquename === m[1]);
+          if (oi >= 0) return [{ appmoduleid: `app-${oi + 2}`, appmoduleidunique: `uv-${oi + 2}`, uniquename: m[1] }];
+          return [{ appmoduleid: APP_ID, appmoduleidunique: SELF_UNIQUE_VALUE, uniquename: m[1] }];
+        }
+        if (opts.failAppList) throw new Error('appmodule list failed'); // shared-check fail-closed
+        const rows = [{ appmoduleid: APP_ID, appmoduleidunique: SELF_UNIQUE_VALUE, uniquename: opts.selfAppUnique }];
+        (opts.otherApps || []).forEach((a, i) => rows.push({ appmoduleid: `app-${i + 2}`, appmoduleidunique: `uv-${i + 2}`, uniquename: a.uniquename }));
+        return rows;
+      }
+      if (e === 'appmodulecomponent') {
+        if (opts.failSitemap) return []; // membership read failure → sitemap-component-not-found
+        const uv = (filter.match(/_appmoduleidunique_value eq (\S+)/) || [])[1];
+        if (uv === SELF_UNIQUE_VALUE) return [{ objectid: SELF_SITEMAP_ID, componenttype: 62 }];
+        const idx = (opts.otherApps || []).findIndex((_, i) => `uv-${i + 2}` === uv);
+        return [{ objectid: `sm-${idx + 2}`, componenttype: 62 }];
+      }
+      if (e === 'sitemap') {
+        // ensureSitemapInSolution queries by sitemapnameunique → sitemapid; fetchSitemap queries by sitemapid → sitemapxml.
+        if (/sitemapnameunique eq/.test(filter)) return [{ sitemapid: 'sm-1' }];
+        const smId = (filter.match(/sitemapid eq (\S+)/) || [])[1];
+        if (smId === SELF_SITEMAP_ID) return [{ sitemapxml: opts.liveSitemapXml || EMPTY_SITEMAP_XML }];
+        const idx = Number(String(smId).replace('sm-', '')) - 2;
+        return [{ sitemapxml: (opts.otherApps && opts.otherApps[idx] && opts.otherApps[idx].sitemapxml) || '<SiteMap/>' }];
+      }
       // Main forms for an entity: our reconciled form + a blank stock "Information" form to deactivate.
       if (e === 'systemform') return opts.artifactsExist ? [{ formid: 'form-existing', isdefault: true }, { formid: 'stock-info', isdefault: false }] : [];
       if (e === 'savedquery') {
@@ -1001,7 +1042,7 @@ test('pages phase uploads each page (no --add-to-sitemap) then finalizes the sit
   try {
     const { sdk, calls } = mockSdk();
     const uploads = [];
-    const genpageCli = { list: async () => [], enumerate: async () => ({ ok: true, pages: [], empty: true }), upload: async (o) => { uploads.push(o); return { pageId: 'gp-1' }; } };
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), upload: async (o) => { uploads.push(o); return { pageId: 'gp-1' }; } };
     await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
     assert.strictEqual(uploads.length, 1, 'one page uploaded');
     const setDef = find(calls, 'updateElement').find((c) => c.args[2] === '/siteMap');
@@ -1016,24 +1057,32 @@ test('app-shell creates the app WITHOUT unbuilt page subareas (app_early orderin
   const appDir = stagePages(spec.pages);
   try {
     const { sdk, calls } = mockSdk();
-    const genpageCli = { list: async () => [], enumerate: async () => ({ ok: true, pages: [], empty: true }), upload: async () => ({ pageId: 'gp-1' }) };
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), upload: async () => ({ pageId: 'gp-1' }) };
     await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
     const appCreate = find(calls, 'createArtifact').find((c) => c.args[0] === 'app');
     assert.ok(!appCreate.args[1].siteMap.areas[0].groups[0].subAreas.some((s) => s.type === 'GenPage'), 'no GenPage subarea at app-create time');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('pages phase updates an existing page in place (matched by name -> --page-id)', async () => {
+test('pages phase reuses an existing page by MANIFEST+EXISTENCE (not by name) — UPDATE in place, no duplicate', async () => {
   const spec = makeSpec();
-  spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }];
+  spec.schemaVersion = 2;
+  spec.pages = [{ key: 'overview', name: 'Overview', source: { kind: 'tsx', codeFile: 'o.tsx' } }];
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'overview', title: 'Overview' });
+  const appUnique = appUniqueName(spec);
   const appDir = stagePages(spec.pages);
   try {
-    const { sdk } = mockSdk();
+    const REUSE = '9a1c2b3d-4e5f-4061-8072-0839455a6b7c';
+    // The manifest maps overview -> REUSE; REUSE exists env-wide AND is a member of THIS app's sitemap →
+    // reconcile reuses it (an UPDATE). Display names are no longer an identity source (the old name match).
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: REUSE }] }), 'utf8').toString('base64');
+    const sm = `<SiteMap><Area><Group><SubArea GenPageId="${REUSE}" Title="Overview"/></Group></Area></SiteMap>`;
+    const { sdk } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sm });
     const uploads = [];
-    const live = [{ pageId: 'gp-existing', name: 'Overview' }];
-    const genpageCli = { list: async () => live, enumerate: async () => ({ ok: true, pages: live }), upload: async (o) => { uploads.push(o); return { pageId: 'gp-existing' }; } };
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [REUSE], pages: [{ pageId: REUSE, name: 'Overview' }] }), upload: async (o) => { uploads.push(o); return { pageId: o.pageId || REUSE }; } };
     await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
-    assert.strictEqual(uploads[0].pageId, 'gp-existing', 'existing page updated via --page-id, not duplicated');
+    assert.strictEqual(uploads.length, 1, 'one upload');
+    assert.strictEqual(uploads[0].pageId, REUSE, 'existing page UPDATEd via its manifest id, not duplicated');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
@@ -1442,7 +1491,7 @@ test('pages phase (v2, page key != name): result.created.pages is keyed by KEY s
   const appDir = stagePages(spec.pages);
   try {
     const { sdk, calls } = mockSdk();
-    const genpageCli = { list: async () => [], enumerate: async () => ({ ok: true, pages: [], empty: true }), upload: async () => ({ pageId: 'gp-1' }) };
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), upload: async () => ({ pageId: 'gp-1' }) };
     await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
     const setDef = find(calls, 'updateElement').find((c) => c.args[2] === '/siteMap');
     assert.ok(setDef.args[3].areas[0].groups[0].subAreas.some((s) => s.type === 'GenPage' && s.genPageId === 'gp-1'), 'GenPage subarea resolved by KEY (was unresolved when keyed by name)');
@@ -1455,7 +1504,7 @@ test('pages phase persists the manifest on a SINGLE-page first build (one create
   const appDir = stagePages(spec.pages);
   try {
     const { sdk, calls } = mockSdk();
-    const genpageCli = { list: async () => [], enumerate: async () => ({ ok: true, pages: [], empty: true }), upload: async () => ({ pageId: 'gp-1' }) };
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), upload: async () => ({ pageId: 'gp-1' }) };
     await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
     const created = find(calls, 'createWebResource').map((c) => c.args[0]).find((o) => /_pagemanifest$/.test(o.name));
     assert.strictEqual(created.type, 'js');
@@ -1471,7 +1520,7 @@ test('pages phase persists the manifest per-create on a MULTI-page first build (
   const appDir = stagePages(spec.pages);
   try {
     const { sdk, calls } = mockSdk();
-    const genpageCli = { list: async () => [], enumerate: async () => ({ ok: true, pages: [], empty: true }), upload: async (o) => ({ pageId: o.name === 'Detail' ? 'gp-d' : 'gp-o' }) };
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), upload: async (o) => ({ pageId: o.name === 'Detail' ? 'gp-d' : 'gp-o' }) };
     await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
     assert.strictEqual(find(calls, 'createWebResource').filter((c) => /_pagemanifest$/.test(c.args[0].name)).length, 1, 'manifest created once (first mint)');
     assert.strictEqual(find(calls, 'updateWebResource').length, 1, 'the second mint UPDATES the manifest in place (immediate persist-after-each-create)');
@@ -1480,13 +1529,17 @@ test('pages phase persists the manifest per-create on a MULTI-page first build (
 
 test('pages phase updates the manifest IN PLACE on a rebuild whose page ids changed (no dup create)', async () => {
   const spec = makeSpec();
-  spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }, { name: 'Detail', codeFile: 'd.tsx' }];
+  spec.schemaVersion = 2;
+  spec.pages = [{ key: 'overview', name: 'Overview', source: { kind: 'tsx', codeFile: 'o.tsx' } }, { key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'd.tsx' } }];
+  const appUnique = appUniqueName(spec);
   const appDir = stagePages(spec.pages);
   try {
-    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'Overview', name: 'Overview', pageId: 'gp-o' }] }), 'utf8').toString('base64');
-    const { sdk, calls } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest' });
-    const live = [{ pageId: 'gp-o', name: 'Overview' }];
-    const genpageCli = { list: async () => live, enumerate: async () => ({ ok: true, pages: live }), upload: async (o) => ({ pageId: o.pageId || 'gp-d' }) };
+    const OV = 'a11c9d20-0000-4000-8000-0000000000a1';
+    // overview is manifested + live (env + this app's sitemap) → UPDATE; detail is new (absent → CREATE).
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: OV }] }), 'utf8').toString('base64');
+    const sm = `<SiteMap><Area><Group><SubArea GenPageId="${OV}"/></Group></Area></SiteMap>`;
+    const { sdk, calls } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sm });
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [OV], pages: [{ pageId: OV, name: 'Overview' }] }), upload: async (o) => ({ pageId: o.pageId || 'a22c9d20-0000-4000-8000-0000000000d2' }) };
     await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
     assert.ok(!find(calls, 'createWebResource').some((c) => /_pagemanifest$/.test(c.args[0].name)), 'manifest not re-created on rebuild');
     assert.ok(find(calls, 'updateWebResource').some((c) => c.args[0] === 'wr-manifest'), 'manifest updated in place');
@@ -1494,34 +1547,18 @@ test('pages phase updates the manifest IN PLACE on a rebuild whose page ids chan
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('pages phase HALTS fail-closed when enumeration fails — never treats it as empty, uploads nothing', async () => {
+test('pages phase HALTS fail-closed when EXISTENCE enumeration fails — never treats it as empty, uploads nothing', async () => {
   const spec = makeSpec();
   spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }];
   const appDir = stagePages(spec.pages);
   try {
     const { sdk } = mockSdk();
     let uploaded = 0;
-    const genpageCli = { list: async () => [], enumerate: async () => ({ ok: false, pages: [], error: 'auth expired' }), upload: async () => { uploaded += 1; return { pageId: 'gp-1' }; } };
+    // enumerateEnv is env-wide EXISTENCE (Task 2). A failed listing must HALT — never collapse to "no pages".
+    const genpageCli = { enumerateEnv: async () => ({ ok: false, ids: [], error: 'auth expired' }), upload: async () => { uploaded += 1; return { pageId: 'gp-1' }; } };
     await assert.rejects(
       runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
-      (e) => e && e.phase === 'pages' && e.code === 'pages-enumeration-failed'
-    );
-    assert.strictEqual(uploaded, 0);
-  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
-});
-
-test('pages phase HALTS on ambiguous duplicate live names before any upload (C5 wired)', async () => {
-  const spec = makeSpec();
-  spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }];
-  const appDir = stagePages(spec.pages);
-  try {
-    const { sdk } = mockSdk();
-    let uploaded = 0;
-    const dup = [{ pageId: 'x1', name: 'Overview' }, { pageId: 'x2', name: 'Overview' }];
-    const genpageCli = { list: async () => dup, enumerate: async () => ({ ok: true, pages: dup }), upload: async () => { uploaded += 1; return { pageId: 'x1' }; } };
-    await assert.rejects(
-      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
-      (e) => e && e.phase === 'pages' && e.code === 'pages-ambiguous-name'
+      (e) => e && e.phase === 'pages' && e.code === 'pages-existence-failed'
     );
     assert.strictEqual(uploaded, 0);
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
@@ -1533,7 +1570,7 @@ test('pages phase HALTS when the app id is absent (I1 recovery guard — do NOT 
   const appDir = stagePages(spec.pages);
   try {
     const { sdk } = mockSdk();
-    const genpageCli = { list: async () => [], enumerate: async () => ({ ok: true, pages: [], empty: true }), upload: async () => ({ pageId: 'gp-1' }) };
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), upload: async () => ({ pageId: 'gp-1' }) };
     await assert.rejects(
       runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['pages'] }),
       (e) => e && e.phase === 'pages' && e.code === 'pages-requires-app'
@@ -1561,10 +1598,10 @@ test('C2: an EXISTING page-backed app does NOT push its sitemap in app-shell —
   const appDir = stagePages(spec.pages);
   try {
     const { sdk, calls } = mockSdk({ artifactsExist: true, existingSitemap: PRIOR_SITEMAP });
-    const genpageCli = { list: async () => [], enumerate: async () => ({ ok: false, pages: [], error: 'boom' }), upload: async () => ({ pageId: 'gp-1' }) };
+    const genpageCli = { enumerateEnv: async () => ({ ok: false, ids: [], error: 'boom' }), upload: async () => ({ pageId: 'gp-1' }) };
     await assert.rejects(
       runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
-      (e) => e && e.code === 'pages-enumeration-failed'
+      (e) => e && e.code === 'pages-existence-failed'
     );
     assert.ok(!find(calls, 'updateElement').some((c) => c.args[2] === '/siteMap'), 'NO sitemap write in app-shell (deferred) and the finalizer was never reached');
     const deployed = await sdk.fetchArtifact('app', 'app-existing');
@@ -1580,7 +1617,7 @@ test('C2: an EXISTING page-backed app writes its sitemap ONCE, in the finalizer,
   const appDir = stagePages(spec.pages);
   try {
     const { sdk, calls } = mockSdk({ artifactsExist: true, existingSitemap: PRIOR_SITEMAP });
-    const genpageCli = { list: async () => [], enumerate: async () => ({ ok: true, pages: [], empty: true }), upload: async () => ({ pageId: 'gp-1' }) };
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), upload: async () => ({ pageId: 'gp-1' }) };
     await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
     const sitemapWrites = find(calls, 'updateElement').filter((c) => c.args[2] === '/siteMap');
     assert.strictEqual(sitemapWrites.length, 1, 'exactly one sitemap write — the finalizer');
@@ -1593,4 +1630,214 @@ test('C2: an EXISTING app with NO page subareas still pushes its sitemap in app-
   const { sdk, calls } = mockSdk({ artifactsExist: true, existingSitemap: PRIOR_SITEMAP });
   await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir: process.cwd(), phases: ['solution', 'data-model', 'app-shell'] });
   assert.ok(find(calls, 'updateElement').some((c) => c.args[2] === '/siteMap'), 'a no-page existing app keeps pushing its sitemap in app-shell');
+});
+
+// ── Plan 5 three-authority safety gates: existence-driven crash-safety (C1), discriminated reads,
+//    destructive-removal (Imp6) and cross-app shared-page (Imp5) HALTs. Real GUIDs (Imp9). ─────────────
+const GP_O = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
+const GP_D = '5c0a4889-45fd-46ea-91a8-ff876914d644';
+const overviewSpec = () => {
+  const spec = makeSpec();
+  spec.schemaVersion = 2;
+  spec.pages = [{ key: 'overview', name: 'Overview', source: { kind: 'tsx', codeFile: 'o.tsx' } }];
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'overview', title: 'Overview' });
+  return spec;
+};
+
+test('pages: crash-after-create convergence — a manifest id in EXISTENCE but NOT in the sitemap is UPDATED, never re-created (C1)', async () => {
+  const spec = overviewSpec();
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
+    // EXISTENCE has GP_O (created + manifested); the SITEMAP is empty (the finalizer died before the subarea).
+    const { sdk } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: EMPTY_SITEMAP_XML });
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }), upload: async (o) => { uploads.push(o); return { pageId: o.pageId || GP_O }; } };
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+    assert.strictEqual(uploads.length, 1, 'exactly one upload');
+    assert.strictEqual(uploads[0].pageId, GP_O, 'UPDATE in place by the existing id, never a duplicate CREATE');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('pages: a MEMBERSHIP (sitemap) read failure HALTS pages-sitemap-read-failed, uploads nothing', async () => {
+  const spec = overviewSpec();
+  const appDir = stagePages(spec.pages);
+  try {
+    const { sdk } = mockSdk({ failSitemap: true }); // fetchSitemap returns ok:false (component not found)
+    let uploaded = 0;
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), upload: async () => { uploaded += 1; return { pageId: GP_O }; } };
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+      (e) => e && e.phase === 'pages' && e.code === 'pages-sitemap-read-failed'
+    );
+    assert.strictEqual(uploaded, 0);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('pages: a PRESENT but corrupt page manifest HALTS pages-manifest-corrupt (never reconciles as no-identity)', async () => {
+  const spec = overviewSpec();
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const garbage = Buffer.from('this is not manifest json { pages', 'utf8').toString('base64'); // present + unparseable
+    const { sdk } = mockSdk({ pageManifest: garbage, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: EMPTY_SITEMAP_XML });
+    let uploaded = 0;
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }), upload: async () => { uploaded += 1; return { pageId: GP_O }; } };
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+      (e) => e && e.phase === 'pages' && e.code === 'pages-manifest-corrupt'
+    );
+    assert.strictEqual(uploaded, 0, 'a corrupt manifest halts before any upload — does not recreate existing pages');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('pages: a spec pageId that disagrees with a live manifest id HALTS pages-identity-conflict', async () => {
+  const spec = overviewSpec();
+  const GP_A = '7f1e2d3c-4b5a-4968-8071-2c3d4e5f6a7b';
+  spec.pages[0].pageId = GP_A; // spec claims GP_A; the manifest maps overview -> GP_O; both live, they DISAGREE
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
+    const { sdk } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: EMPTY_SITEMAP_XML });
+    let uploaded = 0;
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O, GP_A], pages: [{ pageId: GP_O, name: 'Overview' }, { pageId: GP_A, name: 'Other' }] }), upload: async () => { uploaded += 1; return { pageId: GP_A }; } };
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+      (e) => e && e.phase === 'pages' && e.code === 'pages-identity-conflict'
+    );
+    assert.strictEqual(uploaded, 0);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('pages: a live page the spec dropped HALTS pages-removed with ZERO sitemap writes; --allow-destructive detaches (no delete)', async () => {
+  const spec = overviewSpec(); // keeps overview, DROPS order-detail (still live in manifest + sitemap)
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }, { key: 'order-detail', name: 'Order Detail', pageId: GP_D }] }), 'utf8').toString('base64');
+    const sm = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}"/><SubArea GenPageId="${GP_D}"/></Group></Area></SiteMap>`;
+    const mkOpts = () => ({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sm });
+    const cli = () => ({ enumerateEnv: async () => ({ ok: true, ids: [GP_O, GP_D], pages: [{ pageId: GP_O, name: 'Overview' }, { pageId: GP_D, name: 'Order Detail' }] }), upload: async (o) => ({ pageId: o.pageId || GP_O }) });
+    const m1 = mockSdk(mkOpts());
+    await assert.rejects(
+      runSdkBuild(spec, { sdk: m1.sdk, apply: true, env: 'https://x', appDir, genpageCli: cli(), phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+      (e) => e && e.phase === 'pages' && e.code === 'pages-removed'
+    );
+    assert.ok(!find(m1.calls, 'updateElement').some((c) => c.args[2] === '/siteMap'), 'ZERO sitemap writes on the removal HALT (no strip before the gate)');
+    // --allow-destructive: the build proceeds and DETACHES order-detail (finalize omits its SubArea); no delete.
+    const m2 = mockSdk(mkOpts());
+    await runSdkBuild(spec, { sdk: m2.sdk, apply: true, allowDestructive: true, env: 'https://x', appDir, genpageCli: cli(), phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+    const finalize = find(m2.calls, 'updateElement').find((c) => c.args[2] === '/siteMap');
+    assert.ok(finalize, 'finalize wrote the detached sitemap');
+    const genIds = (finalize.args[3].areas || []).flatMap((a) => (a.groups || []).flatMap((g) => (g.subAreas || []).map((s) => s.genPageId)));
+    assert.ok(!genIds.includes(GP_D), 'the dropped page GP_D is detached from the sitemap');
+    assert.ok(!m2.calls.some((c) => /delete/i.test(c.name)), 'detach-only: no page-record delete call');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('pages: spec.pages=[] on an EXISTING app that still has live pages HALTS pages-removed (empty pages does NOT bypass the gate)', async () => {
+  const spec = makeSpec(); spec.schemaVersion = 2; // no spec.pages, no page subareas
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages([]);
+  try {
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
+    const sm = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}"/></Group></Area></SiteMap>`;
+    const { sdk, calls } = mockSdk({ artifactsExist: true, existingSitemap: PRIOR_SITEMAP, pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sm });
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }), upload: async (o) => ({ pageId: o.pageId || GP_O }) };
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+      (e) => e && e.phase === 'pages' && e.code === 'pages-removed'
+    );
+    assert.ok(!find(calls, 'updateElement').some((c) => c.args[2] === '/siteMap'), 'no sitemap write before the removal gate (existing-app write deferred)');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('pages: spec.pages=[] with --allow-destructive DETACHES all live pages (page-less sitemap via finalizer, no throw, no delete)', async () => {
+  const spec = makeSpec(); spec.schemaVersion = 2; // no spec.pages, no page subareas
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages([]);
+  try {
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
+    const sm = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}"/></Group></Area></SiteMap>`;
+    const { sdk, calls } = mockSdk({ artifactsExist: true, existingSitemap: PRIOR_SITEMAP, pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sm });
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }), upload: async (o) => ({ pageId: o.pageId || GP_O }) };
+    await runSdkBuild(spec, { sdk, apply: true, allowDestructive: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+    const finalize = find(calls, 'updateElement').find((c) => c.args[2] === '/siteMap');
+    assert.ok(finalize, 'the page-less sitemap was finalized (existing-app write via the finalizer)');
+    const genIds = (finalize.args[3].areas || []).flatMap((a) => (a.groups || []).flatMap((g) => (g.subAreas || []).map((s) => s.genPageId).filter(Boolean)));
+    assert.strictEqual(genIds.length, 0, 'all GenPage subareas detached — no genpages remain in the sitemap');
+    assert.ok(!calls.some((c) => /delete/i.test(c.name)), 'detach-only: no page-record delete');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('pages: a page shared across TWO app sitemaps HALTS pages-shared-across-apps (Imp5) — --allow-destructive does NOT bypass', async () => {
+  const spec = overviewSpec();
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
+    const sitemapWithO = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}" Title="Overview"/></Group></Area></SiteMap>`;
+    // THIS app reuses GP_O; contoso_secondapp's sitemap ALSO references GP_O → shared → HALT (never auto-modify).
+    const mk = () => mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sitemapWithO, otherApps: [{ uniquename: 'contoso_secondapp', sitemapxml: sitemapWithO }] });
+    const cli = () => ({ enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }), upload: async (o) => ({ pageId: o.pageId || GP_O }) });
+    await assert.rejects(
+      runSdkBuild(spec, { sdk: mk().sdk, apply: true, env: 'https://x', appDir, genpageCli: cli(), phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+      (e) => e && e.phase === 'pages' && e.code === 'pages-shared-across-apps'
+    );
+    // The shared HALT has no escape by design — --allow-destructive must NOT authorize cross-app mutation.
+    await assert.rejects(
+      runSdkBuild(spec, { sdk: mk().sdk, apply: true, allowDestructive: true, env: 'https://x', appDir, genpageCli: cli(), phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+      (e) => e && e.code === 'pages-shared-across-apps'
+    );
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('pages: an UNREADABLE other-app sitemap HALTS pages-shared-check-failed (fail-closed — cannot prove non-sharing)', async () => {
+  const spec = overviewSpec();
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
+    // The other app's sitemap XML is truncated (fails isMalformed) → fetchSitemap ok:false → unreadable.
+    const { sdk } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: EMPTY_SITEMAP_XML, otherApps: [{ uniquename: 'contoso_badapp', sitemapxml: '<SiteMap><Area' }] });
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }), upload: async (o) => ({ pageId: o.pageId || GP_O }) };
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+      (e) => e && e.phase === 'pages' && e.code === 'pages-shared-check-failed'
+    );
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('pages: an env app-list failure HALTS pages-shared-check-failed (fail-closed on the shared scan)', async () => {
+  const spec = overviewSpec();
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
+    // failAppList: the UNFILTERED appmodule list (fetchAppsForPages) throws; the FILTERED read (membership) still works.
+    const { sdk } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: EMPTY_SITEMAP_XML, failAppList: true });
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }), upload: async (o) => ({ pageId: o.pageId || GP_O }) };
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+      (e) => e && e.phase === 'pages' && e.code === 'pages-shared-check-failed'
+    );
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('pages: a single-app env passes the shared-page check (reads no other sitemaps) and reuses the page', async () => {
+  const spec = overviewSpec();
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
+    const sm = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}"/></Group></Area></SiteMap>`;
+    const { sdk } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sm }); // no otherApps
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }), upload: async (o) => { uploads.push(o); return { pageId: o.pageId || GP_O }; } };
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+    assert.strictEqual(uploads.length, 1);
+    assert.strictEqual(uploads[0].pageId, GP_O, 'reused (UPDATE); a single-app env has no other app to share with');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
