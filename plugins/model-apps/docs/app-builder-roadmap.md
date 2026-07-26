@@ -100,6 +100,7 @@ are in [`architecture.md`](architecture.md).
 - 🔲 **Workspace reuse** — load `.maker-workspace/` metadata to skip re-discovery on iterative runs.
 - 🔲 **Worked samples** — a Form-JS spec (web resource + onchange handler) and a dashboard spec in `samples/`.
 - 🔲 **Refresh `authoring-flow.md`** Level (a) column-type list (still shows the pre-Tier-1 short list).
+- 🔲 **KNOWN ISSUE — /genpage vs /app-builder subagent-interaction contradiction** (design review F10): `/app-builder`'s SKILL says a `Task` subagent is headless (`AskUserQuestion`/plan-mode do not reach the user from inside one), while `/genpage` Phase 1 **mandates** `AskUserQuestion` + plan-mode *inside* the `genpage-planner` subagent (`skills/genpage/SKILL.md:92-124`, `agents/genpage-planner.md`). One is wrong about the host runtime. Portable fix: run interactive steps in the main loop and use the planner subagent only for headless prereq/auth/detection that returns data — align `/genpage` to `/app-builder`. Needs host-behavior confirmation before restructuring.
 
 ---
 
