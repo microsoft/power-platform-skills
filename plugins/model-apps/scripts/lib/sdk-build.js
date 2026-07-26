@@ -316,7 +316,7 @@ async function subgridViewId(provision, createdViews, spec, sg, childLogical) {
   if (cv && createdViews[cv.name]) return createdViews[cv.name];
   const rows = await provision.queryRecords('savedquery', {
     select: ['savedqueryid', 'isdefault'],
-    filter: `returnedtypecode eq '${childLogical}' and querytype eq 0`,
+    filter: `returnedtypecode eq '${odataLit(childLogical)}' and querytype eq 0`,
     top: 20,
   });
   const def = (rows || []).find((r) => r.isdefault) || (rows || [])[0];
@@ -664,7 +664,7 @@ async function runSdkBuild(spec, opts = {}) {
   //     in the solution). Built before forms so a form event handler can bind its library.
   if (has('web-resources')) {
     for (const wr of spec.webResources || []) {
-      const existing = await provision.queryRecords('webresource', { select: ['webresourceid'], filter: `name eq '${wr.name}'`, top: 1 });
+      const existing = await provision.queryRecords('webresource', { select: ['webresourceid'], filter: `name eq '${odataLit(wr.name)}'`, top: 1 });
       if (existing && existing[0] && existing[0].webresourceid) {
         result.created.webResources[wr.name] = existing[0].webresourceid;
         runner.skip('web-resources', `web resource ${wr.name} (exists — reuse)`);

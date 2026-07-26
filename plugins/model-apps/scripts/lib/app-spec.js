@@ -3,6 +3,17 @@
 
 const path = require('node:path');
 
+// URL scheme allowlist for spec-supplied URLs that the built app will RENDER (iframe dashboard tiles,
+// sitemap URL subareas). Only http(s) is allowed — a `javascript:`, `data:`, `vbscript:`, or `file:`
+// URL in an app the maker ships would be a script-injection / local-file-exfil vector for whoever opens
+// the app. Anything unparseable or non-http(s) is rejected by the validator.
+function isSafeHttpUrl(u) {
+  if (typeof u !== 'string' || !u) return false;
+  let parsed;
+  try { parsed = new URL(u); } catch { return false; }
+  return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+}
+
 // App Spec column type -> { dv: Dataverse attribute type name }. (The SDK build engine
 // maps App Spec types to the SDK's own ColumnType in lib/sdk-build.js.)
 const TYPE_MAP = {
@@ -455,6 +466,7 @@ function validateAppSpec(spec, opts = {}) {
         }
       } else if (t.type === 'iframe') {
         if (!t.url) errors.push(`dashboard '${d.name}': iframe tile needs a url`);
+        else if (!isSafeHttpUrl(t.url)) errors.push(`dashboard '${d.name}': iframe tile url must be an http(s) URL (got '${t.url}')`);
         if (!t.name) errors.push(`dashboard '${d.name}': iframe tile needs a name`);
       } else if (t.type === 'webresource') {
         if (!t.webResource || !webResourceNames.has(String(t.webResource).toLowerCase())) errors.push(`dashboard '${d.name}': webresource tile references undeclared web resource '${t.webResource}'`);
@@ -595,6 +607,7 @@ function validateAppSpec(spec, opts = {}) {
         else if (targets.length > 1) errors.push(`sitemap subArea "${sa.title || ''}" sets multiple targets (${targets.join(', ')}) — pick one`);
         if (sa.entity && !entityNames.has(sa.entity)) errors.push(`sitemap subArea references unknown entity '${sa.entity}'`);
         if (sa.dashboard && !dashNamesSet.has(sa.dashboard)) errors.push(`sitemap subArea references unknown dashboard '${sa.dashboard}' (declare it in dashboards[])`);
+        if (sa.url && !isSafeHttpUrl(sa.url)) errors.push(`sitemap subArea "${sa.title || ''}" url must be an http(s) URL (got '${sa.url}')`);
         // schemaVersion 2 references pages by stable KEY; legacy specs still reference by name.
         const pageRefSet = isV2 ? pageKeysSet : pageNamesSet;
         if (sa.page && !pageRefSet.has(sa.page)) errors.push(`sitemap subArea references unknown page '${sa.page}' (declare it in pages[])`);

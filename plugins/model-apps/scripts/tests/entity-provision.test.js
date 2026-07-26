@@ -2,7 +2,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
-const { makeRunner, requireSuccessfulPush, provisionDataModel, buildSeedGroup } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
+const { makeRunner, requireSuccessfulPush, provisionDataModel, provisionSampleData, provisionSolution, buildSeedGroup } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
 
 function mockSdk(existing = {}) {
   const calls = [];
@@ -292,6 +292,46 @@ test('buildSeedGroup omits matchOn (no dedup) when the key value is empty in a r
   const group = buildSeedGroup({ spec, e: spec.entities[0], records: spec.sampleData.new_customer, statusReasonValues: {} });
   assert.strictEqual(group.matchOn, undefined, 'no non-empty key -> every record inserted');
   assert.ok(!('primaryAttribute' in group));
+});
+
+// --- provisionSampleData: F9 keyless-seeding warning ------------------------------------------
+function runSample(spec) {
+  const events = [];
+  const runner = makeRunner({ emit: (e) => events.push(e), total: 1 });
+  const sdk = { seedRecordGraph: async () => ({ createdIds: { new_log: ['id1', 'id2'] } }) };
+  const dataModel = { entities: { new_log: { logicalName: 'new_log', entitySetName: 'new_logs' } }, statusReasonValues: {} };
+  return provisionSampleData({ sdk, provision: {}, runner, spec, dataModel }).then(() => events.map((e) => e.label || ''));
+}
+
+test('provisionSampleData WARNS in the op label when a group has no idempotency key — a re-run would duplicate (F9)', async () => {
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    entities: [{ schemaName: 'new_log', displayName: 'Log', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
+    relationships: [],
+    sampleData: { new_log: [{ new_tier: 'x' }, {}] }, // no non-empty new_name + no alt-key -> matchOn undefined
+  };
+  const labels = await runSample(spec);
+  assert.ok(labels.some((l) => /no idempotency key/.test(l)), `expected a keyless-seeding warning; got ${JSON.stringify(labels)}`);
+});
+
+test('provisionSampleData does NOT warn when the primary name gives a stable key (F9)', async () => {
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    entities: [{ schemaName: 'new_log', displayName: 'Log', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
+    relationships: [],
+    sampleData: { new_log: [{ new_name: 'A' }, { new_name: 'B' }] },
+  };
+  const labels = await runSample(spec);
+  assert.ok(!labels.some((l) => /no idempotency key/.test(l)), 'a keyed spec must not warn');
+});
+
+test('provisionSolution ESCAPES the solution uniquename in the OData filter (F12 — no injection/break)', async () => {
+  const calls = [];
+  const provision = { queryRecords: async (set, opts) => { calls.push({ set, filter: opts.filter }); return set === 'solution' ? [{ solutionid: 's' }] : []; } };
+  const runner = makeRunner({ emit: () => {}, total: 1 });
+  await provisionSolution({ sdk: {}, provision, runner, solution: { uniqueName: "O'Brien", publisherPrefix: 'new' } });
+  const q = calls.find((c) => c.set === 'solution');
+  assert.match(q.filter, /uniquename eq 'O''Brien'/, "single quote must be doubled (OData string-literal escaping)");
 });
 
 test('requireSuccessfulPush passes a successful result through unchanged', () => {

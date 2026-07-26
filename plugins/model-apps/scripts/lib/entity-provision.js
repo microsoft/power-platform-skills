@@ -13,6 +13,9 @@ const {
   manyToManySchemaName,
 } = require('./app-spec.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
+// OData string-literal escaping for spec-controlled values interpolated into $filter (a solution
+// uniquename / publisher prefix with a `'` would otherwise break the query or inject a clause).
+const { odataLit } = require('./odata.js');
 
 // App Spec column type -> SDK ColumnType. Lookup is omitted (side effect of a OneToMany
 // relationship); Customer is handled specially (createCustomerColumn).
@@ -145,10 +148,10 @@ function requireSuccessfulPush(result, what) {
 // Discover-then-create the solution + publisher (idempotent). No-op emit-wise if present.
 async function provisionSolution({ sdk, provision, runner, solution }) {
   await runner.run('solution', `solution ${solution.uniqueName}`, async () => {
-    const existing = await provision.queryRecords('solution', { select: ['solutionid'], filter: `uniquename eq '${solution.uniqueName}'`, top: 1 });
+    const existing = await provision.queryRecords('solution', { select: ['solutionid'], filter: `uniquename eq '${odataLit(solution.uniqueName)}'`, top: 1 });
     if (existing && existing[0]) return;
     let publisherId;
-    const pubs = await provision.queryRecords('publisher', { select: ['publisherid'], filter: `customizationprefix eq '${solution.publisherPrefix}'`, top: 1 });
+    const pubs = await provision.queryRecords('publisher', { select: ['publisherid'], filter: `customizationprefix eq '${odataLit(solution.publisherPrefix)}'`, top: 1 });
     if (pubs && pubs[0] && pubs[0].publisherid) publisherId = pubs[0].publisherid;
     else publisherId = (await provision.createPublisher({ uniqueName: `${solution.publisherPrefix}publisher`, friendlyName: `${solution.publisherPrefix} publisher`, prefix: solution.publisherPrefix })).id;
     await provision.createSolution({ uniqueName: solution.uniqueName, friendlyName: solution.displayName || solution.uniqueName, publisherId });
@@ -396,8 +399,23 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   for (const e of topoOrderEntities(spec)) {
     const records = sampleRecordsFor(spec, e);
     if (!records.length) continue;
-    await runner.run('sample-data', `${records.length} record(s) -> ${e.schemaName}`, async () => {
-      const group = buildSeedGroup({ spec, e, records, statusReasonValues });
+    // Build the seed group up front so the operation label can flag NON-IDEMPOTENT (keyless) seeding.
+    // buildSeedGroup can throw (e.g. a statusReason value not captured) — re-wrap as a BuildHalt so the
+    // failure keeps the sample-data phase + halt semantics it had when it ran inside runner.run.
+    let group;
+    try {
+      group = buildSeedGroup({ spec, e, records, statusReasonValues });
+    } catch (err) {
+      throw new BuildHalt(`sample-data failed: ${(err && err.message) || err}`, { phase: 'sample-data', code: (err && err.code) || 'sdk-error', recoverable: false, cause: err });
+    }
+    // F9: seeding is idempotent ONLY when a matchOn key is chosen (chooseMatchOn). Without one the SDK
+    // inserts every row, so a re-run — or a POST retried after a commit — DUPLICATES the sample data,
+    // violating the build's "full rerun is safe" contract. A fresh build is fine; warn in the label so the
+    // maker can add a single-column alternate key or unique <primary> values before relying on re-runs.
+    const dupWarn = (!group.matchOn && group.records.length > 0)
+      ? ` — ⚠ no idempotency key: a re-run/retry will DUPLICATE these rows (add a single-column alternate key or unique ${e.primaryAttribute.schemaName} values)`
+      : '';
+    await runner.run('sample-data', `${records.length} record(s) -> ${e.schemaName}${dupWarn}`, async () => {
       const { createdIds: made } = await sdk.seedRecordGraph([group], { entitySetFor, createdIds });
       Object.assign(createdIds, made);
       result.records[e.schemaName] = made[e.schemaName.toLowerCase()];

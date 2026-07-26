@@ -66,6 +66,30 @@ test('validateAppSpec rejects a sitemap icon referencing an undeclared web resou
   assert.ok(r.errors.some((e) => /icon 'new_missing\.png' is not a declared web resource/.test(e)), JSON.stringify(r.errors));
 });
 
+// F12 — URL scheme allowlist: only http(s) URLs may be shipped in an app the maker renders.
+test('validateAppSpec rejects a sitemap subArea url with a non-http(s) scheme (F12)', () => {
+  const s = JSON.parse(JSON.stringify(sample));
+  s.appShell.areas[0].groups[0].subAreas.push({ title: 'Evil', url: 'javascript:alert(1)' });
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /url must be an http\(s\) URL/.test(e)), JSON.stringify(r.errors));
+});
+
+test('validateAppSpec accepts a sitemap subArea url with https (F12)', () => {
+  const s = JSON.parse(JSON.stringify(sample));
+  s.appShell.areas[0].groups[0].subAreas.push({ title: 'Docs', url: 'https://learn.microsoft.com/' });
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('validateAppSpec rejects an iframe dashboard tile url with a non-http(s) scheme (F12)', () => {
+  const s = JSON.parse(JSON.stringify(sample));
+  s.dashboards = [{ name: 'Ops', tiles: [{ type: 'iframe', name: 'Map', url: 'javascript:alert(1)' }] }];
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /iframe tile url must be an http\(s\)/.test(e)), JSON.stringify(r.errors));
+});
+
 test('validateAppSpec rejects a sitemap icon referencing a non-image web resource', () => {
   const s = JSON.parse(JSON.stringify(sample));
   s.webResources = (s.webResources || []).concat([{ name: 'new_logic.js', type: 'js', content: 'x' }]);
