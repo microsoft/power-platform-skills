@@ -82,7 +82,7 @@ test('droppedSubareaCount counts subareas the spec could not round-trip (e.g. da
 });
 
 // ── Task 11: assignPageKeys + missingDownloads + full round-trip ──────────────
-const { assignPageKeys, missingDownloads, runDownload, recoverAppSolution, readViews } = require('../download-model-app.js');
+const { assignPageKeys, missingDownloads, runDownload, recoverAppSolution } = require('../download-model-app.js');
 const { reconcilePageIds, buildManifest } = require('../lib/page-manifest.js');
 const { hydrateSpec } = require('../lib/hydrate-spec.js');
 const { validateAppSpec } = require('../lib/app-spec.js');
@@ -340,31 +340,4 @@ test('recoverAppSolution returns null when the app has no solution components (c
 test('recoverAppSolution never throws — a query error resolves to null (best-effort)', async () => {
   const sdk = { queryRecords: async () => { throw new Error('boom'); } };
   assert.strictEqual(await recoverAppSolution(sdk, 'app'), null);
-});
-
-// ── readViews (F3 faithful hydration): reconstruct the app's PUBLIC author views as App Spec view
-// entries so the edit round-trip preserves/edits them. Uses the SDK's STRUCTURED read
-// (fetchArtifact→getArtifact.columns), not raw layoutxml parsing. ──────────────────────────────
-test('readViews hydrates public author views (structured columns) and skips the system default view', async () => {
-  const sdk = {
-    queryRecords: async (logical, opts) => {
-      if (logical === 'savedquery' && /new_order/.test(opts.filter)) {
-        assert.match(opts.filter, /querytype eq 0/, 'only public views (querytype 0)');
-        return [
-          { savedqueryid: 'v1', name: 'Active Orders', returnedtypecode: 'new_order', querytype: 0, isdefault: false },
-          { savedqueryid: 'v2', name: 'Order Default', returnedtypecode: 'new_order', querytype: 0, isdefault: true }, // system default → skip
-        ];
-      }
-      return [];
-    },
-    fetchArtifact: async () => {},
-    getArtifact: (kind, id) => (id === 'v1' ? { columns: [{ name: 'new_name' }, { name: 'new_status' }] } : { columns: [] }),
-  };
-  const views = await readViews(sdk, ['new_order']);
-  assert.deepStrictEqual(views, [{ entity: 'new_order', name: 'Active Orders', columns: ['new_name', 'new_status'], activeOnly: true }]);
-});
-
-test('readViews is best-effort — a savedquery query error skips that entity and never throws', async () => {
-  const sdk = { queryRecords: async () => { throw new Error('boom'); } };
-  assert.deepStrictEqual(await readViews(sdk, ['new_order']), []);
 });

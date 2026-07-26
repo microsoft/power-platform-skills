@@ -138,14 +138,6 @@ ASSERTIONS.set('round-trip: generative pages preserve their keys', ({ facts, spe
   return eq(expKeys, facts.roundTrip.pageKeys) ? PASS : fail(`page keys: expected [${expKeys}] got [${facts.roundTrip.pageKeys}]`);
 });
 
-ASSERTIONS.set('round-trip: author views round-trip (hydrate does not drop them)', ({ facts, spec }) => {
-  if (facts.roundTrip.error) return fail(`hydrate threw: ${facts.roundTrip.error}`);
-  const expected = sorted((spec.views || []).map((v) => `${String(v.entity).toLowerCase()}:${v.name}`));
-  if (!expected.length) return skip('spec declares no views');
-  // Regression guard for the F3 fix: if hydrate ever hardcodes views:[] again, this fails.
-  return eq(expected, facts.roundTrip.views) ? PASS : fail(`views: expected [${expected}] got [${facts.roundTrip.views}]`);
-});
-
 ASSERTIONS.set('teardown: every declared dashboard has a teardown step', ({ facts, spec }) => {
   const declared = (spec.dashboards || []).length;
   if (!declared) return skip('spec declares no dashboards');

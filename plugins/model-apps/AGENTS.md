@@ -129,13 +129,16 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   unit-test surface); reuses `appUniqueName`/`commandsByEntity`/`topoOrderEntities` from the build engine (DRY).
 - **`scripts/download-model-app.js` → `scripts/lib/hydrate-spec.js`** — the **edit flow**: pulls a
   *deployed* app back into an editable App Spec + page code (sitemap → `appShell` with icons, **every**
-  generative page via `pac model genpage download`, referenced entities/tables, **public author views**
-  (`readViews` reconstructs them from their structured columns), icon web resources, dashboards, solution).
+  generative page via `pac model genpage download`, referenced entities/tables, icon web resources,
+  dashboards, solution).
   **Round-trip scope (be precise — do not claim "complete"):** tables, sitemap/appShell, generative pages,
-  classic dashboards, icons, solution, and **views** round-trip; **forms, charts, and commands do NOT yet
-  round-trip** — they need structured deployed reads the vendored SDK doesn't expose (formxml topology,
-  chart datadescription XML, appaction rows). They survive on the live app (a rebuild preserves them by
-  discovery), but are absent from the downloaded spec, so edit them in Maker or a fresh spec.
+  classic dashboards, icons, and solution round-trip; **forms, views, charts, and commands do NOT yet
+  round-trip.** (View hydration was tried and reverted — LIVE-verified that the deployed savedquery set
+  can't reliably tell app-builder-authored views from Dataverse's auto-generated Active/Inactive/QuickFind
+  system views: `isdefault` is TRUE on the authored primary view and FALSE on the system Inactive view, so
+  no filter isolates author views. Forms/charts/commands need structured reads the SDK doesn't expose.)
+  All four survive on the live app (a rebuild preserves them by discovery), but are absent from the
+  downloaded spec, so edit them in Maker or a fresh spec.
   The **solution** is recovered as the app's one *real* unmanaged solution — `recoverAppSolution` enumerates
   the app's solution memberships and excludes the built-in `Active`/`Default`/`Basic` system solutions the
   app is also a member of (see `scripts/lib/system-solutions.js`), so the downloaded spec can cleanly tear
