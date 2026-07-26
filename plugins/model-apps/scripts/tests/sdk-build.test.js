@@ -1772,6 +1772,26 @@ test('pages: spec.pages=[] with --allow-destructive DETACHES all live pages (pag
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
+test('pages: app-shell-only run (pages EXCLUDED) HALTS rather than orphan live genpages via a page-less sitemap (whole-branch review)', async () => {
+  const spec = makeSpec(); spec.schemaVersion = 2; // page-less spec, no page subareas
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages([]);
+  try {
+    const sm = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}"/></Group></Area></SiteMap>`; // live app HAS a genpage
+    const mk = () => mockSdk({ artifactsExist: true, existingSitemap: PRIOR_SITEMAP, selfAppUnique: appUnique, liveSitemapXml: sm });
+    // pages phase EXCLUDED — the removal gate cannot run; the app-shell guard must fail-closed.
+    await assert.rejects(
+      runSdkBuild(spec, { sdk: mk().sdk, apply: true, env: 'https://x', appDir, phases: ['solution', 'data-model', 'app-shell'] }),
+      (e) => e && e.phase === 'app-shell' && e.code === 'pages-removed',
+      'a page-less app-shell-only rewrite over an app with live genpages must HALT without --allow-destructive',
+    );
+    // With --allow-destructive it proceeds (detaches by writing the page-less sitemap).
+    const { sdk, calls } = mk();
+    await runSdkBuild(spec, { sdk, apply: true, allowDestructive: true, env: 'https://x', appDir, phases: ['solution', 'data-model', 'app-shell'] });
+    assert.ok(find(calls, 'updateElement').some((c) => c.args[2] === '/siteMap'), 'with --allow-destructive the page-less sitemap is written (detach)');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
 test('pages: a page shared across TWO app sitemaps HALTS pages-shared-across-apps (Imp5) — --allow-destructive does NOT bypass', async () => {
   const spec = overviewSpec();
   const appUnique = appUniqueName(spec);

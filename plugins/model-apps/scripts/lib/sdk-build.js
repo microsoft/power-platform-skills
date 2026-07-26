@@ -1143,6 +1143,16 @@ async function runSdkBuild(spec, opts = {}) {
         // AFTER the removal + shared-page gates. For an app-shell-only run (pages excluded) of a page-less
         // app, keep today's behavior so a nav/subarea edit still lands (design §7 / Plan-3 C2).
         if (!has('pages') && !appHasPageSubareas(spec)) {
+          // Defense-in-depth (whole-branch review): when the pages phase is EXCLUDED and the spec is
+          // page-less, there is no pages-phase removal gate. If the LIVE existing app still has generative
+          // pages, writing this omitUnbuiltPages sitemap would DETACH them (orphan records, broken nav) —
+          // the exact destructive action Imp6 gates. Enforce the gate here too, fail-closed, unless
+          // --allow-destructive. (A page-less app with NO live genpages writes normally. The CLI --apply
+          // path is already blocked from partial phase ranges by the I1 guard, but runSdkBuild must be safe
+          // on its own.)
+          const liveSm = await fetchSitemap(provision, appUniqueName(spec));
+          if (!liveSm.ok) throw new BuildHalt(`cannot verify the existing app's live generative pages before rewriting its sitemap (${liveSm.reason}) — refusing to proceed (would risk orphaning pages)`, { phase: 'app-shell', code: 'pages-sitemap-read-failed', recoverable: true });
+          if (liveSm.ids.length && opts.allowDestructive !== true) throw new BuildHalt(`refusing to rewrite a page-less sitemap over an existing app that still has ${liveSm.ids.length} live generative page(s) (would orphan them: ${liveSm.ids.join(', ')}). Include the pages phase to reconcile them, or re-run with --allow-destructive to detach.`, { phase: 'app-shell', code: 'pages-removed', recoverable: false });
           provision.updateElement('app', existingId, '/siteMap', def.siteMap);
           requireSuccessfulPush(await provision.pushArtifact('app', existingId), `app ${def.name}`);
           await provision.publishArtifact('app', existingId);
