@@ -34,6 +34,10 @@ async function hydrateSpec(read) {
   const entities = (await read.entities()) || [];
   const webResources = (await read.webResources()) || [];
   const dashboards = (read.dashboards ? await read.dashboards() : []) || [];
+  // Views ARE hydrated (F3): the app's public author views round-trip so an edit can preserve/modify them.
+  // Charts, forms, and commands are NOT yet hydrated (see below) — they need structured reads the SDK
+  // doesn't expose; they survive on the live app, so a rebuild preserves them by discovery.
+  const views = (read.views ? await read.views() : []) || [];
   const solution = (await read.solution()) || { uniqueName: 'Default', publisherPrefix: 'new' };
   // `design` is threaded through from the page manifest (§7.3) when present; undefined for legacy apps.
   const design = read.design ? await read.design() : undefined;
@@ -66,7 +70,11 @@ async function hydrateSpec(read) {
     app: { name: app.name, description: app.description || '' },
     entities,
     webResources,
-    views: [],
+    views,
+    // NOT yet round-tripped (documented limitation): charts, forms, and commands need structured deployed
+    // reads the vendored SDK does not expose (chart datadescription XML, formxml topology, appaction button
+    // rows). They remain on the live app — a rebuild preserves them by discovery — but are absent from the
+    // downloaded spec, so edit them in Maker or a fresh spec. See download docs / app-builder-roadmap.
     charts: [],
     forms: [],
     commands: [],

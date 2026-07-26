@@ -100,8 +100,10 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   (`solution·data-model·sample-data·web-resources·views·charts·forms·commands·dashboards·app-shell·pages·ai-features·publish`)
   are unchanged; independent ops run with bounded parallelism.
   Emits `[n/total]` events the orchestrator narrates + a `BuildHalt` it gates on. Dry-run by
-  default; `--apply` writes, `--sample-data` / `--publish` opt-in. `--verify` (opt-in) auto-runs the
-  read-only reconcile after a successful apply and exits non-zero on a silent partial build (the same
+  default; `--apply` writes, `--sample-data` / `--publish` opt-in (`--publish` gates the final *bulk*
+  publish; edit/finalize paths — reconciling an existing form/view, form events, quick-views,
+  existing-app sitemap, page finalize — still publish their one artifact so the change takes effect).
+  `--verify` (opt-in) auto-runs the read-only reconcile after a successful apply and exits non-zero on a silent partial build (the same
   check `verify-model-app.js` runs standalone). Recovery from a halted build is a full rerun (idempotent).
 - **`scripts/teardown-model-app.js` → `scripts/lib/sdk-teardown.js`** — the first-class, **classifier-safe**
   teardown (reverse of the build), for cleaning up live-verification probes or a failed build. Deletes
@@ -126,8 +128,14 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   `--clear-workspace` prunes `.maker-workspace/` after a clean apply. `planTeardown(spec)` is pure (dry-run +
   unit-test surface); reuses `appUniqueName`/`commandsByEntity`/`topoOrderEntities` from the build engine (DRY).
 - **`scripts/download-model-app.js` → `scripts/lib/hydrate-spec.js`** — the **edit flow**: pulls a
-  *deployed* app back into a complete App Spec + page code (sitemap → `appShell` with icons, **every**
-  generative page via `pac model genpage download`, referenced entities, icon web resources, solution).
+  *deployed* app back into an editable App Spec + page code (sitemap → `appShell` with icons, **every**
+  generative page via `pac model genpage download`, referenced entities/tables, **public author views**
+  (`readViews` reconstructs them from their structured columns), icon web resources, dashboards, solution).
+  **Round-trip scope (be precise — do not claim "complete"):** tables, sitemap/appShell, generative pages,
+  classic dashboards, icons, solution, and **views** round-trip; **forms, charts, and commands do NOT yet
+  round-trip** — they need structured deployed reads the vendored SDK doesn't expose (formxml topology,
+  chart datadescription XML, appaction rows). They survive on the live app (a rebuild preserves them by
+  discovery), but are absent from the downloaded spec, so edit them in Maker or a fresh spec.
   The **solution** is recovered as the app's one *real* unmanaged solution — `recoverAppSolution` enumerates
   the app's solution memberships and excludes the built-in `Active`/`Default`/`Basic` system solutions the
   app is also a member of (see `scripts/lib/system-solutions.js`), so the downloaded spec can cleanly tear

@@ -198,7 +198,9 @@ Narrate progress as it runs. Transient env errors (429 customization-lock, 503 S
 concurrent-op guards) are **auto-retried** with backoff on `--apply` (the build is idempotent, so a
 retry reuses what's already created). If the build still **halts** (`BuildHalt`) on an
 unrecoverable error, surface it and ask the user how to proceed via `AskUserQuestion` (adjust the
-spec / cancel), then re-run. Everything is scoped to a dedicated unmanaged solution; `--publish` is opt-in.
+spec / cancel), then re-run. Everything is scoped to a dedicated unmanaged solution; **`--publish`
+gates the final *bulk* publish** — edit/finalize paths still publish their one targeted artifact so the
+change takes effect (see *Notes & limits*).
 
 **Recovery from a failed or halted build: run the full build again.** The build is idempotent —
 every phase re-uses what's already created and only fills the gaps. SDK metadata is persisted under
@@ -364,8 +366,14 @@ run with bounded parallelism; publish is one round-trip per entity + the app. Vi
 - **Headless, no browser.** The SDK (`cds-maker-sdk`, vendored at `scripts/vendor/`) generates
   designer-grade FormXML/FetchXML/sitemap by reusing the designer's own serializers, and writes
   via the Web API using an `az`-token HttpClient. No relay, no designer tab.
-- **Dedicated unmanaged solution per app** (review / teardown). **Publish is opt-in**
-  (`--publish`); the builder never publishes by accident.
+- **Dedicated unmanaged solution per app** (review / teardown). **`--publish` gates the final
+  *bulk* publish** of the app's entity + app customizations (a `PublishXml` per entity + the app). It
+  does **not** suppress the small **targeted** publishes that edit/finalize paths must run so the change
+  takes effect — reconciling an existing form or view, wiring form events, placing quick-views,
+  re-syncing an existing app's sitemap, and finalizing the sitemap after generative pages each publish
+  that one artifact (an unpublished edit to a live artifact is invisible). So `--publish` controls the
+  expensive bulk publish, not "zero publishes"; a fresh build without it still leaves new
+  tables/columns/relationships staged-but-unpublished in the solution.
 - **Idempotent.** Existing solution/tables/columns/relationships are detected and reused, so
   re-runs and existing-table envs work without collisions. (Full spec-vs-deployed *diff* editing
   of views/forms is a later increment.)

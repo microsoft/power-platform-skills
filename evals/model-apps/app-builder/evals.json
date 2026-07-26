@@ -17,7 +17,10 @@
     "teardown: web resources are deleted after tables",
     "round-trip: download hydrate recovers the same solution and tables",
     "round-trip: the sitemap round-trips with the same subareas",
-    "round-trip: generative pages preserve their keys"
+    "round-trip: generative pages preserve their keys",
+    "round-trip: author views round-trip (hydrate does not drop them)",
+    "teardown: every declared dashboard has a teardown step",
+    "teardown: every declared command bar has a teardown step"
   ],
   "evals": [
     {

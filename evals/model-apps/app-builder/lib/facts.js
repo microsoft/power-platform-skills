@@ -224,6 +224,10 @@ function buildDeployedReader(spec) {
       codeFile: `pages/gp-${p.key || p.name}/page.tsx`,
     })),
     entities: async () => (spec.entities || []).map((e) => ({ schemaName: e.schemaName, primaryAttribute: e.primaryAttribute, columns: [] })),
+    // Views round-trip (F3): a real download reconstructs public author views via readViews; the deployed
+    // reader mirrors that by surfacing the spec's views, so the round-trip oracle FAILS if hydrate ever
+    // drops them again (regression guard for the hardcoded `views:[]` that F3 removed).
+    views: async () => (spec.views || []).map((v) => ({ entity: String(v.entity).toLowerCase(), name: v.name, columns: v.columns || [], activeOnly: v.activeOnly !== false })),
     webResources: async () => spec.webResources || [],
     dashboards: async () => (spec.dashboards || []).map((d) => ({ id: `dash-${d.name}`, name: d.name, tiles: d.tiles || [] })),
     solution: async () => spec.solution,
@@ -232,7 +236,7 @@ function buildDeployedReader(spec) {
 }
 
 // round-trip: project the spec into a deployed app, hydrate it back, and expose the recovered
-// solution / tables / page-keys / sitemap so assertions can prove the download→rebuild is lossless
+// solution / tables / views / page-keys / sitemap so assertions can prove the download→rebuild is lossless
 // (create == edit). Never throws — a hydrate error is captured as `error` and surfaced by the assertion.
 async function roundTripFacts(spec) {
   let hydrated;
@@ -241,6 +245,7 @@ async function roundTripFacts(spec) {
   return {
     solution: hydrated.solution && hydrated.solution.uniqueName,
     tables: (hydrated.entities || []).map((e) => lc(e.schemaName)).sort(),
+    views: (hydrated.views || []).map((v) => `${lc(v.entity)}:${v.name}`).sort(),
     pageKeys: (hydrated.pages || []).map((p) => p.key || p.name).sort(),
     origSubareaTargets: subareaTargets(spec.appShell),
     hydratedSubareaTargets: subareaTargets(hydrated.appShell),

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// download-model-app: pull a DEPLOYED app back into a complete app-spec + page codeFiles (the edit
+// download-model-app: pull a DEPLOYED app back into an editable app-spec + page codeFiles (the edit
 // flow's "pull everything" step). Reconstructs the app (sitemap -> appShell), ALL its generative
 // pages (via pac list+download, incl. Maker-authored), its entities (minimal — the build reuses
 // existing tables idempotently), the icon web resources, and its solution, via hydrate-spec.
@@ -248,6 +248,44 @@ async function recoverAppSolution(sdk, appId) {
 // Returns { ok:true, spec, pages, entities, webResources, droppedSubareas } or { ok:false, error }.
 // Logical failures (no sitemap, enumeration down, missing download) return { ok:false } without
 // throwing. Unexpected I/O errors propagate as thrown exceptions (caught by main().catch).
+// Reconstruct the app's PUBLIC author-created views (savedquery querytype 0, not the entity's system
+// default) as App Spec view entries, so the edit round-trip preserves + can modify them. Uses the SDK's
+// STRUCTURED read (fetchArtifact → getArtifact('view').columns — the exact shape reconcileView edits),
+// NOT raw layoutxml parsing. Best-effort: a read error skips that entity/view rather than failing the
+// whole download. (Charts, forms, and commands are NOT yet hydrated — see the download docs; they need
+// unsupported structured reads and survive on the live app, so a rebuild preserves them by discovery.)
+async function readViews(sdk, entityLogicals) {
+  const out = [];
+  for (const entity of entityLogicals || []) {
+    let rows;
+    try {
+      // returnedtypecode is the entity LOGICAL name (a string), matching verify-spec's savedquery query.
+      rows = await sdk.queryRecords('savedquery', {
+        select: ['savedqueryid', 'name', 'returnedtypecode', 'querytype', 'isdefault'],
+        filter: `returnedtypecode eq '${String(entity).toLowerCase()}' and querytype eq 0`,
+        top: 500,
+      });
+    } catch { continue; } // best-effort per entity
+    for (const r of rows || []) {
+      // Skip the entity's system DEFAULT view (Active/Inactive/Lookup … auto-generated, isdefault=true):
+      // the build authors non-default public views (viewDef isDefault:false), so only those are ours to
+      // round-trip. Hydrating a default view would make teardown try to delete a system view.
+      if (!r || r.isdefault === true || !r.name) continue;
+      let columns = [];
+      try {
+        await sdk.fetchArtifact('view', r.savedqueryid);
+        const art = sdk.getArtifact('view', r.savedqueryid) || {};
+        columns = (art.columns || []).map((c) => String(c.name).toLowerCase());
+      } catch { continue; } // structured read failed — skip this view
+      if (!columns.length) continue;
+      // activeOnly defaults true (the common author view); the build only uses activeOnly!==false to add a
+      // statecode=0 filter on a FRESH create — a reconcile of the existing view leaves its filter untouched.
+      out.push({ entity: String(r.returnedtypecode || entity).toLowerCase(), name: r.name, columns, activeOnly: true });
+    }
+  }
+  return out;
+}
+
 async function runDownload({ sdk, genpageCli, outDir, appId, appUnique }) {
   const app = await sdk.fetchArtifact('app', appId);
   const { entities: entityLogicals, icons } = collectSitemap(app);
@@ -385,6 +423,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique }) {
     app: async () => app,
     pages: async () => pages,
     entities: async () => entities,
+    views: async () => readViews(sdk, entityLogicals),
     webResources: async () => webResources,
     dashboards: async () => dashboards,
     solution: async () => solution,
@@ -430,4 +469,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { resolveAppId, collectSitemap, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload };
+module.exports = { resolveAppId, collectSitemap, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, iconWebResources, readDashboards, readViews, droppedSubareaCount, recoverAppSolution, runDownload };

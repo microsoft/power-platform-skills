@@ -69,11 +69,12 @@ test('stageFacts.teardown plans a reverse-of-build delete ending at the solution
   assert.ok(firstWr > lastTable, `web-resource step (${firstWr}) must follow the last table (${lastTable})`);
 });
 
-test('stageFacts.roundTrip hydrates the spec back losslessly (solution, tables, pages, sitemap)', async () => {
+test('stageFacts.roundTrip hydrates the spec back losslessly (solution, tables, views, pages, sitemap)', async () => {
   const f = await stageFacts(spec);
   assert.strictEqual(f.roundTrip.error, undefined, f.roundTrip.error);
   assert.strictEqual(f.roundTrip.solution, 'S', 'the solution round-trips');
   assert.deepStrictEqual(f.roundTrip.tables, ['new_order'], 'tables round-trip');
+  assert.deepStrictEqual(f.roundTrip.views, ['new_order:Active Orders'], 'author views round-trip (F3 — not dropped by hydrate)');
   assert.deepStrictEqual(f.roundTrip.pageKeys, ['overview'], 'page keys round-trip');
   assert.deepStrictEqual(f.roundTrip.origSubareaTargets, f.roundTrip.hydratedSubareaTargets, 'the sitemap subareas round-trip unchanged');
   assert.deepStrictEqual(f.roundTrip.hydratedSubareaTargets, ['entity:new_order', 'page:overview']);

@@ -138,4 +138,27 @@ ASSERTIONS.set('round-trip: generative pages preserve their keys', ({ facts, spe
   return eq(expKeys, facts.roundTrip.pageKeys) ? PASS : fail(`page keys: expected [${expKeys}] got [${facts.roundTrip.pageKeys}]`);
 });
 
+ASSERTIONS.set('round-trip: author views round-trip (hydrate does not drop them)', ({ facts, spec }) => {
+  if (facts.roundTrip.error) return fail(`hydrate threw: ${facts.roundTrip.error}`);
+  const expected = sorted((spec.views || []).map((v) => `${String(v.entity).toLowerCase()}:${v.name}`));
+  if (!expected.length) return skip('spec declares no views');
+  // Regression guard for the F3 fix: if hydrate ever hardcodes views:[] again, this fails.
+  return eq(expected, facts.roundTrip.views) ? PASS : fail(`views: expected [${expected}] got [${facts.roundTrip.views}]`);
+});
+
+ASSERTIONS.set('teardown: every declared dashboard has a teardown step', ({ facts, spec }) => {
+  const declared = (spec.dashboards || []).length;
+  if (!declared) return skip('spec declares no dashboards');
+  const steps = facts.teardown.kinds.filter((k) => k === 'dashboard').length;
+  return steps === declared ? PASS : fail(`expected ${declared} dashboard teardown step(s), got ${steps}`);
+});
+
+ASSERTIONS.set('teardown: every declared command bar has a teardown step', ({ facts, spec }) => {
+  // The command bar is entity-keyed — one teardown step per entity that authors commands.
+  const entities = new Set((spec.commands || []).map((c) => String(c.entity).toLowerCase()));
+  if (!entities.size) return skip('spec declares no commands');
+  const steps = facts.teardown.kinds.filter((k) => k === 'commands').length;
+  return steps === entities.size ? PASS : fail(`expected ${entities.size} command-bar teardown step(s), got ${steps}`);
+});
+
 module.exports = { ASSERTIONS };
