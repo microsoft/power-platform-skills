@@ -11,10 +11,15 @@ A **plugin marketplace** for Power Platform development by Microsoft. The Open P
 ```
 power-platform-skills/
 ├── marketplace.json          # Open Plugins marketplace manifest (lists all available plugins)
+├── .agents/
+│   └── plugins/
+│       └── marketplace.json  # Repository-local Codex marketplace
 ├── .claude-plugin/           # Legacy manifest mirrors for existing subscriptions
 │   └── marketplace.json
 ├── plugins/                  # Directory containing individual plugins
 │   └── <plugin-name>/        # Individual plugin (e.g., power-pages)
+│       ├── .codex-plugin/
+│       │   └── plugin.json   # Codex plugin manifest
 │       ├── .plugin/
 │       │   └── plugin.json   # Plugin manifest
 │       ├── .claude-plugin/
@@ -45,6 +50,7 @@ No root-level build, lint, or test commands exist. Build/test tooling lives insi
 
 Each plugin follows this structure:
 
+- `.codex-plugin/plugin.json` — Codex metadata and interface configuration
 - `.plugin/plugin.json` — Open Plugins metadata (name, version, keywords)
 - `.claude-plugin/plugin.json` — legacy mirror of `.plugin/plugin.json` kept for existing subscriptions
 - `.mcp.json` — MCP server configuration (optional)
@@ -52,6 +58,27 @@ Each plugin follows this structure:
 - `skills/` — Skill definitions, each in its own subdirectory with a `SKILL.md`
 - `scripts/` — Shared utility scripts referenced by skills and agents
 - `references/` — Shared reference documents used by multiple skills
+
+## Codex Compatibility
+
+Keep Codex packaging additive so existing Claude Code and GitHub Copilot
+consumers continue to work:
+
+- Put Codex package metadata in `.codex-plugin/plugin.json`; do not replace the
+  `.plugin` or `.claude-plugin` manifests.
+- Keep the Codex manifest name equal to the plugin folder name. This means the
+  Codex package names are `code-apps` and `mobile-apps`, while the legacy
+  marketplaces retain `code-apps-preview` and `mobile-app`.
+- Reuse the existing `skills/`, hooks, scripts, references, and `.mcp.json`
+  where the Codex schema accepts them.
+- When a shared companion file contains host-specific fields that Codex rejects,
+  declare the equivalent Codex configuration inline in `.codex-plugin/plugin.json`
+  instead of weakening the legacy file.
+- Add every plugin to `.agents/plugins/marketplace.json` with an `AVAILABLE`
+  installation policy, `ON_INSTALL` authentication policy, and a local source
+  matching `./plugins/<folder-name>`.
+- Run `node scripts/validate-codex-plugins.js` and the plugin-creator validator
+  after changing Codex manifests or marketplace metadata.
 
 Skills are defined in `SKILL.md` files with YAML frontmatter (name, description, allowed-tools, model, hooks). The `allowed-tools` field must use a **comma-separated list** (e.g., `allowed-tools: Read, Write, Edit, Bash, Glob, Grep`) — not JSON array syntax (`["Read", "Write"]`) or YAML list syntax. Each skill may include validation scripts in a `scripts/` subdirectory, run as Stop hooks when the skill session ends.
 

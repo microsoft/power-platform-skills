@@ -1,0 +1,34 @@
+{
+  "name": "power-automate",
+  "version": "2.1.0",
+  "description": "Build, edit, run, and debug Power Automate cloud flows via the FlowAgent MCP server.",
+  "author": {
+    "name": "Microsoft",
+    "url": "https://www.microsoft.com"
+  },
+  "homepage": "https://github.com/microsoft/power-platform-skills/",
+  "repository": "https://github.com/microsoft/power-platform-skills/",
+  "license": "MIT",
+  "keywords": [
+    "power-automate",
+    "cloud-flows",
+    "flows",
+    "mcp",
+    "power-platform",
+    "flowagent"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Power Automate",
+    "shortDescription": "Build and debug Power Automate flows.",
+    "longDescription": "Create, edit, run, diagnose, and copy Power Automate cloud flows through the FlowAgent MCP server.",
+    "developerName": "Microsoft",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": "Create, update, or diagnose a Power Automate flow."
+  }
+}

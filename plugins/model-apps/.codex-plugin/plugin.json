@@ -1,0 +1,37 @@
+{
+  "name": "model-apps",
+  "version": "2.2.0",
+  "description": "Build and deploy Power Apps generative pages for model-driven apps.",
+  "author": {
+    "name": "Microsoft",
+    "url": "https://www.microsoft.com"
+  },
+  "homepage": "https://github.com/microsoft/power-platform-skills/",
+  "repository": "https://github.com/microsoft/power-platform-skills/",
+  "license": "MIT",
+  "keywords": [
+    "model-apps",
+    "generative-pages",
+    "genux",
+    "genpage",
+    "react",
+    "fluent-ui",
+    "dataverse",
+    "pac-cli",
+    "model-driven"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Model Apps",
+    "shortDescription": "Build generative pages for model-driven apps.",
+    "longDescription": "Plan, build, and deploy React and Fluent UI generative pages for Power Apps model-driven applications.",
+    "developerName": "Microsoft",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": "Create or update a generative page for a model-driven app."
+  }
+}

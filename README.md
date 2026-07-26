@@ -4,7 +4,7 @@ Official agent skills/plugins for Power Platform development by Microsoft.
 
 ## Overview
 
-This repository is a **plugin marketplace** containing Claude Code/GitHub Copilot plugins for Power Platform services. Each plugin provides skills, agents, and commands to help developers build on the Power Platform.
+This repository is a **plugin marketplace** containing Codex, Claude Code, and GitHub Copilot plugins for Power Platform services. Each plugin provides skills, agents, and commands to help developers build on the Power Platform.
 
 ## Installation
 
@@ -30,6 +30,22 @@ The installer automatically:
 - Detects available tools (Claude Code, GitHub Copilot CLI)
 - Registers the plugin marketplace and installs all listed plugins
 - Enables auto-update so plugins stay current
+
+### Codex
+
+The repository includes a local Codex marketplace for testing the converted
+plugins. From the repository root:
+
+```bash
+codex plugin marketplace add .agents/plugins
+codex plugin add power-pages@power-platform-skills
+```
+
+Available Codex package names are `power-pages`, `model-apps`, `mcp-apps`,
+`canvas-apps`, `code-apps`, `mobile-apps`, and `power-automate`.
+
+Start a new Codex task after installing or updating a plugin so its skills and
+MCP tools are loaded.
 
 ### Manual Installation
 
@@ -113,6 +129,12 @@ To develop and test plugins locally, follow these steps:
     claude --plugin-dir /path/to/power-platform-skills/plugins/canvas-apps
     claude --plugin-dir /path/to/power-platform-skills/plugins/power-automate
     ```
+
+Validate the Codex packaging layer:
+
+```bash
+node scripts/validate-codex-plugins.js
+```
 
 ## Running Without Interruption
 
@@ -238,6 +260,13 @@ plugin entry is intentionally just `name` plus repository-root-relative `source`
 Plugin descriptions, versions, licenses, and keywords are controlled from each
 plugin's `.plugin/plugin.json`. This keeps existing subscriptions updating without
 duplicating display/update metadata.
+
+Codex manifests live in each plugin's `.codex-plugin/plugin.json`. They reuse
+the existing `skills/`, scripts, references, hooks, and MCP definitions while
+providing Codex-specific package and interface metadata. The Codex names for
+Code Apps and Mobile Apps match their folder names (`code-apps` and
+`mobile-apps`); the legacy marketplaces retain `code-apps-preview` and
+`mobile-app`.
 
 ## Documentation
 

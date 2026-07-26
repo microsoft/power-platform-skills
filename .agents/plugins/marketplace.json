@@ -1,0 +1,92 @@
+{
+  "name": "power-platform-skills",
+  "interface": {
+    "displayName": "Power Platform Skills"
+  },
+  "plugins": [
+    {
+      "name": "power-pages",
+      "source": {
+        "source": "local",
+        "path": "./plugins/power-pages"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    },
+    {
+      "name": "model-apps",
+      "source": {
+        "source": "local",
+        "path": "./plugins/model-apps"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    },
+    {
+      "name": "mcp-apps",
+      "source": {
+        "source": "local",
+        "path": "./plugins/mcp-apps"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    },
+    {
+      "name": "canvas-apps",
+      "source": {
+        "source": "local",
+        "path": "./plugins/canvas-apps"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    },
+    {
+      "name": "code-apps",
+      "source": {
+        "source": "local",
+        "path": "./plugins/code-apps"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    },
+    {
+      "name": "mobile-apps",
+      "source": {
+        "source": "local",
+        "path": "./plugins/mobile-apps"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    },
+    {
+      "name": "power-automate",
+      "source": {
+        "source": "local",
+        "path": "./plugins/power-automate"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

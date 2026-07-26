@@ -1,0 +1,38 @@
+{
+  "name": "power-pages",
+  "version": "2.6.3",
+  "description": "Create and deploy Power Pages code sites and manage their application lifecycle.",
+  "author": {
+    "name": "Microsoft",
+    "url": "https://www.microsoft.com"
+  },
+  "homepage": "https://github.com/microsoft/power-platform-skills/",
+  "repository": "https://github.com/microsoft/power-platform-skills/",
+  "license": "MIT",
+  "keywords": [
+    "power-pages",
+    "site-builder",
+    "code-sites",
+    "spa",
+    "pac-cli",
+    "dataverse",
+    "web-api",
+    "solution",
+    "alm",
+    "pipeline"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Power Pages",
+    "shortDescription": "Build and manage Power Pages code sites.",
+    "longDescription": "Create, secure, integrate, test, and deploy Power Pages code sites with Dataverse and enterprise ALM workflows.",
+    "developerName": "Microsoft",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": "Create or update a Power Pages code site."
+  }
+}

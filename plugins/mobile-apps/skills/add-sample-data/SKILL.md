@@ -1,7 +1,6 @@
 ---
 name: add-sample-data
 description: Use when the user wants to seed Dataverse tables with realistic sample records so a freshly-scaffolded code app shows real-looking data on first launch. Generates contextually appropriate rows from each table's schema and inserts them in dependency order. Mirrors microsoft/power-platform-skills/power-pages/add-sample-data, adapted for mobile apps.
-pps.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet

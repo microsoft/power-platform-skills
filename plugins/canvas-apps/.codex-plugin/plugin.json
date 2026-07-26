@@ -1,0 +1,33 @@
+{
+  "name": "canvas-apps",
+  "version": "2.1.1",
+  "description": "Build Power Apps Canvas Apps using the Canvas Authoring MCP server.",
+  "author": {
+    "name": "Microsoft",
+    "url": "https://www.microsoft.com"
+  },
+  "homepage": "https://github.com/microsoft/power-platform-skills/",
+  "repository": "https://github.com/microsoft/power-platform-skills/",
+  "license": "MIT",
+  "keywords": [
+    "canvas-apps",
+    "power-apps",
+    "canvas",
+    "pa-yaml",
+    "msapp"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Canvas Apps",
+    "shortDescription": "Build Power Apps canvas apps with Codex.",
+    "longDescription": "Author, validate, and compile Power Apps Canvas App YAML through the Canvas Authoring MCP server.",
+    "developerName": "Microsoft",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": "Build or update a Power Apps canvas app."
+  }
+}
