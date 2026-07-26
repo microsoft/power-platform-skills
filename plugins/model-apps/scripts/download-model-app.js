@@ -176,6 +176,12 @@ function entityFromMetadata(meta, logical) {
     displayName: (meta && meta.displayName) || logical,
     primaryAttribute: { schemaName: primary, displayName: 'Name' },
     columns: [],
+    // Flag every recovered table as pre-existing so a teardown of THIS downloaded spec never deletes the
+    // table (+ its data). Download cannot prove which tables the app CREATED vs merely REFERENCED, and
+    // deleting a customer's table/data is unrecoverable while an orphaned table is not — so fail safe.
+    // (The build re-applies a downloaded spec by discovery regardless of this flag; and hydrate emits no
+    // forms, so the build's `existing`-gated default-form promotion path is not reached here anyway.)
+    existing: true,
   };
 }
 

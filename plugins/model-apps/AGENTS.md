@@ -91,7 +91,10 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   `scripts/lib/sitemap-pages.js` — drives placement, download enumeration, and verify; a read failure
   HALTs). All page matching is by id. Every `pages[]` entry must be sitemap-placed (validation rejects
   headless pages). The build halts on safety violations (`pages-removed`, `pages-shared-across-apps`,
-  identity conflicts, read failures). Classic `dashboards[]` are opt-in.
+  identity conflicts, read failures). The cross-app shared-page scan (`fetchAppsForPages`) itself fails
+  **closed** if the environment's appmodule list hits the 5000-row page cap — the vendored SDK cannot page
+  `@odata.nextLink`, so an unlisted app could hide a shared page; it HALTs (`apps-truncated`) rather than
+  scan an incomplete list and fail open. Classic `dashboards[]` are opt-in.
   **All Dataverse access is via the SDK**, so metadata is persisted under
   `<app-folder>/.maker-workspace/` for reuse/edits. The 13 phases
   (`solution·data-model·sample-data·web-resources·views·charts·forms·commands·dashboards·app-shell·pages·ai-features·publish`)
@@ -128,7 +131,10 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   The **solution** is recovered as the app's one *real* unmanaged solution — `recoverAppSolution` enumerates
   the app's solution memberships and excludes the built-in `Active`/`Default`/`Basic` system solutions the
   app is also a member of (see `scripts/lib/system-solutions.js`), so the downloaded spec can cleanly tear
-  down its own solution instead of targeting the restricted `Default`.
+  down its own solution instead of targeting the restricted `Default`. Recovered **tables are flagged
+  `existing: true`**, so a teardown of a downloaded spec never deletes a table (+ its data) this build
+  cannot prove it created — download can't distinguish app-created from merely-referenced tables, so it
+  fails safe (an orphaned table is recoverable; deleted customer data is not).
   Edit the downloaded spec and re-run the build (idempotent) — create and edit share one path. Always
   pull fresh at the start of an edit session (the build reads an etag; a write against an artifact
   changed in Maker throws a version conflict → re-pull, never clobber). **Classic DashBoard subareas

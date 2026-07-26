@@ -170,6 +170,17 @@ test('fetchAppsForPages is FAIL-CLOSED when the appmodule enumeration fails (can
   assert.match(r.error, /throttled/);
 });
 
+test('fetchAppsForPages FAILS CLOSED at the appmodule page cap — a full page may be truncated, so it must never fail OPEN', async () => {
+  // The vendored queryRecords returns ONE page and does NOT follow @odata.nextLink; a result AT the
+  // 5000-row page cap means there may be MORE apps we cannot see — and an unseen app could share the
+  // page we are about to UPDATE. So a full page must HALT (ok:false), never silently drop the rest.
+  const rows = Array.from({ length: 5000 }, (_, i) => ({ appmoduleid: `id-${i}`, uniquename: `app-${i}`, appmoduleidunique: `u-${i}` }));
+  const sdk = { queryRecords: async (e) => (e === 'appmodule' ? rows : []) };
+  const r = await fetchAppsForPages(sdk, [GP_OVERVIEW]);
+  assert.strictEqual(r.ok, false, 'hitting the page cap must fail closed (no fail-open)');
+  assert.strictEqual(r.reason, 'apps-truncated');
+});
+
 test('fetchAppsForPages records (does not fail on) an app whose sitemap is unreadable (best-effort partial)', async () => {
   const sdk = {
     queryRecords: async (entity, o) => {

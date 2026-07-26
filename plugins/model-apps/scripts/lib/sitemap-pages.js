@@ -148,6 +148,11 @@ async function fetchSitemap(sdk, appUnique) {
   return { ok: true, xml: String(xml), ids: sitemapGenPageIds(String(xml)) };
 }
 
+// Dataverse's maximum server-side page size. The vendored queryRecords issues one GET and cannot follow
+// `@odata.nextLink`, so an appmodule list of this many rows may be TRUNCATED — fetchAppsForPages treats a
+// full page as a coverage failure and fails CLOSED (see its doc + the cap check).
+const APPMODULE_PAGE_CAP = 5000;
+
 // Env-wide MEMBERSHIP scan (Imp5): which apps' sitemaps reference each id in `pageIds`. GROUNDED by a live
 // Dataverse probe (aurorabapenv03468): a generative page has NO `appmodulecomponent` row —
 // `appmodulecomponents?$filter=objectid eq <genPageId>` returns 0 rows. So a genpage's app membership lives
@@ -157,9 +162,14 @@ async function fetchSitemap(sdk, appUnique) {
 // Cost: O(number of apps) — one appmodule list + one sitemap read per OTHER app. `excludeAppUnique` skips the
 // app being built (self can't share with itself), so a SINGLE-APP environment reads ZERO other sitemaps.
 //
-// PAGINATION: `$top:5000` avoids the 500-row default OData cap; real tenants rarely have > a few hundred apps,
-// but this future-proofs against very large tenants. The SDK does not surface @odata.nextLink, so we rely on
-// a single over-provisioned page (documented limit — update to cursor pagination if the SDK adds it).
+// PAGINATION / FAIL-CLOSED AT THE CAP: `$top:APPMODULE_PAGE_CAP` requests one over-provisioned page. The
+// vendored SDK's queryRecords issues a SINGLE GET and does NOT follow `@odata.nextLink` (it exposes no
+// paginating query), so a result AT the cap means the list may be TRUNCATED and the rest is invisible.
+// Because an unlisted app could be the very one that shares a page we are about to UPDATE, a full page is
+// treated as a coverage failure → `{ ok:false, reason:'apps-truncated' }`, so this safety scan fails
+// CLOSED (the caller HALTs) instead of fail OPEN by silently missing apps. (A tenant with EXACTLY
+// APPMODULE_PAGE_CAP apps false-positives here — acceptably rare and still safe. Replace with cursor
+// pagination if the SDK ever exposes @odata.nextLink.)
 //
 // FAIL-CLOSED on the enumeration itself: a failed appmodule list → { ok:false } (caller refuses to proceed
 // without full visibility). BEST-EFFORT per app: an app whose sitemap we cannot read is recorded in `unreadable`
@@ -174,11 +184,22 @@ async function fetchAppsForPages(sdk, pageIds, opts) {
   try {
     apps = await sdk.queryRecords('appmodule', {
       select: ['appmoduleid', 'appmoduleidunique', 'uniquename'],
-      top:    5000, // over-provisioned page size — no 500-row cap (Task 1 requirement)
+      top:    APPMODULE_PAGE_CAP, // one over-provisioned page — see the FAIL-CLOSED-AT-THE-CAP note above
     });
   } catch (e) {
     // Fail-closed: cannot enumerate apps → cannot verify safety → report failure to caller.
     return { ok: false, error: String((e && e.message) || e) };
+  }
+
+  // Fail CLOSED on a full (possibly-truncated) page: queryRecords cannot page `@odata.nextLink`, so a
+  // result AT the cap may omit apps we can't see — and an unseen app could share the page we are about to
+  // UPDATE. Refuse rather than fail OPEN by scanning an incomplete list. See the PAGINATION note above.
+  if ((apps || []).length >= APPMODULE_PAGE_CAP) {
+    return {
+      ok: false,
+      reason: 'apps-truncated',
+      error: `appmodule enumeration returned the full ${APPMODULE_PAGE_CAP}-row page cap; the vendored SDK cannot paginate @odata.nextLink, so cross-app page-sharing cannot be verified for every app in this environment. Halting fail-closed to avoid overwriting a page shared by an unlisted app.`,
+    };
   }
 
   // Skip self up-front so a single-app env reads no sitemaps at all (minimal work).

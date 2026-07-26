@@ -46,6 +46,10 @@ test('entityFromMetadata builds a minimal (reuse-friendly) entity spec', () => {
   assert.strictEqual(e.schemaName, 'new_order');
   assert.strictEqual(e.primaryAttribute.schemaName, 'new_name');
   assert.deepStrictEqual(e.columns, []);
+  // A downloaded table is flagged existing:true so a teardown of THIS downloaded spec never deletes a
+  // table (+ its data) we cannot prove this build created — download can't distinguish app-created from
+  // merely-referenced tables, and deleting customer data is unrecoverable.
+  assert.strictEqual(e.existing, true, 'downloaded tables must be flagged existing:true (teardown data-loss guard)');
 });
 
 test('iconWebResources looks up web resources by NAME (not id) and maps type from webresourcetype', async () => {
