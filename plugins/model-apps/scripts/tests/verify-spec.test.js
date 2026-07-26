@@ -389,3 +389,91 @@ test('verifySpec pages: each reader method called exactly once (caching, Imp7)',
   assert.strictEqual(manifestCalls, 1, 'manifest called exactly once');
 });
 
+// ── Content-level verify (F5 scoped): catch a build that reports success while the deployed artifact
+// DIFFERS from the spec (edits silently not applied). All best-effort + ADDITIVE — a check only fires
+// when the reader supplies the data, so existing existence-only readers are unaffected. ────────────
+
+test('verifySpec: view-columns — a spec view column missing from the deployed layoutxml FAILS (F5)', async () => {
+  const spec = { entities: [], charts: [], forms: [],
+    views: [{ entity: 'new_o', name: 'V', columns: ['new_name', 'new_status'] }], appShell: { areas: [] } };
+  const read = {
+    findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '',
+    // Deployed view exists but its layoutxml is MISSING new_status (an unapplied column edit).
+    queryRecords: async (set) => (set === 'savedquery'
+      ? [{ savedqueryid: 'v1', layoutxml: '<grid><row><cell name="new_name"/></row></grid>' }]
+      : []),
+  };
+  const r = await verifySpec(spec, read);
+  assert.ok(r.checks.some((c) => c.kind === 'view' && c.present), 'the view exists (existence check still passes)');
+  const vc = r.checks.find((c) => c.kind === 'view-columns');
+  assert.ok(vc && !vc.present, 'view-columns FAILS because new_status is not in the deployed layoutxml');
+  assert.strictEqual(r.ok, false);
+});
+
+test('verifySpec: view-columns — passes when every spec column is in the layoutxml (extra deployed cols OK)', async () => {
+  const spec = { entities: [], charts: [], forms: [],
+    views: [{ entity: 'new_o', name: 'V', columns: ['new_name'] }], appShell: { areas: [] } };
+  const read = {
+    findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '',
+    queryRecords: async (set) => (set === 'savedquery'
+      ? [{ savedqueryid: 'v1', layoutxml: '<grid><row><cell name="new_name"/><cell name="createdon"/></row></grid>' }]
+      : []),
+  };
+  const r = await verifySpec(spec, read);
+  const vc = r.checks.find((c) => c.kind === 'view-columns');
+  assert.ok(vc && vc.present, 'all spec columns present -> view-columns passes (a deployed extra column is fine — additive)');
+});
+
+test('verifySpec: view-columns check is SKIPPED when the reader gives no layoutxml (existence-only readers unaffected)', async () => {
+  const spec = { entities: [], charts: [], forms: [],
+    views: [{ entity: 'new_o', name: 'V', columns: ['new_name'] }], appShell: { areas: [] } };
+  const read = { findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '',
+    queryRecords: async (set) => (set === 'savedquery' ? [{ savedqueryid: 'v1' }] : []) };
+  const r = await verifySpec(spec, read);
+  assert.ok(r.checks.some((c) => c.kind === 'view' && c.present));
+  assert.ok(!r.checks.some((c) => c.kind === 'view-columns'), 'no layoutxml -> no view-columns check (best-effort)');
+});
+
+test('verifySpec: relationship existence — a declared relationship absent from the child metadata FAILS (F5)', async () => {
+  const spec = { entities: [{ schemaName: 'new_o' }], views: [], charts: [], forms: [], appShell: { areas: [] },
+    relationships: [{ type: 'OneToMany', referenced: 'new_customer', referencing: 'new_o', lookup: { schemaName: 'new_CustomerId' } }] };
+  const read = {
+    findTable: async () => ({ logicalName: 'new_o' }), findColumns: async () => [], queryRecords: async () => [], sitemapXml: async () => '',
+    // Child entity metadata has NO relationships -> the declared relationship silently didn't build.
+    entityRelationships: async () => [],
+  };
+  const r = await verifySpec(spec, read);
+  const rc = r.checks.find((c) => c.kind === 'relationship');
+  assert.ok(rc && !rc.present, 'relationship existence FAILS when absent from child metadata');
+  assert.strictEqual(r.ok, false);
+});
+
+test('verifySpec: relationship check is SKIPPED when the reader cannot list relationships (best-effort)', async () => {
+  const spec = { entities: [], views: [], charts: [], forms: [], appShell: { areas: [] },
+    relationships: [{ type: 'OneToMany', referenced: 'new_customer', referencing: 'new_o', lookup: { schemaName: 'new_CustomerId' } }] };
+  const read = { findTable: async () => null, findColumns: async () => [], queryRecords: async () => [], sitemapXml: async () => '' };
+  const r = await verifySpec(spec, read);
+  assert.ok(!r.checks.some((c) => c.kind === 'relationship'), 'no entityRelationships reader -> no relationship check');
+});
+
+test('verifySpec: command existence — a declared command bar with no deployed appaction FAILS (F5)', async () => {
+  const spec = { entities: [{ schemaName: 'new_o' }], views: [], charts: [], forms: [], appShell: { areas: [] },
+    commands: [{ entity: 'new_o', label: 'Escalate', library: 'new_o.js', function: 'X.y' }] };
+  const read = {
+    findTable: async () => ({ logicalName: 'new_o' }), findColumns: async () => [], queryRecords: async () => [], sitemapXml: async () => '',
+    commandBar: async () => false, // no command bar deployed for the entity
+  };
+  const r = await verifySpec(spec, read);
+  const cc = r.checks.find((c) => c.kind === 'command');
+  assert.ok(cc && !cc.present, 'command existence FAILS when no appaction bar exists for the entity');
+  assert.strictEqual(r.ok, false);
+});
+
+test('verifySpec: command check is SKIPPED when the reader cannot resolve a command bar (best-effort)', async () => {
+  const spec = { entities: [], views: [], charts: [], forms: [], appShell: { areas: [] },
+    commands: [{ entity: 'new_o', label: 'Escalate', library: 'new_o.js', function: 'X.y' }] };
+  const read = { findTable: async () => null, findColumns: async () => [], queryRecords: async () => [], sitemapXml: async () => '' };
+  const r = await verifySpec(spec, read);
+  assert.ok(!r.checks.some((c) => c.kind === 'command'), 'no commandBar reader -> no command check');
+});
+

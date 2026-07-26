@@ -5,7 +5,7 @@
 // { ok, checks:[{kind,name,present,detail}], missing:[…] }.
 
 const { odataLit } = require('./odata.js');
-const { normalizePageSource } = require('./app-spec.js');
+const { normalizePageSource, relationshipSchemaName, manyToManySchemaName } = require('./app-spec.js');
 const { extractNavTargets } = require('./pageref-resolver.js');
 
 async function verifySpec(spec, read) {
@@ -25,8 +25,22 @@ async function verifySpec(spec, read) {
 
   // Views / charts / forms — by (entity, name) identity.
   for (const v of spec.views || []) {
-    const rows = await read.queryRecords('savedquery', { select: ['savedqueryid'], filter: `returnedtypecode eq '${String(v.entity).toLowerCase()}' and name eq '${odataLit(v.name)}'`, top: 1 });
-    add('view', v.name, rows && rows[0]);
+    // Also select layoutxml so a CONTENT check can catch a view whose column set drifted from the spec
+    // (reconcileView is additive-union, so a removed/renamed spec column would otherwise silently NOT
+    // apply and still pass an existence-only verify). Best-effort: the column check only runs when the
+    // deployed row actually carries layoutxml — an existence-only reader (no layoutxml) skips it.
+    const rows = await read.queryRecords('savedquery', { select: ['savedqueryid', 'layoutxml'], filter: `returnedtypecode eq '${String(v.entity).toLowerCase()}' and name eq '${odataLit(v.name)}'`, top: 1 });
+    const row = rows && rows[0];
+    add('view', v.name, row);
+    const specCols = (v.columns || []).map((c) => String(c).toLowerCase());
+    if (row && row.layoutxml && specCols.length) {
+      // Deployed column set from the saved view's layoutxml (<cell name="…"/> per column). We require
+      // spec columns ⊆ deployed columns (NOT set-equality): a deployed EXTRA column (default-view
+      // enrichment, or a maker's manual add) is fine; a MISSING spec column is the divergence we flag.
+      const deployed = new Set(layoutColumnNames(row.layoutxml));
+      const missingCols = specCols.filter((c) => !deployed.has(c));
+      add('view-columns', v.name, missingCols.length === 0, missingCols.length ? `missing column(s): ${missingCols.join(', ')}` : '');
+    }
   }
   for (const ch of spec.charts || []) {
     const rows = await read.queryRecords('savedqueryvisualization', { select: ['savedqueryvisualizationid'], filter: `primaryentitytypecode eq '${String(ch.entity).toLowerCase()}' and name eq '${odataLit(ch.name)}'`, top: 1 });
@@ -36,6 +50,40 @@ async function verifySpec(spec, read) {
     const name = f.name || `${f.entity} form`;
     const rows = await read.queryRecords('systemform', { select: ['formid'], filter: `objecttypecode eq '${String(f.entity).toLowerCase()}' and name eq '${odataLit(name)}'`, top: 1 });
     add('form', name, rows && rows[0]);
+  }
+
+  // Relationships (existence) — currently a build can declare a relationship that silently fails to
+  // materialize and still pass verify (relationships weren't checked at all). Best-effort: only when the
+  // reader can list a child entity's relationship schema names (`entityRelationships`). Match the same
+  // schema name the build/teardown compute (relationshipSchemaName / manyToManySchemaName), so an
+  // explicit schemaName or an auto-prefixed system-table relationship is compared correctly.
+  if (typeof read.entityRelationships === 'function') {
+    const prefix = spec.solution && spec.solution.publisherPrefix;
+    const relCache = new Map(); // childLogical -> Set(schemaName lower) — one metadata read per child
+    for (const r of spec.relationships || []) {
+      const schema = String(r.type === 'ManyToMany' ? manyToManySchemaName(r, prefix) : relationshipSchemaName(r, prefix)).toLowerCase();
+      // A 1:N relationship lives on the referencing (child) entity; an N:N is symmetric — check entity1.
+      const child = String((r.type === 'ManyToMany' ? (r.entity1 || r.entity2) : r.referencing) || '').toLowerCase();
+      if (!child) continue;
+      if (!relCache.has(child)) {
+        let names = [];
+        try { names = (await read.entityRelationships(child)) || []; } catch { names = []; }
+        relCache.set(child, new Set(names.map((n) => String(n).toLowerCase())));
+      }
+      add('relationship', schema, relCache.get(child).has(schema));
+    }
+  }
+
+  // Commands (existence) — a spec can declare a command bar that didn't build and still pass verify
+  // (commands weren't checked). The SDK models one command bar per entity, so verify per entity. Best-
+  // effort: only when the reader can resolve a command bar (`commandBar(entity)` -> truthy when present).
+  if (typeof read.commandBar === 'function') {
+    const cmdEntities = new Set((spec.commands || []).map((c) => String(c.entity).toLowerCase()));
+    for (const entity of cmdEntities) {
+      let present = false;
+      try { present = !!(await read.commandBar(entity)); } catch { present = false; }
+      add('command', `${entity} command bar`, present);
+    }
   }
 
   // Sitemap subareas (+ icons). Scope every check to the specific element type (and, for a subarea
@@ -167,6 +215,20 @@ function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// Extract the deployed column logical names from a saved view's layoutxml. Shape (Dataverse grid
+// layout), e.g.:
+//   <grid name='resultset' ...><row ...><cell name='new_name' width='200' /><cell name='new_status' /></row></grid>
+// Only <cell name="…"> carries a column; attribute order varies and quotes may be single or double, so
+// match the `name` attribute on a `<cell` start-tag specifically (a `name` on <grid>/<row> is not a
+// column). Returned lower-cased for case-insensitive comparison with spec column logical names.
+function layoutColumnNames(xml) {
+  const out = [];
+  const re = /<cell\b[^>]*?\bname\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
+  let m;
+  while ((m = re.exec(String(xml || ''))) !== null) out.push(String(m[1] != null ? m[1] : m[2]).toLowerCase());
+  return out;
+}
+
 // True when the sitemap XML contains a `<tag ...>` start-tag whose attributes include every
 // name="value" pair in `attrs` (order-independent, scoped to a single element). Used so icon/entity
 // checks match on the intended element type rather than anywhere in the document.
@@ -215,4 +277,4 @@ function appShellReferencesPage(spec, key) {
   return false;
 }
 
-module.exports = { verifySpec, hasElement, subareaHasDashboard, subareaHasGenPage, appShellReferencesPage };
+module.exports = { verifySpec, hasElement, subareaHasDashboard, subareaHasGenPage, appShellReferencesPage, layoutColumnNames };

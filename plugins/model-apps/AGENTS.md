@@ -154,8 +154,15 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   existing views/charts without re-declaring them (genpage/entity/URL subareas round-trip losslessly). A
   dashboard whose tiles cannot be reconstructed is dropped and surfaced in `droppedSubareas`.
 - **`scripts/verify-model-app.js` → `scripts/lib/verify-spec.js`** — read-only reconcile of the App Spec
-  against what actually deployed (entities/columns/views/charts/forms + sitemap subareas + icons); exits
-  non-zero and lists anything missing, catching silent partial builds.
+  against what actually deployed; exits non-zero and lists anything missing, catching silent partial
+  builds. Checks **existence** (entities/columns/views/charts/forms + sitemap subareas + icons + pages by
+  id) AND, best-effort, **content** so an *unapplied edit* is caught (not just a missing artifact): a
+  view's **column set** (parsed from `layoutxml` — the additive `reconcileView` won't drop a removed spec
+  column, so this flags it), plus **relationship** and **command-bar existence** (previously unchecked).
+  Content checks are additive + reader-gated (they only fire when the reader supplies `layoutxml` /
+  `entityRelationships` / `commandBar`), so existence-only callers are unaffected. This is the F5
+  "convergence" mitigation: the build is additive (edits to existing artifacts aren't re-applied in
+  place — teardown + rebuild to converge), and verify makes any resulting divergence **loud**.
 - **`scripts/ai-preflight.js`** — standalone preflight report: prints each AI feature's on/off status
   and the exact admin action needed (Power Platform Admin Center → Environments → Settings → Product →
   Features) for anything off. Never fails. The `ai-features` build phase calls this logic internally and

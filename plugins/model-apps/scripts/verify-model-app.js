@@ -67,6 +67,26 @@ function readerFor(sdk, appUnique, opts) {
     findTable: async (logical) => { const l = String(logical).toLowerCase(); const t = await sdk.findTables(l); return (t || []).find((x) => String(x.logicalName).toLowerCase() === l) || null; },
     findColumns: async (logical) => sdk.findColumns(logical),
     queryRecords: (set, o) => sdk.queryRecords(set, o),
+    // entityRelationships(childLogical): the relationship SCHEMA NAMES defined on a child entity, for the
+    // content-verify relationship-existence check. Best-effort — a metadata read failure yields [] so the
+    // check simply can't confirm (never a false pass: [] => the declared relationship reads as missing,
+    // which is the fail-closed direction for a read-only reconcile). Reads OneToMany + ManyToMany schema
+    // names from the entity metadata (the shape download's fetchEntityMetadata already returns).
+    entityRelationships: async (childLogical) => {
+      const meta = await sdk.fetchEntityMetadata(String(childLogical).toLowerCase());
+      const rels = (meta && (meta.relationships || meta.Relationships)) || [];
+      return rels
+        .map((r) => r && (r.schemaName || r.SchemaName || r.name))
+        .filter(Boolean)
+        .map((n) => String(n).toLowerCase());
+    },
+    // commandBar(entity): truthy when a command bar (appaction set) exists for the entity — the identity
+    // the build/teardown use (resolveArtifact('command', { entity })). Best-effort — a resolve failure
+    // reads as absent (fail-closed for a read-only check).
+    commandBar: async (entity) => {
+      const items = await sdk.resolveArtifact('command', { entity: String(entity).toLowerCase() });
+      return !!(items && items[0] && items[0].id);
+    },
     // sitemapXml (string, fail-closed '') for entity/icon hasElement checks — from the discriminated sitemap
     // read. Returning '' on failure suppresses entity/icon checks without aborting the whole verify.
     sitemapXml: async () => { const r = await memoSitemap(); return r.ok ? r.xml : ''; },

@@ -73,7 +73,7 @@ are in [`architecture.md`](architecture.md).
 ## 🔜 Pending — by phase
 
 ### Phase: Edit & lifecycle
-- 🔲 **Delta / diff-based edit** — spec-diff against a deployed app and apply only the *changed* delta (SDK `updateColumn`/`deleteColumn`/`updateTable`/`deleteRelationship`/`updateWebResource`, `fetchArtifact` snapshots, `diffArtifact`) instead of a full idempotent re-apply.
+- 🔲 **Delta / diff-based edit (full desired-state convergence)** — today the build is **additive**: it creates what's missing and reuses what exists, but does NOT re-apply an edit to an already-deployed artifact (changed column type, removed view column, edited form/command/dashboard) and never removes an artifact dropped from the spec. The converging edit path today is **teardown + rebuild-fresh**; `--verify` now catches unapplied edits via content checks (view column set, relationship + command existence) so divergence is loud, not silent. The future increment: spec-diff against the deployed app and apply only the *changed* delta (SDK `updateColumn`/`deleteColumn`/`updateTable`/`deleteRelationship`/`updateWebResource`, `fetchArtifact` snapshots, `diffArtifact`) instead of a full re-apply — driven by real edit-workflow usage. (Deliberately NOT a per-resource `managed`/`additive`/`reference` mode system: that's backward-compat machinery for a prod tool; this is pre-prod, so convergence-by-default is the likely direction when it lands.)
 - 🔲 **Form events on existing forms** — fetch an existing form, add/replace handlers, publish (current wiring assumes a freshly built form).
 - 🔲 **`--dry-run` diff view** — show the spec-vs-deployed delta before apply (precursor to delta-based edit).
 

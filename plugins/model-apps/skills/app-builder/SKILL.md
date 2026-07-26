@@ -374,9 +374,16 @@ run with bounded parallelism; publish is one round-trip per entity + the app. Vi
   that one artifact (an unpublished edit to a live artifact is invisible). So `--publish` controls the
   expensive bulk publish, not "zero publishes"; a fresh build without it still leaves new
   tables/columns/relationships staged-but-unpublished in the solution.
-- **Idempotent.** Existing solution/tables/columns/relationships are detected and reused, so
-  re-runs and existing-table envs work without collisions. (Full spec-vs-deployed *diff* editing
-  of views/forms is a later increment.)
+- **Idempotent — but ADDITIVE, not yet full desired-state convergence.** Existing
+  solution/tables/columns/relationships/views/charts/forms/commands/dashboards are detected and **reused**,
+  so re-runs and existing-table envs work without collisions or duplicates. **The important caveat for
+  EDITS:** a rebuild is *additive* — it creates what's missing but does **not** re-apply changes to an
+  artifact that already exists (a changed column type, a removed view column — `reconcileView` only *adds*
+  spec columns — an edited form/command/dashboard), and it never removes an artifact you dropped from the
+  spec. **To apply a structural edit, `teardown --apply` then rebuild fresh** (both fully converge from the
+  spec). `--verify` now catches this: it checks **content** (a view's column set, relationship + command
+  existence), so an unapplied edit surfaces as a loud `verify FAIL`, not a false pass. Full in-place
+  spec-vs-deployed *diff* convergence is a tracked future increment (see `docs/app-builder-roadmap.md`).
 - Not in scope (later): business rules, **conditional** command visibility (Power-Fx-only), **titled
   command groups** (from-scratch — needs an SDK-synthesized parent row), lookup/associated views,
   multi-area sitemaps, security roles. (Supported: the full data model — all column types,
