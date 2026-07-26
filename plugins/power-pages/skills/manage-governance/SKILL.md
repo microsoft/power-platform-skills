@@ -237,6 +237,21 @@ Phrases the parser treats as unambiguous and skips the scope prompt for:
 > can't see the list, or submits any new operation, re-render the whole table
 > again before doing anything else. Displaying the table is mandatory and
 > load-bearing — skipping it, truncating it, or asking without it is a defect.
+>
+> **NEVER back-reference a prior message instead of re-emitting the rows.**
+> Each env pick is a fresh message, and the full table MUST physically appear in
+> that same message — every row, inline. It is a DEFECT to replace the rows with
+> any pointer to an earlier message, such as *"(full 64-row list shown above)"*,
+> *"(see the table above)"*, *"(list unchanged)"*, *"as shown previously"*, or a
+> collapsed one-row excerpt that shows only the flagged/`keep` default. The fact
+> that the same table appeared in a previous turn does NOT satisfy this rule —
+> paste the complete `render-env-table.js --markdown` output verbatim every
+> time. Likewise NEVER emit the `…` / ellipsis placeholder rows that appear in
+> this document's *examples*: those abbreviations exist only to keep THIS spec
+> short; a real reply must contain the actual environment rows the helper
+> printed, never a placeholder. When in doubt, re-run the helper and paste its
+> entire output — brevity is never a valid reason to shorten, summarize, or
+> reference-instead-of-render the environment list.
 
 > **Rule 0b — ALWAYS show the site (portal) list immediately after the
 > environment is selected, then ask the user to pick the scope.** The moment an
@@ -726,6 +741,57 @@ env value, and (for `Include` / `Exclude`) `get-portal.js` for the
 inclusion/exclusion lists, then apply the Phase 4.4.3 site-state table to each
 site in scope. If a live read fails, pass `currentState: "Unknown"` (never
 block the gate on a read error).
+
+**Step 1b — redundant-operation guard (already in the requested state).**
+Before rendering the Impact Summary, compare each in-scope site's Current State
+(from Step 1) to the state the request would set it to. When **every** site in
+scope is **already** in the requested state — i.e. the operation is a no-op for
+the sites the admin named — do **NOT** POST silently and do **NOT** skip ahead.
+Stop and ask the admin how to proceed, because the two reasonable outcomes
+diverge and one of them changes *other* sites.
+
+This guard fires in exactly these situations:
+
+| Op | Current env policy | In-scope site(s) already… | Guard fires |
+|----|--------------------|---------------------------|-------------|
+| **Enable** `<sites>` | `All` (or `Include` already containing them) | Enabled | yes |
+| **Disable** `<sites>` | `None` (or `Exclude` already containing them) | Disabled | yes |
+
+When it fires, ask a single **free-text** prompt (NOT an `AskUserQuestion`),
+naming the site(s) and the two options. Use the site name list for
+`<SITE_NAMES>`:
+
+> *"`<SITE_NAMES>` is already `<enabled|disabled>`. How would you like to
+> proceed?*
+> *1. **Keep** (no changes) — leave the current configuration as-is;
+> `<SITE_NAMES>` stays `<enabled|disabled>` along with all other applicable
+> sites.*
+> *2. **Enforce only on `<SITE_NAMES>`** — restrict the policy so it explicitly
+> targets only `<SITE_NAMES>` (`Include` for enable / `Exclude` for disable).*
+> *Reply **Keep** or **Enforce only on `<SITE_NAMES>`**."*
+
+Map the reply:
+
+- **Keep** → make **no** API call. Report *"No change made — `<SITE_NAMES>` is
+  already `<enabled|disabled>`."* and go straight to the Phase 5 loop. Skip the
+  consent gate and the POST entirely.
+- **Enforce only on `<sites>`** → set `<POLICY_VALUE>` = `Include` (enable) or
+  `Exclude` (disable) with `<PORTAL_IDS>` = the named site(s), then continue to
+  Step 2 (render the Impact Summary) and the normal consent gate. **Do not POST
+  yet** — the admin still approves at the gate.
+
+> **Enforce-only changes other sites — surface it.** Switching the env-wide
+> value to an explicit list re-scopes the policy for **every** site, not just
+> the named one. When the current env value is `All` and the admin picks
+> "Enforce only" on an **enable**, the sites **not** listed flip from Enabled →
+> Disabled. When the current env value is `None` and the admin picks "Enforce
+> only" on a **disable** (→ `Exclude`), the sites **not** listed flip from
+> Disabled → **Enabled** (because `Exclude` enables the policy everywhere except
+> the listed sites). Either way, after the admin chooses "Enforce only", the
+> Impact Summary / consent gate MUST make the collateral explicit: list the
+> out-of-scope sites and their Current → New State so the admin sees the full
+> blast radius before replying `Apply now`. Never let an "Enforce only" POST
+> flip other sites without showing it.
 
 **Step 2 — render the Impact Summary via the helper.** Build the request JSON
 and pipe it through `render-impact-summary.js`, emitting its output **verbatim**
@@ -1240,6 +1306,7 @@ Skill tracking:
 
 - **Plain language** — talk about "turning off the OpenID Connect / SAML sign-in path on portals", "turning Maker Copilot on / off for existing sites", or "enabling Google sign-in on your sites". Show the policy strings only when the user has shown they want the technical name.
 - **Explicit consent for Set** — never POST `/governance` without a Set-specific **free-text** confirmation (the user replies `Apply now`; do NOT use an `AskUserQuestion` with numbered options) that spells out which sign-in path / feature is being turned off and what happens to currently-signed-in users.
+- **Redundant-operation guard runs BEFORE the Impact Summary** — when the admin's requested operation is a no-op for the named site(s) (enable while the env is already `All`/`Include`-with-the-site, or disable while already `None`/`Exclude`-with-the-site), do **not** render the Impact Summary or POST yet. First stop and ask the **Keep** vs **Enforce only on `<sites>`** free-text question (Phase 4.2.3 Step 1b). `Keep` → no API call, report "no change" and loop. `Enforce only` → set `Include` (enable) / `Exclude` (disable) on the named site(s), THEN render the Impact Summary (surfacing the collateral flip on the other sites) and the normal `Apply now` consent gate.
 - **Always verify after Set** — run the matching `get-*` call after the polling script exits, even when it reports success.
 - **Always show the env list** — for **every** new user request / operation
   (Apply, Fetch Env, Fetch Site — including each loop iteration and every new
@@ -1249,7 +1316,13 @@ Skill tracking:
   the site picker or any `get-*` / `set-*` call. Never silently reuse the
   previously-chosen env and skip the env list — the default env is only
   pre-flagged in the **Selected** column (the signed-in / tenant-default env on
-  the first pick, or the previously-chosen env on later picks).
+  the first pick, or the previously-chosen env on later picks). The full table
+  MUST be re-emitted inline in the SAME message that prompts the pick — NEVER
+  back-reference an earlier message (e.g. *"(full list shown above)"*, *"(see
+  table above)"*, *"as shown previously"*) and NEVER collapse it to just the
+  flagged default row or `…` placeholder rows. Re-running the helper and pasting
+  its entire output every time is mandatory; brevity is not a valid reason to
+  shorten or reference-instead-of-render the list.
 - **No auto-proceed on Set** — flagging a default env in the **Selected** column
   is allowed, but the pick is never applied automatically: the user must
   confirm explicitly by typing `keep` (to use the flagged env) or a row

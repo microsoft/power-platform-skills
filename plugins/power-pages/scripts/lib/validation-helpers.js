@@ -89,24 +89,14 @@ function findPath(dir, target) {
 }
 
 /**
- * Finds the project root directory of a Power Pages site.
- *
- * A project root is marked by EITHER:
- *   - `powerpages.config.json` — code/SPA sites (`pac pages download-code-site`), OR
- *   - a `.powerpages-site/` directory — declarative design-studio sites
- *     (`pac pages download`; standard or enhanced data model). These have NO
- *     `powerpages.config.json`.
- *
- * Code sites have both markers; declarative sites have only
- * `.powerpages-site/`. Checking for either makes root discovery work for both site types.
- *
+ * Finds the project root directory (containing powerpages.config.json).
  * @returns {string|null} Project root path, or null
  */
 function findProjectRoot(dir) {
   let current = path.resolve(dir);
   while (true) {
-    if (fs.existsSync(path.join(current, 'powerpages.config.json')) ||
-        fs.existsSync(path.join(current, '.powerpages-site'))) {
+    const configPath = path.join(current, 'powerpages.config.json');
+    if (fs.existsSync(configPath)) {
       return current;
     }
 
@@ -117,11 +107,8 @@ function findProjectRoot(dir) {
     current = parent;
   }
 
-  // Fallback: search subdirectories for either marker (config first, then .powerpages-site/).
   const fallbackConfigPath = findPath(dir, 'powerpages.config.json');
-  if (fallbackConfigPath) return path.dirname(fallbackConfigPath);
-  const fallbackSiteDir = findPath(dir, '.powerpages-site');
-  return fallbackSiteDir ? path.dirname(fallbackSiteDir) : null;
+  return fallbackConfigPath ? path.dirname(fallbackConfigPath) : null;
 }
 
 /**
@@ -143,29 +130,9 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
  * subcommands reject it as an unrecognized argument), so it must not be passed
  * here. Accounts without a subscription can still mint AAD-scoped tokens after
  * signing in via `az login --allow-no-subscriptions`.
- *
- * Optionally pin the token to a specific tenant. When `tenantId` is provided
- * the token is minted against that tenant rather than Azure CLI's default
- * subscription — useful when PAC and Azure CLI defaults point at different
- * tenants. Falls back to the no-tenant call if the tenant-scoped one fails,
- * so existing single-tenant callers behave the same.
- *
- * @param {string} resourceUrl - The Azure AD resource / audience.
- * @param {string} [tenantId]  - Optional tenant id to pin the token to.
- * @returns {string|null} Access token, or null if unavailable.
+ * @returns {string|null} Access token, or null if unavailable
  */
-function getAuthToken(resourceUrl, tenantId) {
-  if (tenantId) {
-    try {
-      return execSync(
-        `az account get-access-token --resource "${resourceUrl}" --tenant "${tenantId}" --query accessToken -o tsv`,
-        { encoding: 'utf8', timeout: 15000 }
-      ).trim();
-    } catch {
-      // Tenant-scoped call failed (tenant not in Azure CLI session, etc.).
-      // Fall through to the default call so legacy single-tenant flows still work.
-    }
-  }
+function getAuthToken(resourceUrl) {
   try {
     return execSync(
       `az account get-access-token --resource "${resourceUrl}" --query accessToken -o tsv`,
@@ -180,48 +147,29 @@ function getAuthToken(resourceUrl, tenantId) {
  * Gets the environment URL from `pac env who`.
  * @returns {string|null} Environment URL, or null
  */
-// Pure parser (exported for unit testing — getEnvironmentUrl() shells out, so the
-// regex itself is tested here against raw banner text rather than through execSync).
-// PAC CLI labels the environment URL differently across versions / commands:
-// `pac env who` on 2.8.x prints it under "Org URL:" (inside "Organization
-// Information"); older/other builds emit "Environment URL:". Match EITHER — with
-// only the "Environment URL:" form this returned null on 2.8.x and every caller
-// relying on the pac-env-who fallback (verify-alm-prerequisites when --envUrl is
-// omitted, the datamodel / solution / permissions validators) silently failed.
-// Example 2.8.1 line: `  Org URL:    https://org4a2942d9.crm17.dynamics.com/`
-function parseEnvironmentUrl(whoOutput) {
-  if (!whoOutput) return null;
-  const match = whoOutput.match(/(?:Org URL|Environment URL):\s*(https:\/\/[^\s]+)/i);
-  return match ? match[1].replace(/\/+$/, '') : null;
-}
-
 function getEnvironmentUrl() {
   try {
     const output = execSync('pac env who', { encoding: 'utf8', timeout: 15000 });
-    return parseEnvironmentUrl(output);
+    const match = output.match(/Environment URL:\s*(https:\/\/[^\s]+)/i);
+    return match ? match[1].replace(/\/+$/, '') : null;
   } catch {
     return null;
   }
 }
 
 /**
- * Gets PAC CLI auth info (environment ID, cloud, tenant ID).
- * `tenantId` is null on older PAC builds whose `pac auth who` output omits the
- * "Tenant Id:" line — callers should treat null as "tenant unknown" and not
- * pin tokens to a specific tenant.
- * @returns {{ environmentId: string, cloud: string, tenantId: string|null }|null}
+ * Gets PAC CLI auth info (environment ID and cloud).
+ * @returns {{ environmentId: string, cloud: string }|null}
  */
 function getPacAuthInfo() {
   try {
     const output = execSync('pac auth who', { encoding: 'utf8', timeout: 15000 });
     const envMatch = output.match(/Environment ID:\s*([0-9a-fA-F-]+)/i);
     const cloudMatch = output.match(/Cloud:\s*(\S+)/i);
-    const tenantMatch = output.match(/Tenant Id:\s*([0-9a-fA-F-]+)/i);
     if (!envMatch) return null;
     return {
       environmentId: envMatch[1],
       cloud: cloudMatch ? cloudMatch[1] : 'Public',
-      tenantId: tenantMatch ? tenantMatch[1] : null,
     };
   } catch {
     return null;
@@ -275,69 +223,9 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
   });
 }
 
-/**
- * Single Dataverse OData GET (v9.2 headers, `Prefer: odata.maxpagesize=5000`),
- * throws on non-2xx. `url` is absolute — pass an `@odata.nextLink` straight back in.
- * @param {string} url - absolute URL
- * @param {string} token - bearer token
- * @param {Function} [request=makeRequest] - injectable for tests
- * @returns {Promise<object>} parsed JSON body
- */
-async function odataGet(url, token, request = makeRequest) {
-  const res = await request({
-    url,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/json',
-      'OData-MaxVersion': '4.0',
-      'OData-Version': '4.0',
-      Prefer: 'odata.maxpagesize=5000',
-    },
-    timeout: 30000,
-  });
-  if (res.error) throw new Error(`OData request failed: ${res.error}`);
-  if (res.statusCode < 200 || res.statusCode >= 300) {
-    throw new Error(`HTTP ${res.statusCode} from ${url}: ${(res.body || '').slice(0, 400)}`);
-  }
-  return JSON.parse(res.body);
-}
-
-/**
- * Follows `@odata.nextLink`, aggregating every page's `value[]` into one array.
- * `maxPages` is a runaway-loop safety cap (100 × 5000 ≈ 500K rows). FAILS CLOSED:
- * if the cap is reached while `@odata.nextLink` is still present, throws rather than
- * silently returning a truncated set — a partial result would produce wrong
- * table/env-var counts for ALM sizing/splitting with no signal. Callers that want
- * partial results must catch and downgrade accuracy intentionally.
- * @param {string} url - absolute starting URL
- * @param {string} token - bearer token
- * @param {Function} [request=makeRequest] - injectable for tests
- * @param {number} [maxPages=100]
- * @returns {Promise<object[]>}
- */
-async function odataGetAll(url, token, request = makeRequest, maxPages = 100) {
-  const out = [];
-  let next = url;
-  let p = 0;
-  for (; p < maxPages && next; p++) {
-    const page = await odataGet(next, token, request);
-    if (Array.isArray(page.value)) out.push(...page.value);
-    next = page['@odata.nextLink'] || null;
-  }
-  if (next) {
-    throw new Error(
-      `odataGetAll hit the ${maxPages}-page cap with @odata.nextLink still present ` +
-      `(${out.length} rows so far) — result would be truncated. Raise maxPages or narrow the query.`,
-    );
-  }
-  return out;
-}
-
 /** Cloud → Power Platform API base URL mapping */
 const CLOUD_TO_API = {
   'Public': 'https://api.powerplatform.com',
-  // TEMP (manage-governance test): remove before merging.
-  'Preprod': 'https://api.preprod.powerplatform.com',
   'UsGov': 'https://api.gov.powerplatform.microsoft.us',
   'UsGovHigh': 'https://api.high.powerplatform.microsoft.us',
   'UsGovDod': 'https://api.appsplatform.us',
@@ -364,10 +252,7 @@ module.exports = {
   UUID_REGEX,
   getAuthToken,
   makeRequest,
-  odataGet,
-  odataGetAll,
   getEnvironmentUrl,
-  parseEnvironmentUrl,
   getPacAuthInfo,
   CLOUD_TO_API,
   CLOUD_TO_SITE_DOMAIN,

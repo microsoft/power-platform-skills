@@ -15,7 +15,7 @@ const {
 const DEFAULT_POLL_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 const AZ_TIMEOUT_MS = 15_000;
-const API_VERSION = process.env.PP_API_VERSION || '2022-03-01-preview';
+const API_VERSION = '2022-03-01-preview';
 
 function getTenantId() {
   // PAC CLI does not expose tenant id; pull it from Azure CLI which shares
@@ -45,16 +45,12 @@ function resolveContext() {
   if (!pac) {
     return { error: 'Power Platform CLI is not signed in. Run: pac auth create' };
   }
-  const azTenantId = getTenantId();
-  if (!azTenantId) {
+  const tenantId = getTenantId();
+  if (!tenantId) {
     return { error: 'Azure CLI is not signed in. Run: az login' };
   }
   const apiHost = CLOUD_TO_API[pac.cloud] || CLOUD_TO_API.Public;
-  // Prefer the PAC tenant when known — the Power Platform env lives there, so
-  // the token must be minted against it. Falls back to Azure CLI's default
-  // tenant when PAC didn't report one (older PAC builds).
-  const tenantId = pac.tenantId || azTenantId;
-  const token = getAuthToken(apiHost, pac.tenantId || undefined);
+  const token = getAuthToken(apiHost);
   if (!token) {
     return { error: `Failed to acquire access token for ${apiHost}.` };
   }

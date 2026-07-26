@@ -79,6 +79,12 @@ Flags:
                      portals. When provided, the policy defaults to
                      policyValue="Include" + ToBeAdded=[ids]. When omitted
                      and --portalId is also omitted, defaults to "All".
+  --removePortalIds  Optional comma- or space-separated list of portal ids to
+                     DROP from an existing Include allow-list / Exclude
+                     block-list (populates ToBeRemoved). The gateway treats
+                     ToBeAdded as additive, so this is the ONLY way to shrink a
+                     list without clearing the whole policy via "None". Combine
+                     with --policyValue Include (or Exclude) to keep the mode.
   --policyValue      Optional explicit policy value (overrides the default
                      derived from --portalId). One of: ${VALID_POLICY_VALUES.join(', ')}.
                      Use "None" for a safe round-trip test of the write path.
@@ -103,7 +109,7 @@ Stdout (JSON):
     "attempts", "finalValue" }
 `;
 
-function buildPolicyPayload(policy, portalIdsArg, policyValueOverride) {
+function buildPolicyPayload(policy, portalIdsArg, policyValueOverride, removePortalIdsArg) {
   // Accept either a single portalId string (legacy) or an array of ids.
   let portalIds;
   if (portalIdsArg == null || portalIdsArg === '') {
@@ -113,20 +119,41 @@ function buildPolicyPayload(policy, portalIdsArg, policyValueOverride) {
   } else {
     portalIds = [portalIdsArg];
   }
+  // ToBeRemoved is the gateway's REMOVAL delta for an Include/Exclude allow-list.
+  // The gateway treats ToBeAdded as an ADDITIVE delta against the existing list
+  // (NOT a full replace, despite the doc contract's "apply only to portals in
+  // ToBeAdded" wording): re-posting Include with a SHORTER ToBeAdded leaves the
+  // previously-added sites on the list untouched. So the ONLY way to drop a site
+  // from an Include allow-list (or an Exclude block-list) without clearing the
+  // whole policy (None) is to name it here in ToBeRemoved. Observed live on
+  // EnableProtocolOpenIdConnect: Include=[P1,P2] then re-post Include=[P1] ->
+  // env still reads {P1,P2}; Include + ToBeRemoved=[P2] -> env reads {P1}.
+  let removePortalIds;
+  if (removePortalIdsArg == null || removePortalIdsArg === '') {
+    removePortalIds = [];
+  } else if (Array.isArray(removePortalIdsArg)) {
+    removePortalIds = removePortalIdsArg.filter(Boolean);
+  } else {
+    removePortalIds = [removePortalIdsArg];
+  }
   // Derive the canonical policyValue (All / None / Include / Exclude) first,
   // then forward-map it to the gateway WRITE vocabulary. Env-level policies
   // require the applyTo enum form ("AllSites"); posting the short canonical
   // form makes the gateway silently reject the upsert ("Website id cannot be
   // null or empty") and leaves the env unchanged. See policies.js
   // toWritePolicyValue / WRITE_VALUE_ALIASES for the WHY.
+  // A removal-only edit (drop a site from the allow-list, keep the mode) passes
+  // no ToBeAdded, so fall back to Include as the mode when only removals are
+  // present — the caller keeps the env in allow-list mode, it just shrinks.
   const canonicalValue =
-    policyValueOverride || (portalIds.length > 0 ? 'Include' : 'All');
+    policyValueOverride ||
+    (portalIds.length > 0 || removePortalIds.length > 0 ? 'Include' : 'All');
   return [
     {
       policyName: policy,
       policyValue: toWritePolicyValue(canonicalValue, policy),
       ToBeAdded: portalIds,
-      ToBeRemoved: [],
+      ToBeRemoved: removePortalIds,
     },
   ];
 }
@@ -156,6 +183,7 @@ async function main() {
   const portalIds = portalIdsFromFlag.length > 0
     ? portalIdsFromFlag
     : (args.portalId ? [args.portalId] : []);
+  const removePortalIds = parsePortalIdsFlag(args.removePortalIds);
   const useAdminPortal = Boolean(args.useAdminPortal);
   const policyValueOverride = args.policyValue || null;
   if (policyValueOverride && !VALID_POLICY_VALUES.includes(policyValueOverride)) {
@@ -169,18 +197,21 @@ async function main() {
   const transportLabel = useAdminPortal ? 'admin-portal' : 'gateway';
   const scopeLabel = portalIds.length > 0
     ? `${portalIds.length} portal(s)`
-    : `env ${args.envId || '<current>'}`;
+    : (removePortalIds.length > 0
+        ? `remove ${removePortalIds.length} portal(s)`
+        : `env ${args.envId || '<current>'}`);
   process.stderr.write(
     `Applying ${args.policy} to ${scopeLabel} via ${transportLabel}...\n`
   );
 
-  const body = buildPolicyPayload(args.policy, portalIds, policyValueOverride);
+  const body = buildPolicyPayload(args.policy, portalIds, policyValueOverride, removePortalIds);
   // The canonical scope (All/None/Include/Exclude) we are asking the gateway to
   // set — mirrors the derivation inside buildPolicyPayload. Used below to verify
   // the write against the ACTUAL env state, not the (possibly stale) status
   // endpoint.
   const requestedCanonical =
-    policyValueOverride || (portalIds.length > 0 ? 'Include' : 'All');
+    policyValueOverride ||
+    (portalIds.length > 0 || removePortalIds.length > 0 ? 'Include' : 'All');
   const start = await callGovernance({
     op: 'apply',
     envId: args.envId,
