@@ -38,6 +38,7 @@ const { appUniqueName, commandsByEntity, defaultViewColumns } = require('./sdk-b
 const { manifestResourceName } = require('./page-manifest.js');
 const { relationshipSchemaName, manyToManySchemaName, lookupColumnsFor } = require('./app-spec.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
+const { isRestrictedSolution } = require('./system-solutions.js');
 
 // OData v4 string-literal escaping lives in ./odata.js. `odataStr` is kept as a backward-compatible
 // alias because it is part of this module's exported (and unit-tested) surface.
@@ -260,6 +261,14 @@ const KIND_HANDLERS = {
   },
   solution: {
     async resolve(sdk, target) {
+      // A built-in system solution (Active/Default/Basic) can never be deleted — Dataverse 400s
+      // ("Attempting to delete a restricted solution ..."). A downloaded spec whose real solution
+      // wasn't recovered defaults its solution to 'Default' (see download-model-app recoverAppSolution),
+      // so a spec-driven teardown of such a download would otherwise error here. Skip it with an
+      // auditable reason instead — the `{ items, skipReason }` shape marks the step skipped, not failed.
+      if (isRestrictedSolution(target.uniqueName)) {
+        return { items: [], skipReason: 'restricted system solution' };
+      }
       const items = await sdk.resolveArtifact('solution', { uniqueName: target.uniqueName });
       return (items || []).map((x) => ({ id: x.id, name: x.name }));
     },

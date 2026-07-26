@@ -190,8 +190,10 @@ deterministic, idempotent, narrated SDK build. Create and **edit share one path*
    Edit  = same path:  download-model-app.js  pulls a deployed app → editable spec → re-run full build
                        (sitemap-authoritative enumeration: MEMBERSHIP = app sitemap GenPageId set;
                         each page's pageId kept in the downloaded spec — edit-snapshot;
-                        fetches <app>_pagemanifest fail-closed, reverse-normalizes PAGEREF_ placeholders).
-   Cleanup =           teardown-model-app.js  reverse-of-build, classifier-safe, dry-run by default.
+                        fetches <app>_pagemanifest fail-closed, reverse-normalizes PAGEREF_ placeholders;
+                        recovers the app's real unmanaged solution, excluding Active/Default/Basic).
+   Cleanup =           teardown-model-app.js  reverse-of-build, classifier-safe, dry-run by default
+                       (skips restricted system solutions Active/Default/Basic — never 400s on them).
 ```
 
 **Stage → engine-phase legend:**

@@ -110,7 +110,10 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   **icon** web resource is referenced by the table itself, so Dataverse refuses to delete it until the table
   is gone (form JS, referenced by its already-deleted form, is safe either way). Teardown also removes the
   build's **generated default app icon** (`<appUnique>_icon`, created in-solution when the spec sets no
-  `app.icon`) so it doesn't leak as an orphan. The empty solution container goes last. Command teardown
+  `app.icon`) so it doesn't leak as an orphan. The empty solution container goes last — but a **built-in
+  system solution** (`Active`/`Default`/`Basic`) is **skipped** (Dataverse 400s any delete of a restricted
+  solution), so a downloaded spec whose real solution could not be recovered (and defaulted to `Default`)
+  still tears down cleanly instead of erroring. Command teardown
   removes the whole command bar for an entity the spec authored commands on (the SDK models a command bar
   per entity, not per button). Every id is resolved from a spec-declared name/logical/uniquename via an
   exact-match OData filter, so it can never wildcard-scan an org. **Dry-run by default** (`--apply`
@@ -122,6 +125,10 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
 - **`scripts/download-model-app.js` → `scripts/lib/hydrate-spec.js`** — the **edit flow**: pulls a
   *deployed* app back into a complete App Spec + page code (sitemap → `appShell` with icons, **every**
   generative page via `pac model genpage download`, referenced entities, icon web resources, solution).
+  The **solution** is recovered as the app's one *real* unmanaged solution — `recoverAppSolution` enumerates
+  the app's solution memberships and excludes the built-in `Active`/`Default`/`Basic` system solutions the
+  app is also a member of (see `scripts/lib/system-solutions.js`), so the downloaded spec can cleanly tear
+  down its own solution instead of targeting the restricted `Default`.
   Edit the downloaded spec and re-run the build (idempotent) — create and edit share one path. Always
   pull fresh at the start of an edit session (the build reads an etag; a write against an artifact
   changed in Maker throws a version conflict → re-pull, never clobber). **Limitation (Preview):** classic
@@ -237,6 +244,7 @@ scripts/
     ai-candidates.js           ← selects good-candidate tables for auto row-summary mode
     ai-prompt.js               ← generates tailored Copilot row-summary prompts
     _graph.js                  ← entity topological ordering (shared by build + teardown)
+    system-solutions.js        ← built-in system solutions (Active/Default/Basic) — shared by download recovery + teardown skip
   vendor/cds-maker-sdk.cjs     ← headless vendored SDK bundle (rebuilt via _vendor-build/)
   _vendor-build/               ← esbuild vendoring tooling (build.js + pinned deps)
   tests/                       ← node --test coverage for the scripts above

@@ -78,7 +78,7 @@ test('droppedSubareaCount counts subareas the spec could not round-trip (e.g. da
 });
 
 // ── Task 11: assignPageKeys + missingDownloads + full round-trip ──────────────
-const { assignPageKeys, missingDownloads, runDownload } = require('../download-model-app.js');
+const { assignPageKeys, missingDownloads, runDownload, recoverAppSolution } = require('../download-model-app.js');
 const { reconcilePageIds, buildManifest } = require('../lib/page-manifest.js');
 const { hydrateSpec } = require('../lib/hydrate-spec.js');
 const { validateAppSpec } = require('../lib/app-spec.js');
@@ -275,4 +275,65 @@ test('Task-6: full round-trip via runDownload → hydrateSpec → validateAppSpe
   } finally {
     fs.rmSync(out, { recursive: true, force: true });
   }
+});
+
+// ── recoverAppSolution: recover an app's REAL unmanaged solution (fixes the download→teardown
+// round-trip). An app module is a solutioncomponent of EVERY solution it belongs to — the built-in
+// system solutions (Active/Default/Basic) AND the real one it was created in. The old code took
+// top:1 with no ordering and often got 'Default' (also ismanaged=false), so hydrate defaulted the
+// spec's solution to the restricted Default and a downloaded spec could never tear down its own
+// solution (teardown 400s on Default, orphaning the real one). ──────────────────────────────
+test('recoverAppSolution enumerates ALL memberships and returns the one real unmanaged solution', async () => {
+  const APP = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  const calls = [];
+  const sdk = {
+    queryRecords: async (logical, opts) => {
+      calls.push({ logical, opts });
+      if (logical === 'solutioncomponent') {
+        assert.match(opts.filter, new RegExp(`objectid eq ${APP}`), 'filters components by the app id');
+        assert.notStrictEqual(opts.top, 1, 'must NOT cap at top:1 — an app belongs to multiple solutions');
+        return [
+          { _solutionid_value: 'sol-default' },
+          { _solutionid_value: 'sol-active' },
+          { _solutionid_value: 'sol-real' },
+        ];
+      }
+      if (logical === 'solution') {
+        return [
+          { solutionid: 'sol-default', uniquename: 'Default', ismanaged: false },
+          { solutionid: 'sol-active', uniquename: 'Active', ismanaged: false },
+          { solutionid: 'sol-real', uniquename: 'NucleoLive2', ismanaged: false },
+        ];
+      }
+      return [];
+    },
+  };
+  const sol = await recoverAppSolution(sdk, APP);
+  assert.deepStrictEqual(sol, { uniqueName: 'NucleoLive2', publisherPrefix: 'new' });
+});
+
+test('recoverAppSolution ignores managed solutions and returns null when only system/managed remain', async () => {
+  const sdk = {
+    queryRecords: async (logical) => {
+      if (logical === 'solutioncomponent') return [{ _solutionid_value: 'sol-default' }, { _solutionid_value: 'sol-mgd' }];
+      if (logical === 'solution') {
+        return [
+          { solutionid: 'sol-default', uniquename: 'Default', ismanaged: false },
+          { solutionid: 'sol-mgd', uniquename: 'SomeManagedPack', ismanaged: true },
+        ];
+      }
+      return [];
+    },
+  };
+  assert.strictEqual(await recoverAppSolution(sdk, 'app'), null);
+});
+
+test('recoverAppSolution returns null when the app has no solution components (caller keeps its default)', async () => {
+  const sdk = { queryRecords: async () => [] };
+  assert.strictEqual(await recoverAppSolution(sdk, 'app'), null);
+});
+
+test('recoverAppSolution never throws — a query error resolves to null (best-effort)', async () => {
+  const sdk = { queryRecords: async () => { throw new Error('boom'); } };
+  assert.strictEqual(await recoverAppSolution(sdk, 'app'), null);
 });

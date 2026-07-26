@@ -16,6 +16,7 @@ const { makeGenpageCli } = require('./lib/genpage-cli.js');
 const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require('./lib/page-manifest.js');
 const { reverseResolveNavIds } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages } = require('./lib/sitemap-pages.js');
+const { isRestrictedSolution } = require('./lib/system-solutions.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
 const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7: 'gif', 8: 'xap', 9: 'xsl', 10: 'ico', 11: 'svg', 12: 'resx' };
@@ -200,6 +201,37 @@ function droppedSubareaCount(app, spec) {
   return countSub(app && app.siteMap && app.siteMap.areas) - countSub(spec && spec.appShell && spec.appShell.areas);
 }
 
+// Recover the REAL unmanaged solution an app module belongs to. An app is a `solutioncomponent` of
+// EVERY solution it lives in — always the built-in system solutions (Active/Default/Basic) AND the
+// real unmanaged solution it was created in. The naive `top:1` query returns an arbitrary row (often
+// 'Default', which is itself ismanaged=false, so an ismanaged filter does not exclude it), so the
+// real solution was never recovered and a downloaded spec defaulted its solution to the restricted
+// 'Default' — which teardown then 400s on, orphaning the real solution. So enumerate ALL memberships
+// and pick the single unmanaged, non-system solution. Best-effort: returns null (caller keeps its own
+// default) on no match or any query error — never throws.
+async function recoverAppSolution(sdk, appId) {
+  try {
+    // objectid == the appmoduleid. `top:500` is a safe over-provision (an app is realistically a
+    // component of only a handful of solutions) that keeps us on the same proven query path as every
+    // other queryRecords call in the skill (all pass an explicit top) — it just must not be the old
+    // `top:1`, which returned an arbitrary single membership (often 'Default').
+    const comps = await sdk.queryRecords('solutioncomponent', { select: ['_solutionid_value'], filter: `objectid eq ${appId}`, top: 500 });
+    const solIds = [...new Set((comps || []).map((c) => c && c._solutionid_value).filter(Boolean))];
+    if (!solIds.length) return null;
+    // One OR-batched lookup for all candidate solutions (solutionid is a Guid, so it is unquoted in
+    // the OData filter — mirrors the existing `solutionid eq ${id}` usage elsewhere in this file).
+    const filter = solIds.map((id) => `solutionid eq ${id}`).join(' or ');
+    const sols = await sdk.queryRecords('solution', { select: ['solutionid', 'uniquename', 'ismanaged'], filter, top: 500 });
+    const real = (sols || []).find((s) => s && s.ismanaged === false && !isRestrictedSolution(s.uniquename));
+    // publisherPrefix stays 'new' (unchanged from the prior default): the edit round-trip reuses
+    // existing tables/columns, so the prefix is not needed to re-apply; only the uniqueName matters
+    // for a clean solution teardown, which is what this recovery fixes.
+    return real ? { uniqueName: real.uniquename, publisherPrefix: 'new' } : null;
+  } catch {
+    return null; // best-effort — a recovery failure must not break the download
+  }
+}
+
 // Injectable download helper: all live-Dataverse work happens here so tests can inject mock deps.
 // `sdk`        — the MakerSDK (fetchArtifact, queryRecords, fetchEntityMetadata)
 // `genpageCli` — the genpage CLI wrapper (enumerateEnv, download)
@@ -336,16 +368,12 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique }) {
   let dashboards = [];
   try { dashboards = await readDashboards(sdk, app); } catch (e) { process.stderr.write(`(dashboards reconstruction skipped: ${e.message})\n`); }
 
-  // Solution (best-effort): the unmanaged solution the appmodule belongs to.
+  // Solution (best-effort): the real unmanaged solution the appmodule belongs to. Falls back to the
+  // restricted 'Default' only when recovery finds nothing — that fallback cannot be torn down, but
+  // teardown skips it safely (see system-solutions.js) rather than erroring.
   let solution = { uniqueName: 'Default', publisherPrefix: 'new' };
-  try {
-    const comps = await sdk.queryRecords('solutioncomponent', { select: ['_solutionid_value'], filter: `objectid eq ${appId}`, top: 1 });
-    const solId = comps && comps[0] && comps[0]._solutionid_value;
-    if (solId) {
-      const sols = await sdk.queryRecords('solution', { select: ['uniquename', 'friendlyname'], filter: `solutionid eq ${solId} and ismanaged eq false`, top: 1 });
-      if (sols && sols[0]) solution = { uniqueName: sols[0].uniquename, publisherPrefix: 'new' };
-    }
-  } catch { /* default */ }
+  const recovered = await recoverAppSolution(sdk, appId);
+  if (recovered) solution = recovered;
 
   const read = {
     app: async () => app,
@@ -396,4 +424,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { resolveAppId, collectSitemap, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount, runDownload };
+module.exports = { resolveAppId, collectSitemap, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload };

@@ -796,3 +796,32 @@ test('planTeardown omits ai-summaries steps when default is off and no overrides
   assert.ok(!steps.some((s) => s.kind === 'aiSummary'), 'no aiSummary when default is off');
 });
 
+// ── Restricted-solution skip (found by live teardown of a DOWNLOADED spec): a downloaded spec whose
+// real solution wasn't recovered defaults its solution to the built-in 'Default', which Dataverse
+// refuses to delete ("Attempting to delete a restricted solution Default", HTTP 400). Teardown must
+// SKIP restricted system solutions (Active/Default/Basic) with an auditable reason — not error. ──
+test('teardown SKIPS a restricted system solution (uniquename Default) without erroring', async () => {
+  const spec = { app: { name: 'X' }, solution: { uniqueName: 'Default', publisherPrefix: 'new' }, entities: [] };
+  // Default exists in the org (as it always does); teardown must not attempt to delete it.
+  const sdk = mockSdk({ solutions: { Default: { solutionid: 'sol-def', uniquename: 'Default' } } });
+  const res = await runTeardown(spec, { apply: true }, { sdk });
+  assert.strictEqual(res.ok, true, 'a restricted solution is skipped, not an error');
+  assert.ok(
+    res.skipped.some((s) => /solution/i.test(s) && /restricted/i.test(s)),
+    `expected a restricted-solution skip reason, got ${JSON.stringify(res.skipped)}`
+  );
+  assert.ok(!sdk.calls.some((c) => c.method === 'deleteSolution'), 'must NOT attempt to delete the restricted solution');
+});
+
+test('teardown still deletes a real (non-restricted) solution — regression', async () => {
+  const spec = { app: { name: 'X' }, solution: { uniqueName: 'NucleoLive2', publisherPrefix: 'new' }, entities: [] };
+  const sdk = mockSdk({ solutions: { NucleoLive2: { solutionid: 'sol-real', uniquename: 'NucleoLive2' } } });
+  const res = await runTeardown(spec, { apply: true }, { sdk });
+  assert.strictEqual(res.ok, true);
+  assert.ok(
+    sdk.calls.some((c) => c.method === 'deleteSolution' && c.id === 'sol-real'),
+    'the real solution must still be deleted'
+  );
+  assert.ok(res.deleted.solution && res.deleted.solution.includes('sol-real'));
+});
+
