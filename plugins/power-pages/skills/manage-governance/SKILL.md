@@ -107,6 +107,8 @@ If the user replies that they are done (e.g. "done", "that's all", "exit",
 
 ## 2.1 Free-text intent prompt
 
+<!-- not-a-gate: data-gathering — free-text intent capture; parsing the user's request shapes later phases but writes nothing on its own -->
+
 Ask the user (prose, free text — NOT an `AskUserQuestion`):
 
 > *"Tell me what you'd like to do. Examples:*
@@ -518,6 +520,8 @@ re-phrase as either *"Enable for X"* or *"Disable for X"* (see
 
 ### Scope picker (when scope is missing or ambiguous)
 
+<!-- not-a-gate: data-gathering — resolving scope (all vs specific sites); no destructive action, the consent gate later guards the POST -->
+
 When the user's intent has no scope qualifier, do **NOT** use an
 `AskUserQuestion`. Instead follow the **Phase 4.2.1** flow: list the sites
 (top 10 via `orderPortalsForDisplay()`), then take a single **free-text**
@@ -626,6 +630,8 @@ Do **NOT** use an `AskUserQuestion` for the scope. Instead, show the site
 list and take a single **free-text** reply. The **verb** (Enable / Disable)
 is already known from the parsed intent (`<INTENT_DIRECTION>`); this step only
 resolves **scope** (all sites vs specific sites).
+
+<!-- not-a-gate: data-gathering — enable/disable verb capture; no destructive action, the consent gate later guards the POST -->
 
 **Step A — resolve the verb.** Use `<INTENT_DIRECTION>` from the NLP parse.
 Only if it is genuinely missing, ask a single short **free-text** prompt (NOT an
