@@ -20,6 +20,8 @@ allowed-tools: Read, Write, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList
 model: opus
 ---
 
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
 > **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Manage Power Pages Governance Policies
