@@ -296,11 +296,16 @@ test('buildSeedGroup omits matchOn (no dedup) when the key value is empty in a r
 
 // --- provisionSampleData: F9 keyless-seeding warning ------------------------------------------
 function runSample(spec) {
-  const events = [];
-  const runner = makeRunner({ emit: (e) => events.push(e), total: 1 });
+  // The F9 warning goes to stderr (non-fatal), so capture stderr for the duration of the run.
+  const origWrite = process.stderr.write.bind(process.stderr);
+  const warnings = [];
+  process.stderr.write = (s) => { warnings.push(String(s)); return true; };
+  const runner = makeRunner({ emit: () => {}, total: 1 });
   const sdk = { seedRecordGraph: async () => ({ createdIds: { new_log: ['id1', 'id2'] } }) };
   const dataModel = { entities: { new_log: { logicalName: 'new_log', entitySetName: 'new_logs' } }, statusReasonValues: {} };
-  return provisionSampleData({ sdk, provision: {}, runner, spec, dataModel }).then(() => events.map((e) => e.label || ''));
+  return provisionSampleData({ sdk, provision: {}, runner, spec, dataModel })
+    .then(() => warnings)
+    .finally(() => { process.stderr.write = origWrite; });
 }
 
 test('provisionSampleData WARNS in the op label when a group has no idempotency key — a re-run would duplicate (F9)', async () => {

@@ -399,23 +399,17 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   for (const e of topoOrderEntities(spec)) {
     const records = sampleRecordsFor(spec, e);
     if (!records.length) continue;
-    // Build the seed group up front so the operation label can flag NON-IDEMPOTENT (keyless) seeding.
-    // buildSeedGroup can throw (e.g. a statusReason value not captured) — re-wrap as a BuildHalt so the
-    // failure keeps the sample-data phase + halt semantics it had when it ran inside runner.run.
-    let group;
-    try {
-      group = buildSeedGroup({ spec, e, records, statusReasonValues });
-    } catch (err) {
-      throw new BuildHalt(`sample-data failed: ${(err && err.message) || err}`, { phase: 'sample-data', code: (err && err.code) || 'sdk-error', recoverable: false, cause: err });
-    }
-    // F9: seeding is idempotent ONLY when a matchOn key is chosen (chooseMatchOn). Without one the SDK
-    // inserts every row, so a re-run — or a POST retried after a commit — DUPLICATES the sample data,
-    // violating the build's "full rerun is safe" contract. A fresh build is fine; warn in the label so the
-    // maker can add a single-column alternate key or unique <primary> values before relying on re-runs.
-    const dupWarn = (!group.matchOn && group.records.length > 0)
-      ? ` — ⚠ no idempotency key: a re-run/retry will DUPLICATE these rows (add a single-column alternate key or unique ${e.primaryAttribute.schemaName} values)`
-      : '';
-    await runner.run('sample-data', `${records.length} record(s) -> ${e.schemaName}${dupWarn}`, async () => {
+    await runner.run('sample-data', `${records.length} record(s) -> ${e.schemaName}`, async () => {
+      const group = buildSeedGroup({ spec, e, records, statusReasonValues });
+      // F9: seeding is idempotent ONLY when a matchOn key is chosen (chooseMatchOn). Without one the SDK
+      // inserts every row, so a re-run — or a POST retried after a commit — DUPLICATES the sample data,
+      // violating the build's "full rerun is safe" contract. A fresh build is fine; warn (non-fatal, to
+      // stderr — same pattern as download-model-app) so the maker can add a single-column alternate key or
+      // unique <primary> values before relying on re-runs. This is additive: it does NOT change the seed
+      // group, the create call, or the error/halt path — only emits a warning line for a keyless group.
+      if (!group.matchOn && group.records.length > 0) {
+        process.stderr.write(`WARNING: sample rows for ${e.schemaName} have no idempotency key (no single-column alternate key, and not every row has a non-empty ${e.primaryAttribute.schemaName}) — a re-run or a retried insert will DUPLICATE these ${group.records.length} row(s). Add a single-column alternate key or give every row a unique ${e.primaryAttribute.schemaName} value.\n`);
+      }
       const { createdIds: made } = await sdk.seedRecordGraph([group], { entitySetFor, createdIds });
       Object.assign(createdIds, made);
       result.records[e.schemaName] = made[e.schemaName.toLowerCase()];
