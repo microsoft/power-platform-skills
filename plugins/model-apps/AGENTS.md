@@ -131,9 +131,11 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   down its own solution instead of targeting the restricted `Default`.
   Edit the downloaded spec and re-run the build (idempotent) — create and edit share one path. Always
   pull fresh at the start of an edit session (the build reads an etag; a write against an artifact
-  changed in Maker throws a version conflict → re-pull, never clobber). **Limitation (Preview):** classic
-  DashBoard subareas are not yet round-tripped — download prints a `WARNING` and a rebuild drops them, so
-  re-add a classic dashboard to the spec before rebuilding (genpage/entity/URL subareas round-trip losslessly).
+  changed in Maker throws a version conflict → re-pull, never clobber). **Classic DashBoard subareas
+  round-trip** too — `readDashboards` reconstructs each into `dashboards[]` with **id-passthrough tiles**
+  (every tile carries the deployed view/chart ids), so a rebuild recreates the dashboard against the
+  existing views/charts without re-declaring them (genpage/entity/URL subareas round-trip losslessly). A
+  dashboard whose tiles cannot be reconstructed is dropped and surfaced in `droppedSubareas`.
 - **`scripts/verify-model-app.js` → `scripts/lib/verify-spec.js`** — read-only reconcile of the App Spec
   against what actually deployed (entities/columns/views/charts/forms + sitemap subareas + icons); exits
   non-zero and lists anything missing, catching silent partial builds.
