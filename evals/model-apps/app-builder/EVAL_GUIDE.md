@@ -18,6 +18,8 @@
 | **app** | Every sitemap subarea resolves to a concrete target · no dangling `navigatesTo` keys | `sdk-build.js` `appDef` |
 | **verify** | Reconcile against a synthetic all-present reader returns `ok: true` | `verify-spec.js` `verifySpec` |
 | **generate-pages** | No `PAGEREF_` nav targets unresolved (Plan 3 — degrades to SKIP if absent) | `pageref-resolver.js` `resolvePageRefs` |
+| **teardown** | The reverse-of-build delete plan is dependency-safe (solution last · web resources after tables · every table has a step) | `sdk-teardown.js` `planTeardown` |
+| **round-trip** | The download→rebuild is lossless — a synthetic deployed read hydrates back the same solution / tables / page-keys / sitemap subareas (incl. classic dashboards) | `hydrate-spec.js` `hydrateSpec` |
 
 ## Fixtures
 
@@ -27,7 +29,8 @@ Naming is numeric-prefix; `fixture-loader.js` matches `^(\d+)(?:-(.+))?$`.
 | # | Slug | What it tests |
 |---|---|---|
 | 1 | `1-support-desk` | Full data/ui/app/verify oracle (no pages) |
-| 2 | `2-orders-multipage` | Page intents + navigation + design contract |
+| 2 | `2-orders-multipage` | Page intents + navigation + design contract; page-key round-trip |
+| 3 | `3-assets-dashboard` | Global choice + column binding, on-click command, and a classic **dashboard** pinned to the nav — exercises teardown (dashboard/command/web-resource/global-choice steps) + the dashboard round-trip |
 
 > **Fixture 2 note:** `appShell.subAreas[].page` references use the page's **key** (e.g. `"overview"`). For `schemaVersion: 2`, `validateAppSpec` validates `sa.page` against `pages[].key`, while `lintAppSpec` validates against `pages[].name`. Setting `p.key === p.name` (lowercase identifiers) satisfies both validators without modifying plugin code.
 

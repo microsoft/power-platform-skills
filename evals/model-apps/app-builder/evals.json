@@ -11,7 +11,13 @@
     "app: every sitemap subarea resolves to a concrete target (no dangling entity/page/dashboard)",
     "app: every navigatesTo target resolves to a known page key",
     "verify: reconcile against an all-present reader returns ok with no missing",
-    "generate-pages: no PAGEREF_ navigation target is left unresolved"
+    "generate-pages: no PAGEREF_ navigation target is left unresolved",
+    "teardown: the solution container is deleted last",
+    "teardown: every declared table has a teardown step",
+    "teardown: web resources are deleted after tables",
+    "round-trip: download hydrate recovers the same solution and tables",
+    "round-trip: the sitemap round-trips with the same subareas",
+    "round-trip: generative pages preserve their keys"
   ],
   "evals": [
     {
@@ -34,6 +40,17 @@
         "views": ["Active Orders"],
         "charts": ["Orders by Status"],
         "pages": ["overview", "order-detail"]
+      },
+      "expectations": []
+    },
+    {
+      "id": 3, "tier": "full", "spec": "app-spec.json",
+      "prompt": "Assets app with a shared status choice, an on-click command, and an operations dashboard pinned to the nav.",
+      "expect": {
+        "tables": ["new_asset"],
+        "relationships": [],
+        "views": ["Active Assets"],
+        "charts": ["Assets by Status"]
       },
       "expectations": []
     }

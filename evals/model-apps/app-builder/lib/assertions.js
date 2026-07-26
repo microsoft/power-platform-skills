@@ -86,4 +86,56 @@ ASSERTIONS.set('generate-pages: no PAGEREF_ navigation target is left unresolved
     : PASS;
 });
 
+// teardown stage -------------------------------------------------------------
+
+ASSERTIONS.set('teardown: the solution container is deleted last', ({ facts, spec }) => {
+  if (!(spec.app && spec.solution)) return skip('spec declares no app + solution');
+  const kinds = facts.teardown.kinds;
+  return kinds[kinds.length - 1] === 'solution'
+    ? PASS
+    : fail(`last teardown step is "${kinds[kinds.length - 1]}", expected "solution"`);
+});
+
+ASSERTIONS.set('teardown: every declared table has a teardown step', ({ facts, spec }) => {
+  const tableSteps = facts.teardown.kinds.filter((k) => k === 'table').length;
+  const declared = (spec.entities || []).length;
+  return tableSteps === declared
+    ? PASS
+    : fail(`expected ${declared} table teardown step(s), got ${tableSteps}`);
+});
+
+ASSERTIONS.set('teardown: web resources are deleted after tables', ({ facts }) => {
+  const kinds = facts.teardown.kinds;
+  const lastTable = kinds.lastIndexOf('table');
+  const firstWr = kinds.indexOf('webResource');
+  if (lastTable === -1 || firstWr === -1) return skip('no tables or no web-resource steps in this spec');
+  return firstWr > lastTable
+    ? PASS
+    : fail(`a web-resource step (idx ${firstWr}) precedes the last table (idx ${lastTable}) — a table's icon web resource is referenced by the table`);
+});
+
+// round-trip (download → edit → rebuild) stage -------------------------------
+
+ASSERTIONS.set('round-trip: download hydrate recovers the same solution and tables', ({ facts, spec }) => {
+  if (facts.roundTrip.error) return fail(`hydrate threw: ${facts.roundTrip.error}`);
+  const expSol = spec.solution && spec.solution.uniqueName;
+  if (facts.roundTrip.solution !== expSol) return fail(`solution: expected "${expSol}" got "${facts.roundTrip.solution}"`);
+  const expTables = sortedLc((spec.entities || []).map((e) => e.schemaName));
+  return eq(expTables, facts.roundTrip.tables) ? PASS : fail(`tables: expected [${expTables}] got [${facts.roundTrip.tables}]`);
+});
+
+ASSERTIONS.set('round-trip: the sitemap round-trips with the same subareas', ({ facts }) => {
+  if (facts.roundTrip.error) return fail(`hydrate threw: ${facts.roundTrip.error}`);
+  return eq(facts.roundTrip.origSubareaTargets, facts.roundTrip.hydratedSubareaTargets)
+    ? PASS
+    : fail(`sitemap drift: authored [${facts.roundTrip.origSubareaTargets}] hydrated [${facts.roundTrip.hydratedSubareaTargets}]`);
+});
+
+ASSERTIONS.set('round-trip: generative pages preserve their keys', ({ facts, spec }) => {
+  if (facts.roundTrip.error) return fail(`hydrate threw: ${facts.roundTrip.error}`);
+  const expKeys = sorted((spec.pages || []).map((p) => p.key || p.name));
+  if (!expKeys.length) return skip('spec declares no pages');
+  return eq(expKeys, facts.roundTrip.pageKeys) ? PASS : fail(`page keys: expected [${expKeys}] got [${facts.roundTrip.pageKeys}]`);
+});
+
 module.exports = { ASSERTIONS };

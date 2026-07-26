@@ -19,7 +19,8 @@ test('runner: real fixtures all pass and emit TAP v13', () => {
   assert.match(stdout, /^TAP version 13/m);
   assert.match(stdout, /# Subtest: 1-support-desk/);
   assert.match(stdout, /# Subtest: 2-orders-multipage/);
-  assert.match(stdout, /# fixtures 2 \(pass 2, fail 0\)/);
+  assert.match(stdout, /# Subtest: 3-assets-dashboard/);
+  assert.match(stdout, /# fixtures 3 \(pass 3, fail 0\)/);
 });
 
 test('runner: --eval selects one fixture; --tier smoke filters', () => {
