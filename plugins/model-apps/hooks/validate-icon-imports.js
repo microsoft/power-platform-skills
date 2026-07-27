@@ -147,9 +147,12 @@ function extractIconImports(content) {
 
 function buildBlockMessage(relPath, invalid) {
   const lines = [];
-  // User-facing summary — short, no jargon.
+  // User-facing summary — short, no jargon. States what happened (a block); the
+  // auto-fix only occurs when an agent is driving, so it is phrased as a
+  // conditional expectation — a user editing manually gets an actionable note
+  // rather than a promise the hook can't keep.
   lines.push(
-    `[model-apps] A page imported ${invalid.length} icon name(s) that aren't in the verified @fluentui/react-icons list. The write was blocked; the page will switch to verified icons and retry — no action needed from you.`
+    `[model-apps] The write was blocked: it imported ${invalid.length} icon name(s) that aren't in the verified @fluentui/react-icons list (listed below). If an agent is generating this page, it will switch to verified icons and retry. If you're editing by hand, replace them with verified names from references/verified-icons.txt.`
   );
   lines.push('');
   // Model-facing block.
