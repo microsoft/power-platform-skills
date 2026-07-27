@@ -28,7 +28,9 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 
 - **Read-only.** You MUST NOT run `npx power-apps add-data-source --api-id dataverse --org-url <env-url> --resource-name <table>`, table-creation HTTP calls, or any mutating PowerShell. Mutation happens later in `/add-dataverse` after user approval.
 - **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx power-apps *` command; retry the original command once after auth is corrected.
-- **Reuse-first.** Always query existing tables and prefer reuse > extension > new. Don't propose a `cr123_customer` table if a standard `contact` table fits.
+- **Reuse-first and target-grounded.** Query the exact target metadata for every proposed table, including standard tables, and prefer reuse > extension > new. Don't propose a `cr123_customer` table if a verified target `contact` table fits.
+- **Fail closed when target metadata is unknown.** An auth, environment, or metadata-query failure is `BLOCKED`, never permission to mark tables `Create`. Never silently recreate or imitate a missing standard, managed, or solution-owned table/column.
+- **No automatic replacement.** This agent classifies schema as `Reuse`, `Extend`, `Create`, or `Block`. Replacing an existing table/column requires a separately approved migration with dependency analysis and data movement; it is outside this workflow.
 - **Return a section, not a separate doc.** Output is a markdown `## Data Model` section the planner embeds verbatim.
 - **No JSON request bodies in the output.** Your `_dm_section.md` describes *what* to create (tables, columns, relationships) using the Mermaid ER + reuse/extend/create table + tier list. **Do NOT include POST body JSON** for `EntityDefinitions` or `RelationshipDefinitions` — `/add-dataverse` constructs those from its own canonical templates in [skills/add-dataverse/SKILL.md](../skills/add-dataverse/SKILL.md) Step 5b. JSON in your output is read as authoritative and will leak invented/wrong fields (e.g. `ReferencingAttribute` on a lookup) into the actual POST.
 - **No questions.** Do not ask the user anything — infer from the requirements provided. The planner runs the approval gate, not you.
@@ -40,7 +42,7 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 2. Verify Dataverse access
 3. Discover existing tables
 4. Infer required entities from requirements
-5. Score reuse / extend / create
+5. Reconcile target metadata and score reuse / extend / create / block
 6. Build dependency tiers
 6a. Cross-entity Read Audit (when `_screens_section.md` exists OR `mode: cross-entity-audit`)
 7. Produce the `## Data Model` section
@@ -68,7 +70,7 @@ node "${PLUGIN_ROOT}/scripts/resolve-environment.js" <environment-id-or-url>
 
 Capture the **Environment URL** (e.g., `https://orgXXXXX.crm.dynamics.com`), **Environment ID**, and **Tenant ID** from the output. Use the URL as `<envUrl>` for subsequent script calls.
 
-If resolution fails (not authenticated or environment not visible to the logged-in account), include a clear note in your output and stop further discovery — propose the data model from requirements only with a "Discovery skipped — environment not reachable" warning prepended to your section.
+If resolution fails (not authenticated or environment not visible to the logged-in account), return `BLOCKED: target environment could not be resolved; no schema was classified or created`. Do not produce a create plan from requirements alone.
 
 ## Step 2 — Verify Dataverse Access
 
@@ -78,18 +80,18 @@ If resolution fails (not authenticated or environment not visible to the logged-
 node "${PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
 ```
 
-If it fails, prepend a "Dataverse access failed — `az login` required" note and skip Steps 3.
+If it fails, return `BLOCKED: Dataverse access failed; run az login for the target tenant`. Do not continue to classification without live target metadata.
 
 ## Step 3 — Discover Existing Tables
 
 **Print before starting:**
 > "→ Discovering existing custom tables in the environment (cap: top 10 by relevance)…"
 
-Query custom tables only (standard tables are well-known):
+Query custom tables to discover conceptual reuse candidates. This broad query is advisory only; Step 5 still queries every selected custom, standard, and managed table by exact logical name before classifying it:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions?\$select=LogicalName,DisplayName,Description&\$filter=IsCustomEntity eq true"
+  "EntityDefinitions?\$select=MetadataId,LogicalName,DisplayName,Description,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes&\$filter=IsCustomEntity eq true"
 ```
 
 For the relevant tables, fetch their user-defined columns in a single call (system columns like `createdon`, `modifiedby`, `statecode`, `ownerid`, `versionnumber` are filtered out automatically):
@@ -123,44 +125,69 @@ Standard table mappings to bias toward:
 | An activity event | `appointment`, `task`, `phonecall`, `email` |
 | A user / system identity | `systemuser` (read-only — never propose extending) |
 
-## Step 5 — Score Reuse / Extend / Create
+## Step 5 — Reconcile Target and Score Reuse / Extend / Create / Block
 
 **Print before starting:**
-> "→ Scoring each required entity as Reuse / Extend / Create against discovered tables…"
+> "→ Reconciling every required table and column against live target metadata…"
+
+Before assigning any decision, query the exact logical name selected for every required entity — including `contact`, `account`, `incident`, other standard tables, and managed-solution dependencies:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
+  "EntityDefinitions(LogicalName='<table>')?\$select=MetadataId,LogicalName,SchemaName,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes,PrimaryIdAttribute,PrimaryNameAttribute"
+```
+
+For every 200 response, fetch the full table-level column snapshot once:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
+  "EntityDefinitions(LogicalName='<table>')/Attributes?\$select=MetadataId,LogicalName,SchemaName,AttributeType,AttributeTypeName,RequiredLevel,IsManaged,IsCustomizable,IsPrimaryId,IsPrimaryName"
+```
+
+Interpret `IsCustomizable` and `CanCreateAttributes` as managed properties (`.Value`). A response other than 200 or a genuine 404 is a discovery failure and blocks the plan. A 404 is actionable only after considering the planned dependency kind: an absent new custom table may be created; an absent standard, managed, reused, or extended dependency is blocked and must be installed/imported or removed from the design.
 
 For each required entity, classify it as one of:
 
 - **Reuse** — existing table fits as-is (no schema changes needed)
-- **Extend** — existing table is the right concept but missing some columns; add only the missing ones
-- **Create** — no existing table serves this purpose at all (neither by name nor by concept)
+- **Extend** — existing table is the right concept, all same-name columns are compatible, missing columns are custom additions, and both `IsCustomizable.Value` and `CanCreateAttributes.Value` permit extension
+- **Create** — the planned item is explicitly a new custom table, the exact logical name returns 404, the publisher prefix is verified, and all required-existing dependencies are present
+- **Block** — target metadata is unavailable; a standard/managed/required-existing dependency is missing; the table cannot accept attributes; or any same-name table/column is incompatible
+
+Classify every planned column before finalizing its table decision:
+
+- **Reuse** — same logical name exists with a compatible `AttributeType` / `AttributeTypeName.Value`.
+- **Create** — column is absent, is explicitly a custom addition, and the target table permits attributes. The containing table becomes `Extend`, or the column is included inline when its table is `Create`.
+- **Block** — a required standard/managed column is absent, a same-name column has an incompatible type, or the target cannot be customized.
+
+`Extend` is a table decision, not a column operation. Do not classify any item as `Replace`; Dataverse cannot change column types in place, and replacement needs an explicit migration outside this workflow.
 
 **Decision priority (HARD — apply in order, stop at first match):**
 
-1. **Standard table match** → always prefer a standard table (`contact`, `account`, `incident`, etc.) over creating a custom table for the same concept. Reuse if it fits; Extend if it needs columns.
+1. **Standard table match** → always prefer a standard table (`contact`, `account`, `incident`, etc.) over creating a custom table for the same concept, but verify it by exact target GET. Reuse if it fits; Extend only when live managed properties permit the planned custom columns. If it is missing, Block — never create a custom imitation.
 2. **Existing custom table by name** → if the proposed logical name already exists in the Step 3 results, it MUST be Reuse or Extend. See collision check below.
 3. **Existing custom table by concept** → if a different-named existing table serves the same business purpose (e.g., an existing `cr8142a_site` table for a new "Inspection Site" entity), prefer Extend over Create.
-4. **Create** → only when no existing table — standard or custom — serves the entity's purpose. The business use case genuinely requires a fresh schema.
+4. **Create** → only when no existing table — standard or custom — serves the entity's purpose, the proposed custom logical name is absent in the target, and every required-existing dependency is verified.
+5. **Block** → apply before all mutations when any target fact is unavailable or incompatible. Do not downgrade Block to Create or Rename-and-Create.
 
 > **⚠️ Plan-time collision check (HARD).** Before classifying any entity as `Create`, look up its **proposed logical name** (e.g. `cr8142a_inspection`) in the Step 3 IsCustomEntity result. If a row with that exact `LogicalName` already exists, the entity **CANNOT** be classified as `Create`. Apply the following decision tree in order:
 >
 > 1. **Downgrade to Reuse** — the existing table's columns from Step 3 already cover what the plan needs (≥70% column overlap or all required columns present). No schema changes.
-> 2. **Downgrade to Extend** — the existing table is the right concept but missing some columns (any overlap, or same entity type). Add only the missing columns; never remove or rename existing ones.
+> 2. **Downgrade to Extend** — the existing table is the right concept but missing some custom columns (any overlap, or same entity type), and live `IsCustomizable.Value` plus `CanCreateAttributes.Value` permit extension. Add only the missing columns; never remove or rename existing ones.
 > 3. **Rename and Create** — use ONLY when the existing table is a completely different entity concept (e.g., `cr8142a_inspection` exists but contains payroll or product catalog data — fundamentally incompatible). Bump the proposed name to `<prefix>_<entity>v2` and document the rename in the Notes column.
 >
-> **Default is Reuse or Extend — not Rename.** Rename-and-Create is the exceptional path, not the fallback. If unsure whether a schema is compatible, prefer Extend and add the missing columns — it is always safer to extend than to duplicate tables.
+> **Default is Reuse or Extend only when compatibility is proven.** Rename-and-Create is the exceptional path, not the fallback. If compatibility or customizability is uncertain, Block and gather evidence; never extend merely to keep the workflow moving.
 >
 > Surfacing the collision at PLAN time (not at create time) prevents the user from approving Gate 1 with a name that will explode at Step 5a of `/add-dataverse`.
 
 Build a table:
 
 ```markdown
-| Required entity | Decision | Existing match | Why | Missing columns |
-|---|---|---|---|---|
-| Customer profile | Reuse | `contact` | Standard table; name/email/phone fields match | — |
-| Job site | Create | — | No matching custom or standard table for this concept | n/a |
-| Inspection report | Extend | `cr123_inspection` (existing) | Same concept; has site reference, missing photos field | `cr123_photourl` (Image) |
-| Equipment inspection | Extend | `cr3e9_inspection` (existing) | Name match; different FK schema but same inspection concept — add equipment-specific columns | `cr3e9_equipmentid` (Lookup), `cr3e9_equipmenttype` (Choice) |
-| Payroll record | Create (renamed from cr3e9_inspection) | `cr3e9_inspection` exists | Existing table is inspection data — fundamentally different concept; using `cr3e9_payrollrecord` | n/a |
+| Required entity | Decision | Existing match | Target evidence | Column decisions | Why |
+|---|---|---|---|---|---|
+| Customer profile | Reuse | `contact` | 200; exact standard table verified | Reuse: fullname, emailaddress1 | Standard table and required columns exist |
+| Job site | Create | — | 404; verified custom prefix | Create inline: cr123_name, cr123_address | No matching custom or standard table for this concept |
+| Inspection report | Extend | `cr123_inspection` | 200; customizable + can create attributes | Reuse: cr123_name; Create: cr123_photo | Same concept; one custom column is missing |
+| Required managed asset | Block | — | 404 for required-existing dependency | Block: all dependent fields | Install/import the owning solution; never recreate it |
 ```
 
 ## Step 6 — Build Dependency Tiers
@@ -251,12 +278,13 @@ Write the section to a file in the working directory named `_dm_section.md` (the
 - Reuse: <N> existing tables
 - Extend: <N> tables (add columns only)
 - Create: <N> new tables across <T> tiers
+- Block: <N> unresolved/incompatible tables (must be 0 before approval can execute)
 
-### Reuse / Extend / Create
+### Target Reconciliation
 
-| Required entity | Decision | Match | Why | Missing columns |
-|---|---|---|---|---|
-| ... | ... | ... | ... | ... |
+| Required entity | Decision | Existing match | Target evidence | Column decisions | Why |
+|---|---|---|---|---|---|
+| ... | ... | ... | ... | ... | ... |
 
 ### ER Diagram
 
@@ -290,7 +318,7 @@ erDiagram
 - Signature images from pen input normalize `data:image/png;base64,...` before Image column writes.
 ```
 
-If discovery was skipped (Step 1 or 2 failure), prepend the appropriate warning to the section, omit the "Reuse" column from the table, and fill all decisions as "Create" with a note that the user should re-run with environment access for accurate reuse detection.
+If any row is `Block`, write the evidence and remediation into the section, then return `BLOCKED: <reason>` so the orchestrator cannot execute `/add-dataverse`. If environment or Dataverse discovery failed, return `BLOCKED` without generating speculative Create decisions.
 
 ## Return Status
 
@@ -299,7 +327,7 @@ You MUST return your final message with one of these four status codes as the **
 | Code | When to use | Example first line |
 |---|---|---|
 | `DONE` | Section written cleanly, all entities resolved, no caveats | `DONE` |
-| `DONE_WITH_CONCERNS: <comma-separated concerns>` | Section written but you fell back from a planned reuse, guessed a column type, or skipped Dataverse discovery — the user should review before approving Gate 1 | `DONE_WITH_CONCERNS: contact reuse skipped (env access denied), all tables marked Create` |
+| `DONE_WITH_CONCERNS: <comma-separated concerns>` | Target discovery succeeded and the section is executable, but a non-blocking design caveat remains | `DONE_WITH_CONCERNS: image dimensions inferred from requirements; verify before approval` |
 | `NEEDS_CONTEXT: <what is missing>` | Cannot complete without more info from the orchestrator — e.g. requirements brief is too thin to infer entities, or no environment was selected | `NEEDS_CONTEXT: requirements brief lists no nouns; need explicit entity list from user` |
 | `BLOCKED: <reason>` | Hit a hard wall — file system error writing `_dm_section.md`, plugin root unreadable, environment resolver crashed. The planner MUST escalate to the user, never silently retry | `BLOCKED: cannot write to <working_dir>/_dm_section.md (permission denied)` |
 
@@ -312,6 +340,6 @@ You MUST return your final message with one of these four status codes as the **
 
 After the status line and a blank line, write:
 
-> Data Model section written to `<working_dir>/_dm_section.md`. Summary: <N reuse, M extend, K create across T tiers>. ER diagram includes <list of entities>.
+> Data Model section written to `<working_dir>/_dm_section.md`. Summary: <N reuse, M extend, K create, B block across T tiers>. ER diagram includes <list of entities>.
 
 The planner reads the file and embeds the contents verbatim into `native-app-plan.md`.
