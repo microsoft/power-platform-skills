@@ -41,9 +41,11 @@ test -f native-app-plan.md
 ```
 
 **If present:** read the `## Data Model` section. Extract:
-- The reuse / extend / create table
+- The target reconciliation table (`reuse` / `extend` / `create` / `block` decisions and evidence)
 - The Mermaid ER diagram (informational)
 - The "Creation Order" tier list
+
+If any table or column is `block`, STOP before auth or mutation and surface its recorded remediation. Do not reinterpret a blocked item as Create.
 
 **If absent:** check `$ARGUMENTS` for diagram hints (`*.png`, `*.jpg`, `*.jpeg` filename, `erDiagram` keyword, `||--o{` cardinality syntax). 
 
@@ -162,26 +164,42 @@ Capture `customizationprefix` from the solution's publisher (typical value: `cr1
 
 Requires the user to hold **System Administrator** or **System Customizer** in this environment.
 
-### Step 4 — Review existing tables
+### Step 4 — Reconcile every planned table and column against the target
 
 **Print before starting:**
-> "→ Querying existing custom tables in the environment…"
+> "→ Reconciling every planned table and column against live target metadata before any write…"
 
-Always query before creating:
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions?\$filter=IsCustomEntity eq true&\$select=SchemaName,LogicalName,DisplayName"
-```
-
-For each plan entry classified `Reuse` or `Extend`, fetch the table's columns to confirm the match:
+Do not use the custom-table list as the source of truth. For **every** plan entry (`Reuse`, `Extend`, or `Create`), query its exact logical name, including standard and managed dependencies:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions(LogicalName='<table>')/Attributes?\$select=LogicalName,AttributeType,RequiredLevel"
+  "EntityDefinitions(LogicalName='<table>')?\$select=MetadataId,LogicalName,SchemaName,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes,PrimaryIdAttribute,PrimaryNameAttribute"
 ```
 
-Schema divergence handling is in Step 5b's per-column pre-flight (not a Step 4 prompt). The pre-flight auto-skips columns that already exist with the same type, and STOPs only on incompatible type drift — no separate confirmation needed here.
+For each 200 response, fetch the table's columns once:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+  "EntityDefinitions(LogicalName='<table>')/Attributes?\$select=MetadataId,LogicalName,SchemaName,AttributeType,AttributeTypeName,RequiredLevel,IsManaged,IsCustomizable,IsPrimaryId,IsPrimaryName"
+```
+
+Cache each response as the table's **attribute snapshot** for Step 5b. Interpret `IsCustomizable` and `CanCreateAttributes` as managed properties and read their `.Value` fields. Do not discard the snapshot and issue another GET for every planned column.
+
+Build and print a reconciliation matrix before Step 5:
+
+| Target result | Table decision | Column decisions | Action |
+|---|---|---|---|
+| 200; all planned columns compatible | `reuse` | existing columns `reuse` | No schema write. |
+| 200; custom columns missing; table customizable and can create attributes | `extend` | compatible `reuse`; absent custom `create` | Queue missing ordinary columns for sequential creation; relationships remain Pass 2. |
+| 404; plan says Create; logical name uses the verified publisher prefix | `create` | ordinary columns `create` inline; lookups deferred | Create once with the complete-payload guard. |
+| 404; plan says Reuse/Extend or dependency is standard/managed/required-existing | `block` | dependent columns `block` | STOP; install/import the owning solution or revise the plan. Never recreate it. |
+| 200; same-name column has incompatible `AttributeType` / `AttributeTypeName.Value` | `block` | incompatible column `block` | STOP before all writes; no automatic replacement. |
+| 200; columns missing but `IsCustomizable.Value=false` or `CanCreateAttributes.Value=false` | `block` | missing columns `block` | STOP; target cannot be extended by this workflow. |
+| Auth/query response other than 200 or genuine 404 | `block` | unknown | STOP; target metadata is not authoritative. |
+
+`replace` is not an automatic state in this workflow. Replacing a table or column requires an explicitly approved migration with dependency analysis and data movement; classify the conflict as `block` here.
+
+**Global write barrier (HARD):** finish reconciliation for every table and column first. If any item is `block`, make zero metadata writes. Step 5 may begin only when the matrix contains exclusively `reuse`, `extend`, and `create` decisions.
 
 ### Step 5 — Create / extend tables
 
@@ -204,7 +222,7 @@ Step 4 listed *known* custom tables you intend to reuse. Step 5a probes for *unk
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions(LogicalName='<prefix>_<table>')?\$select=MetadataId,LogicalName,IsCustomEntity"
+  "EntityDefinitions(LogicalName='<prefix>_<table>')?\$select=MetadataId,LogicalName,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes"
 ```
 
 Branch on the response:
@@ -213,7 +231,7 @@ Branch on the response:
 |---|---|---|
 | **404 NotFound** | Name is free | Proceed with POST. |
 | **200 OK** + `IsCustomEntity: true` + `MetadataId` matches memory-bank | We created this earlier — idempotent re-run | Skip the POST, mark as created, continue. |
-| **200 OK** + `IsCustomEntity: true` + `MetadataId` *not* in memory-bank | Foreign collision | Auto-recover (see below) — do NOT prompt. |
+| **200 OK** + `IsCustomEntity: true` + `MetadataId` *not* in memory-bank | Foreign collision | Reconcile live columns and customization properties below; never auto-extend an uncustomizable target. |
 | **200 OK** + `IsCustomEntity: false` | Reserved system table name | Auto-recover via rename (see below). |
 | **5xx** with `0x80060890` or message `"object with same name exists in solution"` | Tombstone (soft-deleted, ~30 min purge TTL) | Auto-recover via rename (see below). |
 | **400** with `0x80044363`, `"schema name ... is not unique"`, or `"same name already exists"` | Hidden Dataverse collision / recent-delete tombstone not visible to `EntityDefinitions` GET | Auto-recover via rename (see below), then retry the POST once. |
@@ -224,7 +242,7 @@ Branch on the response:
 
 **Priority order when Step 5a hits a name collision:**
 
-1. **Adopt as Extend (preferred)** — if the existing table's `Attributes` overlap with the planned columns by ≥50%, or the existing table is the same conceptual entity: add only the missing columns via per-column POST (Step 5b Extend path). No prompt needed — extend automatically and log `→ Extending existing <original> with <N> missing columns.`
+1. **Adopt as Extend (preferred)** — only if the existing table is the same concept, every same-name column is type-compatible, planned missing columns are custom additions, and live `IsCustomizable.Value` plus `CanCreateAttributes.Value` both permit extension. Add only the missing columns via Step 5b and log `→ Extending existing <original> with <N> missing columns.`
 2. **Adopt as Reuse** — if the existing table's schema already covers all planned columns: skip Step 5b for this entry, keep it in Step 6 for service generation. No prompt. Log `→ Reusing existing <original> (all required columns present).`
 3. **Rename and Create (last resort)** — only when the existing table is a fundamentally different entity (e.g., planned table is an inspection log but existing `<original>` is a payroll record — incompatible concept, incompatible columns). Prompt the user before proceeding.
 
@@ -232,8 +250,9 @@ Branch on the response:
 
 | Situation | Action |
 |---|---|
-| Foreign collision + schema overlap ≥50% | Auto-Extend (no prompt) |
+| Foreign collision + compatible concept/schema + extension allowed | Auto-Extend (no prompt) |
 | Foreign collision + all planned columns present | Auto-Reuse (no prompt) |
+| Foreign collision + incompatible column or extension forbidden | Block before writes; no replacement |
 | Foreign collision + incompatible concept | Prompt (see below) |
 | Reserved system name | Auto-rename (no prompt) |
 | Tombstone (0x80060890 / same-name-exists) | Auto-rename (no prompt) |
@@ -243,11 +262,11 @@ Branch on the response:
 ```
 | Option | What it means |
 |---|---|
-| Extend existing (default) | Add required columns to <original>. Safer — avoids duplicate tables. |
-| Rename and Create | Auto-renamed to <new>. Existing table left untouched. |
+| Rename and Create (recommended) | Use a free custom logical name for the genuinely different entity. Existing table stays untouched. |
+| Block and revise | Make no writes; return to the data-model plan and choose another existing table or name. |
 ```
 
-Default to "Extend existing" so an empty answer auto-proceeds. Rename-and-Create is the opt-in exception, not the default.
+Never offer Extend for an incompatible concept or column shape. Continue only after explicit Rename-and-Create approval; otherwise Block and return to planning.
 
 Maintain a run-level logical-name alias map for every auto-rename. Example:
 
@@ -299,11 +318,18 @@ If the retry also returns a collision signature, continue probing the remaining 
 
 #### Step 5b — Create / extend
 
+Run this step in two explicit passes:
+
+1. **Pass 1 — tables + ordinary columns:** create every new table with all planned non-lookup columns inline, then extend existing tables with any missing non-lookup columns. Calculated columns remain deferred to Step 5c.
+2. **Pass 2 — lookups + relationships:** only after Pass 1 has succeeded for every tier, create the planned `RelationshipDefinitions`. A lookup is created by its relationship and must not appear in a table's initial `Attributes` array.
+
+Both passes remain strictly sequential. Do not use `$batch` for metadata writes.
+
 For each `Create` decision, in **tier order** (Tier 0 → Tier 1 → Tier 2 → …), POST a new EntityDefinition. Skip if Step 5a returned a known-self match (idempotent).
 
 > **⚠️ Inline ALL planned columns into the Create POST body — do NOT POST columns individually.**
 >
-> Dataverse processes the `Attributes: [...]` array atomically with the table create. Inline form: 1 round trip, ~3-8s. Per-column form: N+1 round trips, each ~3-8s. For a 5-column table that's 24s saved per table on the lock-serialized metadata path.
+> Dataverse accepts all non-lookup columns in the initial table's `Attributes: [...]` array. Inline form: 1 round trip, ~3-8s. Per-column form: N+1 round trips, each ~3-8s. For a 5-column table that's roughly 24s saved on the lock-serialized metadata path. Do not describe this metadata create as transactionally atomic: if the request fails after Dataverse starts processing it, the table or some attributes may remain, which is why the recovery path below exists.
 >
 > **Wrong** (N round trips):
 > ```json
@@ -336,6 +362,22 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST Enti
   --body '<json-body-with-all-columns-inline>' \
   --solution '<solution-uniquename-from-memory-bank>'
 ```
+
+**Complete-payload guard (HARD):** before the POST, validate that the body contains exactly the planned inline column set. Build the expected set as:
+
+- the primary-name column; plus
+- every planned String, Memo, Integer, Decimal, Money, DateTime, Boolean, Choice, MultiSelect Choice, BigInt, Image, and File column; minus
+- the auto-created primary-id column, every Lookup/Customer/Owner column, and every calculated/rollup column deferred to Step 5c.
+
+Write the request body and expected-name array under `<working_dir>/.tmp/`, then run:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-table-create-payload.js" \
+  --body "@<working_dir>/.tmp/<table>-create.json" \
+  --expected "@<working_dir>/.tmp/<table>-expected-columns.json"
+```
+
+Only POST when the validator returns `ok: true`. Missing, duplicate, unexpected, or inline lookup attributes are a construction bug: fix the body rather than creating a table shell and repairing it with per-column POSTs. Microsoft documents both parts of this contract: [ordinary columns may be included when the table is created](https://learn.microsoft.com/power-apps/developer/data-platform/webapi/create-update-column-definitions-using-web-api#create-columns), while a [lookup is created with its one-to-many relationship](https://learn.microsoft.com/power-apps/developer/data-platform/webapi/create-update-entity-relationships-using-web-api#create-a-one-to-many-relationship).
 
 Body skeleton — **all planned columns inline in `Attributes: [...]`** (this example shows primary + 3 additional; expand the array to fit every column from the plan):
 
@@ -398,25 +440,24 @@ Body skeleton — **all planned columns inline in `Attributes: [...]`** (this ex
 
 For each `Extend` decision, POST a new column to the existing table.
 
-> **⚠️ Per-column pre-flight (HARD — required for idempotent re-runs).** Before each column POST, probe whether the column already exists. This catches:
-> - Partial failures from a prior `EntityDefinitions` POST that created the table + some columns but not all (the body is non-atomic — server commits each Attribute one at a time).
-> - User re-runs after fixing a typo in one column's metadata.
-> - Re-applying a plan after a network drop mid-Step-5b.
->
-> Without this check, the second POST returns `400: attribute already exists` (`0x80044153`) and the run aborts mid-tier.
+> **⚠️ Table-level pre-flight (HARD — required for idempotent re-runs).** Reuse the complete attribute snapshot fetched for this table in Step 4. If the table was discovered only during collision recovery, or no current snapshot exists, fetch all attributes exactly once:
 >
 > ```bash
 > node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
->   "EntityDefinitions(LogicalName='<table>')/Attributes(LogicalName='<column>')?\$select=LogicalName,AttributeType"
+>   "EntityDefinitions(LogicalName='<table>')/Attributes?\$select=MetadataId,LogicalName,SchemaName,AttributeType,AttributeTypeName,RequiredLevel,IsManaged,IsCustomizable,IsPrimaryId,IsPrimaryName"
 > ```
 >
-> | Status | Meaning | Action |
+> Build a local `{ lowerCaseLogicalName → { AttributeType, AttributeTypeName, IsManaged, IsCustomizable } }` map and classify **every** planned non-lookup column before issuing any POST. Prefer `AttributeTypeName.Value` when `AttributeType` is `Virtual`, so File and Image columns are not incorrectly treated as compatible generic virtual attributes:
+>
+> | Snapshot result | Action |
 > |---|---|---|
-> | **404** | Column doesn't exist | Proceed with POST. |
-> | **200** + `AttributeType` matches the spec | Already created (idempotent re-run) | Skip the POST, log `↻ <column> (already exists, skipped)`, continue. |
-> | **200** + `AttributeType` differs from the spec | Schema drift — column type was changed manually OR plan changed since last run | **STOP** and surface to user: "Column `<column>` exists but is `<existingType>`, plan expected `<plannedType>`. Dataverse does NOT allow column-type changes via API — you must delete the column manually and re-run." Do NOT silently overwrite. |
+> | Name exists and `AttributeType` matches | Skip it and log `↻ <column> (already exists, skipped)`. |
+> | Name exists and `AttributeType` differs | **STOP before all writes** and surface: "Column `<column>` exists but is `<existingType>`, plan expected `<plannedType>`. Dataverse does NOT allow column-type changes via API — delete the column manually or revise the plan." |
+> | Name is absent | Add it to the ordered missing-column queue. |
 
-After pre-flight returns 404, POST the column (always pass `--solution`):
+> This single snapshot catches partial creates, corrected re-runs, and network-drop recovery without paying one GET round trip per column.
+
+After the complete comparison passes, POST the missing-column queue **one column at a time, sequentially** (no `$batch`; always pass `--solution`):
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
@@ -425,9 +466,10 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
   --solution '<solution-uniquename-from-memory-bank>'
 ```
 
-**The same pre-flight applies inside Create POSTs that include initial Attributes.** If a Create POST partially failed earlier (table + some columns committed), the retry path is to do **per-column** pre-flight + POST instead of re-POSTing the whole `EntityDefinitions` body — re-POSTing returns `0x80060888 entity already exists`. After Step 5a says "table exists with our MetadataId" (idempotent re-run match), iterate the planned `Attributes` and pre-flight each one against `/Attributes(LogicalName='<column>')`, then POST only the missing ones.
+**Recovery after a partial Create:** do not re-POST the whole `EntityDefinitions` body because the table now exists and Dataverse returns `0x80060888`. Fetch that table's complete attribute snapshot once, run the same local comparison, and sequentially POST only the missing non-lookup columns. This is the only time a table originally classified as Create should use the per-column path.
 
 Column shapes that have non-obvious gotchas (handle carefully):
+- **Pass-2 barrier (HARD)** — do not create any lookup or relationship while Pass 1 is still creating or extending tables. Accumulate relationship definitions, wait until every table and ordinary column has returned 2xx, then process the relationships sequentially in dependency order.
 - **Lookup** — POST to `/RelationshipDefinitions`, not `/Attributes`.
 
   > **⚠️ Do NOT improvise the body. Copy the skeleton below verbatim and replace only the placeholders in `<>` brackets.**
