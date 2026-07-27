@@ -65,6 +65,17 @@ of the touched artifacts only. A pre-mutation live-projection equality check ref
 Maker-drifted artifact (PAC page upload has no CAS — the residual concurrent-edit race is documented as
 unsupported).
 
+**CONFIRMED landmine (validated against `sdk-build.js`) — the pages-only fast path MUST skip the sitemap
+finalize.** The pages phase's finalize (`sdk-build.js:1428-1437`) rebuilds the WHOLE sitemap via
+`appDef(spec, result.created)` and writes `/siteMap` + `components`. In a pages-only run `result.created`
+holds only `app`+`pages`, so `appDef` (a) THROWS on any dashboard subarea (`:610-611`,
+`result.dashboards` empty) and (b) rebuilds `components` from empty `result.forms/views/charts` (`:635`),
+stripping the app's form/view/chart component registrations. A pure page-content re-upload leaves the
+key→pageId map unchanged, so the sitemap needs no rewrite — the fast path seeds `result.created.app` from
+live discovery, uploads only the changed page(s) to their existing pageIds, SKIPS the finalize, and
+publishes just the page. Two sdk-build seams (flag-gated, full-build path byte-identical): seed
+`result.created.app` from `opts.resolvedAppId`, and skip `:1428-1437` under the changed-only page submode.
+
 ## Sequenced deliverables
 1. ✅ Projection/verifier framework + 3 adversarial tests. 2. ✅ Content hashing + fix the shipped
 `phase-diff` foundation (`.tsx`/`contentPath` edits are now visible to the diff, fail-closed;
