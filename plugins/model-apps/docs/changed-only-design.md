@@ -79,14 +79,17 @@ publishes just the page. Two sdk-build seams (flag-gated, full-build path byte-i
 ## Sequenced deliverables
 1. ✅ Projection/verifier framework + 3 adversarial tests. 2. ✅ Content hashing + fix the shipped
 `phase-diff` foundation (`.tsx`/`contentPath` edits are now visible to the diff, fail-closed;
-`scripts/lib/hash.js` + `content-hash.js`). 3. 🔄 Envelope
-(schema 3, eligibility SM, debt, tombstone, unique keys, source/deployed hashes) + build-wide lease +
-generation CAS + immutable staging + invalidate-before-write + teardown tombstone. **Parts 1–2 done**:
-pure state machine (`apply-snapshot.js`) + I/O store (`apply-snapshot-store.js`, atomic/lease/CAS/
-invalidate/tombstone/delete), fully unit-tested; **remaining part 3**: `indexArtifacts` + wire the store
-into the full-apply persist / invalidate-before-write and teardown tombstone (behavior-touching). 4. Phase submodes +
-artifact-scoped writes + pre-mutation drift + both-writer sitemap drift + phase-local publish. 5.
-Classifier + closure + `--changed-only` flow + eligibility/debt transitions + CLI opts. 6. Full offline
+`scripts/lib/hash.js` + `content-hash.js`). 3. 🔄 Envelope — ✅ pure state machine (`apply-snapshot.js`)
++ ✅ I/O store (`apply-snapshot-store.js`, atomic/lease/CAS/invalidate/tombstone/delete) + ✅
+`indexArtifacts` (`apply-snapshot-index.js`); **remaining**: wire persist/invalidate/tombstone into the
+live build+teardown (part of #5's flow). 4. 🔄 Phase submodes — ✅ the two pages-only sdk-build seams
+(seed `result.created.app` from `opts.changedOnly.resolvedAppId`; skip the sitemap finalize under
+`skipSitemapFinalize`), flag-gated + off-path byte-identical; **remaining**: view-append + sitemap
+submodes, phase-local publish, pre-mutation drift. 5. 🔄 Classifier — ✅ core (`classify-changes.js`);
+**remaining**: the `build-model-app.js --changed-only` FLOW (new `--changed-only` flag; live identity via
+a new WhoAmI/orgId call + app discovery by unique name (reuse `sitemap-pages.js`); snapshot
+read→eligibility gate→classify→pages-only run via the seams→persist eligible + invalidate-before-write;
+I1-gate exception for the pages-only fast apply; fallback to full build). 6. Full offline
 tests + eval. 7. Sol review of the IMPLEMENTATION. 8. Live regression test (aurorabapenv03468). 9. Docs.
 
 ## Build-time notes (from the final Sol pass)
