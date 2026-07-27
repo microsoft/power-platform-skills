@@ -655,6 +655,11 @@ async function runSdkBuild(spec, opts = {}) {
   }
 
   const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, commands: {}, dashboards: {}, pages: {}, ai: { appFeatures: null, summaries: {} }, app: null } };
+  // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
+  // pages phase's `pages-requires-app` guard passes WITHOUT running the app-shell phase in this invocation.
+  // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
+  // creates/updates it exactly as before — this branch is a no-op (byte-identical) on the normal path.
+  if (opts.changedOnly && opts.changedOnly.resolvedAppId) result.created.app = opts.changedOnly.resolvedAppId;
   const runner = makeRunner({ emit, total: plan.length });
   const sol = spec.solution;
 
@@ -1425,7 +1430,14 @@ async function runSdkBuild(spec, opts = {}) {
       //     page-less sitemap on an authorized removal/detach (result.created.pages is empty, so appDef emits
       //     no GenPage SubAreas). A FRESH page-less app already had its sitemap written by the app-shell
       //     create path, so it needs no finalize here.
-      if (appHasPageSubareas(spec) || appWasExisting) {
+      // #changed-only (pages-only content re-upload): the finalize below rebuilds the WHOLE sitemap via
+      // appDef(spec, result.created) and rewrites /siteMap + components. In a pages-only apply result.created
+      // holds only app+pages, so appDef would THROW on any dashboard subarea (:610-611, result.dashboards
+      // empty) and STRIP the app's form/view/chart component registrations (:635). A pure content re-upload
+      // leaves the key→pageId map unchanged, so the sitemap needs no rewrite — skip the finalize in that
+      // submode. Any sitemap-changing apply (and every full build) still finalizes.
+      const skipSitemapFinalize = !!(opts.changedOnly && opts.changedOnly.skipSitemapFinalize);
+      if (!skipSitemapFinalize && (appHasPageSubareas(spec) || appWasExisting)) {
         await runner.run('pages', 'finalize sitemap (genpage subareas)', async () => {
           await provision.fetchArtifact('app', result.created.app);
           const full = appDef(spec, result.created);

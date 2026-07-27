@@ -305,3 +305,75 @@ test('deploy: LITERAL GUID nav pageId (hardcoded) HALTS before any write — new
     assert.strictEqual(genpageCli.uploads.length, 0, 'literal GUID nav pageId rejected before any write (new-Important-1)');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
+
+// ---- #changed-only pages-only fast-apply seams (opts.changedOnly) --------------------------------------
+// Two flag-gated seams in runSdkBuild: (a) seed result.created.app from opts.changedOnly.resolvedAppId so a
+// pages-only apply passes `pages-requires-app` without running app-shell; (b) skip the sitemap finalize so
+// appDef(spec, result.created) does not rebuild the WHOLE sitemap from an incomplete result.created (which
+// would THROW on a dashboard subarea and STRIP form/view/chart component registrations).
+const PAGES_ONLY = ['pages'];
+
+// A single implemented page whose app sitemap ALSO has a dashboard subarea — the dashboard subarea is what
+// makes a pages-only finalize (appDef with result.dashboards empty) throw, so it proves both landmine + fix.
+function makeOnePageDashboardApp() {
+  const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chg-only-'));
+  fs.writeFileSync(path.join(appDir, 'overview.tsx'), 'export default function Overview(){ return null; }', 'utf8');
+  const spec = {
+    schemaVersion: 2,
+    solution: { uniqueName: 'ChgOnly', displayName: 'C', publisherPrefix: 'contoso' },
+    app: { name: 'Changed Only App' },
+    entities: [{ schemaName: 'contoso_item', displayName: 'Item', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' }, columns: [] }],
+    pages: [{ key: 'overview', name: 'Overview', source: { kind: 'tsx', codeFile: 'overview.tsx' } }],
+    appShell: { areas: [{ label: 'Main', groups: [{ label: 'G', subAreas: [{ page: 'overview', title: 'Overview' }, { dashboard: 'Ops', title: 'Ops' }] }] }] },
+  };
+  return { appDir, spec };
+}
+
+const finalizeRan = (calls) => calls.some((c) => c.name === 'updateElement' && c.args[0] === 'app' && c.args[2] === '/siteMap');
+
+test('changed-only: a pages-only apply WITHOUT a seeded app id still HALTS on pages-requires-app', async () => {
+  const { appDir, spec } = makeOnePageDashboardApp();
+  try {
+    const { sdk } = mockSdk();
+    const genpageCli = mockGenpageCli();
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PAGES_ONLY }),
+      (e) => e && e.phase === 'pages' && e.code === 'pages-requires-app'
+    );
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('changed-only: a pages-only apply with a seeded app id but WITHOUT skipping the finalize THROWS on the dashboard subarea (the landmine)', async () => {
+  const { appDir, spec } = makeOnePageDashboardApp();
+  try {
+    const { sdk } = mockSdk();
+    const genpageCli = mockGenpageCli();
+    // resolvedAppId lets pages run, but the finalize rebuilds the sitemap from an empty result.dashboards.
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PAGES_ONLY, changedOnly: { resolvedAppId: APP_ID } }),
+      (e) => /dashboard 'Ops' which wasn't built/.test(String(e && e.message))
+    );
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('changed-only: pages-only with resolvedAppId + skipSitemapFinalize UPLOADS the page and SKIPS the finalize (the fix)', async () => {
+  const { appDir, spec } = makeOnePageDashboardApp();
+  try {
+    const { sdk, calls } = mockSdk();
+    const genpageCli = mockGenpageCli();
+    const r = await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PAGES_ONLY, changedOnly: { resolvedAppId: APP_ID, skipSitemapFinalize: true } });
+    assert.ok(r.ok);
+    assert.ok(genpageCli.uploads.some((u) => u.name === 'Overview'), 'the changed page was re-uploaded');
+    assert.ok(!finalizeRan(calls), 'the sitemap finalize (appDef rebuild) must be skipped for a content-only re-upload');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('changed-only: a NORMAL full build (no opts.changedOnly) still runs the sitemap finalize (seam is byte-identical off-path)', async () => {
+  const { appDir, spec } = makeTwoPageApp();
+  try {
+    const { sdk, calls } = mockSdk();
+    const genpageCli = mockGenpageCli();
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES });
+    assert.ok(finalizeRan(calls), 'the full-build path is unchanged — the finalize still runs');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
