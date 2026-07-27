@@ -143,7 +143,7 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
         const w = window as unknown as Record<string, unknown>;
 
         const cached = w[cacheKey] as Task[] | undefined;
-        if (cached) {
+        if (cached !== undefined) {
             setTasks(cached);
             setLoading(false);
             return;

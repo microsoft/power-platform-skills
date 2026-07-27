@@ -93,7 +93,7 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
     const [data, setData] = useState<{ records: ReadableContact[]; loading: boolean; error: string | null }>(
         () => {
             const cached = winAny[CACHE_KEY] as ReadableContact[] | undefined;
-            return { records: cached ?? [], loading: !cached, error: null };
+            return { records: cached ?? [], loading: cached === undefined, error: null };
         },
     );
     const [search, setSearch] = useState('');
@@ -107,7 +107,7 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
         // it between this render and this effect. Sync state on a hit so we never
         // stick on the spinner (reference compare avoids a redundant render).
         const cached = winAny[CACHE_KEY] as ReadableContact[] | undefined;
-        if (cached) {
+        if (cached !== undefined) {
             if (data.records !== cached) setData({ records: cached, loading: false, error: null });
             return;
         }

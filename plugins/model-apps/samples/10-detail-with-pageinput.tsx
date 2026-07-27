@@ -146,7 +146,7 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
     const [data, setData] = useState<{ record: ReadableContact | null; loading: boolean; error: string | null }>(
         () => ({
             record: cached ?? null,
-            loading: !cached,
+            loading: cached === undefined,
             error: null,
         }),
     );
@@ -156,7 +156,7 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
     useEffect(() => {
         if (!dataReady) return;
         const hit = cache.get(recordId);
-        if (hit) {
+        if (hit !== undefined) {
             // The other mount may have resolved it between render and this effect,
             // or recordId changed in place — sync so we don't stick on the spinner.
             if (data.record !== hit) setData({ record: hit, loading: false, error: null });

@@ -193,10 +193,13 @@ repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **physical copy*
 (never a symlink) so installed plugins don't depend on symlink handling. Edit
 `shared/telemetry/lib/` first, then refresh this plugin's copy in the same change.
 
-- **Posture:** the committed `ikey.json` ships **`disabled: true` with a placeholder
-  key** (Tier-1 static, no resolver). It emits nothing — no POST, no local log —
-  until a real key + Kusto stream are provisioned and `disabled` is flipped to
-  `false`. **Provision a fresh key; never copy another plugin's `ikey.json`**
+- **Posture:** the committed `ikey.json` ships **`disabled: true`** (Tier-1 static,
+  no resolver) — currently carrying the **provisioned model-apps key + collector +
+  `event_stream_name`, staged disabled**. It emits nothing — no POST, no local log —
+  while `disabled: true`; flip `disabled` to `false` only after the Geneva mapping
+  is validated in DGrep (see the ADE provisioning runbook). `disabled: true` is the
+  active guard; the placeholder-key gate is a secondary defense for un-provisioned
+  copies. **Provision a fresh key; never copy another plugin's `ikey.json`**
   (CI-enforced: `node scripts/validate-telemetry-ikeys.js`).
 - **Emission:** `hooks/run-skill-pretool-telemetry.js` (PreToolUse Skill) and
   `hooks/run-user-prompt-telemetry.js` (UserPromptSubmit `/model-apps:<skill>`).

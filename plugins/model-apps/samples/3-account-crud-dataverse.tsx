@@ -54,7 +54,7 @@ const GeneratedComponent = ({ dataApi }: GeneratedComponentProps) => {
         // Authoritative window cache — sync on a hit so a mount that renders while
         // another mount's fetch is resolving doesn't stay stuck on the old list.
         const cached = winAny[CACHE_KEY] as ReadableTableRow<account>[] | undefined;
-        if (cached) {
+        if (cached !== undefined) {
             if (accounts !== cached) setAccounts(cached);
             if (loading) setLoading(false);
             return;

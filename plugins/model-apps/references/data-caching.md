@@ -55,7 +55,7 @@ const [{ records, loading, error }, setData] = useState<{
     error: string | null;
 }>(() => {
     const cached = winAny[CACHE_KEY] as MyRow[] | undefined;
-    return { records: cached ?? [], loading: !cached, error: null };
+    return { records: cached ?? [], loading: cached === undefined, error: null };
 });
 
 useEffect(() => {
@@ -67,7 +67,7 @@ useEffect(() => {
     // hit (reference compare avoids a redundant render) so we never stick on the
     // spinner and we pick up an invalidated/replaced array.
     const cached = winAny[CACHE_KEY] as MyRow[] | undefined;
-    if (cached) {
+    if (cached !== undefined) {
         if (records !== cached) setData({ records: cached, loading: false, error: null });
         return;
     }
@@ -132,7 +132,7 @@ useEffect(() => {
     // resolved it between this mount's render and this effect, or `recordId` may
     // have changed in place. Reference compare avoids a redundant render.
     const hit = _detailCache.get(id);
-    if (hit) {
+    if (hit !== undefined) {
         if (record !== hit) setData({ record: hit, loading: false, error: null });
         return;
     }

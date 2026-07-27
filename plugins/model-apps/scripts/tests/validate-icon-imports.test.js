@@ -75,6 +75,29 @@ test('`as` alias uses the source export name for validation', () => {
   assert.equal(status, 0);
 });
 
+// Regression guard: the generator (and samples 8/11) format long icon imports
+// across multiple lines. The extractor's `{([^}]+)}` capture must span newlines,
+// or a multi-line block would silently bypass validation.
+test('multi-line verified icon import passes (exit 0)', () => {
+  const content =
+    "import {\n    AddRegular,\n    DeleteRegular,\n    EditRegular,\n} from '@fluentui/react-icons';\n" +
+    GENPAGE_HEADER;
+  const fp = writeTemp(tmp, 'page.tsx', content);
+  const { status } = runHook(payloadFor(fp, content));
+  assert.equal(status, 0);
+});
+
+test('hallucinated icon inside a multi-line import is blocked (exit 2)', () => {
+  const bad = 'TotallyMadeUpIconRegular';
+  const content =
+    `import {\n    AddRegular,\n    ${bad},\n    DeleteRegular,\n} from '@fluentui/react-icons';\n` +
+    GENPAGE_HEADER;
+  const fp = writeTemp(tmp, 'page.tsx', content);
+  const { status, stderr } = runHook(payloadFor(fp, content));
+  assert.equal(status, 2);
+  assert.match(stderr, new RegExp(bad));
+});
+
 test('non-genpage file is ignored even with a bad icon (exit 0)', () => {
   // No `export default GeneratedComponent` and no sibling genpage-plan.md.
   const content = "import { NotARealIconRegular } from '@fluentui/react-icons';\nexport const x = 1;\n";
