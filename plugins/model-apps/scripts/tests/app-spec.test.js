@@ -43,9 +43,21 @@ test('relationshipSchemaName: an explicit schemaName is honored verbatim', () =>
 
 test('manyToManySchemaName: system-table N:N is auto-prefixed', () => {
   const rel = { type: 'ManyToMany', entity1: 'systemuser', entity2: 'contoso_project' };
-  assert.strictEqual(manyToManySchemaName(rel, 'contoso'), 'contoso_systemuser_project');
+  // #3: the pair is sorted alphabetically before composing, so 'contoso_project' precedes 'systemuser'.
+  assert.strictEqual(manyToManySchemaName(rel, 'contoso'), 'contoso_project_systemuser');
   // all-custom is unchanged
   assert.strictEqual(manyToManySchemaName({ entity1: 'new_a', entity2: 'new_b' }, 'new'), 'new_a_new_b');
+});
+
+test('manyToManySchemaName: #3 name is STABLE regardless of authoring order (alphabetical)', () => {
+  // The same N:N authored in either order must yield ONE schema name (fixes the V1/V2 reversal that
+  // broke a data-load assuming a fixed order).
+  const ab = manyToManySchemaName({ entity1: 'new_workitem', entity2: 'new_customerrequest' }, 'new');
+  const ba = manyToManySchemaName({ entity1: 'new_customerrequest', entity2: 'new_workitem' }, 'new');
+  assert.strictEqual(ab, ba, 'declaration order must not change the name');
+  assert.strictEqual(ab, 'new_customerrequest_new_workitem', 'entities sorted alphabetically');
+  // An explicit schemaName still wins verbatim (author override).
+  assert.strictEqual(manyToManySchemaName({ entity1: 'new_b', entity2: 'new_a', schemaName: 'new_myrel' }, 'new'), 'new_myrel');
 });
 
 test('validateAppSpec accepts a sitemap icon referencing a declared image web resource', () => {
@@ -260,6 +272,44 @@ test('validateAppSpec rejects an unknown chartType', () => {
   const r = validateAppSpec(bad);
   assert.strictEqual(r.ok, false);
   assert.ok(r.errors.some((e) => /chartType/.test(e)));
+});
+
+test('#4 validateAppSpec flags a sampleData Choice value that is not a declared option label', () => {
+  const bad = cloneDesk();
+  bad.sampleData.new_ticket[0].new_priority = 'Urgent'; // not in Low/Medium/High/Critical -> silent bad @wire
+  const r = validateAppSpec(bad);
+  assert.strictEqual(r.ok, false);
+  assert.ok(
+    r.errors.some((e) => /Urgent/.test(e) && /new_priority/.test(e) && /option label/.test(e)),
+    JSON.stringify(r.errors)
+  );
+});
+
+test('#4 choice-label lint has no false positives: a declared label and a raw option int both pass', () => {
+  const okSpec = cloneDesk();
+  okSpec.sampleData.new_ticket[0].new_priority = 'Critical'; // valid label
+  okSpec.sampleData.new_ticket[0].new_status = 100000001; // raw option int passes through unchanged
+  const r = validateAppSpec(okSpec);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('#4 MultiChoice lint checks each comma token; a bad token is flagged, labels+ints pass', () => {
+  const bad = cloneDesk();
+  bad.entities
+    .find((e) => e.schemaName === 'new_ticket')
+    .columns.push({ schemaName: 'new_tags', displayName: 'Tags', type: 'MultiChoice', options: ['A', 'B', 'C'] });
+  bad.sampleData.new_ticket[0].new_tags = 'A,Zzz'; // Zzz is not a declared option
+  const r = validateAppSpec(bad);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /Zzz/.test(e) && /new_tags/.test(e)), JSON.stringify(r.errors));
+
+  const okSpec = cloneDesk();
+  okSpec.entities
+    .find((e) => e.schemaName === 'new_ticket')
+    .columns.push({ schemaName: 'new_tags', displayName: 'Tags', type: 'MultiChoice', options: ['A', 'B', 'C'] });
+  okSpec.sampleData.new_ticket[0].new_tags = 'A,100000002'; // label + raw int
+  const ok = validateAppSpec(okSpec);
+  assert.strictEqual(ok.ok, true, JSON.stringify(ok.errors));
 });
 
 test('validateAppSpec rejects a chart missing a name', () => {

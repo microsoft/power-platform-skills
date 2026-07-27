@@ -609,6 +609,32 @@ test('defaultViewColumns includes the 1:N parent lookup (Gap 6); includeLookups:
   assert.ok(!scalar.includes('new_projectid'), 'includeLookups:false drops the lookup (what teardown resets the default views to)');
 });
 
+test('#2 defaultViewColumns never truncates a parent lookup even when scalars would fill the cap', () => {
+  // A lookup-heavy table: 8 scalar columns + 1 parent lookup. Before #2, scalars filled the 6-extra cap
+  // and the parent lookup was dropped. Now the lookup is guaranteed to land (scalars yield a slot).
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    entities: [
+      { schemaName: 'new_project', primaryAttribute: { schemaName: 'new_name' }, columns: [] },
+      { schemaName: 'new_task', primaryAttribute: { schemaName: 'new_name' }, columns: [
+        { schemaName: 'new_a', type: 'Text' }, { schemaName: 'new_b', type: 'Text' },
+        { schemaName: 'new_c', type: 'Text' }, { schemaName: 'new_d', type: 'Text' },
+        { schemaName: 'new_e', type: 'Text' }, { schemaName: 'new_f', type: 'Text' },
+        { schemaName: 'new_g', type: 'Text' }, { schemaName: 'new_h', type: 'Text' },
+      ] },
+    ],
+    relationships: [
+      { type: 'OneToMany', referenced: 'new_project', referencing: 'new_task', lookup: { schemaName: 'new_ProjectId' } },
+    ],
+  };
+  const task = spec.entities.find((e) => e.schemaName === 'new_task');
+  const cols = defaultViewColumns(spec, task).map((c) => c.name);
+  assert.ok(cols.includes('new_projectid'), 'the parent lookup is included despite 8 scalar columns');
+  // still bounded (primary + up to DEFAULT_VIEW_MAX_EXTRA), and the lookup occupies one of the extra slots.
+  assert.ok(cols.length <= 7, `stays within the cap (got ${cols.length})`);
+  assert.strictEqual(cols[0], 'new_name', 'primary first');
+});
+
 test('an N:N sub-grid uses the ManyToMany relationship schema name', async () => {
   const spec = makeSpec();
   spec.entities.push({ schemaName: 'new_tag', displayName: 'Tag', primaryAttribute: { schemaName: 'new_label', displayName: 'Label' }, columns: [] });

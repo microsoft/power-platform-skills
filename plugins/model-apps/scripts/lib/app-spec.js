@@ -188,14 +188,19 @@ function manyToManyFor(spec, entityA, entityB) {
   );
 }
 
-// The N:N relationship's SCHEMA name (the intersect/RelationshipName), defaulting to
-// `<entity1>_<entity2>` with the publisher prefix guaranteed at the front (see
-// prefixedRelationshipName) — matches the builder's createRelationship naming.
+// The N:N relationship's SCHEMA name (the intersect/RelationshipName). #3: an N:N is symmetric, so the
+// name is composed from the two entity logical names SORTED ALPHABETICALLY — this makes the name STABLE
+// regardless of authoring order (the same pair authored `entity1/entity2` either way yields ONE name,
+// fixing the V1/V2 reversal that broke a data-load assuming a fixed order). The publisher prefix is then
+// guaranteed at the front (see prefixedRelationshipName). An explicit `schemaName` still wins verbatim.
+// NOTE: only N:N sorts — a 1:N name (relationshipSchemaName) keeps its semantic `referenced_referencing`
+// (parent_child) order and must NOT be sorted.
 function manyToManySchemaName(rel, publisherPrefix) {
   if (rel && rel.schemaName) {
     return rel.schemaName;
   }
-  return prefixedRelationshipName(rel.entity1, rel.entity2, publisherPrefix);
+  const [a, b] = [String(rel.entity1 || '').toLowerCase(), String(rel.entity2 || '').toLowerCase()].sort();
+  return prefixedRelationshipName(a, b, publisherPrefix);
 }
 
 // Turn author-friendly sample records into Web-API bodies: Choice / MultiChoice values
@@ -673,7 +678,37 @@ function validateAppSpec(spec, opts = {}) {
           errors.push(`sampleData['${k}'] must be an array of records`);
           continue;
         }
+        // #4: catch Choice/MultiChoice sample values that are NOT a declared option label. Unknown
+        // labels otherwise pass through resolveChoiceValue() unchanged and reach Dataverse as a raw
+        // string, which either 400s late in the build or (for a MultiChoice) is silently wrong — a
+        // typo like 'Urgnet' should fail spec-lint, not the live deploy. Built once per entity.
+        const ent = lower.has(k.toLowerCase())
+          ? (spec.entities || []).find((e) => String(e.schemaName).toLowerCase() === k.toLowerCase())
+          : null;
+        const choiceMap = ent ? choiceValueMap(ent, spec) : {};
+        const multiSet = ent
+          ? new Set((ent.columns || []).filter((c) => c.type === 'MultiChoice').map((c) => String(c.schemaName).toLowerCase()))
+          : new Set();
         for (const rec of v) {
+          if (rec && typeof rec === 'object' && !Array.isArray(rec)) {
+            for (const [fk, fv] of Object.entries(rec)) {
+              if (fk === '$parent') continue;
+              const byLabel = choiceMap[fk.toLowerCase()];
+              // Only lint columns whose option labels we actually know (inline options or a resolvable
+              // globalChoice); a bare Choice with no declared options isn't in the map. Non-string
+              // values (a raw Int32 for single-select) are passed through by resolve, so skip them.
+              if (!byLabel || typeof fv !== 'string') continue;
+              // MultiChoice is a comma-separated string of tokens ("A,B"); single-select is one token.
+              const tokens = multiSet.has(fk.toLowerCase()) ? fv.split(',').map((t) => t.trim()).filter(Boolean) : [fv];
+              for (const tok of tokens) {
+                // A purely-numeric token is a raw option value and passes through to Dataverse as-is
+                // (valid), so only flag NON-numeric tokens that don't match a declared label — the typo.
+                if (byLabel[tok] === undefined && !/^-?\d+$/.test(tok)) {
+                  errors.push(`sampleData['${k}']: value '${tok}' for choice column '${fk}' is not a declared option label`);
+                }
+              }
+            }
+          }
           if (!rec || rec.$parent === undefined) {
             continue;
           }

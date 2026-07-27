@@ -355,26 +355,29 @@ const DEFAULT_VIEW_MAX_EXTRA = 6;
 const DEFAULT_VIEW_SKIP_TYPES = new Set(['Memo', 'File', 'Image']);
 function defaultViewColumns(spec, entity, opts = {}) {
   const primary = entity.primaryAttribute.schemaName.toLowerCase();
+  const includeLookups = opts.includeLookups !== false;
+  // #2 / Gap 6: parent lookups are the key "which parent?" columns and must NOT be truncated by the cap
+  // (before, scalars filled the cap first and a lookup-heavy table dropped its parent links). Reserve the
+  // lookups' slots up front so scalar columns fill only the REMAINING budget, then always append every
+  // lookup. Teardown passes { includeLookups:false } to get the lookup-free reset set (a lookup column on
+  // an un-deletable default view would otherwise block the relationship's delete), so no slots are
+  // reserved on that path and scalars fill the full cap.
+  const lookups = includeLookups ? lookupColumnsFor(spec, entity.schemaName.toLowerCase()) : [];
+  const scalarBudget = Math.max(0, DEFAULT_VIEW_MAX_EXTRA - lookups.length);
   const picked = [{ name: primary, width: 300, order: 0 }];
+  const chosen = new Set([primary]);
   for (const c of entity.columns || []) {
-    if (picked.length > DEFAULT_VIEW_MAX_EXTRA) break;
+    if (picked.length - 1 >= scalarBudget) break; // -1: exclude the primary from the extra-column count
     const logical = c.schemaName.toLowerCase();
-    if (logical === primary) continue;
+    if (chosen.has(logical)) continue;
     if (DEFAULT_VIEW_SKIP_TYPES.has(c.type)) continue;
+    chosen.add(logical);
     picked.push({ name: logical, width: 150, order: picked.length });
   }
-  // Gap 6: parent lookups read well in a grid (the "which parent?" column), so include them in the
-  // built-in Active/Inactive default views too — bounded by the same cap. Teardown calls this with
-  // { includeLookups: false } to reset those views BEFORE deleting the relationship, since a lookup
-  // column on an un-deletable default view would otherwise block the relationship's delete.
-  if (opts.includeLookups !== false) {
-    const chosen = new Set(picked.map((p) => p.name));
-    for (const lk of lookupColumnsFor(spec, entity.schemaName.toLowerCase())) {
-      if (picked.length > DEFAULT_VIEW_MAX_EXTRA) break;
-      if (chosen.has(lk.logical)) continue;
-      chosen.add(lk.logical);
-      picked.push({ name: lk.logical, width: 150, order: picked.length });
-    }
+  for (const lk of lookups) {
+    if (chosen.has(lk.logical)) continue;
+    chosen.add(lk.logical);
+    picked.push({ name: lk.logical, width: 150, order: picked.length });
   }
   return picked;
 }

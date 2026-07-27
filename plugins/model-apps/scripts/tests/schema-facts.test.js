@@ -56,7 +56,12 @@ test('schemaFacts normalizes relationships with prefixed schema names, sorted', 
   // Sorted by schemaName; 1:n schema name is `<referenced>_<referencing>` (already prefixed).
   assert.deepStrictEqual(f.relationships[0], { kind: '1:n', schemaName: 'new_customer_new_ticket', referenced: 'new_customer', referencing: 'new_ticket', lookup: { logicalName: 'new_customerid', displayName: 'Customer' } });
   assert.strictEqual(f.relationships[1].kind, 'n:n');
-  assert.strictEqual(f.relationships[1].schemaName, 'new_ticket_new_tag');
+  // #3: the N:N schema name sorts its two entities alphabetically (new_tag < new_ticket) so it is
+  // STABLE regardless of entity1/entity2 declaration order — swapping them yields the same name.
+  assert.strictEqual(f.relationships[1].schemaName, 'new_tag_new_ticket');
+  const swapped = JSON.parse(JSON.stringify(spec));
+  swapped.relationships[0] = { type: 'ManyToMany', entity1: 'new_tag', entity2: 'new_ticket', intersectEntityName: 'new_ticket_tag' };
+  assert.strictEqual(schemaFacts(swapped).relationships.find((r) => r.kind === 'n:n').schemaName, 'new_tag_new_ticket');
 });
 
 test('schemaFacts is deterministic regardless of input entity/column order', () => {
