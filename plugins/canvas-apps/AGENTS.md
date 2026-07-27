@@ -19,10 +19,14 @@ claude --plugin-dir /path/to/plugins/canvas-apps
 ## Architecture
 
 ```
-.plugin/plugin.json            ← Open Plugins metadata (name, version, keywords)
+.plugin/plugin.json            ← Open Plugins metadata and Copilot hook path
 .mcp.json                      ← MCP server config (canvas-authoring, auto-registered)
 AGENTS.md                      ← Plugin guidance for AI agents (this file)
 CLAUDE.md                      ← Symlink → AGENTS.md
+hooks/
+  hooks.json                   ← Claude and Copilot prompt hook registration
+  inject-sync-reminder.cs      ← File-based .NET app that injects a cross-host sync reminder
+  tests/                       ← node:test coverage for the hook app and registration
 references/
   TechnicalGuide.md            ← YAML syntax, control selection, layout strategies, Power Fx patterns
   DesignGuide.md               ← Aesthetic guidelines, anti-patterns, design process
@@ -74,6 +78,20 @@ The `canvas-authoring` MCP server exposes the following tools:
 | `list_controls` | Lists all available Power Apps controls in the current authoring session |
 | `list_data_sources` | Lists all available data sources in the current authoring session |
 | `sync_canvas` | Syncs the current coauthoring session state from the server to a local directory, writing all YAML files |
+
+## Hooks
+
+Hook registration is centralized in `hooks/hooks.json`. It registers Claude Code's
+`UserPromptSubmit` event and Copilot's `userPromptTransformed` event. Both
+invoke the file-based .NET app at `hooks/inject-sync-reminder.cs` with `dotnet run
+--file`; the app emits `modifiedTransformedPrompt` for Copilot and
+`hookSpecificOutput.additionalContext` for Claude Code. This avoids requiring Node.js at
+plugin runtime. Both paths remind the agent to call `sync_canvas` (targeting the app's
+working directory) before acting, so it never edits stale local `.pa.yaml` files. The
+reminder is conditional in wording — the agent skips the sync when no coauthoring session
+is active or the request is unrelated to a canvas app. Keep the Copilot event name
+lowercase: Copilot ignores the PascalCase variant, while Claude Code ignores the
+Copilot-only event and continues loading `UserPromptSubmit`.
 
 ## Prerequisites
 

@@ -1,0 +1,27 @@
+{
+  "description": "Canvas Apps lifecycle hooks",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "dotnet run --file \"${CLAUDE_PLUGIN_ROOT}/hooks/inject-sync-reminder.cs\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "userPromptTransformed": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "dotnet run --file \"${PLUGIN_ROOT}/hooks/inject-sync-reminder.cs\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
