@@ -1288,6 +1288,34 @@ test('Gap 2: our (custom) main form is promoted to the entity default (isdefault
   assert.ok(find(calls, 'findArtifact').some((c) => c.args[0] === 'form'), 'form resolved by name+entity (our form), not the stock form');
 });
 
+test('#6 opt-in: forms[].deactivateOtherMainForms deactivates OTHER active main forms on our custom table', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'auto', deactivateOtherMainForms: true }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const upd = find(calls, 'updateRecord').filter((c) => c.args[0] === 'systemform');
+  assert.ok(upd.some((c) => c.args[2] && c.args[2].isdefault === true), 'our form is still promoted default');
+  // The OTHER main form (the mock's stock-info) is deactivated (formactivationstate 0); ours is not.
+  const deacts = upd.filter((c) => c.args[2] && c.args[2].formactivationstate === 0);
+  assert.ok(deacts.some((c) => c.args[1] === 'stock-info'), 'the stock Information form is deactivated');
+  assert.ok(!deacts.some((c) => c.args[1] === 'form-existing'), 'our own form is never deactivated');
+  assert.ok(
+    find(calls, 'queryRecords').some((c) => c.args[0] === 'systemform' && /type eq 2/.test((c.args[1] || {}).filter || '')),
+    'queried the entity main forms (type 2) to find the ones to deactivate'
+  );
+});
+
+test('#6 deactivation NEVER runs on a reused/system table even when the form flags it', async () => {
+  const spec = makeSpec();
+  spec.entities[0].existing = true; // mark new_customer as reused/system
+  spec.forms = [{ entity: spec.entities[0].schemaName, name: 'Reused', layout: 'auto', deactivateOtherMainForms: true }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const upd = find(calls, 'updateRecord').filter((c) => c.args[0] === 'systemform');
+  assert.ok(!upd.some((c) => c.args[2] && c.args[2].formactivationstate === 0), 'no deactivation on a reused/system table even when flagged');
+  assert.ok(!upd.some((c) => c.args[2] && c.args[2].isdefault === true), 'and the reused table default is never re-pointed');
+});
+
 test('Gap 2: a Main form on a reused/system table is NOT promoted (never re-points a shared table default form)', async () => {
   // A system table (not prefixed with the solution publisher prefix, or flagged existing) must never
   // have its default form touched — that is an environment-wide side effect on shared data.

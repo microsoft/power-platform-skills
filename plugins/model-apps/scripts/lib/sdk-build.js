@@ -866,14 +866,45 @@ async function runSdkBuild(spec, opts = {}) {
   // stock "Information" form. Called ONLY for a table THIS build owns (a custom, publisher-prefixed
   // table — see the call-site guard), so it never touches a reused/system table's forms.
   //
-  // We deliberately do NOT deactivate other main forms. That would be destructive: on a shared
-  // system table it disables out-of-box forms env-wide, and on any table it kills legitimate
+  // By default we deliberately do NOT deactivate other main forms. That would be destructive: on a
+  // shared system table it disables out-of-box forms env-wide, and on any table it kills legitimate
   // role-based / sibling author forms — and with concurrent form builds the winner is
   // nondeterministic. Marking ours `isdefault` is enough for the app to open it (the stock form
   // stays available in the form switcher). Best-effort — never fail the build over the flag.
-  const promoteDefaultForm = async (formId) => {
+  //
+  // #6 (opt-in): when a form sets `deactivateOtherMainForms: true`, we ALSO deactivate every OTHER
+  // active main form on the entity so only our form ships active (no blank "Information" form
+  // competing in the switcher). This is gated to our OWN custom table (call-site) AND the explicit
+  // flag, because it is destructive. It is symmetric with teardown's restoreStockMainForm, which
+  // reactivates these stock forms before deleting ours — so a torn-down table is left clean.
+  const promoteDefaultForm = async (formId, entityLogical, deactivateOthers) => {
     try {
       await provision.updateRecord('systemform', formId, { isdefault: true });
+    } catch {
+      /* best-effort */
+    }
+    if (!deactivateOthers) return;
+    if (typeof provision.queryRecords !== 'function') return;
+    try {
+      // Main forms only (systemform.type == 2). Every other ACTIVE main form is deactivated
+      // (formactivationstate 1 -> 0); ours is skipped by id. A form already inactive
+      // (formactivationstate === 0) is left alone to avoid a redundant write; a row without an
+      // explicit state is presumed active and deactivated (the safe assumption).
+      // See: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/systemform
+      const forms = await provision.queryRecords('systemform', {
+        select: ['formid', 'formactivationstate'],
+        filter: `objecttypecode eq '${odataLit(entityLogical)}' and type eq 2`,
+        top: 50,
+      });
+      for (const f of forms || []) {
+        if (String(f.formid) === String(formId)) continue; // never deactivate our own form
+        if (f.formactivationstate === 0) continue; // already inactive
+        try {
+          await provision.updateRecord('systemform', String(f.formid), { formactivationstate: 0 });
+        } catch {
+          /* best-effort per form */
+        }
+      }
     } catch {
       /* best-effort */
     }
@@ -1008,7 +1039,7 @@ async function runSdkBuild(spec, opts = {}) {
         const prefix = spec.solution && spec.solution.publisherPrefix;
         const isOwnCustomTable = !!(entSpec && entSpec.existing !== true && prefix &&
           String(entSpec.schemaName).toLowerCase().startsWith(String(prefix).toLowerCase() + '_'));
-        if (isOwnCustomTable) await promoteDefaultForm(id);
+        if (isOwnCustomTable) await promoteDefaultForm(id, d.f.entity.toLowerCase(), d.f.deactivateOtherMainForms === true);
       }
       const wantedEvents = (d.f.events || []).filter((ev) => FORM_EVENTS.has(ev.event) && ev.library && ev.function);
       if (wantedEvents.length) {
