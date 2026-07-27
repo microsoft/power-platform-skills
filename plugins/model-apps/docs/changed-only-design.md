@@ -68,9 +68,12 @@ unsupported).
 ## Sequenced deliverables
 1. ✅ Projection/verifier framework + 3 adversarial tests. 2. ✅ Content hashing + fix the shipped
 `phase-diff` foundation (`.tsx`/`contentPath` edits are now visible to the diff, fail-closed;
-`scripts/lib/hash.js` + `content-hash.js`). 3. Envelope
+`scripts/lib/hash.js` + `content-hash.js`). 3. 🔄 Envelope
 (schema 3, eligibility SM, debt, tombstone, unique keys, source/deployed hashes) + build-wide lease +
-generation CAS + immutable staging + invalidate-before-write + teardown tombstone. 4. Phase submodes +
+generation CAS + immutable staging + invalidate-before-write + teardown tombstone. **Parts 1–2 done**:
+pure state machine (`apply-snapshot.js`) + I/O store (`apply-snapshot-store.js`, atomic/lease/CAS/
+invalidate/tombstone/delete), fully unit-tested; **remaining part 3**: `indexArtifacts` + wire the store
+into the full-apply persist / invalidate-before-write and teardown tombstone (behavior-touching). 4. Phase submodes +
 artifact-scoped writes + pre-mutation drift + both-writer sitemap drift + phase-local publish. 5.
 Classifier + closure + `--changed-only` flow + eligibility/debt transitions + CLI opts. 6. Full offline
 tests + eval. 7. Sol review of the IMPLEMENTATION. 8. Live regression test (aurorabapenv03468). 9. Docs.
