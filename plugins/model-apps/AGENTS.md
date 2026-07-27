@@ -71,7 +71,7 @@ scripts/
 hooks/                         ← Lifecycle hooks (registered in hooks/hooks.json)
   run-skill-posttool-validation.js ← Runs a skill's validate*.js after the Skill tool returns
   validate-icon-imports.js     ← PostToolUse: blocks unverified @fluentui/react-icons in genpage .tsx
-  validate-write-safety.js     ← PreToolUse: blocks writes outside the working dir
+  validate-write-safety.js     ← PreToolUse: flags (non-blocking) out-of-cwd writes in a genpage session
   run-skill-pretool-telemetry.js   ← PreToolUse(Skill): emits skill_started (ships disabled)
   run-user-prompt-telemetry.js ← UserPromptSubmit: emits skill_started for /model-apps:<skill>
 skills/
@@ -179,9 +179,11 @@ host). Every hook **fails open** on any internal error (exit 0) and **fails clos
   `references/verified-icons.txt`, automating the page-builder's manual grep. It is
   gated to genpage output (the file's `export default GeneratedComponent` marker or
   a sibling `genpage-plan.md`) so it never fires on unrelated React files.
-- **PreToolUse(Write|Edit|MultiEdit)** — `validate-write-safety.js` blocks writes
-  outside the working directory (runaway sub-agent protection). Bypass with
-  `MODEL_APPS_SKIP_WRITE_GUARD=1`.
+- **PreToolUse(Write|Edit|MultiEdit)** — `validate-write-safety.js` **flags
+  (non-blocking, exit 1)** writes outside the cwd, and **only during an active
+  genpage session** (a `genpage-plan.md` at/under cwd). It never blocks and is a
+  clean no-op in unrelated projects — the plugin installs globally, so it must not
+  constrain other work. Silence with `MODEL_APPS_SKIP_WRITE_GUARD=1`.
 - **Master kill-switch** — `MODEL_APPS_DISABLE_HOOKS=1` (or `true`) disables **all**
   model-apps hooks (validators + telemetry emit); checked before any stdin/work.
   Both escape hatches are documented in `README.md`.

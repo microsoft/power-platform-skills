@@ -1,5 +1,5 @@
 {
-  "_comment": "PreToolUse: write-safety blocks Write/Edit/MultiEdit outside the active working directory; skill-pretool-telemetry emits anonymous skill_started (ships disabled until provisioned). PostToolUse: per-skill validator + on every code write validate @fluentui/react-icons imports against references/verified-icons.txt. UserPromptSubmit: emit skill_started for /model-apps:<skill> slash commands. All telemetry is fail-closed and default-off in ikey.json. Run the host from the target project folder (or pass it as cwd).",
+  "_comment": "PreToolUse: write-safety FLAGS (non-blocking, exit 1) Write/Edit/MultiEdit outside the cwd only during an active genpage session (genpage-plan.md at/under cwd); skill-pretool-telemetry emits anonymous skill_started (ships disabled until provisioned). PostToolUse: per-skill validator + on every code write validate @fluentui/react-icons imports against references/verified-icons.txt. UserPromptSubmit: emit skill_started for /model-apps:<skill> slash commands. All telemetry is fail-closed and default-off in ikey.json. Run the host from the target project folder (or pass it as cwd).",
   "hooks": {
     "PreToolUse": [
       {

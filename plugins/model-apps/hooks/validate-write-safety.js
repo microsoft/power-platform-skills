@@ -9,21 +9,31 @@
  * inside a working directory created under the cwd (SKILL Phase 0), so every
  * legitimate write stays under it.
  *
+ * SCOPING (global-install safety): this plugin's hooks are installed globally, so
+ * this guard must NOT constrain writes in unrelated projects. It therefore only
+ * enforces during an active genpage session — detected by a `genpage-plan.md` at
+ * or one level under the cwd (genpage Phase 0 creates the working dir as a child
+ * of cwd and writes the plan into it). With no genpage-plan.md present the hook is
+ * a clean no-op (exit 0), so a globally-installed model-apps plugin never blocks
+ * ordinary out-of-cwd writes.
+ *
  * This intentionally does NOT scan content for secrets. Per repo convention,
  * secret handling is done via agent instructions in SKILL.md (no fixed regex can
  * cover every credential shape); this guard is strictly about write location.
  *
- * Hard-fail = exit 2 (blocks the tool call; the message on stderr goes to the
- * model, which reissues the write to a safe path). Conservative on purpose: a
- * false positive is recoverable (the model sees the reason and retries); a
- * runaway cross-repo write is not.
+ * NON-BLOCKING by design = exit 1 (Claude Code shows the stderr message to the
+ * USER and lets the write proceed; only exit 2 would block). We deliberately do
+ * NOT hard-block: the skill may legitimately run from an unusual cwd or a temp
+ * dir, so a false positive must never stop the user's write — it only flags a
+ * possibly-runaway out-of-cwd write for the user to notice.
  *
- * Bypass: set MODEL_APPS_SKIP_WRITE_GUARD=1. Use sparingly — usually means the
- * guard itself needs adjusting.
+ * Silence: set MODEL_APPS_SKIP_WRITE_GUARD=1 (this guard) or
+ * MODEL_APPS_DISABLE_HOOKS=1 (all model-apps hooks).
  */
 
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
 
 const DEBUG = process.env.DEBUG === '1' || process.env.DEBUG === 'true';
 const SKIP = process.env.MODEL_APPS_SKIP_WRITE_GUARD === '1' || process.env.MODEL_APPS_SKIP_WRITE_GUARD === 'true';
@@ -39,12 +49,11 @@ function debug(msg) {
   if (DEBUG) process.stderr.write(`[write-safety] ${msg}\n`);
 }
 
-function reject(userMsg, modelMsg) {
-  // First block: user-facing summary in plain English.
-  process.stderr.write(`[model-apps] ${userMsg} The agent will revise and retry — no action needed from you.\n\n`);
-  // Second block: prescriptive instruction for the model.
-  process.stderr.write(`For the agent: ${modelMsg}\n`);
-  process.exit(2);
+// Non-blocking warning. Exit 1 (not 2) so Claude Code shows this on stderr to the
+// USER and still lets the write through — the guard flags, it does not block.
+function warn(userMsg) {
+  process.stderr.write(`[model-apps] ${userMsg}\n`);
+  process.exit(1);
 }
 
 /**
@@ -76,6 +85,31 @@ function isPathSafe(targetPath, cwd) {
   const home = os.homedir();
   if (home && isWithin(abs, path.resolve(home, '.claude'))) return true;
 
+  return false;
+}
+
+/**
+ * True when the cwd looks like an active genpage run: a `genpage-plan.md` sits at
+ * the cwd or in one of its immediate child directories. genpage Phase 0 creates
+ * the working directory as a direct child of cwd and the planner writes
+ * genpage-plan.md into it (skills/genpage/SKILL.md), so the plan is at either
+ * `<cwd>/genpage-plan.md` (host started inside the working dir) or
+ * `<cwd>/<workdir>/genpage-plan.md` (host started at the project root). Shallow,
+ * bounded, and fail-open: any error → false (treat as "not a genpage session" and
+ * do NOT warn), because a hook must never interfere with unrelated work.
+ */
+function isGenpageSession(cwd) {
+  try {
+    if (fs.existsSync(path.join(cwd, 'genpage-plan.md'))) return true;
+    let scanned = 0;
+    for (const entry of fs.readdirSync(cwd, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name === 'node_modules' || entry.name === '.git') continue;
+      if (++scanned > 1000) break; // bound syscalls on very large project roots
+      if (fs.existsSync(path.join(cwd, entry.name, 'genpage-plan.md'))) return true;
+    }
+  } catch {
+    return false;
+  }
   return false;
 }
 
@@ -114,14 +148,19 @@ process.stdin.on('end', () => {
     process.exit(0);
   }
 
+  // Global-install safety: only enforce during an active genpage session, so a
+  // globally-installed model-apps plugin never blocks writes in unrelated projects.
+  if (!isGenpageSession(cwd)) {
+    debug('no genpage-plan.md at/under cwd — not a genpage session, allowing');
+    process.exit(0);
+  }
+
   for (const p of extractWritePaths(toolName, toolInput)) {
     if (!isPathSafe(p, cwd)) {
-      reject(
-        `A skill tried to write outside your project folder (${path.basename(cwd)}). The write was blocked for safety.`,
-        `${toolName} target "${p}" is outside the project root (${cwd}). ` +
-        `Skills must not write outside their working directory. ` +
-        `Re-issue the write to a path under the project root, or ask the user to run from the correct cwd. ` +
-        `If this is genuinely intentional, set MODEL_APPS_SKIP_WRITE_GUARD=1 (not recommended).`
+      warn(
+        `Heads up: a genpage ${toolName} targeted "${p}", which is outside your project folder ` +
+        `(${cwd}). Allowing it, but flagging in case a sub-agent went off-track. ` +
+        `Silence with MODEL_APPS_SKIP_WRITE_GUARD=1 or MODEL_APPS_DISABLE_HOOKS=1.`
       );
     }
   }

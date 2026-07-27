@@ -19,6 +19,8 @@ function runHook(payload, env) {
 let cwd;
 test.beforeEach(() => {
   cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-ws-'));
+  // Mark this as an active genpage session so the (session-scoped) guard engages.
+  fs.writeFileSync(path.join(cwd, 'genpage-plan.md'), '# plan\n', 'utf8');
 });
 test.afterEach(() => {
   try { fs.rmSync(cwd, { recursive: true, force: true }); } catch { /* ignore */ }
@@ -38,21 +40,38 @@ test('relative path resolving under cwd is allowed (exit 0)', () => {
   assert.equal(runHook(payload).status, 0);
 });
 
-test('write escaping the working directory is blocked (exit 2)', () => {
+test('write escaping the working directory is flagged, non-blocking (exit 1)', () => {
   // Target the drive/filesystem root so the path is outside BOTH cwd and the
   // tmpdir scratch exception (cwd itself lives under tmpdir here).
   const outside = path.join(path.parse(cwd).root, 'model-apps-guard-evil', 'evil.ts');
   const payload = { tool_name: 'Write', tool_input: { file_path: outside, content: 'x' }, cwd };
   const { status, stderr } = runHook(payload);
-  assert.equal(status, 2);
-  assert.match(stderr, /outside the project root/);
+  assert.equal(status, 1); // non-blocking: exit 1 (only exit 2 would block)
+  assert.match(stderr, /outside your project folder/);
 });
 
-test('parent-traversal path escaping to the root is blocked (exit 2)', () => {
+test('parent-traversal path escaping to the root is flagged, non-blocking (exit 1)', () => {
   const target = path.join(path.parse(cwd).root, 'model-apps-guard-evil2.ts');
   const rel = path.relative(cwd, target); // e.g. ..\..\..\model-apps-guard-evil2.ts
   const payload = { tool_name: 'Edit', tool_input: { file_path: rel, new_string: 'x' }, cwd };
-  assert.equal(runHook(payload).status, 2);
+  assert.equal(runHook(payload).status, 1);
+});
+
+test('outside-cwd write is NOT flagged when there is no genpage session (exit 0)', () => {
+  fs.rmSync(path.join(cwd, 'genpage-plan.md'), { force: true }); // no active genpage run
+  const outside = path.join(path.parse(cwd).root, 'model-apps-guard-evil', 'evil.ts');
+  const payload = { tool_name: 'Write', tool_input: { file_path: outside, content: 'x' }, cwd };
+  assert.equal(runHook(payload).status, 0);
+});
+
+test('genpage-plan.md in a working subdir activates the guard (exit 1)', () => {
+  fs.rmSync(path.join(cwd, 'genpage-plan.md'), { force: true });
+  const wd = path.join(cwd, 'my-page');
+  fs.mkdirSync(wd);
+  fs.writeFileSync(path.join(wd, 'genpage-plan.md'), '# plan\n', 'utf8');
+  const outside = path.join(path.parse(cwd).root, 'model-apps-guard-evil', 'evil.ts');
+  const payload = { tool_name: 'Write', tool_input: { file_path: outside, content: 'x' }, cwd };
+  assert.equal(runHook(payload).status, 1);
 });
 
 test('tmpdir scratch writes are allowed (exit 0)', () => {

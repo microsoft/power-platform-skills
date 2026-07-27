@@ -24,9 +24,10 @@ hardened Playwright launcher. No breaking changes.
   `.tsx` write against `references/verified-icons.txt`, automating the
   page-builder's manual icon-grep step (hallucinated or sized icon names are
   blocked at write time).
-- **PreToolUse write-safety guard.** Blocks Write/Edit/MultiEdit outside the
-  active working directory (runaway sub-agent protection); bypass with
-  `MODEL_APPS_SKIP_WRITE_GUARD=1`.
+- **PreToolUse write-safety guard.** **Flags (non-blocking, exit 1)**
+  Write/Edit/MultiEdit outside the cwd, and only during an active genpage session
+  (a `genpage-plan.md` at/under cwd) — so a globally-installed plugin never blocks
+  or interferes with unrelated work. Silence with `MODEL_APPS_SKIP_WRITE_GUARD=1`.
 
 ### Fixed
 - **Generated-page double-fetch / render flash on open.** Generated data pages
