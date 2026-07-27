@@ -13,8 +13,8 @@
 //   · page hashing     — source vs deployed bytes are hashed SEPARATELY (cross-page-nav rewrites the
 //                        bytes at upload, so the deployed hash ≠ the canonical source hash).
 
-const crypto = require('node:crypto');
 const { stableStringify } = require('./phase-diff.js');
+const { sha256 } = require('./hash.js');
 
 // Dataverse control class ids that occupy a cell but are NOT bound form fields (a quick-view even
 // carries a fieldName). Kept in sync with artifact-intent.js NON_FIELD_CONTROL_CLASS_IDS.
@@ -23,11 +23,6 @@ const NON_FIELD_CONTROL_CLASS_IDS = new Set([
   'E7A81278-8635-4D9E-8D4D-59480B391C5B', // Subgrid / Grid
   '06375649-C143-495E-A496-C962E5B4488E', // Notes / Timeline
 ]);
-
-function sha256(data) {
-  const buf = Buffer.isBuffer(data) ? data : Buffer.from(String(data), 'utf8');
-  return crypto.createHash('sha256').update(buf).digest('hex');
-}
 
 // Normalize a GUID for comparison: drop braces, lowercase. Non-guid strings pass through lowercased-trim.
 function normId(s) {

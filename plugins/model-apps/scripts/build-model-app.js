@@ -20,6 +20,7 @@ const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
 const { diffPhases, summarizeDiff } = require('./lib/phase-diff.js');
+const { annotateContentHashes } = require('./lib/content-hash.js');
 const { classifyOps, sitemapTargets } = require('./lib/op-diff.js');
 // R3 (auto-verify): after a successful --apply the build can reconcile the spec against what actually
 // deployed, so a silent partial build surfaces in the same run instead of only on a separate manual
@@ -397,11 +398,32 @@ async function main() {
   // since — so a small edit is visibly "only pages changed", not a re-read of the whole plan. Advisory
   // only (it does not yet gate --apply; see docs/app-builder-roadmap.md). Never fatal.
   const lastAppliedPath = path.join(workspaceDir, 'last-applied.json');
+  // #2 (content-aware diff): resolve a page codeFile / web-resource contentPath the SAME way the build
+  // engine does — relative to the app folder (opts.appDir) — and return its bytes, or null when it can't
+  // be read. Confined to appDir: a '..'-escaping or absolute path (already rejected at spec-validation
+  // time) resolves outside and returns null rather than reading an arbitrary file. A null result makes
+  // annotateContentHashes emit __contentSha:null, so an unreadable/vanished source reads as CHANGED
+  // (fail-closed) instead of a silent no-op. Bytes are read raw (Buffer) so the hash matches regardless
+  // of encoding; the diff only cares whether the bytes changed, not how they decode.
+  const appDirAbs = path.resolve(opts.appDir || '.');
+  const readContent = (relPath) => {
+    try {
+      const abs = path.resolve(appDirAbs, relPath);
+      const rel = path.relative(appDirAbs, abs);
+      if (rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) return null;
+      return fs.readFileSync(abs);
+    } catch { return null; }
+  };
   if (!opts.apply) {
     try {
       if (fs.existsSync(lastAppliedPath)) {
         const prior = JSON.parse(fs.readFileSync(lastAppliedPath, 'utf8'));
-        process.stderr.write(`\n▸ ${summarizeDiff(diffPhases(spec, prior))}\n`);
+        // Annotate the CURRENT spec with on-disk content hashes so a .tsx / contentPath byte edit that
+        // left the spec JSON identical is still reported changed. `prior` was persisted already annotated
+        // (below). NOTE: a snapshot written by a pre-#2 build has no __contentSha, so the first dry-run
+        // after upgrade may over-report pages/web-resources as changed — a one-time, fail-safe direction
+        // (over-report), corrected on the next apply which re-persists WITH hashes.
+        process.stderr.write(`\n▸ ${summarizeDiff(diffPhases(annotateContentHashes(spec, readContent), prior))}\n`);
       }
     } catch { /* advisory only — never block a dry-run */ }
   }
@@ -423,7 +445,10 @@ async function main() {
   // what changed. Only on a real, successful, FULL apply (a partial --stage data apply is not the whole
   // desired state, so it must not overwrite the snapshot). Best-effort — never fail the build over it.
   if (r.ok && opts.apply && !r.dryRun && (opts.phases || PHASES).length === PHASES.length) {
-    try { fs.writeFileSync(path.join(workspaceDir, 'last-applied.json'), JSON.stringify(spec)); } catch { /* non-fatal */ }
+    // Persist the applied spec ANNOTATED with on-disk content hashes (#2) so the next dry-run's diff can
+    // detect a .tsx / contentPath byte edit, not just a spec-JSON change. Records the content that was
+    // actually deployed by THIS apply.
+    try { fs.writeFileSync(lastAppliedPath, JSON.stringify(annotateContentHashes(spec, readContent))); } catch { /* non-fatal */ }
   }
   // emitResult() calls process.exit(), so emit AFTER cleanup() has run. A build that applied cleanly
   // but whose auto-verify found missing artifacts exits NON-ZERO (the silent-partial signal R3 exists
