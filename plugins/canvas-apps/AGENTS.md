@@ -26,7 +26,6 @@ CLAUDE.md                      ← Symlink → AGENTS.md
 hooks/
   hooks.json                   ← Claude and Copilot prompt hook registration
   inject-sync-reminder.cs      ← File-based .NET app that injects a cross-host sync reminder
-  tests/                       ← node:test coverage for the hook app and registration
 references/
   TechnicalGuide.md            ← YAML syntax, control selection, layout strategies, Power Fx patterns
   DesignGuide.md               ← Aesthetic guidelines, anti-patterns, design process
