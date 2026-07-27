@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 
-// get-status.js — One-shot status read for a governance policy roll-out.
-// Routes via gateway (`GET /governance/status/{policy}`) or admin portal
-// (`GET /api/v1/powerPortal/governance/status/{envId}/{policy}`) based on the
-// --useAdminPortal flag.
+// get-status.js — One-shot status read for a governance policy roll-out via the
+// gateway transport (`GET /governance/status/{policy}`).
 
 const {
   parseCliArgs,
@@ -17,25 +15,20 @@ const HELP = `get-status.js — Returns the current roll-out status for a govern
 
 Usage:
   node get-status.js --policy <name> [--envId <guid>]
-                     [--useAdminPortal --token <bearer> [--principalId <guid>] [--tenantId <guid>]]
 
 Flags:
   --policy            Governance policy name. One of:
                         ${SUPPORTED_POLICIES.join('\n                        ')}
-  --envId             Environment id (required with --useAdminPortal).
-  --useAdminPortal    Use the admin-portal transport.
-  --token             Bearer token for the admin portal.
-  --principalId       Caller's Entra Object Id (admin portal only).
-  --tenantId          Tenant id (admin portal only).
+  --envId             Optional environment id. Falls back to the current PAC env.
   --help              Show this help message.
 
 Exit codes:
   0  Success (including in-progress status)
-  2  Sign-in required (gateway transport only)
+  2  Sign-in required
   1  Other failure
 
 Stdout (JSON):
-  { "status": "ok", "policy": "<name>", "transport": "...",
+  { "status": "ok", "policy": "<name>", "transport": "gateway",
     "value": "<state>", "body": <raw> }
 `;
 
@@ -50,18 +43,11 @@ async function main() {
     fail('Usage: node get-status.js --policy <name> [--envId <guid>]', 1);
   }
   assertPolicy(args.policy);
-  if (args.useAdminPortal && !args.envId) {
-    fail('--useAdminPortal requires --envId (the admin portal URL embeds it).', 1);
-  }
 
   const res = await callGovernance({
     op: 'getStatus',
     envId: args.envId,
     policy: args.policy,
-    useAdminPortal: Boolean(args.useAdminPortal),
-    token: args.token,
-    principalId: args.principalId,
-    tenantId: args.tenantId,
   });
 
   if (!res.ok) {
@@ -71,7 +57,6 @@ async function main() {
     fail(`Get governance status failed (${status}): ${msg}`, code);
   }
 
-  // Bare string ("Succeeded") OR { status|state|value: "..." } — surface both.
   const raw = res.body;
   const value =
     typeof raw === 'string'

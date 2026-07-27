@@ -280,8 +280,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/set-governance.js" 
   --policy <name> [--envId <guid>] \
   [--policyValue All|None|Include|Exclude] \
   [--portalIds "<id>,<id>,…"] [--portalId <guid>] \
-  [--timeoutMinutes <n>] \
-  [--useAdminPortal --token <bearer>]
+  [--timeoutMinutes <n>]
 ```
 
 ### Parameters
@@ -294,8 +293,6 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/set-governance.js" 
 | `--portalId` | No | — | Legacy single-portal flag. Equivalent to `--portalIds <id>`. |
 | `--envId` | No | current PAC env | Target environment id. |
 | `--timeoutMinutes` | No | `15` | How long to poll before giving up. Polls every 30 seconds. |
-| `--useAdminPortal` | No | off | Switch to the admin-portal transport. |
-| `--token` | No | — | Bearer token for the admin portal (required with `--useAdminPortal`). |
 
 ### Response (stdout)
 

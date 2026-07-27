@@ -1,13 +1,7 @@
 #!/usr/bin/env node
 
-// get-portal.js — Reads the portal-level state of a governance policy.
-//
-// gateway transport:    GET /websites/{portalId}/governance/{policy}.
-// admin-portal transport: there is no per-portal endpoint — the script
-// instead fetches the policy's inclusion/exclusion lists via
-// GET /api/v1/powerPortal/governance/policyRecord/{envId}/{policy} and reports
-// whether the portalId appears in either list. The "portal-level state" is
-// derived from those lists by the SKILL.md prose.
+// get-portal.js — Reads the portal-level state of a governance policy via the
+// gateway transport: GET /websites/{portalId}/governance/{policy}.
 
 const {
   parseCliArgs,
@@ -21,7 +15,6 @@ const HELP = `get-portal.js — Reads the portal-level governance policy state.
 
 Usage:
   node get-portal.js --policy <name> --portalId <guid> [--envId <guid>]
-                     [--useAdminPortal --token <bearer> [--principalId <guid>] [--tenantId <guid>]]
 
 Flags:
   --policy            Governance policy name. One of:
@@ -29,27 +22,17 @@ Flags:
   --portalId          Power Platform API portal id. Resolve via list-portals.js
                       — this is the value from the website record's "Id" field,
                       NOT the Dataverse WebsiteRecordId.
-  --envId             Environment id (required with --useAdminPortal).
-  --useAdminPortal    Use the admin-portal transport.
-  --token             Bearer token for the admin portal.
-  --principalId       Caller's Entra Object Id (admin portal only).
-  --tenantId          Tenant id (admin portal only).
+  --envId             Optional environment id. Falls back to the current PAC env.
   --help              Show this help message.
 
 Exit codes:
   0  Success
-  2  Sign-in required (gateway transport only)
+  2  Sign-in required
   1  Other failure
 
 Stdout (JSON):
   { "status": "ok", "policy": "<name>", "envId": "<guid>",
-    "portalId": "<guid>", "transport": "...",
-    "body": <raw> }
-
-  When transport=admin-portal, the body is the policyRecord object
-  { "InclusionList": [...], "ExclusionList": [...] }. The script also
-  derives a top-level "membership" field with values "included" |
-  "excluded" | "neither".
+    "portalId": "<guid>", "transport": "gateway", "body": <raw> }
 `;
 
 async function main() {
@@ -63,19 +46,12 @@ async function main() {
     fail('Usage: node get-portal.js --policy <name> --portalId <guid> [--envId <guid>]', 1);
   }
   assertPolicy(args.policy);
-  if (args.useAdminPortal && !args.envId) {
-    fail('--useAdminPortal requires --envId (the admin portal URL embeds it).', 1);
-  }
 
   const res = await callGovernance({
     op: 'getPortal',
     envId: args.envId,
     policy: args.policy,
     portalId: args.portalId,
-    useAdminPortal: Boolean(args.useAdminPortal),
-    token: args.token,
-    principalId: args.principalId,
-    tenantId: args.tenantId,
   });
 
   if (!res.ok) {
@@ -83,21 +59,6 @@ async function main() {
     const status = res.statusCode != null && res.statusCode !== 0 ? res.statusCode : 'no response';
     const msg = res.error?.message?.trim() || res.error?.code || 'unknown error';
     fail(`Get portal-level governance failed (${status}): ${msg}`, code);
-  }
-
-  // For admin-portal: derive `membership` from the inclusion / exclusion lists.
-  let membership;
-  if (res.transport === 'admin-portal' && res.body && typeof res.body === 'object') {
-    const inList = Array.isArray(res.body.InclusionList)
-      ? res.body.InclusionList.map(String).map((s) => s.toLowerCase())
-      : [];
-    const exList = Array.isArray(res.body.ExclusionList)
-      ? res.body.ExclusionList.map(String).map((s) => s.toLowerCase())
-      : [];
-    const target = String(args.portalId).toLowerCase();
-    if (inList.includes(target)) membership = 'included';
-    else if (exList.includes(target)) membership = 'excluded';
-    else membership = 'neither';
   }
 
   process.stdout.write(
@@ -108,7 +69,6 @@ async function main() {
         envId: args.envId,
         portalId: args.portalId,
         transport: res.transport,
-        ...(membership && { membership }),
         body: res.body,
       },
       null,

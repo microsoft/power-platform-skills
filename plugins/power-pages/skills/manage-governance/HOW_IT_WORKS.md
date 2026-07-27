@@ -5,13 +5,14 @@ does, how a request flows through it, and which pieces do what.
 
 ## What it does
 
-Applies and inspects **tenant-level Power Pages governance policies** against any
-environment the signed-in admin has access to. Ten policies are supported today
-(sign-in protocols, social identity providers, local login, external providers,
-and Maker Copilot). Each policy can be turned on/off for **every site**, **no
-sites**, **only specific sites**, or **all except specific sites**.
+Applies and inspects **environment-level Power Pages governance policies**
+against any environment the signed-in admin has access to. Ten policies are
+supported today (sign-in protocols, social identity providers, local login,
+external providers, and Maker Copilot). Each policy can be turned on/off for
+**every site**, **no sites**, **only specific sites**, or **all except specific
+sites**.
 
-It is an **admin-only, tenant-scoped** skill — it does **not** need a
+It is an **admin-only, environment-scoped** skill — it does **not** need a
 `powerpages.config.json` project root.
 
 ## The three operations
@@ -114,8 +115,8 @@ rather than a smaller `ToBeAdded`.
 | `render-portal-table.js` | Render the fixed-width site state table (🟢/🔴). |
 | `policies.js` | Frozen `SUPPORTED_POLICIES` list + write-vocabulary mapping. |
 | `governance-context.js` | Resolves the API context; applies `--envId` override. |
-| `governance-route.js` | Builds URL/headers/body per transport (gateway vs admin-portal). |
-| `governance-transport.js` | Single network entry-point; branches transport. |
+| `governance-route.js` | Builds the gateway URL and body for each op. |
+| `governance-transport.js` | Single network entry-point; issues the gateway call. |
 | `colors.js` | ANSI green/red helpers for state cells. |
 
 ### References (`references/`)
@@ -131,13 +132,14 @@ rather than a smaller `ToBeAdded`.
 The orchestrator spec — drives the whole workflow (phases, prompts, env-picker
 and consent-gate rules). Reads all mappings from `governance-mapping.json`.
 
-## Transports
+## Transport
 
-- **gateway** (default): `https://api.powerplatform.com/powerpages/environments/{envId}`,
-  Azure CLI bearer (needs `PowerPages.Websites.*` admin consent).
-- **admin-portal** (TIP testing only): portal-infra host with a browser-copied
-  bearer + `x-ms-client-*` headers, for tenants not yet admin-consented for the
-  gateway scopes.
+All governance traffic uses a single transport — the **gateway**:
+`https://api.powerplatform.com/powerpages/environments/{envId}`, authenticated
+with an Azure CLI bearer (needs `PowerPages.Websites.*` admin consent). To target
+a non-production ring during testing, set the `PP_GOV_API_HOST` and
+`PP_GOV_TOKEN` env vars (see `governance-context.js`) — these redirect the same
+gateway transport without hardcoding any host.
 
 ## Exit codes (`set-governance.js`)
 

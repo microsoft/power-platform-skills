@@ -1,11 +1,8 @@
 #!/usr/bin/env node
 
-// get-env.js — Reads the environment-level state of a governance policy.
-// Routes to either the gateway transport (`GET /governance/{policy}` against
-// api.powerplatform.com) or the admin-portal transport
-// (`GET /api/v1/powerPortal/governance/environments/{envId}/{policy}` against
-// portalsitewide-tip.portal-infra.dynamics.com) based on the --useAdminPortal
-// flag. The admin-portal transport requires a caller-supplied bearer token.
+// get-env.js — Reads the environment-level state of a governance policy via the
+// gateway transport (`GET /governance/{policy}` against api.powerplatform.com,
+// env-scoped through the base URL).
 
 const {
   parseCliArgs,
@@ -19,29 +16,21 @@ const HELP = `get-env.js — Reads the environment-level governance policy state
 
 Usage:
   node get-env.js --policy <name> [--envId <guid>]
-                  [--useAdminPortal --token <bearer> [--principalId <guid>] [--tenantId <guid>]]
 
 Flags:
   --policy            Governance policy name. One of:
                         ${SUPPORTED_POLICIES.join('\n                        ')}
-  --envId             Optional environment id. Falls back to the current PAC env
-                      (gateway transport only).
-  --useAdminPortal    Use the admin-portal transport (portalsitewide-tip.portal-infra.dynamics.com).
-  --token             Bearer token for the admin portal (required with --useAdminPortal).
-                      Copy from a logged-in browser session of
-                      admin.preprod.powerplatform.microsoft.com.
-  --principalId       Caller's Entra Object Id (admin portal only; defaults to PAC).
-  --tenantId          Tenant id (admin portal only; defaults to PAC).
+  --envId             Optional environment id. Falls back to the current PAC env.
   --help              Show this help message.
 
 Exit codes:
   0  Success
-  2  Sign-in required (gateway transport only)
+  2  Sign-in required
   1  Other failure
 
 Stdout (JSON):
   { "status": "ok", "policy": "<name>", "envId": "<guid>",
-    "transport": "gateway"|"admin-portal",
+    "transport": "gateway",
     "value": "All"|"None"|"Include"|"Exclude", "body": <raw> }
 `;
 
@@ -53,21 +42,14 @@ async function main() {
 
   const args = parseCliArgs(process.argv);
   if (!args.policy) {
-    fail('Usage: node get-env.js --policy <name> [--envId <guid>] [--useAdminPortal --token <bearer>]', 1);
+    fail('Usage: node get-env.js --policy <name> [--envId <guid>]', 1);
   }
   assertPolicy(args.policy);
-  if (args.useAdminPortal && !args.envId) {
-    fail('--useAdminPortal requires --envId (the admin portal URL embeds it).', 1);
-  }
 
   const res = await callGovernance({
     op: 'getEnv',
     envId: args.envId,
     policy: args.policy,
-    useAdminPortal: Boolean(args.useAdminPortal),
-    token: args.token,
-    principalId: args.principalId,
-    tenantId: args.tenantId,
   });
 
   if (!res.ok) {

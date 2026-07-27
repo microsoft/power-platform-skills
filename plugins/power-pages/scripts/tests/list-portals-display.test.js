@@ -3,7 +3,6 @@ const assert = require('node:assert/strict');
 
 const {
   normalize,
-  normalizeAdminPortal,
   orderPortalsForDisplay,
   compareForDisplay,
   DISPLAY_LIMIT,
@@ -39,12 +38,6 @@ test('normalize tolerates PascalCase Status/CreatedOn', () => {
   const n = normalize({ Id: 'a', Name: 'P', Status: 'StateConfigured', CreatedOn: '2026-01-01T00:00:00' });
   assert.equal(n.status, 'StateConfigured');
   assert.equal(n.createdOn, '2026-01-01T00:00:00');
-});
-
-test('normalizeAdminPortal maps Created -> createdOn and Status', () => {
-  const n = normalizeAdminPortal({ Id: 'a', Name: 'P', PortalUrl: 'https://x', Created: '2026-02-02T00:00:00', Status: 'StateConfigured' });
-  assert.equal(n.createdOn, '2026-02-02T00:00:00');
-  assert.equal(n.status, 'StateConfigured');
 });
 
 test('DISPLAY_LIMIT defaults to 10', () => {

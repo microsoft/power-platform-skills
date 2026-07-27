@@ -638,8 +638,7 @@ Only if it is genuinely missing, ask a single short **free-text** prompt (NOT an
 free-text input is safe (admins recognise site **names**, not GUIDs):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-portals.js" --envId "<ENV_ID>" \
-  [--useAdminPortal --token "<TOKEN>"]
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-portals.js" --envId "<ENV_ID>"
 ```
 
 Render as a plain-text table. **Display cap (10 rows):** when the env has more
@@ -687,8 +686,7 @@ what makes the free-text input safe (admins recognise site **names**, not
 GUIDs).
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-portals.js" --envId "<ENV_ID>" \
-  [--useAdminPortal --token "<TOKEN>"]
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-portals.js" --envId "<ENV_ID>"
 ```
 
 Render the result as a plain-text table the user can copy from:
@@ -882,8 +880,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/set-governance.js" 
   --envId "<ENV_ID>" \
   --policy "<POLICY>" \
   --policyValue "<POLICY_VALUE>" \
-  [--portalIds "<PORTAL_IDS>"] \
-  [--useAdminPortal --token "<TOKEN>"]
+  [--portalIds "<PORTAL_IDS>"]
 ```
 
 `--portalIds` accepts a comma- or whitespace-separated list. Use `--portalId` (singular) only for the legacy single-portal call shape. When `--policyValue` is `All` or `None`, omit `--portalIds`.
@@ -956,8 +953,7 @@ Then give the one-line Phase 5 loop summary.
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-env.js" \
   --envId "<ENV_ID>" \
-  --policy "<POLICY>" \
-  [--useAdminPortal --token "<TOKEN>"]
+  --policy "<POLICY>"
 ```
 
 Output: `{ status: "ok", body: "All" | "None" | "Include" | "Exclude" }`.
@@ -1002,8 +998,7 @@ Steps:
    node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-portal.js" \
      --envId "<ENV_ID>" \
      --policy "<POLICY>" \
-     --portalId 00000000-0000-0000-0000-000000000000 \
-     [--useAdminPortal --token "<TOKEN>"]
+     --portalId 00000000-0000-0000-0000-000000000000
    ```
    The dummy portalId is fine — the helper returns the env's full
    `InclusionList` / `ExclusionList` regardless. We're using it for the env-level
@@ -1012,8 +1007,7 @@ Steps:
 2. Fetch the env's full site list:
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-portals.js" \
-     --envId "<ENV_ID>" \
-     [--useAdminPortal --token "<TOKEN>"]
+     --envId "<ENV_ID>"
    ```
 
 3. Compute each site's state via the Phase 4.4.3 site-state table (using the env
@@ -1047,8 +1041,7 @@ After **4.1** runs, list every site in `<ENV_ID>` and let the user pick by **nam
 #### 4.4.1 List sites and render the table
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-portals.js" --envId "<ENV_ID>" \
-  [--useAdminPortal --token "<TOKEN>"]
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-portals.js" --envId "<ENV_ID>"
 ```
 
 Render the output as a plain-text table (same format as 4.2.2):
@@ -1091,8 +1084,7 @@ Persist as `<PORTAL_ID>` and `<PORTAL_NAME>` (for plain-language output).
 node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-portal.js" \
   --envId "<ENV_ID>" \
   --portalId "<PORTAL_ID>" \
-  --policy "<POLICY>" \
-  [--useAdminPortal --token "<TOKEN>"]
+  --policy "<POLICY>"
 ```
 
 Compute whether the policy applies to the chosen site using the env value
@@ -1215,12 +1207,11 @@ or to confirm a rollout is still in flight.
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-status.js" \
   --envId "<ENV_ID>" \
-  --policy "<POLICY>" \
-  [--useAdminPortal --token "<TOKEN>"]
+  --policy "<POLICY>"
 ```
 
-Endpoint hit (admin-portal transport):
-`GET /api/v1/powerPortal/governance/status/<ENV_ID>/<POLICY>`
+Endpoint hit (gateway transport):
+`GET /powerpages/environments/<ENV_ID>/governance/status/<POLICY>`
 
 The response body is one bare JSON string. Map it to plain language for the
 user:

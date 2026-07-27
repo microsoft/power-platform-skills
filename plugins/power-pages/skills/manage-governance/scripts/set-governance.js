@@ -3,8 +3,7 @@
 // set-governance.js — Applies a governance policy to an environment or to a
 // single portal, then polls the matching status endpoint until terminal.
 //
-// Request shape (per Power Apps Core Services Gateway appsettings.json AND
-// the admin-portal HAR):
+// Request shape (per Power Apps Core Services Gateway appsettings.json):
 //   Body: [
 //     { policyName: "<policy>",
 //       policyValue: "All" | "None" | "Include" | "Exclude",
@@ -12,15 +11,13 @@
 //       ToBeRemoved: [ "<portalId>", ... ] }
 //   ]
 //
-// Semantics (per Power Apps gateway / admin portal contract):
+// Semantics (per Power Apps gateway contract):
 //   - "All"     apply to every portal in the env
 //   - "None"    apply to no portals (clears any inclusion / exclusion list)
 //   - "Include" apply ONLY to portals listed in ToBeAdded (allow-list)
 //   - "Exclude" apply to every portal EXCEPT those in ToBeAdded (block-list)
 //
-// Transport differences:
-//   gateway:      POST /governance          (env id implied by base URL).
-//   admin-portal: POST /api/v1/powerPortal/governance/{envId}.
+// Transport: gateway only — POST /governance (env id implied by base URL).
 //
 // Defaults this script encodes when --policyValue is not passed explicitly:
 //   --portalId omitted → policyValue="All",     ToBeAdded=[]         (env-wide).
@@ -67,8 +64,6 @@ const HELP = `set-governance.js — Applies a governance policy and watches the 
 Usage:
   node set-governance.js --policy <name> [--portalId <guid>] [--envId <guid>]
                          [--timeoutMinutes <n>]
-                         [--useAdminPortal --token <bearer>
-                            [--principalId <guid>] [--tenantId <guid>]]
 
 Flags:
   --policy           Governance policy name. One of:
@@ -88,18 +83,13 @@ Flags:
   --policyValue      Optional explicit policy value (overrides the default
                      derived from --portalId). One of: ${VALID_POLICY_VALUES.join(', ')}.
                      Use "None" for a safe round-trip test of the write path.
-  --envId            Environment id (required with --useAdminPortal; falls
-                     back to current PAC env on gateway transport).
+  --envId            Optional environment id. Falls back to the current PAC env.
   --timeoutMinutes   Maximum wait for terminal status (default: ${DEFAULT_TIMEOUT_MIN}).
-  --useAdminPortal   Use the admin-portal transport.
-  --token            Bearer token for the admin portal.
-  --principalId      Caller's Entra Object Id (admin portal only).
-  --tenantId         Tenant id (admin portal only).
   --help             Show this help message.
 
 Exit codes:
   0  Roll-out reached a success terminal state
-  2  Sign-in required (gateway transport only)
+  2  Sign-in required
   3  Polling timed out before terminal state
   4  Terminal state reached but it was Failed
   1  Other failure
@@ -184,17 +174,12 @@ async function main() {
     ? portalIdsFromFlag
     : (args.portalId ? [args.portalId] : []);
   const removePortalIds = parsePortalIdsFlag(args.removePortalIds);
-  const useAdminPortal = Boolean(args.useAdminPortal);
   const policyValueOverride = args.policyValue || null;
   if (policyValueOverride && !VALID_POLICY_VALUES.includes(policyValueOverride)) {
     fail(`--policyValue must be one of: ${VALID_POLICY_VALUES.join(', ')}`, 1);
   }
 
-  if (useAdminPortal && !args.envId) {
-    fail('--useAdminPortal requires --envId (the admin portal URL embeds it).', 1);
-  }
-
-  const transportLabel = useAdminPortal ? 'admin-portal' : 'gateway';
+  const transportLabel = 'gateway';
   const scopeLabel = portalIds.length > 0
     ? `${portalIds.length} portal(s)`
     : (removePortalIds.length > 0
@@ -218,10 +203,6 @@ async function main() {
     policy: args.policy,
     portalId: portalIds[0] || null,
     body,
-    useAdminPortal,
-    token: args.token,
-    principalId: args.principalId,
-    tenantId: args.tenantId,
   });
 
   // If the POST didn't come back with a clean 2xx, don't bail immediately —
@@ -242,10 +223,6 @@ async function main() {
       op: 'getEnv',
       envId: args.envId,
       policy: args.policy,
-      useAdminPortal,
-      token: args.token,
-      principalId: args.principalId,
-      tenantId: args.tenantId,
     });
     const envValue = envCheck.ok ? normalizeEnvValue(envCheck.body) : null;
     if (envValue && envValue === requestedCanonical) {
@@ -269,10 +246,6 @@ async function main() {
         op: 'getStatus',
         envId: args.envId,
         policy: args.policy,
-        useAdminPortal,
-        token: args.token,
-        principalId: args.principalId,
-        tenantId: args.tenantId,
       });
       if (!r.ok) {
         // Transient failure on the status endpoint — retry on the next tick
@@ -316,10 +289,6 @@ async function main() {
       op: 'getStatus',
       envId: args.envId,
       policy: args.policy,
-      useAdminPortal,
-      token: args.token,
-      principalId: args.principalId,
-      tenantId: args.tenantId,
     });
     if (finalCheck.ok) {
       const raw = finalCheck.body;
