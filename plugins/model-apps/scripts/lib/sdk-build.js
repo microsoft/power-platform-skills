@@ -351,6 +351,12 @@ function viewDef(spec, v) {
 // meaningful declared columns (in declared order), skipping wide/opaque types that read poorly in a
 // grid. Used to enrich the auto-generated "Active/Inactive <Entity>" views (which ship with only
 // the primary column).
+//
+// #7 (drop "Created On" from enriched default views): this set only ever contains declared spec
+// columns (primary + scalars + relationship lookups) — never the stock `createdon`. The vendored
+// SDK's enrichDefaultViews REPLACES the view's /columns with this array and then reconciles the
+// fetchxml + grid to exactly this set (removing the Dataverse-shipped createdon cell/attribute), so
+// the enriched default views ship without Created On. See cds-maker-sdk view serializer f3()/v3().
 const DEFAULT_VIEW_MAX_EXTRA = 6;
 const DEFAULT_VIEW_SKIP_TYPES = new Set(['Memo', 'File', 'Image']);
 function defaultViewColumns(spec, entity, opts = {}) {
