@@ -363,9 +363,17 @@ function buildSeedGroup({ spec, e, records, statusReasonValues }) {
       if (!parent || !parent.entity || !parent.match) continue;
       const rel = relationshipFor(spec, parent.entity, e.schemaName);
       const parentEntity = entityByLogical(spec, parent.entity);
-      if (!rel || !parentEntity) continue;
+      // #1: fail loud on a bind that can't be formed instead of silently dropping it (which created
+      // the child with the lookup UNSET and still reported success). validateAppSpec catches these at
+      // lint time; this is the runtime backstop for a build that skipped validation. runner.run (the
+      // caller) turns the throw into a clean sample-data phase failure.
+      if (!rel || !parentEntity) {
+        throw new Error(`sample data for '${e.schemaName}' declares a parent on '${parent.entity}' with no OneToMany relationship to it — fix the spec's $parent/$parents`);
+      }
       const parentIndex = sampleRecordsFor(spec, parentEntity).findIndex((pr) => matchesRecord(pr, parent.match));
-      if (parentIndex < 0) continue;
+      if (parentIndex < 0) {
+        throw new Error(`sample data for '${e.schemaName}': parent match ${JSON.stringify(parent.match)} found no '${String(parent.entity).toLowerCase()}' sample record — the '${rel.lookup.schemaName}' lookup would be left unset`);
+      }
       binds.push({ navProperty: rel.lookup.schemaName, parentEntity: parent.entity.toLowerCase(), parentIndex });
     }
     // Custom status reason -> statecode + the captured statuscode option value. The value is

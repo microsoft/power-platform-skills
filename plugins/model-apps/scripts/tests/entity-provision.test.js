@@ -257,6 +257,26 @@ test('buildSeedGroup translates $parent.match into a lookup bind (parentIndex) a
   assert.strictEqual(group.records[0].body['new_CustomerId@odata.bind'], undefined, 'no @odata.bind baked in (SDK forms it)');
 });
 
+test('#1 buildSeedGroup THROWS (not silently drops) when a $parent.match resolves to no parent row', () => {
+  const spec = seedSpec();
+  // No new_customer row matches this -> the bind cannot be formed. Before #1 this was a silent skip
+  // that created the ticket with new_CustomerId UNSET while still reporting success.
+  spec.sampleData.new_ticket[0].$parent = { entity: 'new_customer', match: { new_name: 'Ghost' } };
+  assert.throws(
+    () => buildSeedGroup({ spec, e: spec.entities[1], records: spec.sampleData.new_ticket, statusReasonValues: {} }),
+    /found no 'new_customer' sample record|left unset/,
+  );
+});
+
+test('#1 buildSeedGroup THROWS when a declared $parent has no OneToMany relationship to the child', () => {
+  const spec = seedSpec();
+  spec.relationships = []; // remove the customer->ticket relationship
+  assert.throws(
+    () => buildSeedGroup({ spec, e: spec.entities[1], records: spec.sampleData.new_ticket, statusReasonValues: {} }),
+    /no OneToMany relationship/,
+  );
+});
+
 test('buildSeedGroup resolves a custom statusReason to statuscode/statecode', () => {
   const spec = seedSpec();
   spec.sampleData.new_ticket[0].statusReason = 'Escalated';

@@ -709,20 +709,43 @@ function validateAppSpec(spec, opts = {}) {
               }
             }
           }
-          if (!rec || rec.$parent === undefined) {
+          if (!rec || typeof rec !== 'object') {
             continue;
           }
-          const p = rec.$parent;
-          if (!p || typeof p !== 'object' || !p.entity || !lower.has(String(p.entity).toLowerCase())) {
-            errors.push(`sampleData['${k}']: $parent.entity '${p && p.entity}' is unknown`);
-            continue;
-          }
-          if (!p.match || typeof p.match !== 'object' || !Object.keys(p.match).length) {
-            errors.push(`sampleData['${k}']: $parent.match must be a non-empty object`);
-            continue;
-          }
-          if (!relationshipFor(spec, p.entity, k)) {
-            errors.push(`sampleData['${k}']: no OneToMany relationship from $parent '${p.entity}' to '${k}'`);
+          // #1: validate the parent bind(s) — one `$parent` (singular) and/or many `$parents` (a
+          // junction row binding multiple sides). Each must name a known parent entity, carry a
+          // non-empty match, have an existing OneToMany relationship, AND a match that resolves to a
+          // real parent sample record. A match that resolves to NOTHING would make the seeder silently
+          // drop the @odata.bind and create the child with the lookup UNSET (buildSeedGroup parentIndex
+          // < 0), so fail loud here at lint time instead of shipping a half-linked row.
+          const parentBinds = [].concat(
+            rec.$parent !== undefined ? [{ p: rec.$parent, key: '$parent' }] : [],
+            Array.isArray(rec.$parents) ? rec.$parents.map((pp) => ({ p: pp, key: '$parents' })) : []
+          );
+          for (const { p, key } of parentBinds) {
+            if (!p || typeof p !== 'object' || !p.entity || !lower.has(String(p.entity).toLowerCase())) {
+              errors.push(`sampleData['${k}']: ${key}.entity '${p && p.entity}' is unknown`);
+              continue;
+            }
+            if (!p.match || typeof p.match !== 'object' || Array.isArray(p.match) || !Object.keys(p.match).length) {
+              errors.push(`sampleData['${k}']: ${key}.match must be a non-empty object`);
+              continue;
+            }
+            if (!relationshipFor(spec, p.entity, k)) {
+              errors.push(`sampleData['${k}']: no OneToMany relationship from ${key} '${p.entity}' to '${k}'`);
+              continue;
+            }
+            // The match must resolve to at least one parent sample record; otherwise the bind is
+            // dropped silently at seed time and the lookup is left unset.
+            const pKey = Object.keys(spec.sampleData).find((kk) => kk.toLowerCase() === String(p.entity).toLowerCase());
+            const parentRecs = (pKey && Array.isArray(spec.sampleData[pKey])) ? spec.sampleData[pKey] : [];
+            const resolves = parentRecs.some((pr) => pr && typeof pr === 'object' && Object.entries(p.match).every(([mk, mv]) => {
+              const rk = Object.keys(pr).find((x) => x.toLowerCase() === mk.toLowerCase());
+              return rk !== undefined && pr[rk] === mv;
+            }));
+            if (!resolves) {
+              errors.push(`sampleData['${k}']: ${key}.match ${JSON.stringify(p.match)} matched no '${String(p.entity).toLowerCase()}' sample record — the lookup would be left unset`);
+            }
           }
         }
       }

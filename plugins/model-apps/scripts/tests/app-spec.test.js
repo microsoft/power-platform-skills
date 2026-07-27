@@ -477,6 +477,36 @@ test('validateAppSpec rejects $parent pointing at an entity with no relationship
   assert.ok(r.errors.some((e) => /no OneToMany relationship from \$parent/.test(e)));
 });
 
+test('#1 validateAppSpec fails loud when a $parent.match resolves to NO parent sample record', () => {
+  const bad = cloneDesk();
+  // new_ticket[0] binds to a customer that has no matching sample row -> the lookup would be unset.
+  bad.sampleData.new_ticket[0].$parent = { entity: 'new_customer', match: { new_name: 'Nonexistent Co' } };
+  const r = validateAppSpec(bad);
+  assert.strictEqual(r.ok, false);
+  assert.ok(
+    r.errors.some((e) => /\$parent\.match/.test(e) && /matched no 'new_customer' sample record/.test(e) && /left unset/.test(e)),
+    JSON.stringify(r.errors)
+  );
+});
+
+test('#1 validateAppSpec validates $parents (junction) entries the same way as $parent', () => {
+  const bad = cloneDesk();
+  // A $parents entry whose match resolves to nothing must be flagged (not silently dropped).
+  bad.sampleData.new_ticket[0] = {
+    new_name: 'Junction row', new_priority: 'High', new_status: 'New',
+    $parents: [{ entity: 'new_customer', match: { new_name: 'Ghost' } }],
+  };
+  const r = validateAppSpec(bad);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /\$parents\.match/.test(e) && /matched no 'new_customer'/.test(e)), JSON.stringify(r.errors));
+});
+
+test('#1 a valid $parent.match that resolves to a real parent row still passes', () => {
+  // The stock desk sample binds tickets to a real customer row — must remain valid.
+  const r = validateAppSpec(cloneDesk());
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
 // --- Gap 3: lookupColumnsFor -----------------------------------------------------------------
 test('lookupColumnsFor returns the 1:N lookups on the child (referencing) side, excludes N:N, dedupes', () => {
   const spec = {
