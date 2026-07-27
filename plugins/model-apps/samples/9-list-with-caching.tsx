@@ -49,8 +49,8 @@ type ReadableContact = ReadableTableRow<ContactRow>;
 // INFLIGHT_KEY holds the pending promise so a racing second mount shares one
 // round-trip. Read `window` in the effect — never a module-local snapshot, which
 // a re-eval can leave stale. See references/data-caching.md.
-const CACHE_KEY = '__ppContactListCache';
-const INFLIGHT_KEY = '__ppContactListInflight';
+const CACHE_KEY = '__ppContactList_contactCache';
+const INFLIGHT_KEY = '__ppContactList_contactInflight';
 const winAny = window as unknown as Record<string, unknown>;
 
 // ---------- Styles ----------

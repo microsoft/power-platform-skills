@@ -23,8 +23,8 @@ import type {
 // Module-level key aliases — VALUES live on `window` (single source of truth) so
 // they survive the host double-mount on open and back-navigation, and stay
 // coherent across module re-evaluation. See references/data-caching.md.
-const CACHE_KEY = "__ppAccountListCache";
-const INFLIGHT_KEY = "__ppAccountListInflight";
+const CACHE_KEY = "__ppAccountCrud_accountCache";
+const INFLIGHT_KEY = "__ppAccountCrud_accountInflight";
 const winAny = window as unknown as Record<string, unknown>;
 
 const GeneratedComponent = ({ dataApi }: GeneratedComponentProps) => {

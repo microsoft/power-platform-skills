@@ -44,8 +44,8 @@ type ReadableContact = ReadableTableRow<ContactRow>;
 // Map caches keyed by recordId — one resolved-row cache + one in-flight-promise
 // cache so concurrent mounts (the host double-mounts on open) share one fetch per
 // record. Both live on window to survive back-navigation. See data-caching.md.
-const CACHE_KEY = '__ppContactDetailCache';
-const INFLIGHT_KEY = '__ppContactDetailInflight';
+const CACHE_KEY = '__ppContactDetail_contactCache';
+const INFLIGHT_KEY = '__ppContactDetail_contactInflight';
 const winAny = window as unknown as Record<string, unknown>;
 const cache: Map<string, ReadableContact> =
     (winAny[CACHE_KEY] as Map<string, ReadableContact> | undefined) ?? new Map();

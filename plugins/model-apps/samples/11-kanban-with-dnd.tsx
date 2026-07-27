@@ -128,13 +128,18 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
     void pageInput; // board does not consume incoming pageInput
     const styles = useStyles();
 
+    // Page-scoped window keys (unique per page + query) so this board doesn't
+    // collide with other pages caching the same entity — see data-caching.md.
+    const CACHE_KEY = '__ppTaskBoard_taskCache';
+    const INFLIGHT_KEY = '__ppTaskBoard_taskInflight';
+    const winAny = window as unknown as Record<string, unknown>;
     // Lazy-init from the window cache so the host's second mount paints tasks
     // immediately instead of flashing the spinner (see references/data-caching.md).
     const [tasks, setTasks] = React.useState<Task[]>(
-        () => ((window as unknown as Record<string, unknown>)['__genpage_tasks_v1'] as Task[] | undefined) ?? [],
+        () => (winAny[CACHE_KEY] as Task[] | undefined) ?? [],
     );
     const [loading, setLoading] = React.useState<boolean>(
-        () => ((window as unknown as Record<string, unknown>)['__genpage_tasks_v1'] as Task[] | undefined) === undefined,
+        () => (winAny[CACHE_KEY] as Task[] | undefined) === undefined,
     );
     const [error, setError] = React.useState<string | null>(null);
     const [draggingId, setDraggingId] = React.useState<string | null>(null);
@@ -144,9 +149,9 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
 
     React.useEffect(() => {
         if (!dataReady) return;
-        const cacheKey = '__genpage_tasks_v1';
-        const inflightKey = '__genpage_tasks_v1_inflight';
-        const w = window as unknown as Record<string, unknown>;
+        const cacheKey = CACHE_KEY;
+        const inflightKey = INFLIGHT_KEY;
+        const w = winAny;
 
         const cached = w[cacheKey] as Task[] | undefined;
         if (cached !== undefined) {
