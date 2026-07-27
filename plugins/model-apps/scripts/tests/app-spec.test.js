@@ -538,6 +538,24 @@ test('#6 (hardening) two Main forms on one entity flagged deactivateOtherMainFor
   assert.ok(r.errors.some((e) => /deactivateOtherMainForms/.test(e) && /at most one/.test(e)), JSON.stringify(r.errors));
 });
 
+test('#6 (hardening) a flagged Main form sharing its entity with ANOTHER Main form is rejected (the deactivation race)', () => {
+  const bad = cloneDesk();
+  bad.forms = [
+    { entity: 'new_ticket', type: 'main', name: 'Ticket A', layout: 'auto', deactivateOtherMainForms: true },
+    { entity: 'new_ticket', type: 'main', name: 'Ticket B', layout: 'auto' }, // unflagged sibling — would race
+  ];
+  const r = validateAppSpec(bad);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /must be the ONLY Main form/.test(e)), JSON.stringify(r.errors));
+});
+
+test('#6 (hardening) a single flagged Main form (the only Main form for its entity) is accepted', () => {
+  const ok = cloneDesk();
+  ok.forms.find((f) => f.entity === 'new_customer').deactivateOtherMainForms = true;
+  const r = validateAppSpec(ok);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
 // --- Gap 3: lookupColumnsFor -----------------------------------------------------------------
 test('lookupColumnsFor returns the 1:N lookups on the child (referencing) side, excludes N:N, dedupes', () => {
   const spec = {

@@ -359,19 +359,27 @@ function validateAppSpec(spec, opts = {}) {
       errors.push(`webResource ${wr.name}: needs content, contentBase64, or contentPath`);
     }
   }
-  // #6: at most ONE Main form per entity may set deactivateOtherMainForms. Two flagged Main forms on
-  // the same entity would each try to deactivate the other (forms build concurrently, so the winner is
-  // nondeterministic) — a self-defeating race. Deactivation itself is additionally gated to our own
-  // custom tables at build time; this catches the misconfiguration up front.
+  // #6: a Main form that sets deactivateOtherMainForms must be the ONLY Main form declared for its
+  // entity. Rationale: forms build concurrently and every Main form on an OWN custom table is promoted
+  // to isdefault. If a flagged form shares its entity with ANOTHER Main form (flagged or not), the
+  // sibling can win the isdefault race and then be deactivated by the flagged form's pass — leaving the
+  // entity's default form INACTIVE (a bricked form experience). Requiring the flagged form to stand
+  // alone removes the race entirely: the only other active main form is then the stock "Information"
+  // form (which the build never promotes), so deactivating it is safe.
+  const mainFormsByEntity = {};
   const flaggedByEntity = {};
   for (const f of spec.forms || []) {
-    if (f && f.deactivateOtherMainForms === true && (f.formType === undefined || f.formType === 'Main')) {
-      const key = String(f.entity || '').toLowerCase();
-      flaggedByEntity[key] = (flaggedByEntity[key] || 0) + 1;
-    }
+    if (!f || (f.formType !== undefined && f.formType !== 'Main')) continue;
+    const key = String(f.entity || '').toLowerCase();
+    mainFormsByEntity[key] = (mainFormsByEntity[key] || 0) + 1;
+    if (f.deactivateOtherMainForms === true) flaggedByEntity[key] = (flaggedByEntity[key] || 0) + 1;
   }
   for (const [ent, n] of Object.entries(flaggedByEntity)) {
-    if (n > 1) errors.push(`entity '${ent}': ${n} Main forms set deactivateOtherMainForms — at most one may (two would deactivate each other)`);
+    if (n > 1) {
+      errors.push(`entity '${ent}': ${n} Main forms set deactivateOtherMainForms — at most one may (two would deactivate each other)`);
+    } else if ((mainFormsByEntity[ent] || 0) > 1) {
+      errors.push(`entity '${ent}': a Main form sets deactivateOtherMainForms but the entity declares ${mainFormsByEntity[ent]} Main forms — a flagged form must be the ONLY Main form for its entity (a concurrent build would nondeterministically deactivate the sibling and could leave the default form inactive)`);
+    }
   }
   for (const f of spec.forms || []) {
     if (!entityNames.has(f.entity)) {

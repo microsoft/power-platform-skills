@@ -161,8 +161,10 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
     with `forms[].subgrids[].label` overriding.
   - **#6 Opt-in `forms[].deactivateOtherMainForms`.** When set, after promoting our form default the
     build deactivates every OTHER active main form on the entity (the blank stock "Information" form).
-    OFF by default; gated to our own custom, publisher-prefixed table; symmetric with teardown's
-    `restoreStockMainForm`.
+    OFF by default; gated to our own custom, publisher-prefixed table; a flagged form must be the only
+    Main form declared for its entity, and deactivation is skipped if the promote failed. Teardown's
+    `restoreStockMainForm` reactivates a stock main form to ENABLE deletion (not a faithful restore of
+    pre-build activation state).
   - **#7 Enriched default views drop "Created On".** Confirmed (and locked with a real-bundle test) that
     the vendored `enrichDefaultViews` **replaces** the view's columns and reconciles the fetch+grid to
     exactly our set — which never contains `createdon`.
