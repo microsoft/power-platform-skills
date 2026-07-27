@@ -141,6 +141,19 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   is read from `--env <url>` or a positional arg (fixing the `envUrl: "--env"` parse bug).
 
 ### Fixed
+- **2026-07-27 sample-run UX fixes (from a live Property-Listings build).**
+  - **Live build status.** `build-journal.js` now maintains `<workspace>/build-status.json` (a
+    single-object snapshot overwritten every step) next to `build-log.jsonl`, and the CLI prints a
+    `▸ live progress:` path — so a multi-minute build is observable even if the launching shell buffers
+    stdout. SKILL.md tells the agent to stream (Tee, not Select-Object) and read the status file.
+  - **Wireframes shown before approval.** SKILL.md now requires pasting the `preview-app`/`preview-form`
+    wireframe output to the user before the plan gate — not summarizing "looks right".
+  - **Track the spec diff (`phase-diff.js`).** A successful full apply persists `last-applied.json`; a
+    later dry-run prints `▸ Changed since last apply: <phases>` (stable-stringify deep-equal per phase).
+    Foundation for running only the changed phases on `--apply` (tracked in the roadmap).
+  - **Auto-number reseed lint.** `spec-lint` warns that sampleData for an auto-numbered-primary table
+    with no single-column alternate key will DUPLICATE on every re-run (and blocks `--sample-data` on an
+    edit) — nudging a natural alternate key.
 - **2026-07-15 review — 7 forms/views/data-load fixes (`app-spec.js`, `sdk-build.js`, `entity-provision.js`, `artifact-intent.js`).**
   - **#1 (High) Fail loud on lookup binds that can't be formed.** A sample-data `$parent`/`$parents`
     bind whose match resolved to nothing was silently dropped (child created with the lookup **unset**,

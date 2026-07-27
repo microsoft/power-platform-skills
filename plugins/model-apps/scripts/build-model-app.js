@@ -19,6 +19,7 @@ const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
+const { diffPhases, summarizeDiff } = require('./lib/phase-diff.js');
 const { classifyOps, sitemapTargets } = require('./lib/op-diff.js');
 // R3 (auto-verify): after a successful --apply the build can reconcile the spec against what actually
 // deployed, so a silent partial build surfaces in the same run instead of only on a separate manual
@@ -386,6 +387,24 @@ async function main() {
   const journal = opts.apply
     ? openJournal(workspaceDir, { app: spec.app && spec.app.name, solution: spec.solution && spec.solution.uniqueName, apply: true, phases: opts.phases })
     : null;
+  // Surface the live-progress files so a long build is observable even if this process's stdout is
+  // buffered by the launching shell (e.g. piping through Select-Object). `build-status.json` holds the
+  // current step; `build-log.jsonl` is the full trace.
+  if (journal && journal.statusPath) {
+    process.stderr.write(`▸ live progress: read "${journal.statusPath}" for the current step (or tail "${journal.path}").\n`);
+  }
+  // #3 (track the diff): on a DRY-RUN, if a prior apply left a snapshot, report which phases changed
+  // since — so a small edit is visibly "only pages changed", not a re-read of the whole plan. Advisory
+  // only (it does not yet gate --apply; see docs/app-builder-roadmap.md). Never fatal.
+  const lastAppliedPath = path.join(workspaceDir, 'last-applied.json');
+  if (!opts.apply) {
+    try {
+      if (fs.existsSync(lastAppliedPath)) {
+        const prior = JSON.parse(fs.readFileSync(lastAppliedPath, 'utf8'));
+        process.stderr.write(`\n▸ ${summarizeDiff(diffPhases(spec, prior))}\n`);
+      }
+    } catch { /* advisory only — never block a dry-run */ }
+  }
   let r;
   try {
     // deps.verify (R3): the real reconcile, wired to the live provision SDK. Only invoked when
@@ -399,6 +418,12 @@ async function main() {
     r = await buildModelApp(spec, opts, deps);
   } finally {
     cleanup();
+  }
+  // #3: after a clean apply, persist the applied spec so the NEXT dry-run can diff against it and show
+  // what changed. Only on a real, successful, FULL apply (a partial --stage data apply is not the whole
+  // desired state, so it must not overwrite the snapshot). Best-effort — never fail the build over it.
+  if (r.ok && opts.apply && !r.dryRun && (opts.phases || PHASES).length === PHASES.length) {
+    try { fs.writeFileSync(path.join(workspaceDir, 'last-applied.json'), JSON.stringify(spec)); } catch { /* non-fatal */ }
   }
   // emitResult() calls process.exit(), so emit AFTER cleanup() has run. A build that applied cleanly
   // but whose auto-verify found missing artifacts exits NON-ZERO (the silent-partial signal R3 exists

@@ -122,8 +122,10 @@ running every prompt yourself via `AskUserQuestion`. In short:
      the optional `design` contract. **Do not author page `.tsx` here.** Emit `dashboards[]` only
      on explicit request. Persist `app-spec.json` after each level.
    - **Whole-app preview** (design gate for Level (b)): `node "${PLUGIN_ROOT}/scripts/preview-app.js" --spec @<working-dir>/app-spec.json`
-     renders data-model + sitemap + form wireframes + page-intents + design contract. For a single
-     form only: `node "${PLUGIN_ROOT}/scripts/preview-form.js" --spec @<working-dir>/app-spec.json`.
+     renders data-model + sitemap + form wireframes + page-intents + design contract. **SHOW the actual
+     rendered wireframe output to the user (paste it verbatim into the chat) — do NOT just summarize
+     "the preview looks right." The user must be able to SEE each form, the sitemap, and the page intents
+     they are approving.** For a single form only: `node "${PLUGIN_ROOT}/scripts/preview-form.js" --spec @<working-dir>/app-spec.json`.
    - **Don't pre-create tables/columns** — the build does it idempotently.
 5. **Guardrail lint (hard gate)** — run the **full** `spec-lint.js` on the complete spec; **errors block**, warnings teach:
    ```bash
@@ -183,6 +185,14 @@ node "${PLUGIN_ROOT}/scripts/build-model-app.js" \
 
 Each step streams its status live (`[n/total] ✓ created` / `⊘ skipped` / `✗ failed — <error>`) and a
 closing `✓ build complete — X created, Y skipped, Z failed` summary.
+
+> **Keep the build's progress visible.** A full build runs for several minutes. Let its output
+> **stream** — do NOT pipe it through `Select-Object -First/-Last N` or `Select-String` head-limits,
+> which buffer and hide progress until the run ends (and can even truncate a still-running pipe). If
+> you must capture the log, use `Tee-Object -FilePath <log>` (no head-limit). The build also prints a
+> `▸ live progress:` line at start pointing at `<workspace>/.maker-workspace/build-status.json` — a
+> single-object snapshot (`state`, `steps`, `lastPhase`, `lastLabel`) overwritten every step. Read it
+> (or tail `build-log.jsonl`) any time to report where a long build is, even if stdout is buffered.
 
 (**Reaching Phase 2 without a fresh plan-mode approval** — resuming a failed build, or a quick edit
 re-run — do a **dry-run first** (drop `--apply`), show the phase-grouped plan, and get a go-ahead

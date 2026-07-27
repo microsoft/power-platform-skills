@@ -39,6 +39,29 @@ test('a view with a DISTINCT name does NOT warn about a stock-default collision'
   assert.ok(!r.warnings.some((w) => /stock default view/.test(w)), JSON.stringify(r.warnings));
 });
 
+test('#5 warns when an auto-numbered-primary table has sampleData but no single-column alternate key', () => {
+  const s = base();
+  s.entities.push({ schemaName: 'new_offer', displayName: 'Offer', pluralName: 'Offers',
+    primaryAttribute: { schemaName: 'new_number', displayName: 'Offer #', autoNumberFormat: 'OFR-{SEQNUM:5}' }, columns: [] });
+  s.sampleData = { new_offer: [{ new_amount: 100 }, { new_amount: 200 }] };
+  const r = lintAppSpec(s);
+  assert.ok(
+    r.warnings.some((w) => /new_offer/.test(w) && /auto-numbered/.test(w) && /DUPLICATE/.test(w) && /alternateKeys/.test(w)),
+    JSON.stringify(r.warnings)
+  );
+});
+
+test('#5 an auto-numbered-primary table WITH a single-column alternate key does NOT warn', () => {
+  const s = base();
+  s.entities.push({ schemaName: 'new_offer', displayName: 'Offer', pluralName: 'Offers',
+    primaryAttribute: { schemaName: 'new_number', displayName: 'Offer #', autoNumberFormat: 'OFR-{SEQNUM:5}' },
+    columns: [{ schemaName: 'new_ext', displayName: 'Ext Id', type: 'Text' }],
+    alternateKeys: [{ schemaName: 'new_extkey', columns: ['new_ext'] }] });
+  s.sampleData = { new_offer: [{ new_ext: 'A1' }] };
+  const r = lintAppSpec(s);
+  assert.ok(!r.warnings.some((w) => /auto-numbered/.test(w)), JSON.stringify(r.warnings));
+});
+
 test('a relationship to a standard/system table (referenced not in entities[]) WARNS, not errors', () => {
   const s = base();
   // systemuser is a standard table the build supports (auto-prefixes the rel name) — must not error.

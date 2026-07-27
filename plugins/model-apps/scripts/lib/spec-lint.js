@@ -291,6 +291,17 @@ function lintAppSpec(spec) {
   for (const [ent, recs] of Object.entries(spec.sampleData || {})) {
     const e = (spec.entities || []).find((x) => lc(x.schemaName) === lc(ent));
     if (!e) continue; // unknown-entity is already an error in validateAppSpec
+    // #5 (edit-loop safety): a table whose PRIMARY is auto-numbered has no author-supplied key value in
+    // its sample rows (the number is server-assigned), so unless it declares a SINGLE-COLUMN alternate
+    // key, sample seeding has no idempotency key — every re-run (or a retried insert) DUPLICATES the
+    // rows, and you can't refresh data with --sample-data on an edit. Warn so the author adds a natural
+    // key. Mirrors entity-provision.js chooseMatchOn (single-column alt key, else the primary name).
+    if (Array.isArray(recs) && recs.length && e.primaryAttribute && e.primaryAttribute.autoNumberFormat) {
+      const hasSingleColKey = (e.alternateKeys || []).some((k) => Array.isArray(k.columns) && k.columns.length === 1);
+      if (!hasSingleColKey) {
+        W(`sampleData['${ent}']: ${ent}'s primary column is auto-numbered, so its ${recs.length} sample row(s) have no idempotency key — a re-run (or a retried insert) will DUPLICATE them, and you can't refresh data with --sample-data on an edit. Add a single-column alternateKeys[] entry (a natural key) to make seeding idempotent.`);
+      }
+    }
     const declaredReasons = new Set((e.statusReasons || []).map((s) => lc(s.label)));
     for (const rec of Array.isArray(recs) ? recs : []) {
       if (rec && rec.statusReason && !declaredReasons.has(lc(rec.statusReason))) E(`sampleData['${ent}'] sets statusReason '${rec.statusReason}', which isn't a declared status reason on ${ent}`);

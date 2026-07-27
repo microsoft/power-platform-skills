@@ -42,6 +42,39 @@ test('journaling never throws when the directory is unwritable', () => {
   fs.writeFileSync(asFile, 'x');
   const j = openJournal(path.join(asFile, 'sub')); // parent is a file -> mkdir fails
   assert.strictEqual(j.path, null);
+  assert.strictEqual(j.statusPath, null);
   assert.doesNotThrow(() => { j.record({ status: 'ok' }); j.close({ status: 'done' }); });
   fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('#1 build-status.json is overwritten each step with the current phase/label and finalized on close', () => {
+  const dir = tmpdir();
+  const j = openJournal(dir, { app: 'X' });
+  const readStatus = () => JSON.parse(fs.readFileSync(j.statusPath, 'utf8'));
+  let s = readStatus();
+  assert.strictEqual(s.state, 'running');
+  assert.strictEqual(s.steps, 0);
+  assert.strictEqual(s.app, 'X', 'meta is carried into the snapshot');
+  j.record({ phase: 'data-model', status: 'ok', label: 'table lt7_x' });
+  s = readStatus();
+  assert.strictEqual(s.steps, 1);
+  assert.strictEqual(s.lastPhase, 'data-model');
+  assert.strictEqual(s.lastLabel, 'table lt7_x');
+  j.record({ phase: 'forms', status: 'ok', label: 'form X' });
+  s = readStatus();
+  assert.strictEqual(s.steps, 2, 'snapshot reflects the LATEST step (overwritten, not appended)');
+  assert.strictEqual(s.lastPhase, 'forms');
+  j.close({ status: 'complete', ok: 2, skip: 0, error: 0 });
+  s = readStatus();
+  assert.strictEqual(s.state, 'done');
+  assert.strictEqual(s.steps, 2);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('#1 build-status.json state is "halted" when the run closes with a halt', () => {
+  const dir = tmpdir();
+  const j = openJournal(dir);
+  j.close({ status: 'halt', phase: 'preflight' });
+  assert.strictEqual(JSON.parse(fs.readFileSync(j.statusPath, 'utf8')).state, 'halted');
+  fs.rmSync(dir, { recursive: true, force: true });
 });
