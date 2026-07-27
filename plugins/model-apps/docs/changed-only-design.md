@@ -66,8 +66,9 @@ Maker-drifted artifact (PAC page upload has no CAS — the residual concurrent-e
 unsupported).
 
 ## Sequenced deliverables
-1. ✅ Projection/verifier framework + 3 adversarial tests. 2. Content hashing + fix the shipped
-`phase-diff` foundation (`.tsx`/`contentPath` edits are currently invisible to the diff). 3. Envelope
+1. ✅ Projection/verifier framework + 3 adversarial tests. 2. ✅ Content hashing + fix the shipped
+`phase-diff` foundation (`.tsx`/`contentPath` edits are now visible to the diff, fail-closed;
+`scripts/lib/hash.js` + `content-hash.js`). 3. Envelope
 (schema 3, eligibility SM, debt, tombstone, unique keys, source/deployed hashes) + build-wide lease +
 generation CAS + immutable staging + invalidate-before-write + teardown tombstone. 4. Phase submodes +
 artifact-scoped writes + pre-mutation drift + both-writer sitemap drift + phase-local publish. 5.
