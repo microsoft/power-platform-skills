@@ -101,3 +101,40 @@ test('stageFacts round-trips a classic DashBoard subarea and plans its teardown'
   // The DashBoard subarea is reconstructed by name (readDashboards id-passthrough) and survives the round-trip.
   assert.deepStrictEqual(f.roundTrip.hydratedSubareaTargets, ['entity:new_asset', 'dashboard:Ops']);
 });
+
+// A lookup-heavy child (8 scalars + a 1:N parent lookup) with a no-label sub-grid — exercises the
+// 2026-07-15 fixes at the fact level: #2 (default view keeps the lookup), #7 (no createdon), #5
+// (sub-grid own 1-column section titled by the child pluralName).
+const hardeningSpec = {
+  schemaVersion: 2,
+  solution: { uniqueName: 'H', publisherPrefix: 'new' },
+  app: { name: 'H', description: '' },
+  entities: [
+    { schemaName: 'new_customer', displayName: 'Customer', pluralName: 'Customers', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] },
+    { schemaName: 'new_ticket', displayName: 'Ticket', pluralName: 'Tickets', primaryAttribute: { schemaName: 'new_subject', displayName: 'Subject' },
+      columns: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map((s) => ({ schemaName: `new_${s}`, displayName: s.toUpperCase(), type: 'Text' })) },
+  ],
+  relationships: [{ type: 'OneToMany', referenced: 'new_customer', referencing: 'new_ticket', lookup: { schemaName: 'new_CustomerId', displayName: 'Customer' } }],
+  forms: [{ entity: 'new_customer', type: 'main', name: 'Customer', layout: 'auto', subgrids: [{ childEntity: 'new_ticket', view: 'Open Tickets' }] }],
+  views: [{ entity: 'new_ticket', name: 'Open Tickets', columns: ['new_subject'], activeOnly: true }],
+  appShell: { areas: [{ label: 'M', groups: [{ label: 'G', subAreas: [{ entity: 'new_customer', title: 'Customers' }] }] }] },
+  sampleData: { new_customer: [{ new_name: 'Acme' }], new_ticket: [{ new_subject: 'Down', new_a: 'x', $parent: { entity: 'new_customer', match: { new_name: 'Acme' } } }] },
+};
+
+test('stageFacts.ui.defaultViews keep the parent lookup despite 8 scalars (#2) and drop createdon (#7)', async () => {
+  const f = await stageFacts(hardeningSpec);
+  assert.strictEqual(f.author.validate.ok, true, JSON.stringify(f.author.validate.errors));
+  const tk = f.ui.defaultViews['new_ticket'];
+  assert.ok(tk, 'new_ticket is enrichable');
+  assert.ok(tk.columns.includes('new_customerid'), `#2: parent lookup kept; got [${tk.columns}]`);
+  assert.strictEqual(tk.lookupsPresent, true, '#2: every parent lookup present');
+  assert.strictEqual(tk.hasCreatedon, false, '#7: no createdon in the enriched default view');
+});
+
+test('stageFacts.ui.subgrids give each sub-grid a 1-column section titled by the child pluralName (#5)', async () => {
+  const f = await stageFacts(hardeningSpec);
+  const sg = f.ui.subgrids.find((s) => s.childEntity === 'new_ticket');
+  assert.ok(sg, 'sub-grid fact present');
+  assert.strictEqual(sg.sectionColumns, 1, '#5: full-width 1-column section');
+  assert.strictEqual(sg.label, 'Tickets', '#5: title from child pluralName, not the logical name');
+});

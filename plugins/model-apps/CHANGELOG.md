@@ -141,6 +141,34 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   is read from `--env <url>` or a positional arg (fixing the `envUrl: "--env"` parse bug).
 
 ### Fixed
+- **2026-07-15 review — 7 forms/views/data-load fixes (`app-spec.js`, `sdk-build.js`, `entity-provision.js`, `artifact-intent.js`).**
+  - **#1 (High) Fail loud on lookup binds that can't be formed.** A sample-data `$parent`/`$parents`
+    bind whose match resolved to nothing was silently dropped (child created with the lookup **unset**,
+    run still reported success). `validateAppSpec` now validates `$parents` (junction) like `$parent`
+    and errors when a match resolves to no parent sample row; `buildSeedGroup` throws (inside
+    `runner.run`, so a clean phase failure) as a runtime backstop.
+  - **#2 Default views no longer truncate parent lookups.** `defaultViewColumns` reserves the
+    parent-lookup slots up front and caps *scalar* columns at the remaining budget, so a lookup-heavy
+    table (≥6 scalars) keeps its parent links.
+  - **#3 N:N schema names are order-stable.** `manyToManySchemaName` sorts the two entity logical names
+    alphabetically, so the relationship name is the same regardless of `entity1`/`entity2` order
+    (1:N keeps its semantic `referenced_referencing` order; explicit `schemaName` still wins).
+  - **#4 Sample-data Choice lint.** `validateAppSpec` flags a Choice/MultiChoice sample value (per comma
+    token for MultiChoice) that is not a declared option label (raw numeric option values still pass).
+  - **#5 Sub-grid placement + title.** Each sub-grid now renders in its **own full-width (1-column)
+    section** (`subgridSectionIntent` + `firstColumnSectionsPointer`) instead of a half-width cell in a
+    field section, and its title defaults to the child's `pluralName`→`displayName` (`subgridLabel`),
+    with `forms[].subgrids[].label` overriding.
+  - **#6 Opt-in `forms[].deactivateOtherMainForms`.** When set, after promoting our form default the
+    build deactivates every OTHER active main form on the entity (the blank stock "Information" form).
+    OFF by default; gated to our own custom, publisher-prefixed table; symmetric with teardown's
+    `restoreStockMainForm`.
+  - **#7 Enriched default views drop "Created On".** Confirmed (and locked with a real-bundle test) that
+    the vendored `enrichDefaultViews` **replaces** the view's columns and reconciles the fetch+grid to
+    exactly our set — which never contains `createdon`.
+  - Live-verified end-to-end on `aurorabapenv03468` (build → 7/7 checks → teardown, zero leftovers).
+  - **Not done (tracked open):** #8 auto Quick Create forms — needs a raw `EntityDefinitions` metadata
+    PUT (the vendored SDK has no `IsQuickCreateEnabled`); see `docs/app-builder-roadmap.md`.
 - **Entity subarea `vectorIcon` no longer breaks the app designer (`sdk-build.js` / `spec-lint.js`).**
   A `vectorIcon` (Fluent token) on an **entity** sitemap subarea was written verbatim into the sitemap
   `VectorIcon` attribute, which the modern app designer can't resolve — the property pane failed to

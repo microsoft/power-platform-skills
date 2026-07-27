@@ -362,6 +362,11 @@ a `subgrids` entry that shows the child records inline:
 }
 ```
 
+Each sub-grid renders in its **own 1-column, full-width section** (it spans the form). The `label`
+is optional — omit it to title the grid with the child entity's `pluralName` (then `displayName`);
+supply it to override. To ship only your form and hide the blank stock "Information" form, set
+`"deactivateOtherMainForms": true` on the form (opt-in; only affects tables this build owns).
+
 **Show the form wireframe.** After writing the proposed forms to `app-spec.json`, render an
 ASCII wireframe so the user can *see* each form's tabs, sections, fields, the Notes block, and
 sub-grids before approving — then ask for changes:

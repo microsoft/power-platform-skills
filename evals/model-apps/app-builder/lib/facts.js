@@ -6,9 +6,10 @@ const path = require('node:path');
 // with no I/O, no SDK handle, and no network access, so they are safe to call from the eval harness.
 function pluginLib(name) { return require(path.join(__dirname, '..', '..', '..', '..', 'plugins', 'model-apps', 'scripts', 'lib', name)); }
 
-const { migrateAppSpec, validateAppSpec } = pluginLib('app-spec.js');
+const { migrateAppSpec, validateAppSpec, lookupColumnsFor } = pluginLib('app-spec.js');
 const { lintAppSpec } = pluginLib('spec-lint.js');
-const { planFor, PHASES, appDef, viewDef, chartDef, compileFormIntent, formFieldLogicals } = pluginLib('sdk-build.js');
+const { planFor, PHASES, appDef, viewDef, chartDef, compileFormIntent, formFieldLogicals, defaultViewColumns, enrichesDefaultViews, subgridLabel } = pluginLib('sdk-build.js');
+const { subgridSectionIntent } = pluginLib('artifact-intent.js');
 const { schemaFacts } = pluginLib('schema-facts.js');
 const { verifySpec } = pluginLib('verify-spec.js');
 // Round-trip (edit/download) + teardown oracles: both plugin primitives are PURE — planTeardown does
@@ -46,7 +47,45 @@ function wireFacts(spec) {
     views: (spec.views || []).map((v) => { const d = viewDef(spec, v); return { entity: d.entityLogicalName, name: d.name, columns: d.columns.map((c) => c.name) }; }),
     charts: (spec.charts || []).map((c) => { const d = chartDef(spec, c); return { entity: d.entityLogicalName, name: d.name, measure: d.series[0].aggregate, groupBy: d.categories[0].attribute }; }),
     forms: (spec.forms || []).map((f) => { const intent = compileFormIntent(spec, f, {}); return { entity: intent.entityLogicalName, name: intent.name, fields: formFieldLogicals(intent) }; }),
+    defaultViews: defaultViewFacts(spec),
+    subgrids: subgridFacts(spec),
   };
+}
+
+// #2 / #7: the column set defaultViewColumns produces for each ENRICHABLE entity (the set the SDK
+// reconciles the deployed Active/Inactive default views to). Per entity we expose whether EVERY 1:N
+// parent lookup is kept (#2 — a lookup-heavy table must not truncate its parent links) and whether the
+// set leaked `createdon` (#7 — enriched default views must drop the stock Created On). Only entities
+// that actually get enriched (>= 2 columns) are included; others keep the untouched stock view.
+function defaultViewFacts(spec) {
+  const out = {};
+  for (const e of spec.entities || []) {
+    if (!enrichesDefaultViews(spec, e)) continue;
+    const cols = defaultViewColumns(spec, e).map((c) => c.name);
+    const lookups = lookupColumnsFor(spec, lc(e.schemaName)).map((l) => l.logical);
+    out[lc(e.schemaName)] = {
+      columns: cols,
+      lookupsPresent: lookups.every((l) => cols.includes(l)),
+      hasCreatedon: cols.includes('createdon'),
+    };
+  }
+  return out;
+}
+
+// #5: for each authored sub-grid, the section it lands in (own full-width 1-column section) and its
+// resolved display title — derived from the SAME pure primitives the engine uses (subgridSectionIntent
+// for the section shape, subgridLabel for the title), so the eval grades exactly what ships.
+function subgridFacts(spec) {
+  const out = [];
+  for (const f of spec.forms || []) {
+    for (const sg of f.subgrids || []) {
+      const label = subgridLabel(spec, sg);
+      // classId/relationshipName/viewId don't affect the section topology or title being graded.
+      const section = subgridSectionIntent({ subgridClassId: 'x', targetEntity: lc(sg.childEntity), relationshipName: 'r', viewId: 'v', label });
+      out.push({ form: f.name || lc(f.entity), childEntity: lc(sg.childEntity), sectionColumns: section.columns, label });
+    }
+  }
+  return out;
 }
 
 // app: sitemap subarea target facts + navigation-graph validity. appDef resolves page/dashboard

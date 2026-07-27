@@ -19,7 +19,9 @@
     "round-trip: the sitemap round-trips with the same subareas",
     "round-trip: generative pages preserve their keys",
     "teardown: every declared dashboard has a teardown step",
-    "teardown: every declared command bar has a teardown step"
+    "teardown: every declared command bar has a teardown step",
+    "ui: enriched default views keep parent lookups and drop createdon",
+    "ui: each sub-grid is a full-width section titled by the child display name"
   ],
   "evals": [
     {
@@ -55,6 +57,23 @@
         "charts": ["Assets by Status"]
       },
       "expectations": []
+    },
+    {
+      "id": 4, "tier": "full", "spec": "app-spec.json",
+      "prompt": "Hardening: a lookup-heavy ticket table, an N:N to tags, a sub-grid, and valid relational sample data — exercises fixes #1/#2/#3/#4/#5/#7.",
+      "expect": {
+        "tables": ["new_customer", "new_ticket", "new_tag"],
+        "relationships": ["new_customer_new_ticket", "new_tag_new_ticket"],
+        "views": ["Open Tickets"],
+        "charts": []
+      },
+      "expectations": [
+        "the ticket default view keeps new_customerid even though the table has 8 scalar columns (#2)",
+        "no enriched default view carries createdon (#7)",
+        "the N:N relationship name is the alphabetically-sorted new_tag_new_ticket (#3)",
+        "the customer form's ticket sub-grid is a 1-column full-width section titled 'Tickets' from the child pluralName (#5)",
+        "validateAppSpec accepts the relational sample data: the $parent match resolves and the Choice labels are declared (#1/#4)"
+      ]
     }
   ]
 }

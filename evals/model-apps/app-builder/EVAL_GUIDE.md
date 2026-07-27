@@ -14,7 +14,7 @@
 | **author** | `validateAppSpec(plan profile)` passes · spec-lint clean | `app-spec.js`, `spec-lint.js` |
 | **plan** | Every planned item targets a known engine phase | `sdk-build.js` `planFor` + `PHASES` |
 | **data** | Normalized data-model facts match the `expect.tables/relationships` block | `schema-facts.js` `schemaFacts` |
-| **ui** | Normalized view/chart/form facts match the `expect.views/charts` block | `sdk-build.js` `viewDef` / `chartDef` / `compileFormIntent` |
+| **ui** | Normalized view/chart/form facts match the `expect.views/charts` block · enriched **default views** keep parent lookups (#2) and drop `createdon` (#7) · each **sub-grid** is a full-width 1-column section titled by the child display name (#5) | `sdk-build.js` `viewDef` / `chartDef` / `compileFormIntent` / `defaultViewColumns` / `subgridLabel` · `artifact-intent.js` `subgridSectionIntent` |
 | **app** | Every sitemap subarea resolves to a concrete target · no dangling `navigatesTo` keys | `sdk-build.js` `appDef` |
 | **verify** | Reconcile against a synthetic all-present reader returns `ok: true` | `verify-spec.js` `verifySpec` |
 | **generate-pages** | No `PAGEREF_` nav targets unresolved (Plan 3 — degrades to SKIP if absent) | `pageref-resolver.js` `resolvePageRefs` |
@@ -31,6 +31,7 @@ Naming is numeric-prefix; `fixture-loader.js` matches `^(\d+)(?:-(.+))?$`.
 | 1 | `1-support-desk` | Full data/ui/app/verify oracle (no pages) |
 | 2 | `2-orders-multipage` | Page intents + navigation + design contract; page-key round-trip |
 | 3 | `3-assets-dashboard` | Global choice + column binding, on-click command, and a classic **dashboard** pinned to the nav — exercises teardown (dashboard/command/web-resource/global-choice steps) + the dashboard round-trip |
+| 4 | `4-hardening` | The 2026-07-15 review fixes: a lookup-heavy child (8 scalars + a 1:N parent lookup) proves the default view keeps the lookup (#2) and drops `createdon` (#7); an N:N proves the alphabetically-sorted schema name `new_tag_new_ticket` (#3); a no-label sub-grid proves the own-section + pluralName title (#5); relational sample data proves `validateAppSpec` accepts a resolvable `$parent` match and declared Choice labels (#1/#4) |
 
 > **Fixture 2 note:** `appShell.subAreas[].page` references use the page's **key** (e.g. `"overview"`). For `schemaVersion: 2`, `validateAppSpec` validates `sa.page` against `pages[].key`, while `lintAppSpec` validates against `pages[].name`. Setting `p.key === p.name` (lowercase identifiers) satisfies both validators without modifying plugin code.
 

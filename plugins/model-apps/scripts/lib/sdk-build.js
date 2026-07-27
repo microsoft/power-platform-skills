@@ -389,6 +389,15 @@ function defaultViewColumns(spec, entity, opts = {}) {
   }
   return picked;
 }
+// #5: resolve a sub-grid's display TITLE. An explicit `sg.label` wins; otherwise a sub-grid is a LIST
+// of children, so the child entity's plural display name reads best ("Tickets"), then its singular
+// display name, then the child logical name as a last resort. Pure (no I/O) so the eval harness and
+// the forms phase share ONE definition instead of drifting.
+function subgridLabel(spec, sg) {
+  if (sg.label) return sg.label;
+  const child = entityByLogical(spec, String(sg.childEntity || '').toLowerCase());
+  return (child && (child.pluralName || child.displayName)) || sg.childEntity;
+}
 // True when a table has enough declared columns to make enriching its default views worthwhile
 // (opt out per-entity with enrichDefaultViews:false).
 function enrichesDefaultViews(spec, entity) {
@@ -1018,11 +1027,9 @@ async function runSdkBuild(spec, opts = {}) {
         // child entity has neither an explicit nor a built view AND no default public view can be
         // found, skip the sub-grid rather than crash the whole forms phase.
         if (!viewId) { runner.skip('forms', `sub-grid ${sg.label || sg.childEntity} on ${f.entity} (no resolvable view — skipped)`); continue; }
-        // #5: title the sub-grid with the child's display name, not its logical name. A sub-grid is a
-        // LIST of children, so the plural display name reads best ("Tickets"); fall back to the
-        // singular display name, then the logical name. An explicit sg.label always wins.
-        const child = entityByLogical(spec, childLogical);
-        const gridLabel = sg.label || (child && (child.pluralName || child.displayName)) || sg.childEntity;
+        // #5: title the sub-grid with the child's display name, not its logical name. Shared pure
+        // helper (subgridLabel) so the eval harness grades the same title the engine writes.
+        const gridLabel = subgridLabel(spec, sg);
         subs.push({ targetEntity: childLogical, relationshipName, viewId, label: gridLabel });
       }
       def.__subgrids = subs;
@@ -1470,4 +1477,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, chartDef, dashboardTileOpts, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease };
+module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, chartDef, dashboardTileOpts, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease };

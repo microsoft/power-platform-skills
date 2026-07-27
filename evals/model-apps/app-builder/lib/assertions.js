@@ -55,6 +55,29 @@ ASSERTIONS.set('ui: wire-facts build exactly the expected views and charts', ({ 
   return PASS;
 });
 
+// #2 (default-view lookups not truncated) + #7 (enriched default views drop createdon).
+ASSERTIONS.set('ui: enriched default views keep parent lookups and drop createdon', ({ facts }) => {
+  const dv = (facts.ui && facts.ui.defaultViews) || {};
+  const ents = Object.keys(dv);
+  if (!ents.length) return skip('no enrichable entities in this spec');
+  for (const [ent, f] of Object.entries(dv)) {
+    if (f.hasCreatedon) return fail(`${ent} default view still includes createdon (#7)`);
+    if (!f.lookupsPresent) return fail(`${ent} default view drops a parent lookup (#2)`);
+  }
+  return PASS;
+});
+
+// #5: every authored sub-grid gets its own full-width (1-column) section titled by a display name.
+ASSERTIONS.set('ui: each sub-grid is a full-width section titled by the child display name', ({ facts }) => {
+  const sgs = (facts.ui && facts.ui.subgrids) || [];
+  if (!sgs.length) return skip('no sub-grids in this spec');
+  for (const sg of sgs) {
+    if (sg.sectionColumns !== 1) return fail(`sub-grid on ${sg.childEntity} is not a 1-column full-width section (got ${sg.sectionColumns})`);
+    if (!sg.label || sg.label === sg.childEntity) return fail(`sub-grid on ${sg.childEntity} title "${sg.label}" is the logical name, not a display name`);
+  }
+  return PASS;
+});
+
 // app stage ------------------------------------------------------------------
 
 ASSERTIONS.set('app: every sitemap subarea resolves to a concrete target (no dangling entity/page/dashboard)', ({ facts }) => {
@@ -152,5 +175,33 @@ ASSERTIONS.set('teardown: every declared command bar has a teardown step', ({ fa
   const steps = facts.teardown.kinds.filter((k) => k === 'commands').length;
   return steps === entities.size ? PASS : fail(`expected ${entities.size} command-bar teardown step(s), got ${steps}`);
 });
+
+// per-eval expectations (eval 4 "hardening") — explicit, value-specific checks of each fix ---------
+
+ASSERTIONS.set('the ticket default view keeps new_customerid even though the table has 8 scalar columns (#2)', ({ facts }) => {
+  const dv = (facts.ui.defaultViews || {})['new_ticket'];
+  if (!dv) return fail('new_ticket has no enriched default-view fact');
+  return dv.columns.includes('new_customerid') ? PASS : fail(`new_ticket default view = [${dv.columns}] (missing new_customerid)`);
+});
+
+ASSERTIONS.set('no enriched default view carries createdon (#7)', ({ facts }) => {
+  const bad = Object.entries(facts.ui.defaultViews || {}).filter(([, f]) => f.hasCreatedon).map(([e]) => e);
+  return bad.length ? fail(`entities whose enriched default view still has createdon: ${bad.join(', ')}`) : PASS;
+});
+
+ASSERTIONS.set('the N:N relationship name is the alphabetically-sorted new_tag_new_ticket (#3)', ({ facts }) => {
+  const names = facts.data.relationships.map((r) => r.schemaName);
+  return names.includes('new_tag_new_ticket') ? PASS : fail(`relationship names = [${names}] (expected new_tag_new_ticket)`);
+});
+
+ASSERTIONS.set("the customer form's ticket sub-grid is a 1-column full-width section titled 'Tickets' from the child pluralName (#5)", ({ facts }) => {
+  const sg = (facts.ui.subgrids || []).find((s) => s.childEntity === 'new_ticket');
+  if (!sg) return fail('no new_ticket sub-grid fact');
+  if (sg.sectionColumns !== 1) return fail(`sub-grid section columns = ${sg.sectionColumns} (expected 1)`);
+  return sg.label === 'Tickets' ? PASS : fail(`sub-grid title = "${sg.label}" (expected "Tickets" from pluralName)`);
+});
+
+ASSERTIONS.set('validateAppSpec accepts the relational sample data: the $parent match resolves and the Choice labels are declared (#1/#4)', ({ facts }) =>
+  facts.author.validate.ok ? PASS : fail(`validate errors: ${facts.author.validate.errors.join('; ')}`));
 
 module.exports = { ASSERTIONS };

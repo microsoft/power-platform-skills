@@ -107,10 +107,11 @@ Source: `IMPROVEMENTS-07-15-app-builder.md` (Project Management V1/V2 diff + a s
 - 🔲 **Spec templates** — domain starters (support desk, CRM, asset tracking) as one-shot scaffolds.
 
 ### Phase: Quality & docs
-- 🔲 **app-builder eval fixtures** — extend the eval suite with spec → expected-plan/calls cases.
+- ✅ **app-builder eval fixtures** — the offline harness now has a `4-hardening` fixture + `ui` oracles that grade the 2026-07-15 fixes (default-view lookups #2 / no createdon #7, N:N ordering #3, sub-grid section+title #5, valid relational sample data #1/#4). Further spec→expected-plan/calls cases still welcome.
 - 🔲 **Workspace reuse** — load `.maker-workspace/` metadata to skip re-discovery on iterative runs.
 - 🔲 **Worked samples** — a Form-JS spec (web resource + onchange handler) and a dashboard spec in `samples/`.
 - 🔲 **Refresh `authoring-flow.md`** Level (a) column-type list (still shows the pre-Tier-1 short list).
+- 🔲 **KNOWN BEHAVIOR — an authored view named identically to a stock default view unions onto it.** An authored `views[]` entry whose name equals the Dataverse stock default ("Active/Inactive &lt;PluralName&gt;") is matched by `findArtifact('view', {name,entity})` and **reconciled (unioned) onto that stock default** rather than created as a new view, so it inherits the stock `createdon` and `enrichDefaultViews` then enriches the *other* default view. Live-observed on `aurorabapenv03468` (2026-07): authoring `"Active <Plural>"` produced a union `[…authored cols…, createdon]`. Not a correctness bug (the customized default view still works), but a mild surprise vs #7's clean enriched views. Options to weigh: (a) author guidance — use a distinct view name; (b) a targeted engine fix so an authored view reconciling onto a *stock* default drops `createdon`. Deferred pending a design call (flagged for review).
 - 🔲 **KNOWN ISSUE — /genpage vs /app-builder subagent-interaction contradiction** (design review F10): `/app-builder`'s SKILL says a `Task` subagent is headless (`AskUserQuestion`/plan-mode do not reach the user from inside one), while `/genpage` Phase 1 **mandates** `AskUserQuestion` + plan-mode *inside* the `genpage-planner` subagent (`skills/genpage/SKILL.md:92-124`, `agents/genpage-planner.md`). One is wrong about the host runtime. Portable fix: run interactive steps in the main loop and use the planner subagent only for headless prereq/auth/detection that returns data — align `/genpage` to `/app-builder`. Needs host-behavior confirmation before restructuring.
 
 ---
