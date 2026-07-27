@@ -128,8 +128,14 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
     void pageInput; // board does not consume incoming pageInput
     const styles = useStyles();
 
-    const [tasks, setTasks] = React.useState<Task[]>([]);
-    const [loading, setLoading] = React.useState(true);
+    // Lazy-init from the window cache so the host's second mount paints tasks
+    // immediately instead of flashing the spinner (see references/data-caching.md).
+    const [tasks, setTasks] = React.useState<Task[]>(
+        () => ((window as unknown as Record<string, unknown>)['__genpage_tasks_v1'] as Task[] | undefined) ?? [],
+    );
+    const [loading, setLoading] = React.useState<boolean>(
+        () => ((window as unknown as Record<string, unknown>)['__genpage_tasks_v1'] as Task[] | undefined) === undefined,
+    );
     const [error, setError] = React.useState<string | null>(null);
     const [draggingId, setDraggingId] = React.useState<string | null>(null);
     const [hoverColumn, setHoverColumn] = React.useState<StatusValue | null>(null);

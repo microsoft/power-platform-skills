@@ -43,6 +43,11 @@ Use for any page that fetches a set of rows on mount.
 ```typescript
 // Module-level key aliases. The VALUES live on `window` (the single source of
 // truth) so they stay coherent across module re-evaluation and the double-mount.
+// IMPORTANT: make each key UNIQUE PER PAGE + QUERY (include the page name), never
+// entity-only — two different pages that query the same entity with different
+// select/filter must NOT share a cache or in-flight entry, or the second page
+// reads the first's rows (missing columns) or awaits the wrong query. `MyEntity`
+// below stands for "<PageName>_<entity>", e.g. "AccountOverview_account".
 const winAny = window as any;
 const CACHE_KEY = "__ppMyEntityCache";
 const INFLIGHT_KEY = "__ppMyEntityInflight";
@@ -217,6 +222,6 @@ Replace these placeholders with values verified from `RuntimeTypes.ts`:
 |-------------|--------------|
 | `MyRow` | The actual `TableRow<...>` type for your entity |
 | `"myentity"` | The entity's logical name (singular, lowercase) |
-| `__ppMyEntityCache` / `__ppMyEntityDetailCache` | `__pp<EntityName>Cache` — distinct per entity to avoid collisions |
-| `__ppMyEntityInflight` / `__ppMyEntityDetailInflight` | `__pp<EntityName>Inflight` — the in-flight promise, distinct per entity |
+| `__ppMyEntityCache` / `__ppMyEntityDetailCache` | Unique per **page + query** — include the page name, not just the entity, so two pages querying the same entity with different select/filter don't collide (e.g. `__ppAccountOverview_accountCache`) |
+| `__ppMyEntityInflight` / `__ppMyEntityDetailInflight` | The in-flight promise — same page+query scoping as the cache key |
 | `select: [...]` | Actual column names from RuntimeTypes.ts |

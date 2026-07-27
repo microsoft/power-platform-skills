@@ -78,28 +78,44 @@ Detect RTL from the language LCID. Arabic (1025, 2049, 3073, 4097, 5121) and Heb
 Retrieve these columns: `uilanguageid`, `localeid`, `decimalsymbol`, `numberseparator`, `currencysymbol`, `dateformatstring`, `dateseparator`.
 
 ```typescript
-const [userSettings, setUserSettings] = React.useState<any>(null);
+// Cache user settings on `window` + de-dupe the host double-mount so we retrieve
+// them once (see references/data-caching.md). Keyed globally — settings are
+// per-user and stable for the session.
+const winAny = window as unknown as Record<string, unknown>;
+const SETTINGS_KEY = "__ppUserSettings";
+const SETTINGS_INFLIGHT = "__ppUserSettingsInflight";
+
+const [userSettings, setUserSettings] = React.useState<any>(
+  () => (winAny[SETTINGS_KEY] as any) ?? null,
+);
 const dataReady = !!dataApi;   // never depend on `dataApi` itself — see Rule 15
 
 React.useEffect(() => {
   if (!dataReady) return;
-  const fetchUserSettings = async () => {
-    try {
-      const currentUserId = (typeof Xrm !== "undefined" &&
-        Xrm.Utility?.getGlobalContext()?.userSettings?.userId)
-        ?.replace("{", "").replace("}", "");
-      if (!currentUserId) return;
-      const settings = await dataApi.retrieveRow("usersettings" as any, {
-        id: currentUserId,
-        select: ["uilanguageid", "localeid", "decimalsymbol", "numberseparator",
-                 "currencysymbol", "dateformatstring", "dateseparator"] as any,
-      });
-      setUserSettings(settings);
-    } catch (error) {
-      console.error("Failed to fetch user settings", error);
-    }
-  };
-  void fetchUserSettings();
+  if (winAny[SETTINGS_KEY] !== undefined) { setUserSettings(winAny[SETTINGS_KEY]); return; }
+  const currentUserId = (typeof Xrm !== "undefined" &&
+    Xrm.Utility?.getGlobalContext()?.userSettings?.userId)
+    ?.replace("{", "").replace("}", "");
+  if (!currentUserId) return;
+  let cancelled = false;
+
+  // Share one in-flight fetch across the two host mounts.
+  let pending = winAny[SETTINGS_INFLIGHT] as Promise<any> | undefined;
+  if (!pending) {
+    pending = dataApi.retrieveRow("usersettings" as any, {
+      id: currentUserId,
+      select: ["uilanguageid", "localeid", "decimalsymbol", "numberseparator",
+               "currencysymbol", "dateformatstring", "dateseparator"] as any,
+    })
+      .then((settings: any) => { winAny[SETTINGS_KEY] = settings; return settings; })
+      .finally(() => { if (winAny[SETTINGS_INFLIGHT] === pending) delete winAny[SETTINGS_INFLIGHT]; });
+    winAny[SETTINGS_INFLIGHT] = pending;
+  }
+  pending
+    .then((settings: any) => { if (!cancelled) setUserSettings(settings); })
+    .catch((error: any) => { if (!cancelled) console.error("Failed to fetch user settings", error); });
+
+  return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [dataReady]);
 ```

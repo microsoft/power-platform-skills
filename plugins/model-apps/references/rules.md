@@ -421,6 +421,7 @@ Two host behaviors make a naive on-mount fetch run more than once:
 
 **Key rules:**
 - **Never put `dataApi` in a dependency array** (`useEffect`/`useMemo`/`useCallback`) and never `useCallback` a fetch function — the host hands a new `dataApi` ref every render, so it re-fires the effect each render. Depend on a **readiness boolean** (`const dataReady = !!dataApi;`) plus `recordId`/`reloadKey` as needed.
+- **Scope each `window` key by page + query** (include the page name, e.g. `__ppAccountOverview_accountCache`), not just the entity — two pages querying the same entity with different `select`/`filter` must not share a cache or in-flight entry.
 - Seed initial `useState` from the `window` cache so the second mount paints final content with no spinner.
 - Use a single batched state object (`{ records, loading, error }`) — separate `setState` calls in async functions produce intermediate renders in React 17.
 - For detail pages, key both the cache and the in-flight map by `recordId` (`Map<string, ...>` on `window`).
