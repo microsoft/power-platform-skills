@@ -201,6 +201,7 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 { "entity": "new_customer", "type": "main", "name": "Customer", "layout": "auto",
   "notes": true,                                   // optional — add a Notes section
   "autoSubgrids": true,                            // optional — a sub-grid for every child relationship
+  "deactivateOtherMainForms": true,                // optional — see below (own custom tables only)
   "subgrids": [ { "childEntity": "new_ticket", "view": "Active Tickets", "label": "Tickets" } ] }
 
 // explicit layout: author tabs -> sections -> columns(1-4) -> fields
@@ -232,7 +233,15 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   declared in `forms[]` (lint-enforced). Optional `label`, `section`, `displayAsCard`. The control
   renders from plain formxml, so it persists on a plain push.
 - A sub-grid needs a matching `OneToMany` **or** `ManyToMany` between the form's entity and
-  `childEntity` (lint-enforced); the builder resolves the relationship name either way.
+  `childEntity` (lint-enforced); the builder resolves the relationship name either way. Each sub-grid
+  renders in its **own 1-column, full-width section**; its title defaults to the child entity's
+  `pluralName` (then `displayName`), with `subgrids[].label` overriding.
+- **`deactivateOtherMainForms`** (optional, default `false`, Main forms only): after promoting this
+  form as the entity default, deactivate every OTHER active main form on the entity — i.e. hide the
+  blank stock "Information" form so only this form ships active. **Destructive**, so it is OFF by
+  default and only ever applies to a table THIS build owns (a custom, publisher-prefixed, non-`existing`
+  table); it never touches a reused/system table. Teardown reactivates the stock form before deleting
+  ours, so a torn-down table is left clean.
 - **`events[]`** wire client-side JS: `event` is `onload`/`onsave`/`onchange` (`onchange` needs an
   `attribute`), `library` references a declared `webResources[]` name (lint-enforced), `function` is
   the JS function. Optional `enabled` (default true), `passExecutionContext` (default true),
