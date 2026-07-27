@@ -33,8 +33,8 @@ try
     }
     catch (JsonException)
     {
-        // Hook failures must not block the user's prompt. Preserve the previous
-        // behavior by falling back to Claude's additional-context response.
+        // Hook failures must not block the user's prompt. If parsing fails, emit the
+        // Claude Code additional-context shape (Copilot will ignore it).
     }
 
     using var writer = new Utf8JsonWriter(Console.OpenStandardOutput());
