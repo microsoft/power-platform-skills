@@ -23,8 +23,9 @@ import { ArrowLeftRegular } from '@fluentui/react-icons';
 //     blank-flip-to-spinner flicker
 //   - Early-return when required input is missing (no conditional wrapper div)
 //   - Rule 14: SINGLE batched setData call after fetch
-//   - Map<recordId, row> cache on window (Rule 15 detail-page pattern) so
-//     return visits render instantly
+//   - Map<recordId, row> cache + in-flight-promise Map on window (Rule 15
+//     detail-page pattern) so the host double-mount fetches once and return
+//     visits render instantly; readiness-only deps (never `dataApi`)
 //   - Lookup formatted-value access via @OData.Community.Display.V1.FormattedValue
 
 type ContactRow = TableRow<{
@@ -40,11 +41,18 @@ type ContactRow = TableRow<{
 
 type ReadableContact = ReadableTableRow<ContactRow>;
 
-// Map cache: key by recordId so each detail visit hits its own cached row.
+// Map caches keyed by recordId — one resolved-row cache + one in-flight-promise
+// cache so concurrent mounts (the host double-mounts on open) share one fetch per
+// record. Both live on window to survive back-navigation. See data-caching.md.
 const CACHE_KEY = '__ppContactDetailCache';
-const winAny = window as unknown as Record<string, Map<string, ReadableContact> | undefined>;
-const cache: Map<string, ReadableContact> = winAny[CACHE_KEY] ?? new Map();
+const INFLIGHT_KEY = '__ppContactDetailInflight';
+const winAny = window as unknown as Record<string, unknown>;
+const cache: Map<string, ReadableContact> =
+    (winAny[CACHE_KEY] as Map<string, ReadableContact> | undefined) ?? new Map();
 winAny[CACHE_KEY] = cache;
+const inflight: Map<string, Promise<ReadableContact>> =
+    (winAny[INFLIGHT_KEY] as Map<string, Promise<ReadableContact>> | undefined) ?? new Map();
+winAny[INFLIGHT_KEY] = inflight;
 
 // ---------- Styles ----------
 
@@ -143,13 +151,24 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
         }),
     );
 
-    useEffect(() => {
-        // Cache hit — already pre-warmed in initial state, nothing to fetch.
-        if (cache.has(recordId)) return;
+    const dataReady = !!dataApi;
 
-        (async () => {
-            try {
-                const row = (await dataApi.retrieveRow('contact', {
+    useEffect(() => {
+        if (!dataReady) return;
+        const hit = cache.get(recordId);
+        if (hit) {
+            // The other mount may have resolved it between render and this effect,
+            // or recordId changed in place — sync so we don't stick on the spinner.
+            if (data.record !== hit) setData({ record: hit, loading: false, error: null });
+            return;
+        }
+        let cancelled = false;
+
+        // Share one in-flight fetch per recordId across concurrent mounts.
+        let pending = inflight.get(recordId);
+        if (!pending) {
+            pending = dataApi
+                .retrieveRow('contact', {
                     id: recordId,
                     select: [
                         'contactid',
@@ -161,15 +180,29 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
                         'address1_stateorprovince',
                         '_parentcustomerid_value',
                     ],
-                })) as ReadableContact;
-                cache.set(recordId, row);
-                setData({ record: row, loading: false, error: null });
-            } catch (err) {
+                })
+                .then((row) => {
+                    const typed = row as ReadableContact;
+                    cache.set(recordId, typed);
+                    return typed;
+                })
+                // Delete only if still ours (a concurrent refresh may have replaced it).
+                .finally(() => { if (inflight.get(recordId) === pending) inflight.delete(recordId); });
+            inflight.set(recordId, pending);
+        }
+
+        pending
+            .then((row) => { if (!cancelled) setData({ record: row, loading: false, error: null }); })
+            .catch((err) => {
+                if (cancelled) return;
                 const message = err instanceof Error ? err.message : 'Failed to load contact.';
                 setData({ record: null, loading: false, error: message });
-            }
-        })();
-    }, [dataApi, recordId]);
+            });
+
+        return () => { cancelled = true; };
+        // Readiness + recordId only — never `dataApi`. See Rule 15.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [dataReady, recordId]);
 
     const goBack = () => {
         const xrm = (window as unknown as { Xrm?: { Navigation?: { navigateTo: (opts: unknown) => unknown } } }).Xrm;

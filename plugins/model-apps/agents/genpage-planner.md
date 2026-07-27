@@ -415,10 +415,11 @@ prefix you embed in a column name is a silent footgun.
 `crb2b_playerresult.crb2b_playername`), but write only suffixes in the document.
 
 For the `## Per-Page Specifications` section, set the **`Needs caching:`** field
-(exact key, with space) per page: `true` for list pages, detail pages, or any
-page where the user is likely to navigate away and return; `false` for forms,
-single-visit dashboards, or mock-data pages. The page-builder reads this field
-to decide whether to load `references/data-caching.md`.
+(exact key, with space) per page: `true` for any page that **fetches data on
+mount** — list, detail, or single-visit overview/dashboard (all need the
+in-flight de-dupe that survives the host double-mount); `false` only for
+mock-data pages and forms with no initial fetch. The page-builder reads this
+field to decide whether to load `references/data-caching.md`.
 
 For the `## Relevant Samples` section: pick the most structurally relevant sample
 from `${PLUGIN_ROOT}/samples/` (e.g., 7-responsive-cards.tsx for card

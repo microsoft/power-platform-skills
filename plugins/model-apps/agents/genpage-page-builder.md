@@ -132,21 +132,21 @@ Read the relevant sample file identified in the plan:
 ${PLUGIN_ROOT}/samples/[sample-name].tsx
 ```
 
-If **Data mode** is `dataverse` AND the page fits the "list / detail / pages
-the user navigates back to" profile (per the plan's Per-Page Specification),
-also read the data caching reference:
+If **Data mode** is `dataverse` AND the page **fetches data on mount** (any
+list, detail, or single-visit overview/dashboard — per the plan's Per-Page
+Specification), also read the data fetching reference:
 
 ```
 ${PLUGIN_ROOT}/references/data-caching.md
 ```
 
-Skip the caching reference for forms, single-visit dashboards, mock-data pages,
-or any page where the user is not expected to navigate away and return.
+Skip it only for mock-data pages and forms with no initial fetch.
 
 Use the sample as a structural reference — follow its patterns for component
-organization, DataAPI usage, and styling approach. For pages that need caching,
-the data-caching reference is authoritative for the inline IIFE + cache
-guard + batched state pattern.
+organization, DataAPI usage, and styling approach. For any page that fetches on
+mount, the data-fetching reference is authoritative for the in-flight de-dupe +
+`window` cache + readiness-dep pattern that survives the host double-mount.
+**Never put `dataApi` in a dependency array** (see rules.md Rule 15).
 
 ## Step 4 — Create a Task
 

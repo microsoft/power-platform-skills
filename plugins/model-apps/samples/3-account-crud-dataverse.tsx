@@ -20,8 +20,23 @@ import type {
     QueryTableOptions,
 } from "./RuntimeTypes";
 
+// Module-level key aliases — VALUES live on `window` (single source of truth) so
+// they survive the host double-mount on open and back-navigation, and stay
+// coherent across module re-evaluation. See references/data-caching.md.
+const CACHE_KEY = "__ppAccountListCache";
+const INFLIGHT_KEY = "__ppAccountListInflight";
+const winAny = window as unknown as Record<string, unknown>;
+
 const GeneratedComponent = ({ dataApi }: GeneratedComponentProps) => {
-    const [accounts, setAccounts] = useState<ReadableTableRow<account>[]>([]);
+    const dataReady = !!dataApi;
+    const [accounts, setAccounts] = useState<ReadableTableRow<account>[]>(
+        () => (winAny[CACHE_KEY] as ReadableTableRow<account>[] | undefined) ?? [],
+    );
+    // Gate mutations until the initial load resolves so a create/update can't race
+    // an in-flight first fetch (which could otherwise stale-write the cache).
+    const [loading, setLoading] = useState<boolean>(
+        () => (winAny[CACHE_KEY] as ReadableTableRow<account>[] | undefined) === undefined,
+    );
     const [selectedAccount, setSelectedAccount] = useState<ReadableTableRow<account> | null>(null);
     const [formData, setFormData] = useState<WritableTableRow<account>>({
         name: "",
@@ -32,37 +47,68 @@ const GeneratedComponent = ({ dataApi }: GeneratedComponentProps) => {
         telephone1: "",
     });
 
-    // Fetch accounts from Dataverse
+    // Fetch accounts from Dataverse (de-duped against the host double-mount)
     useEffect(() => {
-        const fetchAccounts = async () => {
+        if (!dataReady) return;
+
+        // Authoritative window cache — sync on a hit so a mount that renders while
+        // another mount's fetch is resolving doesn't stay stuck on the old list.
+        const cached = winAny[CACHE_KEY] as ReadableTableRow<account>[] | undefined;
+        if (cached) {
+            if (accounts !== cached) setAccounts(cached);
+            if (loading) setLoading(false);
+            return;
+        }
+        let cancelled = false;
+
+        let inflight = winAny[INFLIGHT_KEY] as Promise<ReadableTableRow<account>[]> | undefined;
+        if (!inflight) {
             const query: QueryTableOptions<account> = {
                 select: ["name", "address1_city", "address1_stateorprovince", "address1_postalcode", "address1_country", "telephone1", "accountid"],
                 pageSize: 50,
                 orderBy: "name asc",
             };
-            const result = await dataApi.queryTable("account", query);
-            setAccounts(result.rows);
-        };
-        fetchAccounts();
-    }, [dataApi]);
+            inflight = dataApi
+                .queryTable("account", query)
+                .then((result) => {
+                    winAny[CACHE_KEY] = result.rows;
+                    return result.rows;
+                })
+                // Clear only if still ours — a concurrent refresh may have replaced it.
+                .finally(() => { if (winAny[INFLIGHT_KEY] === inflight) delete winAny[INFLIGHT_KEY]; });
+            winAny[INFLIGHT_KEY] = inflight;
+        }
+
+        inflight
+            .then((rows) => { if (!cancelled) { setAccounts(rows); setLoading(false); } })
+            .catch((err) => { if (!cancelled) { console.error("Failed to load accounts", err); setLoading(false); } });
+
+        return () => { cancelled = true; };
+        // Readiness only — never `dataApi` (new ref each render). See Rule 15.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [dataReady]);
 
     const handleInputChange = (field: keyof WritableTableRow<account>, value: string) => {
         setFormData((prev) => ({ ...prev, [field]: value }));
     };
 
     const handleAddOrUpdate = async () => {
+        if (loading) return;   // don't mutate while the initial load is still in flight
         if (selectedAccount) {
             await dataApi.updateRow("account", selectedAccount.accountid, formData);
         } else {
             await dataApi.createRow("account", formData);
         }
-        // Refresh list
+        // Refresh list — write through the cache and clear any in-flight fetch so
+        // a later mount stays in sync.
         const query: QueryTableOptions<account> = {
             select: ["name", "address1_city", "address1_stateorprovince", "address1_postalcode", "address1_country", "telephone1", "accountid"],
             pageSize: 50,
             orderBy: "name asc",
         };
+        delete winAny[INFLIGHT_KEY];
         const result = await dataApi.queryTable("account", query);
+        winAny[CACHE_KEY] = result.rows;
         setAccounts(result.rows);
         // Reset form
         setFormData({
@@ -153,7 +199,7 @@ const GeneratedComponent = ({ dataApi }: GeneratedComponentProps) => {
                     <Input aria-label="Zip" placeholder="Enter zip code" value={formData.address1_postalcode || ""} onChange={(e, data) => handleInputChange("address1_postalcode", data.value)} />
                     <Input aria-label="Country" placeholder="Enter country" value={formData.address1_country || ""} onChange={(e, data) => handleInputChange("address1_country", data.value)} />
                     <Input aria-label="Phone" placeholder="Enter phone number" value={formData.telephone1 || ""} onChange={(e, data) => handleInputChange("telephone1", data.value)} />
-                    <Button style={{ width: "100%", marginTop: "12px" }} appearance="primary" onClick={handleAddOrUpdate}>
+                    <Button style={{ width: "100%", marginTop: "12px" }} appearance="primary" onClick={handleAddOrUpdate} disabled={loading}>
                         {selectedAccount ? "Update Account" : "Add Account"}
                     </Button>
                 </section>

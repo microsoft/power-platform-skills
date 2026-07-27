@@ -134,30 +134,48 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
     const [draggingId, setDraggingId] = React.useState<string | null>(null);
     const [hoverColumn, setHoverColumn] = React.useState<StatusValue | null>(null);
 
+    const dataReady = !!dataApi;
+
     React.useEffect(() => {
-        (async () => {
-            const cacheKey = '__genpage_tasks_v1';
-            const w = window as unknown as Record<string, Task[] | undefined>;
-            if (w[cacheKey]) {
-                setTasks(w[cacheKey] as Task[]);
-                setLoading(false);
-                return;
-            }
-            try {
-                const result = await dataApi.queryTable<Task>('task', {
+        if (!dataReady) return;
+        const cacheKey = '__genpage_tasks_v1';
+        const inflightKey = '__genpage_tasks_v1_inflight';
+        const w = window as unknown as Record<string, unknown>;
+
+        const cached = w[cacheKey] as Task[] | undefined;
+        if (cached) {
+            setTasks(cached);
+            setLoading(false);
+            return;
+        }
+
+        let cancelled = false;
+
+        // De-dupe the host double-mount: concurrent mounts share one fetch.
+        let pending = w[inflightKey] as Promise<Task[]> | undefined;
+        if (!pending) {
+            pending = dataApi
+                .queryTable<Task>('task', {
                     select: ['activityid', 'subject', 'description', 'statuscode', 'prioritycode'],
                     top: 200,
-                });
-                // queryTable returns DataTable<T> = { rows: T[], hasMoreRows, loadMoreRows() } — access records via .rows
-                w[cacheKey] = result.rows;
-                setTasks(result.rows);
-            } catch (e) {
-                setError(e instanceof Error ? e.message : String(e));
-            } finally {
-                setLoading(false);
-            }
-        })();
-    }, [dataApi]);
+                })
+                // queryTable returns DataTable<T> = { rows: T[], ... } — read .rows
+                .then((result) => {
+                    w[cacheKey] = result.rows;
+                    return result.rows;
+                })
+                .finally(() => { if (w[inflightKey] === pending) delete w[inflightKey]; });
+            w[inflightKey] = pending;
+        }
+
+        pending
+            .then((rows) => { if (!cancelled) { setTasks(rows); setLoading(false); } })
+            .catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : String(e)); setLoading(false); } });
+
+        return () => { cancelled = true; };
+        // Readiness only — never `dataApi`. See Rule 15.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [dataReady]);
 
     const handleDragStart = (e: React.DragEvent<HTMLDivElement>, taskId: string) => {
         e.dataTransfer.effectAllowed = 'move';

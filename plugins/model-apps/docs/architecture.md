@@ -130,7 +130,7 @@ plugins/model-apps/
 ├── references/                        <-- read on demand by agents
 │   ├── rules.md                       <-- code-gen rules (page-builder hot path)
 │   ├── plan-schema.md                 <-- plan doc contract
-│   ├── data-caching.md                <-- Rule 15 list/detail pattern
+│   ├── data-caching.md                <-- Rule 15 on-mount fetch: de-dupe + cache
 │   ├── localization.md                <-- multi-language + RTL pattern
 │   ├── supported-dependencies.md      <-- v2.2: package.json input list
 │   ├── troubleshooting.md             <-- deploy / runtime / env issues

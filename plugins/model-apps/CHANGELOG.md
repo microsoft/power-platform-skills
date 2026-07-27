@@ -29,6 +29,22 @@ hardened Playwright launcher. No breaking changes.
   `MODEL_APPS_SKIP_WRITE_GUARD=1`.
 
 ### Fixed
+- **Generated-page double-fetch / render flash on open.** Generated data pages
+  could fetch twice and re-flash the spinner because (1) the webplayer host
+  double-mounts the page on open (a cache-bypassing app relaunch ~300ms after
+  the first mount re-runs the data effect — confirmed via network capture: two
+  `POST .../powerapps/apps/<app>/launch`, the second `bypass-cache=true`), and
+  (2) `dataApi` is a new reference each render, so listing it in a `useEffect`
+  dep array re-fires the effect every render. Reworked the data-fetch guidance
+  (`references/data-caching.md`, `rules.md` Rule 15) and every exemplar
+  (samples 3/9/10/11, `localization.md`) to use an **in-flight-promise de-dupe +
+  `window` cache** (concurrent mounts share one round-trip; later mounts paint
+  from cache with no spinner) and a **readiness boolean** dependency —
+  `dataApi` is now forbidden in any dependency array. The de-dupe applies to any
+  page that fetches on mount, including single-visit overviews/dashboards
+  (previously excluded from caching); `Needs caching:` in the plan schema now
+  means "fetches on mount." The host relaunch itself is a platform-side issue
+  tracked separately.
 - **Playwright MCP launcher.** `scripts/launch-playwright-mcp.js` now exports
   `launch()` — satisfying the `.mcp.json` contract instead of relying on a
   require-time side-effect — adds `-y` (avoids the npx first-run prompt hang),

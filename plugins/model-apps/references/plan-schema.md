@@ -144,10 +144,11 @@ connector bindings." sentinel).]
 - **File:** [name].tsx
 - **Purpose:** [one-line description]
 - **Entities:** [comma-separated logical names OR "mock data"]
-- **Needs caching:** true / false — set true for list pages, detail pages, or any
-  page where the user is likely to navigate away and return; false for forms,
-  single-visit dashboards, mock-data pages. When true, the page-builder reads
-  `references/data-caching.md`.
+- **Needs caching:** true / false — set true for any page that **fetches data on
+  mount** (list, detail, or single-visit overview/dashboard); all need the
+  in-flight de-dupe that survives the host double-mount. Set false only for
+  forms with no initial fetch and mock-data pages. When true, the page-builder
+  reads `references/data-caching.md`.
 - **Key Features:** [what this specific page should do]
 - **Components:** [Fluent UI V9 components to use]
 - **Layout:** [responsive design approach]

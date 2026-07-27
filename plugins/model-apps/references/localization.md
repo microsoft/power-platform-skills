@@ -79,8 +79,10 @@ Retrieve these columns: `uilanguageid`, `localeid`, `decimalsymbol`, `numbersepa
 
 ```typescript
 const [userSettings, setUserSettings] = React.useState<any>(null);
+const dataReady = !!dataApi;   // never depend on `dataApi` itself — see Rule 15
 
 React.useEffect(() => {
+  if (!dataReady) return;
   const fetchUserSettings = async () => {
     try {
       const currentUserId = (typeof Xrm !== "undefined" &&
@@ -98,7 +100,8 @@ React.useEffect(() => {
     }
   };
   void fetchUserSettings();
-}, [dataApi]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [dataReady]);
 ```
 
 Provide formatting helpers that use these settings. **NEVER hardcode date formats or currency symbols.**

@@ -41,7 +41,7 @@ agents/                        ← Agent definitions (invoked by skills via Task
 references/                    ← Shared reference docs
   rules.md                     ← Full code-gen rules, DataAPI types, layout patterns, common errors
   plan-schema.md               ← Schema contract for genpage-plan.md
-  data-caching.md              ← Rule 15 list/detail caching pattern (loaded conditionally)
+  data-caching.md              ← Rule 15 on-mount fetch: de-dupe + cache (loaded conditionally)
   localization.md              ← Multi-language + RTL pattern (loaded conditionally)
   supported-dependencies.md    ← Versioned package list for generated pages
   troubleshooting.md           ← Deployment/runtime/env issues
