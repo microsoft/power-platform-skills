@@ -1,15 +1,11 @@
 ---
 name: setup-prerequisites
 description: >-
-  Gets a machine ready to use the power-pages plugin by checking the tools the
-  skills depend on — Node.js, the .NET SDK, the Power Platform CLI (pac), and
-  the Azure CLI (az) — installing whatever is missing, and signing both CLIs in.
-  Use when the user installed the plugin from the marketplace and wants to set
-  it up, asks how to get started, says a skill failed because "pac is not
-  recognized" or "az is not installed", asks "do I have everything I need?",
-  "check my setup", "install the prerequisites", or needs to sign in to the
-  Power Platform or Azure CLI.
+  Gets a machine ready to use the power-pages plugin — checks Node.js, the .NET
+  SDK, the Power Platform CLI (pac), and the Azure CLI (az), installs whatever
+  is missing, and signs both CLIs in.
 user-invocable: true
+disable-model-invocation: true
 argument-hint: "[optional: check | install]"
 allowed-tools: Read, Bash, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 model: sonnet
