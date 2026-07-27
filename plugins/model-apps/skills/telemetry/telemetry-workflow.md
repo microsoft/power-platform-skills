@@ -28,7 +28,7 @@ usage telemetry for this plugin. Default to `status` when no argument is given.
 - Once telemetry is enabled (provisioned), the local diagnostic mirror is written
   for every event — even when you've opted out of transmission — at
   `~/.power-platform-skills/telemetry/model-apps/sessions/<sessionId>/events.jsonl`.
-  While telemetry ships disabled (unprovisioned), nothing is written. `status`
+  While telemetry ships disabled (`disabled: true`), nothing is written. `status`
   prints the mirror's location so you can hand over one self-contained file when
   filing an issue.
 - **Automation/CI** can disable telemetry by setting the opt-out env var
