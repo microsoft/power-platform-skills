@@ -13,7 +13,7 @@ const scriptsDir = path.join(
   'scripts'
 );
 const { foregroundColor, green, red, shouldColor } = require(path.join(scriptsDir, 'colors.js'));
-const { renderPortalTable, normalizeState, colorForState } = require(path.join(
+const { renderPortalTable, renderPortalTableMarkdown, normalizeState, colorForState } = require(path.join(
   scriptsDir,
   'render-portal-table.js'
 ));
@@ -117,4 +117,36 @@ test('unknown state stays uncolored even with color on', () => {
   const out = renderPortalTable([{ name: 'X', state: 'weird' }], { color: true });
   assert.ok(out.includes('Unknown'));
   assert.ok(!out.includes(GREEN) && !out.includes(RED));
+});
+
+// --- render-portal-table.js Markdown mode (chat-safe) ---
+
+test('renderPortalTableMarkdown emits a GFM table, no box-drawing/ANSI', () => {
+  const out = renderPortalTableMarkdown(portals);
+  // No ASCII box borders and no ANSI escapes — the chat client sizes columns.
+  assert.ok(!out.includes('\u001b['), 'markdown output must contain no ANSI escapes');
+  assert.ok(!/[+\-]{3,}/.test(out.replace(/---/g, '')), 'no ASCII box rule rows');
+  assert.match(out, /^\| # \| Name \| URL \| Site ID \| State \|$/m, 'header row present');
+  assert.match(out, /^\| --- \| --- \| --- \| --- \| --- \|$/m, 'delimiter row present');
+});
+
+test('renderPortalTableMarkdown carries the 🟢/🔴 state icon by default and one row per site', () => {
+  const out = renderPortalTableMarkdown(portals);
+  const lines = out.split('\n');
+  // header + delimiter + 2 data rows = 4 lines, each a single physical line.
+  assert.strictEqual(lines.length, 4, 'exactly one line per header/delimiter/site row');
+  assert.match(out, /^\| 1 \| Portal_1 \| https:\/\/a\.example\.com \| id-1 \| 🟢 Enabled \|$/m);
+  assert.match(out, /^\| 2 \| Portal_2 \| https:\/\/b\.example\.com \| id-2 \| 🔴 Disabled \|$/m);
+});
+
+test('renderPortalTableMarkdown --no-icons drops the emoji', () => {
+  const out = renderPortalTableMarkdown(portals, { icons: false });
+  assert.ok(!out.includes('🟢') && !out.includes('🔴'), 'icons suppressed');
+  assert.match(out, /\| Enabled \|/);
+  assert.match(out, /\| Disabled \|/);
+});
+
+test('renderPortalTableMarkdown escapes a literal pipe in a cell', () => {
+  const out = renderPortalTableMarkdown([{ name: 'A|B', url: 'https://x', portalId: 'p1', state: true }]);
+  assert.match(out, /\| A\\\|B \|/, 'a literal pipe is backslash-escaped');
 });

@@ -77,95 +77,29 @@ function plainStateCell(state) {
   return '⚪ Unknown';
 }
 
-// Visible length of a cell, ignoring ANSI SGR escapes. The box table is rendered
-// ANSI-free today, but strip defensively so width math never counts a zero-width
-// escape (e.g. "\x1b[31m…\x1b[0m") as visible characters.
-function visibleLen(s) {
-  // eslint-disable-next-line no-control-regex
-  return String(s == null ? '' : s).replace(/\x1b\[[0-9;]*m/g, '').length;
+// Escape a cell value for a GitHub-flavored Markdown table: a literal `|` would
+// otherwise be read as a column separator and shift every following cell, so
+// backslash-escape it. Newlines are flattened to spaces because a Markdown table
+// cell cannot span physical lines. (URLs/GUIDs/emoji need no other escaping.)
+function mdCell(s) {
+  return String(s == null ? '' : s).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 }
 
-// Greedy word-wrap `text` into lines no wider than `width` visible chars. Splits
-// on whitespace; a single token longer than the column (e.g. a long URL or GUID)
-// is hard-broken into width-sized chunks so it can never overflow the border.
-// Always returns at least one line (possibly '') so an empty cell still occupies
-// a row.
-function wrapCell(text, width) {
-  const words = String(text == null ? '' : text).split(/\s+/).filter((w) => w.length);
-  if (!words.length) return [''];
-  const lines = [];
-  let cur = '';
-  for (let word of words) {
-    // Hard-break any token that can't fit on its own line.
-    while (visibleLen(word) > width) {
-      if (cur) {
-        lines.push(cur);
-        cur = '';
-      }
-      lines.push(word.slice(0, width));
-      word = word.slice(width);
-    }
-    if (!cur) cur = word;
-    else if (visibleLen(cur) + 1 + visibleLen(word) <= width) cur += ' ' + word;
-    else {
-      lines.push(cur);
-      cur = word;
-    }
-  }
-  if (cur) lines.push(cur);
-  return lines.length ? lines : [''];
-}
-
-// Render a fixed-width, Unicode-bordered box table with per-cell word wrapping.
-// Mirrors the approved consent-gate mock: narrow columns wrap their headers
-// ("Portal Name" -> "Portal" / "Name"), and the New State cell wraps its
-// "🔴 Disabled ← CHANGED" marker onto a second line. Column widths are computed
-// from the VISIBLE text of the header words + cells, capped per column (`caps`),
-// so a long URL/GUID wraps instead of stretching the whole row.
-//
-// `headers` is a string[]; `rows` is string[][] (already emoji-decorated, no
-// ANSI). Returns the multi-line box (no trailing newline).
-function renderBoxTable(headers, rows, caps) {
-  const widths = headers.map((h, c) => {
-    // The header must be wrappable within the column, so the floor is its widest
-    // single word (a word can never be split across the header lines cleanly).
-    const headerWordMax = Math.max(...String(h).split(/\s+/).map(visibleLen));
-    let cellMax = 0;
-    for (const r of rows) cellMax = Math.max(cellMax, visibleLen(r[c]));
-    const natural = Math.max(headerWordMax, cellMax);
-    return Math.min(caps[c], natural);
-  });
-
-  const rule = (left, mid, right) =>
-    left + widths.map((w) => '─'.repeat(w + 2)).join(mid) + right;
-
-  // Emit one logical row (header or data) as N physical lines — N = the tallest
-  // wrapped cell — padding shorter cells with blank lines so borders stay aligned.
-  const emitRow = (cells) => {
-    const wrapped = cells.map((cell, c) => wrapCell(cell, widths[c]));
-    const height = Math.max(...wrapped.map((w) => w.length));
-    const lines = [];
-    for (let i = 0; i < height; i++) {
-      const parts = wrapped.map((w, c) => {
-        const txt = w[i] || '';
-        return ' ' + txt + ' '.repeat(Math.max(0, widths[c] - visibleLen(txt))) + ' ';
-      });
-      lines.push('│' + parts.join('│') + '│');
-    }
-    return lines;
-  };
-
-  const out = [rule('┌', '┬', '┐')];
-  for (const l of emitRow(headers)) out.push(l);
-  out.push(rule('├', '┼', '┤'));
-  rows.forEach((r, i) => {
-    // Separate every data row with a mid-rule (matching the approved mock), so a
-    // wrapped 2-line row is visually distinct from its neighbour.
-    if (i > 0) out.push(rule('├', '┼', '┤'));
-    for (const l of emitRow(r)) out.push(l);
-  });
-  out.push(rule('└', '┴', '┘'));
-  return out.join('\n');
+// Render a GitHub-flavored Markdown pipe table (header row + `---` delimiter +
+// one line per data row). We deliberately DROPPED the fixed-width Unicode box
+// (┌─┐ borders) here: admins reported it "breaks" in chat because the state
+// emoji (🟢/🔴) are double-width glyphs while the box padding math counts them
+// as their JS string length, so the columns never line up on a proportional or
+// emoji-aware surface. A Markdown table delegates column sizing to the chat
+// client's own renderer, so each row renders on ONE line and the emoji can be
+// any width without corrupting alignment. `headers` is a string[]; `rows` is
+// string[][] (already emoji-decorated, no ANSI). Returns the joined lines with
+// no trailing newline.
+function renderMarkdownTable(headers, rows) {
+  const head = '| ' + headers.map(mdCell).join(' | ') + ' |';
+  const sep = '| ' + headers.map(() => '---').join(' | ') + ' |';
+  const body = rows.map((r) => '| ' + r.map(mdCell).join(' | ') + ' |');
+  return [head, sep, ...body].join('\n');
 }
 
 // Plain-language scope line for the Scope row. Never leaks the internal
@@ -333,15 +267,16 @@ function renderImpactSummary(req, opts = {}) {
   out.push(`Scope:         ${scopeLine(scope, siteNames)}`);
 
   // Sites table with the required Current State / New State columns, rendered as
-  // a fixed-width Unicode box (the approved consent-gate format). A site whose
-  // state actually flips is tagged '← CHANGED' in its New State cell per the
+  // a GitHub-flavored Markdown table (NOT a fixed-width Unicode box — see
+  // renderMarkdownTable for why the box broke in chat). A site whose state
+  // actually flips is tagged '← CHANGED' in its New State cell per the
   // consentGate rules ("Rows where the per-site state changes MUST be marked
-  // CHANGED"); narrow columns wrap, so that marker lands on the cell's 2nd line.
+  // CHANGED"). The chat client sizes the columns, so each site is one line.
   const sitesLabel = scope === 'specific' ? 'Sites covered:' : 'Sites in env:';
   out.push(sitesLabel);
   out.push('');
-  const boxHeaders = ['Portal Name', 'Portal URL', 'Portal ID', 'Current State', 'New State'];
-  const boxRows = sites.map((s) => {
+  const tableHeaders = ['Portal Name', 'Portal URL', 'Portal ID', 'Current State', 'New State'];
+  const tableRows = sites.map((s) => {
     const cur = normalizeState(s && s.currentState);
     // Only flag a change when we actually know the current state and it differs.
     const changed = cur !== 'Unknown' && cur !== newState ? ' ← CHANGED' : '';
@@ -353,12 +288,7 @@ function renderImpactSummary(req, opts = {}) {
       plainStateCell(newState) + changed,
     ];
   });
-  // Per-column visible-width caps. Name / Current State / New State are kept
-  // narrow so their headers wrap ("Portal"/"Name", "Current"/"State") and the
-  // "🔴 Disabled ← CHANGED" marker wraps onto a second line, matching the mock;
-  // URL and ID are wide enough to hold a full portal URL / GUID on one line.
-  const boxCaps = [14, 44, 38, 12, 20];
-  for (const line of renderBoxTable(boxHeaders, boxRows, boxCaps).split('\n')) {
+  for (const line of renderMarkdownTable(tableHeaders, tableRows).split('\n')) {
     out.push(line);
   }
 

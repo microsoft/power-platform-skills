@@ -419,9 +419,8 @@ consent summary, resolve the **Current State** of each affected site by
 reading the live policy state (`get-env.js` for the env value + `get-portal.js`
 for the inclusion/exclusion lists, then apply the Phase 4.4.3 site-state
 table). **New State** is what that site becomes after the requested operation
-(enable → Enabled, disable → Disabled, for the sites in scope). Render both
-cells with the green/red convention (`🟢 Enabled` / `🔴 Disabled`) from
-`governance-mapping.json` `stateColors`. This lets the user see the exact
+(enable → Enabled, disable → Disabled, for the sites in scope). Render both cells with the green/red convention (`🟢 Enabled` / `🔴 Disabled`)
+from `governance-mapping.json` `stateColors`. This lets the user see the exact
 transition before approving. If a live read fails, render Current State as
 `Unknown` (never block the gate on a read error) and say so in a footnote.
 
@@ -433,26 +432,23 @@ one prose line: *"Reply **Apply now** to proceed, or **cancel** to stop."* Do
 make:", "Impact summary:", or similar. Start the impact summary directly at the
 `Action:` row.
 
-```
+The Sites table is a **GitHub-flavored Markdown table**, emitted un-fenced so
+the chat client renders it. (It is intentionally NOT a fixed-width ASCII/Unicode
+box: the double-width 🟢/🔴 State emoji misalign the box columns in chat.) A
+row whose state actually flips is tagged `← CHANGED` in its New State cell:
+
 Action:        🔴 Disable OpenID Connect sign-in
 Environment:   Sachin-Jun-2nd  (202c4f04-2eb7-eef3-a26d-14c77c8c13c5)
 Scope:         Every site in this environment
 Sites in env:
 
-┌──────────┬─────────────────────────────────────────┬──────────────────────────────────────┬────────────┬──────────────────────┐
-│ Portal   │ Portal URL                              │ Portal ID                            │ Current    │ New State            │
-│ Name     │                                         │                                      │ State      │                      │
-├──────────┼─────────────────────────────────────────┼──────────────────────────────────────┼────────────┼──────────────────────┤
-│ Site 1   │ https://site-dmq4c.powerappsportals.com │ 3e13d603-2607-43e0-90aa-d15bacaa8787 │ 🟢 Enabled │ 🔴 Disabled ←        │
-│          │                                         │                                      │            │ CHANGED              │
-├──────────┼─────────────────────────────────────────┼──────────────────────────────────────┼────────────┼──────────────────────┤
-│ Site 2   │ https://site-uo75u.powerappsportals.com │ ea51fc54-94e0-47fc-ab13-d3db18567809 │ 🟢 Enabled │ 🔴 Disabled ←        │
-│          │                                         │                                      │            │ CHANGED              │
-├──────────┼─────────────────────────────────────────┼──────────────────────────────────────┼────────────┼──────────────────────┤
-│ 8-june   │ https://site-pjpuy.powerappsportals.com │ fe624c02-8793-4423-84f0-3546d80dee49 │ 🔴 Disabled│ 🔴 Disabled          │
-└──────────┴─────────────────────────────────────────┴──────────────────────────────────────┴────────────┴──────────────────────┘
+| Portal Name | Portal URL | Portal ID | Current State | New State |
+| --- | --- | --- | --- | --- |
+| Site 1 | https://site-dmq4c.powerappsportals.com | 3e13d603-2607-43e0-90aa-d15bacaa8787 | 🟢 Enabled | 🔴 Disabled ← CHANGED |
+| Site 2 | https://site-uo75u.powerappsportals.com | ea51fc54-94e0-47fc-ab13-d3db18567809 | 🟢 Enabled | 🔴 Disabled ← CHANGED |
+| 8-june | https://site-pjpuy.powerappsportals.com | fe624c02-8793-4423-84f0-3546d80dee49 | 🔴 Disabled | 🔴 Disabled |
+
 Effect:        OpenID Connect sign-in will be disabled on all portals in Sachin-Jun-2nd.
-```
 
 *Reply **Apply now** to proceed, or **cancel** to stop.*
 
@@ -913,23 +909,25 @@ to the user. This is a verify step — never trust the polling outcome alone.
 
 **Render the verification as a state table (canonical structure).** After the
 read confirms the new state, render a headline + table that lists **every site
-the operation touched**. **Do NOT hand-build a Markdown table with emoji / ANSI
-inside the cells — that breaks column alignment and the Status header.** Instead
-render the table with the **`render-portal-table.js`** helper (the same
-fixed-width ASCII-box approach the env picker uses), piping the sites through it
-and emitting the output **verbatim inside a fenced code block**:
+the operation touched**. **Do NOT hand-build the table.** Instead render it with
+the **`render-portal-table.js`** helper in **`--markdown`** mode, piping the
+sites through it and emitting the output **verbatim as a rendered Markdown
+table** (do **NOT** wrap it in a code fence — a fence would show the raw pipes
+instead of a table):
 
 ```bash
-echo '<PORTALS_JSON>' | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --no-color
+echo '<PORTALS_JSON>' | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --markdown
 ```
 
 `<PORTALS_JSON>` is a JSON array of `{ "name", "url", "portalId", "state" }`
 where `state` is `true` (Enabled) / `false` (Disabled) — compute each site's
-state from the read via the Phase 4.4.3 site-state table. Use `--no-color` for
-chat surfaces (ANSI is stripped there and would show as raw escapes); the helper
-auto-colorizes the State column green / red only in a real terminal. The helper
-emits a fixed-width box with columns `# | Name | URL | Site ID | State` and
-stays aligned because widths are computed on the visible text.
+state from the read via the Phase 4.4.3 site-state table. **Always use
+`--markdown` for chat surfaces**: the legacy fixed-width ASCII box misaligns in
+chat because the 🟢/🔴 State emoji are double-width glyphs while the box padding
+counts characters, so every column after State shifts. The Markdown table lets
+the chat client size the columns, so each site renders on one line. (The
+ASCII-box mode — omit `--markdown`, add `--no-color` — remains only for a real
+terminal.) The helper emits columns `# | Name | URL | Site ID | State`.
 
 **The State cell MUST show the status icon** — 🟢 for Enabled, 🔴 for Disabled.
 The helper prepends these by default (pass `--no-icons` only if you explicitly
@@ -941,18 +939,15 @@ Pick the headline + row set by scope:
 - **`None` (env-wide disable)** — headline *"This Governance setting is 🔴 Disabled for these Sites:"*; list **all** sites in the env, every `state=false`.
 - **`Include` / `Exclude`** — list only the sites the operation targeted; compute each site's state via the Phase 4.4.3 site-state table. Use the singular *"…for this Site:"* headline when exactly one site was targeted.
 
-Env-wide (`None`) example — every site rendered via the helper (icons on):
+Env-wide (`None`) example — every site rendered via the helper as a Markdown
+table (icons on), emitted un-fenced so the client renders it:
 
-```
 This Governance setting is 🔴 Disabled for these Sites:
 
-+---+----------+-----------------------------------------+--------------------------------------+-------------+
-| # | Name     | URL                                     | Site ID                              | State       |
-+---+----------+-----------------------------------------+--------------------------------------+-------------+
+| # | Name | URL | Site ID | State |
+| --- | --- | --- | --- | --- |
 | 1 | Portal_1 | https://site-3axiv.powerappsportals.com | d1df518c-8e39-4bd5-8410-eb1c0c28e56c | 🔴 Disabled |
 | 2 | Portal_2 | https://site-37umu.powerappsportals.com | bf8ead09-df94-488a-b78c-d4065899e1a4 | 🔴 Disabled |
-+---+----------+-----------------------------------------+--------------------------------------+-------------+
-```
 
 Then give the one-line Phase 5 loop summary.
 
@@ -1023,10 +1018,10 @@ Steps:
 
 3. Compute each site's state via the Phase 4.4.3 site-state table (using the env
    `body` + the inclusion/exclusion lists), then render the **full** portal
-   list through the helper, emitting its output **verbatim inside a fenced code
-   block**:
+   list through the helper in **`--markdown`** mode, emitting its output
+   **verbatim as a rendered Markdown table** (NOT inside a code fence):
    ```bash
-   echo '<PORTALS_JSON>' | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --no-color
+   echo '<PORTALS_JSON>' | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --markdown
    ```
    `<PORTALS_JSON>` is a JSON array of `{ "name", "url", "portalId", "state" }`
    (`state` true=Enabled / false=Disabled) for **every** site in the env. The
@@ -1178,45 +1173,35 @@ Phase 5 loop summary, and any verification table. Do NOT invert or
 re-interpret these labels based on the underlying API direction; the
 user has chosen this mental model and we render it consistently.
 
-Then render the result as a one-line headline + **the fixed-width ASCII-box
-table produced by `render-portal-table.js`** (icons on) — **never** a
-hand-built Markdown table with emoji / ANSI in the cells (that breaks the
-Status header and column alignment), and never multi-sentence prose. Pipe the
-single site through the helper:
+Then render the result as a one-line headline + **the Markdown table produced by
+`render-portal-table.js --markdown`** (icons on) — **never** hand-build it, and
+never multi-sentence prose. Pipe the single site through the helper:
 
 ```bash
 echo '[{"name":"<PORTAL_NAME>","url":"<URL>","portalId":"<PORTAL_ID>","state":<true|false>}]' \
-  | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --no-color
+  | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --markdown
 ```
 
 `state` is `true` when the Phase 4.4.3 site-state table resolves to Enabled,
 `false` when Disabled. **The State cell MUST show the icon** — 🟢 Enabled /
-🔴 Disabled (the helper adds it by default). Emit the helper output verbatim in
-a fenced code block.
+🔴 Disabled (the helper adds it by default). Emit the helper output verbatim as
+a rendered Markdown table (NOT inside a code fence).
 
 For **Enabled**:
 
-```
 This Governance setting is 🟢 Enabled for this Site:
 
-+---+--------+-----------------------------------------+--------------------------------------+------------+
-| # | Name   | URL                                     | Site ID                              | State      |
-+---+--------+-----------------------------------------+--------------------------------------+------------+
+| # | Name | URL | Site ID | State |
+| --- | --- | --- | --- | --- |
 | 1 | 8-june | https://site-pjpuy.powerappsportals.com | fe624c02-8793-4423-84f0-3546d80dee49 | 🟢 Enabled |
-+---+--------+-----------------------------------------+--------------------------------------+------------+
-```
 
 For **Disabled**:
 
-```
 This Governance setting is 🔴 Disabled for this Site:
 
-+---+--------+-----------------------------------------+--------------------------------------+-------------+
-| # | Name   | URL                                     | Site ID                              | State       |
-+---+--------+-----------------------------------------+--------------------------------------+-------------+
+| # | Name | URL | Site ID | State |
+| --- | --- | --- | --- | --- |
 | 1 | Site 1 | https://site-dmq4c.powerappsportals.com | 3e13d603-2607-43e0-90aa-d15bacaa8787 | 🔴 Disabled |
-+---+--------+-----------------------------------------+--------------------------------------+-------------+
-```
 
 Do not surface internal terms (`policyValue`, `InclusionList`, `ExclusionList`,
 `Include`, `Exclude`) to the user. The single-table view is the source of

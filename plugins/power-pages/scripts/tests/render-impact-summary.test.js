@@ -60,7 +60,7 @@ test('flips are marked ← CHANGED, already-terminal sites are not', () => {
   }
 });
 
-test('the Sites table renders as a bordered Unicode box with wrapped headers', () => {
+test('the Sites table renders as a GitHub-flavored Markdown table with single-line rows', () => {
   const out = renderImpactSummary({
     policy: 'EnableProtocolOpenIdConnect',
     direction: 'disable',
@@ -76,18 +76,37 @@ test('the Sites table renders as a bordered Unicode box with wrapped headers', (
       },
     ],
   });
-  // Unicode box borders (not the old Markdown pipe table).
-  assert.match(out, /┌─+┬─+┬─+┬─+┬─+┐/, 'top border present');
-  assert.match(out, /└─+┴─+┴─+┴─+┴─+┘/, 'bottom border present');
-  assert.ok(!/\|-+\|/.test(out), 'must not fall back to a Markdown divider row');
-  // Narrow columns wrap their headers across two physical lines.
-  assert.match(out, /│ Portal +│/, 'Portal Name header wraps to "Portal"');
-  assert.match(out, /│ Name +│/, '…and "Name" on the next line');
-  assert.match(out, /Current +│/, 'Current State header wraps to "Current"');
-  assert.match(out, /State +│/, '…and "State" on the next line');
-  // The changed marker wraps onto the New State cell's 2nd line.
-  assert.match(out, /🔴 Disabled ←/, 'New State cell carries the ← marker');
-  assert.match(out, /│ CHANGED +│/, 'CHANGED wraps to the next line of the cell');
+  // Markdown pipe table — a header row, a `---` delimiter row, then data rows.
+  // We deliberately DROPPED the fixed-width Unicode box (it misaligned in chat
+  // because the state emoji are double-width), so the box borders must be gone.
+  assert.ok(!/[┌┬┐└┴┘├┼┤─│]/.test(out), 'must NOT render Unicode box-drawing characters');
+  assert.match(
+    out,
+    /^\| Portal Name \| Portal URL \| Portal ID \| Current State \| New State \|$/m,
+    'Markdown header row present'
+  );
+  assert.match(out, /^\| --- \| --- \| --- \| --- \| --- \|$/m, 'Markdown delimiter row present');
+  // The whole site row — including the double-width emoji and the ← CHANGED
+  // marker — renders on ONE physical line as a single pipe row.
+  assert.match(
+    out,
+    /^\| Portal_1 \| https:\/\/site-3axiv\.powerappsportals\.com \| d1df518c-8e39-4bd5-8410-eb1c0c28e56c \| 🟢 Enabled \| 🔴 Disabled ← CHANGED \|$/m,
+    'the site row is a single Markdown line with every cell inline'
+  );
+});
+
+test('Markdown table cells escape a literal pipe so columns never shift', () => {
+  // A site name containing '|' must be backslash-escaped, otherwise it would be
+  // read as an extra column separator and break the row's alignment.
+  const out = renderImpactSummary({
+    policy: 'EnableProtocolOpenIdConnect',
+    direction: 'disable',
+    scope: 'all',
+    policyValue: 'None',
+    env: { displayName: 'env', envId: 'e1' },
+    sites: [{ name: 'A|B', url: 'https://x', portalId: 'p1', currentState: 'Enabled' }],
+  });
+  assert.match(out, /\| A\\\|B \|/, 'a literal pipe in a cell is escaped as \\|');
 });
 
 test('Side effect line only renders when policyValue is a per-policy trigger', () => {

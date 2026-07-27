@@ -2,7 +2,15 @@
 
 // list-envs.js — Lists Power Platform environments the signed-in user has
 // admin access to. Backed by `pac admin list --json` via the shared shim.
+//
+// Optional on-disk cache (opt-in via --cacheFile): the governance skill
+// pre-warms the env list in the background and reuses it for the rest of the
+// run. `pac admin list` cold-starts the .NET CLI (~seconds) and the tenant's
+// env set changes rarely, so we serve a cached copy when it is younger than
+// the TTL (default 6h) and only re-hit PAC once the cache goes stale. The TTL
+// is enforced by the cache file's mtime — a fresh write restarts the window.
 
+const fs = require('fs');
 const {
   parseCliArgs,
   fail,
@@ -10,14 +18,27 @@ const {
 } = require('../../../scripts/lib/power-platform-api');
 const { listEnvsViaPac } = require('../../../scripts/lib/pac-bap-shim');
 
+// Default cache lifetime. The env inventory for a tenant is slow-changing, so
+// 6 hours keeps the interactive picker fast without serving a day-old list.
+const DEFAULT_CACHE_MAX_AGE_HOURS = 6;
+
 const HELP = `list-envs.js — Lists Power Platform environments visible to the signed-in PAC profile.
 
 Usage:
   node list-envs.js [--type <Production|Sandbox|Trial|Developer|Default>]
+                    [--cacheFile <path>] [--maxAgeHours <n>] [--refresh]
 
 Flags:
-  --type   Optional filter on environment SKU.
-  --help   Show this help message.
+  --type         Optional filter on environment SKU.
+  --cacheFile    Path to a JSON cache file. When present and fresh (younger
+                 than --maxAgeHours), the cached list is served and the slow
+                 pac admin list call is skipped. On a miss/stale cache, the
+                 freshly fetched list is written back to this path.
+  --maxAgeHours  Cache time-to-live in hours (default ${DEFAULT_CACHE_MAX_AGE_HOURS}). The cache is
+                 considered stale once now - mtime >= this many hours.
+  --refresh      Force a fresh fetch, ignoring any existing cache. The result
+                 still overwrites --cacheFile when provided.
+  --help         Show this help message.
 
 Exit codes:
   0  Success (including empty result)
@@ -25,7 +46,8 @@ Exit codes:
   1  Other failure
 
 Stdout (JSON):
-  { "status": "ok", "envs": [ { "envId", "displayName", "envUrl", "type", "domain" } ] }
+  { "status": "ok", "envs": [ { "envId", "displayName", "envUrl", "type", "domain" } ],
+    "cache": { "hit": <bool>, "ageMinutes": <n|null>, "maxAgeHours": <n> } }
 `;
 
 function normalize(bapShapedEnv) {

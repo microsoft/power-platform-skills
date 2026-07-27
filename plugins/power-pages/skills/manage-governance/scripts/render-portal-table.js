@@ -44,6 +44,42 @@ function pad(str, width) {
   return s + ' '.repeat(Math.max(0, width - s.length));
 }
 
+// Escape a cell for a GitHub-flavored Markdown table: a literal `|` would be
+// read as a column separator and shift every following cell, so backslash it;
+// newlines are flattened because a Markdown cell can't span physical lines.
+function mdCell(s) {
+  return String(s == null ? '' : s).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+}
+
+// GitHub-flavored Markdown version of the per-site state table. This is the
+// chat-safe renderer: the ASCII box (renderPortalTable) misaligns on chat
+// surfaces because the State column carries a double-width 🟢/🔴 emoji while the
+// box padding counts characters, so every column after State shifts. A Markdown
+// table hands column sizing to the chat client, so each site stays on one row
+// and the emoji can be any width. Color/ANSI is intentionally omitted (it would
+// show as raw escapes in chat); the emoji is the green/red carrier. `icons`
+// defaults on — pass { icons: false } to omit them.
+function renderPortalTableMarkdown(portals, opts = {}) {
+  const list = Array.isArray(portals) ? portals : [];
+  const icons = opts.icons !== false;
+  const headers = ['#', 'Name', 'URL', 'Site ID', 'State'];
+  const rows = list.map((p, i) => {
+    const label = normalizeState(p && p.state);
+    const state = icons && iconForState(label) ? `${iconForState(label)} ${label}` : label;
+    return [
+      String(i + 1),
+      (p && p.name) || '(unnamed)',
+      (p && p.url) || '',
+      (p && p.portalId) || '',
+      state,
+    ];
+  });
+  const head = '| ' + headers.map(mdCell).join(' | ') + ' |';
+  const sep = '| ' + headers.map(() => '---').join(' | ') + ' |';
+  const body = rows.map((r) => '| ' + r.map(mdCell).join(' | ') + ' |');
+  return [head, sep, ...body].join('\n');
+}
+
 function border(widths, left, mid, right) {
   return left + widths.map((w) => '-'.repeat(w + 2)).join(mid) + right;
 }
@@ -130,7 +166,10 @@ Input:
     { "name": "Portal_1", "url": "https://...", "portalId": "<guid>", "state": true|false|"Enabled"|"Disabled" }
 
 Flags:
-  --color       Force ANSI color on (green=Enabled, red=Disabled).
+  --markdown    Render as a GitHub-flavored Markdown table (chat-safe — the
+                client sizes columns so the 🟢/🔴 emoji never misalign it).
+                Emit this output as a rendered table, NOT inside a code fence.
+  --color       Force ANSI color on (green=Enabled, red=Disabled). ASCII box only.
   --no-color    Force color off (plain ASCII — safe for capturing / chat).
   --icons       Prefix the State cell with 🟢 / 🔴 (default: on).
   --no-icons    Omit the state icons (plain "Enabled" / "Disabled").
@@ -143,13 +182,14 @@ The state icons (🟢 Enabled / 🔴 Disabled) are shown by default — pass
 `;
 
 function parseFlags(argv) {
-  const out = { color: null, icons: true };
+  const out = { color: null, icons: true, markdown: false };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--color') out.color = true;
     else if (a === '--no-color') out.color = false;
     else if (a === '--icons') out.icons = true;
     else if (a === '--no-icons') out.icons = false;
+    else if (a === '--markdown' || a === '--md') out.markdown = true;
     else if (a === '--portalsFile') out.portalsFile = argv[++i];
     else if (a === '--help') out.help = true;
   }
@@ -177,10 +217,19 @@ async function main() {
     return;
   }
   const portals = Array.isArray(parsed) ? parsed : parsed.portals || [];
-  process.stdout.write(renderPortalTable(portals, { color: flags.color, icons: flags.icons }) + '\n');
+  const rendered = flags.markdown
+    ? renderPortalTableMarkdown(portals, { icons: flags.icons })
+    : renderPortalTable(portals, { color: flags.color, icons: flags.icons });
+  process.stdout.write(rendered + '\n');
 }
 
-module.exports = { renderPortalTable, normalizeState, colorForState, iconForState };
+module.exports = {
+  renderPortalTable,
+  renderPortalTableMarkdown,
+  normalizeState,
+  colorForState,
+  iconForState,
+};
 
 if (require.main === module) {
   main();
