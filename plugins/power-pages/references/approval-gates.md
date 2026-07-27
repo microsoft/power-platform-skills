@@ -685,6 +685,17 @@ New skill (Power Pages source & dependency security scan). Runs local static ana
 
 ---
 
+### 6.31 `setup-prerequisites` (2 gate IDs)
+
+New skill (machine setup for marketplace installs). Checks Node.js, the .NET SDK, the PAC CLI, and the Azure CLI, installs what is missing, and signs both CLIs in. Both gates are `consent` — each one authorizes a change to the user's machine (a package install, or a credential prompt that writes a CLI profile) rather than a change to the project.
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `setup-prerequisites:2.install-consent` | gate | consent | 2 | *"Install &lt;tool&gt; using &lt;command&gt;? / Skip"* — fires once per `install`/`update` action returned by `detect-prerequisites.js`. Skipped entirely when nothing is missing. | nothing — the tool stays as it was and the run continues with the next one |
+| `setup-prerequisites:3.signin-consent` | gate | consent | 3 | *"Sign in to &lt;CLI&gt; now? / Skip"* — fires once per `signin` action, and again after an install that added a CLI. | nothing — no CLI profile is created; the outstanding sign-in is listed in the Phase 4 summary |
+
+---
+
 ### Cross-plugin shared skills — out of catalog scope
 
 `report-issue` — Its prompts are cross-plugin, not power-pages-specific, so they are not catalogued here. If the shared workflow is ever governed by per-plugin approval-gate linting, add a `report-issue:*` section to this catalog.
@@ -728,6 +739,7 @@ These need explicit confirmation from the reviewer before SKILL.md edits land. R
 - §6.13–§6.24 added — full catalog rows for `create-site`, `deploy-site`, `add-server-logic`, `add-cloud-flow`, `setup-auth`, `integrate-webapi`, `setup-datamodel`, `add-sample-data`, `add-seo`, `create-webroles`, `audit-permissions`, `integrate-backend` (45 gates + 9 not-a-gates).
 - §6.24a–§6.28 added — security skills introduced by PR #151 (`manage-firewall`, `manage-headers`, `scan-site`, `security-review`). The new skills use a runtime-loop prompt pattern; §6.24a documents the marker convention for that pattern. 3 gates + 2 not-a-gates.
 - §6.30 added — `scan-code` (Power Pages source & dependency security scan). 3 `plan` gates (`scan-code:1.agent-review-fallback`, `scan-code:2.scope-choice`, `scan-code:2.depth-choice`); no not-a-gates.
+- §6.31 added — `setup-prerequisites` (machine setup for marketplace installs). 2 `consent` gates (`setup-prerequisites:2.install-consent`, `setup-prerequisites:3.signin-consent`); no not-a-gates.
 - Markers added to all non-ALM SKILL.md files (HTML comment + 🚦 block per gate; `not-a-gate` comment per data-gathering prompt or meta-mention).
 - `scripts/lint-skills-alm.js` warn-only branch removed — all skills now hard-fail.
 - `AGENTS.md` Key Patterns updated — Approval Gate convention applies plugin-wide; new skills must extend §6 in the same PR they introduce a prompt.

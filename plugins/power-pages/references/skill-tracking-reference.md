@@ -56,6 +56,7 @@ If the tracking script creates or updates site setting YAML files, include those
 | deploy-pipeline | DeployPipeline | Site/AI/Skills/DeployPipeline |
 | ensure-pipelines-host | EnsurePipelinesHost | Site/AI/Skills/EnsurePipelinesHost |
 | force-link-environment | ForceLinkEnvironment | Site/AI/Skills/ForceLinkEnvironment |
+| setup-prerequisites | SetupPrerequisites | Site/AI/Skills/SetupPrerequisites |
 
 ## YAML Format
 
