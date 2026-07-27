@@ -450,7 +450,7 @@ For each `Extend` decision, POST a new column to the existing table.
 > Build a local `{ lowerCaseLogicalName → { AttributeType, AttributeTypeName, IsManaged, IsCustomizable } }` map and classify **every** planned non-lookup column before issuing any POST. Prefer `AttributeTypeName.Value` when `AttributeType` is `Virtual`, so File and Image columns are not incorrectly treated as compatible generic virtual attributes:
 >
 > | Snapshot result | Action |
-> |---|---|---|
+> |---|---|
 > | Name exists and `AttributeType` matches | Skip it and log `↻ <column> (already exists, skipped)`. |
 > | Name exists and `AttributeType` differs | **STOP before all writes** and surface: "Column `<column>` exists but is `<existingType>`, plan expected `<plannedType>`. Dataverse does NOT allow column-type changes via API — delete the column manually or revise the plan." |
 > | Name is absent | Add it to the ordered missing-column queue. |
