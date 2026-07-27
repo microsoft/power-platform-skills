@@ -67,6 +67,31 @@ function choiceValueMap(entity, spec) {
   return map;
 }
 
+// Shared choice-value linter (#4). Returns [{ field, token }] for each Choice/MultiChoice sample VALUE
+// in `record` that is neither a declared option label nor a raw integer option value. Both the hard
+// validator (validateAppSpec) and the guardrail linter (spec-lint.js) call this so the two gates never
+// diverge. A MultiChoice value is a comma-separated token list; a single Choice is one token — a label
+// that legitimately contains a comma is matched WHOLE first (byLabel[val]) so it is never mis-split.
+// Raw integer tokens pass through (an author may use the stable option value instead of the label).
+function invalidChoiceSampleTokens(spec, entity, record) {
+  if (!entity || !record || typeof record !== 'object' || Array.isArray(record)) return [];
+  const byField = choiceValueMap(entity, spec);
+  const multi = new Set((entity.columns || []).filter((c) => c.type === 'MultiChoice').map((c) => String(c.schemaName).toLowerCase()));
+  const out = [];
+  for (const [field, val] of Object.entries(record)) {
+    if (field.startsWith('$') || field === 'statusReason') continue;
+    const byLabel = byField[field.toLowerCase()];
+    if (!byLabel || typeof val !== 'string') continue; // not a choice column, or already an int
+    if (byLabel[val] !== undefined) continue; // whole value is a known label (incl. labels with commas)
+    const tokens = multi.has(field.toLowerCase()) ? val.split(',').map((t) => t.trim()).filter(Boolean) : [val];
+    for (const tok of tokens) {
+      if (tok === '' || /^-?\d+$/.test(tok)) continue; // blank or a raw option int
+      if (byLabel[tok] === undefined) out.push({ field, token: tok });
+    }
+  }
+  return out;
+}
+
 // The sample records declared for an entity (keyed by schemaName, case-insensitive).
 function sampleRecordsFor(spec, entity) {
   const sd = spec.sampleData || {};
@@ -333,6 +358,20 @@ function validateAppSpec(spec, opts = {}) {
     if (wr.content === undefined && wr.contentBase64 === undefined && !wr.contentPath) {
       errors.push(`webResource ${wr.name}: needs content, contentBase64, or contentPath`);
     }
+  }
+  // #6: at most ONE Main form per entity may set deactivateOtherMainForms. Two flagged Main forms on
+  // the same entity would each try to deactivate the other (forms build concurrently, so the winner is
+  // nondeterministic) — a self-defeating race. Deactivation itself is additionally gated to our own
+  // custom tables at build time; this catches the misconfiguration up front.
+  const flaggedByEntity = {};
+  for (const f of spec.forms || []) {
+    if (f && f.deactivateOtherMainForms === true && (f.formType === undefined || f.formType === 'Main')) {
+      const key = String(f.entity || '').toLowerCase();
+      flaggedByEntity[key] = (flaggedByEntity[key] || 0) + 1;
+    }
+  }
+  for (const [ent, n] of Object.entries(flaggedByEntity)) {
+    if (n > 1) errors.push(`entity '${ent}': ${n} Main forms set deactivateOtherMainForms — at most one may (two would deactivate each other)`);
   }
   for (const f of spec.forms || []) {
     if (!entityNames.has(f.entity)) {
@@ -681,49 +720,36 @@ function validateAppSpec(spec, opts = {}) {
         // #4: catch Choice/MultiChoice sample values that are NOT a declared option label. Unknown
         // labels otherwise pass through resolveChoiceValue() unchanged and reach Dataverse as a raw
         // string, which either 400s late in the build or (for a MultiChoice) is silently wrong — a
-        // typo like 'Urgnet' should fail spec-lint, not the live deploy. Built once per entity.
+        // typo like 'Urgnet' should fail here, not the live deploy. Uses the shared token linter so
+        // this hard gate and spec-lint's guardrail apply identical rules. Built once per entity.
         const ent = lower.has(k.toLowerCase())
           ? (spec.entities || []).find((e) => String(e.schemaName).toLowerCase() === k.toLowerCase())
           : null;
-        const choiceMap = ent ? choiceValueMap(ent, spec) : {};
-        const multiSet = ent
-          ? new Set((ent.columns || []).filter((c) => c.type === 'MultiChoice').map((c) => String(c.schemaName).toLowerCase()))
-          : new Set();
         for (const rec of v) {
-          if (rec && typeof rec === 'object' && !Array.isArray(rec)) {
-            for (const [fk, fv] of Object.entries(rec)) {
-              if (fk === '$parent') continue;
-              const byLabel = choiceMap[fk.toLowerCase()];
-              // Only lint columns whose option labels we actually know (inline options or a resolvable
-              // globalChoice); a bare Choice with no declared options isn't in the map. Non-string
-              // values (a raw Int32 for single-select) are passed through by resolve, so skip them.
-              if (!byLabel || typeof fv !== 'string') continue;
-              // MultiChoice is a comma-separated string of tokens ("A,B"); single-select is one token.
-              const tokens = multiSet.has(fk.toLowerCase()) ? fv.split(',').map((t) => t.trim()).filter(Boolean) : [fv];
-              for (const tok of tokens) {
-                // A purely-numeric token is a raw option value and passes through to Dataverse as-is
-                // (valid), so only flag NON-numeric tokens that don't match a declared label — the typo.
-                if (byLabel[tok] === undefined && !/^-?\d+$/.test(tok)) {
-                  errors.push(`sampleData['${k}']: value '${tok}' for choice column '${fk}' is not a declared option label`);
-                }
-              }
-            }
+          for (const { field, token } of invalidChoiceSampleTokens(spec, ent, rec)) {
+            errors.push(`sampleData['${k}']: value '${token}' for choice column '${field}' is not a declared option label`);
           }
           if (!rec || typeof rec !== 'object') {
             continue;
           }
           // #1: validate the parent bind(s) — one `$parent` (singular) and/or many `$parents` (a
           // junction row binding multiple sides). Each must name a known parent entity, carry a
-          // non-empty match, have an existing OneToMany relationship, AND a match that resolves to a
-          // real parent sample record. A match that resolves to NOTHING would make the seeder silently
-          // drop the @odata.bind and create the child with the lookup UNSET (buildSeedGroup parentIndex
-          // < 0), so fail loud here at lint time instead of shipping a half-linked row.
+          // non-empty match, have an existing OneToMany relationship, AND a match that resolves to
+          // EXACTLY ONE parent sample record. Zero matches silently drops the bind (child created with
+          // the lookup UNSET); more than one is ambiguous and the seeder would silently pick the first
+          // (a mis-bind) — both fail loud here at lint time instead of shipping a wrong/half-linked row.
+          if (rec.$parents !== undefined && !Array.isArray(rec.$parents)) {
+            // A non-array $parents is silently ignored by the array-guarded map below but IS processed
+            // by the seeder ([].concat(..., nonArray) keeps it as one element), so validation must
+            // reject it rather than diverge from runtime.
+            errors.push(`sampleData['${k}']: $parents must be an array of { entity, match } binds`);
+          }
           const parentBinds = [].concat(
             rec.$parent !== undefined ? [{ p: rec.$parent, key: '$parent' }] : [],
             Array.isArray(rec.$parents) ? rec.$parents.map((pp) => ({ p: pp, key: '$parents' })) : []
           );
           for (const { p, key } of parentBinds) {
-            if (!p || typeof p !== 'object' || !p.entity || !lower.has(String(p.entity).toLowerCase())) {
+            if (!p || typeof p !== 'object' || Array.isArray(p) || !p.entity || !lower.has(String(p.entity).toLowerCase())) {
               errors.push(`sampleData['${k}']: ${key}.entity '${p && p.entity}' is unknown`);
               continue;
             }
@@ -735,16 +761,17 @@ function validateAppSpec(spec, opts = {}) {
               errors.push(`sampleData['${k}']: no OneToMany relationship from ${key} '${p.entity}' to '${k}'`);
               continue;
             }
-            // The match must resolve to at least one parent sample record; otherwise the bind is
-            // dropped silently at seed time and the lookup is left unset.
+            // The match must resolve to EXACTLY ONE parent sample record.
             const pKey = Object.keys(spec.sampleData).find((kk) => kk.toLowerCase() === String(p.entity).toLowerCase());
             const parentRecs = (pKey && Array.isArray(spec.sampleData[pKey])) ? spec.sampleData[pKey] : [];
-            const resolves = parentRecs.some((pr) => pr && typeof pr === 'object' && Object.entries(p.match).every(([mk, mv]) => {
+            const matchCount = parentRecs.filter((pr) => pr && typeof pr === 'object' && Object.entries(p.match).every(([mk, mv]) => {
               const rk = Object.keys(pr).find((x) => x.toLowerCase() === mk.toLowerCase());
               return rk !== undefined && pr[rk] === mv;
-            }));
-            if (!resolves) {
+            })).length;
+            if (matchCount === 0) {
               errors.push(`sampleData['${k}']: ${key}.match ${JSON.stringify(p.match)} matched no '${String(p.entity).toLowerCase()}' sample record — the lookup would be left unset`);
+            } else if (matchCount > 1) {
+              errors.push(`sampleData['${k}']: ${key}.match ${JSON.stringify(p.match)} is ambiguous — it matches ${matchCount} '${String(p.entity).toLowerCase()}' sample records; tighten the match to select exactly one`);
             }
           }
         }
@@ -886,6 +913,7 @@ module.exports = {
   columnTypeMap,
   TYPE_MAP,
   choiceValueMap,
+  invalidChoiceSampleTokens,
   sampleRecordsFor,
   resolveSampleRecords,
   relationshipFor,

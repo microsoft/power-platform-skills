@@ -2,7 +2,7 @@
 // Pure App Spec guardrail. Returns { ok, errors, warnings }. errors block the plan
 // gate; warnings teach. Bakes in the modeling lessons hit live — notably the
 // relationship schema-name vs lookup-name collision Dataverse rejects.
-const { relationshipSchemaName, relationshipFor, choiceValueMap } = require('./app-spec.js');
+const { relationshipSchemaName, relationshipFor, invalidChoiceSampleTokens } = require('./app-spec.js');
 
 const CHOICE_OPTION_WARN = 12;
 const SEQNUM_RE = /\{SEQNUM(:\d+)?\}/i;
@@ -260,6 +260,18 @@ function lintAppSpec(spec) {
   // View filters: each condition needs a value unless the operator is a no-value kind; in/not-in
   // need a values[]. Choice labels in values resolve to ints at build time.
   for (const v of spec.views || []) {
+    // View-name collision: an authored view named exactly like the Dataverse stock default view
+    // ("Active/Inactive <DisplayCollectionName>") is matched by name+entity and RECONCILED onto that
+    // stock default rather than created anew — so only its COLUMNS merge in (unioned with the stock
+    // set, incl. the stock "Created On"); its authored filters and sort are NOT applied. Warn so the
+    // author picks a distinct name (or knowingly customizes the stock default).
+    const ve = (spec.entities || []).find((x) => lc(x.schemaName) === lc(v.entity));
+    if (ve && v.name) {
+      const plural = ve.pluralName || `${ve.displayName || ve.schemaName}s`;
+      if (lc(v.name) === `active ${lc(plural)}` || lc(v.name) === `inactive ${lc(plural)}`) {
+        W(`View '${v.name}' has the same name as ${ve.schemaName}'s stock default view — it will MERGE onto that default (columns are unioned and the stock "Created On" is kept, but its filters/sort are ignored). Use a distinct name to author a separate view.`);
+      }
+    }
     for (const f of v.filters || []) {
       if (!f.attr) { E(`View '${v.name}' has a filter without an attr`); continue; }
       const op = f.op || 'eq';
@@ -280,23 +292,15 @@ function lintAppSpec(spec) {
     const e = (spec.entities || []).find((x) => lc(x.schemaName) === lc(ent));
     if (!e) continue; // unknown-entity is already an error in validateAppSpec
     const declaredReasons = new Set((e.statusReasons || []).map((s) => lc(s.label)));
-    const choiceInts = choiceValueMap(e, spec); // { colLogical: { label: int } } for Choice/MultiChoice
     for (const rec of Array.isArray(recs) ? recs : []) {
       if (rec && rec.statusReason && !declaredReasons.has(lc(rec.statusReason))) E(`sampleData['${ent}'] sets statusReason '${rec.statusReason}', which isn't a declared status reason on ${ent}`);
       const parents = [].concat(rec && rec.$parent ? [rec.$parent] : [], (rec && rec.$parents) || []);
       for (const p of parents) {
         if (p && p.entity && !relationshipFor(spec, p.entity, ent)) E(`sampleData['${ent}']: no OneToMany from parent '${p.entity}' to '${ent}' (needed to bind the lookup)`);
       }
-      for (const [field, val] of Object.entries(rec || {})) {
-        if (field.startsWith('$')) continue;
-        const byLabel = choiceInts[lc(field)];
-        if (!byLabel || typeof val !== 'string') continue; // not a choice column, or already an int
-        if (byLabel[val] !== undefined) continue;          // whole value is a known label (incl. labels with commas)
-        const tokens = val.indexOf(',') >= 0 ? val.split(',').map((t) => t.trim()) : [val];
-        for (const tok of tokens) {
-          if (tok === '' || /^\d+$/.test(tok)) continue;   // blank or a raw option int
-          if (byLabel[tok] === undefined) E(`sampleData['${ent}'] sets ${field}='${tok}', which isn't a valid option for that Choice column — use a declared option label or its integer value`);
-        }
+      // Shared with validateAppSpec (#4) so the guardrail and the hard gate flag the same tokens.
+      for (const { field, token } of invalidChoiceSampleTokens(spec, e, rec)) {
+        E(`sampleData['${ent}'] sets ${field}='${token}', which isn't a valid option for that Choice column — use a declared option label or its integer value`);
       }
     }
   }

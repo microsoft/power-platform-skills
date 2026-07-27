@@ -21,6 +21,24 @@ test('a clean spec passes with no errors', () => {
   assert.strictEqual(r.errors.length, 0);
 });
 
+test('a view named like the stock default ("Active <Plural>") WARNS about the merge-onto-default collision', () => {
+  const s = base();
+  s.views = [{ entity: 'new_ticket', name: 'Active Tickets', columns: ['new_name', 'new_priority'], activeOnly: true }];
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, true, 'the collision is a warning, not an error: ' + JSON.stringify(r.errors));
+  assert.ok(
+    r.warnings.some((w) => /Active Tickets/.test(w) && /stock default view/.test(w) && /filters\/sort are ignored/.test(w)),
+    JSON.stringify(r.warnings)
+  );
+});
+
+test('a view with a DISTINCT name does NOT warn about a stock-default collision', () => {
+  const s = base();
+  s.views = [{ entity: 'new_ticket', name: 'Open Tickets', columns: ['new_name', 'new_priority'], activeOnly: true }];
+  const r = lintAppSpec(s);
+  assert.ok(!r.warnings.some((w) => /stock default view/.test(w)), JSON.stringify(r.warnings));
+});
+
 test('a relationship to a standard/system table (referenced not in entities[]) WARNS, not errors', () => {
   const s = base();
   // systemuser is a standard table the build supports (auto-prefixes the rel name) — must not error.

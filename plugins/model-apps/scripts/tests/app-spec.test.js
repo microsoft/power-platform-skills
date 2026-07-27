@@ -507,6 +507,37 @@ test('#1 a valid $parent.match that resolves to a real parent row still passes',
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });
 
+test('#1 (hardening) a non-array $parents is rejected (it diverges from the seeder otherwise)', () => {
+  const bad = cloneDesk();
+  bad.sampleData.new_ticket[0] = { new_name: 'Row', new_priority: 'High', new_status: 'New',
+    $parents: { entity: 'new_customer', match: { new_name: 'Northwind Traders' } } }; // object, not array
+  const r = validateAppSpec(bad);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /\$parents must be an array/.test(e)), JSON.stringify(r.errors));
+});
+
+test('#1 (hardening) an AMBIGUOUS $parent.match (matches >1 parent row) is rejected', () => {
+  const bad = cloneDesk();
+  // Two customers share the same segment; match on segment -> ambiguous (the seeder would pick one).
+  const seg = bad.sampleData.new_customer[0].new_segment;
+  bad.sampleData.new_customer[1].new_segment = seg;
+  bad.sampleData.new_ticket[0].$parent = { entity: 'new_customer', match: { new_segment: seg } };
+  const r = validateAppSpec(bad);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /ambiguous/.test(e) && /matches 2/.test(e)), JSON.stringify(r.errors));
+});
+
+test('#6 (hardening) two Main forms on one entity flagged deactivateOtherMainForms is rejected', () => {
+  const bad = cloneDesk();
+  bad.forms = [
+    { entity: 'new_ticket', type: 'main', name: 'Ticket A', layout: 'auto', deactivateOtherMainForms: true },
+    { entity: 'new_ticket', type: 'main', name: 'Ticket B', layout: 'auto', deactivateOtherMainForms: true },
+  ];
+  const r = validateAppSpec(bad);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /deactivateOtherMainForms/.test(e) && /at most one/.test(e)), JSON.stringify(r.errors));
+});
+
 // --- Gap 3: lookupColumnsFor -----------------------------------------------------------------
 test('lookupColumnsFor returns the 1:N lookups on the child (referencing) side, excludes N:N, dedupes', () => {
   const spec = {

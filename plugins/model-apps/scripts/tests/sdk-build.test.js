@@ -1316,6 +1316,22 @@ test('#6 deactivation NEVER runs on a reused/system table even when the form fla
   assert.ok(!upd.some((c) => c.args[2] && c.args[2].isdefault === true), 'and the reused table default is never re-pointed');
 });
 
+test('#6 (hardening) if the isdefault promote FAILS, the other forms are NOT deactivated (no bricked default)', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'auto', deactivateOtherMainForms: true }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  // Make ONLY the isdefault promote fail; other systemform writes (a deactivation) would still record.
+  const realUpdate = sdk.updateRecord;
+  sdk.updateRecord = async (e, id, data) => {
+    if (e === 'systemform' && data && data.isdefault === true) throw new Error('promote failed');
+    return realUpdate(e, id, data);
+  };
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const upd = find(calls, 'updateRecord').filter((c) => c.args[0] === 'systemform');
+  assert.ok(!upd.some((c) => c.args[2] && c.args[2].formactivationstate === 0),
+    'a failed promote must skip deactivation so the entity is not left with a deactivated default and no active default');
+});
+
 test('Gap 2: a Main form on a reused/system table is NOT promoted (never re-points a shared table default form)', async () => {
   // A system table (not prefixed with the solution publisher prefix, or flagged existing) must never
   // have its default form touched — that is an environment-wide side effect on shared data.

@@ -884,15 +884,22 @@ async function runSdkBuild(spec, opts = {}) {
   // #6 (opt-in): when a form sets `deactivateOtherMainForms: true`, we ALSO deactivate every OTHER
   // active main form on the entity so only our form ships active (no blank "Information" form
   // competing in the switcher). This is gated to our OWN custom table (call-site) AND the explicit
-  // flag, because it is destructive. It is symmetric with teardown's restoreStockMainForm, which
-  // reactivates these stock forms before deleting ours — so a torn-down table is left clean.
+  // flag, because it is destructive. Teardown's restoreStockMainForm reactivates a stock main form
+  // before deleting ours so the table can be torn down — note that is a delete-enabler, NOT a perfect
+  // restore of pre-build activation state (a form that was inactive before this build may be left
+  // active after teardown).
   const promoteDefaultForm = async (formId, entityLogical, deactivateOthers) => {
+    // Deactivating the OTHER main forms is only safe once OUR form is the entity default: if the
+    // isdefault promote failed we must NOT deactivate the others, or the entity could be left with its
+    // (now-deactivated) stock form still the default and no active default — a bricked form experience.
+    let promoted = false;
     try {
       await provision.updateRecord('systemform', formId, { isdefault: true });
+      promoted = true;
     } catch {
-      /* best-effort */
+      /* best-effort — leave promoted=false so we skip the destructive deactivation below */
     }
-    if (!deactivateOthers) return;
+    if (!deactivateOthers || !promoted) return;
     if (typeof provision.queryRecords !== 'function') return;
     try {
       // Main forms only (systemform.type == 2). Every other ACTIVE main form is deactivated

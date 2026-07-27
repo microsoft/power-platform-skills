@@ -167,6 +167,14 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
     the vendored `enrichDefaultViews` **replaces** the view's columns and reconciles the fetch+grid to
     exactly our set — which never contains `createdon`.
   - Live-verified end-to-end on `aurorabapenv03468` (build → 7/7 checks → teardown, zero leftovers).
+  - **Hardening after a PROD-readiness review:** #6 now skips the destructive deactivation if the
+    `isdefault` promote failed (never leaves an entity with a deactivated default and no active one)
+    and `validateAppSpec` rejects >1 flagged Main form per entity; #1 now rejects a non-array
+    `$parents` and an **ambiguous** `$parent`/`$parents` match (>1 parent row); the #4 Choice linter is
+    now a single shared `invalidChoiceSampleTokens` helper used by both `validateAppSpec` and
+    `spec-lint`; and `spec-lint` WARNS when an authored view name collides with the stock default
+    ("Active/Inactive &lt;Plural&gt;") — that collision merges onto the stock default and ignores the
+    authored filters/sort (see `docs/app-builder-roadmap.md`).
   - **Not done (tracked open):** #8 auto Quick Create forms — needs a raw `EntityDefinitions` metadata
     PUT (the vendored SDK has no `IsQuickCreateEnabled`); see `docs/app-builder-roadmap.md`.
 - **Entity subarea `vectorIcon` no longer breaks the app designer (`sdk-build.js` / `spec-lint.js`).**
