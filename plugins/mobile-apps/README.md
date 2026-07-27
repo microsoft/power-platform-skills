@@ -26,16 +26,9 @@ connector wiring.
 
 2. Install the mobile-app plugin from the Power Platform Skills marketplace.
 
-    For GitHub Copilot in VS Code:
-
-    1. Open the Command Palette.
-    2. Run **Chat: Install Plugin From Source**.
-    3. Paste the mobile-app plugin manifest URL:
-
-        ```text
-        https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/.plugin/plugin.json
-        ```
-
+    1. Open the Extensions pane.
+    2. Enter `@agentPlugins mobile-app` in the search box.
+    3. Select the **mobile-app** plugin and install it.
     4. Reload VS Code if prompted, then open Copilot Chat in Agent mode.
 
     Alternatively, install it from a terminal with GitHub Copilot CLI:
