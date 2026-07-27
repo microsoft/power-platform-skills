@@ -178,7 +178,6 @@ npm install
 
 > **Astro requires Node 22.12 or newer.**
 > Astro 7 exits with `Node.js vX is not supported by Astro!` on anything older, so when the chosen framework is Astro, run `node --version` first and ask the user to upgrade before continuing.
-> The React, Vue, and Angular templates still run on Node 20.
 
 ### 2.5 Initialize Git Repository
 
