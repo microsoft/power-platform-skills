@@ -9,7 +9,7 @@ using System.Text.Json;
 // overwrite the wrong directory or clobber local edits that have not been pushed.
 const string Reminder =
     "Canvas Apps coauthoring reminder: " +
-    "Before acting on this request, if a Canvas Authoring coauthoring session is " +
+    "Before acting on this request, if a Canvas Authoring session is " +
     "active (i.e. `connect` has already been called for a canvas app), first call " +
     "the `sync_canvas` MCP tool targeting the app's working directory to pull the " +
     "current session state into the local .pa.yaml files. This avoids editing stale " +
