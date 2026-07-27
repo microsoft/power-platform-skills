@@ -81,9 +81,9 @@ The `canvas-authoring` MCP server exposes the following tools:
 ## Hooks
 
 Hook registration is centralized in `hooks/hooks.json`. It registers Claude Code's
-`UserPromptSubmit` event and Copilot's `userPromptTransformed` event. Both
-invoke the file-based .NET app at `hooks/inject-sync-reminder.cs` with `dotnet run
---file`; the app emits `modifiedTransformedPrompt` for Copilot and
+`UserPromptSubmit` event and Copilot's `userPromptTransformed` event. Both invoke the
+file-based .NET app at `hooks/inject-sync-reminder.cs` with `dotnet run --file`; the app
+emits `modifiedTransformedPrompt` for Copilot and
 `hookSpecificOutput.additionalContext` for Claude Code. This avoids requiring Node.js at
 plugin runtime. Both paths remind the agent to call `sync_canvas` (targeting the app's
 working directory) before acting, so it never edits stale local `.pa.yaml` files. The
