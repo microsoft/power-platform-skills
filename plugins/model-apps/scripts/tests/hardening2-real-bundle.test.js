@@ -125,18 +125,21 @@ test('metadata-derived control types: passing only fieldName lets the adapter cl
   assert.notStrictEqual(String(nameCls).toUpperCase(), String(lookupCls).toUpperCase(), 'Lookup vs String get DIFFERENT control classids (metadata-derived, not plugin-fixed)');
 });
 
-test('sub-grid cell serializes its relationship, target entity and view id', async () => {
+test('#5 sub-grid is added as its OWN full-width section and serializes relationship, target, view id + title', async () => {
   const cap = [];
   const sdk = freshSdk(cap);
   const intent = ai.compileFormIntent(custSpec, custSpec.forms[0], { notesClassId: NOTES_CLASS_ID });
   const id = buildFormShell(sdk, intent);
-  const rowsPtr = ai.firstSectionRowsPointer(sdk.getArtifact('form', id));
-  sdk.addElement('form', id, rowsPtr, { cells: [ai.subgridCellIntent({ subgridClassId: SUBGRID_CLASS_ID, targetEntity: 'new_ticket', relationshipName: 'new_customer_new_ticket', viewId: '{00000000-0000-0000-0000-0000000000v1}', label: 'Tickets' })] });
+  // The engine now appends a whole sub-grid SECTION to a column's /sections (not a cell into an
+  // existing field section's rows) — exercise that real path through the vendored serializer.
+  const secPtr = ai.firstColumnSectionsPointer(sdk.getArtifact('form', id));
+  sdk.addElement('form', id, secPtr, ai.subgridSectionIntent({ subgridClassId: SUBGRID_CLASS_ID, targetEntity: 'new_ticket', relationshipName: 'new_customer_new_ticket', viewId: '{00000000-0000-0000-0000-0000000000v1}', label: 'Tickets' }));
   await sdk.pushArtifact('form', id);
   const formxml = String((cap.find((c) => /systemforms/.test(c.url)) || {}).body.formxml);
   assert.match(formxml, /new_customer_new_ticket/, 'RelationshipName is serialized');
   assert.match(formxml, /new_ticket/, 'target entity is serialized');
   assert.ok(formxml.toUpperCase().includes(SUBGRID_CLASS_ID), 'the sub-grid control classid is serialized');
+  assert.match(formxml, /Tickets/, 'the section/grid title (child display name) is serialized');
 });
 
 test('events author + MERGE at /bag/c: appending to an existing <events> region adds a second handler without a duplicate root', async () => {

@@ -253,6 +253,15 @@ function mockSdk(opts = {}) {
 }
 const find = (calls, name) => calls.filter((c) => c.name === name);
 const has = (calls, name) => calls.some((c) => c.name === name);
+// Flatten cells from an addElement 4th-arg value, which is either { cells:[...] } (a field/quick-view
+// row add) or a whole section { rows:[{cells:[...]}] } (a #5 sub-grid section). Sub-grid extractions
+// use this so they find the control regardless of whether it was added as a bare cell or a section.
+const cellsFromAdd = (v) => {
+  if (!v) return [];
+  if (Array.isArray(v.cells)) return v.cells;
+  if (Array.isArray(v.rows)) return v.rows.flatMap((r) => r.cells || []);
+  return [];
+};
 
 test('dry-run emits a plan and writes nothing', async () => {
   const { sdk, calls } = mockSdk();
@@ -319,8 +328,7 @@ test('form sub-grid references the child view id and relationship name', async (
   const SUBGRID_CLS = 'E7A81278-8635-4D9E-8D4D-59480B391C5B';
   const normCls = (c) => String(c || '').replace(/[{}]/g, '').toUpperCase();
   const subCtrls = find(calls, 'addElement')
-    .map((c) => (c.args[3] && c.args[3].cells) || [])
-    .flat()
+    .flatMap((c) => cellsFromAdd(c.args[3]))
     .map((cell) => cell.control)
     .filter((ctrl) => ctrl && normCls(ctrl.classId) === SUBGRID_CLS);
   const sub = subCtrls.find((ctrl) => ctrl.parameters.TargetEntityType === 'new_ticket');
@@ -647,8 +655,7 @@ test('an N:N sub-grid uses the ManyToMany relationship schema name', async () =>
   const SUBGRID_CLS28 = 'E7A81278-8635-4D9E-8D4D-59480B391C5B';
   const normCls28 = (c) => String(c || '').replace(/[{}]/g, '').toUpperCase();
   const subCtrls28 = find(calls, 'addElement')
-    .map((c) => (c.args[3] && c.args[3].cells) || [])
-    .flat()
+    .flatMap((c) => cellsFromAdd(c.args[3]))
     .map((cell) => cell.control)
     .filter((ctrl) => ctrl && normCls28(ctrl.classId) === SUBGRID_CLS28);
   const sub = subCtrls28.find((ctrl) => ctrl.parameters.TargetEntityType === 'new_tag');
@@ -668,8 +675,7 @@ test('a sub-grid with no explicit or built view falls back to the child default 
   const SUBGRID_CLS29 = 'E7A81278-8635-4D9E-8D4D-59480B391C5B';
   const normCls29 = (c) => String(c || '').replace(/[{}]/g, '').toUpperCase();
   const subCtrls29 = find(calls, 'addElement')
-    .map((c) => (c.args[3] && c.args[3].cells) || [])
-    .flat()
+    .flatMap((c) => cellsFromAdd(c.args[3]))
     .map((cell) => cell.control)
     .filter((ctrl) => ctrl && normCls29(ctrl.classId) === SUBGRID_CLS29);
   const sub = subCtrls29.find((ctrl) => ctrl.parameters.TargetEntityType === 'new_tag');
@@ -692,6 +698,52 @@ test('a sub-grid whose child has no resolvable view at all is skipped, not fatal
   assert.ok(events.some((e) => e.status === 'skip' && /sub-grid Tags/.test(e.label)), 'a skip was emitted for it');
 });
 
+test('#5 a sub-grid is placed in its OWN full-width (1-column) section, titled with the child display name', async () => {
+  const spec = makeSpec();
+  spec.entities.find((e) => e.schemaName === 'new_ticket').pluralName = 'Tickets';
+  spec.forms[0].subgrids = [{ childEntity: 'new_ticket', view: 'Active Tickets' }]; // no explicit label
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true });
+  const SUBGRID = 'E7A81278-8635-4D9E-8D4D-59480B391C5B';
+  const norm = (c) => String(c || '').replace(/[{}]/g, '').toUpperCase();
+  // The sub-grid is added as a whole SECTION appended to a column's /sections array (not a cell
+  // spliced into an existing field section's rows).
+  const gridSection = find(calls, 'addElement')
+    .filter((c) => /\/sections$/.test(c.args[2]))
+    .map((c) => c.args[3])
+    .find((sec) => sec && (sec.rows || []).some((r) => (r.cells || []).some((cell) => cell.control && norm(cell.control.classId) === SUBGRID)));
+  assert.ok(gridSection, 'sub-grid is placed in its own section (appended to /sections)');
+  assert.strictEqual(gridSection.columns, 1, 'the sub-grid section is full-width (1 column)');
+  const ctrl = gridSection.rows[0].cells[0].control;
+  assert.strictEqual(ctrl.parameters.TargetEntityType, 'new_ticket');
+  assert.strictEqual(gridSection.label, 'Tickets', 'section title is the child plural display name, not the logical name');
+  assert.strictEqual(ctrl.label, 'Tickets', 'control label is the display name too');
+});
+
+test('#5 subgrid label falls back to displayName when no pluralName, and an explicit label still wins', async () => {
+  const SUBGRID = 'E7A81278-8635-4D9E-8D4D-59480B391C5B';
+  const norm = (c) => String(c || '').replace(/[{}]/g, '').toUpperCase();
+  const gridSectionFor = (calls) => find(calls, 'addElement')
+    .filter((c) => /\/sections$/.test(c.args[2]))
+    .map((c) => c.args[3])
+    .find((sec) => sec && (sec.rows || []).some((r) => (r.cells || []).some((cell) => cell.control && norm(cell.control.classId) === SUBGRID)));
+
+  // No pluralName -> singular displayName ('Ticket').
+  const s1 = makeSpec();
+  s1.forms[0].subgrids = [{ childEntity: 'new_ticket', view: 'Active Tickets' }];
+  const m1 = mockSdk();
+  await runSdkBuild(s1, { sdk: m1.sdk, apply: true });
+  assert.strictEqual(gridSectionFor(m1.calls).label, 'Ticket', 'falls back to the singular display name');
+
+  // Explicit label overrides everything.
+  const s2 = makeSpec();
+  s2.entities.find((e) => e.schemaName === 'new_ticket').pluralName = 'Tickets';
+  s2.forms[0].subgrids = [{ childEntity: 'new_ticket', view: 'Active Tickets', label: 'Open Work' }];
+  const m2 = mockSdk();
+  await runSdkBuild(s2, { sdk: m2.sdk, apply: true });
+  assert.strictEqual(gridSectionFor(m2.calls).label, 'Open Work', 'explicit label wins');
+});
+
 test('Gap 7: forms[].autoSubgrids adds a sub-grid for each child relationship not already declared', async () => {
   const spec = makeSpec();
   const custForm = spec.forms.find((f) => f.entity === 'new_customer');
@@ -703,8 +755,7 @@ test('Gap 7: forms[].autoSubgrids adds a sub-grid for each child relationship no
   const SUBGRID_CLS31 = 'E7A81278-8635-4D9E-8D4D-59480B391C5B';
   const normCls31 = (c) => String(c || '').replace(/[{}]/g, '').toUpperCase();
   const subCtrls31 = find(calls, 'addElement')
-    .map((c) => (c.args[3] && c.args[3].cells) || [])
-    .flat()
+    .flatMap((c) => cellsFromAdd(c.args[3]))
     .map((cell) => cell.control)
     .filter((ctrl) => ctrl && normCls31(ctrl.classId) === SUBGRID_CLS31);
   const sub = subCtrls31.find((ctrl) => ctrl.parameters.TargetEntityType === 'new_ticket');

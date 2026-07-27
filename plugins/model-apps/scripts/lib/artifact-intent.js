@@ -83,6 +83,24 @@ function notesSectionIntent(notesClassId) {
   };
 }
 
+// #5 (2026-07-15 review): a full-width (1-column) SectionIntent that hosts ONLY a sub-grid control.
+// Each authored/auto sub-grid gets its own section so it SPANS the form, instead of being spliced as
+// a single cell into an existing 2-column field section (which rendered the grid half-width with an
+// empty column beside it). `label` is the grid's title — the engine passes the child's plural/display
+// name, so the section header reads "Tickets", not the raw logical name "new_ticket". showLabel:true
+// surfaces that title. sectionName defaults to a stable, relationship-derived name so a rebuild's
+// idempotency scan (by RelationshipName) never double-adds it.
+function subgridSectionIntent({ subgridClassId, targetEntity, relationshipName, viewId, label, sectionName }) {
+  return {
+    name: sectionName || ('section_grid_' + String(relationshipName || targetEntity || 'related').toLowerCase().replace(/[^a-z0-9_]/g, '_')),
+    label: label,
+    visible: true,
+    showLabel: true,
+    columns: 1,
+    rows: [{ cells: [subgridCellIntent({ subgridClassId, targetEntity, relationshipName, viewId, label })] }]
+  };
+}
+
 // Cell for a sub-grid (related-records list) control.
 //
 // subgridClassId is an SDK constant (identifies the sub-grid PCF); it is passed in —
@@ -386,6 +404,23 @@ function firstSectionRowsPointer(formJson) {
   return '';
 }
 
+// JsonPointer to the first tab's first FormColumn `sections` ARRAY — the container a whole sub-grid
+// section is appended to (#5). Unlike firstSectionRowsPointer this targets a column even when it has
+// zero sections yet (we are adding one), so it returns the first column whose `sections` is an array.
+// Returns '' only when the form has no tab/column with a sections array at all.
+function firstColumnSectionsPointer(formJson) {
+  const tabs = formJson.tabs || [];
+  for (let ti = 0; ti < tabs.length; ti++) {
+    const cols = tabs[ti].columns || [];
+    for (let ci = 0; ci < cols.length; ci++) {
+      if (Array.isArray(cols[ci].sections)) {
+        return '/tabs/' + ti + '/columns/' + ci + '/sections';
+      }
+    }
+  }
+  return '';
+}
+
 // JsonPointer to the rows array of a specific tab/column/section by zero-based index.
 function sectionRowsPointer(ti, ci, si) {
   return '/tabs/' + ti + '/columns/' + ci + '/sections/' + si + '/rows';
@@ -425,11 +460,13 @@ module.exports = {
   notesCellIntent,
   notesSectionIntent,
   subgridCellIntent,
+  subgridSectionIntent,
   quickViewCellIntent,
   formEventsRegionIntent,
   viewColumnsIntent,
   formFieldLogicals,
   firstSectionRowsPointer,
+  firstColumnSectionsPointer,
   sectionRowsPointer,
   findFieldCellPointer
 };

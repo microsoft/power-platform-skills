@@ -47,9 +47,11 @@ const {
   firstSectionRowsPointer,
   findFieldCellPointer,
   subgridCellIntent,
+  subgridSectionIntent,
   quickViewCellIntent,
   formEventsRegionIntent,
   viewColumnsIntent,
+  firstColumnSectionsPointer,
 } = require('./artifact-intent.js');
 const { makeGenpageCli } = require('./genpage-cli.js');
 const { manifestResourceName, buildManifest, serializeManifest, parseManifestBase64, reconcilePageIds } = require('./page-manifest.js');
@@ -741,14 +743,17 @@ async function runSdkBuild(spec, opts = {}) {
     return false;
   };
 
-  // Add each sub-grid cell to the form's first section, skipping any already present (idempotent
-  // rebuild). Re-reads the form between adds so firstSectionRowsPointer stays valid.
+  // Add each sub-grid to the form in its OWN full-width (1-column) section (#5), skipping any already
+  // present (idempotent rebuild). Re-reads the form between adds so the sections pointer stays valid.
+  // A sub-grid used to be spliced as a single cell into the first field section's rows, which rendered
+  // it half-width inside a 2-column section; giving it a dedicated section makes the related list span
+  // the form. `sg.label` is already resolved to the child's display name by the forms phase.
   const addSubgrids = (formId, subs) => {
     for (const sg of subs || []) {
       if (hasSubgrid(provision.getArtifact('form', formId) || {}, sg.relationshipName)) continue;
-      const rowsPtr = firstSectionRowsPointer(provision.getArtifact('form', formId) || {});
-      if (!rowsPtr) continue;
-      provision.addElement('form', formId, rowsPtr, { cells: [subgridCellIntent({ subgridClassId: SUBGRID_CLASS_ID, targetEntity: sg.targetEntity, relationshipName: sg.relationshipName, viewId: sg.viewId, label: sg.label })] });
+      const sectionsPtr = firstColumnSectionsPointer(provision.getArtifact('form', formId) || {});
+      if (!sectionsPtr) continue;
+      provision.addElement('form', formId, sectionsPtr, subgridSectionIntent({ subgridClassId: SUBGRID_CLASS_ID, targetEntity: sg.targetEntity, relationshipName: sg.relationshipName, viewId: sg.viewId, label: sg.label }));
     }
   };
 
@@ -982,7 +987,12 @@ async function runSdkBuild(spec, opts = {}) {
         // child entity has neither an explicit nor a built view AND no default public view can be
         // found, skip the sub-grid rather than crash the whole forms phase.
         if (!viewId) { runner.skip('forms', `sub-grid ${sg.label || sg.childEntity} on ${f.entity} (no resolvable view — skipped)`); continue; }
-        subs.push({ targetEntity: childLogical, relationshipName, viewId, label: sg.label || sg.childEntity });
+        // #5: title the sub-grid with the child's display name, not its logical name. A sub-grid is a
+        // LIST of children, so the plural display name reads best ("Tickets"); fall back to the
+        // singular display name, then the logical name. An explicit sg.label always wins.
+        const child = entityByLogical(spec, childLogical);
+        const gridLabel = sg.label || (child && (child.pluralName || child.displayName)) || sg.childEntity;
+        subs.push({ targetEntity: childLogical, relationshipName, viewId, label: gridLabel });
       }
       def.__subgrids = subs;
       return { f, def };
