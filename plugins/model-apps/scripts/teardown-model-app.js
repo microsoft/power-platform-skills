@@ -23,6 +23,7 @@ const { runTeardown } = require('./lib/sdk-teardown.js');
 const { classifyOps } = require('./lib/op-diff.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
+const snapStore = require('./lib/apply-snapshot-store.js');
 
 // Build an SDK client for teardown. Uses the same az-token HttpClient as build-model-app.js.
 function makeSdk(env) {
@@ -81,7 +82,21 @@ async function teardownModelApp(spec, opts, deps) {
       return { ok: false, errors: [`teardown of ${diff.destructive.length} artifact(s) requires --allow-destructive`, ...diff.destructive.slice(0, 8).map((o) => o.label)] };
     }
   }
+  // TOMBSTONE the changed-only snapshot BEFORE any delete (design core invariant): eligible:false +
+  // teardown-in-progress debt, so a partial/crashed teardown leaves the tombstone and a surviving artifact
+  // can never be rebaselined as an eligible fast-path source. Best-effort — a lease contention is logged,
+  // not fatal (once the app is deleted, the fast-path identity check also blocks any stale snapshot).
+  if (opts.apply && opts.workspaceDir) {
+    const tomb = snapStore.tombstoneSnapshot(opts.workspaceDir);
+    if (!tomb.ok) log(`⚠ could not tombstone the changed-only snapshot before teardown (${tomb.reason}) — proceeding; the app-deletion identity check still blocks a stale snapshot`);
+  }
   const r = await runTeardown(spec, { apply: opts.apply }, { sdk: deps.sdk, emit });
+  // After a CLEAN teardown, DELETE the snapshot envelope — the app is gone, so a fresh rebuild must start a
+  // new baseline. A teardown that finished WITH ERRORS leaves the tombstone in place (a surviving artifact
+  // must not be rebaselined). Best-effort.
+  if (opts.apply && opts.workspaceDir && r && r.ok && !r.dryRun) {
+    snapStore.deleteSnapshot(opts.workspaceDir);
+  }
   if (opts.apply && r && !r.dryRun) {
     log(`\n${r.ok ? '✓' : '✗'} teardown ${r.ok ? 'complete' : 'finished with errors'} — ${counts.ok} deleted, ${counts.skip} not found, ${counts.error} failed (${counts.ok + counts.skip + counts.error} steps)`);
   }
@@ -102,16 +117,16 @@ async function main() {
   const spec = migrateAppSpec(readJsonArg('@' + specPath));
   const apply = flags.apply === true;
   const allowDestructive = flags['allow-destructive'] === true;
+  const workspaceDir = flags.workspace || path.join(path.dirname(specPath), '.maker-workspace');
   const { sdk, cleanup } = makeSdk(env);
   let r;
   try {
     const deps = { log: (m) => process.stderr.write(m + '\n'), sdk };
-    r = await teardownModelApp(spec, { apply, allowDestructive }, deps);
+    r = await teardownModelApp(spec, { apply, allowDestructive, workspaceDir }, deps);
 
     // Clear the local workspace only after a clean apply — stale metadata there would make a
     // subsequent rebuild skip tables that no longer exist. Filesystem-local, opt-in.
     if (apply && flags['clear-workspace'] && r && r.ok && !r.dryRun) {
-      const workspaceDir = flags.workspace || path.join(path.dirname(specPath), '.maker-workspace');
       if (fs.existsSync(workspaceDir)) {
         fs.rmSync(workspaceDir, { recursive: true, force: true });
         process.stderr.write(`\ncleared workspace ${workspaceDir}\n`);

@@ -14,6 +14,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { sha256 } = require('./hash.js');
 // normalizePageSource: read the page source from the discriminated `source` field (v2) or the
 // legacy top-level `codeFile` (pre-migration). PHASES: canonical ordered phase list — imported
 // here so the engine and the stage layer can never drift.
@@ -654,7 +655,7 @@ async function runSdkBuild(spec, opts = {}) {
     return { ok: true, dryRun: true, plan: plan.map((p) => p.label) };
   }
 
-  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, commands: {}, dashboards: {}, pages: {}, ai: { appFeatures: null, summaries: {} }, app: null } };
+  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, app: null } };
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
   // pages phase's `pages-requires-app` guard passes WITHOUT running the app-shell phase in this invocation.
   // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
@@ -1397,12 +1398,25 @@ async function runSdkBuild(spec, opts = {}) {
       // (4) UPLOAD-ONCE — exactly one runner.run/skip per page. A non-nav page already minted in step 2 is
       //     final (skip). Every UPDATE asserts the returned id matches the requested id (I7). Persist the
       //     manifest immediately after each create (C5).
+      //
+      // #changed-only selectedKeysOnly: on a pages-only fast apply, upload ONLY the changed page keys — the
+      // whole-app scan/reconcile/removal/shared checks above still run over ALL pages (safety), but
+      // re-uploading an UNCHANGED page would clobber an out-of-band Maker edit to it (Sol #1 / data loss).
+      // keyToId already holds every existing page's live id (reconciled from the manifest/enumerate), so a
+      // changed page that navigates to an unchanged page still resolves its target without re-uploading it.
+      const selectedKeys = opts.changedOnly && Array.isArray(opts.changedOnly.selectedKeys) ? new Set(opts.changedOnly.selectedKeys) : null;
       for (const p of implemented) {
         const key = keyOf(p);
+        if (selectedKeys && !selectedKeys.has(key)) { runner.skip('pages', `page "${p.name}" (unchanged — changed-only)`); continue; }
         const isNav = (p.navigatesTo || []).length > 0;
         if (!isNav && mintedKeys.has(key)) { runner.skip('pages', `page "${p.name}" (created)`); continue; }
         await runner.run('pages', `page "${p.name}"`, async () => {
           const requestedId = keyToId.get(key);
+          // Capture the EXACT bytes we upload so the caller can record a MEASURED deployedSha (a nav source's
+          // deployed bytes differ from its canonical source — PAGEREF_ is resolved to GUIDs — so deployedSha
+          // must never be assumed equal to the source hash). For a non-nav page the deployed bytes ARE the
+          // canonical file content.
+          const deployedBytes = isNav ? deployment.get(key) : fs.readFileSync(canonicalPath(p), 'utf8');
           const codeFile = isNav ? writeStagingFile(stagingDir, key, deployment.get(key)) : canonicalPath(p);
           const up = await genpageCli.upload({ appId: result.created.app, pageId: requestedId, codeFile, name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources });
           // I7: an UPDATE (requestedId set) must return the SAME id, else a resolved sibling could point at
@@ -1412,6 +1426,7 @@ async function runSdkBuild(spec, opts = {}) {
           // migrated KEY (:506). Keying by name left v2 key-referenced subareas unresolved.
           keyToId.set(key, up.pageId);
           result.created.pages[key] = up.pageId;
+          result.created.pageDeployedShas[key] = sha256(deployedBytes);
           await persistNow(); // manifest carries this id BEFORE the next create (crash-safety, design §9 / C5)
           return up.pageId;
         });

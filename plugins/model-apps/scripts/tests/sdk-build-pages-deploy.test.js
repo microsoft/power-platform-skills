@@ -377,3 +377,36 @@ test('changed-only: a NORMAL full build (no opts.changedOnly) still runs the sit
     assert.ok(finalizeRan(calls), 'the full-build path is unchanged — the finalize still runs');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
+
+test('changed-only selectedKeysOnly: uploads ONLY the selected page(s), never clobbers an unchanged one', async () => {
+  // Two independent (no-nav) pages already deployed; a changed-only fast apply selects only "overview".
+  const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sel-keys-'));
+  try {
+    fs.writeFileSync(path.join(appDir, 'overview.tsx'), 'export default function O(){ return null; }', 'utf8');
+    fs.writeFileSync(path.join(appDir, 'detail.tsx'), 'export default function D(){ return null; }', 'utf8');
+    const spec = {
+      schemaVersion: 2,
+      solution: { uniqueName: 'SelKeys', displayName: 'S', publisherPrefix: 'contoso' },
+      app: { name: 'Sel Keys App' },
+      entities: [{ schemaName: 'contoso_item', displayName: 'Item', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' }, columns: [] }],
+      pages: [
+        { key: 'overview', name: 'Overview', source: { kind: 'tsx', codeFile: 'overview.tsx' } },
+        { key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'detail.tsx' } },
+      ],
+      appShell: { areas: [{ label: 'Main', groups: [{ label: 'G', subAreas: [{ page: 'overview', title: 'Overview' }, { page: 'detail', title: 'Detail' }] }] }] },
+    };
+    // Both pages already exist (seed enumerate + a base64 manifest so reconcile resolves both to live ids).
+    const live = [{ pageId: 'gp-overview', name: 'Overview' }, { pageId: 'gp-detail', name: 'Detail' }];
+    const genpageCli = mockGenpageCli(live);
+    const manifest = { schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: 'gp-overview' }, { key: 'detail', name: 'Detail', pageId: 'gp-detail' }] };
+    const manifestB64 = Buffer.from(JSON.stringify(manifest), 'utf8').toString('base64');
+    const { sdk } = mockSdk({ pageManifest: manifestB64 });
+    const r = await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PAGES_ONLY, changedOnly: { fastApply: true, resolvedAppId: APP_ID, skipSitemapFinalize: true, selectedKeys: ['overview'] } });
+    assert.ok(r.ok);
+    const uploaded = genpageCli.uploads.map((u) => u.name);
+    assert.ok(uploaded.includes('Overview'), 'the selected page was uploaded');
+    assert.ok(!uploaded.includes('Detail'), 'the UNCHANGED page was NOT re-uploaded (no clobber)');
+    assert.ok(r.created.pageDeployedShas.overview, 'a measured deployed hash is recorded for the uploaded page');
+    assert.ok(!r.created.pageDeployedShas.detail, 'no deployed hash for the page we did not touch');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});

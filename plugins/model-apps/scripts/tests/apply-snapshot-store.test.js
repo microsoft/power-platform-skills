@@ -161,17 +161,21 @@ test('deleteSnapshot removes the file; deleting a missing file is success', () =
   } finally { rm(d); }
 });
 
-test('invalidate then CAS-write with the OLD generation is refused (invalidate changes nothing but proves ordering)', () => {
-  // A concurrent build reads gen g1, we invalidate (writes SAME generation, eligible:false), then the
-  // concurrent build must still be able to detect our write via content — but generation is unchanged by
-  // invalidate, so this documents that invalidate is NOT a generation bump: the fast-path caller re-reads
-  // eligibility, not just generation, before proceeding.
+test('invalidate BUMPS the generation (fencing) and returns it; eligible stays false', () => {
+  // Fencing (Sol #6): invalidate rotates the generation so a concurrent reader holding the pre-invalidate
+  // token can no longer win the re-bless CAS. The returned generation is what the caller passes as the CAS
+  // `expected` on its re-bless.
   const d = ws();
   try {
     store.writeSnapshotAtomic(d, eligible('g1'));
-    store.invalidateSnapshot(d);
+    const inv = store.invalidateSnapshot(d);
+    assert.ok(inv.ok);
+    assert.notStrictEqual(inv.generation, 'g1', 'invalidate rotates the generation');
     const disk = store.readSnapshot(d);
-    assert.strictEqual(disk.generation, 'g1', 'invalidate preserves the generation token');
+    assert.strictEqual(disk.generation, inv.generation, 'the returned generation matches what was persisted');
     assert.strictEqual(disk.eligible, false);
+    // A CAS write expecting the OLD generation is now refused; expecting the returned generation succeeds.
+    assert.strictEqual(store.casWriteSnapshot(d, eligible('g2'), 'g1').ok, false);
+    assert.strictEqual(store.casWriteSnapshot(d, eligible('g2'), inv.generation).ok, true);
   } finally { rm(d); }
 });

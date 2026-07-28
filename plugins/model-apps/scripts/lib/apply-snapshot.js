@@ -88,15 +88,20 @@ function serializeEnvelope(envelope) {
 
 // Identity match: does this envelope describe the SAME live target we're about to build against?
 // live = { orgId, envUrl, appUniqueName, appId? }. orgId + envUrl + appUniqueName must ALL match. appId is a
-// strong secondary signal: if BOTH sides carry one and they differ, that's a mismatch (the app was deleted
-// and recreated with the same unique name → different GUID → stale ids). Returns { ok, reason }.
+// STRONG identity signal: if the snapshot recorded an appId, the live app MUST resolve to exactly that id —
+// a null live appId (app deleted, or the discovery query failed) is treated as a MISMATCH, never a vacuous
+// pass (Sol #4 / Opus C1: an eligible snapshot must not survive its app being deleted into a false noop).
+// A snapshot with NO recorded appId (a legacy/partial write) skips the appId check. Returns { ok, reason }.
 function identityMatches(envelope, live) {
   if (!isEnvelope(envelope)) return { ok: false, reason: 'no valid snapshot' };
   const l = live || {};
   if (!envelope.orgId || !l.orgId || normId(envelope.orgId) !== normId(l.orgId)) return { ok: false, reason: 'orgId mismatch (different Dataverse org)' };
   if (!envelope.envUrl || !l.envUrl || normId(envelope.envUrl) !== normId(l.envUrl)) return { ok: false, reason: 'envUrl mismatch (different environment)' };
   if (!envelope.appUniqueName || !l.appUniqueName || normId(envelope.appUniqueName) !== normId(l.appUniqueName)) return { ok: false, reason: 'appUniqueName mismatch (different app)' };
-  if (envelope.appId && l.appId && normId(envelope.appId) !== normId(l.appId)) return { ok: false, reason: 'appId mismatch (app deleted+recreated under same unique name)' };
+  if (envelope.appId) {
+    if (!l.appId) return { ok: false, reason: 'app not found live (snapshot recorded an appId) — the app was deleted or is unreachable' };
+    if (normId(envelope.appId) !== normId(l.appId)) return { ok: false, reason: 'appId mismatch (app deleted+recreated under same unique name)' };
+  }
   return { ok: true, reason: 'identity matches' };
 }
 

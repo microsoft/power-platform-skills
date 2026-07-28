@@ -50,8 +50,13 @@ function decideChangedOnly({ annotatedSpec, snapshot, live }) {
   if (classify.verdict === 'noop') {
     return { decision: 'noop', reason: 'no changes since the last apply', classify, gateReason: gate.reason };
   }
-  // Eligible + EVERY change is the wired page-content shape → pages-only fast apply.
+  // Eligible + EVERY change is the wired page-content shape → pages-only fast apply. Requires a live appId
+  // (the fast path seeds result.created.app from it to satisfy pages-requires-app); a null appId would
+  // otherwise HALT, so fall back to a full build instead (M6). identityMatches already guarantees a live
+  // appId when the snapshot recorded one, so this is a belt-and-suspenders guard for a legacy no-appId
+  // snapshot.
   if (classify.verdict === 'fast' && classify.fastChanges.length > 0 && classify.fastChanges.every((c) => c.shape === 'page')) {
+    if (!live || !live.appId) return { decision: 'full', reason: 'full build — live app id unavailable for a pages-only fast apply', classify, gateReason: gate.reason };
     const pageKeys = classify.fastChanges.map((c) => c.identity);
     return { decision: 'fast', reason: `pages-only fast apply (${pageKeys.length} changed page(s): ${pageKeys.join(', ')})`, classify, pageKeys, gateReason: gate.reason };
   }
@@ -93,12 +98,19 @@ async function resolveLiveIdentity({ sdk, envUrl, appUniqueName, whoAmI }) {
 
 // ---- snapshot assembly (post-apply) -------------------------------------------------------------------
 
-// Assemble the eligible/ineligible baseline snapshot to persist after a FULL apply. Sticky-debt rule (Sol
-// build-time note): the new snapshot inherits the prior snapshot's debt UNION this build's classify debt,
-// and is eligible ONLY when the union is empty. A plain full rebuild never clears debt (the additive engine
-// re-skips a stale chart/command/dashboard/web-resource edit); debt clears only when the snapshot is
-// DELETED by a clean teardown and re-created fresh (no prior → no sticky debt → eligible).
-function assembleBaselineSnapshot({ annotatedSpec, created, live, prior }) {
+// Assemble the baseline snapshot to persist after a FULL apply. Two fail-closed rules:
+//  1. FRESH-CREATE-ONLY eligibility (Sol #7 / Opus H2): a full `--apply` is ADDITIVE — on a PRE-EXISTING
+//     app it re-SKIPS diverged chart/command/dashboard/web-resource-content edits, so the deployed state may
+//     not match the spec even though the build "succeeded". We can only PROVE convergence when the app was
+//     CREATED fresh this run (it did not exist when the flow started: appPreExisted=false). If the app
+//     pre-existed, the baseline is recorded INELIGIBLE with an `uncertified-baseline` debt — a page edit then
+//     stays on the full-build path until a clean teardown+rebuild recreates everything fresh. This also
+//     subsumes the AI/data-model divergence concern (Sol #8): any full-build-triggering edit on an existing
+//     app yields an ineligible baseline, regardless of the specific phase.
+//  2. STICKY debt (Sol build-time note): new snapshot debt = prior debt UNION this build's classify debt;
+//     eligible only when empty. A plain full rebuild never self-heals debt (the additive engine re-skips a
+//     stale artifact); debt clears only when a clean teardown DELETES the snapshot and it is recreated fresh.
+function assembleBaselineSnapshot({ annotatedSpec, created, live, prior, appPreExisted, sampleDataApplied }) {
   const classify = classifyChanges(annotatedSpec, prior ? prior.priorSpec : null);
   const appId = (created && created.app) || (live && live.appId) || null;
   const env = snap.makeEnvelope({
@@ -112,31 +124,42 @@ function assembleBaselineSnapshot({ annotatedSpec, created, live, prior }) {
   // sides, so stripping rows (the design's bloat note) would make sampleData read as perpetually changed.
   env.priorSpec = annotatedSpec;
   env.artifacts = indexArtifacts(annotatedSpec, created);
+  env.sampleDataApplied = !!sampleDataApplied;
   for (const d of (prior && Array.isArray(prior.debt) ? prior.debt : [])) snap.addDebt(env, d);
   for (const d of classify.debt) snap.addDebt(env, d);
+  // A pre-existing app cannot be certified fresh — record the uncertified-baseline debt so it stays
+  // ineligible (a full build re-skipped any diverged additive artifact; we cannot prove deployed==spec).
+  if (appPreExisted) snap.addDebt(env, { artifactType: 'app', identity: live.appUniqueName || '', reason: 'uncertified-baseline (app pre-existed; additive edits may not have converged)' });
   snap.markEligible(env); // fail-closed: stays ineligible if the debt union is non-empty
   return env;
 }
 
 // Refresh the snapshot after a pages-only FAST apply: keep the eligible envelope, update priorSpec and the
-// re-uploaded pages' hashes (source==deployed, they were just uploaded), refresh any returned pageId (an
-// UPDATE returns the SAME id — I7). Stays eligible (we only reach a fast apply from an eligible snapshot
-// with page-only changes, so there is no new debt). Bumps the generation for the CAS write.
-function assembleFastSnapshot({ snapshot, annotatedSpec, created, generation }) {
+// re-uploaded pages' hashes. sourceSha is the spec's on-disk hash; deployedSha is the MEASURED hash of the
+// bytes actually uploaded (created.pageDeployedShas[key] — differs from source when PAGEREF nav is resolved,
+// so it must never be assumed equal to the source hash; Sol #2/#3). Only the SELECTED (re-uploaded) keys are
+// refreshed — an unchanged page keeps its recorded hashes. Re-checks empty debt via markEligible (Opus L8)
+// and bumps the generation for the CAS write.
+function assembleFastSnapshot({ snapshot, annotatedSpec, created, pageKeys, generation }) {
   const env = snap.parseEnvelope(snap.serializeEnvelope(snapshot)); // deep clone
   env.priorSpec = annotatedSpec;
   if (!env.artifacts) env.artifacts = {};
   if (!env.artifacts.pages) env.artifacts.pages = {};
+  const selected = new Set(pageKeys || []);
+  const deployedShas = (created && created.pageDeployedShas) || {};
   for (const p of annotatedSpec.pages || []) {
     if (!p || typeof p !== 'object') continue;
     const key = p.key || p.name;
-    const sha = p.__contentSha != null ? p.__contentSha : null;
+    if (!selected.has(key)) continue; // only refresh the pages we actually re-uploaded
+    const sourceSha = p.__contentSha != null ? p.__contentSha : null;
+    const deployedSha = deployedShas[key] != null ? deployedShas[key] : sourceSha;
     const pageId = (created && created.pages && created.pages[key]) || (env.artifacts.pages[key] && env.artifacts.pages[key].pageId) || null;
-    if (pageId == null && sha == null) continue;
-    env.artifacts.pages[key] = { pageId, sourceSha: sha, deployedSha: sha };
+    env.artifacts.pages[key] = { pageId, sourceSha, deployedSha };
   }
-  env.eligible = true;
   snap.bumpGeneration(env, generation);
+  // markEligible re-asserts empty debt (we only reach a fast apply from an eligible snapshot, so this is
+  // defense-in-depth; if somehow debt is present, the snapshot stays ineligible rather than being blessed).
+  snap.markEligible(env);
   return env;
 }
 
@@ -162,7 +185,17 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
     return { ...r, changedOnly: { decision: 'full', reason: 'no live identity' } };
   }
 
-  const decision = decideChangedOnly({ annotatedSpec, snapshot, live });
+  // Whether the app already existed when the flow STARTED — the only proof a subsequent full build is a
+  // fresh create (→ eligible baseline). Captured before any write (Sol #7 / Opus H2).
+  const appPreExisted = !!live.appId;
+
+  let decision = decideChangedOnly({ annotatedSpec, snapshot, live });
+  // Sample-data guard (Sol #11): the baseline records whether --sample-data was applied. If THIS run asks
+  // for sample data but the eligible baseline did not seed it, a fast/noop would never seed the rows —
+  // force a full build so the sample-data phase runs.
+  if (opts.sampleData && snapshot && snapshot.sampleDataApplied !== true && (decision.decision === 'fast' || decision.decision === 'noop')) {
+    decision = { ...decision, decision: 'full', reason: '--sample-data requested but the baseline did not seed rows — full build' };
+  }
   log(`▸ changed-only: ${decision.decision.toUpperCase()} — ${decision.reason}`);
 
   if (decision.decision === 'noop') {
@@ -171,30 +204,37 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
   }
 
   if (decision.decision === 'fast') {
-    // INVALIDATE-before-write: force the snapshot ineligible BEFORE the fast apply writes anything, so a
-    // crash mid-upload can never leave a stale "eligible" snapshot. A failed invalidate means lease
-    // contention (another build) → ABORT rather than risk two concurrent builds of the same app.
+    // INVALIDATE-before-write: force the snapshot ineligible (and ROTATE its generation) BEFORE the fast
+    // apply writes anything, so a crash mid-upload can never leave a stale "eligible" snapshot and a
+    // concurrent reader that captured the old generation can no longer win the re-bless CAS. A failed
+    // invalidate means lease contention (another build) → ABORT rather than risk two concurrent builds.
     const inv = store.invalidateSnapshot(ws);
     if (!inv.ok) {
       const msg = `changed-only: could not invalidate the snapshot before the fast apply (${inv.reason}) — aborting to avoid an unsafe partial write`;
       log(`✗ ${msg}`);
       return { ok: false, errors: [msg], changedOnly: decision };
     }
-    const fastOpts = { ...fullApplyOpts(opts), phases: ['pages'], changedOnly: { fastApply: true, resolvedAppId: live.appId, skipSitemapFinalize: true } };
+    // selectedKeys: upload ONLY the changed pages (never clobber an unchanged one — Sol #1).
+    const fastOpts = { ...fullApplyOpts(opts), phases: ['pages'], changedOnly: { fastApply: true, resolvedAppId: live.appId, skipSitemapFinalize: true, selectedKeys: decision.pageKeys } };
     const r = await deps.buildModelApp(spec, fastOpts, deps.buildDeps);
-    // Re-persist the eligible snapshot ONLY on a fully successful, verified apply. Under CAS (expected =
-    // the generation we read, which invalidate preserved) so a concurrent writer is detected. A CAS miss
-    // leaves the snapshot invalidated — safe (the next run just does a full build).
-    if (r && r.ok && !r.dryRun && (!r.verify || r.verify.ok)) {
-      const refreshed = assembleFastSnapshot({ snapshot, annotatedSpec, created: r.created, generation: snap.newGeneration() });
-      const cas = store.casWriteSnapshot(ws, refreshed, snapshot.generation);
+    // Re-bless ONLY on a fully successful apply whose mandatory page verify PASSED (a fast apply always
+    // applies the pages phase, so verify is mandatory and r.verify is always set — a missing/failed verify
+    // leaves the snapshot invalidated, fail-closed; Sol #2/#3, Opus H4). CAS `expected` = the post-invalidate
+    // generation (inv.generation), which the invalidate wrote; a concurrent writer that bumped it again is
+    // detected and this re-bless is refused.
+    if (r && r.ok && !r.dryRun && r.verify && r.verify.ok) {
+      const refreshed = assembleFastSnapshot({ snapshot, annotatedSpec, created: r.created, pageKeys: decision.pageKeys, generation: snap.newGeneration() });
+      const cas = store.casWriteSnapshot(ws, refreshed, inv.generation);
       if (!cas.ok) log(`▸ changed-only: fast apply succeeded but the snapshot was not re-blessed (${cas.reason}) — the next run will do a full build`);
       else log('✓ changed-only: fast apply verified; snapshot re-blessed eligible');
+    } else if (r && r.ok && !r.dryRun) {
+      log('▸ changed-only: fast apply completed but page verify did not pass — snapshot left invalidated (next run will full-build)');
     }
     return { ...r, changedOnly: decision };
   }
 
   // FULL build (baseline, ineligible-snapshot fallback, or an unsupported/unwired change).
+  let expectedGen = null;
   if (snapshot) {
     const inv = store.invalidateSnapshot(ws);
     if (!inv.ok) {
@@ -202,6 +242,7 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
       log(`✗ ${msg}`);
       return { ok: false, errors: [msg], changedOnly: decision };
     }
+    expectedGen = inv.generation;
   }
   const r = await deps.buildModelApp(spec, fullApplyOpts(opts), deps.buildDeps);
   if (r && r.ok && !r.dryRun && (!r.verify || r.verify.ok)) {
@@ -209,8 +250,8 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
     // this build). created.app already carries it, so this is belt-and-suspenders.
     let liveForWrite = live;
     if (!live.appId) { const relive = await deps.resolveLiveIdentity(); if (relive) liveForWrite = relive; }
-    const env = assembleBaselineSnapshot({ annotatedSpec, created: r.created, live: liveForWrite, prior: snapshot });
-    const wrote = store.casWriteSnapshot(ws, env, snapshot ? snapshot.generation : null);
+    const env = assembleBaselineSnapshot({ annotatedSpec, created: r.created, live: liveForWrite, prior: snapshot, appPreExisted, sampleDataApplied: !!opts.sampleData });
+    const wrote = store.casWriteSnapshot(ws, env, expectedGen);
     if (!wrote.ok) log(`▸ changed-only: full apply succeeded but the snapshot was not persisted (${wrote.reason})`);
     else log(`✓ changed-only: baseline snapshot ${env.eligible ? 'ELIGIBLE' : 'recorded INELIGIBLE (open debt — a future edit needs a full build)'}`);
   }

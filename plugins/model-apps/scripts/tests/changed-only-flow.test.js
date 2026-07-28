@@ -40,9 +40,11 @@ function seedEligible(dir, prior, gen = 'g0') {
   return env;
 }
 
-// A buildModelApp stub that records the opts it was handed and returns a successful full-ish result.
+// A buildModelApp stub that records the opts it was handed and returns a successful full-ish result. Includes
+// verify:{ok:true} — the real buildModelApp runs a mandatory page verify for page-bearing/pages-phase applies,
+// and the flow re-blesses only when it passes.
 function stubBuild(record, result) {
-  return async (spec, opts) => { record.push({ phases: opts.phases, changedOnly: opts.changedOnly }); return result || { ok: true, dryRun: false, created: { app: 'app-1', pages: { overview: 'page-1' } } }; };
+  return async (spec, opts) => { record.push({ phases: opts.phases, changedOnly: opts.changedOnly }); return result || { ok: true, dryRun: false, created: { app: 'app-1', pages: { overview: 'page-1' } }, verify: { ok: true } }; };
 }
 function baseDeps(dir, overrides = {}) {
   return {
@@ -120,6 +122,15 @@ test('decide: ineligible (debt-carrying) snapshot -> full even for a page edit',
   assert.match(d.reason, /not eligible|debt/);
 });
 
+test('decide: eligible snapshot but app DELETED (live appId null) -> full, not a false noop (C1)', () => {
+  const prior = annotate(baseSpec(), 'v1');
+  const env = seedFromPrior(prior); // records appId app-1
+  // Same spec (would be noop) but the live app is gone -> identity fails -> full build, never noop.
+  const d = flow.decideChangedOnly({ annotatedSpec: annotate(baseSpec(), 'v1'), snapshot: env, live: { ...LIVE, appId: null } });
+  assert.strictEqual(d.decision, 'full');
+  assert.match(d.reason, /app not found live/);
+});
+
 // helper: build an eligible in-memory snapshot from a prior annotated spec (no disk)
 function seedFromPrior(prior) {
   const env = snap.makeEnvelope(LIVE, { generation: 'g0' });
@@ -190,12 +201,22 @@ test('fast snapshot: refreshes priorSpec + the changed page hash, stays eligible
   const prior = annotate(baseSpec(), 'v1');
   const snapshot = seedFromPrior(prior);
   const cur = annotate(baseSpec(), 'v2');
-  const env = flow.assembleFastSnapshot({ snapshot, annotatedSpec: cur, created: { pages: { overview: 'page-1' } }, generation: 'g1' });
+  const env = flow.assembleFastSnapshot({ snapshot, annotatedSpec: cur, created: { pages: { overview: 'page-1' }, pageDeployedShas: { overview: sha256('v2') } }, pageKeys: ['overview'], generation: 'g1' });
   assert.strictEqual(env.eligible, true);
   assert.strictEqual(env.generation, 'g1');
   assert.strictEqual(env.artifacts.pages.overview.sourceSha, sha256('v2'));
   assert.strictEqual(env.artifacts.pages.overview.deployedSha, sha256('v2'));
   assert.strictEqual(env.priorSpec.pages[0].__contentSha, sha256('v2'));
+});
+
+test('fast snapshot: a nav-resolved page records the MEASURED deployedSha (≠ source), not an assumption', () => {
+  const prior = annotate(baseSpec(), 'v1');
+  const snapshot = seedFromPrior(prior);
+  const cur = annotate(baseSpec(), 'v2');
+  // The build reports a DIFFERENT deployed hash (PAGEREF resolved to GUIDs at upload).
+  const env = flow.assembleFastSnapshot({ snapshot, annotatedSpec: cur, created: { pages: { overview: 'page-1' }, pageDeployedShas: { overview: 'measured-deployed-hash' } }, pageKeys: ['overview'], generation: 'g1' });
+  assert.strictEqual(env.artifacts.pages.overview.sourceSha, sha256('v2'), 'source hash from the spec');
+  assert.strictEqual(env.artifacts.pages.overview.deployedSha, 'measured-deployed-hash', 'deployed hash is the measured build value');
 });
 
 // ---- runChangedOnlyApply (orchestration, real temp workspace) ----
@@ -211,10 +232,22 @@ test('run: FAST apply calls buildModelApp pages-only + re-blesses the snapshot e
     assert.strictEqual(record[0].changedOnly.fastApply, true);
     assert.strictEqual(record[0].changedOnly.resolvedAppId, 'app-1');
     assert.strictEqual(record[0].changedOnly.skipSitemapFinalize, true);
+    assert.deepStrictEqual(record[0].changedOnly.selectedKeys, ['overview'], 'only the changed page key is uploaded (no clobber of unchanged pages)');
     const disk = store.readSnapshot(dir);
     assert.strictEqual(disk.eligible, true, 'snapshot re-blessed eligible after a verified fast apply');
     assert.strictEqual(disk.artifacts.pages.overview.sourceSha, sha256('v2'));
     assert.notStrictEqual(disk.generation, 'g0', 'generation bumped on the CAS write');
+  } finally { rm(dir); }
+});
+
+test('run: a fast apply whose page VERIFY did not pass is NOT re-blessed (fail-closed)', async () => {
+  const dir = ws();
+  try {
+    seedEligible(dir, annotate(baseSpec(), 'v1'));
+    const failing = async () => ({ ok: true, dryRun: false, created: { app: 'app-1', pages: { overview: 'page-1' } }, verify: { ok: false, missing: [{ kind: 'page', name: 'Overview' }] } });
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: failing, readContent: readFor('v2') }) });
+    assert.strictEqual(r.changedOnly.decision, 'fast');
+    assert.strictEqual(store.readSnapshot(dir).eligible, false, 'a fast apply with a failed page verify must leave the snapshot invalidated');
   } finally { rm(dir); }
 });
 
@@ -242,18 +275,35 @@ test('run: NOOP does not call buildModelApp and reports up-to-date', async () =>
   } finally { rm(dir); }
 });
 
-test('run: FULL baseline (no snapshot) runs a full build then writes an ELIGIBLE snapshot', async () => {
+test('run: FULL baseline (fresh app, appId null at start) writes an ELIGIBLE snapshot', async () => {
   const dir = ws();
   try {
     const record = [];
-    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild(record), readContent: readFor('v1') }) });
+    // A FRESH baseline: the app does NOT exist when the flow starts, so resolveLiveIdentity returns
+    // appId:null; the build creates it (created.app='app-1'), and the baseline is certified eligible.
+    const freshIdentity = async () => ({ orgId: 'org-1', envUrl: 'https://e', appUniqueName: 'new_app', appId: null });
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild(record), resolveLiveIdentity: freshIdentity, readContent: readFor('v1') }) });
     assert.strictEqual(r.changedOnly.decision, 'full');
     assert.strictEqual(record[0].phases, undefined, 'a full build has no explicit phase range (=> PHASES)');
     assert.ok(!record[0].changedOnly, 'a full build carries no changedOnly seam');
     const disk = store.readSnapshot(dir);
     assert.ok(disk, 'baseline snapshot persisted');
-    assert.strictEqual(disk.eligible, true);
+    assert.strictEqual(disk.eligible, true, 'a fresh-create baseline is eligible');
     assert.strictEqual(disk.appId, 'app-1');
+  } finally { rm(dir); }
+});
+
+test('run: FULL baseline against a PRE-EXISTING app is recorded INELIGIBLE (cannot certify convergence)', async () => {
+  const dir = ws();
+  try {
+    const record = [];
+    // The app ALREADY exists at flow start (appId non-null) -> a full build may have additive-skipped a
+    // diverged artifact -> uncertified-baseline debt -> ineligible (Sol #7 / Opus H2).
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild(record), resolveLiveIdentity: async () => LIVE, readContent: readFor('v1') }) });
+    assert.strictEqual(r.changedOnly.decision, 'full');
+    const disk = store.readSnapshot(dir);
+    assert.strictEqual(disk.eligible, false, 'a pre-existing-app baseline cannot be certified eligible');
+    assert.ok(disk.debt.some((d) => /uncertified-baseline/.test(d.reason)));
   } finally { rm(dir); }
 });
 
@@ -296,5 +346,24 @@ test('run: FULL fallback for an unsupported edit records the sticky debt (inelig
     const disk = store.readSnapshot(dir);
     assert.strictEqual(disk.eligible, false, 'an unsupported edit yields an ineligible baseline');
     assert.ok(disk.debt.some((d) => d.artifactType === 'chart'));
+  } finally { rm(dir); }
+});
+
+test('run: --sample-data requested but baseline did not seed rows -> forced FULL, not noop (Sol #11)', async () => {
+  const dir = ws();
+  try {
+    // Baseline recorded sampleDataApplied:false (built without --sample-data).
+    const env = snap.makeEnvelope(LIVE, { generation: 'g0' });
+    env.priorSpec = annotate(baseSpec(), 'v1');
+    env.artifacts = { pages: { overview: { pageId: 'page-1', sourceSha: sha256('v1'), deployedSha: sha256('v1') } } };
+    env.sampleDataApplied = false;
+    snap.markEligible(env);
+    store.writeSnapshotAtomic(dir, env);
+    const record = [];
+    // Same spec (would be noop) but --sample-data is now requested -> must force a full build so rows seed.
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true, sampleData: true }, deps: baseDeps(dir, { buildModelApp: stubBuild(record), readContent: readFor('v1') }) });
+    assert.strictEqual(r.changedOnly.decision, 'full');
+    assert.match(r.changedOnly.reason, /sample-data/);
+    assert.strictEqual(record.length, 1, 'a full build ran to seed the sample data');
   } finally { rm(dir); }
 });

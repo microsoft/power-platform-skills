@@ -22,6 +22,7 @@ const { openJournal } = require('./lib/build-journal.js');
 const { diffPhases, summarizeDiff } = require('./lib/phase-diff.js');
 const { annotateContentHashes } = require('./lib/content-hash.js');
 const { runChangedOnlyApply, resolveLiveIdentity } = require('./lib/changed-only-flow.js');
+const applySnapshotStore = require('./lib/apply-snapshot-store.js');
 const { classifyOps, sitemapTargets } = require('./lib/op-diff.js');
 // R3 (auto-verify): after a successful --apply the build can reconcile the spec against what actually
 // deployed, so a silent partial build surfaces in the same run instead of only on a separate manual
@@ -171,7 +172,14 @@ async function buildModelApp(spec, opts, deps) {
   // discovery is disabled, the gate is skipped. `deps.discoverOpDiffState` is an injection seam for tests.
   // The gate lives here, in the CLI wrapper, NOT inside runSdkBuild — the pure engine is unaffected.
   // See design §11 (fail-closed destructive gate) and §14.
-  if (opts.apply && (deps.discoverOpDiffState || (deps.provisionSdk && opts.checkCollisions !== false))) {
+  //
+  // #changed-only EXEMPTION: a pages-only fast apply is pre-gated by the changed-only flow (snapshot
+  // eligibility + live identity match + classify proved every change is a pure page-content re-upload) and
+  // touches NO data model, so the collision/destructive preflight does not apply. Running it would (a) HARD-
+  // STOP the fast path in --non-interactive because the app always exists (Opus H3), and (b) do slow full
+  // form/sitemap reads for nothing. The pages phase keeps its own removal/shared/membership safety gates.
+  const isFastApply = !!(opts.changedOnly && opts.changedOnly.fastApply);
+  if (opts.apply && !isFastApply && (deps.discoverOpDiffState || (deps.provisionSdk && opts.checkCollisions !== false))) {
     const nonInteractive = opts.nonInteractive === true;
     const allowDestructive = opts.allowDestructive === true;
     let state;
@@ -474,6 +482,14 @@ async function main() {
         },
       });
     } else {
+      // Invariant: EVERY state-changing apply must invalidate the changed-only snapshot BEFORE it writes
+      // (design core invariant). A plain `--apply` (or `--stage data --apply`) mutates the app outside the
+      // changed-only flow, so a stale eligible snapshot would otherwise describe pre-apply state. Best-effort
+      // + fail-safe: if a snapshot exists it is marked ineligible (the next `--changed-only` re-baselines via
+      // a full build); no snapshot ⇒ a harmless no-op. Never blocks the build.
+      if (opts.apply) {
+        try { applySnapshotStore.invalidateSnapshot(workspaceDir); } catch { /* best-effort — never block a build */ }
+      }
       r = await buildModelApp(spec, opts, deps);
     }
   } finally {
@@ -483,10 +499,12 @@ async function main() {
   // what changed. Only on a real, successful, FULL apply, OR a changed-only fast apply (whose deployed
   // state matches the spec: unchanged artifacts persist idempotently and the changed pages were just
   // re-uploaded). A partial --stage data apply is NOT the whole desired state, so it must not overwrite
-  // the snapshot. Best-effort — never fail the build over it.
+  // the snapshot. Gated on EFFECTIVE success (verify passed) — a build that applied but whose auto-verify
+  // found a silent partial must NOT record its spec as the deployed baseline (Sol #13). Best-effort.
   const fullPhaseApply = (opts.phases || PHASES).length === PHASES.length;
   const changedOnlyApplied = !!(r && r.changedOnly && (r.changedOnly.decision === 'fast' || r.changedOnly.decision === 'full'));
-  if (r.ok && opts.apply && !r.dryRun && (fullPhaseApply || changedOnlyApplied)) {
+  const effectiveSuccess = r.ok && (!r.verify || r.verify.ok);
+  if (effectiveSuccess && opts.apply && !r.dryRun && (fullPhaseApply || changedOnlyApplied)) {
     // Persist the applied spec ANNOTATED with on-disk content hashes (#2) so the next dry-run's diff can
     // detect a .tsx / contentPath byte edit, not just a spec-JSON change. Records the content that was
     // actually deployed by THIS apply.

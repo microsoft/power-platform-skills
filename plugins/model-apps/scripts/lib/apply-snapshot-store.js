@@ -15,7 +15,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {
-  parseEnvelope, serializeEnvelope, markIneligible, tombstone, generationMatches,
+  parseEnvelope, serializeEnvelope, markIneligible, tombstone, generationMatches, newGeneration, bumpGeneration,
 } = require('./apply-snapshot.js');
 
 const SNAPSHOT_FILE = 'apply-snapshot.json';
@@ -132,18 +132,23 @@ function persistSnapshot(workspaceDir, envelope) {
   return { ok: true };
 }
 
-// INVALIDATE-before-write: force eligible:false and persist, under the lease. Fail-closed callers (the
-// fast-path apply) MUST abort if this returns { ok:false } — proceeding could bless a snapshot that a
-// crash then leaves eligible. A missing snapshot is already-safe (nothing can fast-path) ⇒ ok:true.
+// INVALIDATE-before-write: force eligible:false and persist, under the lease, ROTATING the generation so a
+// concurrent reader that captured the pre-invalidate generation can no longer win the re-bless CAS (Sol #6
+// fencing — invalidate/apply/re-bless without a long-held lease). Returns { ok, generation } where
+// `generation` is the new post-invalidate token the caller must pass as the CAS `expected` on its re-bless.
+// Fail-closed callers (the fast-path apply) MUST abort if this returns { ok:false }. A missing snapshot is
+// already-safe (nothing can fast-path) ⇒ ok:true with generation:null.
 function invalidateSnapshot(workspaceDir, deps = {}) {
   const lease = acquireLease(workspaceDir, deps);
   if (!lease.ok) return { ok: false, reason: lease.reason };
   try {
     const disk = readSnapshot(workspaceDir);
-    if (!disk) return { ok: true, reason: 'no snapshot to invalidate' };
+    if (!disk) return { ok: true, reason: 'no snapshot to invalidate', generation: null };
     markIneligible(disk);
+    const gen = newGeneration();
+    bumpGeneration(disk, gen);
     writeSnapshotAtomic(workspaceDir, disk);
-    return { ok: true };
+    return { ok: true, generation: gen };
   } catch (e) {
     return { ok: false, reason: `invalidate failed: ${e.message}` };
   } finally {

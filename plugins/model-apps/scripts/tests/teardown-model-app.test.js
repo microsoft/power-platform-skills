@@ -132,3 +132,51 @@ test('cliEmit: an error event with no detail has no dangling separator', () => {
   assert.ok(!/—\s*$/.test(noDetail) && !noDetail.includes(' — '), `no dangling separator: ${JSON.stringify(noDetail)}`);
   assert.ok(withDetail.includes(' — boom'), 'detail still rendered with separator');
 });
+
+// ---- #changed-only snapshot lifecycle: tombstone-before-delete + delete-after-clean-teardown ----------
+const os = require('node:os');
+const snap = require('../lib/apply-snapshot.js');
+const snapStore = require('../lib/apply-snapshot-store.js');
+
+function eligibleSnap(ws, appId) {
+  const env = snap.makeEnvelope({ orgId: 'o', envUrl: 'https://e', appUniqueName: 'a', appId }, { generation: 'g' });
+  snap.markEligible(env);
+  snapStore.writeSnapshotAtomic(ws, env);
+}
+
+test('teardown --apply TOMBSTONES the snapshot before deleting, then DELETES it after a clean teardown', async () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'td-snap-'));
+  try {
+    eligibleSnap(ws, 'app-1');
+    const sdk = presentSdk();
+    const r = await teardownModelApp(desk, { apply: true, allowDestructive: true, workspaceDir: ws }, { sdk });
+    assert.strictEqual(r.ok, true);
+    // A clean teardown removes the envelope entirely (fresh rebuild starts a new baseline).
+    assert.strictEqual(snapStore.readSnapshot(ws), null, 'the snapshot is deleted after a clean teardown');
+  } finally { fs.rmSync(ws, { recursive: true, force: true }); }
+});
+
+test('a teardown that finishes WITH ERRORS leaves the tombstone (snapshot not deleted, stays ineligible)', async () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'td-snap-'));
+  try {
+    eligibleSnap(ws, 'app-1');
+    // An SDK whose app delete fails -> teardown r.ok=false -> the envelope must survive as a tombstone.
+    const sdk = presentSdk();
+    sdk.deleteAppCascade = async () => { throw new Error('app delete failed'); };
+    const r = await teardownModelApp(desk, { apply: true, allowDestructive: true, workspaceDir: ws }, { sdk });
+    const disk = snapStore.readSnapshot(ws);
+    assert.ok(disk, 'the snapshot survives a failed teardown');
+    assert.strictEqual(disk.eligible, false, 'tombstoned ineligible');
+    assert.ok(snap.isTombstoned(disk), 'carries the teardown-in-progress debt');
+  } finally { fs.rmSync(ws, { recursive: true, force: true }); }
+});
+
+test('teardown dry-run does NOT tombstone or delete the snapshot', async () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'td-snap-'));
+  try {
+    eligibleSnap(ws, 'app-1');
+    await teardownModelApp(desk, { apply: false, workspaceDir: ws }, { sdk: presentSdk() });
+    const disk = snapStore.readSnapshot(ws);
+    assert.ok(disk && disk.eligible === true, 'a dry-run leaves the eligible snapshot untouched');
+  } finally { fs.rmSync(ws, { recursive: true, force: true }); }
+});
