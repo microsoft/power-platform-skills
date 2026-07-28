@@ -98,6 +98,41 @@ test('hallucinated icon inside a multi-line import is blocked (exit 2)', () => {
   assert.match(stderr, new RegExp(bad));
 });
 
+test('a `//` comment inside a multi-line import does not hide the next bad icon (exit 2)', () => {
+  // Regression: a `//` line leaves the following specifier starting with `//…`,
+  // which used to fail the identifier test and be silently skipped (fail-open).
+  const bad = 'FakeCommentHiddenRegular';
+  const content =
+    `import {\n    AddRegular, // a trailing comment\n    ${bad},\n} from '@fluentui/react-icons';\n` +
+    GENPAGE_HEADER;
+  const fp = writeTemp(tmp, 'page.tsx', content);
+  const { status, stderr } = runHook(payloadFor(fp, content));
+  assert.equal(status, 2);
+  assert.match(stderr, new RegExp(bad));
+});
+
+test('a `//` comment inside a valid multi-line import still passes (exit 0)', () => {
+  const content =
+    `import {\n    AddRegular, // create\n    DeleteRegular, // remove\n} from '@fluentui/react-icons';\n` +
+    GENPAGE_HEADER;
+  const fp = writeTemp(tmp, 'page.tsx', content);
+  const { status } = runHook(payloadFor(fp, content));
+  assert.equal(status, 0);
+});
+
+test('a `}` inside a `//` comment does not truncate the import capture (exit 2)', () => {
+  // Regression: a `}` in a comment used to end the `[^}]+` capture early, so the
+  // whole import failed to match and every icon (incl. bad ones) slipped through.
+  const bad = 'BraceCommentBypassRegular';
+  const content =
+    `import {\n    AddRegular, // note: shaped like {}\n    ${bad},\n} from '@fluentui/react-icons';\n` +
+    GENPAGE_HEADER;
+  const fp = writeTemp(tmp, 'page.tsx', content);
+  const { status, stderr } = runHook(payloadFor(fp, content));
+  assert.equal(status, 2);
+  assert.match(stderr, new RegExp(bad));
+});
+
 test('non-genpage file is ignored even with a bad icon (exit 0)', () => {
   // No `export default GeneratedComponent` and no sibling genpage-plan.md.
   const content = "import { NotARealIconRegular } from '@fluentui/react-icons';\nexport const x = 1;\n";

@@ -100,17 +100,23 @@ const GeneratedComponent = ({ dataApi }: GeneratedComponentProps) => {
         } else {
             await dataApi.createRow("account", formData);
         }
-        // Refresh list — write through the cache and clear any in-flight fetch so
-        // a later mount stays in sync.
+        // Refresh list — evict the stale cache and publish the refetch as the
+        // shared in-flight promise, so a mount that happens WHILE this refresh is
+        // pending awaits THIS query instead of returning the stale cache. Mirrors
+        // the initial-fetch de-dupe (references/data-caching.md invalidation).
         const query: QueryTableOptions<account> = {
             select: ["name", "address1_city", "address1_stateorprovince", "address1_postalcode", "address1_country", "telephone1", "accountid"],
             pageSize: 50,
             orderBy: "name asc",
         };
-        delete winAny[INFLIGHT_KEY];
-        const result = await dataApi.queryTable("account", query);
-        winAny[CACHE_KEY] = result.rows;
-        setData({ accounts: result.rows, loading: false });
+        delete winAny[CACHE_KEY];
+        const refetch = dataApi
+            .queryTable("account", query)
+            .then((result) => { winAny[CACHE_KEY] = result.rows; return result.rows; })
+            .finally(() => { if (winAny[INFLIGHT_KEY] === refetch) delete winAny[INFLIGHT_KEY]; });
+        winAny[INFLIGHT_KEY] = refetch;
+        const rows = await refetch;
+        setData({ accounts: rows, loading: false });
         // Reset form
         setFormData({
             name: "",

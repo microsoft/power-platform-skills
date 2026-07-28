@@ -126,7 +126,15 @@ function loadVerifiedIcons() {
  */
 function extractIconImports(content) {
   const names = [];
-  const code = content.replace(/\/\*[\s\S]*?\*\//g, ' ');
+  // Strip comments before matching so a comment inside a multi-line import block
+  // can't defeat validation two ways: (a) a `//` line leaves the next specifier
+  // starting with `//…` so it fails the identifier test and is silently skipped,
+  // and (b) a `}` inside a `//` comment prematurely ends the `[^}]+` capture and
+  // the whole import fails to match — both fail OPEN (a bad icon slips through).
+  // The `(?<!:)` lookbehind on the line-comment strip preserves `https://` URLs.
+  const code = content
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/(?<!:)\/\/[^\n]*/g, '');
   const escapedModule = ICON_MODULE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(
     "^[ \\t]*import\\s+(?:type\\s+)?\\{([^}]+)\\}\\s*from\\s*['\"]" + escapedModule + "['\"]",
