@@ -124,7 +124,19 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 **Actions**:
 
 1. Mark **Select template or choose from-scratch** as `in_progress`.
-2. Fetch the template catalog:
+
+<!-- not-a-gate: route preference before any catalog fetch, project directory creation, Dataverse write, or durable skill state -->
+
+2. Ask the user whether they want to browse templates or start from scratch before doing any template lookup:
+
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | Would you like to browse available templates first, or create this site from scratch? | Creation Path | Browse templates (Recommended), Create from scratch |
+
+   - **Browse templates**: continue to the catalog fetch below.
+   - **Create from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions. Do not fetch the template catalog.
+
+3. Fetch the template catalog:
 
    ```bash
    node "${PLUGIN_ROOT}/scripts/fetch-template-catalog.js"
@@ -136,11 +148,11 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    - **If `ok: true` but `catalog.templates` is empty or malformed**: tell the user no templates are currently available and continue with the from-scratch path.
    - **If templates are available**: proceed to semantic matching.
 
-3. Semantically match the templates against the Phase 1 context (`$ARGUMENTS`, site name, purpose, and audience):
+4. Semantically match the templates against the Phase 1 context (`$ARGUMENTS`, site name, purpose, and audience):
    - Use each template's `displayName`, `description`, `keywords`, `audience`, and `framework`.
    - Do **not** compute a numeric score or invent a ranking script. Keywords guide agent judgement; they are not counted.
 
-4. Render the relevant templates for browser preview:
+5. Render the relevant templates for browser preview:
 
    - Download each `previewImages` artifact into the SHA-keyed cache before rendering:
      ```bash
@@ -156,7 +168,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 <!-- not-a-gate: read-only route selection after template preview; only disposable temp preview files exist, with no project directory, Dataverse write, or durable skill state -->
 
-5. Ask one of the following `AskUserQuestion` prompts:
+6. Ask one of the following `AskUserQuestion` prompts:
 
    | Match situation | Prompt options |
    |-----------------|----------------|
@@ -166,7 +178,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
    When the user chooses **See all templates**, render the full catalog gallery and ask again with one option per template plus **Start from scratch**.
 
-6. Branch on the user's selection:
+7. Branch on the user's selection:
    - **Template selected**:
      1. Download and validate the selected template's solution zip before committing to the template path:
         ```bash
@@ -176,7 +188,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
      3. If the result is `ok: true`, set `CREATION_PATH = "template"`, `SELECTED_TEMPLATE = <manifest entry>`, and `SELECTED_TEMPLATE_SOLUTION_ZIP = <localPath>`. Append only **Verify prerequisites and confirm template import** now (see [Progress Tracking](#progress-tracking)); the import-vs-clone tasks are appended after the reinstall policy is known. Continue to the template import sequence below. Do **not** ask framework/location and do **not** proceed to Phase 2.
    - **Start from scratch** or catalog unavailable: set `CREATION_PATH = "from-scratch"` and continue below.
 
-7. For the template path only:
+8. For the template path only:
 
    1. Mark **Verify prerequisites and confirm template import** as `in_progress`.
    2. Resolve the target environment and token via the shared auth helpers:
