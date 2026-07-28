@@ -338,6 +338,10 @@ function compileFormIntent(spec, formSpec, opts) {
     entityLogicalName: entityLogical,
     name: formSpec.name || (formSpec.entity + ' form'),
     formType: formType,
+    // Optional author-pinned target id: when a table has two forms of the SAME (entity, type, name) — the
+    // residual case type-scoped resolution can't disambiguate — the author sets forms[].formId to reconcile
+    // that exact form. Carried verbatim (validated as a GUID at resolve time). Undefined for most forms.
+    formId: formSpec.formId,
     status: 'Active',
     tabs: tabs,
     __explicitLayout: explicit,

@@ -14,7 +14,7 @@ const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { validateAppSpec, migrateAppSpec, normalizePageSource } = require('./lib/app-spec.js');
-const { runSdkBuild, planFor, appUniqueName, compileFormIntent } = require('./lib/sdk-build.js');
+const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId } = require('./lib/sdk-build.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, readJsonArg, emitResult, dataverseRequest } = require('./lib/dataverse-auth.js');
@@ -114,7 +114,10 @@ async function discoverOpDiffState(spec, provision) {
   for (const f of spec.forms || []) {
     const def = compileFormIntent(spec, f, {});
     if (!def.__explicitLayout) continue;
-    const id = await provision.findArtifact('form', { name: def.name, entity: def.entityLogicalName });
+    // Resolve by (entity, name, TYPE) — NOT name alone. A table routinely has same-named Main / Quick View
+    // / Card forms, so a name-only lookup matched multiple rows and the SDK's AmbiguousArtifactError halted
+    // this preflight (fail-closed), blocking the edit. Type-scoped resolution targets the requested form.
+    const id = await resolveExistingFormId(provision, def);
     if (!id) continue; // not deployed yet → nothing to prune
     await provision.fetchArtifact('form', id); // seed the workspace copy so getArtifact can read it
     forms.push({ label: `form "${f.name || f.entity}" (${String(f.entity).toLowerCase()})`, deployedForm: provision.getArtifact('form', id) || {}, def });

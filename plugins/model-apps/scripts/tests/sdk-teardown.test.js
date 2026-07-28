@@ -193,7 +193,28 @@ function mockSdk(state = {}) {
     db.globalchoices.delete(name);
   };
 
-  return { resolveArtifact, deleteAppCascade, deleteRemoteArtifact, deleteRelationship, deleteWebResource, deleteTable, findTables, deleteSolution, deleteGlobalOptionSet, calls, db };
+  // Form resolution now runs through resolveExistingFormId (type-scoped systemform query), not
+  // resolveArtifact. Model it: a `formid eq <id>` lookup echoes the row; an (objecttypecode, name[, type])
+  // lookup finds the single form in db.forms. Test forms are all Main (type 2), so type isn't tracked.
+  const queryRecords = async (entitySet, opts) => {
+    calls.push({ method: 'queryRecords', entitySet });
+    const filter = (opts && opts.filter) || '';
+    if (entitySet === 'systemform') {
+      const idm = filter.match(/formid eq (\S+)/);
+      if (idm) {
+        for (const k of Object.keys(db.forms)) {
+          if (db.forms[k].formid === idm[1]) { const [ent, nm] = k.split(':'); return [{ formid: db.forms[k].formid, objecttypecode: ent, type: 2, name: db.forms[k].name || nm }]; }
+        }
+        return [];
+      }
+      const ent = (filter.match(/objecttypecode eq '([^']*)'/) || [])[1];
+      const nm = (filter.match(/name eq '([^']*)'/) || [])[1];
+      if (ent && nm != null) { const row = db.forms[`${ent}:${nm}`]; return row ? [{ formid: row.formid }] : []; }
+    }
+    return [];
+  };
+
+  return { resolveArtifact, queryRecords, deleteAppCascade, deleteRemoteArtifact, deleteRelationship, deleteWebResource, deleteTable, findTables, deleteSolution, deleteGlobalOptionSet, calls, db };
 }
 
 // --- planTeardown (pure) ----------------------------------------------------------------
@@ -359,13 +380,23 @@ test('deleteStep does NOT swallow a dependency block ("referenced by N component
   );
 });
 
+test('KIND_HANDLERS.form resolve is type-scoped so teardown never deletes a same-named sibling of another type', async () => {
+  const queries = [];
+  const sdk = {
+    queryRecords: async (e, o) => { if (e === 'systemform') { queries.push((o || {}).filter || ''); return [{ formid: 'main-1' }]; } return []; },
+    deleteRemoteArtifact: async () => {}, updateRecord: async () => {},
+  };
+  const items = await KIND_HANDLERS.form.resolve(sdk, { name: 'Information', entity: 'zava_javavendor', formType: 'Main', isMain: true });
+  assert.deepStrictEqual(items, [{ id: 'main-1', name: 'Information', entity: 'zava_javavendor', isMain: true }], 'resolves exactly ONE form (the Main), not every same-named row');
+  assert.match(queries[0], /objecttypecode eq 'zava_javavendor' and name eq 'Information' and type eq 2/, 'the teardown lookup is type-scoped (Main=2) — a same-named Quick View / Card is never resolved for deletion');
+});
+
 test('runTeardown tolerates a 400 "entity not found in MetadataCache" when resolving forms for an uncreated table', async () => {
   const sdk = {
-    resolveArtifact: async (kind, identity) => {
-      if (kind === 'form') { const e = new Error("The entity with a name = 'new_ghost' was not found in the MetadataCache"); e.statusCode = 400; throw e; }
-      if (kind === 'solution') return [{ id: 'sol-1', name: 'S' }];
-      return [];
-    },
+    // Form resolution now runs through resolveExistingFormId → queryRecords('systemform'); an uncreated
+    // table's metadata read 400s there, which teardown must tolerate (skip the step), not fail on.
+    queryRecords: async (entitySet) => { if (entitySet === 'systemform') { const e = new Error("The entity with a name = 'new_ghost' was not found in the MetadataCache"); e.statusCode = 400; throw e; } return []; },
+    resolveArtifact: async (kind) => (kind === 'solution' ? [{ id: 'sol-1', name: 'S' }] : []),
     deleteSolution: async () => {},
     deleteTable: async () => { const e = new Error('Could not find an entity'); e.statusCode = 404; throw e; },
   };

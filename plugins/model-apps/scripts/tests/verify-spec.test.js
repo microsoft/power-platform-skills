@@ -55,6 +55,20 @@ test('verifySpec: a missing entity skips its column checks', async () => {
   assert.ok(!r.checks.some((c) => c.kind === 'column'), 'no column checks when the entity is absent');
 });
 
+test('verifySpec: a Main form check is type-scoped — a same-named Quick View sibling does NOT satisfy it', async () => {
+  const spec = { entities: [], views: [], charts: [], forms: [{ entity: 'zava_javavendor', name: 'Information', formType: 'Main' }], appShell: { areas: [] } };
+  let captured;
+  const read = {
+    findTable: async () => null, findColumns: async () => [],
+    // Only a same-named Quick View exists; the type-scoped Main (type 2) query must find nothing.
+    queryRecords: async (set, opts) => { if (set === 'systemform') { captured = opts.filter; return /type eq 2/.test(opts.filter) ? [] : [{ formid: 'qv-1' }]; } return []; },
+    sitemapXml: async () => '',
+  };
+  const r = await verifySpec(spec, read);
+  assert.match(captured, /objecttypecode eq 'zava_javavendor' and name eq 'Information' and type eq 2/, 'verify scopes the Main form query by type');
+  assert.ok(r.missing.some((m) => m.kind === 'form'), 'the Main form is correctly reported MISSING — a same-named Quick View does not count (no false pass)');
+});
+
 test('verifySpec: an icon present only on a different element does not satisfy the check (scoped)', async () => {
   const spec = {
     entities: [], views: [], charts: [], forms: [],

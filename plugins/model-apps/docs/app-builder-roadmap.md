@@ -145,6 +145,33 @@ are in [`architecture.md`](architecture.md).
   `validateAppSpec` gained a `warnings[]` channel; `build-model-app.js` narrates + attaches them.
   **Follow-up:** enforce name-uniqueness at `/genpage`-native page creation too (the app got into the
   dupe state via non-app-builder tooling).
+- ✅ **Same-named forms (Main/Quick View/Card) no longer block a form edit** — DONE. A Dataverse form name
+  is unique only per `(entity, type)`, so a table's auto-created Main (2), Quick View (6), and Card (11)
+  forms are commonly ALL named "Information". The build resolved a form by `(entity, name)` only, so a
+  name-only lookup matched multiple rows → the SDK's `AmbiguousArtifactError` → the fail-closed preflight
+  HALTED, blocking a `formType:"Main"` edit entirely (author had to hand-patch formxml by id). New shared
+  `resolveExistingFormId` scopes by TYPE (`FORM_TYPE_CODE` → `type eq <code>`) so a Main edit reconciles
+  ONLY the Main form; applied CONSISTENTLY across the form phase (`buildArtifact`), the preflight
+  `discoverOpDiffState`, the spec **verifier** (`verify-spec.js` no longer false-passes a Main when only a
+  same-named Quick View exists), and **teardown** (which previously deleted EVERY same-named match — a
+  data-loss risk on same-named Quick View / Card siblings; now deletes exactly the intended form, skips on
+  absent, halts on a residual collision). The residual `(entity, type, name)` collision errors with
+  actionable guidance; new optional **`forms[].formId`** pins the exact form (GUID-validated in
+  `validateAppSpec` + re-checked at resolve — the id is interpolated unquoted into an Edm.Guid filter — and
+  verified to match the target table, TYPE, AND name; a stale pin fails loud instead of minting duplicate
+  forms).   Quick-view form references are keyed by `(targetEntity, QuickView, name)` so same-named Quick View forms
+  on different entities — or a same-named Main on the target entity — don't cross-wire (build map,
+  `validateAppSpec`, `spec-lint`, and teardown dependency ordering all consistent); verify reuses
+  `resolveExistingFormId` for the same identity. `FORM_TYPE_CODE`/`FORM_GUID_RE` live in the shared
+  `app-spec.js`. `artifactIdentityQuery('form')` is also type-scoped. Reviewed adversarially across three
+  rounds (Sol — the name-only-identity flaw was pervasive; all High/Medium findings fixed). Live-repro
+  `zava_javavendor` (three "Information" forms) unblocked; **live-verified end-to-end on aurora** (build a
+  table → it gets 3 same-named "Information" forms → edit the Main without a halt → the edit lands on the
+  Main ONLY, Quick View/Card untouched → teardown resolves the Main type-scoped). Locked by resolver /
+  preflight / verify / teardown / validation unit tests. **Follow-up:** a quick-view control already
+  cross-wired by the OLD global-name bug is not auto-repaired on a rebuild (`hasQuickView` matches only the
+  lookup field, not the embedded form id) — a rare pre-existing-state edge that self-heals on teardown +
+  rebuild.
 - ✅ **Env-wide appmodule pagination** — DONE. The vendored `queryRecords({ paginate:true })` now follows the OData `@odata.nextLink` to completion. The cross-app shared-page scan (`sitemap-pages.js` `fetchAppsForPages`) enumerates EVERY app instead of one ~5000-row page, so it no longer fails closed at the cap (`apps-truncated` removed). Fail-closed is preserved on: an enumeration throw, a pagination-abort (repeated-nextLink guard), AND an **empty** result (a live env always has ≥1 appmodule, so empty ⇒ a malformed/partial read ⇒ `apps-enumeration-empty` halt). Locked by `vendor-sdk-smoke.test.js` (paginate follows nextLink; rejects paginate+top / paginate+fetchXml) + `sitemap-pages.test.js`.
 - ✅ **Paginate throw-on-malformed-page (SDK hardening)** — DONE. The vendored `queryRecords({ paginate:true })` now THROWS a `ConnectionError` (carrying the page URL + HTTP status) when a paginated page's `value` is not an array (missing/null/object — previously coerced to empty, silently dropping rows; a bare-string `value` was iterated char-by-char, fabricating single-char rows) or when `@odata.nextLink` is a truthy non-string. The single-page (non-paginate) path stays lenient; `queryAllRecords` inherits the guard by delegation. The cross-app scan's `fetchAppsForPages` try/catch catches this → fail-closed at the source (the plugin's empty-enumeration guard remains as defense-in-depth). Locked by `vendor-sdk-smoke.test.js` ("THROWS on a malformed page"); re-vendored from `cds-maker-sdk` hardening-3 (`f066a644`).
 - 🔲 **Conditional `updateTable` (If-Match / skip-if-unchanged)** — the SDK's `updateTable` does an unconditional GET→PUT of the whole `EntityDefinitions` row (strips `@odata.etag`, no `If-Match`), so a concurrent Maker edit to another property of the SAME table in the GET→PUT window is last-writer-wins. This is pre-existing (icons/audit already use `updateTable`); the quick-create flag adds one more caller. Follow-ups: preserve the ETag + conditional PUT (retry/surface 412), and skip the PUT when the requested flag is already set (avoids a redundant write on every opted-in rebuild). Same class as the build's `requireSuccessfulPush` 412 posture for artifacts.

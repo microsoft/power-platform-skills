@@ -30,6 +30,8 @@ const {
   normalizePageSource,
   quickCreateEnabledFor,
   isPlatformIconRef,
+  FORM_TYPE_CODE,
+  FORM_GUID_RE,
 } = require('./app-spec.js');
 const { PHASES } = require('./stages.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
@@ -408,17 +410,89 @@ function enrichesDefaultViews(spec, entity) {
   return !!entity && entity.enrichDefaultViews !== false && defaultViewColumns(spec, entity).length >= 2;
 }
 
-// The (entity, name) identity query that finds an already-built artifact so a re-run or a
-// retry-after-partial-failure REUSES it instead of creating a duplicate. These artifact types
-// (savedquery/savedqueryvisualization/systemform) are otherwise always-create — the root of the
-// "16 copies of everything" duplication. Returns null for types without a stable identity query.
+// Resolve the id of an EXISTING deployed form to reconcile, disambiguating by TYPE (form names are unique
+// only per (entity, type)). Returns the formid, or null when the form isn't deployed yet (→ a fresh create).
+// Shared by the build's form phase AND the preflight op-diff discovery so both agree on the target.
+//   - `def.formId` set → resolve by id (the escape hatch for the residual same-(entity, type, name)
+//     collision, e.g. two Main forms both named "Information"). Validated as a GUID because it is
+//     interpolated UNQUOTED into an Edm.Guid OData filter, and confirmed to belong to the same table — so a
+//     malformed / stale / foreign id fails loud instead of silently reconciling the wrong form.
+//   - else → query systemform by (objecttypecode, name, type eq <code>). A `formType:"Main"` edit thus
+//     matches ONLY the Main form; same-named Quick View / Card siblings never block it. >1 match (two forms
+//     share entity+type+name) throws an ACTIONABLE error telling the author to pin forms[].formId — we
+//     refuse to guess rather than reconcile an arbitrary form (fail-closed).
+async function resolveExistingFormId(provision, def) {
+  if (def.formId) {
+    if (!FORM_GUID_RE.test(String(def.formId))) throw new Error(`form "${def.name}": formId '${def.formId}' is not a valid GUID`);
+    const rows = await provision.queryRecords('systemform', { select: ['formid', 'objecttypecode', 'type', 'name'], filter: `formid eq ${def.formId}`, top: 1 });
+    const row = rows && rows[0];
+    // A pinned id names an EXISTING form to reconcile. If it's ABSENT this is a stale/wrong pin, NOT a
+    // create trigger — returning null would drop to the create path and mint a NEW form on EVERY rerun
+    // (the pin stays in the spec), silently accumulating duplicate forms (Sol review). Fail loud instead.
+    if (!row) throw new Error(`form "${def.name}": pinned formId ${def.formId} does not exist on this environment — remove the pin to create a new form, or correct the id`);
+    // The pin must point at the SAME (table, type, name) the spec intends. reconcileForm blindly pushes the
+    // spec layout onto whatever id it gets, so a wrong pin (a Quick View id under formType:"Main", a form on
+    // another table, or an unrelated form) would CORRUPT that form. The pin's only legitimate use — two
+    // forms with identical (entity, type, name) — matches all three, so validating all three never rejects
+    // a valid pin, only a mistaken one (Opus + Sol review).
+    const wantType = FORM_TYPE_CODE[def.formType || 'Main'];
+    if (String(row.objecttypecode).toLowerCase() !== String(def.entityLogicalName).toLowerCase()) {
+      throw new Error(`form "${def.name}": formId ${def.formId} belongs to table '${row.objecttypecode}', not '${def.entityLogicalName}'`);
+    }
+    if (wantType != null && row.type != null && Number(row.type) !== wantType) {
+      throw new Error(`form "${def.name}": formId ${def.formId} is a type-${row.type} form but the spec declares formType "${def.formType || 'Main'}" (type ${wantType}) — pin a form of the matching type`);
+    }
+    if (row.name != null && String(row.name).toLowerCase() !== String(def.name).toLowerCase()) {
+      throw new Error(`form "${def.name}": formId ${def.formId} is named '${row.name}', not '${def.name}' — pin the form whose name matches the spec`);
+    }
+    return String(row.formid);
+  }
+  const typeCode = FORM_TYPE_CODE[def.formType || 'Main'];
+  // A known formType always maps to a code; an unknown one falls back to a name-only match (no worse than
+  // the old behavior, and authored formType is lint-constrained to Main/QuickCreate/QuickView anyway).
+  const typeFilter = typeCode != null ? ` and type eq ${typeCode}` : '';
+  let rows;
+  try {
+    rows = await provision.queryRecords('systemform', {
+      select: ['formid'],
+      filter: `objecttypecode eq '${odataLit(def.entityLogicalName)}' and name eq '${odataLit(def.name)}'${typeFilter}`,
+      top: 2,
+    });
+  } catch (err) {
+    // A brand-new table isn't in the metadata cache yet, so filtering `objecttypecode eq '<t>'` 400s with
+    // "The entity with a name = '<t>' ... was not found in the MetadataCache". A form on a table that does
+    // not exist definitionally does not exist, so treat this as NOT FOUND (→ build creates it, preflight
+    // has nothing to prune, teardown nothing to delete) — mirroring the SDK findArtifact this replaced,
+    // which swallowed it. This must NOT swallow a transient/real failure: re-throw anything else so the
+    // fail-closed preflight still refuses to write when it truly can't verify safety.
+    // Dataverse error shape: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/compose-http-requests-handle-errors#parse-errors-from-the-response
+    if (err && /not found in the MetadataCache/i.test(String(err.message || ''))) return null;
+    throw err;
+  }
+  if (!rows || !rows.length) return null;
+  if (rows.length > 1) {
+    throw new Error(`form "${def.name}" (${def.formType || 'Main'}) on ${def.entityLogicalName}: ${rows.length} forms share this table, type, and name — pin the exact one with forms[].formId (e.g. "${rows[0].formid}")`);
+  }
+  return String(rows[0].formid);
+}
+
+// The identity query that finds an already-built artifact so a re-run or a retry-after-partial-failure
+// REUSES it instead of creating a duplicate. These artifact types (savedquery/savedqueryvisualization/
+// systemform) are otherwise always-create — the root of the "16 copies of everything" duplication. Forms
+// additionally scope by TYPE (see FORM_TYPE_CODE — a name is unique only per (entity, type)). Returns null
+// for types without a stable identity query.
 function artifactIdentityQuery(type, def) {
   const name = odataLit(def.name);
   const entity = odataLit(def.entityLogicalName);
   switch (type) {
     case 'view': return { set: 'savedquery', idField: 'savedqueryid', filter: `returnedtypecode eq '${entity}' and name eq '${name}'` };
     case 'chart': return { set: 'savedqueryvisualization', idField: 'savedqueryvisualizationid', filter: `primaryentitytypecode eq '${entity}' and name eq '${name}'` };
-    case 'form': return { set: 'systemform', idField: 'formid', filter: `objecttypecode eq '${entity}' and name eq '${name}'` };
+    case 'form': {
+      // Scope by type when the formType is known so a Main-form identity never collides with a same-named
+      // Quick View / Card. An unknown/absent formType falls back to name-only (back-compat).
+      const t = FORM_TYPE_CODE[def.formType];
+      return { set: 'systemform', idField: 'formid', filter: `objecttypecode eq '${entity}' and name eq '${name}'${t != null ? ` and type eq ${t}` : ''}` };
+    }
     // The app is keyed by its (deterministic) unique name. Reusing it on a re-run avoids a duplicate
     // appmodule (Dataverse 400s on a duplicate uniquename). NOTE: reuse does not re-push the sitemap,
     // so a genuine app EDIT must go through the download->hydrate->update flow, not a bare re-run.
@@ -961,7 +1035,7 @@ async function runSdkBuild(spec, opts = {}) {
       // table must keep one main form), so reconciling onto it would attach the spec's subgrids +
       // parent lookups to an un-deletable form and strand references that block teardown. Gap 2 is
       // instead handled by making our form the entity's default (see promoteDefaultForm below).
-      const existingId = await provision.findArtifact('form', { name: def.name, entity: def.entityLogicalName });
+      const existingId = await resolveExistingFormId(provision, def);
       if (existingId) return reconcileForm(existingId, def);
     } else if (type === 'view') {
       const existingId = await provision.findArtifact('view', { name: def.name, entity: def.entityLogicalName });
@@ -1100,8 +1174,11 @@ async function runSdkBuild(spec, opts = {}) {
     // added as a canonical quick-view control cell (semantic identity = the lookup field, so a
     // rebuild doesn't duplicate it). Runs after ALL forms are built so a host can reference a
     // QuickView form created concurrently. Placed in the host's first section.
-    const formIdByName = {};
-    defs.forEach((d, i) => { if (d.f.name) formIdByName[d.f.name] = ids[i]; });
+    const formIdByEntityName = {};
+    // Only QuickView forms are quick-view targets. Keying ALL forms by (entity, name) let a same-named
+    // Main form on the SAME entity OVERWRITE the QuickView entry (order-dependent), embedding the wrong
+    // form id — so key QuickView forms only (Sol review).
+    defs.forEach((d, i) => { if (d.f.name && (d.f.formType || 'Main') === 'QuickView') formIdByEntityName[`${String(d.f.entity).toLowerCase()}|${d.f.name}`] = ids[i]; });
     for (let i = 0; i < defs.length; i++) {
       const f = defs[i].f;
       const qvs = (f.quickViews || []).filter((q) => q && q.lookup && q.targetEntity && q.form);
@@ -1111,8 +1188,10 @@ async function runSdkBuild(spec, opts = {}) {
         await provision.fetchArtifact('form', hostId);
         let changed = false;
         for (const qv of qvs) {
-          const qvFormId = formIdByName[qv.form];
-          if (!qvFormId) throw new Error(`form "${f.name || f.entity}" quick-view references form '${qv.form}' which wasn't built — declare it in forms[] with formType: "QuickView" and a matching name`);
+          // A quick-view embeds a QuickView form OF THE TARGET ENTITY — key by (targetEntity, name), not a
+          // global name, so two entities with same-named QuickView forms don't cross-wire (Sol review).
+          const qvFormId = formIdByEntityName[`${String(qv.targetEntity).toLowerCase()}|${qv.form}`];
+          if (!qvFormId) throw new Error(`form "${f.name || f.entity}" quick-view references form '${qv.form}' on '${qv.targetEntity}' which wasn't built — declare it in forms[] with formType: "QuickView", entity "${qv.targetEntity}", and a matching name`);
           const lookup = String(qv.lookup).toLowerCase();
           if (hasQuickView(provision.getArtifact('form', hostId) || {}, lookup)) continue; // idempotent
           const rowsPtr = firstSectionRowsPointer(provision.getArtifact('form', hostId) || {});
@@ -1554,4 +1633,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, chartDef, dashboardTileOpts, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease };
+module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease };

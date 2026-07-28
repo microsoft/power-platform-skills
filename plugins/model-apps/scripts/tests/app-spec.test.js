@@ -387,6 +387,16 @@ test('validateAppSpec rejects an invalid formType', () => {
   assert.ok(!r.ok && r.errors.some((e) => /formType must be one of/.test(e)));
 });
 
+test('validateAppSpec accepts a valid forms[].formId (GUID) and rejects a malformed one', () => {
+  const ok = cloneDesk();
+  ok.forms[0].formId = '3024db08-9559-4d89-be11-d5cefa01a21f';
+  assert.ok(validateAppSpec(ok).ok, JSON.stringify(validateAppSpec(ok).errors));
+  const bad = cloneDesk();
+  bad.forms[0].formId = "not-a-guid' or 1 eq 1"; // also guards the unquoted Edm.Guid OData interpolation
+  const r = validateAppSpec(bad);
+  assert.ok(!r.ok && r.errors.some((e) => /formId .* is not a valid GUID/.test(e)), JSON.stringify(r.errors));
+});
+
 test('validateAppSpec rejects sub-grids on a non-Main form', () => {
   const bad = cloneDesk(); // desk forms[0] (Customer) has a Tickets sub-grid
   bad.forms[0].formType = 'QuickCreate';
@@ -462,6 +472,41 @@ test('validateAppSpec accepts a quick-view placement referencing a QuickView for
   ];
   const r = validateAppSpec(ok);
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('validateAppSpec: a quick-view matches its form by (name, targetEntity) — a same-named form on ANOTHER entity is not accepted', () => {
+  const bad = cloneDesk();
+  bad.forms = [
+    { entity: 'new_ticket', name: 'Ticket', formType: 'Main', quickViews: [{ lookup: 'new_customerid', targetEntity: 'new_customer', form: 'Shared QV' }] },
+    { entity: 'new_ticket', name: 'Shared QV', formType: 'QuickView' }, // same NAME but on new_ticket, not the targetEntity new_customer
+  ];
+  const r = validateAppSpec(bad);
+  // Name-only matching would have (wrongly) accepted the new_ticket 'Shared QV'; (name, targetEntity) rejects it.
+  assert.ok(!r.ok && r.errors.some((e) => /quickView references form 'Shared QV' \(a QuickView on 'new_customer'\) not found/.test(e)), JSON.stringify(r.errors));
+});
+
+test('validateAppSpec: a quick-view prefers the QuickView form when a same-named Main exists on the SAME target entity', () => {
+  const ok = cloneDesk();
+  // new_customer has BOTH a Main and a QuickView named "Information"; the quick-view must resolve the
+  // QuickView, not be rejected because the Main appears first (order-dependent name matching — Sol).
+  ok.forms = [
+    { entity: 'new_ticket', name: 'Ticket', formType: 'Main', quickViews: [{ lookup: 'new_customerid', targetEntity: 'new_customer', form: 'Information' }] },
+    { entity: 'new_customer', name: 'Information', formType: 'Main' },      // same name, Main — appears FIRST
+    { entity: 'new_customer', name: 'Information', formType: 'QuickView' }, // the intended target
+  ];
+  const r = validateAppSpec(ok);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('validateAppSpec rejects two QuickView forms sharing (entity, name) — a quick-view reference would be ambiguous', () => {
+  const bad = cloneDesk();
+  bad.forms = [
+    { entity: 'new_ticket', name: 'Ticket', formType: 'Main' },
+    { entity: 'new_customer', name: 'Card', formType: 'QuickView' },
+    { entity: 'new_customer', name: 'Card', formType: 'QuickView' }, // duplicate QuickView identity on new_customer
+  ];
+  const r = validateAppSpec(bad);
+  assert.ok(!r.ok && r.errors.some((e) => /duplicate QuickView form 'Card'/.test(e)), JSON.stringify(r.errors));
 });
 
 test('validateAppSpec rejects a quick-view whose form is not a QuickView', () => {

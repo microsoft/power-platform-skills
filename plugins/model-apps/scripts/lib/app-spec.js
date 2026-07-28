@@ -14,6 +14,17 @@ function isSafeHttpUrl(u) {
   return parsed.protocol === 'http:' || parsed.protocol === 'https:';
 }
 
+// Dataverse systemform.type codes. A form NAME is unique only per (entity, TYPE) — a table's auto-created
+// Main / Quick View / Card forms are commonly ALL named "Information" — so any code that RESOLVES a form
+// (build reconcile, preflight discovery, verify) must scope by type or a name-only match hits multiple
+// rows. Shared here (the lowest-level spec module) so build + verify agree. Values per the option set:
+// https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/systemform#type-choicesoptions
+const FORM_TYPE_CODE = { Main: 2, QuickView: 6, QuickCreate: 7, Card: 11 };
+
+// A canonical GUID (used to validate an author-pinned forms[].formId, which is interpolated UNQUOTED into
+// an Edm.Guid OData filter). Anchored so it can neither over-match nor be an injection seam.
+const FORM_GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // A sitemap icon / vectorIcon VALUE the platform resolves DIRECTLY (as opposed to a locally-declared
 // `webResources[]` NAME): a relative WebResources path (`/WebResources/...`, `/_imgs/...`) or a
 // `$webresource:` reference. These are exactly what a DOWNLOADED app carries verbatim on its subareas —
@@ -453,6 +464,13 @@ function validateAppSpec(spec, opts = {}) {
     if (!['Main', 'QuickCreate', 'QuickView'].includes(formType)) {
       errors.push(`form ${f.entity}: formType must be one of Main|QuickCreate|QuickView`);
     }
+    // Optional author-pinned target: a GUID that reconciles an EXACT existing form when a table has two
+    // forms of the same (entity, type, name) that type-scoped resolution can't disambiguate. Validated
+    // here because the build interpolates it UNQUOTED into an Edm.Guid OData filter (a non-GUID would both
+    // break the query and be an injection seam).
+    if (f.formId !== undefined && !FORM_GUID_RE.test(String(f.formId))) {
+      errors.push(`form ${f.entity}: formId '${f.formId}' is not a valid GUID`);
+    }
     if (formType !== 'Main' && Array.isArray(f.subgrids) && f.subgrids.length) {
       errors.push(`form ${f.entity}: ${formType} forms can't host sub-grids (Main forms only)`);
     }
@@ -470,8 +488,12 @@ function validateAppSpec(spec, opts = {}) {
       if (!qv || !qv.lookup) { errors.push(`form ${f.entity}: a quickView is missing lookup (the lookup column logical name on this form)`); continue; }
       if (!qv.targetEntity || !entityByLower.has(String(qv.targetEntity).toLowerCase())) errors.push(`form ${f.entity}: quickView references unknown targetEntity '${qv.targetEntity}'`);
       if (!qv.form) { errors.push(`form ${f.entity}: quickView is missing form (the name of a QuickView form in forms[])`); continue; }
-      const qf = (spec.forms || []).find((x) => x.name === qv.form);
-      if (!qf) errors.push(`form ${f.entity}: quickView references form '${qv.form}' not found in forms[]`);
+      // Resolve by (name, targetEntity) AND prefer the QuickView — a same-named Main on the target entity
+      // must not shadow the intended QuickView (order-dependent otherwise; Sol review). The build keys the
+      // quick-view lookup by (entity, QuickView, name) too.
+      const qvCandidates = (spec.forms || []).filter((x) => x.name === qv.form && String(x.entity).toLowerCase() === String(qv.targetEntity || '').toLowerCase());
+      const qf = qvCandidates.find((x) => (x.formType || 'Main') === 'QuickView') || qvCandidates[0];
+      if (!qf) errors.push(`form ${f.entity}: quickView references form '${qv.form}' (a QuickView on '${qv.targetEntity}') not found in forms[]`);
       else if ((qf.formType || 'Main') !== 'QuickView') errors.push(`form ${f.entity}: quickView form '${qv.form}' must have formType: "QuickView"`);
     }
     if (f.subgrids !== undefined) {
@@ -495,6 +517,17 @@ function validateAppSpec(spec, opts = {}) {
         }
       }
     }
+  }
+  // Two QuickView forms sharing (entity, name) make a quick-view reference — which resolves a QuickView by
+  // (targetEntity, name) — ambiguous (the build map keeps only one, order-dependently). Reject the
+  // ambiguity at author time (Sol review). Main/Card share the "Information" name harmlessly (they're not
+  // quick-view targets), so this is scoped to QuickView.
+  const qvIdentity = new Set();
+  for (const f of spec.forms || []) {
+    if (!f || (f.formType || 'Main') !== 'QuickView' || !f.name) continue;
+    const key = `${String(f.entity).toLowerCase()}|${String(f.name).toLowerCase()}`;
+    if (qvIdentity.has(key)) errors.push(`form ${f.entity}: duplicate QuickView form '${f.name}' — two QuickView forms on one table can't share a name (a quick-view reference resolves a QuickView by name)`);
+    qvIdentity.add(key);
   }
   for (const ch of spec.charts || []) {
     if (!ch || !ch.entity || !entityByLower.has(String(ch.entity).toLowerCase())) {
@@ -1032,6 +1065,8 @@ module.exports = {
   quickCreateEnabledFor,
   isPlatformIconRef,
   webResourceNameFromRef,
+  FORM_TYPE_CODE,
+  FORM_GUID_RE,
   VALIDATION_PROFILES,
   migrateAppSpec,
   columnTypeMap,

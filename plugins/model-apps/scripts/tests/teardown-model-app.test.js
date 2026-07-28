@@ -53,7 +53,19 @@ function presentSdk() {
   const deleteSolution = async (id) => {
     calls.push({ method: 'deleteSolution', id });
   };
-  return { resolveArtifact, deleteAppCascade, deleteRemoteArtifact, deleteRelationship, deleteWebResource, deleteTable, deleteSolution, calls };
+  // Form resolution now runs through resolveExistingFormId → queryRecords('systemform') (type-scoped),
+  // replacing the old resolveArtifact('form'). Mirror the old single-form behavior: any form name/id
+  // lookup resolves to 'id-form'.
+  const queryRecords = async (entitySet, opts) => {
+    calls.push({ method: 'queryRecords', entitySet });
+    const filter = (opts && opts.filter) || '';
+    if (entitySet === 'systemform') {
+      if (/formid eq /.test(filter)) return [{ formid: 'id-form', objecttypecode: 'new_x', type: 2, name: 'Form' }];
+      if (/name eq '/.test(filter)) return [{ formid: 'id-form' }];
+    }
+    return [];
+  };
+  return { resolveArtifact, queryRecords, deleteAppCascade, deleteRemoteArtifact, deleteRelationship, deleteWebResource, deleteTable, deleteSolution, calls };
 }
 
 const logCapture = () => { const logs = []; return { log: (m) => logs.push(m), logs }; };

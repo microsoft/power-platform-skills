@@ -6,6 +6,7 @@
 
 const { odataLit } = require('./odata.js');
 const { normalizePageSource, relationshipSchemaName, manyToManySchemaName } = require('./app-spec.js');
+const { resolveExistingFormId } = require('./sdk-build.js');
 const { extractNavTargets } = require('./pageref-resolver.js');
 
 async function verifySpec(spec, read) {
@@ -48,8 +49,16 @@ async function verifySpec(spec, read) {
   }
   for (const f of spec.forms || []) {
     const name = f.name || `${f.entity} form`;
-    const rows = await read.queryRecords('systemform', { select: ['formid'], filter: `objecttypecode eq '${String(f.entity).toLowerCase()}' and name eq '${odataLit(name)}'`, top: 1 });
-    add('form', name, rows && rows[0]);
+    // Resolve with the SAME identity the build reconcile uses — (entity, name, TYPE) or a validated pinned
+    // formId (which checks the row's table/type/name) — so verify can't be fooled by a same-named sibling
+    // of another type, a mismatched pin, or a residual (entity,type,name) collision. resolveExistingFormId
+    // THROWS on a collision / bad pin → treat as NOT cleanly present (present:false surfaces the problem);
+    // a not-yet-created table (MetadataCache 400) resolves to null → correctly reported missing.
+    let id = null;
+    try {
+      id = await resolveExistingFormId(read, { entityLogicalName: String(f.entity).toLowerCase(), name, formType: f.formType, formId: f.formId });
+    } catch { id = null; }
+    add('form', name, id);
   }
 
   // Relationships (existence) — currently a build can declare a relationship that silently fails to

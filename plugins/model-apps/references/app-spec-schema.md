@@ -263,6 +263,14 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   default and only ever applies to a table THIS build owns (a custom, publisher-prefixed, non-`existing`
   table); it never touches a reused/system table. Teardown reactivates the stock form before deleting
   ours, so a torn-down table is left clean.
+- **Form resolution is by `(entity, name, formType)`** — a Dataverse form name is unique only per
+  `(entity, type)`, so a table's auto-created **Main**, **Quick View**, and **Card** forms can all be
+  named "Information" without colliding. A `formType:"Main"` edit reconciles **only** the Main form;
+  same-named Quick View / Card siblings never block it.
+- **`formId`** *(optional, GUID)* — pin an **exact existing** form to reconcile. Needed only for the rare
+  residual collision where a table has **two forms of the same `(entity, type, name)`** that type-scoped
+  resolution can't disambiguate — the build then errors and tells you to set `formId`. The id is verified
+  to belong to the form's table before anything is reconciled. Omit it for normal forms.
 - **`events[]`** wire client-side JS: `event` is `onload`/`onsave`/`onchange` (`onchange` needs an
   `attribute`), `library` references a declared `webResources[]` name (lint-enforced), `function` is
   the JS function. Optional `enabled` (default true), `passExecutionContext` (default true),

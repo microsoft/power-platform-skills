@@ -156,8 +156,11 @@ function lintAppSpec(spec) {
     for (const qv of f.quickViews || []) {
       if (!qv || !qv.lookup) { E(`Form ${f.entity} has a quickView missing lookup (the lookup column logical name)`); continue; }
       if (!qv.targetEntity || !entityNames.has(lc(qv.targetEntity))) E(`Form ${f.entity} quickView references unknown targetEntity '${qv.targetEntity}'`);
-      const qf = qv.form && (spec.forms || []).find((x) => x.name === qv.form);
-      if (!qf) E(`Form ${f.entity} quickView references form '${qv.form}' not found in forms[]`);
+      // Resolve by (name, targetEntity) preferring the QuickView so a same-named Main on the target entity
+      // doesn't shadow it (order-dependent otherwise; Sol review).
+      const qvCandidates = qv.form ? (spec.forms || []).filter((x) => x.name === qv.form && lc(x.entity) === lc(qv.targetEntity)) : [];
+      const qf = qvCandidates.find((x) => (x.formType || 'Main') === 'QuickView') || qvCandidates[0];
+      if (!qf) E(`Form ${f.entity} quickView references form '${qv.form}' (a QuickView on '${qv.targetEntity}') not found in forms[]`);
       else if ((qf.formType || 'Main') !== 'QuickView') E(`Form ${f.entity} quickView form '${qv.form}' must be a QuickView form`);
     }
   }

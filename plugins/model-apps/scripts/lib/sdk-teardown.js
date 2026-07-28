@@ -34,7 +34,7 @@
 // the identical phase-grouped, status-marked log.
 
 const { topoOrderEntities } = require('./_graph.js');
-const { appUniqueName, commandsByEntity, defaultViewColumns } = require('./sdk-build.js');
+const { appUniqueName, commandsByEntity, defaultViewColumns, resolveExistingFormId } = require('./sdk-build.js');
 const { manifestResourceName } = require('./page-manifest.js');
 const { relationshipSchemaName, manyToManySchemaName, lookupColumnsFor } = require('./app-spec.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
@@ -159,8 +159,13 @@ const KIND_HANDLERS = {
   },
   form: {
     async resolve(sdk, target) {
-      const items = await sdk.resolveArtifact('form', { name: target.name, entity: target.entity });
-      return (items || []).map((x) => ({ id: x.id, name: x.name, entity: target.entity, isMain: target.isMain }));
+      // Resolve by (entity, name, TYPE) or a pinned formId — NOT name alone — so tearing down a Main form
+      // never ALSO deletes the table's same-named Quick View / Card siblings (Sol review: the old name-only
+      // resolveArtifact returned every match and del() deleted each). resolveExistingFormId returns the ONE
+      // intended form (null if absent → nothing to delete; throws on a residual (entity,type,name) collision
+      // → teardown halts fail-closed rather than delete an arbitrary form).
+      const id = await resolveExistingFormId(sdk, { entityLogicalName: target.entity, name: target.name, formType: target.formType, formId: target.formId });
+      return id ? [{ id, name: target.name, entity: target.entity, isMain: target.isMain }] : [];
     },
     async del(sdk, item) {
       // A main form the build promoted to default can't be deleted until a stock form is restored
@@ -296,18 +301,22 @@ function planTeardown(spec) {
   // component"). Relying on the later table-delete cascade to clean the orphan is fragile (it does
   // not fire for a QV form on a REUSED/surviving table), so order the delete: hosts first, referenced
   // quick-view forms last.
-  const referencedQvForms = new Set();
-  for (const f of spec.forms || []) for (const qv of f.quickViews || []) if (qv && qv.form) referencedQvForms.add(qv.form);
+  const referencedQv = new Set();
+  for (const f of spec.forms || []) for (const qv of f.quickViews || []) if (qv && qv.form && qv.targetEntity) referencedQv.add(`${String(qv.targetEntity).toLowerCase()}|${qv.form}`);
+  // A form is a "referenced quick-view" only if it is a QuickView whose (entity, name) a host embeds —
+  // NOT merely a same NAME as some referenced QV (a same-named Main host must stay in the hosts-first
+  // group, else it'd be ordered after its own QV and the QV delete would 400 on the host reference; Sol).
+  const isReferencedQv = (f) => (f.formType || 'Main') === 'QuickView' && referencedQv.has(`${String(f.entity).toLowerCase()}|${f.name}`);
   const namedForms = (spec.forms || []).filter((f) => f.name);
   const orderedForms = [
-    ...namedForms.filter((f) => !referencedQvForms.has(f.name)),
-    ...namedForms.filter((f) => referencedQvForms.has(f.name)),
+    ...namedForms.filter((f) => !isReferencedQv(f)),
+    ...namedForms.filter((f) => isReferencedQv(f)),
   ];
   for (const f of orderedForms) {
     // Main forms get promoted to the entity default at build time; teardown reverses that before
     // deleting (restoreStockMainForm), so flag them here.
     const isMain = String(f.formType || f.type || 'main').toLowerCase() === 'main';
-    steps.push({ kind: 'form', phase: 'forms', label: `form "${f.name}" (${f.entity})`, target: { name: f.name, entity: String(f.entity).toLowerCase(), isMain } });
+    steps.push({ kind: 'form', phase: 'forms', label: `form "${f.name}" (${f.entity})`, target: { name: f.name, entity: String(f.entity).toLowerCase(), formType: f.formType, formId: f.formId, isMain } });
   }
   for (const c of spec.charts || []) {
     steps.push({ kind: 'chart', phase: 'charts', label: `chart "${c.name}" (${c.entity})`, target: { name: c.name, entity: String(c.entity).toLowerCase() } });

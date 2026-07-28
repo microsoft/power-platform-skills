@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { runSdkBuild, planFor, resolvePhases, compileFormIntent, formFieldLogicals, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, dashboardTileOpts, PHASES, appUniqueName } = require('../lib/sdk-build.js');
+const { runSdkBuild, planFor, resolvePhases, compileFormIntent, formFieldLogicals, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, dashboardTileOpts, PHASES, appUniqueName } = require('../lib/sdk-build.js');
 
 // Real GUIDs (Imp9) for the three-authority sitemap mock. SELF_* identify THIS app's appmodule + sitemap
 // so fetchSitemap(appUnique) resolves to opts.liveSitemapXml; otherApps get synthetic ids. Ids that flow
@@ -132,8 +132,17 @@ function mockSdk(opts = {}) {
         const idx = Number(String(smId).replace('sm-', '')) - 2;
         return [{ sitemapxml: (opts.otherApps && opts.otherApps[idx] && opts.otherApps[idx].sitemapxml) || '<SiteMap/>' }];
       }
-      // Main forms for an entity: our reconciled form + a blank stock "Information" form to deactivate.
-      if (e === 'systemform') return opts.artifactsExist ? [{ formid: 'form-existing', isdefault: true }, { formid: 'stock-info', isdefault: false }] : [];
+      // systemform queries come from THREE build paths, distinguished by their filter:
+      //   1. resolveExistingFormId (id resolution): `objecttypecode … and name eq '…' and type eq <code>`
+      //      → the ONE matching form (name+type is unique). Returns 'form-existing' when artifactsExist.
+      //   2. resolveExistingFormId by pinned id: `formid eq <guid>` → that row (objecttypecode echoed back).
+      //   3. promoteDefaultForm deactivation: `objecttypecode … and type eq 2` (NO name) → every Main form
+      //      (our reconciled one + a blank stock "Information" form to deactivate).
+      if (e === 'systemform') {
+        if (/formid eq /.test(filter)) { const id = (filter.match(/formid eq (\S+)/) || [])[1]; return [{ formid: id, objecttypecode: opts.formIdEntity || 'new_ticket' }]; }
+        if (/name eq '/.test(filter)) return opts.artifactsExist ? [{ formid: 'form-existing' }] : []; // (1) id resolution — single match
+        return opts.artifactsExist ? [{ formid: 'form-existing', isdefault: true }, { formid: 'stock-info', isdefault: false }] : []; // (3) deactivation set
+      }
       if (e === 'savedquery') {
         // Default-view / subgrid default lookup (filters by querytype): a default view exists.
         // Artifact idempotency (name eq filter) is now handled by findArtifact, not queryRecords.
@@ -1044,7 +1053,7 @@ test('quick-view placement halts clearly when the referenced form was not built'
       quickViews: [{ lookup: 'new_CustomerId', targetEntity: 'new_customer', form: 'Nope' }] },
   ];
   const { sdk } = mockSdk();
-  await assert.rejects(runSdkBuild(spec, { sdk, apply: true }), /quick-view references form 'Nope' which wasn't built/);
+  await assert.rejects(runSdkBuild(spec, { sdk, apply: true }), /quick-view references form 'Nope' on 'new_customer' which wasn't built/);
 });
 
 test('commands: loose buttons + a flyout with children build to the right shape (one loose group)', async () => {
@@ -1235,13 +1244,113 @@ test('views phase skips default-view enrichment when opted out (enrichDefaultVie
   assert.strictEqual(find(calls, 'enrichDefaultViews').length, 0, 'no enrichment when opted out');
 });
 
-test('artifactIdentityQuery: view/chart/form use (entity, name); others null', () => {
+test('artifactIdentityQuery: view/chart/form use (entity, name); form scopes by TYPE when known; others null', () => {
   assert.match(artifactIdentityQuery('view', { name: 'V', entityLogicalName: 'new_t' }).filter, /returnedtypecode eq 'new_t' and name eq 'V'/);
   assert.strictEqual(artifactIdentityQuery('view', { name: 'V', entityLogicalName: 'new_t' }).set, 'savedquery');
   assert.match(artifactIdentityQuery('chart', { name: 'C', entityLogicalName: 'new_t' }).filter, /primaryentitytypecode eq 'new_t' and name eq 'C'/);
   assert.match(artifactIdentityQuery('form', { name: "O'Brien", entityLogicalName: 'new_t' }).filter, /name eq 'O''Brien'/);
+  // A known formType adds `type eq <code>` so a Main identity never collides with a same-named Quick View.
+  assert.match(artifactIdentityQuery('form', { name: 'Information', entityLogicalName: 'new_t', formType: 'Main' }).filter, /name eq 'Information' and type eq 2$/);
+  assert.match(artifactIdentityQuery('form', { name: 'Information', entityLogicalName: 'new_t', formType: 'QuickView' }).filter, /type eq 6$/);
+  // No formType → name-only (back-compat), no `type eq`.
+  assert.doesNotMatch(artifactIdentityQuery('form', { name: 'Information', entityLogicalName: 'new_t' }).filter, /type eq/);
   assert.match(artifactIdentityQuery('app', { name: 'A', uniqueName: 'new_a' }).filter, /uniquename eq 'new_a'/);
   assert.strictEqual(artifactIdentityQuery('command', { name: 'X' }), null);
+});
+
+// ── resolveExistingFormId: disambiguate a form by (entity, name, TYPE) — Dataverse form names are unique
+// only per (entity, type), so a table's same-named Main / Quick View / Card forms must not collide. ──
+test('resolveExistingFormId scopes by TYPE so a Main edit matches ONLY the Main form among same-named siblings', async () => {
+  const seen = [];
+  const provision = { queryRecords: async (e, o) => { seen.push(o.filter); return e === 'systemform' ? [{ formid: 'main-1' }] : []; } };
+  const id = await resolveExistingFormId(provision, { entityLogicalName: 'zava_javavendor', name: 'Information', formType: 'Main' });
+  assert.strictEqual(id, 'main-1');
+  assert.match(seen[0], /objecttypecode eq 'zava_javavendor' and name eq 'Information' and type eq 2/, 'query scopes by objecttypecode + name + type eq 2 (Main)');
+});
+
+test('resolveExistingFormId maps every authored formType to its systemform.type code', async () => {
+  const codeFor = async (formType) => {
+    let captured;
+    const provision = { queryRecords: async (e, o) => { captured = o.filter; return []; } };
+    await resolveExistingFormId(provision, { entityLogicalName: 't', name: 'n', formType });
+    return (captured.match(/type eq (\d+)/) || [])[1];
+  };
+  assert.strictEqual(await codeFor('Main'), '2');
+  assert.strictEqual(await codeFor('QuickView'), '6');
+  assert.strictEqual(await codeFor('QuickCreate'), '7');
+  assert.deepStrictEqual(FORM_TYPE_CODE, { Main: 2, QuickView: 6, QuickCreate: 7, Card: 11 });
+});
+
+test('resolveExistingFormId returns null when the form is not deployed yet (→ a fresh create)', async () => {
+  const provision = { queryRecords: async () => [] };
+  assert.strictEqual(await resolveExistingFormId(provision, { entityLogicalName: 't', name: 'n', formType: 'Main' }), null);
+});
+
+test('resolveExistingFormId treats a "not found in the MetadataCache" 400 (brand-new table) as NOT FOUND, not a hard error', async () => {
+  // A fresh build queries systemform for a table that does not exist yet → Dataverse 400. A form on a
+  // non-existent table definitionally does not exist, so return null (build creates it; the fail-closed
+  // preflight must NOT halt on this) — mirroring the SDK findArtifact this replaced.
+  const provision = { queryRecords: async () => { const e = new Error("The entity with a name = 'ftx_widget' was not found in the MetadataCache"); e.statusCode = 400; throw e; } };
+  assert.strictEqual(await resolveExistingFormId(provision, { entityLogicalName: 'ftx_widget', name: 'Information', formType: 'Main' }), null);
+});
+
+test('resolveExistingFormId RE-THROWS a non-metadata error (a transient failure must still fail closed)', async () => {
+  const provision = { queryRecords: async () => { const e = new Error('429 Too Many Requests'); e.statusCode = 429; throw e; } };
+  await assert.rejects(
+    () => resolveExistingFormId(provision, { entityLogicalName: 't', name: 'n', formType: 'Main' }),
+    /429/);
+});
+
+test('resolveExistingFormId throws an ACTIONABLE error on the residual same-(entity,type,name) collision (suggests forms[].formId)', async () => {
+  // Two forms share entity+type+name — type scoping can't disambiguate; refuse to guess (fail-closed).
+  const provision = { queryRecords: async () => [{ formid: 'a-1' }, { formid: 'a-2' }] };
+  await assert.rejects(
+    () => resolveExistingFormId(provision, { entityLogicalName: 'zava_javavendor', name: 'Information', formType: 'Main' }),
+    (err) => /forms\[\]\.formId/.test(err.message) && /a-1/.test(err.message));
+});
+
+test('resolveExistingFormId honors a pinned forms[].formId — resolves by id and verifies the entity + type', async () => {
+  const provision = { queryRecords: async (e, o) => {
+    assert.match(o.filter, /formid eq 3024db08-9559-4d89-be11-d5cefa01a21f/, 'resolves by id (unquoted Edm.Guid)');
+    return [{ formid: '3024db08-9559-4d89-be11-d5cefa01a21f', objecttypecode: 'zava_javavendor', type: 2, name: 'Information' }];
+  } };
+  const id = await resolveExistingFormId(provision, { entityLogicalName: 'zava_javavendor', name: 'Information', formType: 'Main', formId: '3024db08-9559-4d89-be11-d5cefa01a21f' });
+  assert.strictEqual(id, '3024db08-9559-4d89-be11-d5cefa01a21f');
+});
+
+test('resolveExistingFormId rejects a pinned formId of the WRONG type (a Quick View id under formType:"Main")', async () => {
+  const provision = { queryRecords: async () => [{ formid: 'f-1', objecttypecode: 'zava_javavendor', type: 6, name: 'Information' }] }; // type 6 = Quick View
+  await assert.rejects(
+    () => resolveExistingFormId(provision, { entityLogicalName: 'zava_javavendor', name: 'Information', formType: 'Main', formId: '3024db08-9559-4d89-be11-d5cefa01a21f' }),
+    (err) => /type-6 form/.test(err.message) && /formType "Main"/.test(err.message));
+});
+
+test('resolveExistingFormId rejects a pinned formId whose NAME differs from the spec (never reconcile an unrelated form)', async () => {
+  const provision = { queryRecords: async () => [{ formid: 'f-1', objecttypecode: 'zava_javavendor', type: 2, name: 'Some Other Form' }] };
+  await assert.rejects(
+    () => resolveExistingFormId(provision, { entityLogicalName: 'zava_javavendor', name: 'Information', formType: 'Main', formId: '3024db08-9559-4d89-be11-d5cefa01a21f' }),
+    (err) => /is named 'Some Other Form'/.test(err.message) && /not 'Information'/.test(err.message));
+});
+
+test('resolveExistingFormId rejects a formId that belongs to a DIFFERENT table (never reconcile the wrong form)', async () => {
+  const provision = { queryRecords: async () => [{ formid: 'f-1', objecttypecode: 'other_table', type: 2, name: 'Information' }] };
+  await assert.rejects(
+    () => resolveExistingFormId(provision, { entityLogicalName: 'zava_javavendor', name: 'Information', formType: 'Main', formId: '3024db08-9559-4d89-be11-d5cefa01a21f' }),
+    /belongs to table 'other_table'/);
+});
+
+test('resolveExistingFormId rejects a malformed formId (guards the unquoted OData Guid interpolation)', async () => {
+  const provision = { queryRecords: async () => { throw new Error('should not query on a bad id'); } };
+  await assert.rejects(
+    () => resolveExistingFormId(provision, { entityLogicalName: 't', name: 'n', formType: 'Main', formId: "not-a-guid' or 1 eq 1" }),
+    /is not a valid GUID/);
+});
+
+test('resolveExistingFormId THROWS (does not create) when a pinned formId is absent — a stale pin must not mint a duplicate every rerun', async () => {
+  const provision = { queryRecords: async () => [] };
+  await assert.rejects(
+    () => resolveExistingFormId(provision, { entityLogicalName: 't', name: 'n', formType: 'Main', formId: '3024db08-9559-4d89-be11-d5cefa01a21f' }),
+    (err) => /pinned formId .* does not exist/.test(err.message));
 });
 
 test('idempotency: existing view/chart/form/app are reused, not re-created (no duplicates on re-run)', async () => {
@@ -1309,7 +1418,10 @@ test('Gap 2: our (custom) main form is promoted to the entity default (isdefault
   assert.ok(upd.some((c) => c.args[2] && c.args[2].isdefault === true), 'our main form is marked isdefault=true');
   // Deactivation is destructive (disables sibling/role-based + env-wide OOB forms), so it must NOT happen.
   assert.ok(!upd.some((c) => c.args[2] && Object.prototype.hasOwnProperty.call(c.args[2], 'formactivationstate')), 'no form is deactivated');
-  assert.ok(find(calls, 'findArtifact').some((c) => c.args[0] === 'form'), 'form resolved by name+entity (our form), not the stock form');
+  assert.ok(
+    find(calls, 'queryRecords').some((c) => c.args[0] === 'systemform' && /name eq '/.test((c.args[1] || {}).filter || '') && /type eq 2/.test((c.args[1] || {}).filter || '')),
+    'form resolved by (entity, name, TYPE) — the type-scoped query targets our Main form, not a same-named Quick View / Card sibling'
+  );
 });
 
 test('#6 opt-in: forms[].deactivateOtherMainForms deactivates OTHER active main forms on our custom table', async () => {

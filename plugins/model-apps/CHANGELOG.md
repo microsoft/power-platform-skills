@@ -9,7 +9,22 @@ plus local-dev ergonomics, sample coverage, and an automated eval suite with
 real and synthetic fixtures. Builds on v2.1; no breaking changes.
 
 ### Changed
-- **Custom nav-icon web resources are made portable across environments (download re-declares them).**
+- **Form edits resolve by `(entity, name, type)` — a table's same-named Main/Quick View/Card forms no
+  longer block editing, and teardown no longer over-deletes them.** A Dataverse form name is unique only per
+  `(entity, type)`, so a table routinely has a Main (type 2), Quick View (type 6), and Card (type 11) form
+  **all named "Information"**. The build resolved/reconciled a form by `(entity, name)` only, so a name-only
+  lookup matched multiple rows, the SDK raised `AmbiguousArtifactError` ("a name is not a unique key"), and
+  the fail-closed preflight **halted** — a `formType:"Main"` edit could not be applied at all (the author had
+  to hand-patch formxml by id). A shared `resolveExistingFormId` now scopes the lookup by **type**
+  (`type eq <code>`), applied CONSISTENTLY in the build's form phase, the preflight op-diff discovery, the
+  spec **verifier** (no longer reports a Main form "present" when only a same-named Quick View exists), and
+  **teardown** (which previously deleted EVERY same-named match — a data-loss risk on same-named Quick
+  View/Card siblings; it now deletes exactly the intended form). For the residual case (two forms of the same
+  `(entity, type, name)`) the build errors with an **actionable** message and a new optional
+  **`forms[].formId`** pins the exact form (GUID-validated; verified to match the target table, type, AND
+  name before reconcile; a stale pin fails loud rather than minting duplicate forms). Quick-view form
+  references are also keyed by `(targetEntity, name)` so two entities with same-named Quick View forms no
+  longer cross-wire. Live-repro table `zava_javavendor` (three "Information" forms) is unblocked.
   A sitemap nav icon that references a custom image web resource **by path**
   (`/WebResources/<pub>/icons/x.svg` or `$webresource:<name>`) previously round-tripped only the
   *reference* — so a download→rebuild into a **different** environment rendered a **broken** icon because

@@ -6,7 +6,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
-const { buildModelApp, isTransientHalt } = require(path.join(__dirname, '..', 'build-model-app.js'));
+const { buildModelApp, isTransientHalt, discoverOpDiffState } = require(path.join(__dirname, '..', 'build-model-app.js'));
 
 const desk = JSON.parse(
   fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.support-desk.json'), 'utf8')
@@ -351,6 +351,40 @@ test('collision preflight: silent when nothing collides', async () => {
   const logs = [];
   await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, log: (m) => logs.push(m) });
   assert.ok(!logs.some((l) => /already exist/.test(l)), 'no false-positive collision warning');
+});
+
+test('discoverOpDiffState resolves an explicit-layout form by (entity, name, TYPE) — no name-ambiguity halt on same-named Main/QuickView/Card', async () => {
+  // The reported bug: a table with same-named Main + Quick View + Card forms made the name-only lookup
+  // match multiple rows → AmbiguousArtifactError → the preflight halted. The type-scoped query must
+  // return exactly the Main form and let discovery proceed.
+  const formQueries = [];
+  const provision = {
+    queryRecords: async (set, o) => {
+      const filter = (o && o.filter) || '';
+      if (set === 'solution' || set === 'appmodule') return []; // no collision
+      if (set === 'systemform') {
+        formQueries.push(filter);
+        // A name-ONLY query would (like the live env) match 3 same-named forms; the TYPE-scoped query
+        // returns exactly one. Assert the caller scoped by type, then return the single Main row.
+        assert.match(filter, /type eq 2/, 'form resolution scopes by type (Main=2), not name alone');
+        return [{ formid: 'main-form-1' }];
+      }
+      return [{ publisherid: 'pub-1' }];
+    },
+    fetchArtifact: async () => ({ id: 'main-form-1' }),
+    getArtifact: () => ({ id: 'main-form-1', tabs: [] }),
+  };
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'zava' },
+    app: { name: 'Zava' },
+    entities: [{ schemaName: 'zava_javavendor', primaryAttribute: { schemaName: 'zava_name' }, columns: [] }],
+    // Explicit-layout Main form named "Information" (the same name as the auto Quick View / Card forms).
+    forms: [{ entity: 'zava_javavendor', name: 'Information', formType: 'Main', layout: 'explicit', tabs: [{ name: 't', sections: [{ name: 's', fields: ['zava_name'] }] }] }],
+    appShell: { areas: [] },
+  };
+  const state = await discoverOpDiffState(spec, provision);
+  assert.strictEqual(state.forms.length, 1, 'the Main form resolved (discovery did not halt on a name collision)');
+  assert.ok(formQueries.length >= 1 && /name eq 'Information'/.test(formQueries[0]), 'resolved by (entity, name, type)');
 });
 
 test('I1: apply refuses ANY partial phase range except the full build or exactly --stage data', async () => {
