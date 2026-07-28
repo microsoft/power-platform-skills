@@ -1818,7 +1818,7 @@ function writeRemediationDiff(sitePath, outputDir, fetchXmlResults, liquidResult
   const environmentName = (meta && meta.environmentName) || 'unknown';
 
   const payload = {
-    // PP-VSCode importer required fields
+    // PP-VSCode importer required fields (current schema)
     version: '1.0',
     extensionVersion: 'migrate-sdm-to-edm-skill/1.0',
     exportedAt: new Date().toISOString(),
@@ -1829,6 +1829,14 @@ function writeRemediationDiff(sitePath, outputDir, fetchXmlResults, liquidResult
     remoteWebsiteId: websiteId,
     remoteWebsiteName: websiteName,
     dataModelVersion: 1,
+
+    // Deprecated aliases — emit them too so older PP-VSCode builds (and any code
+    // path in the mapper that still reads these names) find a non-empty value.
+    // Without these, RemoveSiteHandler can hit "Cannot read properties of
+    // undefined (reading 'siteName')" when its mapper degrades to empty string.
+    websiteId,
+    websiteName: websiteName,
+    localSiteName: websiteName,
 
     // Skill-specific context (ignored by PP-VSCode, used by our renderer)
     generatedAt: new Date().toISOString(),
