@@ -1,9 +1,10 @@
 # `--changed-only` safe partial apply — design (Sol-approved, 7 review rounds)
 
-Status: **implemented; PROD-readiness reviewed** (design: adversarial GPT-5.6 Sol, 7 rounds v1 *unsafe*
-→ v7 *safe-to-implement*; implementation: adversarial GPT-5.6 Sol + Claude Opus, both max effort — all
-Critical/High findings fixed with tests). This is the canonical spec for the multi-deliverable build; the
-round-by-round design history lives in the session workspace (`design-changed-only-v1..v7.md`).
+Status: **implemented; PROD-readiness reviewed; live-verified** (design: adversarial GPT-5.6 Sol, 7 rounds
+v1 *unsafe* → v7 *safe-to-implement*; implementation: adversarial GPT-5.6 Sol + Claude Opus, both max
+effort — all Critical/High findings fixed with tests; **live regression PASSED on aurorabapenv03468**).
+This is the canonical spec for the multi-deliverable build; the round-by-round design history lives in the
+session workspace (`design-changed-only-v1..v7.md`).
 
 ## v1 scope + contract (READ THIS)
 v1 wires exactly ONE convergent shape end-to-end: **page-content re-upload** (a `.tsx` byte edit to an
@@ -113,9 +114,13 @@ snapshot read→eligibility gate→classify→pages-only fast apply via the seam
 invalidate-before-write + fresh-create-only baseline + verify-gated re-bless + generation fencing, I1-gate
 exception. 6. ✅ Full offline tests (919 green). 7. ✅ Implementation review — adversarial GPT-5.6 Sol +
 Claude Opus (max effort); all Critical/High findings fixed with tests (see the fix commit + this doc's v1
-contract/deferred sections). 8. 🔄 Live regression test (aurorabapenv03468) — runbook prepared
-(`session files/changed-only-live/`), pending Aurora test-tenant auth. 9. 🔄 Docs — design + roadmap +
-CHANGELOG + AGENTS.md.
+contract/deferred sections). 8. ✅ **Live regression PASSED** (aurorabapenv03468, 2026-07-27): (1) fresh
+`--apply --changed-only` → full build, verify 9/9, **eligible** snapshot (orgId/appId bound, debt 0);
+(2) `.tsx` byte edit → `--apply --changed-only` → **FAST pages-only** (2 steps not 12, same pageId =
+UPDATE, new measured deployedSha, verify 9/9, snapshot **re-blessed eligible**); (3) chart edit →
+`--apply --changed-only` → **full-build fallback**, verify 9/9, snapshot **INELIGIBLE** with sticky
+`chart-edit-not-convergent` + `uncertified-baseline` debt; (4) `teardown --apply` → app cascade removed,
+snapshot **tombstoned then deleted** (0 leftovers). 9. ✅ Docs — design + roadmap + CHANGELOG + AGENTS.md.
 
 ## Build-time notes (from the final Sol pass)
 - Live-absence verification covers the UNION of prior-snapshot identities, current spec, generated
