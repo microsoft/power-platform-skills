@@ -31,53 +31,52 @@ function renderKeywordChips(keywords) {
   return items.map((item) => `<span class="chip">${escapeHtml(item)}</span>`).join('');
 }
 
-function renderPreviewCarousel(template, templateIndex) {
+function renderPreviewImages(template) {
   const images = Array.isArray(template.previewImages) ? template.previewImages : [];
   if (images.length === 0) {
     return '<div class="preview-empty">No preview image yet</div>';
   }
-  const carouselId = `template-preview-${templateIndex + 1}`;
-  const slides = images.map((image, imageIndex) => `
-    <figure class="preview-frame" data-slide="${imageIndex}"${imageIndex === 0 ? '' : ' hidden'}>
-      <img src="${escapeHtml(image)}" alt="Preview ${imageIndex + 1} of ${escapeHtml(template.displayName)}" loading="lazy" />
-    </figure>
+  return images.map((image, imageIndex) => `
+    <img class="preview-image" src="${escapeHtml(image)}" alt="Preview ${imageIndex + 1} of ${escapeHtml(template.displayName)}" loading="lazy" />
   `).join('');
-  return `
-    <div class="preview-carousel" id="${carouselId}" data-carousel data-current="0">
-      <div class="preview-stage">
-        ${slides}
-      </div>
-      <div class="carousel-controls" aria-label="Preview controls for ${escapeHtml(template.displayName)}">
-        <button type="button" class="carousel-btn" data-carousel-prev aria-label="Show previous preview for ${escapeHtml(template.displayName)}" ${images.length === 1 ? 'disabled' : ''}>&lsaquo;</button>
-        <span class="carousel-count" data-carousel-count>1 of ${images.length}</span>
-        <button type="button" class="carousel-btn" data-carousel-next aria-label="Show next preview for ${escapeHtml(template.displayName)}" ${images.length === 1 ? 'disabled' : ''}>&rsaquo;</button>
-      </div>
-    </div>
-  `;
 }
 
-function renderTemplateCardsHtml(templates) {
+function templateTabId(index) {
+  return `template-${index + 1}`;
+}
+
+function renderTemplateTabsHtml(templates) {
+  if (!Array.isArray(templates) || templates.length === 0) {
+    return '<div class="nav-btn active"><span class="nav-icon">&#9673;</span> No templates</div>';
+  }
+  return templates.map((template, index) => `
+    <button class="nav-btn${index === 0 ? ' active' : ''}" type="button" data-tab="${templateTabId(index)}">
+      <span class="nav-icon">&#9673;</span>
+      ${escapeHtml(template.displayName)}
+    </button>
+  `).join('');
+}
+
+function renderTemplateSectionsHtml(templates) {
   if (!Array.isArray(templates) || templates.length === 0) {
     return '<div class="empty-note">No templates are available right now.</div>';
   }
   return templates.map((template, index) => `
-    <article class="template-card">
-      <div class="template-card-head">
-        <div>
-          <div class="field-label">Template ${index + 1}</div>
-          <h3>${escapeHtml(template.displayName)}</h3>
-          <p class="template-desc">${escapeHtml(template.description)}</p>
-        </div>
+    <section class="template-section${index === 0 ? ' active' : ''}" id="${templateTabId(index)}">
+      <div class="template-hero">
+        <h2>${escapeHtml(template.displayName)}</h2>
         <div class="template-framework">${escapeHtml(template.framework)}</div>
-      </div>
-      <div class="preview-strip">
-        ${renderPreviewCarousel(template, index)}
       </div>
       <div class="template-meta">
         <div class="field-label">Keywords</div>
         <div class="chip-row">${renderKeywordChips(template.keywords)}</div>
       </div>
-    </article>
+      <p class="template-desc">${escapeHtml(template.description)}</p>
+      <div class="field-label previews-label">Previews</div>
+      <div class="preview-stack">
+        ${renderPreviewImages(template)}
+      </div>
+    </section>
   `).join('');
 }
 
@@ -94,9 +93,10 @@ function renderTemplateBrowser({ templatesJsonPath, outputPath, open = false }, 
     outputPath,
     dataObject: {
       TEMPLATE_COUNT: String(templates.length),
-      TEMPLATE_CARD_HTML: renderTemplateCardsHtml(templates),
+      TEMPLATE_TABS_HTML: renderTemplateTabsHtml(templates),
+      TEMPLATE_SECTIONS_HTML: renderTemplateSectionsHtml(templates),
     },
-    requiredKeys: ['TEMPLATE_COUNT', 'TEMPLATE_CARD_HTML'],
+    requiredKeys: ['TEMPLATE_COUNT', 'TEMPLATE_TABS_HTML', 'TEMPLATE_SECTIONS_HTML'],
   });
   if (open) {
     openFileInDefaultBrowser(outputPath, deps);
@@ -122,5 +122,6 @@ module.exports = {
   parseArgs,
   openFileInDefaultBrowser,
   renderTemplateBrowser,
-  renderTemplateCardsHtml,
+  renderTemplateTabsHtml,
+  renderTemplateSectionsHtml,
 };

@@ -32,30 +32,21 @@
     h3{font-size:18px;font-weight:800;color:var(--text-bright);letter-spacing:-0.2px;margin-bottom:6px;}
     .section-desc{font-size:13px;color:var(--text-dim);margin-bottom:20px;max-width:760px;}
     .summary-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px;margin-bottom:22px;font-size:14px;color:var(--text);line-height:1.75;}
-    .template-list{display:grid;gap:18px;}
-    .template-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-4);overflow:hidden;}
-    .template-card-head{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;padding:20px 22px 16px;border-bottom:1px solid var(--border);}
-    .template-desc{font-size:13px;color:var(--text-dim);margin-top:6px;max-width:760px;}
+    .template-section{display:none;}
+    .template-section.active{display:block;animation:fadeIn 0.24s ease;}
+    @keyframes fadeIn{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
+    .template-hero{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin-bottom:16px;}
+    .template-desc{font-size:14px;color:var(--text);margin:14px 0 24px;max-width:900px;}
     .template-framework{font-size:11px;padding:4px 10px;border-radius:999px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;background:var(--pass-bg);border:1px solid var(--pass-border);color:var(--pass);white-space:nowrap;}
-    .preview-strip{background:#eef1f5;border-bottom:1px solid var(--border);}
-    .preview-carousel{position:relative;background:#eef1f5;}
-    .preview-stage{min-height:320px;display:flex;align-items:center;justify-content:center;}
-    .preview-frame{width:100%;min-height:320px;background:#eef1f5;display:flex;align-items:center;justify-content:center;}
-    .preview-frame[hidden]{display:none;}
-    .preview-frame img{display:block;width:100%;height:100%;max-height:420px;object-fit:contain;background:#eef1f5;}
-    .carousel-controls{display:flex;align-items:center;justify-content:center;gap:12px;padding:10px 14px;background:var(--surface);border-top:1px solid var(--border);}
-    .carousel-btn{width:30px;height:30px;border:1px solid var(--border-light);border-radius:999px;background:var(--surface);color:var(--text-bright);font-size:20px;line-height:1;cursor:pointer;font-family:var(--sans);}
-    .carousel-btn:hover:not(:disabled){border-color:var(--accent);color:var(--accent);background:var(--accent-bg);}
-    .carousel-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
-    .carousel-btn:disabled{opacity:0.45;cursor:not-allowed;}
-    .carousel-count{font-size:12px;color:var(--text-dim);font-family:var(--mono);}
-    .preview-empty{min-height:180px;display:flex;align-items:center;justify-content:center;background:var(--surface2);color:var(--text-dim);font-size:13px;}
-    .template-meta{padding:16px 22px 20px;}
+    .template-meta{margin-bottom:12px;}
     .field-label{font-size:11px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:7px;}
+    .previews-label{margin-top:4px;}
     .chip-row{display:flex;flex-wrap:wrap;gap:6px;}
     .chip{font-size:11px;padding:3px 10px;border-radius:4px;font-weight:600;background:var(--surface2);border:1px solid var(--border);color:var(--text);}
     .muted{font-size:12px;color:var(--text-dim);}
     .empty-note{font-size:13px;color:var(--text-dim);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;}
+    .preview-stack{display:grid;gap:28px;}
+    .preview-image{display:block;width:100%;height:auto;}
     @media(max-width:900px){
       .layout{flex-direction:column;}
       .sidebar{width:100%;border-right:none;border-bottom:1px solid var(--border);padding:8px;}
@@ -78,37 +69,21 @@
   </div>
   <div class="layout">
     <aside class="sidebar">
-      <div class="nav-group-label">Catalog</div>
-      <div class="nav-btn active"><span class="nav-icon">&#9673;</span> Template capabilities</div>
+      <div class="nav-group-label">Templates</div>
+      __TEMPLATE_TABS_HTML__
     </aside>
     <main class="content">
-      <h2>Template capabilities</h2>
-      <p class="section-desc">Each card shows what the template is for, the framework it uses, keywords from the catalog, and every preview image shipped with the template.</p>
-      <section class="template-list">
-        __TEMPLATE_CARD_HTML__
-      </section>
+      __TEMPLATE_SECTIONS_HTML__
     </main>
   </div>
   <script>
-    document.querySelectorAll('[data-carousel]').forEach((carousel) => {
-      const slides = Array.from(carousel.querySelectorAll('[data-slide]'));
-      const count = carousel.querySelector('[data-carousel-count]');
-      const prev = carousel.querySelector('[data-carousel-prev]');
-      const next = carousel.querySelector('[data-carousel-next]');
-      if (slides.length === 0) return;
-
-      const show = (nextIndex) => {
-        const index = (nextIndex + slides.length) % slides.length;
-        carousel.dataset.current = String(index);
-        slides.forEach((slide, slideIndex) => {
-          slide.hidden = slideIndex !== index;
-        });
-        if (count) count.textContent = `${index + 1} of ${slides.length}`;
-      };
-
-      prev?.addEventListener('click', () => show(Number(carousel.dataset.current || 0) - 1));
-      next?.addEventListener('click', () => show(Number(carousel.dataset.current || 0) + 1));
-      show(Number(carousel.dataset.current || 0));
+    document.querySelectorAll('[data-tab]').forEach((button) => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('[data-tab]').forEach((item) => item.classList.remove('active'));
+        document.querySelectorAll('.template-section').forEach((section) => section.classList.remove('active'));
+        button.classList.add('active');
+        document.getElementById(button.dataset.tab)?.classList.add('active');
+      });
     });
   </script>
 </body>

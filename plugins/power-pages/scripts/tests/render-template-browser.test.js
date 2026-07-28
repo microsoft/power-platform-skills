@@ -67,11 +67,15 @@ test('renderTemplateBrowser renders static template details and preview images',
   assert.match(html, /311 Portal/);
   assert.match(html, /home\.png/);
   assert.match(html, /detail\.png/);
-  assert.match(html, /data-carousel/);
-  assert.match(html, /data-carousel-next/);
-  assert.match(html, /1 of 2/);
+  assert.match(html, /data-tab="template-1"/);
+  assert.match(html, /data-tab="template-2"/);
+  assert.match(html, /class="template-section active" id="template-1"/);
+  assert.match(html, /class="template-section" id="template-2"/);
+  assert.match(html, /class="preview-image"/);
   assert.match(html, /Preview 2 of Company &quot;Portal&quot;/);
   assert.match(html, /Citizen service request portal/);
+  assert.doesNotMatch(html, /data-carousel/);
+  assert.doesNotMatch(html, /carousel/);
   assert.doesNotMatch(html, /Audience/);
   assert.doesNotMatch(html, /makers/);
   assert.doesNotMatch(html, /developers/);
