@@ -292,6 +292,25 @@ function normalizePageSource(page) {
   return null;
 }
 
+// Whether the build should enable "Allow quick create" (`IsQuickCreateEnabled`) on a table.
+// TWO triggers, both author-controlled:
+//   1. explicit `entities[].quickCreate === true`, OR
+//   2. the spec authors a `formType: 'QuickCreate'` form for that entity — enabling the flag then
+//      just makes the form the author already declared actually reachable (the inline "+ New" from a
+//      lookup / sub-grid). Authoring a Quick Create form but leaving the table flag OFF is a footgun:
+//      the form exists but the platform never surfaces it, so we treat the authored QC form as intent.
+// PURE: both the build engine (entity-provision.js) and the eval fact extractor (schema-facts.js) call
+// this so the eval grades the EXACT rule the engine applies (DRY — never a naive spec echo).
+function quickCreateEnabledFor(spec, entity) {
+  if (!entity) return false;
+  if (entity.quickCreate === true) return true;
+  const logical = String(entity.schemaName || '').toLowerCase();
+  if (!logical) return false;
+  return (spec && spec.forms || []).some(
+    (f) => f && f.formType === 'QuickCreate' && String(f.entity || '').toLowerCase() === logical,
+  );
+}
+
 function validateAppSpec(spec, opts = {}) {
   const profile = opts.profile || 'deploy';
   const errors = [];
@@ -321,6 +340,9 @@ function validateAppSpec(spec, opts = {}) {
     }
     if (!e.primaryAttribute || !e.primaryAttribute.schemaName) {
       errors.push(`entity ${e.schemaName}: primaryAttribute.schemaName required`);
+    }
+    if (e.quickCreate !== undefined && typeof e.quickCreate !== 'boolean') {
+      errors.push(`entity ${e.schemaName}: quickCreate must be a boolean`);
     }
     for (const c of e.columns || []) {
       if (!c.schemaName) {
@@ -916,6 +938,7 @@ function migrateAppSpec(spec) {
 module.exports = {
   validateAppSpec,
   normalizePageSource,
+  quickCreateEnabledFor,
   VALIDATION_PROFILES,
   migrateAppSpec,
   columnTypeMap,

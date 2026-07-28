@@ -94,13 +94,40 @@ test('multi-tab / multi-section explicit layout serializes every tab, section an
   await sdk.pushArtifact('form', id);
   const formxml = String((cap.find((c) => /systemforms/.test(c.url)) || {}).body.formxml);
   for (const f of ['new_name', 'new_a', 'new_b', 'new_c']) assert.match(formxml, new RegExp(`datafieldname="${f}"`), `${f} present in formxml`);
-  // Every <column> MUST carry the required `width` attribute — the SDK's normalizeColumn does not
-  // default it, so a missing width makes live Dataverse reject the form ("required attribute 'width'
-  // is missing"). The fake httpClient does not schema-validate, so this assertion is the offline guard.
+  // Every <column> MUST carry the required `width` attribute or live Dataverse rejects the form
+  // ("required attribute 'width' is missing"). The plugin sets width explicitly AND (hardening-3) the
+  // SDK's normalizeColumn now also defaults a synthesized column's width to 100% — see the dedicated
+  // SDK-default test below. The fake httpClient does not schema-validate, so this assertion is the guard.
   assert.ok((formxml.match(/<column\b[^>]*>/g) || []).length > 0, 'formxml has columns');
   assert.ok(!/<column\b(?![^>]*\bwidth=)/.test(formxml), 'every <column> carries a width attribute');
   assert.match(formxml, /Title="General"|<label description="General"/, 'General tab labelled');
   assert.match(formxml, /Details|<label description="Details"/, 'Details tab present');
+});
+
+test('#8 authored column width: a synthesized form column with NO explicit width serializes as width="100%" (hardening-3 SDK safety net)', async () => {
+  // hardening-3 SDK: FormAdapter.normalizeColumn defaults an AUTHORED (fully-synthesized bag) column's
+  // width to '100%' when it is undefined, so a widthless authored column can never emit invalid formxml.
+  // The plugin still sets width explicitly for exact control, so STRIP it here to prove the SDK safety
+  // net works independently — a re-vendor that drops this default would regress the reconcile-add path
+  // (a field added to a fetched form without an explicit width) into broken formxml.
+  const spec = {
+    entities: [{ schemaName: 'new_customer', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' },
+      columns: [{ schemaName: 'new_a', type: 'Text' }] }],
+    forms: [{ entity: 'new_customer', name: 'W', tabs: [
+      { label: 'General', sections: [{ label: 'Names', columns: 1, fields: ['new_name', 'new_a'] }] },
+    ] }],
+  };
+  const cap = [];
+  const sdk = freshSdk(cap);
+  const intent = ai.compileFormIntent(spec, spec.forms[0], { notesClassId: NOTES_CLASS_ID });
+  // Remove the plugin-set width from every tab column so ONLY the SDK default can supply it.
+  for (const tab of intent.tabs) for (const col of (tab.columns || [])) delete col.width;
+  const id = buildFormShell(sdk, intent);
+  await sdk.pushArtifact('form', id);
+  const formxml = String((cap.find((c) => /systemforms/.test(c.url)) || {}).body.formxml);
+  assert.ok((formxml.match(/<column\b[^>]*>/g) || []).length > 0, 'formxml has columns');
+  assert.ok(!/<column\b(?![^>]*\bwidth=)/.test(formxml), 'every <column> still carries a width (the SDK defaulted it)');
+  assert.match(formxml, /<column\b[^>]*width="100%"/, 'the SDK-defaulted width is 100%');
 });
 
 test('metadata-derived control types: passing only fieldName lets the adapter classId a Lookup vs a text field (T4)', async () => {

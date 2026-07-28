@@ -11,6 +11,7 @@ const {
   relationshipFor,
   relationshipSchemaName,
   manyToManySchemaName,
+  quickCreateEnabledFor,
 } = require('./app-spec.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 // OData string-literal escaping for spec-controlled values interpolated into $filter (a solution
@@ -42,11 +43,12 @@ function columnOptions(c, globalChoiceIds, globalChoices) {
     case 'Boolean': if (c.trueLabel) o.trueLabel = c.trueLabel; if (c.falseLabel) o.falseLabel = c.falseLabel; break;
     case 'Choice': case 'MultiChoice':
       if (c.globalChoice && globalChoiceIds[c.globalChoice]) { o.globalChoiceMetadataId = globalChoiceIds[c.globalChoice]; }
-      // The global choice exists but its metadataId wasn't captured — happens on an idempotent
-      // re-run where the option set already existed (the SDK has no global-choice reader). A
-      // globalChoice column carries no inline options of its own, so fall back to the global
-      // choice's DECLARED options (same values the engine assigns) rather than the column's
-      // empty list, so the column still builds instead of failing the whole data-model phase.
+      // Defensive fallback: the global choice exists but its metadataId wasn't captured. With the now
+      // IDEMPOTENT createGlobalOptionSet (probe-then-reuse returns the existing id), the primary branch
+      // above normally fires on both a fresh build AND a re-run — a real create failure halts the phase
+      // before we get here. This branch is a belt-and-suspenders guard (e.g. a success that somehow
+      // returned no id): a globalChoice column carries no inline options of its own, so fall back to the
+      // global choice's DECLARED options (same values the engine assigns) so the column still builds.
       else if (c.globalChoice) { const gc = (globalChoices || []).find((g) => g.name === c.globalChoice); o.options = choiceOptions(gc ? { options: gc.options } : c); }
       else o.options = choiceOptions(c); break;
     case 'File': case 'Image': if (c.maxSizeKb) o.maxSizeKb = c.maxSizeKb; if (c.type === 'Image' && c.isPrimaryImage) o.isPrimaryImage = true; break;
@@ -166,13 +168,17 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply }) {
   const globalChoiceIds = result.globalChoiceIds;
   const statusReasonValues = result.statusReasonValues;
   
-  // 2a. Global option sets (shared choices) — built before columns that bind to them.
+  // 2a. Global option sets (shared choices) — built before columns that bind to them. The SDK's
+  // createGlobalOptionSet is now IDEMPOTENT: it probes by Name and REUSES an existing set (returning
+  // its MetadataId) instead of failing a duplicate-Name POST. So a rerun captures the existing set's
+  // id here — fixing the old bug where the catch swallowed "already exists" and left the id undefined,
+  // which forced every column on a rebuild to fall back to inline options (roadmap: global-choice
+  // find-by-name). A GENUINE failure (400 validation / auth) now surfaces as a clean phase failure via
+  // runner.run instead of being silently swallowed.
   for (const gc of spec.globalChoices || []) {
     await runner.run('data-model', `global choice ${gc.name}`, async () => {
-      try {
-        const r = await sdk.createGlobalOptionSet({ name: gc.name, displayName: gc.displayName || gc.name, options: (gc.options || []).map((label, i) => ({ value: 100000000 + i, label })) });
-        globalChoiceIds[gc.name] = r.metadataId;
-      } catch (e) { /* already exists — a fresh column binding falls back to inline options (idempotent global-choice lookup is a follow-up SDK method) */ }
+      const r = await sdk.createGlobalOptionSet({ name: gc.name, displayName: gc.displayName || gc.name, options: (gc.options || []).map((label, i) => ({ value: 100000000 + i, label })) });
+      globalChoiceIds[gc.name] = r.metadataId;
     });
   }
   
@@ -205,6 +211,17 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply }) {
           result.entities[e.schemaName] = { logicalName: logical, entitySetName: found.entitySetName };
         }
       }, { recoverable: true });
+    }
+    // Enable "Allow quick create" on the table when the spec opts in (explicit `entities[].quickCreate`
+    // OR an authored `formType: 'QuickCreate'` form — see quickCreateEnabledFor). Runs for BOTH a fresh
+    // and an existing table and is idempotent: `IsQuickCreateEnabled` is a plain Edm.Boolean flag, so
+    // re-PUTting the same value is a Dataverse no-op. The flag alone does NOT author a form — a table
+    // with a Quick Create form (the build authors those via formType) needs this flag for the inline
+    // "+ New" (from a lookup / sub-grid) to surface that form instead of coming up empty.
+    if (quickCreateEnabledFor(spec, e)) {
+      await runner.run('data-model', `enable quick create on ${logical}`, async () => {
+        await sdk.updateTable(logical, { quickCreateEnabled: true });
+      });
     }
     // columns: every buildable column (all scalar types + Customer; Lookup comes from a
     // relationship). Existing ones emit a skip; missing ones are created SERIALLY: Dataverse

@@ -204,4 +204,14 @@ ASSERTIONS.set("the customer form's ticket sub-grid is a 1-column full-width sec
 ASSERTIONS.set('validateAppSpec accepts the relational sample data: the $parent match resolves and the Choice labels are declared (#1/#4)', ({ facts }) =>
   facts.author.validate.ok ? PASS : fail(`validate errors: ${facts.author.validate.errors.join('; ')}`));
 
+// #8: quick-create (IsQuickCreateEnabled) enabled on a table via schema-facts (explicit flag OR an
+// authored QuickCreate form — the exact engine rule). Also assert the plan carries the enable step.
+ASSERTIONS.set('quick create is enabled on the new_ticket table (#8)', ({ facts }) => {
+  const t = (facts.data.tables || []).find((x) => x.logicalName === 'new_ticket');
+  if (!t) return fail('no new_ticket table fact');
+  if (t.quickCreate !== true) return fail('new_ticket.quickCreate fact is not true');
+  const planned = (facts.plan.labels || []).some((l) => /enable quick create on new_ticket/.test(l));
+  return planned ? PASS : fail('the build plan has no "enable quick create on new_ticket" step');
+});
+
 module.exports = { ASSERTIONS };

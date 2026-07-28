@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
-const { validateAppSpec, columnTypeMap, relationshipFor, lookupColumnsFor, childRelationshipsFor, relationshipSchemaName, manyToManySchemaName, resolveSampleRecords, migrateAppSpec } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
+const { validateAppSpec, columnTypeMap, relationshipFor, lookupColumnsFor, childRelationshipsFor, relationshipSchemaName, manyToManySchemaName, resolveSampleRecords, migrateAppSpec, quickCreateEnabledFor } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
 
 const sample = JSON.parse(
   fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.project-tracker.json'), 'utf8')
@@ -782,4 +782,42 @@ test('validateAppSpec REJECTS a non-GUID pages[].pageId', () => {
     { pageId: '' }
   );
   assert.ok(!validateAppSpec(emptySpec, { profile: 'deploy' }).ok, 'empty pageId is rejected');
+});
+
+// --- entities[].quickCreate (Allow quick create table flag) --------------------------------------
+function quickCreateSpec(entityExtra, forms) {
+  return {
+    schemaVersion: 2,
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'A' },
+    entities: [{ schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' }, columns: [], ...entityExtra }],
+    forms: forms || [],
+  };
+}
+
+test('validateAppSpec accepts a boolean entities[].quickCreate', () => {
+  assert.ok(validateAppSpec(quickCreateSpec({ quickCreate: true }), { profile: 'deploy' }).ok, 'quickCreate:true is valid');
+  assert.ok(validateAppSpec(quickCreateSpec({ quickCreate: false }), { profile: 'deploy' }).ok, 'quickCreate:false is valid');
+  assert.ok(validateAppSpec(quickCreateSpec({}), { profile: 'deploy' }).ok, 'omitted quickCreate is valid');
+});
+
+test('validateAppSpec rejects a non-boolean entities[].quickCreate', () => {
+  const r = validateAppSpec(quickCreateSpec({ quickCreate: 'yes' }), { profile: 'deploy' });
+  assert.ok(!r.ok, 'quickCreate must be a boolean');
+  assert.ok(r.errors.some((e) => /quickCreate must be a boolean/.test(e)), 'the error names the field');
+});
+
+test('quickCreateEnabledFor: true for an explicit flag, a derived QuickCreate form, else false', () => {
+  const entity = { schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' }, columns: [] };
+  // explicit flag — the flag lives on the ENTITY object passed (quickCreateEnabledFor reads entity.quickCreate)
+  const flagged = quickCreateSpec({ quickCreate: true });
+  assert.strictEqual(quickCreateEnabledFor(flagged, flagged.entities[0]), true, 'explicit quickCreate:true');
+  // derived from an authored QuickCreate form (case-insensitive entity match)
+  assert.strictEqual(quickCreateEnabledFor(quickCreateSpec({}, [{ entity: 'New_Ticket', formType: 'QuickCreate' }]), entity), true, 'derived from a QuickCreate form');
+  // a Main form does NOT enable it
+  assert.strictEqual(quickCreateEnabledFor(quickCreateSpec({}, [{ entity: 'new_ticket', formType: 'Main' }]), entity), false, 'a Main form does not enable quick create');
+  // neither → false
+  assert.strictEqual(quickCreateEnabledFor(quickCreateSpec({}), entity), false, 'no flag and no QuickCreate form → false');
+  // a QuickCreate form for a DIFFERENT entity does not enable this one
+  assert.strictEqual(quickCreateEnabledFor(quickCreateSpec({}, [{ entity: 'new_other', formType: 'QuickCreate' }]), entity), false, 'a QuickCreate form for another entity does not leak');
 });

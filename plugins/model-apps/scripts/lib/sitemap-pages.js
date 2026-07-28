@@ -148,11 +148,6 @@ async function fetchSitemap(sdk, appUnique) {
   return { ok: true, xml: String(xml), ids: sitemapGenPageIds(String(xml)) };
 }
 
-// Dataverse's maximum server-side page size. The vendored queryRecords issues one GET and cannot follow
-// `@odata.nextLink`, so an appmodule list of this many rows may be TRUNCATED — fetchAppsForPages treats a
-// full page as a coverage failure and fails CLOSED (see its doc + the cap check).
-const APPMODULE_PAGE_CAP = 5000;
-
 // Env-wide MEMBERSHIP scan (Imp5): which apps' sitemaps reference each id in `pageIds`. GROUNDED by a live
 // Dataverse probe (aurorabapenv03468): a generative page has NO `appmodulecomponent` row —
 // `appmodulecomponents?$filter=objectid eq <genPageId>` returns 0 rows. So a genpage's app membership lives
@@ -162,14 +157,13 @@ const APPMODULE_PAGE_CAP = 5000;
 // Cost: O(number of apps) — one appmodule list + one sitemap read per OTHER app. `excludeAppUnique` skips the
 // app being built (self can't share with itself), so a SINGLE-APP environment reads ZERO other sitemaps.
 //
-// PAGINATION / FAIL-CLOSED AT THE CAP: `$top:APPMODULE_PAGE_CAP` requests one over-provisioned page. The
-// vendored SDK's queryRecords issues a SINGLE GET and does NOT follow `@odata.nextLink` (it exposes no
-// paginating query), so a result AT the cap means the list may be TRUNCATED and the rest is invisible.
-// Because an unlisted app could be the very one that shares a page we are about to UPDATE, a full page is
-// treated as a coverage failure → `{ ok:false, reason:'apps-truncated' }`, so this safety scan fails
-// CLOSED (the caller HALTs) instead of fail OPEN by silently missing apps. (A tenant with EXACTLY
-// APPMODULE_PAGE_CAP apps false-positives here — acceptably rare and still safe. Replace with cursor
-// pagination if the SDK ever exposes @odata.nextLink.)
+// COMPLETE ENUMERATION (`paginate: true`): the vendored SDK's queryRecords now follows the OData
+// `@odata.nextLink` to completion, so the appmodule list is the FULL set even past the ~5000-row server
+// page — no silent truncation. This closes the old fail-closed-at-the-cap hole: an unlisted app could
+// hide a shared page we are about to UPDATE, so the scan previously HALTed (`apps-truncated`) whenever the
+// list hit the single-page cap; it can now safely verify EVERY app in the environment. A pagination fault
+// (the SDK aborts on a repeated `@odata.nextLink` to avoid an infinite loop) throws → caught below →
+// `{ ok:false }`, so enumeration still fails CLOSED rather than scanning a partial list.
 //
 // FAIL-CLOSED on the enumeration itself: a failed appmodule list → { ok:false } (caller refuses to proceed
 // without full visibility). BEST-EFFORT per app: an app whose sitemap we cannot read is recorded in `unreadable`
@@ -184,22 +178,26 @@ async function fetchAppsForPages(sdk, pageIds, opts) {
   try {
     apps = await sdk.queryRecords('appmodule', {
       select: ['appmoduleid', 'appmoduleidunique', 'uniquename'],
-      top:    APPMODULE_PAGE_CAP, // one over-provisioned page — see the FAIL-CLOSED-AT-THE-CAP note above
+      // Follow @odata.nextLink to completion so EVERY app is enumerated (no single-page truncation).
+      // Not combined with `top` — Dataverse honors $top as a hard cap and omits @odata.nextLink, which
+      // would silently return one page; the SDK rejects paginate+top for exactly that reason.
+      paginate: true,
     });
   } catch (e) {
-    // Fail-closed: cannot enumerate apps → cannot verify safety → report failure to caller.
+    // Fail-closed: cannot enumerate apps (a query error OR a pagination abort) → cannot verify safety
+    // → report failure to caller.
     return { ok: false, error: String((e && e.message) || e) };
   }
 
-  // Fail CLOSED on a full (possibly-truncated) page: queryRecords cannot page `@odata.nextLink`, so a
-  // result AT the cap may omit apps we can't see — and an unseen app could share the page we are about to
-  // UPDATE. Refuse rather than fail OPEN by scanning an incomplete list. See the PAGINATION note above.
-  if ((apps || []).length >= APPMODULE_PAGE_CAP) {
-    return {
-      ok: false,
-      reason: 'apps-truncated',
-      error: `appmodule enumeration returned the full ${APPMODULE_PAGE_CAP}-row page cap; the vendored SDK cannot paginate @odata.nextLink, so cross-app page-sharing cannot be verified for every app in this environment. Halting fail-closed to avoid overwriting a page shared by an unlisted app.`,
-    };
+  // Fail-closed on an EMPTY enumeration. `fetchAppsForPages` is only called when we are about to UPDATE
+  // an existing page (see the caller), so the app being built already exists — a real Dataverse env
+  // therefore ALWAYS returns ≥1 appmodule (system apps + this app). An empty list means the paginated
+  // read returned no rows without throwing (e.g. a malformed 2xx page the SDK's queryRecords treats as
+  // "empty + complete"): trusting it would fail OPEN (scan sees zero apps → misses a shared page). Refuse.
+  // (This closes the worst — first-page-malformed — case; a rarer non-empty-but-partial page is a residual
+  // SDK-hardening follow-up: queryRecords should throw on any paginated body without an array `value`.)
+  if (!(apps && apps.length)) {
+    return { ok: false, reason: 'apps-enumeration-empty', error: 'appmodule enumeration returned zero rows, which is impossible for a live environment (system apps always exist) — treating it as a failed/partial read and halting fail-closed rather than trusting an empty cross-app scan.' };
   }
 
   // Skip self up-front so a single-app env reads no sitemaps at all (minimal work).

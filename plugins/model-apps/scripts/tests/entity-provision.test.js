@@ -10,6 +10,7 @@ function mockSdk(existing = {}) {
     calls,
     sdk: {
       createTable: async (o) => { calls.push(['createTable', o.schemaName]); return { logicalName: o.schemaName.toLowerCase(), entitySetName: `${o.schemaName.toLowerCase()}s`, metadataId: `tbl-${o.schemaName}` }; },
+      updateTable: async (l, o) => { calls.push(['updateTable', l, o]); return {}; },
       createColumn: async (l, o) => { calls.push(['createColumn', l, o.schemaName]); return { logicalName: o.schemaName.toLowerCase(), metadataId: `col-${o.schemaName}` }; },
       createCustomerColumn: async (l, o) => { calls.push(['createCustomerColumn', l, o.schemaName]); return { logicalName: o.schemaName.toLowerCase(), metadataId: `col-${o.schemaName}` }; },
       createRelationship: async (o) => { calls.push(['createRelationship', o.schemaName]); return { schemaName: o.schemaName, metadataId: `rel-${o.schemaName}`, lookupLogicalName: o.lookupSchemaName ? o.lookupSchemaName.toLowerCase() : undefined }; },
@@ -140,11 +141,13 @@ test('provisionDataModel serializes column creation within an entity (per-entity
   assert.strictEqual(m.calls.filter((c) => c[0] === 'createColumn').length, 3, 'all three columns created');
 });
 
-test('provisionDataModel falls back to global-choice options when the option set pre-exists (idempotent re-run)', async () => {
+test('provisionDataModel binds the reused global-choice metadataId on an idempotent re-run (SDK probe-then-reuse)', async () => {
   const m = mockSdk();
-  // The global option set already exists: createGlobalOptionSet throws already-exists, so its
-  // metadataId is never captured (the SDK has no reader). A globalChoice column must still build.
-  m.sdk.createGlobalOptionSet = async () => { const e = new Error('already exists'); e.statusCode = 409; throw e; };
+  // The global option set already exists. The SDK's createGlobalOptionSet is now IDEMPOTENT: it probes
+  // by Name and RETURNS the existing set's { name, metadataId } instead of throwing a duplicate-Name
+  // error. So the engine captures that id and the column binds to it (globalChoiceMetadataId) — the fix
+  // for the old bug where the id was lost on a rebuild and every column fell back to inline options.
+  m.sdk.createGlobalOptionSet = async ({ name }) => ({ name, metadataId: 'gc-existing' });
   const seen = {};
   m.sdk.createColumn = async (l, o) => { seen[o.schemaName] = o; return { logicalName: o.schemaName.toLowerCase(), metadataId: `col-${o.schemaName}` }; };
   const spec = {
@@ -158,13 +161,77 @@ test('provisionDataModel falls back to global-choice options when the option set
   };
   const runner = makeRunner({ emit: () => {}, total: 10 });
   await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true });
-  assert.ok(seen['new_severity'], 'severity column still created (no crash on pre-existing global choice)');
-  assert.ok(!seen['new_severity'].globalChoiceMetadataId, 'no metadataId bound (option set was not captured)');
-  assert.deepStrictEqual(
-    seen['new_severity'].options.map((o) => o.label),
-    ['Low', 'High', 'Critical'],
-    'fell back to the global choice declared options, not the column empty list'
+  assert.ok(seen['new_severity'], 'severity column still created');
+  assert.strictEqual(seen['new_severity'].globalChoiceMetadataId, 'gc-existing', 'column bound to the reused global-choice metadataId (no fallback to inline options)');
+  assert.ok(!seen['new_severity'].options, 'no inline options — it bound to the global choice by id');
+});
+
+test('provisionDataModel halts the phase on a REAL global-choice failure (no longer swallowed)', async () => {
+  const m = mockSdk();
+  // A genuine failure (400 validation / auth) is NOT an "already exists" — the idempotent SDK only
+  // reuses on a name collision, so a real error must surface as a clean phase halt, not be swallowed
+  // (the old catch swallowed ALL errors, hiding real failures).
+  m.sdk.createGlobalOptionSet = async () => { const e = new Error('Invalid option set name'); e.statusCode = 400; throw e; };
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    globalChoices: [{ name: 'new_sev', displayName: 'Sev', options: ['Low', 'High'] }],
+    entities: [
+      { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' }, columns: [] },
+    ],
+    relationships: [],
+  };
+  const runner = makeRunner({ emit: () => {}, total: 10 });
+  await assert.rejects(
+    () => provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true }),
+    /data-model failed.*Invalid option set name/,
+    'a real global-choice error halts the data-model phase'
   );
+});
+
+test('provisionDataModel enables quick-create when entities[].quickCreate is true (updateTable IsQuickCreateEnabled)', async () => {
+  const m = mockSdk();
+  const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [
+    { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' }, columns: [], quickCreate: true },
+  ], relationships: [] };
+  const runner = makeRunner({ emit: () => {}, total: 10 });
+  await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true });
+  const call = m.calls.find((c) => c[0] === 'updateTable');
+  assert.ok(call, 'updateTable was called to enable quick create');
+  assert.strictEqual(call[1], 'new_ticket', 'updateTable targeted the table logical name');
+  assert.strictEqual(call[2].quickCreateEnabled, true, 'quickCreateEnabled:true passed to updateTable');
+});
+
+test('provisionDataModel enables quick-create when an authored QuickCreate form exists (derived, no explicit flag)', async () => {
+  const m = mockSdk();
+  // No explicit entities[].quickCreate, but the spec authors a QuickCreate form → the flag is derived
+  // so the authored form is actually reachable from the inline "+ New" (footgun removal).
+  const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [
+    { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' }, columns: [] },
+  ], forms: [{ entity: 'new_ticket', name: 'QC', formType: 'QuickCreate' }], relationships: [] };
+  const runner = makeRunner({ emit: () => {}, total: 10 });
+  await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true });
+  assert.ok(m.calls.some((c) => c[0] === 'updateTable' && c[1] === 'new_ticket' && c[2].quickCreateEnabled === true), 'quick-create enabled from the authored QuickCreate form');
+});
+
+test('provisionDataModel does NOT enable quick-create when neither the flag nor a QuickCreate form is present', async () => {
+  const m = mockSdk();
+  const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [
+    { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' }, columns: [] },
+  ], forms: [{ entity: 'new_ticket', name: 'Main' }], relationships: [] };
+  const runner = makeRunner({ emit: () => {}, total: 10 });
+  await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true });
+  assert.ok(!m.calls.some((c) => c[0] === 'updateTable'), 'updateTable is not called without an opt-in');
+});
+
+test('provisionDataModel enables quick-create even for an EXISTING (reused) table (idempotent flag)', async () => {
+  const m = mockSdk({ new_ticket: true });
+  const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [
+    { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' }, columns: [], quickCreate: true },
+  ], relationships: [] };
+  const runner = makeRunner({ emit: () => {}, total: 10 });
+  await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true });
+  assert.ok(!m.calls.some((c) => c[0] === 'createTable'), 'existing table not re-created');
+  assert.ok(m.calls.some((c) => c[0] === 'updateTable' && c[2].quickCreateEnabled === true), 'quick-create flag still applied to the reused table');
 });
 
 test('provisionDataModel still throws on NON-already-exists createTable error', async () => {

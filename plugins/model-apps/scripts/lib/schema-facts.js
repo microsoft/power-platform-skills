@@ -6,7 +6,7 @@
 // offline eval harness diffs per build. Pure (no I/O, no SDK): it derives everything deterministically
 // from the App Spec, reusing the SAME naming/value rules the engine uses, so a fact equals what WOULD
 // be provisioned — not a naive spec echo. See docs/app-builder-staged-flow-design.md §13.2, §14.
-const { columnTypeMap, choiceValueMap, relationshipSchemaName, manyToManySchemaName } = require('./app-spec.js');
+const { columnTypeMap, choiceValueMap, relationshipSchemaName, manyToManySchemaName, quickCreateEnabledFor } = require('./app-spec.js');
 
 const lc = (s) => String(s || '').toLowerCase();
 const byKey = (k) => (a, b) => (a[k] < b[k] ? -1 : a[k] > b[k] ? 1 : 0);
@@ -41,6 +41,10 @@ function tableFacts(spec, e) {
     logicalName: lc(e.schemaName),
     displayName: e.displayName || '',
     hasNotes: e.hasNotes === true,
+    // Whether the build enables "Allow quick create" (IsQuickCreateEnabled) on this table — the EXACT
+    // engine rule (explicit entities[].quickCreate OR an authored QuickCreate form), so the eval grades
+    // provisioned intent, not a naive spec echo. See entity-provision.js updateTable step.
+    quickCreate: quickCreateEnabledFor(spec, e),
     primary: { logicalName: lc(primary.schemaName), displayName: primary.displayName || '', autoNumber: !!primary.autoNumberFormat },
     columns,
     statusReasons: (e.statusReasons || []).map((sr) => ({ label: sr.label, state: sr.state || 'Active' })).sort(byKey('label')),

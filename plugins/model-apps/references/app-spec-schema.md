@@ -74,6 +74,15 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   "displayName": "Ticket",
   "pluralName": "Tickets",               // optional (defaults to "<displayName>s")
   "hasNotes": true,                       // optional — enables the Notes/timeline on the table + form
+  "quickCreate": true,                    // optional — enable "Allow quick create" (IsQuickCreateEnabled)
+                                          //   on the table, so the inline "+ New" (from a lookup or a
+                                          //   sub-grid's + New) opens a Quick Create form instead of the
+                                          //   full form. Auto-derived as true when you author a
+                                          //   forms[] entry with formType "QuickCreate" for this entity
+                                          //   (authoring the form but leaving the flag off is a footgun —
+                                          //   the form exists but is never surfaced), so set it
+                                          //   explicitly only when you want the flag WITHOUT a custom
+                                          //   Quick Create form (the platform's default one is used).
   "vectorIcon": "new_ticketicon",         // RECOMMENDED — the table's OWN icon (what the modern app
                                           //   designer + app nav render for the table). Assign one
                                           //   per CUSTOM table by default so the nav shows a glyph,

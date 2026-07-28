@@ -354,4 +354,90 @@ test('CONTRACT: vendored seedRecordGraph returns { createdIds: { <entity>: [ids]
   assert.deepStrictEqual(result.createdIds.new_widget, ['wid-0', 'wid-1'], 'createdIds[<entity>] lists the new row ids in order');
 });
 
+// --- SDK backlog capability fills (re-vendored from cds-maker-sdk hardening-3) -------------------
+// These lock the four NEW behaviors the skill now wires: quick-create table flag, OData pagination,
+// idempotent global choice, and authored-column full width. Each drives the real vendored bundle so a
+// future re-vendor that regresses the behavior fails HERE (the mock-based engine tests can't catch it).
+
+test('CONTRACT: updateTable({ quickCreateEnabled }) PUTs IsQuickCreateEnabled on the entity (the quick-create table flag)', async () => {
+  // The build's data-model phase calls sdk.updateTable(logical, { quickCreateEnabled: true }) to enable
+  // "Allow quick create" so an authored Quick Create form is reachable from the inline "+ New". The SDK
+  // GET-then-PUTs the full EntityDefinitions row with IsQuickCreateEnabled set (a plain Edm.Boolean flag).
+  const { client, reqs } = captureClient();
+  const sdk = sdkWith(client);
+  await sdk.updateTable('contoso_widget', { quickCreateEnabled: true });
+  const put = reqs.find((r) => r.method === 'PUT' && /EntityDefinitions\(/i.test(r.url));
+  assert.ok(put, 'updateTable issues a PUT to EntityDefinitions');
+  assert.strictEqual(put.body && put.body.IsQuickCreateEnabled, true, 'the PUT body sets IsQuickCreateEnabled=true');
+});
+
+test('CONTRACT: queryRecords({ paginate:true }) follows @odata.nextLink to completion (full env-wide list, no single-page cap)', async () => {
+  // The cross-app page-sharing scan (sitemap-pages.js) enumerates EVERY appmodule with paginate:true so
+  // it can never miss an app past the ~5000-row server page. getAbsolute(nextLink) routes back through
+  // the injected httpClient.get, so page the result by inspecting the URL for the next-page marker.
+  const reqs = [];
+  const client = {
+    get: async (url) => {
+      reqs.push(url);
+      if (/EntityDefinitions\(LogicalName=/i.test(url)) return { status: 200, headers: {}, body: { EntitySetName: 'appmodules', LogicalName: 'appmodule' } };
+      if (/[?&]nextpage=1/.test(url)) return { status: 200, headers: {}, body: { value: [{ appmoduleid: 'a2' }] } };
+      return { status: 200, headers: {}, body: { value: [{ appmoduleid: 'a1' }], '@odata.nextLink': 'https://example.crm.dynamics.com/api/data/v9.0/appmodules?nextpage=1' } };
+    },
+    post: async () => ({ status: 204, headers: {}, body: {} }),
+    patch: async () => ({ status: 204, headers: {}, body: {} }),
+    delete: async () => ({ status: 204, headers: {}, body: {} }),
+    put: async () => ({ status: 204, headers: {}, body: {} }),
+  };
+  const sdk = sdkWith(client);
+  const rows = await sdk.queryRecords('appmodule', { select: ['appmoduleid'], paginate: true });
+  assert.deepStrictEqual(rows.map((r) => r.appmoduleid), ['a1', 'a2'], 'both pages are returned (nextLink was followed)');
+  assert.strictEqual(reqs.filter((u) => /appmodules/.test(u)).length, 2, 'exactly two data pages were fetched');
+});
+
+test('CONTRACT: queryRecords rejects paginate combined with top or fetchXml (both silently cap the result)', async () => {
+  // Dataverse honors $top as a hard cap and omits @odata.nextLink; FetchXML pages via a cookie, not
+  // @odata.nextLink. Either combined with paginate would silently return one page, so the SDK throws
+  // BEFORE any request — the scan must never pass top alongside paginate.
+  const { client } = captureClient();
+  const sdk = sdkWith(client);
+  await assert.rejects(() => sdk.queryRecords('appmodule', { paginate: true, top: 1 }), /paginate.*top/i, 'paginate + top is rejected');
+  await assert.rejects(() => sdk.queryRecords('appmodule', { paginate: true, fetchXml: '<fetch/>' }), /paginate.*fetchXml|fetchXml.*paginate/i, 'paginate + fetchXml is rejected');
+});
+
+test('CONTRACT: createGlobalOptionSet is idempotent by Name — reuses an existing set (no duplicate POST), fixing rebuild id-loss', async () => {
+  // On a rebuild the option set already exists. The SDK probes GlobalOptionSetDefinitions(Name=...) and
+  // REUSES the existing MetadataId instead of a duplicate-Name POST that would fail — so the engine
+  // captures the id and columns bind to it (the old behavior lost the id and fell back to inline options).
+  const reqs = [];
+  const existingClient = {
+    get: async (url) => {
+      reqs.push({ method: 'GET', url });
+      if (/GlobalOptionSetDefinitions\(Name=/i.test(url)) return { status: 200, headers: {}, body: { MetadataId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' } };
+      return { status: 200, headers: {}, body: { value: [] } };
+    },
+    post: async (url, body) => { reqs.push({ method: 'POST', url, body }); return { status: 204, headers: { 'odata-entityid': 'https://x/y(bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb)' }, body: {} }; },
+    patch: async () => ({ status: 204, headers: {}, body: {} }),
+    delete: async () => ({ status: 204, headers: {}, body: {} }),
+    put: async () => ({ status: 204, headers: {}, body: {} }),
+  };
+  const reuseSdk = sdkWith(existingClient);
+  const reused = await reuseSdk.createGlobalOptionSet({ name: 'new_sev', displayName: 'Sev', options: [{ value: 100000000, label: 'Low' }] });
+  assert.strictEqual(reused.metadataId, 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'the existing set MetadataId is returned');
+  assert.strictEqual(reqs.filter((r) => r.method === 'POST').length, 0, 'no duplicate-Name POST is issued when the set already exists');
+
+  // Absent (404 probe) → a normal create POST happens.
+  const created = [];
+  const absentClient = {
+    get: async (url) => { if (/GlobalOptionSetDefinitions\(Name=/i.test(url)) return { status: 404, headers: {}, body: {} }; return { status: 200, headers: {}, body: { value: [] } }; },
+    post: async (url, body) => { created.push({ url, body }); return { status: 204, headers: { 'odata-entityid': 'https://x/y(cccccccc-cccc-cccc-cccc-cccccccccccc)' }, body: {} }; },
+    patch: async () => ({ status: 204, headers: {}, body: {} }),
+    delete: async () => ({ status: 204, headers: {}, body: {} }),
+    put: async () => ({ status: 204, headers: {}, body: {} }),
+  };
+  const freshSdk2 = sdkWith(absentClient);
+  await freshSdk2.createGlobalOptionSet({ name: 'new_sev', displayName: 'Sev', options: [{ value: 100000000, label: 'Low' }] });
+  assert.strictEqual(created.length, 1, 'an absent set (404 probe) is created with one POST');
+  assert.ok(/GlobalOptionSetDefinitions/i.test(created[0].url), 'the create POSTs to GlobalOptionSetDefinitions');
+});
+
 

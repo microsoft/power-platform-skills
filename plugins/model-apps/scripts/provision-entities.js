@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { validateProvisionInput } = require('./lib/provision-input.js');
 const { makeRunner, provisionSolution, provisionDataModel, provisionSampleData } = require('./lib/entity-provision.js');
+const { quickCreateEnabledFor } = require('./lib/app-spec.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 
@@ -46,6 +47,10 @@ function computeTotal(input, opts) {
   // entities + columns + status reasons + alternate keys
   for (const e of input.entities || []) {
     total += 1; // table
+    // quick-create enable step — MUST match provisionDataModel's condition (entity-provision.js) and
+    // buildPlan below, or [n/total] drifts. This CLI's input has no forms[], so quickCreateEnabledFor
+    // fires only on an explicit entities[].quickCreate === true.
+    if (quickCreateEnabledFor(input, e)) total += 1;
     total += (e.columns || []).filter((c) => c.type !== 'Lookup').length; // columns (Lookup comes from relationships)
     total += (e.statusReasons || []).length; // status reasons
     total += (e.alternateKeys || []).length; // alternate keys
@@ -77,6 +82,7 @@ function buildPlan(input, opts) {
   
   for (const e of input.entities || []) {
     plan.push(`table ${e.schemaName}`);
+    if (quickCreateEnabledFor(input, e)) plan.push(`enable quick create on ${String(e.schemaName).toLowerCase()}`);
     for (const c of e.columns || []) {
       if (c.type !== 'Lookup') {
         plan.push(`column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})`);

@@ -5,6 +5,7 @@
       "logicalName": "new_comment",
       "displayName": "Comment",
       "hasNotes": false,
+      "quickCreate": false,
       "primary": {
         "logicalName": "new_name",
         "displayName": "Comment",
@@ -34,6 +35,7 @@
       "logicalName": "new_customer",
       "displayName": "Customer",
       "hasNotes": false,
+      "quickCreate": false,
       "primary": {
         "logicalName": "new_name",
         "displayName": "Customer Name",
@@ -72,6 +74,7 @@
       "logicalName": "new_ticket",
       "displayName": "Ticket",
       "hasNotes": false,
+      "quickCreate": false,
       "primary": {
         "logicalName": "new_name",
         "displayName": "Title",

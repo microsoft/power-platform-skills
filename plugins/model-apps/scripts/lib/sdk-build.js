@@ -28,6 +28,7 @@ const {
   manyToManyFor,
   manyToManySchemaName,
   normalizePageSource,
+  quickCreateEnabledFor,
 } = require('./app-spec.js');
 const { PHASES } = require('./stages.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
@@ -257,6 +258,7 @@ function planFor(spec, opts) {
     for (const gc of spec.globalChoices || []) items.push({ phase: 'data-model', label: `global choice ${gc.name}` });
     for (const e of spec.entities) {
       items.push({ phase: 'data-model', label: `table ${e.schemaName} ("${e.displayName}")` });
+      if (quickCreateEnabledFor(spec, e)) items.push({ phase: 'data-model', label: `enable quick create on ${e.schemaName.toLowerCase()}` });
       for (const c of e.columns || []) {
         if (SDK_COLUMN_TYPE[c.type || 'Text'] || c.type === 'Customer') items.push({ phase: 'data-model', label: `column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})` });
       }

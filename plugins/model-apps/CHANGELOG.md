@@ -9,6 +9,20 @@ plus local-dev ergonomics, sample coverage, and an automated eval suite with
 real and synthetic fixtures. Builds on v2.1; no breaking changes.
 
 ### Changed
+- **SDK backlog capability fills wired into `/app-builder` (re-vendored `cds-maker-sdk`).**
+  Four new SDK behaviors are now used by the build engine: (1) **Quick create** — a table opts into
+  "Allow quick create" (`IsQuickCreateEnabled`) via a new `entities[].quickCreate` flag OR by authoring
+  a `formType:"QuickCreate"` form (auto-derived, so the form is reachable from the inline "+ New");
+  applied idempotently to fresh and reused tables via `updateTable`. (2) **Env-wide pagination** — the
+  cross-app shared-page scan (`fetchAppsForPages`) now enumerates every app with
+  `queryRecords({ paginate:true })` (follows `@odata.nextLink`) instead of failing closed at the
+  ~5000-row page cap; a pagination fault still fails closed. (3) **Idempotent global choice** —
+  `createGlobalOptionSet` reuses an existing set by name, so a rebuild binds a `globalChoice` column to
+  the real `MetadataId` (no more inline-options fallback) and a genuine failure halts the phase instead
+  of being swallowed. (4) **Authored column width** — the SDK defaults a synthesized form column's
+  `width` to `100%`, a safety net against invalid formxml. Locked by real-bundle contract tests
+  (`vendor-sdk-smoke`, `hardening2-real-bundle`) + unit tests + eval #4; no breaking changes (SDK method
+  surface unchanged).
 - **Three-authority generative-page management + id-based identity.**
   The `pages` phase is now sitemap-authoritative with crash-safe convergence:
   (1) **IDENTITY** — the durable `<app>_pagemanifest` (`key → pageId`), outranked by the spec's own

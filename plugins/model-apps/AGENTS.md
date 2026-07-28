@@ -91,10 +91,10 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   `scripts/lib/sitemap-pages.js` — drives placement, download enumeration, and verify; a read failure
   HALTs). All page matching is by id. Every `pages[]` entry must be sitemap-placed (validation rejects
   headless pages). The build halts on safety violations (`pages-removed`, `pages-shared-across-apps`,
-  identity conflicts, read failures). The cross-app shared-page scan (`fetchAppsForPages`) itself fails
-  **closed** if the environment's appmodule list hits the 5000-row page cap — the vendored SDK cannot page
-  `@odata.nextLink`, so an unlisted app could hide a shared page; it HALTs (`apps-truncated`) rather than
-  scan an incomplete list and fail open. Classic `dashboards[]` are opt-in.
+  identity conflicts, read failures). The cross-app shared-page scan (`fetchAppsForPages`) enumerates every app via the vendored SDK's
+  `@odata.nextLink` pagination (`queryRecords({ paginate:true })`), so it verifies EVERY app in the
+  environment rather than one 5000-row page; a pagination fault (the SDK's repeated-nextLink guard) still
+  fails **closed** rather than scanning a partial list. Classic `dashboards[]` are opt-in.
   **All Dataverse access is via the SDK**, so metadata is persisted under
   `<app-folder>/.maker-workspace/` for reuse/edits. The 13 phases
   (`solution·data-model·sample-data·web-resources·views·charts·forms·commands·dashboards·app-shell·pages·ai-features·publish`)
@@ -194,7 +194,9 @@ The end-to-end flow (Phase 0 working dir → Phase 1 author **in the main loop**
 `references/authoring-flow.md` → Phase 2 narrated SDK build → Phase 3 verify & iterate; **edit** an
 existing app via the same path — `download-model-app.js` pulls it back into a spec, then re-run Phase 2
 idempotently) is diagrammed in [`docs/architecture.md`](docs/architecture.md) → *`/app-builder` —
-build pipeline*. **Upcoming:** shippable-defaults provisioning (security role / quick-create / standard views).
+build pipeline*. **Upcoming:** shippable-defaults provisioning (security role / standard views; the
+quick-create table flag now ships via `entities[].quickCreate` / an authored `QuickCreate` form —
+auto-generating the Quick Create form's field layout is the remaining follow-up).
 
 ## Local Development
 

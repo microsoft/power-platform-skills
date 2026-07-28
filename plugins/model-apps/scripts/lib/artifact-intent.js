@@ -254,9 +254,11 @@ function compileFormIntent(spec, formSpec, opts) {
         label: t.label || 'General',
         expanded: true,
         visible: true,
-        // Each tab is one FormColumn. width is set explicitly ('100%') because the SDK's
-        // normalizeColumn does NOT default it and columnToRaw omits an undefined width, which makes
-        // Dataverse reject the pushed formxml ("required attribute 'width' is missing").
+        // Each tab is one FormColumn. width is set explicitly ('100%') for exact control; as of
+        // hardening-3 the SDK's normalizeColumn ALSO defaults a synthesized column's width to '100%'
+        // (a belt-and-suspenders safety net), but we keep setting it here so the value is never left to
+        // an implicit default and older bundles that don't default it still produce valid formxml
+        // (columnToRaw omits an undefined width, which makes Dataverse reject the push).
         columns: [{
           width: '100%',
           sections: (t.sections || []).map(function (s, si) {
@@ -304,7 +306,9 @@ function compileFormIntent(spec, formSpec, opts) {
       label: 'General',
       expanded: true,
       visible: true,
-      // width '100%' is required on the wire — the SDK's normalizeColumn does not default it.
+      // width '100%' is set explicitly for exact control; hardening-3's SDK normalizeColumn also
+      // defaults a synthesized column's width to '100%' as a safety net, but keeping it explicit works
+      // on every bundle (an undefined width is omitted by columnToRaw and Dataverse would reject it).
       columns: [{
         width: '100%',
         sections: [{

@@ -72,7 +72,8 @@
         "no enriched default view carries createdon (#7)",
         "the N:N relationship name is the alphabetically-sorted new_tag_new_ticket (#3)",
         "the customer form's ticket sub-grid is a 1-column full-width section titled 'Tickets' from the child pluralName (#5)",
-        "validateAppSpec accepts the relational sample data: the $parent match resolves and the Choice labels are declared (#1/#4)"
+        "validateAppSpec accepts the relational sample data: the $parent match resolves and the Choice labels are declared (#1/#4)",
+        "quick create is enabled on the new_ticket table (#8)"
       ]
     }
   ]

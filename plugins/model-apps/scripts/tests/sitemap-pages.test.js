@@ -170,15 +170,56 @@ test('fetchAppsForPages is FAIL-CLOSED when the appmodule enumeration fails (can
   assert.match(r.error, /throttled/);
 });
 
-test('fetchAppsForPages FAILS CLOSED at the appmodule page cap — a full page may be truncated, so it must never fail OPEN', async () => {
-  // The vendored queryRecords returns ONE page and does NOT follow @odata.nextLink; a result AT the
-  // 5000-row page cap means there may be MORE apps we cannot see — and an unseen app could share the
-  // page we are about to UPDATE. So a full page must HALT (ok:false), never silently drop the rest.
-  const rows = Array.from({ length: 5000 }, (_, i) => ({ appmoduleid: `id-${i}`, uniquename: `app-${i}`, appmoduleidunique: `u-${i}` }));
-  const sdk = { queryRecords: async (e) => (e === 'appmodule' ? rows : []) };
+test('fetchAppsForPages enumerates with paginate:true and NO top — the complete app list, no single-page cap', async () => {
+  // The vendored queryRecords now follows @odata.nextLink to completion when paginate:true, so the
+  // membership scan verifies EVERY app in the env (no fail-closed-at-5000-cap). It must pass paginate
+  // and must NOT pass a `top` (Dataverse honors $top as a hard cap and omits @odata.nextLink, which
+  // would silently return one page — the SDK rejects paginate+top for that reason).
+  let appOpts;
+  const sdk = {
+    queryRecords: async (entity, o) => {
+      if (entity === 'appmodule') {
+        const all = [
+          { appmoduleid: 'a', uniquename: 'app-a', appmoduleidunique: 'ua' },
+          { appmoduleid: 'b', uniquename: 'app-b', appmoduleidunique: 'ub' },
+        ];
+        // The top-level enumeration passes NO filter; per-app fetchSitemap passes a uniquename filter.
+        // Capture only the enumeration's options (the one under test) and answer the per-app lookup exactly.
+        if (!o.filter) { appOpts = o; return all; }
+        const m = (o.filter || '').match(/uniquename eq '([^']+)'/);
+        return m ? all.filter((a) => a.uniquename === m[1]) : all;
+      }
+      // Both apps' sitemaps reference the page so the scan resolves them (proves the full list is walked).
+      if (entity === 'appmodulecomponent') return [{ objectid: 'sm', componenttype: 62 }];
+      if (entity === 'sitemap') return [{ sitemapxml: `<SiteMap><Area><Group><SubArea GenPageId="${GP_OVERVIEW}"/></Group></Area></SiteMap>` }];
+      return [];
+    },
+  };
   const r = await fetchAppsForPages(sdk, [GP_OVERVIEW]);
-  assert.strictEqual(r.ok, false, 'hitting the page cap must fail closed (no fail-open)');
-  assert.strictEqual(r.reason, 'apps-truncated');
+  assert.strictEqual(r.ok, true, 'a large/complete list no longer halts — pagination covers it');
+  assert.strictEqual(appOpts.paginate, true, 'appmodule enumeration must request pagination');
+  assert.strictEqual(appOpts.top, undefined, 'must NOT combine paginate with top (would cap at one page)');
+  assert.deepStrictEqual((r.byId.get(GP_OVERVIEW) || []).sort(), ['app-a', 'app-b'], 'every app in the full list is scanned');
+});
+
+test('fetchAppsForPages FAILS CLOSED when pagination aborts (SDK repeated-nextLink guard) — cannot verify → ok:false', async () => {
+  // paginate:true makes the SDK follow @odata.nextLink; if the server cycles it throws to avoid an
+  // infinite loop. That fault must fail CLOSED (ok:false), never scan a partial list and fail open.
+  const sdk = { queryRecords: async (e) => { if (e === 'appmodule') throw new Error('aborting pagination — the server returned a repeated @odata.nextLink'); return []; } };
+  const r = await fetchAppsForPages(sdk, [GP_OVERVIEW]);
+  assert.strictEqual(r.ok, false, 'a pagination abort must fail closed');
+  assert.match(r.error, /pagination/);
+});
+
+test('fetchAppsForPages FAILS CLOSED on an EMPTY enumeration (a malformed 2xx page the SDK treats as empty+complete)', async () => {
+  // A live env ALWAYS has ≥1 appmodule (system apps + the app being built, which exists by the time we
+  // scan to UPDATE a page). An empty paginated result therefore means the read returned no rows WITHOUT
+  // throwing (e.g. a malformed 2xx page). Trusting it would fail OPEN (scan sees zero apps → misses a
+  // shared page), so it must fail closed instead.
+  const sdk = { queryRecords: async (e) => (e === 'appmodule' ? [] : []) };
+  const r = await fetchAppsForPages(sdk, [GP_OVERVIEW]);
+  assert.strictEqual(r.ok, false, 'an empty app enumeration must fail closed');
+  assert.strictEqual(r.reason, 'apps-enumeration-empty');
 });
 
 test('fetchAppsForPages records (does not fail on) an app whose sitemap is unreadable (best-effort partial)', async () => {

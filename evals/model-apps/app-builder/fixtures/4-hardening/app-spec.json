@@ -11,6 +11,7 @@
     {
       "schemaName": "new_ticket", "displayName": "Ticket", "pluralName": "Tickets",
       "primaryAttribute": { "schemaName": "new_subject", "displayName": "Subject" },
+      "quickCreate": true,
       "columns": [
         { "schemaName": "new_a", "displayName": "A", "type": "Text" },
         { "schemaName": "new_b", "displayName": "B", "type": "Text" },
