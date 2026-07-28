@@ -1,17 +1,28 @@
-# Design — `/app-builder` staged flow re-architecture
+# Design — `/app-builder` staged flow architecture
 
-> **Status: PROPOSED (revised after Sol architectural review R1).** The first draft was
-> returned `needs-rework`; the four Critical findings were verified against the engine code and
-> are resolved below. See **§17 Sol R1 → resolutions** for a finding-by-finding map. Awaiting a
-> confirming Sol pass and user approval before `writing-plans`.
+> **Status: IMPLEMENTED / LANDED.** This is the design record for the `/app-builder` staged-flow
+> architecture that shipped — the engine now runs it (staged flow, design-only author, generate-pages
+> stage, structural evals, fail-closed safety). It began as a re-architecture proposal (revised after
+> Sol architectural review R1; the four Critical findings were verified against the engine code and
+> resolved — see **§17 Sol R1 → resolutions**) and was subsequently implemented, reviewed, and
+> live-verified. It is retained as the **design rationale** the engine's code cites by section (§6, §7,
+> §9, §11, §13, §14); the section numbers are load-bearing — keep them stable.
 >
-> The App Spec **core** contract and the 13 engine phase names are unchanged; new capability is
-> additive.
+> **Current status of shipped/pending capabilities lives in [`app-builder-roadmap.md`](./app-builder-roadmap.md)**
+> (the canonical roadmap), not here — this doc is the "why", the roadmap is the "what/where". The
+> `--changed-only` partial-apply mode built ON TOP of this staged flow has its own contract in
+> [`changed-only-design.md`](./changed-only-design.md).
+>
+> The App Spec **core** contract and the 13 engine phase names are unchanged; the staged flow is an
+> additive naming/orchestration layer over them.
 
 ## 1. Why
 
-The build engine is sound — spec-driven, idempotent, `create == edit`, 510 tests, a parity
-oracle. But the **flow around it** has five concrete problems:
+> *This section is the original motivation (pre-implementation). All five problems below were
+> addressed by the design that landed — see the roadmap for current status.*
+
+The build engine is sound — spec-driven, idempotent, `create == edit`, a large regression suite, a
+parity oracle. But the **flow around it** had five concrete problems:
 
 1. **Mental-model mismatch.** The engine exposes 13 fine-grained phases; the user and the skill
    narration think in ~6 stages. "Build the pages" maps to three scattered phases
