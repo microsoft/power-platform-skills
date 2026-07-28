@@ -30,7 +30,7 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 - **Read-only.** You MUST NOT run `npx power-apps add-data-source --api-id dataverse --org-url <env-url> --resource-name <table>`, table-creation HTTP calls, or any mutating PowerShell. Mutation happens later in `/add-dataverse` after user approval.
 - **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx power-apps *` command; retry the original command once after auth is corrected.
 - **Reuse-first and target-grounded.** Query the exact target metadata for every proposed table, including standard tables, and prefer reuse > extension > new. Don't propose a `cr123_customer` table if a verified target `contact` table fits.
-- **Fail closed when target metadata is unknown.** An auth, environment, or metadata-query failure is `BLOCKED`, never permission to mark tables `Create`. Never silently recreate or imitate a missing standard, managed, or solution-owned table/column.
+- **Never invent existing schema.** Never propose recreating or imitating a missing standard, managed, or solution-owned table/column. If discovery cannot run, you may still draft a plan from requirements, but mark it `Discovery skipped` so the user and `/add-dataverse` treat every decision as unverified — `/add-dataverse` re-reconciles against live metadata and blocks mutations there.
 - **No automatic replacement.** This agent classifies schema as `Reuse`, `Extend`, `Create`, or `Block`. Replacing an existing table/column requires a separately approved migration with dependency analysis and data movement; it is outside this workflow.
 - **Return a section, not a separate doc.** Output is a markdown `## Data Model` section the planner embeds verbatim.
 - **No JSON request bodies in the output.** Your `_dm_section.md` describes *what* to create (tables, columns, relationships) using the Mermaid ER + reuse/extend/create table + tier list. **Do NOT include POST body JSON** for `EntityDefinitions` or `RelationshipDefinitions` — `/add-dataverse` constructs those from its own canonical templates in [skills/add-dataverse/SKILL.md](../skills/add-dataverse/SKILL.md) Step 5b. JSON in your output is read as authoritative and will leak invented/wrong fields (e.g. `ReferencingAttribute` on a lookup) into the actual POST.
@@ -71,7 +71,7 @@ node "${PLUGIN_ROOT}/scripts/resolve-environment.js" <environment-id-or-url>
 
 Capture the **Environment URL** (e.g., `https://orgXXXXX.crm.dynamics.com`), **Environment ID**, and **Tenant ID** from the output. Use the URL as `<envUrl>` for subsequent script calls.
 
-If resolution fails (not authenticated or environment not visible to the logged-in account), return `BLOCKED: target environment could not be resolved; no schema was classified or created`. Do not produce a create plan from requirements alone.
+If resolution fails (not authenticated or environment not visible to the logged-in account), do not stop the run. Skip further discovery, prepend a `Discovery skipped — environment not reachable` warning to your section, and finish with `DONE_WITH_CONCERNS`. The plan is a draft for the user's Gate 1 review; `/add-dataverse` re-queries live metadata and blocks any mutation it cannot verify.
 
 ## Step 2 — Verify Dataverse Access
 
@@ -81,7 +81,7 @@ If resolution fails (not authenticated or environment not visible to the logged-
 node "${PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
 ```
 
-If it fails, return `BLOCKED: Dataverse access failed; run az login for the target tenant`. Do not continue to classification without live target metadata.
+If it fails, skip Step 3 and Step 5's live queries, prepend a `Dataverse access failed — az login required` warning to your section, and finish with `DONE_WITH_CONCERNS`. Do not convert unverified guesses into confident decisions.
 
 ## Step 3 — Discover Existing Tables
 
@@ -145,7 +145,7 @@ node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions(LogicalName='<table>')/Attributes?\$select=MetadataId,LogicalName,SchemaName,AttributeType,AttributeTypeName,RequiredLevel,IsManaged,IsCustomizable,IsPrimaryId,IsPrimaryName"
 ```
 
-Interpret `IsCustomizable` and `CanCreateAttributes` as managed properties (`.Value`). A response other than 200 or a genuine 404 is a discovery failure and blocks the plan. A 404 is actionable only after considering the planned dependency kind: an absent new custom table may be created; an absent standard, managed, reused, or extended dependency is blocked and must be installed/imported or removed from the design.
+Interpret `IsCustomizable` and `CanCreateAttributes` as managed properties (`.Value`). A 404 is actionable only after considering the planned dependency kind: an absent new custom table may be created; an absent standard, managed, reused, or extended dependency is `Block` and must be installed/imported or removed from the design. If a query returns anything other than 200 or a genuine 404, mark that entity `Unverified` rather than `Create`, and carry the reason into the section — `/add-dataverse` will re-check it and refuse to mutate what it cannot confirm.
 
 For each required entity, classify it as one of:
 
@@ -153,6 +153,7 @@ For each required entity, classify it as one of:
 - **Extend** — existing table is the right concept, all same-name columns are compatible, missing columns are custom additions, and both `IsCustomizable.Value` and `CanCreateAttributes.Value` permit extension
 - **Create** — the planned item is explicitly a new custom table, the exact logical name returns 404, the publisher prefix is verified, and all required-existing dependencies are present
 - **Block** — target metadata is unavailable; a standard/managed/required-existing dependency is missing; the table cannot accept attributes; or any same-name table/column is incompatible
+- **Unverified** — discovery could not run for this entity (Step 1/2 failure or a non-200/404 response). Record the intended decision plus the reason; `/add-dataverse` re-checks it before any write
 
 Classify every planned column before finalizing its table decision:
 
@@ -280,6 +281,7 @@ Write the section to a file in the working directory named `_dm_section.md` (the
 - Extend: <N> tables (add columns only)
 - Create: <N> new tables across <T> tiers
 - Block: <N> unresolved/incompatible tables (must be 0 before approval can execute)
+- Unverified: <N> tables discovery could not confirm (re-checked by `/add-dataverse`)
 
 ### Target Reconciliation
 
@@ -319,7 +321,7 @@ erDiagram
 - Signature images from pen input normalize `data:image/png;base64,...` before Image column writes.
 ```
 
-If any row is `Block`, write the evidence and remediation into the section, then return `BLOCKED: <reason>` so the orchestrator cannot execute `/add-dataverse`. If environment or Dataverse discovery failed, return `BLOCKED` without generating speculative Create decisions.
+If any row is `Block`, write the evidence and remediation into the section and finish with `DONE_WITH_CONCERNS` naming each blocked entity, so the user sees it at Gate 1 and `/add-dataverse` refuses that item at its own reconciliation step. If discovery was skipped (Step 1 or Step 2 failure), prepend the matching warning, mark every decision `Unverified`, and say the user should re-run with environment access for accurate reuse detection.
 
 ## Return Status
 
@@ -328,7 +330,7 @@ You MUST return your final message with one of these four status codes as the **
 | Code | When to use | Example first line |
 |---|---|---|
 | `DONE` | Section written cleanly, all entities resolved, no caveats | `DONE` |
-| `DONE_WITH_CONCERNS: <comma-separated concerns>` | Target discovery succeeded and the section is executable, but a non-blocking design caveat remains | `DONE_WITH_CONCERNS: image dimensions inferred from requirements; verify before approval` |
+| `DONE_WITH_CONCERNS: <comma-separated concerns>` | Section written, but discovery was skipped, an entity is `Block`/`Unverified`, or a design caveat remains | `DONE_WITH_CONCERNS: contact reuse skipped (env access denied), all decisions unverified` |
 | `NEEDS_CONTEXT: <what is missing>` | Cannot complete without more info from the orchestrator — e.g. requirements brief is too thin to infer entities, or no environment was selected | `NEEDS_CONTEXT: requirements brief lists no nouns; need explicit entity list from user` |
 | `BLOCKED: <reason>` | Hit a hard wall — file system error writing `_dm_section.md`, plugin root unreadable, environment resolver crashed. The planner MUST escalate to the user, never silently retry | `BLOCKED: cannot write to <working_dir>/_dm_section.md (permission denied)` |
 

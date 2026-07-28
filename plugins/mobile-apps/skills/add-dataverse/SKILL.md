@@ -191,7 +191,7 @@ Build and print a reconciliation matrix before Step 5:
 |---|---|---|---|
 | 200; all planned columns compatible | `reuse` | existing columns `reuse` | No schema write. |
 | 200; custom columns missing; table customizable and can create attributes | `extend` | compatible `reuse`; absent custom `create` | Queue missing ordinary columns for sequential creation; relationships remain Pass 2. |
-| 404; plan says Create; logical name uses the verified publisher prefix | `create` | ordinary columns `create` inline; lookups deferred | Create once with the complete-payload guard. |
+| 404; plan says Create; logical name uses the verified publisher prefix | `create` | ordinary columns `create` inline; lookups deferred | Create once after the complete-payload self-check. |
 | 404; plan says Reuse/Extend or dependency is standard/managed/required-existing | `block` | dependent columns `block` | STOP; install/import the owning solution or revise the plan. Never recreate it. |
 | 200; same-name column has incompatible `AttributeType` / `AttributeTypeName.Value` | `block` | incompatible column `block` | STOP before all writes; no automatic replacement. |
 | 200; columns missing but `IsCustomizable.Value=false` or `CanCreateAttributes.Value=false` | `block` | missing columns `block` | STOP; target cannot be extended by this workflow. |
@@ -363,21 +363,15 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST Enti
   --solution '<solution-uniquename-from-memory-bank>'
 ```
 
-**Complete-payload guard (HARD):** before the POST, validate that the body contains exactly the planned inline column set. Build the expected set as:
+**Complete-payload self-check (HARD — do this before the POST, no extra tooling):** re-read the body you just built against the plan and confirm all five statements. If any fails, fix the body and re-check; never POST a partial table and repair it with per-column POSTs.
 
-- the primary-name column; plus
-- every planned String, Memo, Integer, Decimal, Money, DateTime, Boolean, Choice, MultiSelect Choice, BigInt, Image, and File column; minus
-- the auto-created primary-id column, every Lookup/Customer/Owner column, and every calculated/rollup column deferred to Step 5c.
+1. **Every planned ordinary column is present** — String, Memo, Integer, BigInt, Decimal, Money, DateTime, Boolean, Choice, MultiSelect Choice, Image, and File. Count `Attributes[]` and compare with the plan's column count for this table.
+2. **No lookup metadata is inline** — no `LookupAttributeMetadata`, `CustomerAttributeMetadata`, or `OwnerAttributeMetadata`. Those are created by their relationship in Pass 2.
+3. **No deferred or server-owned column is inline** — no primary-id column and no calculated/rollup column (Step 5c owns those).
+4. **Exactly one `IsPrimaryName: true` attribute exists**, and `PrimaryNameAttribute` matches its `SchemaName` (lowercased logical form).
+5. **No duplicate `SchemaName`** in `Attributes[]` (compare case-insensitively).
 
-Write the request body and expected-name array under `<working_dir>/.tmp/`, then run:
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-table-create-payload.js" \
-  --body "@<working_dir>/.tmp/<table>-create.json" \
-  --expected "@<working_dir>/.tmp/<table>-expected-columns.json"
-```
-
-Only POST when the validator returns `ok: true`. Missing, duplicate, unexpected, or inline lookup attributes are a construction bug: fix the body rather than creating a table shell and repairing it with per-column POSTs. Microsoft documents both parts of this contract: [ordinary columns may be included when the table is created](https://learn.microsoft.com/power-apps/developer/data-platform/webapi/create-update-column-definitions-using-web-api#create-columns), while a [lookup is created with its one-to-many relationship](https://learn.microsoft.com/power-apps/developer/data-platform/webapi/create-update-entity-relationships-using-web-api#create-a-one-to-many-relationship).
+Microsoft documents both halves of this contract: [ordinary columns may be included when the table is created](https://learn.microsoft.com/power-apps/developer/data-platform/webapi/create-update-column-definitions-using-web-api#create-columns), while a [lookup is created with its one-to-many relationship](https://learn.microsoft.com/power-apps/developer/data-platform/webapi/create-update-entity-relationships-using-web-api#create-a-one-to-many-relationship). `dataverse-request.js` stays the only script in this path — it already owns auth, retry, `--solution` routing, and 401/429 handling.
 
 Body skeleton — **all planned columns inline in `Attributes: [...]`** (this example shows primary + 3 additional; expand the array to fit every column from the plan):
 
