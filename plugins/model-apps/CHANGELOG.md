@@ -23,8 +23,10 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   `(entity, type, name)`) the build errors with an **actionable** message and a new optional
   **`forms[].formId`** pins the exact form (GUID-validated; verified to match the target table, type, AND
   name before reconcile; a stale pin fails loud rather than minting duplicate forms). Quick-view form
-  references are also keyed by `(targetEntity, name)` so two entities with same-named Quick View forms no
-  longer cross-wire. Live-repro table `zava_javavendor` (three "Information" forms) is unblocked.
+  references are also keyed by `(targetEntity, QuickView, name)` so a same-named Quick View form on another
+  entity — or a same-named Main on the target entity — no longer cross-wires. Live-repro table
+  `zava_javavendor` (three "Information" forms) is unblocked.
+- **Custom nav-icon web resources are made portable across environments (download re-declares them).**
   A sitemap nav icon that references a custom image web resource **by path**
   (`/WebResources/<pub>/icons/x.svg` or `$webresource:<name>`) previously round-tripped only the
   *reference* — so a download→rebuild into a **different** environment rendered a **broken** icon because

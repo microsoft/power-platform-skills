@@ -159,7 +159,8 @@ are in [`architecture.md`](architecture.md).
   actionable guidance; new optional **`forms[].formId`** pins the exact form (GUID-validated in
   `validateAppSpec` + re-checked at resolve — the id is interpolated unquoted into an Edm.Guid filter — and
   verified to match the target table, TYPE, AND name; a stale pin fails loud instead of minting duplicate
-  forms).   Quick-view form references are keyed by `(targetEntity, QuickView, name)` so same-named Quick View forms
+  forms).
+  Quick-view form references are keyed by `(targetEntity, QuickView, name)` so same-named Quick View forms
   on different entities — or a same-named Main on the target entity — don't cross-wire (build map,
   `validateAppSpec`, `spec-lint`, and teardown dependency ordering all consistent); verify reuses
   `resolveExistingFormId` for the same identity. `FORM_TYPE_CODE`/`FORM_GUID_RE` live in the shared
