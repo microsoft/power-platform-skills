@@ -105,6 +105,12 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   existing-app sitemap, page finalize — still publish their one artifact so the change takes effect).
   `--verify` (opt-in) auto-runs the read-only reconcile after a successful apply and exits non-zero on a silent partial build (the same
   check `verify-model-app.js` runs standalone). Recovery from a halted build is a full rerun (idempotent).
+  **`--changed-only`** (Preview, off by default) is a fail-closed SAFE partial apply: after a FRESH
+  `--apply --changed-only` baseline, a later `--apply --changed-only` for a page `.tsx` byte edit runs ONLY
+  the pages phase (uploads just the changed page, skips the full build) — gated on an identity-bound
+  snapshot (`.maker-workspace/apply-snapshot.json`); any non-page edit (or an edit to a pre-existing app)
+  falls back to a full build. Teardown tombstones+deletes the snapshot. See
+  [`docs/changed-only-design.md`](docs/changed-only-design.md) for the v1 scope + contract.
 - **`scripts/teardown-model-app.js` → `scripts/lib/sdk-teardown.js`** — the first-class, **classifier-safe**
   teardown (reverse of the build), for cleaning up live-verification probes or a failed build. Deletes
   exactly the artifacts a given App Spec declares, in dependency-safe order (**app → dashboards →
@@ -234,7 +240,7 @@ scripts/
   dataverse-request.js         ← General Dataverse Web API wrapper (escape hatch)
   provision-entities.js        ← CLI wrapper for entity provisioning (solution + data-model + sample-data)
   provision-solution.js        ← Creates a Dataverse solution via the SDK
-  build-model-app.js           ← app-builder: narrated, idempotent SDK build (dry-run default; --stage data|ui|app|publish)
+  build-model-app.js           ← app-builder: narrated, idempotent SDK build (dry-run default; --stage data|ui|app|publish; --changed-only)
   download-model-app.js        ← app-builder: pull a deployed app into an editable spec (edit flow)
   teardown-model-app.js        ← app-builder: classifier-safe reverse-of-build teardown
   verify-model-app.js          ← app-builder: reconcile the spec against the deployed app
@@ -271,6 +277,14 @@ scripts/
     ai-prompt.js               ← generates tailored Copilot row-summary prompts
     _graph.js                  ← entity topological ordering (shared by build + teardown)
     system-solutions.js        ← built-in system solutions (Active/Default/Basic) — shared by download recovery + teardown skip
+    phase-diff.js              ← pure spec-diff → changed build phases (advisory diff foundation)
+    content-hash.js / hash.js  ← content-aware phase diff: fold on-disk .tsx/contentPath byte hashes into the diff (changed-only)
+    classify-changes.js        ← changed-only: classify a spec diff → fast (page-content) | full | noop + sticky debt
+    apply-snapshot.js          ← changed-only: pure eligibility state machine (identity bind, debt, tombstone, generation CAS)
+    apply-snapshot-store.js    ← changed-only: atomic snapshot write + workspace lease + invalidate/tombstone/delete
+    apply-snapshot-index.js    ← changed-only: build result.created → snapshot artifact map
+    changed-only-flow.js       ← changed-only: --changed-only orchestration (decide fast/full, live identity, snapshot lifecycle)
+    projection.js              ← changed-only: pure post-apply verifiers (form placement / sitemap / page dual-hash)
   vendor/cds-maker-sdk.cjs     ← headless vendored SDK bundle (rebuilt via _vendor-build/)
   _vendor-build/               ← esbuild vendoring tooling (build.js + pinned deps)
   tests/                       ← node --test coverage for the scripts above

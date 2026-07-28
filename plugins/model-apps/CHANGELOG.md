@@ -73,11 +73,17 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   surface the chart via a dashboard/sitemap subarea, if it must be an explicit component.
 
 ### Added
-- **`scripts/lib/schema-facts.js`** — pure, offline data-model provisioning fact extractor
-  (`schemaFacts(spec)`, `isBuildableColumn(c)`). Normalizes tables/columns/relationships/global-choices
-  to stable sorted facts reusing the engine's real derivation rules (`relationshipSchemaName`,
-  `choiceValueMap`, `columnTypeMap`). The data-stage eval oracle: two deep-equal fact sets prove two
-  builds provision the same data model.
+- **`--changed-only` safe partial apply (`/app-builder`, Preview, off by default).** After a fresh
+  `--apply --changed-only` baseline, re-running `--apply --changed-only` for a page `.tsx` byte edit runs
+  ONLY the pages phase (re-uploads just the changed page, skips the full 13-phase build) instead of a full
+  rebuild. Fail-closed: gated on an identity-bound schema-3 snapshot (`<workspace>/apply-snapshot.json` —
+  live orgId/env/app match), a durable eligibility state machine + sticky debt + teardown tombstone +
+  generation-fenced CAS; anything that isn't a pure page-content edit (or an edit to a pre-existing app)
+  falls back to a full build. Never clobbers an unchanged page (uploads only the changed keys); re-blesses
+  the snapshot only when the mandatory page verify passes. New modules: `scripts/lib/{projection,hash,
+  content-hash,apply-snapshot,apply-snapshot-store,apply-snapshot-index,classify-changes,changed-only-flow}
+  .js`. Design + v1 contract: [`docs/changed-only-design.md`](docs/changed-only-design.md). Design
+  Sol-approved (7 rounds); implementation adversarially reviewed (GPT-5.6 Sol + Claude Opus).
 - **`scripts/preview-app.js` + `scripts/lib/app-preview.js`** — renders the WHOLE app design
   (data model + sitemap tree + views/charts + per-form wireframes + page-intents + design contract)
   as a single ASCII preview, reusing `form-preview.js`. Used as design gate #2 / plan-mode approval

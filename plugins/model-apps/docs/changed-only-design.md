@@ -1,8 +1,31 @@
 # `--changed-only` safe partial apply — design (Sol-approved, 7 review rounds)
 
-Status: **safe-to-implement** (adversarial design review by GPT-5.6 Sol, 7 rounds: v1 *unsafe* →
-v7 *safe-to-implement*). This is the canonical spec for the multi-deliverable build; the round-by-round
-history lives in the session workspace (`design-changed-only-v1..v7.md`).
+Status: **implemented; PROD-readiness reviewed** (design: adversarial GPT-5.6 Sol, 7 rounds v1 *unsafe*
+→ v7 *safe-to-implement*; implementation: adversarial GPT-5.6 Sol + Claude Opus, both max effort — all
+Critical/High findings fixed with tests). This is the canonical spec for the multi-deliverable build; the
+round-by-round design history lives in the session workspace (`design-changed-only-v1..v7.md`).
+
+## v1 scope + contract (READ THIS)
+v1 wires exactly ONE convergent shape end-to-end: **page-content re-upload** (a `.tsx` byte edit to an
+existing page). Everything else — view-append, sitemap, form, or any data-model/AI/chart/command/
+dashboard/web-resource change — routes to a **full build** (always safe; a full build converges the first
+four and additive-SKIPS the rest, which then incur sticky debt). The user-facing contract:
+- **`--changed-only` bootstraps its baseline from a FRESH build.** The eligible baseline is written only
+  when the app did **not** exist when the run started (a first `--apply --changed-only`). Running the
+  first build with a plain `--apply` (no snapshot) and *then* `--changed-only` yields an **ineligible**
+  baseline (the additive engine may not have converged a pre-existing app) → every run full-builds until a
+  clean teardown+rebuild. **Use `--changed-only` from the first build to opt in.**
+- **Use `--changed-only` consistently.** A plain `--apply` in between invalidates the snapshot (→ next
+  `--changed-only` re-baselines via a full build). Mixing the two de-optimizes but never corrupts.
+- **Concurrent Maker edit of the SAME changed page is unsupported** (PAC page upload has no CAS) — the
+  fast path re-uploads only the *changed* pages, so an unchanged page is never clobbered; a page you edit
+  in both the spec and Maker is overwritten by the spec (the intended deploy). Documented as a follow-up.
+
+## Deferred to follow-ups (v1 does NOT implement; tracked in the roadmap)
+Pre-mutation live page-content drift verifier; `expectedSitemap` population + pre/post sitemap projection
+equality (sitemap fast shape unwired in v1); a `clearDebtMatching` production caller (v1 clears debt only
+via teardown+rebuild); unifying `contentPath` confinement between hashing and the build; view/form/sitemap
+fast submodes. None are reachable on the v1 pages-only fast path.
 
 ## Why this is hard
 `/app-builder`'s build engine is **ADDITIVE, not convergent**: existing chart/command/dashboard defs and
@@ -78,19 +101,21 @@ publishes just the page. Two sdk-build seams (flag-gated, full-build path byte-i
 
 ## Sequenced deliverables
 1. ✅ Projection/verifier framework + 3 adversarial tests. 2. ✅ Content hashing + fix the shipped
-`phase-diff` foundation (`.tsx`/`contentPath` edits are now visible to the diff, fail-closed;
-`scripts/lib/hash.js` + `content-hash.js`). 3. 🔄 Envelope — ✅ pure state machine (`apply-snapshot.js`)
-+ ✅ I/O store (`apply-snapshot-store.js`, atomic/lease/CAS/invalidate/tombstone/delete) + ✅
-`indexArtifacts` (`apply-snapshot-index.js`); **remaining**: wire persist/invalidate/tombstone into the
-live build+teardown (part of #5's flow). 4. 🔄 Phase submodes — ✅ the two pages-only sdk-build seams
-(seed `result.created.app` from `opts.changedOnly.resolvedAppId`; skip the sitemap finalize under
-`skipSitemapFinalize`), flag-gated + off-path byte-identical; **remaining**: view-append + sitemap
-submodes, phase-local publish, pre-mutation drift. 5. 🔄 Classifier — ✅ core (`classify-changes.js`);
-**remaining**: the `build-model-app.js --changed-only` FLOW (new `--changed-only` flag; live identity via
-a new WhoAmI/orgId call + app discovery by unique name (reuse `sitemap-pages.js`); snapshot
-read→eligibility gate→classify→pages-only run via the seams→persist eligible + invalidate-before-write;
-I1-gate exception for the pages-only fast apply; fallback to full build). 6. Full offline
-tests + eval. 7. Sol review of the IMPLEMENTATION. 8. Live regression test (aurorabapenv03468). 9. Docs.
+`phase-diff` foundation (`.tsx`/`contentPath` edits visible to the diff, fail-closed). 3. ✅ Envelope —
+pure state machine (`apply-snapshot.js`) + I/O store (`apply-snapshot-store.js`) + `indexArtifacts`
+(`apply-snapshot-index.js`), wired into the live build (persist/invalidate) + teardown (tombstone/delete).
+4. ✅ Phase submodes (v1) — the pages-only sdk-build seams: seed `result.created.app` from
+`opts.changedOnly.resolvedAppId`, skip the sitemap finalize, and `selectedKeysOnly` (upload only changed
+keys) + measured `pageDeployedShas`. (view/sitemap/form submodes deferred — see follow-ups.)
+5. ✅ Classifier (`classify-changes.js`) + the `build-model-app.js --changed-only` FLOW
+(`changed-only-flow.js`): `--changed-only` flag, live identity (WhoAmI orgId + app discovery),
+snapshot read→eligibility gate→classify→pages-only fast apply via the seams (or full fallback),
+invalidate-before-write + fresh-create-only baseline + verify-gated re-bless + generation fencing, I1-gate
+exception. 6. ✅ Full offline tests (919 green). 7. ✅ Implementation review — adversarial GPT-5.6 Sol +
+Claude Opus (max effort); all Critical/High findings fixed with tests (see the fix commit + this doc's v1
+contract/deferred sections). 8. 🔄 Live regression test (aurorabapenv03468) — runbook prepared
+(`session files/changed-only-live/`), pending Aurora test-tenant auth. 9. 🔄 Docs — design + roadmap +
+CHANGELOG + AGENTS.md.
 
 ## Build-time notes (from the final Sol pass)
 - Live-absence verification covers the UNION of prior-snapshot identities, current spec, generated
