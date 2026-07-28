@@ -71,6 +71,8 @@ test('renderTemplateBrowser renders static template details and preview images',
   assert.match(html, /data-tab="template-2"/);
   assert.match(html, /class="template-section active" id="template-1"/);
   assert.match(html, /class="template-section" id="template-2"/);
+  assert.match(html, /class="preview-boundary"/);
+  assert.match(html, /<figcaption>Preview 2<\/figcaption>/);
   assert.match(html, /class="preview-image"/);
   assert.match(html, /Preview 2 of Company &quot;Portal&quot;/);
   assert.match(html, /Citizen service request portal/);

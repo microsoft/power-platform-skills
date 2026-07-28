@@ -37,7 +37,10 @@ function renderPreviewImages(template) {
     return '<div class="preview-empty">No preview image yet</div>';
   }
   return images.map((image, imageIndex) => `
-    <img class="preview-image" src="${escapeHtml(image)}" alt="Preview ${imageIndex + 1} of ${escapeHtml(template.displayName)}" loading="lazy" />
+    <figure class="preview-boundary">
+      <figcaption>Preview ${imageIndex + 1}</figcaption>
+      <img class="preview-image" src="${escapeHtml(image)}" alt="Preview ${imageIndex + 1} of ${escapeHtml(template.displayName)}" loading="lazy" />
+    </figure>
   `).join('');
 }
 
