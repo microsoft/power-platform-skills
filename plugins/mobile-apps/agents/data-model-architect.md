@@ -131,21 +131,16 @@ Standard table mappings to bias toward:
 **Print before starting:**
 > "→ Reconciling every required table and column against live target metadata…"
 
-Before assigning any decision, query the exact logical name selected for every required entity — including `contact`, `account`, `incident`, other standard tables, and managed-solution dependencies:
+Before assigning any decision, resolve every required entity — including `contact`, `account`, `incident`, other standard tables, and managed-solution dependencies — in a **single** filtered query that also expands their columns:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions(LogicalName='<table>')?\$select=MetadataId,LogicalName,SchemaName,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes,PrimaryIdAttribute,PrimaryNameAttribute"
+  "EntityDefinitions?\$select=MetadataId,LogicalName,SchemaName,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes,PrimaryIdAttribute,PrimaryNameAttribute&\$filter=LogicalName eq '<table1>' or LogicalName eq '<table2>'&\$expand=Attributes(\$select=LogicalName,AttributeType,AttributeTypeName,RequiredLevel,IsManaged,IsCustomizable,IsPrimaryId,IsPrimaryName)"
 ```
 
-For every 200 response, fetch the full table-level column snapshot once:
+Build the `$filter` by OR-ing every selected logical name. This is the [documented way to query multiple table definitions at once](https://learn.microsoft.com/power-apps/developer/data-platform/query-schema-definitions#basic-retrievemetadatachanges-example) and replaces 2N requests with one. Keep the expanded `$select` to base `AttributeMetadata` properties — one query [cannot cast to a derived column type](https://learn.microsoft.com/power-apps/developer/data-platform/query-schema-definitions#evaluate-other-options-to-retrieve-schema-definitions).
 
-```bash
-node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions(LogicalName='<table>')/Attributes?\$select=MetadataId,LogicalName,SchemaName,AttributeType,AttributeTypeName,RequiredLevel,IsManaged,IsCustomizable,IsPrimaryId,IsPrimaryName"
-```
-
-Interpret `IsCustomizable` and `CanCreateAttributes` as managed properties (`.Value`). A 404 is actionable only after considering the planned dependency kind: an absent new custom table may be created; an absent standard, managed, reused, or extended dependency is `Block` and must be installed/imported or removed from the design. If a query returns anything other than 200 or a genuine 404, mark that entity `Unverified` rather than `Create`, and carry the reason into the section — `/add-dataverse` will re-check it and refuse to mutate what it cannot confirm.
+A planned name **present** in `value[]` exists; a name **absent** from `value[]` does not. Interpret `IsCustomizable` and `CanCreateAttributes` as managed properties (`.Value`). Absence is actionable only after considering the planned dependency kind: an absent new custom table may be created; an absent standard, managed, reused, or extended dependency is `Block` and must be installed/imported or removed from the design. If the batched query itself fails, mark the affected entities `Unverified` rather than `Create`, and carry the reason into the section — `/add-dataverse` will re-check it and refuse to mutate what it cannot confirm.
 
 For each required entity, classify it as one of:
 

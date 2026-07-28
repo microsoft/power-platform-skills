@@ -144,6 +144,14 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> <METHOD> 
 - `--include-headers` adds response headers (needed for `OData-EntityId` after a record create).
 - Output is JSON: `{ "status": <code>, "data": <body> }`. Token refresh on 401 and back-off on 429 are automatic — never wrap with manual retry.
 
+**Export the resolved tenant once (HARD — saves a round trip on every later call).** `resolve-environment.js` already returned `tenantId` in Step 1. Export it before any Dataverse call so `dataverse-request.js` short-circuits tenant discovery instead of re-probing the `WWW-Authenticate` challenge on each invocation:
+
+```bash
+export POWER_PLATFORM_TENANT_ID='<tenantId-from-resolve-environment>'
+```
+
+If the tenant is unknown, skip the export — discovery still works, it is just slower.
+
 Acquire a Dataverse access token and verify connectivity:
 
 ```bash
@@ -169,33 +177,34 @@ Requires the user to hold **System Administrator** or **System Customizer** in t
 **Print before starting:**
 > "→ Reconciling every planned table and column against live target metadata before any write…"
 
-Do not use the custom-table list as the source of truth. For **every** plan entry (`Reuse`, `Extend`, or `Create`), query its exact logical name, including standard and managed dependencies:
+Do not use the custom-table list as the source of truth, and do not issue one request per table. Fetch **every** plan entry (`Reuse`, `Extend`, or `Create`) — including standard and managed dependencies — in a **single** filtered query that also expands their columns:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions(LogicalName='<table>')?\$select=MetadataId,LogicalName,SchemaName,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes,PrimaryIdAttribute,PrimaryNameAttribute"
+  "EntityDefinitions?\$select=MetadataId,LogicalName,SchemaName,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes,PrimaryIdAttribute,PrimaryNameAttribute&\$filter=LogicalName eq '<table1>' or LogicalName eq '<table2>'&\$expand=Attributes(\$select=LogicalName,AttributeType,AttributeTypeName,RequiredLevel,IsManaged,IsCustomizable,IsPrimaryId,IsPrimaryName)"
 ```
 
-For each 200 response, fetch the table's columns once:
+Build the `$filter` by OR-ing every planned logical name. This is the [documented way to query multiple table definitions at once](https://learn.microsoft.com/power-apps/developer/data-platform/query-schema-definitions#basic-retrievemetadatachanges-example), and it replaces 2N requests (one entity GET plus one attributes GET per table) with one. Keep the `$expand` `$select` list to base `AttributeMetadata` properties only — a single query [cannot cast to a derived column type](https://learn.microsoft.com/power-apps/developer/data-platform/query-schema-definitions#evaluate-other-options-to-retrieve-schema-definitions), so fetch `OptionSet` details separately for the rare column that needs them.
 
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions(LogicalName='<table>')/Attributes?\$select=MetadataId,LogicalName,SchemaName,AttributeType,AttributeTypeName,RequiredLevel,IsManaged,IsCustomizable,IsPrimaryId,IsPrimaryName"
-```
+Read the results as follows:
 
-Cache each response as the table's **attribute snapshot** for Step 5b. Interpret `IsCustomizable` and `CanCreateAttributes` as managed properties and read their `.Value` fields. Do not discard the snapshot and issue another GET for every planned column.
+- **A planned name present in `value[]`** — the table exists. Cache its expanded `Attributes` as that table's **attribute snapshot** for Steps 5a and 5b.
+- **A planned name absent from `value[]`** — the table does not exist. This is the equivalent of a 404 in the matrix below.
+- Interpret `IsCustomizable` and `CanCreateAttributes` as managed properties and read their `.Value` fields.
+
+If the batched query itself fails (non-2xx), do not fall back to guessing: treat every entry as `block` and stop. If the URL would exceed a practical length with very many tables, split it into a few filtered queries — still far fewer than one request per table.
 
 Build and print a reconciliation matrix before Step 5:
 
 | Target result | Table decision | Column decisions | Action |
 |---|---|---|---|
-| 200; all planned columns compatible | `reuse` | existing columns `reuse` | No schema write. |
-| 200; custom columns missing; table customizable and can create attributes | `extend` | compatible `reuse`; absent custom `create` | Queue missing ordinary columns for sequential creation; relationships remain Pass 2. |
-| 404; plan says Create; logical name uses the verified publisher prefix | `create` | ordinary columns `create` inline; lookups deferred | Create once after the complete-payload self-check. |
-| 404; plan says Reuse/Extend or dependency is standard/managed/required-existing | `block` | dependent columns `block` | STOP; install/import the owning solution or revise the plan. Never recreate it. |
-| 200; same-name column has incompatible `AttributeType` / `AttributeTypeName.Value` | `block` | incompatible column `block` | STOP before all writes; no automatic replacement. |
-| 200; columns missing but `IsCustomizable.Value=false` or `CanCreateAttributes.Value=false` | `block` | missing columns `block` | STOP; target cannot be extended by this workflow. |
-| Auth/query response other than 200 or genuine 404 | `block` | unknown | STOP; target metadata is not authoritative. |
+| Present; all planned columns compatible | `reuse` | existing columns `reuse` | No schema write. |
+| Present; custom columns missing; table customizable and can create attributes | `extend` | compatible `reuse`; absent custom `create` | Queue missing ordinary columns for sequential creation; relationships remain Pass 2. |
+| Absent; plan says Create; logical name uses the verified publisher prefix | `create` | ordinary columns `create` inline; lookups deferred | Create once after the complete-payload self-check. |
+| Absent; plan says Reuse/Extend or dependency is standard/managed/required-existing | `block` | dependent columns `block` | STOP; install/import the owning solution or revise the plan. Never recreate it. |
+| Present; same-name column has incompatible `AttributeType` / `AttributeTypeName.Value` | `block` | incompatible column `block` | STOP before all writes; no automatic replacement. |
+| Present; columns missing but `IsCustomizable.Value=false` or `CanCreateAttributes.Value=false` | `block` | missing columns `block` | STOP; target cannot be extended by this workflow. |
+| Batched query failed (non-2xx) | `block` | unknown | STOP; target metadata is not authoritative. |
 
 `replace` is not an automatic state in this workflow. Replacing a table or column requires an explicitly approved migration with dependency analysis and data movement; classify the conflict as `block` here.
 
@@ -214,29 +223,34 @@ Build and print a reconciliation matrix before Step 5:
 > - **Lookups:** POST to `/RelationshipDefinitions` only **after** both endpoint tables exist and have returned 2xx.
 > - **Extensions:** column POSTs to an existing table are also serial — same lock applies.
 
-#### Step 5a — Pre-flight collision check (per table, before each POST)
+#### Step 5a — Pre-flight collision check (from the Step 4 snapshot)
 
-Step 4 listed *known* custom tables you intend to reuse. Step 5a probes for *unknown* problems on a per-create basis: name-prefix collisions from stale solutions, soft-deleted tombstones, and reserved system names. Skipping this check costs ~1 minute per failed POST (Dataverse takes its time returning the conflict error) and can leave Tier 0 partially created when a Tier 1 lookup fails on a phantom parent.
+Before each create, confirm the target name is actually free: name-prefix collisions from stale solutions, reserved system names, and soft-deleted tombstones all fail the POST, and Dataverse takes ~1 minute to return the conflict error. A failure here can leave Tier 0 partially created and make a Tier 1 lookup fail on a phantom parent. Step 4 already collected this evidence for every planned name, so this step reads it rather than re-querying.
 
-**For every `Create` entry, before its POST, probe the target logical name:**
+**For every `Create` entry, resolve its target state from the Step 4 batch — do not re-query per table.** Step 4 already fetched every planned logical name, so reuse that result:
+
+| Step 4 result for this name | Meaning | Action |
+|---|---|---|
+| **Absent from `value[]`** | Name is free | Proceed with POST. |
+| **Present** + `IsCustomEntity: true` + `MetadataId` matches memory-bank | We created this earlier — idempotent re-run | Skip the POST, mark as created, continue. |
+| **Present** + `IsCustomEntity: true` + `MetadataId` *not* in memory-bank | Foreign collision | Reconcile live columns and customization properties below; never auto-extend an uncustomizable target. |
+| **Present** + `IsCustomEntity: false` | Reserved system table name | Auto-recover via rename (see below). |
+
+Only re-probe a single name when Step 4's batch did not cover it (for example a rename candidate generated later in this step):
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions(LogicalName='<prefix>_<table>')?\$select=MetadataId,LogicalName,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes"
 ```
 
-Branch on the response:
+Tombstones and hidden collisions are **not** reliably visible to either form — Dataverse can report a name as free and still reject the POST minutes later. Those are caught by the POST-time collision rescue below, which is the real safety net:
 
-| Status / body | Meaning | Action |
+| POST response | Meaning | Action |
 |---|---|---|
-| **404 NotFound** | Name is free | Proceed with POST. |
-| **200 OK** + `IsCustomEntity: true` + `MetadataId` matches memory-bank | We created this earlier — idempotent re-run | Skip the POST, mark as created, continue. |
-| **200 OK** + `IsCustomEntity: true` + `MetadataId` *not* in memory-bank | Foreign collision | Reconcile live columns and customization properties below; never auto-extend an uncustomizable target. |
-| **200 OK** + `IsCustomEntity: false` | Reserved system table name | Auto-recover via rename (see below). |
 | **5xx** with `0x80060890` or message `"object with same name exists in solution"` | Tombstone (soft-deleted, ~30 min purge TTL) | Auto-recover via rename (see below). |
-| **400** with `0x80044363`, `"schema name ... is not unique"`, or `"same name already exists"` | Hidden Dataverse collision / recent-delete tombstone not visible to `EntityDefinitions` GET | Auto-recover via rename (see below), then retry the POST once. |
+| **400** with `0x80044363`, `"schema name ... is not unique"`, or `"same name already exists"` | Hidden Dataverse collision / recent-delete tombstone | Auto-recover via rename (see below), then retry the POST once. |
 
-**Important:** Step 5a is a best-effort preflight, not the final authority. Dataverse can return 404 for a recently deleted table and still reject the create POST minutes later because the schema name remains reserved internally. Treat that POST-time 400 as a recoverable name collision, not a data-model failure.
+**Important:** treat a POST-time collision as a recoverable name conflict, not a data-model failure — the schema name can stay reserved internally after a delete even when metadata reports it as free.
 
 #### Auto-recovery — reuse/extend first, rename as last resort
 
@@ -308,7 +322,7 @@ If the Step 5b table POST fails after a 404 preflight with any Dataverse name-co
 - message contains `same name already exists`
 - message contains `object with same name exists in solution`
 
-First attempt auto-Extend: re-GET the existing table's attributes and compare with the plan. If ≥50% overlap, switch to Extend path (add missing columns). Otherwise, run the auto-rename probe sequence, update `native-app-plan.md`, `## Screens`, `memory-bank.md`, and the run-level alias map, then retry the table POST exactly once with the resolved name. Print:
+First attempt auto-Extend: compare the plan against that table's attribute snapshot from Step 4 (re-fetch only if it is absent). If ≥50% overlap, switch to Extend path (add missing columns). Otherwise, run the auto-rename probe sequence, update `native-app-plan.md`, `## Screens`, `memory-bank.md`, and the run-level alias map, then retry the table POST exactly once with the resolved name. Print:
 
 > `→ Dataverse still has <original> reserved from a recent delete/hidden collision. Using <new> and continuing.`
 
@@ -700,15 +714,15 @@ If the publish call returns a non-2xx status, report the error and stop — do n
 
 ### Step 6c — Verify tables exist
 
-For each created or extended table, confirm it is queryable after publish:
+Confirm every created or extended table is queryable after publish with **one** filtered query, not one request per table:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions(LogicalName='<table>')?\\$select=LogicalName,DisplayName"
+  "EntityDefinitions?\$select=LogicalName,DisplayName&\$filter=LogicalName eq '<table1>' or LogicalName eq '<table2>'"
 ```
 
-- **200** → confirmed.
-- **404** → table missing after publish — report and stop.
+- **Every expected name present in `value[]`** → confirmed.
+- **Any expected name missing** → that table did not survive publish — report which ones and stop.
 
 ### Step 6d — Write `.datamodel-manifest.json`
 
