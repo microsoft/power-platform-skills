@@ -2,7 +2,7 @@
 // Pure App Spec guardrail. Returns { ok, errors, warnings }. errors block the plan
 // gate; warnings teach. Bakes in the modeling lessons hit live — notably the
 // relationship schema-name vs lookup-name collision Dataverse rejects.
-const { relationshipSchemaName, relationshipFor, invalidChoiceSampleTokens } = require('./app-spec.js');
+const { relationshipSchemaName, relationshipFor, invalidChoiceSampleTokens, isPlatformIconRef } = require('./app-spec.js');
 
 const CHOICE_OPTION_WARN = 12;
 const SEQNUM_RE = /\{SEQNUM(:\d+)?\}/i;
@@ -229,10 +229,14 @@ function lintAppSpec(spec) {
   // app-designer property pane. For ENTITY subareas the nav icon comes from the TABLE icon
   // (entities[].vectorIcon → IconVectorName), so a subarea vectorIcon is DROPPED at build time; warn
   // the author to set the table icon instead.
-  const looksLikeFile = (v) => v && /\.(png|jpe?g|gif|svg|ico)$/i.test(String(v));
-  const validVectorIcon = (v) => looksLikeFile(v) || /^\$webresource:/i.test(String(v || ''));
+  // The sitemap `VectorIcon` attribute must be a platform icon reference — an SVG/image path
+  // (e.g. /WebResources/<pub>/icons/x.svg) or a `$webresource:<name>.svg` reference — NOT a bare
+  // Fluent token, which breaks the modern app-designer property pane. An entity-subarea vectorIcon that
+  // IS a valid platform ref now round-trips (the build emits it); only a BARE token on an entity subarea
+  // is dropped. (isPlatformIconRef also accepts an extension-less WebResources path like an OOB
+  // /_imgs/.../CDSEntity, which is a valid live reference.)
   for (const a of (spec.appShell && spec.appShell.areas) || []) {
-    if (a.vectorIcon && !validVectorIcon(a.vectorIcon)) W(`Sitemap area "${a.label || ''}": vectorIcon '${a.vectorIcon}' is a bare token — the sitemap VectorIcon needs an SVG path (…/x.svg) or a $webresource:<name>.svg reference, not a Fluent token`);
+    if (a.vectorIcon && !isPlatformIconRef(a.vectorIcon)) W(`Sitemap area "${a.label || ''}": vectorIcon '${a.vectorIcon}' is a bare token — the sitemap VectorIcon needs an SVG path (…/x.svg) or a $webresource:<name>.svg reference, not a Fluent token`);
     for (const g of a.groups || []) {
       for (const sa of g.subAreas || []) {
         const targets = ['entity', 'dashboard', 'url', 'page'].filter((k) => sa[k]);
@@ -241,9 +245,9 @@ function lintAppSpec(spec) {
         if (sa.entity && !entityNames.has(lc(sa.entity))) E(`Sitemap subarea references unknown entity '${sa.entity}'`);
         if (sa.dashboard && !dashNames.has(sa.dashboard)) E(`Sitemap subarea references unknown dashboard '${sa.dashboard}' — declare it in dashboards[]`);
         if (sa.page && !pageRefs.has(sa.page)) E(`Sitemap subarea references unknown page '${sa.page}' — declare it in pages[]`);
-        if (sa.vectorIcon) {
-          if (sa.entity) W(`Sitemap subarea "${sa.title || ''}": vectorIcon is ignored on an entity subarea (dropped from the sitemap so it doesn't break the app designer) — an entity's nav icon comes from the table icon; set entities[].vectorIcon (an SVG web resource) for a custom icon`);
-          else if (!validVectorIcon(sa.vectorIcon)) W(`Sitemap subarea "${sa.title || ''}": vectorIcon '${sa.vectorIcon}' is a bare token — the sitemap VectorIcon needs an SVG path (…/x.svg) or a $webresource:<name>.svg reference, not a Fluent token`);
+        if (sa.vectorIcon && !isPlatformIconRef(sa.vectorIcon)) {
+          if (sa.entity) W(`Sitemap subarea "${sa.title || ''}": vectorIcon '${sa.vectorIcon}' is a bare token — on an entity subarea a bare Fluent token breaks the app designer and is DROPPED. Use an SVG path (/WebResources/<pub>/icons/x.svg) or $webresource:<name>.svg, or set entities[].vectorIcon (the table icon).`);
+          else W(`Sitemap subarea "${sa.title || ''}": vectorIcon '${sa.vectorIcon}' is a bare token — the sitemap VectorIcon needs an SVG path (…/x.svg) or a $webresource:<name>.svg reference, not a Fluent token`);
         }
       }
     }

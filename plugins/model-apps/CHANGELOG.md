@@ -9,6 +9,18 @@ plus local-dev ergonomics, sample coverage, and an automated eval suite with
 real and synthetic fixtures. Builds on v2.1; no breaking changes.
 
 ### Changed
+- **Entity-subarea sitemap icons round-trip (fixes a download→build regression).** Two fixes to the
+  sitemap writer/validator: (A) the build no longer **drops** a custom `vectorIcon` on an entity nav
+  subarea — a valid platform reference (an SVG path `/WebResources/<pub>/icons/x.svg` or a
+  `$webresource:<name>`) is now emitted onto the `<SubArea Entity=…>` (live-verified) and preserved
+  case-sensitively; only a bare Fluent token is dropped (it breaks the modern app-designer), now with a
+  **warning** instead of a silent drop. (B) validation no longer **rejects** a platform/OOB icon reference
+  the download itself wrote (e.g. `/WebResources/msdyn_.../SitemapIcon/CDSEntity`) as "not a declared web
+  resource" — a platform reference (leading `/` or `$webresource:`) passes through; only a bare NAME must be
+  a declared `webResources[]` image. Area icons get the same case-preservation. So a pure
+  download→edit→rebuild round-trip on a real app with custom/OOB nav icons no longer fails or silently
+  loses the icon. New shared `isPlatformIconRef` predicate; `download-model-app` skips platform-path icons
+  (references, not fetchable web resources). Live-verified on aurorabapenv03468 + full offline coverage.
 - **Pre-existing duplicate page names no longer block an unrelated build.** Case-insensitive page-name
   uniqueness is now enforced only on pages the run **creates** (a page with no `pageId`): two new pages
   — or a new page colliding with any other — that share a name are still rejected, but a duplicate

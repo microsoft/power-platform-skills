@@ -29,6 +29,7 @@ const {
   manyToManySchemaName,
   normalizePageSource,
   quickCreateEnabledFor,
+  isPlatformIconRef,
 } = require('./app-spec.js');
 const { PHASES } = require('./stages.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
@@ -601,14 +602,21 @@ function appDef(spec, result, opts = {}) {
   // A subarea is an Entity (table) by default, a DashBoard (a built dashboard, by name — the SDK
   // auto-pins its dashboardId as an app component so the nav actually includes it), or a URL.
   const subAreaJson = (s, id) => {
-    const base = { id, title: s.title,
-      ...(s.icon ? { icon: String(s.icon).toLowerCase() } : {}) };
-    // `vectorIcon` on an ENTITY subarea produces an invalid sitemap `VectorIcon` that breaks the
-    // modern app-designer property pane — an entity's nav icon comes from the TABLE icon
-    // (entities[].vectorIcon → IconVectorName), NOT the subarea. So carry vectorIcon only on
-    // non-entity subareas (URL / GenPage / DashBoard), where an SVG-path / $webresource value is
-    // valid; entity subareas below use `base` (no VectorIcon) and fall back to the table icon.
-    const withVector = s.vectorIcon ? { ...base, vectorIcon: s.vectorIcon } : base;
+    // Preserve a platform icon path VERBATIM (case-sensitive — an OOB/WebResources path like
+    // `/WebResources/.../SitemapIcon/CDSEntity` breaks if lower-cased); lower-case only a BARE local
+    // web-resource NAME (Dataverse web-resource names are case-insensitive and the icon lookup
+    // lower-cases). This is what lets a downloaded app's entity-subarea icon round-trip unchanged.
+    const iconVal = s.icon ? (isPlatformIconRef(s.icon) ? s.icon : String(s.icon).toLowerCase()) : undefined;
+    const base = { id, title: s.title, ...(iconVal ? { icon: iconVal } : {}) };
+    // Carry a VALID `vectorIcon` on ANY subarea — INCLUDING Entity. Live-probed: the vendored SDK
+    // serializes `<SubArea Entity="…" … VectorIcon="/WebResources/<pub>/icons/x.svg">` correctly, and
+    // the modern app accepts a path/$webresource VectorIcon on an entity nav entry (the reporter's live
+    // app uses one). Previously ALL entity vectorIcons were dropped, silently losing a custom nav icon
+    // on every build and breaking the download→build round-trip. We still DROP a BARE Fluent TOKEN on an
+    // entity subarea (that specific shape breaks the modern app-designer property pane; validation
+    // surfaces it as a warning). Non-entity subareas keep emitting any vectorIcon as before.
+    const emitVector = s.vectorIcon && (isPlatformIconRef(s.vectorIcon) || !s.entity);
+    const withVector = emitVector ? { ...base, vectorIcon: s.vectorIcon } : base;
     if (s.dashboard) {
       const dashboardId = (result.dashboards || {})[s.dashboard];
       if (!dashboardId) throw new Error(`sitemap subarea "${s.title}" references dashboard '${s.dashboard}' which wasn't built — declare it in dashboards[] and don't skip the dashboards phase`);
@@ -626,10 +634,13 @@ function appDef(spec, result, opts = {}) {
       return { ...withVector, type: 'GenPage', genPageId };
     }
     if (s.url) return { ...withVector, type: 'URL', url: s.url };
-    return { ...base, type: 'Entity', entity: s.entity && s.entity.toLowerCase() };
+    return { ...withVector, type: 'Entity', entity: s.entity && s.entity.toLowerCase() };
   };
   const areas = (spec.appShell.areas || []).map((a, ai) => ({ id: `area_${ai}`, title: a.label,
-    ...(a.icon ? { icon: String(a.icon).toLowerCase() } : {}),
+    // Same rule as subAreaJson: preserve a platform icon path VERBATIM (case-sensitive OOB/WebResources
+    // path); lower-case only a bare local web-resource NAME. Leaving the area icon unconditionally
+    // lower-cased would corrupt a round-tripped OOB area icon (now that validation tolerates it).
+    ...(a.icon ? { icon: isPlatformIconRef(a.icon) ? a.icon : String(a.icon).toLowerCase() } : {}),
     ...(a.vectorIcon ? { vectorIcon: a.vectorIcon } : {}),
     groups: (a.groups || []).map((g, gi) => ({ id: `group_${ai}_${gi}`, title: g.label,
       subAreas: (g.subAreas || []).map((s, si) => subAreaJson(s, `sub_${ai}_${gi}_${si}`)).filter(Boolean) })) }));

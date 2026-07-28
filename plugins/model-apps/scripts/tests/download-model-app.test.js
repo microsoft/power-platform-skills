@@ -24,6 +24,15 @@ test('collectSitemap gathers distinct entities + icons from the sitemap', () => 
   assert.deepStrictEqual([...icons].sort(), ['a.png', 'i.png']);
 });
 
+test('collectSitemap SKIPS platform icon paths (OOB / $webresource) — they are references, not declared web resources', () => {
+  const app = { siteMap: { areas: [{ icon: '/WebResources/msdyn_/img/area.svg', groups: [{ subAreas: [
+    { type: 'Entity', entity: 'zava_javavendor', icon: '/WebResources/msdyn_OmnichannelBase/_imgs/SitemapIcon/CDSEntity', vectorIcon: '/WebResources/crba3_/icons/approval.svg' },
+    { type: 'Entity', entity: 'new_thing', icon: 'new_declared.png' }, // a bare name IS collected (declared WR)
+  ] }] }] } };
+  const { icons } = collectSitemap(app);
+  assert.deepStrictEqual([...icons], ['new_declared.png'], 'only the bare-name icon is gathered for download; OOB/$webresource paths are skipped');
+});
+
 test('parseDownloadedPages reads pac page tree (<pageId>/page.tsx + config + prompt) into pages[]', () => {
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-'));
   const pagesRoot = path.join(out, 'pages');

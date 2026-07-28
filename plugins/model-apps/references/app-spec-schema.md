@@ -379,14 +379,22 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   of a `dashboards[]` entry — auto-pinned as an app component so the app includes it), `url`, or
   `page` (the **`key`** of a `pages[]` generative page at schemaVersion 2; the **name** for legacy specs
   — surfaced as a `GenPage` sitemap subarea).
-- Any area or subarea may set **`icon`** (a declared image `webResources[]` entry — png/jpg/gif/svg/ico;
-  validated). Icons are **chrome, not a target** — they don't count toward the "exactly one target" rule.
-- **Entity nav icons come from the TABLE icon, not the subarea.** For an `entity` subarea, set the table's
-  own icon via `entities[].vectorIcon` (an SVG web resource → `IconVectorName`); a subarea `vectorIcon`
-  on an entity subarea is **ignored/dropped** (a raw value there breaks the modern app-designer property
-  pane). For a non-entity subarea (`url`/`page`/`dashboard`), `vectorIcon` must be an **SVG path**
-  (e.g. `/_imgs/TableIconsFluentV9/x.svg`) or a **`$webresource:<name>.svg`** reference — not a bare
-  Fluent token (lint warns).
+- Any area or subarea may set **`icon`**. This is either a declared image `webResources[]` NAME
+  (png/jpg/gif/svg/ico — validated against `webResources[]`) OR a **platform icon reference** — a path
+  (`/WebResources/…`, `/_imgs/…`) or a `$webresource:<name>` — which a **downloaded** app carries verbatim
+  (including OOB system icons like `/WebResources/msdyn_.../SitemapIcon/CDSEntity`). A platform reference is
+  passed through as-is (case-preserved) and is **not** required to be a declared web resource, so a
+  download→build round-trip is never blocked by an OOB icon the download itself wrote. Icons are **chrome,
+  not a target** — they don't count toward the "exactly one target" rule.
+- **Entity-subarea nav icons round-trip.** An `entity` subarea's `vectorIcon` (and `icon`) are preserved
+  across a build **when they are a platform reference** — a modern custom nav glyph
+  (`/WebResources/<pub>/icons/x.svg` or `$webresource:<name>.svg`) is emitted onto the sitemap `<SubArea>`
+  and round-trips through download. Only a **bare Fluent token** (e.g. `Shop`) is dropped from an entity
+  subarea (a raw token there breaks the modern app-designer property pane) — and that drop is **surfaced as
+  a warning**, not silent. Alternatively, set the table's own icon via `entities[].vectorIcon` (an SVG web
+  resource → `IconVectorName`), which the modern designer also renders for the table. For a non-entity
+  subarea (`url`/`page`/`dashboard`), `vectorIcon` is any platform reference (an **SVG path** or a
+  **`$webresource:<name>.svg`**) — a bare Fluent token is lint-warned.
 
 ## design (optional — page design contract)
 ```jsonc

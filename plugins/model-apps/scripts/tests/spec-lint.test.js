@@ -78,13 +78,21 @@ test('a relationship whose REFERENCING (child) side is unknown IS an error (the 
   assert.ok(r.errors.some((e) => /unknown entity 'new_missing'/.test(e)), JSON.stringify(r.errors));
 });
 
-test('warns that vectorIcon on an entity subarea is ignored (dropped) — the nav uses the table icon', () => {
+test('warns that a BARE-TOKEN vectorIcon on an entity subarea is dropped; a VALID platform ref round-trips silently', () => {
   const s = base();
   s.appShell = { areas: [{ label: 'Main', groups: [{ label: 'Records', subAreas: [
     { entity: 'new_customer', title: 'Customers', vectorIcon: 'Shield' },
   ] }] }] };
   const r = lintAppSpec(s);
-  assert.ok(r.warnings.some((w) => /vectorIcon is ignored on an entity subarea/.test(w)), JSON.stringify(r.warnings));
+  assert.ok(r.warnings.some((w) => /vectorIcon 'Shield' is a bare token/.test(w) && /entity subarea/.test(w)), JSON.stringify(r.warnings));
+
+  // A valid platform reference (path) on an entity subarea now ROUND-TRIPS — no warning (it is emitted).
+  const s2 = base();
+  s2.appShell = { areas: [{ label: 'Main', groups: [{ label: 'Records', subAreas: [
+    { entity: 'new_customer', title: 'Customers', vectorIcon: '/WebResources/new_/icons/customer.svg' },
+  ] }] }] };
+  const r2 = lintAppSpec(s2);
+  assert.ok(!r2.warnings.some((w) => /vectorIcon/.test(w)), `a valid platform vectorIcon must not warn: ${JSON.stringify(r2.warnings)}`);
 });
 
 test('warns when a non-entity subarea vectorIcon is a bare Fluent token (VectorIcon needs an SVG path / $webresource)', () => {

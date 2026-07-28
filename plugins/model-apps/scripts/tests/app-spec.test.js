@@ -78,6 +78,26 @@ test('validateAppSpec rejects a sitemap icon referencing an undeclared web resou
   assert.ok(r.errors.some((e) => /icon 'new_missing\.png' is not a declared web resource/.test(e)), JSON.stringify(r.errors));
 });
 
+test('validateAppSpec TOLERATES a platform icon reference (OOB / $webresource path) on a subarea — the download→build round-trip fix (Symptom B)', () => {
+  // A downloaded app carries live/OOB icon PATHS on its entity subareas (e.g. the OOB CDSEntity icon).
+  // These are NOT declared web resources — the build must accept them as-is, not reject the round-trip.
+  const OOB = '/WebResources/msdyn_OmnichannelBase/_imgs/SitemapIcon/CDSEntity';
+  for (const iconVal of [OOB, '$webresource:crba3_appicon.svg']) {
+    const s = JSON.parse(JSON.stringify(sample));
+    s.appShell.areas[0].groups[0].subAreas[0].icon = iconVal;
+    const r = validateAppSpec(s, { profile: 'deploy' });
+    assert.ok(!r.errors.some((e) => /is not a declared web resource/.test(e)), `platform icon '${iconVal}' must pass: ${JSON.stringify(r.errors)}`);
+  }
+});
+
+test('validateAppSpec WARNS (does not error) on a dropped BARE-TOKEN entity-subarea vectorIcon (Ask 3 — no silent drop)', () => {
+  const s = JSON.parse(JSON.stringify(sample));
+  s.appShell.areas[0].groups[0].subAreas[0].vectorIcon = 'Shop'; // bare Fluent token on an entity subarea
+  const r = validateAppSpec(s, { profile: 'deploy' });
+  assert.ok(!r.errors.some((e) => /vectorIcon/.test(e)), 'a bare-token vectorIcon does not block the build');
+  assert.ok((r.warnings || []).some((w) => /vectorIcon 'Shop' is a bare token/.test(w)), `it is surfaced as a warning: ${JSON.stringify(r.warnings)}`);
+});
+
 // F12 — URL scheme allowlist: only http(s) URLs may be shipped in an app the maker renders.
 test('validateAppSpec rejects a sitemap subArea url with a non-http(s) scheme (F12)', () => {
   const s = JSON.parse(JSON.stringify(sample));

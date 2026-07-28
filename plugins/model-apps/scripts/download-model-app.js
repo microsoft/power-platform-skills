@@ -17,6 +17,7 @@ const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require(
 const { reverseResolveNavIds } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
+const { isPlatformIconRef } = require('./lib/app-spec.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
 const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7: 'gif', 8: 'xap', 9: 'xsl', 10: 'ico', 11: 'svg', 12: 'resx' };
@@ -71,16 +72,23 @@ async function resolveAppId(sdk, appArg) {
   return rows && rows[0] && rows[0].appmoduleid;
 }
 
-// The distinct entity logical names + icon web-resource names referenced by the app's sitemap.
+// The distinct entity logical names + icon web-resource NAMES referenced by the app's sitemap. Only
+// BARE-NAME icons are collected for download (they are locally-declared image web resources we fetch and
+// re-emit as webResources[]). A PLATFORM icon reference (a path / $webresource — e.g. an OOB
+// `/WebResources/msdyn_.../SitemapIcon/CDSEntity`) is NOT a web-resource name; it round-trips as a
+// verbatim reference on the subarea (hydrate keeps it), so we must NOT try to fetch it as a declared web
+// resource (it wouldn't resolve, and the build validates it as a pass-through platform ref, not a
+// missing declaration).
 function collectSitemap(app) {
   const entities = new Set();
   const icons = new Set();
+  const addIcon = (v) => { if (v && !isPlatformIconRef(v)) icons.add(v); };
   for (const a of (app.siteMap && app.siteMap.areas) || []) {
-    if (a.icon) icons.add(a.icon);
+    addIcon(a.icon);
     for (const g of a.groups || []) {
       for (const sa of g.subAreas || []) {
         if (sa.type === 'Entity' && sa.entity) entities.add(String(sa.entity).toLowerCase());
-        if (sa.icon) icons.add(sa.icon);
+        addIcon(sa.icon);
       }
     }
   }

@@ -89,6 +89,20 @@ are in [`architecture.md`](architecture.md).
 - 🔲 **Live-verify Calculated / Rollup** formula columns end-to-end.
 - 🔲 **Publish granularity** — optionally publish web resources separately from entity customizations.
 - 🔲 **Richer `BuildHalt` recovery** — skip-phase / retry-step / edit-spec-and-resume prompts.
+- ✅ **Entity-subarea sitemap icons round-trip** — DONE. The sitemap writer no longer DROPS a custom
+  `vectorIcon` on an entity nav subarea, and validation no longer REJECTS a platform/OOB icon reference the
+  download itself wrote. New shared `isPlatformIconRef` (a value starting with `/` or `$webresource:` is a
+  platform reference the platform resolves directly, vs a bare declared-web-resource NAME): `checkIcon`
+  passes platform refs through (a bare NAME still must be a declared image WR); `subAreaJson` emits a valid
+  platform `vectorIcon` on ANY subarea incl. Entity (a bare Fluent token is still dropped — it breaks the
+  modern app-designer — but now with a `warnings[]` entry, not silently) and preserves icon paths VERBATIM
+  (case-sensitive; only bare names are lower-cased); `collectSitemap` skips platform-path icons. So
+  download→edit→rebuild on a real app with custom/OOB nav icons no longer fails validation or silently
+  loses the icon. Adversarially reviewed (Sol + Opus — Opus caught a residual area-icon case-corruption,
+  fixed); **live-verified on aurorabapenv03468** (entity-subarea `VectorIcon` lands in the deployed sitemap
+  XML; the reporter's exact OOB `…/CDSEntity` icon rebuilds `ok:true`; round-trip clean). **Follow-up:**
+  deploying a `/WebResources/<pub>/icons/x.svg` reference to a DIFFERENT env that lacks that web resource
+  renders a broken icon — inherent to referencing by path (the WR is assumed pre-existing).
 - ✅ **Pre-existing duplicate page names don't block an unrelated build** — DONE. Two-layer, fail-closed:
   (1) `validateAppSpec` scopes the case-insensitive page-name uniqueness rule to pages the run CREATES
   (no `pageId`): a NEW collision is rejected (prevention), a collision purely among PRE-EXISTING pages

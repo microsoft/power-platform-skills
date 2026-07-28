@@ -1078,21 +1078,32 @@ test('app-shell: a DashBoard subarea for an unbuilt dashboard throws a clear err
   assert.throws(() => appDef(spec, { forms: {}, views: {}, charts: {}, dashboards: {} }), /references dashboard 'Missing' which wasn't built/);
 });
 
-test('app-shell: an entity subarea DROPS vectorIcon (invalid VectorIcon breaks the designer — nav uses the table icon); areas + non-entity subareas keep it', () => {
+test('app-shell: entity-subarea icons round-trip — a BARE token vectorIcon is dropped, a VALID platform (path/$webresource) vectorIcon is emitted, and an OOB icon path is preserved VERBATIM (case-sensitive)', () => {
   const spec = makeSpec();
   spec.appShell.areas[0].icon = 'New_AreaIcon.png';
   spec.appShell.areas[0].vectorIcon = 'Home';
+  // Entity subarea 0: a bare Fluent token vectorIcon (breaks the designer) → dropped; a bare-name icon → lowercased.
   spec.appShell.areas[0].groups[0].subAreas[0].icon = 'New_SubIcon.png';
-  spec.appShell.areas[0].groups[0].subAreas[0].vectorIcon = 'Grid'; // entity subarea -> dropped
+  spec.appShell.areas[0].groups[0].subAreas[0].vectorIcon = 'Grid';
+  // Entity subarea 1: a VALID platform vectorIcon (svg path) + an OOB icon path (mixed case) — both must round-trip.
+  const OOB = '/WebResources/msdyn_OmnichannelBase/_imgs/SitemapIcon/CDSEntity';
+  const SVG = '/WebResources/crba3_/icons/approval.svg';
+  spec.appShell.areas[0].groups[0].subAreas.push({ entity: spec.entities[0].schemaName, title: 'Custom', icon: OOB, vectorIcon: SVG });
   spec.appShell.areas[0].groups[0].subAreas.push({ url: 'https://x', title: 'Help', vectorIcon: '/_imgs/x.svg' });
   const def = appDef(spec, { forms: {}, views: {}, charts: {}, dashboards: {} });
   const area = def.siteMap.areas[0];
-  const sub = area.groups[0].subAreas[0];
+  const sub0 = area.groups[0].subAreas[0];
+  const custom = area.groups[0].subAreas.find((s) => s.title === 'Custom');
   const urlSub = area.groups[0].subAreas.find((s) => s.type === 'URL');
   assert.strictEqual(area.icon, 'new_areaicon.png');
   assert.strictEqual(area.vectorIcon, 'Home', 'area vectorIcon is kept (areas are out of the reported bug scope)');
-  assert.strictEqual(sub.icon, 'new_subicon.png');
-  assert.strictEqual(sub.vectorIcon, undefined, 'entity subarea vectorIcon is dropped (would emit an invalid VectorIcon)');
+  // Area OOB/platform icon path must ALSO be preserved verbatim (not lower-cased) — same rule as subareas.
+  const areaOob = appDef((() => { const s = makeSpec(); s.appShell.areas[0].icon = OOB; return s; })(), { forms: {}, views: {}, charts: {}, dashboards: {} }).siteMap.areas[0];
+  assert.strictEqual(areaOob.icon, OOB, 'an OOB AREA icon path is preserved VERBATIM (case-sensitive), not lower-cased');
+  assert.strictEqual(sub0.icon, 'new_subicon.png', 'a bare-name icon is lowercased (web-resource names are case-insensitive)');
+  assert.strictEqual(sub0.vectorIcon, undefined, 'a BARE-TOKEN entity vectorIcon is dropped (would break the designer)');
+  assert.strictEqual(custom.vectorIcon, SVG, 'a VALID platform vectorIcon on an entity subarea is now EMITTED (Symptom A fix)');
+  assert.strictEqual(custom.icon, OOB, 'an OOB icon PATH is preserved VERBATIM — never lower-cased (case-sensitive path)');
   assert.strictEqual(urlSub.vectorIcon, '/_imgs/x.svg', 'a non-entity (url) subarea keeps vectorIcon (an SVG path is valid there)');
 });
 

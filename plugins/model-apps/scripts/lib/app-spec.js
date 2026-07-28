@@ -14,6 +14,25 @@ function isSafeHttpUrl(u) {
   return parsed.protocol === 'http:' || parsed.protocol === 'https:';
 }
 
+// A sitemap icon / vectorIcon VALUE the platform resolves DIRECTLY (as opposed to a locally-declared
+// `webResources[]` NAME): a relative WebResources path (`/WebResources/...`, `/_imgs/...`) or a
+// `$webresource:` reference. These are exactly what a DOWNLOADED app carries verbatim on its subareas —
+// including OOB system icons like `/WebResources/msdyn_OmnichannelBase/_imgs/SitemapIcon/CDSEntity` — and
+// what a modern custom nav icon uses (`/WebResources/<pub>/icons/x.svg`). They must ROUND-TRIP: the build
+// emits them verbatim (case-preserved) and validation must NOT reject them for not being a declared web
+// resource (that rejection broke download→build on every real app).
+// The signal is a leading `/` or a `$webresource:` prefix — NOT a file extension: a web-resource NAME
+// legitimately ends in an extension (e.g. `new_appicon.png`), so an extension alone can't distinguish a
+// path from a declared name. A BARE token (no `/`, no scheme — e.g. a Fluent icon name `Shop`, or even a
+// bare `x.svg`) is NOT a platform ref: as an `icon` it is a local web-resource name that must be declared,
+// and as an entity-subarea `VectorIcon` it breaks the modern app-designer property pane (build drops it).
+// Grounded by a live probe of the vendored SDK: it serializes
+// `<SubArea Entity="…" … VectorIcon="/WebResources/<pub>/icons/x.svg">` correctly for a path value.
+function isPlatformIconRef(v) {
+  const s = String(v == null ? '' : v);
+  return s.startsWith('/') || /^\$webresource:/i.test(s);
+}
+
 // App Spec column type -> { dv: Dataverse attribute type name }. (The SDK build engine
 // maps App Spec types to the SDK's own ColumnType in lib/sdk-build.js.)
 const TYPE_MAP = {
@@ -687,10 +706,14 @@ function validateAppSpec(spec, opts = {}) {
       }
     }
   }
-  // Icons are chrome, not a target: a web-resource `icon` must reference a declared IMAGE web
-  // resource; `vectorIcon` is a free-form Fluent token (no web resource, not validated here).
+  // Icons are chrome, not a target. An `icon` that is a **platform reference** (a path or
+  // `$webresource:` — see isPlatformIconRef) is a live/OOB value a downloaded app carries and is valid
+  // AS-IS (rejecting it broke the download→build round-trip on real apps). Only a BARE NAME is treated
+  // as a local web-resource reference and must be a declared IMAGE web resource. `vectorIcon` handling
+  // is per-subarea below (entity vs non-entity differ).
   const checkIcon = (icon, label) => {
     if (!icon) return;
+    if (isPlatformIconRef(icon)) return; // live/OOB platform reference — pass through
     const ic = String(icon).toLowerCase();
     if (!webResourceNames.has(ic)) errors.push(`${label}: icon '${icon}' is not a declared web resource`);
     else if (!imageWebResourceNames.has(ic)) errors.push(`${label}: icon '${icon}' must be an image web resource (png/jpg/gif/svg/ico)`);
@@ -709,6 +732,12 @@ function validateAppSpec(spec, opts = {}) {
         const pageRefSet = isV2 ? pageKeysSet : pageNamesSet;
         if (sa.page && !pageRefSet.has(sa.page)) errors.push(`sitemap subArea references unknown page '${sa.page}' (declare it in pages[])`);
         checkIcon(sa.icon, `sitemap subArea "${sa.title || ''}"`);
+        // Ask 3: don't SILENTLY drop an entity-subarea vectorIcon. A valid platform ref round-trips
+        // (emitted by the build); a BARE token can't be emitted on an entity subarea (it breaks the
+        // modern app-designer), so surface it as a warning at author time rather than a silent drop.
+        if (sa.entity && sa.vectorIcon && !isPlatformIconRef(sa.vectorIcon)) {
+          warnings.push(`sitemap subArea "${sa.title || ''}": vectorIcon '${sa.vectorIcon}' is a bare token — on an entity subarea a bare Fluent token breaks the app designer and is DROPPED from the sitemap. Use an SVG path (e.g. /WebResources/<pub>/icons/x.svg) or a $webresource:<name>.svg reference, or set entities[].vectorIcon (the table icon) for a custom nav glyph.`);
+        }
       }
     }
   }
@@ -962,6 +991,7 @@ module.exports = {
   validateAppSpec,
   normalizePageSource,
   quickCreateEnabledFor,
+  isPlatformIconRef,
   VALIDATION_PROFILES,
   migrateAppSpec,
   columnTypeMap,
