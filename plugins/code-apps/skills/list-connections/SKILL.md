@@ -20,6 +20,8 @@ Lists all Power Platform connections in the current environment using the Power 
 
 ### Step 1: Fetch Connections
 
+> Resolve the CLI first (see [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md)): run as `$PA connection list` (`npx --no-install pa …`), never a bare `pa`. On `power-apps`-only projects, translate to `power-apps list-connections`.
+
 ```bash
 pa connection list
 ```

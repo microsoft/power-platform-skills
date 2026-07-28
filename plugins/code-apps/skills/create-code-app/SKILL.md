@@ -98,6 +98,8 @@ Verify: `package.json` exists, `node_modules/` created.
 
 ### Step 5: Initialize
 
+> Resolve the CLI first (see [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md)): run as `$PA app init …` (`npx --no-install pa …`), never a bare `pa`. On `power-apps`-only projects, translate to `power-apps init …` (the `init` verb and its `-n`/`-e` flags are unchanged on both binaries).
+
 ```bash
 pa app init -n '{user-provided-app-name}' -e <environment-id>
 ```
@@ -127,6 +129,8 @@ npm run build
 ```
 
 Verify `dist/` folder created with `index.html` and `assets/`.
+
+> Deploy via the resolved CLI: `$PA app push` on `pa`, or `power-apps push` on `power-apps`-only projects (see [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md)).
 
 ```bash
 pa app push

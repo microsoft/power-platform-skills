@@ -140,7 +140,7 @@ The CLI ships two binaries — grouped `pa` (preferred) and flat `power-apps` (f
 
 ## CLI Commands
 
-The Power Apps code app CLI (`@microsoft/power-apps-cli`) is installed locally as part of `npm install` when a project is scaffolded with the template. All CLI commands run via `npx` from within the project directory — no global install or `pwsh` wrapper needed. **Resolve the binary first (see above); commands below are shown in the canonical grouped `pa` form.**
+The Power Apps code app CLI (`@microsoft/power-apps-cli`) is installed locally as part of `npm install` when a project is scaffolded with the template. **Never invoke a bare `pa`/`power-apps`** — always run the locally-installed CLI through the resolved `$PA` prefix (`npx --no-install …`) from within the project directory. **Resolve the binary first (see [cli-binary.md](./cli-binary.md)); the commands below are canonical grouped `pa` templates — substitute `$PA` for the leading `pa`, and when `PA_KIND=power-apps` translate the verb path and renamed flags via the mapping tables before running.**
 
 **Core commands (canonical `pa` form — translate to flat `power-apps` via [cli-binary.md](./cli-binary.md) when only `power-apps` is installed):**
 

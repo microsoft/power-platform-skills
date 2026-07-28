@@ -32,10 +32,12 @@ Resolve from the **project root** (the directory containing `package.json` / `po
 # Prefer the grouped `pa` binary; fall back to flat `power-apps`.
 # --no-install is REQUIRED: it stops npx from silently fetching a remote
 # package named `pa`/`power-apps` from the registry if no local shim exists.
-if [ -e node_modules/.bin/pa ]; then
+# Probe both the extensionless shim (bash/sh) and the `.cmd` shim that
+# package managers create on Windows, so a valid install is never missed.
+if [ -e node_modules/.bin/pa ] || [ -e node_modules/.bin/pa.cmd ]; then
   PA="npx --no-install pa"          # grouped syntax  → use the "pa" column below
   PA_KIND="pa"
-elif [ -e node_modules/.bin/power-apps ]; then
+elif [ -e node_modules/.bin/power-apps ] || [ -e node_modules/.bin/power-apps.cmd ]; then
   PA="npx --no-install power-apps"  # flat syntax     → translate via the mapping table
   PA_KIND="power-apps"
 else
@@ -48,7 +50,7 @@ fi
 
 Rules:
 
-1. **Probe by file presence only** — do not pin or parse a version. `.bin/pa` existing == the grouped binary is available. This is deterministic and cheaper than spawning `--version`.
+1. **Probe by file presence only** — do not pin or parse a version. A shim (`.bin/pa` or, on Windows, `.bin/pa.cmd`) existing == the grouped binary is available. This is deterministic and cheaper than spawning `--version`. Always check the `.cmd` variant too: npm/pnpm/yarn/bun create `pa.cmd`/`power-apps.cmd` on Windows and an extensionless-only probe would misclassify a valid install as `none`.
 2. **Always use `npx --no-install`.** Never run a bare `npx pa ...`: if the local shim is missing, npx would try to download and execute an unrelated remote package named `pa`. `--no-install` fails closed instead.
 3. **Cache the result** in the project memory bank (`CLI Binary` row — see `memory-bank.md`) so subsequent skills/commands in the session don't re-probe. Re-probe only after an `npm install` that could have changed the installed CLI.
 4. **`none` → install first.** If neither shim exists, the CLI isn't installed; run the project's `npm install` (already part of the scaffold flow) and re-probe before running any command.
