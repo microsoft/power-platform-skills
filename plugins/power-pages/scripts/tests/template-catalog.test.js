@@ -130,6 +130,36 @@ test('fetchCatalog resolves the latest release to a sha, fetches the catalog at 
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, SHA, 'templates/manifest.json'), 'utf8')), catalog);
 });
 
+test('fetchCatalog resolves manifest artifact paths relative to the catalog folder', async (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const catalog = {
+    manifestVersion: '1.0',
+    templates: [{
+      ...VALID_TEMPLATE,
+      previewImages: ['spa/company-portal/previews/home.png', 'templates/spa/company-portal/previews/already-rooted.png'],
+      solutionPath: 'spa/company-portal/solution/Company_1_0_0_0.zip',
+      seedDataPath: 'spa/company-portal/seed/data.json',
+    }],
+  };
+
+  const result = await fetchCatalog({ owner: 'o', repo: 'r', ref: 'templates-v1.0.0', cacheRoot: dir }, {
+    requestJson: async (url) => {
+      if (url === 'https://api.github.com/repos/o/r/commits/templates-v1.0.0') return { sha: SHA };
+      if (url === `https://raw.githubusercontent.com/o/r/${SHA}/templates/manifest.json`) return catalog;
+      throw new Error(`unexpected url: ${url}`);
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.catalog.templates[0].previewImages, [
+    'templates/spa/company-portal/previews/home.png',
+    'templates/spa/company-portal/previews/already-rooted.png',
+  ]);
+  assert.equal(result.catalog.templates[0].solutionPath, 'templates/spa/company-portal/solution/Company_1_0_0_0.zip');
+  assert.equal(result.catalog.templates[0].seedDataPath, 'templates/spa/company-portal/seed/data.json');
+});
+
 test('fetchCatalog falls back to main when the samples repo has no latest release yet', async (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

@@ -95,6 +95,44 @@ function validateCatalogShape(catalog) {
   return null;
 }
 
+function catalogBasePath(catalogPath) {
+  const dir = path.posix.dirname(catalogPath || '');
+  return dir === '.' ? '' : dir.replace(/\/+$/, '');
+}
+
+function resolveCatalogArtifactPath(catalogPath, artifactPath) {
+  if (!isNonEmptyString(artifactPath)) return artifactPath;
+  const base = catalogBasePath(catalogPath);
+  if (!base || artifactPath === base || artifactPath.startsWith(`${base}/`)) {
+    return artifactPath;
+  }
+  return `${base}/${artifactPath.replace(/^\/+/, '')}`;
+}
+
+function materializeCatalogArtifactPaths(catalog, catalogPath) {
+  return {
+    ...catalog,
+    templates: catalog.templates.map((template) => {
+      // Manifest artifact paths are authored relative to the manifest folder.
+      // For the default `templates/manifest.json`, a raw entry like:
+      //   "previewImages": ["spa/311-portal/previews/home.png"]
+      // must download from:
+      //   templates/spa/311-portal/previews/home.png
+      // Do this once after validation so the rest of create-site can treat every
+      // artifact path as repository-root-relative.
+      const materialized = {
+        ...template,
+        previewImages: template.previewImages.map((imagePath) => resolveCatalogArtifactPath(catalogPath, imagePath)),
+        solutionPath: resolveCatalogArtifactPath(catalogPath, template.solutionPath),
+      };
+      if (template.seedDataPath) {
+        materialized.seedDataPath = resolveCatalogArtifactPath(catalogPath, template.seedDataPath);
+      }
+      return materialized;
+    }),
+  };
+}
+
 function startHttpsGet({ url, headers, timeoutMs, deps, reject, onResponse }) {
   const httpsImpl = deps.https || https;
   const req = httpsImpl.get(url, {
@@ -274,9 +312,10 @@ async function fetchCatalog(options = {}, deps = {}) {
     const resolved = await resolveCatalogRef({ owner, repo, ref }, { ...deps, requestJson: request });
     const { sha } = resolved;
     const cacheDir = cacheDirForSha(cacheRoot, sha);
-    const catalog = await request(buildRawUrl({ owner, repo, sha, filePath: catalogPath }));
-    const catalogError = validateCatalogShape(catalog);
+    const rawCatalog = await request(buildRawUrl({ owner, repo, sha, filePath: catalogPath }));
+    const catalogError = validateCatalogShape(rawCatalog);
     if (catalogError) throw new Error(`Template catalog is malformed: ${catalogError}`);
+    const catalog = materializeCatalogArtifactPaths(rawCatalog, catalogPath);
     fsImpl.mkdirSync(cacheDir, { recursive: true });
     const catalogLocalPath = artifactCachePath({ cacheRoot, sha, artifactPath: catalogPath });
     fsImpl.mkdirSync(path.dirname(catalogLocalPath), { recursive: true });
