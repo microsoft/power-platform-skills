@@ -99,8 +99,7 @@ Plugin-level hooks also run during unrelated plugin workflows, so every mutating
 
 3. On exit `2`, repair every finding and rerun. Exit `0` is required before `DONE`.
 
-Never pass a directory or the whole project. Text files receive all applicable checks; binary files receive path-safety checks. This gate remains required after a successful typecheck.
-
+Never pass a directory or the whole project. Files with common text extensions (see `scripts/lib/mobile-validator-manifest.js`) receive content-based checks; other files receive path-safety-only checks. This gate remains required after a successful typecheck.
 ### MUST (required before acting)
 
 - **Confirm before any deployment.** Before running platform-native run commands, ask: _"Build and run on `<platform>`? Metro will start in foreground."_ — exception: the first build at the end of `/create-mobile-app` is pre-approved as part of the scaffold flow.
