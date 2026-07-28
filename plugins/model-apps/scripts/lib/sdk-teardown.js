@@ -345,7 +345,15 @@ function planTeardown(spec) {
   // by its form (deleted in the forms phase), but a table's vector/raster ICON web resource is
   // referenced by the TABLE — Dataverse rejects the delete with "referenced by N other components"
   // while the table still exists, so it must come after the tables phase.
+  const declaredWrNames = new Set(
+    (spec.webResources || []).map((w) => w && w.name && String(w.name).toLowerCase()).filter(Boolean));
   for (const wr of spec.webResources || []) {
+    // `external:true` marks a web resource this app merely REFERENCES (a re-declared path/`$webresource`
+    // nav icon whose ownership can't be proven exclusive — see download-model-app iconWebResources). The
+    // build creates-if-missing so the icon works, but teardown must NOT delete it: a WR another app shares
+    // would break there (fail-safe — an orphan is recoverable, a deleted shared resource is not; same
+    // posture as the `existing:true` protection on downloaded tables). Skip it.
+    if (wr.external === true) continue;
     steps.push({ kind: 'webResource', phase: 'web-resources', label: `web resource ${wr.name}`, target: { name: wr.name } });
   }
   // The build generates a default app icon web resource (`<appUnique>_icon`) in the solution when
@@ -353,18 +361,27 @@ function planTeardown(spec) {
   // is safe to delete here. Without this step it leaks as an orphan the spec never declared (the
   // solution delete removes the container, not the underlying webresource row). Skipped when
   // app.icon is set — that image is a declared webResources[] entry handled by the loop above.
+  // ALSO skipped when the derived name collides with a DECLARED webResources[] entry: if that entry is
+  // `external:true` the loop deliberately protected it (a shared nav icon named `<appUnique>_icon`), so
+  // this derived delete must not clobber the skip and delete a shared resource (Sol review, High); if it
+  // is a normal declared entry the loop already scheduled it, so skipping here just avoids a duplicate.
   if (spec.app && spec.solution && !spec.app.icon) {
     const generatedIcon = `${appUniqueName(spec)}_icon`;
-    steps.push({ kind: 'webResource', phase: 'web-resources', label: `web resource ${generatedIcon} (generated app icon)`, target: { name: generatedIcon } });
+    if (!declaredWrNames.has(generatedIcon.toLowerCase())) {
+      steps.push({ kind: 'webResource', phase: 'web-resources', label: `web resource ${generatedIcon} (generated app icon)`, target: { name: generatedIcon } });
+    }
   }
   // The build derives a `<appUnique>_pagemanifest` web resource for EVERY app-bearing spec (not just
   // those currently declaring pages). Always emit its teardown step so a spec that dropped its pages
   // still cleans up the derived manifest. The manifest is referenced only by the (already-deleted) app
   // module, so leaving it behind would orphan it in the solution. A not-found delete is idempotent —
-  // an app that never had pages adds a harmless no-op step. NOT gated on spec.pages (I5).
+  // an app that never had pages adds a harmless no-op step. NOT gated on spec.pages (I5). Same
+  // declared-name guard as the generated icon (protect an `external` collision; avoid a duplicate).
   if (spec.app && spec.solution) {
     const manifestName = manifestResourceName(appUniqueName(spec));
-    steps.push({ kind: 'webResource', phase: 'web-resources', label: `web resource ${manifestName} (page manifest)`, target: { name: manifestName } });
+    if (!declaredWrNames.has(manifestName.toLowerCase())) {
+      steps.push({ kind: 'webResource', phase: 'web-resources', label: `web resource ${manifestName} (page manifest)`, target: { name: manifestName } });
+    }
   }
   // Global option sets last (before the solution container): every column that bound one lives
   // on a table deleted above, so the shared choice now has no dependents blocking its delete.

@@ -24,13 +24,81 @@ test('collectSitemap gathers distinct entities + icons from the sitemap', () => 
   assert.deepStrictEqual([...icons].sort(), ['a.png', 'i.png']);
 });
 
-test('collectSitemap SKIPS platform icon paths (OOB / $webresource) — they are references, not declared web resources', () => {
-  const app = { siteMap: { areas: [{ icon: '/WebResources/msdyn_/img/area.svg', groups: [{ subAreas: [
+test('collectSitemap separates BARE-NAME icons from platform-path customRefs (both icon + vectorIcon, areas + subareas)', () => {
+  const app = { siteMap: { areas: [{ icon: '/WebResources/crba3_area.svg', groups: [{ subAreas: [
     { type: 'Entity', entity: 'zava_javavendor', icon: '/WebResources/msdyn_OmnichannelBase/_imgs/SitemapIcon/CDSEntity', vectorIcon: '/WebResources/crba3_/icons/approval.svg' },
-    { type: 'Entity', entity: 'new_thing', icon: 'new_declared.png' }, // a bare name IS collected (declared WR)
+    { type: 'Entity', entity: 'new_thing', icon: 'new_declared.png' }, // a bare name → icons (fetched + re-declared)
   ] }] }] } };
-  const { icons } = collectSitemap(app);
-  assert.deepStrictEqual([...icons], ['new_declared.png'], 'only the bare-name icon is gathered for download; OOB/$webresource paths are skipped');
+  const { icons, customRefs } = collectSitemap(app);
+  assert.deepStrictEqual([...icons], ['new_declared.png'], 'only the bare-name icon goes to icons');
+  // Platform paths → customRefs, with the WR NAME extracted (leading /WebResources/ stripped); OOB + custom alike.
+  assert.deepStrictEqual([...customRefs].sort(), [
+    'crba3_/icons/approval.svg', 'crba3_area.svg', 'msdyn_OmnichannelBase/_imgs/SitemapIcon/CDSEntity',
+  ].sort(), 'icon + vectorIcon platform paths are gathered as customRefs (name-extracted)');
+});
+
+test('iconWebResources re-declares an OWN-PREFIX CUSTOM (unmanaged) image WR as external:true; SKIPS managed/OOB + foreign-prefix; tracks unresolved own-prefix refs', async () => {
+  const sdk = { queryRecords: async (e, o) => {
+    const name = (o.filter.match(/name eq '([^']*)'/) || [])[1];
+    if (name === 'crba3_navicon.svg') return [{ name, webresourcetype: 11, content: 'PHN2Zz4=', ismanaged: false }]; // own custom unmanaged SVG
+    if (name === 'msdyn_x/CDSEntity') return [{ name, webresourcetype: 11, content: 'x', ismanaged: true }];          // managed OOB
+    if (name === 'isv_foreign.svg') return [{ name, webresourcetype: 11, content: 'y', ismanaged: false }];           // foreign unmanaged (another publisher)
+    if (name === 'crba3_bare.png') return [{ name, webresourcetype: 5, content: 'aW1n', ismanaged: false }];          // bare-name author icon
+    if (name === 'crba3_gone.svg') return [];                                                                         // own-prefix but absent on source → unresolved
+    return [];
+  } };
+  const { webResources, unresolved } = await iconWebResources(
+    sdk, ['crba3_bare.png'], ['crba3_navicon.svg', 'msdyn_x/CDSEntity', 'isv_foreign.svg', 'crba3_gone.svg'], 'crba3', true);
+  const byName = Object.fromEntries(webResources.map((w) => [w.name, w]));
+  assert.ok(byName['crba3_navicon.svg'], 'an OWN-prefix custom unmanaged path-referenced WR is re-declared');
+  assert.strictEqual(byName['crba3_navicon.svg'].external, true, 'a re-declared path-referenced icon is flagged external (teardown skips it)');
+  assert.ok(byName['crba3_bare.png'], 'a bare-name author icon is re-declared as before');
+  assert.notStrictEqual(byName['crba3_bare.png'].external, true, 'a bare-name author icon is NOT external (teardown owns it, as before)');
+  assert.ok(!byName['msdyn_x/CDSEntity'], 'a managed/OOB path-referenced WR is NOT re-declared');
+  assert.ok(!byName['isv_foreign.svg'], 'a FOREIGN-prefix WR is NOT re-declared (would BuildHalt under an unregistered prefix on a fresh env)');
+  assert.deepStrictEqual(unresolved, ['crba3_gone.svg'], 'an own-prefix ref absent on the source env is reported unresolved (surface, do not silently drop)');
+});
+
+test('iconWebResources reports an own-prefix icon read FAILURE as unresolved (not a silent skip)', async () => {
+  const sdk = { queryRecords: async (e, o) => {
+    const name = (o.filter.match(/name eq '([^']*)'/) || [])[1];
+    if (name === 'crba3_flaky.svg') throw new Error('429 throttled');
+    return [];
+  } };
+  const { webResources, unresolved } = await iconWebResources(sdk, [], ['crba3_flaky.svg'], 'crba3', true);
+  assert.strictEqual(webResources.length, 0);
+  assert.deepStrictEqual(unresolved, ['crba3_flaky.svg'], 'a transient read failure on an own-prefix icon is surfaced');
+});
+
+test('iconWebResources with an UNVERIFIED prefix (publisher read failed) surfaces a genuine own custom icon as unresolved instead of silently dropping it; a managed/OOB ref stays silent', async () => {
+  // prefixResolved=false + a fallback prefix ('new') that does NOT match the app's real 'crba3' icons.
+  // Without the guard, crba3_nav.svg fails startsWith('new_') and is silently skipped with no warning
+  // (Opus/Sol finding). It must instead be surfaced as unresolved; the OOB CDSEntity ref must stay silent.
+  const sdk = { queryRecords: async (e, o) => {
+    const name = (o.filter.match(/name eq '([^']*)'/) || [])[1];
+    if (name === 'crba3_nav.svg') return [{ name, webresourcetype: 11, content: 'PHN2Zz4=', ismanaged: false }]; // genuine own custom svg
+    if (name === 'msdyn_x/CDSEntity') return [{ name, webresourcetype: 11, content: 'x', ismanaged: true }];      // managed OOB (exists everywhere)
+    return [];
+  } };
+  const { webResources, unresolved } = await iconWebResources(
+    sdk, [], ['crba3_nav.svg', 'msdyn_x/CDSEntity'], 'new', false);
+  assert.strictEqual(webResources.length, 0, 'never re-declares under an unverified prefix (would BuildHalt on a fresh env)');
+  assert.deepStrictEqual(unresolved, ['crba3_nav.svg'], 'the genuine custom icon is surfaced; the managed OOB ref stays silent (no false alarm)');
+});
+
+test('iconWebResources: a WR referenced BOTH by a bare name AND a platform path inherits external:true (overlap keeps teardown protection)', async () => {
+  // Sol finding: if the bare pass emitted the WR without external and `seen` then suppressed the path
+  // classification, teardown would delete a shared nav icon. The path pass runs first / the bare entry
+  // inherits external when it is also a customRef.
+  const sdk = { queryRecords: async (e, o) => {
+    const name = (o.filter.match(/name eq '([^']*)'/) || [])[1];
+    if (name === 'crba3_shared.svg') return [{ name, webresourcetype: 11, content: 'PHN2Zz4=', ismanaged: false }];
+    return [];
+  } };
+  const { webResources } = await iconWebResources(
+    sdk, ['crba3_shared.svg'], ['crba3_shared.svg'], 'crba3', true);
+  assert.strictEqual(webResources.length, 1, 'the overlapping WR is re-declared exactly once (deduped)');
+  assert.strictEqual(webResources[0].external, true, 'an overlapping bare+path WR is external (teardown must not delete a shared nav icon)');
 });
 
 test('parseDownloadedPages reads pac page tree (<pageId>/page.tsx + config + prompt) into pages[]', () => {
@@ -71,7 +139,7 @@ test('iconWebResources looks up web resources by NAME (not id) and maps type fro
       return []; // an icon with no matching web resource
     },
   };
-  const out = await iconWebResources(sdk, ['new_rgicon.svg', 'missing.png']);
+  const { webResources: out } = await iconWebResources(sdk, ['new_rgicon.svg', 'missing.png']);
   assert.strictEqual(calls[0].logical, 'webresource', 'queries the webresource logical name');
   assert.match(calls[0].filter, /name eq 'new_rgicon\.svg'/, 'filters by name, not id');
   assert.deepStrictEqual(out, [{ name: 'new_rgicon.svg', type: 'svg', contentBase64: 'BASE64SVG' }]);
@@ -79,7 +147,8 @@ test('iconWebResources looks up web resources by NAME (not id) and maps type fro
 
 test('iconWebResources skips a web resource it cannot read (no throw)', async () => {
   const sdk = { queryRecords: async () => { throw new Error('boom'); } };
-  assert.deepStrictEqual(await iconWebResources(sdk, ['x.png']), []);
+  const { webResources } = await iconWebResources(sdk, ['x.png']);
+  assert.deepStrictEqual(webResources, []);
 });
 
 test('droppedSubareaCount counts subareas the spec could not round-trip (e.g. dashboards)', () => {
@@ -95,6 +164,7 @@ const { assignPageKeys, missingDownloads, runDownload, recoverAppSolution } = re
 const { reconcilePageIds, buildManifest } = require('../lib/page-manifest.js');
 const { hydrateSpec } = require('../lib/hydrate-spec.js');
 const { validateAppSpec } = require('../lib/app-spec.js');
+const { appUniqueName } = require('../lib/sdk-build.js');
 const { resolvePageRefs, reverseResolveNavIds } = require('../lib/pageref-resolver.js');
 
 test('assignPageKeys: reuses the manifest key + v2 semantics for a reconcile-bound page, mints fresh keys otherwise (I3/§7.3)', () => {
@@ -249,7 +319,10 @@ test('Task-6: full round-trip via runDownload → hydrateSpec → validateAppSpe
         if (logical === 'appmodulecomponent') return [{ objectid: SM_ID, componenttype: 62 }];
         if (logical === 'sitemap') return [{ sitemapxml: SM_XML }];
         if (logical === 'webresource') return []; // no manifest → fresh keys
-        if (logical === 'solutioncomponent') return [];
+        // The app belongs to a real unmanaged solution — recoverAppSolution returns its uniquename, but the
+        // publisher PREFIX must still come from the app uniquename ('test'), NOT this solution (Sol F2).
+        if (logical === 'solutioncomponent') return [{ _solutionid_value: 'sol-x' }];
+        if (logical === 'solution') return [{ solutionid: 'sol-x', uniquename: 'ContosoSln', ismanaged: false }];
         return [];
       },
       fetchEntityMetadata: async (logical) => ({
@@ -285,6 +358,13 @@ test('Task-6: full round-trip via runDownload → hydrateSpec → validateAppSpe
     // Env-wide names used (not sitemap titles) — the core addenda new-1 assertion
     const pageA = spec.pages.find((p) => p.pageId === GP_A);
     assert.strictEqual(pageA.name, 'Env Name A', 'env-wide name used as page name (not sitemap title "Sitemap A")');
+    // App identity round-trips: the REAL immutable uniquename is captured (so a rebuild resolves the
+    // existing app even after a display-name rename) and the publisher prefix is derived FROM it.
+    assert.strictEqual(spec.app.uniqueName, APP_UNIQUE, 'the app real uniquename round-trips into spec.app.uniqueName');
+    assert.strictEqual(spec.solution.uniqueName, 'ContosoSln', 'the real unmanaged solution uniquename is recovered for teardown');
+    assert.strictEqual(spec.solution.publisherPrefix, 'test', 'the publisher prefix is derived from the app uniquename (test_roundtrip → test), NOT the recovered solution (Sol F2)');
+    assert.strictEqual(appUniqueName(spec), APP_UNIQUE, 'appUniqueName resolves the REAL uniquename (identity lookup finds the existing app, no duplicate) even though the display name is "Test App"');
+    assert.ok(!('prefixResolved' in spec.solution), 'the transient prefixResolved flag is stripped from the persisted spec');
   } finally {
     fs.rmSync(out, { recursive: true, force: true });
   }
@@ -296,12 +376,11 @@ test('Task-6: full round-trip via runDownload → hydrateSpec → validateAppSpe
 // top:1 with no ordering and often got 'Default' (also ismanaged=false), so hydrate defaulted the
 // spec's solution to the restricted Default and a downloaded spec could never tear down its own
 // solution (teardown 400s on Default, orphaning the real one). ──────────────────────────────
-test('recoverAppSolution enumerates ALL memberships and returns the one real unmanaged solution', async () => {
+test('recoverAppSolution enumerates ALL memberships and returns the real unmanaged solution uniquename (does NOT recover a prefix — that comes from the app uniquename)', async () => {
   const APP = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
-  const calls = [];
+  let publisherQueried = false;
   const sdk = {
     queryRecords: async (logical, opts) => {
-      calls.push({ logical, opts });
       if (logical === 'solutioncomponent') {
         assert.match(opts.filter, new RegExp(`objectid eq ${APP}`), 'filters components by the app id');
         assert.notStrictEqual(opts.top, 1, 'must NOT cap at top:1 — an app belongs to multiple solutions');
@@ -318,11 +397,13 @@ test('recoverAppSolution enumerates ALL memberships and returns the one real unm
           { solutionid: 'sol-real', uniquename: 'NucleoLive2', ismanaged: false },
         ];
       }
+      if (logical === 'publisher') { publisherQueried = true; return [{ customizationprefix: 'crba3' }]; }
       return [];
     },
   };
   const sol = await recoverAppSolution(sdk, APP);
-  assert.deepStrictEqual(sol, { uniqueName: 'NucleoLive2', publisherPrefix: 'new' });
+  assert.deepStrictEqual(sol, { uniqueName: 'NucleoLive2' }, 'returns ONLY the real solution uniquename');
+  assert.strictEqual(publisherQueried, false, 'no publisher lookup — the prefix is NOT sourced from an arbitrary solution membership (Sol review)');
 });
 
 test('recoverAppSolution ignores managed solutions and returns null when only system/managed remain', async () => {

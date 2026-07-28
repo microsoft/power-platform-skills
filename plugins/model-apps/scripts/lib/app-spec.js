@@ -33,6 +33,23 @@ function isPlatformIconRef(v) {
   return s.startsWith('/') || /^\$webresource:/i.test(s);
 }
 
+// The web-resource NAME a PLATFORM icon reference points at, or null when it isn't a resolvable
+// web-resource reference. Two forms the platform emits:
+//   `/WebResources/<name>`  → <name>   (the runtime path a modern nav icon uses)
+//   `$webresource:<name>`   → <name>
+// A `<name>` may itself contain `/` (web-resource names are folder-like, e.g. `pub_/icons/x.svg`), so
+// strip ONLY the known prefix, verbatim. A non-WebResources path (an OOB static image like
+// `/_imgs/TableIconsFluentV9/x.svg`) returns null — not a queryable web resource, so it stays a bare
+// reference present on every env.
+function webResourceNameFromRef(ref) {
+  const s = String(ref == null ? '' : ref);
+  let m = /^\/WebResources\/(.+)$/i.exec(s);
+  if (m) return m[1];
+  m = /^\$webresource:(.+)$/i.exec(s);
+  if (m) return m[1];
+  return null;
+}
+
 // App Spec column type -> { dv: Dataverse attribute type name }. (The SDK build engine
 // maps App Spec types to the SDK's own ColumnType in lib/sdk-build.js.)
 const TYPE_MAP = {
@@ -718,8 +735,28 @@ function validateAppSpec(spec, opts = {}) {
     if (!webResourceNames.has(ic)) errors.push(`${label}: icon '${icon}' is not a declared web resource`);
     else if (!imageWebResourceNames.has(ic)) errors.push(`${label}: icon '${icon}' must be an image web resource (png/jpg/gif/svg/ico)`);
   };
+  // Portability advisory: a platform icon/vectorIcon that references THIS app's OWN custom web resource
+  // (by the solution publisher prefix) but does NOT declare it in webResources[] will render only on an
+  // env that already has that web resource — on a fresh/other env it dangles (a broken icon). A DOWNLOADED
+  // spec re-declares its OWN-prefix UNMANAGED image icon web resources automatically (download-model-app
+  // collectSitemap + iconWebResources), so this normally fires only for a hand-authored spec (a rare
+  // exception: an own-prefix MANAGED icon WR, which download can't recreate and so leaves undeclared). An
+  // OOB/system reference (a different prefix, or a non-WebResources `/_imgs/...` path) is assumed present on
+  // every env → not flagged.
+  const pubPrefix = (spec.solution && spec.solution.publisherPrefix) ? String(spec.solution.publisherPrefix).toLowerCase() : '';
+  const checkPortableIconRef = (val, label) => {
+    if (!val || !isPlatformIconRef(val)) return;
+    const wrName = webResourceNameFromRef(val);
+    if (!wrName || !pubPrefix) return;
+    const lc = wrName.toLowerCase();
+    if (lc.startsWith(pubPrefix + '_') && !webResourceNames.has(lc)) {
+      warnings.push(`${label}: icon reference '${val}' points at a custom web resource ('${wrName}') that is NOT declared in webResources[] — it will render only on an environment that already has it (a rebuild into a fresh env shows a broken icon). Declare that web resource so the build recreates it; a downloaded spec does this automatically.`);
+    }
+  };
   for (const a of (spec.appShell && spec.appShell.areas) || []) {
     checkIcon(a.icon, `sitemap area "${a.label || ''}"`);
+    checkPortableIconRef(a.icon, `sitemap area "${a.label || ''}"`);
+    checkPortableIconRef(a.vectorIcon, `sitemap area "${a.label || ''}"`);
     for (const g of a.groups || []) {
       for (const sa of g.subAreas || []) {
         const targets = ['entity', 'dashboard', 'url', 'page'].filter((k) => sa[k]);
@@ -732,6 +769,8 @@ function validateAppSpec(spec, opts = {}) {
         const pageRefSet = isV2 ? pageKeysSet : pageNamesSet;
         if (sa.page && !pageRefSet.has(sa.page)) errors.push(`sitemap subArea references unknown page '${sa.page}' (declare it in pages[])`);
         checkIcon(sa.icon, `sitemap subArea "${sa.title || ''}"`);
+        checkPortableIconRef(sa.icon, `sitemap subArea "${sa.title || ''}"`);
+        checkPortableIconRef(sa.vectorIcon, `sitemap subArea "${sa.title || ''}"`);
         // Ask 3: don't SILENTLY drop an entity-subarea vectorIcon. A valid platform ref round-trips
         // (emitted by the build); a BARE token can't be emitted on an entity subarea (it breaks the
         // modern app-designer), so surface it as a warning at author time rather than a silent drop.
@@ -992,6 +1031,7 @@ module.exports = {
   normalizePageSource,
   quickCreateEnabledFor,
   isPlatformIconRef,
+  webResourceNameFromRef,
   VALIDATION_PROFILES,
   migrateAppSpec,
   columnTypeMap,

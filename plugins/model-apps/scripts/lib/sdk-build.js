@@ -444,10 +444,15 @@ function chartDef(spec, ch) {  const entityLogical = ch.entity.toLowerCase();
 // The ordered field logical names a form places -> moved to ./artifact-intent.js `formFieldLogicals`
 // (walks the new tabs[].columns[].sections[] topology).
 
-// The app module's uniquename, derived deterministically from the publisher prefix + app name
-// (same rule the builder writes with). Shared with the teardown engine so it can resolve the
-// deployed app by uniquename rather than a collision-prone display name.
+// The app module's uniquename. A DOWNLOADED/edit spec carries the app's REAL, immutable uniquename in
+// `spec.app.uniqueName` — return it VERBATIM so the build's existing-app lookup (findArtifact) AND teardown
+// resolve the SAME deployed app even after a display-name RENAME. A Dataverse appmodule uniquename never
+// changes once created, so deriving it from the MUTABLE display name would miss the existing app on a
+// rebuild and CREATE A DUPLICATE (Sol review). An AUTHORED create-fresh spec has no `app.uniqueName`, so
+// derive it deterministically from the publisher prefix + display name — the exact rule the builder creates
+// with. Shared with the teardown engine so both agree on the identity.
 function appUniqueName(spec) {
+  if (spec.app && spec.app.uniqueName) return String(spec.app.uniqueName);
   const sol = spec.solution;
   return `${sol.publisherPrefix}_${spec.app.name}`.replace(/[^a-z0-9_]/gi, '').toLowerCase();
 }

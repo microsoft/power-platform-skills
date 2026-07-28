@@ -98,6 +98,29 @@ test('validateAppSpec WARNS (does not error) on a dropped BARE-TOKEN entity-suba
   assert.ok((r.warnings || []).some((w) => /vectorIcon 'Shop' is a bare token/.test(w)), `it is surfaced as a warning: ${JSON.stringify(r.warnings)}`);
 });
 
+test('validateAppSpec WARNS on a custom-prefixed platform icon ref that is NOT declared (cross-env portability); no warning once declared', () => {
+  // A hand-authored spec referencing its OWN custom web resource by PATH but not declaring it will dangle
+  // on a fresh env — surface it (a downloaded spec auto-declares, so this only helps hand-authored specs).
+  const pfx = (sample.solution.publisherPrefix || 'new').toLowerCase();
+  const s = JSON.parse(JSON.stringify(sample));
+  s.appShell.areas[0].groups[0].subAreas[0].vectorIcon = `/WebResources/${pfx}_undeclared.svg`;
+  const r = validateAppSpec(s, { profile: 'deploy' });
+  assert.ok(r.ok, 'a custom-but-undeclared icon ref does not block the build');
+  assert.ok((r.warnings || []).some((w) => /points at a custom web resource.*NOT declared in webResources/.test(w)), `portability warning fires: ${JSON.stringify(r.warnings)}`);
+
+  // Declaring the web resource silences the warning (the build recreates it → portable).
+  const s2 = JSON.parse(JSON.stringify(s));
+  s2.webResources = (s2.webResources || []).concat([{ name: `${pfx}_undeclared.svg`, type: 'svg', content: '<svg/>' }]);
+  const r2 = validateAppSpec(s2, { profile: 'deploy' });
+  assert.ok(!(r2.warnings || []).some((w) => /NOT declared in webResources/.test(w)), 'declaring the WR silences the portability warning');
+
+  // An OOB/system reference (different prefix, or a non-WebResources /_imgs/ path) is NOT flagged.
+  const s3 = JSON.parse(JSON.stringify(sample));
+  s3.appShell.areas[0].groups[0].subAreas[0].icon = '/WebResources/msdyn_OmnichannelBase/_imgs/SitemapIcon/CDSEntity';
+  const r3 = validateAppSpec(s3, { profile: 'deploy' });
+  assert.ok(!(r3.warnings || []).some((w) => /NOT declared in webResources/.test(w)), 'an OOB/system icon ref is not flagged (present on every env)');
+});
+
 // F12 — URL scheme allowlist: only http(s) URLs may be shipped in an app the maker renders.
 test('validateAppSpec rejects a sitemap subArea url with a non-http(s) scheme (F12)', () => {
   const s = JSON.parse(JSON.stringify(sample));

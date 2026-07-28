@@ -31,6 +31,18 @@ function stagePages(pages, bodyByCodeFile = {}) {
   return dir;
 }
 
+test('appUniqueName prefers spec.app.uniqueName (real immutable identity) over the display-name derivation', () => {
+  // A DOWNLOADED spec carries the real uniquename → used verbatim so a rebuild resolves the EXISTING app
+  // even after a display-name rename (deriving from the mutable name would miss it and duplicate — Sol F1).
+  assert.strictEqual(
+    appUniqueName({ solution: { publisherPrefix: 'crba3' }, app: { name: 'Zava App 2', uniqueName: 'crba3_zavaapp' } }),
+    'crba3_zavaapp', 'the real uniquename is used, NOT the derived crba3_zavaapp2');
+  // An AUTHORED create-fresh spec has no uniqueName → derive from publisher prefix + display name (unchanged).
+  assert.strictEqual(
+    appUniqueName({ solution: { publisherPrefix: 'new' }, app: { name: 'Support Desk' } }),
+    'new_supportdesk', 'a create-fresh spec still derives the uniquename from prefix + display name');
+});
+
 // Customer 1:N Tickets: a Choice column, sample data with $parent, a view, a Choice chart,
 // and a parent form with a child sub-grid.
 function makeSpec(extra = {}) {

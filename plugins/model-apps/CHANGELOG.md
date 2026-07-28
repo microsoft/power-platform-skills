@@ -9,6 +9,34 @@ plus local-dev ergonomics, sample coverage, and an automated eval suite with
 real and synthetic fixtures. Builds on v2.1; no breaking changes.
 
 ### Changed
+- **Custom nav-icon web resources are made portable across environments (download re-declares them).**
+  A sitemap nav icon that references a custom image web resource **by path**
+  (`/WebResources/<pub>/icons/x.svg` or `$webresource:<name>`) previously round-tripped only the
+  *reference* — so a download→rebuild into a **different** environment rendered a **broken** icon because
+  the web resource didn't exist there. Now **download re-declares** the referenced web resource into
+  `webResources[]` (with its base64 content) so the build recreates it in a fresh env — gated to be safe:
+  only when the WR is (a) **owned by this app** (name starts with the app's real publisher
+  `customizationprefix` — recovered from the app's solution, no longer hard-coded to `new`), (b) **custom**
+  (unmanaged), and (c) an **image** type. A **foreign-prefix / managed / OOB** reference (e.g.
+  `/WebResources/msdyn_.../CDSEntity`) is left as a bare reference (recreating a foreign prefix on a fresh
+  env would hard-fail the build). A re-declared entry is flagged **`external: true`**: the build's
+  web-resources phase creates-if-missing / reuses-if-present (idempotent), and **teardown never deletes an
+  `external` WR** — a publisher-owned WR can be shared across that publisher's other apps, so this fails
+  safe (mirrors `existing: true` on downloaded tables). An own-prefix custom icon that **can't be captured**
+  (absent on the source env, or read failure) is surfaced as a **download warning** instead of silently
+  regressing to the broken-icon bug; the build adds a non-blocking **portability warning** for an
+  own-prefix path-referenced icon that isn't declared in `webResources[]`. Full offline coverage
+  (re-declare/skip/unresolved + teardown skip).
+- **App identity round-trips by its real uniquename (no duplicate app on rebuild).** A downloaded spec now
+  captures the app module's **real, immutable** `uniquename` in `app.uniqueName`, and the build/teardown
+  resolve the deployed app from it (via `appUniqueName`) instead of re-deriving `<publisherPrefix>_<appName>`
+  from the **mutable display name**. So renaming an app and rebuilding no longer misses the existing app and
+  **creates a duplicate**. The publisher prefix (used to scope which custom icon web resources are safe to
+  re-declare cross-env, and to recreate the app's own solution) is likewise derived from the app's **own**
+  uniquename — parsed up front (a solution-recovery I/O failure can't lose it) and validated as a real
+  `<prefix>_<name>` shape — **not** from an arbitrary unmanaged solution membership (an app can belong to
+  several, under different publishers). `recoverAppSolution` now returns only the real solution uniquename
+  (the teardown container); the transient prefix-trust signal is stripped from the persisted spec.
 - **Entity-subarea sitemap icons round-trip (fixes a download→build regression).** Two fixes to the
   sitemap writer/validator: (A) the build no longer **drops** a custom `vectorIcon` on an entity nav
   subarea — a valid platform reference (an SVG path `/WebResources/<pub>/icons/x.svg` or a

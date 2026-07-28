@@ -267,6 +267,36 @@ test('the generated app-icon teardown step is skipped when the spec sets an expl
   assert.ok(wrNames.includes('new_appicon.png'), 'the explicit app.icon WR is still torn down via webResources[]');
 });
 
+test('planTeardown SKIPS an external:true web resource (a re-declared shared/referenced nav icon must not be deleted)', () => {
+  const spec = {
+    solution: { uniqueName: 'IconSln3', publisherPrefix: 'new' },
+    app: { name: 'Icon App 3' },
+    entities: [{ schemaName: 'new_widget3', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
+    webResources: [
+      { name: 'new_owned.js', type: 'js', content: 'x' },                                   // this app's own → deleted
+      { name: 'new_navicon.svg', type: 'svg', contentBase64: 'PHN2Zz4=', external: true },  // re-declared reference → skipped
+    ],
+    appShell: { areas: [{ label: 'A', groups: [{ label: 'G', subAreas: [{ entity: 'new_widget3' }] }] }] },
+  };
+  const wrNames = planTeardown(spec).filter((s) => s.kind === 'webResource').map((s) => s.target.name);
+  assert.ok(wrNames.includes('new_owned.js'), 'an owned (non-external) web resource is still torn down');
+  assert.ok(!wrNames.includes('new_navicon.svg'), 'an external:true web resource is NOT deleted (fail-safe against a shared resource)');
+});
+
+test('planTeardown does NOT schedule the derived generated-app-icon delete when its name collides with an external declared WR (Sol: derived cleanup must honor the external skip)', () => {
+  const spec = {
+    solution: { uniqueName: 'IconSln4', publisherPrefix: 'new' },
+    app: { name: 'IconApp4' }, // no app.icon → the generated-icon branch runs
+    entities: [{ schemaName: 'new_widget4', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
+    appShell: { areas: [{ label: 'A', groups: [{ label: 'G', subAreas: [{ entity: 'new_widget4' }] }] }] },
+  };
+  const generatedIcon = `${appUniqueName(spec)}_icon`; // the derived generated-app-icon name
+  // A shared nav icon happens to be re-declared under exactly the generated-icon name, flagged external.
+  spec.webResources = [{ name: generatedIcon, type: 'svg', contentBase64: 'PHN2Zz4=', external: true }];
+  const wrSteps = planTeardown(spec).filter((s) => s.kind === 'webResource' && s.target.name === generatedIcon);
+  assert.strictEqual(wrSteps.length, 0, 'no delete step for a generated-icon name that is a declared external WR (the loop protected it; the derived branch must not clobber that)');
+});
+
 test('teardown computes the SAME publisher-prefixed relationship name as the build for a system-table rel', () => {
   // Build and teardown must agree on the schema name or teardown can't find the relationship. The
   // default name for a 1:N to a system table (systemuser) is auto-prefixed — planTeardown must

@@ -140,3 +140,18 @@ test('hydrateSpec emits pageId on v2 pages (edit-snapshot self-describes its ids
   assert.strictEqual(spec2.pages[0].pageId, undefined, 'legacy shape has no pageId field');
 });
 
+test('hydrateSpec strips the transient solution.prefixResolved flag from the persisted spec (keeps uniqueName + publisherPrefix)', async () => {
+  // recoverAppSolution returns { uniqueName, publisherPrefix, prefixResolved } — the last is a download-time
+  // signal consumed by iconWebResources, NOT part of the user-facing spec. It must not leak into app-spec.json.
+  const read = {
+    app: async () => ({ name: 'A', description: '', uniquename: 'crba3_realapp', siteMap: { areas: [] } }),
+    pages: async () => [],
+    entities: async () => [], webResources: async () => [],
+    solution: async () => ({ uniqueName: 'Real', publisherPrefix: 'crba3', prefixResolved: true }),
+  };
+  const spec = await hydrateSpec(read);
+  assert.deepStrictEqual(spec.solution, { uniqueName: 'Real', publisherPrefix: 'crba3' }, 'persisted solution keeps only uniqueName + publisherPrefix');
+  assert.ok(!('prefixResolved' in spec.solution), 'the transient prefixResolved flag is stripped from the persisted spec');
+  assert.strictEqual(spec.app.uniqueName, 'crba3_realapp', 'the app real uniquename round-trips into spec.app.uniqueName (identity survives a rebuild)');
+});
+

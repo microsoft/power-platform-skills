@@ -100,9 +100,38 @@ are in [`architecture.md`](architecture.md).
   download→edit→rebuild on a real app with custom/OOB nav icons no longer fails validation or silently
   loses the icon. Adversarially reviewed (Sol + Opus — Opus caught a residual area-icon case-corruption,
   fixed); **live-verified on aurorabapenv03468** (entity-subarea `VectorIcon` lands in the deployed sitemap
-  XML; the reporter's exact OOB `…/CDSEntity` icon rebuilds `ok:true`; round-trip clean). **Follow-up:**
-  deploying a `/WebResources/<pub>/icons/x.svg` reference to a DIFFERENT env that lacks that web resource
-  renders a broken icon — inherent to referencing by path (the WR is assumed pre-existing).
+  XML; the reporter's exact OOB `…/CDSEntity` icon rebuilds `ok:true`; round-trip clean). **Follow-up
+  (now resolved — see below):** deploying a `/WebResources/<pub>/icons/x.svg` reference to a DIFFERENT env
+  originally rendered a broken icon (the WR was assumed pre-existing).
+- ✅ **Custom nav-icon web resources are portable across environments** — DONE. Resolves the follow-up
+  above. A sitemap nav icon that references a custom image web resource **by path**
+  (`/WebResources/<pub>/icons/x.svg` or `$webresource:<name>`) previously round-tripped only the
+  *reference*, so a rebuild into a **fresh** env rendered a broken icon. Now **download re-declares** the
+  referenced web resource into `webResources[]` (base64 content) so the build recreates it cross-env —
+  gated to be safe: only a WR that is (a) **owned by this app** (name starts with the app's real publisher
+  prefix — see the identity round-trip below), (b) **custom** (unmanaged), and (c) an **image** type. A path
+  ref processed BEFORE bare names so an overlap keeps `external`; a **foreign-prefix / managed / OOB**
+  reference is left as a bare reference (recreating a foreign prefix on a fresh env would BuildHalt). A
+  re-declared entry is flagged **`external: true`**: the idempotent web-resources phase creates-if-missing /
+  reuses-if-present, and **teardown skips `external` WRs** (including the derived generated-icon/manifest
+  cleanup, which now honors a declared-name collision) so a shared publisher WR is never deleted (fail-safe,
+  mirrors `existing: true` on downloaded tables). An own-prefix icon that can't be captured (absent on
+  source, or read failure) is surfaced as a **download warning**; the build adds a non-blocking
+  **portability warning** for an own-prefix path-ref icon missing from `webResources[]`. Adversarially
+  re-reviewed across four rounds (Sol + Opus, high effort); full offline coverage (re-declare / skip-foreign
+  / skip-managed / overlap-external / unresolved + teardown-skip).
+- ✅ **App identity round-trips by its real uniquename (no duplicate app on rebuild)** — DONE. A downloaded
+  spec captures the app module's **real, immutable** `uniquename` in `app.uniqueName`; `appUniqueName(spec)`
+  (the single identity chokepoint for build's existing-app `findArtifact` AND teardown's app resolution)
+  returns it verbatim instead of re-deriving `<publisherPrefix>_<appName>` from the **mutable display name**.
+  So **renaming** an app then rebuilding no longer misses the existing app and **creates a duplicate**. The
+  publisher prefix (which scopes safe-to-re-declare custom icons and recreates the app's own solution) is
+  derived from the app's **own** uniquename — parsed **before** the solution-recovery I/O (a failure can't
+  lose it) and validated as a real `<prefix>_<name>` shape — **not** from an arbitrary unmanaged solution
+  membership (an app can belong to several, under different publishers). `recoverAppSolution` returns only
+  the real solution uniquename (teardown container); the transient prefix-trust signal is stripped from the
+  persisted spec. This resolved 4 adversarial-review findings (3 High + 1 Medium, Sol); full offline
+  coverage (identity-over-rename, prefix-from-uniquename-not-solution, malformed-shape rejection).
 - ✅ **Pre-existing duplicate page names don't block an unrelated build** — DONE. Two-layer, fail-closed:
   (1) `validateAppSpec` scopes the case-insensitive page-name uniqueness rule to pages the run CREATES
   (no `pageId`): a NEW collision is rejected (prevention), a collision purely among PRE-EXISTING pages

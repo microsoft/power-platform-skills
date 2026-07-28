@@ -66,6 +66,11 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   **Omit it** and the build generates a simple default SVG icon **inside the solution** — either
   way the app never depends on an arbitrary external/managed icon (which would fail to import into
   a new environment). The app's **sitemap** is also added to the solution automatically.
+- **`app.uniqueName`** *(optional, download-emitted)* — the app module's **real, immutable** Dataverse
+  uniquename (e.g. `crba3_supportdesk`). A **downloaded** spec carries it so a rebuild resolves the
+  **existing** app by identity — even after you **rename** the display `app.name` — instead of creating a
+  **duplicate** app. You normally never hand-author this: an authored create-fresh spec omits it, and the
+  build derives the uniquename deterministically from `solution.publisherPrefix` + `app.name`.
 
 ## entities[]
 ```jsonc
@@ -172,6 +177,13 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 - Source comes from **one** of: `content` (inline text), `contentPath` (a file read relative to the
   app folder at build time), or `contentBase64` (for binary types).
 - Built **before** forms and added to the solution; reference one from a form `events[]` handler.
+- **`external`** *(optional, download-emitted)* — set `true` on an entry that **download** re-declared
+  because a sitemap nav icon referenced a custom image web resource **by path** (see appShell icons
+  below). The build **creates it if missing, reuses it if present** (idempotent, no overwrite), so the
+  icon resolves after a rebuild into a **fresh** environment. Teardown **never deletes** an `external`
+  web resource: a publisher-owned WR can be shared across that publisher's other apps/solutions, and an
+  orphaned icon is recoverable while a deleted shared resource is not — so this fails safe (mirrors
+  `existing: true` on downloaded tables). You normally never hand-author this flag.
 
 ## views[]
 ```jsonc
@@ -395,6 +407,19 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   resource → `IconVectorName`), which the modern designer also renders for the table. For a non-entity
   subarea (`url`/`page`/`dashboard`), `vectorIcon` is any platform reference (an **SVG path** or a
   **`$webresource:<name>.svg`**) — a bare Fluent token is lint-warned.
+- **Custom nav icons are made portable on download.** A path/`$webresource:` reference assumes the web
+  resource already exists in the target env, so a naive download→rebuild into a **different** env renders
+  a broken icon. To fix this, **download re-declares** the referenced web resource into `webResources[]`
+  (with its base64 content, flagged **`external`** — see above) so the build recreates it cross-env — but
+  **only** when the WR is (a) **owned by this app** (its name starts with the app's own publisher
+  customization prefix), (b) **custom** (unmanaged), and (c) an **image** type. A **foreign-prefix**,
+  **managed**, or **OOB** reference (e.g. `/WebResources/msdyn_.../CDSEntity`) is **left as a bare
+  reference** — recreating a foreign publisher prefix on a fresh env would hard-fail the build, and OOB
+  icons already exist everywhere. If an own-prefix custom icon **can't be captured** (already absent on the
+  source env, or the read fails), download **emits a warning**: the sitemap reference still round-trips, but
+  the icon will be missing in a fresh env until you declare the web resource yourself. The build also emits a
+  non-blocking **portability warning** when an own-prefix path-referenced icon is not declared in
+  `webResources[]`.
 
 ## design (optional — page design contract)
 ```jsonc

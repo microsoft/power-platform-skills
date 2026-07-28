@@ -17,7 +17,7 @@ const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require(
 const { reverseResolveNavIds } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
-const { isPlatformIconRef } = require('./lib/app-spec.js');
+const { isPlatformIconRef, webResourceNameFromRef } = require('./lib/app-spec.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
 const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7: 'gif', 8: 'xap', 9: 'xsl', 10: 'ico', 11: 'svg', 12: 'resx' };
@@ -72,27 +72,34 @@ async function resolveAppId(sdk, appArg) {
   return rows && rows[0] && rows[0].appmoduleid;
 }
 
-// The distinct entity logical names + icon web-resource NAMES referenced by the app's sitemap. Only
-// BARE-NAME icons are collected for download (they are locally-declared image web resources we fetch and
-// re-emit as webResources[]). A PLATFORM icon reference (a path / $webresource — e.g. an OOB
-// `/WebResources/msdyn_.../SitemapIcon/CDSEntity`) is NOT a web-resource name; it round-trips as a
-// verbatim reference on the subarea (hydrate keeps it), so we must NOT try to fetch it as a declared web
-// resource (it wouldn't resolve, and the build validates it as a pass-through platform ref, not a
-// missing declaration).
+// The distinct entity logical names + icon web-resource NAMES referenced by the app's sitemap. Returns
+// TWO name sets:
+//   `icons`     — BARE-NAME icon references (a locally-declared image web resource); fetched and
+//                 re-emitted as webResources[] so the build recreates them (existing behavior).
+//   `customRefs`— web-resource NAMES extracted from a PLATFORM icon/vectorIcon PATH reference
+//                 (`/WebResources/<name>` or `$webresource:<name>`) on ANY area/subarea icon OR
+//                 vectorIcon. These are fetched too — but re-declared ONLY when the WR is CUSTOM
+//                 (unmanaged) — so a modern custom nav icon referenced by PATH survives a cross-env
+//                 rebuild (previously the path was a dangling reference: the WR was never recreated on
+//                 a target env that lacked it). An OOB/system path (a managed WR, or a virtual
+//                 `/_imgs/...` image that isn't a real web resource) resolves to nothing / a managed WR
+//                 and is left as a bare reference (it exists on every env / travels with its managed
+//                 solution).
 function collectSitemap(app) {
   const entities = new Set();
   const icons = new Set();
-  const addIcon = (v) => { if (v && !isPlatformIconRef(v)) icons.add(v); };
+  const customRefs = new Set();
+  const addIcon = (v) => { if (!v) return; if (isPlatformIconRef(v)) { const n = webResourceNameFromRef(v); if (n) customRefs.add(n); } else icons.add(v); };
   for (const a of (app.siteMap && app.siteMap.areas) || []) {
-    addIcon(a.icon);
+    addIcon(a.icon); addIcon(a.vectorIcon);
     for (const g of a.groups || []) {
       for (const sa of g.subAreas || []) {
         if (sa.type === 'Entity' && sa.entity) entities.add(String(sa.entity).toLowerCase());
-        addIcon(sa.icon);
+        addIcon(sa.icon); addIcon(sa.vectorIcon);
       }
     }
   }
-  return { entities: [...entities], icons: [...icons] };
+  return { entities: [...entities], icons: [...icons], customRefs: [...customRefs] };
 }
 
 // Read pac's downloaded page tree (<pagesRoot>/<pageId>/{page.tsx,config.json,prompt.txt}) into
@@ -193,19 +200,101 @@ function entityFromMetadata(meta, logical) {
   };
 }
 
+// Image webresourcetypes (png/jpg/gif/ico/svg) — an icon reference must resolve to one of these to be
+// re-declared. See WR_TYPE. Guards against re-declaring a non-image WR that a path happens to name.
+const IMAGE_WR_TYPES = new Set([5, 6, 7, 10, 11]);
+
 // Fetch the icon web resources referenced by the sitemap, looked up by NAME (the sitemap stores the
 // web-resource name, not its id — sdk.getWebResource keys by id and 400s on a name). Returns
-// app-spec webResources[] entries with the content as base64.
-async function iconWebResources(sdk, icons) {
+// `{ webResources, unresolved }`:
+//   webResources — app-spec webResources[] entries (content as base64).
+//     `icons`      (BARE names the author declared) → re-declared (any found WR). Deletable on teardown
+//                  UNLESS the same name is ALSO a `customRefs` path reference, in which case it inherits
+//                  `external:true` (a shared nav icon referenced both ways must keep teardown protection).
+//     `customRefs` (names extracted from a PLATFORM path/`$webresource:` ref on an icon OR vectorIcon)
+//                  → re-declared ONLY when the WR is (a) OWNED by this app (name starts with
+//                  `ownPrefix + '_'`), (b) CUSTOM (unmanaged), and (c) an IMAGE type — so a modern custom
+//                  nav icon survives a cross-env rebuild. Such an entry is flagged `external:true` so the
+//                  build creates-if-missing / reuses-if-present, but TEARDOWN does NOT delete it: prefix +
+//                  unmanaged does NOT prove the WR is exclusively this app's (a publisher's WRs are shared
+//                  across all its solutions), and deleting a WR another app shares would break it (fail-safe
+//                  — an orphan is recoverable, a deleted shared resource is not; mirrors the `existing:true`
+//                  protection on downloaded tables). A FOREIGN-prefix / managed / OOB / non-existent ref is
+//                  SKIPPED → left as a bare reference (re-creating a foreign prefix on a fresh env would
+//                  hard-fail the build). Path refs are processed BEFORE bare names so this stricter
+//                  classification wins on an overlap.
+//   unresolved   — customRefs we could NOT safely round-trip (a custom nav icon that will dangle on a
+//                  cross-env rebuild), so the caller surfaces a warning (the build-time portability warning
+//                  is the backstop). Deduped by name.
+//
+// `prefixResolved` — whether `ownPrefix` is the app's REAL publisher customizationprefix (recovered from
+//   Dataverse) or the unverified `'new'` fallback (recoverAppSolution's publisher read failed / found no
+//   solution). This gates own-vs-foreign classification and MUST NOT be conflated with an app whose prefix
+//   genuinely IS 'new': when the prefix is UNVERIFIED we cannot trust `startsWith(ownPrefix)`, so a genuine
+//   own custom icon (e.g. `crba3_nav.svg` while the fallback prefix is `new`) would fail the own-prefix test
+//   and — without this guard — be silently skipped with NO warning, re-introducing the exact broken-icon bug
+//   this fix exists to prevent (Opus review, Medium). So when `prefixResolved` is false we do NOT re-declare
+//   any path-derived WR (an unknown non-'new' prefix would BuildHalt on a fresh env) but we PROBE every
+//   customRef and surface each genuine CUSTOM (unmanaged image) one as `unresolved` — a managed/OOB/absent
+//   ref is a system icon present in every env, so it stays silent (no false alarm).
+async function iconWebResources(sdk, icons, customRefs, ownPrefix, prefixResolved) {
   const out = [];
-  for (const name of icons || []) {
+  const seen = new Set();                 // lowercased names actually re-declared into `out`
+  const prefixLc = ownPrefix ? String(ownPrefix).toLowerCase() + '_' : null;
+  const customRefSet = new Set((customRefs || []).map((n) => String(n).toLowerCase()));
+  const candidateUnresolved = new Map();  // key -> original name; a path ref we could NOT re-declare in PASS 1
+  const queryWr = async (name) =>
+    (await sdk.queryRecords('webresource', { select: ['name', 'webresourcetype', 'content', 'ismanaged'], filter: `name eq '${String(name).replace(/'/g, "''")}'`, top: 1 }))?.[0];
+  const isCustomImage = (wr) => !!(wr && wr.content && wr.ismanaged === false && IMAGE_WR_TYPES.has(wr.webresourcetype));
+
+  // PASS 1 — path-derived custom icons (safety-gated). Done FIRST so a name referenced BOTH by a platform
+  // path AND by a bare name is classified by the STRICTER path rules (and flagged `external`) before the
+  // lenient bare pass can re-declare it as deletable — otherwise the overlap silently loses teardown
+  // protection and a shared nav icon gets deleted (Sol review, High).
+  for (const name of customRefs || []) {
+    const key = String(name).toLowerCase();
+    if (seen.has(key)) continue;
+    const ownScoped = !!prefixLc && key.startsWith(prefixLc);
+    // TRUSTED prefix: only an OWN-prefix ref is a candidate; a foreign/OOB ref is left as a bare reference
+    // (never queried). UNTRUSTED prefix: fall through and probe EVERY ref to classify it (see below).
+    if (prefixResolved && !ownScoped) continue;
     try {
-      const rows = await sdk.queryRecords('webresource', { select: ['name', 'webresourcetype', 'content'], filter: `name eq '${String(name).replace(/'/g, "''")}'`, top: 1 });
-      const wr = rows && rows[0];
-      if (wr && wr.content) out.push({ name, type: WR_TYPE[wr.webresourcetype] || 'png', contentBase64: wr.content });
-    } catch { /* skip a web resource we can't read */ }
+      const wr = await queryWr(name);
+      if (!prefixResolved) {
+        // Unverified prefix — classify only, NEVER re-declare (an unknown non-'new' prefix would BuildHalt).
+        // Flag a genuine custom icon as a candidate so a transient recovery failure degrades to a warning,
+        // not a silent drop; a managed/OOB/absent ref exists in every env, so stay silent (no false alarm).
+        if (isCustomImage(wr)) candidateUnresolved.set(key, name);
+        continue;
+      }
+      if (!wr || !wr.content) { candidateUnresolved.set(key, name); continue; }         // own-prefix but absent on source → will dangle
+      if (wr.ismanaged === true || !IMAGE_WR_TYPES.has(wr.webresourcetype)) continue;   // managed/non-image → leave as a bare reference
+      seen.add(key);
+      out.push({ name, type: WR_TYPE[wr.webresourcetype] || 'png', contentBase64: wr.content, external: true });
+    } catch { candidateUnresolved.set(key, name); /* read failure → candidate (surface unless a bare pass resolves it) */ }
   }
-  return out;
+
+  // PASS 2 — author-declared BARE names. A bare name MUST be re-declared (validation requires a bare icon
+  // to be a declared image WR). Flag it `external` iff it is ALSO path-referenced (the shared-resource
+  // signal), so the overlap keeps teardown protection. A read failure on a bare-only icon is a silent skip
+  // (a hand-authored bare icon name that can't be read isn't a cross-env regression signal).
+  for (const name of icons || []) {
+    const key = String(name).toLowerCase();
+    if (seen.has(key)) continue;
+    try {
+      const wr = await queryWr(name);
+      if (!wr || !wr.content) continue;
+      seen.add(key);
+      const entry = { name, type: WR_TYPE[wr.webresourcetype] || 'png', contentBase64: wr.content };
+      if (customRefSet.has(key)) entry.external = true; // also path-referenced → protect from teardown
+      out.push(entry);
+    } catch { /* a bare author icon that fails to read is skipped (unchanged) */ }
+  }
+
+  // A path ref is unresolved ONLY if it was never re-declared (a bare pass may have re-declared an
+  // overlapping name — that resolves it, so it must not also warn). Dedup preserved by the Map key.
+  const unresolved = [...candidateUnresolved].filter(([key]) => !seen.has(key)).map(([, name]) => name);
+  return { webResources: out, unresolved };
 }
 
 // Count sitemap subareas hydrateSpec could not round-trip (present in the deployed sitemap but not in
@@ -223,6 +312,11 @@ function droppedSubareaCount(app, spec) {
 // 'Default' — which teardown then 400s on, orphaning the real solution. So enumerate ALL memberships
 // and pick the single unmanaged, non-system solution. Best-effort: returns null (caller keeps its own
 // default) on no match or any query error — never throws.
+//
+// Returns ONLY the solution `{ uniqueName }` (the teardown container). The publisher PREFIX is
+// deliberately NOT recovered here: an app can belong to SEVERAL unmanaged solutions under DIFFERENT
+// publishers, so this arbitrary `find()` pick is not an authoritative source for the app's own prefix
+// (Sol review). The caller derives the trusted prefix from the app's REAL uniquename instead.
 async function recoverAppSolution(sdk, appId) {
   try {
     // objectid == the appmoduleid. `top:500` is a safe over-provision (an app is realistically a
@@ -237,10 +331,8 @@ async function recoverAppSolution(sdk, appId) {
     const filter = solIds.map((id) => `solutionid eq ${id}`).join(' or ');
     const sols = await sdk.queryRecords('solution', { select: ['solutionid', 'uniquename', 'ismanaged'], filter, top: 500 });
     const real = (sols || []).find((s) => s && s.ismanaged === false && !isRestrictedSolution(s.uniquename));
-    // publisherPrefix stays 'new' (unchanged from the prior default): the edit round-trip reuses
-    // existing tables/columns, so the prefix is not needed to re-apply; only the uniqueName matters
-    // for a clean solution teardown, which is what this recovery fixes.
-    return real ? { uniqueName: real.uniquename, publisherPrefix: 'new' } : null;
+    if (!real) return null;
+    return { uniqueName: real.uniquename };
   } catch {
     return null; // best-effort — a recovery failure must not break the download
   }
@@ -258,7 +350,7 @@ async function recoverAppSolution(sdk, appId) {
 // throwing. Unexpected I/O errors propagate as thrown exceptions (caught by main().catch).
 async function runDownload({ sdk, genpageCli, outDir, appId, appUnique }) {
   const app = await sdk.fetchArtifact('app', appId);
-  const { entities: entityLogicals, icons } = collectSitemap(app);
+  const { entities: entityLogicals, icons, customRefs } = collectSitemap(app);
 
   // MEMBERSHIP: the authoritative set of pages owned by this app, from its SITEMAP XML (fail-closed,
   // discriminated). The app-scoped `pac genpage list --app-id` is sitemap-scoped anyway but returns
@@ -375,22 +467,55 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique }) {
     try { entities.push(entityFromMetadata(await sdk.fetchEntityMetadata(logical), logical)); } catch { /* skip */ }
   }
 
+  // App identity + publisher prefix come from the app's REAL, immutable uniquename (`appUnique`, captured
+  // from Dataverse as `appmodule.uniquename`; guaranteed present here because runDownload bails at the
+  // sitemap gate above when it is falsy). It IS the app's own publisher prefix and exactly what the build
+  // (appUniqueName → findArtifact) + teardown must match — NOT the mutable display name (a rename would
+  // miss the existing app) and NOT an arbitrary unmanaged solution membership (an app can belong to several,
+  // under different publishers — Sol review). Parsed BEFORE the solution-recovery I/O so a recovery failure
+  // can't lose it, with a full `<prefix>_<name>` shape check (a bare token is not a valid app uniquename —
+  // its leading segment must be followed by `_<name>`). This is the ONLY TRUSTED source for the icon
+  // own-vs-foreign classification; when it can't be parsed, prefixResolved=false makes the classifier
+  // surface (rather than silently drop) a custom nav icon it can't attribute to this app.
+  const appPrefixMatch = /^([a-z][a-z0-9]{1,7})_.+$/.exec(String(appUnique || '').toLowerCase());
+  const trustedPrefix = appPrefixMatch ? appPrefixMatch[1] : null;
+
+  // Solution container (best-effort): the real unmanaged solution the appmodule belongs to, for a clean
+  // teardown. Falls back to the restricted 'Default' when recovery finds nothing — that fallback cannot be
+  // torn down, but teardown skips it safely (see system-solutions.js) rather than erroring. Only its
+  // uniqueName is used; the publisher prefix is the appUnique-derived `trustedPrefix` above, NOT this
+  // solution's publisher (which may belong to a different publisher).
+  const solution = { uniqueName: 'Default', publisherPrefix: trustedPrefix || 'new', prefixResolved: !!trustedPrefix };
+  const recovered = await recoverAppSolution(sdk, appId);
+  if (recovered && recovered.uniqueName) solution.uniqueName = recovered.uniqueName;
+
   // Icon web resources — looked up by NAME (the sitemap stores the web-resource name, not its id).
-  const webResources = await iconWebResources(sdk, icons);
+  // Bare-name icons are re-declared as-is; a CUSTOM (unmanaged) web resource referenced by a PLATFORM
+  // path (e.g. a modern nav vectorIcon `/WebResources/<pub>/icons/x.svg`) is ALSO re-declared so the icon
+  // survives a rebuild into a fresh env that lacks it — but ONLY when it belongs to THIS app's own
+  // publisher (`solution.publisherPrefix`). A FOREIGN-prefix / OOB reference is left as a bare reference:
+  // re-declaring it would make the build try to createWebResource under an unregistered prefix on a fresh
+  // env → a hard BuildHalt, turning a cosmetic broken icon into a failed build (Opus review).
+  const { webResources, unresolved: unresolvedIcons } = await iconWebResources(sdk, icons, customRefs, solution.publisherPrefix, solution.prefixResolved);
+  if (unresolvedIcons && unresolvedIcons.length) {
+    // A custom nav icon we couldn't safely round-trip: either an own-prefix WR that's absent on the source
+    // env / failed to read, OR (when the publisher prefix couldn't be verified) any custom image icon we
+    // can't classify as own-vs-foreign. Its sitemap reference round-trips but the WR isn't re-declared, so
+    // the icon will dangle on a rebuild into a fresh env. Surface it now (the build-time portability
+    // warning is the backstop). Without this, an unverified-prefix download would silently drop the icon.
+    process.stderr.write(`WARNING: ${unresolvedIcons.length} custom nav-icon web resource(s) could not be captured (${unresolvedIcons.join(', ')}) — their sitemap reference is kept, but declare the web resource(s) in webResources[] if you rebuild into a fresh environment, or the icon will be missing there.\n`);
+  }
 
   // Dashboards (declared as DashBoard sitemap subareas) — reconstructed with id-passthrough tiles.
   let dashboards = [];
   try { dashboards = await readDashboards(sdk, app); } catch (e) { process.stderr.write(`(dashboards reconstruction skipped: ${e.message})\n`); }
 
-  // Solution (best-effort): the real unmanaged solution the appmodule belongs to. Falls back to the
-  // restricted 'Default' only when recovery finds nothing — that fallback cannot be torn down, but
-  // teardown skips it safely (see system-solutions.js) rather than erroring.
-  let solution = { uniqueName: 'Default', publisherPrefix: 'new' };
-  const recovered = await recoverAppSolution(sdk, appId);
-  if (recovered) solution = recovered;
-
   const read = {
-    app: async () => app,
+    // Ensure the app's REAL uniquename reaches hydrateSpec (→ spec.app.uniqueName) even if the artifact
+    // read didn't surface it: `appUnique` is the authoritative value (from the appmodule query) and is
+    // guaranteed present here (the sitemap gate above bails when it's falsy). This is what lets a rebuild
+    // resolve the EXISTING app by identity after a display-name rename instead of creating a duplicate.
+    app: async () => ({ ...app, uniquename: (app && app.uniquename) || appUnique }),
     pages: async () => pages,
     entities: async () => entities,
     webResources: async () => webResources,

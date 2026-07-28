@@ -34,7 +34,11 @@ async function hydrateSpec(read) {
   const entities = (await read.entities()) || [];
   const webResources = (await read.webResources()) || [];
   const dashboards = (read.dashboards ? await read.dashboards() : []) || [];
-  const solution = (await read.solution()) || { uniqueName: 'Default', publisherPrefix: 'new' };
+  // `prefixResolved` is a TRANSIENT download-time signal (whether recoverAppSolution trusted the publisher
+  // prefix) consumed by iconWebResources BEFORE hydrate; strip it so it never leaks into the persisted,
+  // user-facing spec — the build reads only uniqueName + publisherPrefix from solution.
+  const { prefixResolved, ...solution } = (await read.solution()) || { uniqueName: 'Default', publisherPrefix: 'new' };
+  void prefixResolved;
   // `design` is threaded through from the page manifest (§7.3) when present; undefined for legacy apps.
   const design = read.design ? await read.design() : undefined;
   // When downloaded pages carry stable keys (assigned by assignPageKeys), emit the v2 shape;
@@ -63,7 +67,10 @@ async function hydrateSpec(read) {
     // schemaVersion 2 only when pages carry keys (v2 shape); omitted for legacy back-compat.
     ...(hasKeys ? { schemaVersion: 2 } : {}),
     solution,
-    app: { name: app.name, description: app.description || '' },
+    // Round-trip the app's REAL, immutable uniquename so a rebuild resolves the EXISTING app by identity
+    // (appUniqueName prefers this over the display-name derivation) — survives a display-name rename and
+    // never creates a duplicate app (Sol review). Omitted for a legacy read that didn't surface it.
+    app: { name: app.name, description: app.description || '', ...(app.uniquename ? { uniqueName: app.uniquename } : {}) },
     entities,
     webResources,
     views: [],
