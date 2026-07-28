@@ -28,14 +28,14 @@ Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/sh
 
 ### Step 2: Add Connector
 
-The Power Apps code-app CLI (`@microsoft/power-apps-cli`, invoked as `npx power-apps`) creates the connection and generates the typed service itself. Make sure the CLI is installed (`npm install`) and you are signed in (`npx power-apps auth-status`; it shares the same auth as the rest of the code-app skills).
+The Power Apps code-app CLI (`@microsoft/power-apps-cli`, invoked as `pa` or `power-apps` — resolve via [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md)) creates the connection and generates the typed service itself. Make sure the CLI is installed (`npm install`) and you are signed in (`pa auth status`; it shares the same auth as the rest of the code-app skills).
 
 #### Find or Create the Connection
 
 **Check for an existing connection first:**
 
 ```bash
-npx power-apps list-connections
+pa connection list
 ```
 
 Look for a **Work IQ Copilot MCP (Preview)** connection (api id `shared_a365copilotchatmcp`) in the output. If one is listed, note its Connection ID and skip to "Add the Data Source" below.
@@ -43,7 +43,7 @@ Look for a **Work IQ Copilot MCP (Preview)** connection (api id `shared_a365copi
 **Otherwise create one** with the native `create-connection` verb:
 
 ```bash
-npx power-apps create-connection --api-id shared_a365copilotchatmcp
+pa connection create --connector shared_a365copilotchatmcp
 ```
 
 - The environment is read automatically from the app's `power.config.json` — you do **not** need to pass an environment id.
@@ -57,7 +57,7 @@ npx power-apps create-connection --api-id shared_a365copilotchatmcp
 3. **Wait for the user to confirm** the browser shows success before continuing.
 
 **If `create-connection` fails:**
-- "not signed in" / auth error → run `npx power-apps auth-status` (sign in if needed) and retry.
+- "not signed in" / auth error → run `pa auth status` (sign in if needed) and retry.
 - "Connection creation was cancelled." → the browser flow was closed early; re-run and complete it.
 - Any other non-zero exit → report the exact error and STOP.
 
@@ -68,7 +68,7 @@ As a fallback, the user can create the connection manually in the maker portal: 
 Once the connection exists, add it to the code app (this is what generates the typed service + model):
 
 ```bash
-npx power-apps add-data-source -a shared_a365copilotchatmcp -c <connection-id>
+pa app add data-source --connector shared_a365copilotchatmcp -c <connection-id>
 ```
 
 This is a **non-tabular** connector — only `-a` (api id) and `-c` (connection id) are needed.

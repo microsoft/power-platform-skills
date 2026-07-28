@@ -38,10 +38,10 @@ Excel Online is a tabular datasource -- requires `-c` (connection ID), `-d` (dri
 
 ```bash
 # OneDrive workbook
-npx power-apps add-data-source -a excelonlinebusiness -c <connection-id> -d 'me' -t 'Table1'
+pa app add data-source --connector excelonlinebusiness -c <connection-id> -d 'me' --table 'Table1'
 
 # SharePoint workbook -- dataset is the document library path
-npx power-apps add-data-source -a excelonlinebusiness -c <connection-id> -d 'sites/your-site' -t 'Table1'
+pa app add data-source --connector excelonlinebusiness -c <connection-id> -d 'sites/your-site' --table 'Table1'
 ```
 
 Run for each table the user needs.

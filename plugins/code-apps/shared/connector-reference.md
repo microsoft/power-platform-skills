@@ -4,11 +4,11 @@ Applies to all connector skills (`/add-azuredevops`, `/add-teams`, `/add-excel`,
 
 ## Connection ID (Required)
 
-All non-Dataverse connectors require a **connection ID** (`-c`) when adding via `npx power-apps add-data-source`. Without it, the command fails with: `CONNECTION_ID argument is required for connector data sources`.
+All non-Dataverse connectors require a **connection ID** (`-c`) when adding via `pa app add data-source`. Without it, the command fails with: `CONNECTION_ID argument is required for connector data sources`.
 
 ### Step 1: List Existing Connections
 
-Run the `/list-connections` skill. It runs `npx power-apps list-connections` and returns a table of connection IDs and connector names.
+Run the `/list-connections` skill. It runs `pa connection list` and returns a table of connection IDs and connector names.
 
 Look for the connector in the output. Note the **ConnectionId** column value.
 
@@ -27,11 +27,14 @@ The user must create one first:
 Always pass `-c <connection-id>` when adding a connector:
 
 ```bash
+# Commands shown in canonical `pa` form — resolve the binary via shared/cli-binary.md
+# and translate to flat `power-apps add-data-source ...` when only `power-apps` is installed.
+
 # Non-tabular connectors
-npx power-apps add-data-source -a <api-name> -c <connection-id>
+pa app add data-source --connector <api-name> -c <connection-id>
 
 # Tabular connectors (also need -d and -t)
-npx power-apps add-data-source -a <api-name> -c <connection-id> -d '<dataset>' -t '<table>'
+pa app add data-source --connector <api-name> -c <connection-id> -d '<dataset>' --table '<table>'
 ```
 
 
@@ -46,12 +49,12 @@ Generated service files (e.g., `Office365OutlookService.ts`) can be thousands of
 
 2. **Find a specific method** and read just that section:
    ```
-   Grep pattern="async GetEventsCalendarViewV2" path="src/generated/services/Office365OutlookService.ts" -A 20
+   Grep pattern="async GetEventsCalendarViewV2" path="src/generated/services/Office365OutlookService.ts" --connector 20
    ```
 
 3. **Find parameter types** in the models file:
    ```
-   Grep pattern="interface CalendarEventHtmlClient" path="src/generated/models/Office365OutlookModel.ts" -A 30
+   Grep pattern="interface CalendarEventHtmlClient" path="src/generated/models/Office365OutlookModel.ts" --connector 30
    ```
 
 This avoids context window bloat and is much faster than reading entire generated files.

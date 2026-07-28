@@ -21,7 +21,7 @@ Lists all Power Platform connections in the current environment using the Power 
 ### Step 1: Fetch Connections
 
 ```bash
-npx power-apps list-connections
+pa connection list
 ```
 
 If the CLI is not authenticated, it will open a browser for login automatically. Complete the login and retry.
