@@ -194,6 +194,14 @@ Read the results as follows:
 
 If the batched query itself fails (non-2xx), do not fall back to guessing: treat every entry as `block` and stop. If the URL would exceed a practical length with very many tables, split it into a few filtered queries — still far fewer than one request per table.
 
+**Only if the plan contains alternate keys or M:N relationships**, add the matching expands so Steps 5b and 5d never need their own per-item probes. `EntityDefinitions` also supports expanding [`Keys`, `ManyToManyRelationships`, `ManyToOneRelationships`, and `OneToManyRelationships`](https://learn.microsoft.com/power-apps/developer/data-platform/query-schema-definitions#evaluate-other-options-to-retrieve-schema-definitions):
+
+```text
+&$expand=Attributes($select=...),Keys($select=SchemaName,KeyAttributes,EntityKeyIndexStatus),ManyToManyRelationships($select=SchemaName)
+```
+
+Do not add these expands when the plan has no keys or M:N relationships — they enlarge the response for no benefit, and standard tables carry many of both.
+
 Build and print a reconciliation matrix before Step 5:
 
 | Target result | Table decision | Column decisions | Action |
@@ -209,6 +217,8 @@ Build and print a reconciliation matrix before Step 5:
 `replace` is not an automatic state in this workflow. Replacing a table or column requires an explicitly approved migration with dependency analysis and data movement; classify the conflict as `block` here.
 
 **Global write barrier (HARD):** finish reconciliation for every table and column first. If any item is `block`, make zero metadata writes. Step 5 may begin only when the matrix contains exclusively `reuse`, `extend`, and `create` decisions.
+
+**Idempotency criterion (HARD):** re-running this skill against an already-applied plan MUST perform **zero** metadata writes. Every table, column, relationship, key, and calc column resolves to `reuse` or an "already exists, skipped" outcome from the Step 4 snapshot. If a re-run issues any POST, the reconciliation missed something — report it rather than writing. Use this as the acceptance check after any change to Steps 4, 5, or 5a–5d.
 
 ### Step 5 — Create / extend tables
 
@@ -549,7 +559,7 @@ Column shapes that have non-obvious gotchas (handle carefully):
   }
   ```
 
-  **Pre-flight M:N:** GET `RelationshipDefinitions(SchemaName='<prefix>_<table1>_<table2>')?$select=SchemaName` — 404 → proceed; 200 → skip (already exists).
+  **Pre-flight M:N:** a relationship can only pre-exist on a table that already existed at Step 4. If **either** endpoint was just created in this run, skip the probe — nothing can be there. Otherwise read `ManyToManyRelationships` from that table's Step 4 snapshot: present → skip (already exists); absent → proceed. Query `RelationshipDefinitions(SchemaName='<prefix>_<table1>_<table2>')?$select=SchemaName` only when the snapshot did not cover it.
 
   **In the generated service:** M:N relationships are queried via the intersect entity name (e.g., `cr123_tag_inspection`) — the SDK does not expose a direct M:N navigation helper; the screen-builder must query the intersect table directly or via a calculated column approach. Flag this in the Step 7 summary if any M:N relationships are created.
 
@@ -626,7 +636,9 @@ This step exists because of the runtime constraint documented at [`shared/refere
 5. **On failure** — the helper script prints the OData error inline. Common cases:
    - `400 — formula references unknown attribute` → the relationship or column the formula needs has not been created yet. Verify Step 5b finished cleanly before retrying.
    - `400 — calculated formula not allowed on this navigation` → the dotted path tries to traverse 1:many or M:N. The architect should have caught this at Step 6a; flag in summary, skip the row, continue.
-   - Surface non-recoverable errors to the user with the offending row, then proceed to the next row. Do NOT abort the whole step on one bad row.
+   - Surface non-recoverable errors to the user with the offending row, then proceed to the next row. Do NOT abort the whole step for a fault isolated to one row (a bad formula, an unsupported traversal).
+
+6. **Stop early on a systemic failure.** Distinguish a per-row fault from one that will repeat for every remaining row — auth failure, the target table missing, or a dependency the whole subsection relies on. On the first systemic failure, stop Step 5c, report how many rows were created and how many were skipped, and continue to Step 6 rather than issuing the remaining doomed calls. Re-running the skill after the cause is fixed creates only the missing calc columns.
 
 6. After all rows are processed, the publish step (Step 6b) below picks up calc columns automatically — no extra publish call needed.
 
@@ -659,7 +671,7 @@ Body skeleton:
 }
 ```
 
-**Pre-flight each key before POST** so re-runs are idempotent:
+**Pre-flight each key before POST** so re-runs are idempotent. A key can only pre-exist on a table that already existed at Step 4, so for a table created in this run, skip straight to the POST. Otherwise read `Keys` from that table's Step 4 snapshot. Query it directly only when the snapshot did not cover that table:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
