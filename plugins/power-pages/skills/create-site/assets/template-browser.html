@@ -32,11 +32,6 @@
     h3{font-size:18px;font-weight:800;color:var(--text-bright);letter-spacing:-0.2px;margin-bottom:6px;}
     .section-desc{font-size:13px;color:var(--text-dim);margin-bottom:20px;max-width:760px;}
     .summary-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px;margin-bottom:22px;font-size:14px;color:var(--text);line-height:1.75;}
-    .stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:24px;}
-    .stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 16px;text-align:center;position:relative;overflow:hidden;box-shadow:var(--shadow-4);}
-    .stat-card::after{content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);width:40px;height:2px;border-radius:0 0 2px 2px;background:var(--accent);}
-    .stat-num{font-size:30px;font-weight:800;font-family:var(--mono);line-height:1;color:var(--text-bright);}
-    .stat-label{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-top:6px;}
     .template-list{display:grid;gap:18px;}
     .template-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-4);overflow:hidden;}
     .template-card-head{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;padding:20px 22px 16px;border-bottom:1px solid var(--border);}
@@ -67,7 +62,6 @@
       .nav-group-label{padding:8px 14px 4px;}
       .nav-btn{border-left:none;border-bottom:2px solid var(--accent);width:auto;padding:10px 14px;}
       .content{padding:20px 16px 72px;}
-      .stats-grid{grid-template-columns:1fr;}
     }
   </style>
 </head>
@@ -90,11 +84,6 @@
     <main class="content">
       <h2>Template capabilities</h2>
       <p class="section-desc">Each card shows what the template is for, the framework it uses, keywords from the catalog, and every preview image shipped with the template.</p>
-      <div class="stats-grid">
-        <div class="stat-card"><div class="stat-num">__TEMPLATE_COUNT__</div><div class="stat-label">Templates</div></div>
-        <div class="stat-card"><div class="stat-num">SPA</div><div class="stat-label">Template kind</div></div>
-        <div class="stat-card"><div class="stat-num">Live</div><div class="stat-label">Preview mode</div></div>
-      </div>
       <section class="template-list">
         __TEMPLATE_CARD_HTML__
       </section>
