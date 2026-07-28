@@ -23,6 +23,7 @@ const {
   validateZipContainsSolution,
   validateCatalogShape,
   assertValidSha,
+  resolveRefToSha,
 } = require('../lib/template-catalog');
 const { parseArgs: parseCatalogArgs } = require('../fetch-template-catalog');
 const { parseArgs: parseSolutionArgs } = require('../fetch-template-solution');
@@ -72,6 +73,22 @@ test('rejects non-commit refs where a pinned sha is required', () => {
   );
 });
 
+test('resolveRefToSha falls back to git ls-remote when the GitHub commit API is rate limited', async () => {
+  const seen = [];
+  const sha = await resolveRefToSha({ owner: 'o', repo: 'r', ref: 'main' }, {
+    requestJson: async () => {
+      throw new Error('GET https://api.github.com/repos/o/r/commits/main failed with 403');
+    },
+    execFileSync: (cmd, args) => {
+      seen.push([cmd, args]);
+      return `${SHA}\trefs/heads/main\n`;
+    },
+  });
+
+  assert.equal(sha, SHA);
+  assert.deepEqual(seen, [['git', ['ls-remote', 'https://github.com/o/r.git', 'main']]]);
+});
+
 test('fetchCatalog resolves the latest release to a sha, fetches the catalog at that sha, and creates a sha cache dir', async (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -111,6 +128,54 @@ test('fetchCatalog resolves the latest release to a sha, fetches the catalog at 
   ]);
   assert.equal(fs.existsSync(path.join(dir, SHA)), true);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, SHA, 'templates/manifest.json'), 'utf8')), catalog);
+});
+
+test('fetchCatalog falls back to main when the samples repo has no latest release yet', async (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const catalog = { manifestVersion: '1.0', templates: [VALID_TEMPLATE] };
+  const seen = [];
+
+  const result = await fetchCatalog({ owner: 'o', repo: 'r', cacheRoot: dir }, {
+    requestJson: async (url) => {
+      seen.push(url);
+      if (url === 'https://api.github.com/repos/o/r/releases/latest') {
+        throw new Error('GET https://api.github.com/repos/o/r/releases/latest failed with 404');
+      }
+      if (url === 'https://api.github.com/repos/o/r/commits/main') return { sha: SHA };
+      if (url === `https://raw.githubusercontent.com/o/r/${SHA}/templates/manifest.json`) return catalog;
+      throw new Error(`unexpected url: ${url}`);
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.ref, 'latest-release');
+  assert.equal(result.resolvedRef, 'main');
+  assert.deepEqual(seen, [
+    'https://api.github.com/repos/o/r/releases/latest',
+    'https://api.github.com/repos/o/r/commits/main',
+    `https://raw.githubusercontent.com/o/r/${SHA}/templates/manifest.json`,
+  ]);
+});
+
+test('fetchCatalog falls back to main when latest release lookup is rate limited', async (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const catalog = { manifestVersion: '1.0', templates: [VALID_TEMPLATE] };
+
+  const result = await fetchCatalog({ owner: 'o', repo: 'r', cacheRoot: dir }, {
+    requestJson: async (url) => {
+      if (url === 'https://api.github.com/repos/o/r/releases/latest') {
+        throw new Error('GET https://api.github.com/repos/o/r/releases/latest failed with 403');
+      }
+      if (url === 'https://api.github.com/repos/o/r/commits/main') return { sha: SHA };
+      if (url === `https://raw.githubusercontent.com/o/r/${SHA}/templates/manifest.json`) return catalog;
+      throw new Error(`unexpected url: ${url}`);
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.resolvedRef, 'main');
 });
 
 test('fetchCatalog still accepts an explicit ref override for tests or pinned rollouts', async (t) => {

@@ -185,9 +185,34 @@ function downloadFile(url, outputPath, deps = {}) {
   });
 }
 
+function resolveRefToShaWithGit({ owner = DEFAULT_OWNER, repo = DEFAULT_REPO, ref = DEFAULT_REF }, deps = {}) {
+  const execFile = deps.execFileSync || execFileSync;
+  const remoteUrl = `https://github.com/${owner}/${repo}.git`;
+  const output = execFile('git', ['ls-remote', remoteUrl, ref], { encoding: 'utf8', timeout: 15000 });
+  // `git ls-remote <remote> <ref>` returns tab-delimited rows:
+  //   49b0e74b386206c7682019110434f034fca2e129\trefs/heads/main
+  // A release tag can return multiple rows for annotated tags; any leading
+  // 40-character SHA is enough because raw.githubusercontent.com accepts the
+  // object id for immutable content fetches.
+  const match = String(output || '').match(/^([0-9a-f]{40})\s+/im);
+  if (!match) {
+    throw new Error(`git ls-remote did not resolve ${owner}/${repo}@${ref}`);
+  }
+  return match[1];
+}
+
 async function resolveRefToSha(options = {}, deps = {}) {
   const request = deps.requestJson || ((url) => requestJson(url, deps));
-  const result = await request(buildCommitUrl(options));
+  let result;
+  try {
+    result = await request(buildCommitUrl(options));
+  } catch (err) {
+    try {
+      return resolveRefToShaWithGit(options, deps);
+    } catch (fallbackErr) {
+      throw new Error(`${err.message}; git ls-remote fallback failed: ${fallbackErr.message}`);
+    }
+  }
   if (!result || typeof result.sha !== 'string' || !/^[0-9a-f]{40}$/i.test(result.sha)) {
     throw new Error('GitHub commit response did not include a valid 40-character sha');
   }
@@ -201,7 +226,24 @@ async function resolveLatestRelease(options = {}, deps = {}) {
   //     "html_url": "https://github.com/.../releases/tag/templates-v1.0.0" }
   // `tag_name` is the only required field; name/url are carried through for
   // diagnostics but not required for fetching.
-  const result = await request(buildLatestReleaseUrl(options));
+  let result;
+  try {
+    result = await request(buildLatestReleaseUrl(options));
+  } catch (err) {
+    // GitHub returns 404 for /releases/latest until the samples repo publishes
+    // its first release, and unauthenticated callers can also get a 403 rate
+    // limit on this API before the lower-cost commit/raw fetches:
+    //   GET https://api.github.com/repos/<owner>/<repo>/releases/latest failed with 404
+    //   GET https://api.github.com/repos/<owner>/<repo>/releases/latest failed with 403
+    // Use main as a temporary catalog source so create-site can still discover
+    // templates during the bootstrapping window. Other release lookup failures
+    // still fail open through fetchCatalog so auth/rate-limit/outage issues are
+    // not masked as a successful main fallback.
+    if (/\breleases\/latest\b.*\b(?:403|404)\b/i.test(err.message || '')) {
+      return { ref: 'main', sha: await resolveRefToSha({ ...options, ref: 'main' }, { ...deps, requestJson: request }) };
+    }
+    throw err;
+  }
   if (!result || !isNonEmptyString(result.tag_name)) {
     throw new Error('GitHub latest release response did not include tag_name');
   }
