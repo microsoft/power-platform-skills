@@ -29,13 +29,15 @@ const winAny = window as unknown as Record<string, unknown>;
 
 const GeneratedComponent = ({ dataApi }: GeneratedComponentProps) => {
     const dataReady = !!dataApi;
-    const [accounts, setAccounts] = useState<ReadableTableRow<account>[]>(
-        () => (winAny[CACHE_KEY] as ReadableTableRow<account>[] | undefined) ?? [],
-    );
-    // Gate mutations until the initial load resolves so a create/update can't race
-    // an in-flight first fetch (which could otherwise stale-write the cache).
-    const [loading, setLoading] = useState<boolean>(
-        () => (winAny[CACHE_KEY] as ReadableTableRow<account>[] | undefined) === undefined,
+    // Single batched fetch state (Rule 14 — React 17 doesn't batch setState in
+    // async callbacks, so one object + one setData avoids intermediate renders).
+    // `loading` also gates mutations until the initial load resolves, so a
+    // create/update can't race an in-flight first fetch (stale-write the cache).
+    const [{ accounts, loading }, setData] = useState<{ accounts: ReadableTableRow<account>[]; loading: boolean }>(
+        () => {
+            const cached = winAny[CACHE_KEY] as ReadableTableRow<account>[] | undefined;
+            return { accounts: cached ?? [], loading: cached === undefined };
+        },
     );
     const [selectedAccount, setSelectedAccount] = useState<ReadableTableRow<account> | null>(null);
     const [formData, setFormData] = useState<WritableTableRow<account>>({
@@ -55,8 +57,7 @@ const GeneratedComponent = ({ dataApi }: GeneratedComponentProps) => {
         // another mount's fetch is resolving doesn't stay stuck on the old list.
         const cached = winAny[CACHE_KEY] as ReadableTableRow<account>[] | undefined;
         if (cached !== undefined) {
-            if (accounts !== cached) setAccounts(cached);
-            if (loading) setLoading(false);
+            if (accounts !== cached || loading) setData({ accounts: cached, loading: false });
             return;
         }
         let cancelled = false;
@@ -80,8 +81,8 @@ const GeneratedComponent = ({ dataApi }: GeneratedComponentProps) => {
         }
 
         inflight
-            .then((rows) => { if (!cancelled) { setAccounts(rows); setLoading(false); } })
-            .catch((err) => { if (!cancelled) { console.error("Failed to load accounts", err); setLoading(false); } });
+            .then((rows) => { if (!cancelled) setData({ accounts: rows, loading: false }); })
+            .catch((err) => { if (!cancelled) { console.error("Failed to load accounts", err); setData((prev) => ({ ...prev, loading: false })); } });
 
         return () => { cancelled = true; };
         // Readiness only — never `dataApi` (new ref each render). See Rule 15.
@@ -109,7 +110,7 @@ const GeneratedComponent = ({ dataApi }: GeneratedComponentProps) => {
         delete winAny[INFLIGHT_KEY];
         const result = await dataApi.queryTable("account", query);
         winAny[CACHE_KEY] = result.rows;
-        setAccounts(result.rows);
+        setData({ accounts: result.rows, loading: false });
         // Reset form
         setFormData({
             name: "",

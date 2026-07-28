@@ -28,7 +28,7 @@ import { GeneratedComponentProps, Task } from './RuntimeTypes';
 //   - Three columns mapped to task statuscode values (Not Started=2,
 //     In Progress=3, Completed=5 — Dataverse defaults for the `task` entity;
 //     see task_statuscode in RuntimeTypes)
-//   - Window cache (window.__genpage_tasks_v1) for the inline IIFE pattern
+//   - Page-scoped window cache (window.__ppTaskBoard_taskCache) + in-flight de-dupe
 //   - Realistic empty / loading / error states
 //   - Logical CSS properties (paddingInline, paddingBlock, marginInlineStart)
 //   - Unsized Fluent icons (ClipboardTaskRegular, PlayRegular, CheckmarkCircleRegular)
@@ -133,15 +133,16 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
     const CACHE_KEY = '__ppTaskBoard_taskCache';
     const INFLIGHT_KEY = '__ppTaskBoard_taskInflight';
     const winAny = window as unknown as Record<string, unknown>;
+    // Single batched fetch state (Rule 14 — React 17 doesn't batch setState in
+    // async callbacks, so one object + one setData avoids intermediate renders).
     // Lazy-init from the window cache so the host's second mount paints tasks
     // immediately instead of flashing the spinner (see references/data-caching.md).
-    const [tasks, setTasks] = React.useState<Task[]>(
-        () => (winAny[CACHE_KEY] as Task[] | undefined) ?? [],
+    const [{ tasks, loading, error }, setData] = React.useState<{ tasks: Task[]; loading: boolean; error: string | null }>(
+        () => {
+            const cached = winAny[CACHE_KEY] as Task[] | undefined;
+            return { tasks: cached ?? [], loading: cached === undefined, error: null };
+        },
     );
-    const [loading, setLoading] = React.useState<boolean>(
-        () => (winAny[CACHE_KEY] as Task[] | undefined) === undefined,
-    );
-    const [error, setError] = React.useState<string | null>(null);
     const [draggingId, setDraggingId] = React.useState<string | null>(null);
     const [hoverColumn, setHoverColumn] = React.useState<StatusValue | null>(null);
 
@@ -155,8 +156,7 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
 
         const cached = w[cacheKey] as Task[] | undefined;
         if (cached !== undefined) {
-            setTasks(cached);
-            setLoading(false);
+            setData({ tasks: cached, loading: false, error: null });
             return;
         }
 
@@ -180,8 +180,8 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
         }
 
         pending
-            .then((rows) => { if (!cancelled) { setTasks(rows); setLoading(false); } })
-            .catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : String(e)); setLoading(false); } });
+            .then((rows) => { if (!cancelled) setData({ tasks: rows, loading: false, error: null }); })
+            .catch((e) => { if (!cancelled) setData((prev) => ({ ...prev, loading: false, error: e instanceof Error ? e.message : String(e) })); });
 
         return () => { cancelled = true; };
         // Readiness only — never `dataApi`. See Rule 15.
@@ -228,16 +228,14 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
             t.activityid === taskId ? { ...t, statuscode: targetStatus } : t,
         );
         const prevTasks = tasks;
-        setTasks(nextTasks);
-        const w = window as unknown as Record<string, Task[] | undefined>;
-        w.__genpage_tasks_v1 = nextTasks;
+        setData((prev) => ({ ...prev, tasks: nextTasks }));
+        winAny[CACHE_KEY] = nextTasks;
 
         try {
             await dataApi.updateRow('task', taskId, { statuscode: targetStatus });
         } catch (err) {
-            setTasks(prevTasks);
-            w.__genpage_tasks_v1 = prevTasks;
-            setError(err instanceof Error ? err.message : String(err));
+            setData((prev) => ({ ...prev, tasks: prevTasks, error: err instanceof Error ? err.message : String(err) }));
+            winAny[CACHE_KEY] = prevTasks;
         }
     };
 

@@ -80,7 +80,7 @@ function main() {
       out(`Telemetry (${plugin}): OFF — nothing is transmitted.`);
       out(`The local diagnostic log is kept whenever telemetry is enabled for this plugin, even when transmission is OFF (opt-out stops transmission only).`);
       emitLogLocations(dir, plugin);
-      out(`Re-enable anytime with /${plugin}:telemetry on.`);
+      out(`Re-enable with /${plugin}:telemetry on (an environment opt-out, if set, takes precedence and this command cannot override it).`);
       out(ANONYMITY);
     }
     process.exit(0);
@@ -94,7 +94,7 @@ function main() {
     out(`Telemetry (${plugin}): OFF — nothing is transmitted.`);
     out(`The local diagnostic log is kept whenever telemetry is enabled for this plugin, even when transmission is OFF (opt-out stops transmission only).`);
     emitLogLocations(dir, plugin);
-    out(`Re-enable anytime with /${plugin}:telemetry on.`);
+    out(`Re-enable with /${plugin}:telemetry on (an environment opt-out, if set, takes precedence and this command cannot override it).`);
   } else {
     out(`Telemetry (${plugin}): ON`);
   }
