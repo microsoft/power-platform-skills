@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>Browse Power Pages templates</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root{
+      --bg:#faf9f8; --surface:#ffffff; --surface2:#f3f2f1; --border:#e1dfdd; --border-light:#c8c6c4;
+      --text:#323130; --text-dim:#605e5c; --text-bright:#201f1e; --accent:#0078d4; --accent-bg:#0078d40a; --accent-border:#0078d425;
+      --purple:#8764b8; --purple-bg:#8764b80a; --purple-border:#8764b820; --pass:#107c10; --pass-bg:#107c100a; --pass-border:#107c1020;
+      --mono:'Cascadia Code','Consolas',monospace; --sans:'Segoe UI','Segoe UI Web (West European)',-apple-system,system-ui,sans-serif;
+      --radius:8px; --radius-sm:4px; --shadow-4:0 1.6px 3.6px 0 rgba(0,0,0,0.132),0 0.3px 0.9px 0 rgba(0,0,0,0.108);
+    }
+    *{margin:0;padding:0;box-sizing:border-box;}
+    body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;}
+    .topbar{z-index:100;background:var(--surface);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;position:sticky;top:0;}
+    .topbar-left{display:flex;align-items:center;gap:14px;}
+    .logo{width:36px;height:36px;object-fit:contain;display:block;flex-shrink:0;}
+    .topbar-title{font-size:16px;font-weight:700;color:var(--text-bright);}
+    .topbar-sub{font-size:11px;color:var(--text-dim);margin-top:1px;}
+    .pill{font-size:11px;padding:4px 10px;border-radius:999px;font-weight:600;letter-spacing:0.2px;border:1px solid var(--accent-border);background:var(--accent-bg);color:var(--accent);}
+    .layout{display:flex;min-height:calc(100vh - 65px);}
+    .sidebar{width:240px;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0;}
+    .nav-group-label{font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.2px;padding:16px 22px 6px;}
+    .nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:11px 22px;background:none;border:none;border-left:2px solid transparent;color:var(--text-dim);font-size:13px;font-weight:500;font-family:var(--sans);text-align:left;}
+    .nav-btn.active{color:var(--accent);font-weight:600;border-left-color:var(--accent);background:var(--accent-bg);}
+    .nav-icon{font-size:15px;opacity:0.7;width:18px;text-align:center;}
+    .content{flex:1;padding:32px 40px 72px;max-width:1180px;}
+    h2{font-size:21px;font-weight:800;color:var(--text-bright);letter-spacing:-0.3px;margin-bottom:5px;}
+    h3{font-size:18px;font-weight:800;color:var(--text-bright);letter-spacing:-0.2px;margin-bottom:6px;}
+    .section-desc{font-size:13px;color:var(--text-dim);margin-bottom:20px;max-width:760px;}
+    .summary-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px;margin-bottom:22px;font-size:14px;color:var(--text);line-height:1.75;}
+    .stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:24px;}
+    .stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 16px;text-align:center;position:relative;overflow:hidden;box-shadow:var(--shadow-4);}
+    .stat-card::after{content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);width:40px;height:2px;border-radius:0 0 2px 2px;background:var(--accent);}
+    .stat-num{font-size:30px;font-weight:800;font-family:var(--mono);line-height:1;color:var(--text-bright);}
+    .stat-label{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-top:6px;}
+    .template-list{display:grid;gap:18px;}
+    .template-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-4);overflow:hidden;}
+    .template-card-head{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;padding:20px 22px 16px;border-bottom:1px solid var(--border);}
+    .template-desc{font-size:13px;color:var(--text-dim);margin-top:6px;max-width:760px;}
+    .template-framework{font-size:11px;padding:4px 10px;border-radius:999px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;background:var(--pass-bg);border:1px solid var(--pass-border);color:var(--pass);white-space:nowrap;}
+    .preview-strip{background:#eef1f5;border-bottom:1px solid var(--border);}
+    .preview-carousel{position:relative;background:#eef1f5;}
+    .preview-stage{min-height:320px;display:flex;align-items:center;justify-content:center;}
+    .preview-frame{width:100%;min-height:320px;background:#eef1f5;display:flex;align-items:center;justify-content:center;}
+    .preview-frame[hidden]{display:none;}
+    .preview-frame img{display:block;width:100%;height:100%;max-height:420px;object-fit:contain;background:#eef1f5;}
+    .carousel-controls{display:flex;align-items:center;justify-content:center;gap:12px;padding:10px 14px;background:var(--surface);border-top:1px solid var(--border);}
+    .carousel-btn{width:30px;height:30px;border:1px solid var(--border-light);border-radius:999px;background:var(--surface);color:var(--text-bright);font-size:20px;line-height:1;cursor:pointer;font-family:var(--sans);}
+    .carousel-btn:hover:not(:disabled){border-color:var(--accent);color:var(--accent);background:var(--accent-bg);}
+    .carousel-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+    .carousel-btn:disabled{opacity:0.45;cursor:not-allowed;}
+    .carousel-count{font-size:12px;color:var(--text-dim);font-family:var(--mono);}
+    .preview-empty{min-height:180px;display:flex;align-items:center;justify-content:center;background:var(--surface2);color:var(--text-dim);font-size:13px;}
+    .template-meta{padding:16px 22px 20px;}
+    .field-label{font-size:11px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:7px;}
+    .chip-row{display:flex;flex-wrap:wrap;gap:6px;}
+    .chip{font-size:11px;padding:3px 10px;border-radius:4px;font-weight:600;background:var(--surface2);border:1px solid var(--border);color:var(--text);}
+    .muted{font-size:12px;color:var(--text-dim);}
+    .empty-note{font-size:13px;color:var(--text-dim);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;}
+    @media(max-width:900px){
+      .layout{flex-direction:column;}
+      .sidebar{width:100%;border-right:none;border-bottom:1px solid var(--border);padding:8px;}
+      .nav-group-label{padding:8px 14px 4px;}
+      .nav-btn{border-left:none;border-bottom:2px solid var(--accent);width:auto;padding:10px 14px;}
+      .content{padding:20px 16px 72px;}
+      .stats-grid{grid-template-columns:1fr;}
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="topbar-left">
+      <img class="logo" src="./power-pages-icon.png" alt="Power Pages" />
+      <div>
+        <div class="topbar-title">Browse Power Pages templates</div>
+        <div class="topbar-sub">Review capabilities here, then return to the terminal for the actual choice.</div>
+      </div>
+    </div>
+    <span class="pill">__TEMPLATE_COUNT__ templates</span>
+  </div>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="nav-group-label">Catalog</div>
+      <div class="nav-btn active"><span class="nav-icon">&#9673;</span> Template capabilities</div>
+    </aside>
+    <main class="content">
+      <h2>Template capabilities</h2>
+      <p class="section-desc">Each card shows what the template is for, the framework it uses, keywords from the catalog, and every preview image shipped with the template.</p>
+      <div class="stats-grid">
+        <div class="stat-card"><div class="stat-num">__TEMPLATE_COUNT__</div><div class="stat-label">Templates</div></div>
+        <div class="stat-card"><div class="stat-num">SPA</div><div class="stat-label">Template kind</div></div>
+        <div class="stat-card"><div class="stat-num">Live</div><div class="stat-label">Preview mode</div></div>
+      </div>
+      <section class="template-list">
+        __TEMPLATE_CARD_HTML__
+      </section>
+    </main>
+  </div>
+  <script>
+    document.querySelectorAll('[data-carousel]').forEach((carousel) => {
+      const slides = Array.from(carousel.querySelectorAll('[data-slide]'));
+      const count = carousel.querySelector('[data-carousel-count]');
+      const prev = carousel.querySelector('[data-carousel-prev]');
+      const next = carousel.querySelector('[data-carousel-next]');
+      if (slides.length === 0) return;
+
+      const show = (nextIndex) => {
+        const index = (nextIndex + slides.length) % slides.length;
+        carousel.dataset.current = String(index);
+        slides.forEach((slide, slideIndex) => {
+          slide.hidden = slideIndex !== index;
+        });
+        if (count) count.textContent = `${index + 1} of ${slides.length}`;
+      };
+
+      prev?.addEventListener('click', () => show(Number(carousel.dataset.current || 0) - 1));
+      next?.addEventListener('click', () => show(Number(carousel.dataset.current || 0) + 1));
+      show(Number(carousel.dataset.current || 0));
+    });
+  </script>
+</body>
+</html>

@@ -150,9 +150,9 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    - Write a temporary JSON file containing a `TEMPLATES_JSON` array with the templates the user should preview and the cached preview image URLs.
    - Run:
      ```bash
-     node "${PLUGIN_ROOT}/scripts/render-template-picker.js" --templatesJsonPath "<temp-json>" --outputPath "<temp-html>" --open
+     node "${PLUGIN_ROOT}/scripts/render-template-browser.js" --templatesJsonPath "<temp-json>" --outputPath "<temp-html>" --open
      ```
-   - The browser view is read-only; the terminal `AskUserQuestion` remains the decision surface.
+   - The browser view is read-only and exists to browse template capabilities; the terminal `AskUserQuestion` remains the decision surface.
 
 <!-- not-a-gate: read-only route selection after template preview; only disposable temp preview files exist, with no project directory, Dataverse write, or durable skill state -->
 

@@ -9,7 +9,7 @@ const { parseTemplateRepoArgs, runBestEffortJsonCli } = require('./lib/template-
 //   --sha <40-char commit sha> --artifactPath templates/spa/<id>/previews/home.png
 //   [--owner microsoft] [--repo power-pages-samples] [--cacheRoot /tmp/cache]
 // The script is best-effort: it prints `{ ok:false }` instead of throwing so
-// create-site can keep the picker usable even when a preview image is missing.
+// create-site can keep the template browser usable even when a preview image is missing.
 function parseArgs(argv) {
   return {
     owner: DEFAULT_OWNER,

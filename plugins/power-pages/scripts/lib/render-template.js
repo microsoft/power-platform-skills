@@ -101,10 +101,12 @@ function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requir
 }
 
 function escapeHtml(value) {
-  return value
+  return String(value ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function parseArgs(argv) {
@@ -117,4 +119,4 @@ function parseArgs(argv) {
   return args;
 }
 
-module.exports = { renderTemplate, parseArgs };
+module.exports = { renderTemplate, parseArgs, escapeHtml };
