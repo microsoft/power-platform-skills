@@ -5,9 +5,8 @@
 > are resolved below. See **§17 Sol R1 → resolutions** for a finding-by-finding map. Awaiting a
 > confirming Sol pass and user approval before `writing-plans`.
 >
-> This supersedes the phase-model discussion in `app-builder-flow-refinement-design.md` (which
-> remains the record for the landed R0–R3 refinements). The App Spec **core** contract and the
-> 13 engine phase names are unchanged; new capability is additive.
+> The App Spec **core** contract and the 13 engine phase names are unchanged; new capability is
+> additive.
 
 ## 1. Why
 
