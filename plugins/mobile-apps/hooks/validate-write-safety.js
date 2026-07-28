@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Mobile-scoped PreToolUse guardrail for Write / Edit / MultiEdit.
+ * Explicit mobile-workflow guardrail for Write / Edit / MultiEdit payloads.
  *
  * Two checks, both hard-fail (exit 2 = block tool call, message goes to model):
  *
@@ -15,9 +15,9 @@
  *      the words "tenant"/"client"/"secret"). Targets the planner accidentally
  *      pasting connection strings into memory-bank.md or native-app-plan.md.
  *
- * The hook is registered plugin-wide by Claude Code, so it first verifies that
- * either the active cwd or a write target belongs to an Expo native-host app.
- * Writes in Canvas Apps and other projects pass without mobile validation.
+ * This validator is invoked by scripts/validate-mobile-files.js for files owned
+ * by a mobile workflow. It is deliberately not registered in hooks/hooks.json:
+ * Claude loads plugin hooks during unrelated workflows, including Canvas Apps.
  *
  * Both checks are conservative — they err on the side of blocking. False
  * positives are recoverable (the model sees the rejection reason and can
