@@ -448,7 +448,7 @@ For each `Extend` decision, POST a new column to the existing table.
 > | Name exists and `AttributeType` matches | Skip it and log `↻ <column> (already exists, skipped)`. |
 > | Name exists and `AttributeType` differs | **STOP before all writes** and surface: "Column `<column>` exists but is `<existingType>`, plan expected `<plannedType>`. Dataverse does NOT allow column-type changes via API — delete the column manually or revise the plan." |
 > | Name is absent | Add it to the ordered missing-column queue. |
-
+>
 > This single snapshot catches partial creates, corrected re-runs, and network-drop recovery without paying one GET round trip per column.
 
 After the complete comparison passes, POST the missing-column queue **one column at a time, sequentially** (no `$batch`; always pass `--solution`):
