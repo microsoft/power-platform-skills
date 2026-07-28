@@ -34,7 +34,7 @@ Ask the user:
 
 Run the `/list-connections` skill. Find the Excel Online (Business) connection in the output. If none exists, direct the user to create one using the environment-specific Connections URL — construct it from the active environment ID in context (from `power.config.json` or a prior step): `https://make.powerapps.com/environments/<environment-id>/connections` → **+ New connection** → search for the connector → Create.
 
-Excel Online is a tabular datasource -- requires `-c` (connection ID), `-d` (drive), and `-t` (table name in workbook):
+Excel Online is a tabular datasource -- requires `-c` (connection ID), `-d` (drive), and `--table` (table name in workbook):
 
 ```bash
 # OneDrive workbook

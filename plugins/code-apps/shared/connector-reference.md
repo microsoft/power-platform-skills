@@ -49,12 +49,12 @@ Generated service files (e.g., `Office365OutlookService.ts`) can be thousands of
 
 2. **Find a specific method** and read just that section:
    ```
-   Grep pattern="async GetEventsCalendarViewV2" path="src/generated/services/Office365OutlookService.ts" --connector 20
+   Grep pattern="async GetEventsCalendarViewV2" path="src/generated/services/Office365OutlookService.ts" -A 20
    ```
 
 3. **Find parameter types** in the models file:
    ```
-   Grep pattern="interface CalendarEventHtmlClient" path="src/generated/models/Office365OutlookModel.ts" --connector 30
+   Grep pattern="interface CalendarEventHtmlClient" path="src/generated/models/Office365OutlookModel.ts" -A 30
    ```
 
 This avoids context window bloat and is much faster than reading entire generated files.

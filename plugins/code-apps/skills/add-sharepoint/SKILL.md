@@ -120,13 +120,13 @@ Present the tables to the user and ask which ones they want to add. Suggest tabl
 
 ### Step 9: Add Connector
 
-SharePoint is a tabular datasource -- requires `-c` (connection ID), `-d` (site URL), and `-t` (list name):
+SharePoint is a tabular datasource -- requires `-c` (connection ID), `-d` (site URL), and `--table` (list name):
 
 ```bash
 pa app add data-source --connector sharepointonline -c <connection-id> -d '<site-url>' --table '<table-name>'
 ```
 
-Run the command for each list or library the user selected. The `-d` (dataset) is the SharePoint site URL from Step 7, `-t` (table) is the list/library name from Step 8.
+Run the command for each list or library the user selected. The `-d` (dataset) is the SharePoint site URL from Step 7, `--table` is the list/library name from Step 8.
 
 ### Step 10: Configure
 

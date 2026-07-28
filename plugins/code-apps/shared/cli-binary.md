@@ -58,7 +58,7 @@ Rules:
 ## Authoring rule for skills
 
 - **Author every command in the canonical grouped `pa` form** (the left/`pa` column below), using the **renamed `pa` flags** from the flag mapping table, e.g. `pa app push`, `pa app add data-source --connector shared_office365 -c <conn-id>`.
-- Substitute the resolved `$PA` prefix for the binary name at run time: canonical `pa app push` → run `${PA#npx --no-install } ...`, i.e. `npx --no-install pa app push` or `npx --no-install power-apps push`.
+- Substitute the resolved `$PA` prefix (which already contains `npx --no-install`) for the binary at run time. When `PA_KIND=pa`, run the canonical command as-is: `$PA app push` → `npx --no-install pa app push`. When `PA_KIND=power-apps`, translate the verb path (and renamed flags) per the next rule before running: `$PA push` → `npx --no-install power-apps push`.
 - **If `PA_KIND` is `power-apps`, translate each grouped command to its flat equivalent before running it — convert BOTH the verb path AND any renamed flags.** The flat binary does **not** understand the grouped noun-verb form (`power-apps app push` is invalid — it must become `power-apps push`), and it does **not** accept the renamed long flags (`--connector` must become `--api-id`/`-a`, `--table` must become `--resource-name`/`-t`, etc.).
 - **Most flags are unchanged** — only the selector flags in the flag mapping table are renamed on `pa`. Connection ID (`-c`), dataset (`-d`), environment (`-e`), and display name (`-n` on `init`/`connection create`) are identical on both binaries.
 

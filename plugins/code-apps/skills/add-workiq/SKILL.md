@@ -71,7 +71,7 @@ Once the connection exists, add it to the code app (this is what generates the t
 pa app add data-source --connector shared_a365copilotchatmcp -c <connection-id>
 ```
 
-This is a **non-tabular** connector — only `-a` (api id) and `-c` (connection id) are needed.
+This is a **non-tabular** connector — only `--connector` (api id) and `-c` (connection id) are needed.
 
 ### Step 3: Inspect Generated Service
 
