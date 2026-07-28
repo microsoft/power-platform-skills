@@ -17,10 +17,11 @@ const { validateAppSpec, migrateAppSpec, normalizePageSource } = require('./lib/
 const { runSdkBuild, planFor, appUniqueName, compileFormIntent } = require('./lib/sdk-build.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
-const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
+const { parseArgs, readJsonArg, emitResult, dataverseRequest } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
 const { diffPhases, summarizeDiff } = require('./lib/phase-diff.js');
 const { annotateContentHashes } = require('./lib/content-hash.js');
+const { runChangedOnlyApply, resolveLiveIdentity } = require('./lib/changed-only-flow.js');
 const { classifyOps, sitemapTargets } = require('./lib/op-diff.js');
 // R3 (auto-verify): after a successful --apply the build can reconcile the spec against what actually
 // deployed, so a silent partial build surfaces in the same run instead of only on a separate manual
@@ -151,7 +152,13 @@ async function buildModelApp(spec, opts, deps) {
   if (opts.apply) {
     const active = opts.phases || PHASES;
     const sameSet = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
-    if (!sameSet(active, PHASES) && !sameSet(active, STAGES.data)) {
+    // I1 exception: a `--changed-only` pages-only FAST apply is the ONE sanctioned partial range. It is
+    // pre-gated by the changed-only flow (snapshot eligibility + identity match + classify proved every
+    // change is a pure page-content re-upload) and self-hydrates the app id via
+    // opts.changedOnly.resolvedAppId (the sdk-build seam), so it does NOT hit the cross-phase-id hazard I1
+    // guards against. Any other partial range on --apply is still refused.
+    const isChangedOnlyPages = !!(opts.changedOnly && opts.changedOnly.fastApply) && sameSet(active, ['pages']);
+    if (!isChangedOnlyPages && !sameSet(active, PHASES) && !sameSet(active, STAGES.data)) {
       const msg = `refusing to apply a partial phase range (${active.join(',')}) — on --apply only a FULL build or exactly --stage data is allowed (design §14). The app id is not carried across runs, so recover from a halt with a FULL rerun (idempotent), not --from/--to/--only/--skip.`;
       log(`\n✗ ${msg}`);
       if (journal) journal.close({ status: 'halt', phase: 'preflight', label: 'partial-apply-range', detail: active.join(',') });
@@ -241,6 +248,7 @@ async function buildModelApp(spec, opts, deps) {
         genpageCli: deps.genpageCli, // injectable seam for tests; else constructed from env
         workspaceDir: opts.workspaceDir, // lease/staging live under the real workspace dir
         allowDestructive: opts.allowDestructive, // pages phase gates destructive page removals (Imp6)
+        changedOnly: opts.changedOnly, // #changed-only: pages-only fast-apply seams (resolvedAppId + skipSitemapFinalize)
         emit,
       });
       break;
@@ -360,8 +368,16 @@ async function main() {
   const specArg = flags.spec || positional[0];
   if (!env || !specArg) {
     process.stderr.write(
-      'Usage: node build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--non-interactive] [--allow-destructive] [--workspace <dir>]\n'
+      'Usage: node build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--non-interactive] [--allow-destructive] [--workspace <dir>]\n'
     );
+    process.exit(1);
+  }
+  // #changed-only (Preview): a SAFE partial apply. Incompatible with manual phase selection — the flow
+  // computes its own phases (pages-only fast path, or a full fallback), so combining it with a
+  // --stage/--only/--skip/--from/--to range is ambiguous and rejected up front.
+  const changedOnly = flags['changed-only'] === true;
+  if (changedOnly && (flags.stage || flags.only || flags.skip || flags.from || flags.to)) {
+    process.stderr.write('✗ --changed-only cannot be combined with --stage/--only/--skip/--from/--to — it selects its own phases.\n');
     process.exit(1);
   }
   const specPath = path.resolve(typeof specArg === 'string' && specArg.startsWith('@') ? specArg.slice(1) : specArg);
@@ -437,14 +453,40 @@ async function main() {
       sdk, provisionSdk, journal,
       verify: (s) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpageCli: makeGenpageCli(env), workspaceDir })),
     };
-    r = await buildModelApp(spec, opts, deps);
+    if (changedOnly && opts.apply) {
+      // #changed-only: the flow decides fast (pages-only via the sdk-build seams) vs full, gated on the
+      // persisted snapshot's eligibility + a live identity check (WhoAmI orgId + app discovery). It calls
+      // buildModelApp itself (injected) and manages the snapshot lifecycle (invalidate-before-write +
+      // re-bless-on-success). readContent + WhoAmI are injected so the flow is testable offline.
+      r = await runChangedOnlyApply({
+        spec, opts,
+        deps: {
+          ...deps,
+          buildModelApp,
+          buildDeps: deps,
+          readContent,
+          resolveLiveIdentity: () => resolveLiveIdentity({
+            sdk: provisionSdk,
+            envUrl: env,
+            appUniqueName: appUniqueName(spec),
+            whoAmI: (u) => dataverseRequest(u, 'GET', 'WhoAmI'),
+          }),
+        },
+      });
+    } else {
+      r = await buildModelApp(spec, opts, deps);
+    }
   } finally {
     cleanup();
   }
   // #3: after a clean apply, persist the applied spec so the NEXT dry-run can diff against it and show
-  // what changed. Only on a real, successful, FULL apply (a partial --stage data apply is not the whole
-  // desired state, so it must not overwrite the snapshot). Best-effort — never fail the build over it.
-  if (r.ok && opts.apply && !r.dryRun && (opts.phases || PHASES).length === PHASES.length) {
+  // what changed. Only on a real, successful, FULL apply, OR a changed-only fast apply (whose deployed
+  // state matches the spec: unchanged artifacts persist idempotently and the changed pages were just
+  // re-uploaded). A partial --stage data apply is NOT the whole desired state, so it must not overwrite
+  // the snapshot. Best-effort — never fail the build over it.
+  const fullPhaseApply = (opts.phases || PHASES).length === PHASES.length;
+  const changedOnlyApplied = !!(r && r.changedOnly && (r.changedOnly.decision === 'fast' || r.changedOnly.decision === 'full'));
+  if (r.ok && opts.apply && !r.dryRun && (fullPhaseApply || changedOnlyApplied)) {
     // Persist the applied spec ANNOTATED with on-disk content hashes (#2) so the next dry-run's diff can
     // detect a .tsx / contentPath byte edit, not just a spec-JSON change. Records the content that was
     // actually deployed by THIS apply.

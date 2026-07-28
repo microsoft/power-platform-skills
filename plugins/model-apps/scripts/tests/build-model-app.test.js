@@ -336,6 +336,18 @@ test('I1: apply refuses ANY partial phase range except the full build or exactly
   }
 });
 
+test('I1 exception: a changed-only pages-only fast apply is NOT refused (fastApply seam); other partials still are', async () => {
+  const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, app: { name: 'A' }, entities: [{ schemaName: 'new_x', primaryAttribute: { schemaName: 'new_name' }, columns: [] }], pages: [{ key: 'p', name: 'P', source: { kind: 'tsx', codeFile: 'p.tsx' } }], appShell: { areas: [] } };
+  // pages-only WITH the changed-only fastApply seam is the ONE sanctioned partial range — the I1 gate must
+  // let it through (a stub runBuild proves it reached the build, not the gate rejection).
+  const okDeps = { log: () => {}, runBuild: async () => ({ ok: true, dryRun: false, created: { app: 'app-1' } }) };
+  const rOk = await buildModelApp(spec, { apply: true, phases: ['pages'], changedOnly: { fastApply: true, resolvedAppId: 'app-1', skipSitemapFinalize: true } }, okDeps);
+  assert.strictEqual(rOk.ok, true, 'the changed-only pages-only fast apply must pass the I1 gate');
+  // The SAME seam does NOT whitelist an arbitrary partial range (only exactly ['pages']).
+  const rBad = await buildModelApp(spec, { apply: true, phases: ['views', 'pages'], changedOnly: { fastApply: true } }, { log: () => {} });
+  assert.strictEqual(rBad.ok, false, 'the fastApply seam must not whitelist a non-pages partial range');
+});
+
 // ---------------------------------------------------------------------------
 // Task 10: mandatory fail-closed page verify gate + RECONCILIATION 1/2
 // ---------------------------------------------------------------------------
