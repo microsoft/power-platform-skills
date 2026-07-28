@@ -70,6 +70,37 @@ are in [`architecture.md`](architecture.md).
 
 ---
 
+## 🎯 MVP gaps vs the MDA Agentic Authoring spec
+
+Evaluated 2026-07-28 against `powerplatform-modelpages-ade/docs/topics/ModelBuilder/MDA-Agentic-Authoring-spec.md`
+(§3 MVP definition + §5 stack rank). **8 of 10 core P0 _primitives_ are ✅ complete** — data model + sample data
++ auto-number + dedup, Active/Inactive + authored views, main forms, charts, gen-page landings, custom SVG sitemap
+icons, in-app agents (`ai.appFeatures` = formFill/nlSearch/nlChart), Insight Card summaries (`ai.summaries`), and
+the dedup/verify quality gates. The open MVP items:
+
+- 🔲 **Wave 2 (header/navigation refresh) enabled by default** (spec rank 3, P0) — set the app-module header/nav
+  refresh flag on new apps, and turn it on when editing an app that isn't on it yet (spec rank 20). Not set today.
+- 🔲 **Roles + JTBD as first-class planning outputs** (spec rank 1, P0) — the Level-(a)/(b) design flow plans
+  entities/columns/relationships + view/form/gen-page intents with user review, but does NOT model **personas/roles**
+  or **jobs-to-be-done**. Several P0s (JTBD-driven "important" views, agent/summary placement, sitemap grouping) and
+  the eval "JTBD reachability" metric (spec §7 Cat 2) build on this.
+- 🔲 **Default-on + coherence wiring** — the AI agents, Insight Card summaries, and (once added) Wave 2 exist as
+  primitives, but the SKILL flow must **enable them by default** and author **JTBD-quality** content (entity-specific
+  summary prompts per the §4 Group G guidelines, the _right_ view columns). A ✅ primitive is necessary but not
+  sufficient for the spec's coherence bar.
+
+Important, P1 (not MVP-gating; tracked here for visibility):
+- 🔲 **Security roles per persona** (spec rank 14, Group N) — without one the generated app runs only for sysadmins;
+  currently out of scope (needs SDK security-role authoring).
+- 🔲 **Rich AI descriptions on every artifact** (rank 22) · **quick-find / relevance-search config** (rank 23) ·
+  **custom app theme + logo** (rank 18 — the `design` block styles gen pages, not the app theme).
+
+P0.5 stretch (not built): **modern grid visualizations by default** (rank 11, contingent on the SDK grid-customizer)
+and **MCP server + Catalyst by default** (rank 12). A status-annotated copy of the spec's §5 stack rank lives on
+branch `users/akmaloo/mda-spec-impl-status` in `powerplatform-modelpages-ade`.
+
+---
+
 ## 🔜 Pending — by phase
 
 ### Phase: Edit & lifecycle
