@@ -376,7 +376,9 @@ node "${PLUGIN_ROOT}/scripts/preview-form.js" --spec @<working-dir>/app-spec.jso
 ```
 
 Include the wireframe in the same turn as the forms/views/charts proposal (it's the visual
-companion to the JSON). Iterate on the spec and re-render until the user is happy with the layout.
+companion to the JSON) — **reproduce the full rendered output verbatim in your chat reply, inside a
+fenced code block**, because tool/shell output is collapsed and invisible to the user by default.
+Iterate on the spec and re-render until the user is happy with the layout.
 
 #### Form JS (optional — client-side logic)
 

@@ -31,6 +31,18 @@ deployed app back into a spec, change it, and re-run the build (it's idempotent)
 > this skill is the multi-turn, propose-then-confirm experience, so every `AskUserQuestion`,
 > `EnterPlanMode`, and live build status line must originate here, in the main loop.
 
+## CRITICAL — the user sees your chat message, NOT tool output
+
+> **Shell/tool output — the result of running `preview-app.js`, a dry-run plan, or a lint —
+> is COLLAPSED BY DEFAULT in the UI. The user does NOT see it unless they manually expand the
+> tool panel.** Running the command is therefore NOT the same as showing the user. Every artifact
+> the user must **read, review, or approve** — the whole-app **preview wireframes**, the
+> **dry-run build plan**, and blocking **lint findings** — MUST be reproduced **verbatim in your
+> chat reply**, inside a fenced ` ``` ` code block. Never say "the preview looks right" / "the plan
+> is ready" and leave the actual content buried in a collapsed tool-output panel: **paste it into
+> your message.** This is the #1 cause of "the wireframes aren't visible" — the preview ran, but
+> its output stayed hidden in shell output.
+
 ## Capabilities — the full toolbox (pick best-fit per requirement)
 
 You are a **complete** model-driven app builder, not a single-surface tool. Everything below ships in
@@ -122,12 +134,13 @@ running every prompt yourself via `AskUserQuestion`. In short:
      the optional `design` contract. **Do not author page `.tsx` here.** Emit `dashboards[]` only
      on explicit request. Persist `app-spec.json` after each level.
    - **Whole-app preview** (design gate for Level (b)): `node "${PLUGIN_ROOT}/scripts/preview-app.js" --spec @<working-dir>/app-spec.json`
-     renders data-model + sitemap + form wireframes + page-intents + design contract. **SHOW the actual
-     rendered wireframe output to the user (paste it verbatim into the chat) — do NOT just summarize
-     "the preview looks right." The user must be able to SEE each form, the sitemap, and the page intents
-     they are approving.** For a single form only: `node "${PLUGIN_ROOT}/scripts/preview-form.js" --spec @<working-dir>/app-spec.json`.
+     renders data-model + sitemap + form wireframes + page-intents + design contract. **Reproduce the
+     ENTIRE rendered output verbatim in your chat reply, inside a fenced ` ``` ` code block — do NOT
+     leave it in the (collapsed, invisible) tool output, and do NOT just summarize "the preview looks
+     right" (see the CRITICAL note above).** The user must be able to SEE each form, the sitemap, and
+     the page intents they are approving. For a single form only: `node "${PLUGIN_ROOT}/scripts/preview-form.js" --spec @<working-dir>/app-spec.json`.
    - **Don't pre-create tables/columns** — the build does it idempotently.
-5. **Guardrail lint (hard gate)** — run the **full** `spec-lint.js` on the complete spec; **errors block**, warnings teach:
+5. **Guardrail lint (hard gate)** — run the **full** `spec-lint.js` on the complete spec; **errors block**, warnings teach. If it blocks (or warns), **paste the findings into your chat reply** — tool output is collapsed and invisible to the user (see the CRITICAL note above), so the user can't fix what they can't see:
    ```bash
    node -e "const{lintAppSpec}=require('${PLUGIN_ROOT}/scripts/lib/spec-lint.js');const s=require('<working-dir>/app-spec.json');const r=lintAppSpec(s);console.log(JSON.stringify(r,null,2));process.exit(r.ok?0:1)"
    ```
@@ -195,7 +208,8 @@ closing `✓ build complete — X created, Y skipped, Z failed` summary.
 > (or tail `build-log.jsonl`) any time to report where a long build is, even if stdout is buffered.
 
 (**Reaching Phase 2 without a fresh plan-mode approval** — resuming a failed build, or a quick edit
-re-run — do a **dry-run first** (drop `--apply`), show the phase-grouped plan, and get a go-ahead
+re-run — do a **dry-run first** (drop `--apply`), **paste the phase-grouped plan verbatim into your
+chat reply** (tool output is collapsed — see the CRITICAL note above), and get a go-ahead
 before applying.)
 
 **Stage selector (`--stage <data|ui|app|publish>`)** maps to its phase range. On `--apply`, ONLY
