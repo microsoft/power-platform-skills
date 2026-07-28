@@ -404,6 +404,40 @@ test('CONTRACT: queryRecords rejects paginate combined with top or fetchXml (bot
   await assert.rejects(() => sdk.queryRecords('appmodule', { paginate: true, fetchXml: '<fetch/>' }), /paginate.*fetchXml|fetchXml.*paginate/i, 'paginate + fetchXml is rejected');
 });
 
+test('CONTRACT: queryRecords({ paginate:true }) THROWS on a malformed page instead of silently dropping rows', async () => {
+  // A well-formed OData collection page always carries `value` as an array (empty only on the last page).
+  // A missing/null/non-array `value` — or a bare-string `value` that `for..of` would iterate char-by-char
+  // — must fail LOUD (returning partial results silently under-counts, which is dangerous for the
+  // cross-app page scan and cascade-delete enumeration). The single-page (non-paginate) path stays lenient.
+  const meta = (url) => { const ln = (url.match(/LogicalName='([^']+)'/) || [])[1] || 'x'; return { status: 200, headers: {}, body: { MetadataId: '33333333-3333-3333-3333-333333333333', EntitySetName: `${ln}s`, LogicalName: ln } }; };
+
+  // (a) malformed MID-pagination: page 1 is a valid page + nextLink, page 2 has value:null → THROW (not page-1-only).
+  const midClient = {
+    get: async (url) => {
+      if (/EntityDefinitions\(LogicalName=/i.test(url)) return meta(url);
+      if (/[?&]np=1/.test(url)) return { status: 200, headers: {}, body: { value: null } };
+      return { status: 200, headers: {}, body: { value: [{ appmoduleid: 'a1' }], '@odata.nextLink': 'https://example.crm.dynamics.com/api/data/v9.0/appmodules?np=1' } };
+    },
+    post: async () => ({ status: 204, headers: {}, body: {} }), patch: async () => ({ status: 204, headers: {}, body: {} }), delete: async () => ({ status: 204, headers: {}, body: {} }), put: async () => ({ status: 204, headers: {}, body: {} }),
+  };
+  await assert.rejects(() => sdkWith(midClient).queryRecords('appmodule', { paginate: true }), /malformed page|value/i, 'a null mid-pagination value throws, not a silent page-1-only result');
+
+  // (b) bare-string `value` on the FIRST page → THROW (never fabricate single-char "rows" via for..of).
+  const strClient = {
+    get: async (url) => { if (/EntityDefinitions\(LogicalName=/i.test(url)) return meta(url); return { status: 200, headers: {}, body: { value: 'abc' } }; },
+    post: async () => ({ status: 204, headers: {}, body: {} }), patch: async () => ({ status: 204, headers: {}, body: {} }), delete: async () => ({ status: 204, headers: {}, body: {} }), put: async () => ({ status: 204, headers: {}, body: {} }),
+  };
+  await assert.rejects(() => sdkWith(strClient).queryRecords('appmodule', { paginate: true }), /malformed page|value/i, 'a bare-string value throws (no char-row fabrication)');
+
+  // (c) the single-page (non-paginate) path is UNCHANGED — a missing value is leniently treated as empty.
+  const lenientClient = {
+    get: async (url) => { if (/EntityDefinitions\(LogicalName=/i.test(url)) return meta(url); return { status: 200, headers: {}, body: {} }; },
+    post: async () => ({ status: 204, headers: {}, body: {} }), patch: async () => ({ status: 204, headers: {}, body: {} }), delete: async () => ({ status: 204, headers: {}, body: {} }), put: async () => ({ status: 204, headers: {}, body: {} }),
+  };
+  const rows = await sdkWith(lenientClient).queryRecords('appmodule', {});
+  assert.deepStrictEqual(rows, [], 'the non-paginate single-page path stays lenient (missing value → empty)');
+});
+
 test('CONTRACT: createGlobalOptionSet is idempotent by Name — reuses an existing set (no duplicate POST), fixing rebuild id-loss', async () => {
   // On a rebuild the option set already exists. The SDK probes GlobalOptionSetDefinitions(Name=...) and
   // REUSES the existing MetadataId instead of a duplicate-Name POST that would fail — so the engine

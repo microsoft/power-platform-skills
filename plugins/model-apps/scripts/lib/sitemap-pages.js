@@ -189,13 +189,15 @@ async function fetchAppsForPages(sdk, pageIds, opts) {
     return { ok: false, error: String((e && e.message) || e) };
   }
 
-  // Fail-closed on an EMPTY enumeration. `fetchAppsForPages` is only called when we are about to UPDATE
-  // an existing page (see the caller), so the app being built already exists — a real Dataverse env
-  // therefore ALWAYS returns ≥1 appmodule (system apps + this app). An empty list means the paginated
-  // read returned no rows without throwing (e.g. a malformed 2xx page the SDK's queryRecords treats as
-  // "empty + complete"): trusting it would fail OPEN (scan sees zero apps → misses a shared page). Refuse.
-  // (This closes the worst — first-page-malformed — case; a rarer non-empty-but-partial page is a residual
-  // SDK-hardening follow-up: queryRecords should throw on any paginated body without an array `value`.)
+  // Fail-closed on an EMPTY enumeration (defense-in-depth). `fetchAppsForPages` is only called when we
+  // are about to UPDATE an existing page (see the caller), so the app being built already exists — a real
+  // Dataverse env therefore ALWAYS returns ≥1 appmodule (system apps + this app). An empty list means the
+  // paginated read returned no rows: refuse rather than fail OPEN (a zero-app scan would miss a shared
+  // page). NOTE: the vendored `queryRecords` now THROWS a ConnectionError on a malformed paginated page (a
+  // `value` that isn't an array, or a non-string `@odata.nextLink`) instead of silently coercing it to
+  // empty — so a mid-pagination or first-page malformation is caught by the try/catch above (fail-closed at
+  // the source). This empty check remains a belt-and-suspenders guard for any other way an empty list could
+  // arise. See vendor-sdk-smoke.test.js "THROWS on a malformed page".
   if (!(apps && apps.length)) {
     return { ok: false, reason: 'apps-enumeration-empty', error: 'appmodule enumeration returned zero rows, which is impossible for a live environment (system apps always exist) — treating it as a failed/partial read and halting fail-closed rather than trusting an empty cross-app scan.' };
   }
