@@ -38,7 +38,7 @@ test('renderTemplatePicker renders all preview images and can skip opening', (t)
         displayName: 'Company Portal',
         description: 'Internal site',
         framework: 'react',
-        audience: 'internal',
+        audience: ['makers', 'developers'],
         keywords: ['portal', 'directory'],
         previewImages: [
           'https://raw.githubusercontent.com/o/r/sha/templates/spa/company/previews/home.png',
@@ -57,4 +57,7 @@ test('renderTemplatePicker renders all preview images and can skip opening', (t)
   assert.match(html, /detail\.png/);
   assert.match(html, /images\.map/);
   assert.match(html, /Preview \$\{index \+ 1\}/);
+  assert.match(html, /makers/);
+  assert.match(html, /developers/);
+  assert.doesNotMatch(html, /makers, developers/);
 });

@@ -58,13 +58,21 @@ function assertValidSha(sha) {
 
 function validateCatalogShape(catalog) {
   // Raw `templates/manifest.json` shape:
-  //   { "manifestVersion": "1.0", "templates": [
-  //     { "id": "company-portal", "displayName": "Company Portal",
-  //       "kind": "spa", "framework": "react", "keywords": ["portal"],
-  //       "audience": "internal", "previewImages": ["templates/.../home.png"],
-  //       "solutionPath": "templates/.../Company_1_0_0_0.zip",
-  //       "templateVersion": "1.0.0", "author": "Microsoft" }
+  //   { "$schema": "./schemas/templates-manifest.schema.json", "templates": [
+  //     { "id": "311-portal", "displayName": "311 Portal",
+  //       "description": "…", "kind": "spa", "framework": "react",
+  //       "keywords": ["311", "citizen-services"],
+  //       "audience": ["makers", "developers"],
+  //       "previewImages": ["spa/311-portal/previews/home.png"],
+  //       "solutionPath": "spa/311-portal/solution/311-portal-unmanaged.zip",
+  //       "seedDataPath": "spa/311-portal/seed/data.json",
+  //       "templateVersion": "1.0.0.1", "author": "Microsoft" }
   //   ] }
+  // `audience` here is the *template's* target persona list (admins/developers/
+  // makers/partners) and is an array per the upstream schema at
+  // https://github.com/microsoft/power-pages-samples/blob/main/templates/schemas/templates-manifest.schema.json
+  // Do not confuse it with create-site's internal/external site audience, which
+  // comes from Phase 1 discovery and is what the telemetry event records.
   // Keep this structural, not semantic: the samples repo owns the full JSON
   // Schema, while create-site only needs enough validation to fail open before
   // previewing malformed entries or caching artifacts under a pinned SHA.
@@ -73,9 +81,12 @@ function validateCatalogShape(catalog) {
   }
   for (const [index, template] of catalog.templates.entries()) {
     if (!template || typeof template !== 'object') return `template at index ${index} is not an object`;
-    const requiredStringFields = ['id', 'displayName', 'description', 'kind', 'framework', 'audience', 'solutionPath', 'templateVersion', 'author'];
+    const requiredStringFields = ['id', 'displayName', 'description', 'kind', 'framework', 'solutionPath', 'templateVersion', 'author'];
     const missing = requiredStringFields.filter((field) => !isNonEmptyString(template[field]));
     if (missing.length > 0) return `template ${template.id || index} missing string field(s): ${missing.join(', ')}`;
+    if (!Array.isArray(template.audience) || template.audience.length === 0 || !template.audience.every(isNonEmptyString)) {
+      return `template ${template.id} audience must be a non-empty array of strings`;
+    }
     if (!Array.isArray(template.keywords)) return `template ${template.id} keywords must be an array`;
     if (!Array.isArray(template.previewImages) || template.previewImages.length === 0) {
       return `template ${template.id} previewImages must be a non-empty array`;

@@ -131,6 +131,9 @@
     root.innerHTML = templates.map((template) => {
       const images = Array.isArray(template.previewImages) ? template.previewImages : [];
       const keywords = Array.isArray(template.keywords) ? template.keywords.join(', ') : '';
+      // `audience` is an array of personas (makers/developers/…) per the samples
+      // repo schema; render one pill each rather than a comma-joined blob.
+      const audiences = Array.isArray(template.audience) ? template.audience : [];
       const previewMarkup = images.length
         ? `<div class="preview-grid">${images.map((image, index) => `<img class="preview" src="${esc(image)}" alt="Preview ${index + 1} of ${esc(template.displayName)}" />`).join('')}</div>`
         : '<div class="preview" aria-label="No preview image"></div>';
@@ -140,7 +143,7 @@
           <div class="content">
             <div class="meta">
               <span class="pill">${esc(template.framework)}</span>
-              <span class="pill">${esc(template.audience)}</span>
+              ${audiences.map((audience) => `<span class="pill">${esc(audience)}</span>`).join('')}
             </div>
             <h2>${esc(template.displayName)}</h2>
             <p>${esc(template.description)}</p>

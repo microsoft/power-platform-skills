@@ -42,7 +42,7 @@ const VALID_TEMPLATE = {
   kind: 'spa',
   framework: 'react',
   keywords: ['portal'],
-  audience: 'internal',
+  audience: ['makers', 'developers'],
   previewImages: ['templates/spa/company-portal/previews/home.png'],
   solutionPath: 'templates/spa/company-portal/solution/Company_1_0_0_0.zip',
   templateVersion: '1.0.0',
@@ -189,6 +189,32 @@ test('validateCatalogShape accepts a complete template entry and rejects broken 
   assert.equal(validateCatalogShape({ templates: [VALID_TEMPLATE] }), null);
   assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, previewImages: [] }] }), /previewImages/);
   assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, keywords: 'portal' }] }), /keywords/);
+});
+
+// Regression: the published manifest declares `audience` as an array of personas
+// (see templates/schemas/templates-manifest.schema.json in power-pages-samples).
+// An earlier validator required a plain string, which rejected every real
+// template and silently forced create-site down the from-scratch path.
+test('validateCatalogShape accepts the 311 Portal audience array and rejects non-array shapes', () => {
+  const portal311 = {
+    ...VALID_TEMPLATE,
+    id: '311-portal',
+    displayName: '311 Portal',
+    description: 'Citizen service request portal',
+    keywords: ['311', 'citizen-services'],
+    audience: ['makers', 'developers'],
+    previewImages: ['spa/311-portal/previews/home.png'],
+    solutionPath: 'spa/311-portal/solution/311-portal-unmanaged.zip',
+    templateVersion: '1.0.0.1',
+  };
+
+  assert.equal(validateCatalogShape({ templates: [portal311] }), null);
+  assert.match(
+    validateCatalogShape({ templates: [{ ...portal311, audience: 'internal' }] }),
+    /audience must be a non-empty array of strings/,
+  );
+  assert.match(validateCatalogShape({ templates: [{ ...portal311, audience: [] }] }), /audience/);
+  assert.match(validateCatalogShape({ templates: [{ ...portal311, audience: ['makers', ''] }] }), /audience/);
 });
 
 test('requestJson uses an injected https boundary and parses response JSON', async () => {

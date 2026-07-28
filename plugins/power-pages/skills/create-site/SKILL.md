@@ -431,11 +431,12 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
          --mode template \
          --templateId "<SELECTED_TEMPLATE.id>" \
          --framework "<SELECTED_TEMPLATE.framework>" \
-         --audience "<SELECTED_TEMPLATE.audience>" \
+         --audience "<internal|external from Phase 1 discovery>" \
          --importOutcome "success" \
          --activationOutcome "success" \
          --seedApplied "<true|false>"
        ```
+       `--audience` is the site audience captured in Phase 1 (`internal` or `external`), **not** the template's `audience` persona array from the catalog manifest. The telemetry sanitizer only accepts `internal`/`external` and silently drops anything else.
        Do not include site name, URL, subdomain, free-text purpose, or any other user-identifying value.
    18. Mark **Show live template site** and **Select template or choose from-scratch** as `completed`, then present the template-path summary:
        - Template name and framework
