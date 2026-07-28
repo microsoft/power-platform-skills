@@ -23,6 +23,8 @@ claude --plugin-dir /path/to/plugins/canvas-apps
 .mcp.json                      ← MCP server config (canvas-authoring, auto-registered)
 AGENTS.md                      ← Plugin guidance for AI agents (this file)
 CLAUDE.md                      ← Symlink → AGENTS.md
+scripts/
+  check-version.cs             ← .NET 10 file-based plugin update check
 references/
   TechnicalGuide.md            ← YAML syntax, control selection, layout strategies, Power Fx patterns
   DesignGuide.md               ← Aesthetic guidelines, anti-patterns, design process
@@ -80,3 +82,18 @@ The `canvas-authoring` MCP server exposes the following tools:
 Before the MCP server will start, you need:
 
 **.NET 10 SDK** — [Download from Microsoft](https://dotnet.microsoft.com/download/dotnet/10.0)
+
+## Plugin Version Check
+
+`configure-canvas-mcp` runs the .NET 10 file-based app at
+`scripts/check-version.cs` before starting its workflow. The checker compares
+the bundled `.plugin/plugin.json` version with the canonical manifest on
+`main`, prints update commands only when a newer version exists, and exits
+silently for current versions or expected network, filesystem, and manifest
+errors so update discovery never blocks MCP configuration.
+
+Keep the check immediately after the skill frontmatter and run its tests with:
+
+```bash
+dotnet run --file scripts/tests/check-version.tests.cs --verbosity quiet -- --plugin-root .
+```

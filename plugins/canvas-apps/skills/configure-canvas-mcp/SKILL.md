@@ -1,11 +1,13 @@
 ---
 name: configure-canvas-mcp
-version: 2.1.0
+version: 2.1.1
 description: Configure the Canvas Authoring MCP server for the current coauthoring session. USE WHEN "configure MCP", "set up MCP server", "MCP not working", "connect Canvas Apps MCP", "canvas-authoring not available", "MCP not configured", "set up canvas apps".
 author: Microsoft Corporation
 user-invocable: true
 allowed-tools: Bash, AskUserQuestion, mcp__canvas-authoring__connect
 ---
+
+> **Plugin check**: Run `dotnet run --file "${PLUGIN_ROOT}/scripts/check-version.cs" --verbosity quiet -- --plugin-root "${PLUGIN_ROOT}"` — if it outputs a message, show it to the user before proceeding.
 
 # Configure the Canvas Authoring MCP Server
 
