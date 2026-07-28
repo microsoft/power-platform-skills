@@ -239,6 +239,55 @@ test('deploy: a rebuild re-binds ids from the live enumeration and issues only U
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
+// Sol review (dup-page-name fix): validateAppSpec TOLERATES a duplicate name when both pages carry a
+// pageId, but a pageId is only a CLAIM. A STALE snapshot (a page deleted in Maker since download) reconciles
+// its id as ABSENT, so the upload loop would CREATE it fresh and re-materialize the duplicate. The
+// post-reconcile gate must HALT before any write; a fresh download (both ids live) must still build.
+function makeDupNamePageApp() {
+  const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pages-dupname-'));
+  fs.writeFileSync(path.join(appDir, 'a.tsx'), 'export default function A(){ return null; }', 'utf8');
+  fs.writeFileSync(path.join(appDir, 'b.tsx'), 'export default function B(){ return null; }', 'utf8');
+  const GA = 'aaaaaaaa-0000-4000-8000-00000000aaaa';
+  const GB = 'bbbbbbbb-0000-4000-8000-00000000bbbb';
+  const spec = {
+    schemaVersion: 2,
+    solution: { uniqueName: 'PgDup', displayName: 'Pg', publisherPrefix: 'contoso' },
+    app: { name: 'Dup App' },
+    entities: [{ schemaName: 'contoso_item', displayName: 'Item', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' }, columns: [] }],
+    pages: [
+      { key: 'sc-a', name: 'Supplier Scorecard', pageId: GA, source: { kind: 'tsx', codeFile: 'a.tsx' } },
+      { key: 'sc-b', name: 'Supplier Scorecard', pageId: GB, source: { kind: 'tsx', codeFile: 'b.tsx' } },
+    ],
+    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: [{ page: 'sc-a', title: 'Supplier Scorecard' }, { page: 'sc-b', title: 'Supplier Scorecard' }] }] }] },
+  };
+  const manifest = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'sc-a', name: 'Supplier Scorecard', pageId: GA }, { key: 'sc-b', name: 'Supplier Scorecard', pageId: GB }] }), 'utf8').toString('base64');
+  return { appDir, spec, GA, GB, manifest };
+}
+
+test('deploy: a STALE duplicate-named page (its pageId absent from live) HALTS before creating a dupe (Sol review)', async () => {
+  const { appDir, spec, GA, manifest } = makeDupNamePageApp();
+  try {
+    const { sdk } = mockSdk({ pageManifest: manifest, manifestId: 'wr-manifest' });
+    const genpageCli = mockGenpageCli([{ pageId: GA, name: 'Supplier Scorecard' }]); // only GA exists; GB is stale
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES }),
+      (e) => e.code === 'pages-duplicate-name-create' || /duplicate-named generative page/.test(String(e && e.message)),
+    );
+    assert.strictEqual(genpageCli.uploads.length, 0, 'HALT before any page write (never materialize the duplicate)');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('deploy: two duplicate-named pages BOTH live (fresh download) build as UPDATEs — no false halt (the repro is safe)', async () => {
+  const { appDir, spec, GA, GB, manifest } = makeDupNamePageApp();
+  try {
+    const { sdk } = mockSdk({ pageManifest: manifest, manifestId: 'wr-manifest' });
+    const genpageCli = mockGenpageCli([{ pageId: GA, name: 'Supplier Scorecard' }, { pageId: GB, name: 'Supplier Scorecard' }]); // BOTH exist
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES });
+    assert.strictEqual(genpageCli.uploads.length, 2, 'both dupe-named pages uploaded');
+    assert.ok(genpageCli.uploads.every((u) => !!u.requestedId), 'both are UPDATEs (bound to live ids) — no CREATE, no duplicate materialized');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
 // OVERRIDE 2 (new-Important-1): a DYNAMIC nav pageId (e.g. pageId: someVar — a variable, not a literal)
 // must be rejected BEFORE any write, even when navigatesTo:[] so the existing parity check sees no mismatch.
 // Only extractNavTargets-based structural detection (kind:'dynamic') catches it. Error code: pages-nav-parity.

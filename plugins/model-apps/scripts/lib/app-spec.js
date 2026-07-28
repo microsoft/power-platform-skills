@@ -314,11 +314,14 @@ function quickCreateEnabledFor(spec, entity) {
 function validateAppSpec(spec, opts = {}) {
   const profile = opts.profile || 'deploy';
   const errors = [];
+  // Non-blocking advisories (e.g. a PRE-EXISTING duplicate page name the current run did not create).
+  // Additive to the return shape — callers that only read { ok, errors } are unaffected.
+  const warnings = [];
   if (!VALIDATION_PROFILES.includes(profile)) {
-    return { ok: false, errors: [`unknown validation profile '${profile}' (valid: ${VALIDATION_PROFILES.join(', ')})`] };
+    return { ok: false, errors: [`unknown validation profile '${profile}' (valid: ${VALIDATION_PROFILES.join(', ')})`], warnings };
   }
   if (!spec || typeof spec !== 'object') {
-    return { ok: false, errors: ['spec is not an object'] };
+    return { ok: false, errors: ['spec is not an object'], warnings };
   }
   if (!spec.solution || !spec.solution.uniqueName) {
     errors.push('solution.uniqueName is required');
@@ -570,7 +573,6 @@ function validateAppSpec(spec, opts = {}) {
   // reconcilePageIds can use it as the highest identity authority without silently accepting garbage
   // (e.g. a cross-env GUID that happens to match an unrelated page). Addenda Task 4 / C3.
   const PAGE_ID_GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-  const pageNamesLower = new Set();    // case-insensitive name uniqueness (Critical 4)
   const pageCodeFilesNorm = new Set(); // implemented-page normalized codeFile uniqueness (Critical 4)
   // A codeFile must resolve INSIDE the working directory. Use path.normalize to canonicalize before
   // checking — this catches aliases like 'pages/./x.tsx' and 'pages/../pages/x.tsx' that resolve to
@@ -592,11 +594,8 @@ function validateAppSpec(spec, opts = {}) {
   for (const p of spec.pages || []) {
     if (!p || !p.name) { errors.push('a page is missing a name'); continue; }
     pageNamesSet.add(p.name);
-    // Case-insensitive name uniqueness — two pages with names 'Overview' and 'overview' would
-    // collide when the PAC CLI enumerates pages (which is case-insensitive on the server).
-    const nameLower = String(p.name).toLowerCase();
-    if (pageNamesLower.has(nameLower)) errors.push(`duplicate page name '${p.name}' (page names must be unique, case-insensitive)`);
-    else pageNamesLower.add(nameLower);
+    // NOTE: case-insensitive page-name uniqueness is enforced in a dedicated pass AFTER this loop
+    // (see "page-name uniqueness" below) so it can distinguish a NEW page from a PRE-EXISTING one.
     // A page MAY carry its own deployed `pageId` (edit-snapshot marker). A portable fresh-authored spec
     // omits it — absence is never an error. When present it MUST be a valid 36-char GUID: the
     // reconcilePageIds authority logic (addenda Task 4 / C3) consumes it as the HIGHEST identity source,
@@ -648,6 +647,30 @@ function validateAppSpec(spec, opts = {}) {
       else if (pageKeysSet.has(p.key)) errors.push(`duplicate page key '${p.key}'`);
       else pageKeysSet.add(p.key);
     }
+  }
+  // Page-name uniqueness (case-insensitive) — SCOPED to what the current run authors. Two pages that
+  // share a name (e.g. 'Overview' vs 'overview') are confusing in the app navigation. BUT a downloaded
+  // edit-snapshot can legitimately carry a PRE-EXISTING duplicate the run did NOT create (two pages
+  // authored by different people/tools), and blocking every build — even an unrelated form edit that
+  // never touches pages — on a dupe the run is not changing is wrong (the pages phase matches by id/key,
+  // never by name: genpage-cli.js enumerateEnv is id-keyed, and download's assignPageKeys de-dups keys
+  // with a -N suffix, so distinct-id same-name pages build fine). Signal: a page carrying a deployed
+  // `pageId` is PRE-EXISTING (an edit-snapshot marker); a page WITHOUT one is NEW (authored this run).
+  //   - collision involving a NEW page  → ERROR  (prevent authoring/adding a duplicate)
+  //   - collision purely among PRE-EXISTING pages → WARNING (tolerate; rename one in Maker to fix nav)
+  const nameGroups = new Map(); // nameLower -> { display, count, anyNew }
+  for (const p of spec.pages || []) {
+    if (!p || !p.name) continue;
+    const nl = String(p.name).toLowerCase();
+    const g = nameGroups.get(nl) || { display: p.name, count: 0, anyNew: false };
+    g.count += 1;
+    if (!p.pageId) g.anyNew = true; // no deployed id ⇒ this page is being created/authored by this run
+    nameGroups.set(nl, g);
+  }
+  for (const g of nameGroups.values()) {
+    if (g.count <= 1) continue;
+    if (g.anyNew) errors.push(`duplicate page name '${g.display}' (page names must be unique, case-insensitive)`);
+    else warnings.push(`pre-existing duplicate page name '${g.display}' — ${g.count} deployed pages share this name (case-insensitive); tolerated because this build does not create them, but the app navigation is ambiguous. Rename one in Maker (or a fresh spec) to disambiguate.`);
   }
   // Navigation graph (v2 only — these fields don't exist in hand-authored legacy specs):
   // every navigatesTo.targetKey must resolve to a known page key. pageInput shape is validated
@@ -882,7 +905,7 @@ function validateAppSpec(spec, opts = {}) {
       for (const k of Object.keys(spec.design)) if (!allowed.has(k)) errors.push(`design: unknown key '${k}' (allowed: ${[...allowed].join(', ')})`);
     }
   }
-  return { ok: errors.length === 0, errors };
+  return { ok: errors.length === 0, errors, warnings };
 }
 
 // Slugify a page name into a stable key candidate: lowercase, non-alphanumerics -> '-', trimmed.

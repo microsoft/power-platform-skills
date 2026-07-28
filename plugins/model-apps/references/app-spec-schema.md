@@ -317,6 +317,14 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   unique and workspace-confined (no `..` or absolute-path escape).
 - **`navigatesTo`**: `[{ "targetKey": "<page key>", "data": { … } }]` — declared page-to-page
   navigation (custom ids travel in `data`, read as `pageInput?.data?.<key>` on the target).
+- **Page-name uniqueness** is enforced **only on pages this run creates**. A page carrying a `pageId`
+  is a PRE-EXISTING deployed page (edit-snapshot); a page without one is NEW. Two NEW pages (or a NEW
+  page colliding with any other) that share a name (case-insensitive) are **rejected**. But a
+  case-insensitive duplicate **purely among pre-existing pages** (both carry a `pageId`) is a
+  **warning, not an error** — a downloaded app can legitimately contain two pages the run didn't
+  create (authored by different people/tools), and an unrelated edit (e.g. a form change) must still
+  build. The pages phase matches by `pageId`/`key`, never by name, so distinct-id same-name pages
+  build correctly; rename one in Maker to disambiguate the navigation.
 - **`pageInput`**: `{ "data": { … } }` — the input this page expects when navigated to.
 - **Durable page manifest.** The build writes a `<app-unique-name>_pagemanifest` web resource
   carrying `{ schemaVersion, pages: [{ key, name, pageId, purpose, dataSources, navigatesTo, pageInput }], design }`.

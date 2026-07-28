@@ -77,6 +77,32 @@ test('dry-run returns the plan and never touches the SDK', async () => {
   assert.strictEqual(calls.length, 0);
 });
 
+test('a PRE-EXISTING duplicate page name does NOT block the build — it warns and proceeds (repro: form-only edit on an app with dupe pages)', async () => {
+  // Two deployed pages share a name (both carry a pageId → pre-existing). The build did not create them,
+  // so an unrelated build must still succeed; the dup name degrades to a warning (narrated + on the result).
+  const dupePages = {
+    schemaVersion: 2,
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'A' },
+    entities: [{ schemaName: 'new_o', displayName: 'O', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
+    pages: [
+      { key: 'supplier-scorecard', name: 'Supplier Scorecard', pageId: '067e0090-250f-4de7-a054-24c4a070f958', source: { kind: 'tsx', codeFile: 'a.tsx' } },
+      { key: 'supplier-scorecard-2', name: 'Supplier Scorecard', pageId: '5df2bb50-47ae-47e7-a335-cade1b463c11', source: { kind: 'tsx', codeFile: 'b.tsx' } },
+    ],
+    appShell: { areas: [{ label: 'M', groups: [{ label: 'G', subAreas: [
+      { page: 'supplier-scorecard', title: 'Supplier Scorecard' },
+      { page: 'supplier-scorecard-2', title: 'Supplier Scorecard' },
+      { entity: 'new_o', title: 'O' },
+    ] }] }] },
+  };
+  const { sdk } = mockSdk();
+  const cap = logCapture();
+  const r = await buildModelApp(dupePages, { apply: false, env: 'https://x', profile: 'deploy' }, { sdk, log: cap.log });
+  assert.strictEqual(r.dryRun, true, 'the build is NOT blocked by a pre-existing dupe page name');
+  assert.ok((r.warnings || []).some((w) => /pre-existing duplicate page name 'Supplier Scorecard'/.test(w)), 'the warning is attached to the result');
+  assert.ok(cap.logs.some((l) => /⚠.*pre-existing duplicate page name/.test(l)), 'the warning is narrated with a ⚠ marker');
+});
+
 test('apply threads through to the SDK engine (solution + tables created)', async () => {
   const { sdk, calls } = mockSdk();
   const r = await buildModelApp(desk, { apply: true, env: 'https://x' }, { sdk });

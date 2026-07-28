@@ -138,6 +138,10 @@ async function buildModelApp(spec, opts, deps) {
     return { ok: false, errors: v.errors };
   }
   const log = deps.log || (() => undefined);
+  // Surface non-blocking validation advisories (e.g. a PRE-EXISTING duplicate page name the build does
+  // not create — see validateAppSpec). These no longer HALT the build; they are narrated so the maker
+  // knows about the ambiguity but an unrelated edit still applies.
+  for (const w of v.warnings || []) log(`⚠ ${w}`);
   const counts = { ok: 0, skip: 0, error: 0 };
   const journal = deps.journal;
   // Tee the engine's progress events into the durable journal without touching the pure engine.
@@ -333,6 +337,9 @@ async function buildModelApp(spec, opts, deps) {
   } else if (journal) {
     journal.close({ status: r && r.dryRun ? 'dry-run' : 'done', ...counts });
   }
+  // Attach non-blocking validation advisories to the result JSON so programmatic callers see them too
+  // (they were already narrated via `log` above). Never overrides an error result's shape.
+  if (r && typeof r === 'object' && (v.warnings || []).length) r.warnings = v.warnings;
   return r;
 }
 

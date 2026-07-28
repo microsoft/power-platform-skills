@@ -619,6 +619,31 @@ test('validateAppSpec rejects case-insensitive duplicate page names (Critical 4)
   assert.ok(!r.ok && r.errors.some((e) => /duplicate page name/i.test(e)), r.errors.join('; '));
 });
 
+test('validateAppSpec TOLERATES a duplicate page name when ALL colliding pages are pre-existing (have pageId) — degrades to a warning', () => {
+  // The reported repro: a downloaded app carries two deployed pages that share a name. The build did
+  // not create them and (for a form-only edit) is not changing them, so it must not be blocked — the
+  // pages phase matches by id/key, not name. Degrade to a non-blocking warning.
+  const G = '067e0090-250f-4de7-a054-24c4a070f958';
+  const H = '5df2bb50-47ae-47e7-a335-cade1b463c11';
+  const r = validateAppSpec(pageSpec([
+    { key: 'supplier-scorecard', name: 'Supplier Scorecard', pageId: G, source: { kind: 'tsx', codeFile: 'a.tsx' } },
+    { key: 'supplier-scorecard-2', name: 'Supplier Scorecard', pageId: H, source: { kind: 'tsx', codeFile: 'b.tsx' } },
+  ]), { profile: 'deploy' });
+  assert.ok(r.ok, `pre-existing dupe must not block the build: ${r.errors.join('; ')}`);
+  assert.ok(!r.errors.some((e) => /duplicate page name/i.test(e)), 'no duplicate-page-name ERROR for a pre-existing dupe');
+  assert.ok((r.warnings || []).some((w) => /pre-existing duplicate page name 'Supplier Scorecard'/.test(w)), 'a warning is emitted');
+});
+
+test('validateAppSpec still ERRORS when a NEW page (no pageId) collides with a pre-existing one — prevention', () => {
+  // Adding a fresh page whose name duplicates an existing page IS a collision the run creates → block it.
+  const G = '067e0090-250f-4de7-a054-24c4a070f958';
+  const r = validateAppSpec(pageSpec([
+    { key: 'supplier-scorecard', name: 'Supplier Scorecard', pageId: G, source: { kind: 'tsx', codeFile: 'a.tsx' } },
+    { key: 'sc-new', name: 'supplier scorecard', source: { kind: 'tsx', codeFile: 'b.tsx' } },
+  ]), { profile: 'deploy' });
+  assert.ok(!r.ok && r.errors.some((e) => /duplicate page name/i.test(e)), 'a NEW page colliding with a pre-existing name is rejected');
+});
+
 test('validateAppSpec rejects duplicate implemented codeFile paths (Critical 4)', () => {
   const r = validateAppSpec(pageSpec([
     { key: 'a', name: 'A', source: { kind: 'tsx', codeFile: 'pages/x.tsx' } },

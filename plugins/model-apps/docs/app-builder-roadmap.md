@@ -89,6 +89,19 @@ are in [`architecture.md`](architecture.md).
 - 🔲 **Live-verify Calculated / Rollup** formula columns end-to-end.
 - 🔲 **Publish granularity** — optionally publish web resources separately from entity customizations.
 - 🔲 **Richer `BuildHalt` recovery** — skip-phase / retry-step / edit-spec-and-resume prompts.
+- ✅ **Pre-existing duplicate page names don't block an unrelated build** — DONE. Two-layer, fail-closed:
+  (1) `validateAppSpec` scopes the case-insensitive page-name uniqueness rule to pages the run CREATES
+  (no `pageId`): a NEW collision is rejected (prevention), a collision purely among PRE-EXISTING pages
+  (all carry a deployed `pageId`) is a warning (tolerated) so a form-only edit on a downloaded app with
+  two identically-named pages still builds. (2) Because a spec `pageId` is only a CLAIM, the pages phase
+  re-checks after `reconcilePageIds`: if a tolerated dup-name group has any member whose id reconciles as
+  ABSENT (a stale snapshot — e.g. the page was deleted in Maker since download), the build would
+  re-materialize the duplicate, so it HALTs (`pages-duplicate-name-create`) BEFORE any write instead of
+  creating it and only failing verify after. The pages phase is otherwise id/key-matched (never
+  name-matched — `genpage-cli.js` `enumerateEnv` is id-keyed), so distinct-id same-name pages build fine.
+  `validateAppSpec` gained a `warnings[]` channel; `build-model-app.js` narrates + attaches them.
+  **Follow-up:** enforce name-uniqueness at `/genpage`-native page creation too (the app got into the
+  dupe state via non-app-builder tooling).
 - ✅ **Env-wide appmodule pagination** — DONE. The vendored `queryRecords({ paginate:true })` now follows the OData `@odata.nextLink` to completion. The cross-app shared-page scan (`sitemap-pages.js` `fetchAppsForPages`) enumerates EVERY app instead of one ~5000-row page, so it no longer fails closed at the cap (`apps-truncated` removed). Fail-closed is preserved on: an enumeration throw, a pagination-abort (repeated-nextLink guard), AND an **empty** result (a live env always has ≥1 appmodule, so empty ⇒ a malformed/partial read ⇒ `apps-enumeration-empty` halt). Locked by `vendor-sdk-smoke.test.js` (paginate follows nextLink; rejects paginate+top / paginate+fetchXml) + `sitemap-pages.test.js`.
 - 🔲 **Paginate throw-on-malformed-page (SDK hardening)** — the plugin scan now fails closed on an EMPTY paginated result, but a rarer NON-empty-but-partial read (a valid first page + nextLink, then a malformed intermediate 2xx page the SDK treats as "empty + complete") would still under-report. Robust fix belongs in the SDK: `queryRecords` should throw when a paginated response body lacks an array-valued `value`. Tracked for the next `cds-maker-sdk` hardening pass.
 - 🔲 **Conditional `updateTable` (If-Match / skip-if-unchanged)** — the SDK's `updateTable` does an unconditional GET→PUT of the whole `EntityDefinitions` row (strips `@odata.etag`, no `If-Match`), so a concurrent Maker edit to another property of the SAME table in the GET→PUT window is last-writer-wins. This is pre-existing (icons/audit already use `updateTable`); the quick-create flag adds one more caller. Follow-ups: preserve the ETag + conditional PUT (retry/surface 412), and skip the PUT when the requested flag is already set (avoids a redundant write on every opted-in rebuild). Same class as the build's `requireSuccessfulPush` 412 posture for artifacts.

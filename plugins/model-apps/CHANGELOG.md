@@ -9,6 +9,17 @@ plus local-dev ergonomics, sample coverage, and an automated eval suite with
 real and synthetic fixtures. Builds on v2.1; no breaking changes.
 
 ### Changed
+- **Pre-existing duplicate page names no longer block an unrelated build.** Case-insensitive page-name
+  uniqueness is now enforced only on pages the run **creates** (a page with no `pageId`): two new pages
+  — or a new page colliding with any other — that share a name are still rejected, but a duplicate
+  **purely among pre-existing pages** (all carry a deployed `pageId`) degrades to a **warning**, not an
+  error. A downloaded app can legitimately carry two identically-named pages authored by different
+  people/tools; an unrelated edit (e.g. a form change) must still build. The pages phase matches by
+  id/key (never by name), so distinct-id same-name pages build correctly. `validateAppSpec` now returns
+  a `warnings[]` array (additive); `build-model-app` narrates them with a `⚠` and attaches them to the
+  result JSON. A safety backstop in the pages phase HALTs (`pages-duplicate-name-create`) if a tolerated
+  duplicate's `pageId` turns out stale (absent from the live env) and would be re-created — so a
+  duplicate is never silently materialized.
 - **SDK backlog capability fills wired into `/app-builder` (re-vendored `cds-maker-sdk`).**
   Four new SDK behaviors are now used by the build engine: (1) **Quick create** — a table opts into
   "Allow quick create" (`IsQuickCreateEnabled`) via a new `entities[].quickCreate` flag OR by authoring

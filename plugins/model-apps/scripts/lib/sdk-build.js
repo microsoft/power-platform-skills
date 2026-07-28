@@ -1298,6 +1298,31 @@ async function runSdkBuild(spec, opts = {}) {
       const { keyToId, conflicts } = reconcilePageIds(spec.pages, manifest, enumd.ids, sitemapIds);
       if (conflicts.length) throw new BuildHalt(`generative-page identity conflict(s): ${JSON.stringify(conflicts)} — refusing to overwrite/misbind a page. Resolve the duplicate/mismatched id(s) in the spec/manifest and rebuild.`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false });
 
+      // DUPLICATE-NAME MATERIALIZATION GATE (post-reconciliation). validateAppSpec TOLERATES a duplicate
+      // page name only when every colliding page is PRE-EXISTING (carries a pageId) — but a spec pageId is a
+      // CLAIM, not proof of live existence. reconcilePageIds is the authority: a stale/unprovenanced id (e.g.
+      // a page deleted in Maker since this snapshot was downloaded) is NOT bound into keyToId, so the upload
+      // loop below would CREATE it fresh and re-materialize the duplicate the app-spec rule meant to prevent.
+      // A dup-name group is safe ONLY when EVERY member reconciled to a live id (all id-matched UPDATEs). If
+      // any member is unbound (would be created), HALT before any write — matching the validation rule's
+      // intent (never CREATE a duplicate name) rather than creating it and only catching it in verify after
+      // the pages/manifest/sitemap were already written.
+      const pagesByLowerName = new Map();
+      for (const p of spec.pages || []) {
+        if (!p || !p.name) continue;
+        const nl = String(p.name).toLowerCase();
+        const arr = pagesByLowerName.get(nl) || [];
+        arr.push(p);
+        pagesByLowerName.set(nl, arr);
+      }
+      for (const group of pagesByLowerName.values()) {
+        if (group.length < 2) continue;
+        const unbound = group.filter((p) => !keyToId.has(p.key || p.name));
+        if (unbound.length) {
+          throw new BuildHalt(`refusing to CREATE a duplicate-named generative page: ${unbound.length} of ${group.length} pages named '${group[0].name}' are NOT bound to an existing deployed page (their pageId is absent/stale — e.g. the page was deleted in Maker since this spec was downloaded), so this build would re-materialize the duplicate. Re-download the app for fresh page ids, or rename/remove the stale page(s) in the spec.`, { phase: 'pages', code: 'pages-duplicate-name-create', recoverable: false });
+        }
+      }
+
       // ── Imp6: DESTRUCTIVE-REMOVAL GATE. Runs even when spec.pages is empty, and BEFORE any sitemap write
       // (the app-shell existing-app write is now deferred to the finalizer below, so nothing has stripped
       // the live pages yet). The app's CONFIRMED live page set is MEMBERSHIP ∩ EXISTENCE — sitemap ids that
