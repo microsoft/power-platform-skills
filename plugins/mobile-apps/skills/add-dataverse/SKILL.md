@@ -533,6 +533,16 @@ Column shapes that have non-obvious gotchas (handle carefully):
     --solution '<solution-uniquename-from-memory-bank>'
   ```
 
+  **Pre-flight the lookup (HARD — required for idempotent re-runs).** A lookup can only pre-exist if the **referencing (child) table** already existed at Step 4, so when the child was created in this run, skip the probe and POST. Otherwise look for the lookup's foreign-key column — the lowercased `Lookup.SchemaName`, e.g. `<prefix>_<parent>id` — in that child table's Step 4 attribute snapshot:
+
+  | Snapshot result | Action |
+  |---|---|
+  | Present with `AttributeType: Lookup` | Skip the POST and log `↻ <SchemaName> (relationship already exists, skipped)`. |
+  | Present with any other `AttributeType` | **STOP** — a non-lookup column already owns that name. Surface it; do not overwrite. |
+  | Absent | POST the relationship. |
+
+  This costs no extra round trip: the referencing attribute is an ordinary attribute on the child table, so it is already in the snapshot Step 4 fetched. Without this check a re-run POSTs a duplicate relationship and fails the run mid-Pass-2.
+
 - **Many-to-Many (M:N)** — also POST to `/RelationshipDefinitions`, but with `ManyToManyRelationshipMetadata`. Dataverse creates an auto-named intersect table.
 
   > **⚠️ Do NOT improvise the body.** Required fields: `SchemaName`, `Entity1LogicalName`, `Entity2LogicalName`, `IntersectEntityName`, and the two `AssociatedMenuConfiguration` blocks. Do not include lookup or cascade fields — those are 1:N concepts.
@@ -620,7 +630,9 @@ This step exists because of the runtime constraint documented at [`shared/refere
 
 1. Parse the `### Cross-entity Reads` table. Each row has columns: `Calc column | On table | Type | Resolves | Driven by`.
 2. **Run AFTER all regular columns + relationships from Step 5b have been created** (the formula chain references real columns + lookups; creating the calc column before its dependencies returns HTTP 400 from Dataverse).
-3. **Per row**, invoke the helper:
+3. **Pre-flight each row against the Step 4 snapshot.** A calculated column is an ordinary attribute, so an existing one is already in its table's snapshot. If the table was created in this run, nothing can pre-exist — POST directly. Otherwise: logical name present → skip the row and log `↻ <calc-column> (already exists, skipped)`; absent → create it. `create-calculated-column.js` does **not** probe for existence, so without this check a re-run returns `0x80044153 attribute already exists`.
+
+4. **Per row**, invoke the helper:
 
    ```bash
    node "${PLUGIN_ROOT}/scripts/create-calculated-column.js" <envUrl> \
@@ -632,15 +644,15 @@ This step exists because of the runtime constraint documented at [`shared/refere
      --solution '<solution-uniquename-from-memory-bank>'
    ```
 
-4. **One at a time, sequentially.** Calc-column creation is metadata mutation — same concurrency rule as table creation. Print `✓ <calc-column>` after each success.
-5. **On failure** — the helper script prints the OData error inline. Common cases:
+5. **One at a time, sequentially.** Calc-column creation is metadata mutation — same concurrency rule as table creation. Print `✓ <calc-column>` after each success.
+6. **On failure** — the helper script prints the OData error inline. Common cases:
    - `400 — formula references unknown attribute` → the relationship or column the formula needs has not been created yet. Verify Step 5b finished cleanly before retrying.
    - `400 — calculated formula not allowed on this navigation` → the dotted path tries to traverse 1:many or M:N. The architect should have caught this at Step 6a; flag in summary, skip the row, continue.
    - Surface non-recoverable errors to the user with the offending row, then proceed to the next row. Do NOT abort the whole step for a fault isolated to one row (a bad formula, an unsupported traversal).
 
-6. **Stop early on a systemic failure.** Distinguish a per-row fault from one that will repeat for every remaining row — auth failure, the target table missing, or a dependency the whole subsection relies on. On the first systemic failure, stop Step 5c, report how many rows were created and how many were skipped, and continue to Step 6 rather than issuing the remaining doomed calls. Re-running the skill after the cause is fixed creates only the missing calc columns.
+7. **Stop early on a systemic failure.** Distinguish a per-row fault from one that will repeat for every remaining row — auth failure, the target table missing, or a dependency the whole subsection relies on. On the first systemic failure, stop Step 5c, report how many rows were created and how many were skipped, and continue to Step 6 rather than issuing the remaining doomed calls. Re-running the skill after the cause is fixed creates only the missing calc columns.
 
-6. After all rows are processed, the publish step (Step 6b) below picks up calc columns automatically — no extra publish call needed.
+8. After all rows are processed, the publish step (Step 6b) below picks up calc columns automatically — no extra publish call needed.
 
 ### Step 5d — Create alternate keys for unique business identifiers
 
