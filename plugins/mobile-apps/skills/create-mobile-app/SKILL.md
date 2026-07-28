@@ -1708,21 +1708,6 @@ Before the first wave, do a one-shot probe to confirm `Task` can spawn `mobile-a
 
 **Hard rule — no nested agent spawning.** Screen-builder agents MUST NOT spawn further agents (no nested `Task` calls). The top-level orchestrator owns the entire screen-builder fan-out: one `Task` batch per wave of up to 5 screens. If a builder needs help that previously would have been a nested spawn, it returns `NEEDS_CONTEXT:` and the orchestrator handles the follow-up at the wave boundary.
 
-**Fast-wave style deferral:** before spawning the first wave, create `<working_dir>/.tmp/defer-style-hooks` with a short note. The PostToolUse style hooks (`validate-screen-quality`, `validate-color-contrast`) skip blocking writes while this marker exists. This marker does **not** disable TypeScript, connector-first, protected-path, package, or write-safety validators. It only moves deterministic style debt out of the parallel builder hot path and into Step 11.4's batch report/fix sweep.
-
-```bash
-mkdir -p <working_dir>/.tmp
-printf 'Step 11 fast-wave mode: defer style hook blocking until Step 11.4 report sweep.\n' > <working_dir>/.tmp/defer-style-hooks
-```
-
-Delete the marker immediately after the last screen wave's final TypeScript gate passes and before Step 11.4 starts:
-
-```bash
-rm -f <working_dir>/.tmp/defer-style-hooks
-```
-
-Never leave this marker in place for Step 11.4 or Step 12. Report mode ignores the marker and should always scan the generated screens.
-
 **Print before spawning** (substitute computed values; `<W>` = total waves = `ceil(N/5)`):
 > "→ [Step 11/13] Building <N> screens in <W> wave(s) of up to 5 concurrent.
 > Wave 1/<W> starting: <comma-separated screen names in this wave>."
@@ -1803,12 +1788,6 @@ This sticky policy controls **how to handle a failed gate**, not whether the gat
 
 Run one controlled stylistic debt sweep after all screen-builder waves and TypeScript gates are clean, before preview or dev-server launch. This keeps screen-builder retries focused on critical compile/data/route issues, then fixes visual and accessibility quality across the full screen set in batches.
 
-Before running any report, assert the Step 11 fast-wave marker is gone:
-
-```bash
-rm -f <working_dir>/.tmp/defer-style-hooks
-```
-
 **Print before starting:**
 > "→ [Step 11.4/13] Running stylistic validators in batch + auto-fixing contrast / accessibility / token issues across all screens (~2-3 min)"
 
@@ -1833,7 +1812,7 @@ For each available stylistic validator:
 4. Build one file-level edit batch per affected file. Apply affected files in parallel because screen files are independent. Do not run one edit per issue when multiple issues are in the same file; that reintroduces slow per-write loops and line-number drift.
 5. Re-run the same validator in `--report` mode for the touched files. Cap retries at 2 per file per validator.
 
-**Hook behavior during the sweep:** Do not disable hooks globally and do not recreate `<working_dir>/.tmp/defer-style-hooks`. If a normal PostToolUse hook blocks an intermediate edit, treat that as signal that the edit batch was incomplete: fold the hook's message into that file's next retry. Only use a temporary skip env var if the validator itself documents one and you immediately re-run `--report` before advancing.
+These validators are invoked explicitly by this mobile workflow. They are not registered as plugin-wide hooks because that would run them during unrelated Canvas Apps and other plugin operations.
 
 After all validators report no auto-fixable issues, run:
 

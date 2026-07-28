@@ -413,7 +413,7 @@ Run the local, no-network delta check:
 node "${CLAUDE_SKILL_DIR}/../../scripts/offline-profile-delta.js"
 ```
 
-Branch on the JSON `status` per [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → continue silently (do not nag when no profile exists); `delta` → prompt to update, then invoke `/add-table-to-offline-profile` (for `missingTables[]`) and `/edit-offline-profile --table <t> --columns add:<newColumns>` (for `tablesWithNewColumns[]`), and re-check to `in-sync`. Record the reconciliation outcome in the Step 8 memory-bank edit entry.
+Branch on the JSON `status` per [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → continue silently (do not nag when no profile exists); `delta` → prompt to update, then read and execute `${CLAUDE_SKILL_DIR}/../add-table-to-offline-profile/SKILL.md` for `missingTables[]` and `${CLAUDE_SKILL_DIR}/../edit-offline-profile/SKILL.md` for `tablesWithNewColumns[]`, passing the arguments documented by each workflow, and re-check to `in-sync`. Record the reconciliation outcome in the Step 8 memory-bank edit entry.
 
 ### Step 6 — Rebuild affected screens
 
@@ -513,20 +513,14 @@ If `npm run check-routes` is absent but `scripts/check-routes.js` exists, run:
 node scripts/check-routes.js
 ```
 
-When screen files changed, also run the available validators from `hooks/` if this repository is the plugin checkout, or the equivalent project scripts if the generated app exposes them:
+When screen files changed, run the mobile plugin's report-mode validators explicitly:
 
 ```bash
-node hooks/validate-screen-quality.js --report <changed-screen-files-or-app-dir>
-node hooks/validate-color-contrast.js --report <changed-screen-files-or-app-dir>
-node hooks/validate-icon-imports.js <changed-screen-files-or-app-dir>
-node hooks/validate-navigation-idempotency.js <changed-screen-files-or-app-dir>
-node hooks/validate-protected-paths.js <changed-files>
-node hooks/validate-connector-first.js <changed-files>
-node hooks/validate-dataverse-payload.js <changed-files>
-node hooks/validate-package-deps.js <project-root>
+node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-quality.js" --report <changed-screen-files-or-app-dir>
+node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report <changed-screen-files-or-app-dir>
 ```
 
-Only run validators that exist and are relevant to the changed files. Treat validator failures like create-flow gate failures: capture once, batch by root cause, repair, and rerun the same validator/gate once.
+Treat validator findings like create-flow gate failures: capture once, batch by root cause, repair, and rerun the same validator once. These scripts are invoked only inside the mobile workflow; do not register them as plugin-wide hooks.
 
 #### Step 7.1 — Targeted style-quality sweep
 

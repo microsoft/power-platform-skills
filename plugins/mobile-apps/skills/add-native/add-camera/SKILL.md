@@ -2,6 +2,7 @@
 name: add-camera
 description: Internal implementation skill invoked by /add-native for camera, image picker, barcode scanner, QR scanner, and camera/gallery Dataverse artifact workflows.
 user-invocable: false
+disable-model-invocation: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
 ---

@@ -1,6 +1,6 @@
 ---
 name: list-connections
-description: Use when the user asks to find, create, or look up a Power Platform connection ID or connection reference for the current environment.
+description: Use to find or create a Power Platform connection ID or reference for an Expo/React Native Power Apps mobile app.
 user-invocable: true
 allowed-tools: Bash
 model: haiku

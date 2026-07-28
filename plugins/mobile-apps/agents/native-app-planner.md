@@ -1,6 +1,7 @@
 ---
 name: native-app-planner
 description: Use when the orchestrator needs a full plan + four approval gates (data model → native capabilities → connectors → screens) for a Power Apps mobile app. Read-only — proposes everything, mutates nothing. Called by /create-mobile-app; not invoked directly by users.
+user-invocable: false
 color: cyan
 tools:
   - Read
@@ -562,7 +563,17 @@ Reject loop = re-spawn data-model-architect in `mode: cross-entity-audit` with t
 **Auto-skip rule:** if Step 5c.1 returned "no cross-entity reads required" (zero `related_entity_fields` blocks across all screens), skip Gate 1 addendum entirely. Print:
 > "→ Gate 1 addendum auto-skipped — no cross-entity reads in the screen plan."
 
-## Step 6 — Return Status
+## Step 6 — Validate written artifacts
+
+Run the mobile changed-file dispatcher against every file this planner wrote or edited, including `native-app-plan.md` and temporary section files that remain in the project:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" --project-root "<working_dir>" --file "<changed-file>" [--file "<changed-file>" ...]
+```
+
+Repair reported violations and rerun until it exits `0`. Pass exact changed files, never the whole project root.
+
+## Step 7 — Return Status
 
 You MUST return your final message to `/create-mobile-app` with one of these four status codes as the **literal first line** (no markdown, no preamble, no `Status:` prefix, no backticks). The orchestrator parses the first line to decide what to do next. After the status line, leave a blank line, then write the structured summary below.
 

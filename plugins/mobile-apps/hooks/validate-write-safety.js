@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * PreToolUse guardrail for Write / Edit / MultiEdit.
+ * Mobile-scoped PreToolUse guardrail for Write / Edit / MultiEdit.
  *
  * Two checks, both hard-fail (exit 2 = block tool call, message goes to model):
  *
@@ -15,6 +15,10 @@
  *      the words "tenant"/"client"/"secret"). Targets the planner accidentally
  *      pasting connection strings into memory-bank.md or native-app-plan.md.
  *
+ * The hook is registered plugin-wide by Claude Code, so it first verifies that
+ * either the active cwd or a write target belongs to an Expo native-host app.
+ * Writes in Canvas Apps and other projects pass without mobile validation.
+ *
  * Both checks are conservative — they err on the side of blocking. False
  * positives are recoverable (the model sees the rejection reason and can
  * reword); silent secret leakage is not.
@@ -23,6 +27,7 @@
  * sparingly — usually means the guardrail itself needs adjusting.
  */
 
+const fs = require('fs');
 const path = require('path');
 
 const DEBUG = process.env.DEBUG === '1' || process.env.DEBUG === 'true';
@@ -68,6 +73,47 @@ function scanForSecrets(content) {
   return null;
 }
 
+// Claude Code loads plugin hooks for every tool call, including calls made by
+// other installed plugins. A Power Apps mobile project is identified by the two
+// runtime dependencies that distinguish this template from Canvas and web apps.
+function packageMarksMobileProject(packagePath) {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+    const deps = {
+      ...(pkg.dependencies || {}),
+      ...(pkg.devDependencies || {}),
+      ...(pkg.peerDependencies || {}),
+      ...(pkg.optionalDependencies || {}),
+    };
+    return Boolean(deps.expo && deps['@microsoft/power-apps-native-host']);
+  } catch {
+    return false;
+  }
+}
+
+function findMobileProjectRoot(candidatePath) {
+  if (!candidatePath || typeof candidatePath !== 'string') return null;
+
+  let current = path.resolve(candidatePath);
+  try {
+    if (!fs.statSync(current).isDirectory()) current = path.dirname(current);
+  } catch {
+    current = path.dirname(current);
+  }
+
+  while (true) {
+    if (packageMarksMobileProject(path.join(current, 'package.json'))) return current;
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+function isMobileInvocation(paths, cwd) {
+  if (findMobileProjectRoot(cwd)) return true;
+  return paths.some((targetPath) => findMobileProjectRoot(path.resolve(cwd, targetPath)));
+}
+
 // ---------------------------------------------------------------------------
 // Path safety. The cwd is the project root for any skill invocation. Any
 // Write/Edit must stay under it.
@@ -106,15 +152,16 @@ function extractWriteTargets(toolName, toolInput) {
 
   const paths = [];
   const contents = [];
+  const filePath = toolInput.file_path || toolInput.filePath;
 
   if (toolName === 'Write') {
-    if (toolInput.file_path) paths.push(toolInput.file_path);
+    if (filePath) paths.push(filePath);
     if (typeof toolInput.content === 'string') contents.push(toolInput.content);
   } else if (toolName === 'Edit') {
-    if (toolInput.file_path) paths.push(toolInput.file_path);
+    if (filePath) paths.push(filePath);
     if (typeof toolInput.new_string === 'string') contents.push(toolInput.new_string);
   } else if (toolName === 'MultiEdit') {
-    if (toolInput.file_path) paths.push(toolInput.file_path);
+    if (filePath) paths.push(filePath);
     if (Array.isArray(toolInput.edits)) {
       for (const e of toolInput.edits) {
         if (typeof e?.new_string === 'string') contents.push(e.new_string);
@@ -153,6 +200,11 @@ process.stdin.on('end', () => {
   }
 
   const { paths, contents } = extractWriteTargets(toolName, toolInput);
+
+  if (!isMobileInvocation(paths, cwd)) {
+    debug(`Skipping non-mobile write in ${cwd}`);
+    process.exit(0);
+  }
 
   for (const p of paths) {
     if (!isPathSafe(p, cwd)) {

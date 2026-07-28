@@ -136,7 +136,7 @@ Where `statusBg` returns hue at ~10-15% alpha (`#fbe5e6` for red, `#e6f0fa` for 
 
 ## Hard rules (encoded so screen-builders don't drift)
 
-These are documented here for clarity, but the plugin's existing PostToolUse validators (`hooks/validate-color-contrast.js`, `hooks/validate-screen-quality.js`) enforce them automatically across every direction. The new preset inherits them for free.
+The owning mobile workflow checks these rules explicitly with the contrast and screen-quality validators.
 
 | # | Rule | Enforced by |
 |---|---|---|

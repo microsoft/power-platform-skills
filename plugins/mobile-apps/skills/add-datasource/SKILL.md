@@ -1,6 +1,6 @@
 ---
 name: add-datasource
-description: Use when the user wants to add a data source to a mobile app but hasn't said which kind (Dataverse table, SharePoint list, or other connector).
+description: Use when adding an unspecified data source to an Expo/React Native Power Apps mobile app; routes to Dataverse, SharePoint, or another connector.
 user-invocable: true
 allowed-tools: Read, Grep, Glob, AskUserQuestion, Skill
 model: sonnet

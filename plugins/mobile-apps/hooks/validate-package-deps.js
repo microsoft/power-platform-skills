@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * PostToolUse hook: forbid bad dependencies in package.json writes.
+ * Explicit validator: forbid bad dependencies in package.json writes.
  *
  * Triggers on Write/Edit/MultiEdit of any package.json. Blocks when the
  * resulting deps include known-bad packages, private vendor packages are
@@ -134,6 +134,14 @@ function reconstructBeforeContent(toolName, toolInput, afterContent) {
 }
 
 function getNativeAllowlistDeps(toolName, toolInput, afterContent, packageJsonPath) {
+  if (toolInput.validation_mode === 'explicit-mobile-workflow') {
+    try {
+      return readPackageDepsFromContent(fs.readFileSync(BUNDLED_TEMPLATE_PACKAGE_PATH, 'utf8'));
+    } catch {
+      return null;
+    }
+  }
+
   const beforeContent = reconstructBeforeContent(toolName, toolInput, afterContent);
   const beforeDeps = beforeContent ? readPackageDepsFromContent(beforeContent) : null;
   return beforeDeps || readPackageLockDeps(packageJsonPath);
@@ -152,7 +160,7 @@ function isWriteTool(t) {
 }
 
 function readResult(toolName, toolInput) {
-  // Prefer the file on disk (PostToolUse runs after the write).
+  // Prefer the file on disk because explicit validation runs after the write.
   const fp = toolInput.file_path || toolInput.filePath;
   if (typeof fp === 'string' && fs.existsSync(fp)) {
     try {

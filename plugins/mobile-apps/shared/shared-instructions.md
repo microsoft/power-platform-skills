@@ -83,6 +83,24 @@ All non-Dataverse connectors require a connection ID or connection reference bef
 
 ## Safety Guardrails
 
+### Mandatory changed-file validation
+
+Plugin-level hooks also run during unrelated plugin workflows, so every mutating mobile skill owns its validation:
+
+1. Track every file written by the skill or its subagents. Exclude untouched output from trusted generators such as `npx power-apps init` and `npx power-apps add-data-source`.
+2. Before returning success, pass each changed file explicitly:
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" \
+     --project-root "<working_dir>" \
+     --file "<changed-file-1>" \
+     --file "<changed-file-2>"
+   ```
+
+3. On exit `2`, repair every finding and rerun. Exit `0` is required before `DONE`.
+
+Never pass a directory or the whole project. Text files receive all applicable checks; binary files receive path-safety checks. This gate remains required after a successful typecheck.
+
 ### MUST (required before acting)
 
 - **Confirm before any deployment.** Before running platform-native run commands, ask: _"Build and run on `<platform>`? Metro will start in foreground."_ — exception: the first build at the end of `/create-mobile-app` is pre-approved as part of the scaffold flow.
@@ -221,7 +239,7 @@ When a skill is invoked from another skill (e.g., `/create-mobile-app` calls `/a
 - **Memory bank is still read** — but skip the summary if the caller just updated it.
 - **Honor `--skip-planning`** — if the caller indicates the plan is already approved, do not re-spawn the planner agent.
 - **Inherit `working_dir`** — never default to `process.cwd()` when invoked from another skill.
-- **Scratch files go in `<working_dir>/.tmp/`** — never write temporary files (request bodies, intermediate JSON, scratch data) to `/tmp/` or any path outside the project directory. The `validate-write-safety` hook blocks out-of-project writes. Create the folder first: `mkdir -p <working_dir>/.tmp`.
+- **Scratch files go in `<working_dir>/.tmp/`** — never write temporary files (request bodies, intermediate JSON, scratch data) to `/tmp/` or any path outside the project directory. Keeping scratch data project-local prevents cross-project writes and makes cleanup deterministic. Create the folder first: `mkdir -p <working_dir>/.tmp`.
 
 ---
 

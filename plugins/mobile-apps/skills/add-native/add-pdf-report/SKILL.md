@@ -2,6 +2,7 @@
 name: add-pdf-report
 description: Internal implementation skill invoked by /add-native for app-generated PDF report workflows using expo-print and, when present, expo-sharing.
 user-invocable: false
+disable-model-invocation: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
 ---

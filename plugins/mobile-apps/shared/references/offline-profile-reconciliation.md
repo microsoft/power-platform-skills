@@ -89,10 +89,12 @@ default = update now):
 
 On **Yes**, apply in this order (both are non-interactive when the target is explicit):
 
-1. For each `missingTables[]` entry → `/add-table-to-offline-profile --table <logicalName>`
-   (or `--all-new` to add them all at once).
-2. For each `tablesWithNewColumns[]` entry →
-   `/edit-offline-profile --table <logicalName> --columns add:<comma-separated newColumns>`.
+1. For each `missingTables[]` entry, read and execute
+  `${CLAUDE_SKILL_DIR}/../add-table-to-offline-profile/SKILL.md` with
+  `--table <logicalName>` (or `--all-new` to add them all at once).
+2. For each `tablesWithNewColumns[]` entry, read and execute
+  `${CLAUDE_SKILL_DIR}/../edit-offline-profile/SKILL.md` with
+  `--table <logicalName> --columns add:<comma-separated newColumns>`.
 
 Re-run the delta check afterward; expect `in-sync`. Surface any remaining `delta` as a
 concern rather than looping.

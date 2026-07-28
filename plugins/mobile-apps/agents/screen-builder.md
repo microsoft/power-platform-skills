@@ -1,12 +1,14 @@
 ---
 name: screen-builder
 description: Use when an orchestrator needs ONE screen of a Power Apps mobile app implemented from a per-screen spec in native-app-plan.md. Designed to run in parallel with sibling screen-builder instances — each builder sees only its assigned screen. Called by /create-mobile-app and /edit-app; not invoked directly by users.
+user-invocable: false
 color: green
 model: sonnet
 tools:
   - Read
   - Write
   - Edit
+  - Bash
   - Grep
   - Glob
 ---
@@ -36,7 +38,6 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   Do NOT define `function LoadingState()`, `function formatDate()`, `function Field()`, `function Section()`, or status color maps inside your screen. Do NOT write the `useState(loading) + useFocusEffect(load) + onRefresh` pattern manually — use `useListData` instead.
 - **App-specific custom components.** If the orchestrator generated app-specific components in `src/components/` (e.g. `InspectionCard.tsx`, `EquipmentRow.tsx`), import them via `import { InspectionCard } from '@/components/InspectionCard'`. Check what's in `src/components/` before writing your screen — if a component exists for your entity, use it.
 - **Screen skeleton exists — fill it in, don't overwrite.** The orchestrator pre-writes a typed skeleton at your `target_file` with all imports, hook calls, and `return null`. Your job: replace `return null` with the real JSX layout. Do NOT discard the skeleton's imports — they are pre-resolved from the Generated Services table, the per-screen `**Data**` field, and Standard Imports for the screen's archetype. The skeleton file IS the import source of truth; the plan no longer documents per-screen imports separately. If a skeleton does NOT exist at your `target_file` (older orchestrator version), proceed from scratch using the `**Data**` field + Generated Services table to resolve service imports yourself.
-- **Fast-wave mode.** During Step 11, the orchestrator may defer deterministic style-hook blocking until the Step 11.4 sweep. Still write good mobile UI on the first pass, but do not spend extra self-repair passes chasing raw hex/token/a11y/style-hook heuristics unless they also break TypeScript, routing, data access, or obvious usability. Step 11.4 runs the batch validators across all screens and owns those deterministic cleanup edits.
 - **Older-orchestrator fallback.** If the skeleton is absent AND no `### Standard Imports` / `#### Resolved Imports` blocks exist in the plan, resolve imports yourself from the `**Data**` field + Generated Services table.
 - **NEVER write `_layout.tsx` files.** The orchestrator owns all `_layout.tsx` files at Step 10b — both the outer `app/(app)/_layout.tsx` (Tabs/Drawer) and per-folder inner ones (`app/(app)/<folder>/_layout.tsx`). If your `target_file` IS a `_layout.tsx`, your assigned task is wrong — STOP and report `BLOCKED [<screen_name>]: target_file is a _layout.tsx (<path>) — orchestrator owns layouts, not builders`. Two parallel builders writing the same folder's `_layout.tsx` would race; only the orchestrator can serialize that. **You also do not need to declare the route in any `_layout.tsx`** — the orchestrator already wrote the `<Stack.Screen name="<your-name>">` line for you. Just write your screen's content.
 - **Your `target_file` may be nested.** With the folder-grouped navigation pattern, paths like `app/(app)/inspections/[id].tsx` and `app/(app)/inspections/new.tsx` are normal. The folder is guaranteed to exist (orchestrator created it at Step 10b.2). Just write to whatever absolute path you were given. Do NOT modify the path or strip the folder.
@@ -1128,7 +1129,17 @@ Follow these whenever the spec touches navigation, list rows, or modals. Recipes
     - `<Input>` with manual date string parsing
     - Any third-party calendar picker library
 
-## Step 4 — Return Status
+## Step 4 — Validate the written screen
+
+Before returning a status, run the mobile changed-file dispatcher against exactly `target_file`:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" --project-root "<working_dir>" --file "<target_file>"
+```
+
+If it exits `2`, repair every reported violation and rerun it. Do not return `DONE` until it exits `0`. This explicit mobile-owned gate replaces the former plugin-wide write hooks, which also ran during unrelated Canvas Apps workflows.
+
+## Step 5 — Return Status
 
 You MUST return your final message to the orchestrator with one of these four status codes as the **literal first line** (no markdown, no preamble, no `Status:` prefix, no backticks). The orchestrator parses the first line to decide what to do next. After the status line, leave a blank line, then write the one-line summary below.
 

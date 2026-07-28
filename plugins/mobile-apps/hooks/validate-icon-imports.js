@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * PostToolUse hook: forbid non-Ionicons icon imports in TS/TSX files.
+ * Explicit validator: forbid non-Ionicons icon imports in TS/TSX files.
  *
  * Fires after Write / Edit / MultiEdit. Reads the tool_input from stdin,
  * scans the resulting file content (or applied edit content) for forbidden
