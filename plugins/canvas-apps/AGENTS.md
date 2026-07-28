@@ -92,8 +92,4 @@ the bundled `.plugin/plugin.json` version with the canonical manifest on
 silently for current versions or expected network, filesystem, and manifest
 errors so update discovery never blocks MCP configuration.
 
-Keep the check immediately after the skill frontmatter and run its tests with:
-
-```bash
-dotnet run --file scripts/tests/check-version.tests.cs --verbosity quiet -- --plugin-root .
-```
+Keep the check immediately after the skill frontmatter.
