@@ -9,12 +9,14 @@ plus local-dev ergonomics, sample coverage, and an automated eval suite with
 real and synthetic fixtures. Builds on v2.3; no breaking changes.
 
 ### Added
-- **Plugin metadata refreshed for the two-skill plugin (v2.4.0).** The marketplace
+- **Plugin metadata + docs refreshed for the two-skill plugin (v2.4.0).** The marketplace
   `description` now leads with `/app-builder` (whole model-driven apps) alongside `/genpage`
   instead of describing generative pages only, and `keywords` gain `app-builder` +
   `model-driven`. Both `.plugin/plugin.json` and the legacy `.claude-plugin/plugin.json`
   mirror stay byte-identical and LF-normalised (the earlier CRLF drift was what made these
-  manifests conflict on merge).
+  manifests conflict on merge). The plugin README gains an `/app-builder` section — flagged
+  **Preview**, with the authoring→build→edit flow and trigger phrases — plus a skill-picker
+  table, and the repository README's Model Apps entry now lists both skills.
 - **`/app-builder` is covered by the v2.3 hooks + telemetry.** Tracked-skill discovery is derived from
   `skills/*/SKILL.md`, so the new skill emits `skill_started` telemetry with no list to maintain. The two
   write-time guards, which previously only engaged during a `/genpage` run, now also engage for an

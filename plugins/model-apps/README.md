@@ -70,7 +70,41 @@ capability error. The env var name is always `GENPAGE_ENABLE_<FLAG>` (uppercased
 
 ## Skills
 
-The plugin provides a single skill that covers the full lifecycle of a generative page.
+The plugin provides two authoring skills: `/app-builder` builds a whole model-driven app, and
+`/genpage` builds standalone generative pages for an existing app.
+
+| Skill | Status | Use it when |
+|---|---|---|
+| [`/app-builder`](#app-builder) | **Preview** | You want a whole app — tables, relationships, forms, views, charts, security roles, app + sitemap |
+| [`/genpage`](#genpage) | Stable | You want one or more generative pages added to an app that already exists |
+
+### `/app-builder`
+
+> **Preview.** This skill is under active development: its App Spec schema and CLI flags may change
+> between releases, and `--changed-only` (partial apply) is Preview within it. Prefer a scratch/dev
+> environment, review the dry-run plan before approving, and use `teardown-model-app.js --apply` to
+> clean up probes. Report issues with `/report-issue`.
+
+Builds and edits a whole model-driven Power App from a natural-language intent, via the headless
+vendored `cds-maker-sdk`. It runs an interactive, multi-turn authoring flow and a narrated build:
+
+1. **Select environment** — resolves the target Dataverse org and confirms auth
+2. **Author the App Spec** (design-only) — tables, columns, relationships, adaptive forms with
+   sub-grids, views, Choice-column charts, dashboards, generative **page intents**, personas, and the
+   app shell + sitemap, with two consent levels and previews you approve before anything is written
+3. **Guardrail lint** — `spec-lint` + `validateAppSpec` gate the spec before any live call
+4. **Plan approval** — a phase-grouped dry-run plan is shown in plan mode for your go-ahead
+5. **Generate pages** — dispatches parallel page-builder workers to write each page's `.tsx`
+6. **Build** — applies the spec idempotently phase by phase, then optionally `--verify` reconciles
+   the deployed app against the spec
+7. **Edit** — downloads a deployed app back into an editable App Spec so you can change and rebuild it
+
+**Usage:** Invoke directly with `/app-builder`, or use any of the keywords below:
+
+- `Build an app for tracking service requests`
+- `Create a model-driven app to manage suppliers and contracts`
+- `Make me an app to manage job candidates and interviews`
+- `Edit my app — add a table for invoices and put it on the nav`
 
 ### `/genpage`
 
