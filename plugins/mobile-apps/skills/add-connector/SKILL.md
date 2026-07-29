@@ -1,6 +1,6 @@
 ---
 name: add-connector
-description: Use when the user wants to add a Power Platform connector to a mobile app and there is no dedicated /add-* skill for that connector (Dataverse and SharePoint have their own skills).
+description: Use when adding a Power Platform connector to an Expo/React Native Power Apps mobile app and no dedicated mobile connector skill exists.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, Skill
 model: sonnet
@@ -17,7 +17,7 @@ Fallback skill for any connector not covered by a dedicated `/add-*` skill. For 
 
 (More dedicated skills will land in v1: `/add-teams`, `/add-excel`, `/add-onedrive`, `/add-azuredevops`, `/add-office365`.)
 
-The native host runtime (`power-apps-native-host`) handles connector routing, connection resolution, and OAuth consent through `PowerAppsHostProvider` in `app/_layout.tsx` — no separate executor wiring is needed.
+The native host runtime (`@microsoft/power-apps-native-host`) handles connector routing, connection resolution, and OAuth consent through `PowerAppsProvider` in `app/_layout.tsx` — no separate executor wiring is needed.
 
 ## Workflow
 
@@ -195,9 +195,9 @@ Then run `npm run generate-schemas` and `npx tsc --noEmit` before reporting succ
 
 ## Runtime connector handling
 
-The native host runtime handles all connector routing automatically via `PowerAppsHostProvider` in `app/_layout.tsx`. When a screen calls a generated service method:
+The native host runtime handles all connector routing automatically via `PowerAppsProvider` in `app/_layout.tsx`. When a screen calls a generated service method:
 
-1. `PowerAppsHostProvider` resolves the connection from `connectionReferences` in `power.config.json`
+1. `PowerAppsProvider` resolves the connection from `connectionReferences` in `power.config.json`
 2. If the connection requires OAuth consent, `ConnectionSetupScreen` is shown automatically
 3. `NativePowerAppsBridge` dispatches the call with the correct auth token
 

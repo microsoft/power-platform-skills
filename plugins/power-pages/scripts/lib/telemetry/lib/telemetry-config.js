@@ -78,9 +78,9 @@ function main() {
       emitLogLocations(dir, plugin);
     } else {
       out(`Telemetry (${plugin}): OFF — nothing is transmitted.`);
-      out(`A local diagnostic log is still kept.`);
+      out(`The local diagnostic log is kept whenever telemetry is enabled for this plugin, even when transmission is OFF (opt-out stops transmission only).`);
       emitLogLocations(dir, plugin);
-      out(`Re-enable anytime with /${plugin}:telemetry on.`);
+      out(`Re-enable with /${plugin}:telemetry on (an environment opt-out, if set, takes precedence and this command cannot override it).`);
       out(ANONYMITY);
     }
     process.exit(0);
@@ -92,9 +92,14 @@ function main() {
   }
   if (action === "off") {
     out(`Telemetry (${plugin}): OFF — nothing is transmitted.`);
-    out(`A local diagnostic log is still kept.`);
+    out(`The local diagnostic log is kept whenever telemetry is enabled for this plugin, even when transmission is OFF (opt-out stops transmission only).`);
     emitLogLocations(dir, plugin);
-    out(`Re-enable anytime with /${plugin}:telemetry on.`);
+    out(`Re-enable with /${plugin}:telemetry on (an environment opt-out, if set, takes precedence and this command cannot override it).`);
+  } else if (effectiveTelemetryChoice(dir, plugin) === "off") {
+    // The preference was saved as ON, but the highest-precedence environment
+    // opt-out still forces transmission off — report the EFFECTIVE state so we
+    // never claim ON while an opt-out is suppressing it.
+    out(`Telemetry (${plugin}): preference saved as ON, but an environment opt-out is currently in effect — nothing is transmitted until it is cleared.`);
   } else {
     out(`Telemetry (${plugin}): ON`);
   }

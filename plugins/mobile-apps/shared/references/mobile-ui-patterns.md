@@ -117,11 +117,11 @@ First-run or empty-account state. Elements: illustration, 1-sentence value prop,
 - [ ] Wrapped in `SafeAreaView` from `react-native-safe-area-context`
 - [ ] Uses Tamagui `YStack`/`XStack` for layout, not raw `View`
 - [ ] All spacing via tokens (`$1`-`$10`), not literals
-- [ ] All colors via theme (`$background`, `$color`), not hex
+- [ ] All colors via verified theme tokens (`$background`, `$color12`), not hex
 - [ ] Has loading, empty, and error state components
 - [ ] Works in light AND dark mode (test by toggling)
-- [ ] `accessibilityLabel` on every icon-only Pressable
-- [ ] `accessibilityRole` on interactive elements
+- [ ] `aria-label` on every icon-only Tamagui Pressable
+- [ ] `role` on interactive Tamagui elements
 - [ ] Min touch target 44x44 (use `hitSlop` if visual is smaller)
 - [ ] No nested touch targets: do not put a `Button`, `Pressable`, `Touchable*`, `Link`, or tappable custom stack inside another `onPress` parent. Decorative children/overlays inside a tappable parent use `pointerEvents="none"`.
 - [ ] No visible no-op buttons: if a handler would early-return because required state is missing, disable the button and show a short reason, or do not render it until the state exists.
@@ -133,28 +133,32 @@ First-run or empty-account state. Elements: illustration, 1-sentence value prop,
 Every data-driven screen needs these three components with no exceptions:
 
 ```tsx
+const theme = useTheme()
+
 // EmptyState
-<YStack f={1} ai="center" jc="center" p="$6" gap="$3">
-  <Image source={emptyIllustration} />
+<YStack flex={1} items="center" justify="center" p="$6" gap="$3">
+  <Image source={emptyIllustration} contentFit="contain" />
   <H4>No recipes yet</H4>
-  <Paragraph ta="center" col="$color10">
+  <Paragraph text="center" color="$color10">
     Add your first recipe to get started.
   </Paragraph>
-  <Button bg="$blue10" color="$color1" onPress={onAdd}>Add a recipe</Button>
+  <Button bg="$blue10" onPress={onAdd}>
+    <Button.Text color="$color1">Add a recipe</Button.Text>
+  </Button>
 </YStack>
 
 // LoadingState - use skeletons, not spinners
 <YStack gap="$3" p="$4">
   {Array.from({ length: 6 }).map((_, i) => (
-    <XStack key={i} h={60} bg="$color4" br="$3" />
+    <XStack key={i} height={60} bg="$color4" rounded="$3" />
   ))}
 </YStack>
 
 // ErrorState
-<YStack f={1} ai="center" jc="center" p="$6" gap="$3">
-  <Ionicons name="alert-circle" size={48} color="#E5484D" />
+<YStack flex={1} items="center" justify="center" p="$6" gap="$3">
+  <Ionicons name="alert-circle" size={48} color={theme.red10.val} />
   <H4>Something went wrong</H4>
-  <Paragraph ta="center" col="$color10">{error.message}</Paragraph>
+  <Paragraph text="center" color="$color10">{error.message}</Paragraph>
   <Button onPress={onRetry}>Try again</Button>
 </YStack>
 ```

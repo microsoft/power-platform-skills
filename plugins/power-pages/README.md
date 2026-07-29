@@ -38,7 +38,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 30 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 31 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
 
 ### Site scaffolding and deployment
 
@@ -203,6 +203,7 @@ Adds login/logout functionality and role-based authorization to your site.
 - Login/logout UI component
 - Role-based UI patterns (show/hide elements by role)
 - Framework-specific implementation (hooks, composables, services)
+- **IDP app-registration setup for OIDC providers** (Okta, Auth0, Microsoft Entra External ID, and other OpenID Connect) — reads the provider's own documentation first, then **guides the user through the provider's console** or, **when the provider supports it, configures the app for the user**; either way it wires the client ID, authority, and claims mapping (registration + login) into Power Pages using the platform-default no-secret `code id_token` flow
 
 #### `/audit-permissions`
 
@@ -223,6 +224,16 @@ Runs a security scan on a deployed Power Pages site, fetches the latest scan rep
 - Scans the live site's public surface for vulnerabilities
 - Fetches and explains the latest scan report
 - Surfaces issues grouped by severity
+
+#### `/scan-code`
+
+> "Check my source code and dependencies for security issues"
+
+Scans a Power Pages site project's source files and dependencies for security problems — static analysis of the code plus dependency, secret, and license scanning — then surfaces findings in plain language.
+
+- Runs static analysis (opengrep) and dependency/secret/license scanning (trivy)
+- Groups findings by category — code patterns, vulnerable packages, secrets, licenses
+- Offers an agent-driven review fallback when the scanning tools are not installed
 
 #### `/manage-firewall`
 
@@ -248,9 +259,9 @@ Inspects and configures the security headers a Power Pages site sends to browser
 
 > "Do a full security review before we ship"
 
-Runs a guided, end-to-end security review of a Power Pages site and consolidates every finding into one HTML report covering the live site, browser headers, firewall, authentication, and role-based permissions.
+Runs a guided, end-to-end security review of a Power Pages site and consolidates every finding into one HTML report covering source code and dependencies, the live site, browser headers, firewall, authentication, and role-based permissions.
 
-- Orchestrates `/scan-site`, `/manage-headers`, `/manage-firewall`, `/audit-permissions`, and auth checks
+- Orchestrates `/scan-code`, `/scan-site`, `/manage-headers`, `/manage-firewall`, `/audit-permissions`, and auth checks
 - Consolidates findings into a single HTML report
 - Suitable for release-readiness or live-site monitoring
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * PostToolUse hook: forbid non-Ionicons icon imports in TS/TSX files.
+ * Explicit validator: forbid non-Ionicons icon imports in TS/TSX files.
  *
  * Fires after Write / Edit / MultiEdit. Reads the tool_input from stdin,
  * scans the resulting file content (or applied edit content) for forbidden
@@ -36,8 +36,9 @@ const ALLOWED_HINT =
 const FORBIDDEN_IMPORTS = [
   { pattern: /^lucide-react-native$/, label: 'lucide-react-native' },
   { pattern: /^lucide-react$/, label: 'lucide-react' },
-  { pattern: /^@tamagui\/lucide-icons$/, label: '@tamagui/lucide-icons' },
+  { pattern: /^@tamagui\/lucide-icons(?:-2)?(?:\/.*)?$/, label: '@tamagui/lucide-icons' },
   { pattern: /^react-native-vector-icons(\/.*)?$/, label: 'react-native-vector-icons' },
+  { pattern: /^\/vector-icons$/, label: 'invalid /vector-icons path' },
 ];
 
 const FORBIDDEN_EXPO_FAMILIES = new Set([

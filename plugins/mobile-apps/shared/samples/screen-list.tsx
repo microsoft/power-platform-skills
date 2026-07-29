@@ -43,7 +43,7 @@ export default function RecipesListScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1 }} edges={['top', 'bottom']}>
-      <YStack f={1} bg="$background">
+      <YStack flex={1} bg="$background">
         <ScreenHeader
           title="Recipes"
           subtitle={`${items.length} recipe${items.length === 1 ? '' : 's'}`}
@@ -52,7 +52,7 @@ export default function RecipesListScreen() {
               size="$3"
               circular
               icon={<Ionicons name="add" size={20} />}
-              accessibilityLabel="Add recipe"
+              aria-label="Add recipe"
               onPress={() => router.push('/recipes/new')}
             />
           }
@@ -60,11 +60,11 @@ export default function RecipesListScreen() {
 
         <XStack px="$4" pb="$2" pt="$2">
           <Input
-            f={1}
+            flex={1}
             size="$4"
             placeholder="Search recipes…"
             value={query}
-            onChangeText={setQuery}
+            onChange={(event) => setQuery(event.target?.value ?? event.nativeEvent?.text ?? '')}
           />
         </XStack>
 
@@ -106,20 +106,20 @@ function RecipeRow({ item, onPress }: { item: Recipe; onPress: () => void }) {
   return (
     <YStack
       bg="$color2"
-      br="$4"
+      rounded="$4"
       p="$4"
       gap="$2"
       mb="$3"
       pressStyle={{ scale: 0.98 }}
       onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={`Open ${item.title}`}
+      role="button"
+      aria-label={`Open ${item.title}`}
     >
-      <XStack ai="center" jc="space-between">
-        <Text fontSize="$6" fontWeight="700" numberOfLines={1} f={1}>{item.title}</Text>
-        <Text fontSize="$2" col="$color10">{formatDate(item.createdon)}</Text>
+      <XStack items="center" justify="space-between">
+        <Text fontSize="$6" fontWeight="700" numberOfLines={1} flex={1}>{item.title}</Text>
+        <Text fontSize="$2" color="$color10">{formatDate(item.createdon)}</Text>
       </XStack>
-      <Paragraph col="$color10" numberOfLines={2}>{item.description}</Paragraph>
+      <Paragraph color="$color10" numberOfLines={2}>{item.description}</Paragraph>
     </YStack>
   );
 }

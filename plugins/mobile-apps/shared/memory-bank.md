@@ -95,11 +95,11 @@ associationsCount:     # number of mobileofflineprofileitemassociation rows
 
 | Aspect | Status |
 |---|---|
-| Tamagui config | default `@tamagui/config/v4` (no brand tokens) |
+| Tamagui config | Tamagui 2 with default `@tamagui/config/v5` (no brand tokens) |
 | Brand tokens | _<none, or list>_ |
 | Theme variants | light, dark |
 | `PortalProvider` | wired in template |
-| `PowerAppsHostProvider` | wired in template (handles all connector routing) |
+| `PowerAppsProvider` | wired in template (handles all connector routing) |
 
 ## Seeded sample data
 

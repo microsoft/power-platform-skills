@@ -22,7 +22,7 @@ Reference for converting React Native / Tamagui screens to static HTML previews.
 | `SizableText` | `<span>` | `color:var(--color);` + font-size from `size` prop |
 | `Paragraph` | `<p>` | `color:var(--color); line-height:1.5;` |
 | `Button` | `<button>` | `padding:10px 18px; border-radius:8px; border:1px solid var(--border-color); background:var(--color2); color:var(--color); cursor:pointer; font-weight:500; font-family:inherit;` |
-| `Button bg="$blue10" color="$color1"` | `<button>` | `background:var(--blue10); color:var(--color1); border:none;` |
+| `Button bg="$blue10"` + `Button.Text color="$color1"` | `<button>` | `background:var(--blue10); color:var(--color1); border:none;` |
 | `Button theme="red"` | `<button>` | `background:var(--red10); color:#fff; border:none;` |
 | `Button circular` | `<button>` | Add `border-radius:50%; width:40px; height:40px; padding:0; display:flex; align-items:center; justify-content:center;` |
 | `Button disabled` | `<button>` | Add `opacity:0.5; cursor:not-allowed;` |
@@ -32,7 +32,7 @@ Reference for converting React Native / Tamagui screens to static HTML previews.
 | `Form` | `<form>` | Standard semantics |
 | `Form.Trigger` | — | Wrapping element; render the child `<button>` directly |
 | `Card` | `<div>` | `border:1px solid var(--border-color); border-radius:12px; padding:16px; background:var(--background);` |
-| `Card bordered` | `<div>` | Same as Card (bordered is default) |
+| `Card` with `borderWidth={1}` and `borderColor="$borderColor"` | `<div>` | Add `border:1px solid var(--border-color)` only when the approved design calls for a border |
 | `Separator` | `<hr>` | `border:none; border-top:1px solid var(--border-color); margin:8px 0;` |
 | `Avatar` | `<div>` | `width:40px; height:40px; border-radius:50%; overflow:hidden; background:var(--color4); display:flex; align-items:center; justify-content:center;` |
 | `Avatar.Image` | `<img>` | `width:100%; height:100%; object-fit:cover;` |
@@ -84,30 +84,30 @@ Reference for converting React Native / Tamagui screens to static HTML previews.
 
 | Prop | CSS Property |
 |---|---|
-| `f` / `flex` | `flex` |
-| `bg` / `backgroundColor` | `background` |
-| `p` / `padding` | `padding` |
-| `px` / `paddingHorizontal` | `padding-left` + `padding-right` |
-| `py` / `paddingVertical` | `padding-top` + `padding-bottom` |
-| `m` / `margin` | `margin` |
-| `mb` / `marginBottom` | `margin-bottom` |
-| `mt` / `marginTop` | `margin-top` |
-| `br` / `borderRadius` | `border-radius` |
-| `ai` / `alignItems` | `align-items` |
-| `jc` / `justifyContent` | `justify-content` |
-| `col` / `color` | `color` |
+| `flex` | `flex` |
+| `bg` | `background` |
+| `p` | `padding` |
+| `px` | `padding-left` + `padding-right` |
+| `py` | `padding-top` + `padding-bottom` |
+| `m` | `margin` |
+| `mb` | `margin-bottom` |
+| `mt` | `margin-top` |
+| `rounded` | `border-radius` |
+| `items` | `align-items` |
+| `justify` | `justify-content` |
+| `color` | `color` |
 | `gap` | `gap` |
-| `h` / `height` | `height` |
-| `w` / `width` | `width` |
-| `ta` / `textAlign` | `text-align` |
+| `height` | `height` |
+| `width` | `width` |
+| `text` | `text-align` |
 
 ### Theme colors
 
 | Token | Light | Dark | CSS Variable |
 |---|---|---|---|
 | `$background` | `#ffffff` | `#1a1a1a` | `var(--background)` |
-| `$backgroundStrong` | `#f5f5f5` | `#000000` | `var(--bg-strong)` |
-| `$color` | `#1a1a1a` | `#f5f5f5` | `var(--color)` |
+| `$surface0` | `#f5f5f5` | `#141414` | `var(--surface0)` |
+| `$surface1` | `#ffffff` | `#1a1a1a` | `var(--surface1)` |
 | `$color2` | `#f0f0f0` | `#2a2a2a` | `var(--color2)` |
 | `$color4` | `#e0e0e0` | `#3a3a3a` | `var(--color4)` |
 | `$color5` | `#d0d0d0` | `#4a4a4a` | `var(--color5)` |

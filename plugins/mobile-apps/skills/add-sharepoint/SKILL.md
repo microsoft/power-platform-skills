@@ -201,4 +201,4 @@ Fix TypeScript errors before proceeding.
 
 Update `memory-bank.md` with: connector added, site URL, lists/libraries connected (or created), type-check status.
 
-> **Note:** No manual executor wiring needed. `PowerAppsHostProvider` in `app/_layout.tsx` handles SharePoint connector routing, connection resolution, and OAuth consent automatically at runtime.
+> **Note:** No manual executor wiring needed. `PowerAppsProvider` in `app/_layout.tsx` handles SharePoint connector routing, connection resolution, and OAuth consent automatically at runtime.

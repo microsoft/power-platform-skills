@@ -14,7 +14,7 @@ Best for: content-heavy apps, journaling, reading, note-taking. Serif headings c
 
 ```tsx
 // tamagui.config.ts
-import { createFont } from 'tamagui'
+import { createFont } from '@tamagui/core'
 
 const headingFont = createFont({
   family: 'Lora',
@@ -152,22 +152,22 @@ export default function RootLayout() {
 
 ```tsx
 // tamagui.config.ts
-import { createTamagui, createFont } from 'tamagui'
-import { defaultConfig } from '@tamagui/config/v4'
+// Inside the Tamagui 2 + Config v5 customization markers.
+import { createFont } from '@tamagui/core'
+import { animations } from '@tamagui/config/v5-rn'
 
 const headingFont = createFont({ /* from pairing above */ })
 const bodyFont = createFont({ /* from pairing above */ })
 
-const config = createTamagui({
+const customConfig = {
   ...defaultConfig,
+  animations,
   fonts: {
     ...defaultConfig.fonts,
     heading: headingFont,
     body: bodyFont,
   },
-})
-
-export default config
+}
 ```
 
 Usage in components:

@@ -210,7 +210,7 @@ For PDF/signature requests, map the change to every affected section instead of 
 | Store signed approval as Dataverse image | Data Model: Image column; Screens: normalize `data:image/png;base64,...` before update; Native Capabilities: `pen-input` if capture is in-app |
 | Generate/export/print evidence PDF | Native Capabilities: `pdf-report` only when `expo-print` is present, plus `sharing` only when local share is needed and `expo-sharing` is present; Data Model: File column only if retained; Screens: generation pending/failed/success states |
 | Persist generated PDFs | Data Model: Dataverse File column or child Attachment table; Screens: create/update row first, then upload File bytes; Native Capabilities: `pdf-report` |
-| View/open/preview PDF | Native Capabilities: `native-pdf-viewer` only for HTTPS PDF URLs and only when `@microsoft/power-apps-native-pdf-viewer` is present; Screens: invalid URL and viewer failed states |
+| View/open/preview PDF | Native Capabilities: `native-pdf-viewer` for HTTPS URLs or local `file://` URIs when `@microsoft/power-apps-native-pdf-viewer` 0.2.9+ is present; Screens: invalid URL and viewer failed states |
 
 If a single PDF/signature request requires multiple plan sections, say so and run the edit loop section-by-section. Do not write a native capability entry that references a Dataverse column or screen state that remains absent from the plan.
 
@@ -329,8 +329,8 @@ Parse the first line of every agent result using the return-status protocol in `
 
 For Native Capabilities (no separate agent), do it inline: read the current capability table, apply the change, regenerate the table. For PDF/pen rows, include storage/output notes in the table or immediately below it:
 
-- `native-pdf-viewer` opens HTTPS URLs only; it does not support `file://`, `content://`, or `blob:`.
-- `pdf-report` generates a local PDF only when `expo-print` is present; local output is shared with `expo-sharing` only when that package is present, or uploaded to Dataverse File storage before later HTTPS viewing.
+- `native-pdf-viewer` 0.2.9+ opens HTTPS URLs and local `file://` URIs; it does not support `content://`, `blob:`, or `http://`.
+- `pdf-report` generates a local PDF only when `expo-print` is present; local output may be opened by `native-pdf-viewer` 0.2.9+, shared with `expo-sharing` when present, or uploaded to Dataverse File storage.
 - `pen-input` returns a PNG data URI; cancellation is a non-error state; Dataverse target must be Image, File, or child Evidence/Signature row.
 
 For connector/data-source edits, read and execute `/add-datasource` when the source type is unclear; use `/add-sharepoint`, `/add-connector`, or `/add-dataverse` directly only when the source type is clear. If the connector drives new screens or forms, update the Screens section too before applying code.
@@ -402,6 +402,18 @@ done
 Replace or create the `## Generated Services (snapshot at <ISO timestamp>)` section in `native-app-plan.md` immediately after `## Screens`. If there are no services, write an empty table and a note. Screen-builders must treat this table as authoritative.
 
 Do not ask the user to run these follow-up skills manually. This skill is the orchestrator.
+
+#### Step 5.6 — Offline profile reconciliation
+
+If Step 5 created or extended Dataverse tables, an existing Mobile Offline Profile may now be missing those tables/columns (new tables never sync to devices; new columns arrive blank). Step 5's `/add-dataverse --skip-planning` suppresses that skill's own Step 8.5 reconciliation, so this orchestrator owns the check. Skip when no Data Model mutation occurred in this edit.
+
+Run the local, no-network delta check:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/offline-profile-delta.js"
+```
+
+Branch on the JSON `status` per [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → continue silently (do not nag when no profile exists); `delta` → prompt to update, then read and execute `${CLAUDE_SKILL_DIR}/../add-table-to-offline-profile/SKILL.md` for `missingTables[]` and `${CLAUDE_SKILL_DIR}/../edit-offline-profile/SKILL.md` for `tablesWithNewColumns[]`, passing the arguments documented by each workflow, and re-check to `in-sync`. Record the reconciliation outcome in the Step 8 memory-bank edit entry.
 
 ### Step 6 — Rebuild affected screens
 
@@ -501,20 +513,14 @@ If `npm run check-routes` is absent but `scripts/check-routes.js` exists, run:
 node scripts/check-routes.js
 ```
 
-When screen files changed, also run the available validators from `hooks/` if this repository is the plugin checkout, or the equivalent project scripts if the generated app exposes them:
+When screen files changed, run the mobile plugin's report-mode validators explicitly:
 
 ```bash
-node hooks/validate-screen-quality.js --report <changed-screen-files-or-app-dir>
-node hooks/validate-color-contrast.js --report <changed-screen-files-or-app-dir>
-node hooks/validate-icon-imports.js <changed-screen-files-or-app-dir>
-node hooks/validate-navigation-idempotency.js <changed-screen-files-or-app-dir>
-node hooks/validate-protected-paths.js <changed-files>
-node hooks/validate-connector-first.js <changed-files>
-node hooks/validate-dataverse-payload.js <changed-files>
-node hooks/validate-package-deps.js <project-root>
+node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-quality.js" --report <changed-screen-files-or-app-dir>
+node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report <changed-screen-files-or-app-dir>
 ```
 
-Only run validators that exist and are relevant to the changed files. Treat validator failures like create-flow gate failures: capture once, batch by root cause, repair, and rerun the same validator/gate once.
+Treat validator findings like create-flow gate failures: capture once, batch by root cause, repair, and rerun the same validator once. These scripts are invoked only inside the mobile workflow; do not register them as plugin-wide hooks.
 
 #### Step 7.1 — Targeted style-quality sweep
 
@@ -524,7 +530,7 @@ Rules:
 
 1. Run `validate-screen-quality.js --report` and `validate-color-contrast.js --report` when available.
 2. Merge issues by file and rule.
-3. Auto-fix deterministic issues: weak readable tokens, yellow/orange badges with white text, missing icon-only `accessibilityLabel`, missing `accessibilityRole`, tiny icon hit targets, raw hex tokens, missing safe-area padding, `allowFontScaling={false}`.
+3. Auto-fix deterministic issues: weak readable tokens, yellow/orange badges with white text, missing icon-only `aria-label`, missing `role`, tiny icon hit targets, raw hex tokens, missing safe-area padding, `allowFontScaling={false}`. Apply these web-standard accessibility props to Tamagui 2 components; raw React Native components retain their React Native accessibility props.
 4. Treat judgement calls as concerns, not infinite loops: complex safe-area restructuring, ambiguous brand color choices, large hierarchy redesigns, or empty-state rewrites that require large JSX movement.
 5. Re-run the same report validators for touched files. Cap retries at 2 per file per validator.
 6. Run `npx tsc --noEmit` after style fixes. Style concerns may remain, but TypeScript may not.

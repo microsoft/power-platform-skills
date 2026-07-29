@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * PostToolUse hook: enforce navigation intent + submit idempotency guardrails.
+ * Explicit validator: enforce navigation intent and submit idempotency guardrails.
  *
  * Blocking errors:
  * - `router.push(...)` to known singleton routes (must use `router.navigate(...)`)

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * PostToolUse hook: forbid bad dependencies in package.json writes.
+ * Explicit validator: forbid bad dependencies in package.json writes.
  *
  * Triggers on Write/Edit/MultiEdit of any package.json. Blocks when the
  * resulting deps include known-bad packages, private vendor packages are
@@ -13,7 +13,7 @@
  * Allowed icon library: `@expo/vector-icons` only.
  *
  * Forbidden npm-registry packages:
- *   - lucide-react-native, lucide-react, @tamagui/lucide-icons
+ *   - lucide-react-native, lucide-react, @tamagui/lucide-icons, @tamagui/lucide-icons-2
  *   - react-native-vector-icons (use @expo/vector-icons)
  *   - axios, node-fetch (use generated services from src/generated/)
  *
@@ -31,6 +31,7 @@ const FORBIDDEN_DEPS = {
   'lucide-react-native': 'Use `@expo/vector-icons` (Ionicons family).',
   'lucide-react': 'Use `@expo/vector-icons` (Ionicons family).',
   '@tamagui/lucide-icons': 'Use `@expo/vector-icons` (Ionicons family).',
+  '@tamagui/lucide-icons-2': 'Use `@expo/vector-icons` (Ionicons family).',
   'react-native-vector-icons': 'Use `@expo/vector-icons` (Ionicons family).',
   axios: 'Use generated connector services from `src/generated/` (connector-first rule).',
   'node-fetch': 'Use generated connector services from `src/generated/`. The runtime has global fetch.',
@@ -133,6 +134,14 @@ function reconstructBeforeContent(toolName, toolInput, afterContent) {
 }
 
 function getNativeAllowlistDeps(toolName, toolInput, afterContent, packageJsonPath) {
+  if (toolInput.validation_mode === 'explicit-mobile-workflow') {
+    try {
+      return readPackageDepsFromContent(fs.readFileSync(BUNDLED_TEMPLATE_PACKAGE_PATH, 'utf8'));
+    } catch {
+      return null;
+    }
+  }
+
   const beforeContent = reconstructBeforeContent(toolName, toolInput, afterContent);
   const beforeDeps = beforeContent ? readPackageDepsFromContent(beforeContent) : null;
   return beforeDeps || readPackageLockDeps(packageJsonPath);
@@ -151,7 +160,7 @@ function isWriteTool(t) {
 }
 
 function readResult(toolName, toolInput) {
-  // Prefer the file on disk (PostToolUse runs after the write).
+  // Prefer the file on disk because explicit validation runs after the write.
   const fp = toolInput.file_path || toolInput.filePath;
   if (typeof fp === 'string' && fs.existsSync(fp)) {
     try {

@@ -44,6 +44,22 @@ test("on writes the per-plugin opt-in and confirms", () => {
   assert.equal(cfg.telemetry["power-pages"], "on");
 });
 
+test("on reports the env opt-out override instead of falsely claiming ON", () => {
+  // The highest-precedence env opt-out forces transmission off; `on` saves the
+  // preference but must NOT report plain "ON" while the env var suppresses it.
+  const dir = mkTmp();
+  const { status, stdout } = run(["--action", "on", "--plugin", "power-pages"], dir, {
+    POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "1",
+  });
+  assert.equal(status, 0);
+  assert.match(stdout, /preference saved as ON/i);
+  assert.match(stdout, /environment opt-out is currently in effect/i);
+  assert.doesNotMatch(stdout, /^Telemetry \(power-pages\): ON$/m);
+  // The preference is still persisted (so it takes effect once the env var clears).
+  const cfg = JSON.parse(fs.readFileSync(path.join(dir, "config.json"), "utf8"));
+  assert.equal(cfg.telemetry["power-pages"], "on");
+});
+
 test("status reports ON by default and never reads ikey.json", () => {
   const dir = mkTmp();
   const { status, stdout } = run(["--action", "status", "--plugin", "power-pages"], dir);
@@ -57,7 +73,7 @@ test("status reports OFF after opt-out", () => {
   run(["--action", "off", "--plugin", "power-pages"], dir);
   const { stdout } = run(["--action", "status", "--plugin", "power-pages"], dir);
   assert.match(stdout, /Telemetry \(power-pages\): OFF/);
-  assert.match(stdout, /local diagnostic log is still kept/i);
+  assert.match(stdout, /local diagnostic log is kept whenever telemetry is enabled/i);
 });
 
 test("usage error on bad action", () => {
@@ -78,7 +94,7 @@ test("status reflects the env opt-out when config is unset, with no env-var word
   );
   assert.equal(status, 0);
   assert.match(stdout, /Telemetry \(power-pages\): OFF/);
-  assert.match(stdout, /local diagnostic log is still kept/i);
+  assert.match(stdout, /local diagnostic log is kept whenever telemetry is enabled/i);
   // truthful-but-quiet: status must NOT name or explain the env var
   assert.ok(
     !/POWER_PLATFORM_SKILLS_TELEMETRY/.test(stdout),
@@ -123,6 +139,6 @@ test("status names the most recent session log when one exists", () => {
 test("off output names the logs directory too", () => {
   const dir = mkTmp();
   const { stdout } = run(["--action", "off", "--plugin", "power-pages"], dir);
-  assert.match(stdout, /local diagnostic log is still kept/i);
+  assert.match(stdout, /local diagnostic log is kept whenever telemetry is enabled/i);
   assert.match(stdout, /Logs directory:/);
 });

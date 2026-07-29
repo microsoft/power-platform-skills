@@ -1,7 +1,8 @@
 ---
 name: enable-tables-offline
-description: Use when the user needs to enable the per-table prerequisites (Can be taken offline, Track changes) before a Dataverse table can be added to a Mobile Offline Profile. Pre-flight pass for /setup-offline-profile.
+description: Internal mobile-app workflow read and executed only by /setup-offline-profile to enable Dataverse table prerequisites for a Mobile Offline Profile.
 user-invocable: false
+disable-model-invocation: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMode, ExitPlanMode
 model: sonnet
 ---

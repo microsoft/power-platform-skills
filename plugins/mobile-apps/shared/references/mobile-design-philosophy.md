@@ -19,8 +19,8 @@ Every screen has exactly one primary action and one primary piece of information
 | Screen title | `H3`/`H4` | 20–23px |
 | Section header | `Text fontSize="$5" fontWeight="600"` | 16px |
 | Body / row title | `Text fontSize="$5"` | 16px |
-| Secondary | `Paragraph col="$color10"` | 14px |
-| Caption / meta | `Text fontSize="$3" col="$color9"` | 13px |
+| Secondary | `Paragraph color="$color10"` | 14px |
+| Caption / meta | `Text fontSize="$3" color="$color9"` | 13px |
 
 - **Weight:** `700` titles, `600` section headers, `400` body. Never bold body text.
 - **Color:** Primary `$color12`, secondary `$color10`, tertiary `$color9`. Accent (`$blue10`) for interactive only.
@@ -42,7 +42,7 @@ When the aesthetic direction calls for it (Editorial, Soft/Organic), pair a **se
 
 **Line height for body:** Long-form body text (detail screen descriptions, onboarding copy) uses 1.5–1.6x line height for reading comfort. Dense list rows use tighter default (1.3x).
 
-**Column width for prose:** On content-heavy screens (detail, onboarding), wrap prose in `<YStack maxWidth={520}>` (roughly 62ch at 16px). On phones this is naturally satisfied; apply `$gtSm` variants only to preserve readable width on larger surfaces without changing the native workflow.
+**Column width for prose:** On content-heavy screens (detail, onboarding), wrap prose in `<YStack maxW={520}>` (roughly 62ch at 16px). On phones this is naturally satisfied; apply Config v5 `$sm` variants only to preserve readable width on larger surfaces without changing the native workflow.
 
 **Full pairing configs and font loading instructions** → see `typography-and-tone.md`.
 
@@ -92,7 +92,7 @@ The structure is generic, but the content must be domain-specific: inspection ap
 ### Input Ergonomics
 
 - Reduce typing with defaults, recent values, native pickers, steppers, segmented controls, camera/scan, location, and lookup rows before asking for free text.
-- Use the correct mobile keyboard hints: `keyboardType`, `inputMode`, `autoComplete`, `textContentType`, `returnKeyType`, and `submitBehavior` where supported.
+- Tamagui `Input` / `TextArea` use web-standard keyboard hints: `inputMode`, `type`, `autoComplete`, `enterKeyHint`, and `onKeyDown`. Raw React Native inputs retain their native keyboard props.
 - Dates use native date/time pickers. Numbers use numeric keyboards and tolerant parsing. Long text uses `TextArea`, not a tiny single-line input.
 - Forms preserve user work: validation/network failures never clear fields; dirty cancel/back requires confirmation; long or multi-step forms need a draft/save-resume path.
 
@@ -102,9 +102,9 @@ The structure is generic, but the content must be domain-specific: inspection ap
 
 | Share | Role | Tokens |
 |---|---|---|
-| **60%** | Neutral base | `$background`, `$backgroundStrong`, `$color`, `$color2` |
+| **60%** | Neutral base | `$background`, `$surface0`, `$color12`, `$color2` |
 | **30%** | Complementary surfaces | `$color4`, `$color5`, `$borderColor` |
-| **10%** | Accent — interactive only | `$blue10`/`$brand`, `$red10`, `$green10` |
+| **10%** | Accent — interactive only | `$blue10`/`$accentBase`, `$red10`, `$green10` |
 
 >3 non-neutral colors visible at once = too busy. Strip one.
 
@@ -112,7 +112,7 @@ The structure is generic, but the content must be domain-specific: inspection ap
 
 **Surfaces: fill, not borders.** Cards separate from the background via fill difference (`bg="$color2"` on `$background`), not `borderWidth={1}` on everything. Reserve borders for: list item separators (`borderBottomWidth={0.5}`), input fields, and intentional dividers between concepts. If every surface has a border, the screen looks like a wireframe.
 
-**Status colors: desaturate for most apps.** Raw `$red10`/`$green10` on white pills scream. For non-field apps, use tinted backgrounds with text-weight color: `bg="$green3" col="$green10"`, `bg="$red3" col="$red10"`. Only field/ops apps keep fully saturated pills for outdoor visibility. See `color-palette-architecture.md` for desaturation values.
+**Status colors: desaturate for most apps.** Raw `$red10`/`$green10` on white pills scream. For non-field apps, use tinted backgrounds with text-weight color: `bg="$green3" color="$green10"`, `bg="$red3" color="$red10"`. Only field/ops apps keep fully saturated pills for outdoor visibility. See `color-palette-architecture.md` for desaturation values.
 
 **Dark mode:** elevation via lighter surfaces (not shadow). Reduce text contrast one step. Accent colors brighter. Never pure `#000000` background or pure `#ffffff` text — use hue-tinted near-black and warm cream. See `color-palette-architecture.md` dark mode rules.
 
@@ -120,7 +120,7 @@ The structure is generic, but the content must be domain-specific: inspection ap
 
 **Contrast floor for mobile chrome:** inactive tabs, helper text, metadata that users need to act on, picker chevrons, modal body copy, and icon affordances use `$color10` or stronger. `$color8` and below are decorative/faint only, not readable UI text.
 
-**Yellow/orange status badges:** do not put white text on yellow/orange fills unless a measured contrast check proves AA. Prefer `bg="$yellow3" col="$yellow11"` or `bg="$orange3" col="$orange11"`.
+**Yellow/orange status badges:** do not put white text on yellow/orange fills unless a measured contrast check proves AA. Prefer `bg="$yellow3" color="$yellow11"` or `bg="$orange3" color="$orange11"`.
 
 ---
 
@@ -172,7 +172,7 @@ Use saturated status/accent colors only when they improve field readability. Yel
 1. **Consistent radius:** One for cards (`$4`), one for buttons (`$3`), circular for avatars.
 2. **Text truncation:** Titles `numberOfLines={1}`, descriptions `numberOfLines={2}`.
 3. **Separator vs gap:** `<Separator />` between different concepts, `gap` within same section.
-4. **Button hierarchy:** One primary using verified tokens (`bg="$blue10" color="$color1"` or brand tokens from `tamagui.config.ts`), rest secondary. Do not use `theme="active"` unless that theme exists in the project config. Destructive styling uses verified danger tokens or a confirmed theme only in confirm dialogs.
+4. **Button hierarchy:** One primary using a confirmed theme such as `theme="blue"`, or explicit Tamagui 2 frame/text composition (`<Button bg="$blue10"><Button.Text color="$color1">Save</Button.Text></Button>`); rest secondary. Do not put text-style props directly on `Button`, and do not use `theme="active"` unless that theme exists in the project config. Destructive styling uses verified danger tokens or a confirmed theme only in confirm dialogs.
 5. **Icon + text:** Icon-only OK in headers. In body, always pair with label.
 6. **Consistent row structure:** Same height, padding, info architecture in a list.
 7. **Header weight:** Background difference or bottom border — never floating.

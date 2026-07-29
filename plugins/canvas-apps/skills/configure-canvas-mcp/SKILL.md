@@ -1,7 +1,7 @@
 ---
 name: configure-canvas-mcp
 version: 2.1.0
-description: Configure the Canvas Authoring MCP server for the current coauthoring session. USE WHEN "configure MCP", "set up MCP server", "MCP not working", "connect Canvas Apps MCP", "canvas-authoring not available", "MCP not configured", "set up canvas apps". DO NOT USE WHEN prerequisites are missing — direct the user to install .NET 10 SDK first.
+description: Configure the Canvas Authoring MCP server for the current coauthoring session. USE WHEN "configure MCP", "set up MCP server", "MCP not working", "connect Canvas Apps MCP", "canvas-authoring not available", "MCP not configured", "set up canvas apps".
 author: Microsoft Corporation
 user-invocable: true
 allowed-tools: Bash, AskUserQuestion, mcp__canvas-authoring__connect
@@ -12,20 +12,6 @@ allowed-tools: Bash, AskUserQuestion, mcp__canvas-authoring__connect
 This skill configures the Canvas Authoring MCP server for the user's current Power Apps coauthoring session. The MCP server is auto-registered by the plugin — this skill connects it to a specific app session.
 
 ## Instructions
-
-### 0. Check prerequisites
-
-Verify that .NET 10 SDK or higher is installed:
-
-```bash
-dotnet --list-sdks
-```
-
-If a version 10.x.y or higher is not listed, tell the user:
-
-> ⚠️ .NET 10 SDK is required to run the Canvas Authoring MCP server. It looks like you don't have it installed. Please install it first to use this skill. https://dotnet.microsoft.com/download/dotnet/10.0
-
-Then wait for the user to install it before continuing. If they say it's installed, run the command again to confirm. If it's still not found, repeat the message until they have it installed.
 
 ### 1. Ask for the studio URL
 
@@ -93,12 +79,21 @@ mcp__canvas-authoring__connect(
 - `tenant_id`: Pass a tenant GUID **only** for Entra B2B guest access — set it to the host/resource tenant where the user is a guest so the token is issued by that tenant rather than the user's home tenant. Combine with `login_hint` (the guest's home UPN) to pre-fill the account. Omit for normal same-tenant sign-in.
 - `force_account_select`: Pass `true` **only** to force the account picker instead of silently reusing a cached account — set this when a previous connect failed with a 401/403 and no `login_hint` was given, so the user can pick the correct account. Omit otherwise.
 
-If the call fails, report the error to the user and suggest checking that:
+If the `mcp__canvas-authoring__connect` tool is **not available** (the MCP server did not start), run the following command to check whether the server failed to launch due to a missing .NET 10 SDK:
+
+```bash
+dotnet --list-sdks
+```
+
+If a version 10.x.y or higher is **not** listed, tell the user:
+
+> ⚠️ .NET 10 SDK is required to run the Canvas Authoring MCP server. It looks like you don't have it installed. Please install it from https://dotnet.microsoft.com/download/dotnet/10.0 and then try again.
+
+If the tool is available but the call returns an error, report the error and suggest checking that:
 
 1. The studio URL is correct and the browser tab is still open
 2. Coauthoring is enabled in the app settings
-3. .NET 10 SDK is correctly installed
-4. If sign-in failed, the user may need to specify `auth_flow` (`broker`, `browser`, or `devicecode`) or a `login_hint` (UPN/email) to authenticate as the correct account. On a headless/SSH host, use `auth_flow: "devicecode"`. If a cached account keeps getting picked, retry with `force_account_select: true`. For Entra B2B guest access, set `tenant_id` to the host tenant.
+3. If sign-in failed, the user may need to specify `auth_flow` (`broker`, `browser`, or `devicecode`) or a `login_hint` (UPN/email) to authenticate as the correct account. On a headless/SSH host, use `auth_flow: "devicecode"`. If a cached account keeps getting picked, retry with `force_account_select: true`. For Entra B2B guest access, set `tenant_id` to the host tenant.
 
 ### 4. Confirm
 

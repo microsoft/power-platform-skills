@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * PostToolUse hook: catch the two HTTP-400 crash patterns on Dataverse calls.
+ * Explicit validator: catch HTTP-400 crash patterns on Dataverse calls.
  *
  * Fires after Write / Edit / MultiEdit on TS/TSX files. Reads the resulting
  * file content and blocks the write if either:

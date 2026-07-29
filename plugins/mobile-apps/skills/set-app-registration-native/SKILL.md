@@ -14,7 +14,10 @@ Wire `auth.config.json` to an Entra ID app registration for a Power Apps Wrap mo
 
 This skill is manual by design:
 - Do **not** create or patch app registrations from this skill.
-- Use the public Power Apps Wrap app-registration page and then write the pasted client ID into `auth.config.json`.
+- Use the public Power Apps Wrap app-registration page to create/configure the
+  registration, then write the pasted client ID into `auth.config.json`.
+- Do not direct the user to add redirect URIs or API permissions manually.
+  Tenant-wide admin consent is not required for this Wrap registration flow.
 
 ## Workflow
 
@@ -69,6 +72,8 @@ Open the Power Apps Wrap app-registration page for this environment:
 https://make.powerapps.com/environments/<environment-id>/wraps#create-app-registration
 
 Create/register the app there, then paste the Application (client) ID here.
+The Wrap page configures the native registration. Do not add redirect URIs or
+API permissions manually; tenant-wide admin consent is not required.
 If you already have a client ID, paste it directly.
 If you cannot configure auth now, type skip.
 ```

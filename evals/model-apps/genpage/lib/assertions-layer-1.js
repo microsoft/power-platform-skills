@@ -679,6 +679,127 @@ PHASE_EXPECTATIONS.set(
   }
 );
 
+// Eval 17: connector feature flag OFF — regression guard confirming that the
+// planner probes the feature gate and skips connector discovery entirely when
+// the flag is disabled, leaving ## Connector Bindings as the exact sentinel.
+PHASE_EXPECTATIONS.set(
+  "Phase 1 (Planner): With the connectors feature flag OFF, the feature gate (scripts/lib/feature-flags.js) is checked, connector discovery (list-connections.js) is NOT run, and the plan's ## Connector Bindings is exactly 'No connector bindings.'",
+  ({ fixture }) => {
+    const log = fixture.workflowLog;
+    const plan = fixture.genpagePlan;
+    if (!log) return fail('no workflow-log.md');
+    if (!plan) return fail('no genpage-plan.md');
+
+    // (a) A line in the workflow log must reference feature-flags.js with
+    //     "connectors" AND "disabled" or "OFF" — evidence the gate was probed
+    //     and returned the OFF result.
+    const hasFlagDisabled = log.split('\n').some((l) =>
+      /feature-flags(?:\.js)?/i.test(l) &&
+      /\bconnectors\b/i.test(l) &&
+      /\b(?:disabled|OFF)\b/i.test(l)
+    );
+    if (!hasFlagDisabled) {
+      return fail(
+        'workflow-log does not record a feature-flags.js probe for connectors returning disabled/OFF'
+      );
+    }
+
+    // (b) list-connections.js must NOT be invoked — a `node ... list-connections.js`
+    //     command must be absent. A narrative mention like "list-connections.js NOT
+    //     run" in a comment is acceptable and does not count as an invocation.
+    if (/\bnode\b[^\n]*list-connections\.js/.test(log)) {
+      return fail(
+        'list-connections.js was invoked but connectors flag is OFF — connector discovery should be skipped'
+      );
+    }
+
+    // (c) Plan's ## Connector Bindings body must be exactly the no-binding sentinel.
+    const cbSection = planSection(plan, 'Connector Bindings');
+    if (!cbSection) {
+      return fail('genpage-plan.md is missing ## Connector Bindings section');
+    }
+    if (cbSection.trim() !== 'No connector bindings.') {
+      return fail(
+        `## Connector Bindings body is not exactly 'No connector bindings.' (got: ${cbSection.trim().slice(0, 60)})`
+      );
+    }
+
+    return pass();
+  }
+);
+
+// Eval 18: connector feature flag ON — regression guard confirming that the
+// planner probes the gate, gets "enabled", runs list-connections.js for
+// discovery, and records at least one real binding in the plan.
+PHASE_EXPECTATIONS.set(
+  "Phase 1 (Planner): With the connectors feature flag ON, the feature gate passes (enabled) and list-connections.js is run for connector discovery, and the plan's ## Connector Bindings records at least one binding (not 'No connector bindings.')",
+  ({ fixture }) => {
+    const log = fixture.workflowLog;
+    const plan = fixture.genpagePlan;
+    if (!log) return fail('no workflow-log.md');
+    if (!plan) return fail('no genpage-plan.md');
+
+    // (a) A line in the workflow log must reference feature-flags.js with
+    //     "connectors" AND "enabled" or "ON" — evidence the gate passed.
+    const hasFlagEnabled = log.split('\n').some((l) =>
+      /feature-flags(?:\.js)?/i.test(l) &&
+      /\bconnectors\b/i.test(l) &&
+      /\b(?:enabled|ON)\b/i.test(l)
+    );
+    if (!hasFlagEnabled) {
+      return fail(
+        'workflow-log does not record a feature-flags.js probe for connectors returning enabled/ON'
+      );
+    }
+
+    // (b) A `node ... list-connections.js` invocation must appear in the log —
+    //     discovery should run when the flag is ON.
+    if (!/\bnode\b[^\n]*list-connections\.js/.test(log)) {
+      return fail(
+        'list-connections.js not invoked — expected when connectors flag is ON'
+      );
+    }
+
+    // (c) Plan's ## Connector Bindings must contain at least one real binding,
+    //     detected by a table pipe (|) or a shared_ connector id.
+    const cbSection = planSection(plan, 'Connector Bindings');
+    if (!cbSection || cbSection.trim() === '') {
+      return fail('genpage-plan.md is missing ## Connector Bindings section');
+    }
+    if (cbSection.trim() === 'No connector bindings.') {
+      return fail(
+        '## Connector Bindings says "No connector bindings." but flag is ON and a binding was expected'
+      );
+    }
+    if (!/\|/.test(cbSection) && !/shared_/.test(cbSection)) {
+      return fail(
+        '## Connector Bindings does not contain a binding table row (expected | pipe or shared_ connector id)'
+      );
+    }
+
+    return pass();
+  }
+);
+
+// Eval 18: connectors ON deploy — connectors.json is written as a bare array (not
+// the config.json { connectorBindings: [...] } wrapper) and the upload passes
+// --connectors. Locks in the connectors.json shape and the deploy wiring.
+PHASE_EXPECTATIONS.set(
+  "Phase 4.5 / Phase 6 (connectors ON): connectors.json is written as a bare array (not the config.json object wrapper) and the upload includes --connectors",
+  ({ fixture }) => {
+    const log = fixture.workflowLog;
+    if (!log) return fail('no workflow-log.md');
+    if (!/connectors\.json/.test(log)) return fail('workflow-log does not record connectors.json');
+    if (!/--connectors\b/.test(log)) return fail('upload does not include --connectors');
+    // Guard against the object-wrapper regression: connectors.json must be a bare
+    // array, not `{ "connectorBindings": [...] }` (that is the deployed config.json).
+    if (/connectors\.json[^\n]*\{\s*"connectorBindings"/.test(log)) {
+      return fail('connectors.json shown as the config.json object wrapper, not a bare array');
+    }
+    return pass();
+  }
+);
+
 module.exports = {
   WORKFLOW_ASSERTIONS,
   PHASE_EXPECTATIONS,
