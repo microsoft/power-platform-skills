@@ -51,6 +51,8 @@ test('renderTemplateImportStatus renders scaffold-style slideshow, progress, and
   assert.match(html, /grid-overlay/);
   assert.match(html, /orbit-system/);
   assert.match(html, /core-shape/);
+  assert.match(html, /preview-showcase/);
+  assert.match(html, /previewFrame/);
   assert.match(html, /progressFill/);
   assert.match(html, /scaleX/);
   assert.match(html, /progressFromStatus/);

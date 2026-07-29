@@ -59,10 +59,8 @@
     @keyframes gridPulse { 0% { opacity: 0.3; } 100% { opacity: 0.7; } }
     .center-stage { position: relative; z-index: 10; display: flex; flex-direction: column; align-items: center; gap: 36px; padding: 40px 40px 48px; max-height: 100vh; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; }
     .center-stage::-webkit-scrollbar { display: none; }
-    .orbit-system { position: relative; width: 260px; height: 220px; display: flex; align-items: center; justify-content: center; }
-    .core-shape { position: absolute; width: 158px; height: 96px; z-index: 5; border-radius: 16px; background: rgba(255, 255, 255, 0.8); box-shadow: 0 2px 12px rgba(139, 111, 192, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04); overflow: hidden; animation: coreFloat 4s ease-in-out infinite; }
-    .core-shape img { width: 100%; height: 100%; object-fit: cover; display: block; background: var(--pp-surface); }
-    .core-shape.empty { width: 120px; height: 120px; border-radius: 50%; background: url('./power-pages-icon.png') center/contain no-repeat; box-shadow: none; }
+    .orbit-system { position: relative; width: 220px; height: 220px; display: flex; align-items: center; justify-content: center; }
+    .core-shape { position: absolute; width: 120px; height: 120px; z-index: 5; background: url('./power-pages-icon.png') center/contain no-repeat; animation: coreFloat 4s ease-in-out infinite; }
     @keyframes coreFloat { 0%, 100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-3px) scale(1.025); } }
     .core-glow { position: absolute; width: 150px; height: 150px; border-radius: 50%; background: radial-gradient(circle, rgba(167, 139, 219, 0.18) 0%, transparent 70%); z-index: 3; animation: coreGlow 3s ease-in-out infinite alternate; filter: blur(25px); }
     @keyframes coreGlow { 0% { transform: scale(1); opacity: 0.5; } 100% { transform: scale(1.5); opacity: 0.9; } }
@@ -92,6 +90,10 @@
     .status-icon { width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
     .status-icon.working { border: 2px solid rgba(139, 111, 192, 0.2); border-top-color: var(--pp-violet); animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
+    .preview-showcase { width: min(520px, calc(100vw - 64px)); opacity: 0; animation: fadeSlideUp 1s ease-out 1.35s forwards; }
+    .preview-frame { width: 100%; aspect-ratio: 16 / 8.5; border: 1px solid rgba(139, 111, 192, 0.12); border-radius: 18px; background: rgba(255, 255, 255, 0.72); box-shadow: 0 2px 12px rgba(139, 111, 192, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04); overflow: hidden; display: flex; align-items: center; justify-content: center; }
+    .preview-frame img { width: 100%; height: 100%; object-fit: contain; display: block; background: var(--pp-surface); }
+    .preview-empty { padding: 20px; color: var(--pp-text-muted); font-size: 13px; text-align: center; }
     .progress-container { width: 320px; opacity: 0; animation: fadeSlideUp 1s ease-out 1.5s forwards; display: flex; flex-direction: column; align-items: center; gap: 14px; }
     .progress-track { width: 100%; height: 3px; background: rgba(139, 111, 192, 0.1); border-radius: 4px; overflow: hidden; position: relative; }
     .progress-fill { height: 100%; width: 40%; border-radius: 4px; background: linear-gradient(90deg, transparent, var(--pp-violet), var(--pp-lavender), var(--pp-sky), transparent); position: absolute; top: 0; left: -40%; animation: infiniteSlide 2s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
@@ -124,7 +126,7 @@
     .toast-message { font-size: 13px; color: var(--pp-text-secondary); }
     @keyframes toastEnter { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
     @keyframes fadeSlideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
-    @media (max-width: 600px) { .main-heading { font-size: 24px; } .progress-container { width: 260px; } .feature-cards { flex-direction: column; align-items: center; } .orbit-system { width: 180px; height: 180px; } .core-shape { width: 132px; height: 82px; } }
+    @media (max-width: 600px) { .main-heading { font-size: 24px; } .progress-container { width: 260px; } .feature-cards { flex-direction: column; align-items: center; } .orbit-system { width: 180px; height: 180px; } }
   </style>
 </head>
 <body>
@@ -152,6 +154,10 @@
         <div class="main-heading" id="mainHeading">Importing __TEMPLATE_NAME__ template</div>
 
         <div class="status-area" id="statusArea"></div>
+
+        <div class="preview-showcase" aria-label="Template preview slideshow">
+          <div class="preview-frame" id="previewFrame"></div>
+        </div>
 
         <div class="progress-container">
           <div class="progress-track" id="progressTrack">
@@ -200,7 +206,7 @@
       var progressTrack = document.getElementById('progressTrack');
       var progressFill = document.getElementById('progressFill');
       var tipTextEl = document.getElementById('tipText');
-      var coreShape = document.getElementById('coreShape');
+      var previewFrame = document.getElementById('previewFrame');
       var toast = document.getElementById('toast');
       var toastTitle = document.getElementById('toastTitle');
       var toastMessage = document.getElementById('toastMessage');
@@ -281,17 +287,15 @@
       }
 
       function showPreview() {
-        if (!coreShape) return;
+        if (!previewFrame) return;
         if (!PREVIEWS.length) {
-          coreShape.classList.add('empty');
-          coreShape.replaceChildren();
+          previewFrame.innerHTML = '<div class="preview-empty">No preview images are available for this template.</div>';
           return;
         }
-        coreShape.classList.remove('empty');
         var img = document.createElement('img');
         img.src = PREVIEWS[previewIndex % PREVIEWS.length];
         img.alt = 'Template preview ' + ((previewIndex % PREVIEWS.length) + 1);
-        coreShape.replaceChildren(img);
+        previewFrame.replaceChildren(img);
         previewIndex++;
       }
 
@@ -362,9 +366,13 @@
       ];
 
       var tips = [
-        'Template solutions are imported as unmanaged components so you can customize them after activation.',
-        'The imported site stays inactive until the activation step provisions a live endpoint.',
-        'The agent terminal shows detailed Dataverse import status while this page stays visual.'
+        'Power Pages sites are built on Microsoft Dataverse, giving you enterprise-level data capabilities from day one.',
+        'Your site automatically includes responsive design - it looks great on phones, tablets, and desktops.',
+        'With role-based security, you can control exactly who sees what on your site.',
+        'Power Pages integrates seamlessly with Power Automate, Power BI, and the entire Microsoft ecosystem.',
+        'You can extend your site with custom code, and JavaScript for unlimited flexibility.',
+        'Built-in content delivery networks ensure your pages load fast for users worldwide.',
+        'Multi-language support lets you reach audiences across the globe with localized content.'
       ];
 
       var tipIndex = 0;
