@@ -80,8 +80,9 @@ function renderPortalTableMarkdown(portals, opts = {}) {
   return [head, sep, ...body].join('\n');
 }
 
-function border(widths, left, mid, right) {
-  return left + widths.map((w) => '-'.repeat(w + 2)).join(mid) + right;
+function border(widths, left, mid, right, fill) {
+  const f = fill || '-';
+  return left + widths.map((w) => f.repeat(w + 2)).join(mid) + right;
 }
 
 /**
@@ -100,6 +101,13 @@ function renderPortalTable(portals, opts = {}) {
   const colorOpts = { enabled: opts.color == null ? null : opts.color, stream: opts.stream, env: opts.env };
   const colorOn = shouldColor(colorOpts);
   const icons = Boolean(opts.icons);
+  // Unicode box-drawing style (│ ┌ ┬ ┐ ├ ┼ ┤ └ ┴ ┘) with a horizontal rule
+  // between EVERY data row. This is the mandated "governance status" render
+  // format (Fetch Env / Fetch Site) — see SKILL.md Phase 4.3.1 / 4.4.3. ASCII
+  // mode (default, `unicode` falsy) keeps the legacy +---+ box with no
+  // inter-row rules for backward compatibility (and the empty-list test that
+  // asserts a 4-line frame).
+  const uni = Boolean(opts.unicode);
 
   const rows = list.map((p, i) => {
     const label = normalizeState(p && p.state);
@@ -124,6 +132,7 @@ function renderPortalTable(portals, opts = {}) {
     Math.max(...all.map((r) => r.state.length)),
   ];
 
+  const vbar = uni ? '│' : '|';
   const cell = (r, colorize) => {
     const statePadded = pad(r.state, widths[4]);
     // r.state may carry a leading icon (e.g. "🟢 Enabled"); derive the colour
@@ -134,15 +143,24 @@ function renderPortalTable(portals, opts = {}) {
       colorize && colorKey
         ? foregroundColor(statePadded, colorKey, { enabled: true })
         : statePadded;
-    return `| ${pad(r.n, widths[0])} | ${pad(r.name, widths[1])} | ${pad(r.url, widths[2])} | ${pad(r.id, widths[3])} | ${stateCell} |`;
+    return `${vbar} ${pad(r.n, widths[0])} ${vbar} ${pad(r.name, widths[1])} ${vbar} ${pad(r.url, widths[2])} ${vbar} ${pad(r.id, widths[3])} ${vbar} ${stateCell} ${vbar}`;
   };
 
+  // Border glyph sets: Unicode box-drawing vs. the legacy ASCII '+' frame.
+  const top = uni ? border(widths, '┌', '┬', '┐', '─') : border(widths, '+', '+', '+');
+  const midRule = uni ? border(widths, '├', '┼', '┤', '─') : border(widths, '+', '+', '+');
+  const bottom = uni ? border(widths, '└', '┴', '┘', '─') : border(widths, '+', '+', '+');
+
   const out = [];
-  out.push(border(widths, '+', '+', '+'));
+  out.push(top);
   out.push(cell(headers, false));
-  out.push(border(widths, '+', '+', '+'));
-  for (const r of rows) out.push(cell(r, colorOn));
-  out.push(border(widths, '+', '+', '+'));
+  out.push(midRule);
+  rows.forEach((r, i) => {
+    out.push(cell(r, colorOn));
+    // Unicode status format puts a rule between every data row; ASCII does not.
+    if (uni && i < rows.length - 1) out.push(midRule);
+  });
+  out.push(bottom);
   return out.join('\n');
 }
 
@@ -173,6 +191,10 @@ Flags:
   --no-color    Force color off (plain ASCII — safe for capturing / chat).
   --icons       Prefix the State cell with 🟢 / 🔴 (default: on).
   --no-icons    Omit the state icons (plain "Enabled" / "Disabled").
+  --unicode     Render the fixed-width Unicode box (┌─┬─┐ │ ├─┼─┤ └─┴─┘) with a
+                rule between every row. This is the mandated governance STATUS
+                format (Fetch Env / Fetch Site). Use --no-color with it so the
+                ANSI escapes don't clutter the box. Ignored when --markdown set.
   --portalsFile Read JSON from a file instead of stdin.
   --help        Show this help.
 
@@ -182,7 +204,7 @@ The state icons (🟢 Enabled / 🔴 Disabled) are shown by default — pass
 `;
 
 function parseFlags(argv) {
-  const out = { color: null, icons: true, markdown: false };
+  const out = { color: null, icons: true, markdown: false, unicode: false };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--color') out.color = true;
@@ -190,6 +212,7 @@ function parseFlags(argv) {
     else if (a === '--icons') out.icons = true;
     else if (a === '--no-icons') out.icons = false;
     else if (a === '--markdown' || a === '--md') out.markdown = true;
+    else if (a === '--unicode' || a === '--box') out.unicode = true;
     else if (a === '--portalsFile') out.portalsFile = argv[++i];
     else if (a === '--help') out.help = true;
   }
@@ -219,7 +242,7 @@ async function main() {
   const portals = Array.isArray(parsed) ? parsed : parsed.portals || [];
   const rendered = flags.markdown
     ? renderPortalTableMarkdown(portals, { icons: flags.icons })
-    : renderPortalTable(portals, { color: flags.color, icons: flags.icons });
+    : renderPortalTable(portals, { color: flags.color, icons: flags.icons, unicode: flags.unicode });
   process.stdout.write(rendered + '\n');
 }
 

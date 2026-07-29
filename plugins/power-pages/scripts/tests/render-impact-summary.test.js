@@ -35,6 +35,35 @@ test('renderImpactSummary emits the required consent-gate rows in order', () => 
   assert.match(out, /^Scope:\s+Every site in this environment$/m);
   assert.match(out, /^Sites in env:$/m);
   assert.match(out, /^Effect:\s+OpenID Connect sign-in will be disabled on all portals in Sachin-Jun-2nd\.$/m);
+  // The API-mapping companion line: env-wide disable -> None (no ToBeAdded list).
+  assert.match(out, /^Policy value:\s+None$/m);
+});
+
+test('Policy value line derives Include + ToBeAdded ids for a specific-site enable', () => {
+  const out = renderImpactSummary({
+    policy: 'EnableProtocolOpenIdConnect',
+    direction: 'enable',
+    scope: 'specific',
+    // policyValue intentionally omitted — must be derived (enable+specific -> Include).
+    env: { displayName: 'Env', envId: 'e1' },
+    sites: [
+      { name: 'P3', url: 'https://c', portalId: 'aaa', currentState: 'Disabled' },
+      { name: 'P4', url: 'https://d', portalId: 'bbb', currentState: 'Disabled' },
+    ],
+  });
+  assert.match(out, /^Policy value:\s+Include, ToBeAdded = \[aaa, bbb\]$/m);
+});
+
+test('Policy value line uses the explicit req.policyValue when provided (Exclude for specific disable)', () => {
+  const out = renderImpactSummary({
+    policy: 'EnableProtocolOpenIdConnect',
+    direction: 'disable',
+    scope: 'specific',
+    policyValue: 'Exclude',
+    env: { displayName: 'Env', envId: 'e1' },
+    sites: [{ name: 'P1', url: 'https://a', portalId: 'xyz', currentState: 'Enabled' }],
+  });
+  assert.match(out, /^Policy value:\s+Exclude, ToBeAdded = \[xyz\]$/m);
 });
 
 test('flips are marked ← CHANGED, already-terminal sites are not', () => {
@@ -150,7 +179,7 @@ test('specific scope renders the Sites covered label and lists names in the Effe
   assert.match(out, /Effect:.*listed portals in env: Site 1, Site 2\.$/m);
 });
 
-test('never leaks the internal policyValue terms to the user-facing block', () => {
+test('never leaks the internal policyValue terms into the plain-language block', () => {
   const out = renderImpactSummary({
     policy: 'EnableProtocolOpenIdConnect',
     direction: 'enable',
@@ -159,10 +188,19 @@ test('never leaks the internal policyValue terms to the user-facing block', () =
     env: { displayName: 'env', envId: 'e1' },
     sites: [{ name: 'Site 1', currentState: 'Disabled' }],
   });
+  // The dedicated `Policy value:` line intentionally shows the technical
+  // All/None/Include/Exclude value the admin approves (the user explicitly asked
+  // to see it). Everything ELSE — Action / Scope / Effect / Sites — is
+  // plain-language and must never leak those internal terms. So scrub only the
+  // Policy value line before scanning the rest.
+  const plain = out
+    .split('\n')
+    .filter((line) => !/^Policy value:/.test(line))
+    .join('\n');
   for (const term of ['All', 'Include', 'None', 'Exclude']) {
     assert.ok(
-      !new RegExp('\\b' + term + '\\b').test(out),
-      `consent block must not leak internal term '${term}'`
+      !new RegExp('\\b' + term + '\\b').test(plain),
+      `plain-language block must not leak internal term '${term}'`
     );
   }
 });
@@ -249,7 +287,7 @@ test('enabling a parent shows the availability cascade, not the disable checklis
   // Enable must never claim the children "will get Disable" (they keep their state).
   assert.ok(!/Below Setting will get Disable/.test(out), 'enable must not show the disable cascade');
   // It surfaces the informational availability list instead.
-  assert.match(out, /does not automatically enable individual identity providers/);
+  assert.match(out, /must be enabled individually using their respective governance settings/);
 });
 
 test('policies without a cascade dependency render no cascade block', () => {
@@ -303,9 +341,9 @@ test('enabling External Auth Providers lists the methods that become available +
   assert.match(out, /^3\. OAuth 2\.0$/m);
   assert.match(out, /^4\. WS-Federation$/m);
   // Social-provider rows carry the per-provider config annotation.
-  assert.match(out, /^5\. Facebook\s+- Controlled by the Facebook setting\.$/m);
-  assert.match(out, /^6\. Google\s+- Controlled by the Google setting\.$/m);
-  assert.match(out, /^7\. Microsoft\s+- Controlled by the Microsoft setting\.$/m);
+  assert.match(out, /^5\. Facebook\s+- Controlled by the Facebook governance setting\.$/m);
+  assert.match(out, /^6\. Google\s+- Controlled by the Google governance setting\.$/m);
+  assert.match(out, /^7\. Microsoft\s+- Controlled by the Microsoft governance setting\.$/m);
   // Footer note about per-provider configuration.
   assert.match(out, /^Note: Enabling the External Authentication policy restores support/m);
   // Enable path must never render the disable heading.
@@ -321,10 +359,10 @@ test('enabling the OAuth 2.0 protocol lists the social IdPs it does NOT auto-ena
     env: { displayName: 'env', envId: 'e1' },
     sites: [{ name: 'Site 1', currentState: 'Disabled' }],
   });
-  assert.match(out, /does not automatically enable individual identity providers/);
-  assert.match(out, /^1\. Facebook\s+- Controlled by the Facebook setting\.$/m);
-  assert.match(out, /^2\. Google\s+- Controlled by the Google setting\.$/m);
-  assert.match(out, /^3\. Microsoft\s+- Controlled by the Microsoft setting\.$/m);
+  assert.match(out, /must be enabled individually using their respective governance settings/);
+  assert.match(out, /^1\. Facebook\s+- Controlled by the Facebook governance setting\.$/m);
+  assert.match(out, /^2\. Google\s+- Controlled by the Google governance setting\.$/m);
+  assert.match(out, /^3\. Microsoft\s+- Controlled by the Microsoft governance setting\.$/m);
   // OAuth enable is IdP-only — no protocol rows, and no numbered disable-cascade
   // row (the Sites table legitimately shows a 🔴 Disabled current-state cell, so
   // scope the check to numbered cascade rows only).

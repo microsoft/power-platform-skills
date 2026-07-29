@@ -31,6 +31,15 @@ const {
  * @param {string} [args.policy]
  * @param {string} [args.portalId]
  * @param {object} [args.body]              - POST body (apply op only).
+ * @param {object} [args.context]           - Pre-resolved governance context.
+ *   Resolving the context mints a bearer via a `tip-auth.js` SUBPROCESS
+ *   (`execSync`), so a caller issuing many calls for the same env should
+ *   resolve ONCE with `resolveGovernanceContext(envId)` and pass it here to
+ *   every call — otherwise each call re-spawns the token helper. When omitted
+ *   we resolve per-call (the original single-call behavior).
+ * @param {number} [args.timeout]           - Per-request timeout (ms). Defaults
+ *   to the request() default (15s). Raise it for slow gateways / parallel
+ *   batches where the shared server is slower under concurrent load.
  * @returns {Promise<{ ok: boolean, statusCode: number, body: any, transport: string, error?: { code: string, message: string } }>}
  */
 async function callGovernance(args) {
@@ -38,7 +47,9 @@ async function callGovernance(args) {
 
   // Gateway transport: env id goes into the base URL via resolveGovernanceContext,
   // which also carries the Azure CLI bearer token (see governance-context.js).
-  const ctx = resolveGovernanceContext(args.envId);
+  // A caller may pass a pre-resolved `context` to avoid re-minting the token on
+  // every call (each mint is a blocking tip-auth.js subprocess).
+  const ctx = args.context || resolveGovernanceContext(args.envId);
   if (ctx.error) {
     return {
       ok: false,
@@ -53,6 +64,7 @@ async function callGovernance(args) {
     method: route.method,
     path: route.path,
     body: args.body,
+    ...(args.timeout != null && { timeout: args.timeout }),
   });
   return { ...res, transport: 'gateway' };
 }

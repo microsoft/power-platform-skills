@@ -113,6 +113,45 @@ test('empty portal list still renders header + borders', () => {
   assert.strictEqual(out.split('\n').length, 4, 'top border + header + separator + bottom border');
 });
 
+// --- render-portal-table.js Unicode box mode (governance STATUS format) ---
+
+test('unicode mode emits box-drawing frame with a rule between every row', () => {
+  const out = renderPortalTable(
+    [
+      { name: 'Portal_3', url: 'https://a', portalId: 'id3', state: true },
+      { name: 'Portal_4', url: 'https://b', portalId: 'id4', state: true },
+      { name: 'Portal_1', url: 'https://c', portalId: 'id1', state: false },
+    ],
+    { color: false, icons: true, unicode: true }
+  );
+  const lines = out.split('\n');
+  // Frame corners/tees + vertical bar are Unicode box-drawing, never ASCII '+'/'|'.
+  assert.ok(lines[0].startsWith('┌') && lines[0].endsWith('┐'), 'top border');
+  assert.ok(out.includes('│'), 'cells use the │ vertical bar');
+  assert.ok(!out.includes('+') && !out.includes('|'), 'no ASCII box glyphs');
+  assert.ok(lines[lines.length - 1].startsWith('└') && lines[lines.length - 1].endsWith('┘'), 'bottom border');
+  // 3 rows → top, header, mid, r1, mid, r2, mid, r3, bottom = 9 lines.
+  assert.strictEqual(lines.length, 9, 'a ├┼┤ rule separates every data row');
+  assert.strictEqual(out.match(/├/g).length, 3, 'exactly 3 inter-row/header rules');
+});
+
+test('unicode mode keeps exactly the five columns with state icons', () => {
+  const out = renderPortalTable([{ name: 'P', url: 'u', portalId: 'i', state: true }], {
+    color: false,
+    icons: true,
+    unicode: true,
+  });
+  const header = out.split('\n')[1];
+  assert.ok(/│ # │ Name .*│ URL .*│ Site ID .*│ State .*│/.test(header), 'five fixed columns');
+  assert.ok(out.includes('🟢 Enabled'), 'State cell carries the icon');
+});
+
+test('unicode option is additive — default ASCII output is unchanged', () => {
+  const ascii = renderPortalTable([{ name: 'P', url: 'u', portalId: 'i', state: true }], { color: false });
+  assert.ok(ascii.includes('+---') && ascii.includes('| # |'), 'default stays ASCII box');
+  assert.ok(!ascii.includes('┌') && !ascii.includes('│'), 'no Unicode glyphs by default');
+});
+
 test('unknown state stays uncolored even with color on', () => {
   const out = renderPortalTable([{ name: 'X', state: 'weird' }], { color: true });
   assert.ok(out.includes('Unknown'));

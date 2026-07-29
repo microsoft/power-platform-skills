@@ -8,7 +8,7 @@
         "policyValue": "All",
         "userIntent": "Enable the Governance Setting on every site in the environment.",
         "apiBehavior": {
-          "applyTo": "AllSites",
+          "applyTo": "All",
           "enabled": true,
           "inclusionList": [],
           "exclusionList": []
@@ -18,7 +18,7 @@
         "policyValue": "Include",
         "userIntent": "Enable the Governance Setting only on the listed sites.",
         "apiBehavior": {
-          "applyTo": "IncludeSites",
+          "applyTo": "Include",
           "enabled": true,
           "siteList": ["site1", "site2"]
         }
@@ -27,7 +27,7 @@
         "policyValue": "None",
         "userIntent": "Disable the Governance Setting on every site in the environment.",
         "apiBehavior": {
-          "applyTo": "AllSites",
+          "applyTo": "None",
           "enabled": false,
           "inclusionList": [],
           "exclusionList": []
@@ -37,7 +37,7 @@
         "policyValue": "Exclude",
         "userIntent": "Disable the Governance Setting only on the listed sites.",
         "apiBehavior": {
-          "applyTo": "ExcludeSites",
+          "applyTo": "Exclude",
           "enabled": true,
           "siteList": ["site1", "site2"]
         }
@@ -68,6 +68,8 @@
       "displayName": "Enable the OpenID Connect protocol",
       "subject": "OpenID Connect sign-in",
       "summaryLabel": "OpenID Connect protocol",
+      "statusColumnLabel": "OpenID Connect",
+      "availabilityDependsOn": ["EnableExternalAuthProviders"],
       "userShorthands": ["openid connect protocol", "oidc protocol", "enable openid connect", "enable oidc", "openid connect sign-in", "EnableProtocolOpenIdConnect", "openid connect", "oidc", "openidconnect", "openid"],
       "stateParaphrase": {
         "Enabled": "OpenID Connect sign-in Enabled",
@@ -84,6 +86,8 @@
       "displayName": "Enable the SAML 2.0 protocol",
       "subject": "SAML 2.0 sign-in",
       "summaryLabel": "SAML 2.0 protocol",
+      "statusColumnLabel": "SAML 2.0",
+      "availabilityDependsOn": ["EnableExternalAuthProviders"],
       "userShorthands": ["saml 2.0 protocol", "saml protocol", "saml20 protocol", "enable saml", "enable saml 2.0", "EnableProtocolSAML20", "saml", "saml 2.0", "saml20", "saml2", "saml2.0"],
       "stateParaphrase": {
         "Enabled": "SAML 2.0 sign-in Enabled",
@@ -100,6 +104,8 @@
       "displayName": "Enable the WS-Federation protocol",
       "subject": "WS-Federation sign-in",
       "summaryLabel": "WS-Federation protocol",
+      "statusColumnLabel": "WS-Federation",
+      "availabilityDependsOn": ["EnableExternalAuthProviders"],
       "userShorthands": ["ws-federation", "wsfederation", "ws federation", "wsfed", "enable ws-federation", "ws-fed", "EnableProtocolWsFederation"],
       "stateParaphrase": {
         "Enabled": "WS-Federation sign-in Enabled",
@@ -116,6 +122,9 @@
       "displayName": "Enable the OAuth 2.0 protocol",
       "subject": "OAuth 2.0 sign-in",
       "summaryLabel": "OAuth 2.0 protocol",
+      "statusColumnLabel": "OpenAuth Protocol",
+      "effectiveStatusLabel": "Effective OpenAuth State",
+      "availabilityDependsOn": ["EnableExternalAuthProviders"],
       "userShorthands": ["openauth", "open auth", "oauth 2.0 protocol", "oauth protocol", "openauth protocol", "enable openauth", "oauth2", "oauth 2.0", "EnableProtocolOpenAuth"],
       "stateParaphrase": {
         "Enabled": "OAuth 2.0 sign-in Enabled",
@@ -126,15 +135,15 @@
         "message": "Disabling this signs out any users currently authenticated via OAuth 2.0 on the affected sites and blocks that sign-in method until it's re-enabled."
       },
       "cascadeOnDisable": {
-        "heading": "The following OAuth 2.0 identity providers will be disabled:",
+        "heading": "Disabling OAuth 2.0 will disable social login using Facebook, Google, Microsoft, and other OAuth 2.0 identity providers.",
         "items": ["Facebook", "Google", "Microsoft"]
       },
       "cascadeOnEnable": {
-        "heading": "Enabling the OAuth 2.0 protocol enables OAuth-based authentication but does not automatically enable individual identity providers. Each provider is managed independently through its own setting:",
+        "heading": "Enabling OAuth 2.0 enables support for OAuth-based authentication only. OAuth identity providers are managed independently and must be enabled through their respective governance settings.",
         "items": [
-          { "label": "Facebook", "note": "Controlled by the Facebook setting." },
-          { "label": "Google", "note": "Controlled by the Google setting." },
-          { "label": "Microsoft", "note": "Controlled by the Microsoft setting." }
+          { "label": "Facebook", "note": "Enable the Facebook governance setting to allow Facebook sign-in." },
+          { "label": "Google", "note": "Enable the Google governance setting to allow Google sign-in." },
+          { "label": "Microsoft", "note": "Enable the Microsoft governance setting to allow Microsoft sign-in." }
         ]
       }
     },
@@ -144,6 +153,8 @@
       "displayName": "Enable Facebook sign-in",
       "subject": "Facebook sign-in",
       "summaryLabel": "Facebook sign-in provider",
+      "statusColumnLabel": "Facebook",
+      "availabilityDependsOn": ["EnableExternalAuthProviders", "EnableProtocolOpenAuth"],
       "userShorthands": ["facebook", "facebook login", "facebook sign-in", "facebook oauth", "facebook idp", "enable facebook", "fb", "EnableIdpOAuthFacebook"],
       "stateParaphrase": {
         "Enabled": "Facebook sign-in Enabled",
@@ -160,6 +171,9 @@
       "displayName": "Enable Google sign-in",
       "subject": "Google sign-in",
       "summaryLabel": "Google sign-in provider",
+      "statusColumnLabel": "Google",
+      "effectiveStatusLabel": "Effective Google idp State",
+      "availabilityDependsOn": ["EnableExternalAuthProviders", "EnableProtocolOpenAuth"],
       "userShorthands": ["google", "google login", "google sign-in", "google oauth", "google idp", "enable google", "gmail", "EnableIdpOAuthGoogle"],
       "stateParaphrase": {
         "Enabled": "Google sign-in Enabled",
@@ -176,6 +190,8 @@
       "displayName": "Enable Microsoft sign-in",
       "subject": "Microsoft sign-in",
       "summaryLabel": "Microsoft sign-in provider",
+      "statusColumnLabel": "Microsoft",
+      "availabilityDependsOn": ["EnableExternalAuthProviders", "EnableProtocolOpenAuth"],
       "userShorthands": ["microsoft", "microsoft account", "microsoft login", "microsoft sign-in", "microsoft oauth", "microsoft idp", "enable microsoft", "msa", "EnableIdpOAuthMicrosoft"],
       "stateParaphrase": {
         "Enabled": "Microsoft sign-in Enabled",
@@ -208,6 +224,7 @@
       "displayName": "Enable external authentication providers",
       "subject": "External authentication providers",
       "summaryLabel": "External auth providers setting",
+      "statusColumnLabel": "External Auth",
       "userShorthands": ["external auth providers", "external authentication providers", "external identity providers", "external providers", "enable external providers", "external idps", "external idp", "third-party identity providers", "third-party providers", "EnableExternalAuthProviders"],
       "stateParaphrase": {
         "Enabled": "External providers Enabled",
@@ -218,24 +235,66 @@
         "message": "Disabling this turns off all external (social / federated) identity providers on the affected sites; users who sign in through them will be signed out until it's re-enabled."
       },
       "cascadeOnDisable": {
-        "heading": "Below Setting will get Disable",
-        "items": ["OpenIdConnect", "SAML2.0", "OAuth2.0", "WS_Federation", "Facebook", "Google", "Microsoft"]
+        "heading": "Disabling this setting will also disable the following authentication methods and identity providers:",
+        "items": [
+          "OpenID Connect (OIDC) Protocol",
+          "SAML 2.0 Protocol",
+          "OAuth 2.0 Protocol",
+          "  • Facebook Login",
+          "  • Google Login",
+          "  • Microsoft Login",
+          "WS-Federation Protocol"
+        ]
       },
       "cascadeOnEnable": {
-        "heading": "When enabled, the following authentication methods become available (subject to their individual configuration):",
+        "heading": "When enabled, the following authentication methods become available:",
         "items": [
-          { "label": "OpenID Connect" },
-          { "label": "SAML 2.0" },
-          { "label": "OAuth 2.0" },
-          { "label": "WS-Federation" },
-          { "label": "Facebook", "note": "Controlled by the Facebook setting." },
-          { "label": "Google", "note": "Controlled by the Google setting." },
-          { "label": "Microsoft", "note": "Controlled by the Microsoft setting." }
+          { "label": "OpenID Connect (OIDC) Protocol" },
+          { "label": "SAML 2.0 Protocol" },
+          { "label": "OAuth 2.0 Protocol" },
+          { "label": "Facebook Login" },
+          { "label": "Google Login" },
+          { "label": "Microsoft Login" },
+          { "label": "WS-Federation Protocol" }
         ],
-        "footer": "Enabling the External Authentication policy restores support for these authentication methods. However, each authentication provider must still be configured correctly to allow users to sign in."
+        "footer": "Enabling the External Authentication policy restores these authentication methods. Each authentication provider must also be enabled and configured."
       }
     }
   ],
+
+  "policyAvailabilityDependencies": {
+    "description": "Parent/child availability model for Power Pages authentication governance. A portal (or the whole environment) is only ELIGIBLE ('available') for a CHILD policy's governance setting when EVERY parent listed in that child's `availabilityDependsOn` is Enabled for that portal/env. When a gating parent is Disabled for a portal/env, the portal is UNAVAILABLE for the child policy: it cannot be enabled or disabled there and must be shown in the picker BELOW the available portals with the blocking parent named. This mirrors the product rule that a specific sign-in method can only be governed on a portal where its umbrella provider is turned on. `EnableExternalAuthProviders` is the root parent (the Main Flag) of the four sign-in protocols; `EnableProtocolOpenAuth` (OAuth 2.0) is in turn the parent of the three OAuth-based social identity providers. Each dependent policy carries the same list in its own `availabilityDependsOn` field — the per-policy field is what the resolver reads; this block is the readable overview / single source of truth for the tree shape.",
+    "parents": {
+      "EnableExternalAuthProviders": [
+        "EnableProtocolOpenIdConnect",
+        "EnableProtocolSAML20",
+        "EnableProtocolWsFederation",
+        "EnableProtocolOpenAuth"
+      ],
+      "EnableProtocolOpenAuth": [
+        "EnableIdpOAuthFacebook",
+        "EnableIdpOAuthGoogle",
+        "EnableIdpOAuthMicrosoft"
+      ]
+    },
+    "unknownParentPosture": "fail-open",
+    "unknownParentPostureNote": "When a parent's live state cannot be read (network/parse failure), the portal is treated as AVAILABLE (fail-open) so a transient read error never hides portals from the admin. The resolver annotates such portals so the orchestrator can note the unread parent rather than silently blocking."
+  },
+
+  "effectiveStatusRules": {
+    "description": "How the EFFECTIVE (real, end-user-observable) status of a child sign-in method is computed for the status-display paths (Fetch Env portal table, Fetch Site, and the post-Set verify table). A child method's own governance setting being Enabled is necessary but NOT sufficient: the method only actually works on a portal when EVERY gating parent (the transitive `availabilityDependsOn` chain) is also Enabled on that portal. This mirrors the product runtime — e.g. Google sign-in is dark on a portal where OAuth 2.0 or External Auth is off even if the Google setting itself is Enabled, because the umbrella provider gates it. The status tables therefore show the child's own state PLUS a column for each parent, and an Effective column = own AND all parents. The parent columns to display are exactly the child's `availabilityDependsOn` list, in order (External Auth first, then OAuth 2.0 for social IdPs).",
+    "effectiveRule": "effective = Enabled iff (ownState == Enabled) AND every parent in availabilityDependsOn is Enabled for that portal; Disabled iff no state is Unknown and at least one of {own, ...parents} is Disabled; otherwise Unknown (a parent or own state could not be read).",
+    "parentColumnsByPolicy": {
+      "EnableProtocolOpenIdConnect": ["EnableExternalAuthProviders"],
+      "EnableProtocolSAML20": ["EnableExternalAuthProviders"],
+      "EnableProtocolWsFederation": ["EnableExternalAuthProviders"],
+      "EnableProtocolOpenAuth": ["EnableExternalAuthProviders"],
+      "EnableIdpOAuthFacebook": ["EnableExternalAuthProviders", "EnableProtocolOpenAuth"],
+      "EnableIdpOAuthGoogle": ["EnableExternalAuthProviders", "EnableProtocolOpenAuth"],
+      "EnableIdpOAuthMicrosoft": ["EnableExternalAuthProviders", "EnableProtocolOpenAuth"]
+    },
+    "note": "`parentColumnsByPolicy` is the readable overview; the renderer reads each child's own `availabilityDependsOn` field (authoritative). Policies absent here (Maker Copilot, local login, and External Auth itself as a root) have no parents — their effective status equals their own state and no parent columns render."
+  },
 
   "readValueAliases": {
     "AllSites": "All",
@@ -251,7 +310,8 @@
     "description": "Color convention for rendering Governance Setting state in summary/verification/state tables. The Status column is wrapped in ANSI SGR codes so it renders green/red in an ANSI-capable terminal; the emoji marker is kept as a fallback indicator for surfaces that strip ANSI (e.g. some chat renderers). Wrap the whole Status cell as `<ansi><emoji> <label> (<paraphrase>)<reset>`.",
     "ansi": { "green": "\u001b[32m", "red": "\u001b[31m", "reset": "\u001b[0m" },
     "Enabled": { "color": "green", "emoji": "🟢", "ansi": "\u001b[32m" },
-    "Disabled": { "color": "red", "emoji": "🔴", "ansi": "\u001b[31m" }
+    "Disabled": { "color": "red", "emoji": "🔴", "ansi": "\u001b[31m" },
+    "Unavailable": { "color": "gray", "emoji": "⚪", "ansi": "\u001b[90m" }
   },
 
   "intentToPolicyValue": [

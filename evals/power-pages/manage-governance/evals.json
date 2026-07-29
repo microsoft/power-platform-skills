@@ -1,0 +1,135 @@
+{
+  "skill_name": "manage-governance",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "What is the status of the External Authentication providers governance setting in the Sachin-preprod-July environment?",
+      "expected_output": "A Fetch Env read of EnableExternalAuthProviders for the named environment: the bold one-line env-level summary with the correct state icon, plus the full per-site details table (Name, URL, Site ID, State) with a green/red icon per site so the admin sees which portals the setting is on/off for.",
+      "files": [],
+      "expectations": [
+        "Confirms PAC CLI and Azure CLI are signed in before running any governance read",
+        "Resolves the environment named in the request (Sachin-preprod-July) against the cached env list and does not re-render the full env picker when the env is unambiguously named",
+        "Recognizes 'External Authentication providers' as the EnableExternalAuthProviders policy",
+        "Runs the Fetch Env read via get-env.js (or the getEnv transport op) to get the env-level value (All / None / Include / Exclude)",
+        "Renders a bold one-line plain-language summary that leads with the state icon (green when on for some/all sites, red when off everywhere)",
+        "Always also renders the full per-site details table for every site in the env, not just the bare summary",
+        "Computes each site's state from the env value plus the inclusion/exclusion lists using the site-state table",
+        "Each State cell shows the green Enabled / red Disabled icon",
+        "Uses plain language and does not surface internal terms (policyValue, InclusionList, ExclusionList, Include, Exclude) to the user"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "What is the status of the OpenID Connect (OIDC) setting in the Sachin-preprod-July environment?",
+      "expected_output": "A parent-aware effective-status read of EnableProtocolOpenIdConnect. Because OIDC is a gated child of External Auth, the table shows the External Auth parent column plus the Effective OpenID Connect Status column, and each site is effectively Enabled only when its own OIDC setting AND the External Auth parent are both on.",
+      "files": [],
+      "expectations": [
+        "Recognizes 'OIDC' / 'OpenID Connect' as the EnableProtocolOpenIdConnect policy",
+        "Treats OpenID Connect as a gated child whose availability depends on the External Auth parent (EnableExternalAuthProviders)",
+        "Uses the efficient getDetails fast path (getEnv + getDetails per policy, resolving all portals locally) instead of reading each portal one-by-one",
+        "Skips the getDetails call when the env value is All or None (only calls it for Include/Exclude)",
+        "Renders an effective-status table with the External Auth parent column first, then the effective net-result column",
+        "Marks a site as effectively Enabled only when its own OIDC state AND the External Auth parent are both Enabled",
+        "Shows green / red icons in every state cell",
+        "Explains why any disabled site is off (own setting off vs blocked by the External Auth parent)"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "What is the status of Google sign-in in the Sachin-preprod-July environment?",
+      "expected_output": "A two-parent effective-status read of EnableIdpOAuthGoogle. Google is a social IdP gated by External Auth then OAuth 2.0, so the table shows both parent columns (External Auth, OpenAuth Protocol) plus the Effective Google idp State column. A site is effectively Enabled only when Google's own setting AND both parents are all on.",
+      "files": [],
+      "expectations": [
+        "Recognizes 'Google' / 'Google sign-in' as the EnableIdpOAuthGoogle policy",
+        "Treats Google as a social IdP with two parents in dependency order: External Auth first, then OAuth 2.0 (OpenAuth Protocol)",
+        "Uses the getDetails fast path for Google and both parent policies (resolving portals locally) rather than per-portal reads",
+        "Renders the effective-status table with parent columns labeled 'External Auth' and 'OpenAuth Protocol', followed by the 'Effective Google idp State' column",
+        "Marks a site effectively Enabled only when Google's own state AND both parents (External Auth AND OpenAuth Protocol) are all Enabled",
+        "Uses the effectiveStatusLabel override 'Effective Google idp State' from governance-mapping.json for the net-result column header",
+        "Shows green / red icons in every cell",
+        "Explains per-site why a site is disabled (own setting off, OAuth 2.0 parent off, or External Auth parent off)"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Disable OAuth 2.0 in Sachin-preprod-July, only on Portal_5.",
+      "expected_output": "A Set (disable) of EnableProtocolOpenAuth scoped to a single site via an Exclude policy value. The skill lists the sites, resolves Portal_5, reads current state to build the impact summary (including the cascade of OAuth-based social providers), gets explicit consent, applies asynchronously, and verifies the result.",
+      "files": [],
+      "expectations": [
+        "Recognizes 'OAuth 2.0' / 'OAuth2' as the EnableProtocolOpenAuth policy and the direction as disable",
+        "Resolves the environment named in the request and lists the environment's sites so the user can pick the scope",
+        "Resolves Portal_5 to its portal ID and sets the scope to Exclude (disable on the named site, others stay as-is)",
+        "Reads the current OAuth 2.0 state (env value + details) before rendering the impact summary to show the Current State -> New State transition",
+        "Renders the impact summary via render-impact-summary.js starting at the Action: row with no lead-in label",
+        "Marks Portal_5's row as CHANGED (Enabled -> Disabled) and shows the other sites are unaffected",
+        "Includes the cascade block listing the OAuth-based social identity providers (Facebook, Google, Microsoft) that get disabled as a side effect",
+        "Surfaces the sign-out side effect for users currently authenticated via OAuth 2.0 on Portal_5",
+        "Requires explicit free-text 'Apply now' consent before POSTing and does not proceed on cancel",
+        "Applies via set-governance.js with --policyValue Exclude and --portalIds for Portal_5, polling until a terminal state",
+        "Verifies after rollout by re-reading state and renders a state table confirming Portal_5 is red Disabled"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Enable the OAuth 2.0 protocol governance setting for all sites in Sachin-preprod-July.",
+      "expected_output": "A Set (enable) of EnableProtocolOpenAuth env-wide using the All policy value. Because OAuth 2.0 depends on External Auth, only sites where External Auth is enabled are eligible; the skill shows the impact summary, takes consent, applies, and verifies.",
+      "files": [],
+      "expectations": [
+        "Recognizes the enable direction and All (env-wide) scope from 'all sites'",
+        "Maps enable + all to policyValue = All with no portal list",
+        "For this gated child, only offers/affects sites where the External Auth parent is enabled and surfaces any sites hidden because External Auth is off on them",
+        "Renders the impact summary with a green Action: row (enable) before the consent gate",
+        "For an enable of a parent-dependent policy, the cascade block is informational (children become available but are not auto-enabled; each provider still controlled by its own setting)",
+        "Requires explicit 'Apply now' consent before POSTing",
+        "Applies via set-governance.js with --policyValue All (no --portalIds) and polls to terminal",
+        "Verifies via get-env.js after rollout and renders the env-wide state table"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Enable Google sign-in on Portal_3, Portal_4, and Portal_5 in Sachin-preprod-July.",
+      "expected_output": "A Set (enable) of EnableIdpOAuthGoogle scoped to specific sites via an Include policy value with the three portal IDs. The skill resolves the named sites, shows the impact summary, takes consent, applies, and verifies.",
+      "files": [],
+      "expectations": [
+        "Recognizes 'Google' as EnableIdpOAuthGoogle and the direction as enable",
+        "Resolves Portal_3, Portal_4, Portal_5 to their portal IDs via parse-portal-input.js against the site list",
+        "Sets the scope to Include with the three resolved IDs as ToBeAdded",
+        "As a social IdP, only treats sites where External Auth AND OAuth 2.0 are enabled as eligible, and surfaces any named site that can't take effect because a parent is off",
+        "Renders the impact summary (Include scope) showing only the covered sites plus a note about what is not covered",
+        "Requires explicit 'Apply now' consent before POSTing",
+        "Applies via set-governance.js with --policyValue Include --portalIds for the three sites and polls to terminal",
+        "Verifies after rollout with get-portal.js / effective-status resolution and renders the targeted-site table"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Disable OAuth 2.0 across Sachin-preprod-July.",
+      "expected_output": "When OAuth 2.0 is already disabled everywhere in the environment, the env-wide disable is a no-op. The redundant-operation guard fires BEFORE the impact summary and asks the admin to Keep (no change) or Enforce only on specific sites, rather than silently POSTing.",
+      "files": [],
+      "expectations": [
+        "Reads the current OAuth 2.0 state before rendering any impact summary",
+        "Detects that the requested disable is a no-op because the setting is already disabled for the in-scope sites",
+        "Fires the redundant-operation guard BEFORE rendering the impact summary and BEFORE any POST",
+        "Presents the Keep vs Enforce-only-on-<sites> choice as a free-text prompt naming the sites and both options",
+        "On Keep, makes no API call and reports 'no change made', then returns to the loop prompt",
+        "On Enforce only, switches to Exclude on the named site(s), then renders the impact summary that surfaces the collateral flip on the out-of-scope sites before the normal consent gate",
+        "Never silently POSTs a no-op env-wide change"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Show me which portals I can enable OpenID Connect on in this environment.",
+      "expected_output": "For a gated child (OpenID Connect), the site picker lists only the portals where the External Auth parent is enabled; portals where the parent is off are shown separately below as unavailable. If no portal has External Auth enabled, the skill states that External Auth is disabled for the env instead of offering an empty list.",
+      "files": [],
+      "expectations": [
+        "Recognizes OpenID Connect as a gated child of External Auth",
+        "Renders the env list / resolves the env first, then lists sites",
+        "Lists only the portals where the External Auth parent is enabled as eligible for enabling OpenID Connect",
+        "Shows portals where External Auth is off separately below, labeled as unavailable because the parent governance setting is off",
+        "When no portal in the env has External Auth enabled, states that External Auth is disabled for this environment and that OpenID Connect can't apply, instead of offering an empty picker",
+        "Uses the getDetails fast path to resolve parent availability across all portals rather than reading each portal individually",
+        "Uses plain language and phrases the parent dependency in terms of governance settings (e.g. 'External Auth governance setting is off on them, so OpenID Connect can't apply')"
+      ]
+    }
+  ]
+}

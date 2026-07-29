@@ -216,6 +216,32 @@ function cascadeLines(policy, direction, colorOpts) {
   return lines;
 }
 
+// Resolve the internal policyValue that the apply will POST, so the consent gate
+// can show the exact technical mapping beneath the Effect line (SKILL.md Phase
+// 2.1: "The API mapping line already shows the technical translation
+// (policyValue + ToBeAdded)"). Prefer an explicitly-resolved req.policyValue;
+// otherwise derive it from the uniform intent->policyValue rule:
+//   enable + all      -> All      enable + specific  -> Include
+//   disable + all     -> None     disable + specific -> Exclude
+function resolvePolicyValue(direction, scope, explicit) {
+  if (explicit) return explicit;
+  if (scope === 'specific') return direction === 'disable' ? 'Exclude' : 'Include';
+  return direction === 'disable' ? 'None' : 'All';
+}
+
+// The API-mapping line shown under Effect: the internal policyValue that will be
+// POSTed, plus the ToBeAdded portal-id list for Include/Exclude (All/None carry
+// no list). This is the technical companion to the plain-English Effect line, so
+// the admin sees exactly what the apply call sets before approving.
+function policyValueLine(policyValue, sites) {
+  const listy = policyValue === 'Include' || policyValue === 'Exclude';
+  const ids = listy
+    ? (Array.isArray(sites) ? sites : []).map((s) => (s && s.portalId) || '').filter(Boolean)
+    : [];
+  const idPart = listy ? `, ToBeAdded = [${ids.join(', ')}]` : '';
+  return `${policyValue}${idPart}`;
+}
+
 // Color the consent-gate Action line by direction: green "🟢 Enable …" when the
 // operation turns something ON, red "🔴 Disable …" when it turns something OFF —
 // the same green=enabled / red=disabled convention as the state cells, and per
@@ -292,9 +318,24 @@ function renderImpactSummary(req, opts = {}) {
     out.push(line);
   }
 
+  // Terminate the Markdown table with a blank line before the trailing
+  // Effect / Policy value / Side effect / cascade lines. Without this separator
+  // a chat/terminal renderer treats the pipe-less "Effect: ..." and
+  // "Policy value: ..." lines as continuation rows of the table and boxes them
+  // into the grid (admins saw Effect/Policy value crammed into empty table
+  // cells). A blank line after a GFM table is the standard, portable way to
+  // close it so the following prose renders below the table, not inside it.
+  out.push('');
+
   out.push(`Effect:        ${effectLine(mapping, policy, direction, scope, envDisplay, siteNames)}`);
 
-  const se = sideEffectLine(policy, req.policyValue);
+  // Technical companion to the Effect line: the exact internal value + ToBeAdded
+  // list this apply will POST. Resolved once here so the side-effect check below
+  // uses the same value even when the caller omitted req.policyValue.
+  const policyValue = resolvePolicyValue(direction, scope, req.policyValue);
+  out.push(`Policy value:  ${policyValueLine(policyValue, sites)}`);
+
+  const se = sideEffectLine(policy, policyValue);
   if (se) out.push(`Side effect:   ${se}`);
 
   // Downstream policies the admin should know about: on disable, the methods
@@ -386,6 +427,8 @@ module.exports = {
   newStateFor,
   scopeLine,
   effectLine,
+  resolvePolicyValue,
+  policyValueLine,
   sideEffectLine,
   cascadeLines,
   actionCell,

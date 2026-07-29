@@ -37,10 +37,10 @@ User free-text intent
       │   • Scope       → list-portals.js  (all / specific sites)
       ▼
 [4.2.3 Step 1b] Redundant-op guard (if already in requested state)
-      │   → ask "Keep" vs "Enforce only on <sites>"  (before Impact Summary)
+      │   → ask eligible-portal scope: "All" (no-op) vs comma-separated portals
       ▼
 [4.2.3] Impact Summary + consent gate  ──►  render-impact-summary.js
-      │   (boxed Sites table, Current → New State, "Apply now" required)
+      │   (Sites table, Current → New State, 2-option Apply now / Cancel question)
       ▼
 [4.2.4] Apply  ──►  set-governance.js  (POST + poll /governance/status)
       ▼
@@ -74,7 +74,7 @@ replacement:
   list without clearing the whole policy. `set-governance.js --removePortalIds`
   populates it.
 
-This is why the redundant-op guard's **"Enforce only on \<sites\>"** path and any
+This is why the redundant-op guard's **narrow-to-specific-portals** path and any
 list-shrink operation route removals through `--removePortalIds` (`ToBeRemoved`)
 rather than a smaller `ToBeAdded`.
 
@@ -84,12 +84,14 @@ rather than a smaller `ToBeAdded`.
   new operation — the previously-used env is only pre-flagged, never auto-used.
 - **Redundant-operation guard (before the Impact Summary)** — if the requested
   op is a no-op for the named site(s) (enable while already `All`/`Include`, or
-  disable while already `None`/`Exclude`), first ask **Keep** vs **Enforce only
-  on \<sites\>**. `Keep` = no change; `Enforce only` restricts the policy to an
-  `Include`/`Exclude` list (surfacing any collateral flip on other sites) before
-  the consent gate.
-- **Consent gate before every POST** — render the Impact Summary, then require an
-  explicit free-text **`Apply now`** (not `yes`/`all`).
+  disable while already `None`/`Exclude`), first ask the **eligible-portal scope**
+  prompt: reply **All** to apply the requested verb to all eligible portals (a
+  no-op → no change), or a **comma-separated list of portals** for specific
+  sites. Specific portals restrict the policy to an `Include`/`Exclude` list
+  (surfacing any collateral flip on other sites) before the consent gate.
+- **Consent gate before every POST** — render the Impact Summary, then present a
+  **2-option `AskUserQuestion`** (choices **Apply now** / **Cancel**); only a
+  selected **Apply now** authorizes the POST.
 - **Always verify after Set** — re-read state with `get-env.js` / `get-portal.js`;
   never trust the poll outcome alone.
 - **Set is async** — `set-governance.js` polls `/governance/status/{env}/{policy}`
@@ -112,6 +114,7 @@ rather than a smaller `ToBeAdded`.
 | `get-env.js` | Read the env-wide policy value. |
 | `get-portal.js` | Read a single site's inclusion/exclusion state. |
 | `get-status.js` | Read the last rollout status for a policy. |
+| `resolve-portal-availability.js` | Partition a site list into available / unavailable for a child auth policy based on its parent policies' state (fail-open). Renders unavailable sites below available ones with the blocking parent named. |
 | `render-portal-table.js` | Render the fixed-width site state table (🟢/🔴). |
 | `policies.js` | Frozen `SUPPORTED_POLICIES` list + write-vocabulary mapping. |
 | `governance-context.js` | Resolves the API context; applies `--envId` override. |

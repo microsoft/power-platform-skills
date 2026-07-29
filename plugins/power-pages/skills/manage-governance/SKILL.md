@@ -55,6 +55,8 @@ These are **admin-only** operations — applying an auth policy stops or starts 
 - **Plain language with the user.** Talk about "turning off the OpenID Connect / SAML sign-in path on Power Pages portals" or "enabling Google sign-in on your sites". Only show the policy string when the user asks for the technical name.
 - **OpenID Connect / SAML map to the protocol toggles.** "OpenID Connect" / "OIDC" resolves to `EnableProtocolOpenIdConnect` and "SAML" / "SAML 2.0" resolves to `EnableProtocolSAML20` — whether or not the user adds a "protocol" / "enable" qualifier. (The legacy `PowerPages_DisableAuthentication*` block rules have been removed.) A "block OpenID Connect" / "block SAML" phrasing means **disabling** that protocol toggle.
 - **No silent overrides.** **Disabling** any `Enable*` authentication policy (`EnableProtocol*`, `EnableIdp*`, `EnableAuthenticationLocalLogin`, `EnableExternalAuthProviders`) will sign existing users out of any portal that uses the targeted provider. Surface that consequence at the consent gate before posting. (The Maker Copilot policy has no such sign-out side effect.)
+- **Parent/child availability is a hard gate on every apply path.** The four sign-in protocols (OpenID Connect, SAML 2.0, WS-Federation, OAuth 2.0) require `EnableExternalAuthProviders` to be Enabled on a portal; the three social providers (Facebook, Google, Microsoft) require **both** `EnableExternalAuthProviders` **and** `EnableProtocolOpenAuth`. On a portal where the required parent is Disabled the child can be **neither enabled nor disabled** — with **no "force"/"anyway" override**. The scope picker lists **only the portals where the required parent is Enabled** (via `resolve-portal-availability.js --available-only`), and the **named-site fast path** (when the site is named directly in the request) hard-blocks ineligible sites the same way via Phase 4.2.2b. When only some portals qualify, it shows/keeps just those plus an info line; when **none** qualify (a required parent is Disabled env-wide) it shows a single *"External Auth is Disabled for this environment"* message — and for a **social IdP** (two parents) it names both, *"External Auth or OAuth 2.0 sign-in is Disabled for this environment"* — and the skill does not prompt for a scope or POST. See the "Parent/child availability" section under Phase 2.3. **The environment picker itself is never filtered** — every environment is always shown in the full env list; availability only narrows the per-portal scope.
+- **Governance STATUS is ALWAYS the 5-column Unicode box.** Every status render — Fetch Env (4.3.1), Fetch Site (4.4.3), and the post-Set verify (4.2.5) — uses `render-portal-table.js --unicode --no-color`, emitted **inside a fenced code block**, with **exactly** the columns `# | Name | URL | Site ID | State` (`┌─┬─┐ │ ├─┼─┤ └─┴─┘`, a rule between every row). Never add, drop, reorder, or rename a column, and never substitute a Markdown table for status. This is uniform for **all ten policies** including the gated children (OpenID Connect / SAML 2.0 / WS-Federation / OAuth 2.0 / Facebook / Google / Microsoft): for a gated child the single `State` shows the **effective** state (own AND every gating parent) — the parent chain is computed but never rendered as extra columns.
 
 ## Workflow
 
@@ -424,9 +426,10 @@ from `governance-mapping.json` `stateColors`. This lets the user see the exact
 transition before approving. If a live read fails, render Current State as
 `Unknown` (never block the gate on a read error) and say so in a footnote.
 
-Render it then ask for explicit go-ahead as a **free-text** prompt (NOT an
-`AskUserQuestion` — do not present numbered/multiple-choice options). End with
-one prose line: *"Reply **Apply now** to proceed, or **cancel** to stop."* Do
+Render it then ask for explicit go-ahead as a **2-option `AskUserQuestion`**
+whose only choices are **Apply now** and **Cancel** (no free-text prompt, no
+third option). After the impact summary, present the question *"Proceed with
+this change?"* with exactly those two choices. Do
 **NOT** prepend any lead-in line, heading, or label of any kind — e.g.
  "Impact summary:", "Here's the impact summary:", "SUMMARY of the change I'll
 make:", "Impact summary:", or similar. Start the impact summary directly at the
@@ -449,8 +452,16 @@ Sites in env:
 | 8-june | https://site-pjpuy.powerappsportals.com | fe624c02-8793-4423-84f0-3546d80dee49 | 🔴 Disabled | 🔴 Disabled |
 
 Effect:        OpenID Connect sign-in will be disabled on all portals in Sachin-Jun-2nd.
+Policy value:  None
 
-*Reply **Apply now** to proceed, or **cancel** to stop.*
+Then ask a **2-option `AskUserQuestion`** — question *"Proceed with this
+change?"*, choices **Apply now** / **Cancel** (nothing else).
+
+> **The CLI appends its own "Other (type your answer)" line to every question —
+> this is a fixed Copilot CLI behavior the skill cannot suppress.** Do not try to
+> remove it. Only a selected **Apply now** authorizes the POST; any freeform
+> "Other" text is treated as non-authorizing (equivalent to Cancel unless it
+> clearly says to apply).
 
 Also do **NOT** precede the summary with any introductory sentence (e.g.
 "Here it is re-rendered:", "Here's the impact:", "Below is the summary:") —
@@ -537,6 +548,71 @@ never leak the internal `All` / `Include` / `None` / `Exclude` terms to the
 user. The plain-language Effect line MUST match the policy-specific row in
 the Phase 2.1 "Enable / Disable" table.
 
+### Parent/child availability (child auth policies)
+
+Some auth policies are only meaningful on a portal when a **parent** policy is
+already Enabled there. This is a different concept from the Phase 4.2.3 cascade
+(what a parent *turns off* downstream). Availability is a **hard gate**: a portal
+on which a required parent is **Disabled** is **not available** to configure the
+child policy on — the child can be **neither enabled nor disabled** there, with
+**no "force"/"anyway" override**. This gate is enforced on **both** apply paths:
+the scope picker filters to **only the available portals** (the ineligible ones
+are omitted and summarized, and if **no** portal is available it shows a single
+*"&lt;parent&gt; is Disabled for this environment"* message instead of an empty
+list), and the **named-site fast path** (Phase 4.2.2b) hard-blocks any directly
+named ineligible site the same way.
+
+The dependency tree (source of truth: `governance-mapping.json` →
+`policies[].availabilityDependsOn` and top-level `policyAvailabilityDependencies`):
+
+- **`EnableExternalAuthProviders`** (External Auth) is the root parent. When it
+  is **Disabled** for a portal, that portal is **unavailable** for:
+  - OpenID Connect (`EnableProtocolOpenIdConnect`)
+  - SAML 2.0 (`EnableProtocolSAML20`)
+  - WS-Federation (`EnableProtocolWsFederation`)
+  - OAuth 2.0 (`EnableProtocolOpenAuth`)
+- **`EnableProtocolOpenAuth`** (OAuth 2.0) *and* External Auth together gate the
+  three OAuth-based social identity providers. When **either** is **Disabled**
+  for a portal, that portal is **unavailable** for:
+  - Facebook (`EnableIdpOAuthFacebook`)
+  - Google (`EnableIdpOAuthGoogle`)
+  - Microsoft (`EnableIdpOAuthMicrosoft`)
+
+A child is **available** on a portal iff **every** parent in its
+`availabilityDependsOn` list is Enabled there. Availability is computed by
+`resolve-portal-availability.js`, which reads each parent's env value + its
+inclusion/exclusion lists and partitions the portal list into `available` (all
+parents Enabled) and `unavailable` (at least one parent Disabled, with
+`blockingParents` naming which). Posture is **fail-open**: a parent whose state
+can't be read never hides a portal.
+
+The scope picker renders this partition with `--available-only` (Phase 4.2.1
+Step B.1): it lists **only** the `available` portals, and
+
+- when only a subset is available, adds an info line naming how many sites are
+  shown vs hidden and why (the requirement's *"list only those few portals and
+  give proper information"*);
+- when `available` is empty (a parent is Disabled env-wide), prints the single
+  *"External authentication providers is Disabled for this environment"* message
+  (for a **social IdP** it names both parents — *"External authentication
+  providers **or** OAuth 2.0 sign-in is Disabled for this environment"*) and the
+  orchestrator does **not** prompt for a scope or POST (the requirement's *"if
+  there is no portal available, show 'External Auth or OAuth2 is Disabled'"*).
+
+> **OAuth 2.0 is both a child and a parent.** `EnableProtocolOpenAuth` depends
+> on `EnableExternalAuthProviders` (so it is filtered like the other protocols)
+> **and** gates the three social providers. Only `EnableExternalAuthProviders`
+> is a pure root with no `availabilityDependsOn`.
+
+When the target policy has **no** `availabilityDependsOn` (Maker Copilot, local
+login, External Auth itself), every portal is available and this pre-filter is a
+no-op — render the site list normally.
+
+> **The environment picker is never filtered.** This availability rule only
+> applies to the per-portal **scope** picker (Phase 4.2.1). The **environment**
+> list is always rendered in full via `render-env-table.js` — no environment is
+> ever removed or moved into a separate list based on a parent's state.
+
 ---
 
 ## 3. Determine the operation
@@ -602,6 +678,11 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-envs.js"
 
 Output is `{ status: "ok", envs: [ { envId, displayName, envUrl, type, region } ] }`. Pipe it (or the cached file) through `render-env-table.js --markdown` and emit the Markdown table **verbatim** (as a rendered table, not inside a code fence). Resolve the user's row-number / name / id reply against the cached list (fuzzy, case-insensitive). Persist the choice as `<ENV_ID>` and `<ENV_DISPLAY>`, and update `<RECENT_ENV>`.
 
+> **The environment list is never filtered.** Always render **every**
+> environment via `render-env-table.js --markdown` — regardless of policy. Parent
+> availability (External Auth / OAuth 2.0 state) is applied **only** later, at the
+> per-portal scope picker (Phase 4.2.1), never to the environment list itself.
+
 ### 4.2 Apply the policy (`<OP>` = Set)
 
 **Entry variants — skip any step the request already resolved.** Branch on
@@ -611,14 +692,20 @@ what the Phase 2.1 parse produced, then run only the remaining steps:
 |---------------------------|--------------|
 | **Nothing** (no env, no sites) | 4.1 pick env → 4.2.1 top-10 sites + all/selected → (4.2.2 if selected) → **4.2.3 Impact Summary + consent** → 4.2.4 apply → 4.2.5 verify |
 | **Environment only** | 4.1 resolves env (skips picker) → 4.2.1 top-10 sites + all/selected → (4.2.2 if selected) → **4.2.3 Impact Summary + consent** → 4.2.4 apply → 4.2.5 verify |
-| **Environment + site(s)** | 4.1 resolves env + resolve named site(s) to `<PORTAL_IDS>` (skip 4.2.1/4.2.2) → **4.2.3 Impact Summary + consent** → 4.2.4 apply → 4.2.5 verify |
+| **Environment + site(s)** | 4.1 resolves env + resolve named site(s) to `<PORTAL_IDS>` (skip 4.2.1/4.2.2) → **4.2.2b availability gate (hard-block named sites whose parent is Disabled)** → **4.2.3 Impact Summary + consent** → 4.2.4 apply → 4.2.5 verify |
 
 When sites are already named in the request, resolve them with
 `parse-portal-input.js` (against `list-portals.js` output) to get
 `<PORTAL_IDS>` / `<PORTAL_NAMES_LIST>` and set `<POLICY_VALUE>` = `Include`
-(enable) or `Exclude` (disable), then jump straight to **4.2.3**. The
-**Impact Summary is always shown before the consent gate in every variant** —
-never POST without it.
+(enable) or `Exclude` (disable). **Then — for a child auth policy (one with a
+non-empty `availabilityDependsOn`) — you MUST run the Phase 4.2.2b availability
+gate on the named sites BEFORE jumping to 4.2.3.** The named-site fast path does
+**not** get to skip the parent-gate check just because it bypasses the scope
+picker: a portal whose required parent is Disabled is **hard-blocked** for the
+child policy — it can be neither enabled nor disabled there — and there is **no
+"force"/"anyway" override.** Only after 4.2.2b confirms every named site is
+eligible do you jump to **4.2.3**. The **Impact Summary is always shown before
+the consent gate in every variant** — never POST without it.
 
 #### 4.2.1 Pick the scope (site list + free-text input)
 
@@ -655,12 +742,79 @@ sites — type any site name or ID (including ones not listed), or 'all'." With
 | 3 | 8-june        | https://site-pjpuy.powerappsportals.com   | fe624c02-8793-4423-84f0-3546d80dee49  |
 ```
 
+**Step B.1 — availability pre-filter (child auth policies only).** When the
+target `<POLICY>` has an `availabilityDependsOn` list in
+`governance-mapping.json` (the four sign-in protocols and the three social
+providers — see the "Parent/child availability" section under Phase 2.3), run
+the resolver **before** prompting for scope, and render the site list with the
+**`--available-only`** flag so the scope picker shows **only the sites the admin
+can actually target**:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/resolve-portal-availability.js" \
+  --policy "<POLICY>" --envId "<ENV_ID>" \
+  --portalsFile <path-to-list-portals-output> --markdown --available-only
+```
+
+The helper reads each parent policy's env value + inclusion/exclusion lists and
+then, for `--available-only`, behaves as follows:
+
+- **Some sites eligible** — it prints a table of **only** the portals where the
+  gating parent (External Auth, and for Facebook / Google / Microsoft also
+  OAuth 2.0) is **Enabled**. When only a subset is eligible, it appends an info
+  line in plain "Governance setting" language — for a single-parent child
+  *"Showing N of M site(s) — the &lt;child&gt; Governance setting can only be
+  configured on sites where the External authentication providers Governance
+  setting is on. K site(s) are hidden because the External authentication
+  providers Governance setting is off on them, so the &lt;child&gt; Governance
+  setting can't apply there."* For a **social IdP** (two parents) it names both,
+  using **"and"** for the enabled requirement and **"or"** for the blocked
+  reason — *"…the &lt;child&gt; Governance setting can only be configured on
+  sites where **both** the External authentication providers **and** OAuth 2.0
+  sign-in Governance settings **are on**. K site(s) are hidden because the
+  External authentication providers **or** OAuth 2.0 sign-in Governance setting
+  is off on them, so the &lt;child&gt; Governance setting can't apply there."*
+  Emit this output verbatim in place of the plain Step B table, then prompt for
+  scope over the listed (available) sites only.
+- **No site eligible** (a parent is Disabled env-wide, so `available` is
+  empty) — the helper prints a single message. For a single-parent child:
+  **"The External authentication providers Governance setting is off for this
+  environment. No sites are available to configure &lt;child&gt; here — turn on
+  the External authentication providers Governance setting first, then try
+  again."** For a **social IdP** the message names **both** parents — **"The
+  External authentication providers or OAuth 2.0 sign-in Governance setting is
+  off for this environment. No sites are available to configure &lt;child&gt;
+  here — turn on **both** the External authentication providers **and** OAuth
+  2.0 sign-in Governance settings first, then try again."** In this case
+  **do NOT prompt for a scope and do NOT POST**: surface that message and stop.
+  Any follow-up you offer here MUST be a **free-text prose prompt — NOT an
+  `AskUserQuestion` / button menu.** Ask the admin, in plain prose, for a
+  free-text command — e.g. *"Reply **enable external auth** or **enable oauth**
+  to turn a blocking parent on first, name a different setting or site, or reply
+  **cancel** to stop."* Keep the offered actions limited to enabling the
+  blocking parent(s) or cancelling — do **NOT** offer a diagnostic option such
+  as *"Check which sites have which parent off"* (or any similar per-site
+  parent-state breakdown), and do **NOT** wrap the follow-up in numbered /
+  multiple-choice buttons. The admin already knows the parent is off env-wide;
+  only the actionable enable-parent / cancel choices belong here, taken as free
+  text. This is the requirement's *"if there is no portal available, show
+  'External Auth or OAuth2 is Disabled' and ask a free-text command"*.
+
+Only the **available** portals may be chosen. If the admin names a site that
+isn't in the list, tell them the gating parent is Disabled on it and ask them to
+pick one of the listed sites (or enable the parent there first). This is a
+**hard block** — the child policy can be neither enabled nor disabled on an
+ineligible site, and there is **no "force"/"anyway" override** (see Phase
+4.2.2b, which enforces the same rule on the named-site fast path). When
+`<POLICY>` has no `availabilityDependsOn` (Maker Copilot, local login, External
+Auth, OAuth 2.0), **skip this step** and use the plain table from Step B.
+
 **Step C — prompt for scope (prose, free text — NOT an `AskUserQuestion`).**
 Ask, using the known verb:
 
-> *"Reply **all** to &lt;enable/disable&gt; Maker Copilot on **every** site in
-> &lt;ENV_DISPLAY&gt;, or reply with a **comma-separated** list of site names
-> or IDs to &lt;enable/disable&gt; only those. Reply 'cancel' to stop."*
+> *"Reply **all** to &lt;enable/disable&gt; the setting on **every** eligible
+> site in &lt;ENV_DISPLAY&gt;, or reply with a **comma-separated** list of site
+> names or IDs to &lt;enable/disable&gt; only those. Reply 'cancel' to stop."*
 
 **Step D — map the reply to `<POLICY_VALUE>`:**
 
@@ -708,6 +862,15 @@ Render the result as a plain-text table the user can copy from:
 > reference any site by name/ID because the parser validates against the full
 > list.
 
+> **Availability pre-filter (child auth policies).** Same rule as Phase 4.2.1
+> Step B.1 — when `<POLICY>` has an `availabilityDependsOn` list, render this
+> site list via `resolve-portal-availability.js --markdown --available-only` so
+> **only** the portals where the required parent is Enabled are listed. Only
+> those portals may be chosen; if the user names one that isn't listed, tell
+> them the gating parent is Disabled on it and reprompt. If no portal is
+> available, show the *"External Auth is Disabled for this environment"* message
+> and do not proceed.
+
 If the list is empty, tell the user there are no portals in that environment and back the user up to **4.2.1**.
 
 Then prompt the user (prose, not `AskUserQuestion` — the answer is free text).
@@ -729,20 +892,86 @@ When invoking the parser from this step the orchestrator should ignore the parse
 
 Persist `<PORTAL_IDS>` (comma-joined) for downstream steps. Persist `<PORTAL_NAMES_LIST>` (the `resolvedNames` array joined with commas) for the consent gate.
 
+#### 4.2.2b Availability gate for named sites (child auth policies — HARD BLOCK)
+
+This gate runs on the **named-site fast path** (the "Environment + site(s)"
+entry variant) — the path that skips the scope picker (4.2.1/4.2.2) and its
+`--available-only` pre-filter. Because that pre-filter is skipped, the parent
+dependency must be enforced **here** instead, so a directly-named ineligible
+site can never slip through to a POST.
+
+**When it applies.** Only when `<POLICY>` has a non-empty `availabilityDependsOn`
+list in `governance-mapping.json` (the four sign-in protocols and the three
+social providers). For a policy with **no** parents (Maker Copilot, local login,
+`EnableExternalAuthProviders`, and — for availability purposes — any leaf), skip
+this gate: every named site is eligible.
+
+**The rule (hard block, both directions).** A child auth policy can be **neither
+enabled nor disabled** on a portal where a required parent is **Disabled**:
+
+- OAuth 2.0 / OpenID Connect / SAML 2.0 / WS-Federation → blocked on any portal
+  where **External Auth** (`EnableExternalAuthProviders`) is Disabled.
+- Facebook / Google / Microsoft → blocked on any portal where **External Auth**
+  **or** **OAuth 2.0** (`EnableProtocolOpenAuth`) is Disabled.
+
+There is **NO override.** Do **not** offer a "force-enable / force-disable
+anyway", "toggle the own setting regardless", or any similar bypass — the parent
+gate is absolute. (The child's own governance setting is meaningless while the
+umbrella provider is off, so writing it is disallowed, not merely discouraged.)
+
+**How to check.** Write the resolved named sites to a temp portals file and run
+the resolver in JSON mode over just those sites:
+
+```bash
+echo '{ "portals": [ { "portalId": "<id>", "name": "<name>", "url": "<url>" }, ... ] }' > /tmp/named-sites.json
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/resolve-portal-availability.js" \
+  --policy "<POLICY>" --envId "<ENV_ID>" --portalsFile /tmp/named-sites.json
+```
+
+The JSON output partitions the named sites into `available` and
+`unavailable[{ portalId, name, blockingParents, blockedBy }]`. `blockedBy` names
+the Disabled parent(s) in plain "Governance setting" language.
+
+**Act on the partition:**
+
+- **Every named site unavailable** → **do NOT render the Impact Summary and do
+  NOT POST.** Tell the admin the child can't be configured on the named site(s)
+  because the gating parent is Disabled there, name the parent(s), and stop —
+  offer to enable the parent on those sites first (or pick a different site).
+  Return to the Phase 5 loop.
+- **Some named sites unavailable** → **drop the blocked sites from
+  `<PORTAL_IDS>` / `<PORTAL_NAMES_LIST>`** and tell the admin exactly which were
+  removed and why (naming the blocking parent). Proceed to 4.2.3 with **only the
+  eligible** named sites. If that leaves zero eligible sites, treat it as the
+  "every named site unavailable" case above.
+- **All named sites available** → proceed to 4.2.3 unchanged.
+
+Render the blocked sites so the admin sees *why* — one line per blocked site
+naming the Disabled parent, e.g.:
+
+- 🔴 Portal_1 — Facebook can't be configured here · blocked by: **External Auth is Disabled on Portal_1**
+
+Fail-open on unread parents (a parent whose live state can't be read never
+blocks a site — the resolver already applies this posture); note the unread
+parent to the admin rather than silently blocking.
+
 #### 4.2.3 Confirm before posting (Impact Summary + consent gate)
 
-Confirm as a **free-text** prompt (NOT an `AskUserQuestion` — no numbered /
-multiple-choice options). First render the **Impact Summary** deterministically
+Confirm with a **2-option `AskUserQuestion`** (choices **Apply now** /
+**Cancel** — never a free-text prompt, never a third option). First render the
+**Impact Summary** deterministically
 with the helper (do NOT hand-build it — the helper keeps the Action /
 Environment / Scope / Sites / Effect / Side-effect rows consistent with the
 committed spec and per-policy data), then ask for explicit go-ahead.
 
 **Step 1 — resolve each affected site's Current State.** Read the live policy
 state so the summary can show the exact transition: run `get-env.js` for the
-env value, and (for `Include` / `Exclude`) `get-portal.js` for the
-inclusion/exclusion lists, then apply the Phase 4.4.3 site-state table to each
-site in scope. If a live read fails, pass `currentState: "Unknown"` (never
-block the gate on a read error).
+env value, and (only when the env value is `Include` / `Exclude`)
+`get-details.js` **once** for the inclusion/exclusion lists, then resolve each
+in-scope site locally with `resolvePortalStates(envValue, detailsBody, portals)`
+(the batch form of the Phase 4.4.3 site-state table — no per-portal calls, no
+dummy-portalId trick). If a live read fails, pass `currentState: "Unknown"`
+(never block the gate on a read error).
 
 **Step 1b — redundant-operation guard (already in the requested state).**
 Before rendering the Impact Summary, compare each in-scope site's Current State
@@ -759,41 +988,45 @@ This guard fires in exactly these situations:
 | **Enable** `<sites>` | `All` (or `Include` already containing them) | Enabled | yes |
 | **Disable** `<sites>` | `None` (or `Exclude` already containing them) | Disabled | yes |
 
-When it fires, ask a single **free-text** prompt (NOT an `AskUserQuestion`),
-naming the site(s) and the two options. Use the site name list for
-`<SITE_NAMES>`:
+When it fires, ask a single **free-text** prompt (NOT an `AskUserQuestion`).
+Do **not** use the old "Keep vs Enforce only" phrasing — instead present the
+standard **eligible-portal scope prompt**, so the admin either leaves it as-is
+(`All`, a no-op) or narrows it to specific portals. `<POLICY_SUBJECT>` is the
+policy's plain-English `subject`; `<enable|disable>` is the requested verb;
+`<enabled|disabled>` is its current-state adjective; "eligible portals" is the
+availability-filtered set (for a child auth policy, only sites where the parent
+is Enabled; for a policy with no `availabilityDependsOn`, every site):
 
-> *"`<SITE_NAMES>` is already `<enabled|disabled>`. How would you like to
-> proceed?*
-> *1. **Keep** (no changes) — leave the current configuration as-is;
-> `<SITE_NAMES>` stays `<enabled|disabled>` along with all other applicable
-> sites.*
-> *2. **Enforce only on `<SITE_NAMES>`** — restrict the policy so it explicitly
-> targets only `<SITE_NAMES>` (`Include` for enable / `Exclude` for disable).*
-> *Reply **Keep** or **Enforce only on `<SITE_NAMES>`**."*
+> *"Since `<POLICY_SUBJECT>` is already `<enabled|disabled>` on every eligible
+> portal in `<ENV_DISPLAY>`, how would you like to proceed?*
+> *Reply **All** to `<enable|disable>` it on **all eligible portals** (no change
+> — they are already `<enabled|disabled>`), or reply with a **comma-separated
+> list of portals** to `<enable|disable>` only those. Reply **cancel** to stop."*
 
 Map the reply:
 
-- **Keep** → make **no** API call. Report *"No change made — `<SITE_NAMES>` is
-  already `<enabled|disabled>`."* and go straight to the Phase 5 loop. Skip the
-  consent gate and the POST entirely.
-- **Enforce only on `<sites>`** → set `<POLICY_VALUE>` = `Include` (enable) or
-  `Exclude` (disable) with `<PORTAL_IDS>` = the named site(s), then continue to
+- **All** (or "every site") → the env-wide operation is a genuine no-op. Make
+  **no** API call. Report *"No change made — `<POLICY_SUBJECT>` is already
+  `<enabled|disabled>` on every eligible portal in `<ENV_DISPLAY>`."* and go
+  straight to the Phase 5 loop. Skip the consent gate and the POST entirely.
+- **comma-separated portals** → set `<POLICY_VALUE>` = `Include` (enable) or
+  `Exclude` (disable) with `<PORTAL_IDS>` = the named portal(s), then continue to
   Step 2 (render the Impact Summary) and the normal consent gate. **Do not POST
   yet** — the admin still approves at the gate.
+- **cancel** → exit cleanly with *"No change made."*; do not POST.
 
-> **Enforce-only changes other sites — surface it.** Switching the env-wide
-> value to an explicit list re-scopes the policy for **every** site, not just
-> the named one. When the current env value is `All` and the admin picks
-> "Enforce only" on an **enable**, the sites **not** listed flip from Enabled →
-> Disabled. When the current env value is `None` and the admin picks "Enforce
-> only" on a **disable** (→ `Exclude`), the sites **not** listed flip from
-> Disabled → **Enabled** (because `Exclude` enables the policy everywhere except
-> the listed sites). Either way, after the admin chooses "Enforce only", the
-> Impact Summary / consent gate MUST make the collateral explicit: list the
-> out-of-scope sites and their Current → New State so the admin sees the full
-> blast radius before replying `Apply now`. Never let an "Enforce only" POST
-> flip other sites without showing it.
+> **Narrowing to specific portals changes other sites — surface it.** Switching
+> the env-wide value to an explicit list re-scopes the policy for **every** site,
+> not just the named one. When the current env value is `All` and the admin
+> narrows an **enable** to specific portals (`Include`), the portals **not**
+> listed flip from Enabled → Disabled. When the current env value is `None` and
+> the admin narrows a **disable** to specific portals (`Exclude`), the portals
+> **not** listed flip from Disabled → **Enabled** (because `Exclude` enables the
+> policy everywhere except the listed sites). Either way, after the admin names
+> specific portals, the Impact Summary / consent gate MUST make the collateral
+> explicit: list the out-of-scope sites and their Current → New State so the
+> admin sees the full blast radius before replying `Apply now`. Never let a
+> narrowed-scope POST flip other sites without showing it.
 
 **Step 2 — render the Impact Summary via the helper.** Build the request JSON
 and pipe it through `render-impact-summary.js`, emitting its output **verbatim**
@@ -814,7 +1047,9 @@ echo '{
 `scope` is `all` when `<POLICY_VALUE>` is `All` / `None`, and `specific` when it
 is `Include` / `Exclude`. Pass **only the sites in scope** in `sites` (every
 site in the env for `all`; the picked sites for `specific`). The helper renders
-the Current State → New State transition per site, marks changed rows, and adds
+the Current State → New State transition per site, marks changed rows, prints a
+**Policy value** line just below Effect (the internal `policyValue` that will be
+POSTed, plus the `ToBeAdded` portal-id list for `Include`/`Exclude`), and adds
 the sign-out Side-effect line only when the resulting `policyValue` triggers it.
 
 **Cascade block (downstream-methods checklist).** When the user applies a
@@ -868,9 +1103,11 @@ summary the admin approves.
 > Emit the helper output exactly as-is and stop; silence is the correct render
 > for a policy without dependents.
 
-**Step 3 — ask for consent.** After the summary, end with one prose line:
-*"Reply **Apply now** to proceed, or **cancel** to stop."* Do not proceed
-without an explicit free-text `Apply now`. If the user replies `cancel`, exit
+**Step 3 — ask for consent.** After the summary, present a **2-option
+`AskUserQuestion`** — question *"Proceed with this change?"*, choices
+**Apply now** and **Cancel** (exactly those two, no free-text, no extra option).
+Do not proceed without the user selecting **Apply now**. If the user selects
+**Cancel**, exit
 cleanly with *"No change made."* and do not POST.
 
 #### 4.2.4 Apply and watch
@@ -902,29 +1139,30 @@ After the script exits, re-read the current state at the same scope and show it
 to the user. This is a verify step — never trust the polling outcome alone.
 
 - `policyValue` was `All` or `None` → run **`get-env.js`**.
-- `policyValue` was `Include` or `Exclude` → run **`get-portal.js`** (which reads the policyRecord, then check that each picked portal lands on the expected list).
+- `policyValue` was `Include` or `Exclude` → run **`get-env.js`** + **`get-details.js`** (one call each — the env value plus the inclusion/exclusion lists), then resolve each targeted site with `resolvePortalStates(...)` and confirm every picked portal landed on the expected state. Do **NOT** loop `get-portal.js` per portal. **Wait until `set-governance.js` reports the terminal state before this read** — Set is async, so reading mid-rollout can return stale membership.
 
 **Render the verification as a state table (canonical structure).** After the
 read confirms the new state, render a headline + table that lists **every site
 the operation touched**. **Do NOT hand-build the table.** Instead render it with
-the **`render-portal-table.js`** helper in **`--markdown`** mode, piping the
-sites through it and emitting the output **verbatim as a rendered Markdown
-table** (do **NOT** wrap it in a code fence — a fence would show the raw pipes
-instead of a table):
+the **`render-portal-table.js`** helper in **`--unicode`** mode (add
+`--no-color`), piping the sites through it and emitting the output **verbatim
+inside a fenced code block** — the Unicode box only aligns in monospace, so
+STATUS renders are the one path that MUST be fenced:
 
 ```bash
-echo '<PORTALS_JSON>' | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --markdown
+echo '<PORTALS_JSON>' | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --unicode --no-color
 ```
 
 `<PORTALS_JSON>` is a JSON array of `{ "name", "url", "portalId", "state" }`
 where `state` is `true` (Enabled) / `false` (Disabled) — compute each site's
-state from the read via the Phase 4.4.3 site-state table. **Always use
-`--markdown` for chat surfaces**: the legacy fixed-width ASCII box misaligns in
-chat because the 🟢/🔴 State emoji are double-width glyphs while the box padding
-counts characters, so every column after State shifts. The Markdown table lets
-the chat client size the columns, so each site renders on one line. (The
-ASCII-box mode — omit `--markdown`, add `--no-color` — remains only for a real
-terminal.) The helper emits columns `# | Name | URL | Site ID | State`.
+state from the read via the Phase 4.4.3 site-state table. **Governance STATUS is
+ALWAYS the fixed-width Unicode box** (`┌─┬─┐ │ ├─┼─┤ └─┴─┘`, a rule between every
+row), identical for every policy. It emits **exactly** the five columns
+`# | Name | URL | Site ID | State` — never add, drop, reorder, or rename a
+column (no parent columns, no Effective column, no paraphrase column). The
+`--markdown` and legacy ASCII modes stay for other callers, but every STATUS
+render (this post-Set verify, Fetch Env 4.3.1, Fetch Site 4.4.3) uses the
+Unicode box.
 
 **The State cell MUST show the status icon** — 🟢 for Enabled, 🔴 for Disabled.
 The helper prepends these by default (pass `--no-icons` only if you explicitly
@@ -936,15 +1174,21 @@ Pick the headline + row set by scope:
 - **`None` (env-wide disable)** — headline *"This Governance setting is 🔴 Disabled for these Sites:"*; list **all** sites in the env, every `state=false`.
 - **`Include` / `Exclude`** — list only the sites the operation targeted; compute each site's state via the Phase 4.4.3 site-state table. Use the singular *"…for this Site:"* headline when exactly one site was targeted.
 
-Env-wide (`None`) example — every site rendered via the helper as a Markdown
-table (icons on), emitted un-fenced so the client renders it:
+Env-wide (`None`) example — every site rendered via the helper as the Unicode
+box (icons on), emitted **inside a fenced code block** so monospace preserves
+the alignment:
 
 This Governance setting is 🔴 Disabled for these Sites:
 
-| # | Name | URL | Site ID | State |
-| --- | --- | --- | --- | --- |
-| 1 | Portal_1 | https://site-3axiv.powerappsportals.com | d1df518c-8e39-4bd5-8410-eb1c0c28e56c | 🔴 Disabled |
-| 2 | Portal_2 | https://site-37umu.powerappsportals.com | bf8ead09-df94-488a-b78c-d4065899e1a4 | 🔴 Disabled |
+```
+┌───┬──────────┬─────────────────────────────────────────┬──────────────────────────────────────┬─────────────┐
+│ # │ Name     │ URL                                     │ Site ID                              │ State       │
+├───┼──────────┼─────────────────────────────────────────┼──────────────────────────────────────┼─────────────┤
+│ 1 │ Portal_1 │ https://site-3axiv.powerappsportals.com │ d1df518c-8e39-4bd5-8410-eb1c0c28e56c │ 🔴 Disabled │
+├───┼──────────┼─────────────────────────────────────────┼──────────────────────────────────────┼─────────────┤
+│ 2 │ Portal_2 │ https://site-37umu.powerappsportals.com │ bf8ead09-df94-488a-b78c-d4065899e1a4 │ 🔴 Disabled │
+└───┴──────────┴─────────────────────────────────────────┴──────────────────────────────────────┴─────────────┘
+```
 
 Then give the one-line Phase 5 loop summary.
 
@@ -992,17 +1236,28 @@ user sees every portal's name, URL, Site ID, and 🟢/🔴 state.
 
 Steps:
 
-1. Fetch the policy record (needed for `Include`/`Exclude` membership; harmless
-   for `All`/`None`):
+1. Fetch the env-level value and the policy's per-site membership in **two
+   calls total** — regardless of how many portals the env has. First the
+   env-level value:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-portal.js" \
+   node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-env.js" \
      --envId "<ENV_ID>" \
-     --policy "<POLICY>" \
-     --portalId 00000000-0000-0000-0000-000000000000
+     --policy "<POLICY>"
    ```
-   The dummy portalId is fine — the helper returns the env's full
-   `InclusionList` / `ExclusionList` regardless. We're using it for the env-level
-   record here, not for membership of the dummy id.
+   Then, **only when the env value is `Include` or `Exclude`** (membership
+   matters), read the inclusion/exclusion lists in one shot:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-details.js" \
+     --envId "<ENV_ID>" \
+     --policy "<POLICY>"
+   ```
+   `get-details.js` returns `{ includedSites: [...], excludedSites: [...] }` for
+   the whole environment (endpoint `GET /governance/{policy}/details`). Do
+   **NOT** loop `get-portal.js` per portal to discover state, and do **NOT**
+   call `get-portal.js` with a dummy `00000000-…` portalId — that endpoint is
+   genuinely per-portal and returns **404** for a non-existent id, so it never
+   yields the env lists. For `All` / `None` the lists are irrelevant, so skip
+   the `get-details.js` call entirely (env value alone decides every site).
 
 2. Fetch the env's full site list:
    ```bash
@@ -1010,12 +1265,15 @@ Steps:
      --envId "<ENV_ID>"
    ```
 
-3. Compute each site's state via the Phase 4.4.3 site-state table (using the env
-   `body` + the inclusion/exclusion lists), then render the **full** portal
-   list through the helper in **`--markdown`** mode, emitting its output
-   **verbatim as a rendered Markdown table** (NOT inside a code fence):
+3. Compute each site's state **locally** from the env value + the
+   inclusion/exclusion lists via `resolvePortalStates(envValue, detailsBody,
+   portals)` (exported from `resolve-portal-availability.js`) — this is the
+   batch form of the Phase 4.4.3 site-state table and needs **zero** per-portal
+   network calls. Then render the **full** portal list through the helper in
+   **`--unicode`** mode (add `--no-color`), emitting its output **verbatim
+   inside a fenced code block** (the Unicode box needs monospace to align):
    ```bash
-   echo '<PORTALS_JSON>' | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --markdown
+   echo '<PORTALS_JSON>' | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --unicode --no-color
    ```
    `<PORTALS_JSON>` is a JSON array of `{ "name", "url", "portalId", "state" }`
    (`state` true=Enabled / false=Disabled) for **every** site in the env. The
@@ -1030,6 +1288,14 @@ Steps:
    If a policy-list id does NOT appear in `list-portals` (e.g., the site was
    deleted after being added), still show it in the table with `(site not
    found)` for the name and an empty URL.
+
+   > **Gated child policy?** If `<POLICY>` has a non-empty `availabilityDependsOn`
+   > (the four protocols or the three social IdPs), still render the SAME 5-column
+   > Unicode box — never add parent or Effective columns. Compute each site's
+   > **effective** state per **Phase 4.4.4** (own AND every gating parent) and put
+   > that single effective value in the `State` column, then base the headline on
+   > it. The parent chain is computed but NOT displayed — status always shows the
+   > five columns `# | Name | URL | Site ID | State` and nothing more.
 
 4. Finally, give the highlighted (bold + icon) one-line summary from Phase 4.3
    above.
@@ -1165,39 +1431,126 @@ Phase 5 loop summary, and any verification table. Do NOT invert or
 re-interpret these labels based on the underlying API direction; the
 user has chosen this mental model and we render it consistently.
 
-Then render the result as a one-line headline + **the Markdown table produced by
-`render-portal-table.js --markdown`** (icons on) — **never** hand-build it, and
-never multi-sentence prose. Pipe the single site through the helper:
+Then render the result as a one-line headline + **the Unicode box produced by
+`render-portal-table.js --unicode --no-color`** (icons on) — **never** hand-build
+it, and never multi-sentence prose. Pipe the single site through the helper:
 
 ```bash
 echo '[{"name":"<PORTAL_NAME>","url":"<URL>","portalId":"<PORTAL_ID>","state":<true|false>}]' \
-  | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --markdown
+  | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --unicode --no-color
 ```
 
 `state` is `true` when the Phase 4.4.3 site-state table resolves to Enabled,
 `false` when Disabled. **The State cell MUST show the icon** — 🟢 Enabled /
-🔴 Disabled (the helper adds it by default). Emit the helper output verbatim as
-a rendered Markdown table (NOT inside a code fence).
+🔴 Disabled (the helper adds it by default). Emit the helper output verbatim
+**inside a fenced code block** (the Unicode box needs monospace to align).
+
+> **Gated child policy?** When `<POLICY>` is one of the four protocols or three
+> social IdPs (non-empty `availabilityDependsOn`), the site can show its own
+> setting Enabled while the method is actually dark because a parent is off. Do
+> NOT add columns for that — compute the **effective** state per **Phase 4.4.4**
+> (own AND every gating parent) and put it in the single `State` column of the
+> same 5-column Unicode box. Report that effective value as the site's status.
 
 For **Enabled**:
 
 This Governance setting is 🟢 Enabled for this Site:
 
-| # | Name | URL | Site ID | State |
-| --- | --- | --- | --- | --- |
-| 1 | 8-june | https://site-pjpuy.powerappsportals.com | fe624c02-8793-4423-84f0-3546d80dee49 | 🟢 Enabled |
+```
+┌───┬────────┬─────────────────────────────────────────┬──────────────────────────────────────┬────────────┐
+│ # │ Name   │ URL                                     │ Site ID                              │ State      │
+├───┼────────┼─────────────────────────────────────────┼──────────────────────────────────────┼────────────┤
+│ 1 │ 8-june │ https://site-pjpuy.powerappsportals.com │ fe624c02-8793-4423-84f0-3546d80dee49 │ 🟢 Enabled │
+└───┴────────┴─────────────────────────────────────────┴──────────────────────────────────────┴────────────┘
+```
 
 For **Disabled**:
 
 This Governance setting is 🔴 Disabled for this Site:
 
-| # | Name | URL | Site ID | State |
-| --- | --- | --- | --- | --- |
-| 1 | Site 1 | https://site-dmq4c.powerappsportals.com | 3e13d603-2607-43e0-90aa-d15bacaa8787 | 🔴 Disabled |
+```
+┌───┬────────┬─────────────────────────────────────────┬──────────────────────────────────────┬─────────────┐
+│ # │ Name   │ URL                                     │ Site ID                              │ State       │
+├───┼────────┼─────────────────────────────────────────┼──────────────────────────────────────┼─────────────┤
+│ 1 │ Site 1 │ https://site-dmq4c.powerappsportals.com │ 3e13d603-2607-43e0-90aa-d15bacaa8787 │ 🔴 Disabled │
+└───┴────────┴─────────────────────────────────────────┴──────────────────────────────────────┴─────────────┘
+```
 
 Do not surface internal terms (`policyValue`, `InclusionList`, `ExclusionList`,
 `Include`, `Exclude`) to the user. The single-table view is the source of
 truth for whether the policy is on or off for that site.
+
+#### 4.4.4 Effective status for gated child sign-in methods (single effective State column)
+
+**When the policy being read is a *gated child*** — one that has a non-empty
+`availabilityDependsOn` in `governance-mapping.json` (the four protocols
+OAuth 2.0 / OpenID Connect / SAML 2.0 / WS-Federation, and the three social IdPs
+Facebook / Google / Microsoft) — the site's OWN governance setting being Enabled
+is **necessary but not sufficient**. The method only actually works on a portal
+when **every gating parent is also Enabled** on that portal. So the status the
+user cares about is the **effective** status = the child's own state **AND** all
+its parents:
+
+- **OAuth 2.0 / OpenID Connect / SAML 2.0 / WS-Federation** are effectively
+  Enabled on a site only when that protocol **and External Auth** are Enabled.
+- **Facebook / Google / Microsoft** are effectively Enabled on a site only when
+  that provider **and OAuth 2.0 and External Auth** are all Enabled.
+
+**Render it in the SAME 5-column Unicode box as every other status** — do NOT
+add parent context columns and do NOT add an Effective column. Governance status
+is always exactly `# | Name | URL | Site ID | State`; for a gated child the
+single `State` cell carries the **effective** value (own AND all parents), and
+the parent chain is used only to COMPUTE that value, never displayed. This holds
+for the status-display paths — Fetch Env portal table in 4.3.1, Fetch Site in
+4.4.3, and the post-Set verify table in 4.2.5.
+
+**How to build it:**
+
+1. Read each site's **own** child state **and** each parent's state — all via
+   the two-call batch path, **never** a per-portal loop. For the child and for
+   **each** parent policy (`EnableExternalAuthProviders`, plus
+   `EnableProtocolOpenAuth` for the social IdPs), run `get-env.js` once for the
+   env value and `get-details.js` once for the inclusion/exclusion lists (skip
+   `get-details.js` when that policy's env value is `All`/`None`). Then call
+   `resolvePortalStates(envValue, detailsBody, portals)` per policy to classify
+   every site locally. So a protocol needs 2 policies × ≤2 calls = **≤4 calls**;
+   a social IdP needs 3 policies × ≤2 calls = **≤6 calls** — flat, no matter how
+   many portals. The exact parent list per policy is that policy's
+   `availabilityDependsOn` (also mirrored in
+   `effectiveStatusRules.parentColumnsByPolicy`). If a parent read fails, treat
+   that parent's state as unknown — the site's effective state becomes unknown
+   and its `State` cell renders `Unknown` (never block on a read error). Do
+   **NOT** call `get-portal.js` per portal, and do **NOT** use the dummy-portalId
+   trick (it 404s).
+
+2. **Compute the effective boolean per site**: `effective = own AND (every
+   parent state)`. A site whose own setting is Enabled but any gating parent is
+   off is **effectively Disabled**.
+
+3. Render the sites through **`render-portal-table.js --unicode --no-color`**
+   (icons on) exactly like the non-gated paths, passing each site's
+   **effective** boolean as `state`. Emit the box **inside a fenced code block**.
+   Do NOT use `render-status-table.js` for status display — the single-State
+   Unicode box is the only status render.
+
+   ```bash
+   echo '<PORTALS_JSON>' | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --unicode --no-color
+   ```
+
+   `<PORTALS_JSON>` is the same `{ "name", "url", "portalId", "state" }` array,
+   with `state` = the computed effective boolean.
+
+4. Pick the **headline from the effective status**, not the child's own state:
+   *"This Governance setting is 🟢 Enabled for these Sites:"* when at least one
+   site is effectively Enabled. In the plain-language sentences around the box
+   you MAY explain WHY a site is effectively off (e.g. *"Google is turned on for
+   Portal_3 but is not active because OAuth 2.0 is off there"*) — but the box
+   itself stays the five columns with the single effective `State`.
+
+**Non-gated policies** (Maker Copilot, local login, and External Auth itself)
+have no parents — their `availabilityDependsOn` is empty, so their effective
+state equals their own state. They use the exact same 5-column Unicode box; the
+render is uniform across every policy.
 
 ### 4.5 Check the rollout status (`<OP>` = Fetch Status)
 
@@ -1289,9 +1642,10 @@ Skill tracking:
 ## Constraints
 
 - **Plain language** — talk about "turning off the OpenID Connect / SAML sign-in path on portals", "turning Maker Copilot on / off for existing sites", or "enabling Google sign-in on your sites". Show the policy strings only when the user has shown they want the technical name.
-- **Explicit consent for Set** — never POST `/governance` without a Set-specific **free-text** confirmation (the user replies `Apply now`; do NOT use an `AskUserQuestion` with numbered options) that spells out which sign-in path / feature is being turned off and what happens to currently-signed-in users.
-- **Redundant-operation guard runs BEFORE the Impact Summary** — when the admin's requested operation is a no-op for the named site(s) (enable while the env is already `All`/`Include`-with-the-site, or disable while already `None`/`Exclude`-with-the-site), do **not** render the Impact Summary or POST yet. First stop and ask the **Keep** vs **Enforce only on `<sites>`** free-text question (Phase 4.2.3 Step 1b). `Keep` → no API call, report "no change" and loop. `Enforce only` → set `Include` (enable) / `Exclude` (disable) on the named site(s), THEN render the Impact Summary (surfacing the collateral flip on the other sites) and the normal `Apply now` consent gate.
+- **Explicit consent for Set** — never POST `/governance` without a Set-specific consent step: after the Impact Summary, present a **2-option `AskUserQuestion`** (choices **Apply now** / **Cancel** — exactly those two, no free-text prompt, no third option) that spells out which sign-in path / feature is being turned off and what happens to currently-signed-in users. Only a selected **Apply now** authorizes the POST.
+- **Redundant-operation guard runs BEFORE the Impact Summary** — when the admin's requested operation is a no-op for the named site(s) (enable while the env is already `All`/`Include`-with-the-site, or disable while already `None`/`Exclude`-with-the-site), do **not** render the Impact Summary or POST yet. First stop and ask the standard **eligible-portal scope** free-text prompt (Phase 4.2.3 Step 1b): reply **All** to apply the requested verb to all eligible portals, or a **comma-separated list of portals** for specific sites. `All` → no API call (it is already in that state), report "no change" and loop. Specific portals → set `Include` (enable) / `Exclude` (disable) on the named site(s), THEN render the Impact Summary (surfacing the collateral flip on the other sites) and the normal `Apply now` consent gate.
 - **Always verify after Set** — run the matching `get-*` call after the polling script exits, even when it reports success.
+- **Parent-gated hard block (no override)** — a **child** auth policy can be **neither enabled nor disabled** on a portal whose required **parent** is Disabled: OpenID Connect / SAML 2.0 / WS-Federation / OAuth 2.0 are blocked wherever **External Auth** (`EnableExternalAuthProviders`) is off; Facebook / Google / Microsoft are blocked wherever **External Auth or OAuth 2.0** (`EnableProtocolOpenAuth`) is off. This applies **on every path**, including the **named-site fast path** (Phase 4.2.2b) where the site is named directly in the request — not only the scope picker's `--available-only` pre-filter (Phase 4.2.1 Step B.1). NEVER offer a "force-enable / force-disable anyway", "toggle the own setting regardless", or any similar bypass — the gate is absolute. If every named site is ineligible, do **not** render the Impact Summary or POST; name the Disabled parent and stop (offer to enable the parent first). If only some are ineligible, drop them (telling the admin why) and proceed with the eligible ones only. Fail-open only when a parent's live state can't be read.
 - **Always show the env list** — for **every** new user request / operation
   (Apply, Fetch Env, Fetch Site — including each loop iteration and every new
   intent the user types), the orchestrator MUST render the **full** env-list

@@ -13,12 +13,16 @@ All scripts accept `--help` to print full usage.
 - [Supported policies](#supported-policies)
 - [Assumed API contract](#assumed-api-contract)
 - [Environment override](#environment-override)
+- [Ring selection (TIP vs Prod) and token generation](#ring-selection-tip-vs-prod-and-token-generation)
 - [`list-envs.js`](#list-envsjs)
 - [`list-portals.js`](#list-portalsjs)
 - [`set-governance.js`](#set-governancejs)
 - [`get-status.js`](#get-statusjs)
 - [`get-env.js`](#get-envjs)
 - [`get-portal.js`](#get-portaljs)
+- [`get-details.js`](#get-detailsjs)
+- [`resolve-portal-availability.js`](#resolve-portal-availabilityjs)
+- [`render-status-table.js`](#render-status-tablejs)
 - [`parse-portal-input.js`](#parse-portal-inputjs)
 - [Common error catalogue](#common-error-catalogue)
 
@@ -78,6 +82,7 @@ differs:
 | Status snapshot | `GET` | `/governance/status/{policy}` | — | `get-status.js`, plus `set-governance.js` polling |
 | Env-level read | `GET` | `/governance/{policy}` | — | `get-env.js` |
 | Portal-level read | `GET` | `/websites/{portalId}/governance/{policy}` | — | `get-portal.js` |
+| Env-level membership read (inclusion/exclusion lists) | `GET` | `/governance/{policy}/details` | — | `get-details.js` |
 
 POST body shape (from the PowerApps-CoreServicesGateway gateway config — verified 2026-06-06):
 
@@ -117,31 +122,34 @@ body is an array on purpose — the gateway accepts multiple policy objects in
 one POST.
 
 > **Write vocabulary (canonical → wire).** `--policyValue` and every internal
-> code path use the canonical `All` / `None` / `Include` / `Exclude` strings,
-> but for env-level (`uniformGovernance`) policies the gateway does NOT accept
-> those short forms on WRITE — it silently rejects `policyValue:"All"` with the
-> plain body `Website id cannot be null or empty` and leaves the env unchanged.
-> `set-governance.js buildPolicyPayload` therefore forward-maps the canonical
-> value to the `applyTo` enum vocabulary via `policies.js toWritePolicyValue()`
-> right before the POST:
+> code path use the canonical `All` / `None` / `Include` / `Exclude` strings.
+> As of the **2026-07 A059 gateway shift** these short canonical forms ARE the
+> wire vocabulary — the older `applyTo` `*Sites` enums are now rejected. So
+> `set-governance.js buildPolicyPayload` → `policies.js toWritePolicyValue()`
+> forward-maps each canonical value to itself (an identity map, kept as a seam
+> in case the wire vocabulary shifts again):
 >
 > | Canonical (`--policyValue`) | Wire value (env-level policies) |
 > |-----------------------------|---------------------------------|
-> | `All`     | `AllSites` |
-> | `Include` | `IncludeSites` |
-> | `Exclude` | `ExcludeSites` |
+> | `All`     | `All` |
+> | `Include` | `Include` |
+> | `Exclude` | `Exclude` |
 > | `None`    | `None` (disable is conveyed by the value itself) |
 >
-> The `None` wire value conveys disable by the value itself rather than an
-> `applyTo` enum form. This mirrors the read side, where env-level policies
-> return `*Sites` which `policies.js normalizeEnvValue()` folds back to the
-> canonical form.
-> Verified empirically against Preprod (2024-10-01 gateway): POSTing
-> `policyValue:"AllSites"` for `EnableMakerCopilotForExistingSites` returns
-> `200 "Policy upserts accepted."` and flips the env `None` → `AllSites`;
-> `policyValue:"IncludeSites"` + `ToBeAdded:[siteIds]` returns `200` and the env
-> reads back `IncludeSites` with those sites on the inclusion list — whereas the
-> short forms (`All` / `Include` / `Exclude`) are rejected.
+> **History:** originally (2024-10-01 gateway) env-level policies REQUIRED the
+> `applyTo` `*Sites` enums on write (`AllSites` / `IncludeSites` /
+> `ExcludeSites`) and rejected the short forms with the plain body
+> `Website id cannot be null or empty`. As of 2026-07 the gateway inverted that
+> contract for the sign-in protocol policies: it now rejects the `*Sites` forms
+> with HTTP 400 `{ "error": { "code": "A059", "message": "The provided policy
+> value is not a valid governance policy value." } }` and accepts the short
+> forms. The READ side still normalizes `*Sites` → canonical via
+> `policies.js normalizeEnvValue()` because the env can still read those back.
+> Verified empirically against Preprod on `EnableProtocolOpenAuth` (2026-07):
+> `AllSites`/`IncludeSites`/`ExcludeSites` → `400 A059`; `All`/`Include`/`Exclude`
+> → `200 "Policy upserts accepted."` (a short-form POST during an in-flight
+> rollout returns code `D006` with an empty message — a concurrency lock, not
+> value rejection; retry once `GET /governance/status` reports `Succeeded`).
 
 All paths are appended to the base URL:
 `https://api.powerplatform.com/powerpages/environments/{envId}` (or the
@@ -169,8 +177,73 @@ admin access to without re-running `pac auth select`.
 
 The override is implemented in `scripts/governance-context.js`. It replaces
 the `…/environments/<id>/…` segment after the shared `resolveContext()` has
-acquired a token. The token itself is cloud-scoped, not env-scoped, so the
-same token works against any env in the same cloud.
+acquired a token.
+
+---
+
+## Ring selection (TIP vs Prod) and token generation
+
+`governance-context.js` resolves both the **gateway host** and the **bearer
+token** per ring. **TIP/Preprod is the default ring**; Prod is opt-out.
+
+### Ring flag
+
+| Env var | Effect |
+|---------|--------|
+| *(unset)* | **TIP** ring (default) → host `https://api.preprod.powerplatform.com`. |
+| `PP_GOV_RING=prod` | Prod ring → host from the signed-in cloud (`api.powerplatform.com`, gov clouds, …). |
+| `PP_GOV_PROD=1` | Legacy escape hatch, equivalent to `PP_GOV_RING=prod`. `PP_GOV_RING` wins if both are set. |
+| `PP_GOV_TIP_HOST=<url>` | Override the default TIP host (e.g. a different pre-production ring). |
+| `PP_GOV_API_HOST=<url>` | Pin an **arbitrary** host; outranks the ring entirely. |
+
+> The TIP host is `api.preprod.powerplatform.com`. `api.tip.powerplatform.com`
+> does **not** resolve in DNS and is not the Preprod gateway.
+
+### Token generation
+
+The governance gateway requires the delegated scopes
+`PowerPages.Websites.Read` / `PowerPages.Websites.Write`. The Azure CLI
+first-party client is **not** authorized for these and cannot be granted them,
+so an az-minted token 403s (`InsufficientDelegatedPermissions`). Token
+resolution precedence:
+
+1. **`PP_GOV_TOKEN`** — an explicit bearer always wins. Paste a scoped token
+   (e.g. from the admin portal, or one you minted yourself).
+2. **TIP ring → custom-app device-code flow.** `governance-context.js` runs
+   `tip-auth.js` (OAuth 2.0 device-code + silent refresh) to mint a token that
+   actually carries the PowerPages scopes. It defaults to the shipped
+   `pp-governance-cli` app (`c5ae9f06-f0bb-4ef6-9ee4-c7a3803da37a`) and the
+   `organizations` authority, so **no env vars are required** — the first run
+   prompts for an interactive browser sign-in; subsequent runs renew silently
+   from the cached refresh token. Override `PP_GOV_TIP_CLIENT_ID` /
+   `PP_GOV_TIP_TENANT` to point at a different registration.
+3. **Fallback** — if the device-code flow fails, it falls back to an az mint
+   (which will 403 on governance calls) and prints guidance.
+
+| Env var | Purpose |
+|---------|---------|
+| `PP_GOV_TIP_CLIENT_ID` | *(optional)* Public-client app id for the device-code flow. Defaults to the shipped `pp-governance-cli` app. |
+| `PP_GOV_TIP_TENANT` | *(optional)* Tenant id (or `organizations`) for the device-code authority. Defaults to `organizations`. |
+| `PP_GOV_TOKEN` | Explicit bearer token; overrides all generation. |
+| `PP_GOV_TOKEN_RESOURCE` | Override the token audience when it differs from the host. |
+
+The shipped app id is a **public identifier, not a secret** (the flow still
+requires an interactive user sign-in and uses no client secret), so it is safe
+to ship as a default. To use your own app instead, register a public-client
+app, add `PowerPages.Websites.Read` + `PowerPages.Websites.Write` as delegated
+permissions on the Power Platform API resource, grant consent, then:
+
+```bash
+export PP_GOV_TIP_CLIENT_ID="<app-id>"
+export PP_GOV_TIP_TENANT="<tenant-id>"
+```
+
+With the defaults, TIP works with no setup — just run any governance script:
+
+```bash
+# TIP is the default ring:
+node get-env.js --policy EnableProtocolSAML20 --envId <guid>
+```
 
 ---
 
@@ -406,6 +479,259 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-portal.js" \
 | `0`  | Success |
 | `2`  | Sign-in required |
 | `1`  | Any other failure |
+
+---
+
+## `get-details.js`
+
+Reads `GET /governance/{policy}/details` — the policy's **env-level** per-site
+membership (inclusion/exclusion portal lists) in a **single call**, regardless of
+how many portals the environment has.
+
+### Why (kills the per-portal read loop)
+
+`get-portal.js` (`GET /websites/{portalId}/governance/{policy}`) is **per-portal**
+— one boolean per call — so reading N portals costs N cold-started calls and N
+chances at a transient "PAC not signed in". It also **404s on a dummy/non-existent
+portalId** (`Website with the given id does not exist`), so the old "call
+`get-portal.js` with `00000000-…` to fetch the env lists" trick never worked.
+`get-details.js` returns the whole membership once; combine it with `get-env.js`
+(the `All`/`None`/`Include`/`Exclude` env value) and resolve every portal's state
+**locally** via `resolvePortalStates()` (see `resolve-portal-availability.js`).
+That is **2 network calls per policy**, flat — vs `1 + N` for the loop.
+
+### Usage
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-details.js" \
+  --policy <name> [--envId <guid>]
+```
+
+### Response (stdout)
+
+```json
+{ "status": "ok", "policy": "<name>", "envId": "<guid>", "transport": "gateway",
+  "includedSites": ["<portalId>", ...],
+  "excludedSites": ["<portalId>", ...],
+  "body": { "IncludedSites": ["<portalId>", ...], "ExcludedSites": null } }
+```
+
+`includedSites` / `excludedSites` are the normalized (lowercased) id arrays
+parsed from `body` by `extractLists()` — tolerant of the several field spellings
+observed across rings (`InclusionList` / `IncludedSites`, camel/Pascal, bare id
+or object). Skip this call when the env value is `All` / `None` — the lists are
+irrelevant there (every site's state is decided by the env value alone).
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0`  | Success |
+| `2`  | Sign-in required |
+| `1`  | Any other failure |
+
+---
+
+## `resolve-portal-availability.js`
+
+Computes, for a **child** authentication policy, which portals are **available**
+to configure it on based on the live state of its **parent** policies, and which
+are **unavailable** (a required parent is Disabled). Used by the scope pickers
+(SKILL.md Phase 4.2.1 Step B.1 / Phase 4.2.2) — which render it with
+`--available-only` so **only the eligible portals are listed** (with a
+parent-disabled message when none qualify).
+
+### Availability contract
+
+The dependency tree is data-driven from
+`references/governance-mapping.json` — each policy's `availabilityDependsOn`
+array plus the top-level `policyAvailabilityDependencies` block:
+
+| Child policy | Requires (all must be Enabled) |
+|--------------|--------------------------------|
+| `EnableProtocolOpenIdConnect` | `EnableExternalAuthProviders` |
+| `EnableProtocolSAML20` | `EnableExternalAuthProviders` |
+| `EnableProtocolWsFederation` | `EnableExternalAuthProviders` |
+| `EnableProtocolOpenAuth` | `EnableExternalAuthProviders` |
+| `EnableIdpOAuthFacebook` | `EnableExternalAuthProviders`, `EnableProtocolOpenAuth` |
+| `EnableIdpOAuthGoogle` | `EnableExternalAuthProviders`, `EnableProtocolOpenAuth` |
+| `EnableIdpOAuthMicrosoft` | `EnableExternalAuthProviders`, `EnableProtocolOpenAuth` |
+
+A portal is **available** iff **every** parent in the list is Enabled on that
+portal (computed from each parent's env value + inclusion/exclusion lists via
+the Phase 4.4.3 site-state rules). Policies with no `availabilityDependsOn`
+(Maker Copilot, local login, and External Auth itself — the only pure root)
+report all portals available. Note `EnableProtocolOpenAuth` (OAuth 2.0) is
+**not** dependency-free — it is both a child of External Auth and the parent of
+the three social providers.
+
+**Fail-open posture.** A parent whose state cannot be read (transient error,
+missing record) is recorded in `unreadParents` and does **not** hide the portal
+— a read failure never removes options from the admin.
+
+**List-read source.** Parent inclusion/exclusion lists are read via the
+env-level **`getDetails`** op (`GET /governance/{policy}/details`), which returns
+the whole list as `{ "IncludedSites": [...], "ExcludedSites": [...] }`. Do **not**
+use `getPortal` (`GET /websites/{portalId}/governance/{policy}`) for this — that
+op is portal-scoped and returns only a single boolean for the one portal id, and
+it 404s on a dummy/non-existent id ("Website with the given id does not exist").
+The earlier dummy-all-zeros `getPortal` approach silently returned no list,
+leaving the inclusion set empty and mis-reporting an `Include` parent (enabled on
+a subset) as Disabled env-wide — so every eligible site was wrongly hidden.
+
+### Usage
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/resolve-portal-availability.js" \
+  --policy <childPolicy> --portalsFile <path-to-list-portals-json> \
+  [--envId <guid>] [--markdown] [--available-only]
+```
+
+`--portalsFile` is required (the script does not re-page `/websites`). With
+`--markdown`, it prints the site table with available rows first and unavailable
+rows below (blocking parent named); without it, prints the JSON below.
+
+**`--available-only`** (the scope picker used by SKILL.md Phase 4.2.1 Step B.1)
+changes the `--markdown` render so **only the available portals** are listed:
+
+- **Some available** — a table of just the eligible portals (`# | Portal Name |
+  Portal URL | Portal ID`). When only a subset qualifies, an info line follows
+  in plain "Governance setting" language: *"Showing N of M site(s) — the
+  &lt;child&gt; Governance setting can only be configured on sites where the
+  &lt;parent&gt; Governance setting is on. K site(s) are hidden because the
+  &lt;parent&gt; Governance setting is off on them, so the &lt;child&gt;
+  Governance setting can't apply there."* For a two-parent **social IdP** the
+  line names both, using **"and"** for the requirement and **"or"** for the
+  block: *"…the &lt;child&gt; Governance setting can only be configured on sites
+  where **both** the External authentication providers **and** OAuth 2.0 sign-in
+  Governance settings **are on**. K site(s) are hidden because the External
+  authentication providers **or** OAuth 2.0 sign-in Governance setting is off on
+  them, so the &lt;child&gt; Governance setting can't apply there."*
+- **None available** — no table; a single message: *"The &lt;parent&gt;
+  Governance setting is off for this environment. No sites are available to
+  configure &lt;child&gt; here — turn on the &lt;parent&gt; Governance setting
+  first, then try again."* For a two-parent **social IdP**
+  the message names both — *"The External authentication providers **or** OAuth
+  2.0 sign-in Governance setting is off for this environment … turn on **both**
+  … Governance settings first"*. The orchestrator surfaces this and does not
+  prompt for a scope.
+
+### Response (stdout, JSON mode)
+
+```json
+{
+  "policy": "EnableIdpOAuthGoogle",
+  "dependencies": ["EnableExternalAuthProviders", "EnableProtocolOpenAuth"],
+  "available": [ { "portalId": "…", "name": "…", "url": "…" } ],
+  "unavailable": [
+    { "portalId": "…", "name": "…", "url": "…",
+      "blockingParents": ["EnableExternalAuthProviders"],
+      "blockedBy": ["External authentication providers"],
+      "unreadParents": [] }
+  ]
+}
+```
+
+### Exported helper: `resolvePortalStates(envValue, detailsBody, portals)`
+
+The batch, network-free classifier that makes the getDetails fast path work.
+Given a policy's **env value** (`get-env.js`) and its **getDetails body**
+(`get-details.js`), it resolves **every** portal's own state locally — the batch
+form of the Phase 4.4.3 site-state table — so no per-portal `get-portal.js` call
+is needed. `portals` accepts bare id strings **or** portal objects
+(`{ portalId|id|Id, name, url|websiteUrl }`); objects pass their `name`/`url`
+through. Returns `[{ portalId, state, name?, url? }]` where `state` is
+`Enabled` / `Disabled` / `Unknown`. Membership tests are case-insensitive; an
+env value that can't be canonicalized yields `Unknown` (never a guess). This is
+what the orchestrator uses in Fetch Env (4.3.1), the effective-status build
+(4.4.4), the consent-gate Current State (4.2.3), and the post-Set verify (4.2.5).
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0`  | Success |
+| `2`  | Sign-in required |
+| `1`  | Any other failure |
+
+---
+
+## `render-status-table.js`
+
+Renders the per-site **effective** governance-status Markdown table for a
+**gated child** policy — the child's own state plus a column for each gating
+parent, and a final **Effective Status** column. Used by the status-display
+paths (SKILL.md Phase 4.4.4, referenced from Fetch Env 4.3.1, Fetch Site 4.4.3,
+and the post-Set verify 4.2.5).
+
+### Effective-status contract
+
+A child method's own setting being Enabled is necessary but **not** sufficient —
+it is effectively Enabled on a portal only when **every** gating parent is also
+Enabled there (data-driven from `governance-mapping.json` — each child's
+`availabilityDependsOn`, and the readable `effectiveStatusRules` block):
+
+| Child policy | Parent context columns shown |
+|--------------|------------------------------|
+| `EnableProtocolOpenIdConnect` | External Auth |
+| `EnableProtocolSAML20` | External Auth |
+| `EnableProtocolWsFederation` | External Auth |
+| `EnableProtocolOpenAuth` | External Auth |
+| `EnableIdpOAuthFacebook` | External Auth, OpenAuth Protocol |
+| `EnableIdpOAuthGoogle` | External Auth, OpenAuth Protocol |
+| `EnableIdpOAuthMicrosoft` | External Auth, OpenAuth Protocol |
+
+`Effective = Enabled` iff own **and** every parent are Enabled; `Disabled` iff no
+state is Unknown and at least one is Disabled; `Unknown` otherwise (an own/parent
+state could not be read — fail visible, never claim a state on a partial read).
+Non-gated policies (Maker Copilot, local login, External Auth) have no parents —
+use the plain `render-portal-table.js` table instead.
+
+### Usage
+
+```bash
+echo '<JSON>' | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-status-table.js" [--no-icons]
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-status-table.js" --file <path>
+```
+
+### Input JSON
+
+```json
+{
+  "policy": "EnableIdpOAuthGoogle",
+  "portals": [
+    { "name": "Portal_4", "url": "https://…", "portalId": "<guid>",
+      "own": true,
+      "parents": { "EnableExternalAuthProviders": true, "EnableProtocolOpenAuth": true } }
+  ]
+}
+```
+
+`own` and each `parents` value accept `true|false|"Enabled"|"Disabled"|null`. A
+`null`/unreadable state renders `Unknown` and forces `Effective = Unknown`.
+Include the `EnableProtocolOpenAuth` parent key only for the social IdPs. The
+orchestrator assembles the live own/parent states via the batch two-call path —
+`get-env.js` + `get-details.js` per policy, then `resolvePortalStates()` (see
+`resolve-portal-availability.js`) — **never** a per-portal `get-portal.js` loop.
+This helper itself is network-free.
+
+### Response (stdout)
+
+A GitHub-flavored Markdown table (emit un-fenced as a rendered table). Columns:
+`# | Name | URL | Site ID | <parents…> | Effective <child> Status` — parents
+first in dependency order (External Auth → OpenAuth Protocol), then a single
+net-result column. The net-result header is `Effective <statusColumnLabel>
+Status` by default, but a policy may override the whole string via
+`effectiveStatusLabel` in `governance-mapping.json` (OpenAuth Protocol →
+`Effective OpenAuth State`; Google → `Effective Google idp State`). The child's
+own state gates that column but has no column of its own.
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0`  | Success |
+| `1`  | Could not parse the JSON input |
 
 ---
 

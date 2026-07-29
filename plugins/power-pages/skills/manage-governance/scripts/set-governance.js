@@ -127,11 +127,13 @@ function buildPolicyPayload(policy, portalIdsArg, policyValueOverride, removePor
     removePortalIds = [removePortalIdsArg];
   }
   // Derive the canonical policyValue (All / None / Include / Exclude) first,
-  // then forward-map it to the gateway WRITE vocabulary. Env-level policies
-  // require the applyTo enum form ("AllSites"); posting the short canonical
-  // form makes the gateway silently reject the upsert ("Website id cannot be
-  // null or empty") and leaves the env unchanged. See policies.js
-  // toWritePolicyValue / WRITE_VALUE_ALIASES for the WHY.
+  // then forward-map it to the gateway WRITE vocabulary. As of the 2026-07
+  // A059 shift the wire form IS the short canonical value — the older applyTo
+  // `*Sites` enums ("AllSites"/"IncludeSites"/"ExcludeSites") are now rejected
+  // with HTTP 400 A059 "The provided policy value is not a valid governance
+  // policy value." So the forward-map is currently an identity map; the seam
+  // is retained in case the vocabulary shifts again. See policies.js
+  // toWritePolicyValue / WRITE_VALUE_ALIASES for the WHY and empirical proof.
   // A removal-only edit (drop a site from the allow-list, keep the mode) passes
   // no ToBeAdded, so fall back to Include as the mode when only removals are
   // present — the caller keeps the env in allow-list mode, it just shrinks.
