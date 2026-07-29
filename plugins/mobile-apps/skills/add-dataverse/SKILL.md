@@ -41,11 +41,11 @@ test -f native-app-plan.md
 ```
 
 **If present:** read the `## Data Model` section. Extract:
-- The target reconciliation table (`reuse` / `extend` / `create` / `block` decisions and evidence)
+- The target reconciliation table (`reuse` / `extend` / `create` / `adapt` / `defer` decisions and evidence)
 - The Mermaid ER diagram (informational)
 - The "Creation Order" tier list
 
-If any table or column is `block`, STOP before auth or mutation and surface its recorded remediation. Do not reinterpret a blocked item as Create.
+Carry forward any `adapt` (auto-renamed) and `defer` (out-of-scope this run) decisions with their recorded reasons, and apply the alias map to every name you use. A data-modelling conflict never halts this skill — it resolves to `adapt` or `defer` and is reported in Step 9.
 
 **If absent:** check `$ARGUMENTS` for diagram hints (`*.png`, `*.jpg`, `*.jpeg` filename, `erDiagram` keyword, `||--o{` cardinality syntax). 
 
@@ -192,7 +192,7 @@ Read the results as follows:
 - **A planned name absent from `value[]`** — the table does not exist. This is the equivalent of a 404 in the matrix below.
 - Interpret `IsCustomizable` and `CanCreateAttributes` as managed properties and read their `.Value` fields.
 
-If the batched query itself fails (non-2xx), do not fall back to guessing: treat every entry as `block` and stop. If the URL would exceed a practical length with very many tables, split it into a few filtered queries — still far fewer than one request per table.
+If the batched query itself fails (non-2xx), retry it once; if it fails again, split it into per-table queries so one unreadable name cannot hide the rest. Any name still unreadable after that is classified `create` — the POST-time collision rescue in Step 5a is the safety net, and it recovers by extending or renaming rather than failing. If the URL would exceed a practical length with very many tables, split it into a few filtered queries — still far fewer than one request per table.
 
 **Only if the plan contains alternate keys or M:N relationships**, add the matching expands so Steps 5b and 5d never need their own per-item probes. `EntityDefinitions` also supports expanding [`Keys`, `ManyToManyRelationships`, `ManyToOneRelationships`, and `OneToManyRelationships`](https://learn.microsoft.com/power-apps/developer/data-platform/query-schema-definitions#evaluate-other-options-to-retrieve-schema-definitions):
 
@@ -209,14 +209,16 @@ Build and print a reconciliation matrix before Step 5:
 | Present; all planned columns compatible | `reuse` | existing columns `reuse` | No schema write. |
 | Present; custom columns missing; table customizable and can create attributes | `extend` | compatible `reuse`; absent custom `create` | Queue missing ordinary columns for sequential creation; relationships remain Pass 2. |
 | Absent; plan says Create; logical name uses the verified publisher prefix | `create` | ordinary columns `create` inline; lookups deferred | Create once after the complete-payload self-check. |
-| Absent; plan says Reuse/Extend or dependency is standard/managed/required-existing | `block` | dependent columns `block` | STOP; install/import the owning solution or revise the plan. Never recreate it. |
-| Present; same-name column has incompatible `AttributeType` / `AttributeTypeName.Value` | `block` | incompatible column `block` | STOP before all writes; no automatic replacement. |
-| Present; columns missing but `IsCustomizable.Value=false` or `CanCreateAttributes.Value=false` | `block` | missing columns `block` | STOP; target cannot be extended by this workflow. |
-| Batched query failed (non-2xx) | `block` | unknown | STOP; target metadata is not authoritative. |
+| Absent; plan says Reuse/Extend or dependency is standard/managed/required-existing | `defer` | dependent columns `defer` | Never recreate a standard or managed table. Drop the dependent lookups/columns from this run, continue with everything else, and list them under Deferred in Step 9. |
+| Present; same-name column has incompatible `AttributeType` / `AttributeTypeName.Value` | `extend` | incompatible column `adapt` | Auto-rename the planned column via the probe sequence below, record it in the alias map, and create it alongside the existing one. Never modify or delete the existing column. |
+| Present; columns missing but `IsCustomizable.Value=false` or `CanCreateAttributes.Value=false` | `reuse` | missing columns `defer` | The target cannot be extended by this workflow. Reuse the columns that do exist, drop the rest from this run, and list them under Deferred in Step 9. |
+| Batched query failed (non-2xx) after retry and per-table split | `create` | unknown | Proceed; Step 5a's POST-time collision rescue resolves it by extend or rename. |
 
-`replace` is not an automatic state in this workflow. Replacing a table or column requires an explicitly approved migration with dependency analysis and data movement; classify the conflict as `block` here.
+`replace` is not an automatic state in this workflow. Replacing a table or column requires an explicitly approved migration with dependency analysis and data movement, so a conflict resolves to `adapt` (rename beside it) or `defer` (leave it out) instead — both of which leave existing data untouched.
 
-**Global write barrier (HARD):** finish reconciliation for every table and column first. If any item is `block`, make zero metadata writes. Step 5 may begin only when the matrix contains exclusively `reuse`, `extend`, and `create` decisions.
+**Decide-before-write barrier (HARD):** finish reconciliation for every table and column before the first metadata write. Every item must come out of Step 4 as `reuse`, `extend`, `create`, `adapt`, or `defer` — never as an unresolved conflict. Deciding renames up front is what keeps relationships, screens, and sample data pointing at the same names.
+
+**No dead ends (HARD):** a data-modelling conflict must never stop the run. Adapt it (rename beside the existing object) or defer it (drop it from this run), then keep going and report it in Step 9. Only environment faults stop this skill — failed auth, an environment mismatch, or a target the user has no privilege to write to. Those are not data-modelling problems and the user cannot resolve them by editing the plan.
 
 **Idempotency criterion (HARD):** re-running this skill against an already-applied plan MUST perform **zero** metadata writes. Every table, column, relationship, key, and calc column resolves to `reuse` or an "already exists, skipped" outcome from the Step 4 snapshot. If a re-run issues any POST, the reconciliation missed something — report it rather than writing. Use this as the acceptance check after any change to Steps 4, 5, or 5a–5d.
 
@@ -276,7 +278,7 @@ Tombstones and hidden collisions are **not** reliably visible to either form —
 |---|---|
 | Foreign collision + compatible concept/schema + extension allowed | Auto-Extend (no prompt) |
 | Foreign collision + all planned columns present | Auto-Reuse (no prompt) |
-| Foreign collision + incompatible column or extension forbidden | Block before writes; no replacement |
+| Foreign collision + incompatible column or extension forbidden | Auto-rename the conflicting column beside it, or defer it (no prompt) |
 | Foreign collision + incompatible concept | Prompt (see below) |
 | Reserved system name | Auto-rename (no prompt) |
 | Tombstone (0x80060890 / same-name-exists) | Auto-rename (no prompt) |
@@ -286,11 +288,11 @@ Tombstones and hidden collisions are **not** reliably visible to either form —
 ```
 | Option | What it means |
 |---|---|
-| Rename and Create (recommended) | Use a free custom logical name for the genuinely different entity. Existing table stays untouched. |
-| Block and revise | Make no writes; return to the data-model plan and choose another existing table or name. |
+| Rename and Create (default) | Use a free custom logical name for the genuinely different entity. Existing table stays untouched. |
+| Reuse existing as-is | Point the generated services at the existing table and skip the planned columns it lacks. |
 ```
 
-Never offer Extend for an incompatible concept or column shape. Continue only after explicit Rename-and-Create approval; otherwise Block and return to planning.
+Never offer Extend for an incompatible concept or column shape. This prompt is a preference, not a gate: an empty, skipped, or unanswered response defaults to **Rename and Create** so the run always proceeds.
 
 Maintain a run-level logical-name alias map for every auto-rename. Example:
 
@@ -310,7 +312,7 @@ For each candidate in order, GET `EntityDefinitions(LogicalName='<candidate>')?$
 - 404 → free, **take it**, stop probing.
 - 200 or 5xx (collision) → next candidate.
 
-If all 4 probes collide, surface a `BLOCKED: cannot find a free alternative for <original>` and stop.
+If all 4 collide, keep probing `<original>3`, `<original>4`, … through `<original>20`. This sequence is designed never to dead-end: if even those collide, use `<original><4-char run token>`, which is unique to this run. Never abandon a table for want of a free name.
 
 **On a successful auto-rename, do these in order BEFORE the POST:**
 
@@ -336,7 +338,7 @@ First attempt auto-Extend: compare the plan against that table's attribute snaps
 
 > `→ Dataverse still has <original> reserved from a recent delete/hidden collision. Using <new> and continuing.`
 
-If the retry also returns a collision signature, continue probing the remaining candidates. If all candidates collide, return `BLOCKED: cannot find a free alternative for <original>`.
+If the retry also returns a collision signature, continue probing the remaining candidates, then the numeric tail, then the run-token form described above.
 
 **On successful POST**, immediately re-GET to capture the server-assigned `MetadataId` and write it to memory-bank (Step 6d updates `.datamodel-manifest.json`; you also append to `memory-bank.md` under "Created tables" with the GUID and solution name). This lets future `/add-dataverse` runs distinguish "we own this" from "name collision."
 
@@ -470,7 +472,7 @@ For each `Extend` decision, POST a new column to the existing table.
 > | Snapshot result | Action |
 > |---|---|
 > | Name exists and `AttributeType` matches | Skip it and log `↻ <column> (already exists, skipped)`. |
-> | Name exists and `AttributeType` differs | **STOP before all writes** and surface: "Column `<column>` exists but is `<existingType>`, plan expected `<plannedType>`. Dataverse does NOT allow column-type changes via API — delete the column manually or revise the plan." |
+> | Name exists and `AttributeType` differs | Dataverse does not allow column-type changes via API, so **auto-rename the planned column** using the same probe sequence (`<column>v2` → `<column>v3` → `<column>2` → …), add it to the alias map, and create it beside the existing one. Log `→ <column> exists as <existingType>; created <newName> as <plannedType> instead.` Never modify or delete the existing column. |
 > | Name is absent | Add it to the ordered missing-column queue. |
 >
 > This single snapshot catches partial creates, corrected re-runs, and network-drop recovery without paying one GET round trip per column.
@@ -538,7 +540,7 @@ Column shapes that have non-obvious gotchas (handle carefully):
   | Snapshot result | Action |
   |---|---|
   | Present with `AttributeType: Lookup` | Skip the POST and log `↻ <SchemaName> (relationship already exists, skipped)`. |
-  | Present with any other `AttributeType` | **STOP** — a non-lookup column already owns that name. Surface it; do not overwrite. |
+  | Present with any other `AttributeType` | A non-lookup column already owns that name. Auto-rename the lookup's `Lookup.SchemaName` via the probe sequence, record it in the alias map, and POST the relationship with the new name. Never overwrite the existing column. |
   | Absent | POST the relationship. |
 
   This costs no extra round trip: the referencing attribute is an ordinary attribute on the child table, so it is already in the snapshot Step 4 fetched. Without this check a re-run POSTs a duplicate relationship and fails the run mid-Pass-2.
@@ -882,6 +884,8 @@ Environment   : <envUrl>
 Tables reused : <list>
 Tables extended: <list (columns added)>
 Tables created : <list (in tier order)>
+Adapted       : <renamed table/column → new name, and why. Omit the line if none.>
+Deferred      : <items left out of this run and why, e.g. "cr123_note (target not customizable)". Omit the line if none.>
 
 Generated services:
   src/generated/services/<Table>Service.ts × N
