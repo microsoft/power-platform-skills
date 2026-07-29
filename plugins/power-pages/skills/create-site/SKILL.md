@@ -185,12 +185,12 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         node "${PLUGIN_ROOT}/scripts/fetch-template-solution.js" --sha "<catalog-sha>" --solutionPath "<selected.solutionPath>"
         ```
      2. If the result is `ok: false`, tell the user the selected template package is unavailable or corrupt, then set `CREATION_PATH = "from-scratch"` and continue to the from-scratch questions below. Do not leave partial cache files behind. The from-scratch branch emits the single terminal telemetry event for this run.
-     3. If the result is `ok: true`, set `CREATION_PATH = "template"`, `SELECTED_TEMPLATE = <manifest entry>`, and `SELECTED_TEMPLATE_SOLUTION_ZIP = <localPath>`. Append only **Verify prerequisites and confirm template import** now (see [Progress Tracking](#progress-tracking)); the import-vs-clone tasks are appended after the reinstall policy is known. Continue to the template import sequence below. Do **not** ask framework/location and do **not** proceed to Phase 2.
+     3. If the result is `ok: true`, set `CREATION_PATH = "template"`, `SELECTED_TEMPLATE = <manifest entry>`, and `SELECTED_TEMPLATE_SOLUTION_ZIP = <localPath>`. Append the template-path pre-import tasks now (see [Progress Tracking](#progress-tracking)); the import-vs-clone tasks are appended after the reinstall policy is known. Continue to the template import sequence below. Do **not** ask framework/location and do **not** proceed to Phase 2.
    - **Start from scratch** or catalog unavailable: set `CREATION_PATH = "from-scratch"` and continue below.
 
 8. For the template path only:
 
-   1. Mark **Verify prerequisites and confirm template import** as `in_progress`.
+   1. Mark **Resolve target environment** as `in_progress`.
    2. Resolve the target environment and token via the shared auth helpers:
       ```bash
       node "${PLUGIN_ROOT}/scripts/resolve-template-import-context.js"
@@ -205,7 +205,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 > **Why we ask:** PAC auth can point at a different Dataverse environment than the user intended. Even preflights can inspect or modify environment-level settings, so the skill must not continue silently.
 > **Cancel leaves:** `template-cache` — template catalog assets and the selected solution zip may already be cached locally; no org mutation has happened if cancelled here.
 
-   3. Ask the user to confirm the resolved target environment before any environment preflight:
+   3. Mark **Resolve target environment** as `completed` and **Confirm target environment** as `in_progress`, then ask the user to confirm the resolved target environment before any environment preflight:
 
       | Question | Header | Options |
       |----------|--------|---------|
@@ -215,7 +215,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions. Do not run environment preflights or import the template.
       - **Cancel**: emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop before environment preflights.
 
-   4. Preflight-check whether `.js` is blocked in the target environment:
+   4. Mark **Confirm target environment** as `completed` and **Validate JavaScript unblock requirement** as `in_progress`, then preflight-check whether `.js` is blocked in the target environment:
       ```bash
       node "${PLUGIN_ROOT}/scripts/lib/fix-blocked-attachments.js" --envUrl "<environmentUrl>" --extensions js --dry-run --quiet
       ```
@@ -245,7 +245,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions. Do not import the template.
       - **Cancel**: emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop before import.
 
-    5. Preflight-check whether en-US is enabled in the target environment:
+    5. Mark **Validate JavaScript unblock requirement** as `completed` and **Validate en-US language requirement** as `in_progress`, then preflight-check whether en-US is enabled in the target environment:
        ```bash
        node "${PLUGIN_ROOT}/scripts/check-available-languages.js" --envUrl "<environmentUrl>" --token "<token>"
        ```
@@ -273,7 +273,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 > **Why we ask:** The next step imports an unmanaged Dataverse solution into the user's org. Wrong environment or wrong template is disruptive and cannot be cleanly undone.
 > **Cancel leaves:** `template-cache` — the selected solution zip and preview images may remain in the SHA-keyed temp cache; no org mutation has occurred.
 
-   6. Present the template and environment, then ask:
+   6. Mark **Validate en-US language requirement** as `completed` and **Confirm template import** as `in_progress`, then present the template and environment and ask:
 
       | Question | Header | Options |
       |----------|--------|---------|
@@ -281,7 +281,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
       - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions.
       - **Cancel**: emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop; no org mutation has happened.
-   7. Inspect the selected solution zip and check whether that solution is already installed:
+   7. Mark **Confirm template import** as `completed`, then inspect the selected solution zip and check whether that solution is already installed:
       ```bash
       node "${PLUGIN_ROOT}/scripts/inspect-template-solution.js" --zipPath "<SELECTED_TEMPLATE_SOLUTION_ZIP>"
       node "${PLUGIN_ROOT}/scripts/check-solution-installed.js" --solutionName "<uniqueName>" --envUrl "<environmentUrl>"
@@ -377,7 +377,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       node "${PLUGIN_ROOT}/scripts/capture-pages-list.js" --output "<temp-before-pages-list.txt>"
       ```
       If the result is `ok: false`, surface the error, emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop before import.
-   7. Mark **Verify prerequisites and confirm template import** as `completed` and **Import template solution** as `in_progress`.
+   7. Mark **Import template solution** as `in_progress`.
    8. Import the unmanaged solution inline, without invoking `/import-solution` and without writing ALM artifacts:
       ```bash
       node "${PLUGIN_ROOT}/scripts/encode-solution-file.js" --zipPath "<SELECTED_TEMPLATE_SOLUTION_ZIP>"
@@ -1128,11 +1128,15 @@ After Phase 1.5 selects the from-scratch path, append the existing from-scratch 
 | Review with user | Reviewing site | Navigate all pages, share URL, get user feedback, apply changes |
 | Deploy and wrap up | Deploying site | Ask about deployment, present summary, suggest next steps |
 
-After Phase 1.5 selects the template path, append only the common template confirmation task first:
+After Phase 1.5 selects the template path, append the pre-import template tasks immediately so the user can see each environment check:
 
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
-| Verify prerequisites and confirm template import | Confirming template import | Verify PAC/Azure auth, resolve the target environment, preflight `.js` blocked attachments, and ask for import consent |
+| Resolve target environment | Resolving environment | Resolve the active PAC/Azure target environment and token before any environment preflight |
+| Confirm target environment | Confirming environment | Ask whether the resolved environment is the one the user wants for the template install |
+| Validate JavaScript unblock requirement | Checking JavaScript setting | Check `blockedattachments` for `.js` and, with consent, remove only `js` before import |
+| Validate en-US language requirement | Checking language availability | Call `RetrieveAvailableLanguages` and require LCID `1033` before import |
+| Confirm template import | Confirming template import | Show the selected template and target environment, then ask for final import consent |
 
 After the reinstall policy chooses a normal import/update/import-anyway path, append:
 
