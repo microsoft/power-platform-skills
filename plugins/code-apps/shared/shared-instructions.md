@@ -186,7 +186,7 @@ Apply these rules whenever a Power Apps CLI (`pa`/`power-apps`) or `npm` command
 | --- | --- |
 | Non-zero exit / error output | Report the exact error. STOP. Do not continue to the build step. |
 | "connectionId not found" or empty `-c` | Ask the user to run `/list-connections` to get a valid connection ID and retry. |
-| Auth error / token expired | Run `pa auth logout`, then retry — the CLI will prompt re-authentication. |
+| Auth error / token expired | Run `pa auth logout` (or `power-apps logout` on `power-apps`-only projects), then retry — the CLI will prompt re-authentication. |
 
 **Example:**
 > "The `pa app add data-source` command failed: `Error: connectionId 'abc123' not found in environment.` Please run `/list-connections` to confirm the connection exists and get the correct ID."

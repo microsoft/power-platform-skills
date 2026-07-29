@@ -49,7 +49,7 @@ Capture the app URL from the output if present.
 
 If deploy fails, report the error and stop — do not retry silently. Common fixes:
 
-- Auth error / token expired → `pa auth logout`, then retry — the CLI will re-prompt browser login.
+- Auth error / token expired → `pa auth logout` (or `power-apps logout` on `power-apps`-only projects), then retry — the CLI will re-prompt browser login.
 - Environment mismatch → update `environmentId` in `power.config.json` to the correct value and retry.
 
 ### Step 4: Update Memory Bank

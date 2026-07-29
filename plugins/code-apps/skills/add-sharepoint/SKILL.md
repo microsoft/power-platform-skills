@@ -99,7 +99,7 @@ pa connector list-datasets --connector sharepointonline -c <connection-id>
 Present the sites to the user and ask which one(s) they want to connect to. If the user already specified a site URL, confirm it appears in the list.
 
 **If `pa connector list-datasets` fails or returns no results:**
-- Auth error: Run `pa auth logout`, then retry — the CLI will re-prompt browser login.
+- Auth error: Run `pa auth logout` (or `power-apps logout` on `power-apps`-only projects), then retry — the CLI will re-prompt browser login.
 - Empty list: Confirm the connection ID is for a SharePoint Online connection and the user has access to at least one site. STOP if the list is empty after confirming.
 - Any other non-zero exit: Report the exact error output. STOP.
 

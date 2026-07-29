@@ -28,7 +28,7 @@ Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/sh
 
 ### Step 2: Add Connector
 
-The Power Apps code-app CLI (`@microsoft/power-apps-cli`, invoked as `pa` or `power-apps` — resolve via [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md)) creates the connection and generates the typed service itself. Make sure the CLI is installed (`npm install`) and you are signed in (`pa auth status`; it shares the same auth as the rest of the code-app skills).
+The Power Apps code-app CLI (`@microsoft/power-apps-cli`, invoked as `pa` or `power-apps` — resolve via [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md)) creates the connection and generates the typed service itself. Make sure the CLI is installed (`npm install`) and you are signed in (`pa auth status`, or `power-apps auth-status` on `power-apps`-only projects; it shares the same auth as the rest of the code-app skills).
 
 #### Find or Create the Connection
 
@@ -57,7 +57,7 @@ pa connection create --connector shared_a365copilotchatmcp
 3. **Wait for the user to confirm** the browser shows success before continuing.
 
 **If `create-connection` fails:**
-- "not signed in" / auth error → run `pa auth status` (sign in if needed) and retry.
+- "not signed in" / auth error → run `pa auth status` (or `power-apps auth-status` on `power-apps`-only projects), sign in if needed, and retry.
 - "Connection creation was cancelled." → the browser flow was closed early; re-run and complete it.
 - Any other non-zero exit → report the exact error and STOP.
 
