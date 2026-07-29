@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // validate-env-variables.js
-// Stop hook validator for the configure-env-variables skill.
+// PostToolUse(Skill) hook validator for the configure-env-variables skill.
 // Checks that deployment-settings.json was written with at least one env var entry.
 
 const { approve, block, runValidation } = require('../../../scripts/lib/validation-helpers.js');

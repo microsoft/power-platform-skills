@@ -53,7 +53,7 @@ Each plugin follows this structure:
 - `scripts/` — Shared utility scripts referenced by skills and agents
 - `references/` — Shared reference documents used by multiple skills
 
-Skills are defined in `SKILL.md` files with YAML frontmatter (name, description, allowed-tools, model, hooks). The `allowed-tools` field must use a **comma-separated list** (e.g., `allowed-tools: Read, Write, Edit, Bash, Glob, Grep`) — not JSON array syntax (`["Read", "Write"]`) or YAML list syntax. Each skill may include validation scripts in a `scripts/` subdirectory, run as Stop hooks when the skill session ends.
+Skills are defined in `SKILL.md` files with YAML frontmatter (name, description, allowed-tools, model, hooks). The `allowed-tools` field must use a **comma-separated list** (e.g., `allowed-tools: Read, Write, Edit, Bash, Glob, Grep`) — not JSON array syntax (`["Read", "Write"]`) or YAML list syntax. Each skill may include a validation script in a `scripts/` subdirectory (the first `validate*.js`, discovered automatically). It is run by the plugin's **`PostToolUse` hook on the `Skill` tool** — `hooks/run-skill-posttool-validation.js` looks the script up and executes it after the Skill tool returns, propagating its exit code. Note this fires when the skill is **invoked**, not when its work finishes, so a validator must no-op (approve) when the artifacts it checks are not present yet.
 
 ## Cross-Plugin Shared Skills
 

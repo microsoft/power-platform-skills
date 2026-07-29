@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * validate-plan-alm.js — Stop hook validator for the plan-alm skill.
+ * validate-plan-alm.js — PostToolUse(Skill) hook validator for the plan-alm skill.
  *
  * Checks that docs/alm-plan.html was written and is non-empty/non-malformed.
  * Gracefully approves if the file does not exist (not a plan-alm session).

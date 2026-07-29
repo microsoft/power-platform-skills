@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Validates that Web API integration code was created for a Power Pages code site.
-// Runs as a Stop hook to verify the skill produced output.
+// Runs as a PostToolUse(Skill) hook to verify the skill produced output.
 
 const fs = require('fs');
 const path = require('path');

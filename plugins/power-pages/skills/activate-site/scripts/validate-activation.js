@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Validates Power Pages site activation output.
-// Runs as a Stop hook to verify the website was provisioned in the environment.
+// Runs as a PostToolUse(Skill) hook to verify the website was provisioned in the environment.
 // Calls the shared check-activation-status.js script to query the Power Platform API
 // instead of relying on an intermediate file.
 
