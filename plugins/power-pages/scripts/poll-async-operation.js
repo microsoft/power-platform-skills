@@ -90,15 +90,6 @@ function writeStatus(status) {
   }
 }
 
-function progressFromAsyncOperation(pollBody) {
-  const progress = Number(pollBody.progress);
-  return Number.isFinite(progress) ? Math.max(0, Math.min(100, Math.floor(progress))) : null;
-}
-
-function estimatedProgress(attempt) {
-  return Math.max(1, Math.min(95, Math.floor((attempt / maxAttempts) * 95)));
-}
-
 (async () => {
   // Acquire initial token if not provided
   if (!token) {
@@ -131,7 +122,7 @@ function estimatedProgress(attempt) {
 
       if (result.error) {
         // Network error — wait and retry (don't fail on transient issues)
-        writeStatus({ state: 'running', message: 'Waiting for Dataverse import status', progressPercent: estimatedProgress(attempt), attempt });
+        writeStatus({ state: 'running', message: 'Waiting for Dataverse import status', attempt });
         await sleep(intervalMs);
         continue;
       }
@@ -149,7 +140,6 @@ function estimatedProgress(attempt) {
           state: 'running',
           message: 'Waiting for Dataverse import status',
           detail: `Dataverse async operation lookup returned HTTP ${result.statusCode}`,
-          progressPercent: estimatedProgress(attempt),
           attempt,
         });
         await sleep(intervalMs);
@@ -166,28 +156,27 @@ function estimatedProgress(attempt) {
     const statuscode = pollBody.statuscode;
     const message = pollBody.message || pollBody.Message || '';
     const friendlyMessage = pollBody.friendlymessage || pollBody.FriendlyMessage || '';
-    const progressPercent = progressFromAsyncOperation(pollBody) ?? estimatedProgress(attempt);
 
     if (!TERMINAL_STATECODES.has(statecode)) {
       // Still running — wait and poll again
-      writeStatus({ state: 'running', message: friendlyMessage || message || 'Import is still running', progressPercent, attempt });
+      writeStatus({ state: 'running', message: friendlyMessage || message || 'Import is still running', attempt });
       await sleep(intervalMs);
       continue;
     }
 
     // Terminal state reached
     if (SUCCESS_STATUSCODES.has(statuscode)) {
-      writeStatus({ state: 'succeeded', message: 'Template import completed. Check the agent terminal for the next step.', progressPercent: 100, attempt });
+      writeStatus({ state: 'succeeded', message: 'Template import completed. Check the agent terminal for the next step.', attempt });
       output({ status: 'Succeeded', asyncJobId, attempts: attempt });
     }
 
     if (CANCELED_STATUSCODES.has(statuscode)) {
-      writeStatus({ state: 'canceled', message: message || 'Template import was canceled. Check the agent terminal.', progressPercent, attempt });
+      writeStatus({ state: 'canceled', message: message || 'Template import was canceled. Check the agent terminal.', attempt });
       output({ status: 'Canceled', asyncJobId, message, attempts: attempt });
     }
 
     // Failed (statuscode 31 or unknown terminal)
-    writeStatus({ state: 'failed', message: friendlyMessage || message || 'Template import failed. Check the agent terminal.', progressPercent, attempt });
+    writeStatus({ state: 'failed', message: friendlyMessage || message || 'Template import failed. Check the agent terminal.', attempt });
     output({
       status: 'Failed',
       asyncJobId,
@@ -199,7 +188,7 @@ function estimatedProgress(attempt) {
   }
 
   // Timed out
-  writeStatus({ state: 'timeout', message: 'Template import is still running. Check the agent terminal.', progressPercent: estimatedProgress(maxAttempts), attempt: maxAttempts });
+  writeStatus({ state: 'timeout', message: 'Template import is still running. Check the agent terminal.', attempt: maxAttempts });
   output({
     status: 'Timeout',
     asyncJobId,

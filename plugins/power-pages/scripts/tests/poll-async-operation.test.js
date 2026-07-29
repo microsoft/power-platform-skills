@@ -27,7 +27,7 @@ function runNode(args) {
   });
 }
 
-test('poll-async-operation writes estimated progress when Dataverse omits progress', async (t) => {
+test('poll-async-operation leaves progress indeterminate while import is running', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'poll-async-operation-test-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
@@ -61,7 +61,7 @@ test('poll-async-operation writes estimated progress when Dataverse omits progre
 
   const status = JSON.parse(fs.readFileSync(statusFile, 'utf8'));
   assert.equal(status.state, 'timeout');
-  assert.equal(status.progressPercent, 95);
+  assert.equal('progressPercent' in status, false);
 });
 
 test('poll-async-operation normalizes envUrl and braced async operation ids', async (t) => {
@@ -126,5 +126,5 @@ test('poll-async-operation keeps transient HTTP status details out of the loader
 
   const status = JSON.parse(fs.readFileSync(statusFile, 'utf8'));
   assert.equal(status.message, 'Template import is still running. Check the agent terminal.');
-  assert.equal(status.progressPercent, 95);
+  assert.equal('progressPercent' in status, false);
 });

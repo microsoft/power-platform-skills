@@ -108,8 +108,6 @@
     .progress-fill { height: 100%; width: 40%; border-radius: 4px; background: linear-gradient(90deg, transparent, var(--pp-violet), var(--pp-lavender), var(--pp-sky), transparent); position: absolute; top: 0; left: -40%; animation: infiniteSlide 2s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
     .progress-fill::after { content: ''; position: absolute; right: 10%; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--pp-sky); box-shadow: 0 0 8px rgba(90, 155, 213, 0.5), 0 0 16px rgba(90, 155, 213, 0.2); opacity: 0.9; }
     @keyframes infiniteSlide { 0% { left: -40%; } 100% { left: 100%; } }
-    .progress-track.has-progress .progress-fill { width: 100%; left: 0; animation: none; transform: scaleX(var(--progress-scale, 0)); transform-origin: left; background: linear-gradient(90deg, var(--pp-violet), var(--pp-lavender), var(--pp-sky)); transition: transform 0.8s ease; }
-    .progress-track.has-progress .progress-fill::after { display: none; }
     .progress-track.complete .progress-fill { width: 100%; left: 0; animation: none; background: linear-gradient(90deg, var(--pp-violet), var(--pp-lavender), var(--pp-sky)); transition: all 0.8s ease; }
     .progress-track.complete .progress-fill::after { display: none; }
     .progress-label-text { font-size: 11px; color: var(--pp-text-muted); font-family: 'DM Sans', sans-serif; letter-spacing: 0.3px; }
@@ -230,7 +228,6 @@
       var previewPaused = false;
       var toastShown = false;
       var latestLiveMessage = '';
-      var latestLivePercent = null;
 
       function createParticle() {
         if (!particlesEl) return;
@@ -277,16 +274,11 @@
         if (progressLabel) progressLabel.textContent = text;
       }
 
-      function formatProgressLabel(message, percent) {
-        if (typeof percent === 'number') return message + ' (' + Math.round(percent) + '%)';
-        return message;
-      }
-
       function showStatus(index) {
         var status = statuses[index];
         renderStatusMessage(latestLiveMessage || status.text);
         if (latestLiveMessage) {
-          updatePhaseLabel(formatProgressLabel(latestLiveMessage, latestLivePercent));
+          updatePhaseLabel(latestLiveMessage);
           return;
         }
         var phaseIndex = Math.min(Math.floor((index / statuses.length) * phaseLabels.length), phaseLabels.length - 1);
@@ -342,22 +334,6 @@
         setPreview(previewIndex - 1);
       }
 
-      function progressFromStatus(status) {
-        var candidates = [status.progressPercent, status.progress, status.percentComplete];
-        for (var i = 0; i < candidates.length; i++) {
-          var number = Number(candidates[i]);
-          if (Number.isFinite(number)) return Math.max(0, Math.min(100, number));
-        }
-        return null;
-      }
-
-      function setProgress(percent) {
-        if (typeof percent !== 'number') return;
-        var safePercent = Math.max(0, Math.min(100, percent));
-        progressTrack.classList.add('has-progress');
-        progressTrack.style.setProperty('--progress-scale', String(safePercent / 100));
-      }
-
       function showToast(kind, title, message) {
         if (toastShown) return;
         toastShown = true;
@@ -372,23 +348,16 @@
           var res = await fetch(STATUS_URL + '?t=' + Date.now(), { cache: 'no-store' });
           if (!res.ok) return;
           var status = await res.json();
-          var progress = progressFromStatus(status);
-          if (typeof progress === 'number') {
-            latestLivePercent = progress;
-            setProgress(progress);
-          }
           if (status.message) {
             latestLiveMessage = status.message;
             renderStatusMessage(status.message);
-            updatePhaseLabel(formatProgressLabel(status.message, latestLivePercent));
+            updatePhaseLabel(status.message);
           }
           if (status.state === 'failed' || status.state === 'canceled' || status.state === 'timeout') {
             showToast('error', 'Template import needs attention', 'Check the agent terminal for details.');
           }
           if (status.state === 'succeeded') {
-            latestLivePercent = 100;
             progressTrack.classList.add('complete');
-            progressTrack.style.setProperty('--progress-scale', '1');
             showToast('success', 'Template import complete', 'Check the agent terminal for the next step.');
           }
         } catch {}

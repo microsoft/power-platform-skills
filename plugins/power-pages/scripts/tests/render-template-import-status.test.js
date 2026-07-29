@@ -64,11 +64,10 @@ test('renderTemplateImportStatus renders scaffold-style slideshow, progress, and
   assert.match(html, /Lightning-fast performance/);
   assert.match(html, /Ready to scale globally/);
   assert.match(html, /progressFill/);
-  assert.match(html, /scaleX/);
-  assert.match(html, /progressFromStatus/);
-  assert.match(html, /status\.progress/);
-  assert.match(html, /status\.percentComplete/);
-  assert.match(html, /--progress-scale/);
+  assert.doesNotMatch(html, /progressFromStatus/);
+  assert.doesNotMatch(html, /status\.progress/);
+  assert.doesNotMatch(html, /status\.percentComplete/);
+  assert.doesNotMatch(html, /--progress-scale/);
   assert.match(html, /setInterval\(pollStatus, 30000\)/);
   assert.match(html, /Template import complete/);
   assert.match(html, /Template import needs attention/);
