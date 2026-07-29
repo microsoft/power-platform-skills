@@ -90,9 +90,12 @@
     .status-icon { width: 16px; height: 16px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
     .status-icon.working { border: 2px solid rgba(139, 111, 192, 0.2); border-top-color: var(--pp-violet); animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .preview-showcase { width: min(860px, calc(100vw - 72px)); opacity: 0; animation: fadeSlideUp 1s ease-out 1.35s forwards; }
-    .preview-frame { width: 100%; aspect-ratio: 16 / 9; border: 1px solid rgba(139, 111, 192, 0.12); border-radius: 20px; background: rgba(255, 255, 255, 0.72); box-shadow: 0 2px 12px rgba(139, 111, 192, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04); overflow: hidden; display: flex; align-items: center; justify-content: center; }
-    .preview-frame img { width: 100%; height: 100%; object-fit: contain; display: block; background: var(--pp-surface); }
+    .preview-showcase { width: min(900px, calc(100vw - 72px)); height: min(54vh, 520px); opacity: 0; animation: fadeSlideUp 1s ease-out 1.35s forwards; }
+    .preview-frame { width: 100%; height: 100%; overflow: hidden; display: flex; align-items: center; }
+    .preview-track { display: flex; width: 100%; height: 100%; transition: transform 0.7s cubic-bezier(0.22, 1, 0.36, 1); will-change: transform; }
+    .preview-slide { flex: 0 0 100%; height: 100%; display: flex; align-items: center; justify-content: center; padding: 0 10px; }
+    .preview-card { display: inline-flex; max-width: 100%; max-height: 100%; border: 1px solid rgba(139, 111, 192, 0.12); border-radius: 20px; background: var(--pp-surface); box-shadow: 0 2px 12px rgba(139, 111, 192, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04); overflow: hidden; }
+    .preview-card img { display: block; max-width: 100%; max-height: min(54vh, 520px); width: auto; height: auto; object-fit: contain; background: var(--pp-surface); }
     .preview-empty { padding: 20px; color: var(--pp-text-muted); font-size: 13px; text-align: center; }
     .progress-container { width: min(520px, calc(100vw - 72px)); opacity: 0; animation: fadeSlideUp 1s ease-out 1.5s forwards; display: flex; flex-direction: column; align-items: center; gap: 10px; }
     .progress-track { width: 100%; height: 3px; background: rgba(139, 111, 192, 0.1); border-radius: 4px; overflow: hidden; position: relative; }
@@ -126,6 +129,7 @@
     .toast-message { font-size: 13px; color: var(--pp-text-secondary); }
     @keyframes toastEnter { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
     @keyframes fadeSlideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+    @media (prefers-reduced-motion: reduce) { .preview-track { transition: none; } }
     @media (max-width: 600px) { .main-heading { font-size: 24px; } .progress-container { width: 260px; } .feature-cards { flex-direction: column; align-items: center; } .orbit-system { width: 180px; height: 180px; } }
   </style>
 </head>
@@ -286,16 +290,33 @@
         }, duration);
       }
 
-      function showPreview() {
+      function buildPreviewCarousel() {
         if (!previewFrame) return;
         if (!PREVIEWS.length) {
           previewFrame.innerHTML = '<div class="preview-empty">No preview images are available for this template.</div>';
           return;
         }
-        var img = document.createElement('img');
-        img.src = PREVIEWS[previewIndex % PREVIEWS.length];
-        img.alt = 'Template preview ' + ((previewIndex % PREVIEWS.length) + 1);
-        previewFrame.replaceChildren(img);
+        var track = document.createElement('div');
+        track.className = 'preview-track';
+        PREVIEWS.forEach(function (src, index) {
+          var slide = document.createElement('div');
+          slide.className = 'preview-slide';
+          var card = document.createElement('div');
+          card.className = 'preview-card';
+          var img = document.createElement('img');
+          img.src = src;
+          img.alt = 'Template preview ' + (index + 1);
+          card.appendChild(img);
+          slide.appendChild(card);
+          track.appendChild(slide);
+        });
+        previewFrame.replaceChildren(track);
+      }
+
+      function showPreview() {
+        var track = previewFrame && previewFrame.querySelector('.preview-track');
+        if (!track) return;
+        track.style.transform = 'translateX(-' + ((previewIndex % PREVIEWS.length) * 100) + '%)';
         previewIndex++;
       }
 
@@ -402,6 +423,7 @@
         });
       }, 2500);
 
+      buildPreviewCarousel();
       showPreview();
       setInterval(showPreview, 5000);
       setTimeout(showTip, 3500);

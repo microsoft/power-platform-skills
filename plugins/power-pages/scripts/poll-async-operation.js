@@ -47,7 +47,18 @@ const args = parseArgs(process.argv.slice(2));
 if (!args.asyncJobId) output({ error: 'Missing required argument: --asyncJobId' });
 if (!args.envUrl) output({ error: 'Missing required argument: --envUrl' });
 
-const envUrl = args.envUrl.replace(/\/+$/, '');
+function normalizeEnvUrl(value) {
+  return String(value || '').replace(/\/+$/, '').replace(/\/api\/data\/v[0-9.]+$/i, '');
+}
+
+function normalizeAsyncJobId(value) {
+  const match = String(value || '').match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/);
+  return match ? match[0].toLowerCase() : '';
+}
+
+const envUrl = normalizeEnvUrl(args.envUrl);
+const asyncJobId = normalizeAsyncJobId(args.asyncJobId);
+if (!asyncJobId) output({ error: `Invalid async operation id: ${args.asyncJobId}` });
 const intervalMs = parseInt(args.intervalMs || '5000', 10);
 const maxAttempts = parseInt(args.maxAttempts || '60', 10);
 const tokenResource = args.tokenResource || envUrl;
@@ -67,7 +78,7 @@ const SUCCESS_STATUSCODES = new Set([30]);
 const FAILURE_STATUSCODES = new Set([31]);
 const CANCELED_STATUSCODES = new Set([32]);
 
-const pollUrl = `${envUrl}/api/data/v9.2/asyncoperations(${args.asyncJobId})?$select=statecode,statuscode,message,friendlymessage,errorcode,progress`;
+const pollUrl = `${envUrl}/api/data/v9.2/asyncoperations(${asyncJobId})?$select=statecode,statuscode,message,friendlymessage,errorcode,progress`;
 
 function writeStatus(status) {
   if (!args.statusFile) return;
@@ -97,6 +108,7 @@ function estimatedProgress(attempt) {
     }
   }
 
+  let lastHttpStatus = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     // Refresh token periodically
     if (attempt > 1 && attempt % tokenRefreshEvery === 0) {
@@ -132,7 +144,14 @@ function estimatedProgress(attempt) {
       }
 
       if (result.statusCode !== 200 || !result.body) {
-        writeStatus({ state: 'running', message: `Waiting for Dataverse import status (HTTP ${result.statusCode})`, progressPercent: estimatedProgress(attempt), attempt });
+        lastHttpStatus = result.statusCode;
+        writeStatus({
+          state: 'running',
+          message: 'Waiting for Dataverse import status',
+          detail: `Dataverse async operation lookup returned HTTP ${result.statusCode}`,
+          progressPercent: estimatedProgress(attempt),
+          attempt,
+        });
         await sleep(intervalMs);
         continue;
       }
@@ -159,19 +178,19 @@ function estimatedProgress(attempt) {
     // Terminal state reached
     if (SUCCESS_STATUSCODES.has(statuscode)) {
       writeStatus({ state: 'succeeded', message: 'Template import completed. Check the agent terminal for the next step.', progressPercent: 100, attempt });
-      output({ status: 'Succeeded', asyncJobId: args.asyncJobId, attempts: attempt });
+      output({ status: 'Succeeded', asyncJobId, attempts: attempt });
     }
 
     if (CANCELED_STATUSCODES.has(statuscode)) {
       writeStatus({ state: 'canceled', message: message || 'Template import was canceled. Check the agent terminal.', progressPercent, attempt });
-      output({ status: 'Canceled', asyncJobId: args.asyncJobId, message, attempts: attempt });
+      output({ status: 'Canceled', asyncJobId, message, attempts: attempt });
     }
 
     // Failed (statuscode 31 or unknown terminal)
     writeStatus({ state: 'failed', message: friendlyMessage || message || 'Template import failed. Check the agent terminal.', progressPercent, attempt });
     output({
       status: 'Failed',
-      asyncJobId: args.asyncJobId,
+      asyncJobId,
       message,
       friendlyMessage,
       statuscode,
@@ -183,7 +202,8 @@ function estimatedProgress(attempt) {
   writeStatus({ state: 'timeout', message: 'Template import is still running. Check the agent terminal.', progressPercent: estimatedProgress(maxAttempts), attempt: maxAttempts });
   output({
     status: 'Timeout',
-    asyncJobId: args.asyncJobId,
+    asyncJobId,
+    lastHttpStatus,
     message: `Async operation still running after ${maxAttempts} attempts (~${Math.round(maxAttempts * intervalMs / 60000)} minutes). Check operation status manually.`,
   });
 })();
