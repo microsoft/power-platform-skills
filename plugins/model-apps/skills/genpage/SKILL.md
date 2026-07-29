@@ -514,7 +514,12 @@ Runs only when the plan's `## Solution Packaging` has `Package into solution: tr
 Adds the deployed app, the GenPage(s), and any connection references to the
 target solution so they travel cross-environment.
 
-1. Ensure the solution exists (create via `scripts/create-solution.js` if needed).
+1. Ensure the solution exists. `create-solution.js` was replaced by the SDK-backed
+   `provision-solution.js` (v2.2.0) — create it only if it doesn't already exist:
+   `node ${PLUGIN_ROOT}/scripts/provision-solution.js <envUrl> <solutionUniqueName> "<Friendly Name>" [--publisher <uniqueName>]`
+   It prints `{ "ok": true, "solutionId": …, "uniqueName": …, "publisherPrefix": … }`;
+   `uniqueName` must start with a letter and contain only letters, digits, and
+   underscores. Without `--publisher` it resolves the environment's default publisher.
 2. Add the app + GenPage(s) + connection references (pass the page-id(s) returned
    by Phase 6 as `--page-ids` — the GenPage is added explicitly, it does NOT travel
    with the app on its own):
