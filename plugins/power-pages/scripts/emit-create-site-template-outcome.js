@@ -5,8 +5,9 @@ const { emitTemplateOutcome } = require('./lib/create-site-template-telemetry');
 const { formatJsonResult } = require('./lib/template-cli-args');
 
 // Accepted argv shape:
-//   --eventName create_site_with_template --templateId company-portal --templateKind spa --framework react --audience internal
-//   --importOutcome success --activationOutcome success --seedApplied true
+//   --eventName template_used --templateId company-portal --templateKind spa --framework react --audience internal
+//   --eventName template_import_success --templateId company-portal --templateKind spa --framework react --audience internal --seedApplied true
+//   --eventName template_import_failure --templateId company-portal --templateKind spa --framework react --audience internal --outcome failure --errorClass ImportSolutionAsync --errorDescription failed
 // Scratch branch sends:
 //   --eventName create_site_from_scratch --framework react --audience internal
 // Values are fixed catalog/outcome enums; do not pass site name, URL, subdomain,

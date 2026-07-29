@@ -55,7 +55,14 @@ test('renderTemplateImportStatus renders scaffold-style slideshow, progress, and
   assert.match(html, /previewFrame/);
   assert.match(html, /preview-track/);
   assert.match(html, /preview-card/);
+  assert.match(html, /previewPrev/);
+  assert.match(html, /previewNext/);
+  assert.match(html, /previewPaused/);
+  assert.match(html, /mouseenter/);
   assert.match(html, /translateX/);
+  assert.match(html, /Enterprise-grade security/);
+  assert.match(html, /Lightning-fast performance/);
+  assert.match(html, /Ready to scale globally/);
   assert.match(html, /progressFill/);
   assert.match(html, /scaleX/);
   assert.match(html, /progressFromStatus/);

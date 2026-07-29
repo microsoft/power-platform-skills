@@ -8,14 +8,11 @@ const { parseArgs } = require('../emit-create-site-template-outcome');
 
 test('buildTemplateOutcomeEvent emits non-PII template eventInfo through the existing skill event shape', () => {
   const event = buildTemplateOutcomeEvent({
-    eventName: 'create_site_with_template',
+    eventName: 'template_used',
     templateId: 'company-portal',
     templateKind: 'spa',
     framework: 'react',
     audience: 'internal',
-    importOutcome: 'success',
-    activationOutcome: 'success',
-    seedApplied: 'true',
     correlationId: 'corr',
     sessionId: 'session',
     osName: 'darwin',
@@ -29,7 +26,7 @@ test('buildTemplateOutcomeEvent emits non-PII template eventInfo through the exi
   });
 
   assert.equal(event.name, 'PagesAIPluginEvent');
-  assert.equal(event.data.eventName, 'create_site_with_template');
+  assert.equal(event.data.eventName, 'template_used');
   assert.equal(event.data.skillName, 'create-site');
   assert.equal(event.data.pluginVersion, '2.7.0');
   assert.equal(event.data.sessionId, 'session');
@@ -41,11 +38,53 @@ test('buildTemplateOutcomeEvent emits non-PII template eventInfo through the exi
     audience: 'internal',
     templateId: 'company-portal',
     templateKind: 'spa',
-    importOutcome: 'success',
-    activationOutcome: 'success',
-    seedApplied: true,
   });
   assert.equal('siteUrl' in event.data.eventInfo, false);
+});
+
+test('buildTemplateOutcomeEvent emits import result details separately from template selection', () => {
+  const success = buildTemplateOutcomeEvent({
+    eventName: 'template_import_success',
+    templateId: 'company-portal',
+    templateKind: 'spa',
+    framework: 'react',
+    audience: 'internal',
+    seedApplied: 'true',
+    correlationId: 'corr',
+  }, {
+    readPacAuth: () => null,
+    readAgentInfo: () => ({}),
+    randomUUID: () => 'corr',
+  });
+  assert.equal(success.data.eventName, 'template_import_success');
+  assert.deepEqual(success.data.eventInfo, {
+    framework: 'react',
+    audience: 'internal',
+    templateId: 'company-portal',
+    templateKind: 'spa',
+    seedApplied: true,
+  });
+
+  const failure = buildTemplateOutcomeEvent({
+    eventName: 'template_import_failure',
+    templateId: 'company-portal',
+    templateKind: 'spa',
+    framework: 'react',
+    audience: 'internal',
+    outcome: 'failure',
+    errorClass: 'ImportSolutionAsync',
+    errorDescription: 'Async operation failed',
+    correlationId: 'corr',
+  }, {
+    readPacAuth: () => null,
+    readAgentInfo: () => ({}),
+    randomUUID: () => 'corr',
+  });
+  assert.equal(failure.data.eventName, 'template_import_failure');
+  assert.equal(failure.data.outcome, 'failure');
+  assert.equal(failure.data.errorClass, 'ImportSolutionAsync');
+  assert.equal(failure.data.errorDescription, 'Async operation failed');
+  assert.equal(failure.data.severity, 'Error');
 });
 
 test('buildTemplateOutcomeEvent emits scratch branch adoption signal', () => {
@@ -88,14 +127,14 @@ test('emitTemplateOutcome is fail-closed and delegates to telemetry dispatcher s
 });
 
 test('parseArgs and normalizeBool handle CLI values', () => {
-  assert.deepEqual(parseArgs(['--eventName', 'create_site_with_template', '--templateKind', 'spa', '--seedApplied', '1']), { eventName: 'create_site_with_template', templateKind: 'spa', seedApplied: '1' });
+  assert.deepEqual(parseArgs(['--eventName', 'template_import_success', '--templateKind', 'spa', '--seedApplied', '1']), { eventName: 'template_import_success', templateKind: 'spa', seedApplied: '1' });
   assert.equal(normalizeBool('1'), true);
   assert.equal(normalizeBool('false'), false);
 });
 
 test('sanitizeTemplateOutcomeInfo drops invalid dynamic telemetry values', () => {
   assert.deepEqual(sanitizeTemplateOutcomeInfo({
-    eventName: 'create_site_with_template',
+    eventName: 'template_used',
     templateId: 'Company Portal',
     templateKind: 'liquid',
     framework: 'nextjs',
@@ -104,5 +143,5 @@ test('sanitizeTemplateOutcomeInfo drops invalid dynamic telemetry values', () =>
     activationOutcome: 'pending',
     seedApplied: '0',
     siteUrl: 'https://example.test',
-  }), { seedApplied: false });
+  }), {});
 });

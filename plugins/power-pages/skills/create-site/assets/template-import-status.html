@@ -90,13 +90,19 @@
     .status-icon { width: 16px; height: 16px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
     .status-icon.working { border: 2px solid rgba(139, 111, 192, 0.2); border-top-color: var(--pp-violet); animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .preview-showcase { width: min(900px, calc(100vw - 72px)); height: min(54vh, 520px); opacity: 0; animation: fadeSlideUp 1s ease-out 1.35s forwards; }
+    .preview-showcase { position: relative; width: min(900px, calc(100vw - 72px)); height: min(54vh, 520px); opacity: 0; animation: fadeSlideUp 1s ease-out 1.35s forwards; }
     .preview-frame { width: 100%; height: 100%; overflow: hidden; display: flex; align-items: center; }
     .preview-track { display: flex; width: 100%; height: 100%; transition: transform 0.7s cubic-bezier(0.22, 1, 0.36, 1); will-change: transform; }
     .preview-slide { flex: 0 0 100%; height: 100%; display: flex; align-items: center; justify-content: center; padding: 0 10px; }
     .preview-card { display: inline-flex; max-width: 100%; max-height: 100%; border: 1px solid rgba(139, 111, 192, 0.12); border-radius: 20px; background: var(--pp-surface); box-shadow: 0 2px 12px rgba(139, 111, 192, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04); overflow: hidden; }
     .preview-card img { display: block; max-width: 100%; max-height: min(54vh, 520px); width: auto; height: auto; object-fit: contain; background: var(--pp-surface); }
     .preview-empty { padding: 20px; color: var(--pp-text-muted); font-size: 13px; text-align: center; }
+    .preview-nav { position: absolute; top: 50%; z-index: 7; width: 34px; height: 34px; border-radius: 50%; border: 1px solid rgba(139, 111, 192, 0.16); background: rgba(255, 255, 255, 0.88); color: var(--pp-violet); box-shadow: 0 2px 12px rgba(139, 111, 192, 0.10), 0 1px 3px rgba(0, 0, 0, 0.04); cursor: pointer; font-size: 24px; line-height: 30px; display: flex; align-items: center; justify-content: center; transform: translateY(-50%); transition: background 0.2s ease, transform 0.2s ease; }
+    .preview-nav:hover { background: var(--pp-surface); transform: translateY(-50%) scale(1.04); }
+    .preview-nav:focus-visible { outline: 2px solid var(--pp-sky); outline-offset: 3px; }
+    .preview-nav-prev { left: 8px; }
+    .preview-nav-next { right: 8px; }
+    .preview-showcase.single .preview-nav { display: none; }
     .progress-container { width: min(520px, calc(100vw - 72px)); opacity: 0; animation: fadeSlideUp 1s ease-out 1.5s forwards; display: flex; flex-direction: column; align-items: center; gap: 10px; }
     .progress-track { width: 100%; height: 3px; background: rgba(139, 111, 192, 0.1); border-radius: 4px; overflow: hidden; position: relative; }
     .progress-fill { height: 100%; width: 40%; border-radius: 4px; background: linear-gradient(90deg, transparent, var(--pp-violet), var(--pp-lavender), var(--pp-sky), transparent); position: absolute; top: 0; left: -40%; animation: infiniteSlide 2s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
@@ -159,8 +165,10 @@
 
         <div class="status-area" id="statusArea"></div>
 
-        <div class="preview-showcase" aria-label="Template preview slideshow">
+        <div class="preview-showcase" id="previewShowcase" aria-label="Template preview slideshow">
+          <button class="preview-nav preview-nav-prev" id="previewPrev" type="button" aria-label="Previous template preview">&#8249;</button>
           <div class="preview-frame" id="previewFrame"></div>
+          <button class="preview-nav preview-nav-next" id="previewNext" type="button" aria-label="Next template preview">&#8250;</button>
         </div>
 
         <div class="progress-container">
@@ -173,16 +181,16 @@
 
       <div class="feature-cards">
         <div class="feature-card" data-delay="0">
-          <span class="feature-card-icon">&#128230;</span>
-          <span class="feature-card-label">Importing unmanaged solution</span>
+          <span class="feature-card-icon">&#128274;</span>
+          <span class="feature-card-label">Enterprise-grade security</span>
         </div>
         <div class="feature-card" data-delay="400">
           <span class="feature-card-icon">&#9889;</span>
-          <span class="feature-card-label">Tracking Dataverse progress</span>
+          <span class="feature-card-label">Lightning-fast performance</span>
         </div>
         <div class="feature-card" data-delay="800">
           <span class="feature-card-icon">&#127760;</span>
-          <span class="feature-card-label">Activation comes next</span>
+          <span class="feature-card-label">Ready to scale globally</span>
         </div>
       </div>
 
@@ -210,12 +218,16 @@
       var progressTrack = document.getElementById('progressTrack');
       var progressFill = document.getElementById('progressFill');
       var tipTextEl = document.getElementById('tipText');
+      var previewShowcase = document.getElementById('previewShowcase');
       var previewFrame = document.getElementById('previewFrame');
+      var previewPrev = document.getElementById('previewPrev');
+      var previewNext = document.getElementById('previewNext');
       var toast = document.getElementById('toast');
       var toastTitle = document.getElementById('toastTitle');
       var toastMessage = document.getElementById('toastMessage');
       var currentStatusIndex = 0;
       var previewIndex = 0;
+      var previewPaused = false;
       var toastShown = false;
       var latestLiveMessage = '';
       var latestLivePercent = null;
@@ -293,9 +305,11 @@
       function buildPreviewCarousel() {
         if (!previewFrame) return;
         if (!PREVIEWS.length) {
+          previewShowcase.classList.add('single');
           previewFrame.innerHTML = '<div class="preview-empty">No preview images are available for this template.</div>';
           return;
         }
+        previewShowcase.classList.toggle('single', PREVIEWS.length < 2);
         var track = document.createElement('div');
         track.className = 'preview-track';
         PREVIEWS.forEach(function (src, index) {
@@ -313,11 +327,19 @@
         previewFrame.replaceChildren(track);
       }
 
-      function showPreview() {
+      function setPreview(index) {
         var track = previewFrame && previewFrame.querySelector('.preview-track');
         if (!track) return;
-        track.style.transform = 'translateX(-' + ((previewIndex % PREVIEWS.length) * 100) + '%)';
-        previewIndex++;
+        previewIndex = (index + PREVIEWS.length) % PREVIEWS.length;
+        track.style.transform = 'translateX(-' + (previewIndex * 100) + '%)';
+      }
+
+      function showNextPreview() {
+        setPreview(previewIndex + 1);
+      }
+
+      function showPreviousPreview() {
+        setPreview(previewIndex - 1);
       }
 
       function progressFromStatus(status) {
@@ -424,8 +446,18 @@
       }, 2500);
 
       buildPreviewCarousel();
-      showPreview();
-      setInterval(showPreview, 5000);
+      setPreview(0);
+      if (previewShowcase) {
+        previewShowcase.addEventListener('mouseenter', function () { previewPaused = true; });
+        previewShowcase.addEventListener('mouseleave', function () { previewPaused = false; });
+        previewShowcase.addEventListener('focusin', function () { previewPaused = true; });
+        previewShowcase.addEventListener('focusout', function () { previewPaused = false; });
+      }
+      if (previewPrev) previewPrev.addEventListener('click', showPreviousPreview);
+      if (previewNext) previewNext.addEventListener('click', showNextPreview);
+      setInterval(function () {
+        if (!previewPaused) showNextPreview();
+      }, 5000);
       setTimeout(showTip, 3500);
       setInterval(showTip, 12000);
       pollStatus();
