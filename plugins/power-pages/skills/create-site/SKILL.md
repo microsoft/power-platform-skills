@@ -434,8 +434,22 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        ```
        Surface the JSON summary (`inserted`, `failed`, `skipped`, `errors`). For a lightweight read-only verification path, query each seeded `entitySetName` with `dataverse-request.js` using `GET "<entitySetName>?$top=1"` and report whether the seeded table is reachable. Seeding is best-effort: even if `failed > 0`, `ok: false`, or read-only verification cannot run, continue to activation.
        If `seedDataPath` is absent, skip this task.
-   13. Mark **Apply template seed data** as `completed` or skipped, then mark **Activate imported site** as `in_progress`.
-   14. Invoke `/activate-site`, passing the resolved identity in the request so it skips local-project discovery:
+   13. Mark **Apply template seed data** as `completed` or skipped, then emit the template-outcome telemetry event before handing off to `/activate-site`:
+       ```bash
+       node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
+         --mode template \
+         --templateId "<SELECTED_TEMPLATE.id>" \
+         --framework "<SELECTED_TEMPLATE.framework>" \
+         --audience "<internal|external from Phase 1 discovery>" \
+         --importOutcome "success" \
+         --activationOutcome "skipped" \
+         --seedApplied "<true|false>"
+       ```
+       `--audience` is the site audience captured in Phase 1 (`internal` or `external`), **not** the template's `audience` persona array from the catalog manifest. The telemetry sanitizer only accepts `internal`/`external` and silently drops anything else.
+       Do not include site name, URL, subdomain, free-text purpose, or any other user-identifying value.
+       Emit here rather than after `/activate-site`: invoking another skill can end or transfer control from the parent `create-site` run, so this is the reliable point where template choice, import outcome, and seed outcome are all known.
+   14. Mark **Activate imported site** as `in_progress`.
+   15. Invoke `/activate-site`, passing the resolved identity in the request so it skips local-project discovery:
        ```text
        Activate imported template site:
        - siteName: <IMPORTED_SITE_NAME>
@@ -444,9 +458,9 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        - source: create-site template path
        ```
        The activate-site skill owns subdomain selection, final activation confirmation, provisioning, polling, and recovery.
-       If activation ultimately fails, tell the user the site is imported but not live yet and can be activated later by rerunning `/activate-site` with the imported site identity. Emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=success`, `activationOutcome=failure`, and the actual `seedApplied` boolean, then stop. Do **not** treat this as a failed import.
-   15. When `/activate-site` returns a `siteUrl`, mark **Activate imported site** as `completed` and **Show live template site** as `in_progress`.
-   16. Open the live site URL in the user's default browser:
+       If activation ultimately fails, tell the user the site is imported but not live yet and can be activated later by rerunning `/activate-site` with the imported site identity, then stop. Do **not** treat this as a failed import; the template import telemetry was already emitted before activation handoff.
+   16. When `/activate-site` returns a `siteUrl`, mark **Activate imported site** as `completed` and **Show live template site** as `in_progress`.
+   17. Open the live site URL in the user's default browser:
        ```bash
        node "${PLUGIN_ROOT}/scripts/open-url.js" --url "<siteUrl>"
        ```
@@ -455,19 +469,6 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        - **`ok: false`**: tell the user the browser could not be opened automatically and show the `siteUrl` for manual opening.
 
        Always surface the activate-site DNS propagation caveat: the site may take a few minutes to load even after activation succeeds.
-   17. Emit the template-outcome telemetry event (fail-closed):
-       ```bash
-       node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
-         --mode template \
-         --templateId "<SELECTED_TEMPLATE.id>" \
-         --framework "<SELECTED_TEMPLATE.framework>" \
-         --audience "<internal|external from Phase 1 discovery>" \
-         --importOutcome "success" \
-         --activationOutcome "success" \
-         --seedApplied "<true|false>"
-       ```
-       `--audience` is the site audience captured in Phase 1 (`internal` or `external`), **not** the template's `audience` persona array from the catalog manifest. The telemetry sanitizer only accepts `internal`/`external` and silently drops anything else.
-       Do not include site name, URL, subdomain, free-text purpose, or any other user-identifying value.
    18. Mark **Show live template site** and **Select template or choose from-scratch** as `completed`, then present the template-path summary:
        - Template name and framework
        - Imported site name and Website Record ID
