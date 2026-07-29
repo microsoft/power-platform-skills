@@ -77,16 +77,22 @@ function isGenpageFile(content, absPath) {
   // The canonical generated-page default export is `export default GeneratedComponent;`
   // (references/rules.md) — emitted by BOTH /genpage and /app-builder's generate-pages
   // phase, which reuses the same page-builder contract. Accept the inline
-  // `function`/`class` forms too. The sibling marker check below is the primary,
-  // reliable gate for real runs (the working dir always has one); this content marker
-  // is a fallback for files written outside a recognized working dir.
+  // `function`/`class` forms too. This content marker is the PRIMARY gate for
+  // app-builder pages; the sibling-marker check below is a fallback for files written
+  // outside a recognized working dir.
   if (/export\s+default\s+(?:function\s+|class\s+)?GeneratedComponent\b/.test(content)) return true;
   if (absPath) {
     try {
-      // A generated page always sits in an authoring working dir: genpage writes
-      // genpage-plan.md; app-builder writes app-spec.json + model-app-plan.md.
+      // Sibling working-dir markers. These are deliberately PLUGIN-SPECIFIC filenames:
+      // this hook BLOCKS the write (exit 2) and the plugin installs globally, so a
+      // generic name would false-positive and block a legitimate write in an unrelated
+      // repo. app-builder's `app-spec.json` is intentionally NOT listed for that reason
+      // (it is common enough to collide) — its generated pages always carry the
+      // `export default GeneratedComponent` marker above, so nothing is lost. The
+      // non-blocking write-safety guard does accept app-spec.json, since a false
+      // positive there only prints a warning.
       const dir = path.dirname(absPath);
-      return ['genpage-plan.md', 'app-spec.json', 'model-app-plan.md']
+      return ['genpage-plan.md', 'model-app-plan.md']
         .some((marker) => fs.existsSync(path.join(dir, marker)));
     } catch {
       return false;
