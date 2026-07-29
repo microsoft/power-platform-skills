@@ -8,6 +8,30 @@ A new **`/app-builder`** skill (Preview) that builds and edits whole model-drive
 plus local-dev ergonomics, sample coverage, and an automated eval suite with
 real and synthetic fixtures. Builds on v2.1; no breaking changes.
 
+### Added
+- **Security roles per persona (`personas[]`) — the generated app now opens for real users, not just
+  system administrators.** A new optional top-level `personas[]` block authors **one security role per
+  persona**, sized to the entity access that persona's **jobs-to-be-done** need. The model is
+  deterministic — each job DECLARES its `EntityPrivilege[]` (`entity` + `access` of
+  read/create/write/delete/append/appendTo/assign/share at user/businessUnit/parentChild/organization
+  `scope`) and the build **unions** them into the role (max scope wins), never inferring privileges from
+  job text. So the app actually **opens for a non-admin**, each persona role gets a read privilege on the
+  app's `appmodule` **and** the app is associated to the role (the model-designer "Manage roles" link);
+  opt a data-only role out with `appAccess: false`. A new **`security` build phase** (after `app-shell`)
+  runs `createPersonaRole`, is **idempotent + converging** (privileges are applied with replace-semantics,
+  so a rebuild that drops a privilege removes it), and is **fail-closed**: a same-name role the builder did
+  not author — or a managed role — is a conflict it refuses rather than mutating a role it doesn't own.
+  Roles are added to the app's solution and **torn down with the app** (only builder-authored roles, matched
+  by an ownership marker and scoped to the persona's **business unit** — never a hand-built or cross-BU
+  same-name role). Role identity is **(trimmed name, business unit)**, matching the platform; privileges and
+  app availability **converge** on rebuild (flipping `appAccess` to false removes the app↔role association),
+  and a persona change forces a full build under `--changed-only`. `verify` confirms each persona role exists
+  and is builder-authored. New spec fields: `personas[].{persona, jobs[], additionalPrivileges?, appAccess?,
+  businessUnitId?, assignTo?}`; validated by `validateAppSpec` (valid access/scope tokens, GUID shapes,
+  unique names). Column-level (field) security and access teams / hierarchy security remain a tracked SDK
+  follow-up. Implements spec Group N P1 + the roles/JTBD planning gap (rank 1). See
+  `references/app-spec-schema.md` → *personas[]*.
+
 ### Changed
 - **Form edits resolve by `(entity, name, type)` — a table's same-named Main/Quick View/Card forms no
   longer block editing, and teardown no longer over-deletes them.** A Dataverse form name is unique only per

@@ -474,4 +474,22 @@ test('CONTRACT: createGlobalOptionSet is idempotent by Name — reuses an existi
   assert.ok(/GlobalOptionSetDefinitions/i.test(created[0].url), 'the create POSTs to GlobalOptionSetDefinitions');
 });
 
+// --- Security authoring surface (Group N P1) -----------------------------------------------
+
+test('CONTRACT: the vendored facade exposes the security-authoring methods the engine calls', () => {
+  const sdk = freshSdk();
+  for (const m of ['createPersonaRole', 'createSecurityRole', 'deleteSecurityRole', 'associateRecords']) {
+    assert.strictEqual(typeof sdk[m], 'function', `facade must expose ${m}()`);
+  }
+});
+
+test('CONTRACT: the vendored bundle still carries the exact SDK role-ownership marker the plugin hardcodes', () => {
+  // teardown + verify re-implement the SEC-1 ownership guard by string-matching this marker (the SDK
+  // does not export it). If a re-vendored bundle changes the marker text, teardown would stop
+  // recognizing its own roles (leak) and verify would false-fail — so pin the exact string here.
+  const { SDK_ROLE_MARKER } = require('../lib/app-spec.js');
+  const bundle = fs.readFileSync(BUNDLE, 'utf8');
+  assert.ok(bundle.includes(SDK_ROLE_MARKER), `the vendored bundle must contain the role marker '${SDK_ROLE_MARKER}'`);
+});
+
 

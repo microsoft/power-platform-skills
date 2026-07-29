@@ -5,8 +5,8 @@
 // { ok, checks:[{kind,name,present,detail}], missing:[…] }.
 
 const { odataLit } = require('./odata.js');
-const { normalizePageSource, relationshipSchemaName, manyToManySchemaName } = require('./app-spec.js');
-const { resolveExistingFormId } = require('./sdk-build.js');
+const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName } = require('./app-spec.js');
+const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause } = require('./sdk-build.js');
 const { extractNavTargets } = require('./pageref-resolver.js');
 
 async function verifySpec(spec, read) {
@@ -213,6 +213,32 @@ async function verifySpec(spec, read) {
         }
       }
     }
+  }
+
+  // Persona security roles. Existence + SDK-ownership is a sufficient content oracle here (unlike the
+  // additive view/form checks): the SDK applies a role's privileges with ReplacePrivilegesRole, so an
+  // existing role the SDK authored necessarily holds exactly its declared (converged) privilege set —
+  // there is no additive-drift path where the role exists but a privilege silently failed to apply. We
+  // therefore verify the role exists AND carries the SDK ownership marker (a same-name role someone
+  // else built would pass a bare existence check but is NOT the role the security phase authored).
+  const roleBuCache = {}; // memoize the root-BU lookup across personas in this verify pass
+  for (const p of spec.personas || []) {
+    const roleName = canonicalPersonaName(p); // trimmed — matches the SDK's created name
+    if (!roleName) continue;
+    let row;
+    try {
+      // Roles table (logical `role`); exact-match name literal, scoped to the persona's business unit
+      // (explicit, else the org root BU) so a same-named marker role in a DIFFERENT BU can't false-pass
+      // the check. FAIL CLOSED if the BU can't be resolved: report the role missing rather than fall back
+      // to a name-only match that could pass on the wrong BU's role. Best-effort on a reader without role
+      // support (no queryRecords): `row` stays undefined and the check fails loudly as "missing".
+      const bu = await resolveRoleBusinessUnit((e, o) => read.queryRecords(e, o), p.businessUnitId, roleBuCache);
+      if (bu) {
+        const rows = await read.queryRecords('role', { select: ['roleid', 'description', 'ismanaged'], filter: `name eq '${odataLit(roleName)}'${roleBuClause(bu)}`, top: 5 });
+        row = (rows || []).find((r) => r.ismanaged !== true && (r.description || '') === SDK_ROLE_MARKER);
+      }
+    } catch { row = undefined; }
+    add('role', roleName, row, row ? '' : 'persona security role not found (or its business unit could not be resolved)');
   }
 
   const missing2 = checks.filter((c) => !c.present);

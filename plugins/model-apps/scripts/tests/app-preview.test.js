@@ -52,3 +52,24 @@ test('renderAppPreview does not throw on a minimal / empty spec', () => {
   assert.match(out, /\(no tables\)/);
   assert.match(out, /\(no forms\)/);
 });
+
+test('renderAppPreview renders the security-roles section with per-entity access + app-open posture', () => {
+  const spec = {
+    app: { name: 'Ops' },
+    entities: [{ schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
+    personas: [
+      { persona: 'Agent', jobs: [{ name: 'Work', privileges: [{ entity: 'new_ticket', access: ['read', 'write'], scope: 'businessUnit' }] }] },
+      { persona: 'Auditor', appAccess: false, jobs: [{ name: 'Audit', privileges: [{ entity: 'new_ticket', access: ['read'], scope: 'organization' }] }] },
+    ],
+  };
+  const out = renderAppPreview(spec);
+  assert.match(out, /=== Security roles \(personas\) ===/);
+  assert.match(out, /role "Agent"\s+\(app opens for this persona\)/);
+  assert.match(out, /new_ticket: read\/write @ businessUnit/);
+  assert.match(out, /role "Auditor"\s+\(data-only — no app access\)/);
+});
+
+test('renderAppPreview omits the security section when no personas are declared', () => {
+  const out = renderAppPreview({ app: { name: 'Bare' }, entities: [] });
+  assert.doesNotMatch(out, /Security roles/);
+});

@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { runSdkBuild, planFor, resolvePhases, compileFormIntent, formFieldLogicals, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, dashboardTileOpts, PHASES, appUniqueName } = require('../lib/sdk-build.js');
+const { runSdkBuild, planFor, resolvePhases, compileFormIntent, formFieldLogicals, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, dashboardTileOpts, PHASES, appUniqueName, personaRoleSpecFor } = require('../lib/sdk-build.js');
 
 // Real GUIDs (Imp9) for the three-authority sitemap mock. SELF_* identify THIS app's appmodule + sitemap
 // so fetchSitemap(appUnique) resolves to opts.liveSitemapXml; otherApps get synthetic ids. Ids that flow
@@ -270,6 +270,19 @@ function mockSdk(opts = {}) {
     getAiReadiness: async (opts) => { calls.push({ name: 'getAiReadiness', args: [opts] }); return { enabled: true }; },
     setAppAiFeatures: async (appUnique, flags, opts) => { calls.push({ name: 'setAppAiFeatures', args: [appUnique, flags, opts] }); return { applied: Object.keys(flags).filter((k) => flags[k]), skipped: [] }; },
     configureRowSummary: async (promptSpec, opts) => { calls.push({ name: 'configureRowSummary', args: [promptSpec, opts] }); return { modelId: 'model-' + promptSpec.entityLogicalName, aiSkillConfigId: 'skill-' + promptSpec.entityLogicalName }; },
+    // Security authoring. createPersonaRole echoes a RoleResult; opts.roleConflict simulates the SEC-1
+    // fail-closed (a hand-built same-name role) so the security phase's BuildHalt is testable. opts.rolesExist
+    // marks the reused path. associateRecords records the app<->role link; opts.associateDuplicate simulates a
+    // re-run's duplicate-$ref rejection so ensureAppAvailableToRole's idempotent swallow is testable.
+    createPersonaRole: async (spec) => {
+      calls.push({ name: 'createPersonaRole', args: [spec] });
+      if (opts.roleConflict) throw new Error(`A role named '${spec.persona}' already exists in this business unit and was not created by the SDK`);
+      const privs = [...(spec.jobs || []).flatMap((j) => j.privileges || []), ...(spec.additionalPrivileges || [])];
+      return { roleId: `role-${spec.persona}`, name: spec.persona, reused: !!opts.rolesExist, appliedPrivileges: privs.map((p) => ({ entity: p.entity, privilegeName: `prv-${p.entity}`, privilegeType: (p.access || [])[0] || 'Read', scope: p.scope || 'user' })), assignedTeams: (spec.assignTo && spec.assignTo.teams) || [], assignedUsers: (spec.assignTo && spec.assignTo.users) || [] };
+    },
+    associateRecords: async (e, id, o) => { calls.push({ name: 'associateRecords', args: [e, id, o] }); if (opts.associateDuplicate) { const err = new Error('HTTP 400 from /appmodules(x)/appmoduleroles_association/$ref: A record with matching key values already exists.'); err.statusCode = 400; err.cause = { error: { code: '0x80060891', message: 'duplicate' } }; throw err; } if (opts.associateFail) { const err = new Error('HTTP 400 from ...: bad request'); err.statusCode = 400; err.cause = { error: { code: '0x80040203', message: 'invalid argument' } }; throw err; } },
+    disassociateRecords: async (e, id, rel, targetId) => { calls.push({ name: 'disassociateRecords', args: [e, id, rel, targetId] }); if (opts.dissociateGone) { const err = new Error('HTTP 404 from ...: does not exist'); err.statusCode = 404; throw err; } },
+    deleteSecurityRole: async (id) => { calls.push({ name: 'deleteSecurityRole', args: [id] }); },
   };
   return { sdk, calls };
 }
@@ -1638,10 +1651,127 @@ test('publish (opt-in) publishes one artifact per entity + the app', async () =>
   assert.ok(pubs.includes('form') || pubs.includes('view'), 'entity customizations published');
 });
 
+// --- Security personas / roles (Group N P1) ------------------------------------------------
+const personaSpec = () => makeSpec({
+  personas: [
+    { persona: 'Ticket Agent', jobs: [
+      { name: 'Work tickets', privileges: [{ entity: 'New_Ticket', access: ['read', 'write', 'create'], scope: 'businessUnit' }] },
+      { name: 'See customers', privileges: [{ entity: 'new_customer', access: ['read'] }] },
+    ] },
+    { persona: 'Dispatcher', appAccess: false, jobs: [
+      { name: 'Assign', privileges: [{ entity: 'new_ticket', access: ['read', 'assign'], scope: 'organization' }] },
+    ] },
+  ],
+});
+
+test('personaRoleSpecFor maps jobs + lower-cases entities + injects an organization-scoped appmodule read', () => {
+  const spec = personaSpec();
+  const mapped = personaRoleSpecFor(spec.personas[0]);
+  assert.strictEqual(mapped.persona, 'Ticket Agent');
+  assert.strictEqual(mapped.jobs[0].privileges[0].entity, 'new_ticket', 'entity lower-cased to a logical name');
+  const app = (mapped.additionalPrivileges || []).find((p) => p.entity === 'appmodule');
+  assert.ok(app && app.access.includes('read') && app.scope === 'organization', 'appmodule read injected at org scope');
+});
+
+test('personaRoleSpecFor honors appAccess:false — no appmodule read injected', () => {
+  const spec = personaSpec();
+  const mapped = personaRoleSpecFor(spec.personas[1]); // Dispatcher: appAccess:false
+  assert.ok(!(mapped.additionalPrivileges || []).some((p) => p.entity === 'appmodule'), 'no appmodule read for an opted-out persona');
+});
+
+test('personaRoleSpecFor trims the persona name (canonical identity matches the SDK + teardown/verify)', () => {
+  const mapped = personaRoleSpecFor({ persona: '  Ticket Agent  ', jobs: [{ name: 'w', privileges: [{ entity: 'New_Ticket', access: ['read'] }] }] });
+  assert.strictEqual(mapped.persona, 'Ticket Agent');
+  assert.strictEqual(mapped.jobs[0].privileges[0].entity, 'new_ticket');
+});
+
+test('security phase: appAccess:false DISSOCIATES the app from the role (converges away app access)', async () => {
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(personaSpec(), { sdk, apply: true });
+  // Ticket Agent (app-access) → associate; Dispatcher (appAccess:false) → dissociate.
+  const assoc = find(calls, 'associateRecords');
+  const disassoc = find(calls, 'disassociateRecords');
+  assert.strictEqual(assoc.length, 1, 'only the app-access persona is associated');
+  assert.strictEqual(disassoc.length, 1, 'the opted-out persona is dissociated');
+  assert.strictEqual(disassoc[0].args[0], 'appmodule');
+  assert.strictEqual(disassoc[0].args[2], 'appmoduleroles_association');
+});
+
+test('security phase: a role solution-membership failure FAILS the build (not silently swallowed)', async () => {
+  // A role missing from the solution silently breaks export/import, so the phase must fail-closed.
+  const { sdk } = mockSdk();
+  sdk.addSolutionComponent = async (o) => { if (o.componentType === 20) throw new Error('solution add failed'); };
+  await assert.rejects(runSdkBuild(personaSpec(), { sdk, apply: true }), /solution add failed/);
+});
+
+test('security phase: a REUSED role is STILL added to the solution (idempotent re-add repairs membership)', async () => {
+  const { sdk, calls } = mockSdk({ rolesExist: true });
+  await runSdkBuild(personaSpec(), { sdk, apply: true });
+  // AddSolutionComponent is idempotent server-side, so membership is re-ensured on every run (a role that
+  // missed the add on a prior run — created, add failed, then reused — is repaired here).
+  assert.strictEqual(find(calls, 'addSolutionComponent').filter((c) => c.args[0].componentType === 20).length, 2, 'both reused roles re-ensured in the solution');
+});
+
+test('security phase: a duplicate app<->role association (realistic 400 + 0x80060891) is swallowed', async () => {
+  const { sdk, calls } = mockSdk({ associateDuplicate: true });
+  const r = await runSdkBuild(personaSpec(), { sdk, apply: true }); // must NOT throw
+  assert.ok(r.created.roles['Ticket Agent']);
+  assert.ok(find(calls, 'associateRecords').length >= 1);
+});
+
+test('security phase: a NON-duplicate association failure HALTS the build (not mistaken for idempotency)', async () => {
+  const { sdk } = mockSdk({ associateFail: true });
+  await assert.rejects(runSdkBuild(personaSpec(), { sdk, apply: true }), /bad request|invalid argument/);
+});
+
+test('security phase: authors one role per persona, adds each to the solution, associates the app for app-access personas', async () => {
+  const { sdk, calls } = mockSdk();
+  const r = await runSdkBuild(personaSpec(), { sdk, apply: true });
+  assert.strictEqual(find(calls, 'createPersonaRole').length, 2, 'one createPersonaRole per persona');
+  assert.ok(r.created.roles['Ticket Agent'] && r.created.roles['Dispatcher'], 'RoleResult captured per persona');
+  // Each role is added to the app's solution (componentType 20 = Role).
+  assert.strictEqual(find(calls, 'addSolutionComponent').filter((c) => c.args[0].componentType === 20).length, 2);
+  // Only the app-access persona (Ticket Agent) is associated to the app module (Dispatcher opted out).
+  const assoc = find(calls, 'associateRecords');
+  assert.strictEqual(assoc.length, 1, 'only the app-access persona is linked to the app');
+  assert.strictEqual(assoc[0].args[0], 'appmodule');
+  assert.strictEqual(assoc[0].args[2].relationshipName, 'appmoduleroles_association');
+  assert.strictEqual(assoc[0].args[2].targetEntity, 'role');
+});
+
+test('security phase: a SEC-1 conflict (foreign same-name role) halts the build fail-closed', async () => {
+  const { sdk } = mockSdk({ roleConflict: true });
+  await assert.rejects(
+    runSdkBuild(personaSpec(), { sdk, apply: true }),
+    (e) => e.phase === 'security' && e.code === 'security-role-failed' && /could not be authored/.test(e.message)
+  );
+});
+
+test('security phase: a duplicate app<->role association on re-run is swallowed as idempotent success', async () => {
+  const { sdk, calls } = mockSdk({ associateDuplicate: true });
+  const r = await runSdkBuild(personaSpec(), { sdk, apply: true }); // must NOT throw
+  assert.ok(r.created.roles['Ticket Agent'], 'role still authored despite the duplicate-association rejection');
+  assert.ok(find(calls, 'associateRecords').length >= 1);
+});
+
+test('security phase: planFor lists one role item per persona', () => {
+  const items = planFor(personaSpec(), {}).filter((i) => i.phase === 'security');
+  assert.strictEqual(items.length, 2);
+  assert.ok(items.some((i) => i.label.includes('security role "Ticket Agent" (2 jobs)')));
+  assert.ok(items.some((i) => i.label.includes('security role "Dispatcher" (1 job)')));
+});
+
+test('security phase: a spec with no personas makes no security calls', async () => {
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(makeSpec(), { sdk, apply: true });
+  assert.strictEqual(find(calls, 'createPersonaRole').length, 0);
+  assert.strictEqual(find(calls, 'associateRecords').length, 0);
+});
+
 test('resolvePhases honors only/skip/from/to', () => {
   assert.deepStrictEqual(resolvePhases({ only: ['views', 'charts'] }), ['views', 'charts']);
-  assert.deepStrictEqual(resolvePhases({ skip: ['data-model', 'sample-data', 'publish'] }), ['solution', 'web-resources', 'views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell', 'pages', 'ai-features']);
-  assert.deepStrictEqual(resolvePhases({ from: 'views' }), ['views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell', 'pages', 'ai-features', 'publish']);
+  assert.deepStrictEqual(resolvePhases({ skip: ['data-model', 'sample-data', 'publish'] }), ['solution', 'web-resources', 'views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell', 'pages', 'ai-features', 'security']);
+  assert.deepStrictEqual(resolvePhases({ from: 'views' }), ['views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell', 'pages', 'ai-features', 'security', 'publish']);
   assert.deepStrictEqual(resolvePhases({ to: 'data-model' }), ['solution', 'data-model']);
 });
 

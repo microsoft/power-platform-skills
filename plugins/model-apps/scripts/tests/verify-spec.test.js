@@ -3,6 +3,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const { verifySpec, hasElement } = require('../lib/verify-spec.js');
 const { sitemapXmlFor } = require('../verify-model-app.js');
+const { SDK_ROLE_MARKER } = require('../lib/app-spec.js');
 
 const idFor = (set) => ({ savedquery: 'savedqueryid', savedqueryvisualization: 'savedqueryvisualizationid', systemform: 'formid' }[set] || 'id');
 
@@ -489,5 +490,34 @@ test('verifySpec: command check is SKIPPED when the reader cannot resolve a comm
   const read = { findTable: async () => null, findColumns: async () => [], queryRecords: async () => [], sitemapXml: async () => '' };
   const r = await verifySpec(spec, read);
   assert.ok(!r.checks.some((c) => c.kind === 'command'), 'no commandBar reader -> no command check');
+});
+
+// --- Security persona roles (Group N P1) ---------------------------------------------------
+
+test('verifySpec: an SDK-authored persona role present -> ok', async () => {
+  const spec = { entities: [{ schemaName: 'new_o', columns: [] }], personas: [{ persona: 'Agent', jobs: [{ name: 'w', privileges: [{ entity: 'new_o', access: ['read'] }] }] }] };
+  const read = {
+    findTable: async () => ({ logicalName: 'new_o' }),
+    findColumns: async () => [],
+    queryRecords: async (set) => (set === 'role' ? [{ roleid: 'r1', description: SDK_ROLE_MARKER, ismanaged: false }] : set === 'businessunit' ? [{ businessunitid: '00000000-0000-0000-0000-000000000001' }] : []),
+    sitemapXml: async () => '',
+  };
+  const r = await verifySpec(spec, read);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
+  assert.ok(r.checks.some((c) => c.kind === 'role' && c.name === 'Agent' && c.present));
+});
+
+test('verifySpec: a missing persona role (or a foreign same-name role) is a loud fail', async () => {
+  const spec = { entities: [{ schemaName: 'new_o', columns: [] }], personas: [{ persona: 'Agent', jobs: [{ name: 'w', privileges: [{ entity: 'new_o', access: ['read'] }] }] }] };
+  const read = {
+    findTable: async () => ({ logicalName: 'new_o' }),
+    findColumns: async () => [],
+    // A same-name role NOT authored by the SDK must not satisfy the check (it is not the role we built).
+    queryRecords: async (set) => (set === 'businessunit' ? [{ businessunitid: '00000000-0000-0000-0000-000000000001' }] : [{ roleid: 'r2', description: 'hand-built by an admin', ismanaged: false }]),
+    sitemapXml: async () => '',
+  };
+  const r = await verifySpec(spec, read);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.missing.some((m) => m.kind === 'role' && m.name === 'Agent'));
 });
 

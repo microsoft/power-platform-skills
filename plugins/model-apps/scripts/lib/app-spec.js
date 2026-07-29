@@ -25,6 +25,23 @@ const FORM_TYPE_CODE = { Main: 2, QuickView: 6, QuickCreate: 7, Card: 11 };
 // an Edm.Guid OData filter). Anchored so it can neither over-match nor be an injection seam.
 const FORM_GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// Security-authoring enums (personas[]). These mirror the vendored SDK's security surface
+// (cds-maker-sdk src/types/security.ts) EXACTLY — the app-spec validator is a lint-time echo of the
+// SDK's own guards so an author sees a bad access/scope at author time instead of only on apply.
+//   AccessLevel  -> Dataverse PrivilegeType (read->Read, appendTo->AppendTo, …)
+//   PrivilegeScope depth, least->most permissive (user->Basic … organization->Global)
+// Keep these in lockstep with the SDK; vendor-sdk-smoke asserts the vendored bundle still exposes them.
+const ACCESS_LEVELS = new Set(['read', 'create', 'write', 'delete', 'append', 'appendTo', 'assign', 'share']);
+const PRIVILEGE_SCOPES = new Set(['user', 'businessUnit', 'parentChild', 'organization']);
+
+// The exact ownership marker the vendored SDK (cds-maker-sdk SecurityApi) stamps on the `description`
+// of every security role it authors. The SDK deletes/reuses ONLY a role carrying this marker (SEC-1);
+// the plugin re-implements that guard in teardown (deleteSecurityRole takes a raw id and does not
+// re-check ownership) and in verify (a same-name role someone else built is NOT the one we authored),
+// so the string lives here as the single source of truth. Keep in lockstep with the SDK — vendor-sdk-
+// smoke asserts the vendored bundle still contains it.
+const SDK_ROLE_MARKER = 'Authored by @maker-studio/cds-maker-sdk (persona/security role).';
+
 // A sitemap icon / vectorIcon VALUE the platform resolves DIRECTLY (as opposed to a locally-declared
 // `webResources[]` NAME): a relative WebResources path (`/WebResources/...`, `/_imgs/...`) or a
 // `$webresource:` reference. These are exactly what a DOWNLOADED app carries verbatim on its subareas —
@@ -1006,6 +1023,101 @@ function validateAppSpec(spec, opts = {}) {
       for (const k of Object.keys(spec.design)) if (!allowed.has(k)) errors.push(`design: unknown key '${k}' (allowed: ${[...allowed].join(', ')})`);
     }
   }
+  // Security personas (optional; additive — validated on v1 and v2 specs). Each persona authors ONE
+  // security role (role name = persona) whose privilege set is the UNION of the entity access every
+  // one of its jobs-to-be-done declares (the SDK unions them, max scope wins per entity+access). The
+  // planner DECLARES the access each job needs — the engine never infers it — so this validator only
+  // checks the declared SHAPE: valid Dataverse access/scope tokens and well-formed GUIDs. Two guards
+  // are intentionally deferred to apply time because they need live entity metadata the lint pass does
+  // not have: (1) whether an entity actually supports a requested access, and (2) the SDK's shared-
+  // privilege rule (entities that alias to the same prv* must request one scope). Those surface as a
+  // clean BuildHalt from the security phase, not here. Entity NAMES are likewise resolved against live
+  // metadata by the SDK (a persona legitimately grants access to standard tables like `account` that
+  // this spec does not author), so we validate only that `entity` is a non-empty string.
+  if (spec.personas !== undefined) {
+    if (!Array.isArray(spec.personas)) {
+      errors.push('personas must be an array');
+    } else {
+      const personaNames = new Set();
+      // Reject unknown keys so a typo fails loudly at author time instead of silently taking a default.
+      // WHY this matters for security: `appAcces:false` (typo) would leave the REAL `appAccess` absent →
+      // defaulting to true → the persona wrongly gets app-module read + the app association. Same pattern
+      // the `design` block uses. Allowlists mirror the vendored SDK's PersonaRoleSpec/JobToBeDone/
+      // EntityPrivilege shapes exactly.
+      const PERSONA_KEYS = new Set(['persona', 'jobs', 'additionalPrivileges', 'appAccess', 'businessUnitId', 'assignTo']);
+      const JOB_KEYS = new Set(['name', 'description', 'privileges']);
+      const PRIVILEGE_KEYS = new Set(['entity', 'access', 'scope']);
+      const rejectUnknown = (obj, allowed, ctx) => {
+        for (const k of Object.keys(obj)) if (!allowed.has(k)) errors.push(`${ctx}: unknown key '${k}' (allowed: ${[...allowed].join(', ')})`);
+      };
+      // Validate a persona/JTBD EntityPrivilege[] (shape + enum only — see the deferral note above).
+      const validatePrivileges = (privs, ctx, { allowEmpty = false } = {}) => {
+        if (privs === undefined) {
+          if (!allowEmpty) errors.push(`${ctx}: privileges[] is required`);
+          return;
+        }
+        if (!Array.isArray(privs) || (!allowEmpty && !privs.length)) {
+          errors.push(`${ctx}: privileges must be a non-empty array`);
+          return;
+        }
+        for (const pr of privs) {
+          if (!pr || typeof pr !== 'object' || Array.isArray(pr)) { errors.push(`${ctx}: each privilege must be an object`); continue; }
+          rejectUnknown(pr, PRIVILEGE_KEYS, `${ctx}: privilege`);
+          if (!pr.entity || typeof pr.entity !== 'string') errors.push(`${ctx}: privilege.entity (a table logical name) is required`);
+          if (!Array.isArray(pr.access) || !pr.access.length) {
+            errors.push(`${ctx}: privilege on '${pr.entity || '?'}' needs a non-empty access[]`);
+          } else {
+            for (const a of pr.access) if (!ACCESS_LEVELS.has(a)) errors.push(`${ctx}: unknown access '${a}' on '${pr.entity}' (valid: ${[...ACCESS_LEVELS].join(', ')})`);
+          }
+          if (pr.scope !== undefined && !PRIVILEGE_SCOPES.has(pr.scope)) errors.push(`${ctx}: unknown scope '${pr.scope}' on '${pr.entity}' (valid: ${[...PRIVILEGE_SCOPES].join(', ')})`);
+        }
+      };
+      for (const p of spec.personas) {
+        if (!p || typeof p !== 'object' || Array.isArray(p)) { errors.push('personas[]: each persona must be an object'); continue; }
+        rejectUnknown(p, PERSONA_KEYS, 'persona');
+        // The SDK TRIMS the role name before its (name, business-unit) lookup, so validate + dedup on the
+        // TRIMMED name — otherwise "Agent" and " Agent " pass as distinct here but collapse onto one role
+        // (the second silently REPLACES the first's privileges), and teardown/verify would query the wrong
+        // (untrimmed) name and miss the role.
+        const pname = typeof p.persona === 'string' ? p.persona.trim() : p.persona;
+        if (!pname || typeof pname !== 'string') {
+          errors.push('persona: persona (the role name) is required and cannot be blank/whitespace-only');
+        } else {
+          const key = pname.toLowerCase();
+          if (personaNames.has(key)) errors.push(`persona "${pname}": duplicate persona name (each persona authors one role — names must be unique after trimming)`);
+          personaNames.add(key);
+        }
+        const label = pname || '?';
+        if (p.appAccess !== undefined && typeof p.appAccess !== 'boolean') errors.push(`persona "${label}": appAccess must be a boolean`);
+        if (p.businessUnitId !== undefined && (typeof p.businessUnitId !== 'string' || !FORM_GUID_RE.test(p.businessUnitId))) errors.push(`persona "${label}": businessUnitId must be a GUID`);
+        if (!Array.isArray(p.jobs) || !p.jobs.length) {
+          errors.push(`persona "${label}": at least one job (jobs[]) is required`);
+        } else {
+          for (const j of p.jobs) {
+            if (!j || typeof j !== 'object' || Array.isArray(j)) { errors.push(`persona "${label}": each job must be an object`); continue; }
+            rejectUnknown(j, JOB_KEYS, `persona "${label}" job`);
+            if (!j.name || typeof j.name !== 'string') errors.push(`persona "${label}": a job is missing name`);
+            validatePrivileges(j.privileges, `persona "${label}" job "${(j && j.name) || '?'}"`);
+          }
+        }
+        if (p.additionalPrivileges !== undefined) validatePrivileges(p.additionalPrivileges, `persona "${label}" additionalPrivileges`, { allowEmpty: true });
+        // assignTo (optional, grant-only). Team/user ids are Dataverse GUIDs — validate the shape so a
+        // typo'd id fails at author time rather than as an opaque SDK GUID-normalization error on apply.
+        if (p.assignTo !== undefined) {
+          if (typeof p.assignTo !== 'object' || p.assignTo === null || Array.isArray(p.assignTo)) {
+            errors.push(`persona "${label}": assignTo must be an object with teams[]/users[]`);
+          } else {
+            for (const k of Object.keys(p.assignTo)) if (k !== 'teams' && k !== 'users') errors.push(`persona "${label}": assignTo unknown key '${k}' (allowed: teams, users)`);
+            for (const k of ['teams', 'users']) {
+              if (p.assignTo[k] === undefined) continue;
+              if (!Array.isArray(p.assignTo[k])) { errors.push(`persona "${label}": assignTo.${k} must be an array of GUIDs`); continue; }
+              for (const id of p.assignTo[k]) if (typeof id !== 'string' || !FORM_GUID_RE.test(id)) errors.push(`persona "${label}": assignTo.${k} contains a non-GUID value`);
+            }
+          }
+        }
+      }
+    }
+  }
   return { ok: errors.length === 0, errors, warnings };
 }
 
@@ -1014,6 +1126,15 @@ function validateAppSpec(spec, opts = {}) {
 //   "KPI / Analytics" -> "kpi-analytics"
 function slugify(name) {
   return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'page';
+}
+
+// The canonical role name for a persona: the TRIMMED `persona` string. The vendored SDK trims the name
+// before its (name, business-unit) role lookup/create, so every plugin site that identifies the role —
+// the create mapper (personaRoleSpecFor), teardown, and verify — MUST use this same trimmed form or they
+// will disagree on the role's identity (create "Agent" but tear down / verify " Agent ").
+function canonicalPersonaName(persona) {
+  const n = persona && persona.persona;
+  return typeof n === 'string' ? n.trim() : n;
 }
 
 // Upgrade a legacy App Spec to schemaVersion 2 in one pure pass (no I/O; returns a deep copy):
@@ -1067,6 +1188,10 @@ module.exports = {
   webResourceNameFromRef,
   FORM_TYPE_CODE,
   FORM_GUID_RE,
+  ACCESS_LEVELS,
+  PRIVILEGE_SCOPES,
+  SDK_ROLE_MARKER,
+  canonicalPersonaName,
   VALIDATION_PROFILES,
   migrateAppSpec,
   columnTypeMap,

@@ -8,6 +8,10 @@
 //
 // Order (each the mirror of the build's create order — dependents before their dependencies):
 //   1. app          — the app module (references the sitemap + dashboard/form/view/chart components)
+//   1b. roles        — persona security roles. Deleted right after the app (BEFORE the data model): a
+//                      role holding a soon-to-be-deleted table's privileges could otherwise block that
+//                      table's delete. SEC-1: only roles the SDK itself authored (marked on the role
+//                      description) are deleted — never a hand-built or managed same-name role.
 //   2. dashboards    — systemform (type 0) rows, pinned as app components
 //   3. commands      — appactions per entity (they reference the web-resource JS; delete first).
 //                      The SDK's command delete is ENTITY-keyed (removes every appaction on that
@@ -34,9 +38,9 @@
 // the identical phase-grouped, status-marked log.
 
 const { topoOrderEntities } = require('./_graph.js');
-const { appUniqueName, commandsByEntity, defaultViewColumns, resolveExistingFormId } = require('./sdk-build.js');
+const { appUniqueName, commandsByEntity, defaultViewColumns, resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause } = require('./sdk-build.js');
 const { manifestResourceName } = require('./page-manifest.js');
-const { relationshipSchemaName, manyToManySchemaName, lookupColumnsFor } = require('./app-spec.js');
+const { relationshipSchemaName, manyToManySchemaName, lookupColumnsFor, SDK_ROLE_MARKER, canonicalPersonaName, FORM_GUID_RE } = require('./app-spec.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
 
@@ -146,6 +150,61 @@ const KIND_HANDLERS = {
       return (items || []).map((x) => ({ id: x.id, name: x.name }));
     },
     del: (sdk, item) => sdk.deleteRemoteArtifact('dashboard', item.id),
+  },
+  role: {
+    // Persona security role. There is no resolveArtifact('role'), and deleteSecurityRole takes a role
+    // id (not a name) and does NOT re-check ownership — so resolve queries the roles table by the SAME
+    // (name, business-unit) identity the SDK created it under and returns ONLY rows the SDK authored
+    // (SEC-1: the ownership marker on the description, unmanaged). Scoping by BU is load-bearing: a
+    // name-only query would match — and deletion would then remove — a same-named SDK role in a DIFFERENT
+    // business unit that belongs to another app (cross-BU data loss). A hand-built or managed role that
+    // merely shares the persona name is left untouched.
+    async resolve(sdk, target) {
+      if (typeof sdk.queryRecords !== 'function' || typeof sdk.deleteSecurityRole !== 'function') return [];
+      let rows;
+      try {
+        // Scope to the persona's business unit (explicit, else the org root BU the SDK defaults to). This
+        // is a DESTRUCTIVE op, so if the BU can't be resolved we FAIL CLOSED and delete nothing — a
+        // name-only fallback could delete a same-named SDK role in another BU that belongs to another app.
+        const bu = await resolveRoleBusinessUnit((e, o) => sdk.queryRecords(e, o), target.businessUnitId, target._buCache || (target._buCache = {}));
+        if (!bu) return [];
+        // Roles table (logical `role`, set `roles`). name is an exact-match literal — never a wildcard —
+        // so this can only ever resolve the persona's own role(s) in its BU.
+        rows = await sdk.queryRecords('role', {
+          select: ['roleid', 'name', 'description', 'ismanaged'],
+          filter: `name eq '${odataStr(target.name)}'${roleBuClause(bu)}`,
+          top: 50,
+        });
+      } catch {
+        // A query failure (e.g. an old bundle without role support) means we cannot prove ownership,
+        // so delete NOTHING rather than risk removing a role we did not author.
+        return [];
+      }
+      // Marker + unmanaged + in-BU proves WE authored this role. One more guard against cross-app data
+      // loss: teardown deletes the app FIRST, so if the role is STILL associated with any app module, that
+      // association belongs to ANOTHER app that shares this (same name+BU) persona — deleting the role
+      // would break that app. Skip those; delete only roles no app still uses (this app's link is already
+      // gone, or a data-only role). Best-effort: if the association check can't run, fall back to the
+      // BU+marker decision (delete) — the extra guard only ever REMOVES candidates, never adds them.
+      const owned = (rows || []).filter((r) => r.ismanaged !== true && (r.description || '') === SDK_ROLE_MARKER && r.roleid);
+      const kept = [];
+      for (const r of owned) {
+        const id = String(r.roleid);
+        let sharedWithAnotherApp = false;
+        if (FORM_GUID_RE.test(id)) {
+          try {
+            // OData `any()` over the appmodule<->role N:N (live-verified). id is a Dataverse GUID (Edm.Guid,
+            // unquoted) validated above, so interpolation is injection-safe.
+            const apps = await sdk.queryRecords('appmodule', { select: ['appmoduleid'], filter: `appmoduleroles_association/any(x:x/roleid eq ${id})`, top: 1 });
+            sharedWithAnotherApp = Array.isArray(apps) && apps.length > 0;
+          } catch { sharedWithAnotherApp = false; }
+        }
+        if (!sharedWithAnotherApp) kept.push({ id, name: target.name });
+      }
+      return kept;
+    },
+    del: (sdk, item) => sdk.deleteSecurityRole(item.id),
+    tolerateNotFound: true, // a role already deleted (e.g. by a prior teardown) is "gone"
   },
   commands: {
     // The SDK's command delete is keyed by ENTITY — one call removes every appaction on that
@@ -288,6 +347,14 @@ function planTeardown(spec) {
   const steps = [];
   if (spec.app && spec.solution) {
     steps.push({ kind: 'app', phase: 'app', label: `app module "${spec.app.name}"`, target: { uniqueName: appUniqueName(spec) } });
+  }
+  // Persona security roles — deleted right after the app, before the data model (a role holding a
+  // table's privileges could block that table's delete). The role handler is SEC-1 safe (marker-gated)
+  // and BU-scoped. Uses the TRIMMED (canonical) persona name so it matches the name the SDK created.
+  for (const p of spec.personas || []) {
+    const name = canonicalPersonaName(p);
+    if (!name) continue;
+    steps.push({ kind: 'role', phase: 'security', label: `security role "${name}"`, target: { name, businessUnitId: p.businessUnitId } });
   }
   for (const d of spec.dashboards || []) {
     steps.push({ kind: 'dashboard', phase: 'dashboards', label: `dashboard "${d.name}"`, target: { name: d.name } });

@@ -8,6 +8,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { planTeardown, runTeardown, deleteStep, odataStr, KIND_HANDLERS } = require(path.join(__dirname, '..', 'lib', 'sdk-teardown.js'));
 const { appUniqueName } = require(path.join(__dirname, '..', 'lib', 'sdk-build.js'));
+const { SDK_ROLE_MARKER } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
 
 const desk = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.support-desk.json'), 'utf8'));
 
@@ -884,5 +885,102 @@ test('teardown still deletes a real (non-restricted) solution — regression', a
     'the real solution must still be deleted'
   );
   assert.ok(res.deleted.solution && res.deleted.solution.includes('sol-real'));
+});
+
+// --- Security persona roles (Group N P1) ---------------------------------------------------
+
+test('planTeardown inserts persona role steps right after the app, before the data model', () => {
+  const spec = Object.assign(fullSpec(), { personas: [
+    { persona: 'Agent', jobs: [{ name: 'w', privileges: [{ entity: 'new_ticket', access: ['read'] }] }] },
+    { persona: 'Lead', jobs: [{ name: 'm', privileges: [{ entity: 'new_ticket', access: ['read', 'write'] }] }] },
+  ] });
+  const kinds = planTeardown(spec).map((s) => s.kind);
+  assert.strictEqual(kinds[0], 'app');
+  assert.strictEqual(kinds[1], 'role');
+  assert.strictEqual(kinds[2], 'role');
+  // Roles are torn down before any relationship/table delete (a role holding a table's privileges
+  // could otherwise block that table's delete).
+  assert.ok(kinds.lastIndexOf('role') < kinds.indexOf('relationship'), 'roles before relationships/tables');
+});
+
+test('role handler resolves ONLY SDK-authored (marker) unmanaged roles — never a foreign same-name role', async () => {
+  const rows = [
+    { roleid: 'r1', name: 'Agent', description: SDK_ROLE_MARKER, ismanaged: false }, // ours → delete
+    { roleid: 'r2', name: 'Agent', description: 'hand-built by an admin', ismanaged: false }, // foreign → skip (SEC-1)
+    { roleid: 'r3', name: 'Agent', description: SDK_ROLE_MARKER, ismanaged: true }, // managed → skip
+  ];
+  const sdk = { queryRecords: async (entity) => (entity === 'businessunit' ? [{ businessunitid: '00000000-0000-0000-0000-000000000001' }] : entity === 'appmodule' ? [] : rows), deleteSecurityRole: async () => {} };
+  const items = await KIND_HANDLERS.role.resolve(sdk, { name: 'Agent' });
+  assert.deepStrictEqual(items, [{ id: 'r1', name: 'Agent' }]);
+});
+
+test('role handler SKIPS a role still associated with another app (never breaks a shared persona role)', async () => {
+  // Teardown deletes the app first, so a remaining app association means another app shares this role.
+  const sdk = {
+    queryRecords: async (entity) => {
+      if (entity === 'businessunit') return [{ businessunitid: '00000000-0000-0000-0000-000000000001' }];
+      if (entity === 'appmodule') return [{ appmoduleid: 'other-app' }]; // still used by another app
+      return [{ roleid: '11111111-1111-1111-1111-111111111111', name: 'Agent', description: SDK_ROLE_MARKER, ismanaged: false }];
+    },
+    deleteSecurityRole: async () => {},
+  };
+  assert.deepStrictEqual(await KIND_HANDLERS.role.resolve(sdk, { name: 'Agent' }), [], 'a role another app still uses must not be deleted');
+});
+
+test('role handler FAILS CLOSED when the business unit cannot be resolved (deletes nothing — no cross-BU risk)', async () => {
+  // A destructive op must never fall back to a name-only match; an unresolvable BU → delete nothing.
+  const sdk = { queryRecords: async (entity) => (entity === 'businessunit' ? [] : [{ roleid: 'r1', description: SDK_ROLE_MARKER, ismanaged: false }]), deleteSecurityRole: async () => {} };
+  assert.deepStrictEqual(await KIND_HANDLERS.role.resolve(sdk, { name: 'Agent' }), []);
+});
+
+test('role handler del() deletes by role id via deleteSecurityRole', async () => {
+  const deleted = [];
+  const sdk = { deleteSecurityRole: async (id) => deleted.push(id) };
+  await KIND_HANDLERS.role.del(sdk, { id: 'r1', name: 'Agent' });
+  assert.deepStrictEqual(deleted, ['r1']);
+});
+
+test('role handler resolves nothing (deletes nothing) when the bundle lacks role support — fail-safe', async () => {
+  assert.deepStrictEqual(await KIND_HANDLERS.role.resolve({}, { name: 'Agent' }), []);
+});
+
+test('role handler swallows a query failure by resolving nothing (never deletes an unproven role)', async () => {
+  const sdk = { queryRecords: async () => { throw new Error('no role table'); }, deleteSecurityRole: async () => {} };
+  assert.deepStrictEqual(await KIND_HANDLERS.role.resolve(sdk, { name: 'Agent' }), []);
+});
+
+test('role handler scopes the role query to the resolved root business unit (prevents cross-BU over-delete)', async () => {
+  const BU = '00000000-0000-0000-0000-000000000042';
+  const queries = [];
+  const sdk = {
+    queryRecords: async (entity, opts) => {
+      queries.push({ entity, filter: opts.filter });
+      if (entity === 'businessunit') return [{ businessunitid: BU }]; // root BU (no explicit persona BU)
+      return [{ roleid: 'r1', name: 'Agent', description: SDK_ROLE_MARKER, ismanaged: false }];
+    },
+    deleteSecurityRole: async () => {},
+  };
+  const items = await KIND_HANDLERS.role.resolve(sdk, { name: 'Agent' });
+  assert.deepStrictEqual(items, [{ id: 'r1', name: 'Agent' }]);
+  const roleQ = queries.find((q) => q.entity === 'role');
+  assert.ok(roleQ.filter.includes(`_businessunitid_value eq ${BU}`), `role query must be BU-scoped: ${roleQ.filter}`);
+});
+
+test('role handler uses an explicit persona businessUnitId (no root-BU lookup needed)', async () => {
+  const BU = '00000000-0000-0000-0000-0000000000ab';
+  const queries = [];
+  const sdk = {
+    queryRecords: async (entity, opts) => { queries.push({ entity, filter: opts.filter }); return entity === 'role' ? [{ roleid: 'r1', description: SDK_ROLE_MARKER, ismanaged: false }] : []; },
+    deleteSecurityRole: async () => {},
+  };
+  await KIND_HANDLERS.role.resolve(sdk, { name: 'Agent', businessUnitId: BU });
+  assert.ok(!queries.some((q) => q.entity === 'businessunit'), 'an explicit BU skips the root-BU lookup');
+  assert.ok(queries.find((q) => q.entity === 'role').filter.includes(`_businessunitid_value eq ${BU}`));
+});
+
+test('planTeardown trims the persona name in the role step (matches the SDK-created name)', () => {
+  const spec = Object.assign(fullSpec(), { personas: [{ persona: '  Agent  ', jobs: [{ name: 'w', privileges: [{ entity: 'new_ticket', access: ['read'] }] }] }] });
+  const roleStep = planTeardown(spec).find((s) => s.kind === 'role');
+  assert.strictEqual(roleStep.target.name, 'Agent');
 });
 

@@ -80,18 +80,22 @@ the dedup/verify quality gates. The open MVP items:
 
 - 🔲 **Wave 2 (header/navigation refresh) enabled by default** (spec rank 3, P0) — set the app-module header/nav
   refresh flag on new apps, and turn it on when editing an app that isn't on it yet (spec rank 20). Not set today.
-- 🔲 **Roles + JTBD as first-class planning outputs** (spec rank 1, P0) — the Level-(a)/(b) design flow plans
-  entities/columns/relationships + view/form/gen-page intents with user review, but does NOT model **personas/roles**
-  or **jobs-to-be-done**. Several P0s (JTBD-driven "important" views, agent/summary placement, sitemap grouping) and
-  the eval "JTBD reachability" metric (spec §7 Cat 2) build on this.
+- ✅ **Roles + JTBD as first-class planning outputs** (spec rank 1, P0) — the Level-(c) design flow now models
+  **personas** and their **jobs-to-be-done**: the author declares the entity access each job needs, the builder
+  unions it into one security role per persona, and the plan/preview surfaces the proposed roles for review. Built
+  on the SDK security surface (`createPersonaRole`). JTBD-driven view/summary/sitemap coherence (below) still builds
+  further on this.
 - 🔲 **Default-on + coherence wiring** — the AI agents, Insight Card summaries, and (once added) Wave 2 exist as
   primitives, but the SKILL flow must **enable them by default** and author **JTBD-quality** content (entity-specific
   summary prompts per the §4 Group G guidelines, the _right_ view columns). A ✅ primitive is necessary but not
   sufficient for the spec's coherence bar.
 
 Important, P1 (not MVP-gating; tracked here for visibility):
-- 🔲 **Security roles per persona** (spec rank 14, Group N) — without one the generated app runs only for sysadmins;
-  currently out of scope (needs SDK security-role authoring).
+- ✅ **Security roles per persona** (spec rank 14, Group N P1) — `personas[]` authors one security role per persona,
+  sized from its jobs-to-be-done, and grants the app to each role so it **opens for non-admins**, not just sysadmins.
+  Idempotent + converging (replace-privileges), fail-closed on a foreign same-name role, torn down with the app.
+  **Column-level (field) security** and **access teams / hierarchy security** (Group N P3) remain a tracked SDK
+  follow-up.
 - 🔲 **Rich AI descriptions on every artifact** (rank 22) · **quick-find / relevance-search config** (rank 23) ·
   **custom app theme + logo** (rank 18 — the `design` block styles gen pages, not the app theme).
 

@@ -25,7 +25,7 @@ const { diffPhases, stableStringify } = require('./phase-diff.js');
 
 // Phases that, when changed, always force a full build. data-model ripples into everything; solution/
 // sample-data/ai have no convergent fast shape. A full build applies them correctly, so NO debt.
-const FULL_BUILD_PHASES = new Set(['data-model', 'solution', 'sample-data', 'ai-features']);
+const FULL_BUILD_PHASES = new Set(['data-model', 'solution', 'sample-data', 'ai-features', 'security']);
 
 // Stable identity keys per artifact type, used to align current vs prior entries (added / edited / removed).
 const identityOf = {

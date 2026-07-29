@@ -86,11 +86,32 @@ function designSection(spec) {
   return [h('Design contract'), '  ' + Object.entries(spec.design).map(([k, v]) => `${k}=${v}`).join('  ')];
 }
 
+// Security personas → roles. Renders each persona's role, its jobs, and the per-entity access it
+// grants so the user can review the access model (Level-(c) approval artifact). Shows the app-open
+// posture (whether the app is granted to the role) since that decides if the app opens for the persona.
+function securitySection(spec) {
+  const personas = spec.personas || [];
+  if (!personas.length) return [];
+  const out = [h('Security roles (personas)')];
+  for (const p of personas) {
+    const appOpens = p.appAccess !== false;
+    out.push(`  ⛊ role "${p.persona}"${appOpens ? '  (app opens for this persona)' : '  (data-only — no app access)'}`);
+    for (const j of p.jobs || []) {
+      out.push(`     • job: ${j.name || '(unnamed)'}`);
+      for (const pr of j.privileges || []) out.push(`         - ${lc(pr.entity)}: ${(pr.access || []).join('/')} @ ${pr.scope || 'user'}`);
+    }
+    for (const pr of p.additionalPrivileges || []) out.push(`     • baseline: ${lc(pr.entity)}: ${(pr.access || []).join('/')} @ ${pr.scope || 'user'}`);
+    const assigned = [...((p.assignTo && p.assignTo.teams) || []), ...((p.assignTo && p.assignTo.users) || [])];
+    if (assigned.length) out.push(`     • assigned to ${assigned.length} principal(s)`);
+  }
+  return out;
+}
+
 function renderAppPreview(spec) {
   const s = spec || {};
   const lines = [`APP: ${(s.app && s.app.name) || '(unnamed app)'}`];
   if (s.app && s.app.description) lines.push(s.app.description);
-  lines.push(...dataModelSection(s), ...sitemapSection(s), ...viewsChartsSection(s), ...formsSection(s), ...pagesSection(s), ...designSection(s));
+  lines.push(...dataModelSection(s), ...sitemapSection(s), ...viewsChartsSection(s), ...formsSection(s), ...pagesSection(s), ...securitySection(s), ...designSection(s));
   return lines.join('\n') + '\n';
 }
 

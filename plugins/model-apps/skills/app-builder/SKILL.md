@@ -55,6 +55,9 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
 - **Surfaces** — **generative pages** (modern dashboards / overviews / analytics / landing — the default),
   classic dashboards (opt-in), external URLs
 - **App shell** — the app module + sitemap, with per-subarea icons
+- **Security & access** — one **security role per persona**, sized from that persona's jobs-to-be-done
+  (the entity access each job needs, unioned into the role). The app is granted to each persona role so
+  it **opens for non-admins**, not just system administrators. Author via `personas[]` (see below).
 - **AI-first features** (admin-gated) — form-fill assist (data entry), natural-language grid/view
   search (data exploration), NL chart / AI data visualization, M365 Copilot (opt-in); per-table
   Copilot row summaries (Insight Cards) with tailored prompts, auto-selected for good-candidate tables
@@ -133,6 +136,16 @@ running every prompt yourself via `AskUserQuestion`. In short:
      navigatesTo/pageInput, `source: { kind: "intent" }`) per the genpage-first policy above, plus
      the optional `design` contract. **Do not author page `.tsx` here.** Emit `dashboards[]` only
      on explicit request. Persist `app-spec.json` after each level.
+   - **Level (c) — personas & access** (`personas[]`): identify the **personas** who will use the
+     app (e.g. "Dispatcher", "Field Technician", "Sales Rep") and, for each, the **jobs-to-be-done**
+     that persona performs. For every job, DECLARE the entity access it needs (read/create/write/
+     delete/append/appendTo/assign/share at user/businessUnit/parentChild/organization scope) — the
+     builder unions those into one security role per persona and grants the app to it so it **opens
+     for that persona, not just sysadmins**. Propose the personas → jobs → access mapping and confirm
+     via `AskUserQuestion`; **render the proposed roles + per-entity access as a table in your chat
+     reply** (the user can't approve an access model they can't see — see the CRITICAL note above).
+     Skip only if the user explicitly wants no roles authored. (Column-level security and access
+     teams are not yet supported — see *Notes & limits*.)
    - **Whole-app preview** (design gate for Level (b)): `node "${PLUGIN_ROOT}/scripts/preview-app.js" --spec @<working-dir>/app-spec.json`
      renders data-model + sitemap + form wireframes + page-intents + design contract. **Reproduce the
      ENTIRE rendered output verbatim in your chat reply, inside a fenced ` ``` ` code block — do NOT
@@ -378,7 +391,9 @@ laid out, explicit `tabs` honored; sub-grids, quick-views, and form JS (`events[
 canonical control cells / the `/bag/c` events region via the SDK's generic `addElement` surface)
 → **app module + sitemap** → **generative pages** (each page's `.tsx` was generated in Phase 1.5;
 the build uploads each `pages[]` page via `pac model genpage upload`, no `--add-to-sitemap`;
-then the SDK rewrites the sitemap once to add the `GenPage` subareas) → publish
+then the SDK rewrites the sitemap once to add the `GenPage` subareas) → **AI features** (opt-in)
+→ **security** (one role per `personas[]` entry, sized from its jobs' declared access; injects an
+app-module read privilege and associates the app to each role so it opens for that persona) → publish
 (opt-in). When the app has generative-page subareas the app module is created first WITHOUT them (they can't
 resolve until the pages upload), then the pages phase rewrites the sitemap. All Dataverse access goes through the SDK, so the
 downloaded metadata lands in `.maker-workspace/`. Independent ops (columns, views/charts/forms)
@@ -410,11 +425,14 @@ run with bounded parallelism; publish is one round-trip per entity + the app. Vi
   spec-vs-deployed *diff* convergence is a tracked future increment (see `docs/app-builder-roadmap.md`).
 - Not in scope (later): business rules, **conditional** command visibility (Power-Fx-only), **titled
   command groups** (from-scratch — needs an SDK-synthesized parent row), lookup/associated views,
-  multi-area sitemaps, security roles. (Supported: the full data model — all column types,
+  multi-area sitemaps, **column-level (field) security**, **access teams / hierarchy security** (the
+  security surface today is role-per-persona only — the two are a tracked SDK follow-up). (Supported:
+  the full data model — all column types,
   **AutoNumber primary**, global choices, status reasons, alternate keys, **N:N + junction-with-payload**;
   adaptive main forms with **1:N / N:N sub-grids**; **quick-create / quick-view forms** (`formType`) +
   **quick-view placement** (`forms[].quickViews[]` — embed a QuickView form via a lookup); Choice-column
-  charts; **dashboards** (`dashboards[]` — chart/list/iframe/webresource tiles) + **dashboard sitemap
+  charts; **security roles** (`personas[]` — one role per persona sized from its jobs-to-be-done, with app
+  access so the app opens for non-admins); **dashboards** (`dashboards[]` — chart/list/iframe/webresource tiles) + **dashboard sitemap
   placement** (a `dashboard` subarea, auto-pinned); **generative pages** (`pages[]` — the genpage-first
   default for overview/dashboard surfaces, uploaded via `pac model genpage upload` and surfaced as `GenPage`
   sitemap subareas; full **create + edit** round-trip via `download-model-app.js`); **modern command-bar buttons** (`commands[]` — JS

@@ -1,20 +1,23 @@
 'use strict';
 
-// Canonical ordered list of the engine's 13 build phases. This is the SINGLE source of truth —
+// Canonical ordered list of the engine's 14 build phases. This is the SINGLE source of truth —
 // sdk-build.js imports it from here so the stage layer and the engine can never drift. Order is
 // load-bearing: phases run top-to-bottom, and downstream phases depend on earlier ones (e.g. the
-// app phase consumes forms/views/charts built earlier). See docs/app-builder-staged-flow-design.md §6.
-const PHASES = ['solution', 'data-model', 'sample-data', 'web-resources', 'views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell', 'pages', 'ai-features', 'publish'];
+// app phase consumes forms/views/charts built earlier). The `security` phase runs AFTER app-shell
+// because a persona role grants read on (and is associated to) the app module created there, so the
+// generated app opens for that persona. See docs/app-builder-staged-flow-design.md §6.
+const PHASES = ['solution', 'data-model', 'sample-data', 'web-resources', 'views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell', 'pages', 'ai-features', 'security', 'publish'];
 
 // User-facing stages, each a contiguous range of engine phases. Stages are the vocabulary the
 // orchestrator narrates, gates consent on, and evals assert against — they do NOT rename or merge
 // phases. `data`, `ui`, `app`, `publish` tile PHASES exactly (no gaps/overlaps); the design-only
 // `author`, the code-gen `generate-pages`, and `verify` are orchestrator stages with no phase range
-// and are intentionally absent from this map. See the design doc §5–§6.
+// and are intentionally absent from this map. `security` joins the `app` stage — authoring the
+// persona access model is part of standing the app up for its users. See the design doc §5–§6.
 const STAGES = {
   data: ['solution', 'data-model', 'sample-data'],
   ui: ['web-resources', 'views', 'charts', 'forms', 'commands', 'dashboards'],
-  app: ['app-shell', 'pages', 'ai-features'],
+  app: ['app-shell', 'pages', 'ai-features', 'security'],
   publish: ['publish'],
 };
 

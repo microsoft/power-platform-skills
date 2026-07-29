@@ -70,3 +70,12 @@ test('stableStringify: arrays keep order, object keys sort', () => {
   assert.strictEqual(stableStringify([3, 1, 2]), '[3,1,2]');
   assert.strictEqual(stableStringify(undefined), 'null');
 });
+
+test('diffPhases: a personas[] change surfaces as a changed "security" phase', () => {
+  const prior = { entities: [{ schemaName: 'new_x' }], personas: [{ persona: 'Agent', jobs: [{ name: 'w', privileges: [{ entity: 'new_x', access: ['read'] }] }] }] };
+  const cur = JSON.parse(JSON.stringify(prior));
+  cur.personas[0].jobs[0].privileges[0].access = ['read', 'write'];
+  assert.ok(diffPhases(cur, prior).includes('security'));
+  // no persona change => security not listed
+  assert.ok(!diffPhases(prior, prior).includes('security'));
+});

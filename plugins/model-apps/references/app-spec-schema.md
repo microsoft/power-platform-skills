@@ -57,7 +57,8 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   "forms":         [ /* main forms — may wire JS event handlers */ ],
   "appShell":      { "areas": [ /* sitemap */ ] },
   "sampleData":    { /* optional, keyed by entity schemaName */ },
-  "ai":            { /* optional — AI feature flags + row-summary config */ }
+  "ai":            { /* optional — AI feature flags + row-summary config */ },
+  "personas":      [ /* optional — one security role per persona (see below) */ ]
 }
 ```
 
@@ -538,3 +539,76 @@ auto-selects tables that are good row-summary candidates and skips those that ar
 - **Lint warnings:**
   - `incident`, `lead`, and `opportunity` are Dynamics 365 app tables (Case / Lead / Opportunity) that provide their own row summaries — configuring one as a summary table warns, because the row-summary feature is not available for them.
   - A table with no descriptive columns (only lookups / system fields) warns that a row summary may not be useful.
+
+## personas[] (optional — security roles)
+
+Authors one **security role per persona**, sized to the entity access that persona's
+**jobs-to-be-done** need. Without at least one role the generated app runs only for system
+administrators; `personas[]` produces a working access model so the app opens for real users.
+
+The model is **deterministic**: you DECLARE the access each job requires — the builder never infers
+privileges from a job's text. It **unions** every job's declared access into the persona's one role
+(max scope wins per entity+access) and applies it with replace semantics (a rebuild that drops a
+privilege removes it — the role converges to the spec).
+
+```jsonc
+"personas": [
+  {
+    "persona": "Field Technician",         // the role name (unique across personas[])
+    // jobs[]: the units of work this persona does. Each job DECLARES the entity access it needs.
+    "jobs": [
+      { "name": "Complete work orders",
+        "privileges": [
+          { "entity": "msdyn_workorder", "access": ["read", "write"], "scope": "businessUnit" },
+          { "entity": "msdyn_workorderproduct", "access": ["read", "create", "write"], "scope": "user" }
+        ] },
+      { "name": "Look up customers",
+        "privileges": [ { "entity": "account", "access": ["read"], "scope": "organization" } ] }
+    ],
+    // additionalPrivileges (optional): baseline access not tied to one job (shared reference tables,
+    // extra app components). Unioned in like a job's privileges.
+    "additionalPrivileges": [ { "entity": "product", "access": ["read"], "scope": "organization" } ],
+    // appAccess (optional, default true): when true, the build injects a read privilege on the app's
+    // appmodule AND associates the app to this role, so the app opens for the persona. Set false to
+    // author a data-only role that does NOT get the app (e.g. a back-office role).
+    "appAccess": true,
+    // assignTo (optional, grant-only): assign the finished role to existing teams/users by GUID. The
+    // build only ADDS members (never revokes). Omit to author the role and let an admin assign it.
+    "assignTo": { "teams": [], "users": [] }
+  }
+]
+```
+
+**Field reference**
+- `persona` (**required**) — the security role's display name; also its idempotency key. Must be unique across `personas[]`.
+- `jobs[]` (**required**, ≥1) — `{ name, description?, privileges[] }`. `privileges[]` is required and non-empty per job.
+- `privileges[].entity` (**required**) — a table **logical name** (e.g. `account`, `msdyn_workorder`). May be a table this spec doesn't author (standard/system tables are common); existence is resolved against live metadata by the build, not at lint time.
+- `privileges[].access` (**required**) — one or more of `read · create · write · delete · append · appendTo · assign · share`.
+- `privileges[].scope` (optional, default `user`) — `user` (Basic) · `businessUnit` (Local) · `parentChild` (Deep) · `organization` (Global), least→most permissive.
+- `additionalPrivileges[]` (optional) — baseline `EntityPrivilege[]` unioned into the role.
+- `appAccess` (optional boolean, default `true`) — inject app-module read + associate the app to the role.
+- `businessUnitId` (optional GUID) — business unit to create the role in (defaults to the org root BU).
+- `assignTo` (optional) — `{ teams?: GUID[], users?: GUID[] }`, grant-only.
+
+**Idempotency & safety.** A role is identified by its **(trimmed name, business unit)** — the same
+identity the platform uses. A rebuild **reuses** only a role the builder itself authored (marked as
+SDK-authored); a same-name role someone else created — or a managed role — is a **conflict** the build
+refuses (fail-closed), never adopting or mutating a role it does not own. Privileges **converge**
+(replace semantics): a rebuild that drops a privilege removes it. App availability also converges —
+flipping `appAccess` to `false` on a rebuild **removes** the app↔role association (the app stops
+appearing for that persona), not just the injected privilege. `teardown --apply` deletes only the
+builder-authored persona roles, scoped to the persona's business unit so a same-named role in another
+business unit is never touched. Because roles are keyed by (name, BU), two apps that declare a persona
+of the **same name in the same business unit** share one role by design (the second build reuses the
+first's) — give personas distinct names, or a distinct `businessUnitId`, if you need separate roles. In
+`--changed-only` mode a persona change forces a **full build** (there is no partial security apply yet).
+
+**Validation rules** (`validateAppSpec`): `persona` required + unique; each job needs a `name` and a
+non-empty `privileges[]`; `access` values and `scope` must be valid tokens; `appAccess` must be a
+boolean; `businessUnitId` and `assignTo` ids must be GUIDs. Two apply-time checks need live metadata and
+are **not** enforced at lint time (they surface as a clear build halt): whether an entity supports a
+requested access, and the rule that different entities sharing one Dataverse privilege must request the
+same scope.
+
+**Not yet supported** (tracked follow-up): column-level (field) security and access teams / hierarchy
+security. The security surface today is role-per-persona only.

@@ -96,8 +96,8 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   environment rather than one 5000-row page; a pagination fault (the SDK's repeated-nextLink guard) still
   fails **closed** rather than scanning a partial list. Classic `dashboards[]` are opt-in.
   **All Dataverse access is via the SDK**, so metadata is persisted under
-  `<app-folder>/.maker-workspace/` for reuse/edits. The 13 phases
-  (`solution·data-model·sample-data·web-resources·views·charts·forms·commands·dashboards·app-shell·pages·ai-features·publish`)
+  `<app-folder>/.maker-workspace/` for reuse/edits. The 14 phases
+  (`solution·data-model·sample-data·web-resources·views·charts·forms·commands·dashboards·app-shell·pages·ai-features·security·publish`)
   are unchanged; independent ops run with bounded parallelism.
   Emits `[n/total]` events the orchestrator narrates + a `BuildHalt` it gates on. Dry-run by
   default; `--apply` writes, `--sample-data` / `--publish` opt-in (`--publish` gates the final *bulk*

@@ -934,3 +934,104 @@ test('quickCreateEnabledFor: true for an explicit flag, a derived QuickCreate fo
   // a QuickCreate form for a DIFFERENT entity does not enable this one
   assert.strictEqual(quickCreateEnabledFor(quickCreateSpec({}, [{ entity: 'new_other', formType: 'QuickCreate' }]), entity), false, 'a QuickCreate form for another entity does not leak');
 });
+
+// --- Security personas validation (Group N P1) ---------------------------------------------
+const withPersonas = (personas) => Object.assign(JSON.parse(JSON.stringify(sample)), { personas });
+
+test('validateAppSpec accepts a well-formed persona', () => {
+  const r = validateAppSpec(withPersonas([
+    { persona: 'Agent', jobs: [{ name: 'Work tickets', privileges: [{ entity: 'pt_task', access: ['read', 'write', 'create'], scope: 'businessUnit' }] }] },
+  ]));
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('validateAppSpec accepts additionalPrivileges + a valid assignTo (GUIDs)', () => {
+  const r = validateAppSpec(withPersonas([
+    { persona: 'Agent', assignTo: { teams: ['00000000-0000-0000-0000-000000000001'] },
+      additionalPrivileges: [{ entity: 'account', access: ['read'], scope: 'organization' }],
+      jobs: [{ name: 'Work', privileges: [{ entity: 'pt_task', access: ['read'] }] }] },
+  ]));
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('validateAppSpec rejects an unknown access level', () => {
+  const r = validateAppSpec(withPersonas([
+    { persona: 'Agent', jobs: [{ name: 'Work', privileges: [{ entity: 'pt_task', access: ['read', 'launch'] }] }] },
+  ]));
+  assert.ok(!r.ok && r.errors.some((e) => /unknown access 'launch'/.test(e)), JSON.stringify(r.errors));
+});
+
+test('validateAppSpec rejects an unknown privilege scope', () => {
+  const r = validateAppSpec(withPersonas([
+    { persona: 'Agent', jobs: [{ name: 'Work', privileges: [{ entity: 'pt_task', access: ['read'], scope: 'galaxy' }] }] },
+  ]));
+  assert.ok(!r.ok && r.errors.some((e) => /unknown scope 'galaxy'/.test(e)), JSON.stringify(r.errors));
+});
+
+test('validateAppSpec requires a persona name and at least one job', () => {
+  const r = validateAppSpec(withPersonas([{ jobs: [] }]));
+  assert.ok(r.errors.some((e) => /persona \(the role name\) is required/.test(e)), JSON.stringify(r.errors));
+  assert.ok(r.errors.some((e) => /at least one job/.test(e)), JSON.stringify(r.errors));
+});
+
+test('validateAppSpec rejects a job missing privileges[]', () => {
+  const r = validateAppSpec(withPersonas([{ persona: 'Agent', jobs: [{ name: 'Work' }] }]));
+  assert.ok(!r.ok && r.errors.some((e) => /privileges\[\] is required/.test(e)), JSON.stringify(r.errors));
+});
+
+test('validateAppSpec rejects duplicate persona names (case-insensitive)', () => {
+  const r = validateAppSpec(withPersonas([
+    { persona: 'Agent', jobs: [{ name: 'a', privileges: [{ entity: 'pt_task', access: ['read'] }] }] },
+    { persona: 'agent', jobs: [{ name: 'b', privileges: [{ entity: 'pt_task', access: ['read'] }] }] },
+  ]));
+  assert.ok(!r.ok && r.errors.some((e) => /duplicate persona name/.test(e)), JSON.stringify(r.errors));
+});
+
+test('validateAppSpec rejects a non-boolean appAccess and a non-GUID assignTo id', () => {
+  const r = validateAppSpec(withPersonas([
+    { persona: 'Agent', appAccess: 'yes', assignTo: { users: ['not-a-guid'] },
+      jobs: [{ name: 'Work', privileges: [{ entity: 'pt_task', access: ['read'] }] }] },
+  ]));
+  assert.ok(r.errors.some((e) => /appAccess must be a boolean/.test(e)), JSON.stringify(r.errors));
+  assert.ok(r.errors.some((e) => /assignTo\.users contains a non-GUID/.test(e)), JSON.stringify(r.errors));
+});
+
+test('validateAppSpec rejects personas that is not an array', () => {
+  const r = validateAppSpec(Object.assign(JSON.parse(JSON.stringify(sample)), { personas: {} }));
+  assert.ok(!r.ok && r.errors.some((e) => /personas must be an array/.test(e)), JSON.stringify(r.errors));
+});
+
+test('validateAppSpec: a spec with no personas is unaffected (additive)', () => {
+  assert.strictEqual(validateAppSpec(sample).ok, true);
+});
+
+test('validateAppSpec rejects an unknown persona key (typo protection — e.g. appAcces)', () => {
+  const r = validateAppSpec(withPersonas([
+    { persona: 'Agent', appAcces: false, jobs: [{ name: 'Work', privileges: [{ entity: 'pt_task', access: ['read'] }] }] },
+  ]));
+  assert.ok(!r.ok && r.errors.some((e) => /unknown key 'appAcces'/.test(e)), JSON.stringify(r.errors));
+});
+
+test('validateAppSpec rejects unknown job and privilege keys', () => {
+  const rJob = validateAppSpec(withPersonas([
+    { persona: 'Agent', jobs: [{ name: 'Work', scope: 'oops', privileges: [{ entity: 'pt_task', access: ['read'] }] }] },
+  ]));
+  assert.ok(rJob.errors.some((e) => /job: unknown key 'scope'/.test(e)), JSON.stringify(rJob.errors));
+  const rPriv = validateAppSpec(withPersonas([
+    { persona: 'Agent', jobs: [{ name: 'Work', privileges: [{ entity: 'pt_task', access: ['read'], scopes: 'user' }] }] },
+  ]));
+  assert.ok(rPriv.errors.some((e) => /privilege: unknown key 'scopes'/.test(e)), JSON.stringify(rPriv.errors));
+});
+
+test('validateAppSpec rejects a whitespace-only persona name', () => {
+  const r = validateAppSpec(withPersonas([{ persona: '   ', jobs: [{ name: 'Work', privileges: [{ entity: 'pt_task', access: ['read'] }] }] }]));
+  assert.ok(!r.ok && r.errors.some((e) => /cannot be blank\/whitespace-only/.test(e)), JSON.stringify(r.errors));
+});
+
+test('validateAppSpec detects whitespace-distinct persona names as duplicates (SDK trims)', () => {
+  const r = validateAppSpec(withPersonas([
+    { persona: 'Agent', jobs: [{ name: 'a', privileges: [{ entity: 'pt_task', access: ['read'] }] }] },
+    { persona: '  Agent  ', jobs: [{ name: 'b', privileges: [{ entity: 'pt_task', access: ['read'] }] }] },
+  ]));
+  assert.ok(!r.ok && r.errors.some((e) => /duplicate persona name/.test(e)), JSON.stringify(r.errors));
+});

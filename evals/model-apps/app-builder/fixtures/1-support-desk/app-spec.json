@@ -140,5 +140,20 @@
       { "new_name": "Root cause", "new_body": "Tax-rate misconfiguration found; correcting and re-running billing.", "new_author": "Lee Cho", "new_postedon": "2026-06-20T11:00:00Z",
         "$parent": { "entity": "new_ticket", "match": { "new_name": "Invoice total incorrect" } } }
     ]
-  }
+  },
+  "personas": [
+    { "persona": "Support Agent", "jobs": [
+      { "name": "Handle tickets", "privileges": [
+        { "entity": "new_ticket", "access": ["read", "write", "create"], "scope": "businessUnit" },
+        { "entity": "new_comment", "access": ["read", "create"], "scope": "businessUnit" },
+        { "entity": "new_customer", "access": ["read"], "scope": "organization" }
+      ] }
+    ] },
+    { "persona": "Support Lead", "jobs": [
+      { "name": "Oversee the queue", "privileges": [
+        { "entity": "new_ticket", "access": ["read", "write", "create", "delete", "assign"], "scope": "organization" },
+        { "entity": "new_customer", "access": ["read", "write"], "scope": "organization" }
+      ] }
+    ] }
+  ]
 }

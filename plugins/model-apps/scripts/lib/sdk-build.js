@@ -32,6 +32,7 @@ const {
   isPlatformIconRef,
   FORM_TYPE_CODE,
   FORM_GUID_RE,
+  canonicalPersonaName,
 } = require('./app-spec.js');
 const { PHASES } = require('./stages.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
@@ -91,7 +92,7 @@ const TILE_CLASS_ID = {
   iframe: 'FD2A7985-3187-444E-908D-6624B21F69C0',
   webresource: '9FDF5F91-88B1-47F4-AD53-C11EFC01A01D',
 };
-const COMPONENT_TYPE = { view: 26, chart: 59, form: 60, dashboard: 60, webResource: 61, sitemap: 62, app: 80 };
+const COMPONENT_TYPE = { view: 26, chart: 59, form: 60, dashboard: 60, webResource: 61, sitemap: 62, app: 80, role: 20 };
 
 // Web-resource kinds (App Spec `type`) -> SDK createWebResource `type` token. The SDK maps
 // the token to the Dataverse webresourcetype code (js=3, html=1, css=2, …).
@@ -303,6 +304,10 @@ function planFor(spec, opts) {
         items.push({ phase: 'ai-features', label: `row summary for ${logical}` });
       }
     }
+  }
+  if (has('security')) for (const p of spec.personas || []) {
+    const n = (p.jobs || []).length;
+    items.push({ phase: 'security', label: `security role "${p.persona}" (${n} job${n === 1 ? '' : 's'})` });
   }
   if (has('publish') && opts.publish) items.push({ phase: 'publish', label: 'publish customizations' });
   return items;
@@ -728,6 +733,130 @@ function appDef(spec, result, opts = {}) {
     components: { forms: Object.values(result.forms || {}).filter(Boolean), views: Object.values(result.views || {}).filter(Boolean), charts: Object.values(result.charts || {}).filter(Boolean) } };
 }
 
+// Map one App Spec persona to the vendored SDK's PersonaRoleSpec (cds-maker-sdk createPersonaRole).
+// Pure: spec shape -> SDK shape. Two normalizations:
+//   1. `entity` is lower-cased to a Dataverse logical name (the SDK resolves prv* ids from metadata
+//      by logical name).
+//   2. App-open injection (WHY): the SDK "authors exactly the privileges you declare", so a persona
+//      role that only grants table access still cannot OPEN the generated app for a non-admin. Unless
+//      the persona opts out (`appAccess:false`), add a read privilege on the `appmodule` table so the
+//      role can read the app definition. appmodule is an ORG-owned table, so a valid read depth is
+//      Global (`organization`) — a user/BU-scoped read on an org-owned table is not a real depth. The
+//      matching app<->role association (which scopes WHICH app appears) is done separately in the
+//      security phase via ensureAppAvailableToRole. Both are needed for the app to actually appear.
+// The SDK dedupes/unions privileges (max scope wins per entity+access), so an injected appmodule read
+// that overlaps an author-declared one is harmless.
+function personaRoleSpecFor(persona) {
+  const normPriv = (pr) => ({
+    entity: String(pr.entity).toLowerCase(),
+    access: (pr.access || []).slice(),
+    ...(pr.scope ? { scope: pr.scope } : {}),
+  });
+  const jobs = (persona.jobs || []).map((j) => ({
+    name: j.name,
+    ...(j.description ? { description: j.description } : {}),
+    privileges: (j.privileges || []).map(normPriv),
+  }));
+  const additional = (persona.additionalPrivileges || []).map(normPriv);
+  if (persona.appAccess !== false) {
+    additional.push({ entity: 'appmodule', access: ['read'], scope: 'organization' });
+  }
+  return {
+    // Canonical (trimmed) name — the SDK trims before its (name, BU) lookup, so teardown/verify (which
+    // key on the same canonical name) and this create call must all agree on the trimmed identity.
+    persona: canonicalPersonaName(persona),
+    jobs,
+    ...(additional.length ? { additionalPrivileges: additional } : {}),
+    ...(persona.businessUnitId ? { businessUnitId: persona.businessUnitId } : {}),
+    ...(persona.assignTo ? { assignTo: persona.assignTo } : {}),
+  };
+}
+
+// True when an error from an app<->role `$ref` associate/dissociate means the desired end state already
+// holds (associate: the link exists; dissociate: it's already gone), so a re-run is idempotent. Matches
+// the vendored SDK's REAL error shapes (verified against scripts/vendor/cds-maker-sdk.cjs), NOT a guessed
+// one: a ConnectionError carries `.statusCode` (not `.status`) and the raw Dataverse body on `.cause`
+// (its `error.code` is the concrete Dataverse code, e.g. 0x80060891 "duplicate"/0x80040217 "not found");
+// a 412 becomes an `SdkError` with code/message `VERSION_CONFLICT`. A bare 400/404 is NOT swallowed
+// unless the body/message specifically says duplicate/exists (associate) or not-found (dissociate) — so a
+// genuine failure still surfaces. `mode` is 'associate' or 'dissociate'.
+function isBenignAssociationError(err, mode) {
+  if (!err) return false;
+  const status = err.statusCode != null ? err.statusCode : err.status;
+  const code = String(err.code || ''); // SdkError code, e.g. 'VERSION_CONFLICT'
+  const body = err.cause; // raw Dataverse body on a ConnectionError
+  const dvCode = String((body && body.error && body.error.code) || '').toLowerCase();
+  const msg = String(err.message || '').toLowerCase();
+  if (mode === 'associate') {
+    // 412 (precondition) / VERSION_CONFLICT is the "already exists" path; a 400 duplicate carries the
+    // duplicate code in the body or an "already exists"/"duplicate" message.
+    if (status === 412 || status === 409 || /version_conflict/i.test(code) || /version conflict/.test(msg)) return true;
+    return /duplicate|already exists?/.test(msg) || /0x80060891|0x80040237/.test(dvCode) || /duplicate/.test(dvCode);
+  }
+  // dissociate: a link that is already gone is a 404 / "does not exist" — the desired end state.
+  if (status === 404) return true;
+  return /does not exist|not found|cannot be found/.test(msg) || /0x80040217/.test(dvCode);
+}
+
+// Make the generated app available to a persona role by associating the role to the app module
+// (the model-designer "Manage roles" relation). WHY this is required IN ADDITION to the appmodule
+// read privilege: prvReadAppModule lets the role read app definitions, but a model-driven app only
+// APPEARS for a non-admin when a security role is associated to it (appmoduleroles). Without this the
+// persona gets data access but the app never shows in their app list. Idempotent: a re-run re-POSTs the
+// same $ref, which Dataverse rejects as a duplicate — swallowed (the link already exists) via the
+// SDK-accurate isBenignAssociationError; any other error re-throws. See appmodule N:N `appmoduleroles`:
+// https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodule
+async function ensureAppAvailableToRole(sdk, appId, roleId) {
+  try {
+    await sdk.associateRecords('appmodule', appId, { relationshipName: 'appmoduleroles_association', targetEntity: 'role', targetId: roleId });
+  } catch (err) {
+    if (!isBenignAssociationError(err, 'associate')) throw err;
+  }
+}
+
+// Reverse of ensureAppAvailableToRole: remove the app<->role association so the app STOPS appearing for
+// a persona whose `appAccess` flipped to false. The injected appmodule-read privilege is already removed
+// by the role's ReplacePrivileges convergence, but the association is grant-only and would otherwise
+// persist — so a role flipped to data-only would still surface the app for a user who has appmodule read
+// from any other role. Best-effort + idempotent: a link that's already gone (404) is the desired state.
+async function ensureAppNotAvailableToRole(sdk, appId, roleId) {
+  if (typeof sdk.disassociateRecords !== 'function') return; // older bundle without dissociate → no-op
+  try {
+    await sdk.disassociateRecords('appmodule', appId, 'appmoduleroles_association', roleId);
+  } catch (err) {
+    if (!isBenignAssociationError(err, 'dissociate')) throw err;
+  }
+}
+
+// Resolve the business unit a persona's role lives in, so role QUERIES (teardown, verify) scope to the
+// SAME (name, BU) identity the SDK uses on create (createPersonaRole keys a role by name WITHIN a BU).
+// Returns the explicit `businessUnitId`, else the org ROOT business unit (the SDK's own default — a BU
+// with no parent), else null when it can't be resolved (caller then falls back to a name-only match:
+// best-effort, so a transient BU-lookup failure never blocks teardown/verify). `q` is a queryRecords fn
+// (the teardown `sdk` or the verify `read`); `cache` memoizes the root-BU lookup for the run.
+async function resolveRoleBusinessUnit(q, businessUnitId, cache = {}) {
+  if (businessUnitId && FORM_GUID_RE.test(businessUnitId)) return businessUnitId;
+  if (Object.prototype.hasOwnProperty.call(cache, 'rootBu')) return cache.rootBu;
+  cache.rootBu = null;
+  try {
+    if (typeof q === 'function') {
+      // Root BU has no parent. Mirrors the vendored SDK's own resolveRootBusinessUnit query.
+      const rows = await q('businessunit', { select: ['businessunitid'], filter: '_parentbusinessunitid_value eq null', top: 1 });
+      const id = rows && rows[0] && rows[0].businessunitid;
+      if (id && FORM_GUID_RE.test(String(id))) cache.rootBu = String(id);
+    }
+  } catch { /* best-effort: fall back to a name-only match */ }
+  return cache.rootBu;
+}
+
+// The `_businessunitid_value eq <guid>` OData clause (Edm.Guid is UNQUOTED) that scopes a role query to a
+// business unit. Empty string when the BU is unknown (name-only fallback). `bu` is GUID-validated by
+// resolveRoleBusinessUnit, so interpolation is injection-safe.
+function roleBuClause(bu) {
+  return bu && FORM_GUID_RE.test(String(bu)) ? ` and _businessunitid_value eq ${bu}` : '';
+}
+
+
 // --- orchestrator ----------------------------------------------------------------------
 async function runSdkBuild(spec, opts = {}) {
   const { sdk, apply = false, sampleData = false, publish = false } = opts;
@@ -747,7 +876,7 @@ async function runSdkBuild(spec, opts = {}) {
     return { ok: true, dryRun: true, plan: plan.map((p) => p.label) };
   }
 
-  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, app: null } };
+  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, app: null } };
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
   // pages phase's `pages-requires-app` guard passes WITHOUT running the app-shell phase in this invocation.
   // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
@@ -1617,6 +1746,55 @@ async function runSdkBuild(spec, opts = {}) {
     }
   }
 
+  // 7c. Security (persona roles). Author ONE security role per persona (role name = persona), sized to
+  //     the UNION of every job's declared entity access; the SDK converges the privilege set via
+  //     ReplacePrivilegesRole, so this is idempotent and a re-run REMOVES a privilege dropped from the
+  //     spec. Runs AFTER app-shell so the app module exists to be (a) read via the injected appmodule
+  //     privilege and (b) associated to the role so the app opens for the persona. All writes go through
+  //     the header-less `provision` client and role solution membership is added explicitly (same
+  //     pattern as app/forms/views), because — like appmodule/savedquery creates — a create carrying the
+  //     MSCRM.SolutionUniqueName header is rejected; the role lands in the default solution and is then
+  //     moved into the app's solution.
+  if (has('security')) {
+    const appId = result.created.app; // null when app-shell is excluded from this run (partial phases)
+    for (const persona of spec.personas || []) {
+      const roleSpec = personaRoleSpecFor(persona);
+      const roleName = canonicalPersonaName(persona); // trimmed identity — matches the SDK + teardown/verify
+      await runner.run('security', `security role "${roleName}"`, async () => {
+        let rr;
+        try {
+          rr = await provision.createPersonaRole(roleSpec);
+        } catch (err) {
+          // Fail-closed on any SDK security error: a SEC-1 conflict (a hand-built or managed same-name
+          // role the SDK refuses to adopt) or an apply-time metadata guard (an entity that does not
+          // support a requested access, or the shared-privilege same-scope rule). Halt with the SDK's
+          // message rather than leave a half-authored access model behind.
+          throw new BuildHalt(`security role "${roleName}" could not be authored: ${err && err.message ? err.message : err}`, { phase: 'security', code: 'security-role-failed', recoverable: false });
+        }
+        result.created.roles[roleName] = rr;
+        // Ensure the role is in the app's solution on EVERY run so an export/import carries it.
+        // AddSolutionComponent is idempotent server-side (re-adding an existing component returns 200 —
+        // live-verified on aurora), so this ALSO repairs a role that missed membership on a prior run
+        // (created, then the add failed, then reused — a `!reused` gate would skip the repair forever).
+        // NOT swallowed: a real failure means the exported solution would omit the role and silently break
+        // access in the target env, so it fails the phase fail-closed — same as the app/sitemap adds.
+        if (sol && sol.uniqueName) {
+          await provision.addSolutionComponent({ componentId: rr.roleId, componentType: COMPONENT_TYPE.role, solutionUniqueName: sol.uniqueName });
+        }
+        // Reconcile app availability to match `appAccess`: associate so the app appears for the persona
+        // (default), or DISSOCIATE when the persona opted out — otherwise a role flipped true->false would
+        // keep surfacing the app (the read privilege is converged away, but the association is grant-only).
+        if (appId) {
+          if (persona.appAccess !== false) await ensureAppAvailableToRole(provision, appId, rr.roleId);
+          else await ensureAppNotAvailableToRole(provision, appId, rr.roleId);
+        }
+        const priv = (rr.appliedPrivileges || []).length;
+        const assigned = (rr.assignedTeams || []).length + (rr.assignedUsers || []).length;
+        return `${rr.reused ? 'reused' : 'created'} — ${priv} privilege${priv === 1 ? '' : 's'}${appId && persona.appAccess !== false ? ', app access' : ''}${assigned ? `, ${assigned} assignment(s)` : ''}`;
+      });
+    }
+  }
+
   // 8. Publish (opt-in). Publish ONE artifact per entity (covers that entity's customizations)
   //    + the app — far fewer PublishXml round-trips than publishing every artifact.
   if (has('publish') && publish) {
@@ -1633,4 +1811,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease };
+module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause };

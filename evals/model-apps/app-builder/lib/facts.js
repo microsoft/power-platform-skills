@@ -6,9 +6,9 @@ const path = require('node:path');
 // with no I/O, no SDK handle, and no network access, so they are safe to call from the eval harness.
 function pluginLib(name) { return require(path.join(__dirname, '..', '..', '..', '..', 'plugins', 'model-apps', 'scripts', 'lib', name)); }
 
-const { migrateAppSpec, validateAppSpec, lookupColumnsFor } = pluginLib('app-spec.js');
+const { migrateAppSpec, validateAppSpec, lookupColumnsFor, SDK_ROLE_MARKER } = pluginLib('app-spec.js');
 const { lintAppSpec } = pluginLib('spec-lint.js');
-const { planFor, PHASES, appDef, viewDef, chartDef, compileFormIntent, formFieldLogicals, defaultViewColumns, enrichesDefaultViews, subgridLabel } = pluginLib('sdk-build.js');
+const { planFor, PHASES, appDef, viewDef, chartDef, compileFormIntent, formFieldLogicals, defaultViewColumns, enrichesDefaultViews, subgridLabel, personaRoleSpecFor } = pluginLib('sdk-build.js');
 const { subgridSectionIntent } = pluginLib('artifact-intent.js');
 const { schemaFacts } = pluginLib('schema-facts.js');
 const { verifySpec } = pluginLib('verify-spec.js');
@@ -164,8 +164,14 @@ function makeAllPresentReader(spec) {
   return {
     findTable: async (logical) => (entities.has(logical) ? { logicalName: logical } : null),
     findColumns: async (logical) => columnsByEntity[logical] || [],
-    // All view/chart/form/dashboard existence checks pass — the reader always reports present.
-    queryRecords: async () => [{ savedqueryid: 'x', savedqueryvisualizationid: 'x', formid: 'x' }],
+    // All view/chart/form/dashboard existence checks pass — the reader always reports present. A
+    // `role` query (verifySpec's persona-role check) returns an SDK-authored (marker) role, and a
+    // `businessunit` query returns a root BU so the BU-scoped, fail-closed role check resolves offline.
+    queryRecords: async (set) => (set === 'role'
+      ? [{ roleid: 'role-x', description: SDK_ROLE_MARKER, ismanaged: false }]
+      : set === 'businessunit'
+      ? [{ businessunitid: '00000000-0000-0000-0000-000000000001' }]
+      : [{ savedqueryid: 'x', savedqueryvisualizationid: 'x', formid: 'x' }]),
     sitemapXml: async () => xml,
   };
 }
@@ -286,6 +292,19 @@ async function roundTripFacts(spec) {
   };
 }
 
+// security: per-persona role facts from the pure spec->SDK mapper (personaRoleSpecFor). Proves each
+// persona maps to one role whose privilege union carries the injected app-module read (so the app
+// opens) unless the persona opts out. Empty for a spec with no personas — the assertions then pass
+// trivially, so this fact is safe on every fixture.
+function securityFacts(spec) {
+  return (spec.personas || []).map((p) => {
+    const mapped = personaRoleSpecFor(p);
+    const appModuleRead = (mapped.additionalPrivileges || []).some((pr) => pr.entity === 'appmodule' && (pr.access || []).includes('read'));
+    const privileges = (mapped.jobs || []).reduce((n, j) => n + (j.privileges || []).length, 0) + (mapped.additionalPrivileges || []).length;
+    return { persona: p.persona, appAccess: p.appAccess !== false, appModuleRead, privileges };
+  });
+}
+
 async function stageFacts(rawSpec) {
   const spec = migrateAppSpec(rawSpec);
   return {
@@ -294,6 +313,7 @@ async function stageFacts(rawSpec) {
     data: schemaFacts(spec),
     ui: wireFacts(spec),
     app: appFacts(spec),
+    security: securityFacts(spec),
     verify: await verifyFacts(spec),
     page: pageFacts(spec),
     teardown: teardownFacts(spec),

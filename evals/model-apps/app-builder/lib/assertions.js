@@ -31,6 +31,24 @@ ASSERTIONS.set('plan: every planned item targets a known engine phase', ({ facts
   return bad.length ? fail(`unknown phases in plan: ${bad.join(', ')}`) : PASS;
 });
 
+// security stage -------------------------------------------------------------
+// Both assertions are trivially satisfied for a spec with no personas (empty facts.security /
+// zero planned security items), so they are safe as common assertions across every fixture.
+
+ASSERTIONS.set('security: the plan authors exactly one role per declared persona', ({ facts, spec }) => {
+  const declared = (spec.personas || []).length;
+  const planned = (facts.plan.byPhase && facts.plan.byPhase.security) || 0;
+  return declared === planned ? PASS : fail(`declared ${declared} persona(s) but planned ${planned} security role item(s)`);
+});
+
+ASSERTIONS.set('security: each app-access persona role injects app-module read; opted-out personas do not', ({ facts }) => {
+  const missing = (facts.security || []).filter((r) => r.appAccess && !r.appModuleRead);
+  if (missing.length) return fail(`app-access personas missing app-module read: ${missing.map((r) => r.persona).join(', ')}`);
+  const leaked = (facts.security || []).filter((r) => !r.appAccess && r.appModuleRead);
+  if (leaked.length) return fail(`opted-out personas wrongly granted app-module read: ${leaked.map((r) => r.persona).join(', ')}`);
+  return PASS;
+});
+
 // data stage -----------------------------------------------------------------
 
 ASSERTIONS.set('data: schema-facts provision exactly the expected tables', ({ facts, eval: ev }) => {

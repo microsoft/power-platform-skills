@@ -32,6 +32,10 @@ const PHASE_SLICES = {
   'app-shell': (s) => ({ app: s.app, appShell: s.appShell }),
   pages: (s) => s.pages,
   'ai-features': (s) => s.ai,
+  // security consumes personas[]. It has no safe partial-apply path yet (a persona change must
+  // re-author roles + reconcile app associations), so a change here forces a FULL build via
+  // FULL_BUILD_PHASES in classify-changes.js — never a silent changed-only no-op.
+  security: (s) => s.personas,
 };
 
 // Deterministic, key-order-independent JSON so a reordered-but-equal slice compares equal. Arrays keep

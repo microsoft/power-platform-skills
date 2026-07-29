@@ -34,6 +34,26 @@ test('identical specs -> noop', () => {
   assert.deepStrictEqual(r.changedPhases, []);
 });
 
+test('a persona-only change forces a FULL build (never a silent changed-only no-op)', () => {
+  const prior = spec();
+  prior.personas = [{ persona: 'Agent', jobs: [{ name: 'w', privileges: [{ entity: 'new_x', access: ['read'] }] }] }];
+  const cur = JSON.parse(JSON.stringify(prior));
+  cur.personas[0].jobs[0].privileges[0].access = ['read', 'write']; // widen access
+  const r = C.classifyChanges(cur, prior);
+  assert.strictEqual(r.verdict, 'full');
+  assert.ok(r.changedPhases.includes('security'));
+  assert.ok(r.fullReasons.some((x) => /security/.test(x)), JSON.stringify(r.fullReasons));
+});
+
+test('adding personas to a spec that had none is a detected (full-build) change', () => {
+  const prior = spec();
+  const cur = JSON.parse(JSON.stringify(prior));
+  cur.personas = [{ persona: 'Agent', jobs: [{ name: 'w', privileges: [{ entity: 'new_x', access: ['read'] }] }] }];
+  const r = C.classifyChanges(cur, prior);
+  assert.strictEqual(r.verdict, 'full');
+  assert.ok(r.changedPhases.includes('security'));
+});
+
 test('#1 page CONTENT-only edit -> fast (page shape), no debt', () => {
   const cur = spec();
   cur.pages[0].__contentSha = 'psha2'; // only the .tsx bytes changed
