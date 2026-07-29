@@ -30,7 +30,7 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 - **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx power-apps *` command; retry the original command once after auth is corrected.
 - **Reuse-first and target-grounded.** Query the exact target metadata for every proposed table, including standard tables, and prefer reuse > extension > new. Don't propose a `cr123_customer` table if a verified target `contact` table fits.
 - **Never invent existing schema.** Never propose recreating or imitating a missing standard, managed, or solution-owned table/column. If discovery cannot run, you may still draft a plan from requirements, but mark it `Discovery skipped` so the user and `/add-dataverse` treat every decision as unverified — `/add-dataverse` re-reconciles against live metadata and blocks mutations there.
-- **No automatic replacement.** This agent classifies schema as `Reuse`, `Extend`, `Create`, or `Block`. Replacing an existing table/column requires a separately approved migration with dependency analysis and data movement; it is outside this workflow.
+- **No automatic replacement.** This agent classifies schema as `Reuse`, `Extend`, `Create`, `Adapt` (create beside a conflicting object under a new name), or `Defer` (leave out of this run). Replacing an existing table/column requires a separately approved migration with dependency analysis and data movement; it is outside this workflow. A data-modelling conflict is never a blocker — it is an `Adapt` or a `Defer` with a recorded reason.
 - **Return a section, not a separate doc.** Output is a markdown `## Data Model` section the planner embeds verbatim.
 - **No JSON request bodies in the output.** Your `_dm_section.md` describes *what* to create (tables, columns, relationships) using the Mermaid ER + reuse/extend/create table + tier list. **Do NOT include POST body JSON** for `EntityDefinitions` or `RelationshipDefinitions` — `/add-dataverse` constructs those from its own canonical templates in [skills/add-dataverse/SKILL.md](../skills/add-dataverse/SKILL.md) Step 5b. JSON in your output is read as authoritative and will leak invented/wrong fields (e.g. `ReferencingAttribute` on a lookup) into the actual POST.
 - **No questions.** Do not ask the user anything — infer from the requirements provided. The planner runs the approval gate, not you.
@@ -139,7 +139,7 @@ node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
 
 Build the `$filter` by OR-ing every selected logical name. This is the [documented way to query multiple table definitions at once](https://learn.microsoft.com/power-apps/developer/data-platform/query-schema-definitions#basic-retrievemetadatachanges-example) and replaces 2N requests with one. Keep the expanded `$select` to base `AttributeMetadata` properties — one query [cannot cast to a derived column type](https://learn.microsoft.com/power-apps/developer/data-platform/query-schema-definitions#evaluate-other-options-to-retrieve-schema-definitions).
 
-A planned name **present** in `value[]` exists; a name **absent** from `value[]` does not. Interpret `IsCustomizable` and `CanCreateAttributes` as managed properties (`.Value`). Absence is actionable only after considering the planned dependency kind: an absent new custom table may be created; an absent standard, managed, reused, or extended dependency is `Block` and must be installed/imported or removed from the design. If the batched query itself fails, mark the affected entities `Unverified` rather than `Create`, and carry the reason into the section — `/add-dataverse` will re-check it and refuse to mutate what it cannot confirm.
+A planned name **present** in `value[]` exists; a name **absent** from `value[]` does not. Interpret `IsCustomizable` and `CanCreateAttributes` as managed properties (`.Value`). Absence is actionable only after considering the planned dependency kind: an absent new custom table may be created; an absent standard, managed, reused, or extended dependency is `Defer` — it must be installed/imported or removed from the design, so leave it out of this run and record why. If the batched query itself fails, mark the affected entities `Unverified` rather than `Create`, and carry the reason into the section — `/add-dataverse` re-checks it at its own reconciliation step.
 
 For each required entity, classify it as one of:
 
@@ -183,7 +183,7 @@ Build a table:
 | Customer profile | Reuse | `contact` | 200; exact standard table verified | Reuse: fullname, emailaddress1 | Standard table and required columns exist |
 | Job site | Create | — | 404; verified custom prefix | Create inline: cr123_name, cr123_address | No matching custom or standard table for this concept |
 | Inspection report | Extend | `cr123_inspection` | 200; customizable + can create attributes | Reuse: cr123_name; Create: cr123_photo | Same concept; one custom column is missing |
-| Required managed asset | Block | — | 404 for required-existing dependency | Block: all dependent fields | Install/import the owning solution; never recreate it |
+| Required managed asset | Defer | — | 404 for required-existing dependency | Defer: all dependent fields | Install/import the owning solution; never recreate it. Left out of this run, not a blocker |
 ```
 
 ## Step 6 — Build Dependency Tiers
@@ -315,7 +315,7 @@ erDiagram
 - Signature images from pen input normalize `data:image/png;base64,...` before Image column writes.
 ```
 
-If any row is `Block`, write the evidence and remediation into the section and finish with `DONE_WITH_CONCERNS` naming each blocked entity, so the user sees it at Gate 1 and `/add-dataverse` refuses that item at its own reconciliation step. If discovery was skipped (Step 1 or Step 2 failure), prepend the matching warning, mark every decision `Unverified`, and say the user should re-run with environment access for accurate reuse detection.
+If any row is `Adapt` or `Defer`, write the evidence and reason into the section and finish with `DONE_WITH_CONCERNS` naming each one, so the user sees it at Gate 1 and can revise the design before `/add-dataverse` runs. Never return `BLOCKED` for a data-modelling conflict — that status is reserved for hard walls such as an unwritable working directory. If discovery was skipped (Step 1 or Step 2 failure), prepend the matching warning, mark every decision `Unverified`, and say the user should re-run with environment access for accurate reuse detection.
 
 ## Return Status
 
@@ -324,7 +324,7 @@ You MUST return your final message with one of these four status codes as the **
 | Code | When to use | Example first line |
 |---|---|---|
 | `DONE` | Section written cleanly, all entities resolved, no caveats | `DONE` |
-| `DONE_WITH_CONCERNS: <comma-separated concerns>` | Section written, but discovery was skipped, an entity is `Block`/`Unverified`, or a design caveat remains | `DONE_WITH_CONCERNS: contact reuse skipped (env access denied), all decisions unverified` |
+| `DONE_WITH_CONCERNS: <comma-separated concerns>` | Section written, but discovery was skipped, an entity is `Adapt`/`Defer`/`Unverified`, or a design caveat remains | `DONE_WITH_CONCERNS: contact reuse skipped (env access denied), all decisions unverified` |
 | `NEEDS_CONTEXT: <what is missing>` | Cannot complete without more info from the orchestrator — e.g. requirements brief is too thin to infer entities, or no environment was selected | `NEEDS_CONTEXT: requirements brief lists no nouns; need explicit entity list from user` |
 | `BLOCKED: <reason>` | Hit a hard wall — file system error writing `_dm_section.md`, plugin root unreadable, environment resolver crashed. The planner MUST escalate to the user, never silently retry | `BLOCKED: cannot write to <working_dir>/_dm_section.md (permission denied)` |
 
