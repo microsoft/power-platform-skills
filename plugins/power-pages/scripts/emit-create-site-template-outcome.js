@@ -5,7 +5,7 @@ const { emitTemplateOutcome } = require('./lib/create-site-template-telemetry');
 const { formatJsonResult } = require('./lib/template-cli-args');
 
 // Accepted argv shape:
-//   --mode template --templateId company-portal --framework react --audience internal
+//   --mode template --templateId company-portal --templateKind spa --framework react --audience internal
 //   --importOutcome success --activationOutcome success --seedApplied true
 // Scratch branch sends:
 //   --mode scratch --framework react --audience internal
