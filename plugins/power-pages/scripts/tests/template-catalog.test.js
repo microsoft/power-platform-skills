@@ -416,6 +416,30 @@ test('downloadSolutionArtifact fails open and removes invalid zips instead of le
   assert.equal(fs.existsSync(expectedPath), false);
 });
 
+test('downloadSolutionArtifact redownloads once when a cached zip is corrupt', async (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const artifactPath = 'templates/spa/company/solution/Company_1_0_0_0.zip';
+  const expectedPath = artifactCachePath({ cacheRoot: dir, sha: SHA, artifactPath });
+  fs.mkdirSync(path.dirname(expectedPath), { recursive: true });
+  fs.writeFileSync(expectedPath, 'stale corrupt cache');
+  let downloads = 0;
+
+  const result = await downloadSolutionArtifact({ owner: 'o', repo: 'r', sha: SHA, artifactPath, cacheRoot: dir }, {
+    downloadFile: async (_url, dest) => {
+      downloads++;
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.writeFileSync(dest, 'fresh solution zip');
+    },
+    validateZipContainsSolution: (zipPath) => fs.readFileSync(zipPath, 'utf8') === 'fresh solution zip',
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.cached, false);
+  assert.equal(downloads, 1);
+  assert.equal(fs.readFileSync(expectedPath, 'utf8'), 'fresh solution zip');
+});
+
 test('downloadSolutionArtifact reports download failures as ok:false for from-scratch fallback', async () => {
   const result = await downloadSolutionArtifact({ owner: 'o', repo: 'r', sha: SHA, artifactPath: 'missing.zip' }, {
     downloadFile: async () => { throw new Error('404'); },

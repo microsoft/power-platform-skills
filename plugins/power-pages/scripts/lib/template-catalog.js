@@ -377,6 +377,11 @@ async function downloadSolutionArtifact(options = {}, deps = {}) {
     const validate = deps.validateZipContainsSolution || ((zipPath) => validateZipContainsSolution(zipPath, deps));
     if (!validate(result.localPath)) {
       try { fsImpl.rmSync(result.localPath, { force: true }); } catch { /* best-effort */ }
+      if (result.cached) {
+        const refreshed = await downloadArtifact(options, deps);
+        if (validate(refreshed.localPath)) return { ok: true, ...refreshed };
+        try { fsImpl.rmSync(refreshed.localPath, { force: true }); } catch { /* best-effort */ }
+      }
       return {
         ok: false,
         artifactPath: options.artifactPath,
