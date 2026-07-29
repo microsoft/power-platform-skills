@@ -12,6 +12,7 @@ model: opus
 
 - [offline-profile-schema.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-schema.md) — Dataverse entity field map
 - [dataverse-offline-api.md](${CLAUDE_SKILL_DIR}/../../shared/references/dataverse-offline-api.md) — Web API recipes for profile / item / association POSTs
+- [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md) — the `schemaColumns` baseline this skill writes + the lifecycle delta check that consumes it
 
 # Setup Offline Profile
 
@@ -26,7 +27,7 @@ End-to-end wizard for creating a Dataverse Mobile Offline Profile that the app (
 
 ## Workflow
 
-1. Verify project & auth → 2. Resolve mode (create vs extend) → 3. Spawn architect agent → **Gate 1** (table prerequisites) → 4. Run `/enable-tables-offline` if needed → 5. POST profile shell → **Gate 2** (per-table row scope) → 6. POST profile items → **Gate 3** (relationships + columns + sync) → 7. POST associations → 8. Validate + publish → 9. Persist artifacts → 10. Summary
+1. Verify project & auth → 2. Resolve mode (create vs extend) → 3. Spawn architect agent → **Gate 1** (table prerequisites) → 4. Run the internal `enable-tables-offline` workflow if needed → 5. POST profile shell → **Gate 2** (per-table row scope) → 6. POST profile items → **Gate 3** (relationships + columns + sync) → 7. POST associations → 8. Validate + publish → 9. Persist artifacts → 10. Summary
 
 ---
 
@@ -315,12 +316,12 @@ configReview: accepted
 
 > **Design rationale.** The original Step 3.5 used free-text replies ("type `accept` or describe edits in English") to keep things conversational. In practice users typed responses the regex parsers didn't recognise — `change scope of contact to teamonly`, `set sync to 10`, etc. — and the skill either silently dropped the edit or asked a clarifying question that drove additional confusion. The `AskUserQuestion` flow above eliminates parsing risk for the enumerable fields (scope, sync interval, top-level decision) while preserving the free-text path for the genuinely free-form fields (name, description, column lists). Net result: zero ambiguous interactions for the common adjustments, fewer typing-induced errors, parity with `/create-mobile-app`'s plan-gate UX.
 
-### Step 4 — Run `/enable-tables-offline` if needed
+### Step 4 — Run the internal `enable-tables-offline` workflow if needed
 
-If Gate 1 identified any table needing change, invoke `/enable-tables-offline` as a sub-skill with the list:
+If Gate 1 identified any table needing change, read and execute `${CLAUDE_SKILL_DIR}/../enable-tables-offline/SKILL.md` with the table list as its `$ARGUMENTS`:
 
 ```text
-/enable-tables-offline cr123_note,cr123_visit
+$ARGUMENTS: cr123_note,cr123_visit
 ```
 
 Wait for it to return. Expected final line: `DONE` or `DONE_WITH_CONCERNS:`.
@@ -542,6 +543,7 @@ After confirmed success, re-GET the profile and check `publishedon` for the arti
       "recordsOwnedByMyBusinessUnit": false,
       "syncIntervalInMinutes": 10,
       "selectedColumns": ["cr123_ordernumber", "cr123_total", "..."],
+      "schemaColumns": ["cr123_ordernumber", "cr123_total", "cr123_notes", "..."],
       "relationships": [
         {
           "schemaName": "cr123_order_cr123_orderline",
@@ -561,6 +563,7 @@ After confirmed success, re-GET the profile and check `publishedon` for the arti
 - `relationships[]` lives on the **PARENT** table entry (the table on the 1-side of the 1:N relationship). Pure-child tables (e.g. `cr123_orderline`) have empty `relationships: []`.
 - Each `relationships[]` entry has `schemaName` (the relationship's `SchemaName` from EntityDefinitions metadata), `relationshipId` (the relationship's `MetadataId` GUID — **this is the canonical comparison key**, stable across server-side relationshipname formatting), `targetEntity` (child entity logical name), and `associationId` (the created `mobileofflineprofileitemassociationid`).
 - `recordDistributionCriteria=1` (All records) parents always have `relationships: []` — associations would be redundant (see architect Step 5 pruning rule).
+- `schemaColumns[]` is the **schema-reconciliation baseline** — the full set of the table's schema column logical names (from `.datamodel-manifest.json`) that existed when this item was created. It is NOT the same as `selectedColumns` (which is a curated subset the runtime syncs): `schemaColumns` records everything the schema had at reconciliation time, including columns deliberately left out of `selectedColumns`. `scripts/offline-profile-delta.js` compares later manifest columns against this baseline to detect *genuinely new* schema columns (`manifest.columns − schemaColumns`) without false-flagging deliberate exclusions. Populate it from the manifest entry for each table; if the manifest lists no columns for a reused table, write `[]`. See [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md).
 - JSON doesn't support comments — the `/* BEGIN/END OFFLINE-CONFIG-WORKAROUND */` keys above are illustrative bracketing for the SKILL author. **Do NOT write those literal keys to `offline-profile.json`.** When the skill actually patches the file, emit only the real fields (`useDda`, `entitiesIncluded`, `instanceUrl`) inside `appConfig` and keep them contiguous.
 
 Example node script (writes the file in one shot — no read-modify-write against `power.config.json`):

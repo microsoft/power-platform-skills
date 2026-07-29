@@ -128,7 +128,7 @@ Capture target Power Platform environment for the remaining flow.
 | 1. User supplies env ID | `scripts/resolve-environment.js <environment-id>` | Ask only if `power.config.json` is missing/empty or user wants a different env |
 | 2. User wants a different account | Follow shared-instructions standalone CLI auth handling | Only if resolution/token acquisition fails or user asks |
 | 3. User wants different env | Ask for another env ID and re-run resolver | Only if user selects "use a different environment" at Step 2 |
-| 4. `npx power-apps init --display-name "$DISPLAY_NAME" --environment-id $ACTIVE_ENV_ID --non-interactive` | Persists choice into `power.config.json` | Only when this skill owns the initial init path |
+| 4. `npx power-apps init -t MobileApp --display-name "$DISPLAY_NAME" --environment-id $ACTIVE_ENV_ID --non-interactive` | Persists choice into `power.config.json` | Only when this skill owns the initial init path |
 
 ```bash
 TARGET_ENV="<environment-id-or-empty>"
@@ -754,8 +754,8 @@ import { Slot } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useColorScheme } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { PowerAppsProvider, lightTheme, darkTheme } from 'power-apps-native-host';
-import type { ThemeTokens } from 'power-apps-native-host';
+import { PowerAppsProvider, lightTheme, darkTheme } from '@microsoft/power-apps-native-host';
+import type { ThemeTokens } from '@microsoft/power-apps-native-host';
 
 import authConfig from '../auth.config.json';
 // @ts-ignore - power.config.json is auto-generated at build time
@@ -764,7 +764,7 @@ import powerConfig from '../power.config.json';
 import { schemaMap } from '../src/generated/connectorSchemas';
 import tamaguiConfig from '../tamagui.config';
 
-// lightTheme / darkTheme are the built-in defaults from power-apps-native-host.
+// lightTheme / darkTheme are the built-in defaults from @microsoft/power-apps-native-host.
 // When brand/tokens.ts exists, the Brand-token wiring block (Step 9b) replaces
 // these props with brand-derived ThemeTokens objects instead.
 
@@ -840,11 +840,11 @@ Do not run `npm install` inside Step 5 — in template-only mode dependencies mu
 ### Step 6 — Initialize
 
 **Print before starting:**
-> "→ [Step 6/13] Running `npx power-apps init` to write power.config.json for environment <env-id>. ~15–30 seconds."
+> "→ [Step 6/13] Running `npx power-apps init -t MobileApp` to write power.config.json for environment <env-id>. ~15–30 seconds."
 
 ```bash
 cd <working_dir>
-npx power-apps init --display-name '<displayName>' --environment-id <environment-id> --non-interactive
+npx power-apps init -t MobileApp --display-name '<displayName>' --environment-id <environment-id> --non-interactive
 ```
 
 Verify `power.config.json` was created and `environmentId` matches Step 4. If `npx power-apps init` fails, report the exact error and STOP — do not proceed.
@@ -1097,7 +1097,7 @@ Ask one question, using the resolved tenant:
 Do not default to any option silently. The user must choose because app registration ownership varies by tenant/admin role.
 
 - **(a) Paste existing** — run the client-ID write path in 7.3.
-- **(b) Create new manually** — print the portal URL and checklist in 7.4, then ask for the client ID and run 7.3. If the user cannot finish creation, allow `skip` and follow 7.5.
+- **(b) Create new in Power Apps Wrap** — print the environment-specific Wrap URL in 7.4, then ask for the client ID and run 7.3. If the user cannot finish creation, allow `skip` and follow 7.5.
 - **(c) Skip** — run the skip path in 7.5.
 
 #### 7.3 Write client ID into `auth.config.json`
@@ -1119,17 +1119,18 @@ Print:
 
 Jump to Step 8.
 
-#### 7.4 Create a new app registration manually
+#### 7.4 Create a new app registration in Power Apps Wrap
 
 Resolve the selected Power Platform environment ID from `$ACTIVE_ENV_ID`, then `power.config.json`. Print the public Power Apps Wrap URL:
 
 > "Open the Power Apps Wrap app-registration page for the selected environment:
-> https://make.powerapps.com/environments/<environment-id>/wraps#create-app-registration
+> `https://make.powerapps.com/environments/<environment-id>/wraps#create-app-registration`
 >
-> Create/register the app, then copy the Application (client) ID and paste it here.
+> Create the app registration on that page, then copy the Application (client) ID and paste it here.
+> The Wrap experience configures the native registration for this flow. Do not add redirect URIs or API permissions manually; tenant-wide admin consent is not required.
 > If you cannot create it now, type `skip` and run `/set-app-registration-native` later."
 
-Tell the user the registration must be created/configured from the Power Apps Wrap page for the selected environment.
+Tell the user the registration must be created/configured from the Power Apps Wrap page for the selected environment. Do not direct them to the Entra admin center for manual redirect URI, delegated permission, or admin-consent setup.
 
 After the user creates the registration, run 7.3 to capture and write the client ID.
 
@@ -1232,33 +1233,33 @@ Read the `## Design` section from `native-app-plan.md` and follow the execution 
 
 ```tsx
 import { tokens as brandTokens } from '../brand/tokens';
-import { PowerAppsProvider, lightTheme as hostLightTheme, darkTheme as hostDarkTheme } from 'power-apps-native-host';
-import type { ThemeTokens } from 'power-apps-native-host';
+import { PowerAppsProvider, lightTheme as hostLightTheme, darkTheme as hostDarkTheme } from '@microsoft/power-apps-native-host';
+import type { ThemeTokens } from '@microsoft/power-apps-native-host';
 
 const brandedLightTheme: ThemeTokens = {
   ...hostLightTheme,
-  accentDeep: brandTokens.color.accentDeep ?? hostLightTheme.accentDeep,
-  accentBase: brandTokens.color.accentBase ?? hostLightTheme.accentBase,
-  accentSoft: brandTokens.color.accentSoft ?? hostLightTheme.accentSoft,
-  surface0: brandTokens.color.surface0 ?? hostLightTheme.surface0,
-  surface1: brandTokens.color.surface1 ?? hostLightTheme.surface1,
-  surface2: brandTokens.color.surface2 ?? hostLightTheme.surface2,
-  surface3: brandTokens.color.surface3 ?? hostLightTheme.surface3,
-  text0: brandTokens.color.text0 ?? hostLightTheme.text0,
-  text1: brandTokens.color.text1 ?? hostLightTheme.text1,
+  accentDeep: brandTokens.color.primary,
+  accentBase: brandTokens.color.primary,
+  accentSoft: brandTokens.color.accent,
+  surface0: brandTokens.color.bg,
+  surface1: brandTokens.color.surface,
+  surface2: brandTokens.color.surface,
+  surface3: brandTokens.color.border,
+  text0: brandTokens.color.text,
+  text1: brandTokens.color.textMuted,
 };
 const brandedDarkTheme: ThemeTokens = {
   ...hostDarkTheme,
-  accentBase: brandTokens.color.accentBase_dark ?? hostDarkTheme.accentBase,
-  surface0: brandTokens.color.surface0_dark ?? hostDarkTheme.surface0,
-  // ... same pattern for remaining dark tokens
+  accentDeep: brandTokens.color.primary,
+  accentBase: brandTokens.color.primary,
+  accentSoft: brandTokens.color.accent,
 };
 
 // In RootLayout:
 <PowerAppsProvider ... theme={brandedLightTheme} darkTheme={brandedDarkTheme}>
 ```
 
-Inspect `brand/tokens.ts` for exact key names before writing. Apply the same `?? hostDarkTheme.*` fallback pattern for all dark tokens. For runtime theme switching (in-app theme pickers, per-tenant branding), use `useThemeControl()` from `power-apps-native-host`: `setTheme({ ...hostLightTheme, accentBase: color })` / `resetTheme()`.
+The generated schema has one brand palette, so dark surfaces and text retain the host defaults while brand accents carry across modes. For runtime theme switching (in-app theme pickers, per-tenant branding), use `useThemeControl()` from `@microsoft/power-apps-native-host`: `setTheme({ ...hostLightTheme, accentBase: color })` / `resetTheme()`.
 
 ### Step 10 — Add connectors
 
@@ -1355,7 +1356,7 @@ For each tab, infer a Ionicons icon name from the screen name:
 
 **The Edit to apply:**
 
-Add `import { Tabs } from 'expo-router';`, `import { Ionicons } from '@expo/vector-icons';`, and `import { useThemeTokens } from 'power-apps-native-host';` to the import block if not already present. Inside `AppLayout`, after the auth state is read, add `const theme = useThemeTokens();`. Then replace:
+Add `import { Tabs } from 'expo-router';`, `import { Ionicons } from '@expo/vector-icons';`, and `import { useThemeTokens } from '@microsoft/power-apps-native-host';` to the import block if not already present. Inside `AppLayout`, after the auth state is read, add `const theme = useThemeTokens();`. Then replace:
 
 ```tsx
 return (
@@ -1400,7 +1401,7 @@ Use the same icon mapping table as Tabs (above).
 
 **The Edit to apply:**
 
-Add `import { Drawer } from 'expo-router/drawer';`, `import { Ionicons } from '@expo/vector-icons';`, and `import { useThemeTokens } from 'power-apps-native-host';` to the import block if not already present. Inside `AppLayout`, after the auth state is read, add `const theme = useThemeTokens();`. Then replace the existing `<Stack>` return with:
+Add `import { Drawer } from 'expo-router/drawer';`, `import { Ionicons } from '@expo/vector-icons';`, and `import { useThemeTokens } from '@microsoft/power-apps-native-host';` to the import block if not already present. Inside `AppLayout`, after the auth state is read, add `const theme = useThemeTokens();`. Then replace the existing `<Stack>` return with:
 
 ```tsx
 return (
@@ -1650,11 +1651,11 @@ import React from 'react';
 import { useRouter } from 'expo-router';
 import { YStack, XStack, Text, Button } from 'tamagui';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useAuth } from 'power-apps-native-host';
+import { useAuth } from '@microsoft/power-apps-native-host';
 
 export default function <ScreenName>() {
   const router = useRouter();
-  // AuthState shape (power-apps-native-host): { isLoading, isAuthReady, isSignedIn, error, acquireToken, signIn, signOut }
+  // AuthState shape (@microsoft/power-apps-native-host): { isLoading, isAuthReady, isSignedIn, error, acquireToken, signIn, signOut }
   // There is NO `user` / `account` field. Display name comes from the ID-token claim, not from useAuth().
   const { isSignedIn, signOut } = useAuth();
 
@@ -1706,21 +1707,6 @@ Before the first wave, do a one-shot probe to confirm `Task` can spawn `mobile-a
 **Hard rule — never ask the user about build mode.** The probe is the only decision input. If the host changes mid-run (rare), treat the next failure the same way: silently downgrade to inline and continue.
 
 **Hard rule — no nested agent spawning.** Screen-builder agents MUST NOT spawn further agents (no nested `Task` calls). The top-level orchestrator owns the entire screen-builder fan-out: one `Task` batch per wave of up to 5 screens. If a builder needs help that previously would have been a nested spawn, it returns `NEEDS_CONTEXT:` and the orchestrator handles the follow-up at the wave boundary.
-
-**Fast-wave style deferral:** before spawning the first wave, create `<working_dir>/.tmp/defer-style-hooks` with a short note. The PostToolUse style hooks (`validate-screen-quality`, `validate-color-contrast`) skip blocking writes while this marker exists. This marker does **not** disable TypeScript, connector-first, protected-path, package, or write-safety validators. It only moves deterministic style debt out of the parallel builder hot path and into Step 11.4's batch report/fix sweep.
-
-```bash
-mkdir -p <working_dir>/.tmp
-printf 'Step 11 fast-wave mode: defer style hook blocking until Step 11.4 report sweep.\n' > <working_dir>/.tmp/defer-style-hooks
-```
-
-Delete the marker immediately after the last screen wave's final TypeScript gate passes and before Step 11.4 starts:
-
-```bash
-rm -f <working_dir>/.tmp/defer-style-hooks
-```
-
-Never leave this marker in place for Step 11.4 or Step 12. Report mode ignores the marker and should always scan the generated screens.
 
 **Print before spawning** (substitute computed values; `<W>` = total waves = `ceil(N/5)`):
 > "→ [Step 11/13] Building <N> screens in <W> wave(s) of up to 5 concurrent.
@@ -1802,12 +1788,6 @@ This sticky policy controls **how to handle a failed gate**, not whether the gat
 
 Run one controlled stylistic debt sweep after all screen-builder waves and TypeScript gates are clean, before preview or dev-server launch. This keeps screen-builder retries focused on critical compile/data/route issues, then fixes visual and accessibility quality across the full screen set in batches.
 
-Before running any report, assert the Step 11 fast-wave marker is gone:
-
-```bash
-rm -f <working_dir>/.tmp/defer-style-hooks
-```
-
 **Print before starting:**
 > "→ [Step 11.4/13] Running stylistic validators in batch + auto-fixing contrast / accessibility / token issues across all screens (~2-3 min)"
 
@@ -1827,12 +1807,12 @@ For each available stylistic validator:
 1. Run in `--report` mode against all generated screens. Report mode is non-blocking; it emits JSON issues with `file`, `line`, `rule`, `match`, `fix`, and `autoFixable`.
 2. Merge issues by file and rule. Keep exact line numbers for user/debug output, but do not rely on stale line numbers after the first edit in a file.
 3. Split findings into deterministic auto-fixes and judgement calls:
-  - **Auto-fixable:** weak foreground tokens, white-on-yellow/orange status pairs, missing icon-only `accessibilityLabel`, missing tappable `accessibilityRole`, tiny icon button `hitSlop`, obvious raw hex/token substitutions, top-only safe area with bottom UI, `allowFontScaling={false}`.
+  - **Auto-fixable:** weak foreground tokens, white-on-yellow/orange status pairs, missing icon-only `aria-label`, missing tappable `role`, tiny icon button `hitSlop`, obvious raw hex/token substitutions, top-only safe area with bottom UI, `allowFontScaling={false}`. Apply these web-standard accessibility props to Tamagui 2 components; raw React Native components retain their React Native accessibility props.
   - **Needs review:** complex safe-area restructuring, dominant red detail headers, redundant status cue design, ambiguous brand colors, empty-state restructuring that requires moving JSX across large blocks.
 4. Build one file-level edit batch per affected file. Apply affected files in parallel because screen files are independent. Do not run one edit per issue when multiple issues are in the same file; that reintroduces slow per-write loops and line-number drift.
 5. Re-run the same validator in `--report` mode for the touched files. Cap retries at 2 per file per validator.
 
-**Hook behavior during the sweep:** Do not disable hooks globally and do not recreate `<working_dir>/.tmp/defer-style-hooks`. If a normal PostToolUse hook blocks an intermediate edit, treat that as signal that the edit batch was incomplete: fold the hook's message into that file's next retry. Only use a temporary skip env var if the validator itself documents one and you immediately re-run `--report` before advancing.
+These validators are invoked explicitly by this mobile workflow. They are not registered as plugin-wide hooks because that would run them during unrelated Canvas Apps and other plugin operations.
 
 After all validators report no auto-fixable issues, run:
 

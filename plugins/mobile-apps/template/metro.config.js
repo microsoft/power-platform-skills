@@ -1,5 +1,12 @@
 const { getDefaultConfig } = require('expo/metro-config');
 
+// CUSTOMIZATION START - DO NOT REMOVE OR RENAME THE COMMENT
+// Add Metro config changes in this function only.
+function customizeMetroConfig(config) {
+  return config;
+}
+// CUSTOMIZATION END - DO NOT REMOVE OR RENAME THE COMMENT
+
 const config = getDefaultConfig(__dirname);
 
 config.resolver.sourceExts = [...config.resolver.sourceExts, 'mjs'];
@@ -19,9 +26,10 @@ config.server = {
 // Force a single copy of these regardless of where the importing module lives.
 const _defaultResolver = config.resolver.resolveRequest;
 config.resolver.resolveRequest = (context, moduleName, platform) => {
+  const isNodeRenderer = context.customResolverOptions?.environment === 'node';
   if (
-    moduleName === 'react' ||
-    moduleName === 'react-native' ||
+    (!isNodeRenderer && (moduleName === 'react' || moduleName.startsWith('react/'))) ||
+    (moduleName === 'react-native' && platform !== 'web') ||
     moduleName.startsWith('@babel/runtime')
   ) {
     return {
@@ -36,4 +44,4 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
     : context.resolveRequest(context, moduleName, platform);
 };
 
-module.exports = config;
+module.exports = customizeMetroConfig(config);

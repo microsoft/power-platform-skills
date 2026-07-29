@@ -50,6 +50,7 @@ If you prefer to install manually, run these commands inside a Claude Code or Gi
     /plugin install code-apps-preview@power-platform-skills
     /plugin install mobile-app@power-platform-skills
     /plugin install canvas-apps@power-platform-skills
+    /plugin install power-automate@power-platform-skills
     ```
 
 ## Available Plugins
@@ -90,6 +91,12 @@ Author Power Apps Canvas Apps using the Canvas Authoring MCP server.
 
 **Stack**: PA YAML (`.pa.yaml`) authored via `CanvasAuthoringMcpServer`, requires .NET 10 SDK
 
+### [Power Automate](plugins/power-automate/README.md) (`plugins/power-automate`)
+
+Build, edit, run, and debug Power Automate cloud flows via the FlowAgent MCP server.
+
+**Stack**: Node.js 18+, Azure CLI (`az login`), self-contained MCP bundle
+
 ## Local Development
 
 To develop and test plugins locally, follow these steps:
@@ -104,6 +111,7 @@ To develop and test plugins locally, follow these steps:
     claude --plugin-dir /path/to/power-platform-skills/plugins/code-apps
     claude --plugin-dir /path/to/power-platform-skills/plugins/mobile-apps
     claude --plugin-dir /path/to/power-platform-skills/plugins/canvas-apps
+    claude --plugin-dir /path/to/power-platform-skills/plugins/power-automate
     ```
 
 ## Running Without Interruption

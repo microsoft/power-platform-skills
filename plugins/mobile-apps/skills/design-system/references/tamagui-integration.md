@@ -8,9 +8,9 @@ Internal reference used by `/create-mobile-app` Step 9b after `/design-system` w
 
 Keep generated screens on one stable token contract:
 
-- Always provide `$surface0`-`$surface3` and `$accentBase` / `$accentSoft` / `$accentDeep` / `$accentOnBase`.
+- Always provide `$surface0`-`$surface3` and `$accentBase` / `$accentSoft` / `$accentDeep` / `$accentOnAccent`.
 - Import `brand/tokens.ts` when it exists; it is the source of truth from `/design-system`.
-- Do not add outer `TamaguiProvider`, `PortalProvider`, `ToastProvider`, `GestureHandlerRootView`, or `QueryClientProvider`; current `PowerAppsProvider` composes them internally.
+- Do not add an outer `TamaguiProvider`, `PortalProvider`, app-owned `Toaster`, `GestureHandlerRootView`, or `QueryClientProvider`; current `PowerAppsProvider` owns the provider and portal infrastructure. In Tamagui 2, `Toaster` is a sibling component rather than a provider wrapper.
 
 ## Mode Selection
 
@@ -24,58 +24,126 @@ Run `npx tsc --noEmit` after changing Tamagui config or root provider wiring.
 
 ## Alias Layer
 
-Extend `defaultConfig.tokens.color`; do not replace `defaultConfig`.
+Extend the Config v5 `light` and `dark` themes; do not replace `defaultConfig`.
+
+This integration targets Tamagui 2 with Config v5, matching the current standalone template. Tamagui components generated from this config must use v2 APIs (`transition`, ARIA props, web-standard input props, and `boxShadow`).
+
+The template owns the file shell and marks the safe edit region with:
 
 ```ts
-import { defaultConfig } from '@tamagui/config/v4';
-import { createTamagui, createTokens } from 'tamagui';
+// CUSTOMIZATION START - DO NOT REMOVE OR RENAME
+// CUSTOMIZATION END - DO NOT REMOVE OR RENAME
+```
 
-const aliasTokens = createTokens({
-  ...defaultConfig.tokens,
-  color: {
-    ...defaultConfig.tokens.color,
-    surface0: '#ffffff',
-    surface0_dark: '#111113',
-    surface1: '#f7f7f8',
-    surface1_dark: '#1c1c1f',
-    surface2: '#efeff1',
-    surface2_dark: '#28282c',
-    surface3: '#e3e3e7',
-    surface3_dark: '#333338',
-    accentDeep: '#005a9e',
-    accentBase: '#0078d4',
-    accentSoft: '#cce4f7',
-    accentOnBase: '#ffffff',
-  },
-});
+Keep all added imports, token construction, and the `customConfig` replacement between those markers. Do not remove or rename either marker. Preserve the template's existing `createTamagui` and `defaultConfig` imports, exports, and `declare module '@tamagui/core'` block outside them.
 
-export const tamaguiConfig = createTamagui({
+```ts
+import { createTamagui } from '@tamagui/core';
+import { defaultConfig } from '@tamagui/config/v5';
+
+// CUSTOMIZATION START - DO NOT REMOVE OR RENAME
+import { animations } from '@tamagui/config/v5-rn';
+
+type BrandColors = Partial<{
+  bg: string;
+  surface: string;
+  primary: string;
+  accent: string;
+  border: string;
+  statusSuccess: string;
+  statusWarning: string;
+  statusDanger: string;
+  statusInfo: string;
+}>;
+
+function withSemanticAliases(
+  theme: typeof defaultConfig.themes.light,
+  brand: BrandColors = {},
+) {
+  return {
+    ...theme,
+    surface0: brand.bg ?? theme.background,
+    surface1: brand.surface ?? theme.color2,
+    surface2: theme.color3,
+    surface3: brand.border ?? theme.color4,
+    accentDeep: brand.primary ?? theme.blue8,
+    accentBase: brand.primary ?? theme.blue10,
+    accentSoft: brand.accent ?? theme.blue3,
+    accentOnAccent: theme.color1,
+    statusComplete: brand.statusSuccess ?? theme.green10,
+    statusCompleteBg: theme.green3,
+    statusPending: brand.statusWarning ?? theme.yellow10,
+    statusPendingBg: theme.yellow3,
+    statusOverdue: brand.statusDanger ?? theme.red10,
+    statusOverdueBg: theme.red3,
+    statusInProgress: brand.statusInfo ?? theme.blue10,
+    statusInProgressBg: theme.blue3,
+  };
+}
+
+const themes = {
+  ...defaultConfig.themes,
+  light: withSemanticAliases(defaultConfig.themes.light),
+  dark: withSemanticAliases(defaultConfig.themes.dark),
+};
+
+const customConfig = {
   ...defaultConfig,
-  tokens: aliasTokens,
-});
+  animations,
+  themes,
+};
+// CUSTOMIZATION END - DO NOT REMOVE OR RENAME
 
+export const tamaguiConfig = createTamagui(customConfig);
 export default tamaguiConfig;
 export type Conf = typeof tamaguiConfig;
 
-declare module 'tamagui' {
+declare module '@tamagui/core' {
   interface TamaguiCustomConfig extends Conf {}
 }
 ```
 
 ## Brand Import
 
-When `brand/tokens.ts` exists, merge its token objects without re-keying them:
+When `brand/tokens.ts` exists, reuse `withSemanticAliases`, map its colors into the root themes, and merge only its non-color token groups. Keep added imports inside the customization markers:
 
 ```ts
+// CUSTOMIZATION START - DO NOT REMOVE OR RENAME
+import { createTokens } from '@tamagui/core';
+import { animations } from '@tamagui/config/v5-rn';
 import { tokens as brandTokens } from './brand/tokens';
 
 const tokens = createTokens({
   ...defaultConfig.tokens,
-  color: { ...defaultConfig.tokens.color, ...brandTokens.color, /* aliases here */ },
   space: { ...defaultConfig.tokens.space, ...brandTokens.space },
   size: { ...defaultConfig.tokens.size, ...brandTokens.size },
   radius: { ...defaultConfig.tokens.radius, ...brandTokens.radius },
 });
+
+const darkBrandColors = {
+  primary: brandTokens.color.primary,
+  accent: brandTokens.color.accent,
+  statusSuccess: brandTokens.color.statusSuccess,
+  statusWarning: brandTokens.color.statusWarning,
+  statusDanger: brandTokens.color.statusDanger,
+  statusInfo: brandTokens.color.statusInfo,
+};
+
+const themes = {
+  ...defaultConfig.themes,
+  light: withSemanticAliases(defaultConfig.themes.light, brandTokens.color),
+  // The generated schema has one palette: carry accents/status into dark mode,
+  // but retain Config v5's dark surfaces and readable status backgrounds.
+  dark: withSemanticAliases(defaultConfig.themes.dark, darkBrandColors),
+};
+
+const customConfig = {
+  ...defaultConfig,
+  animations,
+  tokens,
+  themes,
+};
+// CUSTOMIZATION END - DO NOT REMOVE OR RENAME
 ```
 
 Hard rule: never remap brand space keys (`xs`, `sm`, `md`, `lg`, `xl`, `2xl`, `3xl`, `4xl`) onto Tamagui numeric keys (`1`, `2`, `3`, `4`, `0.25`, etc.). Screen-builder and Tamagui components rely on the default numeric scale. If a comment says `Map brand space names to Tamagui numeric token keys`, delete that override block.
@@ -106,3 +174,4 @@ If `brand/tokens.ts` exists, spread brand values over `lightTheme` / `darkTheme`
 | `PortalDispatchContext cannot be null` | Pass config/theme props to `PowerAppsProvider`; do not add an outer `PortalProvider` unless on a verified legacy host. |
 | Reanimated error | Ensure `react-native-reanimated/plugin` is last in `babel.config.js`. |
 | Brand spacing blows up layouts | Remove numeric remapping of brand space keys; spread brand spaces verbatim. |
+| Template upgrade creates a `tamagui.config.ts.rej` file | Move every custom import and config expression back between the customization markers; leave the v5 file shell unchanged. |

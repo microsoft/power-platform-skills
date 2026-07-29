@@ -14,11 +14,11 @@ Five stops from lightest to darkest. In dark mode, the scale inverts.
 
 | Token | Light mode role | Maps to Tamagui |
 |---|---|---|
-| `surface0` | Lightest — modal/elevated surfaces | `$background` override |
-| `surface1` | Base background — primary screen fill | `$backgroundStrong` |
-| `surface2` | Sunken — pressed state, card fills, secondary areas | `$color2` |
-| `surface3` | Hairlines, dividers, subtle borders | `$color3` |
-| `surface4` | Muted borders, disabled fills | `$color4` |
+| `surface0` | Base background — primary screen fill | `$surface0` |
+| `surface1` | Lightly differentiated surface | `$surface1` |
+| `surface2` | Sunken/card fill | `$surface2` |
+| `surface3` | Hairlines and subtle borders | `$surface3` |
+| `surface4` | Muted borders and disabled fills | `$color4` |
 
 ### Layer 2: Text Scale (foreground)
 
@@ -265,17 +265,18 @@ Dark mode is not a raw theme swap. It is a designed inversion.
 ### Concrete Tamagui override
 
 ```tsx
-// tamagui.config.ts
-const config = createTamagui({
+// Inside the tamagui.config.ts customization markers
+const customConfig = {
   ...defaultConfig,
+  animations,
   themes: {
     ...defaultConfig.themes,
     dark: {
       ...defaultConfig.themes.dark,
-      background: '#0E0D0B',        // surface0 dark
-      backgroundStrong: '#14130F',   // surface1 dark
-      color2: '#1E1C18',            // surface2 dark (cards)
-      color3: '#2D2A22',            // surface3 dark (borders)
+      surface0: '#0E0D0B',           // base background
+      surface1: '#14130F',           // lightly differentiated surface
+      surface2: '#1E1C18',           // card fill
+      surface3: '#2D2A22',           // borders
       color4: '#3A372F',            // surface4 dark
       color12: '#F2EAD8',           // text0 dark (cream, not white)
       color11: '#D4CCB8',           // text1 dark
@@ -283,7 +284,7 @@ const config = createTamagui({
       color9: '#6B6557',            // text3 dark
     },
   },
-})
+}
 ```
 
 ---

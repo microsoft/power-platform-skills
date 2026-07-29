@@ -1,12 +1,14 @@
 ---
 name: screen-builder
 description: Use when an orchestrator needs ONE screen of a Power Apps mobile app implemented from a per-screen spec in native-app-plan.md. Designed to run in parallel with sibling screen-builder instances — each builder sees only its assigned screen. Called by /create-mobile-app and /edit-app; not invoked directly by users.
+user-invocable: false
 color: green
 model: sonnet
 tools:
   - Read
   - Write
   - Edit
+  - Bash
   - Grep
   - Glob
 ---
@@ -36,7 +38,6 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   Do NOT define `function LoadingState()`, `function formatDate()`, `function Field()`, `function Section()`, or status color maps inside your screen. Do NOT write the `useState(loading) + useFocusEffect(load) + onRefresh` pattern manually — use `useListData` instead.
 - **App-specific custom components.** If the orchestrator generated app-specific components in `src/components/` (e.g. `InspectionCard.tsx`, `EquipmentRow.tsx`), import them via `import { InspectionCard } from '@/components/InspectionCard'`. Check what's in `src/components/` before writing your screen — if a component exists for your entity, use it.
 - **Screen skeleton exists — fill it in, don't overwrite.** The orchestrator pre-writes a typed skeleton at your `target_file` with all imports, hook calls, and `return null`. Your job: replace `return null` with the real JSX layout. Do NOT discard the skeleton's imports — they are pre-resolved from the Generated Services table, the per-screen `**Data**` field, and Standard Imports for the screen's archetype. The skeleton file IS the import source of truth; the plan no longer documents per-screen imports separately. If a skeleton does NOT exist at your `target_file` (older orchestrator version), proceed from scratch using the `**Data**` field + Generated Services table to resolve service imports yourself.
-- **Fast-wave mode.** During Step 11, the orchestrator may defer deterministic style-hook blocking until the Step 11.4 sweep. Still write good mobile UI on the first pass, but do not spend extra self-repair passes chasing raw hex/token/a11y/style-hook heuristics unless they also break TypeScript, routing, data access, or obvious usability. Step 11.4 runs the batch validators across all screens and owns those deterministic cleanup edits.
 - **Older-orchestrator fallback.** If the skeleton is absent AND no `### Standard Imports` / `#### Resolved Imports` blocks exist in the plan, resolve imports yourself from the `**Data**` field + Generated Services table.
 - **NEVER write `_layout.tsx` files.** The orchestrator owns all `_layout.tsx` files at Step 10b — both the outer `app/(app)/_layout.tsx` (Tabs/Drawer) and per-folder inner ones (`app/(app)/<folder>/_layout.tsx`). If your `target_file` IS a `_layout.tsx`, your assigned task is wrong — STOP and report `BLOCKED [<screen_name>]: target_file is a _layout.tsx (<path>) — orchestrator owns layouts, not builders`. Two parallel builders writing the same folder's `_layout.tsx` would race; only the orchestrator can serialize that. **You also do not need to declare the route in any `_layout.tsx`** — the orchestrator already wrote the `<Stack.Screen name="<your-name>">` line for you. Just write your screen's content.
 - **Your `target_file` may be nested.** With the folder-grouped navigation pattern, paths like `app/(app)/inspections/[id].tsx` and `app/(app)/inspections/new.tsx` are normal. The folder is guaranteed to exist (orchestrator created it at Step 10b.2). Just write to whatever absolute path you were given. Do NOT modify the path or strip the folder.
@@ -87,13 +88,15 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   |---|---|
   | Layout containers: `YStack`, `XStack`, `ZStack` | Route layouts: `<Stack>`, `<NativeTabs>` in `_layout.tsx` |
   | Visual primitives: `Text`, `Button`, `Input`, `Form`, `Card`, `Separator`, `Spinner`, `Switch` | Navigation: `<Link>`, `<Link.Preview>`, `<Link.Menu>`, `router.push(...)` |
-  | Tokens: `$4`, `$color12`, `$background`, `$gtSm` | Screen options: `<Stack.Screen options={{ presentation: 'modal' \| 'formSheet', headerSearchBarOptions, headerLargeTitle }}>` |
+  | Tokens: `$4`, `$color12`, `$background`, `$sm` | Screen options: `<Stack.Screen options={{ presentation: 'modal' \| 'formSheet', headerSearchBarOptions, headerLargeTitle }}>` |
   | Theme switching, breakpoints (`useMedia()`) | Scroll insets: `<ScrollView contentInsetAdjustmentBehavior="automatic">` |
   |  | Platform branching: `process.env.EXPO_OS`, `useWindowDimensions` |
   |  | Capabilities: `expo-camera`, `expo-document-picker`, `expo-print`, `expo-secure-store`, `expo-file-system`, `expo-sharing`, `@microsoft/power-apps-native-pdf-viewer`, `@microsoft/power-apps-native-pen-input`, `@microsoft/power-apps-native-bglocation` when allowlisted by the plan (see AGENTS.md §2) |
   |  | Animations: Reanimated |
 
-  **Translation rule:** when the Expo `building-native-ui` skill shows `<View style={{ padding: 16, gap: 8 }}>`, write `<YStack padding="$4" gap="$2">`. When it shows `<Stack.Screen options={{...}}>`, copy that **verbatim** — Tamagui never replaces navigation primitives.
+  **Translation rule:** when the Expo `building-native-ui` skill shows `<View style={{ padding: 16, gap: 8 }}>`, write `<YStack p="$4" gap="$2">`. When it shows `<Stack.Screen options={{...}}>`, copy that **verbatim** — Tamagui never replaces navigation primitives.
+
+- **API boundary.** Tamagui components follow Tamagui 2 and Config v5; `react-native` components and Expo Router keep their native APIs. See Step 2c for the exact prop contract.
 - **Import shared code via `@/` aliases, never re-roll.** `<working_dir>/src/components/index.tsx` is guaranteed to exist (created by the orchestrator at Step 7). Import from `'@/components'`, `'@/hooks'`, `'@/utils'`, `'@/tokens'`. Do NOT inline these — the whole point is consistency across screens. Do NOT create or modify `src/components/`, `src/hooks/`, `src/utils/`, `src/tokens/` — if they appear missing, STOP and report `BLOCKED [<screen_name>]: src/components/index.tsx is missing` so the orchestrator can fix the prerequisite step.
 - **Generated services are the data layer.** Always import from `@/generated/services/<Name>Service`. Never use `fetch`, `axios`, or any direct HTTP. **Source of truth for what's available: the `## Generated Services` table in `native-app-plan.md`** — the orchestrator writes it right before spawning builders. Resolution order:
   1. **If your screen's spec service is in the `## Generated Services` table** — use the exact name + methods listed. Do not rename, do not guess casing.
@@ -190,7 +193,7 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
 
   - **Form picker UI** — when the form's spec calls for a parent picker (e.g., "select Project"), the picker stores the selected record's `id` (GUID string), and the submit handler converts it to the bind string at write time. Never store the bind string in component state — only in the API payload.
 - **Pagination rule:** If your spec says `pagination: cursor`, do NOT use `useListData` or `useSearchFilter`. Use the skeleton's `useCursorListData` call, React Query's `useInfiniteQuery`, or an app-specific `use<Entity>CursorList` hook with FlatList `onEndReached` per the pattern in [`data-performance.md`](${PLUGIN_ROOT}/shared/references/data-performance.md). Never fetch all records at once, and never treat `top: 50` as pagination. Real generated Dataverse services use SDK `maxPageSize` for page size and return `IOperationResult.skipToken` for the next page; pass that value back as `skipToken`. Always include deterministic `orderBy` with a unique key and `select` in the service call. Push search/filter into Dataverse with `filter`. If the generated service in the app does not expose `maxPageSize`/`skipToken` for an unbounded table, return `BLOCKED [<screen_name>]: generated service does not expose cursor paging for <Service>; do not downgrade to useListData`.
-- **Dataverse file/image column controls — use `power-apps-native-host` components, NOT raw Expo modules.** When a form field binds to a Dataverse **File** column (`FileAttributeMetadata`), render `<FilePicker>` from `power-apps-native-host`; persist via generated `Service.upload(...)` after the normal create/update, and use `Service.downloadFile(...)` for read/view actions. When it binds to a Dataverse **Image** column (`ImageAttributeMetadata`), render `<ImagePicker>` from `power-apps-native-host`; capture `PickedImageInfo` via `onImageChange`, persist via generated `Service.upload(...)`, and use `Service.downloadImage(...)` for read/view actions. Do not persist picker-selected image/file content with `Service.update(...)`. Both controls adopt brand colors from the nearest `ThemeProvider` (provided by `PowerAppsProvider`). Do not hand-roll Dataverse file/image UI with `expo-document-picker`, `expo-image-picker`, `expo-file-system`, or `expo-sharing`. The full usage pattern and native-wrapper boundary live in [`skills/add-native/SKILL.md`](../skills/add-native/SKILL.md#fileimage-picker-ownership).
+- **Dataverse file/image column controls — use `@microsoft/power-apps-native-host` components, NOT raw Expo modules.** When a form field binds to a Dataverse **File** column (`FileAttributeMetadata`), render `<FilePicker>` from `@microsoft/power-apps-native-host`; persist via generated `Service.upload(...)` after the normal create/update, and use `Service.downloadFile(...)` for read/view actions. When it binds to a Dataverse **Image** column (`ImageAttributeMetadata`), render `<ImagePicker>` from `@microsoft/power-apps-native-host`; capture `PickedImageInfo` via `onImageChange`, persist via generated `Service.upload(...)`, and use `Service.downloadImage(...)` for read/view actions. Do not persist picker-selected image/file content with `Service.update(...)`. Both controls adopt brand colors from the nearest `ThemeProvider` (provided by `PowerAppsProvider`). Do not hand-roll Dataverse file/image UI with `expo-document-picker`, `expo-image-picker`, `expo-file-system`, or `expo-sharing`. The full usage pattern and native-wrapper boundary live in [`skills/add-native/SKILL.md`](../skills/add-native/SKILL.md#fileimage-picker-ownership).
 
 - **Custom camera URI uploads to Dataverse Image columns use base64 update, not File/Blob upload.** For `takePhoto()` / `pickImage()` URI flows in native screens, read the local URI as base64 (Expo file APIs) and call `Service.update(recordId, { [imageColumnName]: base64 })`. Do not coerce RN camera URIs into browser-style `File`/`Blob` upload payloads for this path.
 
@@ -198,7 +201,7 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
 
 - **Native capabilities: use `src/native/` wrappers, NOT raw Expo modules.** `/add-native` creates typed wrappers under `src/native/` (e.g., `camera.ts`, `cameraUpload.ts`, `secureStore.ts`, `documentPicker.ts`, `pdfReport.ts`, `pdfViewer.ts`, `penInput.ts`, `geolocation.ts`). For non-Dataverse native workflows, always import from these wrappers — never import `expo-camera`, `expo-image-picker`, `expo-document-picker`, `expo-print`, `expo-secure-store`, `expo-file-system`, `expo-sharing`, `@microsoft/power-apps-native-pdf-viewer`, `@microsoft/power-apps-native-pen-input`, or `@microsoft/power-apps-native-bglocation` directly in screen files. The wrappers handle permissions, iOS/Android platform differences, URL validation, and return discriminated-union results (`{ ok: true, ... } | { ok: false, reason }`). If a wrapper doesn't exist yet, write the screen with the expected import path and a `// TODO(native-not-yet-added): run /add-native <capability> to create src/native/<wrapper>.ts` comment. For `camera.ts`, use `/add-native camera`; for `barcodeScanner.tsx`, use `/add-native barcode-scanner`; for `pdfReport.ts`, use `/add-native pdf-report`; for `pdfViewer.ts`, use `/add-native pdf-viewer` or `/add-native @microsoft/power-apps-native-pdf-viewer`; for `penInput.ts`, use `/add-native pen-input` or `/add-native @microsoft/power-apps-native-pen-input`; for `geolocation.ts`, use `/add-native geolocation` or `/add-native @microsoft/power-apps-native-bglocation`. **`expo-notifications` and `expo-haptics` are NOT available** — per AGENTS.md §2 and the HARD RULE below for haptics. If the plan tells you to use an unavailable capability, return `NEEDS_CONTEXT` — do not import it.
 
-- **PDF and pen capability behavior.** Native PDF viewer actions MUST call an HTTPS-only wrapper such as `openHttpsPdf(url)`. Reject or disable actions for `file://`, `content://`, `blob:`, `http://`, empty, or generated local `expo-print` URIs; local generated PDFs use `pdfReport.ts` sharing only when `expo-sharing` was allowlisted, or upload to Dataverse File storage first and can only be viewed later through a supported HTTPS URL if the app has one. Pen capture cancellation (`USER_CANCELLED`) is not an error; leave the screen state unchanged. Handle `NATIVE_MODULE_MISSING`, `VIEWER_FAILED`, `CAPTURE_FAILED`, `uploadFailed`, and `invalidUrl` with visible inline states rather than silent returns.
+- **PDF and pen capability behavior.** Native PDF viewer actions MUST call `openHttpsPdf(url)`, which supports `https://` URLs and local `file://` URIs with viewer 0.2.9+. Reject or disable actions for `content://`, `blob:`, `http://`, or empty inputs. Pen capture cancellation (`USER_CANCELLED`) is not an error; leave the screen state unchanged. Handle `NATIVE_MODULE_MISSING`, `VIEWER_FAILED`, `CAPTURE_FAILED`, `uploadFailed`, and `invalidUrl` with visible inline states rather than silent returns.
 
 - **Pen signatures and generated PDFs follow Dataverse artifact boundaries.** Pen input returns `data:image/png;base64,...`; for Image columns, normalize to the generated service payload shape and strip the prefix when raw base64 is required. Generated PDFs and signature PNGs stored in File columns are uploaded only after the parent row exists and the create/update result is successful. If the spec says `Artifact persistence: child Evidence/Attachment table`, create that child row first, then upload File bytes or write the Image payload against the child row ID. Never include File bytes in create/update JSON.
 
@@ -239,7 +242,7 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
 - **Camera evidence flows MUST expose a visible `Take picture` action.** If the spec, route name, or table purpose includes camera evidence, photo evidence, proof photos, scan evidence, inspection photos, or any custom camera capture/upload flow, the screen must show a first-class button labeled `Take picture` (or a domain-specific equivalent beginning with `Take`, such as `Take evidence photo`) that calls `takePhoto()` from `src/native/camera`. Do not hide camera capture behind gallery-only upload, a file picker, an overflow menu, or a detail-only affordance. Gallery/upload can be a secondary sibling action, but camera capture must be visible in the main content or bottom action bar. After capture, if the photo is written to Dataverse, follow the create-then-navigate/upload rule: pre-generate any needed parent/evidence ID with `newId()`, check every write/upload result, and keep the user on the screen with inline error UI if capture/upload fails.
 
 - **HARD RULE — NEVER use `expo-haptics` in any generated screen.** Even though the package may appear in `package.json`, it crashes at runtime in the current rewrap binary (the native module isn't bundled into the binary the customer's app loads — `Haptics.notificationAsync()` / `Haptics.impactAsync()` throw on first call). Visual-only feedback for all interactions: button press uses `pressStyle={{ scale: 0.98 }}`, success uses a green pill / banner / snackbar, error uses inline error text + retry button, toggle uses Switch's visible state change. NEVER write `import * as Haptics from 'expo-haptics'` — it WILL crash the running app, and the screen-builder hooks will block the write anyway.
-- **React Query (`@tanstack/react-query`) is the default for server state.** The template ships it (`package.json`), and current `power-apps-native-host` wraps the app with `QueryClientProvider` inside `PowerAppsProvider`. **Never re-wire the provider from a screen file** and never construct a new `QueryClient` inside a component. Use `useQuery` for reads, `useMutation` for writes (create / update / delete), `useInfiniteQuery` for cursor-paginated lists, and `useQueryClient()` for invalidation. The raw `useEffect` + `useState` skeleton in Step 3 is only a fallback for screens where the spec explicitly excludes React Query (rare). Required usage rules:
+- **React Query (`@tanstack/react-query`) is the default for server state.** The template ships it (`package.json`), and current `@microsoft/power-apps-native-host` wraps the app with `QueryClientProvider` inside `PowerAppsProvider`. **Never re-wire the provider from a screen file** and never construct a new `QueryClient` inside a component. Use `useQuery` for reads, `useMutation` for writes (create / update / delete), `useInfiniteQuery` for cursor-paginated lists, and `useQueryClient()` for invalidation. The raw `useEffect` + `useState` skeleton in Step 3 is only a fallback for screens where the spec explicitly excludes React Query (rare). Required usage rules:
   - **Query keys are arrays starting with the entity, then params.** Examples: `['inspections']`, `['inspections', { status: 'open' }]`, `['inspection', id]`. Consistent shape lets `queryClient.invalidateQueries({ queryKey: ['inspections'] })` from a sibling mutation invalidate every variant in one line.
   - **After every successful mutation, invalidate the affected query keys.** Pattern:
     ```tsx
@@ -286,9 +289,9 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   <FlatList
     data={items}
     ListEmptyComponent={
-      <YStack flex={1} justifyContent="center" alignItems="center" paddingTop="$3xl">
+      <YStack flex={1} justify="center" items="center" pt="$3xl">
         <Ionicons name="folder-open-outline" size={48} color={tokens.color.textMuted} />
-        <Text color="$textMuted" marginTop="$md">No items yet</Text>
+        <Text color="$textMuted" mt="$md">No items yet</Text>
       </YStack>
     }
     refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
@@ -347,8 +350,8 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   <XStack
     borderWidth={1}
     borderColor="$borderColor"
-    borderRadius="$3"
-    padding="$3"
+    rounded="$3"
+    p="$3"
     onPress={() => setShowPicker(true)}
   >
     <Text flex={1}>
@@ -380,8 +383,8 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   }
   ```
   Each screen owns its own "failed to load <noun>" / "failed to save <noun>" copy. The raw error goes to `console.error` so devtools / `mcp__expo__collect_app_logs` still capture it.
-- **Shadows / elevation: use Tamagui tokens or the `@/tokens` `shadows.sm`/`shadows.md` exports. NEVER inline `shadowOffset`/`shadowColor`.** On a `Card` use `elevation="$1"` (subtle) or `elevation="$2"` (raised). On a custom `YStack`, spread `{...shadows.sm}` from `'@/tokens'`. Inline shadows skip the dark-mode fallback (where elevation should come from a lighter surface, not a black blur) and break consistency.
-- **Skeleton wrapper MUST match the populated wrapper byte-for-byte.** Same `paddingTop={insets.top}`, same outer `padding`, same `gap`, same background. If the populated state has a header bar, the skeleton has the same header bar with skeleton text inside. Otherwise the screen "jumps" when data arrives. Concretely: extract a `<ScreenChrome>` local function or duplicate the wrapper — never let the skeleton branch use a different layout.
+- **Shadows.** Tamagui components use `boxShadow` or a verified v2 shadow token, for example `boxShadow="0 2px 8px $shadow3"`. Native shadow props belong only in React Native styles; never spread a legacy native shadow object into Tamagui.
+- **Skeleton parity.** Match the populated branch's outer insets, spacing, background, and header shape so loading does not shift the layout. Reuse the same wrapper when practical.
 - **Ambiguous spec → STOP and ask, do NOT guess.** If your screen's spec in `native-app-plan.md` is missing a field you need (which service to call, which route to navigate to on success, which native module to use, what the empty-state copy should say), DO NOT invent it. Return early with: `"BLOCKED [<screen_name>]: <one-line description of what's missing>. Need clarification in native-app-plan.md before I can write this screen."` The orchestrator will surface this to the user and re-spawn you after the plan is updated. Guessing produces silently-wrong screens that cost 10× more to fix than asking now.
 - **No `npm run build` or testing.** The orchestrator does that after all builders finish.
 
@@ -458,7 +461,7 @@ After reading your per-screen spec, also check `<plan_path>` for a `## Design Di
 - `status_saturation` (`full` / `desaturated` / `monochrome-plus-accent`) → status pill style
 - `primary_action_shape` (`rectangular` / `rectangular-bottom-pinned` / `pill`) + `primary_action_position` → button placement and shape
 - `empty_state` (`icon-sentence-bigbutton` / `icon-explanation-ghostbutton` / `type-led`) → which empty-state template to use
-- `accent_color` → applied as `$brand` references
+- `accent_color` → applied through `$accentBase`
 - `heading_font` / `body_font` → font family on titles vs body
 
 Per-screen spec values always win. The Design Direction bundle is the *fallback* for fields the per-screen spec didn't pin.
@@ -478,7 +481,7 @@ Check if `<working_dir>/brand/design-system.md` exists.
    - `bg` → `$surface0` / `$background`
    - `surface` → `$surface1` / `$color2`
    - `primary` → `$accentBase` / `$blue10`
-   - `accent` → `$brand`
+  - `accent` → `$accentBase`
    - `text` → `$color12`
    - `text-muted` → `$color10`
    - `border` → `$borderColor`
@@ -525,7 +528,7 @@ Read the `tamagui-design-system: <mode>` plan field from `## Design`. This is a 
 | Primary accent | `$blue10` | `$accentBase` |
 | Soft accent fill | `$color3` | `$accentSoft` |
 | Deep accent / pressed accent | `$blue8` | `$accentDeep` |
-| Text on accent background | `'white'` | `$accentOnBase` |
+| Text on accent background | `'white'` | `$accentOnAccent` |
 
 All translation tables below use the **custom path** names (`$surface0`, `$accentBase`, etc.). If you are on the default path, substitute the left column value everywhere you see a `$surface*` or `$accent*` token.
 
@@ -539,7 +542,7 @@ All translation tables below use the **custom path** names (`$surface0`, `$accen
 | "edge-to-edge rows" | No card wrapper on list rows. `XStack` with `borderBottomWidth={0.5} borderColor="$surface3"` only. No surface bg on rows |
 | "full-bleed image" | `Image` at 100% width, zero horizontal padding on parent, `contentFit="cover"`, height ≥ 200px |
 | "nothing — content leads" | No hero element. First content starts at standard density padding with no extra emphasis |
-| "badge / count" | `YStack` badge: `w={20} h={20} br={10} bg="$accentBase"`, `Text col="$accentOnBase" fontSize={10} fontWeight="700"`, `pos="absolute"` |
+| "badge / count" | `YStack` badge: `width={20} height={20} rounded={10} bg="$accentBase"`, `Text color="$accentOnAccent" fontSize={10} fontWeight="700"`, `position="absolute"` |
 
 ---
 
@@ -559,7 +562,7 @@ The hero visual principle is an app-level constraint, not a per-screen one. Appl
 
 ### Density mode → padding scale
 
-| Density | `px`/`py` on root | gap between sections | list row `minHeight` |
+| Density | `px`/`py` on root | gap between sections | list row `minH` |
 |---|---|---|---|
 | sparse | `$6`–`$8` | `$8`–`$10` | 72 |
 | comfortable | `$4` | `$5`–`$6` | 60 |
@@ -574,8 +577,8 @@ Apply to root `YStack`, section `gap`, and `FlatList` `ItemSeparatorComponent` h
 | Surface style | What to write |
 |---|---|
 | flat | No `Card`, no `borderWidth`. Page bg = token-path page background. Row bg = none (transparent). Edge-to-edge content |
-| subtle-depth | `YStack bg="$surface2" br="$3" p="$4"` for grouped content. No `borderWidth` — contrast from background difference only |
-| strong-cards | `YStack bg="$surface2" br="$4" p="$4" borderWidth={1} borderColor="$surface3"` for all grouped content |
+| subtle-depth | `YStack bg="$surface2" rounded="$3" p="$4"` for grouped content. No `borderWidth` — contrast from background difference only |
+| strong-cards | `YStack bg="$surface2" rounded="$4" p="$4" borderWidth={1} borderColor="$surface3"` for all grouped content |
 | editorial | One dominant content block per screen. Everything else `opacity={0.5}` or smaller type. Intentional blank space — do not fill it |
 
 ---
@@ -601,14 +604,14 @@ Apply to root `YStack`, section `gap`, and `FlatList` `ItemSeparatorComponent` h
 
 ### Radius policy → border-radius on all interactive elements
 
-| Policy | Buttons `br` | Cards `br` | Inputs `br` | Pills / tags `br` |
+| Policy | Buttons `rounded` | Cards `rounded` | Inputs `rounded` | Pills / tags `rounded` |
 |---|---|---|---|---|
 | tight | `$2` | `$3` | `$2` | `$4` |
 | medium | `$3` | `$4` | `$3` | `$6` |
 | loose | `$4` | `$5` | `$4` | `$8` |
 | pill | `$10` | `$4` | `$10` | `$10` |
 
-Apply to every `Button`, `Input`, `TextArea`, and grouped content `YStack` on this screen. FABs and avatar circles are always `br="$10"` regardless of policy.
+Apply to every `Button`, `Input`, `TextArea`, and grouped content `YStack` on this screen. FABs and avatar circles are always `rounded="$10"` regardless of policy.
 
 ---
 
@@ -618,7 +621,7 @@ Apply to every `Button`, `Input`, `TextArea`, and grouped content `YStack` on th
 |---|---|
 | functional | Standard Expo Router tab bar and stack header. No custom header components. `headerShown: true` with default styling. Chrome is invisible by design — users don't notice it |
 | atmospheric | Large title on tab-root screens: `headerLargeTitle: true` in `Stack.Screen options`. Stack headers use `headerTransparent: true` on detail screens. Pass `contentInsetAdjustmentBehavior="automatic"` to `ScrollView` so content scrolls under the large title |
-| cinematic | Detail screens: `headerShown: false` — build the back button inline in the screen. Tab bar hidden on detail screens: add `tabBarStyle: { display: 'none' }` to `Stack.Screen options`. Content fills to safe-area edges (`paddingTop={insets.top}`). Navigation chrome must not compete with content |
+| cinematic | Detail screens: `headerShown: false` — build the back button inline in the screen. Tab bar hidden on detail screens: add `tabBarStyle: { display: 'none' }` to `Stack.Screen options`. Content fills to safe-area edges (`pt={insets.top}`). Navigation chrome must not compete with content |
 
 ---
 
@@ -683,34 +686,34 @@ If absent, add it (one-line template fix per rule 36). Without it, `Swipeable` a
 **Print before starting:**
 > "→ [<screen_name>] Reading tamagui.config.ts to extract real token names…"
 
-**Why:** Tamagui tokens are TypeScript-checked but `xstyled` props (`col="$color"`, `bg="$bg"`) silently render as the literal string `'$color'` if the token doesn't exist — producing INVISIBLE TEXT at runtime that no smoke test catches because tsc passes. The real bug we hit in the field: `EquipmentRow` rendered with `col="$color"` instead of `col="$color12"` — builds clean, looks broken.
-
-**Hard rule: NEVER assume token names. Read them from the actual config.**
+Dynamic token values are not always type-checked; unknown aliases can render literally. Read the project config instead of guessing names.
 
 ```text
 Read: <working_dir>/tamagui.config.ts
 ```
 
-Extract the **explicit token names** that exist in this project. Pay attention to:
+Require Tamagui 2, `@tamagui/config/v5`, both customization markers, and marker-based `customConfig`. Otherwise return `BLOCKED: stale Tamagui template; expected Tamagui 2 with Config v5`.
 
-- `tokens.color.*` — numbered scales (`color1`…`color12`), brand aliases (`brandText`, `brandTextMuted`, `accentBase`, `accentEmphasis`), and surface tokens (`surface0`, `surface1`, `borderColor`).
-- `tokens.size.*`, `tokens.space.*`, `tokens.radius.*` — numbered scales.
-- `tokens.font.*` — family names (`heading`, `body`, `mono`).
-- `themes.light.*` / `themes.dark.*` — semantic tokens that flip per scheme.
+Read the effective customizations:
 
-**The list of allowed color tokens for THIS project is whatever you read above — not the canonical Tamagui defaults.** If `/design-system` generated `brand/tokens.ts` and `/create-mobile-app` Step 9b imported it through the Tamagui integration reference, the project may have brand-specific tokens (`brandText`, `brandSurface`, `accentBase`) that don't exist in stock Tamagui. Use those if present.
+- `customConfig.tokens.color` — added brand and surface aliases, when present.
+- `customConfig.tokens.size`, `space`, and `radius` — added scales or aliases.
+- `customConfig.fonts` — added families such as `heading`, `body`, and `mono`.
+- `customConfig.themes` — light/dark semantic overrides.
+
+Config v5 supplies the standard theme values listed below. Use custom token aliases only when `customConfig` defines them; never infer aliases from naming conventions.
 
 **Forbidden — do NOT use any of these in your TSX, ever:**
 
 | Forbidden | Why | Use instead |
 |---|---|---|
-| `col="$color"` (no number) | Renders as literal string → invisible text | `col="$color12"` (text), `col="$color9"` (muted) |
-| `col="white"` / `col="rgba(...)"` / `col="#fff"` | The `col` shorthand is typed `ColorTokens` only — TypeScript build fails with "string not assignable" | Use `color="white"` / `color="rgba(...)"` for raw strings; reserve `col=` for `$token` values only |
-| `col={someVar}` where `someVar` is typed `string` | Same TypeScript narrowing issue | Use `color={someVar}` |
+| `color="$color"` (no number) | Renders as literal string → invisible text | `color="$color12"` (text), `color="$color9"` (muted) |
 | `bg="$bg"` (no number) | Same — silently broken | `bg="$background"` or `bg="$color2"` |
-| `color="$primary"` | Stock Tamagui has no `$primary`; only brand configs may | `col="$accentBase"` if defined, else `col="$blue10"` |
+| `color="$primary"` | Stock Tamagui has no `$primary`; only brand configs may | `color="$accentBase"` if defined, else `color="$blue10"` |
 | Any `$<name>` you didn't see in `tamagui.config.ts` | Will render as the literal `'$<name>'` string | Read the config and pick a real token |
 | Raw hex (`#1a1a1a`, `#fff`) | Bypasses the design system; breaks dark mode | Always a token |
+
+**Config v5 props:** `onlyAllowShorthands` is enabled. Use v5 shorthands (`bg`, `items`, `justify`, `rounded`, `text`, `self`, `grow`/`shrink`, min/max, spacing, and edge shorthands) whenever defined. Keep unaliased longhands such as `flex`, `width`, `height`, `color`, `position`, `fontSize`, and `fontWeight`. Never use v4 aliases (`ai`, `jc`, `br`, `f`, `w`, `h`, `col`, `pos`, `ta`, `als`, `tt`, `ls`) or a longhand that v5 aliases.
 
 **The numbered-scale convention you can rely on** (Tamagui standard, present in any config):
 
@@ -763,7 +766,7 @@ import {
   // ... add others as needed: Input, Form, Separator, Image, Switch
   // Do NOT import Spinner — loading states use skeleton shapes, not a centered spinner (see quality checklist #1)
 } from 'tamagui';
-import { useThemeTokens, useThemeControl, lightTheme } from 'power-apps-native-host';
+import { useThemeTokens, useThemeControl, lightTheme } from '@microsoft/power-apps-native-host';
 // useThemeControl gives { setTheme, resetTheme } for runtime theme switching.
 // Only import useThemeControl and lightTheme in screens that need an in-app theme picker or per-user brand.
 // Remove unused imports when the screen has no theme-switching logic.
@@ -828,13 +831,13 @@ export default function <ScreenName>Screen() {
   // so the screen does not visibly jump when data arrives.
   if (loading) {
     return (
-      <YStack flex={1} backgroundColor="$backgroundStrong" paddingTop={insets.top} padding="$4" gap="$4">
+      <YStack flex={1} bg="$background" pt={insets.top} p="$4" gap="$4">
         <StatusBar style="auto" />
         {/* Example: 3 card-shaped skeletons for a list screen */}
         {Array.from({ length: 3 }).map((_, i) => (
-          <YStack key={i} bg="$color4" br="$4" p="$4" gap="$2">
-            <YStack h={16} w="60%" bg="$color5" br="$2" />
-            <YStack h={12} w="90%" bg="$color5" br="$2" />
+          <YStack key={i} bg="$color4" rounded="$4" p="$4" gap="$2">
+            <YStack height={16} width="60%" bg="$color5" rounded="$2" />
+            <YStack height={12} width="90%" bg="$color5" rounded="$2" />
           </YStack>
         ))}
       </YStack>
@@ -843,11 +846,11 @@ export default function <ScreenName>Screen() {
 
   if (error) {
     return (
-      <YStack flex={1} alignItems="center" justifyContent="center" padding="$4" gap="$3">
+      <YStack flex={1} items="center" justify="center" p="$4" gap="$3">
         <StatusBar style="auto" />
         <Ionicons name="alert-circle" size={40} color={theme.red10?.val} />
         <Text fontSize="$5" fontWeight="700">Something went wrong</Text>
-        <Text color="$color10" textAlign="center">{error}</Text>
+        <Text color="$color10" text="center">{error}</Text>
         <Button onPress={() => load(false)}>Try again</Button>
       </YStack>
     );
@@ -856,9 +859,9 @@ export default function <ScreenName>Screen() {
   return (
     <YStack
       flex={1}
-      backgroundColor="$backgroundStrong"
-      paddingTop={insets.top}
-      paddingBottom={insets.bottom}
+      bg="$background"
+      pt={insets.top}
+      pb={insets.bottom}
     >
       <StatusBar style="auto" /> {/* set to "light" if header is dark, "dark" if light */}
       {/* layout from spec — for FlatList screens:
@@ -885,8 +888,8 @@ export default function <ScreenName>Screen() {
       Re-run `npx power-apps add-data-source` from the app root with explicit connector/table flags to regenerate, then replace with <Select>. */}
     <Input
       value={String(field.value ?? '')}
-      onChangeText={v => field.onChange(Number(v))}
-      keyboardType="numeric"
+      onChange={event => field.onChange(Number(event.target?.value ?? event.nativeEvent?.text ?? ''))}
+      inputMode="numeric"
     />
     ```
     Triggers: (a) const not exported from the model file, (b) model file missing entirely, (c) option set has zero entries. Never silently drop the field or guess values.
@@ -911,10 +914,10 @@ Before finishing the screen, mentally verify:
 4. **Touch ownership is singular.** Do not nest a `Button`, `Pressable`, `Touchable*`, `Link`, or tappable custom stack inside another tappable parent (`onPress` on a row/card/container). The child can capture the responder so the parent never receives taps. If the whole row/card is tappable, children are passive visual elements. If a child needs its own action, make the parent non-tappable or split the controls into siblings. Decorative absolute overlays inside a tappable parent use `pointerEvents="none"`.
 5. **Text truncation** — titles use `numberOfLines={1}`, descriptions use `numberOfLines={2}`
 6. **Font weights** — screen title `fontWeight="700"`, section headers `fontWeight="600"`, body inherits default
-7. **Button hierarchy** — primary actions use verified color tokens or shared action components (`bg="$blue10" color="$color1"` or brand tokens seen in `tamagui.config.ts`). NEVER use `theme="active"` / `theme="primary"` unless that exact theme is defined in the project's `tamagui.config.ts`; unresolved themes render as gray and look disabled. If host-theme token resolution still renders primary CTA as pale/disabled-looking, move primary styling into a shared app button component with explicit brand-locked colors (annotated with `// brand-exception` on those lines). Destructive actions use verified danger tokens or a confirmed theme; secondary actions are outline/chromeless.
+7. **Button hierarchy** — Tamagui 2 does not forward text-style props from `Button` to its label. Primary actions use a confirmed Config v5 theme such as `<Button theme="blue">`, a shared action component, or explicit frame/text composition: `<Button bg="$blue10"><Button.Text color="$color1">Save</Button.Text></Button>`. NEVER put `color`, `fontSize`, or `fontWeight` directly on `Button`, and never use `theme="active"` / `theme="primary"` unless that exact theme is defined in the project's `tamagui.config.ts`. If host-theme token resolution still renders the CTA as pale or disabled-looking, move primary styling into a shared app button component with explicit brand-locked colors. Destructive actions use verified danger tokens or a confirmed theme; secondary actions use `variant="outlined"` or `chromeless`.
 8. **pressStyle** on tappable cards uses `{{ scale: 0.98 }}` (no opacity-only)
-9. **Accessibility** — all icon-only buttons have `accessibilityLabel`, interactive elements have `accessibilityRole`
-10. **Color and contrast** — follows 60/30/10 rule: 60% `$background`/`$backgroundStrong`, 30% `$color2`–`$color4` cards/surfaces, 10% `$blue10`/`$brand` accent. Readable text/icons never use `$color8` or weaker; inactive tabs, helper text, metadata, modal body copy, and icon affordances use `$color10` or stronger.
+9. **Accessibility** — Tamagui controls use ARIA props; React Native controls use native accessibility props. Label icon-only controls and give custom interactive stacks an appropriate role.
+10. **Color and contrast** — follows 60/30/10 rule: 60% `$background`/`$surface0`, 30% `$color2`–`$color4` or `$surface1`–`$surface3`, 10% `$blue10`/`$accentBase`. Readable text/icons never use `$color8` or weaker; inactive tabs, helper text, metadata, modal body copy, and icon affordances use `$color10` or stronger.
 11. **Monospace for data** — IDs, timestamps, coordinates, currency use `fontFamily="$mono"`
 12. **Button labels** — action-specific ("Save inspection", "Send for review"), never generic ("Submit", "OK", "Continue")
 14. **Anti-patterns** — check against mobile-design-philosophy.md Section 16. No centered text in content flows, no unnecessary cards, no engineer-facing strings
@@ -922,7 +925,7 @@ Before finishing the screen, mentally verify:
 16. **Copy tone** — if plan specifies a tone profile, all UI copy (empty states, errors, buttons, confirmations) matches that tone. Check examples in screen-templates.md "Copy Tone by Archetype" tables. No exclamation marks, no emoji, no "Submit"/"OK".
 17. **Section spacing** — content-heavy screens (detail, onboarding) use `gap="$8"` to `gap="$10"` between major sections per mobile-design-philosophy.md Section 11. Dense lists use tight spacing with separators.
 18. **Card borders** — cards use background fill difference (`bg="$color2"` on `$background`), NOT `borderWidth={1}` on everything. Borders are only for list item separators (`borderBottomWidth={0.5}`) and inputs. If every surface has a border, strip them and use fill contrast instead.
-19. **Status color saturation + contrast** — for non-field apps, status pills use desaturated colors (e.g., `bg="$green3" col="$green10"` not `bg="$green9" color="white"`). Never use white text on yellow/orange status fills (`bg="$yellow9" color="white"` fails often); use `bg="$yellow3" col="$yellow11"` / `bg="$orange3" col="$orange11"` or a much darker fill. Only field/ops apps keep full saturation for outdoor visibility, and even then the foreground/background pair must be AA.
+19. **Status color saturation + contrast** — for non-field apps, status pills use desaturated colors (e.g., `bg="$green3" color="$green10"` not `bg="$green9" color="white"`). Never use white text on yellow/orange status fills (`bg="$yellow9" color="white"` fails often); use `bg="$yellow3" color="$yellow11"` / `bg="$orange3" color="$orange11"` or a much darker fill. Only field/ops apps keep full saturation for outdoor visibility, and even then the foreground/background pair must be AA.
 20. **Palette warmth** — if the plan specifies a custom palette or industry, surfaces and text must use the named palette tokens (not raw grays like `#f5f5f5`/`#1a1a1a`). Even default Tamagui tokens have hue tinting — use `$background`/`$color2`/`$color12`, never hardcoded hex gray.
 21. **Dark mode quality** — dark mode is a designed inversion, not a raw swap. Background should be near-black with hue tint (not pure `#000`), text should be warm cream (not pure `#fff`), accent colors brighten, and shadows are replaced with surface elevation (`$color3` on `$color2`). See `color-palette-architecture.md` dark mode rules.
 22. **FlatList has `keyExtractor`** using a stable ID field, never the index.
@@ -938,18 +941,18 @@ Before finishing the screen, mentally verify:
 26. **Dates serialize via `.toISOString()`** to Dataverse and display via `Intl.DateTimeFormat(undefined, {...})` — never `.toString()` / `.toLocaleString()` without options.
 27. **`<StatusBar style="..." />`** is set on every branch of the screen (loading, error, populated) matching the header background.
 28. **Error UI shows friendly copy**, not `e.message`. Raw error goes to `console.error` for devtools.
-29. **Shadows use Tamagui `elevation` prop or the `shadows` token export**, never inline `shadowOffset`/`shadowColor`.
+29. **Shadows** — Tamagui uses `boxShadow` or verified v2 shadow tokens; native shadow props stay in React Native styles.
 30. **Skeleton wrapper matches populated wrapper** — same insets, padding, gap. No layout jump on data arrival.
 31. **Brand negatives** — if `brand/design-system.md` exists, re-read `## Negatives` and verify the screen violates NONE of them. This is a hard gate — do not return DONE if any negative is violated.
 32. **Brand token usage** — if `brand/design-system.md` exists, verify that NO raw hex values appear in the TSX. Tamagui layout primitives use `$token` syntax (`$surface0`, `$accentBase`, etc.). Raw React Native elements (e.g. `ActivityIndicator`, `StyleSheet`) use values from `useThemeTokens()` (e.g. `theme.accentBase`, `theme.surface0`) — never hardcode hex literals.
 33. **Domain differentiation** — could this screen belong to a different app unchanged? If yes, it is too generic. The row style, hero element, empty state copy, and visual emphasis must reflect the actual entity and domain. A status-stripe card on an inspection list looks different from a stat-card row on a project list — verify the entity-specific fields are surfaced prominently, not buried.
 34. **Dashboard/workflow patterns** — if the spec includes `Operational pattern: <key>`, look up the required layout pieces in [`shared/references/screen-templates.md`](../shared/references/screen-templates.md) under "Operational pattern keys" and implement that contract — NOT a generic CRUD shell. Same lookup applies to `Row style:` (List screens) and `Hero type:` (Detail screens). The reference is the source of truth for every catalogue key the spec emits; never improvise a different layout for a known key.
-35. **Color tokens are explicit** — grep your TSX before returning DONE: `grep -E '(col|color|bg|background|borderColor)="\$[a-z]+"' <file>` and verify EVERY match resolves to a token you saw in `tamagui.config.ts` at Step 2c. Any `$color` / `$bg` / `$primary` / `$text` (un-suffixed shorthand or stock guess) is an automatic fail — fix to a numbered (`$color12`) or brand-aliased (`$brandText`) token before returning. **This is the #1 silent-render bug in the plugin's history.**
+35. **Color tokens are explicit** — grep your TSX before returning DONE: `grep -E '(color|bg|borderColor)="\$[a-z]+"' <file>` and verify EVERY match resolves to a token you saw in `tamagui.config.ts` at Step 2c. Any `$color` / `$bg` / `$primary` / `$text` (un-suffixed shorthand or stock guess) is an automatic fail — fix to a numbered (`$color12`) or brand-aliased (`$brandText`) token before returning. **This is the #1 silent-render bug in the plugin's history.**
 36. **Button themes are not semantic shortcuts.** Grep your TSX for `theme="active"`, `theme="primary"`, and similar generic theme names. If the theme name was not present in `tamagui.config.ts`, replace it with explicit tokens (`bg`, `color`, `borderColor`) or a shared component. Primary CTAs must never look disabled because a guessed theme fell back to a neutral surface.
 37. **No raw hex outside `brand/tokens.ts`** — grep `grep -E '#[0-9a-fA-F]{3,8}' <file>` should return zero matches in your screen file. If you find one: replace with the corresponding `$token` for Tamagui primitives, or with `theme.<tokenName>` for raw RN elements.
-38. **Mobile chrome from screenshots** — headers/titles never clip under the status area; use `SafeAreaView` or `paddingTop={insets.top}` in every loading/error/populated branch. FABs, snackbars, and sticky CTAs use `bottom={insets.bottom + 16}` or `bottom={tabBarHeight + insets.bottom + 16}` rather than a bare `bottom={16}`. If a screen has `BottomActionBar`, sticky form actions, or a FAB, `SafeAreaView` includes `edges={['top', 'bottom']}`.
+38. **Mobile chrome from screenshots** — headers/titles never clip under the status area; use `SafeAreaView` or `pt={insets.top}` in every loading/error/populated branch. FABs, snackbars, and sticky CTAs use `b={insets.bottom + 16}` or `b={tabBarHeight + insets.bottom + 16}` rather than a bare `b={16}`. If a screen has `BottomActionBar`, sticky form actions, or a FAB, `SafeAreaView` includes `edges={['top', 'bottom']}`.
 39. **Status cues are not doubled** — list rows use either a left status stripe with text OR a status pill, not both. Detail screens with Fail/Error states use a compact status band or tinted summary area; avoid a huge red hero that makes the record look like an app error unless the spec explicitly asks for emergency-mode field visibility.
-40. **Input ergonomics** — every Form field uses the right mobile control and keyboard hints from the spec: native date/time picker for dates, `keyboardType`/`inputMode` for numeric/phone/email/url/search fields, `autoComplete`/`textContentType` where supported, `returnKeyType` for multi-field flows, and switches/segmented controls/lookups instead of free text when the value is bounded.
+40. **Input ergonomics** — Tamagui inputs use web-standard props (`inputMode`, `type`, `enterKeyHint`, `autoComplete`, `onChange`, `onKeyDown`, `readOnly`). React Native inputs keep native props. Prefer native or bounded controls over free text when the data permits.
 41. **Progress preservation** — validation errors, failed saves, and refetches never clear user-entered values. Short forms guard dirty cancel/back; long or multi-step forms autosave a local draft and show a resume/discard prompt instead of starting over.
 42. **Dynamic type and one-handed reach** — never set `allowFontScaling={false}` on readable text. Common actions stay reachable near the bottom or in native bottom chrome; top-right actions are secondary and have an accessible fallback.
 43. **Navigation/submit idempotency checks** — navigation handlers and submit handlers are duplicate-tap safe. Primary nav CTA uses `isNavigating` lock and submit CTA uses `isSubmitting`/`isPending` lock with disabled state + label swap; failed saves do not pop/replace.
@@ -960,9 +963,9 @@ Before finishing the screen, mentally verify:
 Apply these to every generated screen unless the per-screen spec explicitly overrides them. These rules prevent screens from looking technically correct but operationally weak.
 
 43. **Primary action placement is consistent.** The workflow's main action lives in `BottomActionBar` or a bottom-reachable card CTA. Do not put the primary submit/start/sign-off action as plain header text. Header actions are for Back/Cancel, lightweight secondary actions, or native navigation affordances.
-44. **Bottom actions clear the tab bar and home indicator.** Use shared `BottomActionBar` for sticky form/review/sign-off actions. If custom bottom UI is required, use `paddingBottom={insets.bottom + 20}` or `bottom={insets.bottom + 20}` and keep at least `$4` visual breathing room above tab/native chrome.
+44. **Bottom actions clear the tab bar and home indicator.** Use shared `BottomActionBar` for sticky form/review/sign-off actions. If custom bottom UI is required, use `pb={insets.bottom + 20}` or `b={insets.bottom + 20}` and keep at least `$4` visual breathing room above tab/native chrome.
 45. **Disabled actions explain why.** If a primary action is disabled, render one short reason near the action using readable `$color10` or stronger text. Examples: `Select a flight to continue`, `Complete all zones before sign-off`, `Resolve or override critical defects first`. Never leave a disabled button as the only feedback.
-46. **Create actions use the right label shape.** On Home/dashboard/workflow screens, visible primary CTAs are labeled (`New inspection`, `Start walkaround`) and may include a leading `add` icon. Do not use an icon-only `+` as the only Home CTA. On a List/queue screen, an icon-only `FloatingActionButton` is acceptable only when it is the single obvious create action; it MUST still pass `label="New <entity>"` for `accessibilityLabel`. If there are multiple create-like actions or the entity is not obvious, use `extended` so the visible button reads `+ New <entity>`.
+46. **Create actions use the right label shape.** On Home/dashboard/workflow screens, visible primary CTAs are labeled (`New inspection`, `Start walkaround`) and may include a leading `add` icon. Do not use an icon-only `+` as the only Home CTA. On a List/queue screen, an icon-only `FloatingActionButton` is acceptable only when it is the single obvious create action; it MUST still pass `label="New <entity>"` so the component can expose an `aria-label`. If there are multiple create-like actions or the entity is not obvious, use `extended` so the visible button reads `+ New <entity>`.
 47. **Filter chips are compact and horizontal.** For 4+ filters, use shared `FilterChipRow` or a horizontal `ScrollView` chip row. Chips are controls, not cards: height 32-40pt, modest horizontal padding, no equal-width expansion, no wrapping into multiple rows unless this is a dedicated filter panel. Include counts when available (`Submitted 3`).
 48. **Header meaning is domain context, not action clutter.** List headers name the queue/entity and optional count/context. Detail headers name the object or job state. Form/modal headers are `Cancel` left + title center; primary submit action belongs in the bottom bar. Avoid crowded rows like `Cancel | Title | Start workflow`.
 49. **Empty and error states are different.** Empty states describe the real domain condition and next step (`No assigned inspections`, `Flights assigned to you will appear here`). Filter-empty states mention the active filter and how to recover. Query/API failures use `ErrorState` with retry, not an empty state. **Filtered or joined lists MUST scaffold three branches** — (a) parent-not-yet-saved → CTA to the parent-create flow; (b) parent-saved-no-children → CTA to the child-create flow; (c) children-exist-but-filter-narrowed → CTA to clear the filter. Generic `"No items found"` is acceptable only on top-level lists with no filter and no parent dependency.
@@ -1029,7 +1032,7 @@ Follow these whenever the spec touches navigation, list rows, or modals. Recipes
     import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
     const insets = useSafeAreaInsets();
-    <YStack pos="absolute" right={16} bottom={insets.bottom + 16}>
+    <YStack position="absolute" r={16} b={insets.bottom + 16}>
       <Button circular size="$5" icon={<Ionicons name="add" size={24} />} />
     </YStack>
     ```
@@ -1080,8 +1083,10 @@ Follow these whenever the spec touches navigation, list rows, or modals. Recipes
 
     ```tsx
     import NetInfo from '@react-native-community/netinfo';
+    import { useTheme } from 'tamagui';
 
     const [isConnected, setIsConnected] = React.useState(true);
+    const theme = useTheme();
     React.useEffect(() => {
       const unsub = NetInfo.addEventListener(state => {
         setIsConnected(state.isConnected ?? true);
@@ -1091,9 +1096,9 @@ Follow these whenever the spec touches navigation, list rows, or modals. Recipes
 
     // Render above the slot/navigator:
     {!isConnected && (
-      <XStack bg="$red4" px="$4" py="$2" ai="center" jc="center" gap="$2">
-        <Ionicons name="cloud-offline-outline" size={16} color="$red10" />
-        <Text fontSize="$2" fontWeight="600" col="$red10">No connection</Text>
+      <XStack bg="$red4" px="$4" py="$2" items="center" justify="center" gap="$2">
+        <Ionicons name="cloud-offline-outline" size={16} color={theme.red10.val} />
+        <Text fontSize="$2" fontWeight="600" color="$red10">No connection</Text>
       </XStack>
     )}
     ```
@@ -1124,7 +1129,17 @@ Follow these whenever the spec touches navigation, list rows, or modals. Recipes
     - `<Input>` with manual date string parsing
     - Any third-party calendar picker library
 
-## Step 4 — Return Status
+## Step 4 — Validate the written screen
+
+Before returning a status, run the mobile changed-file dispatcher against exactly `target_file`:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" --project-root "<working_dir>" --file "<target_file>"
+```
+
+If it exits `2`, repair every reported violation and rerun it. Do not return `DONE` until it exits `0`. This explicit mobile-owned gate replaces the former plugin-wide write hooks, which also ran during unrelated Canvas Apps workflows.
+
+## Step 5 — Return Status
 
 You MUST return your final message to the orchestrator with one of these four status codes as the **literal first line** (no markdown, no preamble, no `Status:` prefix, no backticks). The orchestrator parses the first line to decide what to do next. After the status line, leave a blank line, then write the one-line summary below.
 

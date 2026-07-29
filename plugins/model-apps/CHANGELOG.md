@@ -2,13 +2,21 @@
 
 All notable changes to the **model-apps** plugin.
 
-## [Unreleased] — 2.3.0
+## [Unreleased] — 2.4.0
 
 A new **`/app-builder`** skill (Preview) that builds and edits whole model-driven apps,
 plus local-dev ergonomics, sample coverage, and an automated eval suite with
-real and synthetic fixtures. Builds on v2.1; no breaking changes.
+real and synthetic fixtures. Builds on v2.3; no breaking changes.
 
 ### Added
+- **`/app-builder` is covered by the v2.3 hooks + telemetry.** Tracked-skill discovery is derived from
+  `skills/*/SKILL.md`, so the new skill emits `skill_started` telemetry with no list to maintain. The two
+  write-time guards, which previously only engaged during a `/genpage` run, now also engage for an
+  `/app-builder` session: session detection accepts the app-builder working-dir markers
+  (`app-spec.json`, `model-app-plan.md`) alongside `genpage-plan.md`, so the **write-safety** guard
+  covers app-builder's `generate-pages` phase (which dispatches parallel page-builder workers — the same
+  runaway-sub-agent write risk), and the **icon-import** allowlist opts in app-builder's generated pages
+  by sibling marker as well as by the `export default GeneratedComponent` content marker.
 - **Security roles per persona (`personas[]`) — the generated app now opens for real users, not just
   system administrators.** A new optional top-level `personas[]` block authors **one security role per
   persona**, sized to the entity access that persona's **jobs-to-be-done** need. The model is
@@ -488,6 +496,128 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   (quoted + unquoted GUID literals) round-trip without double-encoding; name-based methods
   (`deleteTable` / `setEntityIcon` / `resolveArtifact` / `createRelationship`) accept logical/unique
   names verbatim; sitemap free-text titles/URLs are XML-escaped, not rejected.
+
+## 2.3.0 — 2026-07-23
+
+Plugin observability + authoring guardrails: default-on (but ship-disabled)
+anonymous telemetry with a local diagnostic log, PostToolUse validators, and a
+hardened Playwright launcher. No breaking changes.
+
+### Added
+- **Anonymous 1DS telemetry (default-on, ships `disabled` until provisioned).**
+  Copied the shared telemetry library into `scripts/lib/telemetry/lib` with a
+  plugin-owned `ikey.json` (Tier-1 static key; ships `disabled: true` until go-live).
+  Emits `skill_started` via PreToolUse(Skill) + UserPromptSubmit hooks and writes
+  a local diagnostic mirror at
+  `~/.power-platform-skills/telemetry/model-apps/sessions/<id>/events.jsonl`. New
+  `/model-apps:telemetry on|off|status` control skill; CI/automation opt-out via
+  `POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT=1`. Fail-closed throughout —
+  never changes a skill's exit code. Carries **no user-level identifier** (no Entra
+  object id) — only org/tenant GUIDs when signed in.
+- **PostToolUse validators (`hooks/hooks.json`).** A per-skill validator runner
+  plus an `@fluentui/react-icons` allowlist check that validates every genpage
+  `.tsx` write against `references/verified-icons.txt`, automating the
+  page-builder's manual icon-grep step (hallucinated or sized icon names are
+  blocked at write time).
+- **PreToolUse write-safety guard.** **Flags (non-blocking, exit 1)**
+  Write/Edit/MultiEdit outside the cwd, and only during an active genpage session
+  (a `genpage-plan.md` at/under cwd) — so a globally-installed plugin never blocks
+  or interferes with unrelated work. Silence with `MODEL_APPS_SKIP_WRITE_GUARD=1`.
+
+### Fixed
+- **Generated-page double-fetch / render flash on open.** Generated data pages
+  could fetch twice and re-flash the spinner because (1) the webplayer host
+  double-mounts the page on open (a cache-bypassing app relaunch ~300ms after
+  the first mount re-runs the data effect — confirmed via network capture: two
+  `POST .../powerapps/apps/<app>/launch`, the second `bypass-cache=true`), and
+  (2) `dataApi` is a new reference each render, so listing it in a `useEffect`
+  dep array re-fires the effect every render. Reworked the data-fetch guidance
+  (`references/data-caching.md`, `rules.md` Rule 15) and every exemplar
+  (samples 3/9/10/11, `localization.md`) to use an **in-flight-promise de-dupe +
+  `window` cache** (concurrent mounts share one round-trip; later mounts paint
+  from cache with no spinner) and a **readiness boolean** dependency —
+  `dataApi` is now forbidden in any dependency array. The de-dupe applies to any
+  page that fetches on mount, including single-visit overviews/dashboards
+  (previously excluded from caching); `Needs caching:` in the plan schema now
+  means "fetches on mount." The host relaunch itself is a platform-side issue
+  tracked separately.
+- **Playwright MCP launcher.** `scripts/launch-playwright-mcp.js` now exports
+  `launch()` — satisfying the `.mcp.json` contract instead of relying on a
+  require-time side-effect — adds `-y` (avoids the npx first-run prompt hang),
+  opens the browser fullscreen via `playwright-mcp-fullscreen.config.json`, and
+  quotes the config path so Windows paths with spaces work. Browser detection
+  extracted to the reusable `scripts/lib/detect-browser.js`.
+- Eval fixture `18-sharepoint-connectors-on`: relabel the connector-only page
+  `Data mode: mock + connectors` to match the page-builder contract (connectors
+  are orthogonal to the Dataverse axis).
+
+### Tests
+- New `node:test` coverage for the launcher, `modelapps-hook-utils`, the
+  icon-import and write-safety validators, and the telemetry pretool hook.
+
+## 2.2.0
+
+Local-dev ergonomics, sample coverage, and an automated eval suite with
+real and synthetic fixtures. Builds on v2.1; no breaking changes.
+
+### Added
+- **Phase 0.5 — local-dev manifest.** Working dirs now get `package.json`
+  and `genpage.d.ts` so `npm install` + editor IntelliSense work after
+  generation. Versions in `references/supported-dependencies.md`.
+- **Eval suite runners.** `run-layer-1.js` (workflow assertions) and
+  `run-layer-2.js` (code assertions) emit TAP v13. `EVAL_GUIDE.md` covers
+  types, tiers, capture flow.
+- **10 fixtures** under `evals/.../fixtures/` (6 synthetic + 4 real
+  captures; all green under the tightened v2.2 spec).
+- `scripts/capture-fixture.js` — copies `/genpage` working dirs into
+  fixtures and runs both layers.
+- `samples/11-kanban-with-dnd.tsx` — native HTML5 drag-and-drop sample.
+- `samples/12-dialog-form-overlay.tsx` + **Dialogs and Overlays** guidance
+  (rules.md rules 16–18 and Special Patterns section, plus a troubleshooting
+  entry): confine portalled Fluent surfaces (`Dialog`, `Popover`, `Menu`,
+  `Tooltip`, `Combobox`/`Dropdown`) to the page via `mountNode` +
+  `contain: layout`, default dialogs to `modalType="non-modal"`, and never nest
+  dialogs — so a modal can't escape the preview and cover the designer /
+  coding-agent panel.
+- **Feature-flag gate for connectors (default OFF).** `feature-flags.json` at the
+  plugin root plus `scripts/lib/feature-flags.js` gate connector support so the
+  skill can ship ahead of its cross-repo dependencies (pac connector verbs, the
+  GenUX authoring control, and the maker/admin setting) reaching PROD. When OFF,
+  the planner skips connector discovery and records `No connector bindings.`, and
+  the connector scripts (`list-connections.js`, `create-connection-reference.js`)
+  fail closed with exit 3. Precedence: env `GENPAGE_ENABLE_CONNECTORS` overrides
+  the committed file; default is OFF (fail-closed). Flip the file to `true` once
+  the dependencies are GA.
+- **`genpage-connector-builder` agent — single owner of connector work.** Connector
+  discovery, connection-reference creation, the feature gate, and the
+  `## Connector Bindings` contract now live in one agent invoked from **both** the
+  create flow (planner) and the edit flow (edit-planner) — so edits can add/replace
+  connectors (previously only preserve/clear worked) and the gate can't drift across
+  markdown. Hardened per review: deploy (SKILL Phase 4.5) **re-probes** the flag and
+  treats an absent/malformed `## Connector Bindings` as no bindings; the page-builder
+  emits connector code only for an actual binding table; the `--connection-refs`
+  branch of `add-page-to-solution.js` is gated; scripts share `exitIfConnectorsDisabled()`;
+  and `feature-flags.js` gains `--list`, `describe()`, and config validation.
+
+### Changed
+- Spec tightening so workflow-logs are command-verbatim and `pageInput`
+  destructure is required even on mock pages (planner, page-builder,
+  SKILL.md Phase 6 + Phase 8).
+- 8 runner regex relaxations to accept functionally-equivalent agent
+  patterns (typed `(window as any).Xrm` aliases, `pac solution list`,
+  local enum mapping, etc.) — no rule loosening.
+
+### Fixed
+- **Synthetic fixtures + sample 11 now follow Rule 11 (queryTable returns
+  DataTable, not an array).** 7 files were iterating `result` directly
+  (`setTasks(result)`, `result.map(...)`) instead of `result.rows`,
+  producing `X.map is not a function` at runtime. Fixed in
+  `samples/11-kanban-with-dnd.tsx` and 6 fixture `.tsx` files.
+  New Layer 2 assertion catches this pattern going forward: any Dataverse
+  file calling `dataApi.queryTable` must access `.rows` somewhere.
+
+### Tests
+- 215 passing across `scripts/tests/` + `evals/.../tests/`.
 
 ## 2.1.0 — 2026-05-13
 

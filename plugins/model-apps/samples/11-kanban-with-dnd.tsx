@@ -28,7 +28,7 @@ import { GeneratedComponentProps, Task } from './RuntimeTypes';
 //   - Three columns mapped to task statuscode values (Not Started=2,
 //     In Progress=3, Completed=5 — Dataverse defaults for the `task` entity;
 //     see task_statuscode in RuntimeTypes)
-//   - Window cache (window.__genpage_tasks_v1) for the inline IIFE pattern
+//   - Page-scoped window cache (window.__ppTaskBoard_taskCache) + in-flight de-dupe
 //   - Realistic empty / loading / error states
 //   - Logical CSS properties (paddingInline, paddingBlock, marginInlineStart)
 //   - Unsized Fluent icons (ClipboardTaskRegular, PlayRegular, CheckmarkCircleRegular)
@@ -128,36 +128,65 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
     void pageInput; // board does not consume incoming pageInput
     const styles = useStyles();
 
-    const [tasks, setTasks] = React.useState<Task[]>([]);
-    const [loading, setLoading] = React.useState(true);
-    const [error, setError] = React.useState<string | null>(null);
+    // Page-scoped window keys (unique per page + query) so this board doesn't
+    // collide with other pages caching the same entity — see data-caching.md.
+    const CACHE_KEY = '__ppTaskBoard_taskCache';
+    const INFLIGHT_KEY = '__ppTaskBoard_taskInflight';
+    const winAny = window as unknown as Record<string, unknown>;
+    // Single batched fetch state (Rule 14 — React 17 doesn't batch setState in
+    // async callbacks, so one object + one setData avoids intermediate renders).
+    // Lazy-init from the window cache so the host's second mount paints tasks
+    // immediately instead of flashing the spinner (see references/data-caching.md).
+    const [{ tasks, loading, error }, setData] = React.useState<{ tasks: Task[]; loading: boolean; error: string | null }>(
+        () => {
+            const cached = winAny[CACHE_KEY] as Task[] | undefined;
+            return { tasks: cached ?? [], loading: cached === undefined, error: null };
+        },
+    );
     const [draggingId, setDraggingId] = React.useState<string | null>(null);
     const [hoverColumn, setHoverColumn] = React.useState<StatusValue | null>(null);
 
+    const dataReady = !!dataApi;
+
     React.useEffect(() => {
-        (async () => {
-            const cacheKey = '__genpage_tasks_v1';
-            const w = window as unknown as Record<string, Task[] | undefined>;
-            if (w[cacheKey]) {
-                setTasks(w[cacheKey] as Task[]);
-                setLoading(false);
-                return;
-            }
-            try {
-                const result = await dataApi.queryTable<Task>('task', {
+        if (!dataReady) return;
+        const cacheKey = CACHE_KEY;
+        const inflightKey = INFLIGHT_KEY;
+        const w = winAny;
+
+        const cached = w[cacheKey] as Task[] | undefined;
+        if (cached !== undefined) {
+            setData({ tasks: cached, loading: false, error: null });
+            return;
+        }
+
+        let cancelled = false;
+
+        // De-dupe the host double-mount: concurrent mounts share one fetch.
+        let pending = w[inflightKey] as Promise<Task[]> | undefined;
+        if (!pending) {
+            pending = dataApi
+                .queryTable<Task>('task', {
                     select: ['activityid', 'subject', 'description', 'statuscode', 'prioritycode'],
                     top: 200,
-                });
-                // queryTable returns DataTable<T> = { rows: T[], hasMoreRows, loadMoreRows() } — access records via .rows
-                w[cacheKey] = result.rows;
-                setTasks(result.rows);
-            } catch (e) {
-                setError(e instanceof Error ? e.message : String(e));
-            } finally {
-                setLoading(false);
-            }
-        })();
-    }, [dataApi]);
+                })
+                // queryTable returns DataTable<T> = { rows: T[], ... } — read .rows
+                .then((result) => {
+                    w[cacheKey] = result.rows;
+                    return result.rows;
+                })
+                .finally(() => { if (w[inflightKey] === pending) delete w[inflightKey]; });
+            w[inflightKey] = pending;
+        }
+
+        pending
+            .then((rows) => { if (!cancelled) setData({ tasks: rows, loading: false, error: null }); })
+            .catch((e) => { if (!cancelled) setData((prev) => ({ ...prev, loading: false, error: e instanceof Error ? e.message : String(e) })); });
+
+        return () => { cancelled = true; };
+        // Readiness only — never `dataApi`. See Rule 15.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [dataReady]);
 
     const handleDragStart = (e: React.DragEvent<HTMLDivElement>, taskId: string) => {
         e.dataTransfer.effectAllowed = 'move';
@@ -199,16 +228,14 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
             t.activityid === taskId ? { ...t, statuscode: targetStatus } : t,
         );
         const prevTasks = tasks;
-        setTasks(nextTasks);
-        const w = window as unknown as Record<string, Task[] | undefined>;
-        w.__genpage_tasks_v1 = nextTasks;
+        setData((prev) => ({ ...prev, tasks: nextTasks }));
+        winAny[CACHE_KEY] = nextTasks;
 
         try {
             await dataApi.updateRow('task', taskId, { statuscode: targetStatus });
         } catch (err) {
-            setTasks(prevTasks);
-            w.__genpage_tasks_v1 = prevTasks;
-            setError(err instanceof Error ? err.message : String(err));
+            setData((prev) => ({ ...prev, tasks: prevTasks, error: err instanceof Error ? err.message : String(err) }));
+            winAny[CACHE_KEY] = prevTasks;
         }
     };
 

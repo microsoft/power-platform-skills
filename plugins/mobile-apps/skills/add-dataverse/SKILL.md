@@ -17,7 +17,7 @@ Two paths:
 
 ## Workflow
 
-1. Verify project & auth → 2. Resolve plan → 3. Setup Dataverse Web API auth → 4. Review existing tables → 5. Create / extend tables → 5d. Create alternate keys → 6. Add data sources → 6b. Publish customizations → 6c. Verify tables → 6d. Write manifest → 7. Inspect generated files → 8. Type-check → 9. Summary
+1. Verify project & auth → 2. Resolve plan → 3. Setup Dataverse Web API auth → 4. Review existing tables → 5. Create / extend tables → 5d. Create alternate keys → 6. Add data sources → 6b. Publish customizations → 6c. Verify tables → 6d. Write manifest → 7. Inspect generated files → 8. Type-check → 8.5. Offline profile reconciliation → 9. Summary
 
 ---
 
@@ -329,7 +329,7 @@ For each `Create` decision, in **tier order** (Tier 0 → Tier 1 → Tier 2 → 
 
 **Solution targeting (HARD):** every Step 5 / 5b POST MUST pass `--solution <uniquename>` so Dataverse routes the new artifact into our solution rather than the unmanaged default. Read the solution name from `memory-bank.md` Power Platform context (captured in Step 3b). Without this flag, multi-project environments end up with cross-solution leakage and the foreign-collision class of bug returns. The script translates `--solution` to the `MSCRM.SolutionUniqueName` HTTP header.
 
-**Scratch files:** When writing request body JSON to disk (e.g. table definitions, column metadata, relationship payloads), always write to `<working_dir>/.tmp/`, never to `/tmp/`. The hook `validate-write-safety.js` blocks writes outside the project directory. Create the folder if it doesn't exist: `mkdir -p <working_dir>/.tmp`.
+**Scratch files:** When writing request body JSON to disk (e.g. table definitions, column metadata, relationship payloads), always write to `<working_dir>/.tmp/`, never to `/tmp/`. Keeping request bodies project-local prevents cross-project writes and makes cleanup deterministic. Create the folder if it doesn't exist: `mkdir -p <working_dir>/.tmp`.
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST EntityDefinitions \
@@ -717,7 +717,7 @@ Grep pattern="async (create|getAll|getById|update|delete|upload|downloadFile|dow
 
 If the table has file or image columns, confirm the service includes `upload`, `downloadFile`, `downloadImage`, `deleteFileOrImage` — and the model exposes `<Table>FileColumnName` / `<Table>ImageColumnName` union types.
 
-**File/image column UI controls:** When a generated table has File or Image columns, note this in the summary so screen-builders apply the host controls from `power-apps-native-host`:
+**File/image column UI controls:** When a generated table has File or Image columns, note this in the summary so screen-builders apply the host controls from `@microsoft/power-apps-native-host`:
 - **File columns** → `<FilePicker>`; upload bytes separately via the generated service's upload method after the main create/update.
 - **Image columns** → `<ImagePicker>`; capture `PickedImageInfo` via `onImageChange` and persist through generated `upload(...)` after the main create/update.
 - **Read/view flows** → use generated `downloadFile(...)` / `downloadImage(...)` helpers for existing attachments/previews.
@@ -779,6 +779,26 @@ npx tsc --noEmit
 
 Fix any errors. Common: missing peer dependencies — `npx expo install <package>`.
 
+### Step 8.5 — Offline profile reconciliation
+
+A schema change here (new table or new column) can leave an existing Mobile Offline Profile behind — new tables never sync to devices and new columns come down blank. Reconcile the profile with what you just created.
+
+**Skip this step entirely when `$ARGUMENTS` contains `--skip-planning`** (the orchestrator-invoked path). `/create-mobile-app`, `/setup-datamodel`, and `/edit-app` own offline reconciliation in their own flow, so running it here too would double-prompt.
+
+Otherwise (manual `/add-dataverse`), run the local, no-network delta check:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/offline-profile-delta.js"
+```
+
+Branch on the JSON `status` per [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md):
+
+| `status` | Action |
+|---|---|
+| `no-manifest` / `no-profile` / `in-sync` | Continue to Step 9 silently. For `no-profile` (no offline profile exists) do not nag — the app may not use offline. |
+| `error` | `offline-profile.json` is unreadable — the script prints `status: error` and **exits non-zero**. Do NOT treat this as an `/add-dataverse` failure (the tables are already created): surface the `error` string, **skip reconciliation** (never drive the update workflows against a corrupt file), and finish with `DONE_WITH_CONCERNS` telling the user to fix `offline-profile.json`. |
+| `delta` | Prompt the user (one `AskUserQuestion`, default = update now) to add the missing tables / new columns. For `missingTables[]`, read and execute `${CLAUDE_SKILL_DIR}/../add-table-to-offline-profile/SKILL.md`; for `tablesWithNewColumns[]`, read and execute `${CLAUDE_SKILL_DIR}/../edit-offline-profile/SKILL.md` with `--table <t> --columns add:<newColumns>`. Re-run the delta check; it should read `in-sync`. Follow the exact prompt + ordering in the reconciliation reference. |
+
 ### Step 9 — Summary
 
 ```
@@ -837,3 +857,4 @@ After printing the summary, **offer one-click sample-data seeding** — but only
 ## Reference
 
 - [`scripts/dataverse-request.js`](../../scripts/dataverse-request.js) — bundled in this plugin
+- [shared/references/offline-profile-reconciliation.md](../../shared/references/offline-profile-reconciliation.md) — Step 8.5 offline delta check + reconciliation flow

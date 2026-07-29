@@ -22,7 +22,7 @@ Thin wrapper over `expo-linear-gradient` that accepts a named gradient key:
 
 ```tsx
 import { LinearGradient } from 'expo-linear-gradient'
-import { gradients, GradientName } from './tokens'
+import { gradients, type GradientName } from '@/tokens'
 
 export function Gradient({
   name,
@@ -73,10 +73,10 @@ export function StatusPill({
   const s = STATUS_STYLES[status]
   return (
     <XStack
-      bg={s.bg} px="$2" py="$1" br="$10" ai="center"
-      accessibilityLabel={`Status: ${label ?? s.label}`}
+      bg={s.bg} px="$2" py="$1" rounded="$10" items="center"
+      aria-label={`Status: ${label ?? s.label}`}
     >
-      <Text fontSize="$1" fontWeight="600" col={s.text}>{label ?? s.label}</Text>
+      <Text fontSize="$1" fontWeight="600" color={s.text}>{label ?? s.label}</Text>
     </XStack>
   )
 }
@@ -91,38 +91,40 @@ Usage: `<StatusPill status="overdue" />` or `<StatusPill status="complete" label
 Metric card for dashboard summary rows. Pair two side-by-side in an `XStack`.
 
 ```tsx
-import { YStack, XStack, Text } from 'tamagui'
-import type { ComponentProps } from "react"
-import { Ionicons } from "/vector-icons"
-type IoniconName = ComponentProps<typeof Ionicons>["name"]
-import { shadows } from './shadows'
+import { YStack, XStack, Text, useTheme } from 'tamagui'
+import { Ionicons } from '@expo/vector-icons'
+import { shadows } from '@/tokens'
+
+type IoniconName = React.ComponentProps<typeof Ionicons>['name']
 
 export function StatTile({
   label,
   value,
   trend,
   trendUp,
-  icon: Icon,
+  iconName,
 }: {
   label: string
   value: string | number
   trend?: string
   trendUp?: boolean
-  icon?: IoniconName
+  iconName?: IoniconName
 }) {
+  const theme = useTheme()
+
   return (
     <YStack
-      bg="$color2" br="$4" p="$4" gap="$1" f={1}
+      bg="$color2" rounded="$4" p="$4" gap="$1" flex={1}
       {...shadows.sm}
-      accessibilityLabel={`${label}: ${value}${trend ? ', trend ' + trend : ''}`}
+      aria-label={`${label}: ${value}${trend ? ', trend ' + trend : ''}`}
     >
-      <XStack ai="center" gap="$2">
-        {Icon && <Icon size={14} color="$color9" />}
-        <Text fontSize="$2" col="$color10" numberOfLines={1}>{label}</Text>
+      <XStack items="center" gap="$2">
+        {iconName && <Ionicons name={iconName} size={14} color={theme.color10.val} />}
+        <Text fontSize="$2" color="$color10" numberOfLines={1}>{label}</Text>
       </XStack>
-      <Text fontSize="$8" fontWeight="700" col="$color12">{value}</Text>
+      <Text fontSize="$8" fontWeight="700" color="$color12">{value}</Text>
       {trend && (
-        <Text fontSize="$1" col={trendUp ? '$statusComplete' : '$statusOverdue'} fontWeight="600">
+        <Text fontSize="$1" color={trendUp ? '$statusComplete' : '$statusOverdue'} fontWeight="600">
           {trend}
         </Text>
       )}
@@ -134,8 +136,8 @@ export function StatTile({
 Usage:
 ```tsx
 <XStack gap="$3">
-  <StatTile label="Open" value={14} trend="+3 this week" trendUp icon={<Ionicons name="clipboard-outline" size={18} />} />
-  <StatTile label="Overdue" value={3} trend="-1" trendUp={false} icon={<Ionicons name="alert-circle-outline" size={18} />} />
+  <StatTile label="Open" value={14} trend="+3 this week" trendUp iconName="clipboard-outline" />
+  <StatTile label="Overdue" value={3} trend="-1" trendUp={false} iconName="alert-circle-outline" />
 </XStack>
 ```
 
@@ -147,11 +149,10 @@ Gradient header for list and dashboard screens. Renders inside a `<Gradient>`.
 
 ```tsx
 import { YStack, XStack, Text, Button } from 'tamagui'
-import { Gradient } from './Gradient'
-import type { GradientName } from './tokens'
-import type { ComponentProps } from "react"
-import { Ionicons } from "/vector-icons"
-type IoniconName = ComponentProps<typeof Ionicons>["name"]
+import { Ionicons } from '@expo/vector-icons'
+import type { GradientName } from '@/tokens'
+
+type IoniconName = React.ComponentProps<typeof Ionicons>['name']
 
 export function Hero({
   title,
@@ -162,13 +163,13 @@ export function Hero({
   title: string
   subtitle?: string
   gradient?: GradientName
-  action?: { label: string; icon?: IoniconName; onPress: () => void }
+  action?: { label: string; iconName?: IoniconName; onPress: () => void }
 }) {
   return (
     <Gradient name={gradient} style={{ borderRadius: 0 }}>
       <YStack px="$5" pt="$6" pb="$5" gap="$1">
-        <XStack ai="center" jc="space-between">
-          <YStack gap="$1" f={1}>
+        <XStack items="center" justify="space-between">
+          <YStack gap="$1" flex={1}>
             <Text fontSize="$7" fontWeight="700" color="white" numberOfLines={1}>
               {title}
             </Text>
@@ -180,11 +181,11 @@ export function Hero({
           </YStack>
           {action && (
             <Button
-              size="$3" chromeless color="white" borderColor="rgba(255,255,255,0.4)"
+              size="$3" chromeless borderColor="rgba(255,255,255,0.4)"
               borderWidth={1} onPress={action.onPress}
-              icon={action.icon}
+              icon={action.iconName ? <Ionicons name={action.iconName} size={16} color="white" /> : undefined}
             >
-              {action.label}
+              <Button.Text color="white">{action.label}</Button.Text>
             </Button>
           )}
         </XStack>
@@ -200,7 +201,7 @@ Usage:
   title="Field Inspections"
   subtitle="14 open · 3 overdue"
   gradient="hero"
-  action={{ label: 'New', icon: Plus, onPress: () => router.push('/inspections/new') }}
+  action={{ label: 'New', iconName: 'add', onPress: () => router.push('/inspections/new') }}
 />
 ```
 
@@ -208,7 +209,7 @@ Usage:
 
 ### `<SectionHeader>`
 
-Consistent section headers with optional "View all" action. Replaces every inline `<XStack ai="center" jc="space-between">` pattern.
+Consistent section headers with optional "View all" action. Replaces every inline `<XStack items="center" justify="space-between">` pattern.
 
 ```tsx
 import { XStack, Text, Button } from 'tamagui'
@@ -221,11 +222,11 @@ export function SectionHeader({
   action?: { label: string; onPress: () => void }
 }) {
   return (
-    <XStack ai="center" jc="space-between" mb="$2">
-      <Text fontSize="$5" fontWeight="600" col="$color11">{title}</Text>
+    <XStack items="center" justify="space-between" mb="$2">
+      <Text fontSize="$5" fontWeight="600" color="$color11">{title}</Text>
       {action && (
         <Button size="$2" chromeless onPress={action.onPress}>
-          <Text fontSize="$3" col="$blue10">{action.label}</Text>
+          <Text fontSize="$3" color="$blue10">{action.label}</Text>
         </Button>
       )}
     </XStack>
@@ -253,22 +254,22 @@ export function AvatarInitials({
 }) {
   const dim = { sm: 28, md: 36, lg: 48 }[size]
   const fontSize = { sm: '$1', md: '$2', lg: '$4' }[size]
-  const initials = name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
+  const initials = name.split(' ').map(word => word[0]).slice(0, 2).join('').toUpperCase()
   const dotColor = { online: '$statusComplete', away: '$statusPending', offline: '$statusDraft' }
 
   return (
-    <ZStack w={dim} h={dim}>
+    <ZStack width={dim} height={dim}>
       <YStack
-        w={dim} h={dim} br={dim / 2}
-        bg="$blue3" ai="center" jc="center"
-        accessibilityLabel={name}
+        width={dim} height={dim} rounded={dim / 2}
+        bg="$blue3" items="center" justify="center"
+        aria-label={name}
       >
-        <Text fontSize={fontSize} fontWeight="600" col="$blue10">{initials}</Text>
+        <Text fontSize={fontSize} fontWeight="600" color="$blue10">{initials}</Text>
       </YStack>
       {statusDot && (
         <YStack
-          position="absolute" bottom={0} right={0}
-          w={10} h={10} br={5}
+          position="absolute" b={0} r={0}
+          width={10} height={10} rounded={5}
           bg={dotColor[statusDot]}
           borderWidth={2} borderColor="$background"
         />
@@ -297,12 +298,12 @@ export function InfoRow({
   mono?: boolean
 }) {
   return (
-    <XStack jc="space-between" py="$2" ai="center">
-      <Text col="$color10" fontSize="$4" f={1}>{label}</Text>
+    <XStack justify="space-between" py="$2" items="center">
+      <Text color="$color10" fontSize="$4" flex={1}>{label}</Text>
       <Text
         fontSize="$4" fontWeight="500"
         fontFamily={mono ? '$mono' : undefined}
-        col="$color12" ta="right" f={1}
+        color="$color12" text="right" flex={1}
         numberOfLines={1}
       >
         {String(value)}
@@ -321,39 +322,46 @@ Usage: `<InfoRow label="Reference" value="INS-2024-047" mono />`
 Settings/navigation list row. Consistent tap target, chevron, and press state.
 
 ```tsx
-import { XStack, Text, YStack } from 'tamagui'
-import { Ionicons } from "/vector-icons"
-import type { ComponentProps } from "react"
-import { Ionicons } from "/vector-icons"
-type IoniconName = ComponentProps<typeof Ionicons>["name"]
+import { XStack, Text, YStack, useTheme } from 'tamagui'
+import { Ionicons } from '@expo/vector-icons'
+
+type IoniconName = React.ComponentProps<typeof Ionicons>['name']
 
 export function ActionRow({
-  icon: Icon,
+  iconName,
   label,
   subtitle,
   onPress,
   destructive,
 }: {
-  icon?: IoniconName
+  iconName?: IoniconName
   label: string
   subtitle?: string
   onPress: () => void
   destructive?: boolean
 }) {
+  const theme = useTheme()
+
   return (
     <XStack
-      ai="center" gap="$3" py="$3" px="$4" minHeight={48}
+      items="center" gap="$3" py="$3" px="$4" minH={48}
       pressStyle={{ bg: '$color3' }}
       onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={label}
+      role="button"
+      aria-label={label}
     >
-      {Icon && <Icon size={18} color={destructive ? '$statusOverdue' : '$color10'} />}
-      <YStack f={1} gap="$0.5">
-        <Text fontSize="$4" col={destructive ? '$statusOverdue' : '$color12'}>{label}</Text>
-        {subtitle && <Text fontSize="$2" col="$color10">{subtitle}</Text>}
+      {iconName && (
+        <Ionicons
+          name={iconName}
+          size={18}
+          color={destructive ? theme.statusOverdue.val : theme.color10.val}
+        />
+      )}
+      <YStack flex={1} gap="$0.5">
+        <Text fontSize="$4" color={destructive ? '$statusOverdue' : '$color12'}>{label}</Text>
+        {subtitle && <Text fontSize="$2" color="$color10">{subtitle}</Text>}
       </YStack>
-      <Ionicons name="chevron-forward" size={16} color="$color9" />
+      <Ionicons name="chevron-forward" size={16} color={theme.color10.val} />
     </XStack>
   )
 }
@@ -370,7 +378,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 export default function Screen() {
   const insets = useSafeAreaInsets()
   return (
-    <YStack f={1} bg="$background" pt={insets.top} p="$4" gap="$4">
+    <YStack flex={1} bg="$background" pt={insets.top} p="$4" gap="$4">
       {/* content */}
     </YStack>
   )
@@ -382,11 +390,11 @@ export default function Screen() {
 Cards separate from background via **fill difference**, not borders. Use `bg="$color2"` on a `$background` screen — the contrast is enough. Only add `borderWidth` if the card is on `$color2` (same as itself).
 
 ```tsx
-<YStack bg="$color2" br="$4" p="$4" gap="$2" {...shadows.md}
+<YStack bg="$color2" rounded="$4" p="$4" gap="$2" {...shadows.md}
   pressStyle={{ scale: 0.98 }} onPress={onPress}
-  accessibilityRole="button" accessibilityLabel={`Open ${title}`}>
+  role="button" aria-label={`Open ${title}`}>
   <H5>{title}</H5>
-  <Paragraph col="$color10" numberOfLines={2}>{description}</Paragraph>
+  <Paragraph color="$color10" numberOfLines={2}>{description}</Paragraph>
 </YStack>
 ```
 
@@ -396,9 +404,9 @@ Cards separate from background via **fill difference**, not borders. Use `bg="$c
 
 ```tsx
 const shadows = {
-  sm: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },
-  md: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8, elevation: 3 },
-  lg: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.12, shadowRadius: 16, elevation: 6 },
+  sm: { boxShadow: '0 1px 2px rgba(0, 0, 0, 0.05)' },
+  md: { boxShadow: '0 2px 8px rgba(0, 0, 0, 0.08)' },
+  lg: { boxShadow: '0 4px 16px rgba(0, 0, 0, 0.12)' },
 } as const
 ```
 
@@ -410,25 +418,28 @@ const shadows = {
 
 ```tsx
 // Primary
-<Button bg="$blue10" color="$color1" size="$4" onPress={onSave}>Save inspection</Button>
+<Button bg="$blue10" size="$4" onPress={onSave}>
+  <Button.Text color="$color1">Save inspection</Button.Text>
+</Button>
 
 // Destructive (inside AlertDialog only)
 <Button theme="red" onPress={onDelete}>Delete</Button>
 
 // FAB
-<Button circular size="$5" bg="$blue10" color="$color1" icon={Plus} {...shadows.lg}
-  position="absolute" bottom="$6" right="$4" accessibilityLabel="Add new" />
+<Button circular size="$5" bg="$blue10" icon={<Ionicons name="add" size={22} color="white" />} {...shadows.lg}
+  position="absolute" b="$6" r="$4" aria-label="Add new" />
 ```
 
 ## Input with label
 
 ```tsx
 <YStack gap="$2">
-  <Label htmlFor="email" fontSize="$3" col="$color10">Email</Label>
+  <Label htmlFor="email" fontSize="$3" color="$color10">Email</Label>
   <Input id="email" size="$4" bg="$color3" borderWidth={0}
     focusStyle={{ borderWidth: 2, borderColor: '$blue8' }}
-    value={email} onChangeText={setEmail} />
-  {error && <Text col="$red10" fontSize="$2">{error}</Text>}
+    value={email}
+    onChange={event => setEmail(event.target?.value ?? event.nativeEvent?.text ?? '')} />
+  {error && <Text color="$red10" fontSize="$2">{error}</Text>}
 </YStack>
 ```
 
@@ -443,7 +454,7 @@ import { Cr123_Projectstatus } from '../generated/models/Cr123_ProjectModel';
 
 // Inside <Controller render={({ field }) => ( ... )} />:
 <YStack gap="$2">
-  <Label fontSize="$3" col="$color10">Status</Label>
+  <Label fontSize="$3" color="$color10">Status</Label>
   <Select
     value={String(field.value ?? '')}
     onValueChange={v => field.onChange(Number(v))}
@@ -464,7 +475,7 @@ import { Cr123_Projectstatus } from '../generated/models/Cr123_ProjectModel';
       <Select.ScrollDownButton />
     </Select.Content>
   </Select>
-  {field.invalid && <Text col="$red10" fontSize="$2">{field.error?.message}</Text>}
+  {field.invalid && <Text color="$red10" fontSize="$2">{field.error?.message}</Text>}
 </YStack>
 ```
 
@@ -477,11 +488,15 @@ import { Cr123_Projectstatus } from '../generated/models/Cr123_ProjectModel';
 ## Empty state
 
 ```tsx
-<YStack f={1} ai="center" jc="center" p="$6" gap="$3">
-  <Ionicons name="mail-open-outline" size={48} color="$color10" />
+const theme = useTheme()
+
+<YStack flex={1} items="center" justify="center" p="$6" gap="$3">
+  <Ionicons name="mail-open-outline" size={48} color={theme.color10.val} />
   <H4>No inspections yet</H4>
-  <Paragraph ta="center" col="$color10">Create your first inspection to get started.</Paragraph>
-  <Button bg="$blue10" color="$color1" onPress={onAdd}>New inspection</Button>
+  <Paragraph text="center" color="$color10">Create your first inspection to get started.</Paragraph>
+  <Button bg="$blue10" onPress={onAdd}>
+    <Button.Text color="$color1">New inspection</Button.Text>
+  </Button>
 </YStack>
 ```
 
@@ -494,9 +509,9 @@ Match populated layout shape — not generic rectangles:
 ```tsx
 <YStack gap="$3" p="$4">
   {Array.from({ length: 5 }).map((_, i) => (
-    <YStack key={i} bg="$color2" br="$4" p="$4" gap="$2">
-      <YStack h={16} w="60%" bg="$color4" br="$2" />
-      <YStack h={12} w="90%" bg="$color4" br="$2" />
+    <YStack key={i} bg="$color2" rounded="$4" p="$4" gap="$2">
+      <YStack height={16} width="60%" bg="$color4" rounded="$2" />
+      <YStack height={12} width="90%" bg="$color4" rounded="$2" />
     </YStack>
   ))}
 </YStack>
@@ -505,10 +520,12 @@ Match populated layout shape — not generic rectangles:
 ## Error state
 
 ```tsx
-<YStack f={1} ai="center" jc="center" p="$6" gap="$3">
-  <Ionicons name="alert-circle" size={40} color="$red10" />
+const theme = useTheme()
+
+<YStack flex={1} items="center" justify="center" p="$6" gap="$3">
+  <Ionicons name="alert-circle" size={40} color={theme.red10.val} />
   <H4>Something went wrong</H4>
-  <Paragraph ta="center" col="$color10">{error.message}</Paragraph>
+  <Paragraph text="center" color="$color10">{error.message}</Paragraph>
   <Button onPress={onRetry}>Try again</Button>
 </YStack>
 ```
@@ -528,8 +545,8 @@ function StatusBadge({ label, type }: { label: string; type: 'success' | 'warnin
   }
   const c = colors[type]
   return (
-    <XStack bg={c.bg} px="$2" py="$1" br="$10" ai="center">
-      <Text fontSize="$1" fontWeight="600" col={c.text}>{label}</Text>
+    <XStack bg={c.bg} px="$2" py="$1" rounded="$10" items="center">
+      <Text fontSize="$1" fontWeight="600" color={c.text}>{label}</Text>
     </XStack>
   )
 }
@@ -537,42 +554,44 @@ function StatusBadge({ label, type }: { label: string; type: 'success' | 'warnin
 
 **Never** use `bg="$green9" color="white"` for status pills — fully saturated pills on white text look alarming and break the 60/30/10 rule. Exception: field/ops apps where status must pop in bright outdoor light.
 
-Alternative — dot prefix: `<YStack w={6} h={6} br={3} bg="$green10" />` before text. Even quieter than pills.
+Alternative — dot prefix: `<YStack width={6} height={6} rounded={3} bg="$green10" />` before text. Even quieter than pills.
 
 ## Inline composites
 
 ```tsx
+const theme = useTheme()
+
 // Section header with action
-<XStack ai="center" jc="space-between" mb="$2">
-  <Text fontSize="$5" fontWeight="600" col="$color11">{title}</Text>
-  <Button size="$2" chromeless onPress={onAction}><Text fontSize="$3" col="$blue10">{action}</Text></Button>
+<XStack items="center" justify="space-between" mb="$2">
+  <Text fontSize="$5" fontWeight="600" color="$color11">{title}</Text>
+  <Button size="$2" chromeless onPress={onAction}><Text fontSize="$3" color="$blue10">{action}</Text></Button>
 </XStack>
 
 // Stat card
-<YStack bg="$color2" br="$4" p="$3" gap="$1" width="47%" {...shadows.sm}>
-  <Text fontSize="$2" col="$color10">{label}</Text>
+<YStack bg="$color2" rounded="$4" p="$3" gap="$1" width="47%" {...shadows.sm}>
+  <Text fontSize="$2" color="$color10">{label}</Text>
   <Text fontSize="$8" fontWeight="700">{value}</Text>
 </YStack>
 
 // Info row (detail screens)
-<XStack jc="space-between" py="$2">
-  <Text col="$color10" fontSize="$4">{label}</Text>
+<XStack justify="space-between" py="$2">
+  <Text color="$color10" fontSize="$4">{label}</Text>
   <Text fontSize="$4" fontWeight="500">{value}</Text>
 </XStack>
 
 // Action row with chevron
-<XStack ai="center" gap="$3" py="$3" px="$4" pressStyle={{ bg: '$color3' }}
-  onPress={onPress} accessibilityRole="button">
+<XStack items="center" gap="$3" py="$3" px="$4" pressStyle={{ bg: '$color3' }}
+  onPress={onPress} role="button">
   {icon}
-  <Text f={1} fontSize="$4">{label}</Text>
-  <Ionicons name="chevron-forward" size={16} color="$color10" />
+  <Text flex={1} fontSize="$4">{label}</Text>
+  <Ionicons name="chevron-forward" size={16} color={theme.color10.val} />
 </XStack>
 ```
 
 ## Monospace data values
 
 ```tsx
-<Text fontFamily="$mono" fontSize="$3" col="$color10">INS-2024-0047</Text>  // ID
+<Text fontFamily="$mono" fontSize="$3" color="$color10">INS-2024-0047</Text>  // ID
 <Text fontFamily="$mono" fontSize="$2">2024-03-15 14:32</Text>              // timestamp
 <Text fontFamily="$mono" fontSize="$7" fontWeight="700">$1,247.50</Text>    // currency
 ```
@@ -595,7 +614,7 @@ Alternative — dot prefix: `<YStack w={6} h={6} br={3} bg="$green10" />` before
     <AlertDialog.Content><YStack gap="$3">
       <AlertDialog.Title>Delete inspection?</AlertDialog.Title>
       <AlertDialog.Description>This can't be undone.</AlertDialog.Description>
-      <XStack gap="$3" jc="flex-end">
+      <XStack gap="$3" justify="flex-end">
         <AlertDialog.Cancel asChild><Button>Cancel</Button></AlertDialog.Cancel>
         <AlertDialog.Action asChild><Button theme="red" onPress={onDelete}>Delete</Button></AlertDialog.Action>
       </XStack>
@@ -620,10 +639,12 @@ Alternative — dot prefix: `<YStack w={6} h={6} br={3} bg="$green10" />` before
 
 When the plan's `## Design` specifies a font pairing, add this to `tamagui.config.ts`. Full pairing catalog → [typography-and-tone.md](typography-and-tone.md).
 
+This matches the standalone template's Tamagui 2 + Config v5 customization region.
+
 ```tsx
 // tamagui.config.ts
-import { createTamagui, createFont } from 'tamagui'
-import { defaultConfig } from '@tamagui/config/v4'
+import { createFont } from '@tamagui/core'
+import { animations } from '@tamagui/config/v5-rn'
 
 // Example: Editorial pairing (Lora + Inter)
 const headingFont = createFont({
@@ -642,10 +663,11 @@ const bodyFont = createFont({
   letterSpacing: { 1: 0.4, 2: 0.2, 3: 0, 4: 0 },
 })
 
-const config = createTamagui({
+const customConfig = {
   ...defaultConfig,
+  animations,
   fonts: { ...defaultConfig.fonts, heading: headingFont, body: bodyFont },
-})
+}
 ```
 
 Usage: `<H3 fontFamily="$heading">Title</H3>` for headings, `<Text fontFamily="$body">Label</Text>` for UI chrome.
@@ -655,21 +677,21 @@ Usage: `<H3 fontFamily="$heading">Title</H3>` for headings, `<Text fontFamily="$
 For reading-oriented screens (detail body, help, onboarding). Generous spacing + max-width for comfortable reading.
 
 ```tsx
-<YStack gap="$8" maxWidth={520} px="$5">
+<YStack gap="$8" maxW={520} px="$5">
   <YStack gap="$2">
-    <Text fontFamily="$body" fontSize="$2" letterSpacing={0.8} textTransform="uppercase" col="$color10">
+    <Text fontFamily="$body" fontSize="$2" letterSpacing={0.8} textTransform="uppercase" color="$color10">
       Tuesday, 14 May
     </Text>
     <H3 fontFamily="$heading" letterSpacing={-0.5}>{title}</H3>
   </YStack>
 
-  <Paragraph fontFamily="$heading" fontSize="$5" lineHeight={28} col="$color12">
+  <Paragraph fontFamily="$heading" fontSize="$5" lineHeight={28} color="$color12">
     {bodyText}
   </Paragraph>
 
   <Separator />
 
-  <Text fontFamily="$body" fontSize="$2" col="$color10" letterSpacing={0.4} textTransform="uppercase">
+  <Text fontFamily="$body" fontSize="$2" color="$color10" letterSpacing={0.4} textTransform="uppercase">
     {wordCount} words · {readTime} minutes
   </Text>
 </YStack>
@@ -704,17 +726,19 @@ Compare: `gap="$4"` (16px) feels cramped. `gap="$8"` (32px) feels designed. Use 
 When the plan specifies a custom palette, override Tamagui's default tokens. Full methodology → [color-palette-architecture.md](color-palette-architecture.md).
 
 ```tsx
-// tamagui.config.ts — custom palette example (warm ochre brand)
-const config = createTamagui({
+// Inside the tamagui.config.ts customization markers — warm ochre brand
+const customConfig = {
   ...defaultConfig,
+  animations,
   themes: {
     ...defaultConfig.themes,
     light: {
       ...defaultConfig.themes.light,
-      background: '#F7F3EC',       // surface1 — warm cream base
-      backgroundStrong: '#FBF8F2', // surface0 — elevated
-      color2: '#EFE8DA',           // surface2 — sunken/card fills
-      color3: '#E4DCC9',           // surface3 — hairlines
+      background: '#F7F3EC',       // default page background
+      surface0: '#F7F3EC',         // semantic page background
+      surface1: '#FBF8F2',         // lightly elevated
+      surface2: '#EFE8DA',         // card fill
+      surface3: '#E4DCC9',         // hairlines
       color4: '#C9BEA3',           // surface4 — muted borders
       color12: '#1C1B17',          // text0 — primary ink
       color11: '#3A372F',          // text1 — secondary
@@ -724,10 +748,11 @@ const config = createTamagui({
     },
     dark: {
       ...defaultConfig.themes.dark,
-      background: '#0E0D0B',       // surface0 dark (near-black, not #000)
-      backgroundStrong: '#14130F', // surface1 dark
-      color2: '#1E1C18',           // surface2 dark (cards)
-      color3: '#2D2A22',           // surface3 dark (borders)
+      background: '#0E0D0B',       // default page background
+      surface0: '#0E0D0B',         // semantic page background
+      surface1: '#14130F',         // lightly elevated
+      surface2: '#1E1C18',         // card fill
+      surface3: '#2D2A22',         // borders
       color4: '#3A372F',           // surface4 dark
       color12: '#F2EAD8',          // text0 dark (cream, not white)
       color11: '#D4CCB8',          // text1 dark
@@ -736,4 +761,4 @@ const config = createTamagui({
       blue10: '#C8965E',           // accent brightens in dark mode
     },
   },
-})
+}

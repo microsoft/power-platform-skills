@@ -61,6 +61,7 @@ The Power Apps CLI is installed automatically via `npm install` from the app tem
 | Read lists or manage documents in SharePoint         | SharePoint (`/add-sharepoint`)        |
 | Send emails, read inbox, manage calendar             | Office 365 Outlook (`/add-office365`) |
 | Invoke a Copilot Studio agent                        | MCS Copilot (`/add-mcscopilot`)       |
+| Search M365 data or get AI-powered answers           | Work IQ (`/add-workiq`)               |
 | Connect to any other service                         | Generic connector (`/add-connector`)  |
 
 **If none of the specific skills match**, invoke `/add-connector` — it handles any connector not covered above. Browse available connectors at https://learn.microsoft.com/en-us/connectors/connector-reference/ to find the correct API name. **If no connector exists for the required functionality, tell the user clearly and do not implement a direct API call as a workaround — it will not work in production.**
@@ -105,6 +106,7 @@ npx power-apps init -n '{app-name}' -e <environment-id>
 - **Azure DevOps**: HttpRequest method requires renaming `parameters` to `body` in 3 generated files.
 - **SharePoint/Excel**: Tabular datasources need `--dataset` and `--table` parameters when adding.
 - **Excel Online**: Body is a flat key-value object -- no `{ items: ... }` wrapper.
+- **Work IQ** (`shared_a365copilotchatmcp`): stateless-tolerant MCP connector — the connection is created with `npx power-apps create-connection` (browser OAuth) and it needs the `McpSession` wrapper (send **no** session id on `initialize`). See the `/add-workiq` skill for setup steps.
 
 ### Default Environment
 

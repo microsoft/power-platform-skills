@@ -2,6 +2,7 @@
 name: add-geolocation
 description: Internal implementation skill invoked by /add-native for native background GPS tracking with durable storage and Dataverse sync using @microsoft/power-apps-native-bglocation.
 user-invocable: false
+disable-model-invocation: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
 ---

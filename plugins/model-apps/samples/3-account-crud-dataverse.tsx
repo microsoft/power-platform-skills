@@ -20,8 +20,25 @@ import type {
     QueryTableOptions,
 } from "./RuntimeTypes";
 
+// Module-level key aliases — VALUES live on `window` (single source of truth) so
+// they survive the host double-mount on open and back-navigation, and stay
+// coherent across module re-evaluation. See references/data-caching.md.
+const CACHE_KEY = "__ppAccountCrud_accountCache";
+const INFLIGHT_KEY = "__ppAccountCrud_accountInflight";
+const winAny = window as unknown as Record<string, unknown>;
+
 const GeneratedComponent = ({ dataApi }: GeneratedComponentProps) => {
-    const [accounts, setAccounts] = useState<ReadableTableRow<account>[]>([]);
+    const dataReady = !!dataApi;
+    // Single batched fetch state (Rule 14 — React 17 doesn't batch setState in
+    // async callbacks, so one object + one setData avoids intermediate renders).
+    // `loading` also gates mutations until the initial load resolves, so a
+    // create/update can't race an in-flight first fetch (stale-write the cache).
+    const [{ accounts, loading }, setData] = useState<{ accounts: ReadableTableRow<account>[]; loading: boolean }>(
+        () => {
+            const cached = winAny[CACHE_KEY] as ReadableTableRow<account>[] | undefined;
+            return { accounts: cached ?? [], loading: cached === undefined };
+        },
+    );
     const [selectedAccount, setSelectedAccount] = useState<ReadableTableRow<account> | null>(null);
     const [formData, setFormData] = useState<WritableTableRow<account>>({
         name: "",
@@ -32,38 +49,74 @@ const GeneratedComponent = ({ dataApi }: GeneratedComponentProps) => {
         telephone1: "",
     });
 
-    // Fetch accounts from Dataverse
+    // Fetch accounts from Dataverse (de-duped against the host double-mount)
     useEffect(() => {
-        const fetchAccounts = async () => {
+        if (!dataReady) return;
+
+        // Authoritative window cache — sync on a hit so a mount that renders while
+        // another mount's fetch is resolving doesn't stay stuck on the old list.
+        const cached = winAny[CACHE_KEY] as ReadableTableRow<account>[] | undefined;
+        if (cached !== undefined) {
+            if (accounts !== cached || loading) setData({ accounts: cached, loading: false });
+            return;
+        }
+        let cancelled = false;
+
+        let inflight = winAny[INFLIGHT_KEY] as Promise<ReadableTableRow<account>[]> | undefined;
+        if (!inflight) {
             const query: QueryTableOptions<account> = {
                 select: ["name", "address1_city", "address1_stateorprovince", "address1_postalcode", "address1_country", "telephone1", "accountid"],
                 pageSize: 50,
                 orderBy: "name asc",
             };
-            const result = await dataApi.queryTable("account", query);
-            setAccounts(result.rows);
-        };
-        fetchAccounts();
-    }, [dataApi]);
+            inflight = dataApi
+                .queryTable("account", query)
+                .then((result) => {
+                    winAny[CACHE_KEY] = result.rows;
+                    return result.rows;
+                })
+                // Clear only if still ours — a concurrent refresh may have replaced it.
+                .finally(() => { if (winAny[INFLIGHT_KEY] === inflight) delete winAny[INFLIGHT_KEY]; });
+            winAny[INFLIGHT_KEY] = inflight;
+        }
+
+        inflight
+            .then((rows) => { if (!cancelled) setData({ accounts: rows, loading: false }); })
+            .catch((err) => { if (!cancelled) { console.error("Failed to load accounts", err); setData((prev) => ({ ...prev, loading: false })); } });
+
+        return () => { cancelled = true; };
+        // Readiness only — never `dataApi` (new ref each render). See Rule 15.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [dataReady]);
 
     const handleInputChange = (field: keyof WritableTableRow<account>, value: string) => {
         setFormData((prev) => ({ ...prev, [field]: value }));
     };
 
     const handleAddOrUpdate = async () => {
+        if (loading) return;   // don't mutate while the initial load is still in flight
         if (selectedAccount) {
             await dataApi.updateRow("account", selectedAccount.accountid, formData);
         } else {
             await dataApi.createRow("account", formData);
         }
-        // Refresh list
+        // Refresh list — evict the stale cache and publish the refetch as the
+        // shared in-flight promise, so a mount that happens WHILE this refresh is
+        // pending awaits THIS query instead of returning the stale cache. Mirrors
+        // the initial-fetch de-dupe (references/data-caching.md invalidation).
         const query: QueryTableOptions<account> = {
             select: ["name", "address1_city", "address1_stateorprovince", "address1_postalcode", "address1_country", "telephone1", "accountid"],
             pageSize: 50,
             orderBy: "name asc",
         };
-        const result = await dataApi.queryTable("account", query);
-        setAccounts(result.rows);
+        delete winAny[CACHE_KEY];
+        const refetch = dataApi
+            .queryTable("account", query)
+            .then((result) => { winAny[CACHE_KEY] = result.rows; return result.rows; })
+            .finally(() => { if (winAny[INFLIGHT_KEY] === refetch) delete winAny[INFLIGHT_KEY]; });
+        winAny[INFLIGHT_KEY] = refetch;
+        const rows = await refetch;
+        setData({ accounts: rows, loading: false });
         // Reset form
         setFormData({
             name: "",
@@ -153,7 +206,7 @@ const GeneratedComponent = ({ dataApi }: GeneratedComponentProps) => {
                     <Input aria-label="Zip" placeholder="Enter zip code" value={formData.address1_postalcode || ""} onChange={(e, data) => handleInputChange("address1_postalcode", data.value)} />
                     <Input aria-label="Country" placeholder="Enter country" value={formData.address1_country || ""} onChange={(e, data) => handleInputChange("address1_country", data.value)} />
                     <Input aria-label="Phone" placeholder="Enter phone number" value={formData.telephone1 || ""} onChange={(e, data) => handleInputChange("telephone1", data.value)} />
-                    <Button style={{ width: "100%", marginTop: "12px" }} appearance="primary" onClick={handleAddOrUpdate}>
+                    <Button style={{ width: "100%", marginTop: "12px" }} appearance="primary" onClick={handleAddOrUpdate} disabled={loading}>
                         {selectedAccount ? "Update Account" : "Add Account"}
                     </Button>
                 </section>

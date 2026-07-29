@@ -230,14 +230,15 @@ agents/                        ← Agent definitions (invoked by skills via Task
 references/                    ← Shared reference docs
   rules.md                     ← Full code-gen rules, DataAPI types, layout patterns, common errors
   plan-schema.md               ← Schema contract for genpage-plan.md
-  data-caching.md              ← Rule 15 list/detail caching pattern (loaded conditionally)
+  data-caching.md              ← Rule 15 on-mount fetch: de-dupe + cache (loaded conditionally)
   localization.md              ← Multi-language + RTL pattern (loaded conditionally)
   supported-dependencies.md    ← Versioned package list for generated pages
   troubleshooting.md           ← Deployment/runtime/env issues
   verified-icons.txt           ← ~5000 Fluent UI icon names; Grep-validated by page-builder
 samples/                       ← Example .tsx files (12 samples)
 scripts/
-  launch-playwright-mcp.js     ← Playwright MCP server launcher (detects system browser)
+  launch-playwright-mcp.js     ← Playwright MCP server launcher (fullscreen; uses lib/detect-browser.js)
+  playwright-mcp-fullscreen.config.json ← Fullscreen browser config for the launcher
   regenerate-verified-icons.js ← Regenerates references/verified-icons.txt from npm
   check-auth.js                ← Pre-flight: az present + logged in, pac identity, WhoAmI, identity match
   dataverse-request.js         ← General Dataverse Web API wrapper (escape hatch)
@@ -288,9 +289,18 @@ scripts/
     apply-snapshot-index.js    ← changed-only: build result.created → snapshot artifact map
     changed-only-flow.js       ← changed-only: --changed-only orchestration (decide fast/full, live identity, snapshot lifecycle)
     projection.js              ← changed-only: pure post-apply verifiers (form placement / sitemap / page dual-hash)
+    detect-browser.js          ← System Chromium/Edge/Chrome detection (used by the launcher)
+    modelapps-hook-utils.js    ← Tracked-skill discovery + validator lookup for the hooks
+    telemetry/                 ← Bundled 1DS telemetry: ikey.json (this plugin's config) + lib/ (copy of shared/telemetry/lib)
   vendor/cds-maker-sdk.cjs     ← headless vendored SDK bundle (rebuilt via _vendor-build/)
   _vendor-build/               ← esbuild vendoring tooling (build.js + pinned deps)
-  tests/                       ← node --test coverage for the scripts above
+  tests/                       ← node --test coverage for the scripts + hooks
+hooks/                         ← Lifecycle hooks (registered in hooks/hooks.json)
+  run-skill-posttool-validation.js ← Runs a skill's validate*.js after the Skill tool returns
+  validate-icon-imports.js     ← PostToolUse: blocks unverified @fluentui/react-icons in genpage .tsx
+  validate-write-safety.js     ← PreToolUse: flags (non-blocking) out-of-cwd writes in a genpage session
+  run-skill-pretool-telemetry.js   ← PreToolUse(Skill): emits skill_started (ships disabled)
+  run-user-prompt-telemetry.js ← UserPromptSubmit: emits skill_started for /model-apps:<skill>
 skills/
   app-builder/
     SKILL.md                   ← intent → model-driven app (create + edit); **Preview**
@@ -298,6 +308,8 @@ skills/
     SKILL.md                   ← Orchestrator skill (delegates to agents)
     edit-flow.md               ← Edit flow steps (loaded only on edit path)
     verify-flow.md             ← Playwright browser verification (loaded only when user opts in)
+  report-issue/                ← Bug-report skill (bundled shared workflow)
+  telemetry/                   ← /model-apps:telemetry on|off|status control skill
 ```
 
 ## Skills
@@ -307,6 +319,7 @@ skills/
 | `/genpage` | Build and deploy generative pages for a model-driven Power App |
 | `/app-builder` | **(Preview)** Build and edit a whole model-driven app — tables, columns, relationships, adaptive forms, views, Choice-column charts, generative pages, app + sitemap, sample data, and admin-gated AI features — from a natural-language intent, via the vendored `cds-maker-sdk` |
 | `/report-issue` | File a bug/issue about the model-apps plugin to the GitHub repository |
+| `/telemetry` | Enable/disable/check anonymous usage telemetry (`on \| off \| status`) |
 
 ## Agents
 
@@ -318,6 +331,7 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 | `genpage-entity-builder` | `genpage` (create flow) | Provisions Dataverse tables, columns, relationships, choices, and sample data via `scripts/provision-entities.js` (the shared SDK-backed core). Bulk inserts use OData `$batch`. Writes a transactional log for recovery |
 | `genpage-page-builder` | `genpage` (create flow) | Generates one complete `.tsx` page from the plan and schema; runs in parallel with other builders for multi-page requests |
 | `genpage-edit-planner` | `genpage` (edit flow) | Reads the downloaded page artifacts (page.tsx, config.json, prompt.txt), gathers change requirements, presents edit plan, writes `genpage-edit-plan.md`. The orchestrator applies the edit inline. |
+| `genpage-connector-builder` | `genpage` (create **and** edit flows) | **Single owner of the connectors feature gate.** Performs connector discovery (connections, connection references, datasets, tables, operations, schema), creates Dataverse connection references, and writes the `## Connector Bindings` contract + `connectors.json`. Both the planner and the edit-planner delegate all connector work to it. |
 
 ## Key Concepts
 
@@ -332,6 +346,102 @@ The DataAPI (`props.dataApi`) provides typed CRUD operations against Dataverse t
 ### RuntimeTypes
 
 TypeScript type definitions generated from Dataverse metadata. Contains entity types, enum registrations, and the `GeneratedComponentProps` interface. Generated via PAC CLI before code generation to ensure correct column names.
+
+## Feature Flags
+
+Unreleased functionality is gated behind committed, **default-OFF** feature flags so
+the skill can merge ahead of its cross-repo dependencies. With a flag OFF, the
+**deployed page behavior is identical to before the feature existed** — the guarantee
+is about runtime/deploy output, not that every authoring artifact is byte-for-byte
+unchanged (e.g. plans still carry a `## Connector Bindings: No connector bindings.`
+line). The mechanism lives in `scripts/lib/feature-flags.js` with the committed
+values in `feature-flags.json` at the plugin root.
+
+- **Source of truth:** `feature-flags.json` (e.g. `{ "connectors": false }`). Flip a
+  flag to `true` in a one-line PR once its dependencies are GA in PROD.
+- **Precedence (highest first):** env var `GENPAGE_ENABLE_<FLAG>` (e.g.
+  `GENPAGE_ENABLE_CONNECTORS=1`) → committed `feature-flags.json` → default `false`
+  (fail-closed). This mirrors the telemetry opt-out env-over-config convention.
+- **LLM gate:** skill/agent markdown probes a flag with
+  `node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" <flag>` (prints `enabled`/`disabled`,
+  exits 0/1) and skips the gated workflow when disabled. `--list` prints every known
+  flag's lifecycle **status** (experimental / in-progress / ga), effective state +
+  source (env/file/default), summary, how to enable, plus config-validation warnings.
+  Flags are catalogued with that metadata in the `FLAGS` map in `feature-flags.js`
+  (the committed `feature-flags.json` carries only the on/off value).
+- **Script backstop:** connector entrypoints call the shared
+  `exitIfConnectorsDisabled()` helper (DRY — no inlined gate) and fail closed with
+  exit 3 when OFF: `list-connections.js`, `create-connection-reference.js`, and the
+  `--connection-refs` branch of `add-page-to-solution.js`.
+- **Validation:** `KNOWN_FLAGS` + `validateFlags()` warn on unknown keys / non-boolean
+  values in the committed file (so a typo can't silently do nothing, or — after a flip
+  to `true` — accidentally enable the wrong thing).
+
+**Connectors gate — the single owner is `genpage-connector-builder`.** Every connector
+entry point must go through it or the helper; the checklist of places that gate:
+
+1. Discovery — `genpage-connector-builder` runs the probe first (planner + edit-planner
+   delegate to it; they do not gate inline).
+2. Scripts — `list-connections.js` / `create-connection-reference.js` (`exitIfConnectorsDisabled`).
+3. Deploy — SKILL Phase 4.5 **re-probes** the flag and treats absent/malformed
+   `## Connector Bindings` as no bindings (a plan authored while ON must not deploy
+   connectors after OFF).
+4. ALM — the `--connection-refs` branch of `add-page-to-solution.js`.
+5. Codegen — `genpage-page-builder` emits connector code only when the plan has an
+   actual binding table (never on an absent/sentinel section).
+
+The **`connectors`** flag currently ships OFF: GenPage connector support needs the
+pac CLI connector verbs (PowerPlatform-Scale-AdminTools), the GenUX authoring control
+(power-platform-ux), and the maker/admin ECS setting to all be released first.
+
+## Hooks & Validators
+
+Hooks are registered centrally in `hooks/hooks.json` (auto-loaded by the plugin
+host). Every hook **fails open** on any internal error (exit 0) and **fails closed**
+(exit 2) only on a real violation, so a hook bug can never break a genpage run.
+
+- **PostToolUse(Skill)** — `run-skill-posttool-validation.js` runs a skill's
+  `skills/<skill>/scripts/validate*.js` when present. Tracked skills are discovered
+  from `skills/*/SKILL.md` by `scripts/lib/modelapps-hook-utils.js` (the telemetry
+  control skill is excluded from tracking).
+- **PostToolUse(Write|Edit|MultiEdit)** — `validate-icon-imports.js` validates
+  `@fluentui/react-icons` named imports in genpage-generated `.tsx` files against
+  `references/verified-icons.txt`, automating the page-builder's manual grep. It is
+  gated to genpage output (the file's `export default GeneratedComponent` marker or
+  a sibling `genpage-plan.md`) so it never fires on unrelated React files.
+- **PreToolUse(Write|Edit|MultiEdit)** — `validate-write-safety.js` **flags
+  (non-blocking, exit 1)** writes outside the cwd, and **only during an active
+  genpage session** (a `genpage-plan.md` at/under cwd). It never blocks and is a
+  clean no-op in unrelated projects — the plugin installs globally, so it must not
+  constrain other work. Silence with `MODEL_APPS_SKIP_WRITE_GUARD=1`.
+- **Master kill-switch** — `MODEL_APPS_DISABLE_HOOKS=1` (or `true`) disables **all**
+  model-apps hooks (validators + telemetry emit); checked before any stdin/work.
+  Both escape hatches are documented in `README.md`.
+
+## Telemetry
+
+This plugin ships 1DS telemetry for `skill_started`. The canonical library is the
+repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **physical copy**
+(never a symlink) so installed plugins don't depend on symlink handling. Edit
+`shared/telemetry/lib/` first, then refresh this plugin's copy in the same change.
+
+- **Posture:** the committed `ikey.json` ships **`disabled: true`** (Tier-1 static,
+  no resolver) — currently carrying the **provisioned model-apps key + collector +
+  `event_stream_name`, staged disabled**. It emits nothing — no POST, no local log —
+  while `disabled: true`; flip `disabled` to `false` only after the Geneva mapping
+  is validated in DGrep (see the ADE provisioning runbook). `disabled: true` is the
+  active guard; the placeholder-key gate is a secondary defense for un-provisioned
+  copies. **Provision a fresh key; never copy another plugin's `ikey.json`**
+  (CI-enforced: `node scripts/validate-telemetry-ikeys.js`).
+- **Emission:** `hooks/run-skill-pretool-telemetry.js` (PreToolUse Skill) and
+  `hooks/run-user-prompt-telemetry.js` (UserPromptSubmit `/model-apps:<skill>`).
+- **Privacy:** anonymous, default-on. Users opt out of transmission via
+  `/model-apps:telemetry off`; the local diagnostic mirror
+  (`~/.power-platform-skills/telemetry/model-apps/sessions/<id>/events.jsonl`) is
+  still written. CI/automation opt out via
+  `POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT=1` (highest precedence).
+- **Fail closed:** telemetry never changes a script's exit code; emission is
+  fire-and-forget via a detached dispatcher child. See `shared/telemetry/README.md`.
 
 ## Development Standards
 
@@ -451,6 +561,11 @@ Prefer a scratch env; always tear down probes (`teardown-model-app.js --apply`) 
 **After modifying the plugin also:** run `claude --debug` to confirm the plugin loads, exercise the
 skill (`/genpage` or `/app-builder`), and for genpage verify Playwright browser checks
 (navigate/snapshot/click/screenshot).
+
+**Hooks + telemetry:** the lifecycle hooks and telemetry hooks are covered by the plugin unit suite
+(`node scripts/run-tests.js`). Keep `scripts/lib/telemetry/ikey.json` shipping `disabled: true` until a
+key is provisioned (a test enforces this), and run `node scripts/validate-telemetry-ikeys.js` from the
+repo root after touching `ikey.json`.
 
 ## Eval Suite
 

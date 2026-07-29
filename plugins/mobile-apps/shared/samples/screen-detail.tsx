@@ -43,10 +43,10 @@ export default function RecipeDetailScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1 }} edges={['top', 'bottom']}>
-      <YStack f={1} bg="$background">
+      <YStack flex={1} bg="$background">
         <ScrollView contentContainerStyle={{ padding: 16, gap: 16 }}>
           <H2>{recipe.title}</H2>
-          <Paragraph col="$color10">{recipe.description}</Paragraph>
+          <Paragraph color="$color10">{recipe.description}</Paragraph>
 
           <Separator />
 
@@ -68,8 +68,8 @@ export default function RecipeDetailScreen() {
             <Text fontSize="$5" fontWeight="600">Steps</Text>
             {recipe.steps?.map((step: string, i: number) => (
               <XStack key={i} gap="$2">
-                <Text col="$color10">{i + 1}.</Text>
-                <Text f={1}>{step}</Text>
+                <Text color="$color10">{i + 1}.</Text>
+                <Text flex={1}>{step}</Text>
               </XStack>
             ))}
           </YStack>
@@ -78,13 +78,12 @@ export default function RecipeDetailScreen() {
         <BottomActionBar>
           <XStack gap="$3">
             <Button
-              f={1}
+              flex={1}
               bg="$blue10"
-              color="$color1"
-              icon={<Ionicons name="create-outline" size={18} />}
+              icon={<Ionicons name="create-outline" size={18} color="white" />}
               onPress={() => router.push(`/recipes/${id}/edit`)}
             >
-              Edit
+              <Button.Text color="$color1">Edit</Button.Text>
             </Button>
             <DeleteButton id={id!} onDeleted={() => router.back()} />
           </XStack>
@@ -98,7 +97,7 @@ function DeleteButton({ id, onDeleted }: { id: string; onDeleted: () => void }) 
   return (
     <AlertDialog>
       <AlertDialog.Trigger asChild>
-        <Button f={1} theme="red" icon={<Ionicons name="trash-outline" size={18} />}>Delete</Button>
+        <Button flex={1} theme="red" icon={<Ionicons name="trash-outline" size={18} />}>Delete</Button>
       </AlertDialog.Trigger>
       <AlertDialog.Portal>
         <AlertDialog.Overlay />
@@ -106,7 +105,7 @@ function DeleteButton({ id, onDeleted }: { id: string; onDeleted: () => void }) 
           <YStack gap="$3">
             <AlertDialog.Title>Delete recipe?</AlertDialog.Title>
             <AlertDialog.Description>This can't be undone.</AlertDialog.Description>
-            <XStack gap="$3" jc="flex-end">
+            <XStack gap="$3" justify="flex-end">
               <AlertDialog.Cancel asChild><Button>Cancel</Button></AlertDialog.Cancel>
               <AlertDialog.Action asChild>
                 <Button

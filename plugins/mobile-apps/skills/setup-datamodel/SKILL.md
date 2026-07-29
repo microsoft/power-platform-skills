@@ -58,7 +58,7 @@ When requirements mention signatures, sign-off, ink, drawings, generated PDFs, e
 | "capture signature", "sign off", "approval signature", "ink" | Image column on the signed record for one current signature, or child Evidence/Signature table for multiple captures/history |
 | "generate PDF", "export report", "evidence packet", "certificate PDF" | Ask whether the generated PDF should be retained. If yes, use a Dataverse File column, usually on the parent record or a child Evidence/Attachment table. If no, document on-device/share-only behavior and add no column. |
 | "upload PDF", "attach file", "import document" | File column or child Attachment table with lookup to parent |
-| "view PDF" | Store or reference an HTTPS URL only if the app has a durable source. Native PDF viewer does not support local `file://`, `content://`, or `blob:` URIs. |
+| "view PDF" | Store or reference an HTTPS URL if the app has a durable source. Native PDF viewer 0.2.9+ also supports local `file://` URIs; `content://`, `blob:`, and `http://` remain unsupported. |
 
 PDF content must never be modeled as long text/base64 text. Use Dataverse File columns for retained PDFs. Signature PNGs may use Image columns when the generated service supports image payloads; use File columns or child Evidence rows when the capture should behave like an attachment.
 
@@ -158,6 +158,18 @@ Arguments:
 
 Run sequentially. Skip if `## Connectors` is "None".
 
+### Phase 6.5 — Offline profile reconciliation
+
+If Phase 5 created or extended Dataverse tables, an existing Mobile Offline Profile may now be missing those tables/columns. Because Phase 5 invoked `/add-dataverse` with `--skip-planning` (which suppresses that skill's own Step 8.5 reconciliation), this orchestrator owns the check. Skip when Phase 2 chose Path C (no Dataverse).
+
+Run the local, no-network delta check:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/offline-profile-delta.js"
+```
+
+Branch on the JSON `status` per [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → continue to Phase 7 silently (do not nag when no profile exists); `delta` → prompt to update, then read and execute `${CLAUDE_SKILL_DIR}/../add-table-to-offline-profile/SKILL.md` for `missingTables[]` and `${CLAUDE_SKILL_DIR}/../edit-offline-profile/SKILL.md` for `tablesWithNewColumns[]`, passing the arguments documented by each workflow, and re-check to `in-sync`.
+
 ### Phase 7 — Summary
 
 ```
@@ -188,5 +200,6 @@ Next steps:
 ## Reference
 
 - [shared/references/connector-planning.md](${CLAUDE_SKILL_DIR}/../../shared/references/connector-planning.md) — connector inference + confirmation logic
+- [shared/references/offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md) — Phase 6.5 offline delta check + reconciliation flow
 - [skills/add-dataverse/SKILL.md](../add-dataverse/SKILL.md) — full data model execution workflow
 - [agents/data-model-architect.md](../../agents/data-model-architect.md) — read-only architect agent
