@@ -16,6 +16,7 @@
 | **data** | Normalized data-model facts match the `expect.tables/relationships` block | `schema-facts.js` `schemaFacts` |
 | **ui** | Normalized view/chart/form facts match the `expect.views/charts` block · enriched **default views** keep parent lookups (#2) and drop `createdon` (#7) · each **sub-grid** is a full-width 1-column section titled by the child display name (#5) | `sdk-build.js` `viewDef` / `chartDef` / `compileFormIntent` / `defaultViewColumns` / `subgridLabel` · `artifact-intent.js` `subgridSectionIntent` |
 | **app** | Every sitemap subarea resolves to a concrete target · no dangling `navigatesTo` keys | `sdk-build.js` `appDef` |
+| **security** | Each declared persona maps to exactly one role · the role **injects** `appmodule` read for app-access personas (and only those) · every persona privilege on an **app-owned** table (the app's own publisher prefix) resolves to a provisioned entity (JTBD coverage) · the role grants **exactly** its jobs' declared privileges — no extra entity, access token, or inflated scope beyond the declared union + the documented `appmodule` injection (least privilege) | `sdk-build.js` `personaRoleSpecFor` |
 | **verify** | Reconcile against a synthetic all-present reader returns `ok: true` | `verify-spec.js` `verifySpec` |
 | **generate-pages** | No `PAGEREF_` nav targets unresolved (Plan 3 — degrades to SKIP if absent) | `pageref-resolver.js` `resolvePageRefs` |
 | **teardown** | The reverse-of-build delete plan is dependency-safe (solution last · web resources after tables · every table has a step) | `sdk-teardown.js` `planTeardown` |
@@ -28,7 +29,7 @@ Naming is numeric-prefix; `fixture-loader.js` matches `^(\d+)(?:-(.+))?$`.
 
 | # | Slug | What it tests |
 |---|---|---|
-| 1 | `1-support-desk` | Full data/ui/app/verify oracle (no pages) |
+| 1 | `1-support-desk` | Full data/ui/app/verify oracle (no pages) · two **personas** (Support Agent, Support Lead) exercise the **security** oracle — one role each, app-module read injected, JTBD coverage + least-privilege |
 | 2 | `2-orders-multipage` | Page intents + navigation + design contract; page-key round-trip |
 | 3 | `3-assets-dashboard` | Global choice + column binding, on-click command, and a classic **dashboard** pinned to the nav — exercises teardown (dashboard/command/web-resource/global-choice steps) + the dashboard round-trip |
 | 4 | `4-hardening` | The 2026-07-15 review fixes: a lookup-heavy child (8 scalars + a 1:N parent lookup) proves the default view keeps the lookup (#2) and drops `createdon` (#7); an N:N proves the alphabetically-sorted schema name `new_tag_new_ticket` (#3); a no-label sub-grid proves the own-section + pluralName title (#5); relational sample data proves `validateAppSpec` accepts a resolvable `$parent` match and declared Choice labels (#1/#4) |

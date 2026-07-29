@@ -9,6 +9,11 @@ const sortedLc = (a) => (a || []).map((s) => String(s).toLowerCase()).sort();
 const sorted = (a) => (a || []).map(String).sort();
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
+// Scope permissiveness ranking for the least-privilege eval (mirrors facts.js): user < businessUnit <
+// parentChild < organization. A granted scope ranked above the declared scope is an over-grant.
+const SCOPE_RANK = { user: 0, businessunit: 1, parentchild: 2, organization: 3 };
+const scopeRank = (s) => (SCOPE_RANK[String(s || 'user').toLowerCase()] !== undefined ? SCOPE_RANK[String(s || 'user').toLowerCase()] : 0);
+
 const ASSERTIONS = new Map();
 
 // author stage ---------------------------------------------------------------
@@ -46,6 +51,54 @@ ASSERTIONS.set('security: each app-access persona role injects app-module read; 
   if (missing.length) return fail(`app-access personas missing app-module read: ${missing.map((r) => r.persona).join(', ')}`);
   const leaked = (facts.security || []).filter((r) => !r.appAccess && r.appModuleRead);
   if (leaked.length) return fail(`opted-out personas wrongly granted app-module read: ${leaked.map((r) => r.persona).join(', ')}`);
+  return PASS;
+});
+
+// #1 (JTBD coverage): a persona job/additionalPrivilege that names an APP-OWNED table (the app's own
+// publisher prefix) must resolve to a table the app actually provisions. Catches a persona access model
+// that references a hallucinated/typo app table (e.g. `new_tickets` vs `new_ticket`) — the role would
+// grant it but the persona can never use it — the offline analog of a functionality grader finding the
+// app can't support the journey. External/system tables (account, msdyn_*) are exempt (a live check).
+ASSERTIONS.set('security: every persona privilege on an app-owned table resolves to a provisioned entity', ({ facts }) => {
+  const sec = facts.security || [];
+  if (!sec.length) return skip('spec declares no personas');
+  const bad = sec.filter((r) => (r.unresolvedAppTables || []).length);
+  return bad.length
+    ? fail(bad.map((r) => `${r.persona}: unprovisioned app table(s) ${r.unresolvedAppTables.join(', ')}`).join('; '))
+    : PASS;
+});
+
+// #2 (least privilege): the role's GRANTED privilege union must not exceed the author's DECLARED union —
+// no entity beyond the declared set (except the documented app-module read injected for app-open when
+// appAccess), no access token the author didn't ask for, and no scope more permissive than declared.
+// Locks personaRoleSpecFor as a faithful normalizer: a future change that auto-grants an extra table or
+// inflates every scope to organization fails here.
+ASSERTIONS.set('security: each persona role grants exactly its declared job privileges (no over-grant)', ({ facts }) => {
+  const sec = facts.security || [];
+  if (!sec.length) return skip('spec declares no personas');
+  for (const r of sec) {
+    const declared = r.declared || {};
+    for (const [ent, g] of Object.entries(r.granted || {})) {
+      // appmodule is the ONE table the engine may inject (a read privilege, for app-open, when
+      // appAccess). Its allowed access = whatever the author explicitly declared on appmodule (rare)
+      // PLUS `read` when this persona has app access. Anything beyond that — or appmodule appearing
+      // with neither a declaration nor app access — is a leak/over-grant. The injection is org-scoped
+      // by design, so appmodule is exempt from the generic scope-inflation check below.
+      if (ent === 'appmodule') {
+        const allowed = new Set(((declared[ent] && declared[ent].access) || []));
+        if (r.appAccess) allowed.add('read');
+        if (!allowed.size) return fail(`${r.persona}: appmodule granted but neither declared nor app-access-injected (leak)`);
+        const beyond = (g.access || []).filter((a) => !allowed.has(a));
+        if (beyond.length) return fail(`${r.persona}: appmodule granted beyond allowed [${[...allowed].join(', ')}]: ${beyond.join(', ')}`);
+        continue;
+      }
+      const d = declared[ent];
+      if (!d) return fail(`${r.persona}: role grants entity '${ent}' the author never declared (over-grant)`);
+      const extraAccess = (g.access || []).filter((a) => !(d.access || []).includes(a));
+      if (extraAccess.length) return fail(`${r.persona}: '${ent}' granted extra access ${extraAccess.join(', ')} (declared ${(d.access || []).join(', ')})`);
+      if (scopeRank(g.scope) > scopeRank(d.scope)) return fail(`${r.persona}: '${ent}' granted scope '${g.scope}' exceeds declared '${d.scope}'`);
+    }
+  }
   return PASS;
 });
 

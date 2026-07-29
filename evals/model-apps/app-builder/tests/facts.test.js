@@ -2,6 +2,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { stageFacts } = require('../lib/facts.js');
+const { ASSERTIONS } = require('../lib/assertions.js');
 
 // A minimal but valid schemaVersion:2 spec covering all stage primitives: one entity with a
 // Choice column, a view, a chart, a form, an intent page (no .tsx), and a sitemap subarea for each.
@@ -137,4 +138,101 @@ test('stageFacts.ui.subgrids give each sub-grid a 1-column section titled by the
   assert.ok(sg, 'sub-grid fact present');
   assert.strictEqual(sg.sectionColumns, 1, '#5: full-width 1-column section');
   assert.strictEqual(sg.label, 'Tickets', '#5: title from child pluralName, not the logical name');
+});
+
+// Two personas exercising the security facts: an app-access "Agent" (jobs touch two authored tables +
+// one external table) and an opted-out "Analyst" (appAccess:false). Proves securityFacts computes the
+// declared/granted unions, the appmodule injection, and clean app-table resolution (#1 + #2 evals).
+const personaSpec = {
+  schemaVersion: 2,
+  solution: { uniqueName: 'P', publisherPrefix: 'new' },
+  app: { name: 'P', description: '' },
+  entities: [
+    { schemaName: 'new_order', displayName: 'Order', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] },
+    { schemaName: 'new_customer', displayName: 'Customer', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] },
+  ],
+  appShell: { areas: [{ label: 'M', groups: [{ label: 'G', subAreas: [
+    { entity: 'new_order', title: 'Orders' }, { entity: 'new_customer', title: 'Customers' },
+  ] }] }] },
+  personas: [
+    { persona: 'Agent', jobs: [{ name: 'Handle orders', privileges: [
+      { entity: 'new_order', access: ['read', 'write', 'create'], scope: 'businessUnit' },
+      { entity: 'new_customer', access: ['read'], scope: 'organization' },
+      { entity: 'account', access: ['read'], scope: 'organization' },
+    ] }] },
+    { persona: 'Analyst', appAccess: false, jobs: [{ name: 'Report', privileges: [
+      { entity: 'new_order', access: ['read'], scope: 'organization' },
+    ] }] },
+  ],
+};
+
+test('stageFacts.security computes declared/granted unions, appmodule injection, and clean table resolution', async () => {
+  const f = await stageFacts(personaSpec);
+  assert.strictEqual(f.author.validate.ok, true, JSON.stringify(f.author.validate.errors));
+  const agent = f.security.find((r) => r.persona === 'Agent');
+  const analyst = f.security.find((r) => r.persona === 'Analyst');
+  // Agent has app access -> appmodule read injected into GRANTED but never into DECLARED.
+  assert.strictEqual(agent.appAccess, true);
+  assert.strictEqual(agent.appModuleRead, true);
+  assert.deepStrictEqual(agent.granted.appmodule, { access: ['read'], scope: 'organization' }, 'granted carries the injected appmodule read');
+  assert.strictEqual(agent.declared.appmodule, undefined, 'declared never carries the injection');
+  // Declared union preserves per-entity access + scope (access sorted; businessUnit lower-cased).
+  assert.deepStrictEqual(agent.declared.new_order, { access: ['create', 'read', 'write'], scope: 'businessunit' });
+  assert.deepStrictEqual(agent.declared.new_customer, { access: ['read'], scope: 'organization' });
+  // No app-prefixed table is unprovisioned; the external `account` is exempt (not `new`-prefixed).
+  assert.deepStrictEqual(agent.unresolvedAppTables, []);
+  // Analyst opted out of app access -> no appmodule injection anywhere.
+  assert.strictEqual(analyst.appAccess, false);
+  assert.strictEqual(analyst.appModuleRead, false);
+  assert.strictEqual(analyst.granted.appmodule, undefined);
+});
+
+test('stageFacts.security flags a persona privilege on an app-prefixed table the app never provisions (#1)', async () => {
+  const bogus = JSON.parse(JSON.stringify(personaSpec));
+  // `new_bogus` carries the app's own `new` prefix but is not in entities[] -> unresolved.
+  bogus.personas[0].jobs[0].privileges.push({ entity: 'new_bogus', access: ['read'], scope: 'user' });
+  const f = await stageFacts(bogus);
+  const agent = f.security.find((r) => r.persona === 'Agent');
+  assert.deepStrictEqual(agent.unresolvedAppTables, ['new_bogus']);
+});
+
+// Drive the #1/#2 assertions directly with synthetic facts so the FAIL paths are proven (fixtures only
+// exercise the PASS/SKIP paths). Mirrors how the runner invokes a check: `check({ facts, spec, eval })`.
+const coverageCheck = ASSERTIONS.get('security: every persona privilege on an app-owned table resolves to a provisioned entity');
+const overGrantCheck = ASSERTIONS.get('security: each persona role grants exactly its declared job privileges (no over-grant)');
+
+test('security #1 coverage assertion: skips with no personas, fails on an unresolved app table', () => {
+  assert.strictEqual(coverageCheck({ facts: { security: [] } }).status, 'skip');
+  const r = coverageCheck({ facts: { security: [{ persona: 'X', unresolvedAppTables: ['new_bogus'] }] } });
+  assert.strictEqual(r.status, 'fail');
+  assert.match(r.reason, /new_bogus/);
+});
+
+test('security #2 least-privilege assertion: passes faithful mapping, catches over-grant / scope inflation / leak', () => {
+  const wrap = (rec) => ({ facts: { security: [rec] } });
+  // Faithful mapping (declared == granted, plus the allowed appmodule injection) passes.
+  assert.strictEqual(overGrantCheck(wrap({ persona: 'A', appAccess: true,
+    declared: { new_order: { access: ['read'], scope: 'user' } },
+    granted: { new_order: { access: ['read'], scope: 'user' }, appmodule: { access: ['read'], scope: 'organization' } },
+  })).status, 'pass');
+  // Extra entity the author never declared.
+  assert.match(overGrantCheck(wrap({ persona: 'A', appAccess: true,
+    declared: { new_order: { access: ['read'], scope: 'user' } },
+    granted: { new_order: { access: ['read'], scope: 'user' }, new_secret: { access: ['read'], scope: 'user' } },
+  })).reason, /new_secret/);
+  // Extra access token beyond declared.
+  assert.match(overGrantCheck(wrap({ persona: 'A', appAccess: true,
+    declared: { new_order: { access: ['read'], scope: 'user' } },
+    granted: { new_order: { access: ['read', 'delete'], scope: 'user' } },
+  })).reason, /delete/);
+  // Scope inflation beyond declared.
+  assert.match(overGrantCheck(wrap({ persona: 'A', appAccess: true,
+    declared: { new_order: { access: ['read'], scope: 'user' } },
+    granted: { new_order: { access: ['read'], scope: 'organization' } },
+  })).reason, /scope/);
+  // appmodule granted while the persona opted out of app access (and never declared it) = leak.
+  assert.match(overGrantCheck(wrap({ persona: 'A', appAccess: false,
+    declared: { new_order: { access: ['read'], scope: 'user' } },
+    granted: { new_order: { access: ['read'], scope: 'user' }, appmodule: { access: ['read'], scope: 'organization' } },
+  })).reason, /leak/);
 });

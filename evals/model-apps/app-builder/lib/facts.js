@@ -26,6 +26,40 @@ try { pagerefResolver = pluginLib('pageref-resolver.js'); } catch { pagerefResol
 
 const lc = (s) => String(s || '').toLowerCase();
 
+// Scope permissiveness ranking (least -> most): user(Basic) < businessUnit(Local) < parentChild(Deep)
+// < organization(Global). Matches the personas[] scope table in references/app-spec-schema.md. A
+// privilege that omits scope defaults to `user` — the SDK's default depth (personaRoleSpecFor omits
+// scope only when the author did, and createPersonaRole treats a missing depth as Basic/user).
+const SCOPE_RANK = { user: 0, businessunit: 1, parentchild: 2, organization: 3 };
+const scopeRank = (s) => (SCOPE_RANK[lc(s || 'user')] !== undefined ? SCOPE_RANK[lc(s || 'user')] : 0);
+
+// Union a flat privilege list into entity -> { access:Set, scope:maxScope }, mirroring the SDK's
+// documented union rule ("max scope wins per entity+access"): a persona's ONE role carries the union of
+// every job's + additionalPrivileges' declared access. Both the DECLARED (author) and GRANTED (mapper)
+// sides are reduced through this so the least-privilege / coverage evals compare like with like.
+function unionPrivileges(privs) {
+  const out = new Map();
+  for (const pr of privs || []) {
+    const ent = lc(pr.entity);
+    const cur = out.get(ent) || { access: new Set(), scope: 'user' };
+    for (const a of pr.access || []) cur.access.add(lc(a));
+    if (scopeRank(pr.scope) > scopeRank(cur.scope)) cur.scope = lc(pr.scope || 'user');
+    out.set(ent, cur);
+  }
+  return out;
+}
+
+// The DECLARED privileges of a persona-shaped object: jobs[].privileges + additionalPrivileges. From the
+// raw spec this is what the AUTHOR asked for (the injected appmodule read is deliberately absent — it is
+// an engine addition, not an author declaration); from personaRoleSpecFor's output it is what the role
+// will GRANT (appmodule read included). Reused for both sides so the two unions are built identically.
+function flattenPrivileges(personaLike) {
+  const privs = [];
+  for (const j of personaLike.jobs || []) for (const pr of j.privileges || []) privs.push(pr);
+  for (const pr of personaLike.additionalPrivileges || []) privs.push(pr);
+  return privs;
+}
+
 // author: design-profile validation + lint. The harness runs in autopilot/design mode — pages are
 // intents, so 'plan' is the right profile (design §7.1 — deploy profile would reject intent pages).
 function authorFacts(spec) {
@@ -292,16 +326,44 @@ async function roundTripFacts(spec) {
   };
 }
 
-// security: per-persona role facts from the pure spec->SDK mapper (personaRoleSpecFor). Proves each
-// persona maps to one role whose privilege union carries the injected app-module read (so the app
-// opens) unless the persona opts out. Empty for a spec with no personas — the assertions then pass
-// trivially, so this fact is safe on every fixture.
+// security: per-persona role facts from the pure spec->SDK mapper (personaRoleSpecFor). For each persona
+// it exposes: the injected app-module read flag (so the app opens) unless the persona opts out; the
+// DECLARED privilege union (author intent, from the raw spec) and the GRANTED union (what the role will
+// carry, from the mapper — appmodule read included) so the least-privilege eval can prove the role does
+// not exceed what was declared; and `unresolvedAppTables` — declared entities that carry the app's own
+// publisher prefix but are not provisioned (a hallucinated/typo table the persona could never use).
+// Empty for a spec with no personas — the assertions then pass trivially, so this fact is safe on every
+// fixture.
 function securityFacts(spec) {
+  // App-owned publisher prefixes + the set of provisioned tables. #1 (JTBD coverage) flags a persona
+  // privilege that names an APP-prefixed table the app never provisions. External/system tables
+  // (account, msdyn_*, no prefix) are exempt — their existence is a LIVE metadata check the offline
+  // harness can't (and shouldn't) make.
+  const appTables = new Set((spec.entities || []).map((e) => lc(e.schemaName)));
+  const appPrefixes = new Set([...appTables].map((t) => t.split('_')[0]).filter(Boolean));
+
+  // Serialize a union Map to a plain object (Set -> sorted array) so facts stay JSON-comparable and the
+  // assertion layer / tests can diff them without Map/Set handling.
+  const serialize = (m) => Object.fromEntries([...m.entries()].map(([k, v]) => [k, { access: [...v.access].sort(), scope: v.scope }]));
+
   return (spec.personas || []).map((p) => {
     const mapped = personaRoleSpecFor(p);
-    const appModuleRead = (mapped.additionalPrivileges || []).some((pr) => pr.entity === 'appmodule' && (pr.access || []).includes('read'));
-    const privileges = (mapped.jobs || []).reduce((n, j) => n + (j.privileges || []).length, 0) + (mapped.additionalPrivileges || []).length;
-    return { persona: p.persona, appAccess: p.appAccess !== false, appModuleRead, privileges };
+    const grantedList = flattenPrivileges({ jobs: mapped.jobs, additionalPrivileges: mapped.additionalPrivileges });
+    const declared = unionPrivileges(flattenPrivileges(p)); // author intent (no appmodule injection)
+    const granted = unionPrivileges(grantedList); // role's actual grant (appmodule read included)
+
+    const appModuleRead = (mapped.additionalPrivileges || []).some((pr) => lc(pr.entity) === 'appmodule' && (pr.access || []).map(lc).includes('read'));
+    const unresolvedAppTables = [...declared.keys()].filter((ent) => !appTables.has(ent) && appPrefixes.has(ent.split('_')[0]));
+
+    return {
+      persona: p.persona,
+      appAccess: p.appAccess !== false,
+      appModuleRead,
+      privileges: grantedList.length,
+      declared: serialize(declared),
+      granted: serialize(granted),
+      unresolvedAppTables,
+    };
   });
 }
 

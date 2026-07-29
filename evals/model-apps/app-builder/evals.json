@@ -7,6 +7,8 @@
     "plan: every planned item targets a known engine phase",
     "security: the plan authors exactly one role per declared persona",
     "security: each app-access persona role injects app-module read; opted-out personas do not",
+    "security: every persona privilege on an app-owned table resolves to a provisioned entity",
+    "security: each persona role grants exactly its declared job privileges (no over-grant)",
     "data: schema-facts provision exactly the expected tables",
     "data: schema-facts provision exactly the expected relationships",
     "ui: wire-facts build exactly the expected views and charts",
