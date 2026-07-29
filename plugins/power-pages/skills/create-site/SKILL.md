@@ -381,8 +381,15 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    8. Import the unmanaged solution inline, without invoking `/import-solution` and without writing ALM artifacts:
       ```bash
       node "${PLUGIN_ROOT}/scripts/encode-solution-file.js" --zipPath "<SELECTED_TEMPLATE_SOLUTION_ZIP>"
+      # Write a temp JSON body file containing:
+      # {
+      #   "CustomizationFile": "<encoded>",
+      #   "OverwriteUnmanagedCustomizations": true,
+      #   "PublishWorkflows": true,
+      #   "ConvertToManaged": false
+      # }
       node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "<environmentUrl>" POST "ImportSolutionAsync" \
-        --body '{"CustomizationFile":"<encoded>","OverwriteUnmanagedCustomizations":true,"PublishWorkflows":true,"ConvertToManaged":false}' \
+        --bodyFile "<temp-import-body.json>" \
         --include-headers
       node "${PLUGIN_ROOT}/scripts/poll-async-operation.js" \
         --asyncJobId "<AsyncOperationId from ImportSolutionAsync>" \
