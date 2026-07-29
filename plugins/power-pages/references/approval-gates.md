@@ -687,7 +687,7 @@ New skill (Power Pages source & dependency security scan). Runs local static ana
 
 ### 6.31 `setup-prerequisites` (2 gate IDs)
 
-New skill (machine setup for marketplace installs). Checks Node.js, the .NET SDK, the PAC CLI, and the Azure CLI, installs what is missing, and signs both CLIs in. Both gates are `consent` — each one authorizes a change to the user's machine (a package install, or a credential prompt that writes a CLI profile) rather than a change to the project.
+New skill (machine setup for marketplace installs). Checks Node.js, Git, the .NET SDK, the PAC CLI, and the Azure CLI, installs what is missing, and signs both CLIs in. Both gates are `consent` — each one authorizes a change to the user's machine (a package install, or a credential prompt that writes a CLI profile) rather than a change to the project.
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|

@@ -45,8 +45,17 @@ test('pac without the .NET SDK has no automated path', () => {
   assert.ok(plan.manual.length > 0);
 });
 
-test('dotnet uses winget on Windows and Homebrew on macOS', () => {
-  const win = resolveInstallPlan({ tool: 'dotnet', platform: 'win32', commandExists: everythingPresent });
+test('git uses winget on Windows and Homebrew on macOS', () => {
+  const win = resolveInstallPlan({ tool: 'git', platform: 'win32', commandExists: everythingPresent });
+  assert.equal(win.command, 'winget');
+  assert.ok(win.args.includes('Git.Git'));
+
+  const mac = resolveInstallPlan({ tool: 'git', platform: 'darwin', commandExists: everythingPresent });
+  assert.equal(mac.command, 'brew');
+  assert.deepEqual(mac.args, ['install', 'git']);
+});
+
+test('dotnet uses winget on Windows and Homebrew on macOS', () => {  const win = resolveInstallPlan({ tool: 'dotnet', platform: 'win32', commandExists: everythingPresent });
   assert.equal(win.command, 'winget');
   assert.ok(win.args.includes('Microsoft.DotNet.SDK.10'));
   assert.ok(win.args.includes('--accept-package-agreements'));
@@ -66,8 +75,8 @@ test('az uses winget on Windows and Homebrew on macOS', () => {
   assert.deepEqual(mac.args, ['install', 'azure-cli']);
 });
 
-test('Linux falls back to manual instructions for dotnet and az', () => {
-  for (const tool of ['dotnet', 'az']) {
+test('Linux falls back to manual instructions for git, dotnet, and az', () => {
+  for (const tool of ['git', 'dotnet', 'az']) {
     const plan = resolveInstallPlan({ tool, platform: 'linux', commandExists: everythingPresent });
     assert.equal(plan.command, null);
     assert.match(plan.reason, /linux/);

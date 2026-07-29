@@ -33,6 +33,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 | Prerequisite | Required for | Install |
 |---|---|---|
 | [Node.js](https://nodejs.org/) (LTS) | All skills | `winget install OpenJS.NodeJS.LTS` |
+| [Git](https://git-scm.com/downloads) | Commits made by most skills | `winget install Git.Git` |
 | [PAC CLI](https://learn.microsoft.com/power-platform/developer/cli/introduction) | Deploy, activate, data model | `dotnet tool install -g Microsoft.PowerApps.CLI.Tool` |
 | [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) | Data model, sample data, activation | `winget install Microsoft.AzureCLI` |
 
@@ -396,7 +397,7 @@ Adds search engine optimization artifacts: `robots.txt`, `sitemap.xml`, and meta
 
 > "Set up the plugin" · "Check my setup" · "pac is not recognized"
 
-Gets a machine ready to use the plugin. Checks Node.js, the .NET SDK, the Power Platform CLI, and the Azure CLI, installs whatever is missing, and signs both CLIs in.
+Gets a machine ready to use the plugin. Checks Node.js, Git, the .NET SDK, the Power Platform CLI, and the Azure CLI, installs whatever is missing, and signs both CLIs in.
 
 - Reports each tool's version and sign-in state before changing anything
 - Asks before every install, one tool at a time, showing the exact command

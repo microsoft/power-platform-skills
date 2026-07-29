@@ -1,9 +1,9 @@
 ---
 name: setup-prerequisites
 description: >-
-  Gets a machine ready to use the power-pages plugin — checks Node.js, the .NET
-  SDK, the Power Platform CLI (pac), and the Azure CLI (az), installs whatever
-  is missing, and signs both CLIs in.
+  Gets a machine ready to use the power-pages plugin — checks Node.js, Git, the
+  .NET SDK, the Power Platform CLI (pac), and the Azure CLI (az), installs
+  whatever is missing, and signs both CLIs in.
 user-invocable: true
 disable-model-invocation: true
 argument-hint: "[optional: check | install]"
@@ -15,7 +15,7 @@ model: sonnet
 
 # Setup Prerequisites
 
-Check every tool the power-pages skills depend on, install what is missing, and sign the Power Platform CLI and Azure CLI in.
+Check every tool the power-pages skills depend on — Node.js, Git, the .NET SDK, the Power Platform CLI, and the Azure CLI — install what is missing, and sign the Power Platform CLI and Azure CLI in.
 
 **Initial request:** $ARGUMENTS
 
@@ -23,9 +23,10 @@ Installing the plugin from the marketplace copies skill files and nothing else, 
 
 ## Gotchas
 
-- **A newly installed CLI does not resolve until the terminal restarts.** `pac` and `az` land in a PATH entry the current shell resolved at startup. After an install, tell the user to restart the terminal rather than reporting a false failure.
+- **A newly installed CLI does not resolve until the terminal restarts.** A freshly installed `git`, `pac`, or `az` lands in a PATH entry the current shell resolved at startup. After an install, tell the user to restart the terminal rather than reporting a false failure.
 - **PAC CLI is a .NET global tool.** Installing it needs the .NET SDK already on PATH. Installing the SDK in this session is not enough — see Phase 2.
-- **Linux has no automated path** for the .NET SDK and Azure CLI. Detection still works; the install step hands back commands.
+- **Git is what the skills commit with.** Most skills commit after each milestone, and the plugin's own version check shells out to `git`. Without it those steps fail rather than degrade.
+- **Linux has no automated path** for Git, the .NET SDK, and the Azure CLI. Detection still works; the install step hands back commands.
 - **`--allow-no-subscriptions` is only valid on `az login`.** Never add it to `az account show` or any other `az` subcommand — they reject it as an unrecognized argument.
 - **A failed install is not the end of the run.** Report it, keep going with the remaining tools, and collect every failure into the final summary.
 - **Environment selection is out of scope.** This skill stops once the CLIs are installed and signed in. Choosing a Dataverse environment belongs to the skill that needs one.
@@ -60,7 +61,7 @@ The script exits `1` when anything needs attention — that is a report, not a f
 
 | Field | Meaning |
 |---|---|
-| `node`, `dotnet`, `pac`, `az` | `available` plus the detected `version` |
+| `node`, `git`, `dotnet`, `pac`, `az` | `available` plus the detected `version` |
 | `pac.updateAvailable` | A newer PAC CLI is published on NuGet (`pac.latestVersion`) |
 | `pacAuth`, `azAuth` | `signedIn`, plus `tenantId` and `user` when signed in |
 | `tenantMismatch` | Non-null when the two CLIs are signed into different tenants |
@@ -90,13 +91,13 @@ Work through `actions` in order, one tool per `AskUserQuestion`. Combining them 
 For each prompt, show the command that will run. Get it from the script rather than writing it out from memory, passing the same flags the real run will use — for a `kind` of `update`, that means `--update` on both calls, because the resolved command differs (`dotnet tool update` rather than `dotnet tool install`):
 
 ```bash
-node "${PLUGIN_ROOT}/skills/setup-prerequisites/scripts/install-prerequisite.js" --tool <dotnet|pac|az> [--update] --dry-run
+node "${PLUGIN_ROOT}/skills/setup-prerequisites/scripts/install-prerequisite.js" --tool <git|dotnet|pac|az> [--update] --dry-run
 ```
 
 On approval, run the same command without `--dry-run`:
 
 ```bash
-node "${PLUGIN_ROOT}/skills/setup-prerequisites/scripts/install-prerequisite.js" --tool <dotnet|pac|az> [--update]
+node "${PLUGIN_ROOT}/skills/setup-prerequisites/scripts/install-prerequisite.js" --tool <git|dotnet|pac|az> [--update]
 ```
 
 The script streams installer output to the terminal and ends with a JSON line:

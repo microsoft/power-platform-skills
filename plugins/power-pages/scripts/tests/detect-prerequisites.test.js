@@ -6,6 +6,7 @@ const {
   parsePacVersion,
   parseAzVersion,
   parseDotnetVersion,
+  parseGitVersion,
   parsePacAuthWho,
   parseAzAccountShow,
   compareVersions,
@@ -42,6 +43,7 @@ function statusFixture(overrides = {}) {
   return Object.assign(
     {
       node: { available: true, version: '22.11.0' },
+      git: { available: true, version: '2.53.0' },
       dotnet: { available: true, version: '10.0.102' },
       pac: { available: true, version: '1.51.1', updateAvailable: false },
       az: { available: true, version: '2.77.0' },
@@ -87,6 +89,14 @@ test('parseDotnetVersion handles stable and preview SDKs', () => {
   assert.equal(parseDotnetVersion('10.0.102\n'), '10.0.102');
   assert.equal(parseDotnetVersion('9.0.100-preview.1.24101.2\n'), '9.0.100-preview.1.24101.2');
   assert.equal(parseDotnetVersion(null), null);
+});
+
+test('parseGitVersion reads upstream and Apple-shipped builds', () => {
+  assert.equal(parseGitVersion('git version 2.53.0\n'), '2.53.0');
+  assert.equal(parseGitVersion('git version 2.39.5 (Apple Git-154)\n'), '2.39.5');
+  assert.equal(parseGitVersion('git version 2.51.0.windows.1\n'), '2.51.0');
+  assert.equal(parseGitVersion(null), null);
+  assert.equal(parseGitVersion('command not found: git'), null);
 });
 
 test('parsePacAuthWho extracts tenant, user, and cloud', () => {
@@ -161,12 +171,14 @@ test('buildActions is empty when everything is present and signed in', () => {
 test('buildActions reports one install per missing tool', () => {
   const actions = buildActions(
     statusFixture({
+      git: { available: false, version: null },
       dotnet: { available: false, version: null },
       az: { available: false, version: null },
       azAuth: { signedIn: false, tenantId: null },
     })
   );
   assert.deepEqual(actions, [
+    { tool: 'git', kind: 'install' },
     { tool: 'dotnet', kind: 'install' },
     { tool: 'az', kind: 'install' },
   ]);

@@ -115,7 +115,7 @@ skills/
     scripts/render-alm-plan.js ← Renders alm-plan-template.html from planData JSON (stages diagram, checklist, risks)
     scripts/validate-plan-alm.js ← Validates docs/alm-plan.html exists and is > 500 bytes; gracefully exits 0 if not a plan-alm session
   setup-prerequisites/
-    SKILL.md                   ← Machine setup skill — checks/installs Node, .NET SDK, PAC CLI, Azure CLI and signs both CLIs in
+    SKILL.md                   ← Machine setup skill — checks/installs Node, Git, .NET SDK, PAC CLI, Azure CLI and signs both CLIs in
     scripts/detect-prerequisites.js   ← Read-only probe; emits JSON status + an `actions` list the workflow works through
     scripts/install-prerequisite.js   ← Installs one tool via winget (Windows) / Homebrew (macOS) / dotnet tool (PAC, all platforms)
 ```

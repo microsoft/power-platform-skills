@@ -9,7 +9,7 @@
  * invocation installs exactly one tool.
  *
  * Usage:
- *   node install-prerequisite.js --tool <dotnet|pac|az> [--update] [--dry-run]
+ *   node install-prerequisite.js --tool <git|dotnet|pac|az> [--update] [--dry-run]
  *
  * Exit codes:
  *   0  Installed, or a dry run printed the plan
@@ -23,10 +23,12 @@
 
 const { execFileSync, spawnSync } = require('child_process');
 
-const TOOLS = ['dotnet', 'pac', 'az'];
+const TOOLS = ['git', 'dotnet', 'pac', 'az'];
 
 // Winget package identifiers, verified against the microsoft/winget-pkgs
-// manifests at manifests/m/Microsoft/DotNet/SDK/10 and manifests/m/Microsoft/AzureCLI.
+// manifests at manifests/g/Git/Git, manifests/m/Microsoft/DotNet/SDK/10, and
+// manifests/m/Microsoft/AzureCLI.
+const WINGET_GIT_ID = 'Git.Git';
 const WINGET_DOTNET_SDK_ID = 'Microsoft.DotNet.SDK.10';
 const WINGET_AZURE_CLI_ID = 'Microsoft.AzureCLI';
 
@@ -45,6 +47,13 @@ const WINGET_FLAGS = [
 const PAC_NUGET_PACKAGE = 'Microsoft.PowerApps.CLI.Tool';
 
 const MANUAL_INSTRUCTIONS = {
+  git: [
+    'Windows (winget)   winget install -e --id Git.Git',
+    'macOS (Homebrew)   brew install git',
+    'macOS (built-in)   xcode-select --install',
+    'Linux (apt)        sudo apt install git',
+    'Any platform       https://git-scm.com/downloads',
+  ],
   dotnet: [
     'Windows (winget)   winget install -e --id Microsoft.DotNet.SDK.10',
     'macOS (Homebrew)   brew install --cask dotnet-sdk',
@@ -111,6 +120,26 @@ function resolveInstallPlan({ tool, platform, update = false, commandExists = ha
       description: `${update ? 'Updating' : 'Installing'} the Power Platform CLI as a .NET global tool`,
       manual,
     };
+  }
+
+  if (tool === 'git') {
+    if (platform === 'win32' && commandExists('winget')) {
+      return {
+        command: 'winget',
+        args: ['install', ...WINGET_FLAGS, '--id', WINGET_GIT_ID],
+        description: 'Installing Git via winget',
+        manual,
+      };
+    }
+    if (platform === 'darwin' && commandExists('brew')) {
+      return {
+        command: 'brew',
+        args: ['install', 'git'],
+        description: 'Installing Git via Homebrew',
+        manual,
+      };
+    }
+    return { command: null, reason: noPackageManagerReason(platform, 'Git'), manual };
   }
 
   if (tool === 'dotnet') {

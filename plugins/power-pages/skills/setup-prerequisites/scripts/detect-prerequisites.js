@@ -98,6 +98,21 @@ function parseAzVersion(output) {
 }
 
 /**
+ * Extracts the version from `git --version`, whose banner is:
+ *
+ *   git version 2.53.0
+ *
+ * The Apple-shipped build appends its own suffix:
+ *
+ *   git version 2.39.5 (Apple Git-154)
+ */
+function parseGitVersion(output) {
+  if (!output) return null;
+  const match = output.match(/git version\s+([0-9]+(?:\.[0-9]+)*)/i);
+  return match ? match[1] : null;
+}
+
+/**
  * Extracts the version from `dotnet --version`, which prints a bare version such
  * as `10.0.102` (or `9.0.100-preview.1.24101.2` on a preview SDK).
  */
@@ -237,6 +252,7 @@ function fetchLatestPacVersion() {
 function buildActions(status) {
   const actions = [];
   if (!status.node.available) actions.push({ tool: 'node', kind: 'install' });
+  if (!status.git.available) actions.push({ tool: 'git', kind: 'install' });
   if (!status.dotnet.available) actions.push({ tool: 'dotnet', kind: 'install' });
   if (!status.pac.available) actions.push({ tool: 'pac', kind: 'install' });
   else if (status.pac.updateAvailable) actions.push({ tool: 'pac', kind: 'update' });
@@ -281,6 +297,7 @@ Exit codes:
   const checkUpdates = !process.argv.includes('--no-update-check');
 
   const nodeVersion = process.version.replace(/^v/, '');
+  const gitVersion = parseGitVersion(probe('git', ['--version']));
   const dotnetVersion = parseDotnetVersion(probe('dotnet', ['--version']));
   const pacVersion = parsePacVersion(probe('pac', ['help']));
   const azVersion = parseAzVersion(probe('az', ['version', '-o', 'tsv']));
@@ -297,6 +314,7 @@ Exit codes:
     // This script runs under Node, so Node is present by construction. It stays
     // in the report because the skill's summary lists every prerequisite.
     node: { available: true, version: nodeVersion },
+    git: { available: Boolean(gitVersion), version: gitVersion },
     dotnet: { available: Boolean(dotnetVersion), version: dotnetVersion },
     pac: {
       available: Boolean(pacVersion),
@@ -322,6 +340,7 @@ module.exports = {
   parsePacVersion,
   parseAzVersion,
   parseDotnetVersion,
+  parseGitVersion,
   parsePacAuthWho,
   parseAzAccountShow,
   compareVersions,
