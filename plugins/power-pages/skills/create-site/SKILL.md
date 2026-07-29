@@ -477,13 +477,44 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        - **`ok: false`**: tell the user the browser could not be opened automatically and show the `siteUrl` for manual opening.
 
        Always surface the activate-site DNS propagation caveat: the site may take a few minutes to load even after activation succeeds.
-   18. Mark **Show live template site** and **Select template or choose from-scratch** as `completed`, then present the template-path summary:
+   18. Mark **Show live template site** as `completed`, then present the template-path summary:
        - Template name and framework
        - Imported site name and Website Record ID
        - Live site URL
        - DNS propagation note: the site may take a few minutes to load everywhere
        - "Your site is live. Want to keep customizing it from here?"
-       Do **not** continue to Phase 2.
+
+<!-- not-a-gate: optional post-live template customization branch; the template site is already imported and activated, so this prompt only chooses whether to download editable source files for further local changes -->
+
+   19. Use `AskUserQuestion`:
+
+       | Question | Header | Options |
+       |----------|--------|---------|
+       | Your template site is live. Do you want to download the site source and customize it now? | Customize Template Site | Yes, download and customize (Recommended), No, finish here |
+
+       - **No, finish here**: mark **Select template or choose from-scratch** as `completed`, then stop.
+       - **Yes, download and customize**: append the template customization tasks (see [Progress Tracking](#progress-tracking)), then continue below.
+
+   20. Mark **Download imported template site** as `in_progress` and ask where to download the code site:
+
+       | Question | Header | Options |
+       |----------|--------|---------|
+       | Where should I download the template site's source files? | Download Location | New folder in current directory (Recommended), Current directory, Any other directory |
+
+       Resolve the path using the same location rules as from-scratch:
+       - **New folder in current directory**: create `<cwd>/<IMPORTED_SITE_NAME>/`.
+       - **Current directory**: use `<cwd>`.
+       - **Any other directory**: ask for a full path, then verify/create it.
+
+       Confirm the resolved path, then run:
+       ```bash
+       pac pages download-code-site -id "<IMPORTED_WEBSITE_RECORD_ID>" -p "<resolved path>"
+       ```
+
+       If download fails, surface the command output and ask whether to retry, choose another folder, or stop. If it succeeds, set `PROJECT_ROOT = "<resolved path>"`, mark **Download imported template site** as `completed`, and continue into the planning/customization phases below.
+   21. Mark **Plan template customizations** as `in_progress`, then ask what the user wants changed in the downloaded template site. Use the existing Phase 3/4/5/6/7 implementation, verification, and review flow against `PROJECT_ROOT`; do **not** run Phase 2 scaffold/copy-template. The downloaded site is already a real Power Pages code site, so customize it in place.
+   22. After the customization plan is approved, mark **Plan template customizations** as `completed`, **Implement pages and components** as `in_progress`, and make the requested changes in the downloaded site.
+   23. Run the existing validation/review flow. Do not automatically deploy from this branch unless the user explicitly asks to run `/deploy-site`.
 
 8. For the from-scratch path only, tell the user: "I'll scaffold this site from scratch."
 
@@ -506,7 +537,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    Store this as `PROJECT_ROOT`.
 11. Append the from-scratch task list (Phases 2-8) to the todo list (see [Progress Tracking](#progress-tracking)), then mark **Select template or choose from-scratch** as `completed`.
 
-**Output**: either imported template site identity (`IMPORTED_SITE_NAME`, `IMPORTED_WEBSITE_RECORD_ID`) in an inactive/not-live state, or `CREATION_PATH = "from-scratch"` with selected framework and resolved project location.
+**Output**: imported template site identity (`IMPORTED_SITE_NAME`, `IMPORTED_WEBSITE_RECORD_ID`) and either a completed live template flow or a downloaded template code site ready for customization; or `CREATION_PATH = "from-scratch"` with selected framework and resolved project location.
 
 ---
 
@@ -1156,6 +1187,13 @@ After the reinstall policy chooses a normal import/update/import-anyway path, ap
 | Apply template seed data | Applying seed data | Insert optional template seed records using the deterministic seed-data script; failures do not block activation |
 | Activate imported site | Activating imported site | Invoke activate-site with the resolved site name and Website Record ID |
 | Show live template site | Showing live site | Open the activated site URL in the browser and invite the user to continue customizing |
+
+If the user chooses to customize the live imported template, append:
+
+| Task subject | activeForm | Description |
+|-------------|------------|-------------|
+| Download imported template site | Downloading template source | Ask for a local folder and run `pac pages download-code-site -id <Website Record ID> -p <path>` |
+| Plan template customizations | Planning customizations | Ask what the user wants changed and plan edits against the downloaded code site |
 
 When the selected template is already installed at the same or a newer version and the user chooses the clone path, append this branch-specific task instead of the import-path tasks:
 

@@ -468,7 +468,7 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 ---
 
-### 6.13 `create-site` (18 calls: 13 gates + 5 not-a-gates)
+### 6.13 `create-site` (20 calls: 13 gates + 7 not-a-gates)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -483,6 +483,8 @@ When **removing** a gate, also remove its catalog row in the same PR.
 | `create-site:1.5.update-installed` | gate | consent | 1.5 | Selected template solution is installed but zip is newer — confirm unmanaged update import | template-cache |
 | `create-site:1.5.clone-existing` | gate | consent | 1.5 | Selected template solution is same/older — confirm cloning an existing website instead of re-importing | template-cache |
 | `create-site:1.5.clone-source-site` | not-a-gate | — | 1.5 | Disambiguate which existing Website Record ID to clone after clone path is already approved | — |
+| `create-site:1.5.customize-template` | not-a-gate | — | 1.5 | Optional post-live route choice to download the imported template source for local customization | — |
+| `create-site:1.5.template-download-location` | not-a-gate | — | 1.5 | Download folder selection before running `pac pages download-code-site`; no download runs until a path is selected | — |
 | `create-site:1.5.clone-failed` | gate | progress | 1.5 | Clone/download/upload failed — choose retry, from-scratch fallback, or stop | partial-template-clone |
 | `create-site:1.5.reinstall-unknown` | gate | consent | 1.5 | Installed-solution detection failed — confirm whether to import anyway, start from scratch, or stop | template-cache |
 | `create-site:1.5.import-failed` | gate | progress | 1.5 | Import failed or partial — choose retry, from-scratch fallback, or stop | partial-unmanaged-template-import |
