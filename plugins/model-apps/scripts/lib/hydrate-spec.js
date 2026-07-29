@@ -33,6 +33,14 @@ function subAreaToSpec(sa, pageRefById, dashboardNameById) {
   return null; // CustomPage / unmapped — not hydrated
 }
 
+function droppedSubareaDetail(sa) {
+  return {
+    type: sa && sa.type ? sa.type : 'Unknown',
+    id: (sa && (sa.genPageId || sa.dashboardId || sa.id || sa.url || sa.entity)) || undefined,
+    title: (sa && sa.title) || undefined,
+  };
+}
+
 async function hydrateSpec(read) {
   const app = (await read.app()) || { name: '', description: '', siteMap: { areas: [] } };
   const pages = (await read.pages()) || [];
@@ -55,6 +63,19 @@ async function hydrateSpec(read) {
   const dashboardNameById = new Map(dashboards.filter((d) => d.id && d.name).map((d) => [String(d.id).toLowerCase(), d.name]));
   // Dispatch: v2 routes GenPage by key; legacy routes by name.
   const subMap = hasKeys ? pageKeyById : pageNameById;
+  const droppedSubareaDetails = [];
+
+  const mapSubArea = (sa) => {
+    const mapped = subAreaToSpec(sa, subMap, dashboardNameById);
+    if (!mapped) {
+      // Dropping remains the safest App Spec behavior (an invalid GenPage/DashBoard ref would fail
+      // validation or rebuild the wrong nav), but download must be able to fail loudly instead of
+      // claiming a lossless pull. Keep compact type/id/title facts so the CLI can tell the maker what
+      // needs manual recovery without persisting SDK sitemap internals into the app-spec.
+      droppedSubareaDetails.push(droppedSubareaDetail(sa));
+    }
+    return mapped;
+  };
 
   const appShell = {
     areas: (app.siteMap.areas || []).map((a) => ({
@@ -63,12 +84,12 @@ async function hydrateSpec(read) {
       ...(a.vectorIcon ? { vectorIcon: a.vectorIcon } : {}),
       groups: (a.groups || []).map((g) => ({
         label: g.title,
-        subAreas: (g.subAreas || []).map((sa) => subAreaToSpec(sa, subMap, dashboardNameById)).filter(Boolean),
+        subAreas: (g.subAreas || []).map(mapSubArea).filter(Boolean),
       })),
     })),
   };
 
-  return {
+  const spec = {
     // schemaVersion 2 only when pages carry keys (v2 shape); omitted for legacy back-compat.
     ...(hasKeys ? { schemaVersion: 2 } : {}),
     solution,
@@ -124,6 +145,13 @@ async function hydrateSpec(read) {
     // design from the page manifest (§7.3) — omit entirely when absent so the spec stays minimal.
     ...(design !== undefined ? { design } : {}),
   };
+  // These diagnostics are intentionally non-enumerable: hydrateSpec returns them to the download CLI,
+  // but `app-spec.json` must stay the user-facing contract rather than gaining transient loss metadata.
+  Object.defineProperties(spec, {
+    droppedSubareas: { value: droppedSubareaDetails.length, enumerable: false },
+    droppedSubareaDetails: { value: droppedSubareaDetails, enumerable: false },
+  });
+  return spec;
 }
 
 module.exports = { hydrateSpec, subAreaToSpec };

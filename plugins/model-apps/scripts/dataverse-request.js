@@ -43,6 +43,10 @@ async function main() {
 
   let timeout = undefined;
   if (flags.timeout !== undefined) {
+    if (typeof flags.timeout !== 'string') {
+      process.stderr.write('--timeout must include a positive millisecond value (for example, --timeout 60000)\n');
+      process.exit(1);
+    }
     const parsed = Number(flags.timeout);
     if (!Number.isFinite(parsed) || parsed <= 0) {
       process.stderr.write(`--timeout must be a positive number (got "${flags.timeout}")\n`);

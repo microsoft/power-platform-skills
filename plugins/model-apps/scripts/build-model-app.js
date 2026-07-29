@@ -382,12 +382,25 @@ function list(v) {
 
 async function main() {
   const { positional, flags } = parseArgs(process.argv.slice(2));
-  const env = flags.env;
-  const specArg = flags.spec || positional[0];
+  // parseArgs sets a value-less flag to boolean `true`. Coerce required-VALUE flags to missing so a
+  // bare flag fails with the usage message instead of (a) crashing later, or (b) — critically for the
+  // phase selectors — being read as `undefined` and SILENTLY SELECTING ALL PHASES. e.g. `--apply --only`
+  // with no value must NOT become a full apply on this destructive tool. Boolean switches
+  // (--apply/--publish/--verify/…) legitimately stay `true`.
+  const env = typeof flags.env === 'string' ? flags.env : undefined;
+  const specArg = typeof flags.spec === 'string' ? flags.spec : positional[0];
   if (!env || !specArg) {
     process.stderr.write(
-      'Usage: node build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--non-interactive] [--allow-destructive] [--workspace <dir>]\n'
+      'Usage: node scripts/build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--non-interactive] [--allow-destructive] [--workspace <dir>]\n'
     );
+    process.exit(1);
+  }
+  // A value-less phase selector (or --workspace) is a USAGE ERROR — never a silent all-phases select
+  // or default workspace. `--only`/`--skip`/`--from`/`--to`/`--stage` with no value would otherwise be
+  // dropped by list()/stagePhasesOrResolve and resolve to the full phase set.
+  const valuelessFlag = ['stage', 'only', 'skip', 'from', 'to', 'workspace'].find((k) => flags[k] === true);
+  if (valuelessFlag) {
+    process.stderr.write(`✗ --${valuelessFlag} requires a value.\n`);
     process.exit(1);
   }
   // #changed-only (Preview): a SAFE partial apply. Incompatible with manual phase selection — the flow
@@ -398,7 +411,7 @@ async function main() {
     process.stderr.write('✗ --changed-only cannot be combined with --stage/--only/--skip/--from/--to — it selects its own phases.\n');
     process.exit(1);
   }
-  const specPath = path.resolve(typeof specArg === 'string' && specArg.startsWith('@') ? specArg.slice(1) : specArg);
+  const specPath = path.resolve(specArg.startsWith('@') ? specArg.slice(1) : specArg);
   const spec = migrateAppSpec(readJsonArg('@' + specPath));
   const workspaceDir = flags.workspace || path.join(path.dirname(specPath), '.maker-workspace');
   const opts = {

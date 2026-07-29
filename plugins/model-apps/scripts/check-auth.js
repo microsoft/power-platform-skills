@@ -40,7 +40,13 @@ const { dataverseRequest } = require('./lib/dataverse-auth');
 // the literal string "--env" as the URL (the prior positional-only parse did exactly that).
 function parseEnvUrl(argv) {
   const flagIdx = argv.indexOf('--env');
-  if (flagIdx !== -1 && argv[flagIdx + 1]) return argv[flagIdx + 1];
+  if (flagIdx !== -1) {
+    const value = argv[flagIdx + 1];
+    // `--env --require-pac` used to treat the next flag as the URL, sending a bogus Dataverse
+    // request to a flag string. A value-bearing flag must have a following non-flag token.
+    if (value && !value.startsWith('--')) return value;
+    return null;
+  }
   const positional = argv.find((a) => !a.startsWith('--'));
   return positional || null;
 }

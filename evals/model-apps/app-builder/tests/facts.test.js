@@ -174,11 +174,11 @@ test('stageFacts.security computes declared/granted unions, appmodule injection,
   // Agent has app access -> appmodule read injected into GRANTED but never into DECLARED.
   assert.strictEqual(agent.appAccess, true);
   assert.strictEqual(agent.appModuleRead, true);
-  assert.deepStrictEqual(agent.granted.appmodule, { access: ['read'], scope: 'organization' }, 'granted carries the injected appmodule read');
+  assert.deepStrictEqual(agent.granted.appmodule, { read: 'organization' }, 'granted carries the injected appmodule read');
   assert.strictEqual(agent.declared.appmodule, undefined, 'declared never carries the injection');
-  // Declared union preserves per-entity access + scope (access sorted; businessUnit lower-cased).
-  assert.deepStrictEqual(agent.declared.new_order, { access: ['create', 'read', 'write'], scope: 'businessunit' });
-  assert.deepStrictEqual(agent.declared.new_customer, { access: ['read'], scope: 'organization' });
+  // Declared union preserves per-(entity, access) scope (businessUnit lower-cased).
+  assert.deepStrictEqual(agent.declared.new_order, { create: 'businessunit', read: 'businessunit', write: 'businessunit' });
+  assert.deepStrictEqual(agent.declared.new_customer, { read: 'organization' });
   // No app-prefixed table is unprovisioned; the external `account` is exempt (not `new`-prefixed).
   assert.deepStrictEqual(agent.unresolvedAppTables, []);
   // Analyst opted out of app access -> no appmodule injection anywhere.
@@ -208,31 +208,37 @@ test('security #1 coverage assertion: skips with no personas, fails on an unreso
   assert.match(r.reason, /new_bogus/);
 });
 
-test('security #2 least-privilege assertion: passes faithful mapping, catches over-grant / scope inflation / leak', () => {
+test('security #2 least-privilege assertion: passes faithful mapping, catches over-grant / scope inflation / under-grant / leak', () => {
   const wrap = (rec) => ({ facts: { security: [rec] } });
   // Faithful mapping (declared == granted, plus the allowed appmodule injection) passes.
   assert.strictEqual(overGrantCheck(wrap({ persona: 'A', appAccess: true,
-    declared: { new_order: { access: ['read'], scope: 'user' } },
-    granted: { new_order: { access: ['read'], scope: 'user' }, appmodule: { access: ['read'], scope: 'organization' } },
+    declared: { new_order: { read: 'user' } },
+    granted: { new_order: { read: 'user' }, appmodule: { read: 'organization' } },
   })).status, 'pass');
   // Extra entity the author never declared.
   assert.match(overGrantCheck(wrap({ persona: 'A', appAccess: true,
-    declared: { new_order: { access: ['read'], scope: 'user' } },
-    granted: { new_order: { access: ['read'], scope: 'user' }, new_secret: { access: ['read'], scope: 'user' } },
+    declared: { new_order: { read: 'user' } },
+    granted: { new_order: { read: 'user' }, new_secret: { read: 'user' } },
   })).reason, /new_secret/);
   // Extra access token beyond declared.
   assert.match(overGrantCheck(wrap({ persona: 'A', appAccess: true,
-    declared: { new_order: { access: ['read'], scope: 'user' } },
-    granted: { new_order: { access: ['read', 'delete'], scope: 'user' } },
+    declared: { new_order: { read: 'user' } },
+    granted: { new_order: { read: 'user', delete: 'user' } },
   })).reason, /delete/);
-  // Scope inflation beyond declared.
+  // PER-ACCESS scope inflation: the entity's max declared scope is organization (read), but write is
+  // only declared @user — granting write@organization must still fail even though read@org is declared.
   assert.match(overGrantCheck(wrap({ persona: 'A', appAccess: true,
-    declared: { new_order: { access: ['read'], scope: 'user' } },
-    granted: { new_order: { access: ['read'], scope: 'organization' } },
-  })).reason, /scope/);
+    declared: { new_order: { read: 'organization', write: 'user' } },
+    granted: { new_order: { read: 'organization', write: 'organization' } },
+  })).reason, /write.*scope|scope/);
+  // UNDER-grant: a declared privilege the role does not carry (mapper dropped it).
+  assert.match(overGrantCheck(wrap({ persona: 'A', appAccess: true,
+    declared: { new_order: { read: 'user', write: 'user' } },
+    granted: { new_order: { read: 'user' } },
+  })).reason, /under-grant/);
   // appmodule granted while the persona opted out of app access (and never declared it) = leak.
   assert.match(overGrantCheck(wrap({ persona: 'A', appAccess: false,
-    declared: { new_order: { access: ['read'], scope: 'user' } },
-    granted: { new_order: { access: ['read'], scope: 'user' }, appmodule: { access: ['read'], scope: 'organization' } },
+    declared: { new_order: { read: 'user' } },
+    granted: { new_order: { read: 'user' }, appmodule: { read: 'organization' } },
   })).reason, /leak/);
 });

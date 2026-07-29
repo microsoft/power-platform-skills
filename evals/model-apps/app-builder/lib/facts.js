@@ -33,18 +33,24 @@ const lc = (s) => String(s || '').toLowerCase();
 const SCOPE_RANK = { user: 0, businessunit: 1, parentchild: 2, organization: 3 };
 const scopeRank = (s) => (SCOPE_RANK[lc(s || 'user')] !== undefined ? SCOPE_RANK[lc(s || 'user')] : 0);
 
-// Union a flat privilege list into entity -> { access:Set, scope:maxScope }, mirroring the SDK's
-// documented union rule ("max scope wins per entity+access"): a persona's ONE role carries the union of
-// every job's + additionalPrivileges' declared access. Both the DECLARED (author) and GRANTED (mapper)
-// sides are reduced through this so the least-privilege / coverage evals compare like with like.
+// Union a flat privilege list into entity -> (access -> maxScope), mirroring the SDK's documented union
+// rule ("max scope wins per entity+ACCESS"): a persona's ONE role carries the union of every job's +
+// additionalPrivileges' declared access. Scope is tracked PER (entity, access) — collapsing to one scope
+// per entity would hide a legitimate read@organization + write@user split AND mask a later write-scope
+// inflation. Both the DECLARED (author) and GRANTED (mapper) sides are reduced through this so the
+// least-privilege / coverage evals compare like with like.
 function unionPrivileges(privs) {
   const out = new Map();
   for (const pr of privs || []) {
     const ent = lc(pr.entity);
-    const cur = out.get(ent) || { access: new Set(), scope: 'user' };
-    for (const a of pr.access || []) cur.access.add(lc(a));
-    if (scopeRank(pr.scope) > scopeRank(cur.scope)) cur.scope = lc(pr.scope || 'user');
-    out.set(ent, cur);
+    const scope = lc(pr.scope || 'user');
+    let byAccess = out.get(ent);
+    if (!byAccess) { byAccess = new Map(); out.set(ent, byAccess); }
+    for (const a of pr.access || []) {
+      const acc = lc(a);
+      const prev = byAccess.get(acc);
+      if (prev === undefined || scopeRank(scope) > scopeRank(prev)) byAccess.set(acc, scope);
+    }
   }
   return out;
 }
@@ -341,10 +347,15 @@ function securityFacts(spec) {
   // harness can't (and shouldn't) make.
   const appTables = new Set((spec.entities || []).map((e) => lc(e.schemaName)));
   const appPrefixes = new Set([...appTables].map((t) => t.split('_')[0]).filter(Boolean));
+  // Also treat the solution's declared publisher prefix as app-owned. Without this, an app that
+  // provisions ONLY external tables yields no entity-derived prefix, so a persona privilege on a
+  // <prefix>_typo table (a hallucinated app table) would go unflagged.
+  const pubPrefix = spec.solution && spec.solution.publisherPrefix;
+  if (pubPrefix) appPrefixes.add(lc(pubPrefix));
 
-  // Serialize a union Map to a plain object (Set -> sorted array) so facts stay JSON-comparable and the
-  // assertion layer / tests can diff them without Map/Set handling.
-  const serialize = (m) => Object.fromEntries([...m.entries()].map(([k, v]) => [k, { access: [...v.access].sort(), scope: v.scope }]));
+  // Serialize a union Map (entity -> access -> scope) to a plain nested object so facts stay
+  // JSON-comparable and the assertion layer / tests can diff them without Map handling.
+  const serialize = (m) => Object.fromEntries([...m.entries()].map(([ent, byAccess]) => [ent, Object.fromEntries([...byAccess.entries()].sort())]));
 
   return (spec.personas || []).map((p) => {
     const mapped = personaRoleSpecFor(p);

@@ -22,11 +22,11 @@ function spec() {
   };
 }
 
-// result.created uses the engine's quirky key conventions (views by NAME, Main forms by entity-logical).
+// result.created uses the engine's key conventions (views by `entity|name`, Main forms by entity-logical).
 function created() {
   return {
     entities: { new_x: 'ent-1' },
-    views: { 'Active X': 'view-1' },
+    views: { 'new_x|Active X': 'view-1' },
     forms: { new_x: 'form-1' }, // Main only, keyed by entity logical
     charts: { 'By Status': 'chart-1' },
     commands: { new_x: 'cmd-1' },

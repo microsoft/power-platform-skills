@@ -68,16 +68,18 @@ async function main() {
     process.exit(1);
   }
 
-  const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
-  const httpClient = createAzHttpClient(env);
   // getAiReadiness is a read-only org/app query, but the vendored SDK expects an initialized
   // workspace (throws WorkspaceNotInitializedError otherwise) — mirror the other entrypoints:
   // create a throwaway workspace, initWorkspace(), and remove it in finally.
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-preflight-'));
-  const sdk = createMakerSdk({ workspacePath: workspaceDir, instanceUrl: env, httpClient });
 
   let report;
   try {
+    const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
+    const httpClient = createAzHttpClient(env);
+    const sdk = createMakerSdk({ workspacePath: workspaceDir, instanceUrl: env, httpClient });
+    // Keep SDK construction inside the protected region too: a constructor failure happens after the
+    // temp directory exists, so the finally must own both construction and init to avoid leaks.
     sdk.initWorkspace();
     const readinessOpts = app ? { appUniqueName: app } : {};
     const readiness = await sdk.getAiReadiness(readinessOpts);

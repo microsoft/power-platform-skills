@@ -152,3 +152,9 @@ test('refuses to send the Dataverse token to a different origin (same-origin gua
   const res = await http.get('https://org.crm.dynamics.com/api/data/v9.2/accounts');
   assert.strictEqual(res.status, 200);
 });
+
+test('rejects a non-https or malformed org URL at construction (fail-closed credential boundary)', () => {
+  // A malformed/hostile --env must fail loudly at construction rather than silently disable the guard.
+  assert.throws(() => createAzHttpClient('http://org.crm.dynamics.com', { getToken: () => 'TOK' }), /https/);
+  assert.throws(() => createAzHttpClient('not-a-url', { getToken: () => 'TOK' }), /https/);
+});

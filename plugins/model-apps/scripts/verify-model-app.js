@@ -162,7 +162,7 @@ async function main() {
   const env = typeof flags.env === 'string' ? flags.env : undefined;
   const specArg = typeof flags.spec === 'string' ? flags.spec : positional[0];
   const workspaceArg = typeof flags.workspace === 'string' ? flags.workspace : undefined;
-  if (!env || !specArg) {
+  if (!env || !specArg || flags.workspace === true) {
     process.stderr.write('Usage: node verify-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--workspace <dir>]\n');
     process.exit(1);
   }

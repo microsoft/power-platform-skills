@@ -138,21 +138,21 @@ async function main() {
   }
   const [envUrl, uniqueName, friendlyName] = positional;
 
-  const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
-  const httpClient = createAzHttpClient(envUrl);
   const sdkTempDir = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'provision-solution-'));
-  const sdk = createMakerSdk({
-    workspacePath: sdkTempDir, // unused workspace (no metadata persistence needed)
-    instanceUrl: envUrl,
-    httpClient,
-  });
 
   let result;
   let error;
   try {
+    const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
+    const httpClient = createAzHttpClient(envUrl);
+    const sdk = createMakerSdk({
+      workspacePath: sdkTempDir, // unused workspace (no metadata persistence needed)
+      instanceUrl: envUrl,
+      httpClient,
+    });
     // initWorkspace() is INSIDE the try so the finally below always removes the temp workspace, even
-    // if init itself throws (otherwise a failed init would leak sdkTempDir). Consistent with other
-    // entrypoints; harmless for the Dataverse-only ops here.
+    // if SDK construction or init itself throws (otherwise a failed constructor leaked sdkTempDir).
+    // Consistent with teardown-model-app's fail-safe pattern; harmless for the Dataverse-only ops here.
     sdk.initWorkspace();
     result = await runProvisionSolution(
       {
@@ -169,7 +169,13 @@ async function main() {
     error = e;
   } finally {
     // emitResult() calls process.exit(), so remove the temp workspace BEFORE emitting.
-    require('fs').rmSync(sdkTempDir, { recursive: true, force: true });
+    try {
+      require('fs').rmSync(sdkTempDir, { recursive: true, force: true });
+    } catch {
+      // Preserve the primary provisioning error. Temp cleanup is best-effort because Windows can keep
+      // a transient handle open after SDK initialization, and masking the real Dataverse/SDK failure
+      // would make the script harder to recover.
+    }
   }
 
   if (error) emitResult(false, error);

@@ -88,6 +88,7 @@ async function main(env, prefix) {
   let exitCode = 1;
   let results = null;
   let buildFailed = false;
+  let teardownFailed = false;
 
   try {
     process.stdout.write(`\n▶ smoke build (${spec.app.name}) — writes to ${env}\n`);
@@ -135,12 +136,25 @@ async function main(env, prefix) {
     // Even a failed build can leave a partially-created solution/app; always run the spec-scoped
     // teardown before deleting the local temp workspace so live smoke probes do not linger.
     process.stdout.write('\n▶ teardown\n');
-    runNode([pluginScript('teardown-model-app.js'), '--env', env, '--spec', '@' + specPath, '--workspace', ws, '--apply', '--allow-destructive']);
-    fs.rmSync(dir, { recursive: true, force: true });
+    const teardown = runNode([pluginScript('teardown-model-app.js'), '--env', env, '--spec', '@' + specPath, '--workspace', ws, '--apply', '--allow-destructive']);
+    process.stdout.write(teardown.stdout || '');
+    process.stderr.write(teardown.stderr || '');
+    if (teardown.status !== 0) {
+      // A passing assertion set is not a clean smoke run if teardown failed: the live org now needs
+      // recovery. Preserve the local spec/workspace so the operator can rerun teardown with the exact
+      // artifact identities instead of deleting the only recovery breadcrumbs.
+      exitCode = teardown.status || 1;
+      teardownFailed = true;
+      process.stderr.write(`\n✗ smoke teardown failed with exit code ${exitCode}; preserving local workspace for recovery: ${dir}\n`);
+    } else {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   }
 
   if (buildFailed) {
     process.stdout.write('\n=== smoke eval: FAIL (build failed; assertions skipped) ===\n');
+  } else if (teardownFailed) {
+    process.stdout.write(`\n=== smoke eval: FAIL (teardown failed; workspace preserved at ${dir}) ===\n`);
   } else {
     const failed = results.filter((r) => !r.ok);
     process.stdout.write(`\n=== smoke eval: ${failed.length ? 'FAIL' : 'PASS'} (${results.length - failed.length}/${results.length}) ===\n`);

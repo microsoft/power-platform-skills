@@ -209,17 +209,19 @@ const KIND_HANDLERS = {
   commands: {
     // The vendored SDK models a table's command bar as ONE artifact per entity (identity = entity):
     // resolveArtifact('command', { entity }) returns that single per-entity artifact and
-    // deleteRemoteArtifact('command', entity) removes the whole bar in one call. There is no
-    // per-BUTTON delete in the SDK surface, and the build's command phase is discover-then-skip
-    // (it only CREATES a bar when none pre-existed — see sdk-build.js §14). Consequence + KNOWN
-    // LIMITATION (PR #229 review): on an entity whose bar this spec added buttons to but that also
-    // carried pre-existing/foreign buttons, teardown removes the whole bar, not just the spec's
-    // buttons — because the SDK cannot delete an individual appaction by id and teardown is stateless
-    // (it has no build record proving which buttons it authored). Scoping the delete to exactly the
-    // spec-declared buttons requires a per-button delete capability in @maker-studio/cds-maker-sdk;
-    // tracked as an SDK follow-up. planTeardown only adds a commands step for entities THIS spec
-    // declares commands for, so bars on untouched entities are never removed.
+    // deleteRemoteArtifact('command', entity) removes the whole bar in one call — there is NO per-button
+    // delete in the SDK surface, and the build's command phase is discover-then-skip (it only CREATES a
+    // bar when none pre-existed — see sdk-build.js §14). So on an entity that carries pre-existing/foreign
+    // buttons, deleting the bar would destroy buttons this spec never authored. FAIL-CLOSED FIX (PR #229
+    // review): planTeardown flags `ownsTable` = "this spec creates the underlying table". We only delete
+    // the bar for a spec-created NEW table (no foreign buttons can exist on a brand-new table); for a
+    // command on an existing/external table we SKIP the delete and surface an auditable skip reason,
+    // rather than risk destroying another app's command buttons. Precise per-button scoping on an adopted
+    // bar would need a per-appaction delete capability in @maker-studio/cds-maker-sdk (SDK follow-up).
     async resolve(sdk, target) {
+      if (!target.ownsTable) {
+        return { items: [], skipReason: "command bar on an existing/external table is not deleted — the SDK deletes the whole bar and cannot scope to this spec's buttons (per-button delete unsupported); remove it manually if intended" };
+      }
       const items = await sdk.resolveArtifact('command', { entity: target.entity });
       return (items || []).map((x) => ({ id: x.id, entity: x.entity || target.entity }));
     },
@@ -368,8 +370,15 @@ function planTeardown(spec) {
   for (const d of spec.dashboards || []) {
     steps.push({ kind: 'dashboard', phase: 'dashboards', label: `dashboard "${d.name}"`, target: { name: d.name } });
   }
+  // Command bars: FAIL-CLOSED (data-loss guard, PR #229 review). Only tear down the bar for a table
+  // THIS spec CREATES (existing !== true) — a brand-new table has no pre-existing foreign buttons, and
+  // its own table delete cascades the bar anyway. A command on an EXISTING/external table is left alone,
+  // because the SDK deletes the WHOLE entity command bar and cannot scope to this spec's buttons (see the
+  // commands handler). Validation guarantees a command's entity is one of spec.entities, so the
+  // `existing` flag cleanly distinguishes spec-created tables from adopted ones.
+  const specCreatedTables = new Set((spec.entities || []).filter((e) => e.existing !== true).map((e) => String(e.schemaName).toLowerCase()));
   for (const entity of Object.keys(commandsByEntity(spec))) {
-    steps.push({ kind: 'commands', phase: 'commands', label: `command bar for ${entity}`, target: { entity } });
+    steps.push({ kind: 'commands', phase: 'commands', label: `command bar for ${entity}`, target: { entity, ownsTable: specCreatedTables.has(String(entity).toLowerCase()) } });
   }
   // Delete forms so a QuickView form referenced by another form's `quickViews[]` is removed AFTER its
   // HOST form. The host embeds a quick-view CONTROL that references the QV form, so deleting the QV

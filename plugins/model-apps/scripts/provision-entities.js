@@ -262,10 +262,13 @@ async function provisionEntities(input, opts = {}, deps = {}) {
 
 async function main() {
   const { positional, flags } = parseArgs(process.argv.slice(2));
-  const env = flags.env;
-  const inputArg = flags.input || positional[0];
+  // parseArgs represents a value-less flag as boolean true. These are value-bearing flags, so
+  // coerce bare `--env` / `--input` to missing and let the usage guard produce the same clear error
+  // as an omitted value instead of passing a boolean into auth or path resolution.
+  const env = typeof flags.env === 'string' ? flags.env : undefined;
+  const inputArg = (typeof flags.input === 'string' ? flags.input : undefined) || (typeof positional[0] === 'string' ? positional[0] : undefined);
   
-  if (!env || !inputArg) {
+  if (!env || !inputArg || flags.input === true) {
     process.stderr.write(
       'Usage: node provision-entities.js --env <url> --input @<path> [--apply] [--sample-data]\n'
     );

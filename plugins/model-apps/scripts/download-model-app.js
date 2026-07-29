@@ -5,7 +5,7 @@
 // pages (via pac list+download, incl. Maker-authored), its entities (minimal — the build reuses
 // existing tables idempotently), the icon web resources, and its solution, via hydrate-spec.
 //
-// Usage: node download-model-app.js --env <orgUrl> --app <appId|uniqueName> --out <dir>
+// Usage: node download-model-app.js --env <orgUrl> --app <appId|uniqueName> --out <dir> [--allow-lossy-download]
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -17,7 +17,7 @@ const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require(
 const { reverseResolveNavIds } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
-const { isPlatformIconRef, webResourceNameFromRef } = require('./lib/app-spec.js');
+const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec } = require('./lib/app-spec.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
 const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7: 'gif', 8: 'xap', 9: 'xsl', 10: 'ico', 11: 'svg', 12: 'resx' };
@@ -345,7 +345,8 @@ async function recoverAppSolution(sdk, appId) {
 // `appId`      — the app's GUID (used for download + solution lookup)
 // `appUnique`  — the app's unique name (for fetchSitemap + manifest lookup); may be undefined for
 //                apps not found by unique name, in which case the sitemap read fails gracefully.
-// Returns { ok:true, spec, pages, entities, webResources, droppedSubareas } or { ok:false, error }.
+// Returns { ok:true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails,
+// dashboardReconstructionError } or { ok:false, error }.
 // Logical failures (no sitemap, enumeration down, missing download) return { ok:false } without
 // throwing. Unexpected I/O errors propagate as thrown exceptions (caught by main().catch).
 async function runDownload({ sdk, genpageCli, outDir, appId, appUnique }) {
@@ -508,7 +509,13 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique }) {
 
   // Dashboards (declared as DashBoard sitemap subareas) — reconstructed with id-passthrough tiles.
   let dashboards = [];
-  try { dashboards = await readDashboards(sdk, app); } catch (e) { process.stderr.write(`(dashboards reconstruction skipped: ${e.message})\n`); }
+  let dashboardReconstructionError = null;
+  try {
+    dashboards = await readDashboards(sdk, app);
+  } catch (e) {
+    dashboardReconstructionError = e.message;
+    process.stderr.write(`(dashboards reconstruction skipped: ${e.message})\n`);
+  }
 
   const read = {
     // Ensure the app's REAL uniquename reaches hydrateSpec (→ spec.app.uniqueName) even if the artifact
@@ -524,19 +531,25 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique }) {
     design: async () => (manifest ? manifest.design : undefined),
   };
   const spec = await hydrateSpec(read);
-  const droppedSubareas = droppedSubareaCount(app, spec);
-  return { ok: true, spec, pages, entities, webResources, droppedSubareas };
+  const droppedSubareas = typeof spec.droppedSubareas === 'number' ? spec.droppedSubareas : droppedSubareaCount(app, spec);
+  const droppedSubareaDetails = Array.isArray(spec.droppedSubareaDetails) ? spec.droppedSubareaDetails : [];
+  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError };
 }
 
 async function main() {
   const { positional, flags } = parseArgs(process.argv.slice(2));
-  const env = flags.env;
-  const appArg = flags.app || positional[0];
-  const outDir = path.resolve(flags.out || flags.output || '.');
-  if (!env || !appArg) {
-    process.stderr.write('Usage: node download-model-app.js --env <url> --app <appId|uniqueName> --out <dir>\n');
+  // parseArgs returns boolean true for a value-less flag. For value-bearing flags, treat that as
+  // missing so `--env --app x` or `--out` reaches the usage guard instead of passing true into URL,
+  // app-id, or path handling. `--allow-lossy-download` is a real boolean switch and stays true.
+  const env = typeof flags.env === 'string' ? flags.env : undefined;
+  const appArg = (typeof flags.app === 'string' ? flags.app : undefined) || (typeof positional[0] === 'string' ? positional[0] : undefined);
+  const outArg = typeof flags.out === 'string' ? flags.out : (typeof flags.output === 'string' ? flags.output : undefined);
+  const allowLossyDownload = flags['allow-lossy-download'] === true;
+  if (!env || !appArg || flags.app === true || flags.out === true || flags.output === true) {
+    process.stderr.write('Usage: node download-model-app.js --env <url> --app <appId|uniqueName> --out <dir> [--allow-lossy-download]\n');
     process.exit(1);
   }
+  const outDir = path.resolve(outArg || '.');
   fs.mkdirSync(outDir, { recursive: true });
   const sdk = makeProvision(env, path.join(outDir, '.maker-workspace'));
   const appId = await resolveAppId(sdk, appArg);
@@ -550,9 +563,24 @@ async function main() {
   const result = await runDownload({ sdk, genpageCli, outDir, appId, appUnique });
   if (!result.ok) { emitResult(false, result); return; }
 
-  const { spec, pages, entities, webResources, droppedSubareas } = result;
-  if (droppedSubareas > 0) {
-    process.stderr.write(`WARNING: ${droppedSubareas} sitemap subarea(s) could not be round-tripped (e.g. custom pages / legacy types) — a rebuild from this spec will DROP them from the app nav. Re-add them after editing.\n`);
+  const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError } = result;
+  if (droppedSubareas > 0 || dashboardReconstructionError) {
+    const droppedList = (droppedSubareaDetails || [])
+      .map((d) => `${d.type}${d.id ? `:${d.id}` : ''}${d.title ? ` (${d.title})` : ''}`)
+      .join(', ');
+    const dashboardMessage = dashboardReconstructionError ? ` Dashboard reconstruction failed: ${dashboardReconstructionError}.` : '';
+    const message = `${droppedSubareas} sitemap subarea(s) could not be round-tripped${droppedList ? `: ${droppedList}` : ''}.${dashboardMessage} A rebuild from this spec will DROP them from the app nav.`;
+    if (!allowLossyDownload) {
+      process.stderr.write(`ERROR: ${message}\nPass --allow-lossy-download to write the partial spec anyway.\n`);
+      emitResult(false, { ok: false, error: message, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError });
+      return;
+    }
+    process.stderr.write(`WARNING: ${message}\n`);
+  }
+  const validation = validateAppSpec(spec, { profile: 'plan' });
+  if (!validation.ok) {
+    emitResult(false, { ok: false, error: 'downloaded App Spec failed validation', errors: validation.errors });
+    return;
   }
   const specPath = path.join(outDir, 'app-spec.json');
   fs.writeFileSync(specPath, JSON.stringify(spec, null, 2));

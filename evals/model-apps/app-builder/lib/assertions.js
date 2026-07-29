@@ -78,25 +78,31 @@ ASSERTIONS.set('security: each persona role grants exactly its declared job priv
   if (!sec.length) return skip('spec declares no personas');
   for (const r of sec) {
     const declared = r.declared || {};
-    for (const [ent, g] of Object.entries(r.granted || {})) {
-      // appmodule is the ONE table the engine may inject (a read privilege, for app-open, when
-      // appAccess). Its allowed access = whatever the author explicitly declared on appmodule (rare)
-      // PLUS `read` when this persona has app access. Anything beyond that — or appmodule appearing
-      // with neither a declaration nor app access — is a leak/over-grant. The injection is org-scoped
-      // by design, so appmodule is exempt from the generic scope-inflation check below.
-      if (ent === 'appmodule') {
-        const allowed = new Set(((declared[ent] && declared[ent].access) || []));
-        if (r.appAccess) allowed.add('read');
-        if (!allowed.size) return fail(`${r.persona}: appmodule granted but neither declared nor app-access-injected (leak)`);
-        const beyond = (g.access || []).filter((a) => !allowed.has(a));
-        if (beyond.length) return fail(`${r.persona}: appmodule granted beyond allowed [${[...allowed].join(', ')}]: ${beyond.join(', ')}`);
-        continue;
+    const granted = r.granted || {};
+    // (1) No OVER-grant: every granted (entity, access) must be declared — or, for appmodule, the
+    // documented read injection when appAccess — at a scope no MORE permissive than declared.
+    for (const [ent, accs] of Object.entries(granted)) {
+      for (const [acc, scope] of Object.entries(accs)) {
+        if (ent === 'appmodule') {
+          const declaredScope = declared.appmodule && declared.appmodule[acc];
+          const injected = r.appAccess && acc === 'read';
+          if (declaredScope === undefined && !injected) return fail(`${r.persona}: appmodule '${acc}' granted but neither declared nor app-access-injected (leak)`);
+          if (declaredScope !== undefined && scopeRank(scope) > scopeRank(declaredScope)) return fail(`${r.persona}: appmodule '${acc}' scope '${scope}' exceeds declared '${declaredScope}'`);
+          continue;
+        }
+        const declaredScope = declared[ent] && declared[ent][acc];
+        if (declaredScope === undefined) return fail(`${r.persona}: role grants ${ent} '${acc}' the author never declared (over-grant)`);
+        if (scopeRank(scope) > scopeRank(declaredScope)) return fail(`${r.persona}: ${ent} '${acc}' scope '${scope}' exceeds declared '${declaredScope}'`);
       }
-      const d = declared[ent];
-      if (!d) return fail(`${r.persona}: role grants entity '${ent}' the author never declared (over-grant)`);
-      const extraAccess = (g.access || []).filter((a) => !(d.access || []).includes(a));
-      if (extraAccess.length) return fail(`${r.persona}: '${ent}' granted extra access ${extraAccess.join(', ')} (declared ${(d.access || []).join(', ')})`);
-      if (scopeRank(g.scope) > scopeRank(d.scope)) return fail(`${r.persona}: '${ent}' granted scope '${g.scope}' exceeds declared '${d.scope}'`);
+    }
+    // (2) No UNDER-grant ("exactly"): every declared (entity, access) must be granted at >= its scope,
+    // so the mapper cannot silently drop or weaken a declared privilege.
+    for (const [ent, accs] of Object.entries(declared)) {
+      for (const [acc, scope] of Object.entries(accs)) {
+        const grantedScope = granted[ent] && granted[ent][acc];
+        if (grantedScope === undefined) return fail(`${r.persona}: declared ${ent} '${acc}' is not granted by the role (under-grant)`);
+        if (scopeRank(grantedScope) < scopeRank(scope)) return fail(`${r.persona}: declared ${ent} '${acc}'@${scope} granted only @${grantedScope} (weakened)`);
+      }
     }
   }
   return PASS;

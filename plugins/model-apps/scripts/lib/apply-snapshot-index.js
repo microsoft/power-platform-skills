@@ -3,7 +3,7 @@
 //
 // After a full apply, the snapshot must record — for every artifact — the LIVE id and the content/
 // projection hashes the fast path will later re-resolve and verify against. This is the seam between the
-// build engine's `result.created` (whose key conventions are QUIRKY: views keyed by NAME only, Main forms
+// build engine's `result.created` (whose key conventions vary: views keyed by `entity|name`, Main forms
 // keyed by entity-logical, app is a scalar id) and the snapshot's CANONICAL identities (identityOf from
 // classify-changes.js, e.g. `entity|name`). Keeping the canonical identity in one place (DRY) means the
 // classifier and the snapshot agree on what "the same view" means.
@@ -26,12 +26,6 @@ function indexArtifacts(spec, created, opts = {}) {
   const pageDeployedShas = opts.pageDeployedShas || {};
   const formProjections = opts.formProjections || {};
   const viewProjections = opts.viewProjections || {};
-  const viewNameCounts = new Map();
-  for (const v of Array.isArray(s.views) ? s.views : []) {
-    if (!v || typeof v !== 'object') continue;
-    const name = String(v.name || '');
-    viewNameCounts.set(name, (viewNameCounts.get(name) || 0) + 1);
-  }
 
   // pages — canonical key is the page key; value carries the live pageId, the SOURCE hash (raw .tsx bytes,
   // = the annotated __contentSha) and the DEPLOYED hash (post-nav-resolution bytes, may differ when
@@ -48,14 +42,12 @@ function indexArtifacts(spec, created, opts = {}) {
     };
   }
 
-  // views — canonical key `entity|name`; created.views is keyed by NAME only.
+  // views — canonical key `entity|name`; created.views is now keyed by `entity|name` too (matching
+  // identityOf.view), so the id lookup is a direct canonical match with no same-name cross-entity collision.
   for (const v of Array.isArray(s.views) ? s.views : []) {
     if (!v || typeof v !== 'object') continue;
-    // Fail closed on duplicate view names: result.created.views cannot disambiguate same-named
-    // views across entities, so recording either id could poison the changed-only snapshot.
-    if (viewNameCounts.get(String(v.name || '')) > 1) continue;
     const key = identityOf.view(v);
-    const viewId = c.views && c.views[v.name];
+    const viewId = c.views && c.views[key];
     if (!viewId) continue;
     const entry = { viewId };
     if (viewProjections[key] != null) entry.projSha = viewProjections[key];

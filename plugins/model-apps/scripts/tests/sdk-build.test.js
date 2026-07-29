@@ -1863,11 +1863,22 @@ test('dashboardTileOpts id-passthrough: a tile carrying viewId/visualizationId +
 
 test('dashboardTileOpts name-based still resolves from result.created (author-declared dashboard)', () => {
   const spec = { views: [{ name: 'V', entity: 'new_ohproject' }], charts: [{ name: 'C', entity: 'new_ohproject' }] };
-  const result = { created: { views: { V: 'view-id' }, charts: { C: 'chart-id' } } };
+  const result = { created: { views: { 'new_ohproject|V': 'view-id' }, charts: { C: 'chart-id' } } };
   const chart = dashboardTileOpts(spec, { type: 'chart', chart: 'C', view: 'V' }, result);
   assert.strictEqual(chart.viewId, 'view-id');
   assert.strictEqual(chart.visualizationId, 'chart-id');
   assert.strictEqual(chart.targetEntity, 'new_ohproject');
+});
+
+test('dashboardTileOpts keys created.views by entity|name so same-named views across entities do not cross-wire', () => {
+  // Two entities each own a view named "Active" — a name-only key would bind BOTH tiles to whichever
+  // view id was created last. With entity|name keying each tile binds its own entity's view.
+  const spec = { views: [{ name: 'Active', entity: 'new_a' }, { name: 'Active', entity: 'new_b' }], charts: [] };
+  const result = { created: { views: { 'new_a|Active': 'view-a', 'new_b|Active': 'view-b' }, charts: {} } };
+  const listA = dashboardTileOpts(spec, { type: 'list', view: 'Active', entity: 'new_a' }, result);
+  assert.strictEqual(listA.viewId, 'view-a', 'new_a tile binds the new_a Active view');
+  const listB = dashboardTileOpts(spec, { type: 'list', view: 'Active', entity: 'new_b' }, result);
+  assert.strictEqual(listB.viewId, 'view-b', 'new_b tile binds the new_b Active view');
 });
 
 test('pages phase (v2, page key != name): result.created.pages is keyed by KEY so the sitemap finalize resolves', async () => {

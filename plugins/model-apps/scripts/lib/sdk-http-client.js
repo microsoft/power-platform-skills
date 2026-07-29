@@ -20,18 +20,21 @@ const { getAuthToken, makeRequest } = require('./dataverse-auth.js');
 function createAzHttpClient(orgUrl, deps = {}) {
   const clean = String(orgUrl).replace(/\/+$/, '');
   // Same-origin guard (security): this client obtains and attaches an Azure bearer token scoped to
-  // `clean` (the user-supplied --env org URL). The SDK always calls back with a FULL URL under that
-  // same origin (instanceUrl + /api/data/v9.x/...). If a request URL ever targets a DIFFERENT origin —
-  // a malformed/hostile --env, or an SDK bug — we must NOT attach the Dataverse token to it, or we would
-  // leak a credential to an unintended host. Compute the expected origin once; refuse any call whose
-  // absolute URL resolves to a different origin. (If `clean` itself is not a parseable absolute URL, the
-  // az token fetch for it would already fail, so we leave the guard disabled in that degenerate case.)
-  let expectedOrigin;
-  try { expectedOrigin = new URL(clean).origin; } catch { expectedOrigin = null; }
+  // `clean` (the user-supplied --env org URL), and the SDK always calls back with a FULL URL under that
+  // same origin (instanceUrl + /api/data/v9.x/...). To keep the credential boundary FAIL-CLOSED we (1)
+  // require the org URL itself to be a valid absolute https:// URL — rejecting construction otherwise, so
+  // a malformed/hostile --env can never silently disable the guard — and (2) refuse any request whose
+  // absolute URL resolves to a different origin, so the Dataverse token can never leak to another host.
+  let orgUrlParsed;
+  try { orgUrlParsed = new URL(clean); } catch { orgUrlParsed = null; }
+  if (!orgUrlParsed || orgUrlParsed.protocol !== 'https:') {
+    throw new Error(`Invalid Dataverse org URL "${orgUrl}": expected an absolute https:// URL (e.g. https://contoso.crm.dynamics.com).`);
+  }
+  const expectedOrigin = orgUrlParsed.origin;
   function assertSameOrigin(url) {
     let target;
     try { target = new URL(url); } catch { throw new Error(`Refusing to send the Dataverse token to a non-absolute URL: ${url}`); }
-    if (expectedOrigin !== null && target.origin !== expectedOrigin) {
+    if (target.origin !== expectedOrigin) {
       throw new Error(`Refusing to send the Dataverse token for ${expectedOrigin} to a different origin (${target.origin}); the request URL must be under the --env org URL.`);
     }
   }

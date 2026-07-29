@@ -26,7 +26,8 @@ function main() {
     process.stderr.write(`Invalid App Spec:\n${validation.errors.map((e) => `  - ${e}`).join('\n')}\n`);
     process.exit(1);
   }
-  process.stdout.write(renderForms(spec, flags.entity) + '\n');
+  const entity = typeof flags.entity === 'string' ? flags.entity : undefined;
+  process.stdout.write(renderForms(spec, entity) + '\n');
 }
 
 if (require.main === module) {

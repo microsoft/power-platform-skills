@@ -112,10 +112,10 @@ function dashboardTileOpts(spec, tile, result) {
   const targetEntity = tile.entity ? tile.entity.toLowerCase() : viewEntity(tile.view);
   if (tile.type === 'chart') {
     return span({ type: 'chart', name: tile.name || tile.chart, targetEntity,
-      viewId: tile.viewId || result.created.views[tile.view], visualizationId: tile.visualizationId || result.created.charts[tile.chart] });
+      viewId: tile.viewId || result.created.views[`${targetEntity}|${tile.view}`], visualizationId: tile.visualizationId || result.created.charts[tile.chart] });
   }
   if (tile.type === 'list') {
-    return span({ type: 'list', name: tile.name || tile.view, targetEntity, viewId: tile.viewId || result.created.views[tile.view] });
+    return span({ type: 'list', name: tile.name || tile.view, targetEntity, viewId: tile.viewId || result.created.views[`${targetEntity}|${tile.view}`] });
   }
   if (tile.type === 'iframe') return span({ type: 'iframe', name: tile.name, url: tile.url });
   return span({ type: 'webresource', name: tile.name, webResourceName: tile.webResource });
@@ -324,9 +324,11 @@ function planFor(spec, opts) {
 //      what makes a sub-grid on an entity with no bespoke view (a common N:N case) work.
 // Returns undefined only when even the default view can't be found (caller then skips the grid).
 async function subgridViewId(provision, createdViews, spec, sg, childLogical) {
-  if (sg.view && createdViews[sg.view]) return createdViews[sg.view];
+  // createdViews is keyed by `entity|name` (see the views build step). The sub-grid's view lives on the
+  // CHILD entity, so scope the lookup to childLogical to avoid a same-named view on another entity.
+  if (sg.view && createdViews[`${childLogical}|${sg.view}`]) return createdViews[`${childLogical}|${sg.view}`];
   const cv = (spec.views || []).find((v) => v.entity.toLowerCase() === childLogical);
-  if (cv && createdViews[cv.name]) return createdViews[cv.name];
+  if (cv && createdViews[`${childLogical}|${cv.name}`]) return createdViews[`${childLogical}|${cv.name}`];
   const rows = await provision.queryRecords('savedquery', {
     select: ['savedqueryid', 'isdefault'],
     filter: `returnedtypecode eq '${odataLit(childLogical)}' and querytype eq 0`,
@@ -1189,7 +1191,10 @@ async function runSdkBuild(spec, opts = {}) {
   // 4. Views (independent -> parallel).
   if (has('views')) {
     const ids = await runner.mapLimit(spec.views || [], concurrency, (v) => buildArtifact('view', viewDef(spec, v)));
-    (spec.views || []).forEach((v, i) => { result.created.views[v.name] = ids[i]; });
+    // Key by `entity|name` (matching identityOf.view + the snapshot canonical id). View names are unique
+    // only PER ENTITY, so a name-only key lets a same-named view on another entity OVERWRITE this id and
+    // cross-wire dashboards / sub-grids / AI-summaries to the wrong entity's view.
+    (spec.views || []).forEach((v, i) => { result.created.views[`${v.entity.toLowerCase()}|${v.name}`] = ids[i]; });
   }
 
   // 4b. Enrich the auto-generated default "Active/Inactive <Entity>" system views (Dataverse ships
@@ -1802,7 +1807,7 @@ async function runSdkBuild(spec, opts = {}) {
       const seen = new Set();
       const perEntity = []; // [type, id] — first artifact found per entity
       for (const f of spec.forms || []) { const id = result.created.forms[f.entity.toLowerCase()]; if (id && !seen.has(f.entity.toLowerCase())) { seen.add(f.entity.toLowerCase()); perEntity.push(['form', id]); } }
-      for (const v of spec.views || []) { const k = v.entity.toLowerCase(); if (result.created.views[v.name] && !seen.has(k)) { seen.add(k); perEntity.push(['view', result.created.views[v.name]]); } }
+      for (const v of spec.views || []) { const k = v.entity.toLowerCase(); const vid = result.created.views[`${k}|${v.name}`]; if (vid && !seen.has(k)) { seen.add(k); perEntity.push(['view', vid]); } }
       await runner.mapLimit(perEntity, concurrency, ([type, id]) => provision.publishArtifact(type, id));
       if (result.created.app) await provision.publishArtifact('app', result.created.app);
     });
