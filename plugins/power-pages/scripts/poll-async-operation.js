@@ -18,6 +18,7 @@
 //   { "status": "Timeout", "asyncJobId": "...", "message": "Still running after N attempts" }
 //   { "error": "..." }   — when arguments are missing or network errors prevent polling
 
+const fs = require('fs');
 const { getAuthToken, makeRequest } = require('./lib/validation-helpers');
 
 function output(obj) {
@@ -31,7 +32,7 @@ function sleep(ms) {
 
 function parseArgs(argv) {
   const args = {};
-  const keys = ['--asyncJobId', '--envUrl', '--token', '--intervalMs', '--maxAttempts', '--tokenResource'];
+  const keys = ['--asyncJobId', '--envUrl', '--token', '--intervalMs', '--maxAttempts', '--tokenResource', '--statusFile'];
   for (const key of keys) {
     const idx = argv.indexOf(key);
     if (idx !== -1 && idx + 1 < argv.length) {
@@ -66,7 +67,17 @@ const SUCCESS_STATUSCODES = new Set([30]);
 const FAILURE_STATUSCODES = new Set([31]);
 const CANCELED_STATUSCODES = new Set([32]);
 
-const pollUrl = `${envUrl}/api/data/v9.2/asyncoperations(${args.asyncJobId})?$select=statecode,statuscode,message,friendlymessage,errorcode`;
+const pollUrl = `${envUrl}/api/data/v9.2/asyncoperations(${args.asyncJobId})?$select=statecode,statuscode,message,friendlymessage,errorcode,progress`;
+
+function writeStatus(status) {
+  if (!args.statusFile) return;
+  try {
+    fs.writeFileSync(args.statusFile, JSON.stringify({ updatedAt: new Date().toISOString(), ...status }, null, 2), 'utf8');
+  } catch {
+    // The status page is best-effort; polling must never fail because the user
+    // closed a temp folder or the status file could not be updated.
+  }
+}
 
 (async () => {
   // Acquire initial token if not provided
@@ -99,6 +110,7 @@ const pollUrl = `${envUrl}/api/data/v9.2/asyncoperations(${args.asyncJobId})?$se
 
       if (result.error) {
         // Network error — wait and retry (don't fail on transient issues)
+        writeStatus({ state: 'running', message: 'Waiting for Dataverse import status', progressPercent: null, attempt });
         await sleep(intervalMs);
         continue;
       }
@@ -111,6 +123,7 @@ const pollUrl = `${envUrl}/api/data/v9.2/asyncoperations(${args.asyncJobId})?$se
       }
 
       if (result.statusCode !== 200 || !result.body) {
+        writeStatus({ state: 'running', message: `Waiting for Dataverse import status (HTTP ${result.statusCode})`, progressPercent: null, attempt });
         await sleep(intervalMs);
         continue;
       }
@@ -125,23 +138,28 @@ const pollUrl = `${envUrl}/api/data/v9.2/asyncoperations(${args.asyncJobId})?$se
     const statuscode = pollBody.statuscode;
     const message = pollBody.message || pollBody.Message || '';
     const friendlyMessage = pollBody.friendlymessage || pollBody.FriendlyMessage || '';
+    const progressPercent = Number.isFinite(Number(pollBody.progress)) ? Math.max(0, Math.min(100, Math.floor(Number(pollBody.progress)))) : null;
 
     if (!TERMINAL_STATECODES.has(statecode)) {
       // Still running — wait and poll again
+      writeStatus({ state: 'running', message: friendlyMessage || message || 'Import is still running', progressPercent, attempt });
       await sleep(intervalMs);
       continue;
     }
 
     // Terminal state reached
     if (SUCCESS_STATUSCODES.has(statuscode)) {
+      writeStatus({ state: 'succeeded', message: 'Template import completed. Check the agent terminal for the next step.', progressPercent: 100, attempt });
       output({ status: 'Succeeded', asyncJobId: args.asyncJobId, attempts: attempt });
     }
 
     if (CANCELED_STATUSCODES.has(statuscode)) {
+      writeStatus({ state: 'canceled', message: message || 'Template import was canceled. Check the agent terminal.', progressPercent, attempt });
       output({ status: 'Canceled', asyncJobId: args.asyncJobId, message, attempts: attempt });
     }
 
     // Failed (statuscode 31 or unknown terminal)
+    writeStatus({ state: 'failed', message: friendlyMessage || message || 'Template import failed. Check the agent terminal.', progressPercent, attempt });
     output({
       status: 'Failed',
       asyncJobId: args.asyncJobId,
@@ -153,6 +171,7 @@ const pollUrl = `${envUrl}/api/data/v9.2/asyncoperations(${args.asyncJobId})?$se
   }
 
   // Timed out
+  writeStatus({ state: 'timeout', message: 'Template import is still running. Check the agent terminal.', progressPercent: null, attempt: maxAttempts });
   output({
     status: 'Timeout',
     asyncJobId: args.asyncJobId,

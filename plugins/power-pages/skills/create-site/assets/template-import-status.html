@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>Importing __TEMPLATE_NAME__ template</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root{
+      --pp-violet:#7B5EA7; --pp-purple:#8B6FC0; --pp-lavender:#A78BDB; --pp-sky:#5A9BD5;
+      --pp-bg:#F7F5FA; --pp-surface:#FFFFFF; --pp-text:#2D1B4E; --pp-muted:#7F7098; --pp-border:rgba(139,111,192,0.14);
+      --pp-error:#B42318; --pp-success:#087443;
+      --sans:'Segoe UI','Segoe UI Web (West European)',-apple-system,system-ui,sans-serif;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;font-family:var(--sans);background:radial-gradient(circle at 50% 20%,rgba(167,139,219,.14),transparent 38%),var(--pp-bg);color:var(--pp-text);overflow:hidden}
+    .wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:40px}
+    .stage{width:min(920px,100%);text-align:center}
+    .brand{letter-spacing:5px;text-transform:uppercase;color:var(--pp-violet);font-size:13px;margin-bottom:18px}
+    h1{font-size:34px;line-height:1.2;margin:0 0 26px;color:var(--pp-violet)}
+    .preview{height:min(52vh,520px);display:flex;align-items:center;justify-content:center;margin:0 auto 22px}
+    .preview img{max-width:100%;max-height:100%;object-fit:contain;border:1px solid var(--pp-border);box-shadow:0 8px 34px rgba(92,61,143,.12);background:#fff}
+    .bar{width:min(620px,100%);height:8px;margin:0 auto 10px;background:rgba(139,111,192,.14);border-radius:999px;overflow:hidden}
+    .fill{height:100%;width:100%;background:linear-gradient(90deg,var(--pp-violet),var(--pp-lavender),var(--pp-sky));transform:scaleX(0);transform-origin:left;transition:transform .5s ease}
+    .label{font-size:13px;color:var(--pp-muted);min-height:22px}
+    .toast{position:fixed;right:24px;bottom:24px;max-width:420px;background:var(--pp-surface);border:1px solid var(--pp-border);border-radius:12px;padding:14px 16px;box-shadow:0 10px 30px rgba(40,24,70,.14);text-align:left;color:var(--pp-text)}
+    .toast[hidden]{display:none}
+    .toast.error .toast-title{color:var(--pp-error)}
+    .toast.success .toast-title{color:var(--pp-success)}
+    .toast-title{font-weight:700;margin-bottom:4px}
+    .toast-message{font-size:13px;color:var(--pp-muted)}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="stage">
+      <div class="brand">Power Pages</div>
+      <h1>Importing __TEMPLATE_NAME__ template</h1>
+      <div class="preview" id="preview"></div>
+      <div class="bar"><div class="fill" id="progressFill"></div></div>
+      <div class="label" id="progressLabel">Starting template import...</div>
+    </section>
+  </main>
+  <div class="toast" id="toast" hidden>
+    <div class="toast-title" id="toastTitle"></div>
+    <div class="toast-message" id="toastMessage"></div>
+  </div>
+  <script>
+    const PREVIEWS = __PREVIEW_IMAGES_JSON__;
+    const STATUS_URL = __STATUS_URL_JSON__;
+    let previewIndex = 0;
+    const preview = document.getElementById('preview');
+    const fill = document.getElementById('progressFill');
+    const label = document.getElementById('progressLabel');
+    const toast = document.getElementById('toast');
+    const toastTitle = document.getElementById('toastTitle');
+    const toastMessage = document.getElementById('toastMessage');
+
+    function showPreview() {
+      if (!PREVIEWS.length) {
+        preview.textContent = 'No preview images available for this template.';
+        return;
+      }
+      const img = document.createElement('img');
+      img.src = PREVIEWS[previewIndex % PREVIEWS.length];
+      img.alt = 'Template preview ' + ((previewIndex % PREVIEWS.length) + 1);
+      preview.replaceChildren(img);
+      previewIndex += 1;
+    }
+
+    function showToast(kind, title, message) {
+      toast.className = 'toast ' + kind;
+      toastTitle.textContent = title;
+      toastMessage.textContent = message;
+      toast.hidden = false;
+    }
+
+    async function pollStatus() {
+      try {
+        const res = await fetch(STATUS_URL + '?t=' + Date.now(), { cache: 'no-store' });
+        if (!res.ok) return;
+        const status = await res.json();
+        if (typeof status.progressPercent === 'number') fill.style.transform = 'scaleX(' + (Math.max(0, Math.min(100, status.progressPercent)) / 100) + ')';
+        if (status.message) label.textContent = status.message;
+        if (status.state === 'failed' || status.state === 'canceled' || status.state === 'timeout') {
+          showToast('error', 'Template import needs attention', 'Check the agent terminal for details.');
+        }
+        if (status.state === 'succeeded') {
+          fill.style.transform = 'scaleX(1)';
+          showToast('success', 'Template import complete', 'Check the agent terminal for the next step.');
+        }
+      } catch {}
+    }
+
+    showPreview();
+    setInterval(showPreview, 5000);
+    pollStatus();
+    setInterval(pollStatus, 3000);
+  </script>
+</body>
+</html>

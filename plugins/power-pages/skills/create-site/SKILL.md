@@ -377,7 +377,19 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       node "${PLUGIN_ROOT}/scripts/capture-pages-list.js" --output "<temp-before-pages-list.txt>"
       ```
       If the result is `ok: false`, surface the error, emit `create_site_with_template` with selected template id/kind/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop before import.
-   7. Mark **Import template solution** as `in_progress`.
+   7. Mark **Import template solution** as `in_progress`, then render and open a read-only import status page so the user has visual feedback while Dataverse imports the solution:
+      ```bash
+      # Create <temp-import-status-dir>/ and write this initial status JSON to <temp-import-status-dir>/status.json:
+      # { "state": "running", "message": "Starting template import", "progressPercent": 0 }
+      node "${PLUGIN_ROOT}/scripts/render-template-import-status.js" \
+        --templateName "<SELECTED_TEMPLATE.displayName>" \
+        --statusPath "<temp-import-status-dir>/status.json" \
+        --previewImagesJson '<JSON array of SELECTED_TEMPLATE.previewImages localUrl values from the template browser step>' \
+        --outputPath "<temp-import-status-dir>/index.html"
+      node "${PLUGIN_ROOT}/scripts/serve-static-dir.js" --root "<temp-import-status-dir>" --urlFile "<temp-import-status-dir>/url.txt"
+      node "${PLUGIN_ROOT}/scripts/open-url.js" --url "<url from <temp-import-status-dir>/url.txt>"
+      ```
+      Reuse the already-downloaded local preview image URLs from the browser step; do not fetch preview images again for this page.
    8. Import the unmanaged solution inline, without invoking `/import-solution` and without writing ALM artifacts:
       ```bash
       node "${PLUGIN_ROOT}/scripts/encode-solution-file.js" --zipPath "<SELECTED_TEMPLATE_SOLUTION_ZIP>"
@@ -395,9 +407,11 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         --asyncJobId "<AsyncOperationId from ImportSolutionAsync>" \
         --envUrl "<environmentUrl>" \
         --token "<token>" \
-        --intervalMs 8000 \
-        --maxAttempts 75
+        --intervalMs 30000 \
+        --maxAttempts 75 \
+        --statusFile "<temp-import-status-dir>/status.json"
       ```
+      The import status page polls `<temp-import-status.json>` and updates its preview slideshow, progress bar, and toast. On failure or timeout, it shows an error toast telling the user to check the agent terminal. On success, it shows a completion toast telling the user to check the agent terminal.
       If the poll result is not `Succeeded`, query the import job (using the `ImportJobKey` returned by `ImportSolutionAsync`) and parse its component-level error XML, following `/import-solution`'s Phase 6 pattern. Do **not** auto-clean up the unmanaged partial import.
 
       <!-- gate: create-site:1.5.import-failed | category=progress | cancel-leaves=partial-unmanaged-template-import -->
