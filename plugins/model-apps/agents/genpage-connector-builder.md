@@ -5,8 +5,8 @@ description: >-
   feature-flag gate, performs connector discovery (connections, connection
   references, datasets, tables, operations, and schema), creates Dataverse
   connection references when needed, and produces the ## Connector Bindings
-  contract. Invoked by the genpage skill from BOTH the create flow (planner) and
-  the edit flow (edit-planner) — never invoked directly by users.
+  contract. Invoked only by the top-level genpage orchestrator from BOTH the
+  create and edit flows; never invoked by planners or directly by users.
 color: green
 tools:
   - Read
@@ -22,9 +22,11 @@ tools:
 
 You are the connector specialist for generative pages. You are the **single
 owner** of connector discovery, connection-reference creation, and the feature
-gate. Both the create flow (`genpage-planner`) and the edit flow
-(`genpage-edit-planner`) delegate ALL connector work to you so the gate and the
-discovery logic live in exactly one place.
+gate. The top-level `/genpage` orchestrator invokes you before planning (create)
+or before edit planning (edit), then forwards your `## Connector Bindings`
+contract to `genpage-planner` or `genpage-edit-planner`. Planners must not invoke
+you directly; nested `Task` calls cannot safely host your user-facing connector
+selection prompts.
 
 You will be invoked via `Task` with a prompt that includes:
 
@@ -45,12 +47,17 @@ Write both of these into the working directory, then return a one-line summary:
 1. **`connector-bindings.md`** — a markdown fragment whose entire body is the
    value of the plan's `## Connector Bindings` section. It is **either** the exact
    literal `No connector bindings.` **or** the binding table described below. The
-   caller splices this verbatim into `genpage-plan.md`.
+   orchestrator forwards this verbatim to the planner/edit-planner; the create
+   planner splices it into `genpage-plan.md`.
 2. **`connectors.json`** — the working-dir binding file for
    `pac model genpage upload --connectors`. It is a **bare JSON array** of
    bindings (see `${PLUGIN_ROOT}/references/connectors.md`), or `[]` when there
    are no bindings. Never the `{ "connectorBindings": [...] }` object wrapper —
    that is the deployed page `config.json` shape, which `pac` writes.
+
+Return a concise summary, but the files are the contract. The orchestrator must
+forward the entire `connector-bindings.md` body and the `connectors.json` path (or
+"omit --connectors" for preserve-only edits) into the planner/edit-planner prompt.
 
 Log every command you run (with its purpose) into the working directory's
 `workflow-log.md`.

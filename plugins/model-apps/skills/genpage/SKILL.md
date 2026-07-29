@@ -17,23 +17,30 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, Task, AskUserQuest
 
 ## Overview
 
-This skill orchestrates four specialist agents across the create and edit flows:
+This skill orchestrates specialist agents across the create and edit flows:
 
 **Create flow:**
-1. **`genpage-planner`** — validates prerequisites, gathers requirements, detects what
+1. **`genpage-connector-builder`** — top-level orchestrator dispatch for connector
+   feature-gating and discovery; writes `connector-bindings.md` + `connectors.json`
+   before the planner consumes the connector contract
+2. **`genpage-planner`** — validates prerequisites, gathers requirements, detects what
    entities and apps exist, presents a plan for approval, writes `genpage-plan.md`
-2. **`genpage-entity-builder`** — creates Dataverse entities (tables, columns,
+3. **`genpage-entity-builder`** — creates Dataverse entities (tables, columns,
    relationships, choices, sample data) via the plugin's Node.js Web API scripts
-3. **`genpage-page-builder`** — generates one complete `.tsx` file per page; multiple
+4. **`genpage-page-builder`** — generates one complete `.tsx` file per page; multiple
    builders run in parallel for multi-page requests
 
 **Edit flow:**
 
-4. **`genpage-edit-planner`** — reads the downloaded page artifacts, gathers change
+5. **`genpage-connector-builder`** — top-level orchestrator dispatch when an edit adds,
+   replaces, discovers, or clears connector bindings; preserves unchanged bindings
+   when the feature gate is OFF
+6. **`genpage-edit-planner`** — reads the downloaded page artifacts, gathers change
    requirements, presents an edit plan, writes `genpage-edit-plan.md`
 
-You (the skill) coordinate the agents and own app creation, RuntimeTypes generation,
-deployment, browser verification, and the inline application of planned edits.
+You (the skill) coordinate the agents and own connector dispatch, app creation,
+RuntimeTypes generation, deployment, browser verification, and the inline
+application of planned edits.
 
 ## References
 
@@ -118,10 +125,51 @@ node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" <working-dir> <kebab-slu
 
 #### Steps
 
-1. Invoke `genpage-planner` via `Task` with the prompt below.
-2. Wait for it to finish (it returns a summary).
-3. If the return includes `{ "action": "edit" }`, jump to the **Edit Flow** section.
-4. Otherwise the planner has written `genpage-plan.md`. Proceed to Phase 2.
+1. Prepare the connector-discovery handoff (orchestrator-owned; see 1a).
+2. Invoke `genpage-planner` via `Task` with the prompt below, including the
+   connector handoff from step 1.
+3. Wait for it to finish (it returns a summary).
+4. If the return includes `{ "action": "connector_discovery_required" }`, invoke
+   `genpage-connector-builder` (Mode: `create`) with the returned intent, then
+   invoke `genpage-planner` again with the builder's `## Connector Bindings`
+   contract and `connectors.json` status.
+5. If the return includes `{ "action": "edit" }`, jump to the **Edit Flow** section.
+6. Otherwise the planner has written `genpage-plan.md`. Proceed to Phase 2.
+
+#### 1a. Prepare connector discovery (orchestrator-owned)
+
+`genpage-connector-builder` is dispatched only by this top-level orchestrator,
+not by `genpage-planner`. This keeps the connectors feature gate in one agent
+while avoiding nested `Task` calls from the planner.
+
+Before each planner invocation:
+
+- If `$ARGUMENTS` clearly implies connector-backed data (SharePoint, Teams,
+  weather, Office 365, SQL via connector, custom REST, or similar), first run the
+  normal auth preflight to capture the active environment URL:
+
+  ```bash
+  node "${PLUGIN_ROOT}/scripts/check-auth.js" --require-pac
+  ```
+
+  Then invoke `genpage-connector-builder` via `Task` with **Mode: `create`**, the
+  working directory, `${PLUGIN_ROOT}`, the `envUrl` from the preflight, and the
+  connector intent. Wait for it to finish, then read `<working-dir>/connector-bindings.md`
+  and verify `<working-dir>/connectors.json` is a bare JSON array. If the planner
+  later selects or reports a different environment URL, discard these connector
+  outputs, rerun the builder for that environment, and re-run the planner with the
+  refreshed connector contract.
+- If the initial request does **not** clearly imply connector data, do not run
+  discovery speculatively. Use the literal connector contract
+  `No connector bindings.` and tell the planner discovery is not yet needed.
+- If the planner's user clarification later reveals connector-backed data, the
+  planner must return `{ "action": "connector_discovery_required", "intent": "..." }`.
+  Dispatch `genpage-connector-builder` from here, then re-run the planner with
+  the returned connector contract.
+
+The builder remains the single owner of the connectors flag: it probes first,
+writes `No connector bindings.` + `[]` when the flag is OFF, and performs all
+connection discovery only when the flag is ON.
 
 #### Invocation prompt
 
@@ -130,6 +178,11 @@ Pass a prompt that includes:
 - The user's requirements: `$ARGUMENTS`
 - The working directory (absolute path from Phase 0)
 - The plugin root path: `${PLUGIN_ROOT}`
+- The connector contract: the full body of `<working-dir>/connector-bindings.md`,
+  or the literal `No connector bindings.` when discovery was not needed or the
+  feature gate was OFF
+- The connector upload file status: `<working-dir>/connectors.json` exists and is
+  a bare JSON array, or `no connectors.json; omit --connectors`
 
 Example:
 
@@ -139,6 +192,19 @@ Example:
 >
 > Working directory: [absolute path from Phase 0]
 > Plugin root: ${PLUGIN_ROOT}
+>
+> Connector discovery is orchestrator-owned. Do **not** invoke
+> `genpage-connector-builder` from inside the planner. Use this as the entire
+> `## Connector Bindings` section of the plan:
+>
+> [paste connector-bindings.md body, or `No connector bindings.`]
+>
+> Connector upload file: [absolute path to connectors.json, or `none — omit --connectors`]
+>
+> If your clarification questions reveal connector-backed data that is not covered
+> by the connector contract above, stop and return
+> `{ "action": "connector_discovery_required", "intent": "<connector need>" }`
+> instead of trying to discover connectors yourself.
 >
 > Follow the instructions in your agent file. Validate prereqs, confirm auth, ask
 > the new/edit question via AskUserQuestion, then proceed accordingly. Write
@@ -514,8 +580,7 @@ Runs only when the plan's `## Solution Packaging` has `Package into solution: tr
 Adds the deployed app, the GenPage(s), and any connection references to the
 target solution so they travel cross-environment.
 
-1. Ensure the solution exists. `create-solution.js` was replaced by the SDK-backed
-   `provision-solution.js` (v2.2.0) — create it only if it doesn't already exist:
+1. Ensure the solution exists — create it only if it doesn't already exist:
    `node ${PLUGIN_ROOT}/scripts/provision-solution.js <envUrl> <solutionUniqueName> "<Friendly Name>" [--publisher <uniqueName>]`
    It prints `{ "ok": true, "solutionId": …, "uniqueName": …, "publisherPrefix": … }`;
    `uniqueName` must start with a letter and contain only letters, digits, and

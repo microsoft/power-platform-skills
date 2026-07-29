@@ -39,10 +39,16 @@ D:/Projects/power-platform-skills/plugins/model-apps
   | priority | Low (100000000), Medium (100000001), High (100000002), Critical (100000003) |
   | status | Open (100000000), In Progress (100000001), Resolved (100000002), Closed (100000003) |
 - Relationships:
-  (none)
+  | Type | Related Table | Lookup Suffix | Cascade |
+  |------|---------------|---------------|---------|
+  | none | none | none | none |
 
 ## Existing Entities
 None
+
+## Connector Bindings
+
+No connector bindings.
 
 ## Design Preferences
 - Styling: Color-coded priority badges (Critical = red, High = orange, Medium = yellow, Low = green); status shown as pill/tag labels; due dates with overdue urgency cue (red text when past due)

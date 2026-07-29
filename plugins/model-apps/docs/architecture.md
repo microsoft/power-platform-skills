@@ -288,5 +288,5 @@ Per-stage oracles: `author` (`validateAppSpec`+`lintAppSpec`), `plan` (`planFor`
 node evals/model-apps/app-builder/run-app-builder.js
 ```
 
-See [`evals/model-apps/app-builder/EVAL_GUIDE.md`](../../evals/model-apps/app-builder/EVAL_GUIDE.md)
+See [`evals/model-apps/app-builder/EVAL_GUIDE.md`](../../../evals/model-apps/app-builder/EVAL_GUIDE.md)
 for the full grading flow.

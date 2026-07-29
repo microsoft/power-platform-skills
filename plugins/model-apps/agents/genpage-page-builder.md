@@ -132,15 +132,17 @@ Read the relevant sample file identified in the plan:
 ${PLUGIN_ROOT}/samples/[sample-name].tsx
 ```
 
-If **Data mode** is `dataverse` AND the page **fetches data on mount** (any
-list, detail, or single-visit overview/dashboard — per the plan's Per-Page
-Specification), also read the data fetching reference:
+If the page's Per-Page Specification says **`Needs caching: true`** because the
+page **fetches data on mount** through a real host read — Dataverse `dataApi`
+calls OR connector calls such as `queryConnectorTable` /
+`executeConnectorOperation` — also read the data fetching reference:
 
 ```
 ${PLUGIN_ROOT}/references/data-caching.md
 ```
 
-Skip it only for mock-data pages and forms with no initial fetch.
+Skip it only for pages that render inline mock arrays and forms with no initial
+fetch.
 
 Use the sample as a structural reference — follow its patterns for component
 organization, DataAPI usage, and styling approach. For any page that fetches on
@@ -253,26 +255,37 @@ export default GeneratedComponent;
 - **No FluentProvider** — already provided at root
 - **No createTheme/mergeThemes/useTheme** — these don't exist in Fluent UI V9
 - **D3.js for charts** — use `group()` not `nest()`
-- **Cross-page navigation** — when navigating to a sibling generative page, use its
-  **stable key** (the App Spec `pages[].key`, same value as `navigatesTo[].targetKey`).
-  Emit a `"PAGEREF_<key>"` placeholder exactly as the `pageId` value of a
-  `pageType:"generative"` `navigateTo` call — one per declared `navigatesTo` entry.
+- **Cross-page navigation** — when navigating to a sibling generative page, emit a
+  `"PAGEREF_<token>"` placeholder exactly as the `pageId` value of a `pageType:"generative"`
+  `navigateTo` call — one per declared navigation edge. **Which token depends on who invoked
+  you**, because the two callers resolve the placeholder differently:
+  - **`/app-builder`** (your Plan document's `## Pages` rows carry App Spec pages) — use the
+    page's **stable key** (`pages[].key`, the same value as `navigatesTo[].targetKey`). The
+    build resolves `PAGEREF_<key>` → GUID and enforces exact parity with `navigatesTo`.
+  - **`/genpage`** (standalone) — there are no App Spec keys, so use the **target page's file
+    name without `.tsx`**, exactly as it appears in the plan's `## Pages` table `File` column.
+    The orchestrator's Phase 6.5 builds a `filename-without-tsx → page-id` map to substitute it.
+
+  In practice the two rarely differ: `/app-builder` names each page file `<key>.tsx`, so the
+  stable key and the file stem are the **same token**. Use the plan's `File` column as the
+  source of truth for the token and both callers resolve correctly.
+
   Pass any custom identifier in `data:` (never `recordId`); it arrives on the target
   as `pageInput?.data?.<field>`. Example:
   ```typescript
   Xrm.Navigation.navigateTo({
     pageType: "generative",
-    pageId: "PAGEREF_pet-detail",   // stable KEY of the target page; resolved to real GUID post-deploy
+    pageId: "PAGEREF_pet-detail",   // target page's key (app-builder) = its file stem; resolved to a GUID post-deploy
     data: { petId: selectedId },    // custom ids in data (read as pageInput?.data?.petId on the target)
   });
   ```
-  Do NOT invent a fake GUID. Do NOT use `recordId` for a custom identifier. Do NOT
-  use the filename or display name — only the stable key. **Always wrap the placeholder
-  in double quotes and place it as the `pageId` value** — the build's single structural
-  resolver only rewrites a `"PAGEREF_<key>"` at a real `navigateTo` call site; a
-  single-quoted, back-ticked, or concatenated form, or any decoy string elsewhere, is
-  rejected by the pre-deploy scan. Every `PAGEREF_<key>` must have a matching
-  `navigatesTo` entry in the spec (the build enforces exact parity).
+  Do NOT invent a fake GUID. Do NOT use `recordId` for a custom identifier. Do NOT use a page's
+  **display name** — only the key / file stem above. **Always wrap the placeholder in double
+  quotes and place it as the `pageId` value** — the resolver only rewrites a `"PAGEREF_<token>"`
+  at a real `navigateTo` call site; a single-quoted, back-ticked, or concatenated form, or any
+  decoy string elsewhere, is rejected by the pre-deploy scan. Under `/app-builder` every
+  `PAGEREF_<key>` must have a matching `navigatesTo` entry in the spec (the build enforces exact
+  parity); under `/genpage` every token must match a `File` in the plan's `## Pages` table.
 - **Every linked page must be sitemap-placed.** A page targeted by a `PAGEREF_<key>` nav
   call must be explicitly placed as a `page` subarea in the app's `appShell`; navigation-
   only (headless) pages are not supported — validation rejects them. A "detail" page that

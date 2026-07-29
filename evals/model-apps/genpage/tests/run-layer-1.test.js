@@ -53,26 +53,44 @@ function mockEval2Artifacts() {
 ## User Requirements
 foo
 ## Working Directory
-wd/
+D:\\work\\mock-dashboard
 ## Plugin Root
-pr/
+D:\\repo\\plugins\\model-apps
 ## Environment
+- URL: https://x.crm.dynamics.com
+- App: Existing App (1)
+- Languages: English (1033) only
 - Solution: Default
 - Publisher Prefix: new
 ## Pages
-| Page | File |
-| P | p.tsx |
+| Page | File | Purpose | Entities |
+|------|------|---------|----------|
+| P | p.tsx | Mock dashboard | mock data |
 ## Entity Creation Required
 No entity creation required — all entities already exist.
 ## Existing Entities
-account
+None
+## Connector Bindings
+No connector bindings.
 ## Design Preferences
-clean
+- Styling: clean
+- Features: mock dashboard
+- Accessibility: WCAG AA
 ## Relevant Samples
-8-dashboard-with-charts.tsx
+| Page | Sample | Reason |
+|------|--------|--------|
+| P | 8-dashboard-with-charts.tsx | Dashboard layout |
 ## Per-Page Specifications
 ### P
-foo
+- **File:** p.tsx
+- **Purpose:** Mock dashboard
+- **Entities:** mock data
+- **Needs caching:** false
+- **Key Features:** KPI cards
+- **Components:** Card, Text
+- **Layout:** Responsive grid
+- **Data Binding:** Inline mock arrays
+- **Interactions:** Local filtering only
 `,
   };
 }

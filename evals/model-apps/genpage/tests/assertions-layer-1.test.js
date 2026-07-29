@@ -6,6 +6,7 @@ const {
   WORKFLOW_ASSERTIONS,
   PHASE_EXPECTATIONS,
   planSection,
+  validateGenpagePlanSchema,
   entitiesNeedCreating,
   newAppNeeded,
 } = require('../lib/assertions-layer-1.js');
@@ -26,6 +27,64 @@ function fix(overrides = {}) {
 
 function evalStub(id = 2) {
   return { id, tier: 'smoke', prompt: '', data: {}, expectations: [] };
+}
+
+function validPlan() {
+  return `# Genpage Plan
+
+## User Requirements
+Build a simple account page.
+
+## Working Directory
+D:\\work\\account-page
+
+## Plugin Root
+D:\\repo\\plugins\\model-apps
+
+## Environment
+- URL: https://org.crm.dynamics.com
+- App: Existing App (app-id)
+- Languages: English (1033) only
+- Solution: Default
+- Publisher Prefix: new
+
+## Pages
+| Page | File | Purpose | Entities |
+|------|------|---------|----------|
+| Account Overview | account-overview.tsx | Show account highlights | account |
+
+## Entity Creation Required
+No entity creation required — all entities already exist.
+
+## Existing Entities
+account
+
+## Connector Bindings
+No connector bindings.
+
+## Design Preferences
+- Styling: Clean
+- Features: Search
+- Accessibility: WCAG AA
+
+## Relevant Samples
+| Page | Sample | Reason |
+|------|--------|--------|
+| Account Overview | 7-responsive-cards.tsx | Responsive cards |
+
+## Per-Page Specifications
+
+### Account Overview
+- **File:** account-overview.tsx
+- **Purpose:** Show account highlights
+- **Entities:** account
+- **Needs caching:** true
+- **Key Features:** Search and summary cards
+- **Components:** Card, Button
+- **Layout:** Responsive grid
+- **Data Binding:** queryTable("account")
+- **Interactions:** Search box filters cards
+`;
 }
 
 // ---------- helpers ----------
@@ -71,6 +130,35 @@ test('entitiesNeedCreating returns true when section has content', () => {
 test('newAppNeeded detects "create new app" intent', () => {
   assert.equal(newAppNeeded('plan: create new app'), true);
   assert.equal(newAppNeeded('plan: use existing app'), false);
+});
+
+// ---------- plan schema validator ----------
+
+test('validateGenpagePlanSchema: valid canonical plan passes', () => {
+  assert.deepEqual(validateGenpagePlanSchema(validPlan()), []);
+});
+
+test('validateGenpagePlanSchema: missing each required per-page field fails clearly', () => {
+  const requiredFields = [
+    'File',
+    'Purpose',
+    'Entities',
+    'Needs caching',
+    'Key Features',
+    'Components',
+    'Layout',
+    'Data Binding',
+    'Interactions',
+  ];
+
+  for (const field of requiredFields) {
+    const plan = validPlan().replace(new RegExp(`^- \\*\\*${field}:\\*\\*.*\\n`, 'm'), '');
+    const errors = validateGenpagePlanSchema(plan);
+    assert.ok(
+      errors.some((error) => error.message.includes(`missing required per-page field "${field}"`)),
+      `expected missing-field error for ${field}, got ${JSON.stringify(errors)}`
+    );
+  }
 });
 
 // ---------- workflow-log.md present check ----------
@@ -190,19 +278,12 @@ test('plan-schema: fail when required heading missing', () => {
   const plan = `# Genpage Plan\n## User Requirements\nfoo\n`;
   const result = check({ fixture: fix({ genpagePlan: plan }), eval: evalStub() });
   assert.equal(result.status, 'fail');
-  assert.match(result.reason, /## Environment|## Pages/);
+  assert.match(result.reason, /## Working Directory/);
 });
 
 test('plan-schema: pass when all headings present', () => {
   const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): genpage-plan.md is written to the working directory, conforming to references/plan-schema.md');
-  const plan = `# Genpage Plan
-## User Requirements
-## Working Directory
-## Plugin Root
-## Environment
-## Pages
-`;
-  const result = check({ fixture: fix({ genpagePlan: plan }), eval: evalStub() });
+  const result = check({ fixture: fix({ genpagePlan: validPlan() }), eval: evalStub() });
   assert.equal(result.status, 'pass');
 });
 

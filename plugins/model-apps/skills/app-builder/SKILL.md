@@ -176,20 +176,48 @@ After plan-mode approval (before the full build):
    once in the full build). Only `--stage data` is apply-safe; all other `--stage` selectors
    and legacy `--from/--to/--only/--skip` selectors are dry-run inspection only.
 
-2. **Types** — generate Dataverse type bindings:
+2. **Types** — generate Dataverse type bindings for the entities the pages read:
    ```bash
-   pac model genpage generate-types
+   pac model genpage generate-types --data-sources "<entity1,entity2,…>" --output-file <working-dir>/RuntimeTypes.ts
    ```
+   `--data-sources` is the union of every intent page's `dataSources`. Skip this step entirely when
+   every intent page is mock-only. On Windows use forward slashes in the path.
 
-3. **Generate** — for each intent page (`source.kind === "intent"`), dispatch the **headless**
-   `page-builder` worker via `Task` with the page intent + `RuntimeTypes.ts` + the optional
-   `design` contract + the navigation graph (`PAGEREF_<key>` for cross-page links). Custom nav
-   ids go in `data:` — never `recordId` (read as `pageInput?.data?.<field>`). Validate each
-   generated page (compile/structure + verified columns + navigation), then flip `source`
-   `intent → { kind: "tsx", codeFile }`. The transition is **all-or-nothing**.
+3. **Page plan (adapter)** — the page worker's input contract is a *plan document*, not an App Spec,
+   so project the spec into one. This also echoes the per-page dispatch parameters:
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/write-page-plan.js" \
+     --spec @<working-dir>/app-spec.json --working-dir <working-dir> --env <envUrl> --app "<app name>"
+   ```
+   It writes `<working-dir>/genpage-plan.md` and prints
+   `{ ok, planPath, pages: [{ key, file, dataMode, intent }] }`. Each page's `file` is `<key>.tsx`,
+   so the worker's stable-key `PAGEREF_<key>` and the filename stem are the **same token**.
 
-4. Proceed to **Phase 2** (full idempotent build), which validates under the `deploy` profile
-   and **fails fast** if any page is still `source.kind === "intent"`.
+4. **Generate** — for each page from step 3 with `intent: true`, dispatch the **headless**
+   `genpage-page-builder` worker via `Task`. Use its documented input contract verbatim — a missing
+   field is why a page silently never becomes `.tsx`:
+
+   > You are the genpage-page-builder agent. Generate the **[Page Name]** page.
+   >
+   > - Target file: [file from step 3].tsx
+   > - Plan document: [absolute path to the genpage-plan.md written in step 3]
+   > - Data mode: **[dataMode from step 3 — `dataverse` or `mock`]**
+   > - RuntimeTypes: [absolute path to RuntimeTypes.ts]   ← omit this line when Data mode is `mock`
+   > - Working directory: [absolute working-dir path]
+   > - Plugin root: ${PLUGIN_ROOT}
+   >
+   > Follow the instructions in your agent file. Write [file] and return your result when done.
+
+   Custom nav ids go in `data:` — never `recordId` (read as `pageInput?.data?.<field>`).
+
+5. **Validate + commit the transition** — for each generated page check that the file exists, compiles
+   structurally, uses only verified columns, and that its `PAGEREF_` tokens match the spec's
+   `navigatesTo` edges exactly. Only after **every** page passes, flip each `source`
+   `intent → { kind: "tsx", codeFile }`. The transition is **all-or-nothing** — never leave the spec
+   half-flipped, because Phase 2 validates under the `deploy` profile and fails fast on any remaining
+   `source.kind === "intent"`.
+
+6. Proceed to **Phase 2** (full idempotent build).
 
 > ⚠️ The interactive author **never** runs inside a `Task` subagent. Only pure, headless
 > code-gen workers are dispatched here — all user-facing prompts originate in the main loop.

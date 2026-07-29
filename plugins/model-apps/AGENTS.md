@@ -178,7 +178,7 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   and skips/warns; it cannot flip admin or tenant switches. `scripts/lib/ai-candidates.js` selects
   good-candidate tables for auto row-summary mode; `scripts/lib/ai-prompt.js` generates tailored summary
   prompts. The `ai` block in the App Spec configures the full set; see
-  [`references/app-spec-schema.md`](../../references/app-spec-schema.md) → `## ai`.
+  [`references/app-spec-schema.md`](references/app-spec-schema.md) → `## ai`.
 - **`scripts/preview-form.js` → `scripts/lib/form-preview.js`** — renders an ASCII **form
   wireframe** (tabs, sections, fields with widget hints, the Notes/timeline block, sub-grids, form
   JS) from the App Spec, so the user can review a form visually during authoring before approving.
@@ -219,29 +219,38 @@ AGENTS.md                      ← Plugin guidance for AI agents (this file)
 CLAUDE.md                      ← Symlink → AGENTS.md
 README.md                      ← User-facing intro and prereqs
 CHANGELOG.md                   ← Keep-a-Changelog
+feature-flags.json             ← Default-OFF feature flags (currently connectors)
+.claude-plugin/plugin.json     ← Legacy plugin metadata mirror
 docs/
   architecture.md              ← Wiring/flow diagrams for BOTH skills (/genpage + /app-builder)
-  app-builder-roadmap.md   ← /app-builder roadmap / TODO (Complete + Pending by phase)
+  app-builder-roadmap.md       ← /app-builder roadmap / TODO (Complete + Pending by phase)
+  app-builder-staged-flow-design.md ← Historical staged-flow design notes
+  changed-only-design.md       ← /app-builder --changed-only design contract
 agents/                        ← Agent definitions (invoked by skills via Task tool)
   genpage-planner.md           ← Requirements, discovery, plan doc, user approval (create flow)
+  genpage-connector-builder.md ← Orchestrator-invoked connector gate/discovery; writes connector bindings
   genpage-entity-builder.md    ← DV entity creation via plugin's Web API scripts (create flow)
   genpage-page-builder.md      ← Writes one .tsx file; runs in parallel for multi-page (create flow)
   genpage-edit-planner.md      ← Reads download artifacts, plans edits, writes edit plan (edit flow)
 references/                    ← Shared reference docs
   rules.md                     ← Full code-gen rules, DataAPI types, layout patterns, common errors
+  connectors.md                ← GenPage connector binding contract and runtime patterns
   plan-schema.md               ← Schema contract for genpage-plan.md
   data-caching.md              ← Rule 15 on-mount fetch: de-dupe + cache (loaded conditionally)
   localization.md              ← Multi-language + RTL pattern (loaded conditionally)
   supported-dependencies.md    ← Versioned package list for generated pages
   troubleshooting.md           ← Deployment/runtime/env issues
   verified-icons.txt           ← ~5000 Fluent UI icon names; Grep-validated by page-builder
-samples/                       ← Example .tsx files (12 samples)
+samples/                       ← Example .tsx files (12 samples) plus app-builder spec samples
 scripts/
   launch-playwright-mcp.js     ← Playwright MCP server launcher (fullscreen; uses lib/detect-browser.js)
   playwright-mcp-fullscreen.config.json ← Fullscreen browser config for the launcher
   regenerate-verified-icons.js ← Regenerates references/verified-icons.txt from npm
   check-auth.js                ← Pre-flight: az present + logged in, pac identity, WhoAmI, identity match
   dataverse-request.js         ← General Dataverse Web API wrapper (escape hatch)
+  list-connections.js          ← Connector discovery: PAC connections + Dataverse connection references
+  create-connection-reference.js ← Creates Dataverse connectionreference rows for connector bindings
+  add-page-to-solution.js      ← Adds GenPages and optional connection references to a solution
   provision-entities.js        ← CLI wrapper for entity provisioning (solution + data-model + sample-data)
   provision-solution.js        ← Creates a Dataverse solution via the SDK
   build-model-app.js           ← app-builder: narrated, idempotent SDK build (dry-run default; --stage data|ui|app|publish; --changed-only)
@@ -260,23 +269,25 @@ scripts/
     provision-input.js         ← Input validation for entity provisioning
     dataverse-auth.js          ← Shared auth + HTTP helpers (uses `az account get-access-token`)
     supported-dependencies.js  ← Single source of truth for runtime + dev deps versions
+    feature-flags.js           ← Default-OFF feature flag probe + connector script backstop
     sdk-build.js               ← app-builder build engine (idempotent; incl. the pages phase)
-    stages.js                  ← stage→phase-range mapping + PHASES/STAGES constants (Plans 1-2)
-    op-diff.js                 ← destructive-op diff + --allow-destructive / --non-interactive gating (Plan 2)
+    stages.js                  ← stage→phase-range mapping + PHASES/STAGES constants
+    op-diff.js                 ← destructive-op diff + --allow-destructive / --non-interactive gating
     artifact-intent.js         ← pure App Spec → canonical SDK intent compiler (new form topology; no SDK calls)
     sdk-teardown.js            ← app-builder teardown engine (planTeardown is pure)
     sdk-http-client.js         ← az-token HttpClient for the vendored SDK
     spec-lint.js / app-spec.js ← App Spec guardrail lint + validation
+    odata.js                   ← OData literal escaping helpers
     genpage-cli.js             ← pac model genpage upload/list/download wrapper
     hydrate-spec.js            ← reconstruct an App Spec from a deployed app (edit flow)
     verify-spec.js             ← spec-vs-deployed reconciliation core
     build-journal.js           ← durable JSONL build journal (resume diagnostics)
     form-preview.js            ← form wireframe renderer
-    app-preview.js             ← whole-app design renderer (data model + sitemap + forms + page-intents + design; Plan 4)
-    schema-facts.js            ← pure data-model provisioning fact extractor for evals (Plan 4)
-    pageref-resolver.js        ← PAGEREF_<key> → GenPageId nav resolver (Plan 3)
-    page-manifest.js           ← durable <app>_pagemanifest read/write (Plan 3)
-    sitemap-pages.js           ← pure GenPageId extractors + fail-closed fetchSitemap MEMBERSHIP reader + cross-app scan (Plan 5)
+    app-preview.js             ← whole-app design renderer (data model + sitemap + forms + page-intents + design)
+    schema-facts.js            ← pure data-model provisioning fact extractor for evals
+    pageref-resolver.js        ← PAGEREF_<key> → GenPageId nav resolver
+    page-manifest.js           ← durable <app>_pagemanifest read/write
+    sitemap-pages.js           ← pure GenPageId extractors + fail-closed fetchSitemap MEMBERSHIP reader + cross-app scan
     ai-candidates.js           ← selects good-candidate tables for auto row-summary mode
     ai-prompt.js               ← generates tailored Copilot row-summary prompts
     _graph.js                  ← entity topological ordering (shared by build + teardown)
@@ -297,8 +308,8 @@ scripts/
   tests/                       ← node --test coverage for the scripts + hooks
 hooks/                         ← Lifecycle hooks (registered in hooks/hooks.json)
   run-skill-posttool-validation.js ← Runs a skill's validate*.js after the Skill tool returns
-  validate-icon-imports.js     ← PostToolUse: blocks unverified @fluentui/react-icons in genpage .tsx
-  validate-write-safety.js     ← PreToolUse: flags (non-blocking) out-of-cwd writes in a genpage session
+  validate-icon-imports.js     ← PostToolUse: blocks unverified @fluentui/react-icons in generated .tsx
+  validate-write-safety.js     ← PreToolUse: flags (non-blocking) out-of-cwd writes in model-apps sessions
   run-skill-pretool-telemetry.js   ← PreToolUse(Skill): emits skill_started (ships disabled)
   run-user-prompt-telemetry.js ← UserPromptSubmit: emits skill_started for /model-apps:<skill>
 skills/
@@ -331,7 +342,7 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 | `genpage-entity-builder` | `genpage` (create flow) | Provisions Dataverse tables, columns, relationships, choices, and sample data via `scripts/provision-entities.js` (the shared SDK-backed core). Bulk inserts use OData `$batch`. Writes a transactional log for recovery |
 | `genpage-page-builder` | `genpage` (create flow) | Generates one complete `.tsx` page from the plan and schema; runs in parallel with other builders for multi-page requests |
 | `genpage-edit-planner` | `genpage` (edit flow) | Reads the downloaded page artifacts (page.tsx, config.json, prompt.txt), gathers change requirements, presents edit plan, writes `genpage-edit-plan.md`. The orchestrator applies the edit inline. |
-| `genpage-connector-builder` | `genpage` (create **and** edit flows) | **Single owner of the connectors feature gate.** Performs connector discovery (connections, connection references, datasets, tables, operations, schema), creates Dataverse connection references, and writes the `## Connector Bindings` contract + `connectors.json`. Both the planner and the edit-planner delegate all connector work to it. |
+| `genpage-connector-builder` | `genpage` orchestrator (create **and** edit flows) | **Single owner of the connectors feature gate.** Performs connector discovery (connections, connection references, datasets, tables, operations, schema), creates Dataverse connection references, and writes the `## Connector Bindings` contract + `connectors.json`. The orchestrator forwards its output into the planner or edit-planner prompt. |
 
 ## Key Concepts
 
@@ -380,8 +391,9 @@ values in `feature-flags.json` at the plugin root.
 **Connectors gate — the single owner is `genpage-connector-builder`.** Every connector
 entry point must go through it or the helper; the checklist of places that gate:
 
-1. Discovery — `genpage-connector-builder` runs the probe first (planner + edit-planner
-   delegate to it; they do not gate inline).
+1. Discovery — the top-level `/genpage` orchestrator dispatches
+   `genpage-connector-builder`, which runs the probe first; the planner and
+   edit-planner receive its `## Connector Bindings` result and do not gate inline.
 2. Scripts — `list-connections.js` / `create-connection-reference.js` (`exitIfConnectorsDisabled`).
 3. Deploy — SKILL Phase 4.5 **re-probes** the flag and treats absent/malformed
    `## Connector Bindings` as no bindings (a plan authored while ON must not deploy
@@ -397,23 +409,30 @@ pac CLI connector verbs (PowerPlatform-Scale-AdminTools), the GenUX authoring co
 ## Hooks & Validators
 
 Hooks are registered centrally in `hooks/hooks.json` (auto-loaded by the plugin
-host). Every hook **fails open** on any internal error (exit 0) and **fails closed**
-(exit 2) only on a real violation, so a hook bug can never break a genpage run.
+host). Validators **fail open** on any internal error (exit 0). The icon validator
+blocks only on a real generated-page violation (exit 2); the write-safety guard is
+non-blocking by design (exit 1), so hook bugs do not break `/genpage` or
+`/app-builder` authoring.
 
 - **PostToolUse(Skill)** — `run-skill-posttool-validation.js` runs a skill's
   `skills/<skill>/scripts/validate*.js` when present. Tracked skills are discovered
-  from `skills/*/SKILL.md` by `scripts/lib/modelapps-hook-utils.js` (the telemetry
-  control skill is excluded from tracking).
+  from `skills/*/SKILL.md` by `scripts/lib/modelapps-hook-utils.js`, so both
+  `/genpage` and `/app-builder` are tracked automatically (the telemetry control
+  skill is excluded from tracking).
 - **PostToolUse(Write|Edit|MultiEdit)** — `validate-icon-imports.js` validates
-  `@fluentui/react-icons` named imports in genpage-generated `.tsx` files against
+  `@fluentui/react-icons` named imports in generated `.tsx` pages against
   `references/verified-icons.txt`, automating the page-builder's manual grep. It is
-  gated to genpage output (the file's `export default GeneratedComponent` marker or
-  a sibling `genpage-plan.md`) so it never fires on unrelated React files.
+  gated to generated-page output (the file's `export default GeneratedComponent`
+  marker) or plugin-specific sibling markers (`genpage-plan.md` or
+  `model-app-plan.md`). It intentionally does **not** use `app-spec.json` as a
+  sibling marker because this validator blocks (exit 2) and `app-spec.json` is too
+  generic for a globally installed hook.
 - **PreToolUse(Write|Edit|MultiEdit)** — `validate-write-safety.js` **flags
-  (non-blocking, exit 1)** writes outside the cwd, and **only during an active
-  genpage session** (a `genpage-plan.md` at/under cwd). It never blocks and is a
-  clean no-op in unrelated projects — the plugin installs globally, so it must not
-  constrain other work. Silence with `MODEL_APPS_SKIP_WRITE_GUARD=1`.
+  (non-blocking, exit 1)** writes outside the cwd, and only during an active
+  model-apps authoring session (`genpage-plan.md`, `model-app-plan.md`, or
+  `app-spec.json` at/under cwd). It accepts `app-spec.json` because a false
+  positive only warns; it never blocks and is a clean no-op in unrelated projects.
+  Silence with `MODEL_APPS_SKIP_WRITE_GUARD=1`.
 - **Master kill-switch** — `MODEL_APPS_DISABLE_HOOKS=1` (or `true`) disables **all**
   model-apps hooks (validators + telemetry emit); checked before any stdin/work.
   Both escape hatches are documented in `README.md`.
@@ -576,7 +595,7 @@ layers are automated (TAP v13 runners); Layer 3 is manual.
   we evaluate, the 3 layers, tiers (smoke/full/stress), fixture types
   (synthetic vs real captures), runner output, capture flow, cadence,
   diagnosing failures, adding evals and assertions.
-- **Eval definitions:** `evals/model-apps/genpage/evals.json` — 16 evals
+- **Eval definitions:** `evals/model-apps/genpage/evals.json` — 18 evals
   with prompts, answers, and expectations.
 - **Fixtures:** `evals/model-apps/genpage/fixtures/<eval-id>-<slug>/` —
   one folder per captured or synthetic run. Each contains the `.tsx`,

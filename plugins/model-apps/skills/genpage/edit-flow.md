@@ -97,20 +97,25 @@ empty array, the page is mock-data only — skip this phase.
 
 Also read `config.json.connectorBindings`.
 
-> **Connectors are owned by `genpage-connector-builder`.** Read the existing
-> `config.json.connectorBindings` (the current bindings). If the edit intent
-> **adds, replaces, or discovers** connector data, do NOT run discovery inline —
-> delegate to the `genpage-connector-builder` agent (**Mode: `edit`**) via the
-> `Task` tool, passing the working directory, `${PLUGIN_ROOT}`, the environment
-> URL, the existing bindings, and the edit intent. That agent **owns the feature
-> gate**: when connectors are OFF it preserves the existing bindings and adds none;
-> when ON it discovers and returns the updated set. It writes
-> `<working-dir>/connectors.json` (bare array) and `<working-dir>/connector-bindings.md`.
+> **Connectors are owned by `genpage-connector-builder`, dispatched by this
+> top-level edit orchestrator before edit planning.** Read the existing
+> `config.json.connectorBindings` (the current bindings) and decide the connector
+> action from the edit intent:
 >
-> For edits that only **preserve** connectors (no connector change) you don't need
-> the agent — omit `--connectors` on upload so pac keeps the deployed bindings. To
-> **clear all** connectors, write `[]` to `<working-dir>/connectors.json` and pass
-> `--connectors`.
+> - **Add / replace / discover connector data:** invoke `genpage-connector-builder`
+>   via `Task` with **Mode: `edit`**, the working directory, `${PLUGIN_ROOT}`, the
+>   environment URL, the existing bindings, and the edit intent. The builder owns
+>   the feature gate: when connectors are OFF it preserves existing bindings and
+>   adds none; when ON it discovers and returns the updated set. It writes
+>   `<working-dir>/connectors.json` (bare array) and
+>   `<working-dir>/connector-bindings.md`.
+> - **Preserve connectors unchanged:** do not invoke the builder and do not create
+>   a replacement `connectors.json`; omit `--connectors` on upload so pac preserves
+>   deployed bindings. Still pass the existing `connectorBindings` summary into the
+>   edit planner so it can preserve connector-backed code correctly.
+> - **Clear all connectors:** write `[]` to `<working-dir>/connectors.json` and a
+>   `connector-bindings.md` body of exactly `No connector bindings.`, then pass
+>   `--connectors` during upload so pac clears `config.json.connectorBindings`.
 
 - Do not add or persist connection IDs. Env-specific `ConnectionId` values belong
   to the connectionreference row and ALM deployment settings, not the page config.
@@ -124,6 +129,15 @@ Invoke the `genpage-edit-planner` agent via the `Task` tool. Pass:
 - The plugin root: `${PLUGIN_ROOT}`
 - The app-id and page-id
 - The download directory: `<working-dir>/<page-id>/`
+- The connector action: preserve, add, replace, discover, or clear
+- The connector contract: the full body of `<working-dir>/connector-bindings.md`
+  when written by the builder/clear path, or a faithful summary of the existing
+  `config.json.connectorBindings` when preserving unchanged connectors
+- The connector upload file status: `<working-dir>/connectors.json` when upload
+  must replace/clear bindings, or `none — omit --connectors` when preserving
+
+Tell the planner that connector discovery is orchestrator-owned: it must use the
+forwarded connector contract and must not invoke `genpage-connector-builder`.
 
 The planner reads `page.tsx`, `config.json`, and `prompt.txt` for context, gathers
 any clarification from the user, presents the edit plan via plan mode, and writes

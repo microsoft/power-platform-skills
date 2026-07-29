@@ -29,6 +29,10 @@ No entity creation required — all entities already exist.
 ## Existing Entities
 contact, appointment
 
+## Connector Bindings
+
+No connector bindings.
+
 ## Design Preferences
 - Styling: Clean, professional recruitment theme using Fluent UI V9 components; neutral palette (white backgrounds, subtle grays, blue accents); card-based layouts where appropriate
 - Features: Candidate List — text search by name, filter by job title/status, clickable rows to open Contact record; Interview Schedule — sortable columns (date, candidate, subject), date-range filter, rows grouped by day; Hiring Metrics Dashboard — summary stat cards (total candidates, total interviews), bar chart for pipeline stage breakdown, recent appointments list

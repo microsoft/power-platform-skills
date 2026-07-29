@@ -416,10 +416,12 @@ prefix you embed in a column name is a silent footgun.
 
 For the `## Per-Page Specifications` section, set the **`Needs caching:`** field
 (exact key, with space) per page: `true` for any page that **fetches data on
-mount** — list, detail, or single-visit overview/dashboard (all need the
-in-flight de-dupe that survives the host double-mount); `false` only for
-mock-data pages and forms with no initial fetch. The page-builder reads this
-field to decide whether to load `references/data-caching.md`.
+mount** through a real host read — Dataverse `dataApi` calls OR connector calls
+such as `queryConnectorTable` / `executeConnectorOperation`. Lists, details, and
+single-visit overviews/dashboards all need the in-flight de-dupe that survives
+the host double-mount. Set `false` only for pages that render inline mock arrays
+and forms with no initial fetch. The page-builder reads this field to decide
+whether to load `references/data-caching.md`.
 
 For the `## Relevant Samples` section: pick the most structurally relevant sample
 from `${PLUGIN_ROOT}/samples/` (e.g., 7-responsive-cards.tsx for card
