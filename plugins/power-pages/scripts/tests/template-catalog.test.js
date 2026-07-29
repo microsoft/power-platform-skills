@@ -474,6 +474,43 @@ test('downloadSeedDataDirectory discovers JSON files from the pinned tree and ca
   assert.equal(result.localDir, path.join(dir, SHA, 'templates/spa/company/seed-data'));
 });
 
+test('downloadSeedDataDirectory downloads a seed JSON file and its referenced __files attachments without tree API', async (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const downloaded = [];
+
+  const result = await downloadSeedDataDirectory({
+    owner: 'o',
+    repo: 'r',
+    sha: SHA,
+    seedDataPath: 'templates/spa/company/seed/data.json',
+    cacheRoot: dir,
+  }, {
+    requestJson: async () => {
+      throw new Error('tree API should not be called for seed JSON paths');
+    },
+    downloadFile: async (_url, dest) => {
+      downloaded.push(path.basename(dest));
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      if (dest.endsWith('data.json')) {
+        fs.writeFileSync(dest, JSON.stringify({
+          entitySetName: 'cr123_invoices',
+          records: [
+            { __files: { cr123_invoicepdf: 'files/invoice.pdf' } },
+            { __files: { cr123_terms: 'files/terms.docx' } },
+          ],
+        }));
+      } else {
+        fs.writeFileSync(dest, 'file-bytes');
+      }
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.localDir, path.join(dir, SHA, 'templates/spa/company/seed'));
+  assert.deepEqual(downloaded, ['data.json', 'invoice.pdf', 'terms.docx']);
+});
+
 test('fetch-template-seed-data CLI parser accepts seed data path', () => {
   assert.deepEqual(parseSeedArgs([
     '--owner', 'contoso',

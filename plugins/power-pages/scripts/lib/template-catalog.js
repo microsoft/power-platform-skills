@@ -418,16 +418,38 @@ async function downloadSeedDataDirectory(options = {}, deps = {}) {
   if (path.isAbsolute(seedDataPath) || seedDataPath.split(/[\\/]+/).includes('..')) {
     return { ok: false, seedDataPath, error: `Seed data path must stay under templates: ${seedDataPath}` };
   }
+  const fsImpl = deps.fs || fs;
   const request = deps.requestJson || ((url) => requestJson(url, deps));
   try {
-    const tree = await request(`https://api.github.com/repos/${owner}/${repo}/git/trees/${sha}?recursive=1`);
+    if (path.posix.extname(seedDataPath).toLowerCase() === '.json') {
+      const seedFile = (await downloadArtifact({ owner, repo, sha, artifactPath: seedDataPath, cacheRoot }, deps)).localPath;
+      const seedRoot = path.posix.dirname(seedDataPath);
+      const parsed = JSON.parse(fsImpl.readFileSync(seedFile, 'utf8'));
+      const attachmentPaths = collectSeedAttachmentPaths(parsed)
+        .map((relativePath) => {
+          if (path.posix.isAbsolute(relativePath) || relativePath.split(/[\\/]+/).includes('..')) {
+            throw new Error(`Seed attachment path must stay under seed-data root: ${relativePath}`);
+          }
+          return `${seedRoot}/${relativePath.replace(/^\/+/, '')}`;
+        })
+        .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      const downloaded = [seedFile];
+      for (const artifactPath of attachmentPaths) {
+        downloaded.push((await downloadArtifact({ owner, repo, sha, artifactPath, cacheRoot }, deps)).localPath);
+      }
+      return { ok: true, localDir: path.dirname(seedFile), files: downloaded };
+    }
+
     const prefix = seedDataPath.replace(/\/+$/, '') + '/';
+    const tree = await request(`https://api.github.com/repos/${owner}/${repo}/git/trees/${sha}?recursive=1`);
+    const treePaths = (tree.tree || [])
+      .filter((entry) => entry.type === 'blob')
+      .map((entry) => entry.path);
     // Seed data can include JSON record files plus binary attachment files
     // referenced by `__files`. Download every blob under seed-data so
     // apply-seed-data can resolve seed-data-root-relative attachment paths.
-    const files = (tree.tree || [])
-      .filter((entry) => entry.type === 'blob' && entry.path.startsWith(prefix))
-      .map((entry) => entry.path)
+    const files = treePaths
+      .filter((filePath) => filePath.startsWith(prefix))
       .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
     const downloaded = [];
     for (const artifactPath of files) {
@@ -437,6 +459,19 @@ async function downloadSeedDataDirectory(options = {}, deps = {}) {
   } catch (err) {
     return { ok: false, seedDataPath, error: err.message };
   }
+}
+
+function collectSeedAttachmentPaths(seedData) {
+  const paths = new Set();
+  for (const record of Array.isArray(seedData.records) ? seedData.records : []) {
+    if (!record || typeof record !== 'object' || !record.__files || typeof record.__files !== 'object' || Array.isArray(record.__files)) {
+      continue;
+    }
+    for (const value of Object.values(record.__files)) {
+      if (typeof value === 'string' && value.trim()) paths.add(value);
+    }
+  }
+  return [...paths];
 }
 
 module.exports = {
