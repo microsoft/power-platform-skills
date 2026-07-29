@@ -96,8 +96,9 @@ no breaking changes.
   entity-subarea `vectorIcon` no longer breaks the app designer.
 
 ### Tests
-- Full plugin, genpage eval, and vendored SDK suites pass via
-  `node scripts/run-tests.js --with-sdk <ppux>`.
+- Plugin, genpage eval and vendored SDK suites: `node scripts/run-tests.js --with-sdk <ppux>`.
+  The eval **fixtures** run separately: `node evals/model-apps/genpage/run-layer-1.js`,
+  `run-layer-2.js`, and `node evals/model-apps/app-builder/run-app-builder.js`.
 - **Vendored-SDK contract tests** lock OData filter encoding, name-based identifiers, and sitemap
   free-text XML escaping.
 

@@ -119,11 +119,26 @@ Ask questions via `AskUserQuestion`, one at a time:
    behavior, or preservation constraints not yet covered.
 
 > **Connector data changes** (SharePoint, weather, Office 365, SQL, custom REST):
-> if the edit adds, replaces, or removes connector-backed data, capture it in the
-> plan's `### Connector Changes` below. Do **not** run connector discovery here —
-> the orchestrator delegates that to the `genpage-connector-builder` agent (which
-> owns the feature gate). Preserving or clearing existing connectors needs no
-> discovery.
+> Do **not** run connector discovery here — the orchestrator delegates that to the
+> `genpage-connector-builder` agent (which owns the feature gate).
+>
+> - **Preserving or clearing** existing connectors needs no discovery: capture it
+>   in the plan's `### Connector Changes` and continue.
+> - **Adding or replacing** a connector-backed source that the orchestrator did not
+>   already discover — i.e. the need surfaced in *your* clarification, so your
+>   prompt carries the "preserve" action and `none — omit --connectors` — you must
+>   **stop and return**
+>
+>   ```json
+>   { "action": "connector_discovery_required", "intent": "<the source(s) implied>",
+>     "resolvedAction": "edit", "envUrl": "<the environment URL you were given>" }
+>   ```
+>
+>   Do **not** write the edit plan. If you proceed instead, the apply step will
+>   generate `queryConnectorTable` / `executeConnectorOperation` calls while upload
+>   still omits `--connectors`, shipping a page whose connector calls have **no
+>   deployed binding**. The orchestrator will run discovery and re-invoke you with a
+>   real connector contract and upload-file status.
 
 Mark "Analyze existing page" task complete.
 

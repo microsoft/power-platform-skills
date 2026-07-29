@@ -279,6 +279,35 @@ ASSERTIONS.set(
   () => skip('Rule 14 batched-setState requires AST analysis')
 );
 
+// Extract the `useEffect(...)` calls (body + dependency array) that contain a match for `inner`.
+// Whole-file regexes cannot tell whether a cache, an in-flight key and a readiness dep belong to the
+// SAME effect as the fetch — an unrelated `__SomethingCache` elsewhere in the file would make an
+// entirely uncached fetch pass. Brace-matching from `useEffect(` keeps the check scoped to the
+// effect that actually performs the read.
+// Returns [{ body, deps }] where `deps` is the raw text between the `[` and `]` of the dep array.
+function effectsContaining(content, inner) {
+  const out = [];
+  const re = /\buseEffect\s*\(/g;
+  let m;
+  while ((m = re.exec(content)) !== null) {
+    let i = m.index + m[0].length;
+    let depth = 1;              // we are inside useEffect(
+    for (; i < content.length && depth > 0; i += 1) {
+      const c = content[i];
+      if (c === '(' || c === '{' || c === '[') depth += 1;
+      else if (c === ')' || c === '}' || c === ']') depth -= 1;
+    }
+    const call = content.slice(m.index, i);
+    if (!inner.test(call)) continue;
+    // The dependency array is the last `[...]` before the closing paren.
+    const dep = call.match(/,\s*\[([\s\S]*?)\]\s*\)\s*;?\s*$/);
+    out.push({ body: call, deps: dep ? dep[1] : null });
+  }
+  return out;
+}
+
+const CONNECTOR_READ = /\b(queryConnectorTable|executeConnectorOperation)\s*(?:!|\?\.)?\s*\(/;
+
 ASSERTIONS.set(
   'For Dataverse list/detail pages, the inline IIFE + window cache + cache-guard pattern from references/data-caching.md is used (Rule 15); no useCallback for data-fetching functions',
   ({ files }) => {
@@ -291,13 +320,15 @@ ASSERTIONS.set(
       const content = stripComments(f.content);
       const hasDataverseRead = isDataverseFile(content) &&
         /dataApi\.(queryTable|retrieveMultipleRecords|retrieveRow|retrieve\b)/.test(content);
-      const hasConnectorMountRead = /\buseEffect\s*\(/.test(content) &&
-        /\b(queryConnectorTable|executeConnectorOperation)\s*(?:!|\?\.)?\s*\(/.test(content);
+      // Only an on-mount connector read matters: the host double-mount is what the pattern fixes,
+      // so a connector call inside a click handler is not in scope.
+      const hasConnectorMountRead = effectsContaining(content, CONNECTOR_READ).length > 0;
       return hasDataverseRead || hasConnectorMountRead;
     });
     if (fetching.length === 0) {
       return skip('no Dataverse or connector read operations detected');
     }
+    let why = '';
     const offender = fetching.find((f) => {
       const content = stripComments(f.content);
       // Accept any of the canonical window-cache patterns:
@@ -311,27 +342,37 @@ ASSERTIONS.set(
         /\bwindow\s+as\s+(unknown|any)\b/.test(content) ||
         /\bwindow\s*\[/.test(content);
       const usesCallback = /useCallback\s*\(\s*async/.test(content);
-      const hasConnectorRead =
-        /\b(queryConnectorTable|executeConnectorOperation)\s*(?:!|\?\.)?\s*\(/.test(content);
-      if (hasConnectorRead) {
-        const hasConnectorCache =
-          /\[\s*CACHE_KEY\s*\]/.test(content) ||
-          /\.\s*__\w*Cache\b/i.test(content);
-        const hasInflight =
-          /\[\s*INFLIGHT_KEY\s*\]/.test(content) ||
-          /\.\s*__\w*Inflight\b/i.test(content);
-        const readiness = content.match(/\bconst\s+([A-Za-z_$][\w$]*Ready)\s*=/);
-        const hasReadinessDep = readiness !== null && new RegExp(
-          `\\}\\s*,\\s*\\[\\s*${readiness[1]}(?:\\s*,[^\\]]*)?\\s*\\]\\s*\\)`
-        ).test(content);
-        return !hasCache || !hasConnectorCache || !hasInflight ||
-          !hasReadinessDep || usesCallback;
+
+      const connectorEffects = effectsContaining(content, CONNECTOR_READ);
+      if (connectorEffects.length) {
+        for (const eff of connectorEffects) {
+          // MANDATORY: in-flight de-dupe. references/data-caching.md "Scope — de-dupe always, cache
+          // when it helps": the de-dupe is the fix for the double-mount, so it is never optional.
+          // The RESOLVED cache is explicitly optional (real-time dashboards drop it), so it is NOT
+          // asserted here — requiring it produced false reds on legitimate always-fresh pages.
+          const hasInflight =
+            /\[\s*[A-Z0-9_]*INFLIGHT[A-Z0-9_]*\s*\]/i.test(eff.body) ||
+            /\.\s*__\w*Inflight\b/i.test(eff.body) ||
+            /\bwindow\s*\[[^\]]*inflight[^\]]*\]/i.test(eff.body);
+          if (!hasInflight) { why = 'connector read on mount without an in-flight de-dupe'; return true; }
+
+          // MANDATORY: readiness-gated deps — the effect must not re-run on every render. Any
+          // `*Ready`-style flag anywhere in the dep list counts (e.g. `[reloadKey, dataReady]`);
+          // requiring it first was an artefact of the old whole-file regex.
+          if (eff.deps === null) { why = 'connector effect has no dependency array'; return true; }
+          if (!/\b\w*(Ready|ready)\b/.test(eff.deps)) {
+            why = `connector effect deps [${eff.deps.trim()}] are not readiness-gated`;
+            return true;
+          }
+        }
+        if (usesCallback) { why = 'uses useCallback for a data fetch'; return true; }
+        return false;
       }
-      return !hasCache || usesCallback;
+      if (!hasCache) { why = 'missing window cache'; return true; }
+      if (usesCallback) { why = 'uses useCallback for a data fetch'; return true; }
+      return false;
     });
-    return offender
-      ? fail(`${offender.name}: missing window cache, in-flight de-dupe, or readiness dependency, or uses useCallback for fetch`)
-      : pass();
+    return offender ? fail(`${offender.name}: ${why}`) : pass();
   }
 );
 

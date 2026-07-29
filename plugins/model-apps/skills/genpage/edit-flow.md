@@ -139,6 +139,15 @@ Invoke the `genpage-edit-planner` agent via the `Task` tool. Pass:
 Tell the planner that connector discovery is orchestrator-owned: it must use the
 forwarded connector contract and must not invoke `genpage-connector-builder`.
 
+**If the planner returns `{ "action": "connector_discovery_required", … }`** instead
+of an edit plan, a connector need surfaced during its clarification — after the
+connector action was already fixed as "preserve". Do **not** proceed to Phase 5.
+Dispatch `genpage-connector-builder` with **Mode: `edit`**, the returned `envUrl`
+and `intent`, then re-invoke the edit planner with the refreshed connector action,
+contract, and upload-file status (`<working-dir>/connectors.json`). Skipping this
+ships connector code with no deployed binding, because upload would still omit
+`--connectors`.
+
 The planner reads `page.tsx`, `config.json`, and `prompt.txt` for context, gathers
 any clarification from the user, presents the edit plan via plan mode, and writes
 `<working-dir>/genpage-edit-plan.md` on approval. Wait for it to finish.

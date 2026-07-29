@@ -64,11 +64,17 @@ test('ONE failing page aborts the whole promotion and leaves the spec byte-ident
   assert.equal(fs.readFileSync(path.join(dir, 'app-spec.json'), 'utf8'), before, 'spec untouched');
 });
 
-test('rejects structurally broken output the worker may return', () => {
+test('rejects Sol-class prose that only LOOKS like a module', () => {
+  // A plain `export default` substring search accepted every one of these, promoting prose as a page.
   for (const [name, code, expected] of [
     ['empty', '   \n', /file is empty/],
-    ['no default export', 'export function P() {}\n', /no `export default`/],
-    ['prose', '```tsx\nexport default function P(){}\n```\n', /markdown code fence/],
+    ['no default export', 'export function P() {}\n', /no real `export default/],
+    ['fenced prose', '```tsx\nexport default function P(){}\n```\n', /markdown code fence/],
+    ['tilde-fenced prose', '~~~tsx\nexport default function P(){}\n~~~\n', /markdown code fence/],
+    ['commented-out export', '/* export default */\nThis is prose\n', /no real `export default/],
+    ['export default in a string', 'const bait = "export default";\nThis is prose\n', /no real `export default/],
+    ['line-commented export', '// export default function P(){}\nThis is prose\n', /no real `export default/],
+    ['empty default export', 'export default;\n', /no real `export default/],
   ]) {
     const dir = makeWorkspace(
       { app: { name: 'A' }, pages: [{ key: 'overview', name: 'Overview', source: { kind: 'intent' } }] },
@@ -77,6 +83,22 @@ test('rejects structurally broken output the worker may return', () => {
     const r = run(dir);
     assert.equal(r.code, 3, `${name} should fail`);
     assert.match(r.stderr, expected, name);
+  }
+});
+
+test('accepts the legitimate default-export forms a worker really emits', () => {
+  for (const [name, code] of [
+    ['function declaration', 'export default function P() { return <div/>; }\n'],
+    ['arrow const', 'const P = () => <div/>;\nexport default P;\n'],
+    ['wrapped in memo', 'import { memo } from "react";\nexport default memo(function P(){ return <div/>; });\n'],
+    ['object-ish default', 'export default {\n  render() { return null; }\n};\n'],
+    ['after a doc comment mentioning export default', '/**\n * export default is required\n */\nexport default function P(){ return <div/>; }\n'],
+  ]) {
+    const dir = makeWorkspace(
+      { app: { name: 'A' }, pages: [{ key: 'overview', name: 'Overview', source: { kind: 'intent' } }] },
+      { 'overview.tsx': code },
+    );
+    assert.equal(run(dir).code, 0, `${name} should be accepted`);
   }
 });
 
@@ -174,6 +196,43 @@ test('a malformed or missing spec fails closed with the same exit contract', () 
   r = run(dir);
   assert.equal(r.code, 3, 'pages not an array');
   assert.match(r.stderr, /"pages" must be an array/);
+});
+
+test('aborts if the spec changed while pages were being validated', () => {
+  // Validation reads N page files, so a concurrent editor's save between our read and the rename
+  // would otherwise be silently overwritten by our stale in-memory copy.
+  //
+  // Deterministic race: preload a module into the CLI's process that patches fs.readFileSync so the
+  // FIRST .tsx read rewrites app-spec.json — exactly the window the compare-and-swap protects.
+  const dir = makeWorkspace(twoPageSpec(), { 'overview.tsx': GOOD, 'detail.tsx': GOOD });
+  const specFile = path.join(dir, 'app-spec.json');
+  const hook = path.join(dir, 'race-hook.js');
+  fs.writeFileSync(hook, `
+    const fs = require('node:fs');
+    const real = fs.readFileSync;
+    let fired = false;
+    fs.readFileSync = function (p, ...rest) {
+      const out = real.call(this, p, ...rest);
+      if (!fired && String(p).endsWith('.tsx')) {
+        fired = true;
+        real.call(fs, ${JSON.stringify(specFile)}, 'utf8');
+        fs.writeFileSync(${JSON.stringify(specFile)}, JSON.stringify({ app: { name: 'Edited By Someone Else' }, pages: [] }, null, 2));
+      }
+      return out;
+    };
+  `, 'utf8');
+
+  let r;
+  try {
+    execFileSync(process.execPath, ['--require', hook, CLI, '--spec', '@' + specFile, '--working-dir', dir], { encoding: 'utf8' });
+    r = { code: 0 };
+  } catch (e) {
+    r = { code: e.status, stderr: String(e.stderr || '') };
+  }
+  assert.equal(r.code, 3, 'must fail closed on a concurrent edit');
+  assert.match(r.stderr, /app spec changed while pages were being validated/);
+  // The concurrent editor's content is intact — we did not overwrite it.
+  assert.equal(readSpec(dir).app.name, 'Edited By Someone Else');
 });
 
 test('unrelated spec content survives the rewrite', () => {

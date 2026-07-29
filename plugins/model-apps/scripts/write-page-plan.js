@@ -18,7 +18,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { migrateAppSpec } = require('./lib/app-spec.js');
-const { buildPagePlan, pageKey, pageFile, pageDataMode } = require('./lib/page-plan.js');
+const { buildPagePlan, pageKey, pageFile, pageDataMode, mdText } = require('./lib/page-plan.js');
 
 function main() {
   const { positional, flags } = parseArgs(process.argv.slice(2));
@@ -68,9 +68,11 @@ function main() {
   fs.writeFileSync(planPath, markdown, 'utf8');
 
   const pages = (spec.pages || []).filter(Boolean).map((p) => ({
-    // `name` is required by the worker's dispatch prompt ("Generate the **[Page Name]** page");
-    // omitting it from the echo forced the caller to re-derive it and get it wrong.
-    name: p.name || pageKey(p),
+    // `name` is required by the worker's dispatch prompt ("Generate the **[Page Name]** page"), and
+    // the caller interpolates it straight into that prompt — so it must be sanitised HERE, not just
+    // where it lands in the plan body. An unsanitised multi-line name would let author- or
+    // download-supplied text inject lines into the instructions given to a file-writing agent.
+    name: mdText(p.name, pageKey(p)),
     key: pageKey(p),
     file: pageFile(p),
     dataMode: pageDataMode(p),

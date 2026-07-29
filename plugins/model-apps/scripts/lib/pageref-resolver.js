@@ -310,4 +310,4 @@ function navTargetParity(declaredKeys, referencedKeysList) {
   };
 }
 
-module.exports = { extractNavTargets, navReferencedKeys, navMalformedRefs, resolvePageRefs, reverseResolveNavIds, navTargetParity };
+module.exports = { extractNavTargets, navReferencedKeys, navMalformedRefs, resolvePageRefs, reverseResolveNavIds, navTargetParity, stripNonCode };

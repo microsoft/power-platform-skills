@@ -125,47 +125,44 @@ node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" <working-dir> <kebab-slu
 
 #### Steps
 
-1. Prepare the connector-discovery handoff (orchestrator-owned; see 1a).
-2. Invoke `genpage-planner` via `Task` with the prompt below, including the
-   connector handoff from step 1.
-3. Wait for it to finish (it returns a summary).
-4. If the return includes `{ "action": "connector_discovery_required" }`, invoke
-   `genpage-connector-builder` (Mode: `create`) with the returned intent, then
-   invoke `genpage-planner` again with the builder's `## Connector Bindings`
-   contract and `connectors.json` status.
-5. If the return includes `{ "action": "edit" }`, jump to the **Edit Flow** section.
-6. Otherwise the planner has written `genpage-plan.md`. Proceed to Phase 2.
+1. Invoke `genpage-planner` via `Task` with the prompt below. Connector discovery
+   has **not** run yet, so tell the planner the contract is the literal
+   `No connector bindings.` and that discovery is available on request (see 1a).
+2. Wait for it to finish (it returns a summary).
+3. If the return includes `{ "action": "connector_discovery_required" }`, invoke
+   `genpage-connector-builder` with the returned intent — **Mode: `create`** for a
+   new page, **Mode: `edit`** if the planner also reported an edit — using the
+   environment URL the planner resolved, then invoke `genpage-planner` again with
+   the builder's `## Connector Bindings` contract and `connectors.json` status.
+4. If the return includes `{ "action": "edit" }`, jump to the **Edit Flow** section.
+5. Otherwise the planner has written `genpage-plan.md`. Proceed to Phase 2.
 
-#### 1a. Prepare connector discovery (orchestrator-owned)
+#### 1a. Connector discovery is orchestrator-owned and never speculative
 
 `genpage-connector-builder` is dispatched only by this top-level orchestrator,
 not by `genpage-planner`. This keeps the connectors feature gate in one agent
 while avoiding nested `Task` calls from the planner.
 
-Before each planner invocation:
+**Never run discovery before the planner returns** — not even when `$ARGUMENTS`
+obviously mentions SharePoint, Teams, Office 365 or a custom REST source.
+Discovery is a **mutating** operation: it can create a connection reference. The
+planner is what resolves (a) create vs. edit and (b) which environment, and it may
+resolve either differently from the active `pac auth` profile. A connection
+reference created in the wrong environment, or in create mode for what turns out
+to be an edit, **cannot be undone** by discarding the local outputs.
 
-- If `$ARGUMENTS` clearly implies connector-backed data (SharePoint, Teams,
-  weather, Office 365, SQL via connector, custom REST, or similar), first run the
-  normal auth preflight to capture the active environment URL:
+So the sequence is always: plan first, then discover, then re-plan.
 
-  ```bash
-  node "${PLUGIN_ROOT}/scripts/check-auth.js" --require-pac
-  ```
-
-  Then invoke `genpage-connector-builder` via `Task` with **Mode: `create`**, the
-  working directory, `${PLUGIN_ROOT}`, the `envUrl` from the preflight, and the
-  connector intent. Wait for it to finish, then read `<working-dir>/connector-bindings.md`
-  and verify `<working-dir>/connectors.json` is a bare JSON array. If the planner
-  later selects or reports a different environment URL, discard these connector
-  outputs, rerun the builder for that environment, and re-run the planner with the
-  refreshed connector contract.
-- If the initial request does **not** clearly imply connector data, do not run
-  discovery speculatively. Use the literal connector contract
-  `No connector bindings.` and tell the planner discovery is not yet needed.
-- If the planner's user clarification later reveals connector-backed data, the
-  planner must return `{ "action": "connector_discovery_required", "intent": "..." }`.
-  Dispatch `genpage-connector-builder` from here, then re-run the planner with
-  the returned connector contract.
+- Every first planner invocation gets the literal contract `No connector bindings.`
+  and is told discovery has not run.
+- When the planner determines connector-backed data is needed — from `$ARGUMENTS`
+  or from its own user clarification — it returns
+  `{ "action": "connector_discovery_required", "intent": "..." }` **together with
+  the resolved action and environment URL**.
+- Only then dispatch `genpage-connector-builder` with that mode, that environment
+  URL, the working directory and `${PLUGIN_ROOT}`. Read
+  `<working-dir>/connector-bindings.md` and verify `<working-dir>/connectors.json`
+  is a bare JSON array, then re-run the planner with the refreshed contract.
 
 The builder remains the single owner of the connectors flag: it probes first,
 writes `No connector bindings.` + `[]` when the flag is OFF, and performs all

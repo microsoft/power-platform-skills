@@ -410,3 +410,78 @@ test('Phase 5 - raw HTML form elements: pass on Fluent <Input>', () => {
   const result = check({ files: [f('a.tsx', `<Input value="" />`)], eval: evalStub() });
   assert.equal(result.status, 'pass');
 });
+
+// ---------- connector on-mount caching (effect-scoped) ----------
+// These lock the two failure modes the previous whole-file-regex version had: an unrelated
+// __*Cache / __*Inflight elsewhere in the file made a genuinely uncached connector fetch PASS, and a
+// legitimate in-flight-only page (references/data-caching.md: "de-dupe always, cache when it helps")
+// FAILED. Scoping the check to the useEffect that contains the connector call fixes both.
+const CACHE_RULE = 'For Dataverse list/detail pages, the inline IIFE + window cache + cache-guard pattern from references/data-caching.md is used (Rule 15); no useCallback for data-fetching functions';
+const cacheCheck = (content) => ASSERTIONS.get(CACHE_RULE)({ files: [f('p.tsx', content)], eval: evalStub() });
+
+test('connector caching: uncached on-mount fetch fails even when an unrelated cache exists', () => {
+  const r = cacheCheck(`
+const w = window as any;
+w.__UnrelatedCache = [];
+w.__UnrelatedInflight = null;
+export default function P() {
+  const dataReady = true;
+  useEffect(() => { const x = dataReady; }, [dataReady]);
+  useEffect(() => { (async () => { const r = await props.dataApi.queryConnectorTable("t", {}); setRows(r); })(); }, []);
+  return null;
+}`);
+  assert.equal(r.status, 'fail');
+  assert.match(r.reason, /in-flight de-dupe/);
+});
+
+test('connector caching: in-flight de-dupe without a resolved cache passes', () => {
+  const r = cacheCheck(`
+const INFLIGHT_KEY = "__ppDocsInflight";
+export default function P() {
+  const dataReady = useDataReady();
+  useEffect(() => {
+    const w = window as any;
+    w[INFLIGHT_KEY] = w[INFLIGHT_KEY] || props.dataApi.queryConnectorTable("t", {});
+    w[INFLIGHT_KEY].then(setRows);
+  }, [dataReady]);
+  return null;
+}`);
+  assert.equal(r.status, 'pass');
+});
+
+test('connector caching: readiness flag need not be the first dependency', () => {
+  const r = cacheCheck(`
+const INFLIGHT_KEY = "__ppDocsInflight";
+export default function P() {
+  const dataReady = useDataReady();
+  useEffect(() => {
+    const w = window as any;
+    w[INFLIGHT_KEY] = w[INFLIGHT_KEY] || props.dataApi.queryConnectorTable("t", {});
+    w[INFLIGHT_KEY].then(setRows);
+  }, [reloadKey, dataReady]);
+  return null;
+}`);
+  assert.equal(r.status, 'pass');
+});
+
+test('connector caching: a connector call in a click handler is out of scope', () => {
+  const r = cacheCheck(`
+export default function P() {
+  const onClick = async () => { await props.dataApi.executeConnectorOperation("op", {}); };
+  return <button onClick={onClick}/>;
+}`);
+  assert.equal(r.status, 'skip');
+});
+
+test('connector caching: an on-mount effect with no dependency array fails', () => {
+  const r = cacheCheck(`
+const INFLIGHT_KEY = "__ppDocsInflight";
+export default function P() {
+  useEffect(() => {
+    const w = window as any;
+    w[INFLIGHT_KEY] = w[INFLIGHT_KEY] || props.dataApi.queryConnectorTable("t", {});
+  });
+  return null;
+}`);
+  assert.equal(r.status, 'fail');
+});

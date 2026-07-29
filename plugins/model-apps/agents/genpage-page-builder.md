@@ -267,25 +267,28 @@ export default GeneratedComponent;
 - **D3.js for charts** — use `group()` not `nest()`
 - **Cross-page navigation** — when navigating to a sibling generative page, emit a
   `"PAGEREF_<token>"` placeholder exactly as the `pageId` value of a `pageType:"generative"`
-  `navigateTo` call — one per declared navigation edge. **Which token depends on who invoked
-  you**, because the two callers resolve the placeholder differently:
-  - **`/app-builder`** (your Plan document's `## Pages` rows carry App Spec pages) — use the
-    page's **stable key** (`pages[].key`, the same value as `navigatesTo[].targetKey`). The
-    build resolves `PAGEREF_<key>` → GUID and enforces exact parity with `navigatesTo`.
-  - **`/genpage`** (standalone) — there are no App Spec keys, so use the **target page's file
-    name without `.tsx`**, exactly as it appears in the plan's `## Pages` table `File` column.
-    The orchestrator's Phase 6.5 builds a `filename-without-tsx → page-id` map to substitute it.
+  `navigateTo` call — one per declared navigation edge. **Read the token from the plan's
+  `## Environment` `Mode:` line — do not guess, and do not derive it from the `File` column
+  unless Mode says to:**
+  - **`Mode: app-builder`** — use the target page's **`Key`** (the `Key` column in `## Pages`,
+    also repeated as `- **Key:**` in each Per-Page Specification). This is the App Spec's stable
+    `pages[].key` and the same value as `navigatesTo[].targetKey`; the build resolves
+    `PAGEREF_<key>` → GUID and enforces exact parity with `navigatesTo`.
+  - **`Mode:` absent (standalone `/genpage`)** — there are no App Spec keys and the plan has no
+    `Key` column, so use the **target page's file name without `.tsx`**, exactly as it appears in
+    the `File` column. The orchestrator's Phase 6.5 builds a `filename-without-tsx → page-id` map
+    to substitute it.
 
-  In practice the two rarely differ: `/app-builder` names each page file `<key>.tsx`, so the
-  stable key and the file stem are the **same token**. Use the plan's `File` column as the
-  source of truth for the token and both callers resolve correctly.
+  **Never use the file stem in `app-builder` mode.** A page pulled from a deployed app keeps its
+  real storage path (e.g. `pages/9f2c…/page.tsx`), whose stem is `page` — nothing to do with its
+  identity. Using it emits `PAGEREF_page`, which fails nav parity and halts the build.
 
   Pass any custom identifier in `data:` (never `recordId`); it arrives on the target
   as `pageInput?.data?.<field>`. Example:
   ```typescript
   Xrm.Navigation.navigateTo({
     pageType: "generative",
-    pageId: "PAGEREF_pet-detail",   // target page's key (app-builder) = its file stem; resolved to a GUID post-deploy
+    pageId: "PAGEREF_pet-detail",   // app-builder: the target's Key column; standalone: its file stem
     data: { petId: selectedId },    // custom ids in data (read as pageInput?.data?.petId on the target)
   });
   ```

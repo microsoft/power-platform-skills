@@ -206,19 +206,32 @@ Office 365, SQL via connector, or a custom REST connector), **do not dispatch an
 agent and do not run the feature-gate probe or any connector discovery inline.**
 You have no `Task` tool, and `genpage-connector-builder` asks the user questions —
 it cannot run headless inside a sub-agent. It is dispatched by the top-level
-`/genpage` orchestrator BEFORE you are invoked.
+`/genpage` orchestrator.
+
+Discovery is **mutating** (it can create a connection reference), and it is *you*
+who resolves create-vs-edit and the target environment — so discovery always runs
+AFTER you, never before. Your first invocation therefore always carries the
+sentinel `No connector bindings.`.
 
 Two cases:
 
-1. **The orchestrator already forwarded connector results** — your prompt carries a
-   `## Connector Bindings` block (or the sentinel `No connector bindings.`) and/or a
-   `connectors.json` path. Consume it as-is: copy the block verbatim into the plan's
+1. **The orchestrator already forwarded connector results** — you are being
+   re-invoked after discovery, so your prompt carries a `## Connector Bindings`
+   block (or the sentinel `No connector bindings.`) and/or a `connectors.json`
+   path. Consume it as-is: copy the block verbatim into the plan's
    `## Connector Bindings` section. Never re-derive or edit it.
-2. **A connector need surfaced during clarification** (the orchestrator did not know
-   up front) — do NOT attempt discovery. Stop and return
-   `{ "action": "connector_discovery_required", "intent": "<the source(s) implied>" }`
-   so the orchestrator can dispatch `genpage-connector-builder` and re-invoke you with
-   the results.
+2. **A connector need is present or surfaces during clarification** — do NOT
+   attempt discovery. Stop and return
+
+   ```json
+   { "action": "connector_discovery_required", "intent": "<the source(s) implied>",
+     "resolvedAction": "create" | "edit", "envUrl": "<the environment you resolved>" }
+   ```
+
+   `resolvedAction` and `envUrl` are **required**: the orchestrator dispatches the
+   builder against exactly those, and a connection reference created in the wrong
+   environment or the wrong mode cannot be undone. Return this only after your
+   auth/environment steps have run, so both values are real.
 
 `genpage-connector-builder` remains the single owner of the connectors feature gate,
 connection / connection-ref discovery, connection-reference creation, and the binding

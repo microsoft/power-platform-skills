@@ -112,8 +112,41 @@ test('file name is derived from the stable key, but IDENTITY is the key (not the
   assert.match(md, /\| Detail \| detail \| pages\/9f2c\/page\.tsx \|/, 'Pages row carries Key and File separately');
 });
 
+test('the approved design contract reaches the worker', () => {
+  // Regression: the adapter read `styling`/`theme`/`features`/`accessibility`, none of which are
+  // valid `design` keys (app-spec.js rejects unknown keys), so every approved token was dropped and
+  // the plan always emitted defaults — pages ignored the design the user signed off on.
+  const s = spec();
+  s.design = { accentColor: '#0f6cbd', density: 'compact', cornerRadius: 'medium', darkMode: 'system', layout: 'cards' };
+  const md = buildPagePlan(s, { workingDir: '/wd' });
+  for (const token of ['#0f6cbd', 'compact', 'medium', 'system']) {
+    assert.match(md, new RegExp(`- Styling:.*${token.replace('#', '#')}`), `styling carries ${token}`);
+  }
+  assert.match(md, /^- Layout: cards layout, responsive$/m);
+  assert.match(md, /- \*\*Layout:\*\* cards layout, responsive — responsive flexbox\/grid/);
+
+  // Absent design still produces a valid, schema-conformant plan.
+  const bare = buildPagePlan(spec(), { workingDir: '/wd' });
+  assert.match(bare, /- Styling: Fluent UI V9 defaults/);
+  assert.equal(require('../../../../evals/model-apps/genpage/lib/assertions-layer-1.js').validateGenpagePlanSchema(bare).length, 0);
+});
+
 test('the plan declares Mode so the worker can pick the right identity rule', () => {
   assert.match(buildPagePlan(spec(), { workingDir: '/wd' }), /- Mode: app-builder/);
+});
+
+test('markdown fence and comment delimiters cannot swallow the rest of the plan', () => {
+  // An unterminated ``` / ~~~ fence or <!-- comment would hide every SECTION AFTER the value,
+  // silently truncating the worker's contract while the document still looks valid.
+  const layer1 = require('../../../../evals/model-apps/genpage/lib/assertions-layer-1.js');
+  for (const payload of ['~~~', '```', '<!--', 'text <!-- hidden', '~~~tsx\nrm -rf /']) {
+    const md = buildPagePlan({
+      app: { name: 'A', description: payload },
+      pages: [{ key: 'p1', name: `N ${payload}`, purpose: payload }],
+    }, { workingDir: '/wd' });
+    assert.ok(!/```|~~~|<!--/.test(md), `payload survived: ${JSON.stringify(payload)}`);
+    assert.deepEqual(layer1.validateGenpagePlanSchema(md), [], `schema broken by: ${JSON.stringify(payload)}`);
+  }
 });
 
 // The plan is READ AS INSTRUCTIONS by a Read/Write/Edit-capable worker and its headings are a

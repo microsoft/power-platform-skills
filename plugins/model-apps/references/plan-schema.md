@@ -36,9 +36,19 @@ same relative position so downstream parsers can find them predictably:
 ## Environment
 - URL: [environment URL]
 - App: [app name] ([app-id]) OR "create new: [name]"
+- Mode: app-builder    ← **only** when the plan was projected from an App Spec by
+  `scripts/write-page-plan.js`; omitted for a planner-authored (standalone `/genpage`) plan
 - Languages: [detected languages with LCIDs, or "English (1033) only"]
 - Solution: [solution unique name — ALWAYS present, default fallback is "Default"]
 - Publisher Prefix: [prefix tied to the solution's publisher — ALWAYS present, default fallback is "new"]
+
+`Mode` selects the **page identity rule** the page-builder uses for `PAGEREF_` tokens, so it is
+not cosmetic:
+- `Mode: app-builder` → the token is the page's **`Key`** (see `## Pages` below). A page pulled
+  from a deployed app keeps its real storage path (`pages/<guid>/page.tsx`), so its file stem is
+  meaningless as an identity.
+- `Mode` absent → there are no App Spec keys and no `Key` column, so the token is the target's
+  file name without `.tsx`.
 
 Both `Solution` and `Publisher Prefix` are **mandatory** in every plan. The
 planner picks them by asking the user (when metadata work is needed) or by
@@ -61,6 +71,13 @@ Downstream consumers honour them:
 | Page | File | Purpose | Entities |
 |------|------|---------|----------|
 | [Name] | [name].tsx | [description] | [entity logical names, comma-separated, OR "mock data"] |
+
+In an `app-builder` plan the table carries an extra **`Key`** column between `Page` and `File`, and
+each Per-Page Specification repeats it as `- **Key:** <key>`:
+
+| Page | Key | File | Purpose | Entities |
+|------|-----|------|---------|----------|
+| [Name] | [stable key] | [file path] | [description] | [entity logical names OR "mock data"] |
 
 ## Entity Creation Required
 The entity-builder provisions this entire section in one pass via `scripts/provision-entities.js` (SDK-backed, idempotent); the section contract (suffix-only names) is unchanged.

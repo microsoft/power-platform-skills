@@ -404,10 +404,20 @@ deployed app fresh into a spec first**, then edit that spec and re-run Phase 2:
 node "${PLUGIN_ROOT}/scripts/download-model-app.js" --env <envUrl> --app <appId|uniqueName> --out <working-dir>
 ```
 
-This reconstructs the **complete** app into `<working-dir>/app-spec.json`: the sitemap → `appShell` (all
-subareas + icons), **every** generative page (downloaded via `pac model genpage download`; page names come
-from the sitemap's `GenPage` subarea titles, so Maker-added pages are included too) into `pages[]` + their `.tsx` `codeFile`s, the referenced entities (minimal — the build reuses
-existing tables idempotently), the icon web resources, and the solution. Then:
+This reconstructs the app into `<working-dir>/app-spec.json`. **Round-trip scope — be precise, it is
+not everything:**
+- **Round-trips:** the sitemap → `appShell` (all subareas + icons), **every** generative page
+  (downloaded via `pac model genpage download`; page names come from the sitemap's `GenPage` subarea
+  titles, so Maker-added pages are included too) into `pages[]` + their `.tsx` `codeFile`s, the
+  referenced entities (minimal — the build reuses existing tables idempotently), **classic
+  dashboards** (as id-passthrough tiles carrying the deployed view/chart ids), the icon web
+  resources, and the solution.
+- **Does NOT round-trip:** `forms[]`, `views[]`, `charts[]`, `commands[]` — they come back empty. All
+  four **survive on the live app** (a rebuild preserves them by discovery), so a plain edit is safe;
+  but they are not editable through the downloaded spec. Change them in Maker, or author them in a
+  fresh spec.
+
+Then:
 
 1. **Always pull fresh at the start of an edit session** — someone may have changed the app in Maker. The
    build reads an etag when it hydrates, so a write against an artifact changed since the pull throws a
@@ -427,11 +437,9 @@ existing tables idempotently), the icon web resources, and the solution. Then:
    write never drops them).
 5. **Verify** (Phase 3) to confirm only the intended change landed.
 
-> **Edit-flow limitation (Preview):** classic `dashboards[]` and their sitemap subareas are **not yet
-> round-tripped** by `download-model-app.js` — it prints a `WARNING: N sitemap subarea(s) could not be
-> round-tripped` and a rebuild would drop them from the nav. If the app has a classic dashboard, **re-add
-> it to the downloaded spec before rebuilding**. (Genpage, entity, URL subareas + icons round-trip
-> losslessly.) Prefer generative pages over classic dashboards per the genpage-first policy.
+> **Prefer generative pages over classic dashboards** per the genpage-first policy. Classic dashboards
+> do round-trip (id-passthrough tiles), but the views and charts their tiles point at do not, so they
+> can only be edited in Maker.
 
 ---
 

@@ -45,8 +45,15 @@ function mdText(value, fallback = '') {
   if (!s.trim()) return fallback;
   return s
     .replace(/[\r\n]+/g, ' ')      // no line breaks -> cannot start a new block/section
-    .replace(/^\s*#+/, '')          // cannot become a heading
+    // ATX heading syntax only (`#` followed by whitespace). A bare `#` is NOT stripped, because
+    // `accentColor: "#0f6cbd"` is a legitimate value and dropping the `#` corrupts the design token.
+    // Newlines are already gone by this point, so a value can never begin a line anyway.
+    .replace(/^\s*#+\s+/, '')
     .replace(/`/g, "'")            // cannot open a code fence / inline code
+    // `~~~` is the other CommonMark fence and `<!--` an HTML comment: an unterminated one would
+    // swallow every section AFTER this value, silently truncating the worker's contract.
+    .replace(/~/g, '-')
+    .replace(/<!--|-->/g, '')
     .replace(/\|/g, '/')           // cannot add a table column
     .replace(/\s+/g, ' ')
     .trim();
@@ -108,12 +115,33 @@ function navTargets(p) {
     .map((k) => assertIdentitySafe('navigatesTo targetKey', k));
 }
 
+// Project the App Spec's `design` contract into the plan's `## Design Preferences` section.
+//
+// The canonical field set is fixed and validated (app-spec.js rejects unknown keys):
+// `accentColor`, `density`, `cornerRadius`, `darkMode`, `layout`. These are the tokens the user
+// approved during authoring, so every generated page must apply them — a page that ignores them is
+// visually inconsistent with the rest of the app and with the model-driven shell.
+// Values are sanitised because `design` is author-supplied (and download-derived on an edit).
 function designPreferences(design) {
-  const d = design || {};
+  const d = design && typeof design === 'object' ? design : {};
+  const tokens = [
+    ['Accent color', d.accentColor],
+    ['Density', d.density],
+    ['Corner radius', d.cornerRadius],
+    ['Dark mode', d.darkMode],
+  ]
+    .filter(([, v]) => v != null && String(v).trim())
+    .map(([label, v]) => `${label}: ${mdText(v)}`);
+
   return {
-    styling: d.styling || d.theme || d.aesthetic || 'Fluent UI V9 defaults; clean, content-first layout',
-    features: d.features || 'Search, sorting and filtering where the page lists records',
-    accessibility: d.accessibility || 'WCAG AA (ARIA labels, keyboard navigation, semantic HTML)',
+    // Always name Fluent UI V9 — it is the required component library, not a preference — then
+    // append the approved tokens so the worker has a single authoritative styling line.
+    styling: tokens.length
+      ? `Fluent UI V9 tokens — ${tokens.join('; ')}`
+      : 'Fluent UI V9 defaults; clean, content-first layout',
+    layout: d.layout ? `${mdText(d.layout)} layout, responsive` : null,
+    features: 'Search, sorting and filtering where the page lists records',
+    accessibility: 'WCAG AA (ARIA labels, keyboard navigation, semantic HTML)',
   };
 }
 
@@ -182,6 +210,7 @@ function buildPagePlan(spec, opts = {}) {
 
   out.push('## Design Preferences');
   out.push(`- Styling: ${design.styling}`);
+  if (design.layout) out.push(`- Layout: ${design.layout}`);
   out.push(`- Features: ${design.features}`);
   out.push(`- Accessibility: ${design.accessibility}`, '');
 
@@ -211,7 +240,7 @@ function buildPagePlan(spec, opts = {}) {
     out.push(`- **Needs caching:** ${needsCaching(p)}`);
     out.push(`- **Key Features:** ${mdText(p.purpose, 'Present the page data and its primary actions')}`);
     out.push('- **Components:** Fluent UI V9 (unsized Regular/Filled icons only)');
-    out.push('- **Layout:** Responsive flexbox/grid with relative units (never 100vh/100vw)');
+    out.push(`- **Layout:** ${design.layout ? `${design.layout} — r` : 'R'}esponsive flexbox/grid with relative units (never 100vh/100vw)`);
     out.push(`- **Data Binding:** ${pageDataMode(p) === 'mock' ? 'Inline mock arrays' : 'dataApi.queryTable / retrieveRow over the entities above'}`);
     out.push(`- **Interactions:** ${nav.length
       ? `Navigate to ${nav.map((k) => `"PAGEREF_${k}"`).join(', ')} via Xrm.Navigation.navigateTo (pageType "generative"); custom ids go in data:`
@@ -228,6 +257,7 @@ function buildPagePlan(spec, opts = {}) {
 module.exports = {
   buildPagePlan,
   REQUIRED_PAGE_FIELDS,
+  mdText,
   pageKey,
   pageFile,
   pageEntities,
