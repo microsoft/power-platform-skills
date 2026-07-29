@@ -19,10 +19,15 @@ claude --plugin-dir /path/to/plugins/canvas-apps
 ## Architecture
 
 ```
+.claude-plugin/plugin.json     ← Claude Code metadata (mirrors .plugin/plugin.json)
 .plugin/plugin.json            ← Open Plugins metadata (name, version, keywords)
 .mcp.json                      ← MCP server config (canvas-authoring, auto-registered)
 AGENTS.md                      ← Plugin guidance for AI agents (this file)
 CLAUDE.md                      ← Symlink → AGENTS.md
+hooks.json                     ← Copilot-format hooks: userPromptTransformed
+hooks/
+  hooks.json                   ← Claude-format hooks: UserPromptSubmit
+  inject-sync-reminder.cs      ← File-based .NET app that emits the sync reminder for both hosts
 references/
   TechnicalGuide.md            ← YAML syntax, control selection, layout strategies, Power Fx patterns
   DesignGuide.md               ← Aesthetic guidelines, anti-patterns, design process
@@ -38,8 +43,6 @@ skills/
     SKILL.md                   ← Registers the Canvas Authoring MCP server with Claude Code
   add-data-source/
     SKILL.md                   ← Guides user to add a data source or connector in Studio, then verifies
-  generate-canvas-app/
-    SKILL.md                   ← [DEPRECATED] Redirects to canvas-app
 ```
 
 ## Skills
@@ -74,6 +77,31 @@ The `canvas-authoring` MCP server exposes the following tools:
 | `list_controls` | Lists all available Power Apps controls in the current authoring session |
 | `list_data_sources` | Lists all available data sources in the current authoring session |
 | `sync_canvas` | Syncs the current coauthoring session state from the server to a local directory, writing all YAML files |
+
+## Hooks
+
+Both hosts inject a reminder to call `sync_canvas` before acting, so the agent never edits stale
+local `.pa.yaml` files. The reminder is conditional in wording — the agent skips the sync when no
+coauthoring session is active or the request is unrelated to a canvas app.
+
+Registration uses both plugin [hook formats](https://code.visualstudio.com/docs/agent-customization/agent-plugins)
+— Claude-format (`hooks/hooks.json`) and Copilot-format (`hooks.json` at the plugin root) — which
+the hosts read independently:
+
+| Host | Registered in | Event |
+|------|---------------|-------|
+| Claude Code | `hooks/hooks.json` (Claude format) | `UserPromptSubmit` |
+| Copilot CLI | `hooks.json` in the plugin root (Copilot format) | `userPromptTransformed` |
+
+Each host reads only its own file and ignores the other's. Both run
+`hooks/inject-sync-reminder.cs` via `dotnet run --file`, which branches on its stdin payload to
+emit the output shape each host expects.
+
+Keep the two files separate. Claude Code rejects unrecognized hook event names, so putting
+`userPromptTransformed` in `hooks/hooks.json` makes Claude fail to load the plugin, disabling its
+`canvas-authoring` MCP server. Neither manifest should declare a `"hooks"` field: Claude Code
+auto-discovers `hooks/hooks.json`, and pointing at it explicitly is treated as a duplicate hook
+source, which also disables MCP.
 
 ## Prerequisites
 
