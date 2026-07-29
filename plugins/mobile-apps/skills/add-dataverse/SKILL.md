@@ -192,7 +192,7 @@ Read the results as follows:
 - **A planned name absent from `value[]`** — the table does not exist. This is the equivalent of a 404 in the matrix below.
 - Interpret `IsCustomizable` and `CanCreateAttributes` as managed properties and read their `.Value` fields.
 
-If the batched query itself fails (non-2xx), retry it once; if it fails again, split it into per-table queries so one unreadable name cannot hide the rest. Any name still unreadable after that is classified `create` — the POST-time collision rescue in Step 5a is the safety net, and it recovers by extending or renaming rather than failing. If the URL would exceed a practical length with very many tables, split it into a few filtered queries — still far fewer than one request per table.
+If the batched query itself fails (non-2xx), retry it once; if it fails again, split it into per-table queries so one unreadable name cannot hide the rest. Any name still unreadable after that is classified `defer` (unverified) — do not create/extend it in this run; list it under Deferred in Step 9 and continue with only the items whose metadata was successfully reconciled. If the URL would exceed a practical length with very many tables, split it into a few filtered queries — still far fewer than one request per table.
 
 **Only if the plan contains alternate keys or M:N relationships**, add the matching expands so Steps 5b and 5d never need their own per-item probes. `EntityDefinitions` also supports expanding [`Keys`, `ManyToManyRelationships`, `ManyToOneRelationships`, and `OneToManyRelationships`](https://learn.microsoft.com/power-apps/developer/data-platform/query-schema-definitions#evaluate-other-options-to-retrieve-schema-definitions):
 
