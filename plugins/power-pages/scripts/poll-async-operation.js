@@ -78,7 +78,7 @@ const SUCCESS_STATUSCODES = new Set([30]);
 const FAILURE_STATUSCODES = new Set([31]);
 const CANCELED_STATUSCODES = new Set([32]);
 
-const pollUrl = `${envUrl}/api/data/v9.2/asyncoperations(${asyncJobId})?$select=statecode,statuscode,message,friendlymessage,errorcode,progress`;
+const pollUrl = `${envUrl}/api/data/v9.2/asyncoperations(${asyncJobId})?$select=statecode,statuscode,message,friendlymessage,errorcode`;
 
 function writeStatus(status) {
   if (!args.statusFile) return;

@@ -94,6 +94,7 @@ test('poll-async-operation normalizes envUrl and braced async operation ids', as
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.equal(JSON.parse(result.stdout).status, 'Succeeded');
   assert.match(requestedUrl, /^\/api\/data\/v9\.2\/asyncoperations\(abcdefab-1234-5678-9abc-abcdefabcdef\)\?/);
+  assert.doesNotMatch(requestedUrl, /progress/);
 });
 
 test('poll-async-operation keeps transient HTTP status details out of the loader message', async (t) => {
