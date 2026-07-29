@@ -113,9 +113,10 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   [`docs/changed-only-design.md`](docs/changed-only-design.md) for the v1 scope + contract.
 - **`scripts/teardown-model-app.js` → `scripts/lib/sdk-teardown.js`** — the first-class, **classifier-safe**
   teardown (reverse of the build), for cleaning up live-verification probes or a failed build. Deletes
-  exactly the artifacts a given App Spec declares, in dependency-safe order (**app → dashboards →
-  commands → forms → charts → views → relationships → AI row summaries → tables
-  [reverse-topological, children-first] → web-resources → global choices → solution**). Forms/charts/views/relationships
+  exactly the artifacts a given App Spec declares, in dependency-safe order (**app module → security
+  roles → dashboards → command bars → forms → charts → views → reset enriched default views to drop
+  parent lookups → relationships → AI row summaries → tables [reverse-topological, children-first] →
+  web resources (generated app icon + page manifest + declared) → global choices → solution**). Forms/charts/views/relationships
   are deleted **explicitly before tables** (a table delete does not reliably cascade cross-references; it
   does remove the table's own columns). **Web resources are deleted after tables**: a table's vector/raster
   **icon** web resource is referenced by the table itself, so Dataverse refuses to delete it until the table

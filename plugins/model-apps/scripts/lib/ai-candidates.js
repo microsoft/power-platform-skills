@@ -41,7 +41,8 @@ function selectSummaryTables(spec) {
     // Explicit exclusion.
     if (override && override.enabled === false) continue;
 
-    const hasDescriptive = (entity.columns || []).some((c) => DESCRIPTIVE_TYPES.has(c.type));
+    // App Spec defaults omitted column types to Text, so treat an absent type as descriptive text.
+    const hasDescriptive = (entity.columns || []).some((c) => DESCRIPTIVE_TYPES.has(c.type || 'Text'));
 
     // Explicit inclusion (enabled === true) bypasses the descriptive-columns filter.
     if (override && override.enabled === true) {

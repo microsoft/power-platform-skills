@@ -1,16 +1,23 @@
 /* Dev-only bundler: @maker-studio/cds-maker-sdk -> self-contained CJS the plugin vendors.
- * Run: node plugins/model-apps/scripts/_vendor-build/build.js [--sdk <path-to-ppux>]
+ * Run: node plugins/model-apps/scripts/_vendor-build/build.js --sdk <path-to-ppux>
+ *      or set POWER_PLATFORM_UX_SDK_ROOT=<path-to-ppux>
  * Not shipped. Re-run only when the SDK source changes. */
-const esbuild = require('esbuild');
 const path = require('node:path');
 const fs = require('node:fs');
 
 const argSdk = (() => {
   const i = process.argv.indexOf('--sdk');
-  return i > -1 ? process.argv[i + 1] : 'D:/Projects/power-platform-ux';
+  if (i > -1) return process.argv[i + 1];
+  return process.env.POWER_PLATFORM_UX_SDK_ROOT;
 })();
+if (!argSdk) {
+  console.error('Usage: node plugins/model-apps/scripts/_vendor-build/build.js --sdk <path-to-ppux>');
+  console.error('   or: set POWER_PLATFORM_UX_SDK_ROOT=<path-to-ppux>');
+  process.exit(2);
+}
 const SDK_ENTRY = path.join(argSdk, 'packages/cds-maker-sdk/lib/index.js');
 const OUTFILE = path.resolve(__dirname, '../vendor/cds-maker-sdk.cjs');
+const esbuild = require('esbuild');
 
 if (!fs.existsSync(SDK_ENTRY)) {
   console.error('SDK entry not found:', SDK_ENTRY);

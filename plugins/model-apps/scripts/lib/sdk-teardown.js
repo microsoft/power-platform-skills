@@ -207,9 +207,18 @@ const KIND_HANDLERS = {
     tolerateNotFound: true, // a role already deleted (e.g. by a prior teardown) is "gone"
   },
   commands: {
-    // The SDK's command delete is keyed by ENTITY — one call removes every appaction on that
-    // entity's command bar. resolveArtifact returns items when commands exist; map to a single
-    // entity-keyed item so del removes the whole bar in one call.
+    // The vendored SDK models a table's command bar as ONE artifact per entity (identity = entity):
+    // resolveArtifact('command', { entity }) returns that single per-entity artifact and
+    // deleteRemoteArtifact('command', entity) removes the whole bar in one call. There is no
+    // per-BUTTON delete in the SDK surface, and the build's command phase is discover-then-skip
+    // (it only CREATES a bar when none pre-existed — see sdk-build.js §14). Consequence + KNOWN
+    // LIMITATION (PR #229 review): on an entity whose bar this spec added buttons to but that also
+    // carried pre-existing/foreign buttons, teardown removes the whole bar, not just the spec's
+    // buttons — because the SDK cannot delete an individual appaction by id and teardown is stateless
+    // (it has no build record proving which buttons it authored). Scoping the delete to exactly the
+    // spec-declared buttons requires a per-button delete capability in @maker-studio/cds-maker-sdk;
+    // tracked as an SDK follow-up. planTeardown only adds a commands step for entities THIS spec
+    // declares commands for, so bars on untouched entities are never removed.
     async resolve(sdk, target) {
       const items = await sdk.resolveArtifact('command', { entity: target.entity });
       return (items || []).map((x) => ({ id: x.id, entity: x.entity || target.entity }));

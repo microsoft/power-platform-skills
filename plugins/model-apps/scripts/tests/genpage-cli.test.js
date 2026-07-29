@@ -48,6 +48,13 @@ test('quoteArg collapses newlines to spaces (a multi-line prompt must not break 
   assert.ok(!quoteArg('a\r\nb').includes('\n'), 'no raw newline survives into the command line');
 });
 
+test('quoteArg caret-escapes % so cmd.exe does not expand %VAR% inside the quoted arg (Windows)', () => {
+  // cmd.exe expands %VAR% even inside double quotes; breaking out of the quotes and caret-escaping each
+  // % (verified to round-trip literally through cmd.exe) keeps prompts/names with env-var syntax intact.
+  assert.strictEqual(quoteArg('plain%PATH%end'), '"plain"^%"PATH"^%"end"');
+  assert.ok(quoteArg('50% off').includes('"^%"'), 'a bare % triggers quoting + escaping');
+});
+
 test('buildPacInvocation (win32) builds a shell command line with cmd-style quoting', () => {
   const inv = buildPacInvocation(['model', 'genpage', 'upload', '--prompt', 'a "quote"'], 'win32');
   assert.strictEqual(inv.options.shell, true);

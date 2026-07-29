@@ -6,7 +6,9 @@
 // The SDK's DataverseClient passes a FULL request URL (instanceUrl + /api/data/v9.x/...) and
 // supplies per-call headers (MSCRM.SolutionUniqueName, If-Match etag, Prefer, …) via options.
 // We must NOT throw on non-2xx — the SDK inspects { status, body } and raises its own typed
-// errors (ensureSuccess / VersionConflictError on 412). We only throw when we cannot get a token.
+// errors (ensureSuccess / VersionConflictError on 412). We throw only when we cannot obtain a token
+// (ensureToken) or when the underlying transport itself fails — a network/timeout error (res.error)
+// after exhausting retries. We never throw purely on a non-2xx HTTP status.
 const { getAuthToken, makeRequest } = require('./dataverse-auth.js');
 
 /**
@@ -17,6 +19,22 @@ const { getAuthToken, makeRequest } = require('./dataverse-auth.js');
  */
 function createAzHttpClient(orgUrl, deps = {}) {
   const clean = String(orgUrl).replace(/\/+$/, '');
+  // Same-origin guard (security): this client obtains and attaches an Azure bearer token scoped to
+  // `clean` (the user-supplied --env org URL). The SDK always calls back with a FULL URL under that
+  // same origin (instanceUrl + /api/data/v9.x/...). If a request URL ever targets a DIFFERENT origin —
+  // a malformed/hostile --env, or an SDK bug — we must NOT attach the Dataverse token to it, or we would
+  // leak a credential to an unintended host. Compute the expected origin once; refuse any call whose
+  // absolute URL resolves to a different origin. (If `clean` itself is not a parseable absolute URL, the
+  // az token fetch for it would already fail, so we leave the guard disabled in that degenerate case.)
+  let expectedOrigin;
+  try { expectedOrigin = new URL(clean).origin; } catch { expectedOrigin = null; }
+  function assertSameOrigin(url) {
+    let target;
+    try { target = new URL(url); } catch { throw new Error(`Refusing to send the Dataverse token to a non-absolute URL: ${url}`); }
+    if (expectedOrigin !== null && target.origin !== expectedOrigin) {
+      throw new Error(`Refusing to send the Dataverse token for ${expectedOrigin} to a different origin (${target.origin}); the request URL must be under the --env org URL.`);
+    }
+  }
   const getToken = deps.getToken || ((u) => getAuthToken(u));
   const request = deps.request || makeRequest;
   const sleep = deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
@@ -57,6 +75,7 @@ function createAzHttpClient(orgUrl, deps = {}) {
   }
 
   async function call(method, url, body, options) {
+    assertSameOrigin(url); // never attach the org's bearer token to a foreign origin
     const hasBody = body !== undefined && body !== null;
     const bodyStr = hasBody ? (typeof body === 'string' ? body : JSON.stringify(body)) : null;
     // DELETE retry policy splits by endpoint, because the two kinds fail oppositely:

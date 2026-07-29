@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 'use strict';
 // verify-model-app: reconcile an App Spec against the DEPLOYED app and report any missing artifacts
-// (entities/columns/views/charts/forms/sitemap subareas + icons). Read-only. Exit non-zero if
-// anything declared is missing — catches silent partial builds.
+// (entities/columns/views/charts/forms/sitemap subareas + icons). Read-only WITH RESPECT TO DATAVERSE
+// (it only READS the org — no create/update/delete), though it does write a local SDK workspace/cache
+// directory (--workspace, default <spec-dir>/.maker-workspace). Exit non-zero if anything declared is
+// missing — catches silent partial builds.
 //
 // Usage: node verify-model-app.js --env <orgUrl> --spec @<app-folder>/app-spec.json [--workspace <dir>]
 
@@ -154,19 +156,23 @@ function readerFor(sdk, appUnique, opts) {
 
 async function main() {
   const { positional, flags } = parseArgs(process.argv.slice(2));
-  const env = flags.env;
-  const specArg = flags.spec || positional[0];
+  // parseArgs sets a value-less flag to boolean `true`; treat those as missing so a bare
+  // `--env`/`--spec`/`--workspace` fails with the usage message instead of crashing later in
+  // createAzHttpClient / path.resolve / fs.mkdirSync when a boolean value reaches them.
+  const env = typeof flags.env === 'string' ? flags.env : undefined;
+  const specArg = typeof flags.spec === 'string' ? flags.spec : positional[0];
+  const workspaceArg = typeof flags.workspace === 'string' ? flags.workspace : undefined;
   if (!env || !specArg) {
     process.stderr.write('Usage: node verify-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--workspace <dir>]\n');
     process.exit(1);
   }
-  const specPath = path.resolve(typeof specArg === 'string' && specArg.startsWith('@') ? specArg.slice(1) : specArg);
+  const specPath = path.resolve(specArg.startsWith('@') ? specArg.slice(1) : specArg);
   const spec = migrateAppSpec(readJsonArg('@' + specPath));
   // Validate the spec up front (consistent with teardown) so malformed input yields a structured
   // error instead of a later throw when dereferencing spec.entities / schemaName.
   const v = validateAppSpec(spec, { profile: 'deploy' });
   if (!v.ok) { emitResult(false, { ok: false, errors: v.errors }); return; }
-  const workspaceDir = flags.workspace || path.join(path.dirname(specPath), '.maker-workspace');
+  const workspaceDir = workspaceArg || path.join(path.dirname(specPath), '.maker-workspace');
   const sdk = makeProvision(env, workspaceDir);
   const genpageCli = makeGenpageCli(env);
   const r = await verifySpec(spec, readerFor(sdk, appUniqueName(spec), { genpageCli, workspaceDir }));

@@ -60,11 +60,11 @@ function runPreflight(readiness) {
 
 async function main() {
   const { flags } = parseArgs(process.argv.slice(2));
-  const env = flags.env;
-  const app = flags.app || null;
+  const env = typeof flags.env === 'string' ? flags.env : undefined;
+  const app = typeof flags.app === 'string' ? flags.app : null;
 
-  if (!env) {
-    process.stderr.write('Usage: node ai-preflight.js --env <orgUrl> [--app <uniqueName>]\n');
+  if (!env || flags.app === true) {
+    process.stderr.write('Usage: node scripts/ai-preflight.js --env <orgUrl> [--app <uniqueName>]\n');
     process.exit(1);
   }
 
@@ -75,10 +75,10 @@ async function main() {
   // create a throwaway workspace, initWorkspace(), and remove it in finally.
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-preflight-'));
   const sdk = createMakerSdk({ workspacePath: workspaceDir, instanceUrl: env, httpClient });
-  sdk.initWorkspace();
 
   let report;
   try {
+    sdk.initWorkspace();
     const readinessOpts = app ? { appUniqueName: app } : {};
     const readiness = await sdk.getAiReadiness(readinessOpts);
     report = runPreflight(readiness);
@@ -98,7 +98,12 @@ async function main() {
     }
   } finally {
     // emitResult() calls process.exit(), so clean up the throwaway workspace BEFORE emitting.
-    fs.rmSync(workspaceDir, { recursive: true, force: true });
+    try {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    } catch {
+      // This is an informational read-only probe; on Windows the SDK can briefly retain a handle,
+      // and cleanup must not turn an otherwise successful readiness report into a script failure.
+    }
   }
 
   emitResult(true, { ok: true, ...report });

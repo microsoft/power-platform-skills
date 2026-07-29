@@ -259,7 +259,10 @@ Then open the app in the browser. Refine `app-spec.json` and re-run Phase 2 to i
 
 **Teardown (cleanup).** To remove everything an App Spec built — e.g. a live-verification probe or a
 failed build — run the classifier-safe teardown. It deletes only the artifacts the spec declares, in
-dependency order (**app [+ its generative pages and the orphaned sitemap] → dashboards → commands → forms → charts → views → relationships → AI row summaries → tables [children-first] → web-resources → global choices → solution**).
+dependency order (**app module → security roles → dashboards → command bars → forms → charts → views
+→ reset enriched default views to drop parent lookups → relationships → AI row summaries → tables
+[children-first] → web resources (generated app icon + page manifest + declared) → global choices →
+solution**).
 Forms/charts/views/relationships are deleted **explicitly before tables** (a table delete does not
 reliably cascade cross-references; it does remove the table's own columns). Command teardown removes
 the whole command bar for any entity the spec authored commands on. **Teardown only deletes tables

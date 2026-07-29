@@ -28,7 +28,7 @@ test('shapes a GET with bearer token + OData headers and parses JSON body', asyn
 test('POST stringifies the body and sets Content-Type', async () => {
   const { request, calls } = fakeTransport({ statusCode: 204, headers: {}, body: '' });
   const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request });
-  const res = await http.post('https://org/x', { name: 'A' });
+  const res = await http.post('https://org.crm.dynamics.com/x', { name: 'A' });
   assert.strictEqual(calls[0].method, 'POST');
   assert.strictEqual(calls[0].body, '{"name":"A"}');
   assert.match(calls[0].headers['Content-Type'], /application\/json/);
@@ -140,4 +140,15 @@ test('throws only when no token is available', async () => {
   const { request } = fakeTransport({ statusCode: 200, headers: {}, body: '{}' });
   const http = createAzHttpClient('https://org', { getToken: () => null, request });
   await assert.rejects(() => http.get('https://org/x'), /Failed to get Azure CLI token/);
+});
+
+test('refuses to send the Dataverse token to a different origin (same-origin guard)', async () => {
+  const { request, calls } = fakeTransport({ statusCode: 200, headers: {}, body: '{}' });
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request });
+  // A URL under a DIFFERENT origin must be rejected before any request/token is sent.
+  await assert.rejects(() => http.get('https://evil.example.com/api/data/v9.2/accounts'), /different origin/);
+  assert.strictEqual(calls.length, 0, 'no request is sent to a foreign origin');
+  // A same-origin URL still works.
+  const res = await http.get('https://org.crm.dynamics.com/api/data/v9.2/accounts');
+  assert.strictEqual(res.status, 200);
 });

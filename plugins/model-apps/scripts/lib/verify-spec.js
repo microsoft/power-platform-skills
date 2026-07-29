@@ -26,13 +26,14 @@ async function verifySpec(spec, read) {
 
   // Views / charts / forms — by (entity, name) identity.
   for (const v of spec.views || []) {
+    const viewName = `${String(v.entity).toLowerCase()}.${v.name}`;
     // Also select layoutxml so a CONTENT check can catch a view whose column set drifted from the spec
     // (reconcileView is additive-union, so a removed/renamed spec column would otherwise silently NOT
     // apply and still pass an existence-only verify). Best-effort: the column check only runs when the
     // deployed row actually carries layoutxml — an existence-only reader (no layoutxml) skips it.
     const rows = await read.queryRecords('savedquery', { select: ['savedqueryid', 'layoutxml'], filter: `returnedtypecode eq '${String(v.entity).toLowerCase()}' and name eq '${odataLit(v.name)}'`, top: 1 });
     const row = rows && rows[0];
-    add('view', v.name, row);
+    add('view', viewName, row);
     const specCols = (v.columns || []).map((c) => String(c).toLowerCase());
     if (row && row.layoutxml && specCols.length) {
       // Deployed column set from the saved view's layoutxml (<cell name="…"/> per column). We require
@@ -40,7 +41,7 @@ async function verifySpec(spec, read) {
       // enrichment, or a maker's manual add) is fine; a MISSING spec column is the divergence we flag.
       const deployed = new Set(layoutColumnNames(row.layoutxml));
       const missingCols = specCols.filter((c) => !deployed.has(c));
-      add('view-columns', v.name, missingCols.length === 0, missingCols.length ? `missing column(s): ${missingCols.join(', ')}` : '');
+      add('view-columns', viewName, missingCols.length === 0, missingCols.length ? `missing column(s): ${missingCols.join(', ')}` : '');
     }
   }
   for (const ch of spec.charts || []) {
@@ -101,6 +102,7 @@ async function verifySpec(spec, read) {
   const xml = (await read.sitemapXml()) || '';
   for (const a of (spec.appShell && spec.appShell.areas) || []) {
     if (a.icon) add('area-icon', a.label || '', hasElement(xml, 'Area', { Icon: a.icon }));
+    if (a.vectorIcon) add('area-vectorIcon', a.label || '', hasElement(xml, 'Area', { VectorIcon: a.vectorIcon }));
     for (const g of a.groups || []) {
       for (const sa of g.subAreas || []) {
         if (sa.entity) add('subarea', sa.title || sa.entity, hasElement(xml, 'SubArea', { Entity: sa.entity }));
@@ -117,6 +119,12 @@ async function verifySpec(spec, read) {
           // SubArea carrying the icon when the subarea has no entity identity.
           const present = sa.entity ? hasElement(xml, 'SubArea', { Entity: sa.entity, Icon: sa.icon }) : hasElement(xml, 'SubArea', { Icon: sa.icon });
           add('subarea-icon', sa.title || '', present);
+        }
+        if (sa.vectorIcon) {
+          // VectorIcon serializes as its own sitemap attribute, so check it independently from the
+          // raster Icon attribute while keeping the same SubArea scoping rules.
+          const present = sa.entity ? hasElement(xml, 'SubArea', { Entity: sa.entity, VectorIcon: sa.vectorIcon }) : hasElement(xml, 'SubArea', { VectorIcon: sa.vectorIcon });
+          add('subarea-vectorIcon', sa.title || '', present);
         }
       }
     }

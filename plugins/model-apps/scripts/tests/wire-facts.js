@@ -53,7 +53,7 @@ function formFacts(formxml) {
     const rel = /RelationshipName<\/[^>]*>\s*<[^>]*>([^<]+)/i.exec(p) || /RelationshipName["'\s>]+([^<"']+)/i.exec(p);
     if (rel) subgrids.push(rel[1]);
   }
-  return { fields, notesControl, sectionColumns };
+  return { fields, notesControl, sectionColumns, subgrids };
 }
 
 // layoutxml (real capture):
@@ -78,7 +78,8 @@ function chartFacts(datadescription) {
   return { entity: entity && entity.toLowerCase(), measure, groupBy: (attr(groupTag, 'name') || '').toLowerCase() };
 }
 
-// sitemapxml (real capture): Area > Group > SubArea; a SubArea binds Entity/Url and a localized Title.
+// sitemapxml (real capture): Area > Group > SubArea; the semantic facts currently captured per
+// SubArea are its Entity/Url bindings (localized titles are intentionally not normalized here).
 function sitemapFacts(sitemapxml) {
   const xml = String(sitemapxml || '');
   const areas = [];

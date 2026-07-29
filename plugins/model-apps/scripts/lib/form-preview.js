@@ -4,6 +4,7 @@
 // hints, the Notes/timeline block, and sub-grids — so the user can *see* a form during the
 // interactive authoring turn before approving it. Pure (no I/O); the CLI is preview-form.js.
 const { compileFormIntent } = require('./artifact-intent.js');
+const { entityByLogical } = require('./_graph.js');
 
 const INNER = 63; // content width inside the box borders
 
@@ -15,11 +16,6 @@ const WIDGET = {
   BigInt: '[# number]', Decimal: '[# number]', Double: '[# number]', File: '[file]',
   Image: '[image]', AutoNumber: '[# auto]', Customer: '[lookup]', Lookup: '[lookup]',
 };
-
-function entityByLogical(spec, logical) {
-  const l = String(logical || '').toLowerCase();
-  return (spec.entities || []).find((e) => String(e.schemaName).toLowerCase() === l);
-}
 
 // Resolve the column type for a form field's logical name (primary, scalar column, or lookup).
 function fieldType(entity, fieldName) {
@@ -84,7 +80,7 @@ function fieldLabel(entity, cell) {
 
 // Render one form to an ASCII wireframe string.
 function renderFormWireframe(spec, f) {
-  const entity = entityByLogical(spec, f.entity);
+  const entity = entityByLogical(spec, f.entity || '');
   // compileFormIntent is the single source of form topology (new SDK shape
   // tabs[].columns[].sections[]). notesClassId is irrelevant to the preview (it keys the notes
   // section by name, not classId), so a placeholder is fine.

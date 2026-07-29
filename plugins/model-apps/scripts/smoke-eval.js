@@ -85,54 +85,81 @@ async function main(env, prefix) {
   const specPath = path.join(dir, 'app-spec.json');
   fs.writeFileSync(specPath, JSON.stringify(spec, null, 2));
   const ws = path.join(dir, '.maker-workspace');
+  let exitCode = 1;
+  let results = null;
+  let buildFailed = false;
 
-  process.stdout.write(`\n▶ smoke build (${spec.app.name}) — writes to ${env}\n`);
-  const build = runNode([pluginScript('build-model-app.js'), '--env', env, '--spec', '@' + specPath, '--workspace', ws, '--apply']);
-  process.stderr.write(build.stderr || '');
-  let appId = null;
-  try { appId = JSON.parse(build.stdout).created.app; } catch { /* parsed below */ }
+  try {
+    process.stdout.write(`\n▶ smoke build (${spec.app.name}) — writes to ${env}\n`);
+    const build = runNode([pluginScript('build-model-app.js'), '--env', env, '--spec', '@' + specPath, '--workspace', ws, '--apply']);
+    process.stderr.write(build.stderr || '');
+    if (build.status !== 0) {
+      buildFailed = true;
+      exitCode = build.status || 1;
+      if (build.stdout) process.stdout.write(build.stdout);
+      process.stderr.write(`\n✗ smoke build failed with exit code ${exitCode}; skipping assertions and running teardown for any partial artifacts.\n`);
+    } else {
+      let appId = null;
+      try { appId = JSON.parse(build.stdout).created.app; } catch { /* assertions report missing appId */ }
 
-  const ent = spec.entities[0].schemaName.toLowerCase();
-  const read = {
-    queryRecords: async (set, opts) => {
-      const sel = (opts.select || []).map(encodeURIComponent).join(',');
-      const flt = encodeURIComponent(opts.filter || '');
-      const setName = set === 'savedquery' ? 'savedqueries' : set;
-      const d = dvGet(env, `${setName}?$select=${sel}&$filter=${flt}`);
-      return (d && d.value) || [];
-    },
-    sitemapXml: async (id) => {
-      if (!id) return '';
-      const app = dvGet(env, `appmodules(${id})?$select=appmoduleidunique`);
-      const unique = app && app.appmoduleidunique;
-      if (!unique) return '';
-      const comp = dvGet(env, `appmodulecomponents?$filter=_appmoduleidunique_value eq ${unique} and componenttype eq 62&$select=objectid`);
-      const smId = comp && comp.value && comp.value[0] && comp.value[0].objectid;
-      if (!smId) return '';
-      const sm = dvGet(env, `sitemaps(${smId})?$select=sitemapxml`);
-      return (sm && sm.sitemapxml) || '';
-    },
-  };
+      const ent = spec.entities[0].schemaName.toLowerCase();
+      const read = {
+        queryRecords: async (set, opts) => {
+          const sel = (opts.select || []).map(encodeURIComponent).join(',');
+          const flt = encodeURIComponent(opts.filter || '');
+          const setName = set === 'savedquery' ? 'savedqueries' : set;
+          const d = dvGet(env, `${setName}?$select=${sel}&$filter=${flt}`);
+          return (d && d.value) || [];
+        },
+        sitemapXml: async (id) => {
+          if (!id) return '';
+          const app = dvGet(env, `appmodules(${id})?$select=appmoduleidunique`);
+          const unique = app && app.appmoduleidunique;
+          if (!unique) return '';
+          const comp = dvGet(env, `appmodulecomponents?$filter=_appmoduleidunique_value eq ${unique} and componenttype eq 62&$select=objectid`);
+          const smId = comp && comp.value && comp.value[0] && comp.value[0].objectid;
+          if (!smId) return '';
+          const sm = dvGet(env, `sitemaps(${smId})?$select=sitemapxml`);
+          return (sm && sm.sitemapxml) || '';
+        },
+      };
 
-  process.stdout.write('\n▶ smoke assertions\n');
-  const results = await runSmokeAssertions(spec, appId, read);
-  for (const r of results) process.stdout.write(`  ${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.detail ? `  (${r.detail})` : ''}\n`);
+      process.stdout.write('\n▶ smoke assertions\n');
+      results = await runSmokeAssertions(spec, appId, read);
+      for (const r of results) process.stdout.write(`  ${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.detail ? `  (${r.detail})` : ''}\n`);
 
-  process.stdout.write('\n▶ teardown\n');
-  runNode([pluginScript('teardown-model-app.js'), '--env', env, '--spec', '@' + specPath, '--workspace', ws, '--apply', '--allow-destructive']);
-  fs.rmSync(dir, { recursive: true, force: true });
+      const failed = results.filter((r) => !r.ok);
+      exitCode = failed.length ? 1 : 0;
+    }
+  } finally {
+    // Even a failed build can leave a partially-created solution/app; always run the spec-scoped
+    // teardown before deleting the local temp workspace so live smoke probes do not linger.
+    process.stdout.write('\n▶ teardown\n');
+    runNode([pluginScript('teardown-model-app.js'), '--env', env, '--spec', '@' + specPath, '--workspace', ws, '--apply', '--allow-destructive']);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 
-  const failed = results.filter((r) => !r.ok);
-  process.stdout.write(`\n=== smoke eval: ${failed.length ? 'FAIL' : 'PASS'} (${results.length - failed.length}/${results.length}) ===\n`);
-  return failed.length ? 1 : 0;
+  if (buildFailed) {
+    process.stdout.write('\n=== smoke eval: FAIL (build failed; assertions skipped) ===\n');
+  } else {
+    const failed = results.filter((r) => !r.ok);
+    process.stdout.write(`\n=== smoke eval: ${failed.length ? 'FAIL' : 'PASS'} (${results.length - failed.length}/${results.length}) ===\n`);
+  }
+  return exitCode;
 }
 
 if (require.main === module) {
   const args = process.argv.slice(2);
-  const env = args[args.indexOf('--env') + 1];
-  const prefix = args.indexOf('--prefix') > -1 ? args[args.indexOf('--prefix') + 1] : 'smk';
-  if (!env || args.indexOf('--env') === -1) {
-    process.stderr.write('Usage: node smoke-eval.js --env <orgUrl> [--prefix smk]  (LIVE — builds + deletes a throwaway app)\n');
+  const valueAfter = (name) => {
+    const i = args.indexOf(name);
+    if (i === -1) return undefined;
+    const value = args[i + 1];
+    return value && !value.startsWith('--') ? value : undefined;
+  };
+  const env = valueAfter('--env');
+  const prefix = args.indexOf('--prefix') > -1 ? valueAfter('--prefix') : 'smk';
+  if (!env || !prefix) {
+    process.stderr.write('Usage: node scripts/smoke-eval.js --env <orgUrl> [--prefix smk]  (LIVE — builds + deletes a throwaway app)\n');
     process.exit(2);
   }
   main(env, prefix).then((code) => process.exit(code));

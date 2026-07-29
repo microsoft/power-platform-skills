@@ -11,7 +11,10 @@ const { spawnSync } = require('node:child_process');
 // prompts:\r\n1. …\r\n2. …") and would otherwise break the upload on an edit-rebuild.
 function quoteArg(a) {
   const s = String(a).replace(/\r\n|[\r\n]/g, ' ');
-  return /[\s"'&|<>^()]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  const q = s.replace(/"/g, '""').replace(/%/g, '"^%"');
+  // cmd.exe expands %VAR% even inside double quotes; break out of the quoted segment and caret-escape
+  // each percent so prompts/names containing environment-variable syntax round-trip literally.
+  return /[\s"'&|<>^()%]/.test(s) ? `"${q}"` : s;
 }
 
 // Build the spawnSync invocation for a `pac` call, per platform. Windows: pac resolves as pac.cmd,

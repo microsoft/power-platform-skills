@@ -41,7 +41,13 @@ function sdkTestSpec(sdkPath, node20Bin) {
 function main(argv) {
   const args = argv.slice(2);
   const sdkIdx = args.indexOf('--with-sdk');
-  const sdkPath = sdkIdx > -1 ? args[sdkIdx + 1] : null;
+  const sdkPath = sdkIdx > -1 && args[sdkIdx + 1] && !args[sdkIdx + 1].startsWith('--') ? args[sdkIdx + 1] : null;
+  if (sdkIdx > -1 && !sdkPath) {
+    // `--with-sdk` is a regression gate opt-in; silently skipping on a missing path makes a
+    // supposedly SDK-covered run green, so treat the omitted value as a usage error.
+    process.stderr.write('Usage: node scripts/run-tests.js [--with-sdk <ppux-path>]\n');
+    return 2;
+  }
   const pluginRoot = path.join(__dirname, '..');
   const results = [];
 

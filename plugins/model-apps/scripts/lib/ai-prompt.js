@@ -40,13 +40,14 @@ function buildPromptSpec(entity, opts) {
     // Auto-select: exclude PK, AutoNumber, File, Image, Lookup.
     const eligible = (entity.columns || []).filter((c) => {
       if (c.schemaName.toLowerCase() === primaryKey) return false;
-      if (EXCLUDED_TYPES.has(c.type)) return false;
+      const type = c.type || 'Text'; // App Spec defaults omitted column types to Text.
+      if (EXCLUDED_TYPES.has(type)) return false;
       return true;
     });
 
     // Separate preferred types from Memo.
-    const preferred = eligible.filter((c) => PREFERRED_TYPES.has(c.type));
-    const memos = eligible.filter((c) => c.type === 'Memo');
+    const preferred = eligible.filter((c) => PREFERRED_TYPES.has(c.type || 'Text'));
+    const memos = eligible.filter((c) => (c.type || 'Text') === 'Memo');
 
     // Combine: preferred first, then at most one Memo, cap at 6.
     const selected = [...preferred, ...memos.slice(0, 1)].slice(0, 6);

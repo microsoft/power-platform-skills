@@ -7,14 +7,16 @@
 // name/logical/uniquename the given spec declares, so it can never wildcard-scan an org.
 //
 // Usage:
-//   node teardown-model-app.js --env <orgUrl> --spec @<app-folder>/app-spec.json [--apply]
-//        [--clear-workspace] [--workspace <dir>]
+//   node scripts/teardown-model-app.js --env <orgUrl> --spec @<app-folder>/app-spec.json [--apply]
+//        [--clear-workspace] [--workspace <dir>]  (--workspace only scopes --clear-workspace)
 //
-// Order: app -> dashboards -> commands -> forms -> charts -> views -> relationships ->
-//   web-resources -> ai-summaries -> tables (reverse-topo) -> global-choices -> solution.
-//   Forms/charts/views/relationships are deleted explicitly BEFORE tables (a table delete does
-//   not reliably cascade cross-references). Command teardown removes the whole command bar for an
-//   entity the spec authored commands on (the SDK models a command bar per entity, not per button).
+// Order: app -> security roles -> dashboards -> command bars -> forms -> charts -> views
+//   (then reset enriched default views) -> relationships -> AI row summaries -> tables
+//   (reverse-topo) -> web resources (generated icon + page manifest + declared) ->
+//   global choices -> solution. Forms/charts/views/relationships are deleted explicitly BEFORE
+//   tables (a table delete does not reliably cascade cross-references). Command teardown removes
+//   the whole command bar for an entity the spec authored commands on (the SDK models a command bar
+//   per entity, not per button).
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
@@ -32,16 +34,28 @@ function makeSdk(env) {
   // Teardown uses a minimal SDK client (no workspace, no solution header) — just queryRecords
   // and delete methods. Use a throw-away temp dir since initWorkspace is mandatory.
   const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teardown-'));
-  const sdk = createMakerSdk({
-    workspacePath: sdkTempDir,
-    instanceUrl: env,
-    httpClient,
-  });
-  sdk.initWorkspace();
-  const cleanup = () => {
-    fs.rmSync(sdkTempDir, { recursive: true, force: true });
-  };
-  return { sdk, cleanup };
+  try {
+    const sdk = createMakerSdk({
+      workspacePath: sdkTempDir,
+      instanceUrl: env,
+      httpClient,
+    });
+    sdk.initWorkspace();
+    const cleanup = () => {
+      fs.rmSync(sdkTempDir, { recursive: true, force: true });
+    };
+    return { sdk, cleanup };
+  } catch (err) {
+    // If SDK initialization fails, no caller-owned cleanup function exists yet; remove the
+    // throwaway workspace here so an auth/SDK startup error does not leak temp directories.
+    try {
+      fs.rmSync(sdkTempDir, { recursive: true, force: true });
+    } catch {
+      // Preserve the SDK/auth startup error as the actionable failure; a best-effort temp cleanup
+      // problem would otherwise mask the reason teardown could not even initialize.
+    }
+    throw err;
+  }
 }
 
 // Turn engine progress events into a phase-grouped, status-marked teardown log — the same shape
@@ -105,11 +119,13 @@ async function teardownModelApp(spec, opts, deps) {
 
 async function main() {
   const { positional, flags } = parseArgs(process.argv.slice(2));
-  const env = flags.env;
-  const specArg = flags.spec || positional[0];
-  if (!env || !specArg) {
+  const env = typeof flags.env === 'string' ? flags.env : undefined;
+  const specArg = (typeof flags.spec === 'string' ? flags.spec : undefined) || (typeof positional[0] === 'string' ? positional[0] : undefined);
+  const workspaceArg = typeof flags.workspace === 'string' ? flags.workspace : undefined;
+  if (!env || !specArg || flags.workspace === true) {
     process.stderr.write(
-      'Usage: node teardown-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--allow-destructive] [--clear-workspace] [--workspace <dir>]\n'
+      'Usage: node scripts/teardown-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--allow-destructive] [--clear-workspace] [--workspace <dir>]\n' +
+      '  Note: --workspace only controls the optional --clear-workspace cleanup; teardown itself uses a throwaway SDK workspace.\n'
     );
     process.exit(1);
   }
@@ -117,9 +133,10 @@ async function main() {
   const spec = migrateAppSpec(readJsonArg('@' + specPath));
   const apply = flags.apply === true;
   const allowDestructive = flags['allow-destructive'] === true;
-  const workspaceDir = flags.workspace || path.join(path.dirname(specPath), '.maker-workspace');
+  const workspaceDir = workspaceArg || path.join(path.dirname(specPath), '.maker-workspace');
   const { sdk, cleanup } = makeSdk(env);
   let r;
+  let thrown = null;
   try {
     const deps = { log: (m) => process.stderr.write(m + '\n'), sdk };
     r = await teardownModelApp(spec, { apply, allowDestructive, workspaceDir }, deps);
@@ -132,10 +149,15 @@ async function main() {
         process.stderr.write(`\ncleared workspace ${workspaceDir}\n`);
       }
     }
+  } catch (err) {
+    thrown = err;
   } finally {
     cleanup();
   }
   // emitResult() calls process.exit(), so emit AFTER cleanup() has run.
+  if (thrown) {
+    emitResult(false, thrown);
+  }
   emitResult(r.ok, r);
 }
 

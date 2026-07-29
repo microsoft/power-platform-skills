@@ -146,11 +146,14 @@ async function main() {
     instanceUrl: envUrl,
     httpClient,
   });
-  sdk.initWorkspace(); // consistent with other entrypoints; harmless for the Dataverse-only ops here
 
   let result;
   let error;
   try {
+    // initWorkspace() is INSIDE the try so the finally below always removes the temp workspace, even
+    // if init itself throws (otherwise a failed init would leak sdkTempDir). Consistent with other
+    // entrypoints; harmless for the Dataverse-only ops here.
+    sdk.initWorkspace();
     result = await runProvisionSolution(
       {
         envUrl,

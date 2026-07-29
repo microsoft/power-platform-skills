@@ -19,7 +19,12 @@ function subAreaToSpec(sa, pageRefById, dashboardNameById) {
   if (sa.icon) base.icon = sa.icon;
   if (sa.vectorIcon) base.vectorIcon = sa.vectorIcon;
   if (sa.type === 'Entity' && sa.entity) return { ...base, entity: sa.entity };
-  if (sa.type === 'GenPage' && sa.genPageId) return { ...base, page: pageRefById.get(String(sa.genPageId).toLowerCase()) || sa.genPageId };
+  if (sa.type === 'GenPage' && sa.genPageId) {
+    const pageRef = pageRefById.get(String(sa.genPageId).toLowerCase());
+    // An unmapped GenPageId cannot validate as an App Spec page reference, so drop the subarea rather
+    // than emitting a broken round-trip spec when PAC's page list is incomplete.
+    return pageRef ? { ...base, page: pageRef } : null;
+  }
   if (sa.type === 'DashBoard' && sa.dashboardId) {
     const name = dashboardNameById && dashboardNameById.get(String(sa.dashboardId).toLowerCase());
     return name ? { ...base, dashboard: name } : null; // drop only if we couldn't reconstruct the dashboard
@@ -122,4 +127,3 @@ async function hydrateSpec(read) {
 }
 
 module.exports = { hydrateSpec, subAreaToSpec };
-

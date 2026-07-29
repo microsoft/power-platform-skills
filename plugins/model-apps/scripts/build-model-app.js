@@ -9,7 +9,7 @@
 //        [--sample-data] [--publish] [--verify] [--stage <data|ui|app|publish>]
 //        [--only <phases>] [--skip <phases>] [--from <phase>] [--to <phase>]
 //        [--workspace <dir>]
-//   phases: solution,data-model,sample-data,web-resources,views,charts,forms,commands,dashboards,app-shell,pages,ai-features,publish
+//   phases: solution,data-model,sample-data,web-resources,views,charts,forms,commands,dashboards,app-shell,pages,ai-features,security,publish
 const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');

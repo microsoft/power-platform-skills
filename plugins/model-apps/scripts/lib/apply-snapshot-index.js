@@ -26,6 +26,12 @@ function indexArtifacts(spec, created, opts = {}) {
   const pageDeployedShas = opts.pageDeployedShas || {};
   const formProjections = opts.formProjections || {};
   const viewProjections = opts.viewProjections || {};
+  const viewNameCounts = new Map();
+  for (const v of Array.isArray(s.views) ? s.views : []) {
+    if (!v || typeof v !== 'object') continue;
+    const name = String(v.name || '');
+    viewNameCounts.set(name, (viewNameCounts.get(name) || 0) + 1);
+  }
 
   // pages — canonical key is the page key; value carries the live pageId, the SOURCE hash (raw .tsx bytes,
   // = the annotated __contentSha) and the DEPLOYED hash (post-nav-resolution bytes, may differ when
@@ -45,6 +51,9 @@ function indexArtifacts(spec, created, opts = {}) {
   // views — canonical key `entity|name`; created.views is keyed by NAME only.
   for (const v of Array.isArray(s.views) ? s.views : []) {
     if (!v || typeof v !== 'object') continue;
+    // Fail closed on duplicate view names: result.created.views cannot disambiguate same-named
+    // views across entities, so recording either id could poison the changed-only snapshot.
+    if (viewNameCounts.get(String(v.name || '')) > 1) continue;
     const key = identityOf.view(v);
     const viewId = c.views && c.views[v.name];
     if (!viewId) continue;
