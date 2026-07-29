@@ -4,18 +4,31 @@
 const { makeRequest } = require('./lib/validation-helpers');
 const { formatJsonResult } = require('./lib/template-cli-args');
 
-const REQUIRED_EN_US_LCID = 1033;
+const DEFAULT_REQUIRED_LOCALE_IDS = [1033];
 
 function parseArgs(argv = process.argv.slice(2)) {
   const args = {};
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--envUrl') args.envUrl = argv[++i];
     else if (argv[i] === '--token') args.token = argv[++i];
+    else if (argv[i] === '--requiredLocaleIds') {
+      args.requiredLocaleIds = argv[++i]
+        .split(',')
+        .map((value) => Number(value.trim()))
+        .filter((value) => Number.isInteger(value));
+    }
   }
   return args;
 }
 
-async function checkAvailableLanguages({ envUrl, token, request = makeRequest } = {}) {
+function normalizeRequiredLocaleIds(requiredLocaleIds) {
+  const ids = Array.isArray(requiredLocaleIds) && requiredLocaleIds.length > 0
+    ? requiredLocaleIds
+    : DEFAULT_REQUIRED_LOCALE_IDS;
+  return [...new Set(ids.filter((id) => Number.isInteger(id)))];
+}
+
+async function checkAvailableLanguages({ envUrl, token, requiredLocaleIds, request = makeRequest } = {}) {
   if (!envUrl) {
     return { ok: false, error: 'Missing --envUrl.' };
   }
@@ -53,20 +66,27 @@ async function checkAvailableLanguages({ envUrl, token, request = makeRequest } 
     return { ok: false, error: `RetrieveAvailableLanguages returned invalid JSON: ${err.message}` };
   }
 
+  const requiredIds = normalizeRequiredLocaleIds(requiredLocaleIds);
+  if (requiredIds.length === 0) {
+    return { ok: false, error: 'At least one required locale id must be provided.' };
+  }
+
   // Dataverse returns available language LCIDs as:
   //   { "LocaleIds": [1033, 1036, ...] }
   // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/retrieveavailablelanguages
-  // Importing the starter templates is blocked unless en-US (1033) is present because
-  // the template solutions are authored against en-US metadata.
+  // Each template declares the LCIDs its solution was authored against in
+  // `requiredDataverseLanguages`; import is blocked if any required LCID is absent.
   if (!Array.isArray(payload.LocaleIds)) {
     return { ok: false, error: 'RetrieveAvailableLanguages response did not include a LocaleIds array.' };
   }
 
   const localeIds = payload.LocaleIds.filter((id) => Number.isInteger(id));
+  const missingLocaleIds = requiredIds.filter((id) => !localeIds.includes(id));
   return {
     ok: true,
-    hasEnUs: localeIds.includes(REQUIRED_EN_US_LCID),
-    requiredLocaleId: REQUIRED_EN_US_LCID,
+    hasRequiredLanguages: missingLocaleIds.length === 0,
+    requiredLocaleIds: requiredIds,
+    missingLocaleIds,
     localeIds,
   };
 }
@@ -85,7 +105,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-  REQUIRED_EN_US_LCID,
+  DEFAULT_REQUIRED_LOCALE_IDS,
   checkAvailableLanguages,
   parseArgs,
 };

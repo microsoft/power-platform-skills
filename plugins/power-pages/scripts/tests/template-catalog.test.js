@@ -44,6 +44,7 @@ const VALID_TEMPLATE = {
   framework: 'react',
   keywords: ['portal'],
   audience: ['makers', 'developers'],
+  requiredDataverseLanguages: [1033],
   previewImages: ['templates/spa/company-portal/previews/home.png'],
   solutionPath: 'templates/spa/company-portal/solution/Company_1_0_0_0.zip',
   templateVersion: '1.0.0',
@@ -284,6 +285,8 @@ test('validateCatalogShape accepts a complete template entry and rejects broken 
   assert.equal(validateCatalogShape({ templates: [VALID_TEMPLATE] }), null);
   assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, previewImages: [] }] }), /previewImages/);
   assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, keywords: 'portal' }] }), /keywords/);
+  assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, requiredDataverseLanguages: [] }] }), /requiredDataverseLanguages/);
+  assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, requiredDataverseLanguages: ['1033'] }] }), /requiredDataverseLanguages/);
 });
 
 // Regression: the published manifest declares `audience` as an array of personas

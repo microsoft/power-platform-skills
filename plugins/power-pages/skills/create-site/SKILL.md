@@ -245,22 +245,22 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions. Do not import the template.
       - **Cancel**: emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop before import.
 
-    5. Mark **Validate JavaScript unblock requirement** as `completed` and **Validate en-US language requirement** as `in_progress`, then preflight-check whether en-US is enabled in the target environment:
+    5. Mark **Validate JavaScript unblock requirement** as `completed` and **Validate Dataverse language requirements** as `in_progress`, then preflight-check whether the target environment has every Dataverse language required by the selected template:
        ```bash
-       node "${PLUGIN_ROOT}/scripts/check-available-languages.js" --envUrl "<environmentUrl>" --token "<token>"
+       node "${PLUGIN_ROOT}/scripts/check-available-languages.js" --envUrl "<environmentUrl>" --token "<token>" --requiredLocaleIds "<SELECTED_TEMPLATE.requiredDataverseLanguages comma-separated>"
        ```
        Evaluate the JSON result:
-       - **`ok: true` and `hasEnUs: true`**: continue; the target environment has en-US (LCID `1033`) enabled.
+       - **`ok: true` and `hasRequiredLanguages: true`**: continue; the target environment has every LCID in `SELECTED_TEMPLATE.requiredDataverseLanguages`.
        - **`ok: false`**: tell the user the skill could not verify available Dataverse languages, surface the script error, then ask whether to switch to from-scratch or stop. Do not import the template.
-       - **`ok: true` and `hasEnUs: false`**: explain that the selected template solution is authored for en-US metadata and requires Dataverse LCID `1033` to be enabled. Block before any solution import mutation. Do not provide a "proceed anyway" branch.
+       - **`ok: true` and `hasRequiredLanguages: false`**: explain that the selected template solution requires the missing Dataverse language LCIDs from `missingLocaleIds`. Block before any solution import mutation. Do not provide a "proceed anyway" branch.
 
-<!-- not-a-gate: route selection after a blocking preflight; no org mutation has happened and there is no option to override the missing en-US requirement -->
+<!-- not-a-gate: route selection after a blocking preflight; no org mutation has happened and there is no option to override missing template language requirements -->
 
        Use `AskUserQuestion` only when the language preflight cannot continue:
 
        | Question | Header | Options |
        |----------|--------|---------|
-       | This template requires en-US (LCID `1033`) to be enabled in Dataverse, but the target environment does not have it available or the language check could not be completed. What would you like to do? | Template Language Requirement | Start from scratch (Recommended), Cancel |
+       | This template requires Dataverse language LCID(s) `<requiredLocaleIds>`, but the target environment is missing `<missingLocaleIds>` or the language check could not be completed. What would you like to do? | Template Language Requirement | Start from scratch (Recommended), Cancel |
 
        - **Start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions. Do not import the template.
        - **Cancel**: emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop before import.
@@ -273,7 +273,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 > **Why we ask:** The next step imports an unmanaged Dataverse solution into the user's org. Wrong environment or wrong template is disruptive and cannot be cleanly undone.
 > **Cancel leaves:** `template-cache` — the selected solution zip and preview images may remain in the SHA-keyed temp cache; no org mutation has occurred.
 
-   6. Mark **Validate en-US language requirement** as `completed` and **Confirm template import** as `in_progress`, then present the template and environment and ask:
+   6. Mark **Validate Dataverse language requirements** as `completed` and **Confirm template import** as `in_progress`, then present the template and environment and ask:
 
       | Question | Header | Options |
       |----------|--------|---------|
@@ -1135,7 +1135,7 @@ After Phase 1.5 selects the template path, append the pre-import template tasks 
 | Resolve target environment | Resolving environment | Resolve the active PAC/Azure target environment and token before any environment preflight |
 | Confirm target environment | Confirming environment | Ask whether the resolved environment is the one the user wants for the template install |
 | Validate JavaScript unblock requirement | Checking JavaScript setting | Check `blockedattachments` for `.js` and, with consent, remove only `js` before import |
-| Validate en-US language requirement | Checking language availability | Call `RetrieveAvailableLanguages` and require LCID `1033` before import |
+| Validate Dataverse language requirements | Checking language availability | Call `RetrieveAvailableLanguages` and require every LCID listed in the selected template's `requiredDataverseLanguages` |
 | Confirm template import | Confirming template import | Show the selected template and target environment, then ask for final import consent |
 
 After the reinstall policy chooses a normal import/update/import-anyway path, append:

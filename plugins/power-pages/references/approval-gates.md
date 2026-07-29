@@ -478,7 +478,7 @@ When **removing** a gate, also remove its catalog row in the same PR.
 | `create-site:1.5.from-scratch-setup` | not-a-gate | — | 1.5 | Deferred framework and directory data-gathering before any scaffold files are written | — |
 | `create-site:1.5.confirm-environment` | gate | consent | 1.5 | Target environment resolved from PAC/Azure auth — confirm before any environment preflight or import mutation | template-cache |
 | `create-site:1.5.unblock-js` | gate | consent | 1.5 | Target environment blocks `.js` in `blockedattachments` — remove only `js` before template import | attachment-block-modified |
-| `create-site:1.5.language-requirement` | not-a-gate | - | 1.5 | Route selection after blocking en-US language preflight; no override option exists and no org mutation has happened | - |
+| `create-site:1.5.language-requirement` | not-a-gate | - | 1.5 | Route selection after blocking template-declared Dataverse language preflight; no override option exists and no org mutation has happened | - |
 | `create-site:1.5.template-import` | gate | consent | 1.5 | Selected template zip downloaded and target env resolved — confirm importing unmanaged solution into the org | template-cache |
 | `create-site:1.5.update-installed` | gate | consent | 1.5 | Selected template solution is installed but zip is newer — confirm unmanaged update import | template-cache |
 | `create-site:1.5.clone-existing` | gate | consent | 1.5 | Selected template solution is same/older — confirm cloning an existing website instead of re-importing | template-cache |

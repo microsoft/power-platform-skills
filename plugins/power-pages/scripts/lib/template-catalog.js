@@ -63,6 +63,7 @@ function validateCatalogShape(catalog) {
   //       "description": "…", "kind": "spa", "framework": "react",
   //       "keywords": ["311", "citizen-services"],
   //       "audience": ["makers", "developers"],
+  //       "requiredDataverseLanguages": [1033],
   //       "previewImages": ["spa/311-portal/previews/home.png"],
   //       "solutionPath": "spa/311-portal/solution/311-portal-unmanaged.zip",
   //       "seedDataPath": "spa/311-portal/seed/data.json",
@@ -86,6 +87,13 @@ function validateCatalogShape(catalog) {
     if (missing.length > 0) return `template ${template.id || index} missing string field(s): ${missing.join(', ')}`;
     if (!Array.isArray(template.audience) || template.audience.length === 0 || !template.audience.every(isNonEmptyString)) {
       return `template ${template.id} audience must be a non-empty array of strings`;
+    }
+    if (
+      !Array.isArray(template.requiredDataverseLanguages) ||
+      template.requiredDataverseLanguages.length === 0 ||
+      !template.requiredDataverseLanguages.every((id) => Number.isInteger(id) && id > 0)
+    ) {
+      return `template ${template.id} requiredDataverseLanguages must be a non-empty array of positive integers`;
     }
     if (!Array.isArray(template.keywords)) return `template ${template.id} keywords must be an array`;
     if (!Array.isArray(template.previewImages) || template.previewImages.length === 0) {
