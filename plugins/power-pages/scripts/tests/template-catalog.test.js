@@ -266,7 +266,8 @@ test('fetchCatalog treats malformed template entries as ok:false without creatin
 
 test('validateCatalogShape accepts a complete template entry and rejects broken entries', () => {
   assert.equal(validateCatalogShape({ templates: [VALID_TEMPLATE] }), null);
-  assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, previewImages: [] }] }), /previewImages/);
+  assert.equal(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, previewImages: [] }] }), null);
+  assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, previewImages: 'templates/spa/company/home.png' }] }), /previewImages/);
   assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, keywords: 'portal' }] }), /keywords/);
   assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, requiredDataverseLanguages: [] }] }), /requiredDataverseLanguages/);
   assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, requiredDataverseLanguages: ['1033'] }] }), /requiredDataverseLanguages/);

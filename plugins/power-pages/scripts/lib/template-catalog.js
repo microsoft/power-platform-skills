@@ -92,8 +92,8 @@ function validateCatalogShape(catalog) {
       return `template ${template.id} requiredDataverseLanguages must be a non-empty array of positive integers`;
     }
     if (!Array.isArray(template.keywords)) return `template ${template.id} keywords must be an array`;
-    if (!Array.isArray(template.previewImages) || template.previewImages.length === 0) {
-      return `template ${template.id} previewImages must be a non-empty array`;
+    if (!Array.isArray(template.previewImages)) {
+      return `template ${template.id} previewImages must be an array`;
     }
   }
   return null;
