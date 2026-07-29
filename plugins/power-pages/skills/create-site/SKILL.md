@@ -197,7 +197,25 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       ```
       Use the returned `environmentUrl` and `token` for the import request and poller. If `ok: false`, surface the error, emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop before import.
 
-   3. Preflight-check whether `.js` is blocked in the target environment:
+<!-- gate: create-site:1.5.confirm-environment | category=consent | cancel-leaves=template-cache -->
+
+> 🚦 **Gate (consent · create-site:1.5.confirm-environment):** Confirm the resolved target environment before running template import preflights.
+>
+> **Trigger:** Phase 1.5 after `resolve-template-import-context.js` returns `environmentUrl` and before any `.js` unblock, language, solution import, seed, or activation step.
+> **Why we ask:** PAC auth can point at a different Dataverse environment than the user intended. Even preflights can inspect or modify environment-level settings, so the skill must not continue silently.
+> **Cancel leaves:** `template-cache` — template catalog assets and the selected solution zip may already be cached locally; no org mutation has happened if cancelled here.
+
+   3. Ask the user to confirm the resolved target environment before any environment preflight:
+
+      | Question | Header | Options |
+      |----------|--------|---------|
+      | Use **`<environmentUrl>`** as the target environment for this template install? | Confirm Environment | Yes, use this environment (Recommended), No, start from scratch, Cancel |
+
+      - **Yes**: continue to the preflight checks below.
+      - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions. Do not run environment preflights or import the template.
+      - **Cancel**: emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop before environment preflights.
+
+   4. Preflight-check whether `.js` is blocked in the target environment:
       ```bash
       node "${PLUGIN_ROOT}/scripts/lib/fix-blocked-attachments.js" --envUrl "<environmentUrl>" --extensions js --dry-run --quiet
       ```
@@ -227,7 +245,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions. Do not import the template.
       - **Cancel**: emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop before import.
 
-    4. Preflight-check whether en-US is enabled in the target environment:
+    5. Preflight-check whether en-US is enabled in the target environment:
        ```bash
        node "${PLUGIN_ROOT}/scripts/check-available-languages.js" --envUrl "<environmentUrl>" --token "<token>"
        ```
@@ -255,7 +273,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 > **Why we ask:** The next step imports an unmanaged Dataverse solution into the user's org. Wrong environment or wrong template is disruptive and cannot be cleanly undone.
 > **Cancel leaves:** `template-cache` — the selected solution zip and preview images may remain in the SHA-keyed temp cache; no org mutation has occurred.
 
-   5. Present the template and environment, then ask:
+   6. Present the template and environment, then ask:
 
       | Question | Header | Options |
       |----------|--------|---------|
@@ -263,7 +281,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
       - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions.
       - **Cancel**: emit the template-outcome event with `mode=template`, selected template id/framework/audience, `importOutcome=failure`, `activationOutcome=skipped`, and `seedApplied=false`, then stop; no org mutation has happened.
-   6. Inspect the selected solution zip and check whether that solution is already installed:
+   7. Inspect the selected solution zip and check whether that solution is already installed:
       ```bash
       node "${PLUGIN_ROOT}/scripts/inspect-template-solution.js" --zipPath "<SELECTED_TEMPLATE_SOLUTION_ZIP>"
       node "${PLUGIN_ROOT}/scripts/check-solution-installed.js" --solutionName "<uniqueName>" --envUrl "<environmentUrl>"
