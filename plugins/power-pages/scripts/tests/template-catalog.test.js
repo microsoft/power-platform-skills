@@ -10,8 +10,7 @@ const { PassThrough } = require('stream');
 
 const {
   buildRawUrl,
-  buildCommitUrl,
-  buildLatestReleaseUrl,
+  buildGitRemoteUrl,
   cacheDirForSha,
   artifactCachePath,
   requestJson,
@@ -51,15 +50,8 @@ const VALID_TEMPLATE = {
   author: 'Microsoft',
 };
 
-test('builds raw and commit URLs from repo, ref and template-relative paths', () => {
-  assert.equal(
-    buildCommitUrl({ owner: 'microsoft', repo: 'power-pages-samples', ref: 'release/v1' }),
-    'https://api.github.com/repos/microsoft/power-pages-samples/commits/release%2Fv1'
-  );
-  assert.equal(
-    buildLatestReleaseUrl({ owner: 'microsoft', repo: 'power-pages-samples' }),
-    'https://api.github.com/repos/microsoft/power-pages-samples/releases/latest'
-  );
+test('builds raw and git remote URLs from repo and template-relative paths', () => {
+  assert.equal(buildGitRemoteUrl({ owner: 'microsoft', repo: 'power-pages-samples' }), 'https://github.com/microsoft/power-pages-samples.git');
   assert.equal(
     buildRawUrl({ owner: 'microsoft', repo: 'power-pages-samples', sha: SHA, filePath: 'templates/spa/hr portal/manifest.json' }),
     `https://raw.githubusercontent.com/microsoft/power-pages-samples/${SHA}/templates/spa/hr%20portal/manifest.json`
@@ -74,12 +66,9 @@ test('rejects non-commit refs where a pinned sha is required', () => {
   );
 });
 
-test('resolveRefToSha falls back to git ls-remote when the GitHub commit API is rate limited', async () => {
+test('resolveRefToSha resolves refs with git ls-remote', async () => {
   const seen = [];
-  const sha = await resolveRefToSha({ owner: 'o', repo: 'r', ref: 'main' }, {
-    requestJson: async () => {
-      throw new Error('GET https://api.github.com/repos/o/r/commits/main failed with 403');
-    },
+  const sha = resolveRefToSha({ owner: 'o', repo: 'r', ref: 'main' }, {
     execFileSync: (cmd, args) => {
       seen.push([cmd, args]);
       return `${SHA}\trefs/heads/main\n`;
@@ -94,15 +83,20 @@ test('fetchCatalog resolves the latest release to a sha, fetches the catalog at 
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const seen = [];
+  const gitCalls = [];
   const catalog = { manifestVersion: '1.0', templates: [VALID_TEMPLATE] };
 
   const result = await fetchCatalog({ owner: 'o', repo: 'r', cacheRoot: dir }, {
+    execFileSync: (cmd, args) => {
+      gitCalls.push([cmd, args]);
+      assert.deepEqual(args, ['ls-remote', '--tags', 'https://github.com/o/r.git']);
+      return [
+        `${'0'.repeat(40)}\trefs/tags/templates-v0.9.0`,
+        `${SHA}\trefs/tags/templates-v1.0.0`,
+      ].join('\n');
+    },
     requestJson: async (url) => {
       seen.push(url);
-      if (url === 'https://api.github.com/repos/o/r/releases/latest') {
-        return { tag_name: 'templates-v1.0.0', name: 'Templates v1.0.0', html_url: 'https://example.test/release' };
-      }
-      if (url === 'https://api.github.com/repos/o/r/commits/templates-v1.0.0') return { sha: SHA };
       if (url === `https://raw.githubusercontent.com/o/r/${SHA}/templates/manifest.json`) return catalog;
       throw new Error(`unexpected url: ${url}`);
     },
@@ -115,16 +109,15 @@ test('fetchCatalog resolves the latest release to a sha, fetches the catalog at 
     ref: 'latest-release',
     resolvedRef: 'templates-v1.0.0',
     sha: SHA,
-    releaseName: 'Templates v1.0.0',
-    releaseUrl: 'https://example.test/release',
+    releaseName: 'templates-v1.0.0',
+    releaseUrl: 'https://github.com/o/r/releases/tag/templates-v1.0.0',
     catalogPath: 'templates/manifest.json',
     catalogLocalPath: path.join(dir, SHA, 'templates/manifest.json'),
     cacheDir: path.join(dir, SHA),
     catalog,
   });
+  assert.deepEqual(gitCalls, [['git', ['ls-remote', '--tags', 'https://github.com/o/r.git']]]);
   assert.deepEqual(seen, [
-    'https://api.github.com/repos/o/r/releases/latest',
-    'https://api.github.com/repos/o/r/commits/templates-v1.0.0',
     `https://raw.githubusercontent.com/o/r/${SHA}/templates/manifest.json`,
   ]);
   assert.equal(fs.existsSync(path.join(dir, SHA)), true);
@@ -145,8 +138,11 @@ test('fetchCatalog resolves manifest artifact paths relative to the catalog fold
   };
 
   const result = await fetchCatalog({ owner: 'o', repo: 'r', ref: 'templates-v1.0.0', cacheRoot: dir }, {
+    execFileSync: (cmd, args) => {
+      assert.deepEqual([cmd, args], ['git', ['ls-remote', 'https://github.com/o/r.git', 'templates-v1.0.0']]);
+      return `${SHA}\trefs/tags/templates-v1.0.0\n`;
+    },
     requestJson: async (url) => {
-      if (url === 'https://api.github.com/repos/o/r/commits/templates-v1.0.0') return { sha: SHA };
       if (url === `https://raw.githubusercontent.com/o/r/${SHA}/templates/manifest.json`) return catalog;
       throw new Error(`unexpected url: ${url}`);
     },
@@ -161,19 +157,22 @@ test('fetchCatalog resolves manifest artifact paths relative to the catalog fold
   assert.equal(result.catalog.templates[0].seedDataPath, 'templates/spa/company-portal/seed/data.json');
 });
 
-test('fetchCatalog falls back to main when the samples repo has no latest release yet', async (t) => {
+test('fetchCatalog falls back to main when no semver tags exist yet', async (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const catalog = { manifestVersion: '1.0', templates: [VALID_TEMPLATE] };
   const seen = [];
+  const gitCalls = [];
 
   const result = await fetchCatalog({ owner: 'o', repo: 'r', cacheRoot: dir }, {
+    execFileSync: (cmd, args) => {
+      gitCalls.push([cmd, args]);
+      if (args[1] === '--tags') return '';
+      assert.deepEqual(args, ['ls-remote', 'https://github.com/o/r.git', 'main']);
+      return `${SHA}\trefs/heads/main\n`;
+    },
     requestJson: async (url) => {
       seen.push(url);
-      if (url === 'https://api.github.com/repos/o/r/releases/latest') {
-        throw new Error('GET https://api.github.com/repos/o/r/releases/latest failed with 404');
-      }
-      if (url === 'https://api.github.com/repos/o/r/commits/main') return { sha: SHA };
       if (url === `https://raw.githubusercontent.com/o/r/${SHA}/templates/manifest.json`) return catalog;
       throw new Error(`unexpected url: ${url}`);
     },
@@ -182,31 +181,13 @@ test('fetchCatalog falls back to main when the samples repo has no latest releas
   assert.equal(result.ok, true);
   assert.equal(result.ref, 'latest-release');
   assert.equal(result.resolvedRef, 'main');
+  assert.deepEqual(gitCalls, [
+    ['git', ['ls-remote', '--tags', 'https://github.com/o/r.git']],
+    ['git', ['ls-remote', 'https://github.com/o/r.git', 'main']],
+  ]);
   assert.deepEqual(seen, [
-    'https://api.github.com/repos/o/r/releases/latest',
-    'https://api.github.com/repos/o/r/commits/main',
     `https://raw.githubusercontent.com/o/r/${SHA}/templates/manifest.json`,
   ]);
-});
-
-test('fetchCatalog falls back to main when latest release lookup is rate limited', async (t) => {
-  const dir = tempDir();
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const catalog = { manifestVersion: '1.0', templates: [VALID_TEMPLATE] };
-
-  const result = await fetchCatalog({ owner: 'o', repo: 'r', cacheRoot: dir }, {
-    requestJson: async (url) => {
-      if (url === 'https://api.github.com/repos/o/r/releases/latest') {
-        throw new Error('GET https://api.github.com/repos/o/r/releases/latest failed with 403');
-      }
-      if (url === 'https://api.github.com/repos/o/r/commits/main') return { sha: SHA };
-      if (url === `https://raw.githubusercontent.com/o/r/${SHA}/templates/manifest.json`) return catalog;
-      throw new Error(`unexpected url: ${url}`);
-    },
-  });
-
-  assert.equal(result.ok, true);
-  assert.equal(result.resolvedRef, 'main');
 });
 
 test('fetchCatalog still accepts an explicit ref override for tests or pinned rollouts', async (t) => {
@@ -216,9 +197,12 @@ test('fetchCatalog still accepts an explicit ref override for tests or pinned ro
   const seen = [];
 
   const result = await fetchCatalog({ owner: 'o', repo: 'r', ref: 'templates-v0.9.0', cacheRoot: dir }, {
+    execFileSync: (cmd, args) => {
+      assert.deepEqual([cmd, args], ['git', ['ls-remote', 'https://github.com/o/r.git', 'templates-v0.9.0']]);
+      return `${SHA}\trefs/tags/templates-v0.9.0\n`;
+    },
     requestJson: async (url) => {
       seen.push(url);
-      if (url === 'https://api.github.com/repos/o/r/commits/templates-v0.9.0') return { sha: SHA };
       if (url === `https://raw.githubusercontent.com/o/r/${SHA}/templates/manifest.json`) return catalog;
       throw new Error(`unexpected url: ${url}`);
     },
@@ -228,7 +212,6 @@ test('fetchCatalog still accepts an explicit ref override for tests or pinned ro
   assert.equal(result.ref, 'templates-v0.9.0');
   assert.equal(result.resolvedRef, 'templates-v0.9.0');
   assert.deepEqual(seen, [
-    'https://api.github.com/repos/o/r/commits/templates-v0.9.0',
     `https://raw.githubusercontent.com/o/r/${SHA}/templates/manifest.json`,
   ]);
 });
@@ -237,8 +220,8 @@ test('fetchCatalog returns ok:false so create-site can fall back when the catalo
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const result = await fetchCatalog({ owner: 'o', repo: 'r', ref: 'main', cacheRoot: dir }, {
+    execFileSync: () => `${SHA}\trefs/heads/main\n`,
     requestJson: async (url) => {
-      if (url === 'https://api.github.com/repos/o/r/commits/main') return { sha: SHA };
       throw new Error('network unavailable');
     },
   });
@@ -255,8 +238,8 @@ test('fetchCatalog treats malformed catalogs as ok:false without creating a sha 
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const result = await fetchCatalog({ owner: 'o', repo: 'r', ref: 'main', cacheRoot: dir }, {
+    execFileSync: () => `${SHA}\trefs/heads/main\n`,
     requestJson: async (url) => {
-      if (url === 'https://api.github.com/repos/o/r/commits/main') return { sha: SHA };
       return { manifestVersion: '1.0' };
     },
   });
@@ -270,8 +253,8 @@ test('fetchCatalog treats malformed template entries as ok:false without creatin
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const result = await fetchCatalog({ owner: 'o', repo: 'r', ref: 'main', cacheRoot: dir }, {
+    execFileSync: () => `${SHA}\trefs/heads/main\n`,
     requestJson: async (url) => {
-      if (url === 'https://api.github.com/repos/o/r/commits/main') return { sha: SHA };
       return { manifestVersion: '1.0', templates: [{ id: 'missing-fields' }] };
     },
   });
@@ -440,40 +423,6 @@ test('downloadSolutionArtifact reports download failures as ok:false for from-sc
   assert.deepEqual(result, { ok: false, artifactPath: 'missing.zip', error: '404' });
 });
 
-test('downloadSeedDataDirectory discovers JSON files from the pinned tree and caches them', async (t) => {
-  const dir = tempDir();
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const downloaded = [];
-  const result = await downloadSeedDataDirectory({
-    owner: 'o',
-    repo: 'r',
-    sha: SHA,
-    seedDataPath: 'templates/spa/company/seed-data',
-    cacheRoot: dir,
-  }, {
-    requestJson: async (url) => {
-      assert.equal(url, `https://api.github.com/repos/o/r/git/trees/${SHA}?recursive=1`);
-      return {
-        tree: [
-          { type: 'blob', path: 'templates/spa/company/seed-data/020-posts.json' },
-          { type: 'blob', path: 'templates/spa/company/seed-data/files/invoice.pdf' },
-          { type: 'blob', path: 'templates/spa/company/README.md' },
-          { type: 'blob', path: 'templates/spa/company/seed-data/010-categories.json' },
-        ],
-      };
-    },
-    downloadFile: async (_url, dest) => {
-      downloaded.push(path.basename(dest));
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.writeFileSync(dest, '{}');
-    },
-  });
-
-  assert.equal(result.ok, true);
-  assert.deepEqual(downloaded, ['010-categories.json', '020-posts.json', 'invoice.pdf']);
-  assert.equal(result.localDir, path.join(dir, SHA, 'templates/spa/company/seed-data'));
-});
-
 test('downloadSeedDataDirectory downloads a seed JSON file and its referenced __files attachments without tree API', async (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -511,18 +460,37 @@ test('downloadSeedDataDirectory downloads a seed JSON file and its referenced __
   assert.deepEqual(downloaded, ['data.json', 'invoice.pdf', 'terms.docx']);
 });
 
+test('downloadSeedDataDirectory rejects directory seed paths without calling the GitHub tree API', async () => {
+  const result = await downloadSeedDataDirectory({
+    owner: 'o',
+    repo: 'r',
+    sha: SHA,
+    seedDataPath: 'templates/spa/company/seed-data',
+  }, {
+    requestJson: async () => {
+      throw new Error('tree API should not be called');
+    },
+  });
+
+  assert.deepEqual(result, {
+    ok: false,
+    seedDataPath: 'templates/spa/company/seed-data',
+    error: 'Seed data path must point to a JSON file: templates/spa/company/seed-data',
+  });
+});
+
 test('fetch-template-seed-data CLI parser accepts seed data path', () => {
   assert.deepEqual(parseSeedArgs([
     '--owner', 'contoso',
     '--repo', 'samples',
     '--sha', SHA,
-    '--seedDataPath', 'templates/spa/company/seed-data',
+    '--seedDataPath', 'templates/spa/company/seed/data.json',
     '--cacheRoot', '/tmp/cache',
   ]), {
     owner: 'contoso',
     repo: 'samples',
     sha: SHA,
-    seedDataPath: 'templates/spa/company/seed-data',
+    seedDataPath: 'templates/spa/company/seed/data.json',
     cacheRoot: '/tmp/cache',
   });
 });

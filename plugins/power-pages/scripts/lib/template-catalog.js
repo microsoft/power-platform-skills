@@ -26,12 +26,8 @@ function buildRawUrl({ owner = DEFAULT_OWNER, repo = DEFAULT_REPO, sha, filePath
   return `https://raw.githubusercontent.com/${owner}/${repo}/${sha}/${encodePath(filePath)}`;
 }
 
-function buildCommitUrl({ owner = DEFAULT_OWNER, repo = DEFAULT_REPO, ref = DEFAULT_REF }) {
-  return `https://api.github.com/repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}`;
-}
-
-function buildLatestReleaseUrl({ owner = DEFAULT_OWNER, repo = DEFAULT_REPO }) {
-  return `https://api.github.com/repos/${owner}/${repo}/releases/latest`;
+function buildGitRemoteUrl({ owner = DEFAULT_OWNER, repo = DEFAULT_REPO }) {
+  return `https://github.com/${owner}/${repo}.git`;
 }
 
 function cacheDirForSha(cacheRoot, sha) {
@@ -231,10 +227,14 @@ function downloadFile(url, outputPath, deps = {}) {
   });
 }
 
-function resolveRefToShaWithGit({ owner = DEFAULT_OWNER, repo = DEFAULT_REPO, ref = DEFAULT_REF }, deps = {}) {
+function runGitLsRemote(args, deps = {}) {
   const execFile = deps.execFileSync || execFileSync;
-  const remoteUrl = `https://github.com/${owner}/${repo}.git`;
-  const output = execFile('git', ['ls-remote', remoteUrl, ref], { encoding: 'utf8', timeout: 15000 });
+  return execFile('git', ['ls-remote', ...args], { encoding: 'utf8', timeout: 15000 });
+}
+
+function resolveRefToSha({ owner = DEFAULT_OWNER, repo = DEFAULT_REPO, ref = DEFAULT_REF }, deps = {}) {
+  const remoteUrl = buildGitRemoteUrl({ owner, repo });
+  const output = runGitLsRemote([remoteUrl, ref], deps);
   // `git ls-remote <remote> <ref>` returns tab-delimited rows:
   //   49b0e74b386206c7682019110434f034fca2e129\trefs/heads/main
   // A release tag can return multiple rows for annotated tags; any leading
@@ -247,62 +247,51 @@ function resolveRefToShaWithGit({ owner = DEFAULT_OWNER, repo = DEFAULT_REPO, re
   return match[1];
 }
 
-async function resolveRefToSha(options = {}, deps = {}) {
-  const request = deps.requestJson || ((url) => requestJson(url, deps));
-  let result;
-  try {
-    result = await request(buildCommitUrl(options));
-  } catch (err) {
-    try {
-      return resolveRefToShaWithGit(options, deps);
-    } catch (fallbackErr) {
-      throw new Error(`${err.message}; git ls-remote fallback failed: ${fallbackErr.message}`);
-    }
-  }
-  if (!result || typeof result.sha !== 'string' || !/^[0-9a-f]{40}$/i.test(result.sha)) {
-    throw new Error('GitHub commit response did not include a valid 40-character sha');
-  }
-  return result.sha;
+function versionKey(tagName) {
+  const match = String(tagName || '').match(/(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?/);
+  if (!match) return null;
+  return match.slice(1).map((part) => Number(part || 0));
 }
 
-async function resolveLatestRelease(options = {}, deps = {}) {
-  const request = deps.requestJson || ((url) => requestJson(url, deps));
-  // GitHub Releases API shape used here:
-  //   { "tag_name": "templates-v1.0.0", "name": "Templates v1.0.0",
-  //     "html_url": "https://github.com/.../releases/tag/templates-v1.0.0" }
-  // `tag_name` is the only required field; name/url are carried through for
-  // diagnostics but not required for fetching.
-  let result;
-  try {
-    result = await request(buildLatestReleaseUrl(options));
-  } catch (err) {
-    // GitHub returns 404 for /releases/latest until the samples repo publishes
-    // its first release, and unauthenticated callers can also get a 403 rate
-    // limit on this API before the lower-cost commit/raw fetches:
-    //   GET https://api.github.com/repos/<owner>/<repo>/releases/latest failed with 404
-    //   GET https://api.github.com/repos/<owner>/<repo>/releases/latest failed with 403
-    // Use main as a temporary catalog source so create-site can still discover
-    // templates during the bootstrapping window. Other release lookup failures
-    // still fail open through fetchCatalog so auth/rate-limit/outage issues are
-    // not masked as a successful main fallback.
-    if (/\breleases\/latest\b.*\b(?:403|404)\b/i.test(err.message || '')) {
-      return { ref: 'main', sha: await resolveRefToSha({ ...options, ref: 'main' }, { ...deps, requestJson: request }) };
-    }
-    throw err;
+function compareVersionKeys(left, right) {
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    const diff = (left[i] || 0) - (right[i] || 0);
+    if (diff !== 0) return diff;
   }
-  if (!result || !isNonEmptyString(result.tag_name)) {
-    throw new Error('GitHub latest release response did not include tag_name');
-  }
-  const sha = await resolveRefToSha({ ...options, ref: result.tag_name }, { ...deps, requestJson: request });
-  return { ref: result.tag_name, sha, releaseName: result.name || '', releaseUrl: result.html_url || '' };
+  return 0;
 }
 
-async function resolveCatalogRef(options = {}, deps = {}) {
+function parseRemoteTags(output) {
+  const byTag = new Map();
+  for (const line of String(output || '').split(/\r?\n/)) {
+    const match = line.match(/^([0-9a-f]{40})\s+refs\/tags\/(.+?)(\^\{\})?$/i);
+    if (!match) continue;
+    const [, sha, tagName, peeled] = match;
+    const existing = byTag.get(tagName) || {};
+    byTag.set(tagName, peeled ? { ...existing, peeledSha: sha } : { ...existing, sha });
+  }
+  return [...byTag.entries()]
+    .map(([tagName, value]) => ({ tagName, sha: value.peeledSha || value.sha, version: versionKey(tagName) }))
+    .filter((entry) => entry.sha && entry.version);
+}
+
+function resolveLatestRelease(options = {}, deps = {}) {
+  const remoteUrl = buildGitRemoteUrl(options);
+  const tags = parseRemoteTags(runGitLsRemote(['--tags', remoteUrl], deps));
+  if (tags.length === 0) {
+    return { ref: 'main', sha: resolveRefToSha({ ...options, ref: 'main' }, deps) };
+  }
+  tags.sort((a, b) => compareVersionKeys(b.version, a.version) || a.tagName.localeCompare(b.tagName));
+  const latest = tags[0];
+  return { ref: latest.tagName, sha: latest.sha, releaseName: latest.tagName, releaseUrl: `https://github.com/${options.owner || DEFAULT_OWNER}/${options.repo || DEFAULT_REPO}/releases/tag/${encodeURIComponent(latest.tagName)}` };
+}
+
+function resolveCatalogRef(options = {}, deps = {}) {
   const ref = options.ref || DEFAULT_REF;
   if (ref === 'latest-release') {
     return resolveLatestRelease(options, deps);
   }
-  return { ref, sha: await resolveRefToSha({ ...options, ref }, deps) };
+  return { ref, sha: resolveRefToSha({ ...options, ref }, deps) };
 }
 
 async function fetchCatalog(options = {}, deps = {}) {
@@ -317,7 +306,7 @@ async function fetchCatalog(options = {}, deps = {}) {
   const request = deps.requestJson || ((url) => requestJson(url, deps));
 
   try {
-    const resolved = await resolveCatalogRef({ owner, repo, ref }, { ...deps, requestJson: request });
+    const resolved = resolveCatalogRef({ owner, repo, ref }, deps);
     const { sha } = resolved;
     const cacheDir = cacheDirForSha(cacheRoot, sha);
     const rawCatalog = await request(buildRawUrl({ owner, repo, sha, filePath: catalogPath }));
@@ -419,7 +408,6 @@ async function downloadSeedDataDirectory(options = {}, deps = {}) {
     return { ok: false, seedDataPath, error: `Seed data path must stay under templates: ${seedDataPath}` };
   }
   const fsImpl = deps.fs || fs;
-  const request = deps.requestJson || ((url) => requestJson(url, deps));
   try {
     if (path.posix.extname(seedDataPath).toLowerCase() === '.json') {
       const seedFile = (await downloadArtifact({ owner, repo, sha, artifactPath: seedDataPath, cacheRoot }, deps)).localPath;
@@ -439,23 +427,7 @@ async function downloadSeedDataDirectory(options = {}, deps = {}) {
       }
       return { ok: true, localDir: path.dirname(seedFile), files: downloaded };
     }
-
-    const prefix = seedDataPath.replace(/\/+$/, '') + '/';
-    const tree = await request(`https://api.github.com/repos/${owner}/${repo}/git/trees/${sha}?recursive=1`);
-    const treePaths = (tree.tree || [])
-      .filter((entry) => entry.type === 'blob')
-      .map((entry) => entry.path);
-    // Seed data can include JSON record files plus binary attachment files
-    // referenced by `__files`. Download every blob under seed-data so
-    // apply-seed-data can resolve seed-data-root-relative attachment paths.
-    const files = treePaths
-      .filter((filePath) => filePath.startsWith(prefix))
-      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-    const downloaded = [];
-    for (const artifactPath of files) {
-      downloaded.push((await downloadArtifact({ owner, repo, sha, artifactPath, cacheRoot }, deps)).localPath);
-    }
-    return { ok: true, localDir: artifactCachePath({ cacheRoot, sha, artifactPath: seedDataPath }), files: downloaded };
+    return { ok: false, seedDataPath, error: `Seed data path must point to a JSON file: ${seedDataPath}` };
   } catch (err) {
     return { ok: false, seedDataPath, error: err.message };
   }
@@ -481,14 +453,14 @@ module.exports = {
   DEFAULT_CATALOG_PATH,
   getDefaultCacheRoot,
   buildRawUrl,
-  buildCommitUrl,
-  buildLatestReleaseUrl,
+  buildGitRemoteUrl,
   cacheDirForSha,
   artifactCachePath,
   requestJson,
   downloadFile,
   resolveRefToSha,
   resolveLatestRelease,
+  parseRemoteTags,
   resolveCatalogRef,
   fetchCatalog,
   validateZipContainsSolution,
