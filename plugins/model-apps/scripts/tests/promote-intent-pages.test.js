@@ -132,6 +132,50 @@ test('promotes a spec whose pages have no explicit key (key is derived from name
   assert.ok(after.pages.every((p) => p.key === undefined), 'derived keys are not persisted into the spec');
 });
 
+test('two pages cannot silently share a file', () => {
+  // Upstream, migrateAppSpec de-duplicates slugified keys, so "Supplier Detail" and
+  // "supplier-detail" become supplier-detail / supplier-detail-2 and get distinct files. Assert
+  // that invariant here (it is what makes one-file-per-page true), and note the script keeps its
+  // own same-file guard as a backstop if that ever changes.
+  const dir = makeWorkspace({
+    app: { name: 'A' },
+    pages: [{ name: 'Supplier Detail' }, { name: 'supplier-detail' }],
+  }, { 'supplier-detail.tsx': GOOD, 'supplier-detail-2.tsx': GOOD });
+  const r = run(dir);
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(readSpec(dir).pages.map((p) => p.source.codeFile), ['supplier-detail.tsx', 'supplier-detail-2.tsx']);
+});
+
+test('validatePage refuses a codeFile that escapes the working directory', () => {
+  // Defence in depth: today `pageFile()` only returns a pinned codeFile for already-built pages
+  // (which promotion skips), but codeFile is author-editable and download-derived, so the check
+  // lives with the read rather than relying on that invariant holding forever.
+  const { validatePage } = require('../promote-intent-pages.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'promote-esc-'));
+  fs.writeFileSync(path.join(dir, '..', 'outside.tsx'), GOOD, 'utf8');
+  for (const codeFile of ['../outside.tsx', path.join(dir, '..', 'outside.tsx')]) {
+    const r = validatePage({ key: 'evil', name: 'Evil', source: { kind: 'tsx', codeFile } }, dir);
+    assert.deepEqual(r.problems.length, 1, codeFile);
+    assert.match(r.problems[0], /escapes the working directory/, codeFile);
+  }
+});
+
+test('a malformed or missing spec fails closed with the same exit contract', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'promote-bad-'));
+  let r = run(dir);
+  assert.equal(r.code, 3, 'missing spec');
+  assert.match(r.stderr, /cannot read app spec/);
+
+  fs.writeFileSync(path.join(dir, 'app-spec.json'), '{ not json', 'utf8');
+  r = run(dir);
+  assert.equal(r.code, 3, 'unparseable spec');
+
+  fs.writeFileSync(path.join(dir, 'app-spec.json'), '{"app":{"name":"A"},"pages":"nope"}', 'utf8');
+  r = run(dir);
+  assert.equal(r.code, 3, 'pages not an array');
+  assert.match(r.stderr, /"pages" must be an array/);
+});
+
 test('unrelated spec content survives the rewrite', () => {
   const spec = twoPageSpec();
   spec.entities = [{ logicalName: 'co_thing', columns: [{ logicalName: 'co_name', type: 'Text' }] }];

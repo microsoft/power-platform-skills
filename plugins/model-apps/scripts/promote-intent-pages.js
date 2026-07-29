@@ -38,7 +38,16 @@ function structuralProblems(code) {
 function validatePage(page, absWorkingDir) {
   const key = pageKey(page);
   const file = pageFile(page);
+
+  // Containment check BEFORE any read. `codeFile` is author-editable and, on an edit round-trip,
+  // download-derived — so a `../` prefix or an absolute path would make this script read (and then
+  // record) a file outside the app folder. The spec is only ever allowed to reference pages inside
+  // its own working directory.
   const abs = path.resolve(absWorkingDir, file);
+  const rel = path.relative(absWorkingDir, abs);
+  if (path.isAbsolute(file) || rel.startsWith('..') || path.isAbsolute(rel)) {
+    return { key, file, problems: [`codeFile escapes the working directory (resolved to ${abs})`] };
+  }
   if (!fs.existsSync(abs)) return { key, file, problems: ['file was never written'] };
 
   const code = fs.readFileSync(abs, 'utf8');
@@ -72,7 +81,23 @@ function main() {
   const absWorkingDir = path.resolve(workingDir);
   // Read the raw text so the rewrite preserves the author's formatting for everything we do not
   // touch — migrateAppSpec is only used to reason about the CURRENT shape, never to rewrite it.
-  const raw = JSON.parse(fs.readFileSync(specPath, 'utf8'));
+  // A missing/garbled spec is a normal operator error, not a crash: report it as a fail-closed
+  // result so the skill sees the same exit-3 contract as a validation failure.
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(specPath, 'utf8'));
+  } catch (e) {
+    process.stderr.write(`cannot read app spec at ${specPath}: ${e.message}\n`);
+    process.exit(3);
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    process.stderr.write(`app spec at ${specPath} is not a JSON object\n`);
+    process.exit(3);
+  }
+  if (raw.pages !== undefined && !Array.isArray(raw.pages)) {
+    process.stderr.write(`app spec "pages" must be an array (got ${typeof raw.pages})\n`);
+    process.exit(3);
+  }
   const spec = migrateAppSpec(JSON.parse(JSON.stringify(raw)));
 
   const pages = spec.pages || [];
@@ -83,6 +108,18 @@ function main() {
   }
 
   const results = intentIdx.map(([p, i]) => ({ index: i, ...validatePage(p, absWorkingDir) }));
+
+  // Two pages resolving to the same file means one worker overwrote the other's output, so both
+  // rows would be promoted to identical code. Compare case-insensitively: NTFS and macOS are
+  // case-insensitive, so `Overview.tsx` and `overview.tsx` are the SAME file there.
+  const byFile = new Map();
+  for (const r of results) {
+    const k = path.resolve(absWorkingDir, r.file).toLowerCase();
+    if (byFile.has(k)) {
+      r.problems.push(`resolves to the same file as page "${byFile.get(k)}" — one page overwrote the other`);
+    } else byFile.set(k, r.key);
+  }
+
   const failed = results.filter((r) => r.problems.length);
   if (failed.length) {
     // Fail-closed: the spec on disk is untouched, so the caller can regenerate just the bad pages
@@ -106,9 +143,19 @@ function main() {
     target.source = { kind: 'tsx', codeFile: r.file };
   }
   // Write via a temp file + rename so a crash mid-write cannot truncate the user's spec.
+  // fs.renameSync overwrites an existing destination on both POSIX and Windows (libuv uses
+  // MoveFileEx with MOVEFILE_REPLACE_EXISTING), so no unlink-first dance is needed. If the write
+  // or rename fails (read-only folder, lock), clean up the temp file and fail closed rather than
+  // leaving a stray `.promote.tmp` next to the spec.
   const tmp = specPath + '.promote.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(raw, null, 2) + '\n', 'utf8');
-  fs.renameSync(tmp, specPath);
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(raw, null, 2) + '\n', 'utf8');
+    fs.renameSync(tmp, specPath);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch { /* nothing to clean up */ }
+    process.stderr.write(`failed to write ${specPath}: ${e.message}\n`);
+    process.exit(3);
+  }
 
   emitResult(true, { ok: true, promoted: results.map((r) => ({ key: r.key, codeFile: r.file })), specPath });
 }
