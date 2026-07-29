@@ -29,8 +29,8 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 - **Read-only.** You MUST NOT run `npx power-apps add-data-source --api-id dataverse --org-url <env-url> --resource-name <table>`, table-creation HTTP calls, or any mutating PowerShell. Mutation happens later in `/add-dataverse` after user approval.
 - **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx power-apps *` command; retry the original command once after auth is corrected.
 - **Reuse-first and target-grounded.** Query the exact target metadata for every proposed table, including standard tables, and prefer reuse > extension > new. Don't propose a `cr123_customer` table if a verified target `contact` table fits.
-- **Never invent existing schema.** Never propose recreating or imitating a missing standard, managed, or solution-owned table/column. If discovery cannot run, you may still draft a plan from requirements, but mark it `Discovery skipped` so the user and `/add-dataverse` treat every decision as unverified — `/add-dataverse` re-reconciles against live metadata and blocks mutations there.
-- **No automatic replacement.** This agent classifies schema as `Reuse`, `Extend`, `Create`, `Adapt` (create beside a conflicting object under a new name), or `Defer` (leave out of this run). Replacing an existing table/column requires a separately approved migration with dependency analysis and data movement; it is outside this workflow. A data-modelling conflict is never a blocker — it is an `Adapt` or a `Defer` with a recorded reason.
+- **Never invent existing schema.** Never propose recreating or imitating a missing standard, managed, or solution-owned table/column. If discovery cannot run, you may still draft a plan from requirements, but mark it `Discovery skipped` so the user and `/add-dataverse` treat every decision as unverified — `/add-dataverse` re-reconciles against live metadata and adapts or defers anything that conflicts.
+- **No automatic replacement.** This agent classifies schema as `Reuse`, `Extend`, `Create`, `Adapt` (create beside a conflicting object under a new name), `Defer` (leave out of this run), or `Unverified` (target metadata could not be read). Replacing an existing table/column requires a separately approved migration with dependency analysis and data movement; it is outside this workflow. A data-modelling conflict is never a blocker — it is an `Adapt` or a `Defer` with a recorded reason.
 - **Return a section, not a separate doc.** Output is a markdown `## Data Model` section the planner embeds verbatim.
 - **No JSON request bodies in the output.** Your `_dm_section.md` describes *what* to create (tables, columns, relationships) using the Mermaid ER + reuse/extend/create table + tier list. **Do NOT include POST body JSON** for `EntityDefinitions` or `RelationshipDefinitions` — `/add-dataverse` constructs those from its own canonical templates in [skills/add-dataverse/SKILL.md](../skills/add-dataverse/SKILL.md) Step 5b. JSON in your output is read as authoritative and will leak invented/wrong fields (e.g. `ReferencingAttribute` on a lookup) into the actual POST.
 - **No questions.** Do not ask the user anything — infer from the requirements provided. The planner runs the approval gate, not you.
@@ -188,7 +188,7 @@ Build a table:
 
 ## Step 6 — Build Dependency Tiers
 
-Order new tables so foreign keys can resolve. From [data-architecture-reference.md](${PLUGIN_ROOT}/skills/add-dataverse/references/data-architecture-reference.md):
+Order new tables so foreign keys can resolve. See [dataverse-reference.md § Pre-flight ordering](${PLUGIN_ROOT}/skills/add-dataverse/references/dataverse-reference.md#pre-flight-ordering):
 
 - **Tier 0** — reference tables (no lookups out)
 - **Tier 1** — primary entities (lookups to Tier 0)
