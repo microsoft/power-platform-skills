@@ -390,7 +390,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       node "${PLUGIN_ROOT}/scripts/open-url.js" --url "<url from <temp-import-status-dir>/url.txt>"
       ```
       Reuse the already-downloaded local preview image URLs from the browser step; do not fetch preview images again for this page.
-   8. Import the unmanaged solution inline, without invoking `/import-solution` and without writing ALM artifacts:
+   8. Import the unmanaged solution inline, without invoking `/import-solution` and without writing ALM artifacts. After `ImportSolutionAsync` returns the async operation id, launch a Task subagent to run `poll-async-operation.js` and write `<temp-import-status-dir>/status.json`; do not run the long poll in the main conversation, because the import can take many minutes and the main agent must remain responsive while the browser status page updates:
       ```bash
       node "${PLUGIN_ROOT}/scripts/encode-solution-file.js" --zipPath "<SELECTED_TEMPLATE_SOLUTION_ZIP>"
       # Write a temp JSON body file containing:
@@ -403,6 +403,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "<environmentUrl>" POST "ImportSolutionAsync" \
         --bodyFile "<temp-import-body.json>" \
         --include-headers
+      # Run this poll command in a Task subagent, not in the main conversation:
       node "${PLUGIN_ROOT}/scripts/poll-async-operation.js" \
         --asyncJobId "<AsyncOperationId from ImportSolutionAsync>" \
         --envUrl "<environmentUrl>" \
@@ -411,7 +412,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         --maxAttempts 75 \
         --statusFile "<temp-import-status-dir>/status.json"
       ```
-      The import status page polls `<temp-import-status.json>` and updates its preview slideshow, progress bar, and toast. On failure or timeout, it shows an error toast telling the user to check the agent terminal. On success, it shows a completion toast telling the user to check the agent terminal.
+      The subagent must return the poller's final JSON to the main conversation when the command exits. While it runs, keep the main conversation unblocked and available for user questions; do not proceed to post-import site detection until the subagent reports `Succeeded`, `Failed`, `Canceled`, or `Timeout`.
+      The import status page polls `<temp-import-status-dir>/status.json` and updates its preview slideshow, progress bar, and toast. On failure or timeout, it shows an error toast telling the user to check the agent terminal. On success, it shows a completion toast telling the user to check the agent terminal.
       If the poll result is not `Succeeded`, query the import job (using the `ImportJobKey` returned by `ImportSolutionAsync`) and parse its component-level error XML, following `/import-solution`'s Phase 6 pattern. Do **not** auto-clean up the unmanaged partial import.
 
       <!-- gate: create-site:1.5.import-failed | category=progress | cancel-leaves=partial-unmanaged-template-import -->

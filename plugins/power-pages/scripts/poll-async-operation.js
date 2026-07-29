@@ -79,6 +79,15 @@ function writeStatus(status) {
   }
 }
 
+function progressFromAsyncOperation(pollBody) {
+  const progress = Number(pollBody.progress);
+  return Number.isFinite(progress) ? Math.max(0, Math.min(100, Math.floor(progress))) : null;
+}
+
+function estimatedProgress(attempt) {
+  return Math.max(1, Math.min(95, Math.floor((attempt / maxAttempts) * 95)));
+}
+
 (async () => {
   // Acquire initial token if not provided
   if (!token) {
@@ -110,7 +119,7 @@ function writeStatus(status) {
 
       if (result.error) {
         // Network error — wait and retry (don't fail on transient issues)
-        writeStatus({ state: 'running', message: 'Waiting for Dataverse import status', progressPercent: null, attempt });
+        writeStatus({ state: 'running', message: 'Waiting for Dataverse import status', progressPercent: estimatedProgress(attempt), attempt });
         await sleep(intervalMs);
         continue;
       }
@@ -123,7 +132,7 @@ function writeStatus(status) {
       }
 
       if (result.statusCode !== 200 || !result.body) {
-        writeStatus({ state: 'running', message: `Waiting for Dataverse import status (HTTP ${result.statusCode})`, progressPercent: null, attempt });
+        writeStatus({ state: 'running', message: `Waiting for Dataverse import status (HTTP ${result.statusCode})`, progressPercent: estimatedProgress(attempt), attempt });
         await sleep(intervalMs);
         continue;
       }
@@ -138,7 +147,7 @@ function writeStatus(status) {
     const statuscode = pollBody.statuscode;
     const message = pollBody.message || pollBody.Message || '';
     const friendlyMessage = pollBody.friendlymessage || pollBody.FriendlyMessage || '';
-    const progressPercent = Number.isFinite(Number(pollBody.progress)) ? Math.max(0, Math.min(100, Math.floor(Number(pollBody.progress)))) : null;
+    const progressPercent = progressFromAsyncOperation(pollBody) ?? estimatedProgress(attempt);
 
     if (!TERMINAL_STATECODES.has(statecode)) {
       // Still running — wait and poll again
@@ -171,7 +180,7 @@ function writeStatus(status) {
   }
 
   // Timed out
-  writeStatus({ state: 'timeout', message: 'Template import is still running. Check the agent terminal.', progressPercent: null, attempt: maxAttempts });
+  writeStatus({ state: 'timeout', message: 'Template import is still running. Check the agent terminal.', progressPercent: estimatedProgress(maxAttempts), attempt: maxAttempts });
   output({
     status: 'Timeout',
     asyncJobId: args.asyncJobId,

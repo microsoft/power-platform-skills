@@ -3,7 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { pathToFileURL } = require('url');
+const { fileURLToPath, pathToFileURL } = require('url');
 const { renderTemplate, escapeHtml } = require('./lib/render-template');
 const { openInDefaultBrowser } = require('./lib/default-browser');
 
@@ -17,6 +17,31 @@ function parseArgs(argv) {
     else if (argv[i] === '--open') args.open = true;
   }
   return args;
+}
+
+function previewImageUrl(input, index, outputDir) {
+  if (typeof input !== 'string' || !input.trim()) return null;
+  if (/^https?:\/\//i.test(input)) return input;
+  const sourcePath = input.startsWith('file://') ? fileURLToPath(input) : path.resolve(input);
+  if (!fs.existsSync(sourcePath)) return input;
+  const ext = path.extname(sourcePath) || '.png';
+  const previewsDir = path.join(outputDir, 'preview-images');
+  const destName = `preview-${String(index + 1).padStart(2, '0')}${ext}`;
+  const destPath = path.join(previewsDir, destName);
+  fs.mkdirSync(previewsDir, { recursive: true });
+  // The status page is served over localhost so it can poll status.json. Browsers
+  // do not reliably load file:// or absolute filesystem image paths from that
+  // HTTP origin, so copy local preview assets beside the page and reference them
+  // by relative URL instead.
+  fs.copyFileSync(sourcePath, destPath);
+  return `preview-images/${destName}`;
+}
+
+function localizePreviewImages(previewImages, outputPath) {
+  const outputDir = path.dirname(path.resolve(outputPath));
+  return previewImages
+    .map((image, index) => previewImageUrl(image, index, outputDir))
+    .filter(Boolean);
 }
 
 function renderTemplateImportStatus({ templateName, statusPath, outputPath, previewImages = [], open = false }, deps = {}) {
@@ -33,7 +58,7 @@ function renderTemplateImportStatus({ templateName, statusPath, outputPath, prev
     dataObject: {
       TEMPLATE_NAME: escapeHtml(templateName),
       STATUS_URL_JSON: JSON.stringify(statusUrl),
-      PREVIEW_IMAGES_JSON: previewImages,
+      PREVIEW_IMAGES_JSON: localizePreviewImages(previewImages, outputPath),
     },
     requiredKeys: ['TEMPLATE_NAME', 'STATUS_URL_JSON', 'PREVIEW_IMAGES_JSON'],
   });
@@ -56,4 +81,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { parseArgs, renderTemplateImportStatus };
+module.exports = { localizePreviewImages, parseArgs, renderTemplateImportStatus };

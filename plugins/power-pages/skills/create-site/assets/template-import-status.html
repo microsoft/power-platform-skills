@@ -1,101 +1,406 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Importing __TEMPLATE_NAME__ template</title>
-  <link rel="icon" href="data:,">
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="icon" href="data:," />
   <style>
-    :root{
-      --pp-violet:#7B5EA7; --pp-purple:#8B6FC0; --pp-lavender:#A78BDB; --pp-sky:#5A9BD5;
-      --pp-bg:#F7F5FA; --pp-surface:#FFFFFF; --pp-text:#2D1B4E; --pp-muted:#7F7098; --pp-border:rgba(139,111,192,0.14);
-      --pp-error:#B42318; --pp-success:#087443;
-      --sans:'Segoe UI','Segoe UI Web (West European)',-apple-system,system-ui,sans-serif;
+    :root {
+      --pp-violet: #7B5EA7;
+      --pp-purple: #8B6FC0;
+      --pp-lavender: #A78BDB;
+      --pp-periwinkle: #8088D9;
+      --pp-sky: #5A9BD5;
+      --pp-deep-violet: #5C3D8F;
+      --pp-bg: #F7F5FA;
+      --pp-surface: #FFFFFF;
+      --pp-text: #2D1B4E;
+      --pp-text-secondary: #6B5A82;
+      --pp-text-muted: #9B8FB5;
+      --pp-border: rgba(139, 111, 192, 0.12);
+      --pp-error: #B42318;
+      --pp-success: #087443;
+      --pp-glow: rgba(139, 111, 192, 0.2);
     }
-    *{box-sizing:border-box}
-    body{margin:0;min-height:100vh;font-family:var(--sans);background:radial-gradient(circle at 50% 20%,rgba(167,139,219,.14),transparent 38%),var(--pp-bg);color:var(--pp-text);overflow:hidden}
-    .wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:40px}
-    .stage{width:min(920px,100%);text-align:center}
-    .brand{letter-spacing:5px;text-transform:uppercase;color:var(--pp-violet);font-size:13px;margin-bottom:18px}
-    h1{font-size:34px;line-height:1.2;margin:0 0 26px;color:var(--pp-violet)}
-    .preview{height:min(52vh,520px);display:flex;align-items:center;justify-content:center;margin:0 auto 22px}
-    .preview img{max-width:100%;max-height:100%;object-fit:contain;border:1px solid var(--pp-border);box-shadow:0 8px 34px rgba(92,61,143,.12);background:#fff}
-    .bar{width:min(620px,100%);height:8px;margin:0 auto 10px;background:rgba(139,111,192,.14);border-radius:999px;overflow:hidden}
-    .fill{height:100%;width:100%;background:linear-gradient(90deg,var(--pp-violet),var(--pp-lavender),var(--pp-sky));transform:scaleX(0);transform-origin:left;transition:transform .5s ease}
-    .label{font-size:13px;color:var(--pp-muted);min-height:22px}
-    .toast{position:fixed;right:24px;bottom:24px;max-width:420px;background:var(--pp-surface);border:1px solid var(--pp-border);border-radius:12px;padding:14px 16px;box-shadow:0 10px 30px rgba(40,24,70,.14);text-align:left;color:var(--pp-text)}
-    .toast[hidden]{display:none}
-    .toast.error .toast-title{color:var(--pp-error)}
-    .toast.success .toast-title{color:var(--pp-success)}
-    .toast-title{font-weight:700;margin-bottom:4px}
-    .toast-message{font-size:13px;color:var(--pp-muted)}
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { overflow: hidden; background: var(--pp-bg); color: var(--pp-text); font-family: 'DM Sans', sans-serif; }
+    .loading-wrapper { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--pp-bg); }
+    .ambient { position: fixed; inset: 0; z-index: 0; overflow: hidden; }
+    .ambient::before {
+      content: ''; position: absolute; width: 160%; height: 160%; top: -30%; left: -30%;
+      background:
+        radial-gradient(ellipse 600px 600px at 25% 30%, rgba(167, 139, 219, 0.12) 0%, transparent 70%),
+        radial-gradient(ellipse 500px 500px at 75% 70%, rgba(90, 155, 213, 0.08) 0%, transparent 70%),
+        radial-gradient(ellipse 800px 400px at 50% 50%, rgba(139, 111, 192, 0.06) 0%, transparent 60%);
+      animation: ambientDrift 25s ease-in-out infinite alternate;
+    }
+    @keyframes ambientDrift {
+      0% { transform: translate(0, 0) scale(1); }
+      50% { transform: translate(-3%, 2%) scale(1.04); }
+      100% { transform: translate(2%, -1%) scale(0.98); }
+    }
+    .particles { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
+    .particle { position: absolute; border-radius: 50%; opacity: 0; animation: particleFloat linear infinite; }
+    @keyframes particleFloat {
+      0% { transform: translateY(100vh) scale(0); opacity: 0; }
+      10% { opacity: 0.6; }
+      90% { opacity: 0.6; }
+      100% { transform: translateY(-10vh) scale(1); opacity: 0; }
+    }
+    .grid-overlay {
+      position: fixed; inset: 0; z-index: 1;
+      background-image: linear-gradient(rgba(139, 111, 192, 0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(139, 111, 192, 0.04) 1px, transparent 1px);
+      background-size: 60px 60px; animation: gridPulse 8s ease-in-out infinite alternate;
+    }
+    @keyframes gridPulse { 0% { opacity: 0.3; } 100% { opacity: 0.7; } }
+    .center-stage { position: relative; z-index: 10; display: flex; flex-direction: column; align-items: center; gap: 36px; padding: 40px 40px 48px; max-height: 100vh; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; }
+    .center-stage::-webkit-scrollbar { display: none; }
+    .orbit-system { position: relative; width: 260px; height: 220px; display: flex; align-items: center; justify-content: center; }
+    .core-shape { position: absolute; width: 158px; height: 96px; z-index: 5; border-radius: 16px; background: rgba(255, 255, 255, 0.8); box-shadow: 0 2px 12px rgba(139, 111, 192, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04); overflow: hidden; animation: coreFloat 4s ease-in-out infinite; }
+    .core-shape img { width: 100%; height: 100%; object-fit: cover; display: block; background: var(--pp-surface); }
+    .core-shape.empty { width: 120px; height: 120px; border-radius: 50%; background: url('./power-pages-icon.png') center/contain no-repeat; box-shadow: none; }
+    @keyframes coreFloat { 0%, 100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-3px) scale(1.025); } }
+    .core-glow { position: absolute; width: 150px; height: 150px; border-radius: 50%; background: radial-gradient(circle, rgba(167, 139, 219, 0.18) 0%, transparent 70%); z-index: 3; animation: coreGlow 3s ease-in-out infinite alternate; filter: blur(25px); }
+    @keyframes coreGlow { 0% { transform: scale(1); opacity: 0.5; } 100% { transform: scale(1.5); opacity: 0.9; } }
+    .orbit-ring { position: absolute; border: 1px solid rgba(139, 111, 192, 0.15); border-radius: 50%; animation: ringRotate linear infinite; }
+    .orbit-ring:nth-child(3) { width: 160px; height: 160px; animation-duration: 12s; }
+    .orbit-ring:nth-child(4) { width: 200px; height: 200px; animation-duration: 18s; animation-direction: reverse; border-color: rgba(90, 155, 213, 0.12); }
+    .orbit-ring:nth-child(5) { width: 240px; height: 240px; animation-duration: 25s; border-style: dashed; border-color: rgba(139, 111, 192, 0.08); }
+    @keyframes ringRotate { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    .orbit-dot { position: absolute; width: 8px; height: 8px; border-radius: 50%; z-index: 6; }
+    .orbit-dot::after { content: ''; position: absolute; inset: -4px; border-radius: 50%; filter: blur(6px); }
+    .orbit-dot:nth-child(6) { background: var(--pp-lavender); box-shadow: 0 0 10px rgba(167, 139, 219, 0.5); animation: orbitA 12s linear infinite; }
+    .orbit-dot:nth-child(6)::after { background: rgba(167, 139, 219, 0.4); }
+    .orbit-dot:nth-child(7) { background: var(--pp-sky); box-shadow: 0 0 10px rgba(90, 155, 213, 0.5); width: 6px; height: 6px; animation: orbitB 18s linear infinite reverse; }
+    .orbit-dot:nth-child(7)::after { background: rgba(90, 155, 213, 0.4); }
+    .orbit-dot:nth-child(8) { background: var(--pp-periwinkle); box-shadow: 0 0 8px rgba(128, 136, 217, 0.5); width: 5px; height: 5px; animation: orbitC 25s linear infinite; }
+    .orbit-dot:nth-child(8)::after { background: rgba(128, 136, 217, 0.4); }
+    @keyframes orbitA { from { transform: rotate(0deg) translateX(80px) rotate(0deg); } to { transform: rotate(360deg) translateX(80px) rotate(-360deg); } }
+    @keyframes orbitB { from { transform: rotate(0deg) translateX(100px) rotate(0deg); } to { transform: rotate(360deg) translateX(100px) rotate(-360deg); } }
+    @keyframes orbitC { from { transform: rotate(0deg) translateX(120px) rotate(0deg); } to { transform: rotate(360deg) translateX(120px) rotate(-360deg); } }
+    .text-content { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 20px; }
+    .brand-title { font-family: 'Outfit', sans-serif; font-weight: 300; font-size: 14px; letter-spacing: 4px; text-transform: uppercase; color: var(--pp-violet); opacity: 0; animation: fadeSlideUp 1s ease-out 0.5s forwards; }
+    .main-heading { font-family: 'Outfit', sans-serif; font-weight: 600; font-size: 32px; line-height: 1.3; background: linear-gradient(135deg, var(--pp-deep-violet) 0%, var(--pp-violet) 40%, var(--pp-sky) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; opacity: 0; animation: fadeSlideUp 1s ease-out 0.8s forwards; }
+    .status-area { height: 52px; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; overflow: hidden; opacity: 0; animation: fadeSlideUp 1s ease-out 1.2s forwards; }
+    .status-message { position: absolute; white-space: nowrap; font-size: 15px; font-weight: 400; color: var(--pp-text-secondary); display: flex; align-items: center; gap: 10px; opacity: 0; transform: translateY(20px); transition: all 0.7s cubic-bezier(0.22, 1, 0.36, 1); }
+    .status-message.active { opacity: 1; transform: translateY(0); }
+    .status-message.exiting { opacity: 0; transform: translateY(-20px); }
+    .status-icon { width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .status-icon.working { border: 2px solid rgba(139, 111, 192, 0.2); border-top-color: var(--pp-violet); animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .progress-container { width: 320px; opacity: 0; animation: fadeSlideUp 1s ease-out 1.5s forwards; display: flex; flex-direction: column; align-items: center; gap: 14px; }
+    .progress-track { width: 100%; height: 3px; background: rgba(139, 111, 192, 0.1); border-radius: 4px; overflow: hidden; position: relative; }
+    .progress-fill { height: 100%; width: 40%; border-radius: 4px; background: linear-gradient(90deg, transparent, var(--pp-violet), var(--pp-lavender), var(--pp-sky), transparent); position: absolute; top: 0; left: -40%; animation: infiniteSlide 2s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
+    .progress-fill::after { content: ''; position: absolute; right: 10%; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--pp-sky); box-shadow: 0 0 8px rgba(90, 155, 213, 0.5), 0 0 16px rgba(90, 155, 213, 0.2); opacity: 0.9; }
+    @keyframes infiniteSlide { 0% { left: -40%; } 100% { left: 100%; } }
+    .progress-track.has-progress .progress-fill { width: 100%; left: 0; animation: none; transform: scaleX(var(--progress-scale, 0)); transform-origin: left; background: linear-gradient(90deg, var(--pp-violet), var(--pp-lavender), var(--pp-sky)); transition: transform 0.8s ease; }
+    .progress-track.has-progress .progress-fill::after { display: none; }
+    .progress-track.complete .progress-fill { width: 100%; left: 0; animation: none; background: linear-gradient(90deg, var(--pp-violet), var(--pp-lavender), var(--pp-sky)); transition: all 0.8s ease; }
+    .progress-track.complete .progress-fill::after { display: none; }
+    .progress-label-text { font-size: 12px; color: var(--pp-text-muted); font-family: 'DM Sans', sans-serif; letter-spacing: 0.3px; }
+    .feature-cards { display: flex; gap: 16px; margin-top: 16px; opacity: 0; animation: fadeSlideUp 1s ease-out 2s forwards; }
+    .feature-card { background: var(--pp-surface); border: 1px solid rgba(139, 111, 192, 0.1); border-radius: 16px; padding: 20px 22px; width: 150px; box-shadow: 0 2px 12px rgba(139, 111, 192, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04); opacity: 0; transform: translateY(20px) scale(0.95); transition: all 0.8s cubic-bezier(0.22, 1, 0.36, 1); }
+    .feature-card.visible { opacity: 1; transform: translateY(0) scale(1); }
+    .feature-card:hover { border-color: rgba(139, 111, 192, 0.2); box-shadow: 0 4px 24px rgba(139, 111, 192, 0.12), 0 2px 6px rgba(0, 0, 0, 0.04); transform: translateY(-2px) scale(1.02); }
+    .feature-card-icon { font-size: 24px; margin-bottom: 10px; display: block; }
+    .feature-card-label { font-family: 'Outfit', sans-serif; font-size: 13px; font-weight: 500; color: var(--pp-text-secondary); line-height: 1.4; }
+    .connector-lines { position: fixed; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; }
+    .connector { position: absolute; height: 1px; background: linear-gradient(90deg, transparent, rgba(139, 111, 192, 0.12), transparent); animation: connectorSweep 6s ease-in-out infinite; }
+    @keyframes connectorSweep { 0%, 100% { transform: translateX(-100%); opacity: 0; } 20% { opacity: 1; } 80% { opacity: 1; } 100% { transform: translateX(100vw); opacity: 0; } }
+    .scanline { position: fixed; left: 0; right: 0; height: 1px; background: linear-gradient(90deg, transparent 0%, var(--pp-lavender) 50%, transparent 100%); opacity: 0.06; z-index: 2; animation: scanDrop 8s linear infinite; pointer-events: none; }
+    @keyframes scanDrop { 0% { top: -2px; } 100% { top: 100%; } }
+    .tip-area { text-align: center; margin-top: 12px; opacity: 0; animation: fadeSlideUp 1s ease-out 3s forwards; }
+    .tip-label { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--pp-text-muted); margin-bottom: 8px; font-family: 'Outfit', sans-serif; }
+    .tip-text { font-size: 13px; color: var(--pp-text-muted); max-width: 380px; line-height: 1.6; margin: 0 auto; min-height: 42px; transition: opacity 0.6s ease, transform 0.6s ease; }
+    .toast { position: fixed; right: 24px; bottom: 24px; z-index: 100; max-width: 420px; background: var(--pp-surface); border: 1px solid var(--pp-border); border-radius: 16px; padding: 16px 18px; box-shadow: 0 10px 30px rgba(40, 24, 70, 0.14); text-align: left; color: var(--pp-text); animation: toastEnter 0.35s cubic-bezier(0.22, 1, 0.36, 1); }
+    .toast[hidden] { display: none; }
+    .toast.error .toast-title { color: var(--pp-error); }
+    .toast.success .toast-title { color: var(--pp-success); }
+    .toast-title { font-weight: 700; margin-bottom: 4px; }
+    .toast-message { font-size: 13px; color: var(--pp-text-secondary); }
+    @keyframes toastEnter { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes fadeSlideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+    @media (max-width: 600px) { .main-heading { font-size: 24px; } .progress-container { width: 260px; } .feature-cards { flex-direction: column; align-items: center; } .orbit-system { width: 180px; height: 180px; } .core-shape { width: 132px; height: 82px; } }
   </style>
 </head>
 <body>
-  <main class="wrap">
-    <section class="stage">
-      <div class="brand">Power Pages</div>
-      <h1>Importing __TEMPLATE_NAME__ template</h1>
-      <div class="preview" id="preview"></div>
-      <div class="bar"><div class="fill" id="progressFill"></div></div>
-      <div class="label" id="progressLabel">Starting template import...</div>
-    </section>
-  </main>
+  <div class="loading-wrapper">
+    <div class="ambient"></div>
+    <div class="grid-overlay"></div>
+    <div class="scanline"></div>
+    <div class="particles" id="particles"></div>
+    <div class="connector-lines" id="connectors"></div>
+
+    <div class="center-stage" id="centerStage">
+      <div class="orbit-system">
+        <div class="core-glow"></div>
+        <div class="core-shape" id="coreShape"></div>
+        <div class="orbit-ring"></div>
+        <div class="orbit-ring"></div>
+        <div class="orbit-ring"></div>
+        <div class="orbit-dot"></div>
+        <div class="orbit-dot"></div>
+        <div class="orbit-dot"></div>
+      </div>
+
+      <div class="text-content">
+        <div class="brand-title">Power Pages</div>
+        <div class="main-heading" id="mainHeading">Importing __TEMPLATE_NAME__ template</div>
+
+        <div class="status-area" id="statusArea"></div>
+
+        <div class="progress-container">
+          <div class="progress-track" id="progressTrack">
+            <div class="progress-fill" id="progressFill"></div>
+          </div>
+          <span class="progress-label-text" id="progressLabel">Starting template import...</span>
+        </div>
+      </div>
+
+      <div class="feature-cards">
+        <div class="feature-card" data-delay="0">
+          <span class="feature-card-icon">&#128230;</span>
+          <span class="feature-card-label">Importing unmanaged solution</span>
+        </div>
+        <div class="feature-card" data-delay="400">
+          <span class="feature-card-icon">&#9889;</span>
+          <span class="feature-card-label">Tracking Dataverse progress</span>
+        </div>
+        <div class="feature-card" data-delay="800">
+          <span class="feature-card-icon">&#127760;</span>
+          <span class="feature-card-label">Activation comes next</span>
+        </div>
+      </div>
+
+      <div class="tip-area">
+        <div class="tip-label">Did you know</div>
+        <div class="tip-text" id="tipText"></div>
+      </div>
+    </div>
+  </div>
+
   <div class="toast" id="toast" hidden>
     <div class="toast-title" id="toastTitle"></div>
     <div class="toast-message" id="toastMessage"></div>
   </div>
+
   <script>
     const PREVIEWS = __PREVIEW_IMAGES_JSON__;
     const STATUS_URL = __STATUS_URL_JSON__;
-    let previewIndex = 0;
-    const preview = document.getElementById('preview');
-    const fill = document.getElementById('progressFill');
-    const label = document.getElementById('progressLabel');
-    const toast = document.getElementById('toast');
-    const toastTitle = document.getElementById('toastTitle');
-    const toastMessage = document.getElementById('toastMessage');
 
-    function showPreview() {
-      if (!PREVIEWS.length) {
-        preview.textContent = 'No preview images available for this template.';
-        return;
+    (function () {
+      var particlesEl = document.getElementById('particles');
+      var connectorsEl = document.getElementById('connectors');
+      var statusArea = document.getElementById('statusArea');
+      var progressLabel = document.getElementById('progressLabel');
+      var progressTrack = document.getElementById('progressTrack');
+      var progressFill = document.getElementById('progressFill');
+      var tipTextEl = document.getElementById('tipText');
+      var coreShape = document.getElementById('coreShape');
+      var toast = document.getElementById('toast');
+      var toastTitle = document.getElementById('toastTitle');
+      var toastMessage = document.getElementById('toastMessage');
+      var currentStatusIndex = 0;
+      var previewIndex = 0;
+      var toastShown = false;
+      var latestLiveMessage = '';
+      var latestLivePercent = null;
+
+      function createParticle() {
+        if (!particlesEl) return;
+        var p = document.createElement('div');
+        p.classList.add('particle');
+        var size = Math.random() * 3 + 1;
+        var colors = ['rgba(167,139,219,0.5)', 'rgba(128,136,217,0.5)', 'rgba(90,155,213,0.5)', 'rgba(139,111,192,0.5)'];
+        var color = colors[Math.floor(Math.random() * colors.length)];
+        p.style.cssText = 'width:' + size + 'px;height:' + size + 'px;left:' + (Math.random() * 100) + '%;background:' + color + ';box-shadow:0 0 ' + (size * 2) + 'px ' + color + ';animation-duration:' + (Math.random() * 15 + 12) + 's;animation-delay:' + (Math.random() * 10) + 's;';
+        particlesEl.appendChild(p);
+        setTimeout(function () { p.remove(); }, 30000);
       }
-      const img = document.createElement('img');
-      img.src = PREVIEWS[previewIndex % PREVIEWS.length];
-      img.alt = 'Template preview ' + ((previewIndex % PREVIEWS.length) + 1);
-      preview.replaceChildren(img);
-      previewIndex += 1;
-    }
 
-    function showToast(kind, title, message) {
-      toast.className = 'toast ' + kind;
-      toastTitle.textContent = title;
-      toastMessage.textContent = message;
-      toast.hidden = false;
-    }
+      function createConnector() {
+        if (!connectorsEl) return;
+        var c = document.createElement('div');
+        c.classList.add('connector');
+        c.style.cssText = 'top:' + (Math.random() * 100) + '%;width:' + (Math.random() * 300 + 200) + 'px;animation-duration:' + (Math.random() * 4 + 4) + 's;animation-delay:' + (Math.random() * 6) + 's;';
+        connectorsEl.appendChild(c);
+        setTimeout(function () { c.remove(); }, 12000);
+      }
 
-    async function pollStatus() {
-      try {
-        const res = await fetch(STATUS_URL + '?t=' + Date.now(), { cache: 'no-store' });
-        if (!res.ok) return;
-        const status = await res.json();
-        if (typeof status.progressPercent === 'number') fill.style.transform = 'scaleX(' + (Math.max(0, Math.min(100, status.progressPercent)) / 100) + ')';
-        if (status.message) label.textContent = status.message;
-        if (status.state === 'failed' || status.state === 'canceled' || status.state === 'timeout') {
-          showToast('error', 'Template import needs attention', 'Check the agent terminal for details.');
+      function renderStatusMessage(text) {
+        if (!statusArea) return;
+        var existing = statusArea.querySelector('.status-message');
+        if (existing) {
+          existing.classList.remove('active');
+          existing.classList.add('exiting');
+          setTimeout(function () { existing.remove(); }, 700);
         }
-        if (status.state === 'succeeded') {
-          fill.style.transform = 'scaleX(1)';
-          showToast('success', 'Template import complete', 'Check the agent terminal for the next step.');
-        }
-      } catch {}
-    }
+        var msg = document.createElement('div');
+        msg.classList.add('status-message');
+        var icon = document.createElement('div');
+        icon.classList.add('status-icon', 'working');
+        msg.appendChild(icon);
+        var textEl = document.createElement('span');
+        textEl.textContent = text;
+        msg.appendChild(textEl);
+        statusArea.appendChild(msg);
+        requestAnimationFrame(function () { requestAnimationFrame(function () { msg.classList.add('active'); }); });
+      }
 
-    showPreview();
-    setInterval(showPreview, 5000);
-    pollStatus();
-    setInterval(pollStatus, 3000);
+      function updatePhaseLabel(text) {
+        if (progressLabel) progressLabel.textContent = text;
+      }
+
+      function formatProgressLabel(message, percent) {
+        if (typeof percent === 'number') return message + ' (' + Math.round(percent) + '%)';
+        return message;
+      }
+
+      function showStatus(index) {
+        var status = statuses[index];
+        renderStatusMessage(latestLiveMessage || status.text);
+        if (latestLiveMessage) {
+          updatePhaseLabel(formatProgressLabel(latestLiveMessage, latestLivePercent));
+          return;
+        }
+        var phaseIndex = Math.min(Math.floor((index / statuses.length) * phaseLabels.length), phaseLabels.length - 1);
+        updatePhaseLabel(phaseLabels[phaseIndex]);
+      }
+
+      function advanceStatus() {
+        showStatus(currentStatusIndex % statuses.length);
+        var duration = statuses[currentStatusIndex % statuses.length].duration;
+        setTimeout(function () {
+          currentStatusIndex++;
+          advanceStatus();
+        }, duration);
+      }
+
+      function showPreview() {
+        if (!coreShape) return;
+        if (!PREVIEWS.length) {
+          coreShape.classList.add('empty');
+          coreShape.replaceChildren();
+          return;
+        }
+        coreShape.classList.remove('empty');
+        var img = document.createElement('img');
+        img.src = PREVIEWS[previewIndex % PREVIEWS.length];
+        img.alt = 'Template preview ' + ((previewIndex % PREVIEWS.length) + 1);
+        coreShape.replaceChildren(img);
+        previewIndex++;
+      }
+
+      function progressFromStatus(status) {
+        var candidates = [status.progressPercent, status.progress, status.percentComplete];
+        for (var i = 0; i < candidates.length; i++) {
+          var number = Number(candidates[i]);
+          if (Number.isFinite(number)) return Math.max(0, Math.min(100, number));
+        }
+        return null;
+      }
+
+      function setProgress(percent) {
+        if (typeof percent !== 'number') return;
+        var safePercent = Math.max(0, Math.min(100, percent));
+        progressTrack.classList.add('has-progress');
+        progressTrack.style.setProperty('--progress-scale', String(safePercent / 100));
+      }
+
+      function showToast(kind, title, message) {
+        if (toastShown) return;
+        toastShown = true;
+        toast.className = 'toast ' + kind;
+        toastTitle.textContent = title;
+        toastMessage.textContent = message;
+        toast.hidden = false;
+      }
+
+      async function pollStatus() {
+        try {
+          var res = await fetch(STATUS_URL + '?t=' + Date.now(), { cache: 'no-store' });
+          if (!res.ok) return;
+          var status = await res.json();
+          var progress = progressFromStatus(status);
+          if (typeof progress === 'number') {
+            latestLivePercent = progress;
+            setProgress(progress);
+          }
+          if (status.message) {
+            latestLiveMessage = status.message;
+            renderStatusMessage(status.message);
+            updatePhaseLabel(formatProgressLabel(status.message, latestLivePercent));
+          }
+          if (status.state === 'failed' || status.state === 'canceled' || status.state === 'timeout') {
+            showToast('error', 'Template import needs attention', 'Check the agent terminal for details.');
+          }
+          if (status.state === 'succeeded') {
+            latestLivePercent = 100;
+            progressTrack.classList.add('complete');
+            progressTrack.style.setProperty('--progress-scale', '1');
+            showToast('success', 'Template import complete', 'Check the agent terminal for the next step.');
+          }
+        } catch {}
+      }
+
+      var statuses = [
+        { text: 'Starting template import', duration: 8000 },
+        { text: 'Uploading solution package', duration: 10000 },
+        { text: 'Importing Dataverse components', duration: 12000 },
+        { text: 'Applying template metadata', duration: 10000 },
+        { text: 'Waiting for Dataverse', duration: 12000 },
+        { text: 'Preparing activation handoff', duration: 10000 }
+      ];
+
+      var phaseLabels = [
+        'Starting template import...', 'Uploading solution...', 'Importing components...',
+        'Applying metadata...', 'Checking import status...', 'Almost there...'
+      ];
+
+      var tips = [
+        'Template solutions are imported as unmanaged components so you can customize them after activation.',
+        'The imported site stays inactive until the activation step provisions a live endpoint.',
+        'The agent terminal shows detailed Dataverse import status while this page stays visual.'
+      ];
+
+      var tipIndex = 0;
+      function showTip() {
+        if (!tipTextEl) return;
+        tipTextEl.style.opacity = '0';
+        tipTextEl.style.transform = 'translateY(8px)';
+        setTimeout(function () {
+          tipTextEl.textContent = tips[tipIndex % tips.length];
+          tipTextEl.style.opacity = '1';
+          tipTextEl.style.transform = 'translateY(0)';
+          tipIndex++;
+        }, 500);
+      }
+
+      for (var i = 0; i < 30; i++) { (function (n) { setTimeout(createParticle, n * 200); })(i); }
+      setInterval(createParticle, 800);
+      for (var j = 0; j < 8; j++) { (function (n) { setTimeout(createConnector, n * 1500); })(j); }
+      setInterval(createConnector, 2000);
+
+      setTimeout(advanceStatus, 2000);
+      setTimeout(function () {
+        var cards = document.querySelectorAll('.feature-card');
+        cards.forEach(function (card) {
+          var delay = parseInt(card.dataset.delay || '0', 10);
+          setTimeout(function () { card.classList.add('visible'); }, delay);
+        });
+      }, 2500);
+
+      showPreview();
+      setInterval(showPreview, 5000);
+      setTimeout(showTip, 3500);
+      setInterval(showTip, 12000);
+      pollStatus();
+      setInterval(pollStatus, 30000);
+    })();
   </script>
 </body>
 </html>
