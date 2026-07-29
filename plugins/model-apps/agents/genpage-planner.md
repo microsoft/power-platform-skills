@@ -199,34 +199,43 @@ If any entities need creating, note that entity creation requires:
 Detection uses `pac model list-tables` natively; creation runs through the
 plugin's own Web API scripts under `${PLUGIN_ROOT}/scripts/`.
 
-### Connector Detection (delegated to genpage-connector-builder)
+### Connector Detection (handled by the orchestrator, not by you)
 
 If the request implies a non-Dataverse source (SharePoint, Teams, weather,
-Office 365, SQL via connector, or a custom REST connector), delegate ALL
-connector work to the `genpage-connector-builder` agent via the `Task` tool. Do
-**not** run the feature-gate probe or any connector discovery inline — that agent
-is the single owner of the connectors feature gate, connection / connection-ref
-discovery, connection-reference creation, and the binding contract.
+Office 365, SQL via connector, or a custom REST connector), **do not dispatch any
+agent and do not run the feature-gate probe or any connector discovery inline.**
+You have no `Task` tool, and `genpage-connector-builder` asks the user questions —
+it cannot run headless inside a sub-agent. It is dispatched by the top-level
+`/genpage` orchestrator BEFORE you are invoked.
 
-Invoke `genpage-connector-builder` with a prompt containing:
+Two cases:
 
-- **Mode:** `create`
-- **Working directory**, **Plugin root** (`${PLUGIN_ROOT}`), **Environment URL**
-- **Intent:** the source(s) the request implies (e.g. "SharePoint documents",
-  "current weather")
+1. **The orchestrator already forwarded connector results** — your prompt carries a
+   `## Connector Bindings` block (or the sentinel `No connector bindings.`) and/or a
+   `connectors.json` path. Consume it as-is: copy the block verbatim into the plan's
+   `## Connector Bindings` section. Never re-derive or edit it.
+2. **A connector need surfaced during clarification** (the orchestrator did not know
+   up front) — do NOT attempt discovery. Stop and return
+   `{ "action": "connector_discovery_required", "intent": "<the source(s) implied>" }`
+   so the orchestrator can dispatch `genpage-connector-builder` and re-invoke you with
+   the results.
 
-It writes two files into the working directory:
+`genpage-connector-builder` remains the single owner of the connectors feature gate,
+connection / connection-ref discovery, connection-reference creation, and the binding
+contract. When no connectors are involved, write the exact sentinel
+`No connector bindings.` into the plan.
+
+When the orchestrator forwards results it provides:
 
 - `connector-bindings.md` — the exact body for the plan's `## Connector Bindings`
-  section (either `No connector bindings.` or the binding table).
+section (either `No connector bindings.` or the binding table).
 - `connectors.json` — the bare-array binding file for deployment.
 
 Read `connector-bindings.md` and splice its contents verbatim into the
 `## Connector Bindings` section of `genpage-plan.md`.
 
 If the request implies **only** Dataverse and/or mock data (no connector source),
-skip the agent entirely and write `## Connector Bindings` as exactly
-`No connector bindings.`.
+write `## Connector Bindings` as exactly `No connector bindings.`.
 
 ### App Detection
 

@@ -187,35 +187,51 @@ After plan-mode approval (before the full build):
    so project the spec into one. This also echoes the per-page dispatch parameters:
    ```bash
    node "${PLUGIN_ROOT}/scripts/write-page-plan.js" \
-     --spec @<working-dir>/app-spec.json --working-dir <working-dir> --env <envUrl> --app "<app name>"
+     --spec @<working-dir>/app-spec.json --working-dir <working-dir> --env <envUrl> \
+     --app "<app name>" --languages "<languages from the environment probe>"
    ```
    It writes `<working-dir>/genpage-plan.md` and prints
-   `{ ok, planPath, pages: [{ key, file, dataMode, intent }] }`. Each page's `file` is `<key>.tsx`,
-   so the worker's stable-key `PAGEREF_<key>` and the filename stem are the **same token**.
+   `{ ok, planPath, pages: [{ name, key, file, dataMode, intent }] }`. Pass `--languages` through
+   from the environment probe — omitting it silently defaults every plan to English-only and drops
+   the localization pattern. The command fails (before writing) if the plan would name a sample that
+   doesn't exist.
 
 4. **Generate** — for each page from step 3 with `intent: true`, dispatch the **headless**
    `genpage-page-builder` worker via `Task`. Use its documented input contract verbatim — a missing
    field is why a page silently never becomes `.tsx`:
 
-   > You are the genpage-page-builder agent. Generate the **[Page Name]** page.
+   > You are the genpage-page-builder agent. Generate the **[name from step 3]** page.
    >
-   > - Target file: [file from step 3].tsx
+   > - Target file: [file from step 3 — already includes .tsx; do NOT append another]
    > - Plan document: [absolute path to the genpage-plan.md written in step 3]
    > - Data mode: **[dataMode from step 3 — `dataverse` or `mock`]**
+   > - Connectors: **disabled**
    > - RuntimeTypes: [absolute path to RuntimeTypes.ts]   ← omit this line when Data mode is `mock`
    > - Working directory: [absolute working-dir path]
    > - Plugin root: ${PLUGIN_ROOT}
    >
    > Follow the instructions in your agent file. Write [file] and return your result when done.
 
-   Custom nav ids go in `data:` — never `recordId` (read as `pageInput?.data?.<field>`).
+   The plan's `## Environment` carries `Mode: app-builder` and every page row carries a **Key**, so
+   the worker emits `"PAGEREF_<key>"` for cross-page navigation (never a file-derived token — a
+   downloaded page's `codeFile` is a path, not its identity). Custom nav ids go in `data:` — never
+   `recordId` (read as `pageInput?.data?.<field>`). `Connectors: disabled` is a constant here: the
+   App Spec has no connector-binding concept, so the projected plan always says
+   `No connector bindings.` — stating it explicitly keeps the worker's dispatch contract complete.
 
-5. **Validate + commit the transition** — for each generated page check that the file exists, compiles
-   structurally, uses only verified columns, and that its `PAGEREF_` tokens match the spec's
-   `navigatesTo` edges exactly. Only after **every** page passes, flip each `source`
-   `intent → { kind: "tsx", codeFile }`. The transition is **all-or-nothing** — never leave the spec
-   half-flipped, because Phase 2 validates under the `deploy` profile and fails fast on any remaining
-   `source.kind === "intent"`.
+5. **Validate + commit the transition (transactional)** — never flip `source` by hand, and never
+   flip pages one at a time as workers return. Run:
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/promote-intent-pages.js" \
+     --spec @<working-dir>/app-spec.json --working-dir <working-dir>
+   ```
+   It checks every generated page (file written, structurally a module, `PAGEREF_` tokens
+   canonical and in exact parity with the spec's `navigatesTo` edges) and only then flips **all**
+   of them `intent → { kind: "tsx", codeFile }` in a single atomic write. On any failure it
+   **exits 3 and leaves `app-spec.json` untouched**, printing which page failed and why —
+   regenerate just those pages and re-run it. This is all-or-nothing on purpose: a half-flipped
+   spec would claim a `.tsx` that was never written, and Phase 2 validates under the `deploy`
+   profile and fails fast on any remaining `source.kind === "intent"`.
 
 6. Proceed to **Phase 2** (full idempotent build).
 
@@ -397,11 +413,19 @@ existing tables idempotently), the icon web resources, and the solution. Then:
    build reads an etag when it hydrates, so a write against an artifact changed since the pull throws a
    version conflict → **re-pull and retry**, never clobber.
 2. Edit `app-spec.json` (and any page `.tsx`) for the requested change.
-3. Re-run the **build** (Phase 2). It's idempotent: it reuses the existing app/tables/views, **updates each
+3. **If the edit ADDS a page** (or resets an existing page's `source` back to `intent` to have it
+   regenerated), **re-run Phase 1.5 before Phase 2** — a downloaded spec contains only
+   `kind: "tsx"` pages, so an added `intent` page has no code and Phase 2's `deploy` profile
+   rejects it. Phase 1.5 is safe to re-run on a downloaded spec: `write-page-plan.js` projects
+   **all** pages into the plan (so the worker sees the real cross-page nav graph), step 4
+   dispatches a worker only for the pages whose echo says `intent: true`, and
+   `promote-intent-pages.js` leaves already-built pages untouched. Editing an *existing* page's
+   `.tsx` by hand needs no regeneration — go straight to Phase 2.
+4. Re-run the **build** (Phase 2). It's idempotent: it reuses the existing app/tables/views, **updates each
    page in place** (matched by name → `--page-id`, so no duplicate pages), and **preserves the existing
    `GenPage` subareas** (the download enumerated them into `pages[]`/`appShell`, so the full-replace sitemap
    write never drops them).
-4. **Verify** (Phase 3) to confirm only the intended change landed.
+5. **Verify** (Phase 3) to confirm only the intended change landed.
 
 > **Edit-flow limitation (Preview):** classic `dashboards[]` and their sitemap subareas are **not yet
 > round-tripped** by `download-model-app.js` — it prints a `WARNING: N sitemap subarea(s) could not be

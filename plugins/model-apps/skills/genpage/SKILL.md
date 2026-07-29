@@ -330,6 +330,14 @@ create or pass `connectors.json`, and never add `--connectors` on upload —
 `list-connections.js` / `create-connection-reference.js` also fail closed with
 exit 3 if invoked while OFF.)
 
+**Carry this decision into code generation.** The probe result is `Connectors:
+disabled` / `Connectors: enabled` for the rest of the run, and Phase 5 **must** pass
+it verbatim in every page-builder dispatch. When it is `disabled`, every downstream
+step treats the plan's `## Connector Bindings` section as if it read
+`No connector bindings.` — otherwise the generated page would call a connector that
+this run deliberately never binds, and the page fails at runtime instead of simply
+omitting the feature.
+
 **If it prints `enabled`:** read the plan's `## Connector Bindings` section and
 treat it as bindings **only when it contains an actual binding table** (a
 `| Logical Name | …` header with at least one data row). If the section is
@@ -384,10 +392,11 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
 
 1. Read `${PLUGIN_ROOT}/references/rules.md`
 2. Read the sample listed in the plan's `## Relevant Samples`
-3. Only when the plan's `## Connector Bindings` section contains an **actual
-   binding table** (a `| Logical Name | …` header with at least one data row),
-   also read `${PLUGIN_ROOT}/references/connectors.md`. Treat a
-   `No connector bindings.` sentinel, or an empty/missing/malformed section, as
+3. Only when the Phase 4.5 probe printed `enabled` **and** the plan's
+   `## Connector Bindings` section contains an **actual binding table** (a
+   `| Logical Name | …` header with at least one data row), also read
+   `${PLUGIN_ROOT}/references/connectors.md`. Treat a `No connector bindings.`
+   sentinel, an empty/missing/malformed section, **or a `disabled` probe** as
    having no connectors (same contract as Phase 4.5 and genpage-page-builder).
 4. If the plan's Per-Page Specification has `Needs caching: true`, also read
    `${PLUGIN_ROOT}/references/data-caching.md`
@@ -417,6 +426,7 @@ For each page, pass a prompt that includes:
 - Target file name (e.g., "candidate-tracker.tsx")
 - Absolute path to `genpage-plan.md`
 - Data mode (see below) — either a RuntimeTypes path or an explicit mock flag
+- **Connectors: `enabled` or `disabled`** — the Phase 4.5 probe result, verbatim
 - Working directory
 - Plugin root: `${PLUGIN_ROOT}`
 
@@ -427,6 +437,7 @@ For each page, pass a prompt that includes:
 > - Target file: [filename].tsx
 > - Plan document: [absolute path to genpage-plan.md]
 > - Data mode: **dataverse**
+> - Connectors: **[enabled|disabled from Phase 4.5]**
 > - RuntimeTypes: [absolute path to RuntimeTypes.ts]
 > - Working directory: [absolute path from Phase 0]
 > - Plugin root: ${PLUGIN_ROOT}
@@ -441,6 +452,7 @@ For each page, pass a prompt that includes:
 > - Target file: [filename].tsx
 > - Plan document: [absolute path to genpage-plan.md]
 > - Data mode: **mock**
+> - Connectors: **[enabled|disabled from Phase 4.5]**
 > - Working directory: [absolute path from Phase 0]
 > - Plugin root: ${PLUGIN_ROOT}
 >

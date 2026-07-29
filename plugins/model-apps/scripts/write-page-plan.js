@@ -53,10 +53,24 @@ function main() {
   });
 
   const planPath = str(flags.out) ? path.resolve(str(flags.out)) : path.join(absWorkingDir, 'genpage-plan.md');
+
+  // Fail BEFORE writing if the plan names a sample that does not exist — the worker's Step 3 reads
+  // `${PLUGIN_ROOT}/samples/<name>` and a missing file derails generation with a confusing error.
+  const samplesDir = path.resolve(__dirname, '..', 'samples');
+  const named = [...new Set([...markdown.matchAll(/\|\s*(\d+-[a-z0-9-]+\.tsx)\s*\|/gi)].map((m) => m[1]))];
+  const missing = named.filter((n) => !fs.existsSync(path.join(samplesDir, n)));
+  if (missing.length) {
+    emitResult(false, new Error(`page plan references sample(s) that do not exist in samples/: ${missing.join(', ')}`));
+    return;
+  }
+
   fs.mkdirSync(path.dirname(planPath), { recursive: true });
   fs.writeFileSync(planPath, markdown, 'utf8');
 
   const pages = (spec.pages || []).filter(Boolean).map((p) => ({
+    // `name` is required by the worker's dispatch prompt ("Generate the **[Page Name]** page");
+    // omitting it from the echo forced the caller to re-derive it and get it wrong.
+    name: p.name || pageKey(p),
     key: pageKey(p),
     file: pageFile(p),
     dataMode: pageDataMode(p),

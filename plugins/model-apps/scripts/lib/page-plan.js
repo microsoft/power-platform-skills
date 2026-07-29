@@ -25,25 +25,67 @@ const REQUIRED_PAGE_FIELDS = [
 
 const lc = (s) => String(s == null ? '' : s).toLowerCase();
 
-/** The page's stable identity. app-builder names the file after the key so that the worker's
- *  "use the stable key" rule and /genpage's filename-stem resolver produce the SAME PAGEREF token
- *  — the two cross-page identity conventions converge instead of conflicting. */
+// --- Untrusted-text hardening -------------------------------------------------------------------
+// The projected plan is READ AS INSTRUCTIONS by a Read/Write/Edit-capable worker, and its section
+// headings are a machine-readable contract. App Spec strings (page name, purpose, app description)
+// are author- or DOWNLOAD-supplied (hydrate-spec.js reconstructs them from a deployed app), so they
+// cross a trust boundary. A value containing a newline + `## Per-Page Specifications` could inject or
+// truncate a section; a `|` could break a table row. Neither is caught by schema validation, because
+// the resulting markdown is still "valid".
+// So every interpolated value is flattened to a single line and its markdown-structural characters
+// are neutralised. This is deliberately lossy for display, never for identity: keys/entity logical
+// names are separately constrained (see assertIdentitySafe).
+//
+// `|` is REPLACED (not backslash-escaped) because the same sanitised page name has to appear both in
+// a `## Pages` table cell and in its `### <name>` per-page heading, and the eval Layer 1 validator
+// cross-references those two byte-for-byte. An escape that only applies inside tables would make
+// them disagree and fail `missing-page-spec`.
+function mdText(value, fallback = '') {
+  const s = String(value == null ? '' : value);
+  if (!s.trim()) return fallback;
+  return s
+    .replace(/[\r\n]+/g, ' ')      // no line breaks -> cannot start a new block/section
+    .replace(/^\s*#+/, '')          // cannot become a heading
+    .replace(/`/g, "'")            // cannot open a code fence / inline code
+    .replace(/\|/g, '/')           // cannot add a table column
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Identity values (page key, entity logical name) end up in `PAGEREF_<key>` tokens and in
+// `--data-sources`, so they must be strict identifiers — not merely escaped. A spec that violates
+// this is a hard error rather than something we silently mangle, because a mangled key produces a
+// PAGEREF the build cannot resolve.
+const IDENT_RE = /^[A-Za-z0-9_-]+$/;
+function assertIdentitySafe(kind, value) {
+  if (!IDENT_RE.test(String(value || ''))) {
+    throw new Error(`buildPagePlan: unsafe ${kind} "${value}" — must match ${IDENT_RE} (letters, digits, _ and -)`);
+  }
+  return String(value);
+}
+
+/** The page's stable identity — the ONLY thing `/app-builder` derives `PAGEREF_<key>` from.
+ *  Identity is deliberately NOT derived from the file name: a downloaded/round-tripped page carries a
+ *  pinned `codeFile` (e.g. `pages/<guid>/page.tsx`), so a file-derived token would not match the
+ *  spec's `navigatesTo[].targetKey` and the build's nav-parity gate would halt. The plan therefore
+ *  publishes an explicit Key column and the worker uses that under app-builder. */
 function pageKey(p) {
-  return p.key || p.name;
+  return assertIdentitySafe('page key', p.key || p.name);
 }
 
 function pageFile(p) {
-  // Prefer an already-assigned codeFile (an edit/round-trip may pin one); else <key>.tsx.
+  // A pinned codeFile (edit / download round-trip) is preserved so we write where the page really
+  // lives. It is NOT the identity — see pageKey().
   const existing = p.source && p.source.kind === 'tsx' && p.source.codeFile;
   return existing || `${pageKey(p)}.tsx`;
 }
 
 /** Entities a page reads, as the plan's comma-separated logical names (or the literal "mock data").
- *  A page with no declared dataSources is a mock page — that is also what selects the worker's
- *  Data mode, so the two must agree. */
+ *  Logical names flow into `--data-sources` on the generate-types command line, so they are held to
+ *  the identifier contract rather than merely escaped. */
 function pageEntities(p) {
   const ds = Array.isArray(p.dataSources) ? p.dataSources.filter(Boolean) : [];
-  return ds.length ? ds.map(lc).join(', ') : 'mock data';
+  return ds.length ? ds.map((e) => assertIdentitySafe('entity logical name', lc(e))).join(', ') : 'mock data';
 }
 
 /** Data mode for the worker dispatch. Dataverse whenever the page reads at least one entity. */
@@ -57,11 +99,13 @@ function needsCaching(p) {
   return pageDataMode(p) === 'dataverse';
 }
 
-/** Cross-page navigation targets, as stable keys — the worker emits one `"PAGEREF_<key>"` per edge. */
+/** Cross-page navigation targets, as stable keys — the worker emits one `"PAGEREF_<key>"` per edge.
+ *  Guarded because the key is emitted verbatim into generated TSX. */
 function navTargets(p) {
   return (Array.isArray(p.navigatesTo) ? p.navigatesTo : [])
     .map((n) => n && n.targetKey)
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((k) => assertIdentitySafe('navigatesTo targetKey', k));
 }
 
 function designPreferences(design) {
@@ -96,21 +140,25 @@ function buildPagePlan(spec, opts = {}) {
 
   const out = [];
   out.push('# Genpage Plan', '');
-  out.push('## User Requirements', requirements, '');
+  out.push('## User Requirements', mdText(requirements, 'Generative pages for a model-driven app.'), '');
   out.push('## Working Directory', workingDir, '');
   out.push('## Plugin Root', pluginRoot, '');
   out.push('## Environment');
-  out.push(`- URL: ${opts.envUrl || '(supplied by /app-builder)'}`);
-  out.push(`- App: ${appLabel}`);
-  out.push(`- Languages: ${opts.languages || 'English (1033) only'}`);
-  out.push(`- Solution: ${solution}`);
-  out.push(`- Publisher Prefix: ${prefix}`, '');
+  out.push(`- URL: ${mdText(opts.envUrl, '(supplied by /app-builder)')}`);
+  out.push(`- App: ${mdText(appLabel, 'model-driven app')}`);
+  out.push(`- Languages: ${mdText(opts.languages, 'English (1033) only')}`);
+  out.push(`- Solution: ${mdText(solution, 'Default')}`);
+  out.push(`- Publisher Prefix: ${mdText(prefix, 'new')}`);
+  // Explicit caller mode: the worker cannot otherwise tell which cross-page identity rule applies
+  // (stable Key under /app-builder vs file stem under standalone /genpage).
+  out.push('- Mode: app-builder', '');
 
+  // The Key column is the identity contract. `File` is only where to write.
   out.push('## Pages');
-  out.push('| Page | File | Purpose | Entities |');
-  out.push('|------|------|---------|----------|');
+  out.push('| Page | Key | File | Purpose | Entities |');
+  out.push('|------|-----|------|---------|----------|');
   for (const p of pages) {
-    out.push(`| ${p.name || pageKey(p)} | ${pageFile(p)} | ${p.purpose || 'Generative page'} | ${pageEntities(p)} |`);
+    out.push(`| ${mdText(p.name, pageKey(p))} | ${pageKey(p)} | ${mdText(pageFile(p))} | ${mdText(p.purpose, 'Generative page')} | ${mdText(pageEntities(p))} |`);
   }
   out.push('');
 
@@ -141,32 +189,35 @@ function buildPagePlan(spec, opts = {}) {
   out.push('| Page | Sample | Reason |');
   out.push('|------|--------|--------|');
   for (const p of pages) {
+    // Sample names are validated against samples/ by write-page-plan.js before the plan is written —
+    // naming a file that does not exist makes the worker's Step 3 read fail.
     const mock = pageDataMode(p) === 'mock';
-    const sample = mock ? '2-mock-dashboard.tsx' : '3-account-crud-dataverse.tsx';
-    const reason = mock ? 'Mock-data page: inline sample records' : 'Dataverse-bound page: queryTable + DataTable rows';
-    out.push(`| ${p.name || pageKey(p)} | ${sample} | ${reason} |`);
+    const sample = mock ? '7-responsive-cards.tsx' : '9-list-with-caching.tsx';
+    const reason = mock
+      ? 'Mock-data page: inline sample records, card layout'
+      : 'Dataverse-bound page: queryTable + DataTable rows with the on-mount de-dupe cache';
+    out.push(`| ${mdText(p.name, pageKey(p))} | ${sample} | ${reason} |`);
   }
   out.push('');
 
   out.push('## Per-Page Specifications', '');
   for (const p of pages) {
     const nav = navTargets(p);
-    out.push(`### ${p.name || pageKey(p)}`);
-    out.push(`- **File:** ${pageFile(p)}`);
-    out.push(`- **Purpose:** ${p.purpose || 'Generative page'}`);
-    out.push(`- **Entities:** ${pageEntities(p)}`);
+    out.push(`### ${mdText(p.name, pageKey(p))}`);
+    out.push(`- **Key:** ${pageKey(p)}`);
+    out.push(`- **File:** ${mdText(pageFile(p))}`);
+    out.push(`- **Purpose:** ${mdText(p.purpose, 'Generative page')}`);
+    out.push(`- **Entities:** ${mdText(pageEntities(p))}`);
     out.push(`- **Needs caching:** ${needsCaching(p)}`);
-    out.push(`- **Key Features:** ${p.purpose || 'Present the page data and its primary actions'}`);
+    out.push(`- **Key Features:** ${mdText(p.purpose, 'Present the page data and its primary actions')}`);
     out.push('- **Components:** Fluent UI V9 (unsized Regular/Filled icons only)');
     out.push('- **Layout:** Responsive flexbox/grid with relative units (never 100vh/100vw)');
     out.push(`- **Data Binding:** ${pageDataMode(p) === 'mock' ? 'Inline mock arrays' : 'dataApi.queryTable / retrieveRow over the entities above'}`);
-    // The nav contract is what makes PAGEREF_ resolution deterministic: one placeholder per declared
-    // edge, and the build enforces exact parity between emitted tokens and navigatesTo entries.
     out.push(`- **Interactions:** ${nav.length
       ? `Navigate to ${nav.map((k) => `"PAGEREF_${k}"`).join(', ')} via Xrm.Navigation.navigateTo (pageType "generative"); custom ids go in data:`
       : 'In-page interactions only (no cross-page navigation)'}`);
     if (p.pageInput !== undefined) {
-      out.push(`- **Page Input:** reads \`pageInput\` (caller-supplied context)`);
+      out.push('- **Page Input:** reads `pageInput` (caller-supplied context)');
     }
     out.push('');
   }

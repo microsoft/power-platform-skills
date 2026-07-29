@@ -34,6 +34,10 @@ You will be invoked with a prompt that includes:
   `mock + connectors` — a **connector-only page is `mock` data mode with connector
   bindings**.
 - **RuntimeTypes path** — absolute path to `RuntimeTypes.ts` (present only when Data mode is `dataverse`)
+- **Connectors** — `enabled` or `disabled`, the orchestrator's feature-flag probe taken
+  immediately before code generation. **`disabled` overrides the plan**: treat the page as
+  having no connector bindings no matter what `## Connector Bindings` says. A missing line
+  means `disabled` (fail closed).
 - **Working directory** — where to write the `.tsx` file
 - **Plugin root** — `${PLUGIN_ROOT}` for reading references and samples
 
@@ -41,8 +45,9 @@ The **Data mode** flag is authoritative for the Dataverse axis — use it to dec
 whether to perform Step 2 (read RuntimeTypes.ts) or skip it. Do not infer data mode
 from the plan document.
 
-**Connectors are decided separately from Data mode** by the plan's `## Connector
-Bindings` (see the connector-detection step below): when it has an actual binding
+**Connectors are decided separately from Data mode** — by the **Connectors** input
+first, then the plan's `## Connector Bindings` (see the connector-detection step
+below): when Connectors is `enabled` *and* the section has an actual binding
 table, the page uses `props.dataApi` connector methods (`queryConnectorTable` /
 `executeConnectorOperation`) **even in `mock` data mode** — the "mock data forbids
 `dataApi`" rule applies only to *non-connector* panels, which still use realistic
@@ -114,17 +119,22 @@ Read the code generation rules reference:
 ${PLUGIN_ROOT}/references/rules.md
 ```
 
-Only when the plan's `## Connector Bindings` section contains an actual binding
-table (a `| Logical Name | …` header with at least one data row) do you treat the
-page as connector-backed and also read:
+Only when your dispatch says **`Connectors: enabled`** *and* the plan's
+`## Connector Bindings` section contains an actual binding table (a
+`| Logical Name | …` header with at least one data row) do you treat the page as
+connector-backed and also read:
 
 ```
 ${PLUGIN_ROOT}/references/connectors.md
 ```
 
-If the `## Connector Bindings` section is the literal `No connector bindings.`, is
-empty, is missing entirely, or contains no binding row, the page has **no
-connectors** — do not read connectors.md and do not emit any connector code.
+If your dispatch says `Connectors: disabled` (or omits the line), or the
+`## Connector Bindings` section is the literal `No connector bindings.`, is empty,
+is missing entirely, or contains no binding row, the page has **no connectors** —
+do not read connectors.md and do not emit any connector code. The dispatch wins
+over the plan: the orchestrator re-probes the connectors feature flag right before
+code generation, so a plan authored while the flag was ON must not produce connector
+calls that this run will never bind.
 
 Read the relevant sample file identified in the plan:
 

@@ -282,17 +282,24 @@ ASSERTIONS.set(
 ASSERTIONS.set(
   'For Dataverse list/detail pages, the inline IIFE + window cache + cache-guard pattern from references/data-caching.md is used (Rule 15); no useCallback for data-fetching functions',
   ({ files }) => {
-    const dv = files.filter((f) => isDataverseFile(f.content));
-    if (dv.length === 0) return skip('no Dataverse files');
     // Trigger only on files that READ data — queryTable / retrieveMultipleRecords
     // / retrieveRow (the read ops). Write-only pages (createRow/updateRow/
     // deleteRow only, e.g., save-on-completion game pages) aren't list/detail
-    // pages and shouldn't be expected to follow the cache pattern.
-    const fetching = dv.filter((f) =>
-      /dataApi\.(queryTable|retrieveMultipleRecords|retrieveRow|retrieve\b)/.test(f.content)
-    );
-    if (fetching.length === 0) return skip('no read operations (queryTable/retrieveRow) detected');
+    // pages and shouldn't be expected to follow the cache pattern. Connector
+    // reads have the same host double-mount behavior even without RuntimeTypes.
+    const fetching = files.filter((f) => {
+      const content = stripComments(f.content);
+      const hasDataverseRead = isDataverseFile(content) &&
+        /dataApi\.(queryTable|retrieveMultipleRecords|retrieveRow|retrieve\b)/.test(content);
+      const hasConnectorMountRead = /\buseEffect\s*\(/.test(content) &&
+        /\b(queryConnectorTable|executeConnectorOperation)\s*(?:!|\?\.)?\s*\(/.test(content);
+      return hasDataverseRead || hasConnectorMountRead;
+    });
+    if (fetching.length === 0) {
+      return skip('no Dataverse or connector read operations detected');
+    }
     const offender = fetching.find((f) => {
+      const content = stripComments(f.content);
       // Accept any of the canonical window-cache patterns:
       //   window.__foo = ...                  (direct dunderscore)
       //   window as unknown as Record<...>    (typed cast — see sample 9)
@@ -300,13 +307,31 @@ ASSERTIONS.set(
       //   (window as any).__foo               (paren-cast property access)
       //   window[CACHE_KEY] = ...              (bracket access)
       const hasCache =
-        /\bwindow\s*\.\s*__\w+/.test(f.content) ||
-        /\bwindow\s+as\s+(unknown|any)\b/.test(f.content) ||
-        /\bwindow\s*\[/.test(f.content);
-      const usesCallback = /useCallback\s*\(\s*async/.test(f.content);
+        /\bwindow\s*\.\s*__\w+/.test(content) ||
+        /\bwindow\s+as\s+(unknown|any)\b/.test(content) ||
+        /\bwindow\s*\[/.test(content);
+      const usesCallback = /useCallback\s*\(\s*async/.test(content);
+      const hasConnectorRead =
+        /\b(queryConnectorTable|executeConnectorOperation)\s*(?:!|\?\.)?\s*\(/.test(content);
+      if (hasConnectorRead) {
+        const hasConnectorCache =
+          /\[\s*CACHE_KEY\s*\]/.test(content) ||
+          /\.\s*__\w*Cache\b/i.test(content);
+        const hasInflight =
+          /\[\s*INFLIGHT_KEY\s*\]/.test(content) ||
+          /\.\s*__\w*Inflight\b/i.test(content);
+        const readiness = content.match(/\bconst\s+([A-Za-z_$][\w$]*Ready)\s*=/);
+        const hasReadinessDep = readiness !== null && new RegExp(
+          `\\}\\s*,\\s*\\[\\s*${readiness[1]}(?:\\s*,[^\\]]*)?\\s*\\]\\s*\\)`
+        ).test(content);
+        return !hasCache || !hasConnectorCache || !hasInflight ||
+          !hasReadinessDep || usesCallback;
+      }
       return !hasCache || usesCallback;
     });
-    return offender ? fail(`${offender.name}: missing window cache or uses useCallback for fetch`) : pass();
+    return offender
+      ? fail(`${offender.name}: missing window cache, in-flight de-dupe, or readiness dependency, or uses useCallback for fetch`)
+      : pass();
   }
 );
 

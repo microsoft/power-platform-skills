@@ -31,14 +31,26 @@ no breaking changes.
   ids before upload and an unresolved token halts the build; a manifest-aware download round-trips pages.
 - **`scripts/preview-app.js`** — renders the whole app design (data model, sitemap, forms, page intents)
   for review before building.
+- **Page generation reuses the `/genpage` worker via a plan adapter** — `write-page-plan.js`
+  projects the App Spec into the `genpage-plan.md` the page-builder actually reads, so an intent page
+  can no longer silently fail to become `.tsx`. Untrusted spec text (including download-derived) is
+  neutralised so it cannot forge plan sections.
+- **`promote-intent-pages.js`** — validates every generated page (written, structurally a module,
+  `PAGEREF_` tokens in exact parity with `navigatesTo`) and flips them all `intent → tsx` in one
+  atomic write, or exits 3 leaving the spec untouched.
 - **Eval suites** — an offline `/app-builder` structural harness (`evals/model-apps/app-builder/`) and
   the genpage Layer 1/2 TAP runners with shipping fixtures.
+- **`check-auth.js --env` support** — SDK builds accept `--env <url>` or a positional URL, treat a
+  missing PAC login as a warning, and reserve `--require-pac` for genpage.
 - **`/app-builder` is covered by the v2.3 hooks + telemetry** — tracked-skill discovery is derived from
   `skills/*/SKILL.md`, and the write-safety and icon-import guards now recognise app-builder working dirs.
 - **Docs + marketplace metadata cover both skills** — `/app-builder` is documented as Preview in the
   plugin and repository READMEs.
 
 ### Changed
+- **The connectors feature flag is re-probed before code generation** — the result is passed as
+  `Connectors: enabled|disabled` in every page-builder dispatch and overrides the plan, so a plan
+  authored while the flag was ON can no longer emit connector calls the run never binds.
 - **Forms resolve by `(entity, name, type)`** — a table's same-named Main/Quick View/Card forms no
   longer block an edit, and teardown no longer over-deletes them.
 - **Views are identified by `entity|name`** — same-named views on different tables no longer cross-wire
@@ -67,6 +79,8 @@ no breaking changes.
   the publisher prefix.
 - **System tables keep their default sitemap icon** — the transparent-spacer placeholder is stripped.
 - **Editing an existing app updates the sitemap for page-less apps too.**
+- **Sub-grids pass `targetEntity` to the SDK** — prevents empty `<TargetEntityType/>` output and
+  edit-time validation failures.
 - **Classic dashboards round-trip** through download/edit with id-passthrough tiles, and dashboard tiles
   render in a 2-column grid.
 - **AI row summaries errored on every record** — the prompt filtered on the primary name column instead
@@ -80,6 +94,12 @@ no breaking changes.
 - **Assorted robustness** — temp workspaces cannot leak on a failed SDK init, `%` in prompts survives
   cmd.exe, an omitted column `type` defaults to `Text`, `vectorIcon` is verified in the sitemap, and
   entity-subarea `vectorIcon` no longer breaks the app designer.
+
+### Tests
+- Full plugin, genpage eval, and vendored SDK suites pass via
+  `node scripts/run-tests.js --with-sdk <ppux>`.
+- **Vendored-SDK contract tests** lock OData filter encoding, name-based identifiers, and sitemap
+  free-text XML escaping.
 
 ### Removed
 - **Standalone entity/solution scripts, consolidated into the SDK** — `create-table.js`,

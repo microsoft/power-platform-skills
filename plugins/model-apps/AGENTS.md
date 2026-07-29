@@ -253,6 +253,8 @@ scripts/
   add-page-to-solution.js      ← Adds GenPages and optional connection references to a solution
   provision-entities.js        ← CLI wrapper for entity provisioning (solution + data-model + sample-data)
   provision-solution.js        ← Creates a Dataverse solution via the SDK
+  write-page-plan.js           ← app-builder Phase 1.5: projects an App Spec into the genpage-plan.md read by page-builder workers
+  promote-intent-pages.js      ← app-builder Phase 1.5: validates every generated page, then atomically flips source: intent → tsx
   build-model-app.js           ← app-builder: narrated, idempotent SDK build (dry-run default; --stage data|ui|app|publish; --changed-only)
   download-model-app.js        ← app-builder: pull a deployed app into an editable spec (edit flow)
   teardown-model-app.js        ← app-builder: classifier-safe reverse-of-build teardown
@@ -274,6 +276,7 @@ scripts/
     stages.js                  ← stage→phase-range mapping + PHASES/STAGES constants
     op-diff.js                 ← destructive-op diff + --allow-destructive / --non-interactive gating
     artifact-intent.js         ← pure App Spec → canonical SDK intent compiler (new form topology; no SDK calls)
+    page-plan.js               ← pure App Spec → plan-document projection used by write-page-plan.js
     sdk-teardown.js            ← app-builder teardown engine (planTeardown is pure)
     sdk-http-client.js         ← az-token HttpClient for the vendored SDK
     spec-lint.js / app-spec.js ← App Spec guardrail lint + validation
@@ -391,9 +394,12 @@ values in `feature-flags.json` at the plugin root.
 **Connectors gate — the single owner is `genpage-connector-builder`.** Every connector
 entry point must go through it or the helper; the checklist of places that gate:
 
-1. Discovery — the top-level `/genpage` orchestrator dispatches
-   `genpage-connector-builder`, which runs the probe first; the planner and
-   edit-planner receive its `## Connector Bindings` result and do not gate inline.
+1. Discovery + codegen — the top-level `/genpage` orchestrator dispatches
+   `genpage-connector-builder`, which runs the initial probe. At Phase 4.5 the
+   orchestrator re-probes with
+   `node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" connectors` and passes the
+   verbatim result as `Connectors: enabled|disabled` in every page-builder dispatch;
+   this dispatch value wins over the plan's `## Connector Bindings` section.
 2. Scripts — `list-connections.js` / `create-connection-reference.js` (`exitIfConnectorsDisabled`).
 3. Deploy — SKILL Phase 4.5 **re-probes** the flag and treats absent/malformed
    `## Connector Bindings` as no bindings (a plan authored while ON must not deploy
