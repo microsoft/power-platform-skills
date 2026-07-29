@@ -22,7 +22,15 @@ function parseArgs(argv) {
 function previewImageUrl(input, index, outputDir) {
   if (typeof input !== 'string' || !input.trim()) return null;
   if (/^https?:\/\//i.test(input)) return input;
-  const sourcePath = input.startsWith('file://') ? fileURLToPath(input) : path.resolve(input);
+  let sourcePath;
+  try {
+    sourcePath = input.startsWith('file://') ? fileURLToPath(input) : path.resolve(input);
+  } catch {
+    // A manifest or test fixture can contain a file URL that is not valid for the
+    // current OS, e.g. `file:///tmp/a.png` when running on Windows. Leave it as-is
+    // instead of failing the render; valid local file URLs are still copied below.
+    return input;
+  }
   if (!fs.existsSync(sourcePath)) return input;
   const ext = path.extname(sourcePath) || '.png';
   const previewsDir = path.join(outputDir, 'preview-images');
