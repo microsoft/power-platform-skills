@@ -42,21 +42,88 @@ function isDuplicateConflict(res) {
 
 function readSeedFile(filePath, deps = {}) {
   const fsImpl = deps.fs || fs;
-  // Seed files are intentionally small authored JSON files, e.g.:
+  // Seed files are intentionally small authored JSON files. Supported shapes:
+  //   Flat:
   //   { "entitySetName": "cr123_categories",
   //     "records": [{ "cr123_categoryid": "<guid>", "cr123_name": "Announcements" }] }
+  //   Dataverse export:
+  //   { "schemaVersion": 1, "tables": { "accounts": {
+  //       "entitySet": "accounts", "idColumn": "accountid", "records": [...] } },
+  //     "fileExports": [{ "attachmentId": "<guid>", "fileColumn": "cr123_file", "path": "files/a.pdf" }] }
   // The numeric filename prefix (`010-...json`) is the ordering contract; the
   // file body names the OData entity set to POST records into.
   const parsed = JSON.parse(fsImpl.readFileSync(filePath, 'utf8'));
-  if (!parsed || typeof parsed.entitySetName !== 'string' || !Array.isArray(parsed.records)) {
-    throw new Error('Expected { entitySetName: string, records: array }');
+  if (parsed && typeof parsed.entitySetName === 'string' && Array.isArray(parsed.records)) {
+    return parsed;
   }
-  return parsed;
+  const normalizedExport = normalizeDataverseExportSeed(parsed);
+  if (normalizedExport) return normalizedExport;
+  throw new Error('Expected flat { entitySetName: string, records: array } or export { tables: object } seed data');
 }
 
 function splitReservedFiles(record) {
   const { __files: files = null, ...recordBody } = record;
   return { recordBody, files };
+}
+
+function normalizeDataverseExportSeed(seed) {
+  if (!seed || typeof seed !== 'object' || !seed.tables || typeof seed.tables !== 'object' || Array.isArray(seed.tables)) {
+    return null;
+  }
+  const idToEntitySet = new Map();
+  for (const table of Object.values(seed.tables)) {
+    if (!table || typeof table !== 'object' || !Array.isArray(table.records) || typeof table.idColumn !== 'string' || typeof table.entitySet !== 'string') {
+      continue;
+    }
+    for (const record of table.records) {
+      const id = record && record[table.idColumn];
+      if (typeof id === 'string') idToEntitySet.set(id.toLowerCase(), table.entitySet);
+    }
+  }
+  const filesByRecordId = new Map();
+  for (const fileExport of Array.isArray(seed.fileExports) ? seed.fileExports : []) {
+    if (!fileExport || typeof fileExport !== 'object') continue;
+    const { attachmentId, fileColumn, path: filePath } = fileExport;
+    if (typeof attachmentId !== 'string' || typeof fileColumn !== 'string' || typeof filePath !== 'string') continue;
+    const current = filesByRecordId.get(attachmentId.toLowerCase()) || {};
+    current[fileColumn] = filePath;
+    filesByRecordId.set(attachmentId.toLowerCase(), current);
+  }
+  return Object.values(seed.tables)
+    .filter((table) => table && typeof table.entitySet === 'string' && typeof table.idColumn === 'string' && Array.isArray(table.records))
+    .map((table) => ({
+      entitySetName: table.entitySet,
+      primaryKey: table.idColumn,
+      records: table.records.map((record) => normalizeExportRecord(record, table.idColumn, idToEntitySet, filesByRecordId)),
+    }));
+}
+
+function normalizeExportRecord(record, primaryKey, idToEntitySet, filesByRecordId) {
+  const out = {};
+  const lookupBinds = {};
+  for (const [key, value] of Object.entries(record || {})) {
+    if (key === '@odata.etag') continue;
+    if (key.endsWith('@Microsoft.Dynamics.CRM.associatednavigationproperty')) continue;
+    if (key.endsWith('@OData.Community.Display.V1.FormattedValue')) continue;
+    if (key === 'createdon' || key === 'modifiedon') continue;
+
+    const lookupMatch = key.match(/^_(.+)_value$/);
+    if (lookupMatch) {
+      if (typeof value !== 'string') continue;
+      const navigationProperty = record[`${key}@Microsoft.Dynamics.CRM.associatednavigationproperty`];
+      const targetEntitySet = idToEntitySet.get(value.toLowerCase());
+      if (typeof navigationProperty === 'string' && targetEntitySet) {
+        lookupBinds[`${navigationProperty}@odata.bind`] = `/${targetEntitySet}(${value})`;
+      }
+      continue;
+    }
+    out[key] = value;
+  }
+  Object.assign(out, lookupBinds);
+  const recordId = record && record[primaryKey];
+  const files = typeof recordId === 'string' ? filesByRecordId.get(recordId.toLowerCase()) : null;
+  if (files) out.__files = files;
+  return out;
 }
 
 function validateFilesContract({ seedDir, seed, record }, deps = {}) {
@@ -288,17 +355,18 @@ async function applySeedData({ seedDir, envUrl }, deps = {}) {
         continue;
       }
 
-      for (const record of seed.records) {
-        const context = { file: path.basename(filePath), entitySetName: seed.entitySetName };
+      for (const seedEntry of (Array.isArray(seed) ? seed : [seed])) {
+        for (const record of seedEntry.records) {
+        const context = { file: path.basename(filePath), entitySetName: seedEntry.entitySetName };
         try {
-          const validationError = validateFilesContract({ seedDir, seed, record }, deps);
+          const validationError = validateFilesContract({ seedDir, seed: seedEntry, record }, deps);
           const { recordBody, files } = splitReservedFiles(record);
           if (validationError) {
             summary.failed += 1;
             summary.errors.push({ ...context, message: validationError });
             continue;
           }
-          const res = await postRecord({ envUrl, tokenProvider, entitySetName: seed.entitySetName, record: recordBody }, deps);
+          const res = await postRecord({ envUrl, tokenProvider, entitySetName: seedEntry.entitySetName, record: recordBody }, deps);
           let shouldUploadFiles = false;
           if (res.error) {
             summary.failed += 1;
@@ -314,11 +382,12 @@ async function applySeedData({ seedDir, envUrl }, deps = {}) {
             summary.errors.push({ ...context, statusCode: res.statusCode, message: res.body || `HTTP ${res.statusCode}` });
           }
           if (shouldUploadFiles && files) {
-            await uploadRecordFiles({ seedDir, seed, record, files, envUrl, tokenProvider, summary, context }, deps);
+            await uploadRecordFiles({ seedDir, seed: seedEntry, record, files, envUrl, tokenProvider, summary, context }, deps);
           }
         } catch (err) {
           summary.failed += 1;
           summary.errors.push({ ...context, message: err.message });
+        }
         }
       }
     }
@@ -356,6 +425,8 @@ module.exports = {
   emptySummary,
   listSeedFiles,
   readSeedFile,
+  normalizeDataverseExportSeed,
+  normalizeExportRecord,
   postRecord,
   isDuplicateConflict,
   splitReservedFiles,

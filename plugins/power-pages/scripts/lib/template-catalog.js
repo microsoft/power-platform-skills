@@ -440,6 +440,9 @@ async function downloadSeedDataDirectory(options = {}, deps = {}) {
 
 function collectSeedAttachmentPaths(seedData) {
   const paths = new Set();
+  for (const fileExport of Array.isArray(seedData.fileExports) ? seedData.fileExports : []) {
+    if (fileExport && typeof fileExport.path === 'string' && fileExport.path.trim()) paths.add(fileExport.path);
+  }
   for (const record of Array.isArray(seedData.records) ? seedData.records : []) {
     if (!record || typeof record !== 'object' || !record.__files || typeof record.__files !== 'object' || Array.isArray(record.__files)) {
       continue;

@@ -34,6 +34,57 @@ test('readSeedFile validates the seed file contract', (t) => {
   assert.throws(() => readSeedFile(file), /Expected/);
 });
 
+test('readSeedFile normalizes Dataverse export seed shape', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'data.json');
+  fs.writeFileSync(file, JSON.stringify({
+    schemaVersion: 1,
+    tables: {
+      contacts: {
+        logicalName: 'contact',
+        entitySet: 'contacts',
+        idColumn: 'contactid',
+        records: [{ contactid: '11111111-1111-1111-1111-111111111111', fullname: 'Amy Chen' }],
+      },
+      invoices: {
+        logicalName: 'spnvc_invoice',
+        entitySet: 'spnvc_invoices',
+        idColumn: 'spnvc_invoiceid',
+        records: [{
+          '@odata.etag': 'W/"1"',
+          spnvc_invoiceid: '22222222-2222-2222-2222-222222222222',
+          _spnvc_contactid_value: '11111111-1111-1111-1111-111111111111',
+          '_spnvc_contactid_value@Microsoft.Dynamics.CRM.associatednavigationproperty': 'spnvc_ContactId',
+          createdon: '2026-01-01T00:00:00Z',
+        }],
+      },
+      invoiceAttachments: {
+        logicalName: 'spnvc_invoiceattachment',
+        entitySet: 'spnvc_invoiceattachments',
+        idColumn: 'spnvc_invoiceattachmentid',
+        records: [{
+          spnvc_invoiceattachmentid: '33333333-3333-3333-3333-333333333333',
+          spnvc_name: 'invoice.pdf',
+        }],
+      },
+    },
+    fileExports: [{
+      attachmentId: '33333333-3333-3333-3333-333333333333',
+      fileColumn: 'spnvc_file',
+      path: 'files/invoice.pdf',
+    }],
+  }));
+
+  const normalized = readSeedFile(file);
+  assert.deepEqual(normalized.map((entry) => entry.entitySetName), ['contacts', 'spnvc_invoices', 'spnvc_invoiceattachments']);
+  assert.deepEqual(normalized[1].records[0], {
+    spnvc_invoiceid: '22222222-2222-2222-2222-222222222222',
+    'spnvc_ContactId@odata.bind': '/contacts(11111111-1111-1111-1111-111111111111)',
+  });
+  assert.deepEqual(normalized[2].records[0].__files, { spnvc_file: 'files/invoice.pdf' });
+});
+
 test('applySeedData posts records, skips duplicates, and records failures without throwing', async (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -89,6 +140,70 @@ test('applySeedData success path can run with injected fs and request function',
   assert.equal(result.inserted, 1);
   assert.equal(requests[0].url, 'https://org.crm.dynamics.com/api/data/v9.2/cr123_categories');
   assert.deepEqual(JSON.parse(requests[0].body), { cr123_name: 'Announcements' });
+});
+
+test('applySeedData posts Dataverse export seed tables and uploads fileExports', async () => {
+  const seedDir = path.resolve('export-seed');
+  const attachmentPath = path.join(seedDir, 'files', 'invoice.pdf');
+  const fileBuffer = Buffer.from('pdf');
+  const fsImpl = {
+    existsSync: (p) => p === seedDir || p === attachmentPath,
+    readdirSync: () => ['data.json'],
+    readFileSync: (p) => {
+      if (p.endsWith('data.json')) {
+        return JSON.stringify({
+          schemaVersion: 1,
+          tables: {
+            contacts: {
+              logicalName: 'contact',
+              entitySet: 'contacts',
+              idColumn: 'contactid',
+              records: [{ contactid: '11111111-1111-1111-1111-111111111111', fullname: 'Amy Chen' }],
+            },
+            invoices: {
+              logicalName: 'spnvc_invoice',
+              entitySet: 'spnvc_invoices',
+              idColumn: 'spnvc_invoiceid',
+              records: [{
+                spnvc_invoiceid: '22222222-2222-2222-2222-222222222222',
+                _contactid_value: '11111111-1111-1111-1111-111111111111',
+                '_contactid_value@Microsoft.Dynamics.CRM.associatednavigationproperty': 'spnvc_ContactId',
+              }],
+            },
+            attachments: {
+              logicalName: 'spnvc_invoiceattachment',
+              entitySet: 'spnvc_invoiceattachments',
+              idColumn: 'spnvc_invoiceattachmentid',
+              records: [{ spnvc_invoiceattachmentid: '33333333-3333-3333-3333-333333333333' }],
+            },
+          },
+          fileExports: [{ attachmentId: '33333333-3333-3333-3333-333333333333', fileColumn: 'spnvc_file', path: 'files/invoice.pdf' }],
+        });
+      }
+      return fileBuffer;
+    },
+    statSync: () => ({ isFile: () => true, size: fileBuffer.length }),
+  };
+  const requests = [];
+  const result = await applySeedData({ seedDir, envUrl: 'https://org.crm.dynamics.com' }, {
+    token: 'token',
+    fs: fsImpl,
+    randomBlockId: () => 'block-1',
+    makeRequest: async (req) => {
+      requests.push(req);
+      if (req.url.endsWith('/InitializeFileBlocksUpload')) return { statusCode: 200, body: JSON.stringify({ FileContinuationToken: 'continuation' }) };
+      return { statusCode: 204 };
+    },
+  });
+
+  const invoicePost = requests.find((req) => req.url.endsWith('/spnvc_invoices'));
+  assert.equal(result.failed, 0);
+  assert.equal(result.inserted, 3);
+  assert.deepEqual(JSON.parse(invoicePost.body), {
+    spnvc_invoiceid: '22222222-2222-2222-2222-222222222222',
+    'spnvc_ContactId@odata.bind': '/contacts(11111111-1111-1111-1111-111111111111)',
+  });
+  assert.equal(requests.some((req) => req.url.endsWith('/InitializeFileBlocksUpload')), true);
 });
 
 test('applySeedData refreshes tokens across the whole seed run instead of per record', async () => {
