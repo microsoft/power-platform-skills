@@ -11,12 +11,12 @@ test('openInDefaultBrowser uses platform-specific opener commands', () => {
   const execFileSync = (...args) => calls.push(args);
 
   openInDefaultBrowser('https://example.test', { os: { platform: () => 'darwin' }, execFileSync });
-  openInDefaultBrowser('https://example.test', { os: { platform: () => 'win32' }, execFileSync });
+  openInDefaultBrowser('https://example.test/a path?q=1&x=2', { os: { platform: () => 'win32' }, execFileSync });
   openInDefaultBrowser('https://example.test', { os: { platform: () => 'linux' }, execFileSync });
 
   assert.deepEqual(calls, [
     ['open', ['https://example.test'], { stdio: 'ignore' }],
-    ['cmd', ['/c', 'start', '', 'https://example.test'], { stdio: 'ignore', windowsHide: true }],
+    ['powershell.exe', ['-NoProfile', '-Command', 'param([string]$Target) Start-Process -FilePath $Target', 'https://example.test/a path?q=1&x=2'], { stdio: 'ignore', windowsHide: true }],
     ['xdg-open', ['https://example.test'], { stdio: 'ignore' }],
   ]);
 });

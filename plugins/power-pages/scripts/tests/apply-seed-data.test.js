@@ -91,13 +91,50 @@ test('applySeedData success path can run with injected fs and request function',
   assert.deepEqual(JSON.parse(requests[0].body), { cr123_name: 'Announcements' });
 });
 
+test('applySeedData refreshes tokens across the whole seed run instead of per record', async () => {
+  const fsImpl = {
+    existsSync: () => true,
+    readdirSync: () => ['010-categories.json'],
+    readFileSync: () => JSON.stringify({
+      entitySetName: 'cr123_categories',
+      records: [
+        { cr123_name: 'One' },
+        { cr123_name: 'Two' },
+        { cr123_name: 'Three' },
+      ],
+    }),
+  };
+  const authResources = [];
+  const authHeaders = [];
+
+  const result = await applySeedData({ seedDir: '/virtual/seed', envUrl: 'https://org.crm.dynamics.com' }, {
+    fs: fsImpl,
+    token: 'initial-token',
+    tokenRefreshEvery: 2,
+    getAuthToken: (resource) => {
+      authResources.push(resource);
+      return `refreshed-${authResources.length}`;
+    },
+    makeRequest: async (req) => {
+      authHeaders.push(req.headers.Authorization);
+      return { statusCode: 204 };
+    },
+  });
+
+  assert.equal(result.inserted, 3);
+  assert.deepEqual(authHeaders, ['Bearer initial-token', 'Bearer initial-token', 'Bearer refreshed-1']);
+  assert.deepEqual(authResources, ['https://org.crm.dynamics.com']);
+});
+
 test('applySeedData strips __files, requires primaryKey, and uploads file-column attachments in 4 MiB blocks', async () => {
+  const seedDir = path.resolve('virtual-seed');
+  const attachmentPath = path.join(seedDir, 'files', 'invoices', 'inv-001.pdf');
   const fileBuffer = Buffer.concat([
     Buffer.alloc(4 * 1024 * 1024, 1),
     Buffer.from('tail'),
   ]);
   const fsImpl = {
-    existsSync: (p) => p === '/virtual/seed' || p === '/virtual/seed/files/invoices/inv-001.pdf',
+    existsSync: (p) => p === seedDir || p === attachmentPath,
     readdirSync: () => ['010-invoices.json'],
     readFileSync: (p) => {
       if (p.endsWith('010-invoices.json')) {
@@ -118,7 +155,7 @@ test('applySeedData strips __files, requires primaryKey, and uploads file-column
     statSync: () => ({ isFile: () => true, size: fileBuffer.length }),
   };
   const requests = [];
-  const result = await applySeedData({ seedDir: '/virtual/seed', envUrl: 'https://org.crm.dynamics.com' }, {
+  const result = await applySeedData({ seedDir, envUrl: 'https://org.crm.dynamics.com' }, {
     token: 'token',
     fs: fsImpl,
     randomBlockId: (() => {
@@ -234,9 +271,11 @@ test('applySeedData accepts attachment paths under a relative seedDir', async (t
 });
 
 test('applySeedData uploads file attachments when the explicit-guid record already exists', async () => {
+  const seedDir = path.resolve('virtual-seed');
+  const attachmentPath = path.join(seedDir, 'files', 'invoices', 'inv-001.pdf');
   const fileBuffer = Buffer.from('pdf');
   const fsImpl = {
-    existsSync: (p) => p === '/virtual/seed' || p === '/virtual/seed/files/invoices/inv-001.pdf',
+    existsSync: (p) => p === seedDir || p === attachmentPath,
     readdirSync: () => ['010-invoices.json'],
     readFileSync: (p) => {
       if (p.endsWith('010-invoices.json')) {
@@ -255,7 +294,7 @@ test('applySeedData uploads file attachments when the explicit-guid record alrea
     statSync: () => ({ isFile: () => true, size: fileBuffer.length }),
   };
   const requests = [];
-  const result = await applySeedData({ seedDir: '/virtual/seed', envUrl: 'https://org.crm.dynamics.com' }, {
+  const result = await applySeedData({ seedDir, envUrl: 'https://org.crm.dynamics.com' }, {
     token: 'token',
     fs: fsImpl,
     randomBlockId: () => 'block-1',

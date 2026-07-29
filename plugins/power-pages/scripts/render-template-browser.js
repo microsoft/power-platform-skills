@@ -101,10 +101,15 @@ function renderTemplateBrowser({ templatesJsonPath, outputPath, open = false }, 
     },
     requiredKeys: ['TEMPLATE_COUNT', 'TEMPLATE_TABS_HTML', 'TEMPLATE_SECTIONS_HTML'],
   });
+  let openError = null;
   if (open) {
-    openFileInDefaultBrowser(outputPath, deps);
+    try {
+      openFileInDefaultBrowser(outputPath, deps);
+    } catch (err) {
+      openError = err.message;
+    }
   }
-  return { status: 'ok', output: outputPath, opened: Boolean(open) };
+  return { status: 'ok', output: outputPath, opened: Boolean(open && !openError), ...(openError ? { openError } : {}) };
 }
 
 function main() {

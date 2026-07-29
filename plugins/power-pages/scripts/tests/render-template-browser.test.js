@@ -84,3 +84,22 @@ test('renderTemplateBrowser renders static template details and preview images',
   assert.doesNotMatch(html, /picker/i);
   assert.doesNotMatch(html, /templates\.map/);
 });
+
+test('renderTemplateBrowser reports opener failures without failing render', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const dataPath = path.join(dir, 'templates.json');
+  const outputPath = path.join(dir, 'browser.html');
+  fs.writeFileSync(dataPath, JSON.stringify({ TEMPLATES_JSON: [] }));
+
+  const result = renderTemplateBrowser({
+    templatesJsonPath: dataPath,
+    outputPath,
+    open: true,
+  }, {
+    execFileSync: () => { throw new Error('no opener'); },
+  });
+
+  assert.deepEqual(result, { status: 'ok', output: outputPath, opened: false, openError: 'no opener' });
+  assert.equal(fs.existsSync(outputPath), true);
+});

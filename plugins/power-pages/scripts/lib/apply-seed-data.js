@@ -276,6 +276,7 @@ async function applySeedData({ seedDir, envUrl }, deps = {}) {
     if (!token) {
       return { ...summary, ok: false, failed: 1, errors: [{ scope: 'auth', message: `Azure CLI token unavailable for ${envUrl}` }] };
     }
+    const tokenProvider = deps.tokenProvider || createTokenProvider({ envUrl, initialToken: token, resolveToken, refreshEvery: deps.tokenRefreshEvery || TOKEN_REFRESH_EVERY_REQUESTS });
 
     for (const filePath of listSeedFiles(seedDir, deps)) {
       let seed;
@@ -297,7 +298,6 @@ async function applySeedData({ seedDir, envUrl }, deps = {}) {
             summary.errors.push({ ...context, message: validationError });
             continue;
           }
-          const tokenProvider = deps.tokenProvider || createTokenProvider({ envUrl, initialToken: token, resolveToken, refreshEvery: deps.tokenRefreshEvery || TOKEN_REFRESH_EVERY_REQUESTS });
           const res = await postRecord({ envUrl, tokenProvider, entitySetName: seed.entitySetName, record: recordBody }, deps);
           let shouldUploadFiles = false;
           if (res.error) {

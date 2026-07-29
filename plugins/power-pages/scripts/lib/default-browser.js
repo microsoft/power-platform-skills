@@ -9,10 +9,10 @@ function openInDefaultBrowser(target, deps = {}) {
   if (platform === 'darwin') {
     execFile('open', [target], { stdio: 'ignore' });
   } else if (platform === 'win32') {
-    // Windows `start` is a cmd.exe built-in, not an executable. The empty
-    // string is the window-title slot; without it, a quoted URL/path can be
-    // misread as the title and nothing opens.
-    execFile('cmd', ['/c', 'start', '', target], { stdio: 'ignore', windowsHide: true });
+    // Avoid `cmd /c start`: cmd.exe reparses metacharacters such as `&` in URL
+    // query strings. Passing the target as a PowerShell argument keeps it as
+    // data while still letting Windows choose the registered default handler.
+    execFile('powershell.exe', ['-NoProfile', '-Command', 'param([string]$Target) Start-Process -FilePath $Target', target], { stdio: 'ignore', windowsHide: true });
   } else {
     execFile('xdg-open', [target], { stdio: 'ignore' });
   }
