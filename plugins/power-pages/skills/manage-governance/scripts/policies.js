@@ -17,6 +17,22 @@ const SUPPORTED_POLICIES = Object.freeze([
   'EnableIdpOAuthMicrosoft',
   'EnableAuthenticationLocalLogin',
   'EnableExternalAuthProviders',
+  // Power Pages Copilot / site-control governance policies. These use the
+  // `PowerPages_*` name prefix but are the SAME uniformGovernance type as the
+  // ten above — each supports the canonical All / None / Include / Exclude
+  // policyValue vocabulary and is independent (no parent/child availability
+  // gating, no cascade). Added per the 2026-07 enhancement request.
+  'PowerPages_AllowMakerCopilotsForNewSites',
+  'PowerPages_AllowMakerCopilotsForExistingSites',
+  'PowerPages_AllowProDevCopilotsForSites',
+  'PowerPages_AllowSiteCopilotForSites',
+  'PowerPages_AllowSearchSummaryCopilotForSites',
+  'PowerPages_AllowListSummaryCopilotForSites',
+  'PowerPages_AllowIntelligentFormsCopilotForSites',
+  'PowerPages_AllowSummarizationAPICopilotForSites',
+  'PowerPages_AllowProDevCopilotsForEnvironment',
+  'PowerPages_AllowNonProdPublicSites',
+  'PowerPages_DisableExtSvcCallsFromServerLogic',
 ]);
 
 // Some policies (env-level ones such as EnableMakerCopilotForExistingSites)

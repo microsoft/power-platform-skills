@@ -22,6 +22,7 @@ All scripts accept `--help` to print full usage.
 - [`get-portal.js`](#get-portaljs)
 - [`get-details.js`](#get-detailsjs)
 - [`resolve-portal-availability.js`](#resolve-portal-availabilityjs)
+- [`get-effective-status.js`](#get-effective-statusjs)
 - [`render-status-table.js`](#render-status-tablejs)
 - [`parse-portal-input.js`](#parse-portal-inputjs)
 - [Common error catalogue](#common-error-catalogue)
@@ -45,13 +46,27 @@ in `scripts/policies.js`):
 | `EnableIdpOAuthMicrosoft` | Enables/disables Microsoft sign-in on Power Pages sites. |
 | `EnableAuthenticationLocalLogin` | Enables/disables local (username & password) sign-in on Power Pages sites. |
 | `EnableExternalAuthProviders` | Enables/disables all external (social / federated) identity providers on Power Pages sites. |
+| `PowerPages_AllowMakerCopilotsForNewSites` | Allows/blocks Maker Copilots on newly created Power Pages sites. |
+| `PowerPages_AllowMakerCopilotsForExistingSites` | Allows/blocks Maker Copilots on existing Power Pages sites. |
+| `PowerPages_AllowProDevCopilotsForSites` | Allows/blocks pro-developer Copilots on Power Pages sites. |
+| `PowerPages_AllowSiteCopilotForSites` | Allows/blocks the site Copilot on Power Pages sites. |
+| `PowerPages_AllowSearchSummaryCopilotForSites` | Allows/blocks the search-summary Copilot on Power Pages sites. |
+| `PowerPages_AllowListSummaryCopilotForSites` | Allows/blocks the list-summary Copilot on Power Pages sites. |
+| `PowerPages_AllowIntelligentFormsCopilotForSites` | Allows/blocks the intelligent-forms Copilot on Power Pages sites. |
+| `PowerPages_AllowSummarizationAPICopilotForSites` | Allows/blocks the summarization-API Copilot on Power Pages sites. |
+| `PowerPages_AllowProDevCopilotsForEnvironment` | Allows/blocks pro-developer Copilots for the Power Pages environment. |
+| `PowerPages_AllowNonProdPublicSites` | Allows/blocks non-production public Power Pages sites. |
+| `PowerPages_DisableExtSvcCallsFromServerLogic` | Controls external service calls from Power Pages server-side logic. |
 
 The nine `Enable*` authentication policies (`EnableProtocol*`, `EnableIdp*`,
-`EnableAuthenticationLocalLogin`, `EnableExternalAuthProviders`) share the
+`EnableAuthenticationLocalLogin`, `EnableExternalAuthProviders`) and the eleven
+`PowerPages_*` Copilot / site-control policies share the
 **same configuration and API contract** as `EnableMakerCopilotForExistingSites`:
 uniform governance with the canonical `policyValue` vocabulary
 (`All` / `None` / `Include` / `Exclude`) on read/normalize and the env-level
-`applyTo` (`*Sites`) enum vocabulary on write.
+`applyTo` (`*Sites`) enum vocabulary on write. The eleven `PowerPages_*`
+policies are **independent leaves** — no parent/child availability gate and no
+cascade, so effective state equals own state.
 
 A new policy is added by appending its string to `SUPPORTED_POLICIES` in
 `scripts/policies.js` — every script validates against that list before
@@ -656,6 +671,95 @@ what the orchestrator uses in Fetch Env (4.3.1), the effective-status build
 
 ---
 
+## `get-effective-status.js`
+
+Computes the **effective** governance state of a policy for **every** portal in
+an environment in **ONE parallel batch** of reads. This is the canonical
+state-read for every SKILL.md status path — Fetch Env portal table (4.3.1),
+Fetch Site (4.4.3), the effective status for gated children (4.4.4), the post-Set
+verify (4.2.5), and the consent-gate Current State (4.2.3). It replaces the old
+sequential `get-env.js` → `get-details.js` → `resolvePortalStates` hand-issued
+loop, so the orchestrator MUST route per-site state through this script and
+**never** hand-issue `get-env.js` / `get-details.js` / `get-portal.js` per
+policy or per portal.
+
+### Why (kills the sequential per-policy reads)
+
+A gated child method is only live on a portal when the child's OWN setting **and**
+every gating parent are Enabled there. Reading that needs `getEnv` + `getDetails`
+for the child **and** each parent — 4 calls for a protocol (child + External
+Auth), 6 for a social IdP (child + External Auth + OAuth 2.0). The previous flow
+issued those reads **sequentially** (a `for … await` loop), so a social-IdP
+status took 6 serial round-trips. Every call is independent, so this script fires
+**all** of them concurrently with a single `Promise.all` and only then assembles
+the report — collapsing 4–6 serial round-trips into one parallel wave (wall-clock
+≈ one round-trip regardless of parent count). Leaf policies with no parents
+(Maker Copilot, local login, External Auth) report their own state as the
+effective state (2 calls).
+
+### Usage
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
+  --policy <name> \
+  --portalsFile <path-to-list-portals-output> \
+  [--envId <guid>]
+```
+
+- `--policy` — any of the twenty-one governance policy names.
+- `--portalsFile` — path to `list-portals.js` output (`{ portals: [...] }` or a
+  bare array). Required — this script does **not** re-page `/websites`.
+- `--envId` — optional; falls back to the current PAC env.
+
+### Response (stdout, JSON)
+
+The shape is what `render-portal-table.js` consumes directly (it reads
+`.portals`), so pipe this straight into it:
+
+```json
+{
+  "status": "ok",
+  "policy": "<name>",
+  "dependencies": ["<parent>", "..."],
+  "apiCalls": 6,
+  "effectiveEnabledCount": 2,
+  "portals": [
+    { "name": "Portal_4", "url": "https://…", "portalId": "<guid>",
+      "state": true,
+      "own": true,
+      "parents": { "EnableExternalAuthProviders": true, "EnableProtocolOpenAuth": true } }
+  ]
+}
+```
+
+- `state` — the **effective** boolean (own AND every parent) — the value the
+  5-column Unicode status box renders.
+- `own` — the child's own setting on that portal.
+- `parents` — each gating parent's state on that portal.
+- `apiCalls` — policies × 2, **all issued in parallel**.
+
+Pipe `.portals` into the status render:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
+  --policy "<POLICY>" --envId "<ENV_ID>" --portalsFile <list-portals-output> \
+  | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --unicode --no-color
+```
+
+Fail-closed posture: a failed `getDetails` degrades to an empty membership list;
+a failed `getEnv` is fatal (cannot classify without the env value). A parent
+whose state can't be read makes the site's effective state `Unknown`.
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0`  | Success |
+| `2`  | Sign-in required |
+| `1`  | Other failure |
+
+---
+
 ## `render-status-table.js`
 
 Renders the per-site **effective** governance-status Markdown table for a
@@ -710,10 +814,12 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-status-table
 `own` and each `parents` value accept `true|false|"Enabled"|"Disabled"|null`. A
 `null`/unreadable state renders `Unknown` and forces `Effective = Unknown`.
 Include the `EnableProtocolOpenAuth` parent key only for the social IdPs. The
-orchestrator assembles the live own/parent states via the batch two-call path —
-`get-env.js` + `get-details.js` per policy, then `resolvePortalStates()` (see
-`resolve-portal-availability.js`) — **never** a per-portal `get-portal.js` loop.
-This helper itself is network-free.
+orchestrator assembles the live own/parent states via
+[`get-effective-status.js`](#get-effective-statusjs) — a **single parallel batch**
+that fires `getEnv` + `getDetails` for the child and every gating parent
+concurrently and returns the effective per-portal state — **never** a sequential
+per-policy loop and **never** a per-portal `get-portal.js` loop. This helper
+itself is network-free.
 
 ### Response (stdout)
 

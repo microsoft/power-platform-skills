@@ -2,21 +2,26 @@
 name: manage-governance
 description: >-
   Apply, inspect, and monitor Power Pages tenant governance policies. Covers
-  ten policies: toggling Maker Copilot for existing sites, and enabling/disabling
+  twenty-one policies: toggling Maker Copilot for existing sites, enabling/disabling
   sign-in protocols (OpenID Connect, SAML 2.0, WS-Federation, OAuth 2.0), social
   identity providers (Google, Facebook, Microsoft), local login, and external
-  auth providers. Sets a policy environment-wide or per portal, watches the
+  auth providers, plus eleven Power Pages Copilot / site-control policies
+  (Maker/pro-dev/site/search-summary/list-summary/intelligent-forms/summarization-API
+  Copilots, non-production public sites, and external service calls from server
+  logic). Sets a policy environment-wide or per portal, watches the
   rollout to completion, and reads current state at the environment or portal
   level. Use when the user wants to "turn off OpenID Connect on Power Pages",
   "disable SAML on a portal", "block a sign-in protocol on portals",
   "enable/disable Maker Copilot for existing sites", "enable Google/Facebook/Microsoft sign-in",
-  "turn off local login", "disable a sign-in protocol", "check which portals have
-  a sign-in protocol enabled", or "see the governance status of my Power Pages portals"
+  "turn off local login", "disable a sign-in protocol", "allow site Copilot on sites",
+  "disable external service calls from server logic",
+  "check which portals have a sign-in protocol enabled", or "see the governance status
+  of my Power Pages portals"
   - even if they only name the policy or its side effect without saying
   "governance".
 user-invocable: true
 argument-hint: "[optional policy or operation hint]"
-allowed-tools: Read, Write, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList
+allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 model: opus
 ---
 
@@ -26,7 +31,7 @@ model: opus
 
 # Manage Power Pages Governance Policies
 
-Apply and inspect Power Pages tenant-level governance policies. Ten policies are supported today. One toggles Maker Copilot for existing sites, and nine enable/disable Power Pages authentication features (sign-in protocols, social identity providers, local login, and external providers):
+Apply and inspect Power Pages tenant-level governance policies. Twenty-one policies are supported today. One toggles Maker Copilot for existing sites, nine enable/disable Power Pages authentication features (sign-in protocols, social identity providers, local login, and external providers), and eleven govern Power Pages Copilot experiences and site-level controls:
 
 | Policy | What it does |
 |--------|--------------|
@@ -40,8 +45,19 @@ Apply and inspect Power Pages tenant-level governance policies. Ten policies are
 | `EnableIdpOAuthMicrosoft` | Enables (or disables) Microsoft sign-in on Power Pages sites. |
 | `EnableAuthenticationLocalLogin` | Enables (or disables) local (username & password) sign-in on Power Pages sites. |
 | `EnableExternalAuthProviders` | Enables (or disables) all external (social / federated) identity providers on Power Pages sites. |
+| `PowerPages_AllowMakerCopilotsForNewSites` | Allows (or blocks) Maker Copilots on newly created Power Pages sites. |
+| `PowerPages_AllowMakerCopilotsForExistingSites` | Allows (or blocks) Maker Copilots on existing Power Pages sites. |
+| `PowerPages_AllowProDevCopilotsForSites` | Allows (or blocks) pro-developer Copilots on Power Pages sites. |
+| `PowerPages_AllowSiteCopilotForSites` | Allows (or blocks) the site Copilot on Power Pages sites. |
+| `PowerPages_AllowSearchSummaryCopilotForSites` | Allows (or blocks) the search-summary Copilot on Power Pages sites. |
+| `PowerPages_AllowListSummaryCopilotForSites` | Allows (or blocks) the list-summary Copilot on Power Pages sites. |
+| `PowerPages_AllowIntelligentFormsCopilotForSites` | Allows (or blocks) the intelligent-forms Copilot on Power Pages sites. |
+| `PowerPages_AllowSummarizationAPICopilotForSites` | Allows (or blocks) the summarization-API Copilot on Power Pages sites. |
+| `PowerPages_AllowProDevCopilotsForEnvironment` | Allows (or blocks) pro-developer Copilots for the Power Pages environment. |
+| `PowerPages_AllowNonProdPublicSites` | Allows (or blocks) non-production public Power Pages sites. |
+| `PowerPages_DisableExtSvcCallsFromServerLogic` | Controls external service calls from Power Pages server-side logic. |
 
-These are **admin-only** operations — applying an auth policy stops or starts the relevant authentication path for the targeted scope, and the Maker Copilot policy toggles the Copilot authoring experience for existing sites (environment or portal scope). All nine `Enable*` authentication policies use the **same configuration and Enable/Disable experience** as `EnableMakerCopilotForExistingSites` — uniform governance (every site / no sites / only specific sites / all except specific sites), the same consent gate, and the same verify tables. Always confirm with the user before posting a Set call.
+These are **admin-only** operations — applying an auth policy stops or starts the relevant authentication path for the targeted scope, the Maker Copilot policy toggles the Copilot authoring experience for existing sites (environment or portal scope), and the eleven `PowerPages_*` Copilot / site-control policies govern their respective Copilot experiences or site controls for the targeted scope. All twenty new/existing `Enable*` and `PowerPages_*` policies use the **same configuration and Enable/Disable experience** as `EnableMakerCopilotForExistingSites` — uniform governance (every site / no sites / only specific sites / all except specific sites), the same consent gate, and the same verify tables. Always confirm with the user before posting a Set call.
 
 **Initial request:** $ARGUMENTS
 
@@ -51,12 +67,12 @@ These are **admin-only** operations — applying an auth policy stops or starts 
 - **Two identifier shapes per portal.** The portal-scoped APIs take `portalId` (the value in the `Id` field on the `/websites` response). The Dataverse `WebsiteRecordId` shown in PAC and YAML is **not** what these APIs accept. The skill resolves portals via the same `/websites` listing that `manage-firewall` uses.
 - **Env override is required.** The skill lets the user pick any environment they have access to. Each script accepts `--envId <guid>` and overrides the env in the Power Platform API base URL. When `--envId` is omitted, the script falls back to the env the user is signed into via PAC.
 - **Set is async; poll until terminal.** `POST /governance` returns immediately but the policy roll-out is asynchronous. Status comes from `GET /governance/status/{policy}`. The `set-governance.js` script polls this endpoint until the status reaches a terminal value (`Succeeded` / `Completed` for success, `Failed` for failure) or the timeout elapses.
-- **Policy names are case-sensitive.** Use the exact policy strings — `EnableMakerCopilotForExistingSites`, `EnableProtocolOpenIdConnect`, `EnableProtocolSAML20`, `EnableProtocolWsFederation`, `EnableProtocolOpenAuth`, `EnableIdpOAuthFacebook`, `EnableIdpOAuthGoogle`, `EnableIdpOAuthMicrosoft`, `EnableAuthenticationLocalLogin`, and `EnableExternalAuthProviders`. Anything else will be rejected by the API.
+- **Policy names are case-sensitive.** Use the exact policy strings — `EnableMakerCopilotForExistingSites`, `EnableProtocolOpenIdConnect`, `EnableProtocolSAML20`, `EnableProtocolWsFederation`, `EnableProtocolOpenAuth`, `EnableIdpOAuthFacebook`, `EnableIdpOAuthGoogle`, `EnableIdpOAuthMicrosoft`, `EnableAuthenticationLocalLogin`, `EnableExternalAuthProviders`, `PowerPages_AllowMakerCopilotsForNewSites`, `PowerPages_AllowMakerCopilotsForExistingSites`, `PowerPages_AllowProDevCopilotsForSites`, `PowerPages_AllowSiteCopilotForSites`, `PowerPages_AllowSearchSummaryCopilotForSites`, `PowerPages_AllowListSummaryCopilotForSites`, `PowerPages_AllowIntelligentFormsCopilotForSites`, `PowerPages_AllowSummarizationAPICopilotForSites`, `PowerPages_AllowProDevCopilotsForEnvironment`, `PowerPages_AllowNonProdPublicSites`, and `PowerPages_DisableExtSvcCallsFromServerLogic`. Anything else will be rejected by the API.
 - **Plain language with the user.** Talk about "turning off the OpenID Connect / SAML sign-in path on Power Pages portals" or "enabling Google sign-in on your sites". Only show the policy string when the user asks for the technical name.
 - **OpenID Connect / SAML map to the protocol toggles.** "OpenID Connect" / "OIDC" resolves to `EnableProtocolOpenIdConnect` and "SAML" / "SAML 2.0" resolves to `EnableProtocolSAML20` — whether or not the user adds a "protocol" / "enable" qualifier. (The legacy `PowerPages_DisableAuthentication*` block rules have been removed.) A "block OpenID Connect" / "block SAML" phrasing means **disabling** that protocol toggle.
 - **No silent overrides.** **Disabling** any `Enable*` authentication policy (`EnableProtocol*`, `EnableIdp*`, `EnableAuthenticationLocalLogin`, `EnableExternalAuthProviders`) will sign existing users out of any portal that uses the targeted provider. Surface that consequence at the consent gate before posting. (The Maker Copilot policy has no such sign-out side effect.)
 - **Parent/child availability is a hard gate on every apply path.** The four sign-in protocols (OpenID Connect, SAML 2.0, WS-Federation, OAuth 2.0) require `EnableExternalAuthProviders` to be Enabled on a portal; the three social providers (Facebook, Google, Microsoft) require **both** `EnableExternalAuthProviders` **and** `EnableProtocolOpenAuth`. On a portal where the required parent is Disabled the child can be **neither enabled nor disabled** — with **no "force"/"anyway" override**. The scope picker lists **only the portals where the required parent is Enabled** (via `resolve-portal-availability.js --available-only`), and the **named-site fast path** (when the site is named directly in the request) hard-blocks ineligible sites the same way via Phase 4.2.2b. When only some portals qualify, it shows/keeps just those plus an info line; when **none** qualify (a required parent is Disabled env-wide) it shows a single *"External Auth is Disabled for this environment"* message — and for a **social IdP** (two parents) it names both, *"External Auth or OAuth 2.0 sign-in is Disabled for this environment"* — and the skill does not prompt for a scope or POST. See the "Parent/child availability" section under Phase 2.3. **The environment picker itself is never filtered** — every environment is always shown in the full env list; availability only narrows the per-portal scope.
-- **Governance STATUS is ALWAYS the 5-column Unicode box.** Every status render — Fetch Env (4.3.1), Fetch Site (4.4.3), and the post-Set verify (4.2.5) — uses `render-portal-table.js --unicode --no-color`, emitted **inside a fenced code block**, with **exactly** the columns `# | Name | URL | Site ID | State` (`┌─┬─┐ │ ├─┼─┤ └─┴─┘`, a rule between every row). Never add, drop, reorder, or rename a column, and never substitute a Markdown table for status. This is uniform for **all ten policies** including the gated children (OpenID Connect / SAML 2.0 / WS-Federation / OAuth 2.0 / Facebook / Google / Microsoft): for a gated child the single `State` shows the **effective** state (own AND every gating parent) — the parent chain is computed but never rendered as extra columns.
+- **Governance STATUS is ALWAYS the 5-column Unicode box.** Every status render — Fetch Env (4.3.1), Fetch Site (4.4.3), and the post-Set verify (4.2.5) — uses `render-portal-table.js --unicode --no-color`, emitted **inside a fenced code block**, with **exactly** the columns `# | Name | URL | Site ID | State` (`┌─┬─┐ │ ├─┼─┤ └─┴─┘`, a rule between every row). Never add, drop, reorder, or rename a column, and never substitute a Markdown table for status. This is uniform for **all twenty-one policies** including the gated children (OpenID Connect / SAML 2.0 / WS-Federation / OAuth 2.0 / Facebook / Google / Microsoft): for a gated child the single `State` shows the **effective** state (own AND every gating parent) — the parent chain is computed but never rendered as extra columns. The eleven `PowerPages_*` Copilot / site-control policies are independent leaves (no gating parent), so their single `State` is simply their own state.
 
 ## Workflow
 
@@ -140,9 +156,10 @@ Parse the reply into a structured intent. The parser's output shape:
 }
 ```
 
-The parser MUST recognize all ten supported policy display names + their
+The parser MUST recognize all twenty-one supported policy display names + their
 shorthand variants. All policies share the **same** uniform Enable/Disable
-experience — the auth `Enable*` family below is configured exactly like
+experience — the auth `Enable*` family and the `PowerPages_*` Copilot /
+site-control family below are configured exactly like
 `EnableMakerCopilotForExistingSites`.
 
 | User shorthand | Resolves to |
@@ -157,6 +174,17 @@ experience — the auth `Enable*` family below is configured exactly like
 | "Microsoft" / "Microsoft account" / "Microsoft sign-in" | `EnableIdpOAuthMicrosoft` |
 | "local login" / "local authentication" / "username and password" | `EnableAuthenticationLocalLogin` |
 | "external auth providers" / "external identity providers" | `EnableExternalAuthProviders` |
+| "maker copilots for new sites" / "new sites copilot" / "maker copilot new sites" | `PowerPages_AllowMakerCopilotsForNewSites` |
+| "maker copilots for existing sites" / "existing sites maker copilot" | `PowerPages_AllowMakerCopilotsForExistingSites` |
+| "pro dev copilot for sites" / "prodev copilot sites" / "professional developer copilot for sites" | `PowerPages_AllowProDevCopilotsForSites` |
+| "site copilot" / "site copilot for sites" / "portal copilot" | `PowerPages_AllowSiteCopilotForSites` |
+| "search summary copilot" / "search summary" / "search summarization copilot" | `PowerPages_AllowSearchSummaryCopilotForSites` |
+| "list summary copilot" / "list summary" / "list summarization copilot" | `PowerPages_AllowListSummaryCopilotForSites` |
+| "intelligent forms copilot" / "intelligent forms" / "forms copilot" / "smart forms copilot" | `PowerPages_AllowIntelligentFormsCopilotForSites` |
+| "summarization api copilot" / "summarization api" / "summarization copilot" | `PowerPages_AllowSummarizationAPICopilotForSites` |
+| "pro dev copilot for environment" / "prodev copilot environment" / "professional developer copilot for environment" | `PowerPages_AllowProDevCopilotsForEnvironment` |
+| "non-prod public sites" / "non production public sites" / "public non-prod sites" | `PowerPages_AllowNonProdPublicSites` |
+| "external service calls from server logic" / "disable external service calls" / "server logic external calls" | `PowerPages_DisableExtSvcCallsFromServerLogic` |
 
 > **OpenID Connect / SAML now map straight to the protocol toggles.** The legacy
 > `PowerPages_DisableAuthentication*` block rules have been removed, so
@@ -214,7 +242,7 @@ ambiguous ones — never re-ask for what the user already specified.
 
 | Field | Missing → ask user | Invalid → reject + reprompt |
 |-------|--------------------|------------------------------|
-| `policy` | "Which governance setting? For example OpenID Connect, SAML 2.0, Maker Copilot, a sign-in protocol (WS-Federation / OAuth), a social provider (Google / Facebook / Microsoft), local login, or external providers?" | "I don't recognize '\<X\>' — supported settings are the ten governance policies (Maker Copilot, the OpenID Connect / SAML 2.0 / WS-Federation / OAuth 2.0 protocols, Google / Facebook / Microsoft sign-in, local login, external providers). Try again." |
+| `policy` | "Which governance setting? For example OpenID Connect, SAML 2.0, Maker Copilot, a sign-in protocol (WS-Federation / OAuth), a social provider (Google / Facebook / Microsoft), local login, external providers, a Power Pages Copilot (site / pro-dev / search-summary / list-summary / intelligent-forms / summarization-API), non-production public sites, or external service calls from server logic?" | "I don't recognize '\<X\>' — supported settings are the twenty-one governance policies (Maker Copilot, the OpenID Connect / SAML 2.0 / WS-Federation / OAuth 2.0 protocols, Google / Facebook / Microsoft sign-in, local login, external providers, and the Power Pages Copilot / site-control policies). Try again." |
 | `intentDirection` | "Do you want to enable or disable it?" | — |
 | `envId` | Use the env picker (see "Env picker pattern" below): list all envs and default to the previously-used env. Track the env from the most recent successful operation as `<RECENT_ENV>` so it becomes the default selection; persist the chosen env id as `<ENV_ID>` and the display name as `<ENV_DISPLAY>`. | "I couldn't find an env matching '\<X\>'. Pick a row from the list or paste an id." |
 | `scope` (when `apply`) | "Apply to all sites in \<env\>, no sites, only selected sites, or all except selected?" — only when the user's phrasing was genuinely ambiguous | — |
@@ -417,10 +445,11 @@ The summary MUST include:
 | What this changes | one-line plain-language consequence | "OpenID Connect sign-in will be blocked on all 3 sites." |
 
 **Current State / New State columns (required).** Before rendering the
-consent summary, resolve the **Current State** of each affected site by
-reading the live policy state (`get-env.js` for the env value + `get-portal.js`
-for the inclusion/exclusion lists, then apply the Phase 4.4.3 site-state
-table). **New State** is what that site becomes after the requested operation
+consent summary, resolve the **Current State** of each affected site with a
+single parallel batch — `get-effective-status.js` (it reads the env value, the
+membership lists, and any gating parents concurrently and returns each site's
+effective state). **New State** is what that site becomes after the requested
+operation
 (enable → Enabled, disable → Disabled, for the sites in scope). Render both cells with the green/red convention (`🟢 Enabled` / `🔴 Disabled`)
 from `governance-mapping.json` `stateColors`. This lets the user see the exact
 transition before approving. If a live read fails, render Current State as
@@ -496,6 +525,17 @@ For the consent gate and verification render, refer to this table:
 | Enable Microsoft sign-in | `EnableIdpOAuthMicrosoft` |
 | Enable local login | `EnableAuthenticationLocalLogin` |
 | Enable external authentication providers | `EnableExternalAuthProviders` |
+| Allow Maker Copilots for new sites | `PowerPages_AllowMakerCopilotsForNewSites` |
+| Allow Maker Copilots for existing sites | `PowerPages_AllowMakerCopilotsForExistingSites` |
+| Allow pro-dev Copilots for sites | `PowerPages_AllowProDevCopilotsForSites` |
+| Allow site Copilot for sites | `PowerPages_AllowSiteCopilotForSites` |
+| Allow search summary Copilot for sites | `PowerPages_AllowSearchSummaryCopilotForSites` |
+| Allow list summary Copilot for sites | `PowerPages_AllowListSummaryCopilotForSites` |
+| Allow intelligent forms Copilot for sites | `PowerPages_AllowIntelligentFormsCopilotForSites` |
+| Allow summarization API Copilot for sites | `PowerPages_AllowSummarizationAPICopilotForSites` |
+| Allow pro-dev Copilots for the environment | `PowerPages_AllowProDevCopilotsForEnvironment` |
+| Allow non-production public sites | `PowerPages_AllowNonProdPublicSites` |
+| Disable external service calls from server-side logic | `PowerPages_DisableExtSvcCallsFromServerLogic` |
 
 ### policyValue meaning — uniform across all policies
 
@@ -965,13 +1005,14 @@ Environment / Scope / Sites / Effect / Side-effect rows consistent with the
 committed spec and per-policy data), then ask for explicit go-ahead.
 
 **Step 1 — resolve each affected site's Current State.** Read the live policy
-state so the summary can show the exact transition: run `get-env.js` for the
-env value, and (only when the env value is `Include` / `Exclude`)
-`get-details.js` **once** for the inclusion/exclusion lists, then resolve each
-in-scope site locally with `resolvePortalStates(envValue, detailsBody, portals)`
-(the batch form of the Phase 4.4.3 site-state table — no per-portal calls, no
-dummy-portalId trick). If a live read fails, pass `currentState: "Unknown"`
-(never block the gate on a read error).
+state so the summary can show the exact transition with **one parallel batch** —
+run `get-effective-status.js` **once** (`--policy <P> --portalsFile <list-portals
+output> --envId <ENV_ID>`). It fires the env value, the membership list, and (for
+a gated child) every gating parent concurrently in a single `Promise.all` wave,
+and returns each in-scope site's effective `state`. Do **NOT** hand-issue
+`get-env.js` / `get-details.js` / `get-portal.js`, and never loop per portal. If
+a live read fails, pass `currentState: "Unknown"` (never block the gate on a read
+error).
 
 **Step 1b — redundant-operation guard (already in the requested state).**
 Before rendering the Impact Summary, compare each in-scope site's Current State
@@ -1138,8 +1179,8 @@ Exit codes:
 After the script exits, re-read the current state at the same scope and show it
 to the user. This is a verify step — never trust the polling outcome alone.
 
-- `policyValue` was `All` or `None` → run **`get-env.js`**.
-- `policyValue` was `Include` or `Exclude` → run **`get-env.js`** + **`get-details.js`** (one call each — the env value plus the inclusion/exclusion lists), then resolve each targeted site with `resolvePortalStates(...)` and confirm every picked portal landed on the expected state. Do **NOT** loop `get-portal.js` per portal. **Wait until `set-governance.js` reports the terminal state before this read** — Set is async, so reading mid-rollout can return stale membership.
+- `policyValue` was `All` or `None` → run **`get-effective-status.js`** once (it parallel-reads the env value + membership in a single wave).
+- `policyValue` was `Include` or `Exclude` → run **`get-effective-status.js`** once — it fires the env value **and** the inclusion/exclusion list (and, for a gated child, every gating parent) concurrently in **one** `Promise.all` batch, then returns each portal's effective `state`. Confirm every picked portal landed on the expected state. Do **NOT** hand-issue `get-env.js` / `get-details.js` / `get-portal.js`, and do **NOT** loop per portal. **Wait until `set-governance.js` reports the terminal state before this read** — Set is async, so reading mid-rollout can return stale membership.
 
 **Render the verification as a state table (canonical structure).** After the
 read confirms the new state, render a headline + table that lists **every site
@@ -1150,12 +1191,15 @@ inside a fenced code block** — the Unicode box only aligns in monospace, so
 STATUS renders are the one path that MUST be fenced:
 
 ```bash
-echo '<PORTALS_JSON>' | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --unicode --no-color
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
+  --policy "<POLICY>" --portalsFile <path-to-list-portals-output> --envId "<ENV_ID>" \
+  | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --unicode --no-color
 ```
 
-`<PORTALS_JSON>` is a JSON array of `{ "name", "url", "portalId", "state" }`
-where `state` is `true` (Enabled) / `false` (Disabled) — compute each site's
-state from the read via the Phase 4.4.3 site-state table. **Governance STATUS is
+`get-effective-status.js` returns the `{ name, url, portalId, state }` array the
+renderer consumes, with `state` already the effective boolean (`true` Enabled /
+`false` Disabled) computed from the same parallel read — never hand-build the
+JSON or recompute per-site state. **Governance STATUS is
 ALWAYS the fixed-width Unicode box** (`┌─┬─┐ │ ├─┼─┤ └─┴─┘`, a rule between every
 row), identical for every policy. It emits **exactly** the five columns
 `# | Name | URL | Site ID | State` — never add, drop, reorder, or rename a
@@ -1172,7 +1216,7 @@ Pick the headline + row set by scope:
 
 - **`All` (env-wide enable)** — headline *"This Governance setting is 🟢 Enabled for these Sites:"*; list **all** sites in the env (from `list-portals.js`), every `state=true`.
 - **`None` (env-wide disable)** — headline *"This Governance setting is 🔴 Disabled for these Sites:"*; list **all** sites in the env, every `state=false`.
-- **`Include` / `Exclude`** — list only the sites the operation targeted; compute each site's state via the Phase 4.4.3 site-state table. Use the singular *"…for this Site:"* headline when exactly one site was targeted.
+- **`Include` / `Exclude`** — list only the sites the operation targeted; take each site's `state` from the `get-effective-status.js` output. Use the singular *"…for this Site:"* headline when exactly one site was targeted.
 
 Env-wide (`None`) example — every site rendered via the helper as the Unicode
 box (icons on), emitted **inside a fenced code block** so monospace preserves
@@ -1194,13 +1238,15 @@ Then give the one-line Phase 5 loop summary.
 
 ### 4.3 Check current state across an environment (`<OP>` = Fetch Env)
 
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-env.js" \
-  --envId "<ENV_ID>" \
-  --policy "<POLICY>"
-```
-
-Output: `{ status: "ok", body: "All" | "None" | "Include" | "Exclude" }`.
+Fetch Env is driven entirely by the **single parallel batch** in Phase 4.3.1 —
+`get-effective-status.js` reads the env-level value **and** the per-site
+membership (and any gating parents) in one `Promise.all` wave. Do **NOT** make a
+separate standalone `get-env.js` call first — that would be a redundant
+sequential read. Derive the env-level plain-language summary from the same batch
+result: all portals effectively 🟢 → "every site"; all 🔴 → "no sites"; a mix →
+"some sites". (If you ever need the raw `All`/`None`/`Include`/`Exclude` value on
+its own, it is available as `get-env.js` output, but the status flow never needs
+a separate call.)
 
 Render in plain language. Use the friendly mapping the loop section calls out:
 
@@ -1236,69 +1282,66 @@ user sees every portal's name, URL, Site ID, and 🟢/🔴 state.
 
 Steps:
 
-1. Fetch the env-level value and the policy's per-site membership in **two
-   calls total** — regardless of how many portals the env has. First the
-   env-level value:
-   ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-env.js" \
-     --envId "<ENV_ID>" \
-     --policy "<POLICY>"
-   ```
-   Then, **only when the env value is `Include` or `Exclude`** (membership
-   matters), read the inclusion/exclusion lists in one shot:
-   ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-details.js" \
-     --envId "<ENV_ID>" \
-     --policy "<POLICY>"
-   ```
-   `get-details.js` returns `{ includedSites: [...], excludedSites: [...] }` for
-   the whole environment (endpoint `GET /governance/{policy}/details`). Do
-   **NOT** loop `get-portal.js` per portal to discover state, and do **NOT**
-   call `get-portal.js` with a dummy `00000000-…` portalId — that endpoint is
-   genuinely per-portal and returns **404** for a non-existent id, so it never
-   yields the env lists. For `All` / `None` the lists are irrelevant, so skip
-   the `get-details.js` call entirely (env value alone decides every site).
-
-2. Fetch the env's full site list:
+1. Fetch the env's full site list:
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-portals.js" \
      --envId "<ENV_ID>"
    ```
 
-3. Compute each site's state **locally** from the env value + the
-   inclusion/exclusion lists via `resolvePortalStates(envValue, detailsBody,
-   portals)` (exported from `resolve-portal-availability.js`) — this is the
-   batch form of the Phase 4.4.3 site-state table and needs **zero** per-portal
-   network calls. Then render the **full** portal list through the helper in
-   **`--unicode`** mode (add `--no-color`), emitting its output **verbatim
-   inside a fenced code block** (the Unicode box needs monospace to align):
+2. Compute every site's state in **one parallel batch** with
+   **`get-effective-status.js`** — the single canonical state read for this
+   skill. Pass the `list-portals.js` output as `--portalsFile`:
    ```bash
-   echo '<PORTALS_JSON>' | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --unicode --no-color
+   node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
+     --policy "<POLICY>" \
+     --portalsFile <path-to-list-portals-output> \
+     --envId "<ENV_ID>"
    ```
-   `<PORTALS_JSON>` is a JSON array of `{ "name", "url", "portalId", "state" }`
-   (`state` true=Enabled / false=Disabled) for **every** site in the env. The
-   State cell MUST show the 🟢 / 🔴 icon (helper default). Pick the headline by
-   env value:
+   This script fires the env value **and** the per-site membership list for the
+   policy — **and, for a gated child, for every gating parent** — all at once in
+   a single `Promise.all` wave (2 reads for a leaf policy, 4 for a protocol, 6
+   for a social IdP), then classifies every portal locally. It returns
+   `{ ..., portals: [{ name, url, portalId, state, own, parents }] }` where
+   `state` is the **effective** boolean (child own AND every gating parent) —
+   exactly the shape `render-portal-table.js` consumes.
 
-   - `All` → *"This Governance setting is 🟢 Enabled for these Sites:"* (all rows 🟢)
-   - `None` → *"This Governance setting is 🔴 Disabled for these Sites:"* (all rows 🔴)
-   - `Include` → *"This Governance setting is 🟢 Enabled for these Sites:"* (listed sites 🟢, the rest 🔴)
-   - `Exclude` → *"This Governance setting is 🟢 Enabled for these Sites:"* (excepted sites 🔴, the rest 🟢)
+   > **Never issue the reads yourself, and never issue them one after another.**
+   > Do **NOT** call `get-env.js`, `get-details.js`, or `get-portal.js` by hand
+   > (and never in a per-policy or per-portal loop) to build this table — that
+   > re-creates the old sequential 4–6-round-trip flow this script exists to
+   > replace. `get-effective-status.js` is the **only** approved way to read
+   > per-site state for the status table; a failed `get-details` inside it
+   > degrades to an empty list, and only a failed env read is fatal (surfaced as
+   > exit code 2 for sign-in, 1 otherwise).
+
+3. Render the returned `portals` array through the helper in **`--unicode`**
+   mode (add `--no-color`), emitting its output **verbatim inside a fenced code
+   block** (the Unicode box needs monospace to align). You can pipe the script
+   straight into the renderer:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
+     --policy "<POLICY>" --portalsFile <path-to-list-portals-output> --envId "<ENV_ID>" \
+     | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --unicode --no-color
+   ```
+   The rendered box shows **exactly** the five columns `# | Name | URL | Site ID
+   | State`, and the State cell MUST show the 🟢 / 🔴 icon (helper default).
+   For a **gated child** this is still the same 5-column box — the `state` is the
+   effective value, the parent chain is computed inside the script but **never**
+   rendered as extra columns. Pick the headline from the effective status:
+
+   - all sites 🟢 → *"This Governance setting is 🟢 Enabled for these Sites:"*
+   - all sites 🔴 → *"This Governance setting is 🔴 Disabled for these Sites:"*
+   - mixed → *"This Governance setting is 🟢 Enabled for these Sites:"* (live sites 🟢, the rest 🔴)
 
    If a policy-list id does NOT appear in `list-portals` (e.g., the site was
    deleted after being added), still show it in the table with `(site not
    found)` for the name and an empty URL.
 
-   > **Gated child policy?** If `<POLICY>` has a non-empty `availabilityDependsOn`
-   > (the four protocols or the three social IdPs), still render the SAME 5-column
-   > Unicode box — never add parent or Effective columns. Compute each site's
-   > **effective** state per **Phase 4.4.4** (own AND every gating parent) and put
-   > that single effective value in the `State` column, then base the headline on
-   > it. The parent chain is computed but NOT displayed — status always shows the
-   > five columns `# | Name | URL | Site ID | State` and nothing more.
-
 4. Finally, give the highlighted (bold + icon) one-line summary from Phase 4.3
-   above.
+   above. For a gated child you MAY explain in prose WHY a site is effectively
+   off (using the script's `own` / `parents` fields, e.g. *"Facebook is on for
+   Portal_2 but not active because External Auth is off there"*) — but the box
+   itself always stays the five columns with the single effective `State`.
 
 ### 4.4 Check current state on one portal (`<OP>` = Fetch Portal)
 
@@ -1346,16 +1389,24 @@ Persist as `<PORTAL_ID>` and `<PORTAL_NAME>` (for plain-language output).
 
 #### 4.4.3 Run the read and render the result
 
+Read the chosen site's state with the **same single parallel batch** used
+everywhere else — build a one-site portals file (name / url / portalId for
+`<PORTAL_ID>`) and run `get-effective-status.js` against it:
+
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-portal.js" \
-  --envId "<ENV_ID>" \
-  --portalId "<PORTAL_ID>" \
-  --policy "<POLICY>"
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
+  --policy "<POLICY>" \
+  --portalsFile <path-to-one-site-portals-file> \
+  --envId "<ENV_ID>"
 ```
 
-Compute whether the policy applies to the chosen site using the env value
-(from `get-env.js`, run in parallel) plus the inclusion/exclusion lists in
-this response:
+This fires the env value + membership list — **and, for a gated child, every
+gating parent** — concurrently in one `Promise.all` wave, and returns the site's
+effective `state`. Do **NOT** hand-issue `get-portal.js`, `get-env.js`, or
+`get-details.js` (in any order). The script internally applies the same
+site-state logic shown below (env value + inclusion/exclusion → Enabled /
+Disabled), so this table is the **conceptual** reference for what `state` means,
+not a set of calls to run yourself:
 
 | env `body` | Inclusion list contains site? | Exclusion list contains site? | Site state |
 |-----------|--------------------------------|-------------------------------|------------|
@@ -1433,17 +1484,21 @@ user has chosen this mental model and we render it consistently.
 
 Then render the result as a one-line headline + **the Unicode box produced by
 `render-portal-table.js --unicode --no-color`** (icons on) — **never** hand-build
-it, and never multi-sentence prose. Pipe the single site through the helper:
+it, and never multi-sentence prose. Pipe the `get-effective-status.js` output
+straight through the helper (its `portals` array already carries the site's
+`state`):
 
 ```bash
-echo '[{"name":"<PORTAL_NAME>","url":"<URL>","portalId":"<PORTAL_ID>","state":<true|false>}]' \
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
+  --policy "<POLICY>" --portalsFile <path-to-one-site-portals-file> --envId "<ENV_ID>" \
   | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --unicode --no-color
 ```
 
-`state` is `true` when the Phase 4.4.3 site-state table resolves to Enabled,
-`false` when Disabled. **The State cell MUST show the icon** — 🟢 Enabled /
-🔴 Disabled (the helper adds it by default). Emit the helper output verbatim
-**inside a fenced code block** (the Unicode box needs monospace to align).
+`state` comes from the parallel batch — `true` Enabled / `false` Disabled (for a
+gated child it is the effective value: own AND every parent). **The State cell
+MUST show the icon** — 🟢 Enabled / 🔴 Disabled (the helper adds it by default).
+Emit the helper output verbatim **inside a fenced code block** (the Unicode box
+needs monospace to align).
 
 > **Gated child policy?** When `<POLICY>` is one of the four protocols or three
 > social IdPs (non-empty `availabilityDependsOn`), the site can show its own
@@ -1506,39 +1561,49 @@ for the status-display paths — Fetch Env portal table in 4.3.1, Fetch Site in
 
 **How to build it:**
 
-1. Read each site's **own** child state **and** each parent's state — all via
-   the two-call batch path, **never** a per-portal loop. For the child and for
-   **each** parent policy (`EnableExternalAuthProviders`, plus
-   `EnableProtocolOpenAuth` for the social IdPs), run `get-env.js` once for the
-   env value and `get-details.js` once for the inclusion/exclusion lists (skip
-   `get-details.js` when that policy's env value is `All`/`None`). Then call
-   `resolvePortalStates(envValue, detailsBody, portals)` per policy to classify
-   every site locally. So a protocol needs 2 policies × ≤2 calls = **≤4 calls**;
-   a social IdP needs 3 policies × ≤2 calls = **≤6 calls** — flat, no matter how
-   many portals. The exact parent list per policy is that policy's
+1. Read the child's **own** state **and** every parent's state in **one
+   parallel batch** with **`get-effective-status.js`** — never sequentially,
+   never a per-policy or per-portal loop. Pass the `list-portals.js` output as
+   `--portalsFile`:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
+     --policy "<POLICY>" \
+     --portalsFile <path-to-list-portals-output> \
+     --envId "<ENV_ID>"
+   ```
+   The script fires the env value + membership list for the child **and** for
+   each gating parent (`EnableExternalAuthProviders`, plus
+   `EnableProtocolOpenAuth` for the social IdPs) **all at once** in a single
+   `Promise.all` wave — 4 reads for a protocol, 6 for a social IdP — turning the
+   old 4–6 serial round-trips into one parallel wave (wall-clock ≈ a single
+   round-trip). The parent list per policy is that policy's
    `availabilityDependsOn` (also mirrored in
-   `effectiveStatusRules.parentColumnsByPolicy`). If a parent read fails, treat
-   that parent's state as unknown — the site's effective state becomes unknown
-   and its `State` cell renders `Unknown` (never block on a read error). Do
-   **NOT** call `get-portal.js` per portal, and do **NOT** use the dummy-portalId
-   trick (it 404s).
+   `effectiveStatusRules.parentColumnsByPolicy`); the script reads it from the
+   mapping, so you never enumerate parents by hand. It returns
+   `{ ..., portals: [{ name, url, portalId, state, own, parents }] }` where
+   `state` is already the **effective** boolean (`own AND every parent`). A
+   failed parent read degrades to Disabled/empty (fail-closed on the list);
+   only a failed env read is fatal (exit 2 for sign-in, 1 otherwise). Do
+   **NOT** call `get-env.js`, `get-details.js`, or `get-portal.js` yourself, and
+   do **NOT** use the dummy-portalId trick (it 404s).
 
-2. **Compute the effective boolean per site**: `effective = own AND (every
-   parent state)`. A site whose own setting is Enabled but any gating parent is
-   off is **effectively Disabled**.
+2. **The effective boolean is already computed** by the script as
+   `effective = own AND (every parent state)` — a site whose own setting is
+   Enabled but any gating parent is off comes back `state: false` (effectively
+   Disabled). Use the returned `state` directly; the `own` / `parents` fields
+   are available only to explain WHY in prose.
 
-3. Render the sites through **`render-portal-table.js --unicode --no-color`**
-   (icons on) exactly like the non-gated paths, passing each site's
-   **effective** boolean as `state`. Emit the box **inside a fenced code block**.
-   Do NOT use `render-status-table.js` for status display — the single-State
-   Unicode box is the only status render.
+3. Render the returned `portals` array through
+   **`render-portal-table.js --unicode --no-color`** (icons on) exactly like the
+   non-gated paths — pipe the script straight into it. Emit the box **inside a
+   fenced code block**. Do NOT use `render-status-table.js` for status display —
+   the single-State Unicode box is the only status render.
 
    ```bash
-   echo '<PORTALS_JSON>' | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --unicode --no-color
+   node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
+     --policy "<POLICY>" --portalsFile <path-to-list-portals-output> --envId "<ENV_ID>" \
+     | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --unicode --no-color
    ```
-
-   `<PORTALS_JSON>` is the same `{ "name", "url", "portalId", "state" }` array,
-   with `state` = the computed effective boolean.
 
 4. Pick the **headline from the effective status**, not the child's own state:
    *"This Governance setting is 🟢 Enabled for these Sites:"* when at least one
@@ -1548,9 +1613,10 @@ for the status-display paths — Fetch Env portal table in 4.3.1, Fetch Site in
    itself stays the five columns with the single effective `State`.
 
 **Non-gated policies** (Maker Copilot, local login, and External Auth itself)
-have no parents — their `availabilityDependsOn` is empty, so their effective
-state equals their own state. They use the exact same 5-column Unicode box; the
-render is uniform across every policy.
+have no parents — their `availabilityDependsOn` is empty, so
+`get-effective-status.js` fires just the child's env value + membership (2 reads,
+still in parallel) and reports `state = own`. The exact same call and 5-column
+Unicode box are used; the render is uniform across every policy.
 
 ### 4.5 Check the rollout status (`<OP>` = Fetch Status)
 
@@ -1667,7 +1733,7 @@ Skill tracking:
   number / name / id (to switch). Never POST against a flagged env without that
   explicit confirmation. The portal pick is never defaulted.
 - **Background polling** — run `set-governance.js` with `run_in_background: true`. Stream stderr to the user at most once every 30 seconds.
-- **Policy strings are hard-coded** — only the ten policies named in Phase 2.3 are valid (`EnableMakerCopilotForExistingSites`, `EnableProtocolOpenIdConnect`, `EnableProtocolSAML20`, `EnableProtocolWsFederation`, `EnableProtocolOpenAuth`, `EnableIdpOAuthFacebook`, `EnableIdpOAuthGoogle`, `EnableIdpOAuthMicrosoft`, `EnableAuthenticationLocalLogin`, `EnableExternalAuthProviders`). This list is the frozen `SUPPORTED_POLICIES` array in `scripts/policies.js`. Reject any custom policy name with a clear "this skill only supports those ten governance policies today" message.
+- **Policy strings are hard-coded** — only the twenty-one policies named in Phase 2.3 are valid (`EnableMakerCopilotForExistingSites`, `EnableProtocolOpenIdConnect`, `EnableProtocolSAML20`, `EnableProtocolWsFederation`, `EnableProtocolOpenAuth`, `EnableIdpOAuthFacebook`, `EnableIdpOAuthGoogle`, `EnableIdpOAuthMicrosoft`, `EnableAuthenticationLocalLogin`, `EnableExternalAuthProviders`, `PowerPages_AllowMakerCopilotsForNewSites`, `PowerPages_AllowMakerCopilotsForExistingSites`, `PowerPages_AllowProDevCopilotsForSites`, `PowerPages_AllowSiteCopilotForSites`, `PowerPages_AllowSearchSummaryCopilotForSites`, `PowerPages_AllowListSummaryCopilotForSites`, `PowerPages_AllowIntelligentFormsCopilotForSites`, `PowerPages_AllowSummarizationAPICopilotForSites`, `PowerPages_AllowProDevCopilotsForEnvironment`, `PowerPages_AllowNonProdPublicSites`, `PowerPages_DisableExtSvcCallsFromServerLogic`). This list is the frozen `SUPPORTED_POLICIES` array in `scripts/policies.js`. Reject any custom policy name with a clear "this skill only supports those twenty-one governance policies today" message.
 - **Sign-in failures** — exit code `2` from any script means PAC or Azure CLI is signed out. Tell the user which command to run (`pac auth create` or `az login`) and stop.
 
 ## References

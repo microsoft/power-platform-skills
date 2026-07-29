@@ -25,10 +25,29 @@ const NEW_AUTH_ENABLE_POLICIES = [
   'EnableExternalAuthProviders',
 ];
 
-test('SUPPORTED_POLICIES includes maker copilot and the nine auth Enable* policies', () => {
+// Power Pages Copilot / site-control policies added in the 2026-07 enhancement.
+// Same uniformGovernance type as everything else (All/None/Include/Exclude),
+// but INDEPENDENT — no parent/child availability gating, no cascade. They carry
+// the Maker-Copilot-style empty sideEffectCallout (no user sign-out).
+const NEW_COPILOT_POLICIES = [
+  'PowerPages_AllowMakerCopilotsForNewSites',
+  'PowerPages_AllowMakerCopilotsForExistingSites',
+  'PowerPages_AllowProDevCopilotsForSites',
+  'PowerPages_AllowSiteCopilotForSites',
+  'PowerPages_AllowSearchSummaryCopilotForSites',
+  'PowerPages_AllowListSummaryCopilotForSites',
+  'PowerPages_AllowIntelligentFormsCopilotForSites',
+  'PowerPages_AllowSummarizationAPICopilotForSites',
+  'PowerPages_AllowProDevCopilotsForEnvironment',
+  'PowerPages_AllowNonProdPublicSites',
+  'PowerPages_DisableExtSvcCallsFromServerLogic',
+];
+
+test('SUPPORTED_POLICIES includes maker copilot, the nine auth Enable* policies, and the eleven PowerPages_* copilot policies', () => {
   assert.deepEqual([...SUPPORTED_POLICIES], [
     'EnableMakerCopilotForExistingSites',
     ...NEW_AUTH_ENABLE_POLICIES,
+    ...NEW_COPILOT_POLICIES,
   ]);
 });
 
@@ -42,6 +61,13 @@ test('isSupportedPolicy recognizes EnableMakerCopilotForExistingSites', () => {
 
 test('isSupportedPolicy recognizes each new auth Enable* policy and rejects mis-casing', () => {
   for (const name of NEW_AUTH_ENABLE_POLICIES) {
+    assert.equal(isSupportedPolicy(name), true, `should support ${name}`);
+    assert.equal(isSupportedPolicy(name.toLowerCase()), false, `should reject mis-cased ${name}`);
+  }
+});
+
+test('isSupportedPolicy recognizes each new PowerPages_* copilot policy and rejects mis-casing', () => {
+  for (const name of NEW_COPILOT_POLICIES) {
     assert.equal(isSupportedPolicy(name), true, `should support ${name}`);
     assert.equal(isSupportedPolicy(name.toLowerCase()), false, `should reject mis-cased ${name}`);
   }
@@ -144,6 +170,31 @@ test('each new auth Enable* policy is configured like the reference EnableProtoc
       entry.sideEffectCallout.message && entry.sideEffectCallout.message.length > 0,
       `${name} sideEffect message`
     );
+  }
+});
+
+test('each new PowerPages_* copilot policy is a uniformGovernance leaf with the required render fields', () => {
+  for (const name of NEW_COPILOT_POLICIES) {
+    const entry = mapping.policies.find((p) => p.policyName === name);
+    assert.ok(entry, `mapping missing policy ${name}`);
+    assert.equal(entry.policyMode, 'uniformGovernance', `${name} policyMode`);
+    assert.ok(entry.displayName, `${name} displayName`);
+    assert.ok(entry.subject, `${name} subject`);
+    assert.ok(entry.summaryLabel, `${name} summaryLabel`);
+    assert.ok(
+      Array.isArray(entry.userShorthands) && entry.userShorthands.length > 0,
+      `${name} userShorthands`
+    );
+    assert.ok(entry.stateParaphrase.Enabled, `${name} stateParaphrase.Enabled`);
+    assert.ok(entry.stateParaphrase.Disabled, `${name} stateParaphrase.Disabled`);
+    assert.ok(entry.sideEffectCallout, `${name} sideEffectCallout`);
+    // Independent policies: no parent/child availability gating, no cascade.
+    assert.equal(entry.availabilityDependsOn, undefined, `${name} must have no availabilityDependsOn`);
+    assert.equal(entry.cascadeOnDisable, undefined, `${name} must have no cascadeOnDisable`);
+    assert.equal(entry.cascadeOnEnable, undefined, `${name} must have no cascadeOnEnable`);
+    // Copilot / site-control policies do not sign users out, so (like Maker
+    // Copilot) their side-effect callout is empty.
+    assert.deepEqual(entry.sideEffectCallout.policyValueTriggers, [], `${name} empty sideEffect triggers`);
   }
 });
 

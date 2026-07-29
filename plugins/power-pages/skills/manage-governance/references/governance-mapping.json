@@ -259,6 +259,182 @@
         ],
         "footer": "Enabling the External Authentication policy restores these authentication methods. Each authentication provider must also be enabled and configured."
       }
+    },
+    {
+      "policyName": "PowerPages_AllowMakerCopilotsForNewSites",
+      "policyMode": "uniformGovernance",
+      "displayName": "Allow Maker Copilots for new sites",
+      "subject": "Maker Copilot for new sites",
+      "summaryLabel": "Maker Copilot (new sites) setting",
+      "userShorthands": ["maker copilots for new sites", "maker copilot for new sites", "new sites copilot", "maker copilot new sites", "new site copilot", "PowerPages_AllowMakerCopilotsForNewSites"],
+      "stateParaphrase": {
+        "Enabled": "Maker Copilot for new sites Enabled",
+        "Disabled": "Maker Copilot for new sites Disabled"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": [],
+        "message": ""
+      }
+    },
+    {
+      "policyName": "PowerPages_AllowMakerCopilotsForExistingSites",
+      "policyMode": "uniformGovernance",
+      "displayName": "Allow Maker Copilots for existing sites",
+      "subject": "Maker Copilot for existing sites",
+      "summaryLabel": "Maker Copilot (existing sites) setting",
+      "userShorthands": ["maker copilots for existing sites", "allow maker copilots for existing sites", "existing sites maker copilot", "maker copilot existing sites allow", "PowerPages_AllowMakerCopilotsForExistingSites"],
+      "stateParaphrase": {
+        "Enabled": "Maker Copilot for existing sites Enabled",
+        "Disabled": "Maker Copilot for existing sites Disabled"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": [],
+        "message": ""
+      }
+    },
+    {
+      "policyName": "PowerPages_AllowProDevCopilotsForSites",
+      "policyMode": "uniformGovernance",
+      "displayName": "Allow pro-dev Copilots for sites",
+      "subject": "Pro-dev Copilot for sites",
+      "summaryLabel": "Pro-dev Copilot (sites) setting",
+      "userShorthands": ["pro dev copilot for sites", "pro-dev copilot for sites", "prodev copilot for sites", "prodev copilot sites", "professional developer copilot for sites", "pro dev copilot sites", "PowerPages_AllowProDevCopilotsForSites"],
+      "stateParaphrase": {
+        "Enabled": "Pro-dev Copilot for sites Enabled",
+        "Disabled": "Pro-dev Copilot for sites Disabled"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": [],
+        "message": ""
+      }
+    },
+    {
+      "policyName": "PowerPages_AllowSiteCopilotForSites",
+      "policyMode": "uniformGovernance",
+      "displayName": "Allow site Copilot for sites",
+      "subject": "Site Copilot",
+      "summaryLabel": "Site Copilot setting",
+      "userShorthands": ["site copilot", "site copilot for sites", "sites copilot", "portal copilot", "PowerPages_AllowSiteCopilotForSites"],
+      "stateParaphrase": {
+        "Enabled": "Site Copilot Enabled",
+        "Disabled": "Site Copilot Disabled"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": [],
+        "message": ""
+      }
+    },
+    {
+      "policyName": "PowerPages_AllowSearchSummaryCopilotForSites",
+      "policyMode": "uniformGovernance",
+      "displayName": "Allow search summary Copilot for sites",
+      "subject": "Search summary Copilot",
+      "summaryLabel": "Search summary Copilot setting",
+      "userShorthands": ["search summary copilot", "search summary", "search summarization copilot", "search summary copilot for sites", "PowerPages_AllowSearchSummaryCopilotForSites"],
+      "stateParaphrase": {
+        "Enabled": "Search summary Copilot Enabled",
+        "Disabled": "Search summary Copilot Disabled"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": [],
+        "message": ""
+      }
+    },
+    {
+      "policyName": "PowerPages_AllowListSummaryCopilotForSites",
+      "policyMode": "uniformGovernance",
+      "displayName": "Allow list summary Copilot for sites",
+      "subject": "List summary Copilot",
+      "summaryLabel": "List summary Copilot setting",
+      "userShorthands": ["list summary copilot", "list summary", "list summarization copilot", "list summary copilot for sites", "PowerPages_AllowListSummaryCopilotForSites"],
+      "stateParaphrase": {
+        "Enabled": "List summary Copilot Enabled",
+        "Disabled": "List summary Copilot Disabled"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": [],
+        "message": ""
+      }
+    },
+    {
+      "policyName": "PowerPages_AllowIntelligentFormsCopilotForSites",
+      "policyMode": "uniformGovernance",
+      "displayName": "Allow intelligent forms Copilot for sites",
+      "subject": "Intelligent forms Copilot",
+      "summaryLabel": "Intelligent forms Copilot setting",
+      "userShorthands": ["intelligent forms copilot", "intelligent forms", "forms copilot", "intelligent forms copilot for sites", "smart forms copilot", "PowerPages_AllowIntelligentFormsCopilotForSites"],
+      "stateParaphrase": {
+        "Enabled": "Intelligent forms Copilot Enabled",
+        "Disabled": "Intelligent forms Copilot Disabled"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": [],
+        "message": ""
+      }
+    },
+    {
+      "policyName": "PowerPages_AllowSummarizationAPICopilotForSites",
+      "policyMode": "uniformGovernance",
+      "displayName": "Allow summarization API Copilot for sites",
+      "subject": "Summarization API Copilot",
+      "summaryLabel": "Summarization API Copilot setting",
+      "userShorthands": ["summarization api copilot", "summarization api", "summarization copilot", "summarisation api copilot", "summarization api copilot for sites", "PowerPages_AllowSummarizationAPICopilotForSites"],
+      "stateParaphrase": {
+        "Enabled": "Summarization API Copilot Enabled",
+        "Disabled": "Summarization API Copilot Disabled"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": [],
+        "message": ""
+      }
+    },
+    {
+      "policyName": "PowerPages_AllowProDevCopilotsForEnvironment",
+      "policyMode": "uniformGovernance",
+      "displayName": "Allow pro-dev Copilots for the environment",
+      "subject": "Pro-dev Copilot for the environment",
+      "summaryLabel": "Pro-dev Copilot (environment) setting",
+      "userShorthands": ["pro dev copilot for environment", "pro-dev copilot for environment", "prodev copilot for environment", "prodev copilot environment", "pro dev copilot environment", "professional developer copilot for environment", "PowerPages_AllowProDevCopilotsForEnvironment"],
+      "stateParaphrase": {
+        "Enabled": "Pro-dev Copilot for the environment Enabled",
+        "Disabled": "Pro-dev Copilot for the environment Disabled"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": [],
+        "message": ""
+      }
+    },
+    {
+      "policyName": "PowerPages_AllowNonProdPublicSites",
+      "policyMode": "uniformGovernance",
+      "displayName": "Allow non-production public sites",
+      "subject": "Non-production public sites",
+      "summaryLabel": "Non-production public sites setting",
+      "userShorthands": ["non-prod public sites", "non prod public sites", "nonprod public sites", "non production public sites", "public non-prod sites", "allow non-prod public sites", "PowerPages_AllowNonProdPublicSites"],
+      "stateParaphrase": {
+        "Enabled": "Non-production public sites Enabled",
+        "Disabled": "Non-production public sites Disabled"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": [],
+        "message": ""
+      }
+    },
+    {
+      "policyName": "PowerPages_DisableExtSvcCallsFromServerLogic",
+      "policyMode": "uniformGovernance",
+      "displayName": "Disable external service calls from server-side logic",
+      "subject": "External service calls from server-side logic",
+      "summaryLabel": "External service calls from server logic setting",
+      "userShorthands": ["external service calls from server logic", "disable external service calls", "ext svc calls from server logic", "external service calls server logic", "server logic external calls", "disable ext svc calls from server logic", "PowerPages_DisableExtSvcCallsFromServerLogic"],
+      "stateParaphrase": {
+        "Enabled": "External service calls from server-side logic Enabled",
+        "Disabled": "External service calls from server-side logic Disabled"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": [],
+        "message": ""
+      }
     }
   ],
 
