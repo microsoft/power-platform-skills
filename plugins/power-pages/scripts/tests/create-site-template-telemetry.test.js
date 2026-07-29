@@ -8,7 +8,7 @@ const { parseArgs } = require('../emit-create-site-template-outcome');
 
 test('buildTemplateOutcomeEvent emits non-PII template eventInfo through the existing skill event shape', () => {
   const event = buildTemplateOutcomeEvent({
-    mode: 'template',
+    eventName: 'create_site_with_template',
     templateId: 'company-portal',
     templateKind: 'spa',
     framework: 'react',
@@ -29,7 +29,7 @@ test('buildTemplateOutcomeEvent emits non-PII template eventInfo through the exi
   });
 
   assert.equal(event.name, 'PagesAIPluginEvent');
-  assert.equal(event.data.eventName, 'template_used');
+  assert.equal(event.data.eventName, 'create_site_with_template');
   assert.equal(event.data.skillName, 'create-site');
   assert.equal(event.data.pluginVersion, '2.7.0');
   assert.equal(event.data.sessionId, 'session');
@@ -37,7 +37,6 @@ test('buildTemplateOutcomeEvent emits non-PII template eventInfo through the exi
   assert.equal(event.data.aiAgentVersion, '1.0.76-0');
   assert.equal(event.data.pacCliVersion, '2.10.1');
   assert.deepEqual(event.data.eventInfo, {
-    mode: 'template',
     framework: 'react',
     audience: 'internal',
     templateId: 'company-portal',
@@ -51,7 +50,7 @@ test('buildTemplateOutcomeEvent emits non-PII template eventInfo through the exi
 
 test('buildTemplateOutcomeEvent emits scratch branch adoption signal', () => {
   const event = buildTemplateOutcomeEvent({
-    mode: 'scratch',
+    eventName: 'create_site_from_scratch',
     framework: 'vue',
     audience: 'external',
     correlationId: 'corr',
@@ -63,14 +62,15 @@ test('buildTemplateOutcomeEvent emits scratch branch adoption signal', () => {
     pluginVersion: '2.7.0',
   });
 
-  assert.deepEqual(event.data.eventInfo, { mode: 'scratch', framework: 'vue', audience: 'external' });
+  assert.equal(event.data.eventName, 'create_site_from_scratch');
+  assert.deepEqual(event.data.eventInfo, { framework: 'vue', audience: 'external' });
   assert.equal(event.data.sessionId, 'copilot-session');
 });
 
 test('emitTemplateOutcome is fail-closed and delegates to telemetry dispatcher seam', () => {
   const emitted = [];
   const opts = [];
-  const result = emitTemplateOutcome({ mode: 'scratch', framework: 'react', audience: 'internal' }, {
+  const result = emitTemplateOutcome({ eventName: 'create_site_from_scratch', framework: 'react', audience: 'internal' }, {
     readPacAuth: () => ({ cloud: 'Public' }),
     readAgentInfo: () => ({}),
     randomUUID: () => 'corr',
@@ -88,14 +88,14 @@ test('emitTemplateOutcome is fail-closed and delegates to telemetry dispatcher s
 });
 
 test('parseArgs and normalizeBool handle CLI values', () => {
-  assert.deepEqual(parseArgs(['--mode', 'template', '--templateKind', 'spa', '--seedApplied', '1']), { mode: 'template', templateKind: 'spa', seedApplied: '1' });
+  assert.deepEqual(parseArgs(['--eventName', 'create_site_with_template', '--templateKind', 'spa', '--seedApplied', '1']), { eventName: 'create_site_with_template', templateKind: 'spa', seedApplied: '1' });
   assert.equal(normalizeBool('1'), true);
   assert.equal(normalizeBool('false'), false);
 });
 
 test('sanitizeTemplateOutcomeInfo drops invalid dynamic telemetry values', () => {
   assert.deepEqual(sanitizeTemplateOutcomeInfo({
-    mode: 'template',
+    eventName: 'create_site_with_template',
     templateId: 'Company Portal',
     templateKind: 'liquid',
     framework: 'nextjs',
@@ -104,5 +104,5 @@ test('sanitizeTemplateOutcomeInfo drops invalid dynamic telemetry values', () =>
     activationOutcome: 'pending',
     seedApplied: '0',
     siteUrl: 'https://example.test',
-  }), { mode: 'template', seedApplied: false });
+  }), { seedApplied: false });
 });

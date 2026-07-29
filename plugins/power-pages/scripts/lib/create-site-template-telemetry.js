@@ -11,6 +11,7 @@ const { readPacCliVersion, readAiAgent } = require('./telemetry/lib/agent-info')
 const { getSessionId } = require('./telemetry/lib/session');
 
 const EVENT_STREAM = 'PagesAIPluginEvent';
+const TEMPLATE_EVENT_NAMES = new Set(['create_site_with_template', 'create_site_from_scratch']);
 const TEMPLATE_KINDS = new Set(['spa', 'traditional']);
 const FRAMEWORKS = new Set(['react', 'vue', 'angular', 'astro']);
 const AUDIENCES = new Set(['internal', 'external']);
@@ -40,10 +41,9 @@ function normalizeBool(value) {
 
 function sanitizeTemplateOutcomeInfo(fields = {}) {
   const info = {};
-  if (fields.mode === 'template' || fields.mode === 'scratch') info.mode = fields.mode;
   if (FRAMEWORKS.has(fields.framework)) info.framework = fields.framework;
   if (AUDIENCES.has(fields.audience)) info.audience = fields.audience;
-  if (info.mode === 'template') {
+  if (templateEventName(fields) === 'create_site_with_template') {
     if (/^[a-z0-9][a-z0-9-]*$/.test(fields.templateId || '')) info.templateId = fields.templateId;
     if (TEMPLATE_KINDS.has(fields.templateKind)) info.templateKind = fields.templateKind;
     if (OUTCOMES.has(fields.importOutcome)) info.importOutcome = fields.importOutcome;
@@ -51,6 +51,11 @@ function sanitizeTemplateOutcomeInfo(fields = {}) {
     info.seedApplied = normalizeBool(fields.seedApplied);
   }
   return info;
+}
+
+function templateEventName(fields = {}) {
+  if (TEMPLATE_EVENT_NAMES.has(fields.eventName)) return fields.eventName;
+  return fields.templateId ? 'create_site_with_template' : 'create_site_from_scratch';
 }
 
 function osFriendlyName(platform) {
@@ -108,10 +113,11 @@ function buildTemplateOutcomeEvent(fields = {}, deps = {}) {
   if (agentInfo.pacCliVersion) payload.pacCliVersion = agentInfo.pacCliVersion;
 
   const severity = payload.outcome === 'failure' ? 'Error' : 'Info';
+  const eventName = templateEventName(fields);
   return {
     name: EVENT_STREAM,
     data: {
-      eventName: 'template_used',
+      eventName,
       eventType: 'Trace',
       severity,
       ...pick(payload, [...COMMON_FIELDS, ...SKILL_FIELDS, ...COMPLETED_FIELDS]),
@@ -136,4 +142,4 @@ function emitTemplateOutcome(fields = {}, deps = {}) {
   }
 }
 
-module.exports = { buildTemplateOutcomeEvent, emitTemplateOutcome, normalizeBool, sanitizeTemplateOutcomeInfo };
+module.exports = { buildTemplateOutcomeEvent, emitTemplateOutcome, normalizeBool, sanitizeTemplateOutcomeInfo, templateEventName };
