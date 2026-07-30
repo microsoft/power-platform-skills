@@ -8,6 +8,8 @@ const { formatJsonResult } = require('./lib/template-cli-args');
 //   --eventName template_used --templateId company-portal --templateKind spa --framework react --audience internal
 //   --eventName template_import_success --templateId company-portal --templateKind spa --framework react --audience internal --seedApplied true
 //   --eventName template_import_failure --templateId company-portal --templateKind spa --framework react --audience internal --outcome failure --errorClass ImportSolutionAsync --errorDescription failed
+//   --eventName template_clone_success --templateId company-portal --templateKind spa --framework react --audience internal
+//   --eventName template_clone_failure --templateId company-portal --templateKind spa --framework react --audience internal --outcome failure --errorClass PacPagesClone --errorDescription failed
 // Scratch branch sends:
 //   --eventName create_site_from_scratch --framework react --audience internal
 // Values are fixed catalog/outcome enums; do not pass site name, URL, subdomain,

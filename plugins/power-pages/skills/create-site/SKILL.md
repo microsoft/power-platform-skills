@@ -148,9 +148,10 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    - **If `ok: true` but `catalog.templates` is empty or malformed**: tell the user no templates are currently available and continue with the from-scratch path.
    - **If templates are available**: proceed to semantic matching.
 
-4. Semantically match the templates against the Phase 1 context (`$ARGUMENTS`, site name, purpose, and audience):
-   - Use each template's `displayName`, `description`, `keywords`, `audience`, and `framework`.
+4. Semantically match the template families against the Phase 1 context (`$ARGUMENTS`, site name, purpose, audience, and any framework mentioned by the user):
+   - Use each family template's `displayName`, `description`, `keywords`, `audience`, available variant frameworks, and any variant-specific previews.
    - Do **not** compute a numeric score or invent a ranking script. Keywords guide agent judgement; they are not counted.
+   - Treat a template family as the user-facing template and a framework variant as the installable package. A family can have multiple variants (`react`, `vue`, `angular`, `astro`).
 
 5. Render the relevant templates for browser preview:
 
@@ -159,12 +160,12 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
      node "${PLUGIN_ROOT}/scripts/fetch-template-artifact.js" --sha "<catalog-sha>" --artifactPath "<preview-image-path>"
      ```
      Replace each preview image path with the returned `localUrl`. If a preview download returns `ok: false`, omit that one image from the gallery and continue; a missing preview should not block using an otherwise-valid template.
-   - Write a temporary JSON file containing a `TEMPLATES_JSON` array with the templates the user should preview and the cached preview image URLs.
+   - Write a temporary JSON file containing a `TEMPLATES_JSON` array with the template families the user should preview and the cached preview image URLs. Include each family's available variants so the browser can show framework badges/tabs, but keep the browser read-only.
    - Run:
      ```bash
      node "${PLUGIN_ROOT}/scripts/render-template-browser.js" --templatesJsonPath "<temp-json>" --outputPath "<temp-html>" --open
      ```
-   - The browser view is read-only and exists to browse template capabilities; the terminal `AskUserQuestion` remains the decision surface.
+   - The browser view is read-only and exists to browse template capabilities and available framework variants; the terminal `AskUserQuestion` remains the decision surface.
 
 <!-- not-a-gate: read-only route selection after template preview; only disposable temp preview files exist, with no project directory, Dataverse write, or durable skill state -->
 
@@ -172,26 +173,27 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
    | Match situation | Prompt options |
    |-----------------|----------------|
-   | One strong match | Use `<displayName>` (Recommended), See all templates, Start from scratch |
-   | Several plausible matches | One option per shortlisted template, See all templates, Start from scratch |
+   | One strong family + framework match | Use `<displayName>` - `<framework>` (Recommended), Choose another framework, See all templates, Start from scratch |
+   | One strong family but no framework match | One option per available framework, See all templates, Start from scratch |
+   | Several plausible family matches | One option per shortlisted family, See all templates, Start from scratch |
    | No clear match | See all templates, Start from scratch (Recommended) |
 
-   When the user chooses **See all templates**, render the full catalog gallery and ask again with one option per template plus **Start from scratch**.
+   When the user chooses **See all templates**, render the full family-first catalog gallery and ask again with one option per family plus **Start from scratch**. If the selected family has multiple variants, ask a second terminal question for the framework.
 
 7. Branch on the user's selection:
-   - **Template selected**:
-     1. Download and validate the selected template's solution zip before committing to the template path:
+   - **Template family and framework variant selected**:
+     1. Set `SELECTED_TEMPLATE` to the family entry and `SELECTED_TEMPLATE_VARIANT` to the exact framework variant (`<familyId>/<framework>` internally). Download and validate the selected variant's solution zip before committing to the template path:
         ```bash
-        node "${PLUGIN_ROOT}/scripts/fetch-template-solution.js" --sha "<catalog-sha>" --solutionPath "<selected.solutionPath>"
+        node "${PLUGIN_ROOT}/scripts/fetch-template-solution.js" --sha "<catalog-sha>" --solutionPath "<selected variant solutionPath>"
         ```
-     2. If the result is `ok: false`, tell the user the selected template package is unavailable or corrupt, then set `CREATION_PATH = "from-scratch"` and continue to the from-scratch questions below. Do not leave partial cache files behind. The from-scratch branch emits the single terminal telemetry event for this run.
-     3. If the result is `ok: true`, set `CREATION_PATH = "template"`, `SELECTED_TEMPLATE = <manifest entry>`, and `SELECTED_TEMPLATE_SOLUTION_ZIP = <localPath>`. Immediately emit the `template_used` telemetry event (fail-closed), then append the template-path pre-import tasks now (see [Progress Tracking](#progress-tracking)); the import-vs-clone tasks are appended after the reinstall policy is known. Continue to the template import sequence below. Do **not** ask framework/location and do **not** proceed to Phase 2.
+     2. If the result is `ok: false`, tell the user the selected framework package is unavailable or corrupt. If the same family has other available framework variants, offer those first; otherwise offer **Start from scratch** or **Stop**. Do not emit `template_used` for a variant whose package did not validate. If the user falls back to from-scratch, recommend the framework they had selected.
+     3. If the result is `ok: true`, set `CREATION_PATH = "template"` and `SELECTED_TEMPLATE_SOLUTION_ZIP = <localPath>`. Immediately emit the `template_used` telemetry event (fail-closed), then append the template-path pre-import tasks now (see [Progress Tracking](#progress-tracking)); the import-vs-clone tasks are appended after the reinstall policy is known. Continue to the template import sequence below. Do **not** ask project location and do **not** proceed to Phase 2.
         ```bash
         node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
           --eventName template_used \
           --templateId "<SELECTED_TEMPLATE.id>" \
           --templateKind "<SELECTED_TEMPLATE.kind>" \
-          --framework "<SELECTED_TEMPLATE.framework>" \
+          --framework "<SELECTED_TEMPLATE_VARIANT.framework>" \
           --audience "<internal|external from Phase 1 discovery>"
         ```
         `--audience` is the site audience captured in Phase 1 (`internal` or `external`), **not** the template's `audience` persona array from the catalog manifest. Do not include site name, URL, subdomain, free-text purpose, or any other user-identifying value.
@@ -256,10 +258,10 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
     5. Mark **Validate JavaScript unblock requirement** as `completed` and **Validate Dataverse language requirements** as `in_progress`, then preflight-check whether the target environment has every Dataverse language required by the selected template:
        ```bash
-       node "${PLUGIN_ROOT}/scripts/check-available-languages.js" --envUrl "<environmentUrl>" --token "<token>" --requiredLocaleIds "<SELECTED_TEMPLATE.requiredDataverseLanguages comma-separated>"
+       node "${PLUGIN_ROOT}/scripts/check-available-languages.js" --envUrl "<environmentUrl>" --token "<token>" --requiredLocaleIds "<SELECTED_TEMPLATE_VARIANT.requiredDataverseLanguages or SELECTED_TEMPLATE.requiredDataverseLanguages comma-separated>"
        ```
        Evaluate the JSON result:
-       - **`ok: true` and `hasRequiredLanguages: true`**: continue; the target environment has every LCID in `SELECTED_TEMPLATE.requiredDataverseLanguages`.
+       - **`ok: true` and `hasRequiredLanguages: true`**: continue; the target environment has every LCID required by the selected variant, falling back to the family requirements when the variant does not override them.
        - **`ok: false`**: tell the user the skill could not verify available Dataverse languages, surface the script error, then ask whether to switch to from-scratch or stop. Do not import the template.
        - **`ok: true` and `hasRequiredLanguages: false`**: explain that the selected template solution requires the missing Dataverse language LCIDs from `missingLocaleIds`. Block before any solution import mutation. Do not provide a "proceed anyway" branch.
 
@@ -299,7 +301,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       If `inspect-template-solution.js` returns `ok: false`, treat detection as unknown (`decision: "ask"`). The solution can still be imported if the user explicitly chooses to continue, but the safer defaults are **Start from scratch** or **Stop**.
       If `check-solution-installed.js` exits 1, treat detection as unknown (`decision: "ask"`) and do not assume the solution is absent.
       - **`decision: "import"`**: append the import-path tasks (**Import template solution**, **Show imported inactive site**, optional **Apply template seed data**, **Activate imported site**, **Show live template site**) and continue.
-      - **`decision: "confirm-update"`**: tell the user a newer template version is available and confirm before importing in place.
+      - **`decision: "confirm-update"`**: tell the user a newer version of the exact selected family/framework variant is available and confirm before importing in place. Do not compare versions across framework variants.
 
         <!-- gate: create-site:1.5.update-installed | category=consent | cancel-leaves=template-cache -->
 
@@ -313,11 +315,11 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
         | Question | Header | Options |
         |----------|--------|---------|
-        | Template `<displayName>` is already installed at version `<installedVersion>`. The selected template zip is newer (`<zipVersion>`). Update the unmanaged solution in this environment? | Update Template | Yes, update the template (Recommended), No, cancel |
+        | Template `<displayName>` - `<SELECTED_TEMPLATE_VARIANT.framework>` is already installed at version `<installedVersion>`. The selected framework package is newer (`<zipVersion>`). Update the unmanaged solution in this environment? | Update Template | Yes, update this framework variant (Recommended), No, cancel |
 
         If the user declines or cancels, stop before import; no org mutation has happened. Do not emit `template_import_failure` because no import was attempted; `template_used` was already emitted when the template path was selected. If the user confirms, append the import-path tasks and continue.
 
-      - **`decision: "offer-clone"`**: do not re-import. Append **Clone existing template site**, then offer to clone the existing site instead:
+      - **`decision: "offer-clone"`**: do not re-import the exact same/newer framework variant. Append **Clone existing template site**, then offer to clone the existing site instead:
 
         <!-- gate: create-site:1.5.clone-existing | category=consent | cancel-leaves=template-cache -->
 
@@ -331,19 +333,19 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
         | Question | Header | Options |
         |----------|--------|---------|
-        | Template `<displayName>` is already installed at the same or newer version. Re-importing is not recommended. Clone an existing website from this template instead? | Clone Existing Site | Yes, clone an existing site (Recommended), No, cancel |
+        | Template `<displayName>` - `<SELECTED_TEMPLATE_VARIANT.framework>` is already installed at the same or newer version. Re-importing is not recommended. Clone an existing website from this framework variant instead? | Clone Existing Site | Yes, clone an existing site (Recommended), No, cancel |
 
         First run `pac pages list -v` and identify the existing website to clone.
 
         <!-- not-a-gate: clone source-site disambiguation after the user has already approved the clone path; data-gathering only, no clone/download/upload runs until a source is selected -->
 
-        If more than one candidate could be the template site, ask the user to pick the source site name/Website Record ID before running clone commands.
+        If more than one candidate could be the exact selected framework variant's template site, ask the user to pick the source site name/Website Record ID before running clone commands.
         ```bash
         pac pages download-code-site --webSiteId "<existing website id>" --path "<temp path>"
         pac pages clone --path "<downloaded path>"
         pac pages upload-code-site --rootPath "<cloned path>"
         ```
-        If any clone command fails, surface the failed command and error output, then fire this gate:
+        If any clone command fails, emit `template_clone_failure` with selected family id/framework/kind/audience, `outcome=failure`, `errorClass=PacPagesClone`, and a short non-PII `errorDescription`. Then surface the failed command and error output and fire this gate:
 
         <!-- gate: create-site:1.5.clone-failed | category=progress | cancel-leaves=partial-template-clone -->
 
@@ -359,7 +361,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         |----------|--------|---------|
         | Cloning the existing template site failed. How would you like to proceed? | Clone Failed | Retry clone (Recommended), Fall back to from-scratch, Stop |
 
-        Do not retry automatically; offer **Retry clone**, **Fall back to from-scratch**, or **Stop**. Verify a successful upload by running `pac pages list -v` again and diffing the output with `diff-pages-list.js`. If the cloned site identity is found, invoke `/activate-site` with that cloned site name and Website Record ID, then open the live URL and present the same template-path summary used below. If the cloned site identity cannot be resolved, stop and tell the user the clone/upload completed but activation needs a manual `/activate-site` run with the cloned Website Record ID from `pac pages list -v`. If the user declines cloning, stop. Do not emit an import result event for the clone path because no template import was attempted; `template_used` was already emitted when the template path was selected. **Do not continue into the normal template import flow after a clone path succeeds or stops.**
+        Do not retry automatically; offer **Retry clone**, **Fall back to from-scratch**, or **Stop**. Verify a successful upload by running `pac pages list -v` again and diffing the output with `diff-pages-list.js`. If the cloned site identity is found, emit `template_clone_success`, invoke `/activate-site` with that cloned site name and Website Record ID, then open the live URL and present the same template-path summary used below. If the cloned site identity cannot be resolved, stop and tell the user the clone/upload completed but activation needs a manual `/activate-site` run with the cloned Website Record ID from `pac pages list -v`. If the user declines cloning, stop. Do not emit an import result event for the clone path because no template import was attempted; `template_used` was already emitted when the template path was selected. If the user falls back to from-scratch after clone failure or cancellation, recommend `<SELECTED_TEMPLATE_VARIANT.framework>` in the from-scratch framework prompt. **Do not continue into the normal template import flow after a clone path succeeds or stops.**
       - **`decision: "ask"`** or detection failure: ask whether to import anyway, start from scratch, or stop.
 
         <!-- gate: create-site:1.5.reinstall-unknown | category=consent | cancel-leaves=template-cache -->
@@ -429,7 +431,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         --eventName template_import_failure \
         --templateId "<SELECTED_TEMPLATE.id>" \
         --templateKind "<SELECTED_TEMPLATE.kind>" \
-        --framework "<SELECTED_TEMPLATE.framework>" \
+        --framework "<SELECTED_TEMPLATE_VARIANT.framework>" \
         --audience "<internal|external from Phase 1 discovery>" \
         --outcome failure \
         --errorClass "ImportSolutionAsync" \
@@ -464,7 +466,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         --eventName template_import_success \
         --templateId "<SELECTED_TEMPLATE.id>" \
         --templateKind "<SELECTED_TEMPLATE.kind>" \
-        --framework "<SELECTED_TEMPLATE.framework>" \
+        --framework "<SELECTED_TEMPLATE_VARIANT.framework>" \
         --audience "<internal|external from Phase 1 discovery>" \
         --seedApplied "false"
       ```
@@ -479,16 +481,16 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       - **`status: "found"` but `inactive: false`**: show the diff result, then explain that the import succeeded but the inactive state could not be verified automatically. Stop before activation; the next slice will handle recovery.
       - **`status: "none"` or `"multiple"`**: show the diff result, then explain that the import succeeded but the newly-imported site could not be identified automatically. Stop before activation; the next slice will handle recovery.
    12. Mark **Show imported inactive site** as `completed`.
-   13. If `SELECTED_TEMPLATE.seedDataPath` is present, mark **Apply template seed data** as `in_progress` and run:
+   13. If `SELECTED_TEMPLATE_VARIANT.seedDataPath` or `SELECTED_TEMPLATE.seedDataPath` is present, mark **Apply template seed data** as `in_progress` and run:
        ```bash
-       node "${PLUGIN_ROOT}/scripts/fetch-template-seed-data.js" --sha "<catalog-sha>" --seedDataPath "<SELECTED_TEMPLATE.seedDataPath>"
+       node "${PLUGIN_ROOT}/scripts/fetch-template-seed-data.js" --sha "<catalog-sha>" --seedDataPath "<SELECTED_TEMPLATE_VARIANT.seedDataPath or SELECTED_TEMPLATE.seedDataPath>"
        ```
        If the result is `ok: true`, use `localDir` as the seed directory. If the result is `ok: false`, surface the error and continue to activation; seed-data fetch is best-effort.
        ```bash
        node "${PLUGIN_ROOT}/scripts/apply-seed-data.js" --seedDir "<localDir>" --envUrl "<environmentUrl>"
        ```
        Surface the JSON summary (`inserted`, `failed`, `skipped`, `errors`). For a lightweight read-only verification path, query each seeded `entitySetName` with `dataverse-request.js` using `GET "<entitySetName>?$top=1"` and report whether the seeded table is reachable. Seeding is best-effort: even if `failed > 0`, `ok: false`, or read-only verification cannot run, continue to activation.
-       If `seedDataPath` is absent, skip this task.
+       Prefer the selected variant's `seedDataPath` when present; otherwise use the family `seedDataPath`. If both are absent, skip this task.
    14. Mark **Apply template seed data** as `completed` or skipped. Do not emit another import success event here; `template_import_success` was emitted immediately after the solution import succeeded so telemetry is not lost if seed or activation handoff changes control flow.
    15. Mark **Activate imported site** as `in_progress`.
    15. Invoke `/activate-site`, passing the resolved identity in the request so it skips local-project discovery:

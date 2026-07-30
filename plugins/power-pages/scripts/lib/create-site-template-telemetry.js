@@ -11,7 +11,7 @@ const { readPacCliVersion, readAiAgent } = require('./telemetry/lib/agent-info')
 const { getSessionId } = require('./telemetry/lib/session');
 
 const EVENT_STREAM = 'PagesAIPluginEvent';
-const TEMPLATE_EVENT_NAMES = new Set(['template_used', 'template_import_success', 'template_import_failure', 'create_site_from_scratch']);
+const TEMPLATE_EVENT_NAMES = new Set(['template_used', 'template_import_success', 'template_import_failure', 'template_clone_success', 'template_clone_failure', 'create_site_from_scratch']);
 const TEMPLATE_KINDS = new Set(['spa', 'traditional']);
 const FRAMEWORKS = new Set(['react', 'vue', 'angular', 'astro']);
 const AUDIENCES = new Set(['internal', 'external']);

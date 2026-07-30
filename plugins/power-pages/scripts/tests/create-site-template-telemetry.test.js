@@ -87,6 +87,51 @@ test('buildTemplateOutcomeEvent emits import result details separately from temp
   assert.equal(failure.data.severity, 'Error');
 });
 
+test('buildTemplateOutcomeEvent emits clone result events separately from import events', () => {
+  const success = buildTemplateOutcomeEvent({
+    eventName: 'template_clone_success',
+    templateId: 'supplier-portal',
+    templateKind: 'spa',
+    framework: 'vue',
+    audience: 'external',
+    correlationId: 'corr',
+  }, {
+    readPacAuth: () => null,
+    readAgentInfo: () => ({}),
+    randomUUID: () => 'corr',
+  });
+
+  assert.equal(success.data.eventName, 'template_clone_success');
+  assert.deepEqual(success.data.eventInfo, {
+    framework: 'vue',
+    audience: 'external',
+    templateId: 'supplier-portal',
+    templateKind: 'spa',
+  });
+
+  const failure = buildTemplateOutcomeEvent({
+    eventName: 'template_clone_failure',
+    templateId: 'supplier-portal',
+    templateKind: 'spa',
+    framework: 'vue',
+    audience: 'external',
+    outcome: 'failure',
+    errorClass: 'PacPagesClone',
+    errorDescription: 'clone failed',
+    correlationId: 'corr',
+  }, {
+    readPacAuth: () => null,
+    readAgentInfo: () => ({}),
+    randomUUID: () => 'corr',
+  });
+
+  assert.equal(failure.data.eventName, 'template_clone_failure');
+  assert.equal(failure.data.outcome, 'failure');
+  assert.equal(failure.data.errorClass, 'PacPagesClone');
+  assert.equal(failure.data.errorDescription, 'clone failed');
+  assert.equal(failure.data.severity, 'Error');
+});
+
 test('buildTemplateOutcomeEvent emits scratch branch adoption signal', () => {
   const event = buildTemplateOutcomeEvent({
     eventName: 'create_site_from_scratch',

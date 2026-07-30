@@ -44,6 +44,25 @@ function renderPreviewImages(template) {
   `).join('');
 }
 
+function frameworkLabel(framework) {
+  if (!framework) return '';
+  return String(framework).slice(0, 1).toUpperCase() + String(framework).slice(1);
+}
+
+function renderFrameworkVariants(template) {
+  const variants = Array.isArray(template.variants)
+    ? template.variants
+    : Object.entries(template.variants || {}).map(([framework, variant]) => ({ framework, ...variant }));
+  const frameworks = variants.length > 0 ? variants.map((variant) => variant.framework) : [template.framework].filter(Boolean);
+  if (frameworks.length === 0) return '';
+  return `
+    <div class="template-meta">
+      <div class="field-label">Available frameworks</div>
+      <div class="chip-row">${frameworks.map((framework) => `<span class="chip chip-framework">${escapeHtml(frameworkLabel(framework))}</span>`).join('')}</div>
+    </div>
+  `;
+}
+
 function templateTabId(index) {
   return `template-${index + 1}`;
 }
@@ -68,8 +87,9 @@ function renderTemplateSectionsHtml(templates) {
     <section class="template-section${index === 0 ? ' active' : ''}" id="${templateTabId(index)}">
       <div class="template-hero">
         <h2>${escapeHtml(template.displayName)}</h2>
-        <div class="template-framework">${escapeHtml(template.framework)}</div>
+        <div class="template-framework">${escapeHtml(template.variants && template.variants.length > 1 ? `${template.variants.length} frameworks` : frameworkLabel(template.framework || (template.variants && template.variants[0] && template.variants[0].framework)))}</div>
       </div>
+      ${renderFrameworkVariants(template)}
       <div class="template-meta">
         <div class="field-label">Keywords</div>
         <div class="chip-row">${renderKeywordChips(template.keywords)}</div>

@@ -10,6 +10,8 @@ const DEFAULT_OWNER = 'microsoft';
 const DEFAULT_REPO = 'power-pages-samples';
 const DEFAULT_REF = 'latest-release';
 const DEFAULT_CATALOG_PATH = 'templates/manifest.json';
+const FRAMEWORKS = new Set(['react', 'vue', 'angular', 'astro', 'none', 'other']);
+const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 function getDefaultCacheRoot() {
   return path.join(os.tmpdir(), 'powerpages-templates');
@@ -46,6 +48,10 @@ function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function isNestedFamilyTemplate(template) {
+  return template && typeof template.variants === 'object' && template.variants && !Array.isArray(template.variants);
+}
+
 function assertValidSha(sha) {
   if (!/^[0-9a-f]{40}$/i.test(sha || '')) {
     throw new Error(`Expected an immutable 40-character commit sha, got: ${sha}`);
@@ -78,9 +84,12 @@ function validateCatalogShape(catalog) {
   }
   for (const [index, template] of catalog.templates.entries()) {
     if (!template || typeof template !== 'object') return `template at index ${index} is not an object`;
-    const requiredStringFields = ['id', 'displayName', 'description', 'kind', 'framework', 'solutionPath', 'templateVersion', 'author'];
+    const requiredStringFields = isNestedFamilyTemplate(template)
+      ? ['id', 'displayName', 'description', 'kind', 'author']
+      : ['id', 'displayName', 'description', 'kind', 'framework', 'solutionPath', 'templateVersion', 'author'];
     const missing = requiredStringFields.filter((field) => !isNonEmptyString(template[field]));
     if (missing.length > 0) return `template ${template.id || index} missing string field(s): ${missing.join(', ')}`;
+    if (!ID_PATTERN.test(template.id)) return `template ${template.id} id must be kebab-case`;
     if (!Array.isArray(template.audience) || template.audience.length === 0 || !template.audience.every(isNonEmptyString)) {
       return `template ${template.id} audience must be a non-empty array of strings`;
     }
@@ -94,6 +103,33 @@ function validateCatalogShape(catalog) {
     if (!Array.isArray(template.keywords)) return `template ${template.id} keywords must be an array`;
     if (!Array.isArray(template.previewImages)) {
       return `template ${template.id} previewImages must be an array`;
+    }
+    if (isNestedFamilyTemplate(template)) {
+      const seenFrameworks = new Set();
+      const variantEntries = Object.entries(template.variants);
+      if (variantEntries.length === 0) return `template ${template.id} variants must contain at least one framework`;
+      for (const [framework, variant] of variantEntries) {
+        const normalizedFramework = framework.toLowerCase();
+        if (seenFrameworks.has(normalizedFramework)) return `template ${template.id} has duplicate framework variant: ${framework}`;
+        seenFrameworks.add(normalizedFramework);
+        if (!FRAMEWORKS.has(normalizedFramework)) return `template ${template.id} variant ${framework} has unsupported framework`;
+        if (!variant || typeof variant !== 'object' || Array.isArray(variant)) return `template ${template.id} variant ${framework} is not an object`;
+        const variantMissing = ['templateVersion', 'solutionPath'].filter((field) => !isNonEmptyString(variant[field]));
+        if (variantMissing.length > 0) return `template ${template.id} variant ${framework} missing string field(s): ${variantMissing.join(', ')}`;
+        if (variant.previewImages !== undefined && !Array.isArray(variant.previewImages)) {
+          return `template ${template.id} variant ${framework} previewImages must be an array`;
+        }
+        if (
+          variant.requiredDataverseLanguages !== undefined &&
+          (
+            !Array.isArray(variant.requiredDataverseLanguages) ||
+            variant.requiredDataverseLanguages.length === 0 ||
+            !variant.requiredDataverseLanguages.every((id) => Number.isInteger(id) && id > 0)
+          )
+        ) {
+          return `template ${template.id} variant ${framework} requiredDataverseLanguages must be a non-empty array of positive integers`;
+        }
+      }
     }
   }
   return null;
@@ -127,14 +163,100 @@ function materializeCatalogArtifactPaths(catalog, catalogPath) {
       const materialized = {
         ...template,
         previewImages: template.previewImages.map((imagePath) => resolveCatalogArtifactPath(catalogPath, imagePath)),
-        solutionPath: resolveCatalogArtifactPath(catalogPath, template.solutionPath),
       };
+      if (template.solutionPath) {
+        materialized.solutionPath = resolveCatalogArtifactPath(catalogPath, template.solutionPath);
+      }
       if (template.seedDataPath) {
         materialized.seedDataPath = resolveCatalogArtifactPath(catalogPath, template.seedDataPath);
+      }
+      if (isNestedFamilyTemplate(template)) {
+        materialized.variants = Object.fromEntries(Object.entries(template.variants).map(([framework, variant]) => {
+          const materializedVariant = {
+            ...variant,
+            solutionPath: resolveCatalogArtifactPath(catalogPath, variant.solutionPath),
+          };
+          if (Array.isArray(variant.previewImages)) {
+            materializedVariant.previewImages = variant.previewImages.map((imagePath) => resolveCatalogArtifactPath(catalogPath, imagePath));
+          }
+          if (variant.seedDataPath) {
+            materializedVariant.seedDataPath = resolveCatalogArtifactPath(catalogPath, variant.seedDataPath);
+          }
+          return [framework.toLowerCase(), materializedVariant];
+        }));
       }
       return materialized;
     }),
   };
+}
+
+function normalizeCatalogFamilies(catalog = {}) {
+  const templates = Array.isArray(catalog.templates) ? catalog.templates : [];
+  return templates.map((template) => {
+    if (!isNestedFamilyTemplate(template)) {
+      return {
+        id: template.id,
+        displayName: template.displayName,
+        description: template.description,
+        kind: template.kind,
+        keywords: template.keywords || [],
+        audience: template.audience || [],
+        requiredDataverseLanguages: template.requiredDataverseLanguages || [],
+        previewImages: template.previewImages || [],
+        ...(template.seedDataPath ? { seedDataPath: template.seedDataPath } : {}),
+        author: template.author,
+        variants: [{
+          familyId: template.id,
+          variantKey: template.framework,
+          variantId: `${template.id}/${template.framework}`,
+          displayName: template.displayName,
+          description: template.description,
+          kind: template.kind,
+          framework: template.framework,
+          keywords: template.keywords || [],
+          audience: template.audience || [],
+          requiredDataverseLanguages: template.requiredDataverseLanguages || [],
+          previewImages: template.previewImages || [],
+          ...(template.seedDataPath ? { seedDataPath: template.seedDataPath } : {}),
+          templateVersion: template.templateVersion,
+          solutionPath: template.solutionPath,
+          author: template.author,
+        }],
+      };
+    }
+    return {
+      id: template.id,
+      displayName: template.displayName,
+      description: template.description,
+      kind: template.kind,
+      keywords: template.keywords || [],
+      audience: template.audience || [],
+      requiredDataverseLanguages: template.requiredDataverseLanguages || [],
+      previewImages: template.previewImages || [],
+      ...(template.seedDataPath ? { seedDataPath: template.seedDataPath } : {}),
+      author: template.author,
+      variants: Object.entries(template.variants).map(([framework, variant]) => {
+        const variantKey = framework.toLowerCase();
+        return {
+          familyId: template.id,
+          variantKey,
+          variantId: `${template.id}/${variantKey}`,
+          displayName: template.displayName,
+          description: template.description,
+          kind: template.kind,
+          framework: variantKey,
+          keywords: template.keywords || [],
+          audience: template.audience || [],
+          requiredDataverseLanguages: variant.requiredDataverseLanguages || template.requiredDataverseLanguages || [],
+          previewImages: Array.isArray(variant.previewImages) ? variant.previewImages : (template.previewImages || []),
+          ...(variant.seedDataPath || template.seedDataPath ? { seedDataPath: variant.seedDataPath || template.seedDataPath } : {}),
+          templateVersion: variant.templateVersion,
+          solutionPath: variant.solutionPath,
+          author: template.author,
+        };
+      }),
+    };
+  });
 }
 
 function startHttpsGet({ url, headers, timeoutMs, deps, reject, onResponse }) {
@@ -476,5 +598,6 @@ module.exports = {
   downloadSolutionArtifact,
   downloadSeedDataDirectory,
   validateCatalogShape,
+  normalizeCatalogFamilies,
   assertValidSha,
 };

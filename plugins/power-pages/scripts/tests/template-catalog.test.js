@@ -23,6 +23,7 @@ const {
   validateCatalogShape,
   assertValidSha,
   resolveRefToSha,
+  normalizeCatalogFamilies,
 } = require('../lib/template-catalog');
 const { parseArgs: parseCatalogArgs } = require('../fetch-template-catalog');
 const { parseArgs: parseSolutionArgs } = require('../fetch-template-solution');
@@ -48,6 +49,30 @@ const VALID_TEMPLATE = {
   solutionPath: 'templates/spa/company-portal/solution/Company_1_0_0_0.zip',
   templateVersion: '1.0.0',
   author: 'Microsoft',
+};
+
+const VALID_TEMPLATE_FAMILY = {
+  id: 'supplier-portal',
+  displayName: 'Supplier Portal',
+  description: 'Supplier invoice portal',
+  kind: 'spa',
+  keywords: ['supplier', 'invoice'],
+  audience: ['makers', 'developers'],
+  requiredDataverseLanguages: [1033],
+  previewImages: ['templates/spa/supplier-portal/previews/home.png'],
+  seedDataPath: 'templates/spa/supplier-portal/seed-data/data.json',
+  author: 'Microsoft',
+  variants: {
+    react: {
+      templateVersion: '1.0.0',
+      solutionPath: 'templates/spa/supplier-portal/variants/react/solution/SupplierReact.zip',
+    },
+    vue: {
+      templateVersion: '1.0.1',
+      solutionPath: 'templates/spa/supplier-portal/variants/vue/solution/SupplierVue.zip',
+      previewImages: ['templates/spa/supplier-portal/variants/vue/previews/home.png'],
+    },
+  },
 };
 
 test('builds raw and git remote URLs from repo and template-relative paths', () => {
@@ -155,6 +180,115 @@ test('fetchCatalog resolves manifest artifact paths relative to the catalog fold
   ]);
   assert.equal(result.catalog.templates[0].solutionPath, 'templates/spa/company-portal/solution/Company_1_0_0_0.zip');
   assert.equal(result.catalog.templates[0].seedDataPath, 'templates/spa/company-portal/seed/data.json');
+});
+
+test('validateCatalogShape accepts nested template families with framework variants', () => {
+  assert.equal(validateCatalogShape({ manifestVersion: '2.0', templates: [VALID_TEMPLATE_FAMILY] }), null);
+});
+
+test('validateCatalogShape rejects duplicate framework variants in a family', () => {
+  const family = {
+    ...VALID_TEMPLATE_FAMILY,
+    variants: {
+      react: VALID_TEMPLATE_FAMILY.variants.react,
+      React: VALID_TEMPLATE_FAMILY.variants.react,
+    },
+  };
+
+  assert.match(
+    validateCatalogShape({ templates: [family] }),
+    /duplicate framework variant/i
+  );
+});
+
+test('fetchCatalog materializes nested family and variant artifact paths', async (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const catalog = {
+    manifestVersion: '2.0',
+    templates: [{
+      ...VALID_TEMPLATE_FAMILY,
+      previewImages: ['spa/supplier-portal/previews/home.png'],
+      seedDataPath: 'spa/supplier-portal/seed-data/data.json',
+      variants: {
+        react: {
+          templateVersion: '1.0.0',
+          solutionPath: 'spa/supplier-portal/variants/react/solution/SupplierReact.zip',
+        },
+        vue: {
+          templateVersion: '1.0.1',
+          solutionPath: 'spa/supplier-portal/variants/vue/solution/SupplierVue.zip',
+          previewImages: ['spa/supplier-portal/variants/vue/previews/home.png'],
+          seedDataPath: 'spa/supplier-portal/variants/vue/seed-data/data.json',
+        },
+      },
+    }],
+  };
+
+  const result = await fetchCatalog({ owner: 'o', repo: 'r', ref: 'templates-v2.0.0', cacheRoot: dir }, {
+    execFileSync: () => `${SHA}\trefs/tags/templates-v2.0.0\n`,
+    requestJson: async () => catalog,
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.catalog.templates[0].previewImages, ['templates/spa/supplier-portal/previews/home.png']);
+  assert.equal(result.catalog.templates[0].seedDataPath, 'templates/spa/supplier-portal/seed-data/data.json');
+  assert.equal(result.catalog.templates[0].variants.react.solutionPath, 'templates/spa/supplier-portal/variants/react/solution/SupplierReact.zip');
+  assert.deepEqual(result.catalog.templates[0].variants.vue.previewImages, ['templates/spa/supplier-portal/variants/vue/previews/home.png']);
+  assert.equal(result.catalog.templates[0].variants.vue.seedDataPath, 'templates/spa/supplier-portal/variants/vue/seed-data/data.json');
+});
+
+test('normalizeCatalogFamilies exposes exact variant records with family metadata', () => {
+  const families = normalizeCatalogFamilies({ templates: [VALID_TEMPLATE_FAMILY] });
+
+  assert.deepEqual(families, [{
+    id: 'supplier-portal',
+    displayName: 'Supplier Portal',
+    description: 'Supplier invoice portal',
+    kind: 'spa',
+    keywords: ['supplier', 'invoice'],
+    audience: ['makers', 'developers'],
+    requiredDataverseLanguages: [1033],
+    previewImages: ['templates/spa/supplier-portal/previews/home.png'],
+    seedDataPath: 'templates/spa/supplier-portal/seed-data/data.json',
+    author: 'Microsoft',
+    variants: [
+      {
+        familyId: 'supplier-portal',
+        variantKey: 'react',
+        variantId: 'supplier-portal/react',
+        displayName: 'Supplier Portal',
+        description: 'Supplier invoice portal',
+        kind: 'spa',
+        framework: 'react',
+        keywords: ['supplier', 'invoice'],
+        audience: ['makers', 'developers'],
+        requiredDataverseLanguages: [1033],
+        previewImages: ['templates/spa/supplier-portal/previews/home.png'],
+        seedDataPath: 'templates/spa/supplier-portal/seed-data/data.json',
+        templateVersion: '1.0.0',
+        solutionPath: 'templates/spa/supplier-portal/variants/react/solution/SupplierReact.zip',
+        author: 'Microsoft',
+      },
+      {
+        familyId: 'supplier-portal',
+        variantKey: 'vue',
+        variantId: 'supplier-portal/vue',
+        displayName: 'Supplier Portal',
+        description: 'Supplier invoice portal',
+        kind: 'spa',
+        framework: 'vue',
+        keywords: ['supplier', 'invoice'],
+        audience: ['makers', 'developers'],
+        requiredDataverseLanguages: [1033],
+        previewImages: ['templates/spa/supplier-portal/variants/vue/previews/home.png'],
+        seedDataPath: 'templates/spa/supplier-portal/seed-data/data.json',
+        templateVersion: '1.0.1',
+        solutionPath: 'templates/spa/supplier-portal/variants/vue/solution/SupplierVue.zip',
+        author: 'Microsoft',
+      },
+    ],
+  }]);
 });
 
 test('fetchCatalog falls back to main when no semver tags exist yet', async (t) => {

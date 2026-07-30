@@ -85,6 +85,71 @@ test('renderTemplateBrowser renders static template details and preview images',
   assert.doesNotMatch(html, /templates\.map/);
 });
 
+test('renderTemplateBrowser renders one family with read-only framework variants', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const dataPath = path.join(dir, 'families.json');
+  const outputPath = path.join(dir, 'browser.html');
+  fs.writeFileSync(dataPath, JSON.stringify({
+    TEMPLATES_JSON: [
+      {
+        id: 'supplier-portal',
+        displayName: 'Supplier Portal',
+        description: 'Supplier invoice portal',
+        kind: 'spa',
+        keywords: ['supplier', 'invoice'],
+        previewImages: ['https://raw.githubusercontent.com/o/r/sha/templates/spa/supplier/previews/home.png'],
+        variants: [
+          { variantId: 'supplier-portal/react', variantKey: 'react', framework: 'react', templateVersion: '1.0.0' },
+          { variantId: 'supplier-portal/vue', variantKey: 'vue', framework: 'vue', templateVersion: '1.0.1' },
+        ],
+      },
+    ],
+  }));
+
+  const result = renderTemplateBrowser({ templatesJsonPath: dataPath, outputPath, open: false });
+  const html = fs.readFileSync(outputPath, 'utf8');
+
+  assert.deepEqual(result, { status: 'ok', output: outputPath, opened: false });
+  assert.match(html, /Supplier Portal/);
+  assert.match(html, /supplier invoice portal/i);
+  assert.match(html, /React/);
+  assert.match(html, /Vue/);
+  assert.match(html, /Available frameworks/);
+  assert.match(html, /data-tab="template-1"/);
+  assert.doesNotMatch(html, /data-tab="template-2"/);
+});
+
+test('renderTemplateBrowser accepts raw nested variant maps from the manifest', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const dataPath = path.join(dir, 'families-raw.json');
+  const outputPath = path.join(dir, 'browser.html');
+  fs.writeFileSync(dataPath, JSON.stringify({
+    TEMPLATES_JSON: [
+      {
+        id: 'supplier-portal',
+        displayName: 'Supplier Portal',
+        description: 'Supplier invoice portal',
+        kind: 'spa',
+        keywords: ['supplier'],
+        previewImages: [],
+        variants: {
+          react: { templateVersion: '1.0.0', solutionPath: 'variants/react/solution.zip' },
+          vue: { templateVersion: '1.0.0', solutionPath: 'variants/vue/solution.zip' },
+        },
+      },
+    ],
+  }));
+
+  renderTemplateBrowser({ templatesJsonPath: dataPath, outputPath, open: false });
+  const html = fs.readFileSync(outputPath, 'utf8');
+
+  assert.match(html, /Available frameworks/);
+  assert.match(html, /React/);
+  assert.match(html, /Vue/);
+});
+
 test('renderTemplateBrowser reports opener failures without failing render', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
