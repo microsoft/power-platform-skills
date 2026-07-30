@@ -13,6 +13,10 @@ function isInactiveState(state) {
   return /inactive|not\s+live|not\s+provisioned|unprovisioned/i.test(state || '');
 }
 
+function normalizeComparableName(value) {
+  return normalizeName(String(value || '')).toLowerCase();
+}
+
 function parsePagesListVerbose(output) {
   // `pac pages list -v` is a human table whose exact columns vary by CLI
   // version/cloud. The stable token we need is the Website Record ID GUID.
@@ -43,7 +47,7 @@ function parsePagesListVerbose(output) {
   return rows;
 }
 
-function diffPagesListVerbose(beforeOutput, afterOutput) {
+function diffPagesListVerbose(beforeOutput, afterOutput, options = {}) {
   const before = parsePagesListVerbose(beforeOutput);
   const after = parsePagesListVerbose(afterOutput);
   const beforeIds = new Set(before.map((row) => row.websiteRecordId.toLowerCase()));
@@ -59,6 +63,24 @@ function diffPagesListVerbose(beforeOutput, afterOutput) {
     };
   }
   if (added.length === 0) {
+    const expectedSiteName = normalizeComparableName(options.expectedSiteName);
+    if (expectedSiteName) {
+      const existing = after.filter((row) => normalizeComparableName(row.siteName) === expectedSiteName);
+      if (existing.length === 1) {
+        return {
+          status: 'existing',
+          siteName: existing[0].siteName,
+          websiteRecordId: existing[0].websiteRecordId,
+          state: existing[0].state,
+          inactive: isInactiveState(existing[0].state),
+          added,
+          warning: 'No new site appeared in pac pages list; matched an existing site by expected template site name.',
+        };
+      }
+      if (existing.length > 1) {
+        return { status: 'existing-multiple', added, existing };
+      }
+    }
     return { status: 'none', added };
   }
   return { status: 'multiple', added };

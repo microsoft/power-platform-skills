@@ -295,6 +295,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       node "${PLUGIN_ROOT}/scripts/check-solution-installed.js" --solutionName "<uniqueName>" --envUrl "<environmentUrl>"
       node "${PLUGIN_ROOT}/scripts/inspect-template-solution.js" --zipPath "<SELECTED_TEMPLATE_SOLUTION_ZIP>" --installed "<true|false>" --installedVersion "<version-or-empty>"
       ```
+      If solution inspection can identify the template website name, compare it with the pre-import `pac pages list -v` snapshot captured earlier. If that site name already exists, warn the user before continuing: "A site named `<expected site name>` already exists in this environment. Import may update or overwrite unmanaged components for that existing site, and the post-import `pac pages list -v` diff may show no new row." This is a warning only; do not block import solely because the site already exists.
       If `inspect-template-solution.js` returns `ok: false`, treat detection as unknown (`decision: "ask"`). The solution can still be imported if the user explicitly chooses to continue, but the safer defaults are **Start from scratch** or **Stop**.
       If `check-solution-installed.js` exits 1, treat detection as unknown (`decision: "ask"`) and do not assume the solution is absent.
       - **`decision: "import"`**: append the import-path tasks (**Import template solution**, **Show imported inactive site**, optional **Apply template seed data**, **Activate imported site**, **Show live template site**) and continue.
@@ -472,11 +473,13 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    11. Capture a post-import site list snapshot and identify the newly-imported site:
       ```bash
       node "${PLUGIN_ROOT}/scripts/capture-pages-list.js" --output "<temp-after-pages-list.txt>"
-      node "${PLUGIN_ROOT}/scripts/diff-pages-list.js" --before "<temp-before-pages-list.txt>" --after "<temp-after-pages-list.txt>"
+      node "${PLUGIN_ROOT}/scripts/diff-pages-list.js" --before "<temp-before-pages-list.txt>" --after "<temp-after-pages-list.txt>" --expectedSiteName "<expected site name from solution inspection, if known>"
       ```
       - **`status: "found"` and `inactive: true`**: set `IMPORTED_SITE_NAME`, `IMPORTED_WEBSITE_RECORD_ID`, and `IMPORTED_SITE_STATE`, then tell the user: "Template `<displayName>` was imported as `<IMPORTED_SITE_NAME>` (`<IMPORTED_WEBSITE_RECORD_ID>`). Current state from `pac pages list -v`: `<IMPORTED_SITE_STATE>`. The site exists in your environment but is not live yet; activation is the next step."
+      - **`status: "existing"` and `inactive: true`**: set `IMPORTED_SITE_NAME`, `IMPORTED_WEBSITE_RECORD_ID`, and `IMPORTED_SITE_STATE` from the matched existing site, then tell the user: "Template `<displayName>` appears to have imported into existing site `<IMPORTED_SITE_NAME>` (`<IMPORTED_WEBSITE_RECORD_ID>`). `pac pages list -v` did not show a new row, which is expected when the site was already present. Current state: `<IMPORTED_SITE_STATE>`. Activation is the next step."
       - **`status: "found"` but `inactive: false`**: show the diff result, then explain that the import succeeded but the inactive state could not be verified automatically. Stop before activation; the next slice will handle recovery.
-      - **`status: "none"` or `"multiple"`**: show the diff result, then explain that the import succeeded but the newly-imported site could not be identified automatically. Stop before activation; the next slice will handle recovery.
+      - **`status: "existing"` but `inactive: false`**: show the diff result, then explain that the import succeeded into an existing site but the inactive state could not be verified automatically. Stop before activation; the next slice will handle recovery.
+      - **`status: "none"`, `"multiple"`, or `"existing-multiple"`**: show the diff result, then explain that the import succeeded but the imported site could not be identified automatically. Stop before activation; the next slice will handle recovery.
    12. Mark **Show imported inactive site** as `completed`.
    13. If `SELECTED_TEMPLATE_VARIANT.seedDataPath` or `SELECTED_TEMPLATE.seedDataPath` is present, mark **Apply template seed data** as `in_progress` and run:
        ```bash

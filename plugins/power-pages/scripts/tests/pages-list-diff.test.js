@@ -66,6 +66,35 @@ test('diffPagesListVerbose reports none or multiple when the import row is ambig
   });
 });
 
+test('diffPagesListVerbose can match an existing template site when import creates no new row', () => {
+  const before = `Template Site      ${ID1}      Inactive`;
+  const after = `Template Site      ${ID1}      Inactive`;
+
+  assert.deepEqual(diffPagesListVerbose(before, after, { expectedSiteName: 'Template Site' }), {
+    status: 'existing',
+    siteName: 'Template Site',
+    websiteRecordId: ID1,
+    state: 'Inactive',
+    inactive: true,
+    added: [],
+    warning: 'No new site appeared in pac pages list; matched an existing site by expected template site name.',
+  });
+});
+
+test('diffPagesListVerbose reports ambiguous existing template site matches', () => {
+  const before = `Template Site      ${ID1}      Inactive\nTemplate Site      ${ID2}      Inactive`;
+  const after = before;
+
+  assert.deepEqual(diffPagesListVerbose(before, after, { expectedSiteName: 'Template Site' }), {
+    status: 'existing-multiple',
+    added: [],
+    existing: [
+      { siteName: 'Template Site', websiteRecordId: ID1, state: 'Inactive' },
+      { siteName: 'Template Site', websiteRecordId: ID2, state: 'Inactive' },
+    ],
+  });
+});
+
 test('parsePagesListVerbose ignores malformed lines without GUIDs', () => {
   assert.deepEqual(parsePagesListVerbose(`not a row\nBroken Portal not-a-guid Inactive\nValid Site ${ID1} Inactive`), [
     { siteName: 'Valid Site', websiteRecordId: ID1, state: 'Inactive' },
@@ -73,8 +102,9 @@ test('parsePagesListVerbose ignores malformed lines without GUIDs', () => {
 });
 
 test('parseArgs reads before and after snapshot file paths', () => {
-  assert.deepEqual(parseArgs(['--before', '/tmp/before.txt', '--after', '/tmp/after.txt']), {
+  assert.deepEqual(parseArgs(['--before', '/tmp/before.txt', '--after', '/tmp/after.txt', '--expectedSiteName', 'Template Site']), {
     before: '/tmp/before.txt',
     after: '/tmp/after.txt',
+    expectedSiteName: 'Template Site',
   });
 });

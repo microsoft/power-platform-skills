@@ -5,7 +5,7 @@ const fs = require('fs');
 const { diffPagesListVerbose } = require('./lib/pages-list-diff');
 
 // Accepted argv shape:
-//   --before /tmp/pac-pages-before.txt --after /tmp/pac-pages-after.txt
+//   --before /tmp/pac-pages-before.txt --after /tmp/pac-pages-after.txt [--expectedSiteName "Template Site"]
 // Both files contain raw `pac pages list -v` output captured before/after a
 // template solution import.
 // Missing or malformed argv is fail-open JSON (`{ error: "Usage..." }`) rather
@@ -17,6 +17,7 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === '--before') args.before = argv[++i];
     else if (arg === '--after') args.after = argv[++i];
+    else if (arg === '--expectedSiteName') args.expectedSiteName = argv[++i];
   }
   return args;
 }
@@ -29,7 +30,7 @@ function main() {
   }
   const before = fs.readFileSync(args.before, 'utf8');
   const after = fs.readFileSync(args.after, 'utf8');
-  process.stdout.write(`${JSON.stringify(diffPagesListVerbose(before, after), null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify(diffPagesListVerbose(before, after, { expectedSiteName: args.expectedSiteName }), null, 2)}\n`);
   process.exit(0);
 }
 
