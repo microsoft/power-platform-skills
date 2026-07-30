@@ -6,7 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { localizePreviewImages, parseArgs, renderTemplateImportStatus } = require('../render-template-import-status');
+const { jsonForScript, localizePreviewImages, parseArgs, renderTemplateImportStatus } = require('../render-template-import-status');
 
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'template-import-status-test-'));
@@ -90,4 +90,8 @@ test('localizePreviewImages copies local preview images beside the served page',
     fs.readFileSync(path.join(dir, 'site', 'preview-images', 'preview-01.png'), 'utf8'),
     'fake image bytes'
   );
+});
+
+test('jsonForScript escapes script-closing characters', () => {
+  assert.equal(jsonForScript('status<bad>.json'), '"status\\u003cbad>.json"');
 });

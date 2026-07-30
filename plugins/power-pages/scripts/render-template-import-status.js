@@ -52,6 +52,10 @@ function localizePreviewImages(previewImages, outputPath) {
     .filter(Boolean);
 }
 
+function jsonForScript(value) {
+  return JSON.stringify(value).replace(/</g, '\\u003c');
+}
+
 function renderTemplateImportStatus({ templateName, statusPath, outputPath, previewImages = [], open = false }, deps = {}) {
   if (!templateName || !statusPath || !outputPath) {
     throw new Error('Usage: render-template-import-status.js --templateName <name> --statusPath <path> --outputPath <path> [--previewImagesJson <json>] [--open]');
@@ -65,7 +69,7 @@ function renderTemplateImportStatus({ templateName, statusPath, outputPath, prev
     outputPath,
     dataObject: {
       TEMPLATE_NAME: escapeHtml(templateName),
-      STATUS_URL_JSON: JSON.stringify(statusUrl),
+      STATUS_URL_JSON: jsonForScript(statusUrl),
       PREVIEW_IMAGES_JSON: localizePreviewImages(previewImages, outputPath),
     },
     requiredKeys: ['TEMPLATE_NAME', 'STATUS_URL_JSON', 'PREVIEW_IMAGES_JSON'],
@@ -89,4 +93,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { localizePreviewImages, parseArgs, renderTemplateImportStatus };
+module.exports = { jsonForScript, localizePreviewImages, parseArgs, renderTemplateImportStatus };

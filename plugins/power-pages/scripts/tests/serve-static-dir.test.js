@@ -22,6 +22,11 @@ test('safeResolve keeps requests inside the served root', () => {
   assert.equal(safeResolve(root, '/../secret.txt'), null);
 });
 
+test('safeResolve rejects malformed percent-encoding without throwing', () => {
+  const root = path.resolve('/tmp/import');
+  assert.equal(safeResolve(root, '/%E0%A4%A'), null);
+});
+
 test('contentType returns useful types for import status assets', () => {
   assert.equal(contentType('index.html'), 'text/html; charset=utf-8');
   assert.equal(contentType('status.json'), 'application/json; charset=utf-8');

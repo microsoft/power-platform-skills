@@ -30,7 +30,12 @@ function contentType(filePath) {
 }
 
 function safeResolve(root, urlPath) {
-  const decoded = decodeURIComponent((urlPath || '/').split('?')[0]);
+  let decoded;
+  try {
+    decoded = decodeURIComponent((urlPath || '/').split('?')[0]);
+  } catch {
+    return null;
+  }
   const relative = decoded === '/' ? 'index.html' : decoded.replace(/^\/+/, '');
   if (path.isAbsolute(relative) || relative.split(/[\\/]+/).includes('..')) return null;
   const fullPath = path.resolve(root, relative);
