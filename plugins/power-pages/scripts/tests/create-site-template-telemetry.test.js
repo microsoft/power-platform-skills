@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { buildTemplateOutcomeEvent, emitTemplateOutcome, normalizeBool, sanitizeTemplateOutcomeInfo } = require('../lib/create-site-template-telemetry');
-const { parseArgs } = require('../emit-create-site-template-outcome');
+const { parseArgs, run } = require('../emit-create-site-template-outcome');
 
 test('buildTemplateOutcomeEvent emits non-PII template eventInfo through the existing skill event shape', () => {
   const event = buildTemplateOutcomeEvent({
@@ -172,9 +172,20 @@ test('emitTemplateOutcome is fail-closed and delegates to telemetry dispatcher s
 });
 
 test('parseArgs and normalizeBool handle CLI values', () => {
-  assert.deepEqual(parseArgs(['--eventName', 'template_import_success', '--templateKind', 'spa', '--seedApplied', '1']), { eventName: 'template_import_success', templateKind: 'spa', seedApplied: '1' });
+  assert.deepEqual(parseArgs(['--eventName', 'template_import_success', '--templateKind', 'spa', '--seedApplied', '1', '--quiet']), { eventName: 'template_import_success', templateKind: 'spa', seedApplied: '1', quiet: true });
   assert.equal(normalizeBool('1'), true);
   assert.equal(normalizeBool('false'), false);
+});
+
+test('run ignores quiet flag when building the telemetry event', () => {
+  const result = run(['--eventName', 'template_used', '--templateId', 'company-portal', '--framework', 'react', '--templateKind', 'spa', '--audience', 'internal', '--quiet'], {
+    readPacAuth: () => null,
+    readAgentInfo: () => ({}),
+    randomUUID: () => 'corr',
+    fireAndForget: () => {},
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.event.data.eventName, 'template_used');
 });
 
 test('sanitizeTemplateOutcomeInfo drops invalid dynamic telemetry values', () => {

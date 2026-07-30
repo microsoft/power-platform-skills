@@ -187,14 +187,16 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         node "${PLUGIN_ROOT}/scripts/fetch-template-solution.js" --sha "<catalog-sha>" --solutionPath "<selected variant solutionPath>"
         ```
      2. If the result is `ok: false`, tell the user the selected framework package is unavailable or corrupt. If the same family has other available framework variants, offer those first; otherwise offer **Start from scratch** or **Stop**. Do not emit `template_used` for a variant whose package did not validate. If the user falls back to from-scratch, recommend the framework they had selected.
-     3. If the result is `ok: true`, set `CREATION_PATH = "template"` and `SELECTED_TEMPLATE_SOLUTION_ZIP = <localPath>`. Immediately emit the `template_used` telemetry event (fail-closed), then append the template-path pre-import tasks now (see [Progress Tracking](#progress-tracking)); the import-vs-clone tasks are appended after the reinstall policy is known. Continue to the template import sequence below. Do **not** ask project location and do **not** proceed to Phase 2.
+     3. If the result is `ok: true`, set `CREATION_PATH = "template"` and `SELECTED_TEMPLATE_SOLUTION_ZIP = <localPath>`. Run the `template_used` telemetry command silently (fail-closed), then append the template-path pre-import tasks now (see [Progress Tracking](#progress-tracking)); the import-vs-clone tasks are appended after the reinstall policy is known. Continue to the template import sequence below. Do **not** ask project location and do **not** proceed to Phase 2.
+        Do not mention this telemetry command to the user and do not print its output.
         ```bash
         node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
           --eventName template_used \
           --templateId "<SELECTED_TEMPLATE.id>" \
           --templateKind "<SELECTED_TEMPLATE.kind>" \
           --framework "<SELECTED_TEMPLATE_VARIANT.framework>" \
-          --audience "<internal|external from Phase 1 discovery>"
+          --audience "<internal|external from Phase 1 discovery>" \
+          --quiet
         ```
         `--audience` is the site audience captured in Phase 1 (`internal` or `external`), **not** the template's `audience` persona array from the catalog manifest. Do not include site name, URL, subdomain, free-text purpose, or any other user-identifying value.
    - **Start from scratch** or catalog unavailable: set `CREATION_PATH = "from-scratch"` and continue below.
@@ -423,7 +425,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       ```
       The subagent must return the poller's final JSON to the main conversation when the command exits. While it runs, keep the main conversation unblocked and available for user questions; do not proceed to post-import site detection until the subagent reports `Succeeded`, `Failed`, `Canceled`, or `Timeout`.
       The import status page polls `<temp-import-status-dir>/status.json` and updates its preview slideshow, progress bar, and toast. On failure or timeout, it shows an error toast telling the user to check the agent terminal. On success, it shows a completion toast telling the user to check the agent terminal.
-      If the poll result is not `Succeeded`, query the import job (using the `ImportJobKey` returned by `ImportSolutionAsync`) and parse its component-level error XML, following `/import-solution`'s Phase 6 pattern. Do **not** auto-clean up the unmanaged partial import. Emit the `template_import_failure` telemetry event before asking the recovery question:
+      If the poll result is not `Succeeded`, query the import job (using the `ImportJobKey` returned by `ImportSolutionAsync`) and parse its component-level error XML, following `/import-solution`'s Phase 6 pattern. Do **not** auto-clean up the unmanaged partial import. Run the `template_import_failure` telemetry command silently before asking the recovery question. Do not mention this telemetry command to the user and do not print its output:
       ```bash
       node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
         --eventName template_import_failure \
@@ -433,7 +435,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         --audience "<internal|external from Phase 1 discovery>" \
         --outcome failure \
         --errorClass "ImportSolutionAsync" \
-        --errorDescription "<short non-PII failure category or poll status>"
+        --errorDescription "<short non-PII failure category or poll status>" \
+        --quiet
       ```
       `--audience` is the site audience captured in Phase 1 (`internal` or `external`), **not** the template's `audience` persona array from the catalog manifest. Do not include site name, URL, subdomain, free-text purpose, component names, or any other user-identifying value in `errorDescription`.
 
@@ -458,7 +461,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
       If the error is `AttachmentBlocked`, point to `/import-solution` Phase 5b remediation.
       Only continue to the next step when the import poll result is `Succeeded`.
-   9. Mark **Import template solution** as `completed`, then emit the `template_import_success` telemetry event before any activation handoff or seed-data best-effort work:
+   9. Mark **Import template solution** as `completed`, then run the `template_import_success` telemetry command silently before any activation handoff or seed-data best-effort work. Do not mention this telemetry command to the user and do not print its output:
       ```bash
       node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
         --eventName template_import_success \
@@ -466,7 +469,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         --templateKind "<SELECTED_TEMPLATE.kind>" \
         --framework "<SELECTED_TEMPLATE_VARIANT.framework>" \
         --audience "<internal|external from Phase 1 discovery>" \
-        --seedApplied "false"
+        --seedApplied "false" \
+        --quiet
       ```
       `--audience` is the site audience captured in Phase 1 (`internal` or `external`), **not** the template's `audience` persona array from the catalog manifest. Do not include site name, URL, subdomain, free-text purpose, or any other user-identifying value.
    10. Mark **Show imported inactive site** as `in_progress`.
@@ -1161,12 +1165,13 @@ Present a summary table to the user:
    - `/add-seo` — Add meta tags, robots.txt, sitemap.xml, favicon
    - `/add-tests` — Add unit tests (Vitest) and E2E tests (Playwright)
    - `/add-ai-webapi` — Add generative-AI summaries (Search Summary and Data Summarization). **Recommend first when `AI_SUMMARY_PLACEMENTS` from Phase 3 is non-empty** — the pages already carry `POWERPAGES:AI-SLOT` comment markers at the intended insertion points, so the follow-up skill's explore step finds them deterministically and the user gets the AI surface they picked during discovery without any page redesign.
-7. Emit the `create_site_from_scratch` telemetry (fail-closed):
+7. Run the `create_site_from_scratch` telemetry command silently (fail-closed). Do not mention this telemetry command to the user and do not print its output:
    ```bash
    node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
     --eventName create_site_from_scratch \
     --framework "<framework>" \
-    --audience "<audience>"
+    --audience "<audience>" \
+    --quiet
    ```
 
 **Output**: Deployed (or deployment-ready) site with clear next steps
