@@ -48,35 +48,51 @@ function expressionPosition(src, i) {
 // `<` in a .tsx file is ambiguous: JSX, or a TypeScript type-parameter list. Both can appear right
 // after `=`, so position alone cannot separate them:
 //   const updateField = <K extends keyof FormState>(key: K) => { … }   // generic arrow
+//   const pick = <T extends { id: string }>(x: T): T => x;             // generic arrow
 //   const el = <Section title="x">…</Section>;                         // JSX
-// Treating the first as JSX desynchronises the lexer for the rest of the file (its `>` opens a text
-// run that never closes), which is exactly how a whole corpus of valid pages got rejected.
-// Discriminate on what the matching `>` is followed by — `(` for a generic arrow's parameter list —
-// and on `extends`, which is legal in a type-parameter list and not in a JSX tag name.
+//   return <button>(</button>;                                          // JSX
+// Treating JSX as a generic (or vice versa) desynchronises the lexer for the rest of the file.
+//
+// Discriminate STRUCTURALLY rather than on keywords: a generic arrow's type-parameter list is
+// followed by a balanced parameter list and then `=>` (optionally via a return-type annotation).
+// Nothing else has that shape. Keyword heuristics were not enough — `extends` misses `<T,>(x) => x`,
+// and "the matching `>` is followed by `(`" wrongly claimed `<button>(</button>`.
 function looksLikeTypeParams(src, i) {
-  let depth = 0;
   const limit = Math.min(src.length, i + 400);   // type-parameter lists are short; bail rather than scan a file
-  for (let j = i; j < limit; j += 1) {
+  let angle = 0;
+  let brace = 0;                                 // `<T extends { id: string }>` — braces are legal inside
+  let j = i;
+  for (; j < limit; j += 1) {
     const c = src[j];
-    if (c === '<') depth += 1;
-    else if (c === '>') {
-      depth -= 1;
-      if (depth === 0) {
-        const span = src.slice(i, j);
-        if (/\bextends\b/.test(span)) return true;
-        const after = prevSignificantForward(src, j + 1);
-        return after === '(';
-      }
-    } else if (c === '{' || c === '}' || c === ';' || c === '"' || c === "'" || c === '`' || c === '/') {
-      return false;                              // none of these appear in a type-parameter list
+    if (c === '{') brace += 1;
+    else if (c === '}') brace -= 1;
+    else if (c === ';' || c === '`') return false;
+    else if (brace === 0) {
+      if (c === '<') angle += 1;
+      else if (c === '>') { angle -= 1; if (angle === 0) break; }
     }
   }
-  return false;
-}
+  if (j >= limit) return false;                  // never closed within the window
 
-function prevSignificantForward(src, from) {
-  for (let j = from; j < src.length; j += 1) if (!/\s/.test(src[j])) return src[j];
-  return '';
+  // Skip the balanced parameter list that must follow.
+  let k = j + 1;
+  while (k < src.length && /\s/.test(src[k])) k += 1;
+  if (src[k] !== '(') return false;
+  let depth = 0;
+  for (; k < src.length; k += 1) {
+    if (src[k] === '(') depth += 1;
+    else if (src[k] === ')') { depth -= 1; if (depth === 0) { k += 1; break; } }
+  }
+  if (depth !== 0) return false;                 // unbalanced — this was JSX text, not a parameter list
+
+  while (k < src.length && /\s/.test(src[k])) k += 1;
+  if (src[k] === '=' && src[k + 1] === '>') return true;
+  // A return-type annotation may sit between: `<T>(x: T): T => x`. Look for the arrow before the
+  // statement ends.
+  if (src[k] !== ':') return false;
+  const tail = src.slice(k, Math.min(src.length, k + 200));
+  const stop = tail.indexOf(';');
+  return /=>/.test(stop === -1 ? tail : tail.slice(0, stop));
 }
 
 /**
