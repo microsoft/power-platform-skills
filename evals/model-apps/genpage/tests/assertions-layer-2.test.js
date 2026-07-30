@@ -485,3 +485,52 @@ export default function P() {
 }`);
   assert.equal(r.status, 'fail');
 });
+
+// Round-2 hardening: the effect scoper is literal-aware and follows local helpers.
+test('connector caching: a string cannot forge or hide the effect', () => {
+  const inEffect = (body, deps = '[dataReady]') => `
+const INFLIGHT_KEY = "__ppDocsInflight";
+export default function P(){ const dataReady = true;
+  useEffect(() => { ${body} }, ${deps}); return null; }`;
+
+  // A `')))'` string used to close the useEffect call early, hiding the fetch entirely.
+  assert.equal(cacheCheck(inEffect(
+    `const s = ')))'; const w = window as any; w[INFLIGHT_KEY] = w[INFLIGHT_KEY] || props.dataApi.queryConnectorTable("t", {});`
+  )).status, 'pass');
+
+  // The in-flight name appearing only INSIDE a string must not satisfy the de-dupe check.
+  assert.equal(cacheCheck(inEffect(
+    `const label = "window.__DocsInflight"; props.dataApi.queryConnectorTable("t", {}).then(setRows);`
+  )).status, 'fail');
+
+  // A legitimate `'((('` string must not cause a false failure.
+  assert.equal(cacheCheck(inEffect(
+    `const art = '((('; const w = window as any; w[INFLIGHT_KEY] = w[INFLIGHT_KEY] || props.dataApi.queryConnectorTable("t", {});`
+  )).status, 'pass');
+});
+
+test('connector caching: follows a local helper the effect calls', () => {
+  const helper = (inner) => `
+const INFLIGHT_KEY = "__ppDocsInflight";
+export default function P() {
+  const dataReady = true;
+  const loadDocs = async () => { ${inner} };
+  useEffect(() => { loadDocs(); }, [dataReady]);
+  return null;
+}`;
+  // Uncached read hidden in a helper is still a finding.
+  assert.equal(cacheCheck(helper(
+    `const r = await props.dataApi.queryConnectorTable("t", {}); setRows(r);`
+  )).status, 'fail');
+  // De-duped read in a helper passes.
+  assert.equal(cacheCheck(helper(
+    `const w = window as any; w[INFLIGHT_KEY] = w[INFLIGHT_KEY] || props.dataApi.queryConnectorTable("t", {}); setRows(await w[INFLIGHT_KEY]);`
+  )).status, 'pass');
+  // A helper the effect never calls is out of scope.
+  assert.equal(cacheCheck(`
+export default function P() {
+  const unusedLoader = async () => { await props.dataApi.queryConnectorTable("t", {}); };
+  useEffect(() => { setX(1); }, []);
+  return null;
+}`).status, 'skip');
+});

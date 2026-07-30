@@ -20,11 +20,13 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, Task, AskUserQuest
 This skill orchestrates specialist agents across the create and edit flows:
 
 **Create flow:**
-1. **`genpage-connector-builder`** — top-level orchestrator dispatch for connector
-   feature-gating and discovery; writes `connector-bindings.md` + `connectors.json`
-   before the planner consumes the connector contract
-2. **`genpage-planner`** — validates prerequisites, gathers requirements, detects what
-   entities and apps exist, presents a plan for approval, writes `genpage-plan.md`
+1. **`genpage-planner`** — validates prerequisites, gathers requirements, detects what
+   entities and apps exist, presents a plan for approval, writes `genpage-plan.md`.
+   May pause and return `connector_discovery_required` (see 2).
+2. **`genpage-connector-builder`** — top-level orchestrator dispatch for connector
+   feature-gating and discovery; writes `connector-bindings.md` + `connectors.json`.
+   Runs **after** the planner has resolved create-vs-edit and the target environment
+   (discovery is mutating), then the planner is re-invoked with its contract.
 3. **`genpage-entity-builder`** — creates Dataverse entities (tables, columns,
    relationships, choices, sample data) via the plugin's Node.js Web API scripts
 4. **`genpage-page-builder`** — generates one complete `.tsx` file per page; multiple
@@ -200,8 +202,10 @@ Example:
 >
 > If your clarification questions reveal connector-backed data that is not covered
 > by the connector contract above, stop and return
-> `{ "action": "connector_discovery_required", "intent": "<connector need>" }`
-> instead of trying to discover connectors yourself.
+> `{ "action": "connector_discovery_required", "intent": "<connector need>",
+> "resolvedAction": "create" | "edit", "envUrl": "<the environment you resolved>" }`
+> instead of trying to discover connectors yourself. `resolvedAction` and `envUrl`
+> are required — discovery is dispatched against exactly those.
 >
 > Follow the instructions in your agent file. Validate prereqs, confirm auth, ask
 > the new/edit question via AskUserQuestion, then proceed accordingly. Write

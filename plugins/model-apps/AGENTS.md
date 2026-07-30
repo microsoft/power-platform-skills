@@ -277,6 +277,7 @@ scripts/
     op-diff.js                 ← destructive-op diff + --allow-destructive / --non-interactive gating
     artifact-intent.js         ← pure App Spec → canonical SDK intent compiler (new form topology; no SDK calls)
     page-plan.js               ← pure App Spec → plan-document projection used by write-page-plan.js
+    source-literals.js         ← TSX comment/string/template blanker (dependency-free stand-in for a parser)
     sdk-teardown.js            ← app-builder teardown engine (planTeardown is pure)
     sdk-http-client.js         ← az-token HttpClient for the vendored SDK
     spec-lint.js / app-spec.js ← App Spec guardrail lint + validation

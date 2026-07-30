@@ -1,0 +1,101 @@
+'use strict';
+// Contract tests for the literal/comment blanker that backs the promotion gate and the eval's
+// effect scoper. The plugin ships dependency-free, so this hand-rolled lexer stands in for a TSX
+// parser — which makes its FALSE-POSITIVE behaviour (wrongly rejecting a real page) as important as
+// its ability to reject prose. The corpus test below runs it over every .tsx the repo ships.
+
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+const { blankLiterals, hasDefaultExport, hasUnbalancedBrackets } = require('../lib/source-literals.js');
+
+test('blanks comments, strings and template bodies while preserving offsets', () => {
+  const src = 'const a = "hi"; // note\nconst b = `t${x}`; /* c */ const d = 1;';
+  const out = blankLiterals(src);
+  assert.equal(out.length, src.length, 'offsets must map 1:1');
+  assert.ok(!/hi|note|t\$\{x\}|c\b/.test(out.replace('const d = 1;', '')), `leaked: ${out}`);
+  assert.ok(out.includes('const d = 1;'), 'real code survives');
+  assert.equal((out.match(/\n/g) || []).length, 1, 'newlines preserved');
+});
+
+test('an apostrophe in JSX text does not start a string', () => {
+  // This is the failure mode that would make the lexer reject real pages: treating `'` in
+  // `<p>it's fine</p>` as a string opener blanks everything after it.
+  const src = "export default function P(){ return <p>it's fine</p>; }";
+  assert.equal(blankLiterals(src), src, 'nothing should be blanked');
+  assert.ok(hasDefaultExport(src));
+});
+
+test('a quoted string that would span a newline is left alone', () => {
+  // JS strings cannot contain a raw newline, so hitting one means the quote was not an opener.
+  const src = "export default function P(){ return <p>don't</p>; }\nconst after = 1;";
+  assert.ok(blankLiterals(src).includes('const after = 1;'));
+});
+
+test('hasDefaultExport rejects mentions inside strings and comments', () => {
+  for (const bait of [
+    'const prose = "export default GeneratedComponent";\n',
+    "const prose = 'export default P';\n",
+    '/* export default */\nThis is prose\n',
+    '// export default function P(){}\nconst x = 1;\n',
+    'const t = `\nexport default Foo\n`;\n',
+    'export default;\n',
+    'export function P() {}\n',
+    '',
+  ]) {
+    assert.equal(hasDefaultExport(bait), false, `wrongly accepted: ${JSON.stringify(bait)}`);
+  }
+});
+
+test('hasDefaultExport accepts every legitimate spelling', () => {
+  for (const ok of [
+    'export default function P(){ return null; }\n',
+    'export default async function P(){ return null; }\n',
+    'export default class P {}\n',
+    'const P = () => null;\nexport default P;\n',
+    'export default memo(function P(){ return null; });\n',
+    'export default {\n  render() { return null; }\n};\n',
+    'function P(){}\nexport { P as default };\n',
+    "export { default } from './P';\n",
+    '/**\n * export default is required\n */\nexport default function P(){ return null; }\n',
+  ]) {
+    assert.equal(hasDefaultExport(ok), true, `wrongly rejected: ${JSON.stringify(ok)}`);
+  }
+});
+
+test('hasUnbalancedBrackets flags a truncated write but tolerates JSX and generics', () => {
+  assert.equal(hasUnbalancedBrackets('export default function P() {\n  return <div>\n'), true);
+  assert.equal(hasUnbalancedBrackets('const a = (1;\n'), true);
+  // `<` / `>` are never counted: JSX and TS generics make them legitimately unbalanced.
+  assert.equal(hasUnbalancedBrackets('const x: Array<Record<string, number>> = [];\nexport default () => <div a={1} />;\n'), false);
+  // Brackets inside strings/comments must not count.
+  assert.equal(hasUnbalancedBrackets('const s = "{{{"; // )))\nexport default () => null;\n'), false);
+});
+
+test('every committed .tsx the repo ships is accepted (false-positive corpus)', () => {
+  // A false positive here would block a real user mid-build, so this is the load-bearing test:
+  // the samples the worker is told to copy, and every eval fixture artifact.
+  //
+  // Enumerate through `git ls-files` rather than walking the directory: capture-fixture.test.js
+  // creates and deletes transient `capture-cli-test-<timestamp>` fixture directories while this
+  // suite runs, and a plain walk races with it (EBUSY on Windows). Only committed files are the
+  // contract anyway.
+  const listed = execFileSync('git', ['ls-files', '-z', '*.tsx'], {
+    cwd: path.resolve(__dirname, '..', '..', '..', '..'),
+    encoding: 'utf8',
+  }).split('\0').filter(Boolean);
+
+  const repoRoot = path.resolve(__dirname, '..', '..', '..', '..');
+  const files = listed
+    .filter((p) => p.startsWith('plugins/model-apps/samples/') || p.startsWith('evals/model-apps/genpage/fixtures/'))
+    .map((p) => path.join(repoRoot, p));
+  assert.ok(files.length >= 20, `expected a real corpus, found ${files.length}`);
+
+  const rejected = files.filter((f) => {
+    const code = fs.readFileSync(f, 'utf8');
+    return !hasDefaultExport(code) || hasUnbalancedBrackets(code);
+  });
+  assert.deepEqual(rejected, [], 'these real pages would have been rejected');
+});

@@ -42,8 +42,7 @@ const lc = (s) => String(s == null ? '' : s).toLowerCase();
 // them disagree and fail `missing-page-spec`.
 function mdText(value, fallback = '') {
   const s = String(value == null ? '' : value);
-  if (!s.trim()) return fallback;
-  return s
+  const cleaned = s
     .replace(/[\r\n]+/g, ' ')      // no line breaks -> cannot start a new block/section
     // ATX heading syntax only (`#` followed by whitespace). A bare `#` is NOT stripped, because
     // `accentColor: "#0f6cbd"` is a legitimate value and dropping the `#` corrupts the design token.
@@ -53,10 +52,19 @@ function mdText(value, fallback = '') {
     // `~~~` is the other CommonMark fence and `<!--` an HTML comment: an unterminated one would
     // swallow every section AFTER this value, silently truncating the worker's contract.
     .replace(/~/g, '-')
-    .replace(/<!--|-->/g, '')
+    // CommonMark allows raw HTML blocks, so `<script>`/`<div>` would introduce block structure the
+    // plan's heading contract does not control. Escaping the three HTML-significant characters
+    // makes any angle-bracket content render as literal text. This also neutralises `<!--`.
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
     .replace(/\|/g, '/')           // cannot add a table column
     .replace(/\s+/g, ' ')
     .trim();
+  // Fallback AFTER sanitising, not before: a value like "<!--" is non-empty on input but sanitises
+  // to nothing, and returning that empty string produced a plan with an empty `### ` heading that
+  // fails the Layer 1 schema check with `missing-page-spec`.
+  return cleaned || fallback;
 }
 
 // Identity values (page key, entity logical name) end up in `PAGEREF_<key>` tokens and in

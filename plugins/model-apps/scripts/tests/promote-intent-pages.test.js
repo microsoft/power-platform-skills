@@ -65,16 +65,19 @@ test('ONE failing page aborts the whole promotion and leaves the spec byte-ident
 });
 
 test('rejects Sol-class prose that only LOOKS like a module', () => {
-  // A plain `export default` substring search accepted every one of these, promoting prose as a page.
+  // A plain `export default` substring search — even over pageref-resolver's stripNonCode, which
+  // preserves ordinary string bodies — accepted every one of these, promoting prose as a page.
   for (const [name, code, expected] of [
     ['empty', '   \n', /file is empty/],
     ['no default export', 'export function P() {}\n', /no real `export default/],
     ['fenced prose', '```tsx\nexport default function P(){}\n```\n', /markdown code fence/],
     ['tilde-fenced prose', '~~~tsx\nexport default function P(){}\n~~~\n', /markdown code fence/],
     ['commented-out export', '/* export default */\nThis is prose\n', /no real `export default/],
-    ['export default in a string', 'const bait = "export default";\nThis is prose\n', /no real `export default/],
+    ['export default in a string', 'const bait = "export default GeneratedComponent";\n', /no real `export default/],
+    ['export default in a template', 'const t = `\nexport default Foo\n`;\n', /no real `export default/],
     ['line-commented export', '// export default function P(){}\nThis is prose\n', /no real `export default/],
     ['empty default export', 'export default;\n', /no real `export default/],
+    ['truncated write', 'export default function P() {\n  return <div>\n', /truncated/],
   ]) {
     const dir = makeWorkspace(
       { app: { name: 'A' }, pages: [{ key: 'overview', name: 'Overview', source: { kind: 'intent' } }] },
@@ -93,6 +96,8 @@ test('accepts the legitimate default-export forms a worker really emits', () => 
     ['wrapped in memo', 'import { memo } from "react";\nexport default memo(function P(){ return <div/>; });\n'],
     ['object-ish default', 'export default {\n  render() { return null; }\n};\n'],
     ['after a doc comment mentioning export default', '/**\n * export default is required\n */\nexport default function P(){ return <div/>; }\n'],
+    ['aliased default export', 'function P(){ return <div/>; }\nexport { P as default };\n'],
+    ['JSX text with an apostrophe', "export default function P(){ return <p>it's fine</p>; }\n"],
   ]) {
     const dir = makeWorkspace(
       { app: { name: 'A' }, pages: [{ key: 'overview', name: 'Overview', source: { kind: 'intent' } }] },

@@ -16,6 +16,11 @@
 
 const path = require('node:path');
 const fs = require('node:fs');
+// Literal/comment blanking is shared with the plugin (scripts/lib/source-literals.js) rather than
+// re-implemented: it is a pure lexer over TSX text, not part of the thing this harness judges, and
+// two divergent copies of a tokenizer is exactly how a false-green assertion creeps back in. Evals
+// never ship, so reaching into the plugin directory here is in-repo only.
+const { blankLiterals } = require('../../../../plugins/model-apps/scripts/lib/source-literals.js');
 
 let _verifiedIcons = null;
 function getVerifiedIcons() {
@@ -279,29 +284,79 @@ ASSERTIONS.set(
   () => skip('Rule 14 batched-setState requires AST analysis')
 );
 
+// A connector read is frequently factored into a local helper that the effect calls:
+//   const loadDocs = async () => { ... queryConnectorTable ... };
+//   useEffect(() => { loadDocs(); }, [dataReady]);
+// Scoping strictly to the effect body would miss that entirely (a false GREEN). Follow one level:
+// append the bodies of top-level declarations the effect actually calls. One level covers the shapes
+// real pages use, and going deeper without an AST costs more correctness than it buys.
+function localHelperBodies(bare) {
+  const bodies = new Map();
+  const decl = /(?:^|\n)\s*(?:const|let|var|async\s+function|function)\s+([A-Za-z_$][\w$]*)\s*(?:=|\()/g;
+  let m;
+  while ((m = decl.exec(bare)) !== null) {
+    // Walk to the end of the declaration. Stopping at the first balanced bracket group is wrong for
+    // `const f = async () => { … }`: the `()` closes immediately and the arrow BODY — the part that
+    // holds the fetch — would be dropped. So keep going until either the closing `}` of a real body
+    // or a depth-0 `;` (for a value declaration with no body at all).
+    let i = m.index + m[0].length - 1;
+    let depth = 0;
+    let sawBody = false;
+    for (; i < bare.length; i += 1) {
+      const c = bare[i];
+      if (c === '(' || c === '{' || c === '[') { depth += 1; if (c === '{') sawBody = true; continue; }
+      if (c === ')' || c === '}' || c === ']') {
+        depth -= 1;
+        if (depth <= 0 && sawBody && c === '}') { i += 1; break; }
+        continue;
+      }
+      if (depth <= 0 && c === ';') { i += 1; break; }
+    }
+    bodies.set(m[1], bare.slice(m.index, i));
+  }
+  return bodies;
+}
+
+function withCalledHelpers(callText, bare) {
+  let out = callText;
+  for (const [name, body] of localHelperBodies(bare)) {
+    if (body === callText) continue;                       // never re-append the effect itself
+    if (new RegExp(`\\b${name}\\s*\\(`).test(callText)) out += `\n${body}`;
+  }
+  return out;
+}
+
 // Extract the `useEffect(...)` calls (body + dependency array) that contain a match for `inner`.
 // Whole-file regexes cannot tell whether a cache, an in-flight key and a readiness dep belong to the
 // SAME effect as the fetch — an unrelated `__SomethingCache` elsewhere in the file would make an
 // entirely uncached fetch pass. Brace-matching from `useEffect(` keeps the check scoped to the
-// effect that actually performs the read.
+// effect that actually performs the read, plus the local helpers that effect calls.
+//
+// Brace matching runs over LITERAL-BLANKED source: a string like `')))';` inside the effect would
+// otherwise close the call early and truncate the body (making the effect invisible), and a string
+// containing `window.__DocsInflight` would satisfy the de-dupe check without any real de-dupe.
+// Offsets in the blanked text map 1:1 onto the original, so spans stay valid.
 // Returns [{ body, deps }] where `deps` is the raw text between the `[` and `]` of the dep array.
 function effectsContaining(content, inner) {
   const out = [];
+  const bare = blankLiterals(content);
   const re = /\buseEffect\s*\(/g;
   let m;
-  while ((m = re.exec(content)) !== null) {
+  while ((m = re.exec(bare)) !== null) {
     let i = m.index + m[0].length;
     let depth = 1;              // we are inside useEffect(
-    for (; i < content.length && depth > 0; i += 1) {
-      const c = content[i];
+    for (; i < bare.length && depth > 0; i += 1) {
+      const c = bare[i];
       if (c === '(' || c === '{' || c === '[') depth += 1;
       else if (c === ')' || c === '}' || c === ']') depth -= 1;
     }
-    const call = content.slice(m.index, i);
-    if (!inner.test(call)) continue;
-    // The dependency array is the last `[...]` before the closing paren.
+    const call = bare.slice(m.index, i);
+    const scope = withCalledHelpers(call, bare);
+    if (!inner.test(scope)) continue;
+    // The dependency array belongs to the useEffect call ITSELF — read it from `call`, never from
+    // the appended helper text.
     const dep = call.match(/,\s*\[([\s\S]*?)\]\s*\)\s*;?\s*$/);
-    out.push({ body: call, deps: dep ? dep[1] : null });
+    out.push({ body: scope, deps: dep ? dep[1] : null });
   }
   return out;
 }

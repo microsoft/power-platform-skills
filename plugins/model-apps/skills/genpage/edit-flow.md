@@ -128,6 +128,9 @@ Invoke the `genpage-edit-planner` agent via the `Task` tool. Pass:
 - The working directory (absolute path)
 - The plugin root: `${PLUGIN_ROOT}`
 - The app-id and page-id
+- **The environment URL** — the `envUrl` this edit session resolved. Required: the planner
+  echoes it back if it has to ask for connector discovery, and discovery must target the
+  environment being edited, not whatever `pac auth` happens to be pointing at.
 - The download directory: `<working-dir>/<page-id>/`
 - The connector action: preserve, add, replace, discover, or clear
 - The connector contract: the full body of `<working-dir>/connector-bindings.md`

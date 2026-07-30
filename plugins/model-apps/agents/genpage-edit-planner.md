@@ -32,6 +32,8 @@ You will be invoked by the `/genpage` skill with a prompt that includes:
 - The working directory (absolute path)
 - The plugin root directory (`${PLUGIN_ROOT}`)
 - The app-id and page-id of the page being edited
+- The environment URL (`envUrl`) of the environment being edited — you never resolve this
+  yourself; echo it back verbatim if you have to request connector discovery
 - The download directory: `<working-dir>/<page-id>/`
 
 ---

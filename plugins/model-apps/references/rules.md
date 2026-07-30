@@ -335,37 +335,40 @@ const isDark =
 const [isDarkMode, setIsDarkMode] = useState(isDark);
 ```
 
-#### Multi-page builds: use `PAGEREF_<key>` placeholders
+#### Multi-page builds: use `PAGEREF_<token>` placeholders
 
 In a multi-page deployment, page GUIDs don't exist until after first upload. Use a
-`PAGEREF_<key>` placeholder as the `pageId` — where `<key>` is the **stable key** of the
-sibling page (the App Spec `pages[].key`, also used by `navigatesTo[].targetKey`). The build
-replaces these with real GUIDs in a resolved deployment copy after all pages are deployed;
-your canonical `.tsx` keeps the symbolic token (the build never writes a GUID back into it).
+`PAGEREF_<token>` placeholder as the `pageId`. The build replaces these with real GUIDs in a
+resolved deployment copy after all pages are deployed; your canonical `.tsx` keeps the symbolic
+token (the build never writes a GUID back into it).
+
+**The token depends on the caller — read the plan's `## Environment` `Mode:` line:**
+
+| `Mode:` | Token | Why |
+|---------|-------|-----|
+| `app-builder` | the target page's **`Key`** (the `Key` column in `## Pages`, = App Spec `pages[].key` = `navigatesTo[].targetKey`) | Rename-stable, and a downloaded page's file is a storage path (`pages/<guid>/page.tsx`) whose stem means nothing |
+| absent (standalone `/genpage`) | the target page's **file name without `.tsx`**, exactly as in the `File` column | There is no App Spec, so there are no keys and the plan has no `Key` column; Phase 6.5 builds a filename-stem → page-id map |
 
 ```typescript
-// Navigating to a sibling page — use its stable KEY, and pass any custom id in `data` (never recordId)
+// Navigating to a sibling page — pass any custom id in `data` (never recordId)
 xrm.Navigation.navigateTo({
     pageType: "generative",
-    pageId: "PAGEREF_pet-gallery",   // <key> of the target page; replaced with the real GUID post-deploy
+    pageId: "PAGEREF_pet-gallery",   // app-builder: target's Key. standalone: target's file stem.
     data: { selectedPetId: selectedId },   // custom ids go in data (read as pageInput?.data?.selectedPetId)
 });
 ```
 
-The placeholder format is `PAGEREF_` followed by the target page's stable **key** (e.g. a page
-with `"key": "pet-gallery"` → `PAGEREF_pet-gallery`). The key is rename-stable; a filename or
-display name is not.
-
 **Must be quoted, and it is the pageId.** The build's single structural resolver only rewrites a
-`PAGEREF_<key>` that appears as the **double-quoted `pageId:` value of a `pageType:"generative"`
+`PAGEREF_<token>` that appears as the **double-quoted `pageId:` value of a `pageType:"generative"`
 `navigateTo` call**. Always emit it exactly there — never single-quoted, back-ticked, concatenated,
 or as a decoy string elsewhere (the pre-deploy scan **rejects** a malformed nav ref and any parity
-mismatch). Every `PAGEREF_<key>` you emit must have a matching `navigatesTo` entry in the page's
-spec, and every declared `navigatesTo.targetKey` must appear as a real nav pageId in the source
-(the build enforces exact parity, and verification confirms each edge resolves to the actual target).
+mismatch). In `app-builder` mode every `PAGEREF_<key>` you emit must have a matching `navigatesTo`
+entry in the page's spec, and every declared `navigatesTo.targetKey` must appear as a real nav
+pageId in the source (the build enforces exact parity, and verification confirms each edge resolves
+to the actual target).
 
-**Every `PAGEREF_<key>` target page must be sitemap-placed.** <a id="PAGEREF_sitemap_placement"></a>
-A page referenced by a `PAGEREF_<key>` placeholder must have a matching `page` subarea in the
+**Every `PAGEREF_` target page must be sitemap-placed.** <a id="PAGEREF_sitemap_placement"></a>
+A page referenced by a `PAGEREF_` placeholder must have a matching `page` subarea in the
 app's `appShell`. Navigation-only pages — reachable only via a `PAGEREF_` call but absent from the
 app sitemap — are not supported; validation rejects them. A "detail" page that receives a caller-
 supplied record id or other context is a normal sitemap page; it reads its input via

@@ -21,29 +21,32 @@ const path = require('node:path');
 const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { migrateAppSpec } = require('./lib/app-spec.js');
 const { pageKey, pageFile } = require('./lib/page-plan.js');
-const { navReferencedKeys, navMalformedRefs, navTargetParity, stripNonCode } = require('./lib/pageref-resolver.js');
+const { navReferencedKeys, navMalformedRefs, navTargetParity } = require('./lib/pageref-resolver.js');
+const { hasDefaultExport, hasUnbalancedBrackets } = require('./lib/source-literals.js');
 
-// A generated page must be a real React module. We deliberately do NOT typecheck here (that is the
-// build's job) — this is the cheap structural gate that catches the common worker failures: an empty
-// file, a truncated write, or prose returned instead of code.
+// A generated page must be a real React module. We deliberately do NOT typecheck here (the plugin
+// ships with no dependencies, so there is no TS parser to call, and typechecking is the build's
+// job) — this is the structural gate that catches the realistic worker failures: an empty file, a
+// truncated write, or prose returned instead of code.
 //
-// The `export default` search runs over COMMENT- AND STRING-STRIPPED source. A plain substring match
-// accepted all of these, promoting prose as if it were a page:
-//   /* export default */\nThis is prose
-//   const bait = "export default";\nThis is prose
-// stripNonCode blanks comments and string/template bodies in place (same length, so offsets hold),
-// so only a real declaration survives. The trailing `[\w$({[*]` requires something to actually be
-// exported, which rejects the parse-error form `export default;`.
+// Every check runs over literal-blanked source (see lib/source-literals.js). A substring search —
+// even one over pageref-resolver's stripNonCode, which deliberately PRESERVES ordinary string
+// bodies — accepted prose that merely MENTIONS an export:
+//   /* export default */                                -> promoted
+//   const prose = "export default GeneratedComponent";   -> promoted
+// Promotion is sticky (the page is then marked implemented and skipped on the next run), so a
+// fail-open here corrupts the state the user would otherwise retry from.
 function structuralProblems(code) {
   const out = [];
   if (!code.trim()) return ['file is empty'];
-  const bare = stripNonCode(code);
-  if (!/\bexport\s+default\s+[\w$({[*]/.test(bare)) {
-    out.push('no real `export default <component>` — the host cannot mount the page');
+  if (!hasDefaultExport(code)) {
+    out.push('no real `export default` (or `export { X as default }`) — the host cannot mount the page');
+  }
+  if (hasUnbalancedBrackets(code)) {
+    out.push('unbalanced brackets — the file looks truncated');
   }
   // A worker that answers in prose usually still opens a fence; a real .tsx never contains one.
-  // Both CommonMark fence markers count (``` and ~~~), and the fence check must run on the ORIGINAL
-  // text because stripNonCode blanks the backtick form.
+  // Both CommonMark fence markers count.
   if (/^\s*(```|~~~)/m.test(code)) out.push('contains a markdown code fence — the worker returned prose, not a module');
   return out;
 }
@@ -159,19 +162,25 @@ function main() {
   }
   // Write via a temp file + rename so a crash mid-write cannot truncate the user's spec.
   // fs.renameSync overwrites an existing destination on both POSIX and Windows (libuv uses
-  // MoveFileEx with MOVEFILE_REPLACE_EXISTING), so no unlink-first dance is needed.
+  // MoveFileEx with MOVEFILE_REPLACE_EXISTING), so no unlink-first dance is needed. The temp name
+  // includes the pid so two concurrent promotions cannot clobber each other's staging file.
   //
   // Compare-and-swap: validating N pages involves N file reads, so a user editing app-spec.json in
   // Maker/an editor meanwhile would have their change silently overwritten by our stale in-memory
-  // copy. Re-read immediately before the rename and abort if it moved. The temp file name includes
-  // the pid so two concurrent promotions cannot clobber each other's staging file.
+  // copy. STAGE FIRST, then re-read and compare in the last instant before the rename — doing the
+  // compare before writing the temp file leaves the whole serialize+write window unguarded, which
+  // is the larger of the two. This is a narrow-window check, not a lock: without OS-level file
+  // locking (unavailable portably in node) a write landing between the compare and the rename is
+  // still possible. That residual is acceptable because promotion is operator-driven and rerunnable,
+  // and the check closes the window that is actually long (page validation).
   const tmp = `${specPath}.${process.pid}.promote.tmp`;
   try {
+    fs.writeFileSync(tmp, JSON.stringify(raw, null, 2) + '\n', 'utf8');
     if (fs.readFileSync(specPath, 'utf8') !== originalText) {
-      process.stderr.write(`app spec changed while pages were being validated; nothing was written — re-run promotion\n`);
+      fs.unlinkSync(tmp);
+      process.stderr.write('app spec changed while pages were being validated; nothing was written — re-run promotion\n');
       process.exit(3);
     }
-    fs.writeFileSync(tmp, JSON.stringify(raw, null, 2) + '\n', 'utf8');
     fs.renameSync(tmp, specPath);
   } catch (e) {
     try { fs.unlinkSync(tmp); } catch { /* nothing to clean up */ }
