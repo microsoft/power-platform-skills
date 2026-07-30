@@ -128,7 +128,6 @@ rather than a smaller `ToBeAdded`.
 |------|------|
 | `governance-mapping.json` | **Single source of truth** — policies, shorthands, intent→policyValue, cascade data, effect-line templates, state colors/paraphrases. |
 | `commands.md` | Script flags, response shapes, exit codes, polling semantics. |
-| `intent-training-cases.json` | Parser training/validation cases. |
 
 ### `SKILL.md`
 

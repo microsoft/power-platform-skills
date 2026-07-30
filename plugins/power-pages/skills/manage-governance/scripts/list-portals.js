@@ -102,6 +102,19 @@ async function listViaGateway(args) {
   const ctx = resolveGovernanceContext(args.envId);
   if (ctx.error) fail(ctx.error, 2);
 
+  const { portals, error } = await fetchPortalsPaged(ctx);
+  if (error) fail(error, 1);
+  return { transport: 'gateway', portals };
+}
+
+// Page through GET /websites for a PRE-RESOLVED context and return the
+// normalized portal records. Split out from listViaGateway so other scripts
+// (e.g. fetch-env-status.js) can fetch the site list as ONE promise inside a
+// parallel Promise.all batch — sharing the same governance context/token
+// instead of re-resolving it. Returns { portals, error }: a non-null `error`
+// string means a page read failed (the caller decides whether to fail() or
+// tolerate a partial list); `portals` always holds whatever was read so far.
+async function fetchPortalsPaged(ctx) {
   const portals = [];
   let skip;
   for (let page = 0; page < MAX_PAGES; page += 1) {
@@ -109,7 +122,7 @@ async function listViaGateway(args) {
     if (skip !== undefined) query.skip = String(skip);
     const res = await request({ context: ctx, method: 'GET', path: '/websites', query });
     if (!res.ok) {
-      fail(`List portals failed (${res.statusCode}): ${res.error?.message || ''}`, 1);
+      return { portals, error: `List portals failed (${res.statusCode}): ${res.error?.message || ''}` };
     }
     const body = res.body && typeof res.body === 'object' ? res.body : {};
     for (const site of body.value || []) {
@@ -120,7 +133,7 @@ async function listViaGateway(args) {
     if (advance == null || advance <= (skip ?? 0)) break;
     skip = advance;
   }
-  return { transport: 'gateway', portals };
+  return { portals };
 }
 
 async function main() {
@@ -137,6 +150,6 @@ async function main() {
   );
 }
 
-module.exports = { nextSkipFrom, normalize, compareForDisplay, orderPortalsForDisplay, DISPLAY_LIMIT };
+module.exports = { nextSkipFrom, normalize, compareForDisplay, orderPortalsForDisplay, fetchPortalsPaged, DISPLAY_LIMIT };
 
 runCli(module, main);

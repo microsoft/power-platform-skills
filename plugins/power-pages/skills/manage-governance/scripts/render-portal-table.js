@@ -11,6 +11,7 @@
 // whether or not color is on.
 
 const { foregroundColor, shouldColor } = require('./colors');
+const { pad, border } = require('./table');
 
 // Normalize a state value to the canonical 'Enabled' / 'Disabled' label.
 // Accepts booleans (true=Enabled), or strings like 'enabled'/'disabled'/
@@ -37,11 +38,6 @@ function iconForState(label) {
   if (label === 'Enabled') return '\u{1F7E2}';
   if (label === 'Disabled') return '\u{1F534}';
   return '';
-}
-
-function pad(str, width) {
-  const s = String(str == null ? '' : str);
-  return s + ' '.repeat(Math.max(0, width - s.length));
 }
 
 // Escape a cell for a GitHub-flavored Markdown table: a literal `|` would be
@@ -78,11 +74,6 @@ function renderPortalTableMarkdown(portals, opts = {}) {
   const sep = '| ' + headers.map(() => '---').join(' | ') + ' |';
   const body = rows.map((r) => '| ' + r.map(mdCell).join(' | ') + ' |');
   return [head, sep, ...body].join('\n');
-}
-
-function border(widths, left, mid, right, fill) {
-  const f = fill || '-';
-  return left + widths.map((w) => f.repeat(w + 2)).join(mid) + right;
 }
 
 /**

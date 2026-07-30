@@ -12,6 +12,8 @@
 const CURRENT_TAG = '<-- CURRENT SELECTION (default)';
 const CURRENT_MARK = '>';
 
+const { pad, border } = require('./table');
+
 // Resolve the tenant-default env id straight from the list-envs.js payload so
 // the picker can pre-flag a sensible default WITHOUT a second round-trip. The
 // list already carries `type: "Default"` for the tenant's default environment
@@ -27,21 +29,6 @@ function resolveDefaultEnvId(envs) {
     (e) => e && typeof e.type === 'string' && e.type.toLowerCase() === 'default'
   );
   return def && def.envId ? def.envId : null;
-}
-
-// Pad an ASCII string to a fixed visible width (right side).
-function pad(str, width) {
-  const s = String(str == null ? '' : str);
-  return s + ' '.repeat(Math.max(0, width - s.length));
-}
-
-// Build a horizontal border segment given the 4 column widths.
-function border(widths, left, mid, right) {
-  return (
-    left +
-    widths.map((w) => '-'.repeat(w + 2)).join(mid) +
-    right
-  );
 }
 
 /**

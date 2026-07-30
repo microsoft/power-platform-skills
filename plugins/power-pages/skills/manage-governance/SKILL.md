@@ -22,8 +22,6 @@ model: opus
 
 > **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
-
 # Manage Power Pages Governance Policies
 
 Apply and inspect Power Pages tenant-level governance policies. Twenty-one policies are supported today. One toggles Maker Copilot for existing sites, nine enable/disable Power Pages authentication features (sign-in protocols, social identity providers, local login, and external providers), and eleven govern Power Pages Copilot experiences and site-level controls:
@@ -1277,62 +1275,57 @@ user sees every portal's name, URL, Site ID, and 🟢/🔴 state.
 
 Steps:
 
-1. Fetch the env's full site list:
+1. Fetch **everything in one parallel batch** with **`fetch-env-status.js`** —
+   the single script that answers Fetch Env. It resolves the token once, then
+   fires the env's **full site list** (`GET /websites`) **and** the env value +
+   per-site membership for the policy **and every gating parent** all at once in
+   one `Promise.all` wave, and classifies every portal's **effective** state
+   locally:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-portals.js" \
-     --envId "<ENV_ID>"
-   ```
-
-2. Compute every site's state in **one parallel batch** with
-   **`get-effective-status.js`** — the single canonical state read for this
-   skill. Pass the `list-portals.js` output as `--portalsFile`:
-   ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
+   node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/fetch-env-status.js" \
      --policy "<POLICY>" \
-     --portalsFile <path-to-list-portals-output> \
      --envId "<ENV_ID>"
    ```
-   This script fires the env value **and** the per-site membership list for the
-   policy — **and, for a gated child, for every gating parent** — all at once in
-   a single `Promise.all` wave (2 reads for a leaf policy, 4 for a protocol, 6
-   for a social IdP), then classifies every portal locally. It returns
-   `{ ..., portals: [{ name, url, portalId, state, own, parents }] }` where
-   `state` is the **effective** boolean (child own AND every gating parent) —
-   exactly the shape `render-portal-table.js` consumes.
+   Total reads: `1 (websites) + policies × 2` — 3 for a leaf policy, 5 for a
+   protocol, 7 for a social IdP — **all issued concurrently**. It returns
+   `{ status, policy, envId, envValue, dependencies, apiCalls, portalCount,
+   effectiveEnabledCount, headline, portals: [{ name, url, portalId, state, own,
+   parents }] }` where `state` is the **effective** boolean (child own AND every
+   gating parent) — exactly the shape `render-portal-table.js` consumes, and
+   `headline` is the pre-computed Phase 4.3.1 headline.
 
    > **Never issue the reads yourself, and never issue them one after another.**
-   > Do **NOT** call `get-env.js`, `get-details.js`, or `get-portal.js` by hand
-   > (and never in a per-policy or per-portal loop) to build this table — that
-   > re-creates the old sequential 4–6-round-trip flow this script exists to
-   > replace. `get-effective-status.js` is the **only** approved way to read
-   > per-site state for the status table; a failed `get-details` inside it
-   > degrades to an empty list, and only a failed env read is fatal (surfaced as
-   > exit code 2 for sign-in, 1 otherwise).
+   > Do **NOT** call `list-portals.js`, `get-env.js`, `get-details.js`,
+   > `get-portal.js`, or `get-effective-status.js` by hand (and never in a
+   > per-policy or per-portal loop) to build this table — that re-creates the old
+   > multi-step sequential flow this script exists to replace.
+   > `fetch-env-status.js` is the **only** approved way to read the Fetch Env
+   > status; a failed `get-details` inside it degrades to an empty list, and only
+   > a failed site-list read or env read is fatal (surfaced as exit code 2 for
+   > sign-in, 1 otherwise). An env with **zero sites** is not an error — it
+   > returns an empty `portals` array; say so explicitly to the user.
 
-3. Render the returned `portals` array through the helper in **`--unicode`**
+2. Render the returned `portals` array through the helper in **`--unicode`**
    mode (add `--no-color`), emitting its output **verbatim inside a fenced code
-   block** (the Unicode box needs monospace to align). You can pipe the script
-   straight into the renderer:
+   block** (the Unicode box needs monospace to align). Pipe the script straight
+   into the renderer:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
-     --policy "<POLICY>" --portalsFile <path-to-list-portals-output> --envId "<ENV_ID>" \
+   node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/fetch-env-status.js" \
+     --policy "<POLICY>" --envId "<ENV_ID>" \
      | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --unicode --no-color
    ```
    The rendered box shows **exactly** the five columns `# | Name | URL | Site ID
    | State`, and the State cell MUST show the 🟢 / 🔴 icon (helper default).
    For a **gated child** this is still the same 5-column box — the `state` is the
    effective value, the parent chain is computed inside the script but **never**
-   rendered as extra columns. Pick the headline from the effective status:
+   rendered as extra columns. Use the script's `headline` field verbatim (green
+   when at least one site is effectively Enabled, red when off everywhere).
 
-   - all sites 🟢 → *"This Governance setting is 🟢 Enabled for these Sites:"*
-   - all sites 🔴 → *"This Governance setting is 🔴 Disabled for these Sites:"*
-   - mixed → *"This Governance setting is 🟢 Enabled for these Sites:"* (live sites 🟢, the rest 🔴)
-
-   If a policy-list id does NOT appear in `list-portals` (e.g., the site was
+   If a policy-list id does NOT appear in the site list (e.g., the site was
    deleted after being added), still show it in the table with `(site not
    found)` for the name and an empty URL.
 
-4. Finally, give the highlighted (bold + icon) one-line summary from Phase 4.3
+3. Finally, give the highlighted (bold + icon) one-line summary from Phase 4.3
    above. For a gated child you MAY explain in prose WHY a site is effectively
    off (using the script's `own` / `parents` fields, e.g. *"Facebook is on for
    Portal_2 but not active because External Auth is off there"*) — but the box

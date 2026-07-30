@@ -22,6 +22,7 @@ All scripts accept `--help` to print full usage.
 - [`get-portal.js`](#get-portaljs)
 - [`get-details.js`](#get-detailsjs)
 - [`resolve-portal-availability.js`](#resolve-portal-availabilityjs)
+- [`fetch-env-status.js`](#fetch-env-statusjs)
 - [`get-effective-status.js`](#get-effective-statusjs)
 - [`render-status-table.js`](#render-status-tablejs)
 - [`parse-portal-input.js`](#parse-portal-inputjs)
@@ -31,46 +32,22 @@ All scripts accept `--help` to print full usage.
 
 ## Supported policies
 
-The skill only accepts these policy strings today (single source of truth
-in `scripts/policies.js`):
-
-| Policy string | Plain-language meaning |
-|---------------|------------------------|
-| `EnableMakerCopilotForExistingSites` | Turns Maker Copilot on for existing Power Pages sites in the environment. |
-| `EnableProtocolOpenIdConnect` | Enables/disables the OpenID Connect sign-in protocol on Power Pages sites. |
-| `EnableProtocolSAML20` | Enables/disables the SAML 2.0 sign-in protocol on Power Pages sites. |
-| `EnableProtocolWsFederation` | Enables/disables the WS-Federation sign-in protocol on Power Pages sites. |
-| `EnableProtocolOpenAuth` | Enables/disables the OAuth 2.0 sign-in protocol on Power Pages sites. |
-| `EnableIdpOAuthFacebook` | Enables/disables Facebook sign-in on Power Pages sites. |
-| `EnableIdpOAuthGoogle` | Enables/disables Google sign-in on Power Pages sites. |
-| `EnableIdpOAuthMicrosoft` | Enables/disables Microsoft sign-in on Power Pages sites. |
-| `EnableAuthenticationLocalLogin` | Enables/disables local (username & password) sign-in on Power Pages sites. |
-| `EnableExternalAuthProviders` | Enables/disables all external (social / federated) identity providers on Power Pages sites. |
-| `PowerPages_AllowMakerCopilotsForNewSites` | Allows/blocks Maker Copilots on newly created Power Pages sites. |
-| `PowerPages_AllowMakerCopilotsForExistingSites` | Allows/blocks Maker Copilots on existing Power Pages sites. |
-| `PowerPages_AllowProDevCopilotsForSites` | Allows/blocks pro-developer Copilots on Power Pages sites. |
-| `PowerPages_AllowSiteCopilotForSites` | Allows/blocks the site Copilot on Power Pages sites. |
-| `PowerPages_AllowSearchSummaryCopilotForSites` | Allows/blocks the search-summary Copilot on Power Pages sites. |
-| `PowerPages_AllowListSummaryCopilotForSites` | Allows/blocks the list-summary Copilot on Power Pages sites. |
-| `PowerPages_AllowIntelligentFormsCopilotForSites` | Allows/blocks the intelligent-forms Copilot on Power Pages sites. |
-| `PowerPages_AllowSummarizationAPICopilotForSites` | Allows/blocks the summarization-API Copilot on Power Pages sites. |
-| `PowerPages_AllowProDevCopilotsForEnvironment` | Allows/blocks pro-developer Copilots for the Power Pages environment. |
-| `PowerPages_AllowNonProdPublicSites` | Allows/blocks non-production public Power Pages sites. |
-| `PowerPages_DisableExtSvcCallsFromServerLogic` | Controls external service calls from Power Pages server-side logic. |
-
-The nine `Enable*` authentication policies (`EnableProtocol*`, `EnableIdp*`,
-`EnableAuthenticationLocalLogin`, `EnableExternalAuthProviders`) and the eleven
-`PowerPages_*` Copilot / site-control policies share the
-**same configuration and API contract** as `EnableMakerCopilotForExistingSites`:
-uniform governance with the canonical `policyValue` vocabulary
-(`All` / `None` / `Include` / `Exclude`) on read/normalize and the env-level
-`applyTo` (`*Sites`) enum vocabulary on write. The eleven `PowerPages_*`
-policies are **independent leaves** — no parent/child availability gate and no
-cascade, so effective state equals own state.
-
-A new policy is added by appending its string to `SUPPORTED_POLICIES` in
-`scripts/policies.js` — every script validates against that list before
+The skill validates every policy string against the frozen `SUPPORTED_POLICIES`
+array in `scripts/policies.js` — the single code-level source of truth. Add a
+policy by appending its string there; every script checks that list before
 calling the API.
+
+The **plain-language meaning, user shorthands, availability dependencies, and
+cascade data for each policy live in `references/governance-mapping.json`**
+(and are surfaced to the user via the SKILL.md policy table). This file
+deliberately does **not** re-list them — read the JSON so there is one source
+of truth rather than a third copy that can drift.
+
+All policies share the **same API contract** regardless of what they govern:
+uniform governance with the canonical `policyValue` vocabulary
+(`All` / `None` / `Include` / `Exclude`). The eleven `PowerPages_*` Copilot /
+site-control policies are **independent leaves** — no parent/child availability
+gate and no cascade — so their effective state equals their own state.
 
 > **Read-value vocabulary.** The nine auth `Enable*` policies report their
 > environment-level state on read using the
@@ -668,6 +645,95 @@ what the orchestrator uses in Fetch Env (4.3.1), the effective-status build
 | `0`  | Success |
 | `2`  | Sign-in required |
 | `1`  | Any other failure |
+
+---
+
+## `fetch-env-status.js`
+
+The **one-shot Fetch Env status** script — the single command the skill triggers
+to answer *"what is the status of `<policy>` in `<env>`?"* (SKILL.md Phase
+4.3.1). It performs the **whole** Fetch Env in **one parallel wave** and emits a
+render-ready payload, so the orchestrator just runs it and pipes `.portals` into
+`render-portal-table.js`.
+
+### Why (folds the site-list fetch into the parallel batch)
+
+The previous Fetch Env flow was **two steps**: `list-portals.js` FIRST (a
+separate `GET /websites` round-trip), THEN `get-effective-status.js` for the
+governance reads. This script folds the site-list fetch into the **same**
+`Promise.all` as the governance reads — the `/websites` page(s) and every
+`getEnv` + `getDetails` (for the policy and every gating parent) are all fired
+concurrently against **one** shared context/token — removing that extra serial
+round-trip. Total latency ≈ one round-trip regardless of parent count.
+
+Total reads: `1 (websites) + policies × 2` — **3** for a leaf policy, **5** for a
+protocol, **7** for a social IdP — all issued in parallel.
+
+### Usage
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/fetch-env-status.js" \
+  --policy <name> \
+  [--envId <guid>]
+```
+
+- `--policy` — any of the supported governance policy names.
+- `--envId` — optional; falls back to the current PAC env.
+
+Unlike `get-effective-status.js`, this script does **not** take `--portalsFile`
+— it fetches the site list itself as part of the batch.
+
+### Response (stdout, JSON)
+
+The `.portals` array is exactly what `render-portal-table.js` consumes, so pipe
+this straight into it:
+
+```json
+{
+  "status": "ok",
+  "policy": "EnableIdpOAuthFacebook",
+  "envId": "<guid>",
+  "envValue": "None",
+  "dependencies": ["EnableExternalAuthProviders", "EnableProtocolOpenAuth"],
+  "apiCalls": 7,
+  "portalCount": 5,
+  "effectiveEnabledCount": 0,
+  "headline": "This Governance setting is 🔴 Disabled for these Sites:",
+  "portals": [
+    { "name": "Portal_4", "url": "https://…", "portalId": "<guid>",
+      "state": false, "own": false,
+      "parents": { "EnableExternalAuthProviders": true, "EnableProtocolOpenAuth": true } }
+  ]
+}
+```
+
+- `envValue` — the **policy's own** env-level value (`All` / `None` / `Include` /
+  `Exclude`) for the plain-language env summary.
+- `state` — the **effective** boolean (own AND every parent) — the value the
+  5-column Unicode status box renders.
+- `headline` — the pre-computed Phase 4.3.1 headline (green when at least one
+  site is effectively Enabled, red when off everywhere / zero sites).
+- `apiCalls` — `1 + policies × 2`, **all issued in parallel**.
+
+Pipe `.portals` into the status render:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/fetch-env-status.js" \
+  --policy "<POLICY>" --envId "<ENV_ID>" \
+  | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --unicode --no-color
+```
+
+Fail-closed posture: a failed `getDetails` degrades to an empty membership list;
+a failed `/websites` read or `getEnv` is fatal (cannot classify without them).
+An env with **zero sites** is not an error — `portals` is an empty array.
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0`  | Success (including an env with zero sites) |
+| `2`  | Sign-in required |
+| `1`  | Other failure |
 
 ---
 
