@@ -226,13 +226,19 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions. Do not run environment preflights or import the template.
       - **Cancel**: stop before environment preflights. Do not emit `template_import_failure` because no import was attempted; `template_used` was already emitted when the template path was selected.
 
-   4. Mark **Confirm target environment** as `completed` and **Validate JavaScript unblock requirement** as `in_progress`, then preflight-check whether `.js` is blocked in the target environment:
+   4. Mark **Confirm target environment** as `completed`, then mark both **Validate JavaScript unblock requirement** and **Validate Dataverse language requirements** as `in_progress`. Run the `.js` blocked-attachment dry run and the Dataverse language check in parallel because both are read-only preflights against the confirmed target environment:
       ```bash
       node "${PLUGIN_ROOT}/scripts/lib/fix-blocked-attachments.js" --envUrl "<environmentUrl>" --extensions js --dry-run --quiet
+      node "${PLUGIN_ROOT}/scripts/check-available-languages.js" --envUrl "<environmentUrl>" --token "<token>" --requiredLocaleIds "<SELECTED_TEMPLATE_VARIANT.requiredDataverseLanguages or SELECTED_TEMPLATE.requiredDataverseLanguages comma-separated>"
       ```
-      Evaluate the JSON result:
-      - **`wasBlocked` does not include `js`**: continue; JavaScript attachments are allowed.
-      - **`wasBlocked` includes `js`**: fire the `.js` unblock consent gate below.
+      Capture both JSON results before deciding what to do next. Do not mutate `blockedattachments` until the language check has also completed; if the language check blocks import, route to the language-requirement question without changing attachment settings.
+      Evaluate the `.js` result:
+      - **`wasBlocked` does not include `js`**: mark **Validate JavaScript unblock requirement** as `completed`; JavaScript attachments are allowed.
+      - **`wasBlocked` includes `js`**: keep **Validate JavaScript unblock requirement** as `in_progress`; this may need the `.js` unblock consent gate below, but handle language failures first because they block import without any environment mutation.
+      Evaluate the language result:
+      - **`ok: true` and `hasRequiredLanguages: true`**: mark **Validate Dataverse language requirements** as `completed`; the target environment has every LCID required by the selected variant, falling back to the family requirements when the variant does not override them.
+      - **`ok: false`**: tell the user the skill could not verify available Dataverse languages, surface the script error, then ask whether to switch to from-scratch or stop. Do not import the template and do not mutate `blockedattachments`.
+      - **`ok: true` and `hasRequiredLanguages: false`**: explain that the selected template solution requires the missing Dataverse language LCIDs from `missingLocaleIds`. Block before any solution import mutation. Do not provide a "proceed anyway" branch and do not mutate `blockedattachments`.
 
 <!-- gate: create-site:1.5.unblock-js | category=consent | cancel-leaves=attachment-block-modified -->
 
@@ -256,18 +262,9 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions. Do not import the template.
       - **Cancel**: stop before import. Do not emit `template_import_failure` because no import was attempted; `template_used` was already emitted when the template path was selected.
 
-    5. Mark **Validate JavaScript unblock requirement** as `completed` and **Validate Dataverse language requirements** as `in_progress`, then preflight-check whether the target environment has every Dataverse language required by the selected template:
-       ```bash
-       node "${PLUGIN_ROOT}/scripts/check-available-languages.js" --envUrl "<environmentUrl>" --token "<token>" --requiredLocaleIds "<SELECTED_TEMPLATE_VARIANT.requiredDataverseLanguages or SELECTED_TEMPLATE.requiredDataverseLanguages comma-separated>"
-       ```
-       Evaluate the JSON result:
-       - **`ok: true` and `hasRequiredLanguages: true`**: continue; the target environment has every LCID required by the selected variant, falling back to the family requirements when the variant does not override them.
-       - **`ok: false`**: tell the user the skill could not verify available Dataverse languages, surface the script error, then ask whether to switch to from-scratch or stop. Do not import the template.
-       - **`ok: true` and `hasRequiredLanguages: false`**: explain that the selected template solution requires the missing Dataverse language LCIDs from `missingLocaleIds`. Block before any solution import mutation. Do not provide a "proceed anyway" branch.
-
 <!-- not-a-gate: route selection after a blocking preflight; no org mutation has happened and there is no option to override missing template language requirements -->
 
-       Use `AskUserQuestion` only when the language preflight cannot continue:
+    5. Use `AskUserQuestion` only when the language preflight cannot continue:
 
        | Question | Header | Options |
        |----------|--------|---------|
@@ -284,7 +281,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 > **Why we ask:** The next step imports an unmanaged Dataverse solution into the user's org. Wrong environment or wrong template is disruptive and cannot be cleanly undone.
 > **Cancel leaves:** `template-cache` — the selected solution zip and preview images may remain in the SHA-keyed temp cache; no org mutation has occurred.
 
-   6. Mark **Validate Dataverse language requirements** as `completed` and **Confirm template import** as `in_progress`, then present the template and environment and ask:
+   6. If the language preflight passed but `.js` was blocked and the user approved/verification passed, mark **Validate JavaScript unblock requirement** as `completed`. Then mark **Confirm template import** as `in_progress`, present the template and environment, and ask:
 
       | Question | Header | Options |
       |----------|--------|---------|
