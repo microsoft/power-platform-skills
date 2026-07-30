@@ -135,15 +135,15 @@
         "message": "Disabling this signs out any users currently authenticated via OAuth 2.0 on the affected sites and blocks that sign-in method until it's re-enabled."
       },
       "cascadeOnDisable": {
-        "heading": "Disabling OAuth 2.0 will disable social login using Facebook, Google, Microsoft, and other OAuth 2.0 identity providers.",
+        "heading": "The following OAuth 2.0 identity providers will be disabled:",
         "items": ["Facebook", "Google", "Microsoft"]
       },
       "cascadeOnEnable": {
-        "heading": "Enabling OAuth 2.0 enables support for OAuth-based authentication only. OAuth identity providers are managed independently and must be enabled through their respective governance settings.",
+        "heading": "When enabled, OAuth-based authentication is supported. The OAuth 2.0 identity providers (Facebook, Google, Microsoft) must be enabled individually using their respective governance settings:",
         "items": [
-          { "label": "Facebook", "note": "Enable the Facebook governance setting to allow Facebook sign-in." },
-          { "label": "Google", "note": "Enable the Google governance setting to allow Google sign-in." },
-          { "label": "Microsoft", "note": "Enable the Microsoft governance setting to allow Microsoft sign-in." }
+          { "label": "Facebook", "note": "Controlled by the Facebook governance setting." },
+          { "label": "Google", "note": "Controlled by the Google governance setting." },
+          { "label": "Microsoft", "note": "Controlled by the Microsoft governance setting." }
         ]
       }
     },
@@ -235,29 +235,29 @@
         "message": "Disabling this turns off all external (social / federated) identity providers on the affected sites; users who sign in through them will be signed out until it's re-enabled."
       },
       "cascadeOnDisable": {
-        "heading": "Disabling this setting will also disable the following authentication methods and identity providers:",
+        "heading": "Below Setting will get Disable",
         "items": [
-          "OpenID Connect (OIDC) Protocol",
-          "SAML 2.0 Protocol",
-          "OAuth 2.0 Protocol",
-          "  • Facebook Login",
-          "  • Google Login",
-          "  • Microsoft Login",
-          "WS-Federation Protocol"
+          "OpenIdConnect",
+          "SAML2.0",
+          "OAuth2.0",
+          "WS_Federation",
+          "Facebook",
+          "Google",
+          "Microsoft"
         ]
       },
       "cascadeOnEnable": {
         "heading": "When enabled, the following authentication methods become available:",
         "items": [
-          { "label": "OpenID Connect (OIDC) Protocol" },
-          { "label": "SAML 2.0 Protocol" },
-          { "label": "OAuth 2.0 Protocol" },
-          { "label": "Facebook Login" },
-          { "label": "Google Login" },
-          { "label": "Microsoft Login" },
-          { "label": "WS-Federation Protocol" }
+          { "label": "OpenID Connect" },
+          { "label": "SAML 2.0" },
+          { "label": "OAuth 2.0" },
+          { "label": "WS-Federation" },
+          { "label": "Facebook", "note": "Controlled by the Facebook governance setting." },
+          { "label": "Google", "note": "Controlled by the Google governance setting." },
+          { "label": "Microsoft", "note": "Controlled by the Microsoft governance setting." }
         ],
-        "footer": "Enabling the External Authentication policy restores these authentication methods. Each authentication provider must also be enabled and configured."
+        "footer": "Enabling the External Authentication policy restores support for these authentication methods. Each authentication provider must also be enabled and configured."
       }
     },
     {

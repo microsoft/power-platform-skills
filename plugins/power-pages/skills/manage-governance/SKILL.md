@@ -5,19 +5,14 @@ description: >-
   twenty-one policies: toggling Maker Copilot for existing sites, enabling/disabling
   sign-in protocols (OpenID Connect, SAML 2.0, WS-Federation, OAuth 2.0), social
   identity providers (Google, Facebook, Microsoft), local login, and external
-  auth providers, plus eleven Power Pages Copilot / site-control policies
-  (Maker/pro-dev/site/search-summary/list-summary/intelligent-forms/summarization-API
-  Copilots, non-production public sites, and external service calls from server
-  logic). Sets a policy environment-wide or per portal, watches the
-  rollout to completion, and reads current state at the environment or portal
-  level. Use when the user wants to "turn off OpenID Connect on Power Pages",
-  "disable SAML on a portal", "block a sign-in protocol on portals",
-  "enable/disable Maker Copilot for existing sites", "enable Google/Facebook/Microsoft sign-in",
-  "turn off local login", "disable a sign-in protocol", "allow site Copilot on sites",
-  "disable external service calls from server logic",
-  "check which portals have a sign-in protocol enabled", or "see the governance status
-  of my Power Pages portals"
-  - even if they only name the policy or its side effect without saying
+  auth providers, plus eleven Power Pages Copilot / site-control policies. Sets
+  a policy environment-wide or per portal, watches the rollout to completion, and
+  reads current state at the environment or portal level. Use when the user wants
+  to "turn off OpenID Connect on Power Pages", "disable SAML on a portal",
+  "enable/disable Maker Copilot for existing sites", "enable Google/Facebook/Microsoft
+  sign-in", "turn off local login", "allow site Copilot on sites", "disable external
+  service calls from server logic", or "see the governance status of my Power Pages
+  portals" - even if they only name the policy or its side effect without saying
   "governance".
 user-invocable: true
 argument-hint: "[optional policy or operation hint]"
