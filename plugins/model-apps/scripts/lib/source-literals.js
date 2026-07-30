@@ -57,19 +57,37 @@ function expressionPosition(src, i) {
 // followed by a balanced parameter list and then `=>` (optionally via a return-type annotation).
 // Nothing else has that shape. Keyword heuristics were not enough — `extends` misses `<T,>(x) => x`,
 // and "the matching `>` is followed by `(`" wrongly claimed `<button>(</button>`.
+//
+// Everything here is depth-aware, because ordinary TypeScript puts the same characters inside a type
+// that also terminate a statement outside one:
+//   <T extends { id: string; name: string }>(row: T) => row.id      `;` inside an object type
+//   <T extends (...args: unknown[]) => void>(fn: T) => fn           `>` belonging to a function type's `=>`
+//   <T,>(v: T): { key: string; value: T } => ({ … })                `;` inside the RETURN type
 function looksLikeTypeParams(src, i) {
   const limit = Math.min(src.length, i + 400);   // type-parameter lists are short; bail rather than scan a file
   let angle = 0;
-  let brace = 0;                                 // `<T extends { id: string }>` — braces are legal inside
+  let brace = 0;
+  let paren = 0;
+  let bracket = 0;
+  const nested = () => brace > 0 || paren > 0 || bracket > 0;
   let j = i;
   for (; j < limit; j += 1) {
     const c = src[j];
     if (c === '{') brace += 1;
     else if (c === '}') brace -= 1;
-    else if (c === ';' || c === '`') return false;
-    else if (brace === 0) {
+    else if (c === '(') paren += 1;
+    else if (c === ')') paren -= 1;
+    else if (c === '[') bracket += 1;
+    else if (c === ']') bracket -= 1;
+    else if (c === '`') return false;
+    else if (c === ';' && !nested()) return false;
+    else if (!nested()) {
       if (c === '<') angle += 1;
-      else if (c === '>') { angle -= 1; if (angle === 0) break; }
+      else if (c === '>') {
+        if (src[j - 1] === '=') continue;        // the `>` of an `=>` in a function-type constraint
+        angle -= 1;
+        if (angle === 0) break;
+      }
     }
   }
   if (j >= limit) return false;                  // never closed within the window
@@ -87,12 +105,26 @@ function looksLikeTypeParams(src, i) {
 
   while (k < src.length && /\s/.test(src[k])) k += 1;
   if (src[k] === '=' && src[k + 1] === '>') return true;
-  // A return-type annotation may sit between: `<T>(x: T): T => x`. Look for the arrow before the
-  // statement ends.
+  // A return-type annotation may sit between: `<T>(x: T): T => x`. Find the arrow before the
+  // statement ends, ignoring `;` that belongs to an object type rather than the statement.
   if (src[k] !== ':') return false;
-  const tail = src.slice(k, Math.min(src.length, k + 200));
-  const stop = tail.indexOf(';');
-  return /=>/.test(stop === -1 ? tail : tail.slice(0, stop));
+  let b = 0;
+  let p = 0;
+  let br = 0;
+  for (let m = k; m < Math.min(src.length, k + 300); m += 1) {
+    const c = src[m];
+    if (c === '{') b += 1;
+    else if (c === '}') b -= 1;
+    else if (c === '(') p += 1;
+    else if (c === ')') p -= 1;
+    else if (c === '[') br += 1;
+    else if (c === ']') br -= 1;
+    else if (b === 0 && p === 0 && br === 0) {
+      if (c === ';') return false;
+      if (c === '=' && src[m + 1] === '>') return true;
+    }
+  }
+  return false;
 }
 
 /**
