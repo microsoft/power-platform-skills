@@ -142,6 +142,76 @@ test('applySeedData success path can run with injected fs and request function',
   assert.deepEqual(JSON.parse(requests[0].body), { cr123_name: 'Announcements' });
 });
 
+test('applySeedData maps camelCase lookup ids to odata binds from prior seed records', async () => {
+  const files = {
+    '010-categories.json': {
+      entitySetName: 'spa311_categories',
+      primaryKey: 'spa311_categoryid',
+      records: [{ spa311_categoryid: '11111111-1111-1111-1111-111111111111', spa311_name: 'Roads' }],
+    },
+    '020-service-types.json': {
+      entitySetName: 'spa311_servicetypes',
+      primaryKey: 'spa311_servicetypeid',
+      records: [{
+        spa311_servicetypeid: '22222222-2222-2222-2222-222222222222',
+        spa311_name: 'Pothole',
+        categoryId: '11111111-1111-1111-1111-111111111111',
+      }],
+    },
+    '030-service-requests.json': {
+      entitySetName: 'spa311_servicerequests',
+      primaryKey: 'spa311_servicerequestid',
+      records: [{
+        spa311_servicerequestid: '33333333-3333-3333-3333-333333333333',
+        spa311_name: 'SR-001',
+        serviceTypeId: '22222222-2222-2222-2222-222222222222',
+      }],
+    },
+    '040-status-updates.json': {
+      entitySetName: 'spa311_statusupdates',
+      primaryKey: 'spa311_statusupdateid',
+      records: [{
+        spa311_statusupdateid: '44444444-4444-4444-4444-444444444444',
+        spa311_name: 'Created',
+        serviceRequestId: '33333333-3333-3333-3333-333333333333',
+      }],
+    },
+  };
+  const fsImpl = {
+    existsSync: () => true,
+    readdirSync: () => Object.keys(files),
+    readFileSync: (filePath) => JSON.stringify(files[path.basename(filePath)]),
+  };
+  const requests = [];
+
+  const result = await applySeedData({ seedDir: '/virtual/seed', envUrl: 'https://org.crm.dynamics.com' }, {
+    token: 'token',
+    fs: fsImpl,
+    makeRequest: async (req) => {
+      requests.push(req);
+      return { statusCode: 204 };
+    },
+  });
+
+  assert.equal(result.failed, 0);
+  assert.equal(result.inserted, 4);
+  assert.deepEqual(JSON.parse(requests[1].body), {
+    spa311_servicetypeid: '22222222-2222-2222-2222-222222222222',
+    spa311_name: 'Pothole',
+    'spa311_category@odata.bind': '/spa311_categories(11111111-1111-1111-1111-111111111111)',
+  });
+  assert.deepEqual(JSON.parse(requests[2].body), {
+    spa311_servicerequestid: '33333333-3333-3333-3333-333333333333',
+    spa311_name: 'SR-001',
+    'spa311_servicetype@odata.bind': '/spa311_servicetypes(22222222-2222-2222-2222-222222222222)',
+  });
+  assert.deepEqual(JSON.parse(requests[3].body), {
+    spa311_statusupdateid: '44444444-4444-4444-4444-444444444444',
+    spa311_name: 'Created',
+    'spa311_servicerequest@odata.bind': '/spa311_servicerequests(33333333-3333-3333-3333-333333333333)',
+  });
+});
+
 test('applySeedData posts Dataverse export seed tables and uploads fileExports', async () => {
   const seedDir = path.resolve('export-seed');
   const attachmentPath = path.join(seedDir, 'files', 'invoice.pdf');

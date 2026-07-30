@@ -66,6 +66,44 @@ function splitReservedFiles(record) {
   return { recordBody, files };
 }
 
+function isCamelCaseLookupKey(key) {
+  // Some hand-authored template seed files use app-style lookup keys:
+  //   { "categoryId": "<category-guid>", "serviceTypeId": "<type-guid>" }
+  // Dataverse rejects those raw properties. When the referenced GUID was seeded
+  // earlier in the same ordered seed run, convert the key to an @odata.bind
+  // using the target table's logical name derived from its primary key.
+  const match = String(key || '').match(/^([a-z][A-Za-z0-9]*)Id$/);
+  return Boolean(match);
+}
+
+function indexSeedRecords(seed, idToTarget) {
+  if (!seed || !seed.primaryKey) return;
+  for (const record of Array.isArray(seed.records) ? seed.records : []) {
+    const id = record && record[seed.primaryKey];
+    if (typeof id === 'string') {
+      idToTarget.set(id.toLowerCase(), {
+        entitySetName: seed.entitySetName,
+        navigationProperty: entityLogicalNameFromPrimaryKey(seed.primaryKey),
+      });
+    }
+  }
+}
+
+function applyCamelCaseLookupBinds(recordBody, idToTarget) {
+  const out = {};
+  for (const [key, value] of Object.entries(recordBody || {})) {
+    if (isCamelCaseLookupKey(key) && typeof value === 'string') {
+      const target = idToTarget.get(value.toLowerCase());
+      if (target) {
+        out[`${target.navigationProperty}@odata.bind`] = `/${target.entitySetName}(${value})`;
+        continue;
+      }
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
 function normalizeDataverseExportSeed(seed) {
   if (!seed || typeof seed !== 'object' || !seed.tables || typeof seed.tables !== 'object' || Array.isArray(seed.tables)) {
     return null;
@@ -344,6 +382,7 @@ async function applySeedData({ seedDir, envUrl }, deps = {}) {
       return { ...summary, ok: false, failed: 1, errors: [{ scope: 'auth', message: `Azure CLI token unavailable for ${envUrl}` }] };
     }
     const tokenProvider = deps.tokenProvider || createTokenProvider({ envUrl, initialToken: token, resolveToken, refreshEvery: deps.tokenRefreshEvery || TOKEN_REFRESH_EVERY_REQUESTS });
+    const idToEntitySet = new Map();
 
     for (const filePath of listSeedFiles(seedDir, deps)) {
       let seed;
@@ -356,6 +395,7 @@ async function applySeedData({ seedDir, envUrl }, deps = {}) {
       }
 
       for (const seedEntry of (Array.isArray(seed) ? seed : [seed])) {
+        indexSeedRecords(seedEntry, idToEntitySet);
         for (const record of seedEntry.records) {
         const context = { file: path.basename(filePath), entitySetName: seedEntry.entitySetName };
         try {
@@ -366,7 +406,7 @@ async function applySeedData({ seedDir, envUrl }, deps = {}) {
             summary.errors.push({ ...context, message: validationError });
             continue;
           }
-          const res = await postRecord({ envUrl, tokenProvider, entitySetName: seedEntry.entitySetName, record: recordBody }, deps);
+          const res = await postRecord({ envUrl, tokenProvider, entitySetName: seedEntry.entitySetName, record: applyCamelCaseLookupBinds(recordBody, idToEntitySet) }, deps);
           let shouldUploadFiles = false;
           if (res.error) {
             summary.failed += 1;
