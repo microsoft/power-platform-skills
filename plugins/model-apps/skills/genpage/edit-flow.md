@@ -14,6 +14,17 @@ to `genpage-edit-planner`, then applies the edit inline.
 
 The planner has already validated prereqs and confirmed auth.
 
+**Capture the environment URL first.** Everything below — the download, connector
+discovery, and the edit planner — must target the same environment, and connector
+discovery is mutating, so it must never fall back to "whatever `pac auth` points at
+now":
+
+```bash
+node "${PLUGIN_ROOT}/scripts/check-auth.js" --require-pac
+```
+
+Keep the returned org URL as `envUrl` for the rest of the edit session.
+
 **CRITICAL — never guess or invent app names or page names.** You must discover
 them by running the PAC CLI commands below. Hallucinating page names from context
 (repo names, prior conversation, sample apps) is wrong and confuses the user.
@@ -98,16 +109,20 @@ empty array, the page is mock-data only — skip this phase.
 Also read `config.json.connectorBindings`.
 
 > **Connectors are owned by `genpage-connector-builder`, dispatched by this
-> top-level edit orchestrator before edit planning.** Read the existing
-> `config.json.connectorBindings` (the current bindings) and decide the connector
-> action from the edit intent:
+> top-level edit orchestrator.** Unlike the create flow, the mode here is already
+> `edit` and `envUrl` was captured in Edit Phase 1, so discovery can safely run
+> before edit planning when the intent already names a connector source. (If the
+> need only surfaces during the edit planner's clarification, it returns
+> `connector_discovery_required` and discovery runs then — see Edit Phase 4.)
+> Read the existing `config.json.connectorBindings` (the current bindings) and
+> decide the connector action from the edit intent:
 >
 > - **Add / replace / discover connector data:** invoke `genpage-connector-builder`
 >   via `Task` with **Mode: `edit`**, the working directory, `${PLUGIN_ROOT}`, the
->   environment URL, the existing bindings, and the edit intent. The builder owns
->   the feature gate: when connectors are OFF it preserves existing bindings and
->   adds none; when ON it discovers and returns the updated set. It writes
->   `<working-dir>/connectors.json` (bare array) and
+>   `envUrl` from Edit Phase 1, the existing bindings, and the edit intent. The
+>   builder owns the feature gate: when connectors are OFF it preserves existing
+>   bindings and adds none; when ON it discovers and returns the updated set. It
+>   writes `<working-dir>/connectors.json` (bare array) and
 >   `<working-dir>/connector-bindings.md`.
 > - **Preserve connectors unchanged:** do not invoke the builder and do not create
 >   a replacement `connectors.json`; omit `--connectors` on upload so pac preserves

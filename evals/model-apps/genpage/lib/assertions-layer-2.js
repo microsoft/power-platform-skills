@@ -292,9 +292,14 @@ ASSERTIONS.set(
 // real pages use, and going deeper without an AST costs more correctness than it buys.
 function localHelperBodies(bare) {
   const bodies = new Map();
-  const decl = /(?:^|\n)\s*(?:const|let|var|async\s+function|function)\s+([A-Za-z_$][\w$]*)\s*(?:=|\()/g;
+  // Match the declaration NAME and stop at `:` or `=` (or `(` for a function declaration). Stopping
+  // only at `=` missed a TypeScript-annotated helper —
+  //   const loadDocs: () => Promise<void> = async () => { … }
+  // — whose annotation sits between the name and the `=`, so an uncached read inside it was invisible.
+  const decl = /(?:^|\n)\s*(?:(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*[:=]|(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\()/g;
   let m;
   while ((m = decl.exec(bare)) !== null) {
+    const name = m[1] || m[2];
     // Walk to the end of the declaration. Stopping at the first balanced bracket group is wrong for
     // `const f = async () => { … }`: the `()` closes immediately and the arrow BODY — the part that
     // holds the fetch — would be dropped. So keep going until either the closing `}` of a real body
@@ -312,7 +317,7 @@ function localHelperBodies(bare) {
       }
       if (depth <= 0 && c === ';') { i += 1; break; }
     }
-    bodies.set(m[1], bare.slice(m.index, i));
+    bodies.set(name, bare.slice(m.index, i));
   }
   return bodies;
 }
@@ -321,7 +326,9 @@ function withCalledHelpers(callText, bare) {
   let out = callText;
   for (const [name, body] of localHelperBodies(bare)) {
     if (body === callText) continue;                       // never re-append the effect itself
-    if (new RegExp(`\\b${name}\\s*\\(`).test(callText)) out += `\n${body}`;
+    // `(?<![.\w$])` so a METHOD call on some other object — `service.loadDocs()` — does not pull in
+    // an unrelated top-level `loadDocs`, which produced a false finding.
+    if (new RegExp(`(?<![.\\w$])${name}\\s*\\(`).test(callText)) out += `\n${body}`;
   }
   return out;
 }

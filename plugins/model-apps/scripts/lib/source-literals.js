@@ -1,121 +1,273 @@
 'use strict';
-// Literal/comment blanking for TSX source scanning.
+// A small lexer for TSX source, used where a check has to distinguish real code from text.
 //
-// WHY a purpose-built lexer: this plugin ships with **zero runtime dependencies** (every `require`
-// in scripts/ is a node builtin or relative — the plugin is installed by copying its directory, so
-// there is no node_modules to carry a TypeScript parser). Several checks nevertheless have to reason
-// about "is this token real code, or is it text inside a string/comment?", and a naive substring
-// search gets that wrong in ways that matter:
-//   `const prose = "export default GeneratedComponent";`  -> looks like a valid page, isn't one
-//   `/* export default */`                                 -> same
-//   const s = "window.__ppInflight"                        -> makes an uncached fetch look cached
+// WHY hand-rolled: this plugin ships **dependency-free** (no package.json, no node_modules; it is
+// installed by copying its directory, and every runtime `require` under scripts/ is a node builtin
+// or a relative path), so there is no TypeScript parser to call. Several checks nevertheless have to
+// answer "is this token code, or is it text?", and getting that wrong is costly in BOTH directions:
 //
-// This is NOT `pageref-resolver.stripNonCode()`. That function deliberately PRESERVES the contents
-// of ordinary quoted strings, because its callers (objectArgAt / topLevelValue) need them to find
-// key/value boundaries inside a `navigateTo({...})` literal. Reusing it for "is this real code?"
-// was a real defect: the bait above passed. Blanking here is total.
+//   accepting text as code   ->  prose is promoted as a page, permanently marked implemented
+//   rejecting code as text   ->  a valid generated page is refused and the user is blocked mid-build
 //
-// Blanked characters are replaced with spaces (never removed), so every offset in the output maps
-// 1:1 onto the input and a caller can mix matches across both.
+// The second is worse, which is why this tracks JSX properly instead of running regexes over the
+// raw file. Naive approaches fail on ordinary generated pages:
+//   <p>https://contoso.com/help</p>   `//` is not a comment here
+//   <p>1) Review details</p>          `)` is not a bracket here
+//   const re = /\(/;                  `(` is not a bracket here
+//   "The worker says export default X is required."   not an export statement
+//
+// MODES: code (incl. JSX expressions), comment, string, template, regex, JSX tag, JSX text.
+// Blanked characters become spaces and newlines are preserved, so output offsets map 1:1 onto the
+// input and a caller may mix matches across both.
 
-// A quote only starts a string in an EXPRESSION position. JSX text is the reason this matters:
-//   <p>it's fine</p>
-// Treating that apostrophe as a string opener would blank the rest of the file and make a perfectly
-// good page look broken. The standard heuristic: a quote preceded by an identifier char, `)`, `]`
-// or `}` cannot be opening a string — it is JSX text (or, harmlessly, a division/regex edge we do
-// not care about here).
-function opensString(code, i) {
+// `/` starts a regex (rather than division) only where an expression may begin. Same idea for `<`
+// starting JSX rather than a comparison or a TypeScript generic argument list.
+const EXPR_START_PUNCT = new Set(['(', ',', '=', ':', '[', '!', '&', '|', '?', '{', '}', ';', '+', '-', '*', '%', '<', '>', '~', '^', '\n']);
+const EXPR_START_WORDS = new Set(['return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'case', 'do', 'else', 'yield', 'await']);
+
+function prevSignificant(src, i) {
   for (let j = i - 1; j >= 0; j -= 1) {
-    const c = code[j];
-    if (c === ' ' || c === '\t') continue;
-    return !/[\w$)\]}]/.test(c);
+    if (!/\s/.test(src[j])) return { ch: src[j], index: j };
   }
-  return true; // start of file
+  return { ch: '', index: -1 };
+}
+
+function expressionPosition(src, i) {
+  const { ch, index } = prevSignificant(src, i);
+  if (ch === '') return true;                    // start of file
+  if (EXPR_START_PUNCT.has(ch)) return true;
+  if (/[\w$)\]]/.test(ch)) {
+    // Could be the tail of a keyword like `return` — read the word back.
+    let s = index;
+    while (s >= 0 && /[\w$]/.test(src[s])) s -= 1;
+    return EXPR_START_WORDS.has(src.slice(s + 1, index + 1));
+  }
+  return false;
+}
+
+// `<` in a .tsx file is ambiguous: JSX, or a TypeScript type-parameter list. Both can appear right
+// after `=`, so position alone cannot separate them:
+//   const updateField = <K extends keyof FormState>(key: K) => { … }   // generic arrow
+//   const el = <Section title="x">…</Section>;                         // JSX
+// Treating the first as JSX desynchronises the lexer for the rest of the file (its `>` opens a text
+// run that never closes), which is exactly how a whole corpus of valid pages got rejected.
+// Discriminate on what the matching `>` is followed by — `(` for a generic arrow's parameter list —
+// and on `extends`, which is legal in a type-parameter list and not in a JSX tag name.
+function looksLikeTypeParams(src, i) {
+  let depth = 0;
+  const limit = Math.min(src.length, i + 400);   // type-parameter lists are short; bail rather than scan a file
+  for (let j = i; j < limit; j += 1) {
+    const c = src[j];
+    if (c === '<') depth += 1;
+    else if (c === '>') {
+      depth -= 1;
+      if (depth === 0) {
+        const span = src.slice(i, j);
+        if (/\bextends\b/.test(span)) return true;
+        const after = prevSignificantForward(src, j + 1);
+        return after === '(';
+      }
+    } else if (c === '{' || c === '}' || c === ';' || c === '"' || c === "'" || c === '`' || c === '/') {
+      return false;                              // none of these appear in a type-parameter list
+    }
+  }
+  return false;
+}
+
+function prevSignificantForward(src, from) {
+  for (let j = from; j < src.length; j += 1) if (!/\s/.test(src[j])) return src[j];
+  return '';
 }
 
 /**
- * Blank every comment, string and template-literal body in TSX source.
+ * Blank every comment, string, template, regex literal and JSX text run in TSX source.
  * @param {string} code
- * @returns {string} same length as `code`, with non-code regions replaced by spaces
+ * @returns {string} same length as `code`, non-code regions replaced by spaces
  */
 function blankLiterals(code) {
   const src = String(code || '');
-  const out = [...src];
+  // split('') and NOT [...src]: the spread iterates by CODE POINT, so an astral character (an emoji
+  // in a label, which generated pages do use) makes array indices drift out of step with the UTF-16
+  // offsets everything else here uses, corrupting the output.
+  const out = src.split('');
   const blank = (from, to) => {
-    // Keep newlines so line-oriented matching and error offsets still make sense.
-    for (let k = from; k < to && k < src.length; k += 1) if (src[k] !== '\n') out[k] = ' ';
+    for (let k = Math.max(0, from); k < to && k < src.length; k += 1) if (src[k] !== '\n') out[k] = ' ';
   };
 
+  let mode = 'code';
+  let jsxDepth = 0;                 // open JSX elements in the CURRENT expression frame
+  let angleDepth = 0;               // nested < > inside a tag's type arguments
+  const frames = [];                // JSX-expression frames: { returnMode, braceDepth, savedJsxDepth }
   let i = 0;
+
+  const leaveJsxExpr = () => {
+    const f = frames.pop();
+    if (!f) { mode = 'code'; return; }
+    // Restore the enclosing element depth. It must be per-frame: in
+    //   <div>{items.map(x => { return (<section>…</section>); })}</div>
+    // the `<div>` is open across the whole expression, but once `</section>` closes we are back in
+    // CODE (inside the arrow body), not in the div's text run. A single global counter left the
+    // lexer in jsxText for the rest of the file and blanked the real `export default`.
+    jsxDepth = f.savedJsxDepth;
+    mode = f.returnMode;
+  };
+  const enterJsxExpr = (returnMode) => {
+    frames.push({ returnMode, braceDepth: 0, savedJsxDepth: jsxDepth });
+    jsxDepth = 0;
+    mode = 'code';
+  };
+
   while (i < src.length) {
     const c = src[i];
-    const next = src[i + 1];
+    const n = src[i + 1];
 
-    if (c === '/' && next === '/') {
-      const end = src.indexOf('\n', i);
-      blank(i, end === -1 ? src.length : end);
-      i = end === -1 ? src.length : end;
+    if (mode === 'code') {
+      if (c === '/' && n === '/') {
+        const end = src.indexOf('\n', i);
+        blank(i, end === -1 ? src.length : end);
+        i = end === -1 ? src.length : end;
+        continue;
+      }
+      if (c === '/' && n === '*') {
+        const end = src.indexOf('*/', i + 2);
+        const stop = end === -1 ? src.length : end + 2;
+        blank(i, stop);
+        i = stop;
+        continue;
+      }
+      if (c === '"' || c === "'") {
+        let j = i + 1;
+        for (; j < src.length; j += 1) {
+          if (src[j] === '\\') { j += 1; continue; }
+          if (src[j] === c) break;
+          if (src[j] === '\n') { j = -1; break; }   // a string cannot span a raw newline
+        }
+        if (j === -1) { i += 1; continue; }
+        blank(i + 1, j);
+        i = Math.min(j + 1, src.length);
+        continue;
+      }
+      if (c === '`') {
+        // Template literal. `${}` expressions are blanked with the rest: no declaration lives inside
+        // one, and tracking their nesting would only add ways to be wrong.
+        let j = i + 1;
+        let d = 0;
+        for (; j < src.length; j += 1) {
+          if (src[j] === '\\') { j += 1; continue; }
+          if (src[j] === '{' && src[j - 1] === '$') d += 1;
+          else if (src[j] === '}' && d > 0) d -= 1;
+          else if (src[j] === '`' && d === 0) break;
+        }
+        blank(i + 1, j);
+        i = Math.min(j + 1, src.length);
+        continue;
+      }
+      if (c === '/' && expressionPosition(src, i)) {
+        // Regex literal: scan to the unescaped closing `/`, honouring a character class so `/[/]/`
+        // does not terminate early.
+        let j = i + 1;
+        let inClass = false;
+        for (; j < src.length; j += 1) {
+          if (src[j] === '\\') { j += 1; continue; }
+          if (src[j] === '\n') { j = -1; break; }
+          if (src[j] === '[') inClass = true;
+          else if (src[j] === ']') inClass = false;
+          else if (src[j] === '/' && !inClass) break;
+        }
+        if (j === -1) { i += 1; continue; }
+        blank(i + 1, j);
+        i = Math.min(j + 1, src.length);
+        continue;
+      }
+      if (c === '<' && /[A-Za-z_$>]/.test(n || '') && expressionPosition(src, i) && !looksLikeTypeParams(src, i)) {
+        mode = 'jsxTag';
+        i += 1;
+        continue;
+      }
+      if (frames.length) {
+        const top = frames[frames.length - 1];
+        if (c === '{') { top.braceDepth += 1; i += 1; continue; }
+        if (c === '}') {
+          if (top.braceDepth === 0) { leaveJsxExpr(); i += 1; continue; }
+          top.braceDepth -= 1; i += 1; continue;
+        }
+      }
+      i += 1;
       continue;
     }
-    if (c === '/' && next === '*') {
-      const end = src.indexOf('*/', i + 2);
-      const stop = end === -1 ? src.length : end + 2;
-      blank(i, stop);
+
+    if (mode === 'jsxTag') {
+      if (c === '"' || c === "'") {                 // attribute value
+        let j = i + 1;
+        while (j < src.length && src[j] !== c) j += 1;
+        blank(i + 1, j);
+        i = Math.min(j + 1, src.length);
+        continue;
+      }
+      if (c === '{') { enterJsxExpr('jsxTag'); i += 1; continue; }
+      if (c === '/' && n === '>') {                 // self-closing: no text run follows
+        mode = jsxDepth > 0 ? 'jsxText' : 'code';
+        i += 2;
+        continue;
+      }
+      // An explicit type argument (`<Table<Row> rows={r} />`) nests angle brackets inside the tag.
+      // Without tracking that, the `>` of `<Row>` would end the tag early and the element would
+      // never close, desynchronising the rest of the file. A bare `<` can only be a type argument
+      // here — a comparison would be inside a `{…}` expression, which switches to code mode.
+      if (c === '<') { angleDepth += 1; i += 1; continue; }
+      if (c === '>') {
+        if (angleDepth > 0) { angleDepth -= 1; i += 1; continue; }
+        jsxDepth += 1;
+        mode = 'jsxText';
+        i += 1;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+
+    // mode === 'jsxText' — everything here is prose until a tag or an expression starts.
+    if (c === '{') { enterJsxExpr('jsxText'); i += 1; continue; }
+    if (c === '<' && n === '/') {                   // closing tag
+      const end = src.indexOf('>', i);
+      const stop = end === -1 ? src.length : end + 1;
+      jsxDepth = Math.max(0, jsxDepth - 1);
+      mode = jsxDepth > 0 ? 'jsxText' : 'code';
       i = stop;
       continue;
     }
-    if (c === '`') {
-      // Template literal. `${}` expressions are blanked too: for every question this module answers,
-      // an interpolated expression is not a place a real declaration lives, and tracking nesting
-      // would only add ways to be wrong.
-      let j = i + 1;
-      let depth = 0;
-      for (; j < src.length; j += 1) {
-        if (src[j] === '\\') { j += 1; continue; }
-        if (src[j] === '{' && src[j - 1] === '$') depth += 1;
-        else if (src[j] === '}' && depth > 0) depth -= 1;
-        else if (src[j] === '`' && depth === 0) break;
-      }
-      blank(i + 1, j);
-      i = Math.min(j + 1, src.length);
-      continue;
-    }
-    if ((c === '"' || c === "'") && opensString(src, i)) {
-      let j = i + 1;
-      for (; j < src.length; j += 1) {
-        if (src[j] === '\\') { j += 1; continue; }
-        if (src[j] === c) break;
-        // A quoted string cannot span a raw newline. Hitting one means this was NOT a string (most
-        // often an apostrophe in JSX text that slipped past opensString), so leave it all alone.
-        if (src[j] === '\n') { j = -1; break; }
-      }
-      if (j === -1) { i += 1; continue; }
-      blank(i + 1, j);
-      i = Math.min(j + 1, src.length);
-      continue;
-    }
+    if (c === '<' && /[A-Za-z_$>]/.test(n || '')) { mode = 'jsxTag'; i += 1; continue; }
+    blank(i, i + 1);
     i += 1;
   }
   return out.join('');
 }
 
 /**
- * True when `code` really exports a default binding. Runs over blanked source, so a mention inside
- * a string or comment does not count. Both spellings are accepted:
+ * True when `code` really exports a default binding.
+ *
+ * Two conditions, both required. (1) The match is in code, not in a string/comment/JSX text — that
+ * is what blankLiterals gives us. (2) `export` begins a STATEMENT: at the start of a line, or right
+ * after `;` or `}`. Without (2), ordinary prose in a failed worker response is accepted:
+ *   "The worker says export default GeneratedComponent is required."
+ * Real source always writes the keyword at a statement position.
+ *
+ * Both spellings count:
  *   export default <expr|function|class|async function>
  *   export { P as default }   /   export { default } from './x'
  */
+const DEFAULT_EXPORT = /(?:^[ \t]*|[;}][ \t]*)export[ \t]+default[ \t\r\n]+[\w$({[*]/m;
+const NAMED_DEFAULT_EXPORT = /(?:^[ \t]*|[;}][ \t]*)export[ \t]*\{[^}]*\bdefault\b[^}]*\}/m;
 function hasDefaultExport(code) {
   const bare = blankLiterals(code);
-  // `[\w$({[*]` requires something to actually follow, which rejects the parse-error `export default;`.
-  if (/\bexport\s+default\s+[\w$({[*]/.test(bare)) return true;
-  return /\bexport\s*\{[^}]*\bdefault\b[^}]*\}/.test(bare);
+  return DEFAULT_EXPORT.test(bare) || NAMED_DEFAULT_EXPORT.test(bare);
 }
 
 /**
- * True when the brackets in `code` are unbalanced — the signature of a truncated write. Checked on
- * blanked source so brackets inside strings/comments (and JSX text) do not count. `<` / `>` are NOT
- * checked: JSX and TypeScript generics make them unbalanced in perfectly valid files.
+ * True when the brackets in `code` are unbalanced — the signature of a truncated write. Counted only
+ * over code (blankLiterals removes strings, comments, regex literals and JSX text, so `1) Review`
+ * and `/\(/` do not count). `<` / `>` are never counted: JSX and TypeScript generics make them
+ * legitimately unbalanced.
  */
 function hasUnbalancedBrackets(code) {
   const bare = blankLiterals(code);
@@ -123,11 +275,9 @@ function hasUnbalancedBrackets(code) {
   const pairs = { ')': '(', ']': '[', '}': '{' };
   for (const ch of bare) {
     if (ch === '(' || ch === '[' || ch === '{') stack.push(ch);
-    else if (pairs[ch]) {
-      if (stack.pop() !== pairs[ch]) return true;
-    }
+    else if (pairs[ch] && stack.pop() !== pairs[ch]) return true;
   }
   return stack.length > 0;
 }
 
-module.exports = { blankLiterals, hasDefaultExport, hasUnbalancedBrackets, opensString };
+module.exports = { blankLiterals, hasDefaultExport, hasUnbalancedBrackets, expressionPosition };

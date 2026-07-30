@@ -20,11 +20,15 @@ test('blanks comments, strings and template bodies while preserving offsets', ()
   assert.equal((out.match(/\n/g) || []).length, 1, 'newlines preserved');
 });
 
-test('an apostrophe in JSX text does not start a string', () => {
-  // This is the failure mode that would make the lexer reject real pages: treating `'` in
-  // `<p>it's fine</p>` as a string opener blanks everything after it.
-  const src = "export default function P(){ return <p>it's fine</p>; }";
-  assert.equal(blankLiterals(src), src, 'nothing should be blanked');
+test('an apostrophe in JSX text does not run away', () => {
+  // JSX text IS blanked (it is text, not code) — the hazard is a stray apostrophe being read as a
+  // string opener and blanking everything AFTER it too, which would hide the real export.
+  const src = "export default function P(){ return <p>it's fine</p>; }\nconst after = 1;";
+  const out = blankLiterals(src);
+  assert.equal(out.length, src.length);
+  assert.ok(out.includes('export default function P()'), 'code before the JSX survives');
+  assert.ok(out.includes('const after = 1;'), 'code after the JSX survives');
+  assert.ok(!out.includes("it's fine"), 'the JSX text itself is blanked');
   assert.ok(hasDefaultExport(src));
 });
 
@@ -34,8 +38,10 @@ test('a quoted string that would span a newline is left alone', () => {
   assert.ok(blankLiterals(src).includes('const after = 1;'));
 });
 
-test('hasDefaultExport rejects mentions inside strings and comments', () => {
+test('hasDefaultExport rejects mentions that are not statements', () => {
   for (const bait of [
+    // Prose in a failed worker response: the words appear in code position but not as a statement.
+    'The worker says export default GeneratedComponent is required.\n',
     'const prose = "export default GeneratedComponent";\n',
     "const prose = 'export default P';\n",
     '/* export default */\nThis is prose\n',
@@ -62,6 +68,27 @@ test('hasDefaultExport accepts every legitimate spelling', () => {
     '/**\n * export default is required\n */\nexport default function P(){ return null; }\n',
   ]) {
     assert.equal(hasDefaultExport(ok), true, `wrongly rejected: ${JSON.stringify(ok)}`);
+  }
+});
+
+test('JSX text is text, not code — the false-positive cases that block real users', () => {
+  // Each of these is ordinary generated-page content that a regex-only scanner misreads.
+  const cases = {
+    'URL in JSX text (`//` is not a comment)': 'export default function P() {\n  return <p>https://contoso.com/help</p>;\n}\n',
+    'numbered JSX text (`)` is not a bracket)': 'export default function P() {\n  return <p>1) Review details</p>;\n}\n',
+    'regex literal (`(` is not a bracket)': 'const re = /\\(/;\nexport default function P(){ return <div/>; }\n',
+    'regex with a character class': 'const re = /[/(]/g;\nexport default function P(){ return <div/>; }\n',
+    'astral char (offsets must stay UTF-16 aligned)': 'const e = "\u{1F600}(";\nexport default function P(){ return <div/>; }\n',
+    'nested element inside a .map() expression': 'export default function P(){ return <div>{items.map(x => { return (<section>{x}</section>); })}</div>; }\n',
+    'TSX generic arrow (`<K extends …>` is not JSX)': 'const f = <K extends keyof T>(k: K) => k;\nexport default function P(){ return <div/>; }\n',
+    'TSX generic arrow, comma form': 'const f = <T,>(x: T) => x;\nexport default function P(){ return <div/>; }\n',
+    'JSX with an explicit type argument': 'export default function P(){ return <Table<Row> rows={r} />; }\n',
+    'fragment': 'export default function P(){ return <><span>a</span><span>b</span></>; }\n',
+    'comparison operators': 'const b = a < c && c > a;\nexport default function P(){ return <div/>; }\n',
+  };
+  for (const [name, code] of Object.entries(cases)) {
+    assert.equal(hasDefaultExport(code), true, `default export missed: ${name}`);
+    assert.equal(hasUnbalancedBrackets(code), false, `falsely unbalanced: ${name}`);
   }
 });
 

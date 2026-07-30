@@ -534,3 +534,28 @@ export default function P() {
   return null;
 }`).status, 'skip');
 });
+
+test('connector caching: TypeScript-annotated helper declarations are followed', () => {
+  // `const loadDocs: () => Promise<void> = async …` — the annotation sits between the name and the
+  // `=`, so a matcher that stopped at `=` never found the body and the read was invisible.
+  const typed = (inner) => `
+const INFLIGHT_KEY = "__ppInflight";
+export default function P() {
+  const dataReady = true;
+  const loadDocs: () => Promise<void> = async () => { ${inner} };
+  useEffect(() => { loadDocs(); }, [dataReady]);
+  return null;
+}`;
+  assert.equal(cacheCheck(typed('const r = await props.dataApi.queryConnectorTable("t", {}); setRows(r);')).status, 'fail');
+  assert.equal(cacheCheck(typed('const w = window as any; w[INFLIGHT_KEY] = w[INFLIGHT_KEY] || props.dataApi.queryConnectorTable("t", {}); setRows(await w[INFLIGHT_KEY]);')).status, 'pass');
+});
+
+test('connector caching: a method call does not attach an unrelated same-named helper', () => {
+  // `service.loadDocs()` must not pull in a top-level `loadDocs` — that produced a false finding.
+  assert.equal(cacheCheck(`
+const loadDocs = async () => { await props.dataApi.queryConnectorTable("t", {}); };
+export default function P() {
+  useEffect(() => { service.loadDocs(); }, []);
+  return null;
+}`).status, 'skip');
+});
