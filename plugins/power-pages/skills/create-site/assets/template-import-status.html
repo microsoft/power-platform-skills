@@ -111,7 +111,7 @@
     .progress-track.complete .progress-fill { width: 100%; left: 0; animation: none; background: linear-gradient(90deg, var(--pp-violet), var(--pp-lavender), var(--pp-sky)); transition: all 0.8s ease; }
     .progress-track.complete .progress-fill::after { display: none; }
     .progress-label-text { font-size: 11px; color: var(--pp-text-muted); font-family: 'DM Sans', sans-serif; letter-spacing: 0.3px; }
-    .phase-steps { width: min(520px, calc(100vw - 72px)); display: grid; grid-template-columns: 1fr 1fr; gap: 8px; opacity: 0; animation: fadeSlideUp 1s ease-out 1.65s forwards; }
+    .phase-steps { width: min(640px, calc(100vw - 72px)); display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; opacity: 0; animation: fadeSlideUp 1s ease-out 1.65s forwards; }
     .phase-step { position: relative; border: 1px solid rgba(139, 111, 192, 0.10); border-radius: 12px; background: rgba(255, 255, 255, 0.72); color: var(--pp-text-muted); font-family: 'Outfit', sans-serif; font-size: 11px; font-weight: 500; padding: 8px 10px; text-align: center; }
     .phase-step.active { border-color: rgba(139, 111, 192, 0.28); color: var(--pp-violet); background: var(--pp-surface); }
     .phase-step.done { color: #229E5C; border-color: rgba(34, 158, 92, 0.20); background: rgba(34, 158, 92, 0.06); }
@@ -182,6 +182,7 @@
         <div class="phase-steps" aria-label="Template setup phases">
           <div class="phase-step active" id="phaseSolution">Importing solution</div>
           <div class="phase-step" id="phaseSeed">Seeding data</div>
+          <div class="phase-step" id="phaseActivation">Activating site</div>
         </div>
       </div>
 
@@ -234,6 +235,7 @@
       var toastMessage = document.getElementById('toastMessage');
       var phaseSolution = document.getElementById('phaseSolution');
       var phaseSeed = document.getElementById('phaseSeed');
+      var phaseActivation = document.getElementById('phaseActivation');
       var currentStatusIndex = 0;
       var previewIndex = 0;
       var previewPaused = false;
@@ -288,23 +290,33 @@
 
       function phaseForStatus(status) {
         if (status && (status.phase === 'seed' || status.phase === 'seeding')) return 'seed';
+        if (status && (status.phase === 'activation' || status.phase === 'activating')) return 'activation';
         if (status && status.state === 'succeeded') return 'done';
         return 'solution';
       }
 
       function renderPhase(phase) {
-        if (!phaseSolution || !phaseSeed) return;
+        if (!phaseSolution || !phaseSeed || !phaseActivation) return;
         phaseSolution.className = 'phase-step';
         phaseSeed.className = 'phase-step';
+        phaseActivation.className = 'phase-step';
         if (phase === 'seed') {
           phaseSolution.classList.add('done');
           phaseSeed.classList.add('active');
           if (mainHeading) mainHeading.textContent = 'Seeding __TEMPLATE_NAME__ template data';
           return;
         }
+        if (phase === 'activation') {
+          phaseSolution.classList.add('done');
+          phaseSeed.classList.add('done');
+          phaseActivation.classList.add('active');
+          if (mainHeading) mainHeading.textContent = 'Activating __TEMPLATE_NAME__ template site';
+          return;
+        }
         if (phase === 'done') {
           phaseSolution.classList.add('done');
           phaseSeed.classList.add('done');
+          phaseActivation.classList.add('done');
           if (mainHeading) mainHeading.textContent = '__TEMPLATE_NAME__ template is ready';
           return;
         }

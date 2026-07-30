@@ -497,7 +497,11 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        Prefer the selected variant's `seedDataPath` when present; otherwise use the family `seedDataPath`. If both are absent, skip this task.
    14. Mark **Apply template seed data** as `completed` or skipped. Do not emit another import success event here; `template_import_success` was emitted immediately after the solution import succeeded so telemetry is not lost if seed or activation handoff changes control flow.
    15. Mark **Activate imported site** as `in_progress`.
-   15. Invoke `/activate-site`, passing the resolved identity in the request so it skips local-project discovery:
+   15. Before invoking `/activate-site`, update `<temp-import-status-dir>/status.json` so the existing status page switches to the third phase:
+       ```json
+       { "state": "running", "phase": "activation", "message": "Activating template site" }
+       ```
+       Then invoke `/activate-site`, passing the resolved identity in the request so it skips local-project discovery:
        ```text
        Activate imported template site:
        - siteName: <IMPORTED_SITE_NAME>
