@@ -111,6 +111,10 @@
     .progress-track.complete .progress-fill { width: 100%; left: 0; animation: none; background: linear-gradient(90deg, var(--pp-violet), var(--pp-lavender), var(--pp-sky)); transition: all 0.8s ease; }
     .progress-track.complete .progress-fill::after { display: none; }
     .progress-label-text { font-size: 11px; color: var(--pp-text-muted); font-family: 'DM Sans', sans-serif; letter-spacing: 0.3px; }
+    .phase-steps { width: min(520px, calc(100vw - 72px)); display: grid; grid-template-columns: 1fr 1fr; gap: 8px; opacity: 0; animation: fadeSlideUp 1s ease-out 1.65s forwards; }
+    .phase-step { position: relative; border: 1px solid rgba(139, 111, 192, 0.10); border-radius: 12px; background: rgba(255, 255, 255, 0.72); color: var(--pp-text-muted); font-family: 'Outfit', sans-serif; font-size: 11px; font-weight: 500; padding: 8px 10px; text-align: center; }
+    .phase-step.active { border-color: rgba(139, 111, 192, 0.28); color: var(--pp-violet); background: var(--pp-surface); }
+    .phase-step.done { color: #229E5C; border-color: rgba(34, 158, 92, 0.20); background: rgba(34, 158, 92, 0.06); }
     .feature-cards { display: flex; gap: 10px; margin-top: 4px; opacity: 0; animation: fadeSlideUp 1s ease-out 2s forwards; }
     .feature-card { background: var(--pp-surface); border: 1px solid rgba(139, 111, 192, 0.1); border-radius: 14px; padding: 14px 16px; width: 128px; box-shadow: 0 2px 12px rgba(139, 111, 192, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04); opacity: 0; transform: translateY(20px) scale(0.95); transition: all 0.8s cubic-bezier(0.22, 1, 0.36, 1); }
     .feature-card.visible { opacity: 1; transform: translateY(0) scale(1); }
@@ -175,6 +179,10 @@
           </div>
           <span class="progress-label-text" id="progressLabel">Starting template import...</span>
         </div>
+        <div class="phase-steps" aria-label="Template setup phases">
+          <div class="phase-step active" id="phaseSolution">Importing solution</div>
+          <div class="phase-step" id="phaseSeed">Seeding data</div>
+        </div>
       </div>
 
       <div class="feature-cards">
@@ -212,6 +220,7 @@
       var particlesEl = document.getElementById('particles');
       var connectorsEl = document.getElementById('connectors');
       var statusArea = document.getElementById('statusArea');
+      var mainHeading = document.getElementById('mainHeading');
       var progressLabel = document.getElementById('progressLabel');
       var progressTrack = document.getElementById('progressTrack');
       var progressFill = document.getElementById('progressFill');
@@ -223,6 +232,8 @@
       var toast = document.getElementById('toast');
       var toastTitle = document.getElementById('toastTitle');
       var toastMessage = document.getElementById('toastMessage');
+      var phaseSolution = document.getElementById('phaseSolution');
+      var phaseSeed = document.getElementById('phaseSeed');
       var currentStatusIndex = 0;
       var previewIndex = 0;
       var previewPaused = false;
@@ -273,6 +284,32 @@
 
       function updatePhaseLabel(text) {
         if (progressLabel) progressLabel.textContent = text;
+      }
+
+      function phaseForStatus(status) {
+        if (status && (status.phase === 'seed' || status.phase === 'seeding')) return 'seed';
+        if (status && status.state === 'succeeded') return 'done';
+        return 'solution';
+      }
+
+      function renderPhase(phase) {
+        if (!phaseSolution || !phaseSeed) return;
+        phaseSolution.className = 'phase-step';
+        phaseSeed.className = 'phase-step';
+        if (phase === 'seed') {
+          phaseSolution.classList.add('done');
+          phaseSeed.classList.add('active');
+          if (mainHeading) mainHeading.textContent = 'Seeding __TEMPLATE_NAME__ template data';
+          return;
+        }
+        if (phase === 'done') {
+          phaseSolution.classList.add('done');
+          phaseSeed.classList.add('done');
+          if (mainHeading) mainHeading.textContent = '__TEMPLATE_NAME__ template is ready';
+          return;
+        }
+        phaseSolution.classList.add('active');
+        if (mainHeading) mainHeading.textContent = 'Importing __TEMPLATE_NAME__ template';
       }
 
       function showStatus(index) {
@@ -355,6 +392,7 @@
           var res = await fetch(STATUS_URL + '?t=' + Date.now(), { cache: 'no-store' });
           if (!res.ok) return;
           var status = await res.json();
+          renderPhase(phaseForStatus(status));
           if (status.message) {
             latestLiveMessage = status.message;
             renderStatusMessage(status.message);

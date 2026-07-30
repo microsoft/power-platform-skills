@@ -389,7 +389,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    7. Mark **Import template solution** as `in_progress`, then render and open a read-only import status page so the user has visual feedback while Dataverse imports the solution:
       ```bash
       # Create <temp-import-status-dir>/ and write this initial status JSON to <temp-import-status-dir>/status.json:
-      # { "state": "running", "message": "Starting template import", "progressPercent": 0 }
+      # { "state": "running", "phase": "solution", "message": "Starting template import" }
       node "${PLUGIN_ROOT}/scripts/render-template-import-status.js" \
         --templateName "<SELECTED_TEMPLATE.displayName>" \
         --statusPath "<temp-import-status-dir>/status.json" \
@@ -482,6 +482,10 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       - **`status: "none"`, `"multiple"`, or `"existing-multiple"`**: show the diff result, then explain that the import succeeded but the imported site could not be identified automatically. Stop before activation; the next slice will handle recovery.
    12. Mark **Show imported inactive site** as `completed`.
    13. If `SELECTED_TEMPLATE_VARIANT.seedDataPath` or `SELECTED_TEMPLATE.seedDataPath` is present, mark **Apply template seed data** as `in_progress` and run:
+       Before running seed fetch/application, update `<temp-import-status-dir>/status.json` so the existing status page switches to the second phase:
+       ```json
+       { "state": "running", "phase": "seed", "message": "Seeding template data" }
+       ```
        ```bash
        node "${PLUGIN_ROOT}/scripts/fetch-template-seed-data.js" --sha "<catalog-sha>" --seedDataPath "<SELECTED_TEMPLATE_VARIANT.seedDataPath or SELECTED_TEMPLATE.seedDataPath>"
        ```

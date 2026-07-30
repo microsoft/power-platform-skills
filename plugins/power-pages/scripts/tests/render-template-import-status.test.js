@@ -64,6 +64,13 @@ test('renderTemplateImportStatus renders scaffold-style slideshow, progress, and
   assert.match(html, /Lightning-fast performance/);
   assert.match(html, /Ready to scale globally/);
   assert.match(html, /progressFill/);
+  assert.match(html, /Importing solution/);
+  assert.match(html, /Seeding data/);
+  assert.match(html, /phaseForStatus/);
+  assert.match(html, /renderPhase/);
+  assert.match(html, /status\.phase/);
+  assert.match(html, /Seeding Supplier Portal template data/);
+  assert.match(html, /Supplier Portal template is ready/);
   assert.doesNotMatch(html, /progressFromStatus/);
   assert.doesNotMatch(html, /status\.progress/);
   assert.doesNotMatch(html, /status\.percentComplete/);
