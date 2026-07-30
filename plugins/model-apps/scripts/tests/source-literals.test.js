@@ -103,6 +103,10 @@ test('JSX text is text, not code — the false-positive cases that block real us
     'comparison inside a JSX expression': 'export default function P(){ return <div>{a < b ? <X/> : <Y/>}</div>; }\n',
     'generic component with children': 'export default function P(){ return <List<Item> items={x}><Row/></List>; }\n',
     'JSX comment': 'export default function P(){ return <div>{/* note */}<A/></div>; }\n',
+    // A signature may carry its own trivia; a `;` or `(` inside a comment or string is not structural.
+    'comment inside the type-parameter list': 'const preserveRow = <T extends Record<string, unknown>, // preserve fields; do not widen\n>(row: T) => row;\nexport default function P(){ return <div/>; }\n',
+    'block comment inside the signature': 'const f = <T /* keep wide */ extends object>(x: T) => x;\nexport default function P(){ return <div/>; }\n',
+    'string literal type in a constraint': 'const pickKey = <T extends { kind: "a" | "b" }>(x: T) => x.kind;\nexport default function P(){ return <div/>; }\n',
     'JSX with an explicit type argument': 'export default function P(){ return <Table<Row> rows={r} />; }\n',
     'fragment': 'export default function P(){ return <><span>a</span><span>b</span></>; }\n',
     'comparison operators': 'const b = a < c && c > a;\nexport default function P(){ return <div/>; }\n',
@@ -111,6 +115,15 @@ test('JSX text is text, not code — the false-positive cases that block real us
     assert.equal(hasDefaultExport(code), true, `default export missed: ${name}`);
     assert.equal(hasUnbalancedBrackets(code), false, `falsely unbalanced: ${name}`);
   }
+});
+
+test('a large inline generic signature stays within the lookahead window', () => {
+  // The generic-vs-JSX scan is bounded so a stray `<` cannot make it walk the whole file. The bound
+  // has to clear a realistic signature: this one carries a 34-member inline return object type.
+  const members = Array.from({ length: 34 }, (_, i) => `field${i}: string;`).join(' ');
+  const code = `const wide = <T,>(v: T): { ${members} } => ({} as never);\nexport default function P(){ return <div/>; }\n`;
+  assert.equal(hasDefaultExport(code), true);
+  assert.equal(hasUnbalancedBrackets(code), false);
 });
 
 test('hasUnbalancedBrackets flags a truncated write but tolerates JSX and generics', () => {

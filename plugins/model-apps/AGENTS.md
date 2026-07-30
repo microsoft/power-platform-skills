@@ -277,7 +277,7 @@ scripts/
     op-diff.js                 ← destructive-op diff + --allow-destructive / --non-interactive gating
     artifact-intent.js         ← pure App Spec → canonical SDK intent compiler (new form topology; no SDK calls)
     page-plan.js               ← pure App Spec → plan-document projection used by write-page-plan.js
-    source-literals.js         ← TSX comment/string/template blanker (dependency-free stand-in for a parser)
+    source-literals.js         ← TSX lexer (code/comment/string/template/regex/JSX) — see "Known limits" below
     sdk-teardown.js            ← app-builder teardown engine (planTeardown is pure)
     sdk-http-client.js         ← az-token HttpClient for the vendored SDK
     spec-lint.js / app-spec.js ← App Spec guardrail lint + validation
@@ -391,6 +391,34 @@ values in `feature-flags.json` at the plugin root.
 - **Validation:** `KNOWN_FLAGS` + `validateFlags()` warn on unknown keys / non-boolean
   values in the committed file (so a typo can't silently do nothing, or — after a flip
   to `true` — accidentally enable the wrong thing).
+
+**`scripts/lib/source-literals.js` — known limits.** It is a hand-rolled TSX lexer, not a
+parser: the plugin ships dependency-free, so there is no TypeScript to call. It tracks
+code / line comment / block comment / string / template / regex / JSX tag / JSX text, and
+backs the `promote-intent-pages.js` structural gate plus the eval's effect scoper.
+
+Judge changes to it by **both** error directions, and weight them correctly:
+- a false **accept** promotes prose as a page, and promotion is sticky — the page is then
+  marked implemented and skipped on retry;
+- a false **reject** blocks a real user mid-build, which is worse, because their page was
+  fine.
+
+`scripts/tests/source-literals.test.js` carries a **false-positive corpus** over every
+committed `.tsx` in `samples/` and `evals/model-apps/genpage/fixtures/` (enumerated via
+`git ls-files`, so it does not race the transient fixture dirs `capture-fixture.test.js`
+creates). Two lexer bugs were invisible to hand-written cases and caught only by that
+corpus — keep it, and add to it rather than around it.
+
+Residual limits, accepted deliberately:
+- **`<` disambiguation is structural, not semantic.** A generic arrow is recognised by its
+  shape — type parameters, then a balanced `(…)`, then `=>` (optionally via a return-type
+  annotation). Exotic shapes that break the shape rule (e.g. a type-parameter *default*
+  containing an unmatched `)`) can still be misread.
+- **Lookahead is bounded** (`LOOKAHEAD`, 2000 chars) so a stray `<` cannot walk the file. A
+  signature longer than that is not recognised as a generic.
+
+Neither shape occurs in the corpus, and both fail *loudly* (exit 3, retryable) rather than
+silently. If you hit one, widen the tests first.
 
 **Connectors gate — the single owner is `genpage-connector-builder`.** Every connector
 entry point must go through it or the helper; the checklist of places that gate:

@@ -63,8 +63,40 @@ function expressionPosition(src, i) {
 //   <T extends { id: string; name: string }>(row: T) => row.id      `;` inside an object type
 //   <T extends (...args: unknown[]) => void>(fn: T) => fn           `>` belonging to a function type's `=>`
 //   <T,>(v: T): { key: string; value: T } => ({ … })                `;` inside the RETURN type
+//
+// The lookahead loops also skip trivia — comments and quoted/template strings — because a signature
+// may legitimately carry either, and a `;` or `(` inside one is not structural:
+//   const preserveRow = <T extends Record<string, unknown>, // preserve fields; do not widen
+//   >(row: T) => row;
+//   const pickKey = <T extends { kind: "a" | "b" }>(x: T) => x.kind;
+const LOOKAHEAD = 2000;   // generous: a signature with a large inline object type still fits
+
+// If `j` is the start of a comment or a quoted/template string, return the index just past it;
+// otherwise return `j` unchanged.
+function skipTrivia(src, j) {
+  const c = src[j];
+  const n = src[j + 1];
+  if (c === '/' && n === '/') {
+    const end = src.indexOf('\n', j);
+    return end === -1 ? src.length : end;
+  }
+  if (c === '/' && n === '*') {
+    const end = src.indexOf('*/', j + 2);
+    return end === -1 ? src.length : end + 2;
+  }
+  if (c === '"' || c === "'" || c === '`') {
+    for (let k = j + 1; k < src.length; k += 1) {
+      if (src[k] === '\\') { k += 1; continue; }
+      if (src[k] === c) return k + 1;
+      if (src[k] === '\n' && c !== '`') return j;   // not a string after all
+    }
+    return src.length;
+  }
+  return j;
+}
+
 function looksLikeTypeParams(src, i) {
-  const limit = Math.min(src.length, i + 400);   // type-parameter lists are short; bail rather than scan a file
+  const limit = Math.min(src.length, i + LOOKAHEAD);
   let angle = 0;
   let brace = 0;
   let paren = 0;
@@ -72,6 +104,8 @@ function looksLikeTypeParams(src, i) {
   const nested = () => brace > 0 || paren > 0 || bracket > 0;
   let j = i;
   for (; j < limit; j += 1) {
+    const skipped = skipTrivia(src, j);
+    if (skipped !== j) { j = skipped - 1; continue; }
     const c = src[j];
     if (c === '{') brace += 1;
     else if (c === '}') brace -= 1;
@@ -79,7 +113,6 @@ function looksLikeTypeParams(src, i) {
     else if (c === ')') paren -= 1;
     else if (c === '[') bracket += 1;
     else if (c === ']') bracket -= 1;
-    else if (c === '`') return false;
     else if (c === ';' && !nested()) return false;
     else if (!nested()) {
       if (c === '<') angle += 1;
@@ -98,6 +131,8 @@ function looksLikeTypeParams(src, i) {
   if (src[k] !== '(') return false;
   let depth = 0;
   for (; k < src.length; k += 1) {
+    const skipped = skipTrivia(src, k);
+    if (skipped !== k) { k = skipped - 1; continue; }
     if (src[k] === '(') depth += 1;
     else if (src[k] === ')') { depth -= 1; if (depth === 0) { k += 1; break; } }
   }
@@ -111,7 +146,9 @@ function looksLikeTypeParams(src, i) {
   let b = 0;
   let p = 0;
   let br = 0;
-  for (let m = k; m < Math.min(src.length, k + 300); m += 1) {
+  for (let m = k; m < Math.min(src.length, k + LOOKAHEAD); m += 1) {
+    const skipped = skipTrivia(src, m);
+    if (skipped !== m) { m = skipped - 1; continue; }
     const c = src[m];
     if (c === '{') b += 1;
     else if (c === '}') b -= 1;
