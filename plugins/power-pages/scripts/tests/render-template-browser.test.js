@@ -148,6 +148,39 @@ test('renderTemplateBrowser accepts raw nested variant maps from the manifest', 
   assert.match(html, /Available frameworks/);
   assert.match(html, /React/);
   assert.match(html, /Vue/);
+  // Regression: the hero summary label must also read the object-map variants,
+  // not just the "Available frameworks" chip row. Multiple variants collapse to
+  // a count in the hero.
+  assert.match(html, /template-framework">2 frameworks</);
+});
+
+test('renderTemplateBrowser shows a single object-map variant in the hero label', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const dataPath = path.join(dir, 'families-single.json');
+  const outputPath = path.join(dir, 'browser.html');
+  fs.writeFileSync(dataPath, JSON.stringify({
+    TEMPLATES_JSON: [
+      {
+        id: '311-portal',
+        displayName: '311 Portal',
+        description: 'Citizen service requests',
+        kind: 'spa',
+        keywords: ['311'],
+        previewImages: [],
+        variants: {
+          react: { templateVersion: '1.0.0.1', solutionPath: 'variants/react/solution.zip' },
+        },
+      },
+    ],
+  }));
+
+  renderTemplateBrowser({ templatesJsonPath: dataPath, outputPath, open: false });
+  const html = fs.readFileSync(outputPath, 'utf8');
+
+  // Regression for the empty hero label: a single-variant object map must render
+  // the framework name (not an empty string) in the hero.
+  assert.match(html, /template-framework">React</);
 });
 
 test('renderTemplateBrowser reports opener failures without failing render', (t) => {

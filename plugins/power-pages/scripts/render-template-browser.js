@@ -49,10 +49,28 @@ function frameworkLabel(framework) {
   return String(framework).slice(0, 1).toUpperCase() + String(framework).slice(1);
 }
 
+// The catalog manifest defines `variants` as an object map keyed by framework
+// (e.g. { "react": { ... } }), but some inputs may already pass an array of
+// { framework, ... } entries. Normalize both shapes to a single array so the
+// hero label and the chip row stay in sync.
+// See templates/manifest.json (variants object) in microsoft/power-pages-samples.
+function normalizeVariants(template) {
+  if (Array.isArray(template.variants)) return template.variants;
+  return Object.entries(template.variants || {}).map(([framework, variant]) => ({ framework, ...variant }));
+}
+
+function frameworkSummaryLabel(template) {
+  const frameworks = normalizeVariants(template)
+    .map((variant) => variant.framework)
+    .filter(Boolean);
+  if (frameworks.length > 1) return `${frameworks.length} frameworks`;
+  if (frameworks.length === 1) return frameworkLabel(frameworks[0]);
+  // Fall back to a legacy top-level `framework` field when no variants exist.
+  return frameworkLabel(template.framework);
+}
+
 function renderFrameworkVariants(template) {
-  const variants = Array.isArray(template.variants)
-    ? template.variants
-    : Object.entries(template.variants || {}).map(([framework, variant]) => ({ framework, ...variant }));
+  const variants = normalizeVariants(template);
   const frameworks = variants.length > 0 ? variants.map((variant) => variant.framework) : [template.framework].filter(Boolean);
   if (frameworks.length === 0) return '';
   return `
@@ -87,7 +105,7 @@ function renderTemplateSectionsHtml(templates) {
     <section class="template-section${index === 0 ? ' active' : ''}" id="${templateTabId(index)}">
       <div class="template-hero">
         <h2>${escapeHtml(template.displayName)}</h2>
-        <div class="template-framework">${escapeHtml(template.variants && template.variants.length > 1 ? `${template.variants.length} frameworks` : frameworkLabel(template.framework || (template.variants && template.variants[0] && template.variants[0].framework)))}</div>
+        <div class="template-framework">${escapeHtml(frameworkSummaryLabel(template))}</div>
       </div>
       ${renderFrameworkVariants(template)}
       <div class="template-meta">
