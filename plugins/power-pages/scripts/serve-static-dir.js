@@ -43,10 +43,18 @@ function safeResolve(root, urlPath) {
   return fullPath === rootPath || fullPath.startsWith(rootPath + path.sep) ? fullPath : null;
 }
 
+function isServableFile(filePath) {
+  try {
+    return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
 function startServer({ root, host, port, urlFile }) {
   const server = http.createServer((req, res) => {
     const filePath = safeResolve(root, req.url);
-    if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+    if (!filePath || !isServableFile(filePath)) {
       res.writeHead(404);
       res.end('Not found');
       return;
@@ -102,4 +110,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseArgs, safeResolve, contentType, main };
+module.exports = { parseArgs, safeResolve, contentType, isServableFile, main };

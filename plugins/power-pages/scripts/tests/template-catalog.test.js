@@ -20,6 +20,7 @@ const {
   downloadSolutionArtifact,
   downloadSeedDataDirectory,
   validateZipContainsSolution,
+  zipFileNames,
   validateCatalogShape,
   assertValidSha,
   resolveRefToSha,
@@ -74,6 +75,15 @@ const VALID_TEMPLATE_FAMILY = {
     },
   },
 };
+
+function fakeZipWithLocalFile(name) {
+  const nameBytes = Buffer.from(name, 'utf8');
+  const header = Buffer.alloc(30);
+  header.writeUInt32LE(0x04034b50, 0);
+  header.writeUInt16LE(nameBytes.length, 26);
+  header.writeUInt16LE(0, 28);
+  return Buffer.concat([header, nameBytes]);
+}
 
 test('builds raw and git remote URLs from repo and template-relative paths', () => {
   assert.equal(buildGitRemoteUrl({ owner: 'microsoft', repo: 'power-pages-samples' }), 'https://github.com/microsoft/power-pages-samples.git');
@@ -654,15 +664,19 @@ test('fetch-template-seed-data CLI parser accepts seed data path', () => {
   });
 });
 
-test('validateZipContainsSolution recognizes solution.xml in unzip output', () => {
+test('validateZipContainsSolution recognizes solution.xml without requiring external unzip', () => {
+  assert.deepEqual(zipFileNames(fakeZipWithLocalFile('solution.xml')), ['solution.xml']);
   assert.equal(validateZipContainsSolution('/tmp/ok.zip', {
-    execFileSync: () => '      123  01-01-2026 00:00   solution.xml\n',
+    fs: { readFileSync: () => fakeZipWithLocalFile('solution.xml') },
   }), true);
   assert.equal(validateZipContainsSolution('/tmp/nope.zip', {
-    execFileSync: () => '      123  01-01-2026 00:00   customizations.xml\n',
+    fs: { readFileSync: () => fakeZipWithLocalFile('customizations.xml') },
+  }), false);
+  assert.equal(validateZipContainsSolution('/tmp/nested.zip', {
+    fs: { readFileSync: () => fakeZipWithLocalFile('folder/solution.xml') },
   }), false);
   assert.equal(validateZipContainsSolution('/tmp/broken.zip', {
-    execFileSync: () => { throw new Error('not a zip'); },
+    fs: { readFileSync: () => { throw new Error('not a zip'); } },
   }), false);
 });
 

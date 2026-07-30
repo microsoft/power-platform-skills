@@ -459,19 +459,44 @@ async function fetchCatalog(options = {}, deps = {}) {
 }
 
 function validateZipContainsSolution(zipPath, deps = {}) {
-  const execFile = deps.execFileSync || execFileSync;
   try {
-    const output = execFile('unzip', ['-l', zipPath], { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
-    // `unzip -l` prints one file per line, for example:
-    //   Length      Date    Time    Name
-    //   ---------  ---------- -----   ----
-    //        123  2026-07-12 12:00   solution.xml
-    // Dataverse solution zips must contain a root `solution.xml`; matching a
-    // whitespace-delimited token avoids false positives like `solution.xml.bak`.
-    return /(^|\s)solution\.xml(\s|$)/i.test(output);
+    const fsImpl = deps.fs || fs;
+    return zipFileNames(fsImpl.readFileSync(zipPath)).some((name) => name.toLowerCase() === 'solution.xml');
   } catch {
     return false;
   }
+}
+
+function zipFileNames(buffer) {
+  // ZIP stores each filename in local file headers:
+  //   50 4b 03 04 ... [fileNameLength at +26] [extraLength at +28] [name at +30]
+  // and again in central directory headers:
+  //   50 4b 01 02 ... [fileNameLength at +28] [extraLength at +30] [commentLength at +32] [name at +46]
+  // Read both forms so this remains independent of the host OS having `unzip`
+  // installed. That matters in plugin hosts and CI images where external tools
+  // are not guaranteed.
+  const data = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+  const names = [];
+  for (let i = 0; i <= data.length - 4; i++) {
+    const signature = data.readUInt32LE(i);
+    if (signature === 0x04034b50 && i + 30 <= data.length) {
+      const fileNameLength = data.readUInt16LE(i + 26);
+      const extraLength = data.readUInt16LE(i + 28);
+      const nameStart = i + 30;
+      const nameEnd = nameStart + fileNameLength;
+      if (nameEnd <= data.length) names.push(data.subarray(nameStart, nameEnd).toString('utf8'));
+      i = Math.max(i, nameEnd + extraLength - 1);
+    } else if (signature === 0x02014b50 && i + 46 <= data.length) {
+      const fileNameLength = data.readUInt16LE(i + 28);
+      const extraLength = data.readUInt16LE(i + 30);
+      const commentLength = data.readUInt16LE(i + 32);
+      const nameStart = i + 46;
+      const nameEnd = nameStart + fileNameLength;
+      if (nameEnd <= data.length) names.push(data.subarray(nameStart, nameEnd).toString('utf8'));
+      i = Math.max(i, nameEnd + extraLength + commentLength - 1);
+    }
+  }
+  return names;
 }
 
 async function downloadArtifact(options = {}, deps = {}) {
@@ -599,5 +624,6 @@ module.exports = {
   downloadSeedDataDirectory,
   validateCatalogShape,
   normalizeCatalogFamilies,
+  zipFileNames,
   assertValidSha,
 };
