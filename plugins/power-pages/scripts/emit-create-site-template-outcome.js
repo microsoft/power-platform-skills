@@ -18,21 +18,18 @@ function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === '--quiet') args.quiet = true;
-    else if (arg.startsWith('--')) args[arg.slice(2)] = argv[++i];
+    if (arg.startsWith('--')) args[arg.slice(2)] = argv[++i];
   }
   return args;
 }
 
-function run(argv = process.argv.slice(2), deps = {}) {
+function run(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
-  return emitTemplateOutcome(args, deps);
+  return emitTemplateOutcome(args);
 }
 
 if (require.main === module) {
-  const args = parseArgs(process.argv.slice(2));
-  const result = emitTemplateOutcome(args);
-  if (!args.quiet) process.stdout.write(formatJsonResult(result));
+  process.stdout.write(formatJsonResult(run()));
 }
 
 module.exports = { parseArgs, run };

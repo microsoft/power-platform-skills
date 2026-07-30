@@ -195,8 +195,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
           --templateId "<SELECTED_TEMPLATE.id>" \
           --templateKind "<SELECTED_TEMPLATE.kind>" \
           --framework "<SELECTED_TEMPLATE_VARIANT.framework>" \
-          --audience "<internal|external from Phase 1 discovery>" \
-          --quiet
+          --audience "<internal|external from Phase 1 discovery>"
         ```
         `--audience` is the site audience captured in Phase 1 (`internal` or `external`), **not** the template's `audience` persona array from the catalog manifest. Do not include site name, URL, subdomain, free-text purpose, or any other user-identifying value.
    - **Start from scratch** or catalog unavailable: set `CREATION_PATH = "from-scratch"` and continue below.
@@ -435,8 +434,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         --audience "<internal|external from Phase 1 discovery>" \
         --outcome failure \
         --errorClass "ImportSolutionAsync" \
-        --errorDescription "<short non-PII failure category or poll status>" \
-        --quiet
+        --errorDescription "<short non-PII failure category or poll status>"
       ```
       `--audience` is the site audience captured in Phase 1 (`internal` or `external`), **not** the template's `audience` persona array from the catalog manifest. Do not include site name, URL, subdomain, free-text purpose, component names, or any other user-identifying value in `errorDescription`.
 
@@ -469,8 +467,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         --templateKind "<SELECTED_TEMPLATE.kind>" \
         --framework "<SELECTED_TEMPLATE_VARIANT.framework>" \
         --audience "<internal|external from Phase 1 discovery>" \
-        --seedApplied "false" \
-        --quiet
+        --seedApplied "false"
       ```
       `--audience` is the site audience captured in Phase 1 (`internal` or `external`), **not** the template's `audience` persona array from the catalog manifest. Do not include site name, URL, subdomain, free-text purpose, or any other user-identifying value.
    10. Mark **Show imported inactive site** as `in_progress`.
@@ -1170,8 +1167,7 @@ Present a summary table to the user:
    node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
     --eventName create_site_from_scratch \
     --framework "<framework>" \
-    --audience "<audience>" \
-    --quiet
+    --audience "<audience>"
    ```
 
 **Output**: Deployed (or deployment-ready) site with clear next steps
