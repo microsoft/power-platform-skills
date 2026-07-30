@@ -227,6 +227,7 @@
       var previewIndex = 0;
       var previewPaused = false;
       var toastShown = false;
+      var redirectScheduled = false;
       var latestLiveMessage = '';
 
       function createParticle() {
@@ -343,6 +344,12 @@
         toast.hidden = false;
       }
 
+      function scheduleRedirect(url) {
+        if (redirectScheduled || !/^https?:\/\//i.test(String(url || ''))) return;
+        redirectScheduled = true;
+        setTimeout(function () { window.location.assign(url); }, 1500);
+      }
+
       async function pollStatus() {
         try {
           var res = await fetch(STATUS_URL + '?t=' + Date.now(), { cache: 'no-store' });
@@ -358,7 +365,10 @@
           }
           if (status.state === 'succeeded') {
             progressTrack.classList.add('complete');
-            showToast('success', 'Template import complete', 'Check the agent terminal for the next step.');
+            showToast('success', 'Template site is ready', status.redirectUrl ? 'Opening the live site in this tab.' : 'Check the agent terminal for the next step.');
+          }
+          if (status.redirectUrl) {
+            scheduleRedirect(status.redirectUrl);
           }
         } catch {}
       }

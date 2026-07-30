@@ -504,13 +504,15 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        The activate-site skill owns subdomain selection, final activation confirmation, provisioning, polling, and recovery.
        If activation ultimately fails, tell the user the site is imported but not live yet and can be activated later by rerunning `/activate-site` with the imported site identity, then stop. Do **not** treat this as a failed import; the template import telemetry was already emitted before activation handoff.
    16. When `/activate-site` returns a `siteUrl`, mark **Activate imported site** as `completed` and **Show live template site** as `in_progress`.
-   17. Open the live site URL in the user's default browser:
-       ```bash
-       node "${PLUGIN_ROOT}/scripts/open-url.js" --url "<siteUrl>"
+   17. Redirect the already-open template import status page to the live site by updating `<temp-import-status-dir>/status.json`:
+       ```json
+       {
+         "state": "succeeded",
+         "message": "Template site is live. Opening it now...",
+         "redirectUrl": "<siteUrl>"
+       }
        ```
-       Evaluate the JSON result:
-       - **`ok: true`**: tell the user the site was opened in their default browser.
-       - **`ok: false`**: tell the user the browser could not be opened automatically and show the `siteUrl` for manual opening.
+       Do not open a second browser page for the template path. The status page polls this file and redirects the same tab to `redirectUrl` when the URL is `http` or `https`. If the user closed the status page, show the `siteUrl` for manual opening.
 
        Always surface the activate-site DNS propagation caveat: the site may take a few minutes to load even after activation succeeds.
    18. Mark **Show live template site** as `completed`, then present the template-path summary:

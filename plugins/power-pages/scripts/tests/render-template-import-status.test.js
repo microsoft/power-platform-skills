@@ -69,7 +69,10 @@ test('renderTemplateImportStatus renders scaffold-style slideshow, progress, and
   assert.doesNotMatch(html, /status\.percentComplete/);
   assert.doesNotMatch(html, /--progress-scale/);
   assert.match(html, /setInterval\(pollStatus, 30000\)/);
-  assert.match(html, /Template import complete/);
+  assert.match(html, /Template site is ready/);
+  assert.match(html, /status\.redirectUrl/);
+  assert.match(html, /window\.location\.assign/);
+  assert.match(html, /\^https\?:/);
   assert.match(html, /Template import needs attention/);
 });
 
