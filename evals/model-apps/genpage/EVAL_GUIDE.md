@@ -72,6 +72,9 @@ Layers 1 and 2 are automated. Layer 3 is human judgment by design — visual qua
 - Solution-selection question runs when (and only when) metadata work is needed
 - `check-auth.js` runs before `entity-builder` when entities need creating
 - `pac model genpage upload` invocations include `--prompt` with correct scoping
+- Every upload uses an escaped, structured `--agent-message` with OOB-style
+  Step-by-Step Agent Thoughts (bold numbered headings separated by blank lines),
+  a bulleted Summary, and Final Code sections
 - Prefix discipline holds across plan, entity-creation log, and resolved names
 
 **Runner:** `evals/model-apps/genpage/run-layer-1.js`
@@ -126,7 +129,7 @@ Plus per-eval `expectations` whose text starts with `Phase 5` (page-builder-spec
 
 All eval definitions live in `evals.json` alongside this file. The file contains:
 
-- `common_workflow_assertions`: 15 workflow checks every run must pass (prereqs, auth, solution selection gating, check-auth pre-flight, plan creation, workflow log, `--prompt` scoping, prefix discipline at plan-format / resolved-names / solution-alignment).
+- `common_workflow_assertions`: 16 workflow checks every run must pass (prereqs, auth, solution selection gating, check-auth pre-flight, plan creation, workflow log, `--prompt` scoping, structured `--agent-message` content, prefix discipline at plan-format / resolved-names / solution-alignment).
 - `common_code_assertions`: 18 code-quality checks the generated `.tsx` must pass (Fluent UI V9 only, no forbidden patterns, etc.).
 - `evals`: 16 test cases — each with `id`, `tier`, `prompt`, `data`, and per-eval `expectations`.
 

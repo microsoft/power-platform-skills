@@ -61,7 +61,7 @@
 - Post-write icon verification: grep `from "@fluentui/react-icons"` in weather-dashboard.tsx; verified `TemperatureRegular`, `WeatherSunnyRegular`, `WaterRegular` against verified-icons.txt — all present
 
 ## Phase 6 — Deployment
-- `pac model genpage upload --app-id aa112233-1122-1122-1122-aabbccdd1234 --code-file seattle-weather-dashboard/weather-dashboard.tsx --prompt "Build a dashboard showing the current weather for Seattle with temperature, conditions, and humidity." --model claude-sonnet --name "Seattle Weather" --agent-message "Weather dashboard with temperature, conditions, and humidity" --add-to-sitemap`
+- `pac model genpage upload --app-id aa112233-1122-1122-1122-aabbccdd1234 --code-file seattle-weather-dashboard/weather-dashboard.tsx --prompt "Build a dashboard showing the current weather for Seattle with temperature, conditions, and humidity." --model claude-sonnet --name "Seattle Weather" --agent-message "# Agent Thoughts\nStep-by-Step Processing\n\n**1. Requirements Analysis**\n- Applied the requested page changes using verified requirements.\n# Summary\n- Weather dashboard with temperature, conditions, and humidity\n# Final Code\n" --add-to-sitemap`
 - (--data-sources omitted — mock-data page)
 - Upload succeeded
 

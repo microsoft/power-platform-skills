@@ -53,7 +53,7 @@
 - Post-write icon verification: grep `from "@fluentui/react-icons"` in page.tsx; verified `PersonRegular`, `DocumentRegular`, `CheckmarkCircleRegular` against verified-icons.txt — all present
 
 ## Phase 6 — Deployment
-- `pac model genpage upload --app-id 22222222-1111-2222-3333-444444444444 --code-file new-case-wizard/page.tsx --data-sources 'incident,contact' --prompt "Build a multi-step wizard form for creating new Case records. Step 1: customer info. Step 2: case details (title, priority, category). Step 3: review and submit. Use the incident and contact tables." --model claude-sonnet --name "New Case Wizard" --agent-message "3-step case creation wizard with contact and incident creation" --add-to-sitemap`
+- `pac model genpage upload --app-id 22222222-1111-2222-3333-444444444444 --code-file new-case-wizard/page.tsx --data-sources 'incident,contact' --prompt "Build a multi-step wizard form for creating new Case records. Step 1: customer info. Step 2: case details (title, priority, category). Step 3: review and submit. Use the incident and contact tables." --model claude-sonnet --name "New Case Wizard" --agent-message "# Agent Thoughts\nStep-by-Step Processing\n\n**1. Requirements Analysis**\n- Applied the requested page changes using verified requirements.\n# Summary\n- 3-step case creation wizard with contact and incident creation\n# Final Code\n" --add-to-sitemap`
 - Upload succeeded
 
 ## Phase 8 — Summary

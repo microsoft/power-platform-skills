@@ -71,6 +71,11 @@ function allMatches(pattern, text) {
   return [...text.matchAll(new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : pattern.flags + 'g'))];
 }
 
+function agentMessageFromUpload(uploadLine) {
+  const match = uploadLine.match(/--agent-message\s+(?:"((?:\\.|[^"])*)"|'((?:\\.|[^'])*)'|(\S+))/);
+  return match ? (match[1] ?? match[2] ?? match[3]) : null;
+}
+
 const WORKFLOW_ASSERTIONS = new Map();
 
 WORKFLOW_ASSERTIONS.set(
@@ -327,6 +332,46 @@ WORKFLOW_ASSERTIONS.set(
     if (!solutionQuestionAsked(log)) return skip('solution question not asked');
     if (!/dominant\s+prefix|prefix\s+alignment|env(ironment)?\s+publishers/i.test(log)) {
       return fail('solution question recorded but no dominant-prefix detection mentioned');
+    }
+    return pass();
+  }
+);
+
+WORKFLOW_ASSERTIONS.set(
+  'Every pac model genpage upload records --agent-message with escaped # Agent Thoughts, OOB-style Step-by-Step Processing with bold numbered headings on new lines, a bulleted # Summary, and # Final Code sections',
+  ({ fixture }) => {
+    const log = fixture.workflowLog;
+    if (!log) return fail('no workflow-log.md');
+    const uploadLines = log.split('\n').filter((line) => /pac\s+model\s+genpage\s+upload/.test(line));
+    if (uploadLines.length === 0) return skip('no upload command recorded');
+
+    const structuredMessage =
+      /^# Agent Thoughts\\nStep-by-Step Processing\\n(.*?)\\n# Summary\\n(.*?)\\n# Final Code\\n$/;
+    for (const [index, uploadLine] of uploadLines.entries()) {
+      const agentMessage = agentMessageFromUpload(uploadLine);
+      if (!agentMessage) return fail(`upload ${index + 1} is missing a quoted --agent-message value`);
+      const sections = agentMessage.match(structuredMessage);
+      if (!sections || !sections[1].trim() || !sections[2].trim()) {
+        return fail(`upload ${index + 1} agent message must contain non-empty escaped OOB-style Agent Thoughts, Summary, and Final Code sections in order`);
+      }
+      const thoughtLines = sections[1].split('\\n');
+      const boldHeadingIndexes = thoughtLines
+        .map((line, lineIndex) => (/^\*\*\d+\.\s+.+\*\*$/.test(line.trim()) ? lineIndex : -1))
+        .filter((lineIndex) => lineIndex >= 0);
+      const hasUnboldedNumberedHeading = thoughtLines.some((line) => /^\d+\.\s+/.test(line.trim()));
+      const hasHeadingWithoutBlankLine = boldHeadingIndexes.some(
+        (lineIndex) => lineIndex === 0 || thoughtLines[lineIndex - 1].trim()
+      );
+      if (boldHeadingIndexes.length === 0 || hasUnboldedNumberedHeading) {
+        return fail(`upload ${index + 1} Agent Thoughts must bold every numbered heading with Markdown **...**`);
+      }
+      if (hasHeadingWithoutBlankLine) {
+        return fail(`upload ${index + 1} Agent Thoughts must put an escaped blank line before every numbered heading`);
+      }
+      const summaryLines = sections[2].split('\\n').filter((line) => line.trim());
+      if (summaryLines.some((line) => !line.trim().startsWith('- '))) {
+        return fail(`upload ${index + 1} Summary items must be Markdown bullets beginning with "- "`);
+      }
     }
     return pass();
   }

@@ -180,13 +180,20 @@ pac model genpage upload `
   --connectors "<working-dir>/connectors.json" `
   --prompt "<User's edit request — only the changes, not the full page>" `
   --model "<current-model-id>" `
-  --agent-message "Description of what was changed in this upload"
+  --agent-message "# Agent Thoughts\nStep-by-Step Processing\n\n**1. Requirements Analysis**\n- <requested changes>\n\n**2. Assumptions**\n- <explicit assumptions; omit when none>\n\n**3. Major Functions**\n- <implementation and preserved behavior>\n\n**4. Layout, Styling, and Theming**\n- <applicable UX decisions>\n\n**5. Accessibility, Localization, and Overflow**\n- <applicable decisions>\n\n**6. Final Verifications**\n- <checks against the edit request and GenPage rules>\n# Summary\n- <Description of what changed in this upload>\n- <Additional relevant outcome>\n# Final Code\n"
 ```
 
 Use `--page-id` for updates. Omit `--add-to-sitemap` (the page is already in
 the sitemap).
 Omit `--data-sources` when `config.json.dataSources` was empty.
 Omit `--connectors` when connector bindings are unchanged.
+Use literal `\n` escape sequences in `--agent-message`, not actual newlines.
+Agent Thoughts must be a concise OOB-style, user-facing implementation summary.
+Include only applicable sections, distinguish requirements from assumptions, and
+bold every numbered section heading with Markdown `**...**`. Put a blank escaped
+line (`\n\n`) before every numbered heading so Adaptive Cards render it on a new
+line. Every Summary item must be a Markdown bullet beginning with `- `. Never
+include private chain-of-thought or sensitive information.
 
 ## Edit Phase 7: Verify (Optional)
 

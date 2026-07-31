@@ -68,7 +68,7 @@
 - Post-write icon verification: grep `from "@fluentui/react-icons"` in sharepoint-docs.tsx; verified `DocumentRegular`, `OpenRegular` against verified-icons.txt — all present
 
 ## Phase 6 — Deployment
-- `pac model genpage upload --app-id aa112233-1122-1122-1122-aabbccdd1234 --code-file sharepoint-team-docs/sharepoint-docs.tsx --connectors "sharepoint-team-docs/connectors.json" --prompt "Build a page listing documents from our SharePoint team site." --model claude-sonnet --name "SharePoint Documents" --agent-message "SharePoint team site document listing" --add-to-sitemap`
+- `pac model genpage upload --app-id aa112233-1122-1122-1122-aabbccdd1234 --code-file sharepoint-team-docs/sharepoint-docs.tsx --connectors "sharepoint-team-docs/connectors.json" --prompt "Build a page listing documents from our SharePoint team site." --model claude-sonnet --name "SharePoint Documents" --agent-message "# Agent Thoughts\nStep-by-Step Processing\n\n**1. Requirements Analysis**\n- Applied the requested page changes using verified requirements.\n# Summary\n- SharePoint team site document listing\n# Final Code\n" --add-to-sitemap`
 - Upload succeeded
 
 ## Phase 8 — Summary

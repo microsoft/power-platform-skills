@@ -409,11 +409,28 @@ Connector deployment matrix:
 
 **Copy the upload commands below exactly — `--app-id`, `--code-file`, `--prompt`, `--agent-message` are all required and must use these exact flag names.**
 
+`--agent-message` must always use this structured, single-line value:
+
+```text
+# Agent Thoughts\nStep-by-Step Processing\n\n**1. Requirements Analysis**\n- <verified requirements implemented>\n\n**2. Assumptions**\n- <explicit user-facing assumptions; omit this section when none were needed>\n\n**3. Major Functions**\n- <data access, interactions, navigation, and other major behaviors>\n\n**4. Layout, Styling, and Theming**\n- <layout and Fluent UI decisions>\n\n**5. Accessibility, Localization, and Overflow**\n- <relevant accessibility, localization, scrolling, and responsive decisions>\n\n**6. Final Verifications**\n- <checks completed against the requirements and GenPage rules>\n# Summary\n- <what was built or changed>\n- <additional outcome or usage detail when relevant>\n# Final Code\n
+```
+
+Use the literal two-character `\n` escape sequences shown above, not actual
+newlines. PAC's Windows command parser splits multiline argument values, while
+the GenUX control expands escaped section breaks for rendering. Agent Thoughts
+must be an OOB-style, user-facing implementation summary: include only applicable
+sections, keep each section concise, distinguish verified requirements from
+assumptions, bold every numbered section heading with Markdown `**...**`, and
+put a blank escaped line (`\n\n`) before every numbered heading so Adaptive
+Cards render it on a new line. Describe decisions rather than hidden reasoning.
+Every Summary item must be a Markdown bullet beginning with `- `. Do not include
+private chain-of-thought, credentials, or other sensitive information.
+
 **Log the full command verbatim into `workflow-log.md` under a `## Phase 6 — Deploy` section before invoking it.** Including `--prompt` and all other flags. The eval harness greps the log for these tokens — a terse summary like `Command: pac model genpage upload --add-to-sitemap` will fail the `--prompt scoping` assertion. Format:
 
 ```markdown
 ## Phase 6 — Deploy
-- Command: `pac model genpage upload --app-id <id> --code-file <path> --data-sources '<entities>' --prompt "<full prompt>" --model <model-id> --name "<page name>" --agent-message "<description>" --add-to-sitemap`
+- Command: `pac model genpage upload --app-id <id> --code-file <path> --data-sources '<entities>' --prompt "<full prompt>" --model <model-id> --name "<page name>" --agent-message "# Agent Thoughts\nStep-by-Step Processing\n<bold numbered headings and bulleted implementation details>\n# Summary\n- <summary item>\n# Final Code\n" --add-to-sitemap`
 - Result: page-id = <returned-id>, status = success
 ```
 
@@ -442,7 +459,7 @@ pac model genpage upload `
   --connectors "<working-dir>/connectors.json" `
   --prompt "<Full page description from plan's ## User Requirements>" `
   --model "<current-model-id>" `
-  --agent-message "Description of what was built and any relevant details" `
+  --agent-message "# Agent Thoughts\nStep-by-Step Processing\n<Bold numbered headings with bulleted requirements, assumptions, major functions, UX decisions, and verification details>\n# Summary\n- <What was built>\n- <Additional relevant outcome>\n# Final Code\n" `
   --add-to-sitemap
 ```
 
@@ -463,7 +480,7 @@ pac model genpage upload `
   --connectors "<working-dir>/connectors.json" `
   --prompt "<Only the changes in this upload, e.g. 'Add a search box and sort by company name'>" `
   --model "<current-model-id>" `
-  --agent-message "Description of what was changed in this upload"
+  --agent-message "# Agent Thoughts\nStep-by-Step Processing\n<Bold numbered headings with bulleted edit requirements, assumptions, implementation decisions, preserved behavior, and verification details>\n# Summary\n- <What changed in this upload>\n- <Additional relevant outcome>\n# Final Code\n"
 ```
 
 For updates, include the `--connectors` line only when this upload intentionally
@@ -500,7 +517,7 @@ phase substitutes the real GUIDs.
      --data-sources "entity1,entity2" `
      --prompt "Resolve cross-page navigation placeholders to real page GUIDs (post-deploy fix-up)" `
      --model "<current-model-id>" `
-     --agent-message "Replaced PAGEREF_<name> tokens with actual page IDs returned by Phase 6"
+     --agent-message "# Agent Thoughts\nStep-by-Step Processing\n\n**1. Requirements Analysis**\n- Resolve every generated-page navigation placeholder.\n\n**2. Major Functions**\n- Substitute the page IDs returned by Phase 6 without changing unrelated behavior.\n\n**3. Final Verifications**\n- Confirm no PAGEREF_ placeholders remain.\n# Summary\n- Replaced PAGEREF_<name> tokens with actual page IDs returned by Phase 6.\n# Final Code\n"
    ```
 
 Pages with no `PAGEREF_` strings need no second upload.

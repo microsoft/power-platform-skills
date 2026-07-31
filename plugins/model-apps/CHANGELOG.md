@@ -105,6 +105,13 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   and `feature-flags.js` gains `--list`, `describe()`, and config validation.
 
 ### Changed
+- GenPage create, edit, and navigation-fix uploads now send structured
+  `Agent Thoughts` and `Summary` sections through `--agent-message` using
+  PAC-safe escaped line breaks. A Layer 1 assertion rejects plain descriptions
+  in any initial upload or re-upload. Agent Thoughts follow the OOB-style
+  step-by-step implementation summary with bold numbered headings and bulleted
+  Summary items; blank lines keep each numbered heading on its own rendered line
+  while excluding private chain-of-thought.
 - Spec tightening so workflow-logs are command-verbatim and `pageInput`
   destructure is required even on mock pages (planner, page-builder,
   SKILL.md Phase 6 + Phase 8).
