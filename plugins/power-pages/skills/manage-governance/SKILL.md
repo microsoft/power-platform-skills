@@ -64,7 +64,7 @@ These are **admin-only** operations — applying an auth policy stops or starts 
 - **Plain language with the user.** Talk about "turning off the OpenID Connect / SAML sign-in path on Power Pages portals" or "enabling Google sign-in on your sites". Only show the policy string when the user asks for the technical name.
 - **OpenID Connect / SAML map to the protocol toggles.** "OpenID Connect" / "OIDC" resolves to `EnableProtocolOpenIdConnect` and "SAML" / "SAML 2.0" resolves to `EnableProtocolSAML20` — whether or not the user adds a "protocol" / "enable" qualifier. (The legacy `PowerPages_DisableAuthentication*` block rules have been removed.) A "block OpenID Connect" / "block SAML" phrasing means **disabling** that protocol toggle.
 - **No silent overrides.** **Disabling** any `Enable*` authentication policy (`EnableProtocol*`, `EnableIdp*`, `EnableAuthenticationLocalLogin`, `EnableExternalAuthProviders`) will sign existing users out of any portal that uses the targeted provider. Surface that consequence at the consent gate before posting. (The Maker Copilot policy has no such sign-out side effect.)
-- **Parent/child availability is a hard gate on every apply path.** The four sign-in protocols (OpenID Connect, SAML 2.0, WS-Federation, OAuth 2.0) require `EnableExternalAuthProviders` to be Enabled on a portal; the three social providers (Facebook, Google, Microsoft) require **both** `EnableExternalAuthProviders` **and** `EnableProtocolOpenAuth`. On a portal where the required parent is Disabled the child can be **neither enabled nor disabled** — with **no "force"/"anyway" override**. The scope picker lists **only the portals where the required parent is Enabled** (via `resolve-portal-availability.js --available-only`), and the **named-site fast path** (when the site is named directly in the request) hard-blocks ineligible sites the same way via Phase 4.2.2b. When only some portals qualify, it shows/keeps just those plus an info line; when **none** qualify (a required parent is Disabled env-wide) it shows a single *"External Auth is Disabled for this environment"* message — and for a **social IdP** (two parents) it names both, *"External Auth or OAuth 2.0 sign-in is Disabled for this environment"* — and the skill does not prompt for a scope or POST. See the "Parent/child availability" section under Phase 2.3. **The environment picker itself is never filtered** — every environment is always shown in the full env list; availability only narrows the per-portal scope.
+- **Parent/child availability is a hard gate on every apply path.** The four sign-in protocols (OpenID Connect, SAML 2.0, WS-Federation, OAuth 2.0) require `EnableExternalAuthProviders` to be Enabled on a portal; the three social providers (Facebook, Google, Microsoft) require **both** `EnableExternalAuthProviders` **and** `EnableProtocolOpenAuth`. On a portal where the required parent is Disabled the child can be **neither enabled nor disabled** — with **no "force"/"anyway" override**. The scope picker **always lists every portal with an explicit `Eligible` (Yes / No) column** (via `resolve-portal-availability.js --markdown`) — eligible portals first, ineligible ones just below with the blocking parent named — and **only the eligible (Yes) portals may be selected**; the **named-site fast path** (when the site is named directly in the request) hard-blocks ineligible sites the same way via Phase 4.2.2b. When **none** qualify (a required parent is Disabled env-wide) it shows a single *"External Auth is Disabled for this environment"* message — and for a **social IdP** (two parents) it names both, *"External Auth or OAuth 2.0 sign-in is Disabled for this environment"* — and the skill does not prompt for a scope or POST. See the "Parent/child availability" section under Phase 2.3. **The environment picker itself is never filtered** — every environment is always shown in the full env list; availability only marks the per-portal Eligible status.
 - **Governance STATUS is ALWAYS the 5-column Unicode box.** Every status render — Fetch Env (4.3.1), Fetch Site (4.4.3), and the post-Set verify (4.2.5) — uses `render-portal-table.js --unicode --no-color`, emitted **inside a fenced code block**, with **exactly** the columns `# | Name | URL | Site ID | State` (`┌─┬─┐ │ ├─┼─┤ └─┴─┘`, a rule between every row). Never add, drop, reorder, or rename a column, and never substitute a Markdown table for status. This is uniform for **all twenty-one policies** including the gated children (OpenID Connect / SAML 2.0 / WS-Federation / OAuth 2.0 / Facebook / Google / Microsoft): for a gated child the single `State` shows the **effective** state (own AND every gating parent) — the parent chain is computed but never rendered as extra columns. The eleven `PowerPages_*` Copilot / site-control policies are independent leaves (no gating parent), so their single `State` is simply their own state.
 
 ## Workflow
@@ -589,11 +589,12 @@ already Enabled there. This is a different concept from the Phase 4.2.3 cascade
 on which a required parent is **Disabled** is **not available** to configure the
 child policy on — the child can be **neither enabled nor disabled** there, with
 **no "force"/"anyway" override**. This gate is enforced on **both** apply paths:
-the scope picker filters to **only the available portals** (the ineligible ones
-are omitted and summarized, and if **no** portal is available it shows a single
-*"&lt;parent&gt; is Disabled for this environment"* message instead of an empty
-list), and the **named-site fast path** (Phase 4.2.2b) hard-blocks any directly
-named ineligible site the same way.
+the scope picker **always shows every portal with an explicit `Eligible` (Yes /
+No) column** (the ineligible ones listed just below with the blocking parent
+named, and if **no** portal is eligible it shows a single *"&lt;parent&gt; is
+Disabled for this environment"* message instead of an all-No list) — but **only
+the eligible portals may be selected** — and the **named-site fast path** (Phase
+4.2.2b) hard-blocks any directly named ineligible site the same way.
 
 The dependency tree (source of truth: `governance-mapping.json` →
 `policies[].availabilityDependsOn` and top-level `policyAvailabilityDependencies`):
@@ -619,13 +620,16 @@ parents Enabled) and `unavailable` (at least one parent Disabled, with
 `blockingParents` naming which). Posture is **fail-open**: a parent whose state
 can't be read never hides a portal.
 
-The scope picker renders this partition with `--available-only` (Phase 4.2.1
-Step B.1): it lists **only** the `available` portals, and
+The scope picker renders this partition with the default `--markdown` view
+(Phase 4.2.1 Step B.1): it lists **every** portal — `available` first (marked
+**✅ Yes**), then `unavailable` directly below (marked **🚫 No — blocked by
+&lt;parent&gt;**) — with an explicit `Eligible` column, and
 
-- when only a subset is available, adds an info line naming how many sites are
-  shown vs hidden and why (the requirement's *"list only those few portals and
-  give proper information"*);
-- when `available` is empty (a parent is Disabled env-wide), prints the single
+- only the **✅ Yes** portals may be selected (the **🚫 No** rows are shown for
+  transparency, so the admin sees which sites are blocked and why — the
+  requirement's *"always show the eligible portal with Status Eligible
+  Yes/No"*);
+- when `available` is empty (a parent is Disabled env-wide), it prints the single
   *"External authentication providers is Disabled for this environment"* message
   (for a **social IdP** it names both parents — *"External authentication
   providers **or** OAuth 2.0 sign-in is Disabled for this environment"*) and the
@@ -723,9 +727,21 @@ what the Phase 2.1 parse produced, then run only the remaining steps:
 
 | What the request provided | Steps to run |
 |---------------------------|--------------|
-| **Nothing** (no env, no sites) | 4.1 pick env → 4.2.1 top-10 sites + all/selected → (4.2.2 if selected) → **4.2.3 Impact Summary + consent** → 4.2.4 apply → 4.2.5 verify |
-| **Environment only** | 4.1 resolves env (skips picker) → 4.2.1 top-10 sites + all/selected → (4.2.2 if selected) → **4.2.3 Impact Summary + consent** → 4.2.4 apply → 4.2.5 verify |
+| **Nothing** (no env, no sites) | 4.1 pick env → 4.2.1 **eligible** sites (child auth policy → `resolve-portal-availability.js --markdown`, all portals with an Eligible Yes/No column; else plain list) + all/selected → (4.2.2 if selected) → **4.2.3 Impact Summary + consent** → 4.2.4 apply → 4.2.5 verify |
+| **Environment only** | 4.1 resolves env (skips picker) → 4.2.1 **eligible** sites (child auth policy → `resolve-portal-availability.js --markdown`, all portals with an Eligible Yes/No column; else plain list) + all/selected → (4.2.2 if selected) → **4.2.3 Impact Summary + consent** → 4.2.4 apply → 4.2.5 verify |
 | **Environment + site(s)** | 4.1 resolves env + resolve named site(s) to `<PORTAL_IDS>` (skip 4.2.1/4.2.2) → **4.2.2b availability gate (hard-block named sites whose parent is Disabled)** → **4.2.3 Impact Summary + consent** → 4.2.4 apply → 4.2.5 verify |
+
+> **Mandatory eligibility filter for the seven child auth policies.** For any of
+> the four sign-in protocols (OpenID Connect, SAML 2.0, WS-Federation, OAuth 2.0)
+> or the three social providers (Facebook, Google, Microsoft), the **only**
+> portals ever shown, offered, or POSTed in the scope step are the **eligible**
+> ones — those whose gating parent is Enabled (External Auth for the protocols;
+> External Auth **and** OAuth 2.0 for the social providers). The scope picker
+> (4.2.1 Step B.1) and the named-site fast path (4.2.2b) both enforce this via
+> `resolve-portal-availability.js`. There is **no** path — not "environment
+> only", not "environment + sites", not a loop iteration — that shows the plain
+> unfiltered `list-portals.js` table for these policies or lets an ineligible
+> portal be selected. Never bypass it.
 
 When sites are already named in the request, resolve them with
 `parse-portal-input.js` (against `list-portals.js` output) to get
@@ -754,8 +770,31 @@ Only if it is genuinely missing, ask a single short **free-text** prompt (NOT an
 `AskUserQuestion`): *"Do you want to **enable** or **disable** it? Reply
 'enable' or 'disable'."* Map the reply to the verb, then continue.
 
-**Step B — list the sites (top 10).** Always show the site list first so the
-free-text input is safe (admins recognise site **names**, not GUIDs):
+**Step B — choose the correct site-list source (MANDATORY branch — NEVER skip).**
+Before showing any site list, branch on whether `<POLICY>` is a **child auth
+policy** (has a non-empty `availabilityDependsOn` in `governance-mapping.json`).
+This branch decides which command produces the list — get it wrong and the admin
+can pick an ineligible portal, which is a defect:
+
+- **Child auth policy** — the four sign-in protocols **OpenID Connect /
+  SAML 2.0 / WS-Federation / OAuth 2.0** and the three social providers
+  **Facebook / Google / Microsoft**. You **MUST** build the site list from the
+  availability resolver in **Step B.1** (`resolve-portal-availability.js
+  --markdown`), which shows **every portal with an explicit `Eligible` (Yes /
+  No) column** — eligible ones first, ineligible ones just below with the
+  blocking parent named — and lets **only the eligible portals** be selected.
+  **NEVER show the plain `list-portals.js` table for these policies**, and
+  **NEVER prompt for scope or POST over an unfiltered list or an ineligible
+  portal**. Skipping the eligibility filter, or listing/allowing a portal whose
+  required parent is Disabled, is a hard defect with no exception. Go straight to
+  **Step B.1** — do **not** render the plain table below first.
+- **Root / independent policy** — `<POLICY>` has **no** `availabilityDependsOn`
+  (Maker Copilot, local login, **External Auth** itself, and **OAuth 2.0** when
+  it is the target policy — it is a root parent, not a child). Every portal is
+  eligible, so show the plain full site list below.
+
+**Plain site list — ROOT / INDEPENDENT policies only.** Show the site list so
+the free-text input is safe (admins recognise site **names**, not GUIDs):
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-portals.js" --envId "<ENV_ID>"
@@ -775,40 +814,39 @@ sites — type any site name or ID (including ones not listed), or 'all'." With
 | 3 | 8-june        | https://site-pjpuy.powerappsportals.com   | fe624c02-8793-4423-84f0-3546d80dee49  |
 ```
 
-**Step B.1 — availability pre-filter (child auth policies only).** When the
-target `<POLICY>` has an `availabilityDependsOn` list in
+**Step B.1 — eligibility view (child auth policies — MANDATORY, never
+bypass).** When the target `<POLICY>` has an `availabilityDependsOn` list in
 `governance-mapping.json` (the four sign-in protocols and the three social
-providers — see the "Parent/child availability" section under Phase 2.3), run
-the resolver **before** prompting for scope, and render the site list with the
-**`--available-only`** flag so the scope picker shows **only the sites the admin
-can actually target**:
+providers — see the "Parent/child availability" section under Phase 2.3), this
+step is **required** and **replaces** the plain Step B table entirely: run the
+resolver **before** prompting for scope, and render the site list in the
+**default `--markdown`** mode (do **NOT** pass `--available-only`) so the scope
+picker **always shows EVERY portal with an explicit `Eligible` (Yes / No)
+column** — the eligible sites first, the ineligible ones listed directly below
+with the blocking parent named. This is the requirement *"always show the
+eligible portal with Status Eligible Yes/No"*: the admin sees the full portal
+list and which ones can/can't be targeted, not a silently-filtered subset. There
+is **no** code path where a child auth policy skips this and shows the plain
+unfiltered `list-portals.js` table — doing so is a defect:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/resolve-portal-availability.js" \
   --policy "<POLICY>" --envId "<ENV_ID>" \
-  --portalsFile <path-to-list-portals-output> --markdown --available-only
+  --portalsFile <path-to-list-portals-output> --markdown
 ```
 
 The helper reads each parent policy's env value + inclusion/exclusion lists and
-then, for `--available-only`, behaves as follows:
+then behaves as follows:
 
-- **Some sites eligible** — it prints a table of **only** the portals where the
-  gating parent (External Auth, and for Facebook / Google / Microsoft also
-  OAuth 2.0) is **Enabled**. When only a subset is eligible, it appends an info
-  line in plain "Governance setting" language — for a single-parent child
-  *"Showing N of M site(s) — the &lt;child&gt; Governance setting can only be
-  configured on sites where the External authentication providers Governance
-  setting is on. K site(s) are hidden because the External authentication
-  providers Governance setting is off on them, so the &lt;child&gt; Governance
-  setting can't apply there."* For a **social IdP** (two parents) it names both,
-  using **"and"** for the enabled requirement and **"or"** for the blocked
-  reason — *"…the &lt;child&gt; Governance setting can only be configured on
-  sites where **both** the External authentication providers **and** OAuth 2.0
-  sign-in Governance settings **are on**. K site(s) are hidden because the
-  External authentication providers **or** OAuth 2.0 sign-in Governance setting
-  is off on them, so the &lt;child&gt; Governance setting can't apply there."*
-  Emit this output verbatim in place of the plain Step B table, then prompt for
-  scope over the listed (available) sites only.
+- **At least one site eligible** — it prints ONE table of **every** portal with
+  columns `# | Portal Name | Portal URL | Portal ID | Eligible`. Eligible rows
+  show **✅ Yes** and are listed first; ineligible rows show **🚫 No — blocked by
+  &lt;parent&gt; (Disabled)** and are listed directly below (per *"Disabled
+  Portal or Environment should be shown just below it"*). For a **social IdP**
+  (two parents) an ineligible row names whichever parent(s) are off. Emit this
+  output verbatim in place of the plain Step B table, then **always** prompt for
+  scope (Step C). **Only the ✅ Yes (eligible) portals may actually be chosen**
+  — the ineligible rows are shown for transparency only.
 - **No site eligible** (a parent is Disabled env-wide, so `available` is
   empty) — the helper prints a single message. For a single-parent child:
   **"The External authentication providers Governance setting is off for this
@@ -833,9 +871,9 @@ then, for `--available-only`, behaves as follows:
   text. This is the requirement's *"if there is no portal available, show
   'External Auth or OAuth2 is Disabled' and ask a free-text command"*.
 
-Only the **available** portals may be chosen. If the admin names a site that
-isn't in the list, tell them the gating parent is Disabled on it and ask them to
-pick one of the listed sites (or enable the parent there first). This is a
+Only the **eligible** (✅ Yes) portals may be chosen. If the admin names a site
+that shows **🚫 No**, tell them the gating parent is Disabled on it and ask them
+to pick one of the eligible sites (or enable the parent there first). This is a
 **hard block** — the child policy can be neither enabled nor disabled on an
 ineligible site, and there is **no "force"/"anyway" override** (see Phase
 4.2.2b, which enforces the same rule on the named-site fast path). When
@@ -895,14 +933,15 @@ Render the result as a plain-text table the user can copy from:
 > reference any site by name/ID because the parser validates against the full
 > list.
 
-> **Availability pre-filter (child auth policies).** Same rule as Phase 4.2.1
+> **Eligibility view (child auth policies).** Same rule as Phase 4.2.1
 > Step B.1 — when `<POLICY>` has an `availabilityDependsOn` list, render this
-> site list via `resolve-portal-availability.js --markdown --available-only` so
-> **only** the portals where the required parent is Enabled are listed. Only
-> those portals may be chosen; if the user names one that isn't listed, tell
-> them the gating parent is Disabled on it and reprompt. If no portal is
-> available, show the *"External Auth is Disabled for this environment"* message
-> and do not proceed.
+> site list via `resolve-portal-availability.js --markdown` so **every** portal
+> is shown with an explicit `Eligible` (Yes / No) column (eligible first,
+> ineligible just below with the blocking parent named). Only the **eligible**
+> portals may be chosen; if the user names an ineligible one, tell them the
+> gating parent is Disabled on it and reprompt. If no portal is eligible, show
+> the *"External Auth is Disabled for this environment"* message and do not
+> proceed.
 
 If the list is empty, tell the user there are no portals in that environment and back the user up to **4.2.1**.
 
@@ -929,7 +968,7 @@ Persist `<PORTAL_IDS>` (comma-joined) for downstream steps. Persist `<PORTAL_NAM
 
 This gate runs on the **named-site fast path** (the "Environment + site(s)"
 entry variant) — the path that skips the scope picker (4.2.1/4.2.2) and its
-`--available-only` pre-filter. Because that pre-filter is skipped, the parent
+Step B.1 eligibility view. Because that view is skipped, the parent
 dependency must be enforced **here** instead, so a directly-named ineligible
 site can never slip through to a POST.
 
@@ -1699,7 +1738,7 @@ Skill tracking:
 - **Explicit consent for Set** — never POST `/governance` without a Set-specific consent step: after the Impact Summary, present a **2-option `AskUserQuestion`** (choices **Apply now** / **Cancel** — exactly those two, no free-text prompt, no third option) that spells out which sign-in path / feature is being turned off and what happens to currently-signed-in users. Only a selected **Apply now** authorizes the POST.
 - **Redundant-operation guard runs BEFORE the Impact Summary** — when the admin's requested operation is a no-op for the named site(s) (enable while the env is already `All`/`Include`-with-the-site, or disable while already `None`/`Exclude`-with-the-site), do **not** render the Impact Summary or POST yet. First stop and ask the standard **eligible-portal scope** free-text prompt (Phase 4.2.3 Step 1b): reply **All** to apply the requested verb to all eligible portals, or a **comma-separated list of portals** for specific sites. `All` → no API call (it is already in that state), report "no change" and loop. Specific portals → set `Include` (enable) / `Exclude` (disable) on the named site(s), THEN render the Impact Summary (surfacing the collateral flip on the other sites) and the normal `Apply now` consent gate.
 - **Always verify after Set** — run the matching `get-*` call after the polling script exits, even when it reports success.
-- **Parent-gated hard block (no override)** — a **child** auth policy can be **neither enabled nor disabled** on a portal whose required **parent** is Disabled: OpenID Connect / SAML 2.0 / WS-Federation / OAuth 2.0 are blocked wherever **External Auth** (`EnableExternalAuthProviders`) is off; Facebook / Google / Microsoft are blocked wherever **External Auth or OAuth 2.0** (`EnableProtocolOpenAuth`) is off. This applies **on every path**, including the **named-site fast path** (Phase 4.2.2b) where the site is named directly in the request — not only the scope picker's `--available-only` pre-filter (Phase 4.2.1 Step B.1). NEVER offer a "force-enable / force-disable anyway", "toggle the own setting regardless", or any similar bypass — the gate is absolute. If every named site is ineligible, do **not** render the Impact Summary or POST; name the Disabled parent and stop (offer to enable the parent first). If only some are ineligible, drop them (telling the admin why) and proceed with the eligible ones only. Fail-open only when a parent's live state can't be read.
+- **Parent-gated hard block (no override)** — a **child** auth policy can be **neither enabled nor disabled** on a portal whose required **parent** is Disabled: OpenID Connect / SAML 2.0 / WS-Federation / OAuth 2.0 are blocked wherever **External Auth** (`EnableExternalAuthProviders`) is off; Facebook / Google / Microsoft are blocked wherever **External Auth or OAuth 2.0** (`EnableProtocolOpenAuth`) is off. This applies **on every path**, including the **named-site fast path** (Phase 4.2.2b) where the site is named directly in the request — not only the scope picker's eligibility view (Phase 4.2.1 Step B.1). NEVER offer a "force-enable / force-disable anyway", "toggle the own setting regardless", or any similar bypass — the gate is absolute. If every named site is ineligible, do **not** render the Impact Summary or POST; name the Disabled parent and stop (offer to enable the parent first). If only some are ineligible, drop them (telling the admin why) and proceed with the eligible ones only. Fail-open only when a parent's live state can't be read.
 - **Always show the env list** — for **every** new user request / operation
   (Apply, Fetch Env, Fetch Site — including each loop iteration and every new
   intent the user types), the orchestrator MUST render the **full** env-list

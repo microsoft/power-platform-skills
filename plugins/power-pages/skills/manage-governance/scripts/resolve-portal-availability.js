@@ -298,17 +298,35 @@ function urlOf(portal) {
   return (portal && (portal.url || portal.websiteUrl || portal.WebsiteUrl)) || '';
 }
 
-// Render one Markdown table with AVAILABLE portals first, then the UNAVAILABLE
-// ones listed directly BELOW (per the requirement "Disabled Portal or
-// Environment should be shown just below it"). The Availability column carries
-// the 🟢 / ⚪ marker; unavailable rows also name the blocking parent so the admin
-// sees *why* the portal is ineligible. Emit the output as a rendered Markdown
-// table (NOT inside a code fence). `opts.icons` defaults on.
+// Render ONE Markdown table listing EVERY portal with an explicit **Eligible**
+// (Yes / No) column: the ELIGIBLE portals first, then the INELIGIBLE ones
+// directly BELOW (per the requirement "Disabled Portal or Environment should be
+// shown just below it"). The Eligible column carries a ✅ Yes / 🚫 No marker;
+// ineligible rows also name the blocking parent so the admin sees *why* the
+// portal can't be targeted. This is the picker the admin sees for the seven
+// child auth policies — the user asked to ALWAYS see the full portal list with a
+// Yes/No eligibility status rather than the filtered available-only view.
+//
+// Empty-state exception: when NO portal is eligible (a required parent is
+// Disabled env-wide), an all-"No" table would be useless and misleading — the
+// child cannot be governed anywhere until the parent is enabled. In that case we
+// delegate to renderAvailablePortalsMarkdown, which returns the single
+// "<parent> is off for this environment" message (and the orchestrator must not
+// prompt for a scope). Emit the output as a rendered Markdown table (NOT inside a
+// code fence). `opts.icons` defaults on.
 function renderAvailabilityMarkdown(partition, opts = {}) {
   const icons = opts.icons !== false;
   const avail = Array.isArray(partition.available) ? partition.available : [];
   const unavail = Array.isArray(partition.unavailable) ? partition.unavailable : [];
-  const headers = ['#', 'Portal Name', 'Portal URL', 'Portal ID', 'Availability'];
+
+  // No eligible portal anywhere -> show the parent-disabled message instead of a
+  // table of all-"No" rows (reuses the available-only renderer's empty-state
+  // branch so the phrasing stays identical and single-sourced).
+  if (avail.length === 0 && unavail.length > 0) {
+    return renderAvailablePortalsMarkdown(partition, opts);
+  }
+
+  const headers = ['#', 'Portal Name', 'Portal URL', 'Portal ID', 'Eligible'];
 
   const rows = [];
   let n = 0;
@@ -319,7 +337,7 @@ function renderAvailabilityMarkdown(partition, opts = {}) {
       (p && p.name) || '(unnamed)',
       urlOf(p),
       portalIdOf(p) || '',
-      icons ? '🟢 Available' : 'Available',
+      icons ? '✅ Yes' : 'Yes',
     ]);
   }
   for (const p of unavail) {
@@ -332,7 +350,7 @@ function renderAvailabilityMarkdown(partition, opts = {}) {
       (p && p.name) || '(unnamed)',
       urlOf(p),
       portalIdOf(p) || '',
-      (icons ? '⚪ Unavailable — ' : 'Unavailable — ') + reason,
+      (icons ? '🚫 No — ' : 'No — ') + reason,
     ]);
   }
 
@@ -532,12 +550,16 @@ Flags:
   --portalsFile  Path to JSON produced by list-portals.js ({ portals: [...] } or
                  a bare array). Required — this script does NOT re-page /websites.
   --envId        Optional environment id (falls back to the current PAC env).
-  --markdown     Print the picker table (Markdown) instead of JSON.
-  --available-only  With --markdown, list ONLY the available portals (the scope
-                 picker for child auth policies). Shows a single "<parent> is
-                 Disabled for this environment" message when none are available,
-                 and an info line when only a subset is. Without this flag,
-                 --markdown lists unavailable portals below the available ones.
+  --markdown     Print the picker table (Markdown) instead of JSON. The default
+                 --markdown view lists EVERY portal with an explicit Eligible
+                 (Yes / No) column — eligible portals first, ineligible ones
+                 below with the blocking parent named — and falls back to a
+                 single "<parent> is off for this environment" message when NO
+                 portal is eligible.
+  --available-only  With --markdown, list ONLY the eligible portals (a stricter
+                 view that hides the ineligible ones entirely). Shows the same
+                 "<parent> is Disabled for this environment" message when none
+                 are eligible, and an info line when only a subset is.
   --help         Show this help.
 
 Exit codes:
@@ -607,12 +629,13 @@ async function main() {
   );
 
   if (flags.markdown) {
-    // The scope picker for child auth policies wants ONLY the available
-    // portals (--available-only); the default markdown view lists unavailable
-    // portals below the available ones.
+    // `--available-only` shows ONLY the eligible portals (the strictly
+    // actionable set). The default markdown view (used by the scope picker)
+    // lists EVERY portal with an explicit Eligible (Yes/No) column — eligible
+    // rows first, ineligible ones below with the blocking parent named.
     const render = flags.availableOnly
       ? renderAvailablePortalsMarkdown(partition, { mapping })
-      : renderAvailabilityMarkdown(partition);
+      : renderAvailabilityMarkdown(partition, { mapping });
     process.stdout.write(render + '\n');
     return;
   }

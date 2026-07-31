@@ -214,9 +214,9 @@ test('parentStates accepts inclusion/exclusion as Set or array, case-insensitive
   assert.deepEqual(withSet.available.map((p) => p.name), ['Site 1']);
 });
 
-// --- renderAvailabilityMarkdown ---------------------------------------------
+// --- renderAvailabilityMarkdown (eligibility table: all portals, Yes/No) -----
 
-test('renderAvailabilityMarkdown lists available first then unavailable below, with reason', () => {
+test('renderAvailabilityMarkdown lists eligible first then ineligible below, with an Eligible column + reason', () => {
   const part = computeAvailability({
     targetPolicy: 'EnableIdpOAuthGoogle',
     portals: PORTALS,
@@ -227,17 +227,17 @@ test('renderAvailabilityMarkdown lists available first then unavailable below, w
   });
   const md = renderAvailabilityMarkdown(part);
   const lines = md.split('\n');
-  assert.match(lines[0], /^\| # \| Portal Name \| Portal URL \| Portal ID \| Availability \|$/);
+  assert.match(lines[0], /^\| # \| Portal Name \| Portal URL \| Portal ID \| Eligible \|$/);
   assert.match(lines[1], /^\| --- \| --- \| --- \| --- \| --- \|$/);
-  // Row 1 is the available site; the two unavailable ones come strictly after.
-  assert.match(md, /^\| 1 \| Site 1 \| https:\/\/a \| AAA \| 🟢 Available \|$/m);
+  // Row 1 is the eligible site; the two ineligible ones come strictly after.
+  assert.match(md, /^\| 1 \| Site 1 \| https:\/\/a \| AAA \| ✅ Yes \|$/m);
   assert.match(
     md,
-    /^\| 2 \| Site 2 \| https:\/\/b \| bbb \| ⚪ Unavailable — blocked by External authentication providers \(Disabled\) \|$/m
+    /^\| 2 \| Site 2 \| https:\/\/b \| bbb \| 🚫 No — blocked by External authentication providers \(Disabled\) \|$/m
   );
   const availIdx = md.indexOf('Site 1');
   const unavailIdx = md.indexOf('Site 2');
-  assert.ok(availIdx < unavailIdx, 'available rows must render above unavailable rows');
+  assert.ok(availIdx < unavailIdx, 'eligible rows must render above ineligible rows');
 });
 
 test('renderAvailabilityMarkdown escapes pipes and can omit icons', () => {
@@ -247,8 +247,22 @@ test('renderAvailabilityMarkdown escapes pipes and can omit icons', () => {
   };
   const md = renderAvailabilityMarkdown(part, { icons: false });
   assert.match(md, /\| A\\\|B \|/);
-  assert.match(md, /\| Available \|/);
-  assert.ok(!/🟢/.test(md), 'icons:false suppresses the emoji marker');
+  assert.match(md, /\| Yes \|/);
+  assert.ok(!/✅/.test(md), 'icons:false suppresses the emoji marker');
+});
+
+test('renderAvailabilityMarkdown shows the parent-disabled message (no all-No table) when NO portal is eligible', () => {
+  const part = computeAvailability({
+    targetPolicy: 'EnableProtocolOpenIdConnect',
+    portals: PORTALS,
+    parentStates: {
+      EnableExternalAuthProviders: { envValue: 'None' },
+    },
+  });
+  const md = renderAvailabilityMarkdown(part);
+  // Empty-state: single message, NOT a Markdown table of ineligible rows.
+  assert.ok(!/\| Eligible \|/.test(md), 'no eligibility table when nothing is eligible');
+  assert.match(md, /off for this environment/i);
 });
 
 // --- renderAvailablePortalsMarkdown (scope picker: available only) -----------

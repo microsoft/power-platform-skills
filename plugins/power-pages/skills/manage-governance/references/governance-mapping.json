@@ -237,25 +237,31 @@
       "cascadeOnDisable": {
         "heading": "Below Setting will get Disable",
         "items": [
-          "OpenIdConnect",
-          "SAML2.0",
-          "OAuth2.0",
-          "WS_Federation",
-          "Facebook",
-          "Google",
-          "Microsoft"
+          "Authentication Using OpenID Connect (OIDC) Protocol",
+          "Authentication Using SAML 2.0 Protocol",
+          {
+            "Authentication Using OAuth 2.0 Protocol": [
+              "Facebook Authentication",
+              "Google Authentication",
+              "Microsoft Authentication"
+            ]
+          },
+          "Authentication Using WS-Federation Protocol"
         ]
       },
       "cascadeOnEnable": {
-        "heading": "When enabled, the following authentication methods become available:",
+        "heading": "Below authentication Protocol/IDPs become available:",
         "items": [
-          { "label": "OpenID Connect" },
-          { "label": "SAML 2.0" },
-          { "label": "OAuth 2.0" },
-          { "label": "WS-Federation" },
-          { "label": "Facebook", "note": "Controlled by the Facebook governance setting." },
-          { "label": "Google", "note": "Controlled by the Google governance setting." },
-          { "label": "Microsoft", "note": "Controlled by the Microsoft governance setting." }
+          "Authentication Using OpenID Connect (OIDC) Protocol",
+          "Authentication Using SAML 2.0 Protocol",
+          {
+            "Authentication Using OAuth 2.0 Protocol": [
+              "Facebook Authentication",
+              "Google Authentication",
+              "Microsoft Authentication"
+            ]
+          },
+          "Authentication Using WS-Federation Protocol"
         ],
         "footer": "Enabling the External Authentication policy restores support for these authentication methods. Each authentication provider must also be enabled and configured."
       }

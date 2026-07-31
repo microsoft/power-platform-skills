@@ -529,9 +529,10 @@ irrelevant there (every site's state is decided by the env value alone).
 Computes, for a **child** authentication policy, which portals are **available**
 to configure it on based on the live state of its **parent** policies, and which
 are **unavailable** (a required parent is Disabled). Used by the scope pickers
-(SKILL.md Phase 4.2.1 Step B.1 / Phase 4.2.2) — which render it with
-`--available-only` so **only the eligible portals are listed** (with a
-parent-disabled message when none qualify).
+(SKILL.md Phase 4.2.1 Step B.1 / Phase 4.2.2) — which render it with the default
+`--markdown` view so **every portal is listed with an explicit `Eligible`
+(Yes / No) column** (eligible first, ineligible just below with the blocking
+parent named, and a parent-disabled message when none qualify).
 
 ### Availability contract
 
@@ -580,11 +581,15 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/resolve-portal-avai
 ```
 
 `--portalsFile` is required (the script does not re-page `/websites`). With
-`--markdown`, it prints the site table with available rows first and unavailable
-rows below (blocking parent named); without it, prints the JSON below.
+`--markdown` (the default picker view), it prints ONE table of **every** portal
+with an `Eligible` (Yes / No) column — eligible rows (**✅ Yes**) first,
+ineligible rows (**🚫 No — blocked by &lt;parent&gt;**) directly below — and a
+single parent-disabled message in place of the table when none are eligible.
+Without `--markdown`, it prints the JSON below.
 
-**`--available-only`** (the scope picker used by SKILL.md Phase 4.2.1 Step B.1)
-changes the `--markdown` render so **only the available portals** are listed:
+**`--available-only`** (a stricter alternative view) changes the `--markdown`
+render so **only the eligible portals** are listed (the ineligible ones hidden
+entirely):
 
 - **Some available** — a table of just the eligible portals (`# | Portal Name |
   Portal URL | Portal ID`). When only a subset qualifies, an info line follows
@@ -662,7 +667,7 @@ The previous Fetch Env flow was **two steps**: `list-portals.js` FIRST (a
 separate `GET /websites` round-trip), THEN `get-effective-status.js` for the
 governance reads. This script folds the site-list fetch into the **same**
 `Promise.all` as the governance reads — the `/websites` page(s) and every
-`getEnv` + `getDetails` (for the policy and every gating parent) are all fired
+`GetEnvPolicy` + `getDetails` (for the policy and every gating parent) are all fired
 concurrently against **one** shared context/token — removing that extra serial
 round-trip. Total latency ≈ one round-trip regardless of parent count.
 
@@ -724,7 +729,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/fetch-env-status.js
 ```
 
 Fail-closed posture: a failed `getDetails` degrades to an empty membership list;
-a failed `/websites` read or `getEnv` is fatal (cannot classify without them).
+a failed `/websites` read or `GetEnvPolicy` is fatal (cannot classify without them).
 An env with **zero sites** is not an error — `portals` is an empty array.
 
 ### Exit codes
@@ -752,7 +757,7 @@ policy or per portal.
 ### Why (kills the sequential per-policy reads)
 
 A gated child method is only live on a portal when the child's OWN setting **and**
-every gating parent are Enabled there. Reading that needs `getEnv` + `getDetails`
+every gating parent are Enabled there. Reading that needs `GetEnvPolicy` + `getDetails`
 for the child **and** each parent — 4 calls for a protocol (child + External
 Auth), 6 for a social IdP (child + External Auth + OAuth 2.0). The previous flow
 issued those reads **sequentially** (a `for … await` loop), so a social-IdP
@@ -813,7 +818,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-statu
 ```
 
 Fail-closed posture: a failed `getDetails` degrades to an empty membership list;
-a failed `getEnv` is fatal (cannot classify without the env value). A parent
+a failed `GetEnvPolicy` is fatal (cannot classify without the env value). A parent
 whose state can't be read makes the site's effective state `Unknown`.
 
 ### Exit codes
@@ -882,7 +887,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-status-table
 Include the `EnableProtocolOpenAuth` parent key only for the social IdPs. The
 orchestrator assembles the live own/parent states via
 [`get-effective-status.js`](#get-effective-statusjs) — a **single parallel batch**
-that fires `getEnv` + `getDetails` for the child and every gating parent
+that fires `GetEnvPolicy` + `getDetails` for the child and every gating parent
 concurrently and returns the effective per-portal state — **never** a sequential
 per-policy loop and **never** a per-portal `get-portal.js` loop. This helper
 itself is network-free.
