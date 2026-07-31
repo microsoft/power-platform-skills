@@ -1861,8 +1861,10 @@ This skill launches Metro through the bundled `scripts/metro-session.js` wrapper
 
 The wrapper stores runtime-only state under `<working_dir>/.expo/metro-session/`:
 
-- `state.json` — session ID, PIDs, lifecycle status, timestamps, and native Metro URL
+- `state.json` — dev-server port, PIDs, lifecycle status, timestamps, and native Metro URL
 - `metro.log` — ANSI-free Metro/app output with common tokens, secrets, keys, and signed-query values redacted before persistence
+
+The **port** is the session's identity: it is what the QR encodes, what the device dials, and what `/debug-app` probes to confirm the log it reads still belongs to this app. Expo rolls to the next free port when 8081 is taken, so always report the port the wrapper recorded rather than assuming 8081.
 
 `.expo/` is already gitignored by the template. Do not copy these files into `memory-bank.md` or commit them.
 
@@ -1890,8 +1892,8 @@ Parse the returned JSON as `$METRO_SESSION`. Branch as follows:
 
 | State | Action |
 |---|---|
-| `status: running` and `metroUrl` present | Continue with QR generation. |
-| `alreadyRunning: true` | Reuse the existing session and `metroUrl`; do not start a second Metro process. |
+| `status: running` and `metroUrl` present | Continue with QR generation. Report `port` to the user. |
+| `alreadyRunning: true` | Reuse the existing session, `metroUrl`, and `port`; do not start a second Metro process. |
 | `status: starting` and no `metroUrl` after 8s | Run `status --project-root "<working_dir>"` once. If the URL is still absent, print the log/state paths and tell the user Metro is still starting; continue without a QR rather than guessing a URL. |
 | `status: failed` or non-zero exit | Run `tail --project-root "<working_dir>" --lines 120`, surface the sanitized launch error, and STOP. |
 
@@ -1905,7 +1907,7 @@ Parse the returned JSON as `$METRO_SESSION`. Branch as follows:
   - Surface only the native Metro URL immediately after the image/fallback message.
 2. Follow with:
 
-  > "✓ Metro is running as project-local session `<sessionId>`.
+  > "✓ Metro is running on port `<port>`.
   > 📱 Scan the QR code shown above (or opened from `<working_dir>/.expo/metro-qr.png`) with your native dev client to load the app. Metro URL: `<metro-url>`
   > 🔄 Edits hot-reload automatically. Debug log: `<working_dir>/.expo/metro-session/metro.log`."
 
@@ -1919,7 +1921,7 @@ Parse the returned JSON as `$METRO_SESSION`. Branch as follows:
 - Metro launch cmd: node "<plugin-root>/scripts/metro-session.js" start --project-root "<working_dir>"
 ```
 
-Do not persist PIDs, session IDs, or Metro URLs to the memory bank. They are ephemeral and are resolved from `state.json` when needed.
+Do not persist PIDs, ports, or Metro URLs to the memory bank. They are ephemeral and are resolved from `state.json` when needed.
 
 This skill stops after Step 12 so the user can iterate locally. Production build + tenant push is a separate, explicit user action via the `/deploy` skill.
 
@@ -1953,7 +1955,7 @@ Data model    : <N tables — M reuse, K extend, L create>
 Native caps   : <list>
 Connectors    : <list>
 Screens       : <N total — M from template, K built in parallel>
-Dev server    : Metro session <sessionId> — running
+Dev server    : Metro running on port <port>
 Debug log     : .expo/metro-session/metro.log
 ─────────────────────────────────────────────
 ```

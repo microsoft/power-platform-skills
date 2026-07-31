@@ -8,12 +8,18 @@
  * Metro as a detached process and persists its sanitized output under the app's
  * already-ignored `.expo/` directory so every host can inspect the same state.
  *
+ * The dev-server **port** is the session's identity. It is the number the QR
+ * encodes, the number the device dials, and the only session fact with external
+ * ground truth: the OS knows which process holds a listening socket, so
+ * liveness is a socket probe rather than a heartbeat we wrote ourselves. That
+ * also catches the failure a self-reported heartbeat cannot — our Metro died
+ * and a *different* project's Metro now owns the port, making our log stale.
+ *
  * Usage:
- *   node metro-session.js start  [--project-root <dir>] [--clear]
+ *   node metro-session.js start  [--project-root <dir>] [--clear] [--wait-ready-ms <n>]
  *   node metro-session.js status [--project-root <dir>]
  *   node metro-session.js tail   [--project-root <dir>] [--cursor <bytes>] [--lines <n>]
  *   node metro-session.js stop   [--project-root <dir>]
- *   node metro-session.js clean  [--project-root <dir>] [--force]
  */
 
 'use strict';
@@ -23,20 +29,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 
-const STATE_SCHEMA_VERSION = 1;
+const STATE_SCHEMA_VERSION = 2;
 const SESSION_DIR_PARTS = ['.expo', 'metro-session'];
 const STATE_FILE = 'state.json';
 const LOG_FILE = 'metro.log';
 const DEFAULT_TAIL_LINES = 200;
 const DEFAULT_MAX_TAIL_BYTES = 256 * 1024;
 const DEFAULT_MAX_LOG_BYTES = 10 * 1024 * 1024;
-const HEARTBEAT_INTERVAL_MS = 2000;
-const HEARTBEAT_STALE_MS = 15000;
-const STARTUP_GRACE_MS = 15000;
-const LOCK_TIMEOUT_MS = 5000;
-const LOCK_STALE_MS = 30000;
 const DEFAULT_MAX_PENDING_LINE_BYTES = 1024 * 1024;
-const OWNERSHIP_RECHECK_MS = HEARTBEAT_INTERVAL_MS + 750;
+const START_LOCK_STALE_MS = 60000;
+const START_LOCK_TIMEOUT_MS = 5000;
 
 function sleepSync(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
@@ -47,14 +49,11 @@ function parseArgs(argv) {
     command: '',
     projectRoot: process.cwd(),
     clear: false,
-    force: false,
     cursor: null,
     lines: DEFAULT_TAIL_LINES,
     maxBytes: DEFAULT_MAX_TAIL_BYTES,
     waitReadyMs: 1500,
     waitMs: 0,
-    generation: null,
-    sessionId: '',
   };
 
   if (argv.length === 0 || argv[0] === '--help' || argv[0] === '-h') {
@@ -83,16 +82,8 @@ function parseArgs(argv) {
     } else if (argument === '--wait-ms') {
       options.waitMs = Number(argv[index + 1]);
       index += 1;
-    } else if (argument === '--generation') {
-      options.generation = Number(argv[index + 1]);
-      index += 1;
-    } else if (argument === '--session-id') {
-      options.sessionId = argv[index + 1] || '';
-      index += 1;
     } else if (argument === '--clear') {
       options.clear = true;
-    } else if (argument === '--force') {
-      options.force = true;
     } else {
       throw new Error(`Unknown argument: ${argument}`);
     }
@@ -114,9 +105,6 @@ function parseArgs(argv) {
   if (!Number.isInteger(options.waitMs) || options.waitMs < 0 || options.waitMs > 30000) {
     throw new Error('--wait-ms must be an integer from 0 to 30000');
   }
-  if (options.generation !== null && (!Number.isInteger(options.generation) || options.generation < 0)) {
-    throw new Error('--generation must be a non-negative integer');
-  }
 
   return options;
 }
@@ -124,15 +112,12 @@ function parseArgs(argv) {
 function resolvePaths(projectRoot) {
   const root = path.resolve(projectRoot);
   const sessionDir = path.join(root, ...SESSION_DIR_PARTS);
-  const lockDir = path.join(root, '.expo', 'metro-session-locks');
   return {
     projectRoot: root,
     sessionDir,
-    lockDir,
     statePath: path.join(sessionDir, STATE_FILE),
     logPath: path.join(sessionDir, LOG_FILE),
-    stateLockPath: path.join(lockDir, 'state.lock'),
-    lifecycleLockPath: path.join(lockDir, 'lifecycle.lock'),
+    startLockPath: path.join(sessionDir, 'start.lock'),
   };
 }
 
@@ -166,94 +151,53 @@ function readState(paths) {
   return state;
 }
 
-function withDirectoryLock(lockPath, callback, options = {}) {
-  const timeoutMs = options.timeoutMs || LOCK_TIMEOUT_MS;
-  const staleMs = options.staleMs || LOCK_STALE_MS;
-  const isAlive = options._isProcessAlive || processIsAlive;
+function writeState(paths, state) {
+  ensureSessionDir(paths);
+  // Atomic rename is the only write primitive needed: readers either see the
+  // previous complete file or the next one, never a partial write. There is no
+  // read-modify-write lock because the runner is the sole writer once started.
+  const temporaryPath = `${paths.statePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  fs.writeFileSync(temporaryPath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(temporaryPath, paths.statePath);
+  return state;
+}
+
+function updateState(paths, patch, expectedRunnerPid = 0) {
+  const current = readState(paths) || {};
+  // A zombie runner from a replaced session must not clobber the live session's
+  // state. Ownership is the recorded runner PID, which is unforgeable enough
+  // here because a replaced session always rewrites it.
+  if (expectedRunnerPid && Number(current.runnerPid) !== expectedRunnerPid) return current;
+  return writeState(paths, { ...current, ...patch, updatedAt: new Date().toISOString() });
+}
+
+/**
+ * Minimal mutual exclusion for start/stop only. `mkdir` is atomic on POSIX and
+ * Windows, so the directory itself is the mutex. A lock older than
+ * START_LOCK_STALE_MS is assumed abandoned by a crashed process. This is
+ * deliberately not a general-purpose lock: state writes use atomic rename, and
+ * concurrent Metro launches are additionally prevented by the OS refusing to
+ * bind an in-use port.
+ */
+function withStartLock(lockPath, callback, options = {}) {
   const wait = options._sleepSync || sleepSync;
-  const deadline = Date.now() + timeoutMs;
-  const token = crypto.randomUUID();
-  const reclaimPath = `${lockPath}.reclaim`;
+  const deadline = Date.now() + (options.timeoutMs || START_LOCK_TIMEOUT_MS);
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
 
   while (true) {
-    // A stale-owner reclaimer temporarily blocks all normal acquisitions. This
-    // closes the race where two contenders both observe a dead owner and one
-    // accidentally removes the other's newly acquired live lock.
-    if (fs.existsSync(reclaimPath)) {
-      if (Date.now() >= deadline) {
-        throw new Error(
-          `Timed out waiting for stale-lock recovery: ${path.basename(reclaimPath)}. ` +
-          'The recovery owner may have crashed; inspect this directory before removing it.'
-        );
-      }
-      wait(10);
-      continue;
-    }
-
     try {
       fs.mkdirSync(lockPath);
-      fs.writeFileSync(
-        path.join(lockPath, 'owner.json'),
-        `${JSON.stringify({ token, pid: process.pid, acquiredAt: new Date().toISOString() })}\n`,
-        { mode: 0o600 }
-      );
       break;
     } catch (error) {
       if (!error || error.code !== 'EEXIST') throw error;
-
-      let stale = false;
-      try {
-        const owner = readJson(path.join(lockPath, 'owner.json'), 1);
-        const age = Date.now() - fs.statSync(lockPath).mtimeMs;
-        // Never displace a live owner solely because a laptop suspended or an
-        // operation exceeded an arbitrary duration. A missing/corrupt owner is
-        // removable only after the stale window; a dead owner is safe to reap.
-        stale = owner && Number.isInteger(owner.pid)
-          ? !isAlive(owner.pid)
-          : age > staleMs;
-      } catch {
-        // The owner released between mkdir and stat; retry immediately.
-        continue;
-      }
-      if (stale) {
-        const reclaimToken = crypto.randomUUID();
-        try {
-          fs.mkdirSync(reclaimPath);
-          fs.writeFileSync(
-            path.join(reclaimPath, 'owner.json'),
-            `${JSON.stringify({ token: reclaimToken, pid: process.pid, acquiredAt: new Date().toISOString() })}\n`,
-            { mode: 0o600 }
-          );
-
-          // Re-read only after winning the reclaim mutex. Every implementation
-          // contender checks this mutex before normal acquisition, so the main
-          // lock cannot change underneath this validation/removal sequence.
-          const currentOwner = readJson(path.join(lockPath, 'owner.json'), 1);
-          let stillStale = false;
-          try {
-            const age = Date.now() - fs.statSync(lockPath).mtimeMs;
-            stillStale = currentOwner && Number.isInteger(currentOwner.pid)
-              ? !isAlive(currentOwner.pid)
-              : age > staleMs;
-          } catch {
-            stillStale = false;
-          }
-          if (stillStale) {
-            fs.rmSync(lockPath, { recursive: true, force: true });
-          }
-        } catch (error) {
-          if (!error || error.code !== 'EEXIST') throw error;
-        } finally {
-          const reclaimOwner = readJson(path.join(reclaimPath, 'owner.json'), 1);
-          if (reclaimOwner && reclaimOwner.token === reclaimToken) {
-            fs.rmSync(reclaimPath, { recursive: true, force: true });
-          }
-        }
+      let age = 0;
+      try { age = Date.now() - fs.statSync(lockPath).mtimeMs; } catch { continue; }
+      if (age > START_LOCK_STALE_MS) {
+        fs.rmSync(lockPath, { recursive: true, force: true });
         continue;
       }
       if (Date.now() >= deadline) {
-        throw new Error(`Timed out waiting for session lock: ${path.basename(lockPath)}`);
+        throw new Error(`Timed out waiting for the Metro start lock: ${lockPath}`);
       }
       wait(10);
     }
@@ -262,43 +206,8 @@ function withDirectoryLock(lockPath, callback, options = {}) {
   try {
     return callback();
   } finally {
-    const owner = readJson(path.join(lockPath, 'owner.json'), 1);
-    // A displaced/expired owner must never remove a successor's lock.
-    if (owner && owner.token === token) {
-      fs.rmSync(lockPath, { recursive: true, force: true });
-    }
+    fs.rmSync(lockPath, { recursive: true, force: true });
   }
-}
-
-function writeStateFile(paths, state) {
-  const temporaryPath = `${paths.statePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  fs.writeFileSync(temporaryPath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
-  fs.renameSync(temporaryPath, paths.statePath);
-}
-
-function writeState(paths, state) {
-  ensureSessionDir(paths);
-  return withDirectoryLock(paths.stateLockPath, () => writeStateFile(paths, state));
-}
-
-function updateState(paths, patch, expectedSessionId = '') {
-  if (expectedSessionId) {
-    return withDirectoryLock(paths.stateLockPath, () => {
-      const current = readState(paths) || {};
-      if (current.sessionId !== expectedSessionId) return current;
-      ensureSessionDir(paths);
-      const next = { ...current, ...patch, updatedAt: new Date().toISOString() };
-      writeStateFile(paths, next);
-      return next;
-    });
-  }
-  ensureSessionDir(paths);
-  return withDirectoryLock(paths.stateLockPath, () => {
-    const current = readState(paths) || {};
-    const next = { ...current, ...patch, updatedAt: new Date().toISOString() };
-    writeStateFile(paths, next);
-    return next;
-  });
 }
 
 function processIsAlive(pid, kill = process.kill) {
@@ -311,49 +220,81 @@ function processIsAlive(pid, kill = process.kill) {
   }
 }
 
-function timestampAge(timestamp, now = Date.now()) {
-  const value = Date.parse(timestamp || '');
-  return Number.isFinite(value) ? Math.max(0, now - value) : Number.POSITIVE_INFINITY;
-}
+/**
+ * PIDs holding a listening TCP socket on `port`, or null when the host provides
+ * no usable probe (then callers fall back to PID liveness).
+ *
+ * macOS/Linux `lsof -nP -iTCP:8081 -sTCP:LISTEN -t` prints one PID per line:
+ *   41233
+ * Windows `netstat -ano -p tcp` prints a fixed-column table:
+ *     Proto  Local Address      Foreign Address    State       PID
+ *     TCP    0.0.0.0:8081       0.0.0.0:0          LISTENING   41233
+ * IPv6 rows use bracketed hosts (`[::]:8081`), so match on a trailing `:<port>`
+ * of the local-address column rather than parsing the host.
+ */
+function portListenerPids(port, options = {}) {
+  if (!Number.isInteger(port) || port <= 0) return null;
+  const platform = options.platform || process.platform;
+  const run = options._spawnSync || spawnSync;
 
-function stateHasFreshHeartbeat(state, isAlive = processIsAlive, now = Date.now()) {
-  if (!state) return false;
-  const processAlive = isAlive(Number(state.runnerPid)) || isAlive(Number(state.metroPid));
-  if (!processAlive) return false;
-  return timestampAge(state.heartbeatAt, now) <= HEARTBEAT_STALE_MS;
-}
-
-function stateBlocksDuplicateStart(state, isAlive = processIsAlive, now = Date.now()) {
-  if (stateHasFreshHeartbeat(state, isAlive, now)) return true;
-  // The parent writes `starting` before the runner can publish its first
-  // heartbeat. This grace suppresses duplicate starts only; it never authorizes
-  // stop/kill operations.
-  return Boolean(
-    state &&
-    state.status === 'starting' &&
-    isAlive(Number(state.runnerPid)) &&
-    timestampAge(state.startedAt, now) <= STARTUP_GRACE_MS
-  );
-}
-
-function confirmOwnedProcess(paths, state, options = {}) {
-  const isAlive = options._isProcessAlive || processIsAlive;
-  const now = options._now || Date.now();
-  if (stateHasFreshHeartbeat(state, isAlive, now)) return state;
-  if (!state || !(isAlive(Number(state.runnerPid)) || isAlive(Number(state.metroPid)))) {
-    return null;
+  if (platform === 'win32') {
+    const result = run('netstat', ['-ano', '-p', 'tcp'], { encoding: 'utf8', windowsHide: true });
+    if (!result || result.error || typeof result.stdout !== 'string') return null;
+    const pids = new Set();
+    for (const line of result.stdout.split(/\r?\n/)) {
+      const match = line.match(/^\s*TCP\s+(\S+):(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$/i);
+      if (match && Number(match[2]) === port) pids.add(Number(match[3]));
+    }
+    return [...pids];
   }
 
-  // A machine sleep can make an otherwise healthy heartbeat look stale. Give
-  // the runner one interval to refresh. A recycled unrelated PID cannot update
-  // this session's heartbeat and therefore still fails ownership confirmation.
-  const recheckMs = Object.hasOwn(options, '_ownershipRecheckMs')
-    ? options._ownershipRecheckMs
-    : OWNERSHIP_RECHECK_MS;
-  if (recheckMs > 0) (options._sleepSync || sleepSync)(recheckMs);
-  const refreshed = readState(paths);
-  if (!refreshed || refreshed.sessionId !== state.sessionId) return null;
-  return stateHasFreshHeartbeat(refreshed, isAlive, Date.now()) ? refreshed : null;
+  const result = run('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8' });
+  // lsof exits 1 with empty stdout when nothing matches, which is a valid
+  // "nothing is listening" answer. Only a missing binary is "unknown".
+  if (!result || result.error || typeof result.stdout !== 'string') return null;
+  return result.stdout
+    .split(/\r?\n/)
+    .map((line) => Number(line.trim()))
+    .filter((pid) => Number.isInteger(pid) && pid > 0);
+}
+
+/**
+ * Collapses PID liveness and the port probe into one verdict.
+ *
+ * - `running`   — our recorded process is alive and, when the port can be
+ *                 probed, nothing contradicts our ownership of it.
+ * - `port-conflict` — our process is alive but another process holds our port.
+ * - `port-taken`    — our process is gone and someone else now holds the port,
+ *                 so `metro.log` is stale and must not be trusted.
+ */
+function resolveLiveness(state, options = {}) {
+  const isAlive = options._isProcessAlive || processIsAlive;
+  const probe = options._portListenerPids || portListenerPids;
+  const runnerAlive = isAlive(Number(state.runnerPid));
+  const metroAlive = isAlive(Number(state.metroPid));
+  const processAlive = runnerAlive || metroAlive;
+  const port = Number.isInteger(state.port) ? state.port : null;
+  const listeners = port ? probe(port, options) : null;
+
+  const ownsPort = listeners === null
+    ? null
+    : listeners.some((pid) => pid === Number(state.runnerPid) || pid === Number(state.metroPid));
+
+  let status;
+  if (processAlive && ownsPort === false && listeners.length > 0) status = 'port-conflict';
+  else if (processAlive) status = 'running';
+  else if (listeners && listeners.length > 0) status = 'port-taken';
+  else status = 'stopped';
+
+  return {
+    status,
+    running: status === 'running',
+    runnerAlive,
+    metroAlive,
+    port,
+    portListeners: listeners,
+    portOwnedBySession: ownsPort,
+  };
 }
 
 function stripAnsi(value) {
@@ -513,19 +454,9 @@ function redactLogText(value) {
 
 function appendSanitized(paths, value, options = {}) {
   const sanitized = options.alreadySanitized ? String(value) : redactLogText(value);
-  const persist = () => {
-    if (options.sessionId) {
-      const state = readState(paths);
-      if (!state || state.sessionId !== options.sessionId) return '';
-    }
-    ensureSessionDir(paths);
-    fs.appendFileSync(paths.logPath, sanitized, { encoding: 'utf8', mode: 0o600 });
-    return sanitized;
-  };
-
-  return options.sessionId
-    ? withDirectoryLock(paths.stateLockPath, persist)
-    : persist();
+  ensureSessionDir(paths);
+  fs.appendFileSync(paths.logPath, sanitized, { encoding: 'utf8', mode: 0o600 });
+  return sanitized;
 }
 
 function createSanitizedStreamWriter(paths, options = {}) {
@@ -535,11 +466,7 @@ function createSanitizedStreamWriter(paths, options = {}) {
 
   function persist(value) {
     if (!value) return '';
-    const sanitized = redactLogText(value);
-    return appendSanitized(paths, sanitized, {
-      alreadySanitized: true,
-      sessionId: options.sessionId || '',
-    });
+    return appendSanitized(paths, redactLogText(value), { alreadySanitized: true });
   }
 
   function boundCompleteLines(value) {
@@ -595,37 +522,20 @@ function createSanitizedStreamWriter(paths, options = {}) {
   };
 }
 
-function rotateLog(paths, maxBytes = DEFAULT_MAX_LOG_BYTES, options = {}) {
-  const rotate = () => {
-    const state = options.sessionId ? readState(paths) : null;
-    if (options.sessionId && (!state || state.sessionId !== options.sessionId)) return null;
-    if (!fs.existsSync(paths.logPath)) return null;
-    const stats = fs.statSync(paths.logPath);
-    if (stats.size < maxBytes) return null;
+/**
+ * Copy-then-truncate keeps the active path present so tail readers never race a
+ * rename. Readers detect rotation without a generation counter: a saved cursor
+ * beyond the current file size can only mean the file was truncated.
+ */
+function rotateLog(paths, maxBytes = DEFAULT_MAX_LOG_BYTES) {
+  if (!fs.existsSync(paths.logPath)) return null;
+  if (fs.statSync(paths.logPath).size < maxBytes) return null;
 
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const rotatedPath = path.join(paths.sessionDir, `metro.${stamp}.log`);
-    // Keep the active path present so tail readers never race a rename. The
-    // generation counter tells cursored readers that bytes in the previous file
-    // may have been missed; they must not call that observation interval clean.
-    fs.copyFileSync(paths.logPath, rotatedPath);
-    fs.truncateSync(paths.logPath, 0);
-
-    if (options.sessionId) {
-      const next = {
-        ...state,
-        logGeneration: Number(state.logGeneration || 0) + 1,
-        lastRotatedLog: rotatedPath,
-        updatedAt: new Date().toISOString(),
-      };
-      writeStateFile(paths, next);
-    }
-    return rotatedPath;
-  };
-
-  return options.sessionId
-    ? withDirectoryLock(paths.stateLockPath, rotate)
-    : rotate();
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const rotatedPath = path.join(paths.sessionDir, `metro.${stamp}.log`);
+  fs.copyFileSync(paths.logPath, rotatedPath);
+  fs.truncateSync(paths.logPath, 0);
+  return rotatedPath;
 }
 
 function resolveExpoCli(projectRoot) {
@@ -647,19 +557,32 @@ function resolveExpoCli(projectRoot) {
   return cliPath;
 }
 
-function markStaleIfNeeded(paths, state, options = {}) {
-  if (!state || !['starting', 'running', 'stopping', 'stop-failed'].includes(state.status)) return state;
-  const isAlive = options._isProcessAlive || processIsAlive;
-  if (stateBlocksDuplicateStart(state, isAlive, options._now || Date.now())) return state;
-  const owned = confirmOwnedProcess(paths, state, options);
-  if (owned) return owned;
+/**
+ * Metro announces its URL on a banner line, e.g.:
+ *   › Metro: http://192.168.1.24:8081
+ *   Metro: exp://192.168.1.24:8082
+ */
+function extractMetroUrl(value) {
+  const match = String(value).match(/(?:^|\n)\s*›?\s*Metro:\s*(\S+)/);
+  return match ? match[1] : null;
+}
 
-  return updateState(paths, {
-    status: 'stale',
-    stale: true,
-    stoppedAt: new Date().toISOString(),
-    reason: 'recorded Metro processes are no longer running',
-  }, state.sessionId);
+/**
+ * Port from a Metro URL. Expo rolls to the next free port when 8081 is taken,
+ * so this must be read from the banner rather than assumed.
+ *
+ * Dev-client banners nest the real URL as a percent-encoded query parameter:
+ *   exp+myapp://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8081
+ * so decode before matching, otherwise the `%3A` hides the port delimiter.
+ */
+function extractMetroPort(value) {
+  const url = typeof value === 'string' && /^[\w+.-]+:\/\//.test(value) ? value : extractMetroUrl(value);
+  if (!url) return null;
+  let candidate = String(url);
+  try { candidate = decodeURIComponent(candidate); } catch { /* keep the raw form */ }
+  const match = candidate.match(/:(\d{2,5})(?:[/?#]|$)/);
+  const port = match ? Number(match[1]) : null;
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : null;
 }
 
 function startSession(projectRoot, options = {}) {
@@ -667,26 +590,18 @@ function startSession(projectRoot, options = {}) {
   ensureProject(paths.projectRoot);
   ensureSessionDir(paths);
 
-  const initial = withDirectoryLock(paths.lifecycleLockPath, () => startSessionLocked(paths, options), {
-    timeoutMs: options.startLockTimeoutMs || LOCK_TIMEOUT_MS,
-    _isProcessAlive: options._isProcessAlive,
+  const initial = withStartLock(paths.startLockPath, () => startSessionLocked(paths, options), {
+    timeoutMs: options.startLockTimeoutMs,
     _sleepSync: options._sleepSync,
   });
 
-  if (
-    !options._spawn &&
-    options.waitReadyMs !== 0 &&
-    !initial.alreadyRunning &&
-    initial.sessionId
-  ) {
+  // Wait for the runner to publish the Metro URL/port so callers can render a
+  // QR immediately instead of polling status themselves.
+  if (!options._spawn && options.waitReadyMs !== 0 && !initial.alreadyRunning) {
     const deadline = Date.now() + options.waitReadyMs;
     while (Date.now() < deadline) {
       const current = readState(paths);
-      if (
-        current &&
-        current.sessionId === initial.sessionId &&
-        (current.metroUrl || ['failed', 'stopped'].includes(current.status))
-      ) break;
+      if (current && (current.metroUrl || ['failed', 'stopped'].includes(current.status))) break;
       sleepSync(25);
     }
   }
@@ -700,33 +615,26 @@ function startSession(projectRoot, options = {}) {
 }
 
 function startSessionLocked(paths, options = {}) {
-
-  const isAlive = options._isProcessAlive || processIsAlive;
-  const existing = markStaleIfNeeded(paths, readState(paths), options);
-  if (stateBlocksDuplicateStart(existing, isAlive, options._now || Date.now())) {
-    return {
-      ok: true,
-      alreadyRunning: true,
-      ...existing,
-      statePath: paths.statePath,
-      logPath: paths.logPath,
-    };
+  const existing = readState(paths);
+  if (existing) {
+    const liveness = resolveLiveness(existing, options);
+    if (liveness.running) {
+      return {
+        ok: true,
+        alreadyRunning: true,
+        ...existing,
+        ...liveness,
+        statePath: paths.statePath,
+        logPath: paths.logPath,
+      };
+    }
   }
 
   rotateLog(paths, options.maxLogBytes || DEFAULT_MAX_LOG_BYTES);
-  const sessionId = crypto.randomUUID();
   const spawnImpl = options._spawn || spawn;
   const runner = spawnImpl(
     process.execPath,
-    [
-      __filename,
-      '__run',
-      '--project-root',
-      paths.projectRoot,
-      '--session-id',
-      sessionId,
-      ...(options.clear ? ['--clear'] : []),
-    ],
+    [__filename, '__run', '--project-root', paths.projectRoot, ...(options.clear ? ['--clear'] : [])],
     {
       cwd: paths.projectRoot,
       detached: true,
@@ -741,29 +649,25 @@ function startSessionLocked(paths, options = {}) {
   }
 
   const now = new Date().toISOString();
-  const state = {
+  writeState(paths, {
     schemaVersion: STATE_SCHEMA_VERSION,
-    sessionId,
     status: 'starting',
-    stale: false,
     projectRoot: paths.projectRoot,
     runnerPid: runner.pid,
     metroPid: null,
+    port: null,
+    metroUrl: null,
     startedAt: now,
     updatedAt: now,
     stoppedAt: null,
     clear: Boolean(options.clear),
-    metroUrl: null,
-    logGeneration: 0,
-    logPath: paths.logPath,
-  };
-  writeState(paths, state);
+  });
   if (typeof runner.unref === 'function') runner.unref();
 
   return {
     ok: true,
     alreadyRunning: false,
-    ...(readState(paths) || state),
+    ...(readState(paths) || {}),
     statePath: paths.statePath,
     logPath: paths.logPath,
   };
@@ -771,11 +675,7 @@ function startSessionLocked(paths, options = {}) {
 
 function getStatus(projectRoot, options = {}) {
   const paths = resolvePaths(projectRoot);
-  const state = markStaleIfNeeded(
-    paths,
-    readState(paths),
-    options
-  );
+  const state = readState(paths);
   if (!state) {
     return {
       ok: true,
@@ -787,13 +687,19 @@ function getStatus(projectRoot, options = {}) {
     };
   }
 
+  const liveness = resolveLiveness(state, options);
+  // A recorded terminal state is authoritative over the probe: an exited Metro
+  // whose port was immediately reused should still report why it exited.
+  const status = ['failed', 'stopped'].includes(state.status) && liveness.status !== 'running'
+    ? (liveness.status === 'port-taken' ? 'port-taken' : state.status)
+    : liveness.status;
+
   return {
     ok: true,
     ...state,
-    running: ['starting', 'running', 'stopping', 'stop-failed'].includes(state.status) && stateBlocksDuplicateStart(
-      state,
-      options._isProcessAlive || processIsAlive
-    ),
+    ...liveness,
+    status,
+    running: status === 'running',
     statePath: paths.statePath,
     logPath: paths.logPath,
   };
@@ -812,109 +718,65 @@ function readLogBytes(logPath, start, length) {
 
 function tailSession(projectRoot, options = {}) {
   const paths = resolvePaths(projectRoot);
-  const initialStatus = getStatus(projectRoot, options);
-  const observedSessionId = initialStatus.sessionId || null;
+  const status = getStatus(projectRoot, options);
   let observationComplete = options.waitMs === 0;
-  let transitionDetected = false;
-  if (Number.isInteger(options.cursor) && options.waitMs > 0 && initialStatus.running) {
+
+  // Hold the poll open for the full interval so a caller may only count a cycle
+  // "clean" after genuinely observing that window. Data arriving early does not
+  // shorten it; every byte is read once, after the wait.
+  if (Number.isInteger(options.cursor) && options.waitMs > 0 && status.running) {
     const now = options._nowFn || Date.now;
-    const deadline = now() + options.waitMs;
     const wait = options._sleepSync || sleepSync;
+    const deadline = now() + options.waitMs;
+    let transitionDetected = false;
     while (now() < deadline) {
-      const currentState = readState(paths);
-      const currentGeneration = Number.isInteger(currentState && currentState.logGeneration)
-        ? currentState.logGeneration
-        : 0;
-      let currentSize = 0;
-      try { currentSize = fs.statSync(paths.logPath).size; } catch { /* rotation/startup window */ }
-      const terminalState = Boolean(
-        (currentState && observedSessionId && currentState.sessionId !== observedSessionId) ||
-        !currentState ||
-        !['starting', 'running'].includes(currentState.status)
-      );
-      const dataAvailable = Boolean(
-        (Number.isInteger(options.generation) && currentGeneration !== options.generation) ||
-        currentSize > options.cursor
-      );
-      if (terminalState) {
+      const current = readState(paths);
+      if (!current || !['starting', 'running'].includes(current.status)) {
         transitionDetected = true;
         break;
       }
-      // Even when data arrives, finish the full observation interval before a
-      // caller may count the cycle clean. Keep waiting without changing the
-      // caller's byte cursor; all bytes are read once after the interval.
-      void dataAvailable;
       wait(Math.min(50, Math.max(1, deadline - now())));
     }
-    observationComplete = !transitionDetected && now() >= deadline;
+    observationComplete = !transitionDetected;
   }
 
-  return withDirectoryLock(paths.stateLockPath, () => {
-    const state = readState(paths);
-    const sameSession = Boolean(state && observedSessionId && state.sessionId === observedSessionId);
-    const running = Boolean(state && ['starting', 'running'].includes(state.status));
-    if (!sameSession || !running) observationComplete = false;
+  let size = 0;
+  try { size = fs.statSync(paths.logPath).size; } catch { /* no active log */ }
 
-    const status = state
-      ? {
-          ok: true,
-          ...state,
-          running,
-          statePath: paths.statePath,
-          logPath: paths.logPath,
-        }
-      : {
-          ok: true,
-          status: 'not-started',
-          running: false,
-          projectRoot: paths.projectRoot,
-          statePath: paths.statePath,
-          logPath: paths.logPath,
-        };
-    const generation = Number.isInteger(state && state.logGeneration) ? state.logGeneration : 0;
-    const callerGeneration = Number.isInteger(options.generation) ? options.generation : generation;
-    const generationBehind = callerGeneration !== generation;
-    let size = 0;
-    try { size = fs.statSync(paths.logPath).size; } catch { /* no active log */ }
-
-    const maxBytes = options.maxBytes || DEFAULT_MAX_TAIL_BYTES;
-    let start;
-    let truncated = generationBehind;
-    if (generationBehind) {
+  const maxBytes = options.maxBytes || DEFAULT_MAX_TAIL_BYTES;
+  let start;
+  let rotationLost = false;
+  if (Number.isInteger(options.cursor)) {
+    start = options.cursor;
+    // The log only ever grows or is truncated by rotation, so a cursor past the
+    // end can only mean rotation happened between polls.
+    if (start > size) {
       start = 0;
-    } else if (Number.isInteger(options.cursor)) {
-      start = options.cursor;
-      if (start > size) {
-        start = 0;
-        truncated = true;
-      }
-    } else {
-      start = Math.max(0, size - maxBytes);
-      truncated = start > 0;
+      rotationLost = true;
     }
+  } else {
+    start = Math.max(0, size - maxBytes);
+  }
 
-    const readLength = Math.min(maxBytes, Math.max(0, size - start));
-    const buffer = readLength > 0 && fs.existsSync(paths.logPath)
-      ? readLogBytes(paths.logPath, start, readLength)
-      : Buffer.alloc(0);
-    let output = buffer.toString('utf8');
-    if (!Number.isInteger(options.cursor)) {
-      const lines = output.split(/\r?\n/);
-      output = lines.slice(-1 * (options.lines || DEFAULT_TAIL_LINES) - 1).join('\n');
-    }
+  const readLength = Math.min(maxBytes, Math.max(0, size - start));
+  const buffer = readLength > 0 && fs.existsSync(paths.logPath)
+    ? readLogBytes(paths.logPath, start, readLength)
+    : Buffer.alloc(0);
+  let output = buffer.toString('utf8');
+  if (!Number.isInteger(options.cursor)) {
+    const lines = output.split(/\r?\n/);
+    output = lines.slice(-1 * (options.lines || DEFAULT_TAIL_LINES) - 1).join('\n');
+  }
 
-    return {
-      ...status,
-      cursor: start,
-      nextCursor: start + buffer.length,
-      generation,
-      nextGeneration: generation,
-      truncated: truncated || start + buffer.length < size,
-      rotationLost: generationBehind,
-      observationComplete,
-      output,
-    };
-  });
+  return {
+    ...status,
+    cursor: start,
+    nextCursor: start + buffer.length,
+    truncated: rotationLost || start + buffer.length < size,
+    rotationLost,
+    observationComplete: observationComplete && status.running,
+    output,
+  };
 }
 
 function killProcessTree(pid, options = {}) {
@@ -923,6 +785,7 @@ function killProcessTree(pid, options = {}) {
   const isAlive = options._isProcessAlive || processIsAlive;
   const kill = options._kill || process.kill;
   const spawnSyncImpl = options._spawnSync || spawnSync;
+  const wait = options._sleepSync || sleepSync;
   if (!isAlive(pid)) return false;
 
   if (platform === 'win32') {
@@ -932,7 +795,7 @@ function killProcessTree(pid, options = {}) {
     });
     if (result.status !== 0) return false;
     const deadline = Date.now() + 1500;
-    while (isAlive(pid) && Date.now() < deadline) sleepSync(25);
+    while (isAlive(pid) && Date.now() < deadline) wait(25);
     return !isAlive(pid);
   }
 
@@ -949,7 +812,7 @@ function killProcessTree(pid, options = {}) {
   }
 
   const deadline = Date.now() + 1500;
-  while (isAlive(pid) && Date.now() < deadline) sleepSync(25);
+  while (isAlive(pid) && Date.now() < deadline) wait(25);
   if (isAlive(pid)) {
     try {
       kill(-pid, 'SIGKILL');
@@ -958,20 +821,16 @@ function killProcessTree(pid, options = {}) {
     }
   }
   const finalDeadline = Date.now() + 500;
-  while (isAlive(pid) && Date.now() < finalDeadline) sleepSync(25);
+  while (isAlive(pid) && Date.now() < finalDeadline) wait(25);
   return !isAlive(pid);
 }
 
 function stopSession(projectRoot, options = {}) {
   const paths = resolvePaths(projectRoot);
-  return withDirectoryLock(
-    paths.lifecycleLockPath,
-    () => stopSessionLocked(paths, options),
-    {
-      _isProcessAlive: options._isProcessAlive,
-      _sleepSync: options._sleepSync,
-    }
-  );
+  return withStartLock(paths.startLockPath, () => stopSessionLocked(paths, options), {
+    timeoutMs: options.startLockTimeoutMs,
+    _sleepSync: options._sleepSync,
+  });
 }
 
 function stopSessionLocked(paths, options = {}) {
@@ -981,27 +840,27 @@ function stopSessionLocked(paths, options = {}) {
   }
 
   const isAlive = options._isProcessAlive || processIsAlive;
-  const ownedState = confirmOwnedProcess(paths, state, options);
-  const ownsLiveProcess = Boolean(ownedState);
-  const signaledRunner = ownsLiveProcess
-    ? killProcessTree(Number(state.runnerPid), options)
-    : false;
+  const liveness = resolveLiveness(state, options);
+  // Never signal PIDs we no longer own. A dead session's recorded PIDs may have
+  // been recycled by an unrelated process.
+  const ownsLiveProcess = liveness.status === 'running' || liveness.status === 'port-conflict';
+  const signaledRunner = ownsLiveProcess ? killProcessTree(Number(state.runnerPid), options) : false;
   const signaledMetro = ownsLiveProcess && isAlive(Number(state.metroPid))
     ? killProcessTree(Number(state.metroPid), options)
     : false;
   const runnerAlive = ownsLiveProcess && isAlive(Number(state.runnerPid));
   const metroAlive = ownsLiveProcess && isAlive(Number(state.metroPid));
   const fullyStopped = ownsLiveProcess && !runnerAlive && !metroAlive;
+
   const next = updateState(paths, {
-    status: fullyStopped ? 'stopped' : ownsLiveProcess ? 'stop-failed' : 'stale',
-    stale: !ownsLiveProcess,
-    stoppedAt: fullyStopped ? new Date().toISOString() : null,
+    status: fullyStopped ? 'stopped' : ownsLiveProcess ? 'stop-failed' : 'stopped',
+    stoppedAt: fullyStopped || !ownsLiveProcess ? new Date().toISOString() : null,
     reason: fullyStopped
       ? 'stopped by metro-session command'
       : ownsLiveProcess
         ? `failed to stop Metro process tree (runnerAlive=${runnerAlive}, metroAlive=${metroAlive})`
-      : 'session heartbeat is stale; recorded PIDs were not signaled',
-  }, state.sessionId);
+        : 'recorded Metro processes were no longer running',
+  });
 
   return {
     ok: true,
@@ -1015,75 +874,33 @@ function stopSessionLocked(paths, options = {}) {
   };
 }
 
-function cleanSession(projectRoot, options = {}) {
-  const paths = resolvePaths(projectRoot);
-  return withDirectoryLock(
-    paths.lifecycleLockPath,
-    () => cleanSessionLocked(paths, options),
-    {
-      _isProcessAlive: options._isProcessAlive,
-      _sleepSync: options._sleepSync,
-    }
-  );
-}
-
-function cleanSessionLocked(paths, options = {}) {
-  const state = readState(paths);
-  const ownedState = confirmOwnedProcess(paths, state, options);
-  if (ownedState && !options.force) {
-    throw new Error('Metro is still running. Run stop first, or use clean --force.');
-  }
-  if (ownedState && options.force) {
-    const stopped = stopSessionLocked(paths, options);
-    if (!stopped.stopped) {
-      throw new Error('Metro could not be stopped; session state and logs were preserved.');
-    }
-  }
-
-  withDirectoryLock(paths.stateLockPath, () => {
-    // Conditional worker updates use this same external state lock. Removing the
-    // session directory while holding it guarantees a delayed heartbeat cannot
-    // pass its session-id check and recreate state after cleanup.
-    fs.rmSync(paths.sessionDir, { recursive: true, force: true });
-  });
-  return { ok: true, status: 'clean', projectRoot: paths.projectRoot, removed: paths.sessionDir };
-}
-
-function extractMetroUrl(value) {
-  const match = String(value).match(/(?:^|\n)\s*›?\s*Metro:\s*(\S+)/);
-  return match ? match[1] : null;
-}
-
-function waitForSessionState(paths, sessionId, timeoutMilliseconds = 5000) {
+/**
+ * Blocks until the parent has published state naming *this* process as the
+ * runner. The parent can only record the PID after `spawn` returns, so a fast
+ * runner may first observe no state at all, or the previous session's state.
+ * Waiting for `runnerPid === process.pid` is what makes a replaced session's
+ * zombie runner exit instead of adopting (and then clobbering) the new one.
+ */
+function waitForOwnState(paths, timeoutMilliseconds = 5000, options = {}) {
+  const wait = options._sleepSync || sleepSync;
   const deadline = Date.now() + timeoutMilliseconds;
   while (Date.now() < deadline) {
     const state = readState(paths);
-    if (state && state.sessionId === sessionId) return state;
-    sleepSync(25);
+    if (state && Number(state.runnerPid) === process.pid) return state;
+    wait(25);
   }
   return null;
 }
 
-function runWorker(projectRoot, sessionId, options = {}) {
+function runWorker(projectRoot, options = {}) {
   const paths = resolvePaths(projectRoot);
-  const state = (options._waitForSessionState || waitForSessionState)(paths, sessionId);
-  if (!state) throw new Error('Metro session state was not initialized by the parent process.');
-
-  const claimedState = updateState(
-    paths,
-    { heartbeatAt: new Date().toISOString() },
-    sessionId
-  );
-  if (!claimedState || claimedState.sessionId !== sessionId) {
-    throw new Error('Metro session was cleaned or replaced before the runner claimed it.');
+  const state = (options._waitForOwnState || waitForOwnState)(paths);
+  if (!state) {
+    throw new Error('Metro session state was not initialized by the parent process.');
   }
 
   const cliPath = (options._resolveExpoCli || resolveExpoCli)(paths.projectRoot);
-  appendSanitized(
-    paths,
-    `\n--- Metro session ${sessionId} started ${new Date().toISOString()} ---\n`,
-    { sessionId }
-  );
+  appendSanitized(paths, `\n--- Metro session started ${new Date().toISOString()} ---\n`);
 
   const child = (options._spawn || spawn)(
     process.execPath,
@@ -1099,30 +916,25 @@ function runWorker(projectRoot, sessionId, options = {}) {
   updateState(paths, {
     status: 'running',
     metroPid: child.pid,
-    heartbeatAt: new Date().toISOString(),
     command: [process.execPath, cliPath, 'start', ...(state.clear ? ['--clear'] : [])],
-  }, sessionId);
-
-  const heartbeat = setInterval(() => {
-    updateState(paths, { heartbeatAt: new Date().toISOString() }, sessionId);
-  }, HEARTBEAT_INTERVAL_MS);
-  if (typeof heartbeat.unref === 'function') heartbeat.unref();
+  }, process.pid);
 
   let rollingText = '';
-  const stdoutWriter = createSanitizedStreamWriter(paths, { sessionId });
-  const stderrWriter = createSanitizedStreamWriter(paths, { sessionId });
+  const stdoutWriter = createSanitizedStreamWriter(paths);
+  const stderrWriter = createSanitizedStreamWriter(paths);
   const consume = (writer) => (chunk) => {
     const sanitized = writer.write(chunk);
     if (!sanitized) return;
     rollingText = `${rollingText}${sanitized}`.slice(-8192);
     const metroUrl = extractMetroUrl(rollingText);
     if (metroUrl) {
-      updateState(paths, {
-        metroUrl,
-        readyAt: new Date().toISOString(),
-      }, sessionId);
+      const port = extractMetroPort(metroUrl);
+      const current = readState(paths);
+      if (!current || current.metroUrl !== metroUrl || current.port !== port) {
+        updateState(paths, { metroUrl, port, readyAt: new Date().toISOString() }, process.pid);
+      }
     }
-    rotateLog(paths, DEFAULT_MAX_LOG_BYTES, { sessionId });
+    rotateLog(paths);
   };
   child.stdout.on('data', consume(stdoutWriter));
   child.stderr.on('data', consume(stderrWriter));
@@ -1132,35 +944,29 @@ function runWorker(projectRoot, sessionId, options = {}) {
     if (shuttingDown) return;
     shuttingDown = true;
     try { child.kill(signal === 'SIGINT' ? 'SIGINT' : 'SIGTERM'); } catch { /* best effort */ }
-    updateState(paths, {
-      status: 'stopping',
-      reason: `runner received ${signal}`,
-    }, sessionId);
+    updateState(paths, { status: 'stopping', reason: `runner received ${signal}` }, process.pid);
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 
   child.on('error', (error) => {
-    clearInterval(heartbeat);
     stdoutWriter.flush();
     stderrWriter.flush();
-    appendSanitized(paths, `\nMetro launch failed: ${error.message}\n`, { sessionId });
+    appendSanitized(paths, `\nMetro launch failed: ${error.message}\n`);
     updateState(paths, {
       status: 'failed',
       stoppedAt: new Date().toISOString(),
       reason: error.message,
-    }, sessionId);
+    }, process.pid);
     process.exitCode = 1;
   });
 
   child.on('exit', (code, signal) => {
-    clearInterval(heartbeat);
     stdoutWriter.flush();
     stderrWriter.flush();
     appendSanitized(
       paths,
-      `\n--- Metro exited code=${code === null ? 'null' : code} signal=${signal || 'none'} ${new Date().toISOString()} ---\n`,
-      { sessionId }
+      `\n--- Metro exited code=${code === null ? 'null' : code} signal=${signal || 'none'} ${new Date().toISOString()} ---\n`
     );
     updateState(paths, {
       status: shuttingDown || code === 0 ? 'stopped' : 'failed',
@@ -1168,7 +974,7 @@ function runWorker(projectRoot, sessionId, options = {}) {
       exitCode: code,
       exitSignal: signal,
       reason: shuttingDown ? 'runner stopped' : `Metro exited with code ${code}`,
-    }, sessionId);
+    }, process.pid);
     process.exitCode = code || 0;
   });
 }
@@ -1178,9 +984,8 @@ function printHelp() {
     'Usage:\n' +
       '  node metro-session.js start  [--project-root <dir>] [--clear] [--wait-ready-ms <n>]\n' +
       '  node metro-session.js status [--project-root <dir>]\n' +
-      '  node metro-session.js tail   [--project-root <dir>] [--cursor <bytes>] [--generation <n>] [--wait-ms <n>] [--lines <n>] [--max-bytes <n>]\n' +
-      '  node metro-session.js stop   [--project-root <dir>]\n' +
-      '  node metro-session.js clean  [--project-root <dir>] [--force]\n'
+      '  node metro-session.js tail   [--project-root <dir>] [--cursor <bytes>] [--wait-ms <n>] [--lines <n>] [--max-bytes <n>]\n' +
+      '  node metro-session.js stop   [--project-root <dir>]\n'
   );
 }
 
@@ -1196,23 +1001,17 @@ function main() {
   }
 
   if (options.command === '__run') {
-    if (!options.sessionId) throw new Error('__run requires --session-id');
     try {
-      runWorker(options.projectRoot, options.sessionId);
+      runWorker(options.projectRoot, options);
     } catch (error) {
       const paths = resolvePaths(options.projectRoot);
-      const current = readState(paths);
-      if (current && current.sessionId === options.sessionId) {
-        appendSanitized(paths, `\nMetro runner failed before startup: ${error.message}\n`, {
-          sessionId: options.sessionId,
-        });
-        updateState(paths, {
-          status: 'failed',
-          stoppedAt: new Date().toISOString(),
-          reason: error.message,
-        }, options.sessionId);
-      }
-      throw error;
+      appendSanitized(paths, `\nMetro runner failed before startup: ${error.message}\n`);
+      updateState(paths, {
+        status: 'failed',
+        stoppedAt: new Date().toISOString(),
+        reason: error.message,
+      });
+      process.exitCode = 1;
     }
     return;
   }
@@ -1228,43 +1027,45 @@ function main() {
     printJson(tailSession(options.projectRoot, options));
   } else if (options.command === 'stop') {
     printJson(stopSession(options.projectRoot));
-  } else if (options.command === 'clean') {
-    printJson(cleanSession(options.projectRoot, { force: options.force }));
   } else {
-    throw new Error(`Unknown command: ${options.command}`);
+    printHelp();
+    process.exitCode = 1;
   }
 }
-
-module.exports = {
-  appendSanitized,
-  cleanSession,
-  confirmOwnedProcess,
-  createSanitizedStreamWriter,
-  extractMetroUrl,
-  getStatus,
-  killProcessTree,
-  markStaleIfNeeded,
-  parseArgs,
-  processIsAlive,
-  readState,
-  redactLogText,
-  resolveExpoCli,
-  resolvePaths,
-  rotateLog,
-  runWorker,
-  startSession,
-  stopSession,
-  tailSession,
-  updateState,
-  withDirectoryLock,
-  writeState,
-};
 
 if (require.main === module) {
   try {
     main();
   } catch (error) {
-    process.stderr.write(`${JSON.stringify({ ok: false, error: error.message })}\n`);
-    process.exit(1);
+    process.stderr.write(`${error.message}\n`);
+    process.exitCode = 1;
   }
 }
+
+module.exports = {
+  appendSanitized,
+  createSanitizedStreamWriter,
+  extractMetroPort,
+  extractMetroUrl,
+  getStatus,
+  killProcessTree,
+  parseArgs,
+  portListenerPids,
+  processIsAlive,
+  readState,
+  redactLogText,
+  resolveExpoCli,
+  resolveLiveness,
+  resolvePaths,
+  rotateLog,
+  runWorker,
+  startSession,
+  stopSession,
+  stripAnsi,
+  tailSession,
+  waitForOwnState,
+  withStartLock,
+  writeState,
+  updateState,
+  STATE_SCHEMA_VERSION,
+};

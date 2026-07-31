@@ -18,9 +18,9 @@ Monitor the running app through the bundled `scripts/metro-session.js` process m
 
 | Form | Behavior |
 |---|---|
-| `/debug-app` (no args) | **Default — project-log-driven mode.** Run Phase 0, resolve `.expo/metro-session/state.json`, then enter the monitor loop using `metro-session.js tail`. No host terminal ID is required. |
+| `/debug-app` (no args) | **Default — project-log-driven mode.** Run Phase 0, resolve `.expo/metro-session/state.json`, verify the recorded dev-server port is still ours, then enter the monitor loop using `metro-session.js tail`. No host terminal ID is required. |
 | `/debug-app "<symptom text>"` | **Symptom-driven mode** (recommended when there's a user-visible problem). Free-text symptom such as `"todos not appearing on home screen"`, `"login button does nothing"`, `"list empty after refresh"`. Run Phase 0 → Phase 0.5 (parse symptom → ask the user to reproduce/navigate → walk the likely data path from terminal traces) → enter monitor loop. Catches silent failures (empty lists, blank screens, swallowed errors) that pure log polling misses. |
-| `/debug-app status` | Run `metro-session.js status`, then print current Metro state, last cursor, fixes applied, and unresolved errors. Do NOT enter the loop. |
+| `/debug-app status` | Run `metro-session.js status`, then print current Metro state, dev-server port, last cursor, fixes applied, and unresolved errors. Do NOT enter the loop. |
 | `/debug-app stop` | Stop only the foreground debug loop and preserve `.claude/debug-app/` state. It does not stop Metro. To stop Metro explicitly, run `node "${PLUGIN_ROOT}/scripts/metro-session.js" stop --project-root <working_dir>`. |
 
 **Dispatch rule:** if `$ARGUMENTS` is non-empty and is not one of the reserved subcommand tokens (`status`, `stop`, `help`, `--help`, `-h`, `version`, `--version`), treat the entire string (everything after the command name; outer quotes optional) as the symptom and use symptom-driven mode. For `help` / `--help` / `-h`, print the subcommands table above and exit.
@@ -36,6 +36,7 @@ Monitor the running app through the bundled `scripts/metro-session.js` process m
 - **No screen-by-screen verification** — Do not crawl routes or validate every screen. In symptom mode, focus only on the user-reported workflow and the terminal/source evidence needed to diagnose it.
 - **One fix at a time** — Fully resolve one issue (context → fix → type-check → reload → re-poll) before starting the next. No batching.
 - **Working-dir state** — Debug audit state lives in `.claude/debug-app/`: `fixes.md`, `unresolved.md`, `injected-logs.md`, and `metro-cursor.json`. Metro process state/logs live in the already-ignored `.expo/metro-session/`. Both survive chat/editor restarts.
+- **The port is the session identity** — the dev-server port is the number the QR encodes, the device dials, and this skill verifies. Liveness is a socket probe (does our recorded PID still hold that port?), never a self-reported heartbeat. A `port-taken` status means the log belongs to a dead session and must not be diagnosed.
 - **Host terminal APIs are optional only** — If the current host already exposes the Metro terminal output, it may be consulted as a low-latency convenience. Never ask the user for a terminal ID, never persist one, and never make a diagnosis from host output without advancing the authoritative project-log cursor too.
 - **Reference resolution order** — For unfamiliar errors: in-repo references first ([skills/add-dataverse/references/dataverse-reference.md](${CLAUDE_SKILL_DIR}/../../skills/add-dataverse/references/dataverse-reference.md), etc.), then `mcp__plugin_mobile-app_microsoft-learn__microsoft_docs_search`, then general web search.
 
@@ -44,7 +45,7 @@ Monitor the running app through the bundled `scripts/metro-session.js` process m
 Before entering the monitor loop, write a task list and keep it up to date:
 
 ```
-- [ ] Verify project-local Metro session is running (`metro-session.js status`)
+- [ ] Verify our Metro still owns its dev-server port (`metro-session.js status`)
 - [ ] Capture baseline log state (`metro-session.js tail`, save byte cursor)
 - [ ] (Symptom mode only) Phase 0.5: parse symptom → ask user to navigate → inject console.logs → read new log bytes → walk data path → clean up logs
 - [ ] Monitoring cycle 1: collect → classify → fix if needed
@@ -71,21 +72,24 @@ METRO_SCRIPT="${CLAUDE_SKILL_DIR}/../../scripts/metro-session.js"
 node "$METRO_SCRIPT" status --project-root "<working_dir>"
 ```
 
-Parse the JSON result:
+Parse the JSON result. The wrapper answers liveness with a socket probe on the recorded `port`, so there are only three outcomes:
 
-| Status | Action |
-|---|---|
-| `running: true` | Capture `sessionId`, `statePath`, `logPath`, and continue. |
-| `status: starting` | Run `status` once more. If still starting, tell the user Metro is not ready yet and stop cleanly. |
-| `status: failed` | Run `tail --lines 120`, surface the sanitized launch error, and stop. |
-| `stale`, `stopped`, or `not-started` | Tell the user Metro is not running. Offer to start it with `node "$METRO_SCRIPT" start --project-root "<working_dir>" --wait-ready-ms 8000`; start only after confirmation, then rerun status. |
+| Status | Meaning | Action |
+|---|---|---|
+| `running: true` | Our Metro holds its port | Capture `port`, `logPath`, and continue. |
+| `status: port-taken` | **Our Metro is gone and another process now holds the recorded port.** `metro.log` is stale and describes a dead session. | Do NOT diagnose from this log. Tell the user which PID holds the port (`portListeners`) and offer to start a fresh session. |
+| `status: port-conflict` | Our process is alive but something else owns the port | The device is talking to the wrong server. Stop the session and restart so Expo picks a free port. |
+| `status: failed` | Expo/Metro exited during startup | Run `tail --lines 120`, surface the sanitized launch error, and stop. |
+| `starting`, `stopped`, or `not-started` | No log source yet | Tell the user Metro is not running. Offer to start it with `node "$METRO_SCRIPT" start --project-root "<working_dir>" --wait-ready-ms 8000`; start only after confirmation, then rerun status. |
+
+The port is the check that a session ID cannot perform: a state file describing a dead process still "matches itself", so only the socket probe reveals that the log stopped belonging to the app under test.
 
 If no wrapper session exists but the host happens to expose a live Metro terminal, that output may explain what is running, but do not ask for or store its terminal ID and do not enter the continuous monitor loop against it. Portable monitoring requires the wrapper session.
 
 Record the stable source in `fixes.md`:
 
 ```text
-[<HH:MM:SS>] Log source — <working_dir>/.expo/metro-session/metro.log (session <sessionId>)
+[<HH:MM:SS>] Log source — <working_dir>/.expo/metro-session/metro.log (port <port>)
 ```
 
 ### 0.1 Ensure state directory
@@ -113,7 +117,7 @@ Read the latest sanitized log window:
 node "$METRO_SCRIPT" tail --project-root "<working_dir>" --lines 500 --max-bytes 262144
 ```
 
-Parse `output`, `sessionId`, and `nextCursor`. Scan `output`:
+Parse `output`, `port`, and `nextCursor`. Scan `output`:
 
 - Most recent error-class line is `SyntaxError`, `Unable to resolve module`, `transform failed`, or `error: Bundling failed` → bundle is broken. Treat as a Step B "Import / Bundle" critical error and route through Step D immediately. Do NOT enter the steady-state loop until the bundle is healthy.
 - Output contains `Bundling complete` / `iOS Bundled` / `Android Bundled` with no later error-class line → Metro is healthy. Proceed.
@@ -141,18 +145,17 @@ Write `.claude/debug-app/metro-cursor.json` using structured JSON:
 
 ```json
 {
-   "sessionId": "<sessionId from tail result>",
+   "port": 8081,
    "cursor": 12345,
-   "generation": 0,
    "updatedAt": "<ISO timestamp>"
 }
 ```
 
 Set `cursor` to `nextCursor` from Phase 0.2. On later invocations:
 
-- Same `sessionId` and `generation` → reuse the saved cursor so old errors are not processed again.
-- New `sessionId` → discard the old cursor and initialize from the latest log window.
-- Changed `generation`, or `tail.truncated: true` because the log rotated or shrank → accept the returned reset cursor/generation and record the rotation in `fixes.md`.
+- Same `port` and `running: true` → reuse the saved cursor so old errors are not processed again.
+- Different `port` → a new Metro session is in play. Discard the old cursor and initialize from the latest log window.
+- `tail.rotationLost: true` (the saved cursor is past end-of-file, which can only happen when the log rotated) → accept the returned reset cursor and record the rotation in `fixes.md`.
 
 ---
 
@@ -300,22 +303,21 @@ Repeat until **3 consecutive clean cycles**, OR the user types `stop`, OR the es
 
 ### Step A — Collect logs
 
-Read `.claude/debug-app/metro-cursor.json`, confirm its `sessionId` matches `metro-session.js status`, then run:
+Read `.claude/debug-app/metro-cursor.json`, confirm its `port` matches `metro-session.js status`, then run:
 
 ```bash
 node "$METRO_SCRIPT" tail \
    --project-root "<working_dir>" \
    --cursor <saved-cursor> \
-   --generation <saved-generation> \
    --wait-ms 5000 \
    --max-bytes 262144
 ```
 
-Use only the returned `output` for this cycle. Immediately persist `nextCursor`, `nextGeneration`, and the current `sessionId` to `metro-cursor.json`, even when `output` is empty or contains an error; this prevents duplicate processing after interruption and handles same-session log rotation safely.
+Use only the returned `output` for this cycle. Immediately persist `nextCursor` and the current `port` to `metro-cursor.json`, even when `output` is empty or contains an error; this prevents duplicate processing after interruption and handles log rotation safely.
 
-Count a clean cycle only when the result has `observationComplete: true` and the full `tail --wait-ms 5000` interval contains empty or non-error output. A process/session transition returns `observationComplete: false` and is never a clean cycle.
+Count a clean cycle only when the result has `observationComplete: true` and the full `tail --wait-ms 5000` interval contains empty or non-error output. A process transition, or a status of `port-taken` / `port-conflict`, returns `observationComplete: false` and is never a clean cycle.
 
-If `truncated: true`, never count the result as clean. Process any nonempty output, then issue at most three additional tail calls from the returned cursor/generation in the same cycle. If `rotationLost: true`, record an explicit lost-generation warning in `fixes.md` and require a fresh full observation interval before incrementing the clean counter. If data remains truncated after four chunks, record a backlog warning and continue next cycle rather than consuming unbounded context.
+If `truncated: true`, never count the result as clean. Process any nonempty output, then issue at most three additional tail calls from the returned cursor in the same cycle. If `rotationLost: true`, record an explicit rotation warning in `fixes.md` and require a fresh full observation interval before incrementing the clean counter. If data remains truncated after four chunks, record a backlog warning and continue next cycle rather than consuming unbounded context.
 
 In the new output, surface as classifiable signal:
 - Runtime ` ERROR ` / ` WARN ` / ` LOG ` prefixes

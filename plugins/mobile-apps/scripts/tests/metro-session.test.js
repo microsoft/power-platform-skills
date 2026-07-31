@@ -10,17 +10,22 @@ const { spawn, spawnSync } = require('node:child_process');
 const SCRIPT = path.resolve(__dirname, '..', 'metro-session.js');
 const {
   appendSanitized,
-  cleanSession,
   createSanitizedStreamWriter,
+  extractMetroPort,
+  extractMetroUrl,
   getStatus,
+  portListenerPids,
   redactLogText,
+  resolveLiveness,
   resolvePaths,
-  runWorker,
   startSession,
+  stopSession,
   tailSession,
   updateState,
-  withDirectoryLock,
+  waitForOwnState,
+  withStartLock,
   writeState,
+  STATE_SCHEMA_VERSION,
 } = require('../metro-session');
 
 function makeProject(prefix = 'mobile-metro-session-') {
@@ -30,6 +35,22 @@ function makeProject(prefix = 'mobile-metro-session-') {
     `${JSON.stringify({ name: 'metro-session-fixture', private: true }, null, 2)}\n`
   );
   return projectRoot;
+}
+
+function seedState(projectRoot, overrides = {}) {
+  const paths = resolvePaths(projectRoot);
+  writeState(paths, {
+    schemaVersion: STATE_SCHEMA_VERSION,
+    status: 'running',
+    projectRoot,
+    runnerPid: 111,
+    metroPid: 222,
+    port: 8081,
+    metroUrl: 'http://127.0.0.1:8081',
+    startedAt: new Date().toISOString(),
+    ...overrides,
+  });
+  return paths;
 }
 
 function runCliAsync(command, projectRoot, extraArgs = []) {
@@ -228,20 +249,162 @@ test('stream writer bounds an oversized completed output line', () => {
   assert.doesNotMatch(fs.readFileSync(paths.logPath, 'utf8'), /y{32}/);
 });
 
+test('extractMetroPort reads the port from plain and dev-client banners', () => {
+  assert.equal(extractMetroPort('› Metro: http://192.168.1.24:8081'), 8081);
+  assert.equal(extractMetroPort('  Metro: exp://10.0.0.4:8082\n'), 8082);
+  // Dev-client banners percent-encode the inner URL, hiding the ':' delimiter.
+  assert.equal(
+    extractMetroPort('› Metro: exp+fixture://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8081'),
+    8081
+  );
+  assert.equal(extractMetroPort('http://localhost:19000/'), 19000);
+  assert.equal(extractMetroPort('no metro banner here'), null);
+  assert.equal(extractMetroPort('› Metro: exp://no-port-here'), null);
+  assert.equal(extractMetroUrl('› Metro: http://192.168.1.24:8081'), 'http://192.168.1.24:8081');
+});
+
+test('portListenerPids parses lsof output and distinguishes empty from unknown', () => {
+  const listening = portListenerPids(8081, {
+    platform: 'darwin',
+    _spawnSync: () => ({ stdout: '41233\n41240\n', status: 0 }),
+  });
+  assert.deepEqual(listening, [41233, 41240]);
+
+  // lsof exits 1 with empty stdout when nothing matches: a real "nobody is
+  // listening" answer, not an unknown one.
+  const free = portListenerPids(8081, {
+    platform: 'darwin',
+    _spawnSync: () => ({ stdout: '', status: 1 }),
+  });
+  assert.deepEqual(free, []);
+
+  // A missing binary is genuinely unknown, so callers must fall back to PIDs.
+  const unknown = portListenerPids(8081, {
+    platform: 'darwin',
+    _spawnSync: () => ({ error: new Error('spawn lsof ENOENT') }),
+  });
+  assert.equal(unknown, null);
+
+  assert.equal(portListenerPids(null, { platform: 'darwin' }), null);
+});
+
+test('portListenerPids parses the Windows netstat table including IPv6 rows', () => {
+  const stdout = [
+    '',
+    'Active Connections',
+    '',
+    '  Proto  Local Address          Foreign Address        State           PID',
+    '  TCP    0.0.0.0:8081           0.0.0.0:0              LISTENING       41233',
+    '  TCP    [::]:8081              [::]:0                 LISTENING       41233',
+    '  TCP    0.0.0.0:8082           0.0.0.0:0              LISTENING       999',
+    '  TCP    127.0.0.1:8081         127.0.0.1:5000         ESTABLISHED     777',
+    '',
+  ].join('\r\n');
+
+  const pids = portListenerPids(8081, {
+    platform: 'win32',
+    _spawnSync: () => ({ stdout, status: 0 }),
+  });
+  assert.deepEqual(pids, [41233], 'only LISTENING rows on the requested port count');
+});
+
+test('resolveLiveness reports running when our process holds the port', () => {
+  const liveness = resolveLiveness(
+    { runnerPid: 111, metroPid: 222, port: 8081 },
+    { _isProcessAlive: (pid) => pid === 222, _portListenerPids: () => [222] }
+  );
+  assert.equal(liveness.status, 'running');
+  assert.equal(liveness.running, true);
+  assert.equal(liveness.portOwnedBySession, true);
+  assert.equal(liveness.port, 8081);
+});
+
+test('resolveLiveness falls back to PID liveness when the port cannot be probed', () => {
+  const liveness = resolveLiveness(
+    { runnerPid: 111, metroPid: 222, port: 8081 },
+    { _isProcessAlive: (pid) => pid === 111, _portListenerPids: () => null }
+  );
+  assert.equal(liveness.status, 'running');
+  assert.equal(liveness.portOwnedBySession, null, 'ownership is unknown, not false');
+});
+
+test('resolveLiveness flags a foreign Metro that took over a dead session port', () => {
+  const liveness = resolveLiveness(
+    { runnerPid: 111, metroPid: 222, port: 8081 },
+    { _isProcessAlive: () => false, _portListenerPids: () => [90210] }
+  );
+  assert.equal(liveness.status, 'port-taken');
+  assert.equal(liveness.running, false);
+  assert.deepEqual(liveness.portListeners, [90210]);
+});
+
+test('resolveLiveness flags a port conflict while our process is still alive', () => {
+  const liveness = resolveLiveness(
+    { runnerPid: 111, metroPid: 222, port: 8081 },
+    { _isProcessAlive: () => true, _portListenerPids: () => [90210] }
+  );
+  assert.equal(liveness.status, 'port-conflict');
+  assert.equal(liveness.running, false, 'a conflicted port must not be treated as healthy');
+});
+
+test('resolveLiveness reports stopped when nothing is alive and the port is free', () => {
+  const liveness = resolveLiveness(
+    { runnerPid: 111, metroPid: 222, port: 8081 },
+    { _isProcessAlive: () => false, _portListenerPids: () => [] }
+  );
+  assert.equal(liveness.status, 'stopped');
+  assert.equal(liveness.running, false);
+});
+
+test('status surfaces a stale log when another Metro now owns the recorded port', () => {
+  const projectRoot = makeProject();
+  seedState(projectRoot);
+
+  const status = getStatus(projectRoot, {
+    _isProcessAlive: () => false,
+    _portListenerPids: () => [90210],
+  });
+
+  assert.equal(status.status, 'port-taken');
+  assert.equal(status.running, false);
+  assert.equal(status.port, 8081);
+  assert.deepEqual(status.portListeners, [90210]);
+  fs.rmSync(projectRoot, { recursive: true, force: true });
+});
+
+test('status reports not-started when no session state exists', () => {
+  const projectRoot = makeProject();
+  const status = getStatus(projectRoot);
+  assert.equal(status.status, 'not-started');
+  assert.equal(status.running, false);
+  fs.rmSync(projectRoot, { recursive: true, force: true });
+});
+
+test('status keeps a recorded failure reason when the port is free', () => {
+  const projectRoot = makeProject();
+  seedState(projectRoot, { status: 'failed', reason: 'Expo is not installed in this project.' });
+
+  const status = getStatus(projectRoot, {
+    _isProcessAlive: () => false,
+    _portListenerPids: () => [],
+  });
+
+  assert.equal(status.status, 'failed');
+  assert.match(status.reason, /Expo is not installed/);
+  fs.rmSync(projectRoot, { recursive: true, force: true });
+});
+
 test('startSession records a detached runner without requiring a host terminal', () => {
   const projectRoot = makeProject();
   let spawnCall = null;
   let unrefCalled = false;
-  const fakeRunner = {
-    pid: 42001,
-    unref() { unrefCalled = true; },
-  };
 
   const result = startSession(projectRoot, {
     _isProcessAlive: () => false,
+    _portListenerPids: () => [],
     _spawn(command, args, options) {
       spawnCall = { command, args, options };
-      return fakeRunner;
+      return { pid: 42001, unref() { unrefCalled = true; } };
     },
   });
 
@@ -249,39 +412,226 @@ test('startSession records a detached runner without requiring a host terminal',
   assert.equal(result.alreadyRunning, false);
   assert.equal(result.status, 'starting');
   assert.equal(result.runnerPid, 42001);
+  assert.equal(result.port, null, 'the port is unknown until Metro prints its banner');
   assert.equal(unrefCalled, true);
   assert.equal(spawnCall.command, process.execPath);
   assert.equal(spawnCall.options.detached, true);
   assert.equal(spawnCall.options.cwd, projectRoot);
   assert.match(spawnCall.args.join(' '), /__run/);
   assert.ok(fs.existsSync(resolvePaths(projectRoot).statePath));
+  fs.rmSync(projectRoot, { recursive: true, force: true });
 });
 
-test('startSession reuses a live wrapper session instead of spawning again', () => {
+test('startSession reuses a live session instead of spawning a second Metro', () => {
   const projectRoot = makeProject();
-  const paths = resolvePaths(projectRoot);
-  const now = new Date().toISOString();
-  writeState(paths, {
-    schemaVersion: 1,
-    sessionId: 'existing-session',
-    status: 'running',
-    projectRoot,
-    runnerPid: 111,
-    metroPid: 222,
-    startedAt: now,
-    heartbeatAt: now,
-    logGeneration: 0,
-  });
+  seedState(projectRoot);
   let spawnCalls = 0;
 
   const result = startSession(projectRoot, {
     _isProcessAlive: () => true,
+    _portListenerPids: () => [222],
     _spawn() { spawnCalls += 1; return { pid: 333, unref() {} }; },
   });
 
   assert.equal(result.alreadyRunning, true);
-  assert.equal(result.sessionId, 'existing-session');
+  assert.equal(result.port, 8081);
   assert.equal(spawnCalls, 0);
+  fs.rmSync(projectRoot, { recursive: true, force: true });
+});
+
+test('startSession replaces a dead session whose port was taken by another Metro', () => {
+  const projectRoot = makeProject();
+  seedState(projectRoot);
+  let spawnCalls = 0;
+
+  const result = startSession(projectRoot, {
+    _isProcessAlive: () => false,
+    _portListenerPids: () => [90210],
+    _spawn() { spawnCalls += 1; return { pid: 4242, unref() {} }; },
+  });
+
+  assert.equal(result.alreadyRunning, false);
+  assert.equal(result.runnerPid, 4242);
+  assert.equal(spawnCalls, 1, 'a foreign process on our old port must not block a restart');
+  fs.rmSync(projectRoot, { recursive: true, force: true });
+});
+
+test('start lock serializes contenders and reclaims an abandoned lock', () => {
+  const projectRoot = makeProject();
+  const paths = resolvePaths(projectRoot);
+  fs.mkdirSync(paths.sessionDir, { recursive: true });
+  fs.mkdirSync(paths.startLockPath, { recursive: true });
+
+  assert.throws(
+    () => withStartLock(paths.startLockPath, () => 'unexpected', {
+      timeoutMs: 10,
+      _sleepSync() {},
+    }),
+    /Timed out waiting for the Metro start lock/
+  );
+
+  // An abandoned lock older than the stale window must not deadlock the CLI.
+  const old = new Date(Date.now() - 120_000);
+  fs.utimesSync(paths.startLockPath, old, old);
+  const result = withStartLock(paths.startLockPath, () => 'recovered', { _sleepSync() {} });
+  assert.equal(result, 'recovered');
+  assert.equal(fs.existsSync(paths.startLockPath), false, 'the lock is released on exit');
+  fs.rmSync(projectRoot, { recursive: true, force: true });
+});
+
+test('runner-scoped update cannot clobber a replaced session', () => {
+  const projectRoot = makeProject();
+  const paths = seedState(projectRoot, { runnerPid: 555 });
+
+  const rejected = updateState(paths, { status: 'failed' }, 999);
+  assert.equal(rejected.status, 'running', 'a zombie runner must not write');
+  assert.equal(JSON.parse(fs.readFileSync(paths.statePath, 'utf8')).status, 'running');
+
+  const accepted = updateState(paths, { status: 'stopped' }, 555);
+  assert.equal(accepted.status, 'stopped');
+  fs.rmSync(projectRoot, { recursive: true, force: true });
+});
+
+test('a runner only starts once state names its own PID', () => {
+  const projectRoot = makeProject();
+  const paths = seedState(projectRoot, { runnerPid: process.pid });
+
+  const own = waitForOwnState(paths, 1000);
+  assert.ok(own, 'state naming this process is adopted immediately');
+  assert.equal(own.runnerPid, process.pid);
+  fs.rmSync(projectRoot, { recursive: true, force: true });
+});
+
+test('a replaced session is never adopted by the previous runner', () => {
+  const projectRoot = makeProject();
+  // State belongs to a newer runner, so this process must time out rather than
+  // claim it — otherwise the stale runner would overwrite the live session.
+  const paths = seedState(projectRoot, { runnerPid: process.pid + 1 });
+  let waits = 0;
+
+  const own = waitForOwnState(paths, 50, { _sleepSync() { waits += 1; } });
+
+  assert.equal(own, null);
+  assert.ok(waits >= 1);
+  assert.equal(
+    JSON.parse(fs.readFileSync(paths.statePath, 'utf8')).runnerPid,
+    process.pid + 1,
+    'the live session PID must survive untouched'
+  );
+  fs.rmSync(projectRoot, { recursive: true, force: true });
+});
+
+test('stop never signals PIDs it no longer owns', () => {
+  const projectRoot = makeProject();
+  seedState(projectRoot);
+  const signals = [];
+
+  const result = stopSession(projectRoot, {
+    _isProcessAlive: () => false,
+    _portListenerPids: () => [],
+    _kill(pid, signal) { signals.push([pid, signal]); },
+    _sleepSync() {},
+  });
+
+  assert.equal(result.stopped, false);
+  assert.equal(result.signalAttempted, false);
+  assert.deepEqual(signals, [], 'recycled PIDs must never be signaled');
+  assert.match(result.reason, /no longer running/);
+  fs.rmSync(projectRoot, { recursive: true, force: true });
+});
+
+test('tail reads only bytes after a cursor and resets safely after log replacement', () => {
+  const projectRoot = makeProject();
+  const paths = resolvePaths(projectRoot);
+  appendSanitized(paths, 'first line\n');
+  const first = tailSession(projectRoot, { cursor: 0, maxBytes: 1024, waitMs: 0 });
+  assert.equal(first.output, 'first line\n');
+  assert.equal(first.nextCursor, Buffer.byteLength('first line\n'));
+
+  appendSanitized(paths, 'second line\n');
+  const second = tailSession(projectRoot, { cursor: first.nextCursor, maxBytes: 1024, waitMs: 0 });
+  assert.equal(second.output, 'second line\n');
+
+  // Rotation truncates in place, so a cursor beyond EOF is the rotation signal.
+  fs.writeFileSync(paths.logPath, 'new log\n');
+  const reset = tailSession(projectRoot, { cursor: second.nextCursor, maxBytes: 1024, waitMs: 0 });
+  assert.equal(reset.cursor, 0);
+  assert.equal(reset.rotationLost, true);
+  assert.equal(reset.truncated, true);
+  assert.equal(reset.output, 'new log\n');
+  fs.rmSync(projectRoot, { recursive: true, force: true });
+});
+
+test('tail holds the full observation window before reporting a clean cycle', () => {
+  const projectRoot = makeProject();
+  const paths = seedState(projectRoot);
+  appendSanitized(paths, 'baseline\n');
+  const cursor = fs.statSync(paths.logPath).size;
+  let waits = 0;
+  let appended = false;
+
+  const result = tailSession(projectRoot, {
+    cursor,
+    waitMs: 100,
+    maxBytes: 1024,
+    _isProcessAlive: () => true,
+    _portListenerPids: () => [222],
+    _sleepSync() {
+      waits += 1;
+      if (!appended) {
+        appendSanitized(paths, 'new runtime error\n');
+        appended = true;
+      }
+    },
+  });
+
+  assert.ok(waits >= 1);
+  assert.equal(result.output, 'new runtime error\n', 'bytes are read once, after the wait');
+  assert.ok(result.nextCursor > cursor);
+  assert.equal(result.observationComplete, true);
+  fs.rmSync(projectRoot, { recursive: true, force: true });
+});
+
+test('tail marks observation incomplete when the session disappears while waiting', () => {
+  const projectRoot = makeProject();
+  const paths = seedState(projectRoot);
+  appendSanitized(paths, 'baseline\n');
+  const cursor = fs.statSync(paths.logPath).size;
+  let removed = false;
+
+  const result = tailSession(projectRoot, {
+    cursor,
+    waitMs: 100,
+    _isProcessAlive: () => true,
+    _portListenerPids: () => [222],
+    _sleepSync() {
+      if (!removed) {
+        fs.rmSync(paths.statePath, { force: true });
+        removed = true;
+      }
+    },
+  });
+
+  assert.equal(result.observationComplete, false);
+  fs.rmSync(projectRoot, { recursive: true, force: true });
+});
+
+test('tail refuses to call a port-taken session a clean observation', () => {
+  const projectRoot = makeProject();
+  const paths = seedState(projectRoot);
+  appendSanitized(paths, 'stale output\n');
+
+  const result = tailSession(projectRoot, {
+    cursor: 0,
+    waitMs: 0,
+    _isProcessAlive: () => false,
+    _portListenerPids: () => [90210],
+  });
+
+  assert.equal(result.status, 'port-taken');
+  assert.equal(result.running, false);
+  assert.equal(result.observationComplete, false);
+  fs.rmSync(projectRoot, { recursive: true, force: true });
 });
 
 test('concurrent CLI starts in a path with spaces create exactly one session', async (context) => {
@@ -290,7 +640,6 @@ test('concurrent CLI starts in a path with spaces create exactly one session', a
 
   context.after(() => {
     runCli('stop', projectRoot);
-    runCli('clean', projectRoot, ['--force']);
     fs.rmSync(projectRoot, { recursive: true, force: true });
   });
 
@@ -301,7 +650,7 @@ test('concurrent CLI starts in a path with spaces create exactly one session', a
 
   assert.equal(first.status, 0, first.stderr);
   assert.equal(second.status, 0, second.stderr);
-  assert.equal(first.json.sessionId, second.json.sessionId);
+  assert.equal(first.json.runnerPid, second.json.runnerPid, 'both callers share one runner');
   assert.equal(
     [first.json.alreadyRunning, second.json.alreadyRunning].filter(Boolean).length,
     1
@@ -316,485 +665,12 @@ test('concurrent CLI starts in a path with spaces create exactly one session', a
   assert.ok(ready, 'the single shared session should become ready');
 });
 
-test('directory lock never displaces a live owner solely because it is old', () => {
-  const projectRoot = makeProject();
-  const paths = resolvePaths(projectRoot);
-  fs.mkdirSync(paths.stateLockPath, { recursive: true });
-  fs.writeFileSync(
-    path.join(paths.stateLockPath, 'owner.json'),
-    JSON.stringify({ token: 'live-owner', pid: 12345, acquiredAt: new Date(0).toISOString() })
-  );
-  const old = new Date(Date.now() - 60_000);
-  fs.utimesSync(paths.stateLockPath, old, old);
-
-  assert.throws(
-    () => withDirectoryLock(paths.stateLockPath, () => 'unexpected', {
-      timeoutMs: 10,
-      staleMs: 1,
-      _isProcessAlive: () => true,
-      _sleepSync() {},
-    }),
-    /Timed out waiting for session lock/
-  );
-  assert.equal(readFile(path.join(paths.stateLockPath, 'owner.json')).token, 'live-owner');
-});
-
-test('directory lock reclaims a dead owner before running one successor', () => {
-  const projectRoot = makeProject();
-  const paths = resolvePaths(projectRoot);
-  fs.mkdirSync(paths.stateLockPath, { recursive: true });
-  fs.writeFileSync(
-    path.join(paths.stateLockPath, 'owner.json'),
-    JSON.stringify({ token: 'dead-owner', pid: 99999, acquiredAt: new Date(0).toISOString() })
-  );
-  let callbacks = 0;
-
-  const result = withDirectoryLock(paths.stateLockPath, () => {
-    callbacks += 1;
-    return 'recovered';
-  }, {
-    timeoutMs: 500,
-    staleMs: 1,
-    _isProcessAlive: () => false,
-    _sleepSync() {},
-  });
-
-  assert.equal(result, 'recovered');
-  assert.equal(callbacks, 1);
-  assert.equal(fs.existsSync(paths.stateLockPath), false);
-  assert.equal(fs.existsSync(`${paths.stateLockPath}.reclaim`), false);
-});
-
-function readFile(filePath) {
-  return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-}
-
-test('expected-session update cannot recreate deleted or replaced state', () => {
-  const projectRoot = makeProject();
-  const paths = resolvePaths(projectRoot);
-  const result = updateState(paths, { status: 'running' }, 'old-session');
-  assert.deepEqual(result, {});
-  assert.equal(fs.existsSync(paths.statePath), false);
-
-  writeState(paths, { schemaVersion: 1, sessionId: 'new-session', status: 'running' });
-  const replaced = updateState(paths, { status: 'failed' }, 'old-session');
-  assert.equal(replaced.sessionId, 'new-session');
-  assert.equal(readFile(paths.statePath).status, 'running');
-});
-
-test('delayed worker cannot recreate state after the session is cleaned', () => {
-  const projectRoot = makeProject();
-  const paths = resolvePaths(projectRoot);
-  writeState(paths, {
-    schemaVersion: 1,
-    sessionId: 'delayed-worker-session',
-    status: 'starting',
-    runnerPid: 123,
-    startedAt: new Date().toISOString(),
-  });
-  fs.rmSync(paths.sessionDir, { recursive: true, force: true });
-
-  assert.throws(
-    () => runWorker(projectRoot, 'delayed-worker-session', {
-      _waitForSessionState: () => null,
-    }),
-    /state was not initialized/
-  );
-  assert.equal(fs.existsSync(paths.sessionDir), false);
-});
-
-test('conditional update waiting behind cleanup cannot recreate the session directory', () => {
-  const projectRoot = makeProject();
-  const paths = resolvePaths(projectRoot);
-  writeState(paths, {
-    schemaVersion: 1,
-    sessionId: 'cleanup-race-session',
-    status: 'stopped',
-    runnerPid: null,
-    metroPid: null,
-  });
-  fs.mkdirSync(paths.stateLockPath, { recursive: true });
-  fs.writeFileSync(
-    path.join(paths.stateLockPath, 'owner.json'),
-    JSON.stringify({ token: 'cleanup-owner', pid: process.pid, acquiredAt: new Date().toISOString() })
-  );
-
-  fs.rmSync(paths.sessionDir, { recursive: true, force: true });
-  fs.rmSync(paths.stateLockPath, { recursive: true, force: true });
-  const result = updateState(
-    paths,
-    { heartbeatAt: new Date().toISOString() },
-    'cleanup-race-session'
-  );
-
-  assert.deepEqual(result, {});
-  assert.equal(fs.existsSync(paths.sessionDir), false);
-});
-
-test('session-bound stream writer cannot recreate logs after cleanup', () => {
-  const projectRoot = makeProject();
-  const paths = resolvePaths(projectRoot);
-  writeState(paths, {
-    schemaVersion: 1,
-    sessionId: 'stale-writer-session',
-    status: 'stopped',
-  });
-  const writer = createSanitizedStreamWriter(paths, {
-    sessionId: 'stale-writer-session',
-  });
-  fs.rmSync(paths.sessionDir, { recursive: true, force: true });
-
-  const result = writer.write('late line after cleanup\n');
-  assert.equal(result, '');
-  assert.equal(fs.existsSync(paths.sessionDir), false);
-});
-
-test('status marks a vanished recorded process as stale and persists recovery', () => {
-  const projectRoot = makeProject();
-  const paths = resolvePaths(projectRoot);
-  writeState(paths, {
-    schemaVersion: 1,
-    sessionId: 'stale-session',
-    status: 'running',
-    stale: false,
-    projectRoot,
-    runnerPid: 987654,
-    metroPid: 987655,
-    startedAt: new Date().toISOString(),
-    heartbeatAt: new Date().toISOString(),
-  });
-
-  const status = getStatus(projectRoot, { _isProcessAlive: () => false });
-  assert.equal(status.status, 'stale');
-  assert.equal(status.stale, true);
-  assert.equal(status.running, false);
-  assert.match(status.reason, /no longer running/);
-  assert.equal(JSON.parse(fs.readFileSync(paths.statePath, 'utf8')).status, 'stale');
-});
-
-test('status rejects a recycled live PID when the runner heartbeat is stale', () => {
-  const projectRoot = makeProject();
-  const paths = resolvePaths(projectRoot);
-  const oldTimestamp = new Date(Date.now() - 60_000).toISOString();
-  writeState(paths, {
-    schemaVersion: 1,
-    sessionId: 'recycled-pid-session',
-    status: 'running',
-    stale: false,
-    projectRoot,
-    runnerPid: 12345,
-    metroPid: 12346,
-    startedAt: oldTimestamp,
-    heartbeatAt: oldTimestamp,
-  });
-
-  const status = getStatus(projectRoot, {
-    _isProcessAlive: () => true,
-    _ownershipRecheckMs: 0,
-  });
-  assert.equal(status.status, 'stale');
-  assert.equal(status.running, false);
-  assert.match(status.reason, /no longer running/);
-});
-
-test('stop never signals recycled PIDs from a stale heartbeat', () => {
-  const projectRoot = makeProject();
-  const paths = resolvePaths(projectRoot);
-  const oldTimestamp = new Date(Date.now() - 60_000).toISOString();
-  writeState(paths, {
-    schemaVersion: 1,
-    sessionId: 'stale-stop-session',
-    status: 'running',
-    runnerPid: 54321,
-    metroPid: 54322,
-    startedAt: oldTimestamp,
-    heartbeatAt: oldTimestamp,
-  });
-  let killCalls = 0;
-
-  const result = require('../metro-session').stopSession(projectRoot, {
-    _isProcessAlive: () => true,
-    _ownershipRecheckMs: 0,
-    _kill: () => { killCalls += 1; },
-    _spawnSync: () => { killCalls += 1; return { status: 0 }; },
-  });
-
-  assert.equal(result.status, 'stale');
-  assert.equal(result.stopped, false);
-  assert.equal(killCalls, 0);
-});
-
-test('stop without a runner heartbeat never signals a starting PID', () => {
-  const projectRoot = makeProject();
-  const paths = resolvePaths(projectRoot);
-  writeState(paths, {
-    schemaVersion: 1,
-    sessionId: 'starting-no-heartbeat',
-    status: 'starting',
-    runnerPid: 43210,
-    metroPid: null,
-    startedAt: new Date().toISOString(),
-  });
-  let killCalls = 0;
-
-  const result = require('../metro-session').stopSession(projectRoot, {
-    _isProcessAlive: () => true,
-    _ownershipRecheckMs: 0,
-    _kill: () => { killCalls += 1; },
-  });
-
-  assert.equal(result.status, 'stale');
-  assert.equal(result.stopped, false);
-  assert.equal(killCalls, 0);
-});
-
-test('failed termination preserves stop-failed state and force clean refuses removal', () => {
-  const projectRoot = makeProject();
-  const paths = resolvePaths(projectRoot);
-  const now = new Date().toISOString();
-  writeState(paths, {
-    schemaVersion: 1,
-    sessionId: 'unstoppable-session',
-    status: 'running',
-    runnerPid: 777,
-    metroPid: 778,
-    startedAt: now,
-    heartbeatAt: now,
-  });
-
-  const stopResult = require('../metro-session').stopSession(projectRoot, {
-    platform: 'win32',
-    _isProcessAlive: () => true,
-    _spawnSync: () => ({ status: 1 }),
-    _ownershipRecheckMs: 0,
-  });
-  assert.equal(stopResult.status, 'stop-failed');
-  assert.equal(stopResult.stopped, false);
-  assert.ok(fs.existsSync(paths.statePath));
-
-  assert.throws(
-    () => cleanSession(projectRoot, {
-      force: true,
-      platform: 'win32',
-      _isProcessAlive: () => true,
-      _spawnSync: () => ({ status: 1 }),
-      _ownershipRecheckMs: 0,
-    }),
-    /could not be stopped/
-  );
-  assert.ok(fs.existsSync(paths.sessionDir));
-});
-
-test('status recovers a live session when heartbeat refreshes after wake', () => {
-  const projectRoot = makeProject();
-  const paths = resolvePaths(projectRoot);
-  const oldTimestamp = new Date(Date.now() - 60_000).toISOString();
-  writeState(paths, {
-    schemaVersion: 1,
-    sessionId: 'wake-session',
-    status: 'running',
-    projectRoot,
-    runnerPid: 123,
-    metroPid: 456,
-    startedAt: oldTimestamp,
-    heartbeatAt: oldTimestamp,
-  });
-
-  const status = getStatus(projectRoot, {
-    _isProcessAlive: () => true,
-    _ownershipRecheckMs: 1,
-    _sleepSync() {
-      const current = JSON.parse(fs.readFileSync(paths.statePath, 'utf8'));
-      current.heartbeatAt = new Date().toISOString();
-      writeState(paths, current);
-    },
-  });
-
-  assert.equal(status.status, 'running');
-  assert.equal(status.running, true);
-  assert.equal(status.stale, undefined);
-});
-
-test('tail reads only bytes after a cursor and resets safely after log replacement', () => {
-  const projectRoot = makeProject();
-  const paths = resolvePaths(projectRoot);
-  appendSanitized(paths, 'first line\n');
-  const first = tailSession(projectRoot, { cursor: 0, maxBytes: 1024 });
-  assert.equal(first.output, 'first line\n');
-  assert.equal(first.nextCursor, Buffer.byteLength('first line\n'));
-
-  appendSanitized(paths, 'second line\n');
-  const second = tailSession(projectRoot, { cursor: first.nextCursor, maxBytes: 1024 });
-  assert.equal(second.output, 'second line\n');
-
-  fs.writeFileSync(paths.logPath, 'new log\n');
-  const reset = tailSession(projectRoot, { cursor: second.nextCursor, maxBytes: 1024 });
-  assert.equal(reset.cursor, 0);
-  assert.equal(reset.truncated, true);
-  assert.equal(reset.output, 'new log\n');
-});
-
-test('tail resets a cursor when the same session rotates to a new log generation', () => {
-  const projectRoot = makeProject();
-  const paths = resolvePaths(projectRoot);
-  const now = new Date().toISOString();
-  writeState(paths, {
-    schemaVersion: 1,
-    sessionId: 'rotation-session',
-    status: 'running',
-    projectRoot,
-    runnerPid: 111,
-    metroPid: 222,
-    startedAt: now,
-    heartbeatAt: now,
-    logGeneration: 3,
-  });
-  appendSanitized(paths, 'new generation line\n');
-
-  const result = tailSession(projectRoot, {
-    cursor: 8,
-    generation: 2,
-    maxBytes: 1024,
-    _isProcessAlive: () => true,
-  });
-
-  assert.equal(result.generation, 3);
-  assert.equal(result.cursor, 0);
-  assert.equal(result.truncated, true);
-  assert.equal(result.rotationLost, true);
-  assert.equal(result.output, 'new generation line\n');
-});
-
-test('tail waits for newly appended bytes before returning a clean observation', () => {
-  const projectRoot = makeProject();
-  const paths = resolvePaths(projectRoot);
-  const now = new Date().toISOString();
-  writeState(paths, {
-    schemaVersion: 1,
-    sessionId: 'wait-session',
-    status: 'running',
-    projectRoot,
-    runnerPid: 111,
-    metroPid: 222,
-    startedAt: now,
-    heartbeatAt: now,
-    logGeneration: 0,
-  });
-  appendSanitized(paths, 'baseline\n');
-  const cursor = fs.statSync(paths.logPath).size;
-  let waits = 0;
-  let appended = false;
-
-  const result = tailSession(projectRoot, {
-    cursor,
-    generation: 0,
-    waitMs: 100,
-    maxBytes: 1024,
-    _isProcessAlive: () => true,
-    _ownershipRecheckMs: 0,
-    _sleepSync() {
-      waits += 1;
-      if (!appended) {
-        appendSanitized(paths, 'new runtime error\n');
-        appended = true;
-      }
-    },
-  });
-
-  assert.ok(waits >= 1);
-  assert.equal(result.output, 'new runtime error\n');
-  assert.ok(result.nextCursor > cursor);
-  assert.equal(result.observationComplete, true);
-});
-
-test('tail marks observation incomplete when the session disappears while waiting', () => {
-  const projectRoot = makeProject();
-  const paths = resolvePaths(projectRoot);
-  const now = new Date().toISOString();
-  writeState(paths, {
-    schemaVersion: 1,
-    sessionId: 'disappearing-session',
-    status: 'running',
-    projectRoot,
-    runnerPid: 111,
-    metroPid: 222,
-    startedAt: now,
-    heartbeatAt: now,
-    logGeneration: 0,
-  });
-  appendSanitized(paths, 'baseline\n');
-  const cursor = fs.statSync(paths.logPath).size;
-  let removed = false;
-
-  const result = tailSession(projectRoot, {
-    cursor,
-    generation: 0,
-    waitMs: 100,
-    _isProcessAlive: () => true,
-    _ownershipRecheckMs: 0,
-    _sleepSync() {
-      if (!removed) {
-        fs.rmSync(paths.statePath, { force: true });
-        removed = true;
-      }
-    },
-  });
-
-  assert.equal(result.status, 'not-started');
-  assert.equal(result.observationComplete, false);
-});
-
-test('clean refuses to remove a live session and removes stopped session state', () => {
-  const projectRoot = makeProject();
-  const paths = resolvePaths(projectRoot);
-  writeState(paths, {
-    schemaVersion: 1,
-    sessionId: 'live-session',
-    status: 'running',
-    runnerPid: 123,
-    metroPid: 456,
-    heartbeatAt: new Date().toISOString(),
-  });
-  appendSanitized(paths, 'log line\n');
-
-  assert.throws(
-    () => cleanSession(projectRoot, {
-      _isProcessAlive: () => true,
-      _ownershipRecheckMs: 0,
-    }),
-    /Metro is still running/
-  );
-  assert.ok(fs.existsSync(paths.sessionDir));
-
-  const result = cleanSession(projectRoot, { _isProcessAlive: () => false });
-  assert.equal(result.status, 'clean');
-  assert.equal(fs.existsSync(paths.sessionDir), false);
-});
-
-test('concurrent clean callers serialize outside the removable session directory', async () => {
-  const projectRoot = makeProject();
-  const paths = resolvePaths(projectRoot);
-  appendSanitized(paths, 'cleanup fixture\n');
-
-  const results = await Promise.all(
-    Array.from({ length: 20 }, () => runCliAsync('clean', projectRoot))
-  );
-
-  for (const result of results) {
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.json.status, 'clean');
-  }
-  assert.equal(fs.existsSync(paths.sessionDir), false);
-  fs.rmSync(projectRoot, { recursive: true, force: true });
-});
-
-test('CLI manages a real detached fixture across start, status, tail, stop, and clean', (context) => {
+test('CLI manages a real detached fixture across start, status, tail, and stop', (context) => {
   const projectRoot = makeProject();
   installFakeExpo(projectRoot);
 
   context.after(() => {
     runCli('stop', projectRoot);
-    runCli('clean', projectRoot, ['--force']);
     fs.rmSync(projectRoot, { recursive: true, force: true });
   });
 
@@ -812,6 +688,7 @@ test('CLI manages a real detached fixture across start, status, tail, stop, and 
   assert.ok(ready, 'fixture Metro process should become ready');
   assert.equal(ready.status, 'running');
   assert.match(ready.metroUrl, /^exp\+fixture:/);
+  assert.equal(ready.port, 8081, 'the port is parsed out of the dev-client banner');
 
   const tailed = runCli('tail', projectRoot, ['--cursor', '0']);
   assert.equal(tailed.status, 0, tailed.stderr);
@@ -830,11 +707,6 @@ test('CLI manages a real detached fixture across start, status, tail, stop, and 
     return status.status === 0 && !status.json.running ? status.json : null;
   });
   assert.ok(stoppedStatus);
-
-  const cleaned = runCli('clean', projectRoot);
-  assert.equal(cleaned.status, 0, cleaned.stderr);
-  assert.equal(cleaned.json.status, 'clean');
-  assert.equal(fs.existsSync(resolvePaths(projectRoot).sessionDir), false);
 });
 
 test('CLI persists a failed state when Expo cannot be resolved', () => {
@@ -854,7 +726,7 @@ test('CLI persists a failed state when Expo cannot be resolved', () => {
   fs.rmSync(projectRoot, { recursive: true, force: true });
 });
 
-test('skill contracts use portable Metro state and declare sub-skill invocation', () => {
+test('skill contracts use the port-anchored Metro session and declare sub-skill invocation', () => {
   const pluginRoot = path.resolve(__dirname, '..', '..');
   const createSkill = fs.readFileSync(
     path.join(pluginRoot, 'skills', 'create-mobile-app', 'SKILL.md'),
@@ -869,7 +741,7 @@ test('skill contracts use portable Metro state and declare sub-skill invocation'
   assert.match(createFrontmatter, /allowed-tools:.*\bSkill\b/);
   assert.match(createSkill, /scripts\/metro-session\.js/);
   assert.match(debugSkill, /\.expo\/metro-session\/metro\.log/);
-  assert.match(debugSkill, /Host terminal APIs are optional only/);
+  assert.match(debugSkill, /port-taken/, 'debug must refuse a hijacked port');
   assert.doesNotMatch(debugSkill, /BashOutput|METRO_TERMINAL_ID/);
   assert.doesNotMatch(debugSkill, /Which terminal is running/);
 });
