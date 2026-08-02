@@ -37,6 +37,7 @@ Monitor the running app through the bundled `scripts/metro-session.js` process m
 - **One fix at a time** — Fully resolve one issue (context → fix → type-check → reload → re-poll) before starting the next. No batching.
 - **Working-dir state** — Debug audit state lives in `.claude/debug-app/`: `fixes.md`, `unresolved.md`, `injected-logs.md`, and `metro-cursor.json`. Metro process state/logs live in the already-ignored `.expo/metro-session/`. Both survive chat/editor restarts.
 - **The port is the session identity** — the dev-server port is the number the QR encodes, the device dials, and this skill verifies. Liveness is a socket probe (does our recorded PID still hold that port?), never a self-reported heartbeat. A `port-taken` status means the log belongs to a dead session and must not be diagnosed.
+- **Never fix history** — the log is a record of the past, so an error in it is not proof of a current problem. Errors found in the baseline window must pass the Phase 0.2.1 supersession check before any code is edited. Editing working code to chase an already-resolved error is a worse outcome than reporting nothing.
 - **Host terminal APIs are optional only** — If the current host already exposes the Metro terminal output, it may be consulted as a low-latency convenience. Never ask the user for a terminal ID, never persist one, and never make a diagnosis from host output without advancing the authoritative project-log cursor too.
 - **Reference resolution order** — For unfamiliar errors: in-repo references first ([skills/add-dataverse/references/dataverse-reference.md](${CLAUDE_SKILL_DIR}/../../skills/add-dataverse/references/dataverse-reference.md), etc.), then `mcp__plugin_mobile-app_microsoft-learn__microsoft_docs_search`, then general web search.
 
@@ -131,6 +132,41 @@ window through Step B, including JS runtime errors, React warnings, network/API
 failures, native errors, and host diagnostics. Do not advance past a prior error
 just because it is not a bundle error. This preserves the promise that users can
 "play around, then debug" after a symptom already occurred.
+
+### 0.2.1 Supersession — never re-fix an error the log already shows resolved
+
+The baseline window is **history, not current state**. It can contain errors that
+were already fixed, that the user resolved themselves, or that were transient.
+Fixing those is worse than doing nothing: it edits working code to chase a
+symptom that no longer exists, and the "fix" is unverifiable because the error
+cannot reproduce.
+
+So every error found in the **baseline window only** (not in later polls) is
+treated as *unconfirmed* until checked for supersession. Scan forward from the
+error line to the end of the window:
+
+| Error class | Superseded when a later line shows |
+|---|---|
+| Import / Bundle | `Bundling complete`, `iOS Bundled`, or `Android Bundled` |
+| Network / API | a 2xx for the same route/resource that previously failed |
+| JS runtime / React | a later app reload or successful bundle, and the error does not reappear after it |
+| Host diagnostic (`[AuthProvider]`, `[bridge]`, …) | a later success from the same subsystem (e.g. a token acquired after `acquireTokenSilent failed`) |
+
+Then:
+
+- **Superseded** → do NOT fix. Record it and move on:
+  ```
+  [<HH:MM:SS>] Observed (already resolved, not fixed) — <error summary> — superseded by <evidence line>
+  ```
+- **Not superseded** → the error is live. Fix it normally through Step D.
+- **Ambiguous** (no clear supersession evidence either way) → do NOT edit code yet. Ask the user whether they still see it, or wait for it to reappear in the next poll. An error that recurs after the cursor advances is confirmed live.
+
+This applies to the baseline window only. Anything appearing in a later
+`tail --cursor` poll is by definition new output and needs no supersession check.
+
+**Symptom mode overrides this.** If the user supplied a symptom, that is
+first-hand evidence the problem is current, so a matching baseline error is
+treated as live even when a later line would otherwise look like supersession.
 
 ### 0.3 Capture baseline
 

@@ -42,12 +42,11 @@ function seedState(projectRoot, overrides = {}) {
   writeState(paths, {
     schemaVersion: STATE_SCHEMA_VERSION,
     status: 'running',
-    projectRoot,
     runnerPid: 111,
     metroPid: 222,
     port: 8081,
     metroUrl: 'http://127.0.0.1:8081',
-    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
     ...overrides,
   });
   return paths;
@@ -419,6 +418,28 @@ test('startSession records a detached runner without requiring a host terminal',
   assert.equal(spawnCall.options.cwd, projectRoot);
   assert.match(spawnCall.args.join(' '), /__run/);
   assert.ok(fs.existsSync(resolvePaths(projectRoot).statePath));
+  fs.rmSync(projectRoot, { recursive: true, force: true });
+});
+
+test('state.json stays minimal — only facts with no other durable home', () => {
+  const projectRoot = makeProject();
+  startSession(projectRoot, {
+    _isProcessAlive: () => false,
+    _portListenerPids: () => [],
+    _spawn: () => ({ pid: 42002, unref() {} }),
+  });
+
+  const persisted = JSON.parse(
+    fs.readFileSync(resolvePaths(projectRoot).statePath, 'utf8')
+  );
+  // Anything derivable from metro.log (start time, Metro URL history, exit
+  // codes, launch argv) or from resolvePaths (projectRoot, logPath) must not
+  // reappear here. metroPid/port are the exception: the log rotates, so they
+  // would not survive a long session.
+  assert.deepEqual(
+    Object.keys(persisted).sort(),
+    ['metroPid', 'metroUrl', 'port', 'runnerPid', 'schemaVersion', 'status', 'updatedAt']
+  );
   fs.rmSync(projectRoot, { recursive: true, force: true });
 });
 

@@ -649,18 +649,18 @@ function startSessionLocked(paths, options = {}) {
   }
 
   const now = new Date().toISOString();
+  // Minimal by design. Everything else a caller might want (Metro URL history,
+  // start time, failure text) is already in metro.log; the only fact with no
+  // other durable home is which PID is supposed to own the port, because the
+  // log rotates and would eventually discard its own session header.
   writeState(paths, {
     schemaVersion: STATE_SCHEMA_VERSION,
     status: 'starting',
-    projectRoot: paths.projectRoot,
     runnerPid: runner.pid,
     metroPid: null,
     port: null,
     metroUrl: null,
-    startedAt: now,
     updatedAt: now,
-    stoppedAt: null,
-    clear: Boolean(options.clear),
   });
   if (typeof runner.unref === 'function') runner.unref();
 
@@ -854,7 +854,6 @@ function stopSessionLocked(paths, options = {}) {
 
   const next = updateState(paths, {
     status: fullyStopped ? 'stopped' : ownsLiveProcess ? 'stop-failed' : 'stopped',
-    stoppedAt: fullyStopped || !ownsLiveProcess ? new Date().toISOString() : null,
     reason: fullyStopped
       ? 'stopped by metro-session command'
       : ownsLiveProcess
@@ -902,9 +901,11 @@ function runWorker(projectRoot, options = {}) {
   const cliPath = (options._resolveExpoCli || resolveExpoCli)(paths.projectRoot);
   appendSanitized(paths, `\n--- Metro session started ${new Date().toISOString()} ---\n`);
 
+  // `--clear` arrives on this runner's own argv, so it does not need to be
+  // round-tripped through state.json.
   const child = (options._spawn || spawn)(
     process.execPath,
-    [cliPath, 'start', ...(state.clear ? ['--clear'] : [])],
+    [cliPath, 'start', ...(options.clear ? ['--clear'] : [])],
     {
       cwd: paths.projectRoot,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -913,11 +914,7 @@ function runWorker(projectRoot, options = {}) {
     }
   );
 
-  updateState(paths, {
-    status: 'running',
-    metroPid: child.pid,
-    command: [process.execPath, cliPath, 'start', ...(state.clear ? ['--clear'] : [])],
-  }, process.pid);
+  updateState(paths, { status: 'running', metroPid: child.pid }, process.pid);
 
   let rollingText = '';
   const stdoutWriter = createSanitizedStreamWriter(paths);
@@ -931,7 +928,7 @@ function runWorker(projectRoot, options = {}) {
       const port = extractMetroPort(metroUrl);
       const current = readState(paths);
       if (!current || current.metroUrl !== metroUrl || current.port !== port) {
-        updateState(paths, { metroUrl, port, readyAt: new Date().toISOString() }, process.pid);
+        updateState(paths, { metroUrl, port }, process.pid);
       }
     }
     rotateLog(paths);
@@ -955,7 +952,6 @@ function runWorker(projectRoot, options = {}) {
     appendSanitized(paths, `\nMetro launch failed: ${error.message}\n`);
     updateState(paths, {
       status: 'failed',
-      stoppedAt: new Date().toISOString(),
       reason: error.message,
     }, process.pid);
     process.exitCode = 1;
@@ -970,9 +966,6 @@ function runWorker(projectRoot, options = {}) {
     );
     updateState(paths, {
       status: shuttingDown || code === 0 ? 'stopped' : 'failed',
-      stoppedAt: new Date().toISOString(),
-      exitCode: code,
-      exitSignal: signal,
       reason: shuttingDown ? 'runner stopped' : `Metro exited with code ${code}`,
     }, process.pid);
     process.exitCode = code || 0;
@@ -1008,7 +1001,6 @@ function main() {
       appendSanitized(paths, `\nMetro runner failed before startup: ${error.message}\n`);
       updateState(paths, {
         status: 'failed',
-        stoppedAt: new Date().toISOString(),
         reason: error.message,
       });
       process.exitCode = 1;
