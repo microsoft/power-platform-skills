@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const mapping = require('../../skills/manage-governance/references/governance-mapping.json');
+const mapping = require('../../../skills/manage-governance/references/governance-mapping.json');
 
 // Build a shorthand -> policyName index from the committed mapping data. This is
 // exactly what the orchestrator relies on when resolving a user's phrasing to a

@@ -144,16 +144,15 @@ function makeResult(policyValue, portalIds, resolvedNames, errors) {
 }
 
 if (require.main === module) {
-  // CLI mode: read input from stdin (or --input <text>), optional --portalsFile
-  // <path-to-list-portals-json>, emit JSON to stdout.
+  // CLI mode: read user input from stdin (or --input <text>). With
+  // --portalsStdin, stdin instead carries list-portals.js JSON so callers can
+  // validate names without creating a temporary file.
   const argv = process.argv;
   const arg = (k) => {
     const i = argv.indexOf(k);
     return i >= 0 && i + 1 < argv.length ? argv[i + 1] : null;
   };
-  const readInput = async () => {
-    const inline = arg('--input');
-    if (inline != null) return inline;
+  const readStdin = async () => {
     return new Promise((resolve) => {
       let buf = '';
       process.stdin.on('data', (c) => (buf += c));
@@ -163,20 +162,27 @@ if (require.main === module) {
   (async () => {
     let validIds;
     const file = arg('--portalsFile');
-    if (file) {
+    const portalsStdin = argv.includes('--portalsStdin');
+    if (file || portalsStdin) {
       try {
-        const raw = require('fs').readFileSync(file, 'utf8');
+        const raw = file ? require('fs').readFileSync(file, 'utf8') : await readStdin();
         const parsed = JSON.parse(raw);
         const list = Array.isArray(parsed) ? parsed : parsed.portals;
         if (Array.isArray(list)) {
           validIds = list.map((p) => ({ portalId: p.portalId || p.Id, name: p.name || p.Name }));
         }
       } catch (e) {
-        process.stderr.write(`Failed to read --portalsFile: ${e.message}\n`);
+        process.stderr.write(`Failed to read portal list: ${e.message}\n`);
         process.exit(1);
       }
     }
-    const input = (await readInput()).trim();
+    const inline = arg('--input');
+    if (portalsStdin && inline == null) {
+      process.stderr.write('--portalsStdin requires --input <text> because stdin contains the portal list.\n');
+      process.exit(1);
+      return;
+    }
+    const input = (inline != null ? inline : await readStdin()).trim();
     const result = parsePortalInput(input, { validIds });
     process.stdout.write(JSON.stringify(result, null, 2) + '\n');
     process.exit(result.errors.length > 0 ? 1 : 0);

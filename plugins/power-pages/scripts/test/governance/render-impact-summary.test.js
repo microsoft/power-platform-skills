@@ -8,8 +8,8 @@ const {
   scopeLine,
   cascadeLines,
   actionCell,
-} = require('../../skills/manage-governance/scripts/render-impact-summary');
-const mapping = require('../../skills/manage-governance/references/governance-mapping.json');
+} = require('../../../skills/manage-governance/scripts/render-impact-summary');
+const mapping = require('../../../skills/manage-governance/references/governance-mapping.json');
 
 function findPolicy(name) {
   return mapping.policies.find((p) => p.policyName === name);

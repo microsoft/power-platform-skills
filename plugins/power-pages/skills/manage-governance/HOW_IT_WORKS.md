@@ -82,6 +82,9 @@ rather than a smaller `ToBeAdded`.
 
 - **Always show the full env list** (`render-env-table.js --markdown`) on every
   new operation — the previously-used env is only pre-flagged, never auto-used.
+- **Always fetch environments fresh** — pipe a new `list-envs.js` API response
+  directly into the renderer for every picker. Never create or reuse an
+  environment-list cache or TTL.
 - **Redundant-operation guard (before the Impact Summary)** — if the requested
   op is a no-op for the named site(s) (enable while already `All`/`Include`, or
   disable while already `None`/`Exclude`), first ask the **eligible-portal scope**
@@ -93,7 +96,15 @@ rather than a smaller `ToBeAdded`.
   **2-option `AskUserQuestion`** (choices **Apply now** / **Cancel**); only a
   selected **Apply now** authorizes the POST.
 - **Always verify after Set** — re-read state with `get-env.js` / `get-portal.js`;
-  never trust the poll outcome alone.
+  never trust the poll outcome alone. Deliver the complete
+  `render-portal-table.js --unicode --no-color` output verbatim in the final
+  response: all five columns (`#`, `Name`, `URL`, `Site ID`, `State`) and every
+  site row. Never replace it with a compact recap table.
+- **Multi-policy status requests are expanded, not compressed** — if the user
+  asks for the status of more than one policy in one request, the skill runs a
+  separate Fetch Env / Fetch Portal read per policy and emits the full
+  per-portal Unicode table for each one. Never collapse multiple policies into
+  a single summary-only matrix that drops portal URLs or IDs.
 - **Set is async** — `set-governance.js` polls `/governance/status/{env}/{policy}`
   until `Succeeded`/`Failed` or timeout.
 - **Sign-out side-effect** — disabling any auth policy signs current users out of

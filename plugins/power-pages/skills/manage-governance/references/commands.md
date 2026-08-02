@@ -180,11 +180,10 @@ token** per ring. **TIP/Preprod is the default ring**; Prod is opt-out.
 
 ### Ring flag
 
-| Env var | Effect |
-|---------|--------|
-| *(unset)* | **TIP** ring (default) → host `https://api.preprod.powerplatform.com`. |
-| `PP_GOV_RING=prod` | Prod ring → host from the signed-in cloud (`api.powerplatform.com`, gov clouds, …). |
-| `PP_GOV_PROD=1` | Legacy escape hatch, equivalent to `PP_GOV_RING=prod`. `PP_GOV_RING` wins if both are set. |
+| Source | Effect |
+|--------|--------|
+| `app-settings.json activeRing=TIP` | TIP ring → host `https://api.preprod.powerplatform.com`. |
+| `app-settings.json activeRing=Prod` | Prod ring → host from the signed-in cloud (`api.powerplatform.com`, gov clouds, …). |
 | `PP_GOV_TIP_HOST=<url>` | Override the default TIP host (e.g. a different pre-production ring). |
 | `PP_GOV_API_HOST=<url>` | Pin an **arbitrary** host; outranks the ring entirely. |
 
@@ -248,8 +247,12 @@ Backed by `pac admin list --json` via the shared `pac-bap-shim.js`.
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-envs.js" \
-  [--type <Production|Sandbox|Trial|Developer|Default>]
+  [--type <Production|Sandbox|Trial|Developer|Default>] \
+  | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-env-table.js" --markdown
 ```
+
+Every invocation fetches the current environment inventory from the configured
+ring. The command intentionally has no file cache or TTL cache.
 
 ### Response (stdout)
 
@@ -575,12 +578,13 @@ a subset) as Disabled env-wide — so every eligible site was wrongly hidden.
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/resolve-portal-availability.js" \
-  --policy <childPolicy> --portalsFile <path-to-list-portals-json> \
-  [--envId <guid>] [--markdown] [--available-only]
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-portals.js" --envId <guid> \
+  | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/resolve-portal-availability.js" \
+      --policy <childPolicy> [--envId <guid>] [--markdown] [--available-only]
 ```
 
-`--portalsFile` is required (the script does not re-page `/websites`). With
+Portal JSON is read from stdin (the script does not re-page `/websites`).
+`--portalsFile` remains a backward-compatible alternative. With
 `--markdown` (the default picker view), it prints ONE table of **every** portal
 with an `Eligible` (Yes / No) column — eligible rows (**✅ Yes**) first,
 ineligible rows (**🚫 No — blocked by &lt;parent&gt;**) directly below — and a
@@ -720,6 +724,13 @@ this straight into it:
   site is effectively Enabled, red when off everywhere / zero sites).
 - `apiCalls` — `1 + policies × 2`, **all issued in parallel**.
 
+For a request that asks for the status of **multiple policies** in the same
+environment, call `fetch-env-status.js` **once per policy** and render each
+result separately. Do **not** post-process multiple policies into one compact
+matrix that drops the portal `url` / `portalId` columns; the contract is that
+each `fetch-env-status.js` result feeds one full `render-portal-table.js`
+render.
+
 Pipe `.portals` into the status render:
 
 ```bash
@@ -771,15 +782,14 @@ effective state (2 calls).
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
-  --policy <name> \
-  --portalsFile <path-to-list-portals-output> \
-  [--envId <guid>]
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-portals.js" --envId <guid> \
+  | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
+      --policy <name> [--envId <guid>]
 ```
 
 - `--policy` — any of the twenty-one governance policy names.
-- `--portalsFile` — path to `list-portals.js` output (`{ portals: [...] }` or a
-  bare array). Required — this script does **not** re-page `/websites`.
+- stdin — `list-portals.js` output (`{ portals: [...] }` or a bare array).
+  `--portalsFile` remains a backward-compatible alternative.
 - `--envId` — optional; falls back to the current PAC env.
 
 ### Response (stdout, JSON)
@@ -812,8 +822,9 @@ The shape is what `render-portal-table.js` consumes directly (it reads
 Pipe `.portals` into the status render:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
-  --policy "<POLICY>" --envId "<ENV_ID>" --portalsFile <list-portals-output> \
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-portals.js" --envId "<ENV_ID>" \
+  | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
+      --policy "<POLICY>" --envId "<ENV_ID>" \
   | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --unicode --no-color
 ```
 
@@ -935,9 +946,9 @@ Pipe the user's reply to stdin and reference the `list-portals.js` output for
 validation:
 
 ```bash
-echo "<USER_REPLY>" | \
-  node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/parse-portal-input.js" \
-    --portalsFile <path-to-list-portals-json>
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-portals.js" --envId "<ENV_ID>" \
+  | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/parse-portal-input.js" \
+      --portalsStdin --input "<USER_REPLY>"
 ```
 
 Or use it programmatically:

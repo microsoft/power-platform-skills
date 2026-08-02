@@ -8,6 +8,7 @@ const scriptsDir = path.join(
   __dirname,
   '..',
   '..',
+  '..',
   'skills',
   'manage-governance',
   'scripts'

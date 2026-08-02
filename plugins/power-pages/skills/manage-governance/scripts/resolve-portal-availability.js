@@ -32,9 +32,9 @@
 // (network-free, unit-testable). The optional CLI mode reads each parent's
 // env-level value (get-env op) plus the env's inclusion/exclusion lists
 // (get-portal op) via the shared governance transport, builds `parentStates`,
-// and prints the partition (JSON or Markdown). Only a portal LIST must be
-// supplied to the CLI (--portalsFile) — this module never re-implements the
-// /websites pagination that list-portals.js already owns (DRY).
+// and prints the partition (JSON or Markdown). A portal list is supplied on
+// stdin from list-portals.js (or, for backward compatibility, by
+// --portalsFile) — this module never re-implements /websites pagination (DRY).
 
 'use strict';
 
@@ -154,6 +154,29 @@ function portalIdOf(portal) {
   if (!portal) return null;
   const id = portal.portalId || portal.id || portal.Id || null;
   return id == null ? null : String(id).trim();
+}
+
+function parsePortalsJson(raw) {
+  const parsed = JSON.parse(raw);
+  return Array.isArray(parsed) ? parsed : parsed.portals || [];
+}
+
+function readStdin() {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (chunk) => (data += chunk));
+    process.stdin.on('end', () => resolve(data));
+    process.stdin.on('error', reject);
+  });
+}
+
+async function readPortalsInput(portalsFile) {
+  // Stdin is the default so callers can stream list-portals.js output directly
+  // without writing site metadata to a temporary file. --portalsFile remains
+  // supported for existing automation.
+  const raw = portalsFile ? fs.readFileSync(portalsFile, 'utf8') : await readStdin();
+  return parsePortalsJson(raw);
 }
 
 // Batch form of computeSiteState — resolve MANY portals' own state for a single
@@ -541,14 +564,16 @@ const HELP = `resolve-portal-availability.js — Partition portals into availabl
 unavailable for a CHILD governance policy, based on its parent policies' state.
 
 Usage:
-  node resolve-portal-availability.js --policy <childPolicy> --portalsFile <path> [--envId <guid>] [--markdown]
+  node list-portals.js [--envId <guid>] |
+    node resolve-portal-availability.js --policy <childPolicy> [--envId <guid>] [--markdown]
 
 Flags:
   --policy       Child policy name (e.g. EnableProtocolOpenIdConnect,
                  EnableIdpOAuthGoogle). Leaf policies with no parents return
                  every portal as available.
-  --portalsFile  Path to JSON produced by list-portals.js ({ portals: [...] } or
-                 a bare array). Required — this script does NOT re-page /websites.
+  stdin          JSON produced by list-portals.js ({ portals: [...] } or a bare
+                 array). This script does NOT re-page /websites.
+  --portalsFile  Backward-compatible alternative to stdin.
   --envId        Optional environment id (falls back to the current PAC env).
   --markdown     Print the picker table (Markdown) instead of JSON. The default
                  --markdown view lists EVERY portal with an explicit Eligible
@@ -591,8 +616,8 @@ async function main() {
     process.stdout.write(HELP);
     return;
   }
-  if (!flags.policy || !flags.portalsFile) {
-    process.stderr.write('Usage: node resolve-portal-availability.js --policy <name> --portalsFile <path> [--envId <guid>] [--markdown]\n');
+  if (!flags.policy) {
+    process.stderr.write('Usage: node list-portals.js | node resolve-portal-availability.js --policy <name> [--envId <guid>] [--markdown]\n');
     process.exit(1);
     return;
   }
@@ -601,15 +626,14 @@ async function main() {
   assertPolicy(flags.policy);
 
   const mapping = loadMapping();
-  let parsed;
+  let portals;
   try {
-    parsed = JSON.parse(fs.readFileSync(flags.portalsFile, 'utf8'));
+    portals = await readPortalsInput(flags.portalsFile);
   } catch (e) {
-    process.stderr.write(`resolve-portal-availability: could not read/parse --portalsFile: ${e.message}\n`);
+    process.stderr.write(`resolve-portal-availability: could not read/parse portal JSON: ${e.message}\n`);
     process.exit(1);
     return;
   }
-  const portals = Array.isArray(parsed) ? parsed : parsed.portals || [];
   const deps = dependenciesForPolicy(flags.policy, mapping);
 
   let parentStates = {};
@@ -649,6 +673,8 @@ module.exports = {
   canonicalizeEnvValue,
   computeSiteState,
   extractLists,
+  parsePortalsJson,
+  readPortalsInput,
   resolvePortalStates,
   computeAvailability,
   renderAvailabilityMarkdown,

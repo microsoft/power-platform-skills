@@ -4,8 +4,8 @@ const assert = require('node:assert/strict');
 const {
   pickHeadline,
   parseFlags,
-} = require('../../skills/manage-governance/scripts/fetch-env-status');
-const listPortals = require('../../skills/manage-governance/scripts/list-portals');
+} = require('../../../skills/manage-governance/scripts/fetch-env-status');
+const listPortals = require('../../../skills/manage-governance/scripts/list-portals');
 
 // --- pickHeadline: mirrors SKILL.md Phase 4.3.1 headline rule ---
 // Green when at least one site is effectively Enabled; red when off everywhere

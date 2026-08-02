@@ -7,7 +7,7 @@ const {
   resolveDefaultEnvId,
   CURRENT_TAG,
   CURRENT_MARK,
-} = require('../../skills/manage-governance/scripts/render-env-table');
+} = require('../../../skills/manage-governance/scripts/render-env-table');
 
 const SAMPLE = [
   { displayName: 'Automation_runtimeenv', envId: '00476f13-5245-e3c1-a4a4-2fb76ad3ac49' },

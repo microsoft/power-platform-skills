@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { buildPolicyPayload } = require('../../skills/manage-governance/scripts/set-governance');
+const { buildPolicyPayload } = require('../../../skills/manage-governance/scripts/set-governance');
 
 // buildPolicyPayload is the single seam where a canonical policyValue
 // (All / None / Include / Exclude) is forward-mapped to the value that

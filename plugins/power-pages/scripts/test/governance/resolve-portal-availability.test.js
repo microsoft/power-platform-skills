@@ -1,17 +1,43 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const {
   dependenciesForPolicy,
   canonicalizeEnvValue,
   computeSiteState,
   extractLists,
+  parsePortalsJson,
   resolvePortalStates,
   computeAvailability,
   renderAvailabilityMarkdown,
   renderAvailablePortalsMarkdown,
-} = require('../../skills/manage-governance/scripts/resolve-portal-availability');
-const mapping = require('../../skills/manage-governance/references/governance-mapping.json');
+} = require('../../../skills/manage-governance/scripts/resolve-portal-availability');
+const mapping = require('../../../skills/manage-governance/references/governance-mapping.json');
+
+test('parsePortalsJson accepts list-portals envelopes and bare arrays', () => {
+  assert.deepEqual(parsePortalsJson('{"portals":[{"portalId":"p1"}]}'), [{ portalId: 'p1' }]);
+  assert.deepEqual(parsePortalsJson('[{"portalId":"p2"}]'), [{ portalId: 'p2' }]);
+});
+
+test('availability CLI reads portal JSON from stdin without a temporary file', () => {
+  const script = path.resolve(
+    __dirname,
+    '../../../skills/manage-governance/scripts/resolve-portal-availability.js'
+  );
+  const result = spawnSync(
+    process.execPath,
+    [script, '--policy', 'EnableAuthenticationLocalLogin'],
+    {
+      input: JSON.stringify({ portals: [{ portalId: 'p1', name: 'Site 1' }] }),
+      encoding: 'utf8',
+    }
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.deepEqual(output.available.map((portal) => portal.portalId), ['p1']);
+});
 
 // --- Mapping data invariants: the parent/child tree is the requirement ------
 

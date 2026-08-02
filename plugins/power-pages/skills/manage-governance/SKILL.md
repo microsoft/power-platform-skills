@@ -65,7 +65,8 @@ These are **admin-only** operations — applying an auth policy stops or starts 
 - **OpenID Connect / SAML map to the protocol toggles.** "OpenID Connect" / "OIDC" resolves to `EnableProtocolOpenIdConnect` and "SAML" / "SAML 2.0" resolves to `EnableProtocolSAML20` — whether or not the user adds a "protocol" / "enable" qualifier. (The legacy `PowerPages_DisableAuthentication*` block rules have been removed.) A "block OpenID Connect" / "block SAML" phrasing means **disabling** that protocol toggle.
 - **No silent overrides.** **Disabling** any `Enable*` authentication policy (`EnableProtocol*`, `EnableIdp*`, `EnableAuthenticationLocalLogin`, `EnableExternalAuthProviders`) will sign existing users out of any portal that uses the targeted provider. Surface that consequence at the consent gate before posting. (The Maker Copilot policy has no such sign-out side effect.)
 - **Parent/child availability is a hard gate on every apply path.** The four sign-in protocols (OpenID Connect, SAML 2.0, WS-Federation, OAuth 2.0) require `EnableExternalAuthProviders` to be Enabled on a portal; the three social providers (Facebook, Google, Microsoft) require **both** `EnableExternalAuthProviders` **and** `EnableProtocolOpenAuth`. On a portal where the required parent is Disabled the child can be **neither enabled nor disabled** — with **no "force"/"anyway" override**. The scope picker **always lists every portal with an explicit `Eligible` (Yes / No) column** (via `resolve-portal-availability.js --markdown`) — eligible portals first, ineligible ones just below with the blocking parent named — and **only the eligible (Yes) portals may be selected**; the **named-site fast path** (when the site is named directly in the request) hard-blocks ineligible sites the same way via Phase 4.2.2b. When **none** qualify (a required parent is Disabled env-wide) it shows a single *"External Auth is Disabled for this environment"* message — and for a **social IdP** (two parents) it names both, *"External Auth or OAuth 2.0 sign-in is Disabled for this environment"* — and the skill does not prompt for a scope or POST. See the "Parent/child availability" section under Phase 2.3. **The environment picker itself is never filtered** — every environment is always shown in the full env list; availability only marks the per-portal Eligible status.
-- **Governance STATUS is ALWAYS the 5-column Unicode box.** Every status render — Fetch Env (4.3.1), Fetch Site (4.4.3), and the post-Set verify (4.2.5) — uses `render-portal-table.js --unicode --no-color`, emitted **inside a fenced code block**, with **exactly** the columns `# | Name | URL | Site ID | State` (`┌─┬─┐ │ ├─┼─┤ └─┴─┘`, a rule between every row). Never add, drop, reorder, or rename a column, and never substitute a Markdown table for status. This is uniform for **all twenty-one policies** including the gated children (OpenID Connect / SAML 2.0 / WS-Federation / OAuth 2.0 / Facebook / Google / Microsoft): for a gated child the single `State` shows the **effective** state (own AND every gating parent) — the parent chain is computed but never rendered as extra columns. The eleven `PowerPages_*` Copilot / site-control policies are independent leaves (no gating parent), so their single `State` is simply their own state.
+- **Governance STATUS is ALWAYS the complete 5-column Unicode box.** Every status render — Fetch Env (4.3.1), Fetch Site (4.4.3), and the post-Set verify (4.2.5) — uses `render-portal-table.js --unicode --no-color`, emitted **verbatim and in full inside a fenced code block**, with **exactly** the columns `# | Name | URL | Site ID | State` (`┌─┬─┐ │ ├─┼─┤ └─┴─┘`, a rule between every row). Never add, drop, reorder, rename, truncate, summarize, or manually recreate columns or rows, and never substitute a Markdown table or a compact recap table for status. The helper's complete stdout is the status artifact delivered to the user; response-length or brevity preferences never override it. This is uniform for **all twenty-one policies** including the gated children (OpenID Connect / SAML 2.0 / WS-Federation / OAuth 2.0 / Facebook / Google / Microsoft): for a gated child the single `State` shows the **effective** state (own AND every gating parent) — the parent chain is computed but never rendered as extra columns. The eleven `PowerPages_*` Copilot / site-control policies are independent leaves (no gating parent), so their single `State` is simply their own state.
+- **Multi-policy status still means full detail for each policy.** When the user asks for the status of **more than one governance setting** in a single request (for example *"What is the status of Facebook, Google, and Microsoft?"*), resolve each requested policy, then run the normal Fetch Env / Fetch Site status path **once per policy**. Each policy MUST render its **own complete** 5-column Unicode table with **every affected site row** and the site **Name, URL, Site ID, and State**. Never replace those per-policy tables with a condensed cross-policy summary matrix.
 
 ## Workflow
 
@@ -99,19 +100,19 @@ If either is missing, tell the user which CLI to sign in to and stop. Do **not**
 
 ---
 
-## 2. Entry point + background pre-warm
+## 2. Entry point
 
 The moment the skill is invoked:
 
-1. **Fire `list-envs.js` in the background** so the env list is ready by the
-   time the user needs to specify an env. The first user-facing prompt
-   should not block on it. Cache the result in `/tmp/governance-envs.json`
-   for the rest of the run.
-2. **Go straight to the Phase 2.1 free-text intent prompt.** Do **NOT** show a
+1. **Go straight to the Phase 2.1 free-text intent prompt.** Do **NOT** show a
    top-level `AskUserQuestion` menu (no "Manage a Governance Setting" / "Done"
    choice list, and no numbered/multiple-choice entry menu of any kind). The
    very first user-facing prompt is the Phase 2.1 prose question — ask it
    directly.
+2. **Do not pre-warm or cache the environment list.** When the workflow reaches
+   an environment picker, call `list-envs.js` fresh and pipe that response
+   directly into `render-env-table.js --markdown`. Never create or reuse
+   `governance-envs.json`, and never apply a TTL cache to the environment list.
 
 If the user replies that they are done (e.g. "done", "that's all", "exit",
 "nothing"), exit cleanly without doing anything else.
@@ -330,9 +331,14 @@ When an env is needed (missing or ambiguous), the orchestrator MUST:
    defect.
 
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-env-table.js" \
-     --envsFile <cached-governance-envs.json> --markdown [--current "<RECENT_ENV_ID>"]
+   node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-envs.js" \
+     | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-env-table.js" \
+       --markdown [--current "<RECENT_ENV_ID>"]
    ```
+
+   **Fresh API result only.** Run this pipeline for every environment picker.
+   Do not render from `--envsFile`, a prior command's output, an in-memory TTL,
+   or any other cache. The environment rows must reflect the latest API call.
 
    The helper (with `--markdown`) prints a GitHub-flavored Markdown table with
    exactly a row-number column, a marker column, **Environment Name**, and
@@ -372,7 +378,7 @@ When an env is needed (missing or ambiguous), the orchestrator MUST:
    skip ahead.
 3. **Allow selecting another env.** The user may reply with any row number,
    environment name, or environment id to switch. Resolve fuzzy /
-   case-insensitive matches against the cached list. To cancel the request
+   case-insensitive matches against the fresh list returned for this picker. To cancel the request
    entirely, the user replies `cancel` (no API call is made — run the
    loop-end summary).
 
@@ -691,29 +697,28 @@ Persist the chosen operation as `<OP>`.
 
 ### 4.1 Common — resolve the environment
 
-**Branch on what the request already provided** (from the Phase 2.1 parse):
+**Always run the environment picker from a fresh API response**, regardless of
+whether the request already named an environment:
 
-- **Environment already provided** (the user named an env or gave an env id in
-  their request, e.g. *"disable OIDC in Contoso-Prod"*): **skip the interactive
-  picker.** Resolve the name/id against the cached env list, confirm it in one
-  line — *"Using environment **&lt;ENV_DISPLAY&gt;** (`<ENV_ID>`)."* — and go
-  straight to the next step (4.2 scope for Set, 4.3 for Fetch Env, 4.4 for
-  Fetch Portal). Do **not** re-render the full env table when the env is
-  unambiguously resolved.
-- **Environment NOT provided** (the common case): render the **full** env-list
-  table (every row, every request) via `render-env-table.js --markdown`,
-  default to `<RECENT_ENV>` when set (flagged in the **Selected** column), and
-  let the user `keep` / switch / `cancel`. Never skip the list by silently
-  reusing the previously-chosen env — the env list is NEVER optional or hidden
-  when a pick is required.
+- **Environment already provided** (the user named an env or gave an env id,
+  e.g. *"disable OIDC in Contoso-Prod"*): fetch `list-envs.js` fresh, resolve the
+  name/id against that response, pass the resolved id as `--current`, render the
+  complete table, and require `keep` or a switch before proceeding.
+- **Environment not provided**: fetch `list-envs.js` fresh, render the complete
+  table, default to `<RECENT_ENV>` when set (or the tenant-default environment
+  on the first request), and require `keep` / switch / `cancel`.
 
-The env list comes from `list-envs.js` (cached as `governance-envs.json`):
+Never skip or reuse a prior environment-list result. Only the previously chosen
+environment id may persist as the row-selection marker.
+
+The env list always comes from a fresh `list-envs.js` call:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-envs.js"
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-envs.js" \
+  | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-env-table.js" --markdown
 ```
 
-Output is `{ status: "ok", envs: [ { envId, displayName, envUrl, type, region } ] }`. Pipe it (or the cached file) through `render-env-table.js --markdown` and emit the Markdown table **verbatim** (as a rendered table, not inside a code fence). Resolve the user's row-number / name / id reply against the cached list (fuzzy, case-insensitive). Persist the choice as `<ENV_ID>` and `<ENV_DISPLAY>`, and update `<RECENT_ENV>`.
+`list-envs.js` outputs `{ status: "ok", envs: [ { envId, displayName, envUrl, type, region } ] }`. Pipe that same fresh response directly through `render-env-table.js --markdown` and emit the Markdown table **verbatim** (as a rendered table, not inside a code fence). Resolve the user's row-number / name / id reply against that response (fuzzy, case-insensitive). Persist only the chosen `<ENV_ID>` / `<ENV_DISPLAY>` as `<RECENT_ENV>` for the selection marker; never persist or cache the environment list.
 
 > **The environment list is never filtered.** Always render **every**
 > environment via `render-env-table.js --markdown` — regardless of policy. Parent
@@ -728,7 +733,7 @@ what the Phase 2.1 parse produced, then run only the remaining steps:
 | What the request provided | Steps to run |
 |---------------------------|--------------|
 | **Nothing** (no env, no sites) | 4.1 pick env → 4.2.1 **eligible** sites (child auth policy → `resolve-portal-availability.js --markdown`, all portals with an Eligible Yes/No column; else plain list) + all/selected → (4.2.2 if selected) → **4.2.3 Impact Summary + consent** → 4.2.4 apply → 4.2.5 verify |
-| **Environment only** | 4.1 resolves env (skips picker) → 4.2.1 **eligible** sites (child auth policy → `resolve-portal-availability.js --markdown`, all portals with an Eligible Yes/No column; else plain list) + all/selected → (4.2.2 if selected) → **4.2.3 Impact Summary + consent** → 4.2.4 apply → 4.2.5 verify |
+| **Environment only** | 4.1 fetches and renders the fresh env list with the named env selected → explicit confirmation → 4.2.1 **eligible** sites (child auth policy → `resolve-portal-availability.js --markdown`, all portals with an Eligible Yes/No column; else plain list) + all/selected → (4.2.2 if selected) → **4.2.3 Impact Summary + consent** → 4.2.4 apply → 4.2.5 verify |
 | **Environment + site(s)** | 4.1 resolves env + resolve named site(s) to `<PORTAL_IDS>` (skip 4.2.1/4.2.2) → **4.2.2b availability gate (hard-block named sites whose parent is Disabled)** → **4.2.3 Impact Summary + consent** → 4.2.4 apply → 4.2.5 verify |
 
 > **Mandatory eligibility filter for the seven child auth policies.** For any of
@@ -830,9 +835,9 @@ is **no** code path where a child auth policy skips this and shows the plain
 unfiltered `list-portals.js` table — doing so is a defect:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/resolve-portal-availability.js" \
-  --policy "<POLICY>" --envId "<ENV_ID>" \
-  --portalsFile <path-to-list-portals-output> --markdown
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-portals.js" --envId "<ENV_ID>" \
+  | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/resolve-portal-availability.js" \
+      --policy "<POLICY>" --envId "<ENV_ID>" --markdown
 ```
 
 The helper reads each parent policy's env value + inclusion/exclusion lists and
@@ -954,8 +959,9 @@ Use plain language matching the 4.2.1 choice:
 Parse the user's reply with the helper:
 
 ```bash
-echo "<USER_INPUT>" | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/parse-portal-input.js" \
-  --portalsFile <path-to-list-portals-output>
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-portals.js" --envId "<ENV_ID>" \
+  | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/parse-portal-input.js" \
+      --portalsStdin --input "<USER_INPUT>"
 ```
 
 Or call `parsePortalInput(input, { validIds: portals })` directly when integrating from JS. Output: `{ policyValue, portalIds[], resolvedNames[], errors[] }`.
@@ -991,13 +997,13 @@ anyway", "toggle the own setting regardless", or any similar bypass — the pare
 gate is absolute. (The child's own governance setting is meaningless while the
 umbrella provider is off, so writing it is disallowed, not merely discouraged.)
 
-**How to check.** Write the resolved named sites to a temp portals file and run
-the resolver in JSON mode over just those sites:
+**How to check.** Pipe the resolved named-site JSON directly to the resolver in
+JSON mode. Do not create a temporary portal-list file:
 
 ```bash
-echo '{ "portals": [ { "portalId": "<id>", "name": "<name>", "url": "<url>" }, ... ] }' > /tmp/named-sites.json
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/resolve-portal-availability.js" \
-  --policy "<POLICY>" --envId "<ENV_ID>" --portalsFile /tmp/named-sites.json
+echo '{ "portals": [ { "portalId": "<id>", "name": "<name>", "url": "<url>" }, ... ] }' \
+  | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/resolve-portal-availability.js" \
+      --policy "<POLICY>" --envId "<ENV_ID>"
 ```
 
 The JSON output partitions the named sites into `available` and
@@ -1038,8 +1044,9 @@ committed spec and per-policy data), then ask for explicit go-ahead.
 
 **Step 1 — resolve each affected site's Current State.** Read the live policy
 state so the summary can show the exact transition with **one parallel batch** —
-run `get-effective-status.js` **once** (`--policy <P> --portalsFile <list-portals
-output> --envId <ENV_ID>`). It fires the env value, the membership list, and (for
+pipe `list-portals.js` into `get-effective-status.js` **once**
+(`list-portals.js --envId <ENV_ID> | get-effective-status.js --policy <P>
+--envId <ENV_ID>`). It fires the env value, the membership list, and (for
 a gated child) every gating parent concurrently in a single `Promise.all` wave,
 and returns each in-scope site's effective `state`. Do **NOT** hand-issue
 `get-env.js` / `get-details.js` / `get-portal.js`, and never loop per portal. If
@@ -1223,8 +1230,9 @@ inside a fenced code block** — the Unicode box only aligns in monospace, so
 STATUS renders are the one path that MUST be fenced:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
-  --policy "<POLICY>" --portalsFile <path-to-list-portals-output> --envId "<ENV_ID>" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-portals.js" --envId "<ENV_ID>" \
+  | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
+      --policy "<POLICY>" --envId "<ENV_ID>" \
   | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --unicode --no-color
 ```
 
@@ -1239,6 +1247,15 @@ column (no parent columns, no Effective column, no paraphrase column). The
 `--markdown` and legacy ASCII modes stay for other callers, but every STATUS
 render (this post-Set verify, Fetch Env 4.3.1, Fetch Site 4.4.3) uses the
 Unicode box.
+
+**Final-delivery invariant.** The verification response itself MUST contain the
+entire fenced stdout from `render-portal-table.js`, including the URL and Site
+ID columns and every rendered site row. Do not replace it in the final answer
+with a shorter hand-written table, omit columns, reorder rows, collapse rows,
+use an ellipsis, or say that the full output appeared in tool output above.
+Do not render a second compact table after it. A short headline or loop summary
+may accompany the box, but the complete five-column box remains present
+verbatim in the user-facing response.
 
 **The State cell MUST show the status icon** — 🟢 for Enabled, 🔴 for Disabled.
 The helper prepends these by default (pass `--no-icons` only if you explicitly
@@ -1303,6 +1320,13 @@ a bold line, e.g.:
 Use the policy's `summaryLabel` / `subject` from `governance-mapping.json` for
 the label, and the `stateColors` emoji for the icon. Never render the Fetch Env
 summary as an un-emphasized plain sentence.
+
+**When one request names multiple policies.** Treat that as a small batch of
+independent Fetch Env reads against the same environment. Run this section once
+per policy, in the user-mentioned order, and emit the full result for each
+policy in sequence. Do **not** merge multiple policies into one compressed
+"policy vs portal" summary; each policy still gets its own highlighted summary
+and the full 5-column portal-details table from Phase 4.3.1.
 
 #### 4.3.1 ALWAYS show the portal details table (every env value)
 
@@ -1406,8 +1430,9 @@ Prompt the user (prose, free text):
 Pipe the reply through `parse-portal-input.js` with the listed sites as `validIds`. The helper resolves the name to a portal id when the input isn't a UUID.
 
 ```bash
-echo "<USER_REPLY>" | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/parse-portal-input.js" \
-  --portalsFile <path-to-list-portals-output>
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-portals.js" --envId "<ENV_ID>" \
+  | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/parse-portal-input.js" \
+      --portalsStdin --input "<USER_REPLY>"
 ```
 
 The reply must resolve to exactly one site. If the helper returns more than one (the user typed multiple), tell them this is a single-site read and ask again. If it returns zero or errors, surface the message and reprompt.
@@ -1421,10 +1446,9 @@ everywhere else — build a one-site portals file (name / url / portalId for
 `<PORTAL_ID>`) and run `get-effective-status.js` against it:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
-  --policy "<POLICY>" \
-  --portalsFile <path-to-one-site-portals-file> \
-  --envId "<ENV_ID>"
+echo '{ "portals": [ { "portalId": "<PORTAL_ID>", "name": "<PORTAL_NAME>", "url": "<URL>" } ] }' \
+  | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
+      --policy "<POLICY>" --envId "<ENV_ID>"
 ```
 
 This fires the env value + membership list — **and, for a gated child, every
@@ -1516,8 +1540,9 @@ straight through the helper (its `portals` array already carries the site's
 `state`):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
-  --policy "<POLICY>" --portalsFile <path-to-one-site-portals-file> --envId "<ENV_ID>" \
+echo '{ "portals": [ { "portalId": "<PORTAL_ID>", "name": "<PORTAL_NAME>", "url": "<URL>" } ] }' \
+  | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
+      --policy "<POLICY>" --envId "<ENV_ID>" \
   | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --unicode --no-color
 ```
 
@@ -1590,13 +1615,12 @@ for the status-display paths — Fetch Env portal table in 4.3.1, Fetch Site in
 
 1. Read the child's **own** state **and** every parent's state in **one
    parallel batch** with **`get-effective-status.js`** — never sequentially,
-   never a per-policy or per-portal loop. Pass the `list-portals.js` output as
-   `--portalsFile`:
+   never a per-policy or per-portal loop. Pipe `list-portals.js` directly into
+   it; do not create a portal-list file:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
-     --policy "<POLICY>" \
-     --portalsFile <path-to-list-portals-output> \
-     --envId "<ENV_ID>"
+   node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-portals.js" --envId "<ENV_ID>" \
+     | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
+         --policy "<POLICY>" --envId "<ENV_ID>"
    ```
    The script fires the env value + membership list for the child **and** for
    each gating parent (`EnableExternalAuthProviders`, plus
@@ -1627,8 +1651,9 @@ for the status-display paths — Fetch Env portal table in 4.3.1, Fetch Site in
    the single-State Unicode box is the only status render.
 
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
-     --policy "<POLICY>" --portalsFile <path-to-list-portals-output> --envId "<ENV_ID>" \
+   node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/list-portals.js" --envId "<ENV_ID>" \
+     | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/get-effective-status.js" \
+         --policy "<POLICY>" --envId "<ENV_ID>" \
      | node "${CLAUDE_PLUGIN_ROOT}/skills/manage-governance/scripts/render-portal-table.js" --unicode --no-color
    ```
 
@@ -1737,7 +1762,7 @@ Skill tracking:
 - **Plain language** — talk about "turning off the OpenID Connect / SAML sign-in path on portals", "turning Maker Copilot on / off for existing sites", or "enabling Google sign-in on your sites". Show the policy strings only when the user has shown they want the technical name.
 - **Explicit consent for Set** — never POST `/governance` without a Set-specific consent step: after the Impact Summary, present a **2-option `AskUserQuestion`** (choices **Apply now** / **Cancel** — exactly those two, no free-text prompt, no third option) that spells out which sign-in path / feature is being turned off and what happens to currently-signed-in users. Only a selected **Apply now** authorizes the POST.
 - **Redundant-operation guard runs BEFORE the Impact Summary** — when the admin's requested operation is a no-op for the named site(s) (enable while the env is already `All`/`Include`-with-the-site, or disable while already `None`/`Exclude`-with-the-site), do **not** render the Impact Summary or POST yet. First stop and ask the standard **eligible-portal scope** free-text prompt (Phase 4.2.3 Step 1b): reply **All** to apply the requested verb to all eligible portals, or a **comma-separated list of portals** for specific sites. `All` → no API call (it is already in that state), report "no change" and loop. Specific portals → set `Include` (enable) / `Exclude` (disable) on the named site(s), THEN render the Impact Summary (surfacing the collateral flip on the other sites) and the normal `Apply now` consent gate.
-- **Always verify after Set** — run the matching `get-*` call after the polling script exits, even when it reports success.
+- **Always verify after Set and deliver the complete result** — run the matching `get-*` call after the polling script exits, even when it reports success. Pipe the result through `render-portal-table.js --unicode --no-color`, then include that helper's entire five-column stdout verbatim in the final user-facing response. Never replace it with a shorter recap table, even when every row has the same state.
 - **Parent-gated hard block (no override)** — a **child** auth policy can be **neither enabled nor disabled** on a portal whose required **parent** is Disabled: OpenID Connect / SAML 2.0 / WS-Federation / OAuth 2.0 are blocked wherever **External Auth** (`EnableExternalAuthProviders`) is off; Facebook / Google / Microsoft are blocked wherever **External Auth or OAuth 2.0** (`EnableProtocolOpenAuth`) is off. This applies **on every path**, including the **named-site fast path** (Phase 4.2.2b) where the site is named directly in the request — not only the scope picker's eligibility view (Phase 4.2.1 Step B.1). NEVER offer a "force-enable / force-disable anyway", "toggle the own setting regardless", or any similar bypass — the gate is absolute. If every named site is ineligible, do **not** render the Impact Summary or POST; name the Disabled parent and stop (offer to enable the parent first). If only some are ineligible, drop them (telling the admin why) and proceed with the eligible ones only. Fail-open only when a parent's live state can't be read.
 - **Always show the env list** — for **every** new user request / operation
   (Apply, Fetch Env, Fetch Site — including each loop iteration and every new

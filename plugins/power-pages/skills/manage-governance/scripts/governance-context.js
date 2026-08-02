@@ -3,6 +3,7 @@
 'use strict';
 
 const { execSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 const {
   resolveContext,
@@ -16,37 +17,158 @@ const {
 
 // ---------------------------------------------------------------------------
 // Central ring registry — the single source of truth for "which endpoint + how
-// to get its token". Add/point a ring in ONE place and both the gateway host
-// and the token-acquisition path fall out of the same lookup. A single flag
-// (resolveRing) selects the active entry.
+// to get its token". The DATA defaults live in DEFAULT_RINGS below and can be
+// overridden by the co-located app-settings.json (loaded inline — no separate
+// config module). A single switch (resolveRing, app-settings.json > TIP)
+// selects the active entry, and BOTH the governance gateway AND the
+// env-list BAP path key off it.
 //
-//   host          gateway base host for the ring.
-//   hostEnv       optional per-ring env var to override `host` (a sub-ring).
-//   tokenStrategy how to mint the bearer for this ring:
-//                   'device-code' → custom public-client app via tip-auth.js.
-//                       This is the ONLY strategy that yields the PowerPages
-//                       delegated scopes (PowerPages.Websites.Read/Write). The
-//                       az CLI first-party client is NOT authorized for them,
-//                       so it 403s (InsufficientDelegatedPermissions).
-//                   'az'          → az account get-access-token against the
-//                       ring host's resource (works for prod, where the
-//                       signed-in cloud token is already scoped).
+//   gatewayHost     governance gateway base host (powerplatform.com API).
+//   gatewayHostEnv  optional per-ring env var overriding gatewayHost (sub-ring).
+//   tokenStrategy   how to mint the gateway bearer:
+//                     'device-code' → custom public-client app via tip-auth.js.
+//                         The ONLY strategy that yields the PowerPages delegated
+//                         scopes (PowerPages.Websites.Read/Write). The az CLI
+//                         first-party client is NOT authorized for them, so it
+//                         403s (InsufficientDelegatedPermissions).
+//                     'az'          → az account get-access-token against the
+//                         ring host's resource (prod, where the signed-in cloud
+//                         token is already scoped).
+//   bapStrategy     how the admin env list is fetched:
+//                     'pac'  → `pac admin list --json` (follows PAC's signed-in
+//                         cloud; correct for Prod).
+//                     'rest' → direct GET to bapHost (correct for TIP, which
+//                         `pac admin list` cannot reach without a Preprod sign-in).
+//   bapHost         BAP host for the 'rest' strategy.
+//   bapResource     az token audience for the BAP REST call.
 //
-// NOTE the TIP host is api.preprod.powerplatform.com — `api.tip.powerplatform.com`
-// does NOT resolve in DNS and is NOT the Preprod gateway (verified 2026-07).
+// NOTE the TIP hosts are api.preprod.powerplatform.com / tip1.api.bap.microsoft
+// .com — the `api.tip...` form does NOT resolve in DNS (verified 2026-07).
 // ---------------------------------------------------------------------------
-const RINGS = Object.freeze({
+const DEFAULT_RINGS = Object.freeze({
   TIP: Object.freeze({
     label: 'TIP',
-    host: 'https://api.preprod.powerplatform.com',
-    hostEnv: 'PP_GOV_TIP_HOST',
+    gatewayHost: 'https://api.preprod.powerplatform.com',
+    gatewayHostEnv: 'PP_GOV_TIP_HOST',
     tokenStrategy: 'device-code',
+    bapStrategy: 'rest',
+    bapHost: 'https://tip1.api.bap.microsoft.com',
+    bapResource: 'https://service.powerapps.com/',
   }),
   Prod: Object.freeze({
     label: 'Prod',
-    host: 'https://api.powerplatform.com',
-    hostEnv: null,
+    gatewayHost: 'https://api.powerplatform.com',
+    gatewayHostEnv: null,
     tokenStrategy: 'az',
+    bapStrategy: 'pac',
+    bapHost: 'https://api.bap.microsoft.com',
+    bapResource: 'https://service.powerapps.com/',
+  }),
+});
+
+// The routing config file, co-located so a marketplace install (which copies
+// only the plugin dir) always ships it beside the code.
+const CONFIG_PATH = path.join(__dirname, 'app-settings.json');
+
+function stripTrailingSlashes(s) {
+  return String(s == null ? '' : s).trim().replace(/\/+$/, '');
+}
+
+// Memoize the parsed config for the process — app-settings.json is read-only
+// routing config, so re-forking fs on every governance call is wasted work.
+let cachedConfig;
+
+// Load + normalize app-settings.json. Fail-open: a missing file, IO error, or
+// invalid JSON all resolve to DEFAULT_RINGS rather than throwing — a governance
+// call must never break because the config was deleted or fat-fingered.
+// DEFAULT_RINGS remain the fail-open fallback when the file is absent/unusable.
+function loadConfig(filePath) {
+  if (!filePath && cachedConfig !== undefined) return cachedConfig;
+  let raw = {};
+  try {
+    raw = JSON.parse(fs.readFileSync(filePath || CONFIG_PATH, 'utf8'));
+  } catch {
+    raw = {};
+  }
+  const r = raw && typeof raw === 'object' ? raw : {};
+
+  // activeRing: accept case-insensitive TIP/preprod/test and Prod/production;
+  // ignore junk (→ null, so resolveRing falls through to its default).
+  let activeRing = null;
+  const ar = String(r.activeRing || '').trim().toLowerCase();
+  if (ar === 'tip' || ar === 'preprod' || ar === 'test') activeRing = 'TIP';
+  else if (ar.startsWith('prod')) activeRing = 'Prod';
+
+  const targetEnv = typeof r.targetEnv === 'string' ? r.targetEnv.trim() : '';
+
+  // Merge each file ring over its default. Accept legacy `host` as an alias for
+  // `gatewayHost` so an older single-host config still routes the gateway.
+  const rings = {};
+  for (const key of Object.keys(DEFAULT_RINGS)) {
+    const base = DEFAULT_RINGS[key];
+    const over = (r.rings && typeof r.rings === 'object' && r.rings[key]) || {};
+    rings[key] = Object.freeze({
+      label: base.label,
+      gatewayHost: stripTrailingSlashes(over.gatewayHost || over.host || base.gatewayHost),
+      gatewayHostEnv: base.gatewayHostEnv,
+      tokenStrategy: over.tokenStrategy || base.tokenStrategy,
+      bapStrategy: over.bapStrategy || base.bapStrategy,
+      bapHost: stripTrailingSlashes(over.bapHost || base.bapHost),
+      bapResource: over.bapResource || base.bapResource,
+    });
+  }
+
+  const cfg = Object.freeze({ activeRing, targetEnv, rings: Object.freeze(rings) });
+  if (!filePath) cachedConfig = cfg;
+  return cfg;
+}
+
+// Test-only seam: drop the process cache so a case can load a fresh fixture.
+function resetConfigCache() {
+  cachedConfig = undefined;
+}
+
+// Kept as a shared helper for existing callers/tests that still need the repo's
+// standard truthy parsing semantics, even though ring selection no longer uses
+// PP_GOV_PROD/PP_GOV_RING.
+function isTruthyFlag(v) {
+  if (v == null) return false;
+  return ['1', 'true', 'yes', 'on'].includes(String(v).trim().toLowerCase());
+}
+
+// THE central switch. Resolve which ring key ('TIP' | 'Prod') is active.
+// app-settings.json is the source of truth for ring selection. Runtime env vars
+// may still override hosts/tokens inside the chosen ring, but they do not get to
+// switch the ring away from the bundled config.
+function resolveRing(env) {
+  const cfg = loadConfig();
+  if (cfg.activeRing && DEFAULT_RINGS[cfg.activeRing]) return cfg.activeRing;
+  return 'TIP';
+}
+
+// The merged (defaults + app-settings.json overrides) ring object for the
+// active (or a named) ring. This is the single lookup both the gateway and BAP
+// paths use, so the same switch drives every endpoint.
+function getRing(env, ringName) {
+  const key = ringName || resolveRing(env);
+  const cfg = loadConfig();
+  return (cfg.rings && cfg.rings[key]) || DEFAULT_RINGS[key];
+}
+
+// Back-compat: a RINGS-shaped view (`.host` / `.hostEnv` / `.tokenStrategy`)
+// built from DEFAULT_RINGS for callers/tests that read the old shape.
+const RINGS = Object.freeze({
+  TIP: Object.freeze({
+    label: DEFAULT_RINGS.TIP.label,
+    host: DEFAULT_RINGS.TIP.gatewayHost,
+    hostEnv: DEFAULT_RINGS.TIP.gatewayHostEnv,
+    tokenStrategy: DEFAULT_RINGS.TIP.tokenStrategy,
+  }),
+  Prod: Object.freeze({
+    label: DEFAULT_RINGS.Prod.label,
+    host: DEFAULT_RINGS.Prod.gatewayHost,
+    hostEnv: DEFAULT_RINGS.Prod.gatewayHostEnv,
+    tokenStrategy: DEFAULT_RINGS.Prod.tokenStrategy,
   }),
 });
 
@@ -55,47 +177,34 @@ const RINGS = Object.freeze({
 const TIP_GATEWAY_HOST = RINGS.TIP.host;
 const PROD_GATEWAY_HOST = RINGS.Prod.host;
 
-// dotnet-style truthy spellings (mirrors the *_OPTOUT convention used elsewhere
-// in this repo) so PP_GOV_PROD=1/true/yes/on all flip to the prod ring.
-function isTruthyFlag(v) {
-  if (v == null) return false;
-  return ['1', 'true', 'yes', 'on'].includes(String(v).trim().toLowerCase());
-}
-
-// THE central flag. Resolve which ring key ('TIP' | 'Prod') is active.
-// Precedence:
-//   1. PP_GOV_RING explicit ('prod'/'production' | 'tip'/'preprod')
-//   2. PP_GOV_PROD truthy -> Prod
-//   3. default -> TIP
-function resolveRing(env) {
+// Default target environment when a script gets no --envId. PP_GOV_ENV_ID wins
+// over the file (env-vars-first precedence); returns null when neither is set so
+// the caller falls back to the signed-in PAC env.
+function resolveTargetEnv(env) {
   const e = env || process.env;
-  const explicit = (e.PP_GOV_RING || '').trim().toLowerCase();
-  if (explicit) {
-    if (explicit.startsWith('prod')) return 'Prod';
-    if (explicit === 'tip' || explicit === 'preprod') return 'TIP';
-  }
-  if (isTruthyFlag(e.PP_GOV_PROD)) return 'Prod';
-  return 'TIP';
+  const fromEnv = (e.PP_GOV_ENV_ID || '').trim();
+  if (fromEnv) return fromEnv;
+  return loadConfig().targetEnv || null;
 }
 
 // Effective gateway host for the active ring. Explicit PP_GOV_API_HOST always
-// wins (pin an arbitrary host); otherwise the ring's `host` (or its per-ring
-// `hostEnv` override) decides. For Prod we prefer the host resolveContext
+// wins (pin an arbitrary host); otherwise the ring's gatewayHost (or its
+// per-ring hostEnv override) decides. For Prod we prefer the host resolveContext
 // already computed from the signed-in cloud (gov clouds etc.), falling back to
-// the registry host.
+// the ring host.
 function resolveHostOverride(env, prodApiHost) {
   const e = env || process.env;
   if (e.PP_GOV_API_HOST && e.PP_GOV_API_HOST.trim()) {
     return e.PP_GOV_API_HOST.trim().replace(/\/+$/, '');
   }
-  const ring = RINGS[resolveRing(e)];
+  const ring = getRing(e);
   // Prod: honor the signed-in cloud host (could be a gov cloud) over the
-  // registry default. TIP: the registry host is authoritative.
+  // config default. TIP: the config host is authoritative.
   if (ring.label === 'Prod' && prodApiHost) {
     return prodApiHost.replace(/\/+$/, '');
   }
-  const perRingOverride = ring.hostEnv ? e[ring.hostEnv] : null;
-  return (perRingOverride || ring.host).trim().replace(/\/+$/, '');
+  const perRingOverride = ring.gatewayHostEnv ? e[ring.gatewayHostEnv] : null;
+  return (perRingOverride || ring.gatewayHost).trim().replace(/\/+$/, '');
 }
 
 // Rewrite ONLY the scheme+authority of the env-scoped base URL, preserving the
@@ -156,10 +265,9 @@ function resolveGovernanceContext(envId, env) {
   const ctx = resolveContext();
   if (ctx.error) return ctx;
 
-  // ONE flag → ring → { host, tokenStrategy }. Host is rewritten onto the
-  // env-scoped base URL (scheme+authority only) before the request goes out.
-  const ringKey = resolveRing(e);
-  const ring = RINGS[ringKey];
+  // ONE switch → ring → { gatewayHost, tokenStrategy, ... }. Host is rewritten
+  // onto the env-scoped base URL (scheme+authority only) before the request.
+  const ring = getRing(e);
   const host = resolveHostOverride(e, ctx.apiHost);
   const hostChanged = host !== (ctx.apiHost || '').replace(/\/+$/, '');
   if (hostChanged) applyHostOverride(ctx, host);
@@ -198,7 +306,11 @@ function resolveGovernanceContext(envId, env) {
     if (hostToken) ctx.token = hostToken;
   }
 
-  return applyEnvOverride(ctx, envId);
+  // Default the environment from app-settings.json (targetEnv) / PP_GOV_ENV_ID
+  // when the caller passed no explicit --envId, so a single config value can
+  // pin the test env for the whole skill.
+  const effectiveEnvId = envId || resolveTargetEnv(e);
+  return applyEnvOverride(ctx, effectiveEnvId);
 }
 
 // The AAD token resource (audience) to mint against. PP_GOV_TOKEN_RESOURCE lets
@@ -214,10 +326,16 @@ module.exports = {
   applyHostOverride,
   resolveHostOverride,
   resolveRing,
+  getRing,
+  loadConfig,
+  resetConfigCache,
+  resolveTargetEnv,
   resourceForHost,
   tokenResourceFor,
   isTruthyFlag,
   getTipTokenSync,
+  DEFAULT_RINGS,
+  CONFIG_PATH,
   RINGS,
   TIP_GATEWAY_HOST,
   PROD_GATEWAY_HOST,

@@ -6,7 +6,7 @@ const {
   orderPortalsForDisplay,
   compareForDisplay,
   DISPLAY_LIMIT,
-} = require('../../skills/manage-governance/scripts/list-portals');
+} = require('../../../skills/manage-governance/scripts/list-portals');
 
 function portal(over = {}) {
   return {

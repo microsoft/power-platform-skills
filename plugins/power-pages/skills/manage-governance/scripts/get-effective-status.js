@@ -33,7 +33,6 @@
 
 'use strict';
 
-const fs = require('fs');
 const path = require('path');
 
 const { assertPolicy, normalizeEnvValue } = require('./policies');
@@ -43,6 +42,7 @@ const {
   loadMapping,
   dependenciesForPolicy,
   canonicalizeEnvValue,
+  readPortalsInput,
   resolvePortalStates,
 } = require('./resolve-portal-availability');
 
@@ -59,13 +59,15 @@ concurrently (4 calls for a protocol, 6 for a social IdP), then reports each
 portal's EFFECTIVE state = child own AND all parents.
 
 Usage:
-  node get-effective-status.js --policy <name> --portalsFile <path> [--envId <guid>] [--json]
+  node list-portals.js [--envId <guid>] |
+    node get-effective-status.js --policy <name> [--envId <guid>] [--json]
 
 Flags:
   --policy       Governance policy name (any of the ten). Leaf policies with no
                  parents report their own state as the effective state.
-  --portalsFile  Path to list-portals.js output ({ portals: [...] } or a bare
-                 array). Required — this script does NOT re-page /websites.
+  stdin          list-portals.js output ({ portals: [...] } or a bare array).
+                 This script does NOT re-page /websites.
+  --portalsFile  Backward-compatible alternative to stdin.
   --envId        Optional environment id (falls back to the current PAC env).
   --json         (default) Emit JSON.
   --help         Show this help.
@@ -131,24 +133,23 @@ async function main() {
     process.stdout.write(HELP);
     return;
   }
-  if (!flags.policy || !flags.portalsFile) {
+  if (!flags.policy) {
     process.stderr.write(
-      'Usage: node get-effective-status.js --policy <name> --portalsFile <path> [--envId <guid>]\n'
+      'Usage: node list-portals.js | node get-effective-status.js --policy <name> [--envId <guid>]\n'
     );
     process.exit(1);
     return;
   }
   assertPolicy(flags.policy);
 
-  let parsed;
+  let portals;
   try {
-    parsed = JSON.parse(fs.readFileSync(flags.portalsFile, 'utf8'));
+    portals = await readPortalsInput(flags.portalsFile);
   } catch (e) {
-    process.stderr.write(`get-effective-status: could not read/parse --portalsFile: ${e.message}\n`);
+    process.stderr.write(`get-effective-status: could not read/parse portal JSON: ${e.message}\n`);
     process.exit(1);
     return;
   }
-  const portals = Array.isArray(parsed) ? parsed : parsed.portals || [];
 
   const mapping = loadMapping();
   const deps = dependenciesForPolicy(flags.policy, mapping);

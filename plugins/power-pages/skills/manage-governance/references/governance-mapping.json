@@ -108,8 +108,8 @@
       "availabilityDependsOn": ["EnableExternalAuthProviders"],
       "userShorthands": ["ws-federation", "wsfederation", "ws federation", "wsfed", "enable ws-federation", "ws-fed", "EnableProtocolWsFederation"],
       "stateParaphrase": {
-        "Enabled": "WS-Federation sign-in Enabled",
-        "Disabled": "WS-Federation sign-in Blocked"
+        "Enabled": "WS-Federation protocol sign-in Enabled",
+        "Disabled": "WS-Federation protocol sign-in Blocked"
       },
       "sideEffectCallout": {
         "policyValueTriggers": ["None", "Exclude"],
@@ -132,15 +132,14 @@
       },
       "sideEffectCallout": {
         "policyValueTriggers": ["None", "Exclude"],
-        "message": "Disabling this signs out any users currently authenticated via OAuth 2.0 on the affected sites and blocks that sign-in method until it's re-enabled."
+        "message": "Disabling this setting signs out all users currently authenticated with OAuth 2.0 on the affected sites and prevents OAuth 2.0 sign-in until it is re-enabled."
       },
       "cascadeOnDisable": {
-        "heading": "The following OAuth 2.0 identity providers will be disabled:",
+        "heading": "Disabling OAuth 2.0 protocol will disable the following identity providers:",
         "items": ["Facebook", "Google", "Microsoft"]
       },
       "cascadeOnEnable": {
-        "heading": "When enabled, OAuth-based authentication is supported. The OAuth 2.0 identity providers (Facebook, Google, Microsoft) must be enabled individually using their respective governance settings:",
-        "items": [
+          "heading": "Enabling OAuth 2.0 protocol allows Social-based sign-in. Each identity provider must also be enabled individually through its corresponding governance setting:",        "items": [
           { "label": "Facebook", "note": "Controlled by the Facebook governance setting." },
           { "label": "Google", "note": "Controlled by the Google governance setting." },
           { "label": "Microsoft", "note": "Controlled by the Microsoft governance setting." }

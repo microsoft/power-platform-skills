@@ -23,7 +23,7 @@ const {
   DEFAULT_TIP_CLIENT_ID,
   DEFAULT_TIP_TENANT,
   LOCK_STALE_MS,
-} = require('../../skills/manage-governance/scripts/tip-auth');
+} = require('../../../skills/manage-governance/scripts/tip-auth');
 
 const fs = require('fs');
 

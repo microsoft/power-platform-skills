@@ -2,8 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
 
-const policies = require('../../skills/manage-governance/scripts/policies');
-const mapping = require('../../skills/manage-governance/references/governance-mapping.json');
+const policies = require('../../../skills/manage-governance/scripts/policies');
+const mapping = require('../../../skills/manage-governance/references/governance-mapping.json');
 
 const {
   SUPPORTED_POLICIES,
@@ -217,9 +217,9 @@ test('classifyStatus unaffected by the new policy plumbing', () => {
 });
 
 test('policies module path resolves under manage-governance skill', () => {
-  const resolved = require.resolve('../../skills/manage-governance/scripts/policies');
+  const resolved = require.resolve('../../../skills/manage-governance/scripts/policies');
   assert.equal(resolved, path.resolve(
     __dirname,
-    '../../skills/manage-governance/scripts/policies.js'
+    '../../../skills/manage-governance/scripts/policies.js'
   ));
 });
