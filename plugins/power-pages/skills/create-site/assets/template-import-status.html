@@ -292,6 +292,7 @@
         if (status && (status.phase === 'seed' || status.phase === 'seeding')) return 'seed';
         if (status && (status.phase === 'activation' || status.phase === 'activating')) return 'activation';
         if (status && status.state === 'succeeded' && status.redirectUrl) return 'done';
+        if (status && status.state === 'succeeded') return 'solutionDone';
         return 'solution';
       }
 
@@ -304,6 +305,11 @@
           phaseSolution.classList.add('done');
           phaseSeed.classList.add('active');
           if (mainHeading) mainHeading.textContent = 'Seeding __TEMPLATE_NAME__ template data';
+          return;
+        }
+        if (phase === 'solutionDone') {
+          phaseSolution.classList.add('done');
+          if (mainHeading) mainHeading.textContent = 'Imported __TEMPLATE_NAME__ template';
           return;
         }
         if (phase === 'activation') {
