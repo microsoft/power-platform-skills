@@ -17,6 +17,13 @@
 
 const lc = (s) => String(s || '').toLowerCase();
 
+// Every collection read below goes through these. The renderer runs against WORK-IN-PROGRESS specs
+// during authoring — a half-typed `jobs: "x"`, a null entry left by an edit, a `dataSources` written
+// as a bare string — and a crash here kills the authoring flow. Shape errors are validateAppSpec's
+// job to report; this module's job is to render whatever it is given without throwing.
+const arr = (v) => (Array.isArray(v) ? v : []);
+const objs = (v) => arr(v).filter((x) => x && typeof x === 'object' && !Array.isArray(x));
+
 // Table cells: a spec string (app description, job name, page purpose) may contain a `|` or a line
 // break, either of which silently breaks a Markdown table row. Flatten and escape for cells only —
 // prose lines elsewhere keep their original text.
@@ -45,10 +52,11 @@ function overview(spec) {
 
 function environment(spec, opts) {
   const out = ['## Environment', ''];
+  const sol = spec.solution && typeof spec.solution === 'object' ? spec.solution : {};
   const rows = [
     ['Environment', opts.envUrl],
-    ['Solution', spec.solution && (spec.solution.uniqueName || spec.solution.name)],
-    ['Publisher prefix', spec.solution && spec.solution.prefix],
+    ['Solution', sol.uniqueName || sol.displayName],
+    ['Publisher prefix', sol.publisherPrefix],
     ['App unique name', spec.app && spec.app.uniqueName],
   ].filter(([, v]) => v);
   if (!rows.length) return [];
@@ -62,7 +70,7 @@ function environment(spec, opts) {
 // EXISTS to do, so a reviewer should read them before the tables. Testers found that enumerating jobs
 // explicitly is what makes the design complete — without it, surfaces get missed.
 function jobsSection(spec) {
-  const personas = spec.personas || [];
+  const personas = objs(spec.personas);
   const out = ['## Jobs to be done', ''];
   if (!personas.length) {
     out.push(
@@ -75,13 +83,13 @@ function jobsSection(spec) {
   }
   out.push('| Persona | Job to be done | Surfaces that satisfy it |', '|---|---|---|');
   for (const p of personas) {
-    for (const j of p.jobs || []) {
-      const covering = (j.surfaces || []).map((s) => cell(s)).join(', ');
+    for (const j of objs(p.jobs)) {
+      const covering = arr(j.surfaces).map((s) => cell(s)).join(', ');
       out.push(`| ${cell(p.persona)} | ${cell(j.name)}${j.description ? ` — ${cell(j.description, '')}` : ''} | ${covering || '_not mapped_'} |`);
     }
   }
   out.push('');
-  const unmapped = personas.flatMap((p) => (p.jobs || []).filter((j) => !(j.surfaces || []).length).map((j) => `${p.persona} → ${j.name}`));
+  const unmapped = personas.flatMap((p) => objs(p.jobs).filter((j) => !arr(j.surfaces).length).map((j) => `${p.persona} → ${j.name}`));
   if (unmapped.length) {
     out.push(
       `> ⚠ ${unmapped.length} job(s) are not mapped to a surface, so nothing in this app demonstrably`,
@@ -94,26 +102,26 @@ function jobsSection(spec) {
 
 function dataModel(spec) {
   const out = ['## Data model', ''];
-  const entities = spec.entities || [];
+  const entities = objs(spec.entities);
   if (!entities.length) { out.push('_No tables._', ''); return out; }
   for (const e of entities) {
     const reused = e.existing ? ' _(existing table — reused, not created)_' : '';
     out.push(`### ${text(e.displayName, e.schemaName)} \`${lc(e.schemaName)}\`${reused}`, '');
     if (e.description) out.push(text(e.description), '');
     out.push('| Column | Type | Notes |', '|---|---|---|');
-    const pa = e.primaryAttribute;
+    const pa = e.primaryAttribute && typeof e.primaryAttribute === 'object' ? e.primaryAttribute : null;
     if (pa) out.push(`| ${cell(pa.displayName || pa.schemaName)} | ${cell(pa.type, 'Text')} | primary name${pa.autoNumberFormat ? `, auto-number \`${cell(pa.autoNumberFormat)}\`` : ''} |`);
-    for (const c of e.columns || []) {
+    for (const c of objs(e.columns)) {
       const notes = [];
       if (c.required) notes.push('required');
-      if (c.options) notes.push(`choices: ${(c.options || []).map((o) => cell(o.label || o)).join(', ')}`);
+      if (c.options) notes.push(`choices: ${arr(c.options).map((o) => cell(o && typeof o === 'object' ? o.label : o)).join(', ')}`);
       if (c.globalChoice) notes.push(`global choice \`${cell(c.globalChoice)}\``);
       out.push(`| ${cell(c.displayName || c.schemaName)} | ${cell(c.type, 'Text')} | ${notes.join('; ') || '—'} |`);
     }
     out.push('');
     if (e.hasNotes) out.push('Notes/timeline enabled.', '');
   }
-  const rels = spec.relationships || [];
+  const rels = objs(spec.relationships);
   if (rels.length) {
     out.push('### Relationships', '', '| Kind | From | To | Lookup |', '|---|---|---|---|');
     for (const r of rels) {
@@ -130,11 +138,11 @@ function dataModel(spec) {
 // them the default for any non-record surface, and testers found they were being skipped silently).
 function surfaces(spec) {
   const out = ['## Surfaces', ''];
-  const pages = spec.pages || [];
-  const forms = spec.forms || [];
-  const views = spec.views || [];
-  const charts = spec.charts || [];
-  const dashboards = spec.dashboards || [];
+  const pages = objs(spec.pages);
+  const forms = objs(spec.forms);
+  const views = objs(spec.views);
+  const charts = objs(spec.charts);
+  const dashboards = objs(spec.dashboards);
 
   out.push('### Generative pages', '');
   if (!pages.length) {
@@ -149,8 +157,8 @@ function surfaces(spec) {
     out.push('| Page | Key | Purpose | Reads | Navigates to | State |', '|---|---|---|---|---|---|');
     for (const p of pages) {
       const state = p.source && p.source.kind === 'tsx' ? `built (\`${cell(p.source.codeFile)}\`)` : 'intent (code not yet generated)';
-      const nav = (p.navigatesTo || []).map((n) => cell(n.targetKey)).join(', ');
-      out.push(`| ${cell(p.name)} | \`${cell(p.key)}\` | ${cell(p.purpose)} | ${cell((p.dataSources || []).map(lc).join(', '))} | ${nav || '—'} | ${state} |`);
+      const nav = objs(p.navigatesTo).map((n) => cell(n.targetKey)).join(', ');
+      out.push(`| ${cell(p.name)} | \`${cell(p.key)}\` | ${cell(p.purpose)} | ${cell(arr(p.dataSources).map(lc).join(', '))} | ${nav || '—'} | ${state} |`);
     }
     out.push('');
   }
@@ -160,7 +168,7 @@ function surfaces(spec) {
   else {
     out.push('| Form | Table | Type | Layout | Sub-grids |', '|---|---|---|---|---|');
     for (const f of forms) {
-      const sg = (f.subgrids || []).map((s) => cell(lc(s.childEntity))).join(', ');
+      const sg = objs(f.subgrids).map((s) => cell(lc(s.childEntity))).join(', ');
       out.push(`| ${cell(f.name)} | ${cell(lc(f.entity))} | ${cell(f.type, 'main')} | ${cell(f.layout, 'auto')} | ${sg || '—'} |`);
     }
     out.push('');
@@ -170,7 +178,7 @@ function surfaces(spec) {
   if (!views.length) out.push('_No views._', '');
   else {
     out.push('| View | Table | Columns |', '|---|---|---|');
-    for (const v of views) out.push(`| ${cell(v.name)} | ${cell(lc(v.entity))} | ${cell((v.columns || []).join(', '))} |`);
+    for (const v of views) out.push(`| ${cell(v.name)} | ${cell(lc(v.entity))} | ${cell(arr(v.columns).join(', '))} |`);
     out.push('');
   }
 
@@ -181,21 +189,21 @@ function surfaces(spec) {
   }
   if (dashboards.length) {
     out.push('### Classic dashboards', '', '| Dashboard | Tiles |', '|---|---|');
-    for (const d of dashboards) out.push(`| ${cell(d.name)} | ${(d.tiles || []).length} |`);
+    for (const d of dashboards) out.push(`| ${cell(d.name)} | ${arr(d.tiles).length} |`);
     out.push('');
   }
   return out;
 }
 
 function navigation(spec) {
-  const areas = (spec.appShell && spec.appShell.areas) || [];
+  const areas = objs(spec.appShell && spec.appShell.areas);
   if (!areas.length) return [];
   const out = ['## Navigation', ''];
   for (const a of areas) {
     out.push(`- **${text(a.label, '(area)')}**`);
-    for (const g of a.groups || []) {
+    for (const g of objs(a.groups)) {
       out.push(`  - ${text(g.label, '(group)')}`);
-      for (const sa of g.subAreas || []) {
+      for (const sa of objs(g.subAreas)) {
         const target = sa.entity ? `table \`${lc(sa.entity)}\`` : sa.page ? `page \`${sa.page}\`` : sa.dashboard ? `dashboard \`${sa.dashboard}\`` : sa.url ? `URL ${sa.url}` : '(no target)';
         out.push(`    - ${text(sa.title, target)} → ${target}`);
       }
@@ -207,29 +215,57 @@ function navigation(spec) {
 
 // The access model, rendered as what each persona's role can actually DO. A reviewer cannot approve
 // an access model they cannot see, and this is the durable copy of it.
+//
+// Scope is unioned PER (entity, ACCESS), never per entity. That mirrors how the SDK actually applies
+// a role (see evals/model-apps/app-builder/lib/facts.js `unionPrivileges`): collapsing to one scope
+// per table would render `read@organization` + `write@user` as "read, write @ organization" and
+// OVERSTATE write access. A document that misreports the access model is worse than no document.
+const SCOPE_RANK = { user: 0, businessunit: 1, parentchild: 2, organization: 3 };
+const scopeRank = (s) => {
+  const r = SCOPE_RANK[String(s || 'user').toLowerCase()];
+  return r === undefined ? 0 : r;
+};
+
 function security(spec) {
-  const personas = spec.personas || [];
+  const personas = Array.isArray(spec.personas) ? spec.personas.filter((p) => p && typeof p === 'object') : [];
   if (!personas.length) return [];
   const out = ['## Security', ''];
   for (const p of personas) {
     out.push(`### Role: ${text(p.persona)}`, '');
     out.push(p.appAccess === false ? '_Data-only — the app is **not** granted to this role._' : 'The app is granted to this role, so it opens for this persona.', '');
-    // One row per entity+access is what the SDK actually applies (jobs are unioned, max scope wins),
-    // so show the union rather than per-job duplicates a reviewer would have to merge mentally.
-    const union = new Map();
+
+    // entity -> access -> most permissive declared scope
+    const byEntity = new Map();
     const add = (pr) => {
-      const key = lc(pr.entity);
-      const cur = union.get(key) || { access: new Set(), scope: pr.scope || 'user' };
-      for (const a of pr.access || []) cur.access.add(a);
-      const order = ['user', 'businessUnit', 'parentChild', 'organization'];
-      if (order.indexOf(pr.scope || 'user') > order.indexOf(cur.scope)) cur.scope = pr.scope || 'user';
-      union.set(key, cur);
+      if (!pr || typeof pr !== 'object') return;
+      const entity = lc(pr.entity);
+      if (!entity) return;
+      let byAccess = byEntity.get(entity);
+      if (!byAccess) { byAccess = new Map(); byEntity.set(entity, byAccess); }
+      const scope = String(pr.scope || 'user');
+      for (const a of Array.isArray(pr.access) ? pr.access : []) {
+        const prev = byAccess.get(a);
+        if (prev === undefined || scopeRank(scope) > scopeRank(prev)) byAccess.set(a, scope);
+      }
     };
-    for (const j of p.jobs || []) for (const pr of j.privileges || []) add(pr);
-    for (const pr of p.additionalPrivileges || []) add(pr);
-    if (union.size) {
+    for (const j of Array.isArray(p.jobs) ? p.jobs : []) {
+      if (j && typeof j === 'object') for (const pr of Array.isArray(j.privileges) ? j.privileges : []) add(pr);
+    }
+    for (const pr of Array.isArray(p.additionalPrivileges) ? p.additionalPrivileges : []) add(pr);
+
+    if (byEntity.size) {
       out.push('| Table | Access | Scope |', '|---|---|---|');
-      for (const [entity, v] of union) out.push(`| ${cell(entity)} | ${cell([...v.access].join(', '))} | ${cell(v.scope)} |`);
+      for (const [entity, byAccess] of byEntity) {
+        // Group the accesses that share a scope so the common case stays one row, while a genuine
+        // split (read@organization + write@user) renders as two — visibly different access levels.
+        const byScope = new Map();
+        for (const [access, scope] of byAccess) {
+          if (!byScope.has(scope)) byScope.set(scope, []);
+          byScope.get(scope).push(access);
+        }
+        const scopes = [...byScope.keys()].sort((a, b) => scopeRank(b) - scopeRank(a));
+        for (const scope of scopes) out.push(`| ${cell(entity)} | ${cell(byScope.get(scope).join(', '))} | ${cell(scope)} |`);
+      }
       out.push('');
     } else {
       out.push('_No privileges declared._', '');

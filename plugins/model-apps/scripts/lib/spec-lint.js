@@ -17,6 +17,10 @@ function lintAppSpec(spec) {
   const E = (m) => errors.push(m);
   const W = (m) => warnings.push(m);
   const lc = (s) => String(s || '').toLowerCase();
+  // Lint runs on WORK-IN-PROGRESS specs (it is the gate the author hits before plan mode), so a
+  // half-typed collection must produce findings, not a crash that kills the authoring flow.
+  // validateAppSpec is what reports the shape error itself.
+  const arrOf = (v) => (Array.isArray(v) ? v : []);
 
   const prefix = spec.solution && spec.solution.publisherPrefix;
   const entityNames = new Set();
@@ -217,8 +221,8 @@ function lintAppSpec(spec) {
   // the strict enforcer (it selects keys-for-v2 / names-for-legacy per schemaVersion, app-spec.js:586); the
   // guardrail lint just must not error on a correct ref.
   const pageRefs = new Set([
-    ...(spec.pages || []).map((p) => p && p.key).filter(Boolean),
-    ...(spec.pages || []).map((p) => p && p.name).filter(Boolean),
+    ...arrOf(spec.pages).map((p) => p && p.key).filter(Boolean),
+    ...arrOf(spec.pages).map((p) => p && p.name).filter(Boolean),
   ]);
   // Genpage data sources that aren't declared entities are likely standard tables (fine) or a typo.
   const entityLowerSet = new Set((spec.entities || []).map((e) => lc(e.schemaName)));
@@ -361,19 +365,25 @@ function lintAppSpec(spec) {
   // the authoring flow only asked for in prose, and prose steps get silently skipped — testers
   // reported exactly that (no jobs enumerated, no pages proposed). Surfacing them at the lint gate
   // makes the omission visible while it is still cheap to fix.
-  const personas = spec.personas || [];
-  const jobs = personas.flatMap((p) => (p.jobs || []).map((j) => ({ persona: p.persona, job: j })));
+  //
+  // Every traversal is shape-guarded. Lint runs on WORK-IN-PROGRESS specs (it is the gate the author
+  // hits before plan mode), so a half-typed `personas: {}` or a null entry must produce a finding —
+  // validateAppSpec already reports the shape error — and never a crash that kills the flow.
+  const personas = Array.isArray(spec.personas) ? spec.personas.filter((p) => p && typeof p === 'object') : [];
+  const jobs = personas.flatMap((p) => (Array.isArray(p.jobs) ? p.jobs : [])
+    .filter((j) => j && typeof j === 'object')
+    .map((j) => ({ persona: p.persona, job: j })));
   if (!personas.length) {
     W('no personas[] — no jobs-to-be-done are recorded and no security role is authored, so the app opens only for system administrators. Capture who uses this app and what each of them needs to get done.');
   } else if (!jobs.length) {
     W('personas[] declares no jobs — a persona with no jobs-to-be-done neither documents the app nor sizes its security role.');
   }
   for (const { persona, job } of jobs) {
-    if (!((job.surfaces || []).length)) {
+    if (!(Array.isArray(job.surfaces) && job.surfaces.length)) {
       W(`persona "${persona}" job "${job.name}" is not mapped to a surface (jobs[].surfaces[]) — nothing in this app demonstrably lets that persona do the job.`);
     }
   }
-  if (!(spec.pages || []).length) {
+  if (!(Array.isArray(spec.pages) && spec.pages.length)) {
     W('no pages[] — per the genpage-first policy, non-record surfaces (overview/landing, dashboard, analytics, guided or wizard flows) should be generative pages. If this app is genuinely record-CRUD only, ignore this.');
   }
 

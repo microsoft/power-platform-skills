@@ -371,3 +371,66 @@ test('CLI fails cleanly when the spec is not valid JSON', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- Round-2 corrections (from adversarial review) -------------------------------------------
+
+test('privilege scope is unioned per (table, ACCESS), never per table', () => {
+  // Collapsing to one scope per table rendered `read@organization` + `write@user` as
+  // "read, write @ organization" — OVERSTATING write access. A document that misreports the access
+  // model is worse than no document. Mirrors evals/.../facts.js `unionPrivileges`.
+  const md = renderAppSpecDoc({
+    app: { name: 'A' },
+    personas: [{ persona: 'P', jobs: [
+      { name: 'j1', privileges: [{ entity: 'new_ticket', access: ['read'], scope: 'organization' }] },
+      { name: 'j2', privileges: [{ entity: 'new_ticket', access: ['write'], scope: 'user' }] },
+    ] }],
+  });
+  const rows = md.split('\n').filter((l) => l.startsWith('| new_ticket'));
+  assert.equal(rows.length, 2, `expected a split, got:\n${rows.join('\n')}`);
+  assert.ok(rows.some((r) => /\| read \|.*organization/.test(r)), 'read stays at organization');
+  assert.ok(rows.some((r) => /\| write \|.*user/.test(r)), 'write is NOT promoted to organization');
+});
+
+test('accesses that genuinely share a scope stay on one row', () => {
+  const md = renderAppSpecDoc({
+    app: { name: 'A' },
+    personas: [{ persona: 'P', jobs: [
+      { name: 'j1', privileges: [{ entity: 'new_ticket', access: ['read', 'write'], scope: 'businessUnit' }] },
+      { name: 'j2', privileges: [{ entity: 'new_ticket', access: ['create'], scope: 'businessUnit' }] },
+    ] }],
+  });
+  const rows = md.split('\n').filter((l) => l.startsWith('| new_ticket'));
+  assert.equal(rows.length, 1, 'one scope -> one row');
+  for (const a of ['read', 'write', 'create']) assert.match(rows[0], new RegExp(a));
+});
+
+test('the publisher prefix is read from its real field name', () => {
+  // Was reading `solution.prefix`, which no valid spec sets — the row silently never rendered.
+  const md = renderAppSpecDoc({ app: { name: 'A' }, solution: { uniqueName: 'S', publisherPrefix: 'contoso' } });
+  assert.match(md, /\| Publisher prefix \| contoso \|/);
+});
+
+test('a malformed or half-typed spec renders instead of throwing', () => {
+  // The renderer runs against WORK-IN-PROGRESS specs during authoring, so a crash kills the flow.
+  // Shape errors are validateAppSpec's job to report; this must degrade, not explode.
+  const malformed = [
+    {}, null, undefined,
+    { personas: {} }, { personas: [null] }, { personas: [{ persona: 'P', jobs: [null] }] },
+    { personas: [{ persona: 'P', jobs: 'x' }] }, { personas: [{ persona: 'P', jobs: [{ name: 'j', surfaces: 'x' }] }] },
+    { personas: [{ persona: 'P', jobs: [{ name: 'j', privileges: [null] }] }] },
+    { personas: [{ persona: 'P', jobs: [{ name: 'j', privileges: [{ entity: 'e', access: 'read' }] }] }] },
+    { entities: {} }, { entities: [null] }, { entities: [{ schemaName: 'e', columns: 'x' }] },
+    { entities: [{ schemaName: 'e', columns: [{ schemaName: 'c', options: [null] }] }] },
+    { pages: [{ key: 'p', name: 'P', dataSources: 'new_ticket' }] },
+    { pages: [{ key: 'p', name: 'P', navigatesTo: [null] }] },
+    { forms: [{ name: 'F', entity: 'e', subgrids: [null] }] },
+    { views: [{ name: 'V', entity: 'e', columns: 'x' }] },
+    { dashboards: [{ name: 'D', tiles: 'x' }] },
+    { appShell: { areas: 'x' } }, { appShell: { areas: [null] } },
+    { appShell: { areas: [{ label: 'A', groups: 'x' }] } },
+    { sampleData: { e: 'x' } }, { relationships: {} },
+  ];
+  for (const spec of malformed) {
+    assert.doesNotThrow(() => renderAppSpecDoc(spec), `threw on ${JSON.stringify(spec)}`);
+  }
+});

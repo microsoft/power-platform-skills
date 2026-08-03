@@ -491,12 +491,6 @@ it with realistic, domain-appropriate records — not "Test Record 1". Include:
 - Choice values must be label strings (matching the `options[]` you defined),
   not integer codes.
 
-Present Level (b) as a proposal, then use `AskUserQuestion` to let the user edit
-or remove any section (forms, views, charts, sample data, page intents):
-
-> "Here are the proposed forms, views, charts, sample data, and page intents for your app. Feel
-> free to edit any section — or tell me what to change — before I lock the spec."
-
 #### Pages (generative page intents — design only)
 
 **Enumerate every surface this app needs before you author any of them.** Walk the Level (a0)
@@ -558,6 +552,16 @@ one subArea per entity.
 Mention, but do **not** author or build: quick-create forms and standard system
 views (All Records, Lookup, etc.) are sensible future additions but are out of
 scope for this authoring phase.
+
+#### Confirm Level (b)
+
+Only now — with forms, views, charts, sample data, **pages** and the app shell all
+proposed — present Level (b) as a whole and use `AskUserQuestion` to let the user
+edit or remove any section:
+
+> "Here are the proposed surfaces for your app — pages, forms, views, charts — plus sample data and
+> the navigation. Each of your jobs-to-be-done maps to at least one of them. Feel free to edit any
+> section — or tell me what to change — before I lock the spec."
 
 Security roles ARE in scope — they are authored in Level (c) below from the
 personas and jobs you captured in Level (a0).

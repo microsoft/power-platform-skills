@@ -232,3 +232,17 @@ test('validateAppSpec: omitted surfaces is fine (surfaces is optional and docume
   assert.deepEqual(surfaceErrors, [], `omitted surfaces must not error: ${JSON.stringify(surfaceErrors)}`);
   assert.equal(r.ok, true, `spec should pass with omitted surfaces; errors: ${JSON.stringify(r.errors)}`);
 });
+
+test('lint does not crash on a half-typed personas block', () => {
+  // Lint is the gate the author hits mid-authoring, so it sees work-in-progress specs. It fixed two
+  // pre-existing crash shapes (personas not an array, a null persona) rather than adding more.
+  for (const spec of [
+    { personas: {} }, { personas: [null] },
+    { personas: [{ persona: 'P', jobs: [null] }] },
+    { personas: [{ persona: 'P', jobs: 'x' }] },
+    { personas: [{ persona: 'P', jobs: [{ name: 'j', surfaces: 'x' }] }] },
+    { pages: 'x' },
+  ]) {
+    assert.doesNotThrow(() => lintAppSpec(spec), `threw on ${JSON.stringify(spec)}`);
+  }
+});
