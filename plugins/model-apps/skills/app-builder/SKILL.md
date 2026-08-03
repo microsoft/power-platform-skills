@@ -197,7 +197,7 @@ After plan-mode approval (before the full build):
      --spec @<working-dir>/app-spec.json --working-dir <working-dir> --env <envUrl> \
      --app "<app name>" --languages "<languages from the environment probe>"
    ```
-   It writes `<working-dir>/genpage-plan.md` and prints
+   It writes `<working-dir>/app-builder-page-plan.md` and prints
    `{ ok, planPath, pages: [{ name, key, file, dataMode, intent }] }`. Pass `--languages` through
    from the environment probe — omitting it silently defaults every plan to English-only and drops
    the localization pattern. The command fails (before writing) if the plan would name a sample that
@@ -210,7 +210,7 @@ After plan-mode approval (before the full build):
    > You are the genpage-page-builder agent. Generate the **[name from step 3]** page.
    >
    > - Target file: [file from step 3 — already includes .tsx; do NOT append another]
-   > - Plan document: [absolute path to the genpage-plan.md written in step 3]
+   > - Plan document: [absolute path to the app-builder-page-plan.md written in step 3]
    > - Data mode: **[dataMode from step 3 — `dataverse` or `mock`]**
    > - Connectors: **disabled**
    > - RuntimeTypes: [absolute path to RuntimeTypes.ts]   ← omit this line when Data mode is `mock`

@@ -252,3 +252,26 @@ test('CLI fails with usage when a required flag has no value', () => {
   assert.equal(res.status, 1);
   assert.match(res.stderr, /Usage:/);
 });
+
+test('the projection does NOT default to genpage-plan.md — that filename belongs to /genpage', () => {
+  // Both skills derive their working directory from a slug off the user's request, so they can land
+  // on the same folder. `genpage-plan.md` is what standalone /genpage treats as its authoritative
+  // state, and the two dialects differ (`Mode: app-builder` + stable keys vs. no Mode + filename
+  // stems), so writing there would let a later /genpage run consume an app-builder plan and emit
+  // wrong PAGEREF tokens. The worker gets the plan PATH explicitly, so the name is free to differ.
+  const cli = path.join(__dirname, '..', 'write-page-plan.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plan-collision-'));
+  const specPath = path.join(dir, 'app-spec.json');
+  fs.writeFileSync(specPath, JSON.stringify(spec()), 'utf8');
+  const run = () => spawnSync(process.execPath, [cli, '--spec', '@' + specPath, '--working-dir', dir], { encoding: 'utf8' });
+
+  const out = JSON.parse(run().stdout);
+  assert.equal(path.basename(out.planPath), 'app-builder-page-plan.md');
+  assert.ok(!fs.existsSync(path.join(dir, 'genpage-plan.md')), 'must not create /genpage state');
+
+  // A pre-existing /genpage plan in the same folder must survive untouched.
+  const sentinel = '# Genpage Plan\n(authored by genpage-planner)\n';
+  fs.writeFileSync(path.join(dir, 'genpage-plan.md'), sentinel, 'utf8');
+  run();
+  assert.equal(fs.readFileSync(path.join(dir, 'genpage-plan.md'), 'utf8'), sentinel, 'clobbered /genpage state');
+});

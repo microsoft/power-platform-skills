@@ -10,6 +10,13 @@
 //   node write-page-plan.js --spec @<working-dir>/app-spec.json --working-dir <dir>
 //     [--env <orgUrl>] [--app <label>] [--languages "English (1033) only"] [--out <path>]
 //
+// The default output is `app-builder-page-plan.md`, NOT `genpage-plan.md`. Both skills derive their
+// working directory from a slug off the user's request, so the two can land on the same folder — and
+// `genpage-plan.md` is the filename standalone `/genpage` treats as its authoritative state. Writing
+// there would let a later `/genpage` run silently consume an app-builder plan, whose dialect differs
+// (`Mode: app-builder` + stable keys vs. no Mode + filename stems), producing wrong PAGEREF tokens.
+// The worker is handed the plan PATH explicitly in its dispatch, so the name is free to differ.
+//
 // Output: { "ok": true, "planPath": "...", "pages": [{ "key", "file", "dataMode" }, ...] }
 // The `pages[]` echo is what Phase 1.5 iterates to dispatch one worker per page, so the CLI is the
 // single source of truth for BOTH the plan content and the per-page dispatch parameters.
@@ -52,7 +59,7 @@ function main() {
     pluginRoot: path.resolve(__dirname, '..').replace(/\\/g, '/'),
   });
 
-  const planPath = str(flags.out) ? path.resolve(str(flags.out)) : path.join(absWorkingDir, 'genpage-plan.md');
+  const planPath = str(flags.out) ? path.resolve(str(flags.out)) : path.join(absWorkingDir, 'app-builder-page-plan.md');
 
   // Fail BEFORE writing if the plan names a sample that does not exist — the worker's Step 3 reads
   // `${PLUGIN_ROOT}/samples/<name>` and a missing file derails generation with a confusing error.
