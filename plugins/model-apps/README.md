@@ -166,14 +166,14 @@ The plugin registers lifecycle hooks (in `hooks/hooks.json`) that run automatica
 while it's loaded. They are **fail-open**: any internal error exits 0, so a hook can
 never fail or abort a skill run. Because the plugin installs **globally**, the hooks
 are scoped so they don't interfere with unrelated projects: the write-safety guard
-only **flags** (never blocks) and only during an active genpage session, and the icon
-validator only fires on genpage output. At most, the icon validator blocks a single
-tool call (the agent reworks it) — never the whole skill.
+only **flags** (never blocks) and only during an active model-apps authoring session,
+and the icon validator only fires on generated-page output. At most, the icon
+validator blocks a single tool call (the agent reworks it) — never the whole skill.
 
 | Hook | When | What it does |
 |---|---|---|
-| Write-safety | before Write/Edit/MultiEdit | **Flags (non-blocking)** writes outside the cwd — only during a genpage session (a `genpage-plan.md` at/under cwd). Never blocks; silent in unrelated projects. |
-| Icon validator | after a genpage `.tsx` write | Blocks `@fluentui/react-icons` imports that aren't in the verified list. |
+| Write-safety | before Write/Edit/MultiEdit | **Flags (non-blocking)** writes outside the cwd — only during a model-apps authoring session (a `genpage-plan.md`, `app-spec.json`, or `model-app-plan.md` at/under cwd, so it covers both `/genpage` and `/app-builder`). Never blocks; silent in unrelated projects. |
+| Icon validator | after a generated `.tsx` write | Blocks `@fluentui/react-icons` imports that aren't in the verified list. Fires for both skills (gated on the `export default GeneratedComponent` marker, or a sibling `genpage-plan.md` / `model-app-plan.md`). |
 | Skill validator | after a skill runs | Runs the skill's `validate*.js` if it has one. |
 | Telemetry | on skill start / prompt | Emits anonymous `skill_started` (see [Telemetry](#telemetry)). |
 

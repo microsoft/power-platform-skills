@@ -4,7 +4,8 @@ This file provides guidance to AI Agents when working with the **model-apps** pl
 
 ## What This Plugin Is
 
-A plugin for building Power Apps for **model-driven apps**, via two user-invocable skills:
+A plugin for building Power Apps for **model-driven apps**. Two **authoring** skills do the work
+(plus `/report-issue` and `/telemetry` — four user-invocable skills in total):
 
 - **`/genpage`** — build and deploy standalone **generative pages** (genux): React 17 + TypeScript +
   Fluent UI V9 single-file components, deployed via PAC CLI. Orchestrates specialist agents (planner,
@@ -13,12 +14,15 @@ A plugin for building Power Apps for **model-driven apps**, via two user-invocab
   relationships, adaptive forms, views, charts, generative pages, app + sitemap, sample data, and
   admin-gated AI features) from a natural-language intent, via the vendored headless `cds-maker-sdk`.
 
-**The two skills are independent entry points — neither requires the other.** Use `/genpage` to add
-pages to an app that already exists; use `/app-builder` to build or edit a whole app. `/app-builder`
-does *reuse* `genpage-page-builder` to generate its page `.tsx` (Phase 1.5), but that is an
-implementation detail of code generation, not a dependency: `/genpage` never invokes `/app-builder`,
-`/app-builder` never invokes the `/genpage` skill, and either can be installed and run on its own.
-Keep it that way — shared **agents and libraries** are fine, a skill-to-skill call is not.
+**The two authoring skills are independent entry points — neither requires the other.** Use `/genpage`
+to add pages to an app that already exists; use `/app-builder` to build or edit a whole app.
+`/app-builder` does *reuse* `genpage-page-builder` to generate its page `.tsx` (Phase 1.5), but that
+is an implementation detail of code generation, not a dependency: `/genpage` never invokes
+`/app-builder`, and `/app-builder` never invokes the `/genpage` skill. They install together (the
+marketplace copies the whole plugin directory), but **either can be invoked without the other, and
+neither leaves state the other depends on**. Keep it that way — shared **agents and libraries** are
+fine, a skill-to-skill call is not, and neither may write a file the other treats as authoritative
+(this is why `write-page-plan.js` emits `app-builder-page-plan.md`, not `genpage-plan.md`).
 
 Plus **`/report-issue`** to file bugs against this repo. All Dataverse mutation flows through the
 shared, vendored SDK (`scripts/vendor/cds-maker-sdk.cjs`) — see `## Building & Testing`.
@@ -363,7 +367,7 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 |-------|-----------|-------------|
 | `genpage-planner` | `genpage` (create flow) | Validates prereqs, gathers requirements, detects entity/app existence, presents plan for approval, writes `genpage-plan.md` |
 | `genpage-entity-builder` | `genpage` (create flow) | Provisions Dataverse tables, columns, relationships, choices, and sample data via `scripts/provision-entities.js` (the shared SDK-backed core). Bulk inserts use OData `$batch`. Writes a transactional log for recovery |
-| `genpage-page-builder` | `genpage` (create flow) | Generates one complete `.tsx` page from the plan and schema; runs in parallel with other builders for multi-page requests |
+| `genpage-page-builder` | `genpage` (create flow) **and** `app-builder` (Phase 1.5) | Generates one complete `.tsx` page from a plan document and schema; runs in parallel with other builders for multi-page requests. `/app-builder` projects its App Spec into that plan format via `scripts/write-page-plan.js` and dispatches this same agent |
 | `genpage-edit-planner` | `genpage` (edit flow) | Reads the downloaded page artifacts (page.tsx, config.json, prompt.txt), gathers change requirements, presents edit plan, writes `genpage-edit-plan.md`. The orchestrator applies the edit inline. |
 | `genpage-connector-builder` | `genpage` orchestrator (create **and** edit flows) | **Single owner of the connectors feature gate.** Performs connector discovery (connections, connection references, datasets, tables, operations, schema), creates Dataverse connection references, and writes the `## Connector Bindings` contract + `connectors.json`. The orchestrator forwards its output into the planner or edit-planner prompt. |
 

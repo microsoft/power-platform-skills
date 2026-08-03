@@ -1,8 +1,9 @@
 # Model Apps Plugin — Architecture
 
-The **wiring / flow reference** for both skills, as one page of ASCII diagrams: `/genpage`
-(page generation) first, then `/app-builder` (intent → whole model-driven app via the headless
-`cds-maker-sdk`). For **per-component behavioral specs**, the canonical file tree, conventions, and
+The **wiring / flow reference** for both skills, as one page of ASCII diagrams. They are two
+**independent** flows, documented here in order — `/genpage` (page generation) below, then
+`/app-builder` (intent → whole model-driven app via the headless `cds-maker-sdk`). Neither is a
+stage of the other; document order is not a pipeline. For **per-component behavioral specs**, the canonical file tree, conventions, and
 build/test, see [`../AGENTS.md`](../AGENTS.md). The App Spec contract is
 [`../references/app-spec-schema.md`](../references/app-spec-schema.md); the app-builder skill is
 [`../skills/app-builder/SKILL.md`](../skills/app-builder/SKILL.md); the roadmap/TODO is
@@ -49,9 +50,12 @@ build/test, see [`../AGENTS.md`](../AGENTS.md). The App Spec contract is
                               (machine-readable contract)
 ```
 
-The orchestrator never inlines planner/builder logic — it dispatches via
-`Task` and waits for the agent to return. The plan document is the contract:
-the planner writes it; subsequent phases (and other agents) read it.
+The orchestrator dispatches planner/builder work via `Task` and waits for the agent
+to return, rather than reimplementing it. The one documented exception is the
+**single-page fast path** (SKILL Phase 5b): when the plan has exactly one page, the
+orchestrator inlines the page-builder workflow instead of paying for a subagent.
+The plan document is the contract either way: the planner writes it; subsequent
+phases (and other agents) read it.
 
 ## /genpage — edit flow
 
@@ -163,11 +167,13 @@ deterministic, idempotent, narrated SDK build. Create and **edit share one path*
                              v
               ┌────────────────────────────┐   STAGE: generate-pages  (main loop + agents)
               │ Generate pages             │   pac model genpage generate-types → RuntimeTypes.ts
-              │  generate-types +          │   headless page-builder agents fill each intent
-              │  page-builder agents       │   page's .tsx; PAGEREF_<key> for cross-page nav
-              │  (Task — parallel)         │   <app>_pagemanifest carries semantics durably
+              │  generate-types +          │   write-page-plan.js projects the spec into
+              │  write-page-plan.js +      │   app-builder-page-plan.md (NOT genpage-plan.md —
+              │  page-builder agents       │   that name is /genpage's own state)
+              │  (Task — parallel)         │   PAGEREF_<key> for cross-page nav; the durable
+              │                            │   <app>_pagemanifest carries semantics
               └──────────────┬─────────────┘
-                             │  all pages: source { kind:"tsx", codeFile }
+                             │  promote-intent-pages.js: all-or-nothing intent → tsx
                              v
    ┌───────────────────────────────────────────────────────────────────┐
    │ Full idempotent build  build-model-app.js --apply --verify        │  STAGES: ui · app · publish · verify
