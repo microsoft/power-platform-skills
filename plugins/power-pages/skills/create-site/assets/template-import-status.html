@@ -291,7 +291,7 @@
       function phaseForStatus(status) {
         if (status && (status.phase === 'seed' || status.phase === 'seeding')) return 'seed';
         if (status && (status.phase === 'activation' || status.phase === 'activating')) return 'activation';
-        if (status && status.state === 'succeeded') return 'done';
+        if (status && status.state === 'succeeded' && status.redirectUrl) return 'done';
         return 'solution';
       }
 
@@ -413,9 +413,9 @@
           if (status.state === 'failed' || status.state === 'canceled' || status.state === 'timeout') {
             showToast('error', 'Template import needs attention', 'Check the agent terminal for details.');
           }
-          if (status.state === 'succeeded') {
+          if (status.state === 'succeeded' && status.redirectUrl) {
             progressTrack.classList.add('complete');
-            showToast('success', 'Template site is ready', status.redirectUrl ? 'Opening the live site in this tab.' : 'Check the agent terminal for the next step.');
+            showToast('success', 'Template site is ready', 'Opening the live site in this tab.');
           }
           if (status.redirectUrl) {
             scheduleRedirect(status.redirectUrl);

@@ -73,6 +73,7 @@ test('renderTemplateImportStatus renders scaffold-style slideshow, progress, and
   assert.match(html, /Seeding Supplier Portal template data/);
   assert.match(html, /Activating Supplier Portal template site/);
   assert.match(html, /Supplier Portal template is ready/);
+  assert.match(html, /status\.state === 'succeeded' && status\.redirectUrl/);
   assert.doesNotMatch(html, /progressFromStatus/);
   assert.doesNotMatch(html, /status\.progress/);
   assert.doesNotMatch(html, /status\.percentComplete/);
