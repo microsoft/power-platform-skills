@@ -71,12 +71,17 @@ capability error. The env var name is always `GENPAGE_ENABLE_<FLAG>` (uppercased
 ## Skills
 
 The plugin provides two authoring skills: `/app-builder` builds a whole model-driven app, and
-`/genpage` builds standalone generative pages for an existing app.
+`/genpage` builds standalone generative pages for an existing app. **They are independent — you can
+use either on its own, and neither requires the other.**
 
 | Skill | Status | Use it when |
 |---|---|---|
 | [`/app-builder`](#app-builder) | **Preview** | You want a whole app — tables, relationships, forms, views, charts, security roles, app + sitemap |
 | [`/genpage`](#genpage) | Stable | You want one or more generative pages added to an app that already exists |
+
+Already have an app and just want to add a page? Use `/genpage` — you never need to run
+`/app-builder` first. Building from scratch? `/app-builder` authors its own generative pages as part
+of the build, so you don't need to run `/genpage` afterwards.
 
 ### `/app-builder`
 

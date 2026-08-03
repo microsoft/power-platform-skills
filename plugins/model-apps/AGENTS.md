@@ -13,6 +13,13 @@ A plugin for building Power Apps for **model-driven apps**, via two user-invocab
   relationships, adaptive forms, views, charts, generative pages, app + sitemap, sample data, and
   admin-gated AI features) from a natural-language intent, via the vendored headless `cds-maker-sdk`.
 
+**The two skills are independent entry points — neither requires the other.** Use `/genpage` to add
+pages to an app that already exists; use `/app-builder` to build or edit a whole app. `/app-builder`
+does *reuse* `genpage-page-builder` to generate its page `.tsx` (Phase 1.5), but that is an
+implementation detail of code generation, not a dependency: `/genpage` never invokes `/app-builder`,
+`/app-builder` never invokes the `/genpage` skill, and either can be installed and run on its own.
+Keep it that way — shared **agents and libraries** are fine, a skill-to-skill call is not.
+
 Plus **`/report-issue`** to file bugs against this repo. All Dataverse mutation flows through the
 shared, vendored SDK (`scripts/vendor/cds-maker-sdk.cjs`) — see `## Building & Testing`.
 

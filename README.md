@@ -67,7 +67,7 @@ Build model-driven Power Apps end to end, and the generative pages that go in th
 
 **Skills**: `/app-builder` (**Preview**) builds and edits a whole app — tables, relationships, forms,
 views, charts, security roles, app + sitemap — from a natural-language intent; `/genpage` builds
-generative pages for an app that already exists
+generative pages for an app that already exists. Use either independently — neither requires the other
 
 **Stack**: React + TypeScript + Fluent, deployed via PAC CLI and the headless `cds-maker-sdk`
 
