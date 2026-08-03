@@ -594,8 +594,13 @@ system administrators** (`appAccess: false` opts a role out).
 
 **Render the proposed roles and their per-entity access as a table in your chat reply**, then
 confirm with `AskUserQuestion` — the user cannot approve an access model they cannot see, and
-tool output is collapsed and invisible to them. Skip this level only if the user explicitly wants
-no roles authored.
+tool output is collapsed and invisible to them.
+
+**If the user wants no security roles**, say plainly that jobs-to-be-done currently live inside
+`personas[]`, so dropping the roles also drops the recorded jobs and the jobs→surfaces traceability
+in `model-app-plan.md` — the design rationale goes with them. Offer to keep the personas with
+minimal read-only privileges instead, which preserves the record. Only remove `personas[]` if they
+still want it gone; a job cannot be kept without `privileges[]` (validation requires it).
 
 Column-level security and access teams are not yet supported.
 

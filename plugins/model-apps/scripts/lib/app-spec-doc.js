@@ -169,16 +169,52 @@ function surfaces(spec) {
     out.push('| Form | Table | Type | Layout | Sub-grids |', '|---|---|---|---|---|');
     for (const f of forms) {
       const sg = objs(f.subgrids).map((s) => cell(lc(s.childEntity))).join(', ');
-      out.push(`| ${cell(f.name)} | ${cell(lc(f.entity))} | ${cell(f.type, 'main')} | ${cell(f.layout, 'auto')} | ${sg || '—'} |`);
+      // `formType` is the canonical field (Main / QuickCreate / QuickView), defaulting to Main —
+      // NOT `type`. Reading the wrong one rendered every QuickCreate/QuickView form as "main",
+      // hiding a real difference in what the form does.
+      const kind = f.formType === undefined ? 'Main' : f.formType;
+      // An authored `tabs[]` IS the layout — reporting "auto" for it misstates the design, and the
+      // build treats an explicit layout differently (it prunes fields the author dropped).
+      const tabs = objs(f.tabs);
+      const layout = tabs.length ? `explicit (${tabs.length} tab${tabs.length === 1 ? '' : 's'})` : (f.layout || 'auto');
+      out.push(`| ${cell(f.name)} | ${cell(lc(f.entity))} | ${cell(kind)} | ${cell(layout)} | ${sg || '—'} |`);
     }
     out.push('');
+    const withQv = forms.filter((f) => objs(f.quickViews).length);
+    if (withQv.length) {
+      out.push('Quick-view cards embedded on a form:', '');
+      for (const f of withQv) {
+        for (const qv of objs(f.quickViews)) out.push(`- **${cell(f.name)}** shows \`${cell(qv.form)}\` via lookup \`${cell(qv.lookup)}\``);
+      }
+      out.push('');
+    }
+    const withEvents = forms.filter((f) => objs(f.events).length);
+    if (withEvents.length) {
+      out.push('Form scripts:', '');
+      for (const f of withEvents) {
+        for (const ev of objs(f.events)) out.push(`- **${cell(f.name)}** — \`${cell(ev.event)}\`${ev.attribute ? ` on \`${cell(ev.attribute)}\`` : ''} → \`${cell(ev.function)}\` (\`${cell(ev.library)}\`)`);
+      }
+      out.push('');
+    }
   }
 
   out.push('### Views', '');
   if (!views.length) out.push('_No views._', '');
   else {
-    out.push('| View | Table | Columns |', '|---|---|---|');
-    for (const v of views) out.push(`| ${cell(v.name)} | ${cell(lc(v.entity))} | ${cell(arr(v.columns).join(', '))} |`);
+    // Filters and sort decide what a user actually sees in a view ("my open tickets, newest first"),
+    // so a doc that lists only columns lets two materially different views read identically.
+    // Canonical shapes (references/app-spec-schema.md → views[]): sort is `{attr, dir}` and a filter
+    // is `{attr, op, value?|values?}` — NOT `{column, descending}` / `{column, operator}`.
+    out.push('| View | Table | Columns | Filters | Sort |', '|---|---|---|---|---|');
+    for (const v of views) {
+      const filters = objs(v.filters).map((f) => {
+        const val = f.values !== undefined ? arr(f.values).join('/') : f.value;
+        return `${cell(f.attr)} ${cell(f.op, '=')}${val === undefined || val === '' ? '' : ` ${cell(val)}`}`;
+      }).join('; ');
+      const sort = objs(v.sort).map((s) => `${cell(s.attr)} ${cell(s.dir, 'asc')}`).join(', ');
+      const scope = v.activeOnly === false ? 'all records' : '';
+      out.push(`| ${cell(v.name)} | ${cell(lc(v.entity))} | ${cell(arr(v.columns).join(', '))} | ${[filters, scope].filter(Boolean).join('; ') || '—'} | ${sort || '—'} |`);
+    }
     out.push('');
   }
 
@@ -190,6 +226,22 @@ function surfaces(spec) {
   if (dashboards.length) {
     out.push('### Classic dashboards', '', '| Dashboard | Tiles |', '|---|---|');
     for (const d of dashboards) out.push(`| ${cell(d.name)} | ${arr(d.tiles).length} |`);
+    out.push('');
+  }
+
+  // Commands are actions a user can take — omitting them let two specs differing by an "Escalate"
+  // button render identically, which is exactly the kind of behaviour a reviewer signs off on.
+  const commands = objs(spec.commands);
+  if (commands.length) {
+    out.push('### Command-bar buttons', '', '| Button | Table | Kind | Runs |', '|---|---|---|---|');
+    for (const c of commands) {
+      const kind = c.type || 'Button';
+      const runs = c.function ? `\`${cell(c.function)}\`${c.library ? ` (\`${cell(c.library)}\`)` : ''}` : (objs(c.children).length ? `${objs(c.children).length} child button(s)` : '—');
+      out.push(`| ${cell(c.label || c.name)} | ${cell(lc(c.entity))} | ${cell(kind)} | ${runs} |`);
+      for (const ch of objs(c.children)) {
+        out.push(`| ↳ ${cell(ch.label || ch.name)} | ${cell(lc(c.entity))} | child | ${ch.function ? `\`${cell(ch.function)}\`` : '—'} |`);
+      }
+    }
     out.push('');
   }
   return out;

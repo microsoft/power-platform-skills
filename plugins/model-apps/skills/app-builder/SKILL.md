@@ -142,8 +142,9 @@ every prompt yourself via `AskUserQuestion`. In short:
      the users are. The builder unions them into one role per persona and grants the app to it so it
      **opens for that persona, not just sysadmins**. **Render the roles + per-entity access as a table
      in your chat reply** (the user can't approve an access model they can't see — see the CRITICAL
-     note above). Skip only if the user explicitly wants no roles. (Column-level security and access
-     teams are not yet supported — see *Notes & limits*.)
+     note above). If they want no roles, tell them jobs live in `personas[]` so dropping the roles
+     drops the recorded jobs too; offer read-only privileges to keep the record. (Column-level
+     security and access teams are not yet supported — see *Notes & limits*.)
    - **Whole-app preview** (design gate for Level (b)): `node "${PLUGIN_ROOT}/scripts/preview-app.js" --spec @<working-dir>/app-spec.json`
      renders data-model + sitemap + form wireframes + page-intents + design contract. **Reproduce the
      ENTIRE rendered output verbatim in your chat reply, inside a fenced ` ``` ` code block — do NOT

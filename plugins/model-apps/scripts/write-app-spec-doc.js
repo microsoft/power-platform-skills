@@ -23,18 +23,23 @@ const { renderAppSpecDoc } = require('./lib/app-spec-doc.js');
 
 // The same three gaps the document calls out, returned as data. Kept here (not in the pure renderer)
 // because the renderer's contract is "markdown in one string"; the CLI is what talks to the caller.
+// Shape-guarded for the same reason the renderer is: this runs against work-in-progress specs during
+// authoring, and it must not be the thing that crashes the flow.
 function designGaps(spec) {
   const out = [];
-  const personas = spec.personas || [];
-  const jobs = personas.flatMap((p) => (p.jobs || []).map((j) => ({ persona: p.persona, job: j })));
+  const s = spec && typeof spec === 'object' ? spec : {};
+  const personas = Array.isArray(s.personas) ? s.personas.filter((p) => p && typeof p === 'object') : [];
+  const jobs = personas.flatMap((p) => (Array.isArray(p.jobs) ? p.jobs : [])
+    .filter((j) => j && typeof j === 'object')
+    .map((j) => ({ persona: p.persona, job: j })));
   if (!jobs.length) {
     out.push('no jobs-to-be-done captured (personas[] is empty) — the app has no recorded purpose and will open only for admins');
   }
-  const unmapped = jobs.filter(({ job }) => !((job.surfaces || []).length));
+  const unmapped = jobs.filter(({ job }) => !(Array.isArray(job.surfaces) && job.surfaces.length));
   if (unmapped.length) {
     out.push(`${unmapped.length} job(s) not mapped to a surface: ${unmapped.map(({ persona, job }) => `${persona} → ${job.name}`).join('; ')}`);
   }
-  if (!(spec.pages || []).length) {
+  if (!(Array.isArray(s.pages) && s.pages.length)) {
     out.push('no generative pages — per the genpage-first policy, overview/dashboard/analytics/wizard surfaces should be pages');
   }
   return out;
@@ -59,12 +64,15 @@ function main() {
   }
 
   const markdown = renderAppSpecDoc(spec, { envUrl: str(flags.env) });
+  // Compute the gaps BEFORE writing: a failure here used to leave a written document behind and then
+  // exit with a raw stack, so the caller saw a crash next to a file that looked fine.
+  const warnings = designGaps(spec);
   // Default next to the spec, which is the working directory the skill created in Phase 0.
   const docPath = str(flags.out) ? path.resolve(str(flags.out)) : path.join(path.dirname(specPath), 'model-app-plan.md');
   fs.mkdirSync(path.dirname(docPath), { recursive: true });
   fs.writeFileSync(docPath, markdown, 'utf8');
 
-  emitResult(true, { ok: true, docPath, bytes: Buffer.byteLength(markdown, 'utf8'), warnings: designGaps(spec) });
+  emitResult(true, { ok: true, docPath, bytes: Buffer.byteLength(markdown, 'utf8'), warnings });
 }
 
 if (require.main === module) main();

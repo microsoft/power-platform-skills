@@ -434,3 +434,109 @@ test('a malformed or half-typed spec renders instead of throwing', () => {
     assert.doesNotThrow(() => renderAppSpecDoc(spec), `threw on ${JSON.stringify(spec)}`);
   }
 });
+
+// --- Round-3 corrections (from adversarial review) -------------------------------------------
+
+test('forms render their canonical formType, not the non-existent `type` field', () => {
+  // Reading `f.type` rendered every QuickCreate/QuickView form as "main", hiding a real difference
+  // in what the form does. `formType` is canonical and defaults to Main (app-spec.js:480).
+  const md = renderAppSpecDoc({ app: { name: 'A' }, forms: [
+    { name: 'Quick Add', entity: 'new_ticket', formType: 'QuickCreate' },
+    { name: 'Card', entity: 'new_ticket', formType: 'QuickView' },
+    { name: 'Plain', entity: 'new_ticket' },
+  ] });
+  assert.match(md, /\| Quick Add \| new_ticket \| QuickCreate \|/);
+  assert.match(md, /\| Card \| new_ticket \| QuickView \|/);
+  assert.match(md, /\| Plain \| new_ticket \| Main \|/, 'absent formType defaults to Main');
+});
+
+test('an authored tabs[] layout is reported as explicit, not "auto"', () => {
+  // The build treats an explicit layout differently (it prunes fields the author dropped), so
+  // calling it "auto" misstates the design.
+  const md = renderAppSpecDoc({ app: { name: 'A' }, forms: [
+    { name: 'Structured', entity: 'e', tabs: [{ label: 'T1' }, { label: 'T2' }] },
+    { name: 'Auto', entity: 'e' },
+  ] });
+  assert.match(md, /\| Structured \|.*\| explicit \(2 tabs\) \|/);
+  assert.match(md, /\| Auto \|.*\| auto \|/);
+});
+
+test('view filters and sort are rendered — two views differing only by them must not read alike', () => {
+  const base = { app: { name: 'A' }, views: [{ name: 'Queue', entity: 'e', columns: ['a'] }] };
+  const filtered = { app: { name: 'A' }, views: [{ name: 'Queue', entity: 'e', columns: ['a'],
+    filters: [{ attr: 'ownerid', op: 'eq-userid' }], sort: [{ attr: 'createdon', dir: 'desc' }] }] };
+  const a = renderAppSpecDoc(base);
+  const b = renderAppSpecDoc(filtered);
+  assert.notEqual(a, b, 'a filtered+sorted view must render differently from a bare one');
+  assert.match(b, /ownerid eq-userid/);
+  assert.match(b, /createdon desc/);
+});
+
+test('command-bar buttons are rendered, including flyout children', () => {
+  const md = renderAppSpecDoc({ app: { name: 'A' }, commands: [
+    { label: 'Escalate', entity: 'new_ticket', library: 'x.js', function: 'T.escalate' },
+    { label: 'More', entity: 'new_ticket', type: 'FlyoutAnchor', children: [{ label: 'Archive', function: 'T.archive' }] },
+  ] });
+  assert.match(md, /### Command-bar buttons/);
+  assert.match(md, /\| Escalate \| new_ticket \|.*T\.escalate/);
+  assert.match(md, /↳ Archive/);
+  // And a spec WITHOUT commands must not grow the section.
+  assert.ok(!/### Command-bar buttons/.test(renderAppSpecDoc({ app: { name: 'A' } })));
+});
+
+test('the CLI reports design gaps instead of crashing on a malformed personas block', () => {
+  // designGaps() was unguarded while the renderer was guarded, so the CLI wrote the document and
+  // THEN exited 1 with a raw stack — the caller saw a crash next to a file that looked fine.
+  const { designGaps } = require('../write-app-spec-doc.js');
+  for (const spec of [
+    {}, null, undefined,
+    { personas: {} }, { personas: [null] },
+    { personas: [{ persona: 'P', jobs: {} }] },
+    { personas: [{ persona: 'P', jobs: [null] }] },
+    { personas: [{ persona: 'P', jobs: [{ name: 'j', surfaces: 'x' }] }] },
+    { pages: 'x' },
+  ]) {
+    assert.doesNotThrow(() => designGaps(spec), `threw on ${JSON.stringify(spec)}`);
+    assert.ok(Array.isArray(designGaps(spec)));
+  }
+});
+
+test('every committed fixture spec renders with its real values, not empty cells', () => {
+  // Three separate field-name guesses shipped before this guard: `solution.prefix` (real:
+  // publisherPrefix), `forms[].type` (real: formType), and `{column,descending}` for view sort
+  // (real: {attr,dir}). Each rendered an empty or wrong cell while every hand-written test passed,
+  // because the tests used the same wrong names as the code. Rendering the REAL committed fixtures
+  // and asserting their REAL values appear is what catches that class of mistake.
+  const fixturesDir = path.resolve(__dirname, '..', '..', '..', '..', 'evals', 'model-apps', 'app-builder', 'fixtures');
+  const dirs = fs.readdirSync(fixturesDir, { withFileTypes: true }).filter((d) => d.isDirectory());
+  assert.ok(dirs.length >= 3, `expected real fixtures, found ${dirs.length}`);
+
+  for (const d of dirs) {
+    const specPath = path.join(fixturesDir, d.name, 'app-spec.json');
+    if (!fs.existsSync(specPath)) continue;
+    const spec = JSON.parse(fs.readFileSync(specPath, 'utf8'));
+    const md = renderAppSpecDoc(spec, { envUrl: 'https://x.crm.dynamics.com' });
+
+    if (spec.solution && spec.solution.publisherPrefix) {
+      assert.match(md, new RegExp(`\\| Publisher prefix \\| ${spec.solution.publisherPrefix} \\|`), `${d.name}: publisher prefix missing`);
+    }
+    for (const v of spec.views || []) {
+      assert.ok(md.includes(v.name), `${d.name}: view "${v.name}" missing`);
+      for (const srt of v.sort || []) {
+        assert.ok(md.includes(`${srt.attr} ${srt.dir || 'asc'}`), `${d.name}: view "${v.name}" sort "${srt.attr}" not rendered`);
+      }
+    }
+    for (const p of spec.pages || []) assert.ok(md.includes(p.key), `${d.name}: page "${p.key}" missing`);
+    for (const per of spec.personas || []) {
+      assert.ok(md.includes(per.persona), `${d.name}: persona "${per.persona}" missing`);
+      for (const j of per.jobs || []) {
+        assert.ok(md.includes(j.name), `${d.name}: job "${j.name}" missing`);
+        for (const s of j.surfaces || []) assert.ok(md.includes(s), `${d.name}: surface "${s}" missing`);
+      }
+    }
+    // No table row should be entirely empty cells — the signature of a wrong field name.
+    for (const line of md.split('\n')) {
+      if (/^\|/.test(line) && /^\|(\s*(—|)\s*\|)+$/.test(line)) assert.fail(`${d.name}: all-empty table row: ${line}`);
+    }
+  }
+});
