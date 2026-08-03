@@ -47,6 +47,14 @@ const WINGET_FLAGS = [
 // See: https://learn.microsoft.com/power-platform/developer/cli/introduction
 const PAC_NUGET_PACKAGE = 'Microsoft.PowerApps.CLI.Tool';
 
+// Tools with an update path of their own. Only PAC has one: `dotnet tool update`
+// is a distinct command, whereas updating a winget/brew package would mean
+// `winget upgrade` / `brew upgrade`, which this script does not offer — those
+// managers update the whole machine's packages and are the user's business, not
+// a prerequisite check's. `detect-prerequisites.js` only ever emits an `update`
+// action for `pac`, so anything else arriving here is a caller mistake.
+const UPDATABLE_TOOLS = new Set(['pac']);
+
 const MANUAL_INSTRUCTIONS = {
   git: [
     'Windows (winget)   winget install -e --id Git.Git',
@@ -100,10 +108,22 @@ function hasCommand(command) {
  * @param {string} options.tool           One of TOOLS.
  * @param {string} options.platform       A `process.platform` value.
  * @param {boolean} [options.update]      Update an installed tool instead of installing it.
+ *   Rejected for tools outside UPDATABLE_TOOLS rather than quietly downgraded to
+ *   an install: the skill shows the dry-run command at its approval prompt and
+ *   then runs it for real, so silently swapping update for install would have the
+ *   user approve one command and get another.
  * @param {(cmd: string) => boolean} [options.commandExists]  PATH probe, injected by the tests.
  */
 function resolveInstallPlan({ tool, platform, update = false, commandExists = hasCommand }) {
   const manual = MANUAL_INSTRUCTIONS[tool] || [];
+
+  if (update && !UPDATABLE_TOOLS.has(tool)) {
+    return {
+      command: null,
+      reason: `--update is not supported for "${tool}". Updatable tools: ${[...UPDATABLE_TOOLS].join(', ')}.`,
+      manual,
+    };
+  }
 
   if (tool === 'pac') {
     // PAC installs as a dotnet global tool on every platform, so the only thing
@@ -248,7 +268,9 @@ function main() {
 Usage:
   node install-prerequisite.js --tool <${TOOLS.join('|')}> [--update] [--dry-run]
 
-  --update    Update an already-installed tool (supported for: pac).
+  --update    Update an already-installed tool. Only supported for: pac.
+              Passing it for any other tool is rejected, not silently
+              treated as an install.
   --dry-run   Print the resolved command without running it.
 
 Exit codes:
@@ -310,7 +332,14 @@ Exit codes:
   process.exit(1);
 }
 
-module.exports = { resolveInstallPlan, parseArgs, hasCommand, TOOLS, MANUAL_INSTRUCTIONS };
+module.exports = {
+  resolveInstallPlan,
+  parseArgs,
+  hasCommand,
+  TOOLS,
+  UPDATABLE_TOOLS,
+  MANUAL_INSTRUCTIONS,
+};
 
 if (require.main === module) {
   main();

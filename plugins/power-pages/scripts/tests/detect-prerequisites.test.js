@@ -76,7 +76,8 @@ test('buildProbeInvocation runs the command directly off Windows', () => {
   }
 });
 
-test('parsePacVersion strips the build-metadata suffix', () => {  assert.equal(parsePacVersion(PAC_HELP), '1.51.1');
+test('parsePacVersion strips the build-metadata suffix', () => {
+  assert.equal(parsePacVersion(PAC_HELP), '1.51.1');
 });
 
 test('parsePacVersion returns null for missing or unparseable output', () => {

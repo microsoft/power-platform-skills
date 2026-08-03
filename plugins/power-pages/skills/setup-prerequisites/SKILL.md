@@ -91,7 +91,7 @@ Work through `actions` in order, one tool per `AskUserQuestion`. Combining them 
 > **Why we ask:** An install writes to the machine outside the project, can need elevation, and can take several minutes. The user may also prefer their own package manager or a company-managed build.
 > **Cancel leaves:** Nothing — the tool stays as it was, and the run continues with the next tool.
 
-For each prompt, show the command that will run. Get it from the script rather than writing it out from memory, passing the same flags the real run will use — for a `kind` of `update`, that means `--update` on both calls, because the resolved command differs (`dotnet tool update` rather than `dotnet tool install`):
+For each prompt, show the command that will run. Get it from the script rather than writing it out from memory, passing the same flags the real run will use — for a `kind` of `update`, that means `--update` on both calls, because the resolved command differs (`dotnet tool update` rather than `dotnet tool install`). Only `pac` accepts `--update`; passing it for anything else is rejected rather than treated as an install, so pass it only when the action's `kind` is `update`:
 
 ```bash
 node "${PLUGIN_ROOT}/skills/setup-prerequisites/scripts/install-prerequisite.js" --tool <git|dotnet|pac|az|gh> [--update] --dry-run

@@ -5,6 +5,7 @@ const {
   resolveInstallPlan,
   parseArgs,
   TOOLS,
+  UPDATABLE_TOOLS,
   MANUAL_INSTRUCTIONS,
 } = require('../../skills/setup-prerequisites/scripts/install-prerequisite');
 
@@ -34,6 +35,28 @@ test('pac --update switches install to update', () => {
   assert.deepEqual(plan.args, ['tool', 'update', '--global', 'Microsoft.PowerApps.CLI.Tool']);
 });
 
+// The skill shows the dry-run command at its approval prompt and then runs the
+// same command for real, so quietly turning an unsupported --update into an
+// install would have the user approve one command and get another.
+test('--update is rejected for tools that have no update path', () => {
+  for (const tool of TOOLS) {
+    if (UPDATABLE_TOOLS.has(tool)) continue;
+    const plan = resolveInstallPlan({
+      tool,
+      platform: 'win32',
+      update: true,
+      commandExists: everythingPresent,
+    });
+    assert.equal(plan.command, null, `${tool} should reject --update`);
+    assert.match(plan.reason, /--update is not supported/);
+    assert.match(plan.reason, /pac/);
+  }
+});
+
+test('only pac is updatable', () => {
+  assert.deepEqual([...UPDATABLE_TOOLS], ['pac']);
+});
+
 test('pac without the .NET SDK has no automated path', () => {
   const plan = resolveInstallPlan({ tool: 'pac', platform: 'darwin', commandExists: nothingPresent });
   assert.equal(plan.command, null);
@@ -55,7 +78,8 @@ test('git uses winget on Windows and Homebrew on macOS', () => {
   assert.deepEqual(mac.args, ['install', 'git']);
 });
 
-test('dotnet uses winget on Windows and Homebrew on macOS', () => {  const win = resolveInstallPlan({ tool: 'dotnet', platform: 'win32', commandExists: everythingPresent });
+test('dotnet uses winget on Windows and Homebrew on macOS', () => {
+  const win = resolveInstallPlan({ tool: 'dotnet', platform: 'win32', commandExists: everythingPresent });
   assert.equal(win.command, 'winget');
   assert.ok(win.args.includes('Microsoft.DotNet.SDK.10'));
   assert.ok(win.args.includes('--accept-package-agreements'));
