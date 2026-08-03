@@ -8,6 +8,7 @@
     "security: the plan authors exactly one role per declared persona",
     "security: each app-access persona role injects app-module read; opted-out personas do not",
     "design: every mapped persona job resolves to a surface that exists",
+    "design: every custom table icon is described by what it depicts, not a token name",
     "security: every persona privilege on an app-owned table resolves to a provisioned entity",
     "security: each persona role grants exactly its declared job privileges (no over-grant)",
     "data: schema-facts provision exactly the expected tables",

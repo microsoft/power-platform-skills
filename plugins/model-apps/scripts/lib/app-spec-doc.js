@@ -108,6 +108,12 @@ function dataModel(spec) {
     const reused = e.existing ? ' _(existing table — reused, not created)_' : '';
     out.push(`### ${text(e.displayName, e.schemaName)} \`${lc(e.schemaName)}\`${reused}`, '');
     if (e.description) out.push(text(e.description), '');
+    // The nav icon is something the user APPROVES, and at plan time the SVG may not exist yet — so
+    // show what the glyph will DEPICT, not the web-resource name (which tells a reviewer nothing).
+    if (e.iconDescription || e.vectorIcon || e.icon) {
+      const depicts = e.iconDescription ? text(e.iconDescription) : '_no description — the user cannot approve an icon they cannot picture_';
+      out.push(`**Nav icon:** ${depicts}`, '');
+    }
     out.push('| Column | Type | Notes |', '|---|---|---|');
     const pa = e.primaryAttribute && typeof e.primaryAttribute === 'object' ? e.primaryAttribute : null;
     if (pa) out.push(`| ${cell(pa.displayName || pa.schemaName)} | ${cell(pa.type, 'Text')} | primary name${pa.autoNumberFormat ? `, auto-number \`${cell(pa.autoNumberFormat)}\`` : ''} |`);
@@ -250,14 +256,19 @@ function surfaces(spec) {
 function navigation(spec) {
   const areas = objs(spec.appShell && spec.appShell.areas);
   if (!areas.length) return [];
+  // A sitemap icon is chrome the user approves, so show its depiction inline. An `entity` subarea's
+  // nav glyph comes from the TABLE's own icon, not the subarea — so point at the table rather than
+  // repeating a description that would not be the one actually rendered.
+  const depiction = (o) => (o && o.iconDescription ? ` — icon: ${text(o.iconDescription)}` : (o && (o.icon || o.vectorIcon) ? ' — icon: _not described_' : ''));
   const out = ['## Navigation', ''];
   for (const a of areas) {
-    out.push(`- **${text(a.label, '(area)')}**`);
+    out.push(`- **${text(a.label, '(area)')}**${depiction(a)}`);
     for (const g of objs(a.groups)) {
-      out.push(`  - ${text(g.label, '(group)')}`);
+      out.push(`  - ${text(g.label, '(group)')}${depiction(g)}`);
       for (const sa of objs(g.subAreas)) {
         const target = sa.entity ? `table \`${lc(sa.entity)}\`` : sa.page ? `page \`${sa.page}\`` : sa.dashboard ? `dashboard \`${sa.dashboard}\`` : sa.url ? `URL ${sa.url}` : '(no target)';
-        out.push(`    - ${text(sa.title, target)} → ${target}`);
+        const icon = sa.entity ? ' — icon: the table\'s own' : depiction(sa);
+        out.push(`    - ${text(sa.title, target)} → ${target}${icon}`);
       }
     }
   }

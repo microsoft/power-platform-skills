@@ -42,6 +42,13 @@ function designGaps(spec) {
   if (!(Array.isArray(s.pages) && s.pages.length)) {
     out.push('no generative pages — per the genpage-first policy, overview/dashboard/analytics/wizard surfaces should be pages');
   }
+  const undescribed = (Array.isArray(s.entities) ? s.entities : [])
+    .filter((e) => e && typeof e === 'object' && !e.existing && (e.vectorIcon || e.icon)
+      && !(typeof e.iconDescription === 'string' && e.iconDescription.trim()))
+    .map((e) => e.schemaName || '?');
+  if (undescribed.length) {
+    out.push(`${undescribed.length} table icon(s) have no description (${undescribed.join(', ')}) — the user cannot approve an icon they cannot picture`);
+  }
   return out;
 }
 

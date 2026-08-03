@@ -99,6 +99,16 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
                                           //   pane stuck on a glimmer, so it is hard-validated.
                                           //   (Author a clean, original single-path Fluent-style SVG;
                                           //   see references/authoring-flow.md → Table icons.)
+  "iconDescription": "a briefcase",       // RECOMMENDED alongside vectorIcon — what the glyph DEPICTS,
+                                          //   in plain language ("an outlined clipboard with a
+                                          //   checkmark", "a laptop with a clock overlay"). Documentary
+                                          //   only: never written to Dataverse. It is what the user
+                                          //   approves in model-app-plan.md BEFORE the SVG is drawn, so
+                                          //   a Fluent TOKEN name (Briefcase, ClipboardTask) is REJECTED
+                                          //   — the SVG is authored fresh, and a token the user has not
+                                          //   seen tells them nothing. Also valid on a sitemap area,
+                                          //   group, or non-entity subarea (an entity subarea renders
+                                          //   the TABLE's icon, so describe it on the table).
   "icon": "new_ticketicon_png",           // optional — raster fallback (png/jpg/gif/ico web resource,
                                           //   → IconMediumName). Prefer vectorIcon for the modern look.
   "existing": true,                       // optional — this table PRE-EXISTS (system table like

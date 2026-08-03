@@ -48,7 +48,7 @@ You are a **complete** model-driven app builder, not a single-surface tool. Ever
 one App Spec and one build — choose what best serves the user's requirement to make a **useful,
 prod-ready** app; don't under-build (a bare table list) or over-build (surfaces nobody asked for):
 
-- **Data model** — tables (give each custom table a **meaningful Fluent-style SVG table icon by default** — see [`references/authoring-flow.md`](../../references/authoring-flow.md) → *Table icons*), columns (all types), relationships (1:N / N:N + junctions), sample data
+- **Data model** — tables (give each custom table a **meaningful Fluent-style SVG table icon by default**; propose what the glyph will **depict** in words — never a Fluent token name — and record it as `iconDescription` before drawing the SVG — see [`references/authoring-flow.md`](../../references/authoring-flow.md) → *Table icons*), columns (all types), relationships (1:N / N:N + junctions), sample data
 - **Record UI** — forms (sub-grids, quick-create / quick-view), views (with enriched default columns), charts
 - **Actions** — modern command-bar buttons (incl. flyout / split menus), web resources (form JS / HTML / CSS)
 - **Surfaces** — **generative pages** (modern dashboards / overviews / analytics / landing — the default),

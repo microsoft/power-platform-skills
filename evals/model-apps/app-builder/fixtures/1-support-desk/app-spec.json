@@ -33,7 +33,9 @@
           "displayName": "Account Manager",
           "type": "Text"
         }
-      ]
+      ],
+      "vectorIcon": "new_customer_icon",
+      "iconDescription": "a single person bust inside a rounded square"
     },
     {
       "schemaName": "new_ticket",
@@ -76,7 +78,9 @@
           "displayName": "Description",
           "type": "Memo"
         }
-      ]
+      ],
+      "vectorIcon": "new_ticket_icon",
+      "iconDescription": "an outlined clipboard with a checkmark on the page"
     },
     {
       "schemaName": "new_comment",
@@ -102,7 +106,9 @@
           "displayName": "Posted On",
           "type": "DateTime"
         }
-      ]
+      ],
+      "vectorIcon": "new_comment_icon",
+      "iconDescription": "a rounded speech bubble with a tail at the lower left"
     }
   ],
   "relationships": [
@@ -438,6 +444,26 @@
           ]
         }
       ]
+    }
+  ],
+  "webResources": [
+    {
+      "name": "new_customer_icon",
+      "displayName": "new_customer icon",
+      "type": "svg",
+      "content": "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='currentColor' d='M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm7 4a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Zm-4 9c0-1.7 1.8-3 4-3s4 1.3 4 3v1H8v-1Z'/></svg>"
+    },
+    {
+      "name": "new_ticket_icon",
+      "displayName": "new_ticket icon",
+      "type": "svg",
+      "content": "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='currentColor' d='M9 2h6a1 1 0 0 1 1 1v1h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2V3a1 1 0 0 1 1-1Zm1 2v1h4V4h-4Zm-.3 13.7-2.4-2.4 1.4-1.4 1 1 3.9-3.9 1.4 1.4-5.3 5.3Z'/></svg>"
+    },
+    {
+      "name": "new_comment_icon",
+      "displayName": "new_comment icon",
+      "type": "svg",
+      "content": "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='currentColor' d='M4 4h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4v-4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z'/></svg>"
     }
   ]
 }

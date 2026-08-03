@@ -54,6 +54,25 @@ ASSERTIONS.set('security: each app-access persona role injects app-module read; 
   return PASS;
 });
 
+// #4 (icon reviewability): a custom table's nav icon is something the USER approves, and at plan time
+// the SVG may not be drawn yet — so the spec must say what the glyph DEPICTS, in plain language.
+// A Fluent token name is not a depiction: the SVG is authored fresh, so a token the user has never
+// seen tells them nothing about what they are approving. Reused/system tables already ship an icon.
+const FLUENT_TOKENISH = /^(?=\S+$)(?:[A-Z].*|.*[a-z0-9][A-Z].*|.*(?:Regular|Filled|Light|Color)\d*$)/;
+ASSERTIONS.set('design: every custom table icon is described by what it depicts, not a token name', ({ spec }) => {
+  const entities = ((spec && spec.entities) || []).filter((e) => e && typeof e === 'object' && !e.existing);
+  const withIcon = entities.filter((e) => e.vectorIcon || e.icon);
+  if (!withIcon.length) return skip('no custom table declares an icon');
+
+  const undescribed = withIcon.filter((e) => !(typeof e.iconDescription === 'string' && e.iconDescription.trim()));
+  if (undescribed.length) return fail(`table icon(s) with no iconDescription: ${undescribed.map((e) => e.schemaName).join(', ')}`);
+
+  const tokenish = withIcon.filter((e) => FLUENT_TOKENISH.test(e.iconDescription.trim()));
+  return tokenish.length
+    ? fail(`iconDescription reads as a Fluent token, not a depiction: ${tokenish.map((e) => `${e.schemaName}="${e.iconDescription}"`).join(', ')}`)
+    : PASS;
+});
+
 // #3 (design coverage): every persona job should name the surface(s) that let that persona DO it,
 // and each named surface must actually exist in the spec. This grades the DESIGN, not the access
 // model: testers reported the skill enumerating neither jobs-to-be-done nor the generative pages that

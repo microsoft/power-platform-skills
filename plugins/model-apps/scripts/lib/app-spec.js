@@ -61,6 +61,29 @@ function isPlatformIconRef(v) {
   return s.startsWith('/') || /^\$webresource:/i.test(s);
 }
 
+// `iconDescription` is a DOCUMENTARY field: what the icon's glyph will DEPICT, in plain language
+// ("a briefcase", "an outlined clipboard with a checkmark"). It is never written to Dataverse — it
+// exists so `model-app-plan.md` can show the user what they are approving BEFORE the SVG is drawn.
+//
+// Why a Fluent token name is rejected outright: the SVG is authored fresh in this phase, so there is
+// no icon library to look a token up in — and a token name the user has never seen ("ClipboardTask")
+// tells them nothing about what the glyph will look like, which defeats the entire point of the
+// field. Detect a token by SHAPE: a single word (no whitespace) that is either Capitalised the way
+// every Fluent name is ("Briefcase", "ClipboardTask") or carries a Fluent style/size suffix
+// ("...24Regular"). A single lowercase word ("briefcase") is terse but still a real depiction, so it
+// passes — the rule targets library-name pasting, not brevity.
+const FLUENT_TOKENISH = /^(?=\S+$)(?:[A-Z].*|.*[a-z0-9][A-Z].*|.*(?:Regular|Filled|Light|Color)\d*$)/;
+function validateIconDescription(value, label, errors) {
+  if (value === undefined) return;
+  if (typeof value !== 'string' || !value.trim()) {
+    errors.push(`${label}: iconDescription must be a non-empty string describing what the glyph depicts (e.g. "a briefcase")`);
+    return;
+  }
+  if (FLUENT_TOKENISH.test(value.trim())) {
+    errors.push(`${label}: iconDescription '${value}' looks like a Fluent icon token, not a description. The SVG is drawn fresh, so describe what the glyph will DEPICT (e.g. "an outlined clipboard with a checkmark") — a token name the user has not seen tells them nothing.`);
+  }
+}
+
 // The web-resource NAME a PLATFORM icon reference points at, or null when it isn't a resolvable
 // web-resource reference. Two forms the platform emits:
 //   `/WebResources/<name>`  → <name>   (the runtime path a modern nav icon uses)
@@ -807,7 +830,9 @@ function validateAppSpec(spec, opts = {}) {
     checkIcon(a.icon, `sitemap area "${a.label || ''}"`);
     checkPortableIconRef(a.icon, `sitemap area "${a.label || ''}"`);
     checkPortableIconRef(a.vectorIcon, `sitemap area "${a.label || ''}"`);
+    validateIconDescription(a.iconDescription, `sitemap area "${a.label || ''}"`, errors);
     for (const g of a.groups || []) {
+      validateIconDescription(g && g.iconDescription, `sitemap group "${(g && g.label) || ''}"`, errors);
       for (const sa of g.subAreas || []) {
         const targets = ['entity', 'dashboard', 'url', 'page'].filter((k) => sa[k]);
         if (targets.length === 0) errors.push(`sitemap subArea "${sa.title || ''}" needs an entity, dashboard, url, or page`);
@@ -821,6 +846,7 @@ function validateAppSpec(spec, opts = {}) {
         checkIcon(sa.icon, `sitemap subArea "${sa.title || ''}"`);
         checkPortableIconRef(sa.icon, `sitemap subArea "${sa.title || ''}"`);
         checkPortableIconRef(sa.vectorIcon, `sitemap subArea "${sa.title || ''}"`);
+        validateIconDescription(sa.iconDescription, `sitemap subArea "${sa.title || ''}"`, errors);
         // Ask 3: don't SILENTLY drop an entity-subarea vectorIcon. A valid platform ref round-trips
         // (emitted by the build); a BARE token can't be emitted on an entity subarea (it breaks the
         // modern app-designer), so surface it as a warning at author time rather than a silent drop.
@@ -867,6 +893,7 @@ function validateAppSpec(spec, opts = {}) {
       if (!webResourceNames.has(ic)) errors.push(`${label}: icon '${e.icon}' is not a declared web resource`);
       else if (!rasterWebResourceNames.has(ic)) errors.push(`${label}: icon '${e.icon}' must be a raster image web resource (png/jpg/gif/ico); use vectorIcon for an SVG`);
     }
+    validateIconDescription(e.iconDescription, label, errors);
   }
   // App tile icon (optional). When set it must be a declared IMAGE web resource so the app is
   // self-contained on export/import; when omitted, the build generates a default icon in-solution.

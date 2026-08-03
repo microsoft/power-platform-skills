@@ -246,3 +246,73 @@ test('lint does not crash on a half-typed personas block', () => {
     assert.doesNotThrow(() => lintAppSpec(spec), `threw on ${JSON.stringify(spec)}`);
   }
 });
+
+// --- iconDescription: a depiction, never a Fluent token (tester ask) ---
+
+const iconSpec = (iconDescription, extra = {}) => ({
+  schemaVersion: 2, solution: { uniqueName: 'S', publisherPrefix: 'new' }, app: { name: 'A' },
+  entities: [{ schemaName: 'new_t', displayName: 'T', iconDescription,
+    primaryAttribute: { schemaName: 'new_name', displayName: 'N', type: 'Text' }, ...extra }],
+  appShell: { areas: [{ label: 'A', groups: [{ label: 'G', subAreas: [{ entity: 'new_t', title: 'T' }] }] }] },
+});
+const iconErrors = (spec) => (validateAppSpec(spec, { profile: 'plan' }).errors || []).filter((e) => /iconDescription/.test(e));
+
+test('a plain-language depiction is accepted', () => {
+  for (const d of [
+    'a briefcase',
+    'an outlined clipboard with a checkmark',
+    'a laptop with a clock overlay',
+    'briefcase',                    // terse, but still a depiction
+    'A briefcase with a handle',    // a phrase may start with a capital
+  ]) {
+    assert.deepEqual(iconErrors(iconSpec(d)), [], `wrongly rejected: ${d}`);
+  }
+});
+
+test('a Fluent icon token is rejected — the user has never seen it, so it describes nothing', () => {
+  // The SVG is authored fresh in this phase; there is no library being picked from, so a token name
+  // cannot tell the user what the glyph will look like. This is the tester's core ask.
+  for (const d of ['Briefcase', 'ClipboardTask', 'DocumentBulletList24Regular', 'clipboardTask', 'PersonRegular']) {
+    const errs = iconErrors(iconSpec(d));
+    assert.equal(errs.length, 1, `should reject token: ${d}`);
+    assert.match(errs[0], /looks like a Fluent icon token/);
+  }
+});
+
+test('iconDescription must be a non-empty string when present', () => {
+  for (const d of ['', '   ', 42, null, {}]) assert.ok(iconErrors(iconSpec(d)).length, `should reject: ${JSON.stringify(d)}`);
+  // Absent is fine — it is recommended, not required.
+  const spec = iconSpec(undefined);
+  delete spec.entities[0].iconDescription;
+  assert.deepEqual(iconErrors(spec), []);
+});
+
+test('sitemap area, group and non-entity subarea descriptions follow the same rule', () => {
+  const mk = (where) => ({
+    schemaVersion: 2, solution: { uniqueName: 'S', publisherPrefix: 'new' }, app: { name: 'A' },
+    entities: [{ schemaName: 'new_t', displayName: 'T', primaryAttribute: { schemaName: 'new_name', displayName: 'N', type: 'Text' } }],
+    appShell: { areas: [{ label: 'A', ...(where === 'area' ? { iconDescription: 'ClipboardTask' } : {}),
+      groups: [{ label: 'G', ...(where === 'group' ? { iconDescription: 'ClipboardTask' } : {}),
+        subAreas: [{ entity: 'new_t', title: 'T', ...(where === 'subarea' ? { iconDescription: 'ClipboardTask' } : {}) }] }] }] },
+  });
+  for (const where of ['area', 'group', 'subarea']) {
+    const errs = iconErrors(mk(where));
+    assert.equal(errs.length, 1, `${where}: token should be rejected`);
+    assert.match(errs[0], new RegExp(`sitemap ${where === 'subarea' ? 'subArea' : where}`, 'i'));
+  }
+});
+
+test('a custom table with an icon but no description is a lint WARNING, not an error', () => {
+  const spec = iconSpec(undefined, { vectorIcon: 'new_t_icon' });
+  delete spec.entities[0].iconDescription;
+  const r = lintAppSpec(spec);
+  assert.equal(r.ok, true, 'must never block the plan gate');
+  assert.deepEqual(r.errors, []);
+  assert.ok(r.warnings.some((w) => /new_t.*iconDescription/.test(w)), `expected a warning, got: ${JSON.stringify(r.warnings)}`);
+  // Describing it clears the warning; a REUSED table never warns (it already ships an icon).
+  spec.entities[0].iconDescription = 'a briefcase';
+  assert.ok(!lintAppSpec(spec).warnings.some((w) => /iconDescription/.test(w)));
+  const reused = iconSpec(undefined, { vectorIcon: 'new_t_icon', existing: true });
+  delete reused.entities[0].iconDescription;
+  assert.ok(!lintAppSpec(reused).warnings.some((w) => /iconDescription/.test(w)));
+});

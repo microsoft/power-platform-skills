@@ -9,6 +9,11 @@ plus local-dev ergonomics, sample coverage, and an automated eval suite. Builds 
 no breaking changes.
 
 ### Added
+- **Table icons are described before they are drawn** — each custom table proposes what its glyph
+  will **depict** in plain language (`entities[].iconDescription`, e.g. "an outlined clipboard with
+  a checkmark"), shown in `model-app-plan.md` for approval before any SVG is authored. A Fluent
+  token name is rejected: the SVG is drawn fresh, so a token the user has never seen describes
+  nothing. Also valid on sitemap areas, groups and non-entity subareas.
 - **Jobs-to-be-done drive the design** — authoring now starts at Level (a0) by asking who uses the
   app and what each of them needs to get done, *before* the data model, and carries those jobs
   through to the surfaces that satisfy them (`personas[].jobs[].surfaces[]`). Previously jobs were

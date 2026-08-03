@@ -386,6 +386,15 @@ function lintAppSpec(spec) {
   if (!(Array.isArray(spec.pages) && spec.pages.length)) {
     W('no pages[] — per the genpage-first policy, non-record surfaces (overview/landing, dashboard, analytics, guided or wizard flows) should be generative pages. If this app is genuinely record-CRUD only, ignore this.');
   }
+  // An icon the user cannot picture is an icon they cannot approve. At plan time the SVG may not be
+  // drawn yet, and a web-resource name ("new_project_icon") describes nothing — so a custom table
+  // carrying an icon without `iconDescription` is a review gap, not a build problem.
+  for (const e of arrOf(spec.entities)) {
+    if (!e || typeof e !== 'object' || e.existing) continue;
+    if ((e.vectorIcon || e.icon) && !(typeof e.iconDescription === 'string' && e.iconDescription.trim())) {
+      W(`entity ${e.schemaName || '?'}: has an icon but no iconDescription — describe what the glyph DEPICTS (e.g. "a briefcase") so the user can approve it before the SVG is drawn.`);
+    }
+  }
 
   return { ok: errors.length === 0, errors, warnings };
 }

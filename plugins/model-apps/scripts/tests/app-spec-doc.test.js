@@ -540,3 +540,36 @@ test('every committed fixture spec renders with its real values, not empty cells
     }
   }
 });
+
+// --- Icon depictions (tester ask: approve what the glyph will LOOK like, before the SVG exists) ---
+
+test('a table icon renders its depiction, and an undescribed icon is called out', () => {
+  const md = renderAppSpecDoc({ app: { name: 'A' }, entities: [
+    { schemaName: 'new_project', displayName: 'Project', vectorIcon: 'new_project_icon', iconDescription: 'a briefcase with a handle' },
+    { schemaName: 'new_task', displayName: 'Task', vectorIcon: 'new_task_icon' },
+  ] });
+  assert.match(md, /\*\*Nav icon:\*\* a briefcase with a handle/);
+  assert.match(md, /Task[\s\S]*?\*\*Nav icon:\*\* _no description/);
+  // The web-resource NAME must not be what the reviewer is shown — it describes nothing.
+  assert.ok(!md.includes('new_project_icon'), 'the web-resource name is not the approval artifact');
+});
+
+test('a table with no icon at all gets no Nav icon line', () => {
+  const md = renderAppSpecDoc({ app: { name: 'A' }, entities: [{ schemaName: 'account', displayName: 'Account', existing: true }] });
+  assert.ok(!/\*\*Nav icon:\*\*/.test(md));
+});
+
+test('sitemap area/group/subarea depictions render, and entity subareas defer to the table', () => {
+  const md = renderAppSpecDoc({ app: { name: 'A' }, appShell: { areas: [{
+    label: 'Delivery', iconDescription: 'a rocket taking off',
+    groups: [{ label: 'Work', subAreas: [
+      { entity: 'new_project', title: 'Projects' },
+      { page: 'overview', title: 'Overview', iconDescription: 'a speedometer at three-quarter dial' },
+    ] }],
+  }] } });
+  assert.match(md, /\*\*Delivery\*\* — icon: a rocket taking off/);
+  assert.match(md, /Overview .*— icon: a speedometer at three-quarter dial/);
+  // An entity subarea's nav glyph comes from the TABLE's icon, so describing it here would show the
+  // reviewer a depiction that is not the one actually rendered.
+  assert.match(md, /Projects .*— icon: the table's own/);
+});

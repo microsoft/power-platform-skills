@@ -335,17 +335,31 @@ behavior — only skip it if the user declines. (A model-driven app's nav icon f
 subarea comes from the **table's own icon**, not the sitemap subarea — a subarea `vectorIcon` is
 ignored for entity subareas.)
 
-Author it entirely inside the App Spec (so the app stays self-contained on export/import):
+**Propose the icon in words FIRST, before you author any SVG.** For each custom table, say what the
+glyph will **depict** — "a briefcase", "an outlined clipboard with a checkmark", "a laptop with a
+clock overlay" — and record it on the entity as `iconDescription`. Present the list and confirm it
+with `AskUserQuestion` alongside the data model.
+
+> **Never propose a Fluent icon token name** (`Briefcase`, `ClipboardTask`, `DocumentBulletList24Regular`).
+> The SVG is drawn fresh in this phase — there is no icon library being picked from — and a token
+> name the user has never seen tells them nothing about what the glyph will look like. Validation
+> rejects a token-shaped `iconDescription` for exactly this reason.
+>
+> The same rule applies to **any sitemap area or group icon** you propose: describe the depiction,
+> not a token. (Entity subareas take the table's icon, so describe it on the table.)
+
+Only once the depictions are agreed, author the icons into the App Spec (so the app stays
+self-contained on export/import):
 
 1. Add an **SVG web resource** to `webResources[]` (`"type": "svg"`) carrying the icon markup, named
    `<publisherPrefix>_<tablelogical>_icon` (e.g. `new_project_icon`).
 2. Point the table at it with `entities[].vectorIcon: "<that web resource name>"` (→ Dataverse
    `IconVectorName`). The build creates the web resource, publishes it, then sets the table icon.
 
-Pick a glyph that matches the table's concept (a briefcase for Projects, a clipboard/checklist for
-Work Items, a person for Team Members, a calendar for Sprints, a document for Contracts, etc.) and
-emit **clean, original, single-color SVG** — do **not** paste a third-party icon file. Author it
-like a Fluent V9 glyph:
+Draw the glyph you described — a briefcase for Projects, a clipboard/checklist for Work Items, a
+person for Team Members, a calendar for Sprints, a document for Contracts — and emit **clean,
+original, single-color SVG**; do **not** paste a third-party icon file. Author it like a Fluent V9
+glyph:
 
 - `viewBox="0 0 24 24"` (or `0 0 32 32`), no fixed `width`/`height`.
 - One or two `<path>` elements, `fill="currentColor"` (Dataverse tints it) — simple, legible at 16px.
@@ -358,6 +372,7 @@ like a Fluent V9 glyph:
 ],
 "entities": [
   { "schemaName": "new_project", "displayName": "Project", "vectorIcon": "new_project_icon",
+    "iconDescription": "a briefcase with a handle and a centre seam",
     "primaryAttribute": { "schemaName": "new_name", "displayName": "Name" }, "columns": [ ... ] }
 ]
 ```
@@ -679,9 +694,9 @@ even though the underlying spec stores the schemaName as provided:
 
 ### Data Model
 #### Tables
-| Table | Status | Columns |
-|-------|--------|---------|
-| [schemaName] | Create / Reuse | [col1 (Type), col2 (Type), ...] |
+| Table | Status | Columns | Nav icon depicts |
+|-------|--------|---------|------------------|
+| [schemaName] | Create / Reuse | [col1 (Type), col2 (Type), ...] | [what the glyph shows, e.g. "a briefcase"] |
 
 #### Relationships
 | Type | Parent | Child | Lookup Column |
