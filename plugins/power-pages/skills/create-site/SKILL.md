@@ -152,8 +152,9 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    - Use each family template's `displayName`, `description`, `keywords`, `audience`, available variant frameworks, and any variant-specific previews.
    - Do **not** compute a numeric score or invent a ranking script. Keywords guide agent judgement; they are not counted.
    - Treat a template family as the user-facing template and a framework variant as the installable package. A family can have multiple variants (`react`, `vue`, `angular`, `astro`).
+   - **If no template family is a clear semantic match**: tell the user no matching templates are available for their requested site, set `CREATION_PATH = "from-scratch"`, and continue to the from-scratch questions below. Do **not** render or offer the full catalog in this no-match branch; showing unrelated templates is worse than a clean from-scratch fallback.
 
-5. Render the relevant templates for browser preview:
+5. If one or more template families match, render the relevant templates for browser preview:
 
    - Download each `previewImages` artifact into the SHA-keyed cache before rendering:
      ```bash
@@ -180,9 +181,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    | One strong family + framework match | Use `<displayName>` - `<framework>` (Recommended), Choose another framework, See all templates, Start from scratch |
    | One strong family but no framework match | One option per available framework, See all templates, Start from scratch |
    | Several plausible family matches | One option per shortlisted family, See all templates, Start from scratch |
-   | No clear match | See all templates, Start from scratch (Recommended) |
 
-   When the user chooses **See all templates**, render the full family-first catalog gallery and ask again with one option per family plus **Start from scratch**. If the selected family has multiple variants, ask a second terminal question for the framework.
+   When the user chooses **See all templates** from a matching-template branch, render the full family-first catalog gallery and ask again with one option per family plus **Start from scratch**. If the selected family has multiple variants, ask a second terminal question for the framework.
 
 7. Branch on the user's selection:
    - **Template family and framework variant selected**:
