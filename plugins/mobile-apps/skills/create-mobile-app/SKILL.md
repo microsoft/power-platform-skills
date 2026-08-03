@@ -14,7 +14,7 @@ Top-level orchestrator. Owns the user-visible flow; delegates planning to the `n
 
 ## Workflow
 
-0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 3. Plan (planner agent + 4 gates) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9a. Install planned JavaScript dependencies → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npx expo start`) → 12.5 Optional debug handoff → 13. Summary
+0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 3. Plan (planner agent + 4 gates) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → 6.75 design system → **6.8 customer Application Insights telemetry** → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9a. Install planned JavaScript dependencies → 9b. Design-system integration → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npx expo start`) → 12.5 Optional debug handoff → 13. Summary
 
 ---
 
@@ -226,6 +226,8 @@ Re-prompt for name if (1). If (2), send the user to Maker portal to delete the e
 If `npx power-apps list-codeapps` is unavailable in the installed CLI version, skip the pre-flight silently and continue.
 
 Don't enter plan mode here — that's the planner agent's job in Step 3.
+
+**Application Insights requirement normalization:** If the user's description asks for Application Insights, telemetry, app analytics, diagnostics, traces, or monitoring of this generated app, preserve that intent for Step 6.8 but explicitly tell the planner that it is host/runtime configuration, not a data connector or planning constraint. The planner must not propose the Azure Application Insights connector, a custom telemetry connector, telemetry tables, or telemetry screens unless the user separately asked to build an in-app analytics dashboard. If the user names specific customer events (for example `OrderSubmitted` or `InspectionCompleted`), preserve those event names and their approved scalar properties in the corresponding per-screen specs so screen builders can emit them through `getCustomerTelemetryLogger()`; do not convert them into connectors or data-model artifacts.
 
 ### Step 2b — Requirements discovery
 
@@ -632,11 +634,12 @@ Then apply these **safe idempotent** prep steps:
 
 1. Update app identity in `app.config.js` and `package.json` from Step 2 answers (`displayName`, `slug`) using targeted string replacements only.
 2. Ensure `src/generated/index.ts` exists with the empty generated barrel if no generated services exist.
-3. Ensure `src/components/`, `src/hooks/`, `src/utils/`, `src/tokens/`, and `src/native/` directories exist.
-4. Copy shared helper files from plugin samples only when the destination file is missing. Do not overwrite user-edited files.
-5. Merge the six path aliases into `tsconfig.json` (`@/components`, `@/hooks`, `@/utils`, `@/tokens`, `@/generated`, `@/native`) without deleting existing aliases.
-6. Verify `app/_layout.tsx` imports `PowerAppsProvider` from `@microsoft/power-apps-native-host` and imports `tamaguiConfig`. If either is missing, patch `_layout.tsx` conservatively; do not rewrite custom navigation or unrelated provider code.
-7. Remove placeholder `power.config.json` if its `environmentId` is empty or missing. `npx power-apps init` in Step 6 writes the real file for the selected environment.
+3. Ensure `telemetry.config.json` exists with customer telemetry disabled and the generated app slug as `appId`.
+4. Ensure `src/components/`, `src/hooks/`, `src/utils/`, `src/tokens/`, and `src/native/` directories exist.
+5. Copy shared helper files from plugin samples only when the destination file is missing. Do not overwrite user-edited files.
+6. Merge the six path aliases into `tsconfig.json` (`@/components`, `@/hooks`, `@/utils`, `@/tokens`, `@/generated`, `@/native`) without deleting existing aliases.
+7. Verify `app/_layout.tsx` imports `PowerAppsProvider`, `tamaguiConfig`, and `telemetryConfig`, and passes `customerTelemetry={telemetryConfig}`. Patch conservatively; do not rewrite custom navigation or unrelated provider code.
+8. Remove placeholder `power.config.json` if its `environmentId` is empty or missing. `npx power-apps init` in Step 6 writes the real file for the selected environment.
 
 Do **not** preserve placeholder `power.config.json` from the template. Keeping it would let downstream steps read an empty or stale environment.
 
@@ -651,6 +654,7 @@ Substitute the hardcoded template values with wizard answers from Step 2:
 | `const APP_NAME = process.env.APP_DISPLAY_NAME || 'Power Apps Standalone App';` | `const APP_NAME = process.env.APP_DISPLAY_NAME || '<displayName>';` |
 | `const APP_SLUG = process.env.APP_SLUG || 'powerapps-standalone-app';` | `const APP_SLUG = process.env.APP_SLUG || '<slug>';` |
 | `"name": "powerapps-standalone-app"` | `"name": "<slug>"` |
+| `"appId": "powerapps-standalone-app"` in `telemetry.config.json` | `"appId": "<slug>"` |
 
 Bundle ID and scheme are left as template defaults — they are fixed across all dev builds and patched by the wrap pipeline at release time.
 
@@ -758,6 +762,7 @@ import { PowerAppsProvider, lightTheme, darkTheme } from '@microsoft/power-apps-
 import type { ThemeTokens } from '@microsoft/power-apps-native-host';
 
 import authConfig from '../auth.config.json';
+import telemetryConfig from '../telemetry.config.json';
 // @ts-ignore - power.config.json is auto-generated at build time
 import powerConfig from '../power.config.json';
 // @ts-ignore - connectorSchemas is auto-generated at build time
@@ -780,6 +785,7 @@ export default function RootLayout() {
         defaultTheme={colorScheme === 'dark' ? 'dark' : 'light'}
         theme={lightTheme}
         darkTheme={darkTheme}
+        customerTelemetry={telemetryConfig}
       >
         <StatusBar style="auto" />
         <SafeAreaView edges={['top', 'bottom']} style={{ flex: 1 }}>
@@ -796,6 +802,7 @@ Key points:
 - **Do NOT add an outer `<TamaguiProvider>`** — `PowerAppsProvider` composes it internally.
 - **`SafeAreaProvider` wraps the tree** so child screens can call `useSafeAreaInsets()` without a context error. `SafeAreaView` around `<Slot />` keeps content out of the status-bar / home-indicator areas — required by `validate-screen-quality.js`.
 - `tamaguiConfig` is imported from `'../tamagui.config'` (the `default export` of `tamagui.config.ts` at project root).
+- `telemetryConfig` is imported from `'../telemetry.config.json'`. It contains the selected Application Insights connection string. Never print that value, copy it to `memory-bank.md`, or include it in a summary.
 - `defaultTheme` flips between light/dark via `useColorScheme()`. `/design-system --add-dark-mode` later wires per-token dark variants.
 
 Write the file directly when applying this fix.
@@ -963,7 +970,7 @@ Arguments:
 The skill detects orchestrator mode (`CODE_APPS_NATIVE_ORCHESTRATING=1`), collects brand inputs, presents the cost picker (a/b/c/d), runs the internal style picker, writes `brand/design-system.md` + `brand/tokens.ts`, renders `brand/design-system.html`, and returns with status.
 
 Handle the return per the status protocol (AGENTS.md rule #10):
-- `DONE` → continue to Step 7. Record `brand_path`, `tokens_path`, `direction` in memory-bank.
+- `DONE` → continue to Step 6.8. Record `brand_path`, `tokens_path`, `direction` in memory-bank.
 - `DONE_WITH_CONCERNS` → surface concerns, ask user, continue.
 - `NEEDS_CONTEXT` → surface question, re-invoke with answer.
 - `BLOCKED` → surface error, STOP.
@@ -995,11 +1002,114 @@ The user skipped the design system but still deserves to see their screens befor
 
 4. **Auto-continue — no prompt.** The user already approved Gates 1–3 via plan-mode and just looked at the preview. A fourth confirmation here adds friction without adding decision power. Print one line and proceed:
 
-  > `→ Preview rendered with default styling. Continuing to Step 7. (Interrupt and re-run /design-system or /edit-app to revise.)`
+  > `→ Preview rendered with default styling. Continuing to Step 6.8. (Interrupt and re-run /design-system or /edit-app to revise.)`
 
 This ensures **every path through the flow gets at least one visual preview** before screen-builders write code.
 
 **Why this matters:** under the OLD two-preview flow, the user saw screens at Gate 4 with default Tamagui colors, mentally committed, then the brand re-rendered later — confusing visual whiplash plus ~3–5 min of wasted token spend on the Gate 4 HTML. Under the NEW flow, Gate 4 is a markdown screen-graph (structural only), and the user only ever sees one HTML preview — at Step 6.75, with the locked brand applied. Single visual decision point, no waste.
+
+### Step 6.8 — Customer Application Insights telemetry
+
+**Print before starting:**
+> "→ [Step 6.8/13] Configuring optional customer-owned Application Insights telemetry…"
+
+Ask with `AskUserQuestion`:
+
+> "Do you want this app to send usage, performance, and sanitized error telemetry to a customer-owned Application Insights resource?"
+
+Choices:
+1. `Use an Application Insights resource (Recommended)`
+2. `Leave customer telemetry disabled`
+
+This is an explicit opt-in. Do not infer consent from the app description, and do not enable customer telemetry without this answer.
+
+#### Configure branch
+
+First discover Application Insights resources visible to the current Azure CLI identity:
+
+```bash
+az resource list \
+  --resource-type Microsoft.Insights/components \
+  --query "[].{name:name,id:id,resourceGroup:resourceGroup,location:location}" \
+  -o json
+```
+
+Branch on the result:
+
+- **One or more resources returned:** use `AskUserQuestion` to let the creator select one. Retrieve its connection string without printing it:
+
+  ```bash
+  APP_INSIGHTS_CONNECTION_STRING=$(
+    az resource show \
+      --ids "<selected-resource-id>" \
+      --api-version 2020-02-02 \
+      --query properties.ConnectionString \
+      -o tsv
+  )
+  ```
+
+- **Not logged in:** tell the creator to run `az login`, then retry discovery once.
+- **No subscription/resource access or authorization failure:** explain that Application Insights Azure RBAC is separate from Power Platform and Entra app-registration permissions. Offer an admin handoff: an administrator can create/select one workspace-based Application Insights resource and give the creator its connection string.
+- **No resources returned:** ask whether the creator wants to paste an administrator-provided connection string or leave telemetry disabled. Do not require the creator to create Azure resources.
+
+When accepting a pasted connection string, use `AskUserQuestion` freeform and never repeat the answer in chat or command output. Validate only that it contains `InstrumentationKey=` and either an `IngestionEndpoint=` or the standard public-cloud default can be used. Do not store the connection string in `memory-bank.md`.
+
+Write `<working_dir>/telemetry.config.json`:
+
+```json
+{
+  "enabled": true,
+  "connectionString": "<selected-or-pasted-connection-string>",
+  "appId": "<slug>",
+  "environment": "development",
+  "includeUserId": false
+}
+```
+
+The app uses `@microsoft/applicationinsights-web` with the React Native manual-device plugin. The first runtime event is `PowerAppsNative.ApplicationStarted`, which gives the creator a deterministic ingestion check after loading the app in Dev Player.
+
+The runtime exposes two intentionally different loggers:
+
+```ts
+import {
+  getAppLogger,
+  getCustomerTelemetryLogger,
+} from '@microsoft/power-apps-native-host';
+```
+
+- `getAppLogger()` is the host/runtime logger. Its events continue to Microsoft OneDS and also fan out to the configured customer Application Insights resource.
+- `getCustomerTelemetryLogger()` is for customer-defined app events. Its events go only to the configured customer Application Insights resource and are a no-op when customer telemetry is disabled.
+- Generate customer event calls only when the user explicitly requested those events or the approved screen spec contains a `Customer telemetry` entry. Never use `getAppLogger()` for customer-defined events.
+- Telemetry properties must be approved scalar values such as result codes, durations, counts, screen identifiers, or operation names. Never include form values, free text, record titles, names, email addresses, phone numbers, tokens, precise coordinates, nested objects, or complete URLs.
+
+Persist in `memory-bank.md`:
+
+```markdown
+- Customer telemetry: enabled
+- Customer telemetry app ID: <slug>
+- Customer telemetry resource ID: <selected-resource-id or admin-provided>
+- Customer telemetry destination: one C1-owned workspace-based Application Insights resource
+```
+
+Never write the connection string itself to `memory-bank.md`.
+
+#### Disabled branch
+
+Ensure `<working_dir>/telemetry.config.json` contains:
+
+```json
+{
+  "enabled": false,
+  "connectionString": "",
+  "appId": "<slug>",
+  "environment": "development",
+  "includeUserId": false
+}
+```
+
+Persist `Customer telemetry: disabled` in `memory-bank.md`.
+
+**Support boundary:** this step discovers or accepts an existing Application Insights resource; it does not require creators to provision Azure resources. If the creator lacks Azure access and has no administrator-provided connection string, leave telemetry disabled without blocking app creation.
 
 ### Step 6.85 — Offline profile (always asked)
 
@@ -1966,6 +2076,7 @@ Data model    : <N tables — M reuse, K extend, L create>
 Native caps   : <list>
 Connectors    : <list>
 Screens       : <N total — M from template, K built in parallel>
+App Insights  : <enabled for selected C1 resource | disabled>
 Dev server    : npx expo start — running in background terminal <id>
                 (scan QR there when you want to run locally)
 ─────────────────────────────────────────────

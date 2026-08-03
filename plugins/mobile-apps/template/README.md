@@ -96,6 +96,44 @@ connector wiring.
 	- Play store: (coming soon)
 	- App center: https://install.appcenter.ms/orgs/appmagic-player-x6ys/apps/rn-dev-player-preview/distribution_groups/public_distribution/releases
 
+## Customer Application Insights
+
+Customer telemetry is disabled by default in `telemetry.config.json`. To test
+it, set `enabled` to `true` and provide the connection string for one
+C1-owned, workspace-based Application Insights resource. All approved C2
+end-user interactions for this app are sent to that resource while Microsoft
+operational telemetry continues through its existing provider.
+
+The connection string identifies the ingestion destination and is embedded in
+the mobile bundle, matching the Power Apps canvas-app model. It is not a
+strong authentication secret, but someone who extracts it could submit false
+telemetry. Restrict access to the project, review the value when sharing or
+exporting the app, and keep `includeUserId` false unless the customer has an
+approved privacy requirement.
+
+Application Insights receives app events, traces, and handled exceptions.
+Native process crash symbolication remains the responsibility of the host's
+Crashlytics integration.
+
+Generated app code can emit customer-owned events without sending them to
+Microsoft operational telemetry:
+
+```ts
+import { getCustomerTelemetryLogger } from '@microsoft/power-apps-native-host';
+
+getCustomerTelemetryLogger().trackEvent('OrderSubmitted', {
+  result: 'Success',
+  duration_ms: 320,
+});
+```
+
+`getAppLogger()` remains the host/runtime logger and sends events to the
+existing Microsoft operational provider as well as the configured customer
+Application Insights provider. Use `getCustomerTelemetryLogger()` for
+customer-defined business events. Keep properties to approved scalar values;
+never include form contents, record names, email addresses, tokens, precise
+locations, or complete URLs.
+
 ## Upgrade the Native Host
 
 From the app directory, preview the next template upgrade:

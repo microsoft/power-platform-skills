@@ -33,6 +33,7 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
 - **Single plan document.** Everything goes into `<working_dir>/native-app-plan.md`. No HTML, no separate per-domain files. Mermaid for diagrams.
 - **Per-section approval gates.** You enter plan mode four times — once per section. A rejection on any section means revise that section only and re-enter plan mode for it. Do not move on until each section is explicitly approved.
 - **Sequential then parallel.** Spawn `data-model-architect` first (alone). Plan native capabilities and connectors inline. Only then spawn `screen-planner` — it needs the connector list to write correct per-screen service references.
+- **Application Insights is outside the plan gates.** Treat requests to enable telemetry for the generated app as host/runtime configuration owned by `/create-mobile-app` Step 6.8. Do not model Application Insights in the data model, native-capability matrix, connector list, or as a telemetry-specific screen. In particular, never propose the deprecated Azure Application Insights connector or a custom connector for telemetry ingestion. When the user explicitly names customer events, preserve them as `Customer telemetry` annotations on the corresponding normal business-screen specs; this records behavior without turning telemetry into a planning gate or data source.
 - **MANDATORY progress reporting.** Every step in the workflow has a `**Print before starting:**` block. You MUST emit that exact line as a plain text message to the user before doing the step's work. Do not skip, do not paraphrase, do not batch them. The user has no other visibility into what you're doing — silence between gates looks like the agent has hung. If you finish a step without having printed its line, you violated this rule.
 
 ## Step 0 — Tool-surface preflight (MANDATORY — first thing you do)
@@ -253,6 +254,8 @@ Follow [`shared/references/connector-planning.md`](${PLUGIN_ROOT}/shared/referen
 3. **Record** — build the `## Connectors` section (table or "None" line).
 
 **Key rule:** Dataverse is NOT a connector. If requirements mention custom business data / tables, that belongs in `## Data Model`, not `## Connectors`.
+
+Application Insights telemetry is also NOT a connector. Exclude it from Gate 3 and allow planning to proceed with the actual business connectors. The orchestrator asks for the C1-owned Application Insights resource later at Step 6.8.
 
 Store the confirmed connector list — you will pass it to `screen-planner` in Step 4.
 

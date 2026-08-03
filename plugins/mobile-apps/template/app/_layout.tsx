@@ -3,6 +3,7 @@ import { StatusBar } from 'expo-status-bar';
 import { PowerAppsProvider } from '@microsoft/power-apps-native-host';
 
 import authConfig from '../auth.config.json';
+import telemetryConfig from '../telemetry.config.json';
 import tamaguiConfig from '../tamagui.config';
 // @ts-ignore - power.config.json is auto-generated at build time
 import powerConfig from '../power.config.json';
@@ -16,10 +17,10 @@ export default function RootLayout() {
       powerConfig={powerConfig}
       schemaMap={schemaMap}
       tamaguiConfig={tamaguiConfig}
+      customerTelemetry={telemetryConfig}
     >
       <StatusBar style="auto" />
       <Slot />
     </PowerAppsProvider>
   );
 }
-

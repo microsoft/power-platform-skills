@@ -23,6 +23,16 @@ If a requirement is vague (e.g., "external data", "third-party API") but no keyw
 
 **Important:** Dataverse is NOT listed here. If the requirements need custom business data / tables, that is handled by `/add-dataverse` and captured in the `## Data Model` section, not the `## Connectors` section.
 
+**Application Insights is also NOT a connector requirement.** If requirements mention Application Insights, app analytics, diagnostics, telemetry, traces, or monitoring of this generated app:
+
+- Do not infer the Azure Application Insights connector.
+- Do not propose a custom connector.
+- Do not raise a connector-constraint approval question.
+- Exclude the telemetry request from `## Connectors`.
+- Record, at most, this note after the connector table: `Application Insights telemetry is configured separately by /create-mobile-app Step 6.8 through PowerAppsProvider; it is not a Power Platform data connector.`
+
+This exception applies only to host/runtime observability. Business features that read monitoring data or query another system still require an appropriate connector.
+
 ---
 
 ## Step 2 — Present to User for Confirmation
