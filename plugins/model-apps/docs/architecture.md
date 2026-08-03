@@ -143,10 +143,12 @@ deterministic, idempotent, narrated SDK build. Create and **edit share one path*
                               v
               ┌────────────────────────────┐   STAGE: author  (main loop)
               │ Phase 1 — authoring        │   references/authoring-flow.md
-              │  env select (pac auth/org) │   DESIGN-ONLY: App Spec in 2 confirmed
-              │  Level 1: data model       │   levels — no .tsx emitted here.
-              │  Level 2: artifacts +      │   → early + full spec-lint gates
-              │    page-intents + design   │   → plan-mode approval (single build gate)
+              │  env select (pac auth/org) │   DESIGN-ONLY: App Spec in confirmed
+              │  L(a0): personas + jobs    │   levels — no .tsx emitted here.
+              │  L(a):  data model         │   → early + full spec-lint gates
+              │  L(b):  artifacts +        │   → plan-mode approval (single build gate)
+              │    page-intents + design   │   → write-app-spec-doc.js renders the
+              │  L(c):  access (privs)     │     readable model-app-plan.md
               └──────────────┬─────────────┘
                              │  app-spec.json (machine contract) + model-app-plan.md
                              │

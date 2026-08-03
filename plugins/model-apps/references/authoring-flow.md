@@ -7,7 +7,7 @@ inside one. Throughout this file, **"you" means the orchestrator running in the 
 every prompt yourself so each question and the plan-mode gate surface to the user.
 
 Your job: validate the environment, authenticate with PAC CLI, detect what already exists,
-build a complete App Spec through two-level interactive authoring, run the guardrail lint, get
+build a complete App Spec through levelled interactive authoring, run the guardrail lint, get
 user approval in plan mode, and write `app-spec.json` + `model-app-plan.md` so the build engine
 can execute without re-asking or re-discovering.
 
@@ -233,7 +233,7 @@ the user before continuing:
 > "Heads up — env has `<detectedPrefix>_*` tables but you chose `<chosenPrefix>`.
 > New tables won't match the prefix of your existing work."
 
-## Step 4 — Multi-Turn, Two-Level Interactive Authoring
+## Step 4 — Multi-Turn, Levelled Interactive Authoring
 
 This is the core of `model-app-planner` — the step that distinguishes it from
 `genpage-planner`. Rather than drafting the entire App Spec in one shot, you
@@ -241,14 +241,15 @@ author it **one topic at a time** through conversational turns, persisting the
 working spec to `<working-dir>/app-spec.json` after each round so the user can
 hand-edit between turns.
 
-**Do not present the entire spec at once.** Level (a) must be agreed before
-Level (b) begins.
+**Do not present the entire spec at once.** Level (a0) must be agreed before Level (a), and
+Level (a) before Level (b).
 
 Phase 1 is a **design-only author**: page `.tsx` is never written here — pages are declared as
 **intents** (`source: { kind: "intent" }`) and their code is generated in **Phase 1.5 — Generate
 pages** (see `SKILL.md` → Phase 1.5) **after** plan approval and after the data pre-build. The
-two confirmed levels are: **(a) data model** and **(b) artifacts + page-intents + design**. The
-author never emits `.tsx`; pages remain intents until generate-pages.
+levels are: **(a0) personas & jobs-to-be-done**, **(a) data model**, **(b) artifacts +
+page-intents + design**, and **(c) access**. The author never emits `.tsx`; pages remain intents
+until generate-pages.
 
 > **Read the spec format once, up front** — don't reverse-engineer it from scripts:
 > [`references/app-spec-schema.md`](./app-spec-schema.md) (every field) and the worked sample
@@ -256,11 +257,54 @@ author never emits `.tsx`; pages remain intents until generate-pages.
 > shape. **Do not pre-create tables/columns/solution** during authoring — the build is
 > idempotent and creates only what's missing.
 
+### Level (a0) — Personas & jobs-to-be-done
+
+**Do this FIRST, before proposing any tables.** Ask who will use the app and what each of them
+needs to get done. Jobs-to-be-done are what the app EXISTS to do, so they drive everything that
+follows: a table exists because some job needs its data, a view or form exists because some job
+needs to work with those records, and a page exists because some job needs an overview, an
+analysis, or a guided flow. Deriving the data model first and the jobs afterwards gets this
+backwards and reliably misses surfaces.
+
+Propose personas and their jobs, then confirm with `AskUserQuestion`:
+
+> "Before I design the data model — who will use this app, and what does each of them need to get
+> done? Here's my read: **Dispatcher** (assign incoming work, watch today's queue), **Field
+> Technician** (see my jobs, record what I did, log parts). Does that cover it, or is there a role
+> or a task I've missed?"
+
+Write them into `personas[]` as you go — the same block Level (c) later sizes security roles from,
+so you ask once and use the answer twice:
+
+```json
+"personas": [
+  { "persona": "Dispatcher",
+    "jobs": [
+      { "name": "Assign incoming work", "description": "Triage new work orders and route them to a technician" },
+      { "name": "Watch today's queue",  "description": "See at a glance what is overdue, unassigned, or at risk" }
+    ] }
+]
+```
+
+`privileges[]` is **not** filled in yet — entities don't exist until Level (a). Level (c) adds it.
+
+**Carry the jobs forward.** At Level (b), every job must be answerable with "this surface lets them
+do it". Record that link in `jobs[].surfaces[]` (view/form/page names, or a page `key`):
+
+```json
+{ "name": "Watch today's queue", "surfaces": ["Today's Queue"] }
+```
+
+That mapping is what the design document renders as a traceability table, and an unmapped job is
+flagged by the lint gate — so a job with no surface is a **visible** design gap rather than a
+silent one.
+
 ### Level (a) — Data model
 
 Propose the `entities` block (including `columns` and `primaryAttribute`) and
-the `relationships` block. Present your proposal clearly, then use
-`AskUserQuestion` to confirm or refine:
+the `relationships` block — **derived from the Level (a0) jobs**: each table should exist because
+a job needs its data, and each job's data needs should be satisfiable. Present your proposal
+clearly, then use `AskUserQuestion` to confirm or refine:
 
 > "Here's the data model I'd suggest for your [app name]. Does this look right,
 > or would you like to adjust any tables, columns, or relationships before we
@@ -455,8 +499,29 @@ or remove any section (forms, views, charts, sample data, page intents):
 
 #### Pages (generative page intents — design only)
 
-Per the **genpage-first policy** (`SKILL.md` → Genpage-first policy): overview/dashboard/analytics/
-landing surfaces → a page **intent** in `pages[]`; record CRUD → a model-driven form + view.
+**Enumerate every surface this app needs before you author any of them.** Walk the Level (a0)
+jobs one at a time and name the surface that satisfies each. Then classify each surface with the
+**genpage-first policy** (`SKILL.md` → Genpage-first policy):
+
+- create/read/update/list a table's rows → a model-driven **form + view**
+- anything else → a **generative page** in `pages[]`
+
+"Anything else" is broader than it first looks, and these are the surfaces that get missed:
+
+| If a job needs… | Author |
+|---|---|
+| an at-a-glance overview, home or landing surface | a page |
+| a dashboard, KPIs, or a "what needs attention" queue | a page (**not** a classic dashboard) |
+| analytics, trends, or a chart-led summary | a page |
+| a guided multi-step or wizard flow | a page |
+| a composite screen spanning several tables | a page |
+| side-by-side comparison, or a review/approval console | a page |
+
+**State the classification out loud for each surface** in the same turn you propose forms and
+views — e.g. "Watch today's queue → overview surface → generative page `todays-queue`". If you
+conclude the app needs no pages at all, say so and why, so the user can disagree; don't just
+omit the section. Record the mapping back on the job (`jobs[].surfaces[]`) — the lint gate warns
+about any job with no surface, and about a spec with no pages.
 
 Author the intent shape — **not `.tsx`**:
 
@@ -490,9 +555,45 @@ one subArea per entity.
 
 #### Shippable-defaults note
 
-Mention, but do **not** author or build: security roles, quick-create forms, and
-standard system views (All Records, Lookup, etc.) are sensible future additions
-but are out of scope for this authoring phase.
+Mention, but do **not** author or build: quick-create forms and standard system
+views (All Records, Lookup, etc.) are sensible future additions but are out of
+scope for this authoring phase.
+
+Security roles ARE in scope — they are authored in Level (c) below from the
+personas and jobs you captured in Level (a0).
+
+Persist the fully agreed spec to `<working-dir>/app-spec.json` before Level (c).
+
+### Level (c) — Access (size the roles from the jobs)
+
+You already captured personas and their jobs in Level (a0), and the entities now exist, so this
+level only adds the **privileges** each job needs. Do not re-ask who the users are.
+
+For every job, DECLARE the entity access it requires — the builder never infers privileges from a
+job's text:
+
+```json
+{ "name": "Assign incoming work",
+  "surfaces": ["Today's Queue", "Work Order"],
+  "privileges": [
+    { "entity": "contoso_workorder", "access": ["read", "write", "assign"], "scope": "businessUnit" },
+    { "entity": "contoso_technician", "access": ["read"], "scope": "organization" }
+  ] }
+```
+
+- `access`: `read · create · write · delete · append · appendTo · assign · share`
+- `scope`: `user` (Basic) · `businessUnit` (Local) · `parentChild` (Deep) · `organization` (Global)
+
+The builder authors **one role per persona**, unioning every job's declared access (max scope wins
+per entity+access), and grants the app to that role so it **opens for that persona, not just for
+system administrators** (`appAccess: false` opts a role out).
+
+**Render the proposed roles and their per-entity access as a table in your chat reply**, then
+confirm with `AskUserQuestion` — the user cannot approve an access model they cannot see, and
+tool output is collapsed and invisible to them. Skip this level only if the user explicitly wants
+no roles authored.
+
+Column-level security and access teams are not yet supported.
 
 Persist the fully agreed spec to `<working-dir>/app-spec.json` before Step 5.
 
@@ -541,16 +642,18 @@ Common errors the lint catches (teach these to the user if they arise):
 
 Create tasks via `TaskCreate`:
 
-1. "Build data model (entities, columns, relationships)"
-2. "Author artifacts and sample data (forms, views, charts)"
-3. "Write app-spec.json and model-app-plan.md"
+1. "Capture personas and jobs-to-be-done"
+2. "Build data model (entities, columns, relationships)"
+3. "Author surfaces and sample data (pages, forms, views, charts)"
+4. "Size access from the jobs (personas[].privileges)"
+5. "Write app-spec.json and render model-app-plan.md"
 
 Enter plan mode (`EnterPlanMode`) and present a rendered summary. **Resolve and
 display full prefixed names** for the user (e.g., `crb2b_customer.crb2b_segment`)
 even though the underlying spec stores the schemaName as provided:
 
 ```
-## Model-App Plan
+## Build Plan
 
 ### App
 - Name: [app name]
@@ -559,6 +662,11 @@ even though the underlying spec stores the schemaName as provided:
 
 ### Solution
 - [solution uniqueName] — Publisher prefix: [prefix]
+
+### Jobs to be done
+| Persona | Job | Surfaces that satisfy it |
+|---------|-----|--------------------------|
+| [persona] | [job name] | [view/form/page names] |
 
 ### Data Model
 #### Tables
@@ -571,11 +679,17 @@ even though the underlying spec stores the schemaName as provided:
 |------|--------|-------|---------------|
 | OneToMany | [referenced] | [referencing] | [lookup.schemaName] |
 
-### Artifacts
+### Surfaces
+- Pages (generative): [N — list keys, or "none — record-CRUD only because <reason>"]
 - Forms: [N forms — list entity names]
 - Views: [N views — list entity names]
 - Charts: [N charts — list names and chart types]
 - App shell: [N areas / N subAreas]
+
+### Access
+| Role (persona) | Tables and access |
+|----------------|-------------------|
+| [persona] | [entity: read/write @ scope, ...] |
 
 ### Sample Data
 - [entity]: [N records]
@@ -585,9 +699,12 @@ even though the underlying spec stores the schemaName as provided:
 - [✓ No errors | ⚠ N warning(s) acknowledged: <list>]
 
 ### Notes
-- Security roles, quick-create forms, and standard system views are
-  out of scope for this phase and can be added later.
+- Quick-create forms and standard system views are out of scope for this phase
+  and can be added later.
 ```
+
+> This is the **in-chat approval summary**, not the `model-app-plan.md` file — that document is
+> rendered separately by `scripts/write-app-spec-doc.js` in Step 7.
 
 **Include the engine's real build plan (this is the SINGLE build approval).** Before `ExitPlanMode`,
 run the build **dry-run** (no `--apply`) and show its phase-grouped plan beneath the summary above:
@@ -654,17 +771,24 @@ The spec shape follows `plugins/model-apps/samples/app-spec.support-desk.json`:
 
 ### Write model-app-plan.md
 
-Write a short human-readable summary to `<working-dir>/model-app-plan.md`. This
-is for the user's reference — it does not need to be machine-parseable. Include:
+**Render it — never hand-write it.** The design document is generated from the spec so it is
+complete, always agrees with what will actually build, and can be regenerated after any edit:
 
-- **App:** name, description, action (create / reuse)
-- **Environment:** env URL, solution, prefix
-- **Tables:** create vs reuse list with column counts
-- **Relationships:** list
-- **Artifacts:** form/view/chart counts
-- **Sample data:** record counts per entity
-- **Lint status:** clean / warnings acknowledged
-- **Next step:** "Run the app-builder build step to apply this spec."
+```bash
+node "${PLUGIN_ROOT}/scripts/write-app-spec-doc.js" \
+  --spec @<working-dir>/app-spec.json --env <envUrl>
+```
+
+It writes `<working-dir>/model-app-plan.md` — a readable spec covering the jobs-to-be-done and the
+surfaces that satisfy them, the data model, every surface (pages, forms, views, charts),
+navigation, the access model per role, sample data, the design contract and AI features — and
+prints `{ ok, docPath, bytes, warnings }`.
+
+**Surface `warnings` in your chat reply.** They name design gaps the document called out — jobs
+with no covering surface, or an app with no generative pages. Re-running the command after fixing
+the spec regenerates the document.
+
+This is the artifact the user keeps alongside the app, so tell them where it is.
 
 ### Complete the workflow log
 
@@ -720,9 +844,9 @@ Mark the "Write app-spec.json and model-app-plan.md" task complete.
 - **Interaction points are limited to:**
   1. Step 2 — environment selection (if multiple auth profiles).
   2. Step 3 — app selection and solution selection.
-  3. Step 4 — two-level authoring turns (data model confirmation, then
-     artifacts + page-intents + design confirmation). These are the only turns
-     where the spec is shaped.
+  3. Step 4 — levelled authoring turns (personas + jobs-to-be-done, data model
+     confirmation, artifacts + page-intents + design confirmation, then access).
+     These are the only turns where the spec is shaped.
   4. Step 5 — lint-warning acknowledgement (if warnings present).
   5. Step 6 — plan-mode gate (`EnterPlanMode` / `ExitPlanMode`).
 - **No other interaction points.** Do not ask questions outside these steps.

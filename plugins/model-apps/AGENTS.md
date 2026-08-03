@@ -50,9 +50,11 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
 
 - **`references/authoring-flow.md`** — the Phase-1 authoring playbook the skill executes itself:
   validate prereqs, select the env via PAC (`pac auth list` / `pac org who`), detect existing
-  tables/apps, author the **App Spec** in two confirmed levels (data model first, then
-  forms/views/charts + sample data), run the `spec-lint.js` guardrail, get plan-mode approval.
-  Writes `app-spec.json` (the machine contract) + `model-app-plan.md`.
+  tables/apps, author the **App Spec** in confirmed levels (**(a0) personas & jobs-to-be-done
+  first** — they drive which tables and surfaces exist — then data model, then forms/views/charts +
+  page-intents + sample data, then access), run the `spec-lint.js` guardrail, get plan-mode approval.
+  Writes `app-spec.json` (the machine contract) + `model-app-plan.md` (rendered by
+  `scripts/write-app-spec-doc.js`, never hand-written).
 - **`scripts/lib/spec-lint.js`** — pure App Spec guardrail (`lintAppSpec → { ok, errors,
   warnings }`): errors block the plan gate (e.g. the relationship-name-vs-lookup-name
   collision Dataverse rejects), warnings teach.
@@ -185,6 +187,14 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   **`scripts/preview-app.js` → `scripts/lib/app-preview.js`** — renders the WHOLE app design
   (data model + sitemap tree + views/charts + per-form wireframes + page-intents + design contract)
   as a single ASCII preview — the design gate #2 / plan-mode approval artifact.
+  **`scripts/write-app-spec-doc.js` → `scripts/lib/app-spec-doc.js`** — renders `model-app-plan.md`,
+  the durable **Markdown design document** the user reviews and keeps alongside the app (jobs →
+  surfaces traceability, data model, every surface incl. generative pages, navigation, the access
+  model per role, sample data, design contract, AI features). Distinct from `app-preview.js`: that is
+  an ASCII console preview for the in-conversation approval gate, this is durable Markdown for review
+  and archival. It is **rendered, never hand-written** — the freehand version drifted from the spec
+  and shrank to a counts summary. Also returns `warnings[]` naming design gaps (no jobs captured, a
+  job with no covering surface, no generative pages) so the orchestrator surfaces them in chat.
 - **`scripts/vendor/cds-maker-sdk.cjs`** — the SDK vendored as a self-contained headless bundle
   (rebuild via `scripts/_vendor-build/`); **`scripts/lib/sdk-http-client.js`** injects an
   `az`-token HttpClient. No browser, no relay — the SDK reuses the designer's own serializers.
@@ -261,6 +271,7 @@ scripts/
   verify-model-app.js          ← app-builder: reconcile the spec against the deployed app
   preview-form.js              ← app-builder: ASCII form wireframe for authoring review
   preview-app.js               ← app-builder: ASCII whole-app design preview (data model + sitemap + forms + page-intents + design)
+  write-app-spec-doc.js        ← app-builder: renders the readable model-app-plan.md design doc from app-spec.json
   ai-preflight.js              ← app-builder: preflight AI feature availability (admin-gate report)
   run-tests.js                 ← one-command plugin + SDK regression runner
   smoke-eval.js                ← scripted live smoke eval (build → assert → teardown)
@@ -288,6 +299,7 @@ scripts/
     build-journal.js           ← durable JSONL build journal (resume diagnostics)
     form-preview.js            ← form wireframe renderer
     app-preview.js             ← whole-app design renderer (data model + sitemap + forms + page-intents + design)
+    app-spec-doc.js            ← pure App Spec → readable Markdown design doc (model-app-plan.md)
     schema-facts.js            ← pure data-model provisioning fact extractor for evals
     pageref-resolver.js        ← PAGEREF_<key> → GenPageId nav resolver
     page-manifest.js           ← durable <app>_pagemanifest read/write

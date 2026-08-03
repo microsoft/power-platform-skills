@@ -15,7 +15,8 @@ are in [`architecture.md`](architecture.md).
 ## ✅ Complete
 
 ### Authoring & build framework — ✅ verified live
-- Interactive two-level authoring in the **main loop** (env select, App Spec, lint gate, plan-mode approval).
+- Interactive levelled authoring in the **main loop** — jobs-to-be-done first, then data model,
+  artifacts + page-intents, then access (env select, App Spec, lint gate, plan-mode approval).
 - Deterministic, **idempotent** build engine — discovers via the SDK (`findTables`/`findColumns`/`fetchEntityMetadata`) and creates only what's missing; new / existing / mixed envs all work.
 - **All Dataverse access via the vendored headless SDK**; metadata cached under `<app-folder>/.maker-workspace/` for reuse.
 - Phase selection (`--only`/`--skip`/`--from`/`--to`), `[n/total]` narration, `BuildHalt` gate, dry-run by default, `--sample-data` / `--publish` opt-in.

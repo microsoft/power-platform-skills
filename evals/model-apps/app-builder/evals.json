@@ -7,6 +7,7 @@
     "plan: every planned item targets a known engine phase",
     "security: the plan authors exactly one role per declared persona",
     "security: each app-access persona role injects app-module read; opted-out personas do not",
+    "design: every mapped persona job resolves to a surface that exists",
     "security: every persona privilege on an app-owned table resolves to a provisioned entity",
     "security: each persona role grants exactly its declared job privileges (no over-grant)",
     "data: schema-facts provision exactly the expected tables",
@@ -29,46 +30,95 @@
   ],
   "evals": [
     {
-      "id": 1, "tier": "smoke", "spec": "app-spec.json",
+      "id": 1,
+      "tier": "smoke",
+      "spec": "app-spec.json",
       "prompt": "Support desk: customers, tickets, and comments.",
       "expect": {
-        "tables": ["new_customer", "new_ticket", "new_comment"],
-        "relationships": ["new_customer_new_ticket", "new_ticket_new_comment"],
-        "views": ["Active Customers", "Active Tickets", "Active Comments"],
-        "charts": ["Tickets by Priority", "Tickets by Status"]
+        "tables": [
+          "new_customer",
+          "new_ticket",
+          "new_comment"
+        ],
+        "relationships": [
+          "new_customer_new_ticket",
+          "new_ticket_new_comment"
+        ],
+        "views": [
+          "Active Customers",
+          "Active Tickets",
+          "Active Comments"
+        ],
+        "charts": [
+          "Tickets by Priority",
+          "Tickets by Status"
+        ]
       },
       "expectations": []
     },
     {
-      "id": 2, "tier": "full", "spec": "app-spec.json",
+      "id": 2,
+      "tier": "full",
+      "spec": "app-spec.json",
       "prompt": "Orders app with an overview page that navigates to an order-detail page.",
       "expect": {
-        "tables": ["new_customer", "new_order"],
-        "relationships": ["new_customer_new_order"],
-        "views": ["Active Orders"],
-        "charts": ["Orders by Status"],
-        "pages": ["overview", "order-detail"]
+        "tables": [
+          "new_customer",
+          "new_order"
+        ],
+        "relationships": [
+          "new_customer_new_order"
+        ],
+        "views": [
+          "Active Orders"
+        ],
+        "charts": [
+          "Orders by Status"
+        ],
+        "pages": [
+          "overview",
+          "order-detail"
+        ]
       },
       "expectations": []
     },
     {
-      "id": 3, "tier": "full", "spec": "app-spec.json",
+      "id": 3,
+      "tier": "full",
+      "spec": "app-spec.json",
       "prompt": "Assets app with a shared status choice, an on-click command, and an operations dashboard pinned to the nav.",
       "expect": {
-        "tables": ["new_asset"],
+        "tables": [
+          "new_asset"
+        ],
         "relationships": [],
-        "views": ["Active Assets"],
-        "charts": ["Assets by Status"]
+        "views": [
+          "Active Assets"
+        ],
+        "charts": [
+          "Assets by Status"
+        ]
       },
       "expectations": []
     },
     {
-      "id": 4, "tier": "full", "spec": "app-spec.json",
+      "id": 4,
+      "tier": "full",
+      "spec": "app-spec.json",
       "prompt": "Hardening: a lookup-heavy ticket table, an N:N to tags, a sub-grid, and valid relational sample data — exercises fixes #1/#2/#3/#4/#5/#7.",
       "expect": {
-        "tables": ["new_customer", "new_ticket", "new_tag"],
-        "relationships": ["new_customer_new_ticket", "new_tag_new_ticket"],
-        "views": ["Open Tickets"],
+        "tables": [
+          "new_customer",
+          "new_ticket",
+          "new_tag"
+        ],
+        "relationships": [
+          "new_customer_new_ticket",
+          "new_tag_new_ticket"
+        ],
+        "views": [
+          "Open Tickets"
+        ],
         "charts": []
       },
       "expectations": [

@@ -1045,7 +1045,7 @@ function validateAppSpec(spec, opts = {}) {
       // the `design` block uses. Allowlists mirror the vendored SDK's PersonaRoleSpec/JobToBeDone/
       // EntityPrivilege shapes exactly.
       const PERSONA_KEYS = new Set(['persona', 'jobs', 'additionalPrivileges', 'appAccess', 'businessUnitId', 'assignTo']);
-      const JOB_KEYS = new Set(['name', 'description', 'privileges']);
+      const JOB_KEYS = new Set(['name', 'description', 'privileges', 'surfaces']);
       const PRIVILEGE_KEYS = new Set(['entity', 'access', 'scope']);
       const rejectUnknown = (obj, allowed, ctx) => {
         for (const k of Object.keys(obj)) if (!allowed.has(k)) errors.push(`${ctx}: unknown key '${k}' (allowed: ${[...allowed].join(', ')})`);
@@ -1097,6 +1097,14 @@ function validateAppSpec(spec, opts = {}) {
             if (!j || typeof j !== 'object' || Array.isArray(j)) { errors.push(`persona "${label}": each job must be an object`); continue; }
             rejectUnknown(j, JOB_KEYS, `persona "${label}" job`);
             if (!j.name || typeof j.name !== 'string') errors.push(`persona "${label}": a job is missing name`);
+            // surfaces[]: the view/form/page names (or page keys) that let this persona DO the job.
+            // Purely documentary — it drives the design doc's traceability table and the "job with no
+            // surface" lint warning, and is never applied to Dataverse. Shape-only validation, because
+            // a surface may legitimately name an artifact this spec doesn't author (a stock view).
+            if (j.surfaces !== undefined) {
+              if (!Array.isArray(j.surfaces)) errors.push(`persona "${label}" job "${j.name || '?'}": surfaces must be an array of strings`);
+              else for (const s of j.surfaces) if (typeof s !== 'string' || !s.trim()) errors.push(`persona "${label}" job "${j.name || '?'}": each surfaces[] entry must be a non-empty string`);
+            }
             validatePrivileges(j.privileges, `persona "${label}" job "${(j && j.name) || '?'}"`);
           }
         }

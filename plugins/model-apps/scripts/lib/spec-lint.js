@@ -356,6 +356,27 @@ function lintAppSpec(spec) {
   dupWarn((spec.charts || []).map((c) => c.name), 'chart', W);
   dupWarn((spec.forms || []).map((f) => f.name).filter(Boolean), 'form', W);
 
+  // Design-completeness warnings. These are WARNINGS, never errors: a spec without personas or pages
+  // is still buildable, and the author may have good reason. They exist because all three were steps
+  // the authoring flow only asked for in prose, and prose steps get silently skipped — testers
+  // reported exactly that (no jobs enumerated, no pages proposed). Surfacing them at the lint gate
+  // makes the omission visible while it is still cheap to fix.
+  const personas = spec.personas || [];
+  const jobs = personas.flatMap((p) => (p.jobs || []).map((j) => ({ persona: p.persona, job: j })));
+  if (!personas.length) {
+    W('no personas[] — no jobs-to-be-done are recorded and no security role is authored, so the app opens only for system administrators. Capture who uses this app and what each of them needs to get done.');
+  } else if (!jobs.length) {
+    W('personas[] declares no jobs — a persona with no jobs-to-be-done neither documents the app nor sizes its security role.');
+  }
+  for (const { persona, job } of jobs) {
+    if (!((job.surfaces || []).length)) {
+      W(`persona "${persona}" job "${job.name}" is not mapped to a surface (jobs[].surfaces[]) — nothing in this app demonstrably lets that persona do the job.`);
+    }
+  }
+  if (!(spec.pages || []).length) {
+    W('no pages[] — per the genpage-first policy, non-record surfaces (overview/landing, dashboard, analytics, guided or wizard flows) should be generative pages. If this app is genuinely record-CRUD only, ignore this.');
+  }
+
   return { ok: errors.length === 0, errors, warnings };
 }
 

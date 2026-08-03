@@ -54,6 +54,35 @@ ASSERTIONS.set('security: each app-access persona role injects app-module read; 
   return PASS;
 });
 
+// #3 (design coverage): every persona job should name the surface(s) that let that persona DO it,
+// and each named surface must actually exist in the spec. This grades the DESIGN, not the access
+// model: testers reported the skill enumerating neither jobs-to-be-done nor the generative pages that
+// satisfy them, so an app shipped whose personas had no way to do their work. A job pointing at a
+// surface that does not exist is the same failure wearing a mapping.
+// Surfaces are matched by page key, page name, view name or form name — the four things an author
+// would naturally write. Advisory-by-omission: a spec that maps NO jobs at all skips rather than
+// fails, because `surfaces[]` is optional and older fixtures predate it.
+ASSERTIONS.set('design: every mapped persona job resolves to a surface that exists', ({ spec }) => {
+  const personas = (spec && spec.personas) || [];
+  if (!personas.length) return skip('spec declares no personas');
+  const jobs = personas.flatMap((p) => (p.jobs || []).map((j) => ({ persona: p.persona, job: j })));
+  const mapped = jobs.filter(({ job }) => ((job.surfaces || []).length));
+  if (!mapped.length) return skip('no job declares surfaces[]');
+
+  const known = new Set();
+  for (const p of spec.pages || []) { if (p.key) known.add(String(p.key).toLowerCase()); if (p.name) known.add(String(p.name).toLowerCase()); }
+  for (const v of spec.views || []) if (v.name) known.add(String(v.name).toLowerCase());
+  for (const f of spec.forms || []) if (f.name) known.add(String(f.name).toLowerCase());
+
+  const dangling = [];
+  for (const { persona, job } of mapped) {
+    for (const s of job.surfaces || []) {
+      if (!known.has(String(s).toLowerCase())) dangling.push(`${persona} → "${job.name}" → ${s}`);
+    }
+  }
+  return dangling.length ? fail(`job(s) mapped to a non-existent surface: ${dangling.join('; ')}`) : PASS;
+});
+
 // #1 (JTBD coverage): a persona job/additionalPrivilege that names an APP-OWNED table (the app's own
 // publisher prefix) must resolve to a table the app actually provisions. Catches a persona access model
 // that references a hallucinated/typo app table (e.g. `new_tickets` vs `new_ticket`) — the role would

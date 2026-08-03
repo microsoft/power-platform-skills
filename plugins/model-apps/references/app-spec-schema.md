@@ -546,6 +546,10 @@ Authors one **security role per persona**, sized to the entity access that perso
 **jobs-to-be-done** need. Without at least one role the generated app runs only for system
 administrators; `personas[]` produces a working access model so the app opens for real users.
 
+`personas[]` is captured **first** during authoring (Level (a0), before the data model): the jobs
+are what the app exists to do, so they drive which tables and surfaces exist. `privileges[]` is
+filled in later (Level (c)), once the entities they reference are agreed.
+
 The model is **deterministic**: you DECLARE the access each job requires — the builder never infers
 privileges from a job's text. It **unions** every job's declared access into the persona's one role
 (max scope wins per entity+access) and applies it with replace semantics (a rebuild that drops a
@@ -556,8 +560,10 @@ privilege removes it — the role converges to the spec).
   {
     "persona": "Field Technician",         // the role name (unique across personas[])
     // jobs[]: the units of work this persona does. Each job DECLARES the entity access it needs.
+    // `surfaces[]` is optional and documentary — the views/forms/pages that let them do the job.
     "jobs": [
       { "name": "Complete work orders",
+        "surfaces": ["My Work Orders", "Work Order"],
         "privileges": [
           { "entity": "msdyn_workorder", "access": ["read", "write"], "scope": "businessUnit" },
           { "entity": "msdyn_workorderproduct", "access": ["read", "create", "write"], "scope": "user" }
@@ -581,7 +587,8 @@ privilege removes it — the role converges to the spec).
 
 **Field reference**
 - `persona` (**required**) — the security role's display name; also its idempotency key. Must be unique across `personas[]`.
-- `jobs[]` (**required**, ≥1) — `{ name, description?, privileges[] }`. `privileges[]` is required and non-empty per job.
+- `jobs[]` (**required**, ≥1) — `{ name, description?, surfaces?, privileges[] }`. `privileges[]` is required and non-empty per job.
+- `jobs[].surfaces[]` (optional) — the view/form/page names (or page `key`s) that let this persona **do** the job. Documentary only: it is never applied to Dataverse. It renders the jobs→surfaces traceability table in `model-app-plan.md`, and a job with no `surfaces[]` is flagged by `spec-lint.js` as a design gap — nothing in the app demonstrably lets that persona do that job.
 - `privileges[].entity` (**required**) — a table **logical name** (e.g. `account`, `msdyn_workorder`). May be a table this spec doesn't author (standard/system tables are common); existence is resolved against live metadata by the build, not at lint time.
 - `privileges[].access` (**required**) — one or more of `read · create · write · delete · append · appendTo · assign · share`.
 - `privileges[].scope` (optional, default `user`) — `user` (Basic) · `businessUnit` (Local) · `parentChild` (Deep) · `organization` (Global), least→most permissive.

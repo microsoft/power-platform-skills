@@ -9,6 +9,17 @@ plus local-dev ergonomics, sample coverage, and an automated eval suite. Builds 
 no breaking changes.
 
 ### Added
+- **Jobs-to-be-done drive the design** — authoring now starts at Level (a0) by asking who uses the
+  app and what each of them needs to get done, *before* the data model, and carries those jobs
+  through to the surfaces that satisfy them (`personas[].jobs[].surfaces[]`). Previously jobs were
+  only asked for at the end, to size security roles — and the playbook contradicted the skill by
+  declaring roles out of scope, so they were never enumerated at all.
+- **`scripts/write-app-spec-doc.js`** — renders `model-app-plan.md`, a readable design document
+  (jobs → surfaces traceability, data model, every surface, navigation, access model, sample data)
+  from the spec. It replaces a hand-written counts summary, so it is complete, always agrees with
+  what will build, and is regenerable after any edit.
+- **Design-gap warnings at the lint gate** — jobs with no covering surface, an app with no
+  generative pages, or no personas at all are now surfaced as warnings instead of passing silently.
 - **`/app-builder` skill (Preview)** — natural-language intent → deployed model-driven app: tables,
   columns, relationships, adaptive forms with sub-grids, views, Choice-column charts, dashboards,
   generative pages, app + sitemap, and sample data, via the headless vendored `cds-maker-sdk`.
@@ -51,6 +62,10 @@ no breaking changes.
 - **The connectors feature flag is re-probed before code generation** — the result is passed as
   `Connectors: enabled|disabled` in every page-builder dispatch and overrides the plan, so a plan
   authored while the flag was ON can no longer emit connector calls the run never binds.
+- **Surface classification is explicit** — the authoring flow now enumerates every surface each job
+  needs and classifies it (record CRUD → form + view; overview/dashboard/analytics/wizard/composite
+  → generative page), and states each call out loud. Pages were previously one item in a long list
+  behind a "never force-add it" hedge, so they were routinely skipped.
 - **Forms resolve by `(entity, name, type)`** — a table's same-named Main/Quick View/Card forms no
   longer block an edit, and teardown no longer over-deletes them.
 - **Views are identified by `entity|name`** — same-named views on different tables no longer cross-wire
