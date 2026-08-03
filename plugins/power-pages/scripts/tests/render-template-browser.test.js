@@ -9,6 +9,7 @@ const path = require('path');
 const {
   parseArgs,
   renderTemplateBrowser,
+  validateRenderedTemplateBrowser,
 } = require('../render-template-browser');
 
 function tempDir() {
@@ -188,7 +189,15 @@ test('renderTemplateBrowser reports opener failures without failing render', (t)
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const dataPath = path.join(dir, 'templates.json');
   const outputPath = path.join(dir, 'browser.html');
-  fs.writeFileSync(dataPath, JSON.stringify({ TEMPLATES_JSON: [] }));
+  fs.writeFileSync(dataPath, JSON.stringify({
+    TEMPLATES_JSON: [{
+      displayName: 'Company Portal',
+      description: 'Internal site',
+      framework: 'react',
+      keywords: ['portal'],
+      previewImages: [],
+    }],
+  }));
 
   const result = renderTemplateBrowser({
     templatesJsonPath: dataPath,
@@ -200,4 +209,31 @@ test('renderTemplateBrowser reports opener failures without failing render', (t)
 
   assert.deepEqual(result, { status: 'ok', output: outputPath, opened: false, openError: 'no opener' });
   assert.equal(fs.existsSync(outputPath), true);
+});
+
+test('renderTemplateBrowser refuses to open an empty template browser', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const dataPath = path.join(dir, 'templates.json');
+  const outputPath = path.join(dir, 'browser.html');
+  fs.writeFileSync(dataPath, JSON.stringify({ TEMPLATES_JSON: [] }));
+
+  const result = renderTemplateBrowser({ templatesJsonPath: dataPath, outputPath, open: true }, {
+    execFileSync: () => { throw new Error('should not open invalid browser'); },
+  });
+
+  assert.equal(result.status, 'invalid');
+  assert.equal(result.opened, false);
+  assert.match(result.validation.errors.join('\n'), /must contain at least one template family/);
+  assert.match(result.validation.errors.join('\n'), /empty-state/);
+});
+
+test('validateRenderedTemplateBrowser catches missing framework labels', () => {
+  const result = validateRenderedTemplateBrowser({
+    templates: [{ displayName: 'Supplier Portal', variants: { react: {}, vue: {} } }],
+    html: '<h2>Supplier Portal</h2><span>React</span>',
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join('\n'), /missing framework Vue/);
 });

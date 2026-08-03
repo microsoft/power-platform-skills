@@ -165,6 +165,10 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
      ```bash
      node "${PLUGIN_ROOT}/scripts/render-template-browser.js" --templatesJsonPath "<temp-json>" --outputPath "<temp-html>" --open
      ```
+     Evaluate the JSON result before telling the user to use the browser:
+     - **`status: "ok"`**: continue; the browser preview was generated and opened.
+     - **`status: "invalid"`**: do not continue with template selection. Surface the validation errors, rebuild the `TEMPLATES_JSON` file from the matched families, and rerun the render. If it is still invalid, fall back to from-scratch rather than showing an empty or incomplete template browser.
+     - **`status: "ok"` with `opened: false`**: the HTML validated but the browser could not be opened automatically. Show the file path and continue with terminal selection only after the user has had a chance to open it manually.
    - The browser view is read-only and exists to browse template capabilities and available framework variants; the terminal `AskUserQuestion` remains the decision surface.
 
 <!-- not-a-gate: read-only route selection after template preview; only disposable temp preview files exist, with no project directory, Dataverse write, or durable skill state -->

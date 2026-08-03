@@ -121,6 +121,35 @@ function renderTemplateSectionsHtml(templates) {
   `).join('');
 }
 
+function expectedFrameworks(template) {
+  const variants = normalizeVariants(template);
+  const frameworks = variants.length > 0 ? variants.map((variant) => variant.framework) : [template.framework].filter(Boolean);
+  return frameworks.map(frameworkLabel).filter(Boolean);
+}
+
+function validateRenderedTemplateBrowser({ templates, html }) {
+  const errors = [];
+  const items = Array.isArray(templates) ? templates : [];
+  if (items.length === 0) {
+    errors.push('TEMPLATES_JSON must contain at least one template family before opening the browser preview');
+  }
+  if (/No templates are available right now/i.test(html || '')) {
+    errors.push('Rendered template browser contains the empty-state message');
+  }
+  items.forEach((template, index) => {
+    const displayName = escapeHtml(template.displayName);
+    if (!displayName || !html.includes(displayName)) {
+      errors.push(`Rendered template browser is missing template ${index + 1} displayName`);
+    }
+    for (const framework of expectedFrameworks(template)) {
+      if (!html.includes(escapeHtml(framework))) {
+        errors.push(`Rendered template browser is missing framework ${framework} for ${template.displayName || `template ${index + 1}`}`);
+      }
+    }
+  });
+  return { ok: errors.length === 0, errors };
+}
+
 function renderTemplateBrowser({ templatesJsonPath, outputPath, open = false }, deps = {}) {
   if (!templatesJsonPath || !outputPath) {
     throw new Error('Usage: render-template-browser.js --templatesJsonPath <path> --outputPath <path> [--open]');
@@ -139,6 +168,10 @@ function renderTemplateBrowser({ templatesJsonPath, outputPath, open = false }, 
     },
     requiredKeys: ['TEMPLATE_COUNT', 'TEMPLATE_TABS_HTML', 'TEMPLATE_SECTIONS_HTML'],
   });
+  const validation = validateRenderedTemplateBrowser({ templates, html: fsImpl.readFileSync(outputPath, 'utf8') });
+  if (!validation.ok) {
+    return { status: 'invalid', output: outputPath, opened: false, validation };
+  }
   let openError = null;
   if (open) {
     try {
@@ -170,4 +203,5 @@ module.exports = {
   renderTemplateBrowser,
   renderTemplateTabsHtml,
   renderTemplateSectionsHtml,
+  validateRenderedTemplateBrowser,
 };
