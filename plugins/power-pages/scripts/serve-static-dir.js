@@ -51,6 +51,23 @@ function isServableFile(filePath) {
   }
 }
 
+function streamFile(filePath, res, deps = {}) {
+  const fsImpl = deps.fs || fs;
+  let stream;
+  try {
+    stream = fsImpl.createReadStream(filePath);
+  } catch {
+    if (!res.headersSent) res.writeHead(404);
+    res.end('Not found');
+    return;
+  }
+  stream.on('error', () => {
+    if (!res.headersSent) res.writeHead(404);
+    res.end();
+  });
+  stream.pipe(res);
+}
+
 function startServer({ root, host, port, urlFile }) {
   const server = http.createServer((req, res) => {
     const filePath = safeResolve(root, req.url);
@@ -63,7 +80,7 @@ function startServer({ root, host, port, urlFile }) {
       'Content-Type': contentType(filePath),
       'Cache-Control': 'no-store',
     });
-    fs.createReadStream(filePath).pipe(res);
+    streamFile(filePath, res);
   });
   server.listen(port, host, () => {
     const address = server.address();
@@ -110,4 +127,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseArgs, safeResolve, contentType, isServableFile, main };
+module.exports = { parseArgs, safeResolve, contentType, isServableFile, streamFile, main };

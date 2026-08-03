@@ -3,8 +3,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
+const { EventEmitter } = require('events');
 
-const { parseArgs, safeResolve, contentType, isServableFile } = require('../serve-static-dir');
+const { parseArgs, safeResolve, contentType, isServableFile, streamFile } = require('../serve-static-dir');
 
 test('parseArgs reads static server options', () => {
   assert.deepEqual(parseArgs(['--root', '/tmp/import', '--urlFile', '/tmp/url.txt', '--port', '8123']), {
@@ -44,4 +45,41 @@ test('contentType returns useful types for import status assets', () => {
   assert.equal(contentType('index.html'), 'text/html; charset=utf-8');
   assert.equal(contentType('status.json'), 'application/json; charset=utf-8');
   assert.equal(contentType('preview.png'), 'image/png');
+});
+
+test('streamFile ends the response when read stream creation throws', () => {
+  const writes = [];
+  const res = {
+    headersSent: false,
+    writeHead: (status) => writes.push(['head', status]),
+    end: (body) => writes.push(['end', body]),
+  };
+
+  streamFile('/tmp/import/status.json', res, {
+    fs: {
+      createReadStream: () => { throw new Error('gone'); },
+    },
+  });
+
+  assert.deepEqual(writes, [['head', 404], ['end', 'Not found']]);
+});
+
+test('streamFile handles stream errors after headers are written', () => {
+  const stream = new EventEmitter();
+  stream.pipe = () => {};
+  const writes = [];
+  const res = {
+    headersSent: true,
+    writeHead: (status) => writes.push(['head', status]),
+    end: (body) => writes.push(['end', body]),
+  };
+
+  streamFile('/tmp/import/status.json', res, {
+    fs: {
+      createReadStream: () => stream,
+    },
+  });
+  stream.emit('error', new Error('gone'));
+
+  assert.deepEqual(writes, [['end', undefined]]);
 });
