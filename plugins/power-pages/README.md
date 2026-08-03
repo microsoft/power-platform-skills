@@ -36,6 +36,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 | [Git](https://git-scm.com/downloads) | Commits made by most skills | `winget install Git.Git` |
 | [PAC CLI](https://learn.microsoft.com/power-platform/developer/cli/introduction) | Deploy, activate, data model | `dotnet tool install -g Microsoft.PowerApps.CLI.Tool` |
 | [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) | Data model, sample data, activation | `winget install Microsoft.AzureCLI` |
+| [GitHub CLI](https://github.com/cli/cli#installation) (optional) | `/report-issue` only | `winget install GitHub.cli` |
 
 Installing from the marketplace copies the skill files and nothing else, so none of these tools come with it. Run [`/setup-prerequisites`](#setup-prerequisites) to check what is on your machine, install what is missing, and sign the two CLIs in.
 
@@ -397,13 +398,14 @@ Adds search engine optimization artifacts: `robots.txt`, `sitemap.xml`, and meta
 
 > "Set up the plugin" · "Check my setup" · "pac is not recognized"
 
-Gets a machine ready to use the plugin. Checks Node.js, Git, the .NET SDK, the Power Platform CLI, and the Azure CLI, installs whatever is missing, and signs both CLIs in.
+Gets a machine ready to use the plugin. Checks Node.js, Git, the .NET SDK, the Power Platform CLI, and the Azure CLI, plus the optional GitHub CLI, installs whatever is missing, and signs the CLIs in.
 
 - Reports each tool's version and sign-in state before changing anything
 - Asks before every install, one tool at a time, showing the exact command
 - Installs via winget on Windows and Homebrew on macOS; hands back commands on Linux
 - Offers a PAC CLI update when a newer version is published
-- Warns when the two CLIs are signed into different tenants
+- Warns when the Power Platform and Azure CLIs are signed into different tenants
+- Offers the GitHub CLI as optional, so a machine without it still reads as ready
 - A failed install never stops the run — everything outstanding lands in the final summary
 
 #### `/report-issue`

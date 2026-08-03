@@ -7,6 +7,8 @@ const {
   parseAzVersion,
   parseDotnetVersion,
   parseGitVersion,
+  parseGhVersion,
+  parseGhAuthStatus,
   parsePacAuthWho,
   parseAzAccountShow,
   compareVersions,
@@ -47,8 +49,10 @@ function statusFixture(overrides = {}) {
       dotnet: { available: true, version: '10.0.102' },
       pac: { available: true, version: '1.51.1', updateAvailable: false },
       az: { available: true, version: '2.77.0' },
+      gh: { available: true, version: '2.96.0', optional: true },
       pacAuth: { signedIn: true, tenantId: 'tenant-a' },
       azAuth: { signedIn: true, tenantId: 'tenant-a' },
+      ghAuth: { signedIn: true, account: 'octocat' },
     },
     overrides
   );
@@ -164,6 +168,76 @@ test('latestStableVersion picks the last stable entry', () => {
   assert.equal(latestStableVersion(undefined), null);
 });
 
+test('parseGhVersion ignores the release URL on the second line', () => {
+  const banner = 'gh version 2.96.0 (2026-07-02)\nhttps://github.com/cli/cli/releases/tag/v2.96.0\n';
+  assert.equal(parseGhVersion(banner), '2.96.0');
+  assert.equal(parseGhVersion(null), null);
+  assert.equal(parseGhVersion('command not found: gh'), null);
+});
+
+// Captured from gh 2.96.0 with two hosts configured. The whole report goes to
+// stderr, and gh exits 1 because the enterprise host is broken — even though
+// github.com is authenticated. Reading this as "signed out" was a real bug.
+const GH_AUTH_MULTI_HOST = `github.com
+  ✓ Logged in to github.com account octocat (GH_TOKEN)
+  - Active account: true
+  - Token scopes: 'gist', 'repo', 'workflow'
+
+contoso.ghe.com
+  X Failed to log in to contoso.ghe.com using token (GH_TOKEN)
+  - Active account: true
+  - The token in GH_TOKEN is invalid.
+`;
+
+test('parseGhAuthStatus reads a signed-in account', () => {
+  assert.deepEqual(parseGhAuthStatus('  ✓ Logged in to github.com account octocat (keyring)\n'), {
+    signedIn: true,
+    account: 'octocat',
+  });
+});
+
+test('parseGhAuthStatus prefers github.com when several hosts are configured', () => {
+  assert.deepEqual(parseGhAuthStatus(GH_AUTH_MULTI_HOST), { signedIn: true, account: 'octocat' });
+});
+
+// The inverse of the capture above: an enterprise host works, github.com does
+// not. /report-issue files against github.com, so this must read as signed out
+// rather than deferring the failure to `gh issue create`.
+test('parseGhAuthStatus does not accept an enterprise-only login', () => {
+  const enterpriseOnly = `github.com
+  X Failed to log in to github.com account octocat (GH_TOKEN)
+  - The token in GH_TOKEN is invalid.
+
+contoso.ghe.com
+  ✓ Logged in to contoso.ghe.com account alice (keyring)
+  - Active account: true
+`;
+  assert.deepEqual(parseGhAuthStatus(enterpriseOnly), { signedIn: false, account: null });
+});
+
+test('parseGhAuthStatus does not read a failed host as signed in', () => {
+  const failedOnly = `contoso.ghe.com
+  X Failed to log in to contoso.ghe.com using token (GH_TOKEN)
+  - The token in GH_TOKEN is invalid.
+`;
+  assert.deepEqual(parseGhAuthStatus(failedOnly), { signedIn: false, account: null });
+});
+
+test('parseGhAuthStatus accepts the older "as <account>" phrasing', () => {
+  assert.deepEqual(parseGhAuthStatus('✓ Logged in to github.com as octocat (oauth_token)'), {
+    signedIn: true,
+    account: 'octocat',
+  });
+});
+
+test('parseGhAuthStatus reports signed out for null and the empty-hosts message', () => {
+  assert.deepEqual(parseGhAuthStatus(null), { signedIn: false, account: null });
+  assert.deepEqual(parseGhAuthStatus('You are not logged into any GitHub hosts.'), {
+    signedIn: false,
+    account: null,
+  });
+});
+
 test('buildActions is empty when everything is present and signed in', () => {
   assert.deepEqual(buildActions(statusFixture()), []);
 });
@@ -227,4 +301,38 @@ test('tenantMismatch stays silent when either side is signed out or unknown', ()
     tenantMismatch({ signedIn: true, tenantId: null }, { signedIn: true, tenantId: 'tenant-b' }),
     null
   );
+});
+
+// The GitHub CLI backs exactly one skill (/report-issue), so it is offered but
+// never withholds the ready verdict.
+test('buildActions marks GitHub CLI install and sign-in as optional', () => {
+  const missing = buildActions(
+    statusFixture({ gh: { available: false, version: null, optional: true } })
+  );
+  assert.deepEqual(missing, [{ tool: 'gh', kind: 'install', optional: true }]);
+
+  const signedOut = buildActions(statusFixture({ ghAuth: { signedIn: false, account: null } }));
+  assert.deepEqual(signedOut, [{ tool: 'gh', kind: 'signin', optional: true }]);
+});
+
+test('buildActions does not ask a missing GitHub CLI to sign in', () => {
+  const actions = buildActions(
+    statusFixture({
+      gh: { available: false, version: null, optional: true },
+      ghAuth: { signedIn: false, account: null },
+    })
+  );
+  assert.deepEqual(actions, [{ tool: 'gh', kind: 'install', optional: true }]);
+});
+
+test('required actions are never marked optional', () => {
+  const actions = buildActions(
+    statusFixture({
+      git: { available: false, version: null },
+      pac: { available: true, version: '1.50.1', updateAvailable: true },
+      azAuth: { signedIn: false, tenantId: null },
+    })
+  );
+  assert.ok(actions.length > 0);
+  for (const action of actions) assert.equal(action.optional, undefined);
 });

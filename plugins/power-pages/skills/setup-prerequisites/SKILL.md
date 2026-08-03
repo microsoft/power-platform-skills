@@ -2,8 +2,8 @@
 name: setup-prerequisites
 description: >-
   Gets a machine ready to use the power-pages plugin — checks Node.js, Git, the
-  .NET SDK, the Power Platform CLI (pac), and the Azure CLI (az), installs
-  whatever is missing, and signs both CLIs in.
+  .NET SDK, the Power Platform CLI (pac), the Azure CLI (az), and the GitHub CLI
+  (gh), installs whatever is missing, and signs the CLIs in.
 user-invocable: true
 disable-model-invocation: true
 argument-hint: "[optional: check | install]"
@@ -15,7 +15,7 @@ model: sonnet
 
 # Setup Prerequisites
 
-Check every tool the power-pages skills depend on — Node.js, Git, the .NET SDK, the Power Platform CLI, and the Azure CLI — install what is missing, and sign the Power Platform CLI and Azure CLI in.
+Check every tool the power-pages skills depend on — Node.js, Git, the .NET SDK, the Power Platform CLI, and the Azure CLI, plus the optional GitHub CLI — install what is missing, and sign the CLIs in.
 
 **Initial request:** $ARGUMENTS
 
@@ -29,13 +29,14 @@ Installing the plugin from the marketplace copies skill files and nothing else, 
 - **Linux has no automated path** for Git, the .NET SDK, and the Azure CLI. Detection still works; the install step hands back commands.
 - **`--allow-no-subscriptions` is only valid on `az login`.** Never add it to `az account show` or any other `az` subcommand — they reject it as an unrecognized argument.
 - **A failed install is not the end of the run.** Report it, keep going with the remaining tools, and collect every failure into the final summary.
+- **The GitHub CLI is optional.** Only `/report-issue` uses it, so a missing `gh` is offered but never holds back the ready verdict.
 - **Environment selection is out of scope.** This skill stops once the CLIs are installed and signed in. Choosing a Dataverse environment belongs to the skill that needs one.
 
 ## Workflow
 
 1. **Detect** — Run the status check, present what is present and what is missing
 2. **Install** — Ask per missing tool, install it
-3. **Sign in** — Sign the Power Platform CLI and Azure CLI in
+3. **Sign in** — Sign the Power Platform CLI and Azure CLI in, and the GitHub CLI when present
 4. **Summarize** — Re-check, report, point at the next step
 
 ## Task Tracking
@@ -57,20 +58,22 @@ Create all four tasks at the start of Phase 1. Mark each `in_progress` when star
 node "${PLUGIN_ROOT}/skills/setup-prerequisites/scripts/detect-prerequisites.js"
 ```
 
-The script exits `1` when anything needs attention — that is a report, not a failure. Read the JSON on stdout:
+The script exits `1` when something required needs attention, and `0` when only optional items are left — either way that is a report, not a failure. Read the JSON on stdout:
 
 | Field | Meaning |
 |---|---|
-| `node`, `git`, `dotnet`, `pac`, `az` | `available` plus the detected `version` |
+| `node`, `git`, `dotnet`, `pac`, `az`, `gh` | `available` plus the detected `version` |
 | `pac.updateAvailable` | A newer PAC CLI is published on NuGet (`pac.latestVersion`) |
-| `pacAuth`, `azAuth` | `signedIn`, plus `tenantId` and `user` when signed in |
+| `pacAuth`, `azAuth`, `ghAuth` | `signedIn`, plus the account details when signed in |
 | `tenantMismatch` | Non-null when the two CLIs are signed into different tenants |
 | `actions` | What needs doing, as `{ tool, kind }` where `kind` is `install`, `update`, or `signin` |
-| `ready` | True when `actions` is empty |
+| `ready` | True when nothing required is outstanding |
 
 Add `--no-update-check` to skip the NuGet lookup when the machine is offline or behind a proxy that blocks it.
 
-Present the status as a short plain-language table — tool, version, and whether it is ready. If `ready` is true and there is no `tenantMismatch`, tell the user they are set up and skip to Phase 4.
+Present the status as a short plain-language table — tool, version, and whether it is ready. If `ready` is true and there is no `tenantMismatch`, tell the user they are set up. Mention any optional action still open, then skip to Phase 4.
+
+**Optional actions.** An action carrying `optional: true` is offered like any other but never withholds the ready verdict. The GitHub CLI is the only one today: just `/report-issue` uses it, so a user without it is still set up for everything else. Say what it unlocks rather than presenting it as a gap.
 
 **Node.js** is always reported as available, because this script runs under Node. If the user reached this skill with no Node at all, no script here can run — point them at <https://nodejs.org/> and stop.
 
@@ -91,13 +94,13 @@ Work through `actions` in order, one tool per `AskUserQuestion`. Combining them 
 For each prompt, show the command that will run. Get it from the script rather than writing it out from memory, passing the same flags the real run will use — for a `kind` of `update`, that means `--update` on both calls, because the resolved command differs (`dotnet tool update` rather than `dotnet tool install`):
 
 ```bash
-node "${PLUGIN_ROOT}/skills/setup-prerequisites/scripts/install-prerequisite.js" --tool <git|dotnet|pac|az> [--update] --dry-run
+node "${PLUGIN_ROOT}/skills/setup-prerequisites/scripts/install-prerequisite.js" --tool <git|dotnet|pac|az|gh> [--update] --dry-run
 ```
 
 On approval, run the same command without `--dry-run`:
 
 ```bash
-node "${PLUGIN_ROOT}/skills/setup-prerequisites/scripts/install-prerequisite.js" --tool <git|dotnet|pac|az> [--update]
+node "${PLUGIN_ROOT}/skills/setup-prerequisites/scripts/install-prerequisite.js" --tool <git|dotnet|pac|az|gh> [--update]
 ```
 
 The script streams installer output to the terminal and ends with a JSON line:
@@ -115,6 +118,8 @@ The script streams installer output to the terminal and ends with a JSON line:
 3. Tell the user to restart the terminal and re-run `/setup-prerequisites`, which will then find the SDK and install PAC.
 
 Do not present that `unsupported` result as a failure of their machine or their platform.
+
+**Optional tools are offered last and framed as a choice.** Ask for the GitHub CLI after the required tools, and say what it buys — it is what `/report-issue` uses to file a bug. Declining it leaves a working setup.
 
 **Never stop the run on a failure.** Every failed or unsupported install is carried into Phase 4.
 
@@ -146,6 +151,12 @@ az login
 
 If `az login` fails because the account has no Azure subscription, retry with `az login --allow-no-subscriptions`. That variant lets subscription-less accounts sign in and still mint the tokens the plugin's scripts need. It is valid on `az login` only.
 
+**GitHub CLI** (optional — only `/report-issue` needs it):
+
+```bash
+gh auth login
+```
+
 ### Tenant mismatch
 
 When `tenantMismatch` is non-null, tell the user which tenant each CLI is signed into and that the plugin's skills use both against the same environment, so mismatched tenants surface later as permission errors. Offer to re-run the sign-in for whichever CLI is on the wrong tenant. This is a warning, not a blocker — the user may have a reason.
@@ -169,7 +180,8 @@ If a tool the user just installed still reports missing, that is the PATH-refres
 Present a final table of every prerequisite with its state, then:
 
 - **Everything ready** — say so and move to 4.3.
-- **Anything outstanding** — list each gap with the exact command to run by hand, taken from the `manual` array of the failing install. Include failures the user declined, so nothing is silently dropped.
+- **Anything required outstanding** — list each gap with the exact command to run by hand, taken from the `manual` array of the failing install. Include failures the user declined, so nothing is silently dropped.
+- **Only optional items outstanding** — the setup is complete. Note what is missing and what it would unlock, in one line, without calling it a gap.
 
 ### 4.3 Record skill usage
 

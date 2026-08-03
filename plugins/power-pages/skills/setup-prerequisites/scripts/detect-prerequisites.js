@@ -21,7 +21,7 @@
 
 'use strict';
 
-const { execFileSync } = require('child_process');
+const { spawnSync } = require('child_process');
 const https = require('https');
 
 // NuGet's flat-container index for the PAC CLI dotnet tool. The `versions` array
@@ -55,20 +55,36 @@ function buildProbeInvocation(command, args, platform = process.platform) {
 }
 
 /**
- * Runs a command and returns its stdout, or null when the command is missing or
- * fails. Arguments are passed as an array, never as a shell command string.
+ * Runs a command and returns its output, or null when the command is missing,
+ * fails, or times out. Arguments are passed as an array, never as a shell
+ * command string.
+ *
+ * @param {object} [options]
+ * @param {boolean} [options.mergeStderr]  Append stderr to stdout. Needed for
+ *   CLIs that report on stderr rather than stdout (`gh auth status` writes its
+ *   whole report there), where reading stdout alone yields an empty string.
+ * @param {boolean} [options.acceptNonZeroExit]  Return the output even when the
+ *   command exits non-zero. Needed where a non-zero exit does not mean "no
+ *   answer" — see the `gh auth status` note in `parseGhAuthStatus`.
  */
-function probe(command, args, { timeout = PROBE_TIMEOUT_MS } = {}) {
+function probe(
+  command,
+  args,
+  { timeout = PROBE_TIMEOUT_MS, mergeStderr = false, acceptNonZeroExit = false } = {}
+) {
   const invocation = buildProbeInvocation(command, args);
-  try {
-    return execFileSync(invocation.file, invocation.args, {
-      encoding: 'utf8',
-      timeout,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-  } catch {
-    return null;
-  }
+  const result = spawnSync(invocation.file, invocation.args, {
+    encoding: 'utf8',
+    timeout,
+    shell: false,
+  });
+  // `error` means the binary is missing or could not be spawned — never an
+  // answer. A non-zero exit usually means the question came back negative
+  // (signed out, no profile), unless the caller says otherwise.
+  if (result.error) return null;
+  if (result.status !== 0 && !acceptNonZeroExit) return null;
+  const stdout = result.stdout || '';
+  return mergeStderr ? stdout + (result.stderr || '') : stdout;
 }
 
 /**
@@ -110,6 +126,66 @@ function parseGitVersion(output) {
   if (!output) return null;
   const match = output.match(/git version\s+([0-9]+(?:\.[0-9]+)*)/i);
   return match ? match[1] : null;
+}
+
+/**
+ * Extracts the version from `gh --version`, which prints two lines:
+ *
+ *   gh version 2.96.0 (2026-07-02)
+ *   https://github.com/cli/cli/releases/tag/v2.96.0
+ *
+ * The trailing release URL also carries a version-shaped substring, so the
+ * pattern anchors on the "gh version" prefix rather than matching any digits.
+ */
+function parseGhVersion(output) {
+  if (!output) return null;
+  const match = output.match(/gh version\s+([0-9]+(?:\.[0-9]+)*)/i);
+  return match ? match[1] : null;
+}
+
+/**
+ * Reads sign-in state out of `gh auth status`. The report goes to **stderr**,
+ * groups accounts per host, and looks like this (captured from gh 2.96.0, with
+ * a second host configured):
+ *
+ *   github.com
+ *     ✓ Logged in to github.com account octocat (GH_TOKEN)
+ *     - Active account: true
+ *     - Token scopes: 'gist', 'repo', 'workflow'
+ *
+ *   contoso.ghe.com
+ *     X Failed to log in to contoso.ghe.com using token (GH_TOKEN)
+ *     - The token in GH_TOKEN is invalid.
+ *
+ * Two quirks drive this parser:
+ *
+ * 1. **A partial failure exits 1.** That run above exits non-zero purely because
+ *    the enterprise host is broken, even though github.com is authenticated. So
+ *    the caller must pass `acceptNonZeroExit` and let this function judge, or a
+ *    signed-in user is reported as signed out.
+ * 2. **The failure line is not the negation of the success line.** Failures read
+ *    "Failed to log in to", successes "Logged in to" — close enough to match the
+ *    same loose pattern, so this anchors on the "Logged in to <host> account"
+ *    shape rather than a bare "logged in" substring.
+ *
+ * `/report-issue` files against github.com, so that is the host that counts: an
+ * enterprise-only login does not let `gh issue create --repo microsoft/...`
+ * work, and reporting it as signed in would push the failure to issue-creation
+ * time. Signed out prints "You are not logged into any GitHub hosts", which
+ * matches nothing here.
+ */
+function parseGhAuthStatus(output) {
+  const signedOut = { signedIn: false, account: null };
+  if (!output) return signedOut;
+
+  // Older gh phrases the line "Logged in to github.com as octocat"; current
+  // builds use "account octocat". Accept both, and tolerate a missing name.
+  const pattern = /Logged in to (\S+)(?: (?:account|as) (\S+))?/gi;
+  const logins = [...output.matchAll(pattern)].map((m) => ({ host: m[1], account: m[2] || null }));
+
+  const github = logins.find((l) => l.host.toLowerCase() === 'github.com');
+  if (!github) return signedOut;
+  return { signedIn: true, account: github.account };
 }
 
 /**
@@ -248,6 +324,11 @@ function fetchLatestPacVersion() {
 /**
  * Turns a raw status map into the action list the skill works through. Each
  * action names the tool the workflow passes to `install-prerequisite.js`.
+ *
+ * Actions carrying `optional: true` are offered but never withhold the ready
+ * verdict. Only the GitHub CLI is optional today: exactly one skill uses it
+ * (`/report-issue`), so telling a user with a working Power Pages setup that
+ * they are not ready would be noise.
  */
 function buildActions(status) {
   const actions = [];
@@ -257,10 +338,14 @@ function buildActions(status) {
   if (!status.pac.available) actions.push({ tool: 'pac', kind: 'install' });
   else if (status.pac.updateAvailable) actions.push({ tool: 'pac', kind: 'update' });
   if (!status.az.available) actions.push({ tool: 'az', kind: 'install' });
+  if (!status.gh.available) actions.push({ tool: 'gh', kind: 'install', optional: true });
   // Sign-in is only actionable once the CLI itself exists; a missing CLI already
   // has an install action and would otherwise produce two entries for one gap.
   if (status.pac.available && !status.pacAuth.signedIn) actions.push({ tool: 'pac', kind: 'signin' });
   if (status.az.available && !status.azAuth.signedIn) actions.push({ tool: 'az', kind: 'signin' });
+  if (status.gh.available && !status.ghAuth.signedIn) {
+    actions.push({ tool: 'gh', kind: 'signin', optional: true });
+  }
   return actions;
 }
 
@@ -287,8 +372,11 @@ Usage:
   --no-update-check   Skip the NuGet lookup for a newer PAC CLI version.
 
 Exit codes:
-  0  Ready — every tool present and both CLIs signed in
+  0  Ready — every required tool present and both required CLIs signed in
   1  Action needed — see the "actions" array in the JSON output
+
+Actions marked "optional" (the GitHub CLI, used only by /report-issue)
+are reported but never withhold the ready verdict.
 `
     );
     process.exit(0);
@@ -301,10 +389,17 @@ Exit codes:
   const dotnetVersion = parseDotnetVersion(probe('dotnet', ['--version']));
   const pacVersion = parsePacVersion(probe('pac', ['help']));
   const azVersion = parseAzVersion(probe('az', ['version', '-o', 'tsv']));
+  const ghVersion = parseGhVersion(probe('gh', ['--version']));
 
   const pacAuth = parsePacAuthWho(pacVersion ? probe('pac', ['auth', 'who']) : null);
   const azAuth = parseAzAccountShow(
     azVersion ? probe('az', ['account', 'show', '-o', 'json']) : null
+  );
+  // `gh auth status` writes its report to stderr and exits non-zero when any
+  // configured host fails, so read both streams and keep the output regardless
+  // of exit code — see parseGhAuthStatus for why.
+  const ghAuth = parseGhAuthStatus(
+    ghVersion ? probe('gh', ['auth', 'status'], { mergeStderr: true, acceptNonZeroExit: true }) : null
   );
 
   const latestPac = checkUpdates && pacVersion ? await fetchLatestPacVersion() : null;
@@ -323,13 +418,18 @@ Exit codes:
       updateAvailable: Boolean(latestPac && compareVersions(pacVersion, latestPac) === 1),
     },
     az: { available: Boolean(azVersion), version: azVersion },
+    // Optional: only /report-issue uses the GitHub CLI.
+    gh: { available: Boolean(ghVersion), version: ghVersion, optional: true },
     pacAuth,
     azAuth,
+    ghAuth,
   };
 
   status.tenantMismatch = tenantMismatch(pacAuth, azAuth);
   status.actions = buildActions(status);
-  status.ready = status.actions.length === 0;
+  // Optional actions are reported but do not withhold the ready verdict, so a
+  // user with a working Power Pages setup and no GitHub CLI still reads as ready.
+  status.ready = status.actions.every((a) => a.optional === true);
 
   process.stdout.write(JSON.stringify(status, null, 2) + '\n');
   process.exit(status.ready ? 0 : 1);
@@ -341,6 +441,8 @@ module.exports = {
   parseAzVersion,
   parseDotnetVersion,
   parseGitVersion,
+  parseGhVersion,
+  parseGhAuthStatus,
   parsePacAuthWho,
   parseAzAccountShow,
   compareVersions,

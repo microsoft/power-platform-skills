@@ -9,7 +9,7 @@
  * invocation installs exactly one tool.
  *
  * Usage:
- *   node install-prerequisite.js --tool <git|dotnet|pac|az> [--update] [--dry-run]
+ *   node install-prerequisite.js --tool <git|dotnet|pac|az|gh> [--update] [--dry-run]
  *
  * Exit codes:
  *   0  Installed, or a dry run printed the plan
@@ -23,12 +23,13 @@
 
 const { execFileSync, spawnSync } = require('child_process');
 
-const TOOLS = ['git', 'dotnet', 'pac', 'az'];
+const TOOLS = ['git', 'dotnet', 'pac', 'az', 'gh'];
 
 // Winget package identifiers, verified against the microsoft/winget-pkgs
-// manifests at manifests/g/Git/Git, manifests/m/Microsoft/DotNet/SDK/10, and
-// manifests/m/Microsoft/AzureCLI.
+// manifests at manifests/g/Git/Git, manifests/g/GitHub/cli,
+// manifests/m/Microsoft/DotNet/SDK/10, and manifests/m/Microsoft/AzureCLI.
 const WINGET_GIT_ID = 'Git.Git';
+const WINGET_GH_ID = 'GitHub.cli';
 const WINGET_DOTNET_SDK_ID = 'Microsoft.DotNet.SDK.10';
 const WINGET_AZURE_CLI_ID = 'Microsoft.AzureCLI';
 
@@ -68,6 +69,11 @@ const MANUAL_INSTRUCTIONS = {
     'macOS (Homebrew)   brew install azure-cli',
     'Linux (curl)       curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash',
     'Docs               https://aka.ms/InstallAzureCLI',
+  ],
+  gh: [
+    'Windows (winget)   winget install -e --id GitHub.cli',
+    'macOS (Homebrew)   brew install gh',
+    'Any platform       https://github.com/cli/cli#installation',
   ],
 };
 
@@ -160,6 +166,26 @@ function resolveInstallPlan({ tool, platform, update = false, commandExists = ha
       };
     }
     return { command: null, reason: noPackageManagerReason(platform, '.NET SDK'), manual };
+  }
+
+  if (tool === 'gh') {
+    if (platform === 'win32' && commandExists('winget')) {
+      return {
+        command: 'winget',
+        args: ['install', ...WINGET_FLAGS, '--id', WINGET_GH_ID],
+        description: 'Installing the GitHub CLI via winget',
+        manual,
+      };
+    }
+    if (platform === 'darwin' && commandExists('brew')) {
+      return {
+        command: 'brew',
+        args: ['install', 'gh'],
+        description: 'Installing the GitHub CLI via Homebrew',
+        manual,
+      };
+    }
+    return { command: null, reason: noPackageManagerReason(platform, 'GitHub CLI'), manual };
   }
 
   if (tool === 'az') {

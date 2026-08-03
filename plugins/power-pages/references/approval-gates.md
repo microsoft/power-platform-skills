@@ -687,12 +687,12 @@ New skill (Power Pages source & dependency security scan). Runs local static ana
 
 ### 6.31 `setup-prerequisites` (2 gate IDs)
 
-New skill (machine setup for marketplace installs). Checks Node.js, Git, the .NET SDK, the PAC CLI, and the Azure CLI, installs what is missing, and signs both CLIs in. Both gates are `consent` — each one authorizes a change to the user's machine (a package install, or a credential prompt that writes a CLI profile) rather than a change to the project.
+New skill (machine setup for marketplace installs). Checks Node.js, Git, the .NET SDK, the PAC CLI, and the Azure CLI, plus the optional GitHub CLI, installs what is missing, and signs the CLIs in. Both gates are `consent` — each one authorizes a change to the user's machine (a package install, or a credential prompt that writes a CLI profile) rather than a change to the project.
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
 | `setup-prerequisites:2.install-consent` | gate | consent | 2 | *"Install &lt;tool&gt; using &lt;command&gt;? / Skip"* — fires once per `install`/`update` action returned by `detect-prerequisites.js`. Skipped entirely when nothing is missing. | nothing — the tool stays as it was and the run continues with the next one |
-| `setup-prerequisites:3.signin-consent` | gate | consent | 3 | *"Sign in to &lt;CLI&gt; now? / Skip"* — fires once per `signin` action, and again after an install that added a CLI. | nothing — no CLI profile is created; the outstanding sign-in is listed in the Phase 4 summary |
+| `setup-prerequisites:3.signin-consent` | gate | consent | 3 | *"Sign in to &lt;CLI&gt; now? / Skip"* — fires once per `signin` action (pac, az, and optionally gh), and again after an install that added a CLI. | nothing — no CLI profile is created; the outstanding sign-in is listed in the Phase 4 summary |
 
 ---
 
