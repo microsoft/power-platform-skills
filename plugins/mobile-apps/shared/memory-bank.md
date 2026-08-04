@@ -20,7 +20,7 @@ This file is the per-project notebook the agent maintains across `/create-mobile
 | Created | _<ISO date>_ |
 | Metro session state | `.expo/metro-session/state.json` — runtime status, dev-server port, PIDs, and native Metro URL; do not copy ephemeral values into this file |
 | Metro log | `.expo/metro-session/metro.log` — sanitized source used by `/debug-app` |
-| Metro launch command | _plugin wrapper: `node "<plugin-root>/scripts/metro-session.js" start --project-root "<working_dir>"`_ |
+| Metro launch command | `npm run dev` (foreground) or `node scripts/metro-session.js start --project-root "<working_dir>"` (detached) |
 
 ## Power Platform context
 

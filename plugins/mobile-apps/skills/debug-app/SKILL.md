@@ -69,9 +69,15 @@ Before entering the loop:
 Determine `<working_dir>` from `--working-dir` when present, otherwise use the current app root. Define:
 
 ```bash
-METRO_SCRIPT="${CLAUDE_SKILL_DIR}/../../scripts/metro-session.js"
+if [ -f "<working_dir>/scripts/metro-session.js" ]; then
+   METRO_SCRIPT="<working_dir>/scripts/metro-session.js"
+else
+   METRO_SCRIPT="${CLAUDE_SKILL_DIR}/../../scripts/metro-session.js"
+fi
 node "$METRO_SCRIPT" status --project-root "<working_dir>"
 ```
+
+Prefer the project-local wrapper. Created apps wire `npm run dev` through that file, so manual starts and agent starts produce the same `.expo/metro-session/metro.log`.
 
 Parse the JSON result. The wrapper answers liveness with a socket probe on the recorded `port`, so there are only three outcomes:
 
@@ -81,11 +87,11 @@ Parse the JSON result. The wrapper answers liveness with a socket probe on the r
 | `status: port-taken` | **Our Metro is gone and another process now holds the recorded port.** `metro.log` is stale and describes a dead session. | Do NOT diagnose from this log. Tell the user which PID holds the port (`portListeners`) and offer to start a fresh session. |
 | `status: port-conflict` | Our process is alive but something else owns the port | The device is talking to the wrong server. Stop the session and restart so Expo picks a free port. |
 | `status: failed` | Expo/Metro exited during startup | Run `tail --lines 120`, surface the sanitized launch error, and stop. |
-| `starting`, `stopped`, or `not-started` | No log source yet | Tell the user Metro is not running. Offer to start it with `node "$METRO_SCRIPT" start --project-root "<working_dir>" --wait-ready-ms 8000`; start only after confirmation, then rerun status. |
+| `starting`, `stopped`, or `not-started` | No log source yet | Tell the user Metro is not running. Offer to start it with `npm run dev` for a foreground manual session, or `node "$METRO_SCRIPT" start --project-root "<working_dir>" --wait-ready-ms 8000` for the agent-owned detached session; start only after confirmation, then rerun status. |
 
 The port is the check that a session ID cannot perform: a state file describing a dead process still "matches itself", so only the socket probe reveals that the log stopped belonging to the app under test.
 
-If no wrapper session exists but the host happens to expose a live Metro terminal, that output may explain what is running, but do not ask for or store its terminal ID and do not enter the continuous monitor loop against it. Portable monitoring requires the wrapper session.
+If no wrapper session exists but the host happens to expose a live raw Expo terminal, that output may explain what is running, but do not ask for or store its terminal ID and do not enter the continuous monitor loop against it. Ask the user to restart with `npm run dev` after the app has the project-local wrapper installed.
 
 Record the stable source in `fixes.md`:
 

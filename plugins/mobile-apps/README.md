@@ -86,13 +86,15 @@ connector wiring.
     Copilot CLI, and Claude Code without asking for a terminal ID.
 
 	To start Metro manually instead, run the command below from the app directory.
-    Manual sessions support normal Expo development, but `/debug-app` continuous
-    monitoring requires a wrapper-owned session. If one is not running,
-    `/debug-app` offers to start it.
+    Created apps wire this command through the same project-local wrapper, so
+    manual starts and `/debug-app` use the same captured log.
 
     ```bash
     npm run dev
     ```
+
+    Use `npm run dev:expo` only when you explicitly want raw Expo terminal
+    behavior and do not need `/debug-app` log capture.
 
     The wrapper removes common credentials, tokens, keys, and signed-query
     values before writing `metro.log`. The complete `.expo/` folder is ignored

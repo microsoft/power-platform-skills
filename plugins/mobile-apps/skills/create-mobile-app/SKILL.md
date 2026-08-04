@@ -14,7 +14,7 @@ Top-level orchestrator. Owns the user-visible flow; delegates planning to the `n
 
 ## Workflow
 
-0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 3. Plan (planner agent + 4 gates) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npx expo start`) → 12.5 Optional debug handoff → 13. Summary
+0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 3. Plan (planner agent + 4 gates) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`scripts/metro-session.js`) → 12.5 Optional debug handoff → 13. Summary
 
 ---
 
@@ -637,6 +637,7 @@ Then apply these **safe idempotent** prep steps:
 5. Merge the six path aliases into `tsconfig.json` (`@/components`, `@/hooks`, `@/utils`, `@/tokens`, `@/generated`, `@/native`) without deleting existing aliases.
 6. Verify `app/_layout.tsx` imports `PowerAppsProvider` from `@microsoft/power-apps-native-host` and imports `tamaguiConfig`. If either is missing, patch `_layout.tsx` conservatively; do not rewrite custom navigation or unrelated provider code.
 7. Remove placeholder `power.config.json` if its `environmentId` is empty or missing. `npx power-apps init` in Step 6 writes the real file for the selected environment.
+8. Install the project-local Metro wrapper and wire `npm run dev` through it.
 
 Do **not** preserve placeholder `power.config.json` from the template. Keeping it would let downstream steps read an empty or stale environment.
 
@@ -653,6 +654,28 @@ Substitute the hardcoded template values with wizard answers from Step 2:
 | `"name": "powerapps-standalone-app"` | `"name": "<slug>"` |
 
 Bundle ID and scheme are left as template defaults — they are fixed across all dev builds and patched by the wrap pipeline at release time.
+
+**Fix 1b — Install project-local Metro wrapper and dev script**
+
+Manual `npm run dev` must use the same capture path as `/create-mobile-app` and `/debug-app`; otherwise a manually-started Expo process can occupy 8081 while the wrapper starts a second Metro on 8082 and watches the wrong log. Copy the plugin wrapper into the app and patch only the script entries:
+
+```bash
+mkdir -p "<working_dir>/scripts"
+cp "${CLAUDE_SKILL_DIR}/../../scripts/metro-session.js" "<working_dir>/scripts/metro-session.js"
+node - "<working_dir>" <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+const root = process.argv[2];
+const packagePath = path.join(root, 'package.json');
+const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+pkg.scripts = pkg.scripts || {};
+pkg.scripts.dev = 'node scripts/metro-session.js dev';
+pkg.scripts['dev:expo'] = pkg.scripts['dev:expo'] || 'expo start';
+fs.writeFileSync(packagePath, `${JSON.stringify(pkg, null, 2)}\n`);
+NODE
+```
+
+Keep `predev: npm run generate-schemas` if present. `dev:expo` remains an escape hatch for humans who explicitly want raw Expo terminal behavior and do not need `/debug-app` log capture.
 
 **Fix 2 — Delete `power.config.json`**
 
@@ -1861,7 +1884,7 @@ This skill launches Metro through the bundled `scripts/metro-session.js` wrapper
 
 The wrapper stores runtime-only state under `<working_dir>/.expo/metro-session/`:
 
-- `state.json` — dev-server port, PIDs, lifecycle status, timestamps, and native Metro URL
+- `state.json` — dev-server port, PIDs, lifecycle status, and native Metro URL
 - `metro.log` — ANSI-free Metro/app output with common tokens, secrets, keys, and signed-query values redacted before persistence
 
 The **port** is the session's identity: it is what the QR encodes, what the device dials, and what `/debug-app` probes to confirm the log it reads still belongs to this app. Expo rolls to the next free port when 8081 is taken, so always report the port the wrapper recorded rather than assuming 8081.
@@ -1879,14 +1902,14 @@ npx tsc --noEmit            # final gate — dev server starts only from a clean
 Run the schema regen and final `tsc` synchronously and check both exits. If either fails, do not launch Metro. Capture the full output once, batch-fix by root cause, rerun the final gate, and continue only when clean. Then launch Metro through the wrapper:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/metro-session.js" start \
+node "<working_dir>/scripts/metro-session.js" start \
   --project-root "<working_dir>" \
   --wait-ready-ms 8000
 ```
 
 The wrapper resolves and executes the project-local Expo CLI directly, then returns while its detached runner continues. Do not launch this command itself with a host background/async flag; doing so would recreate the host-terminal dependency this wrapper removes.
 
-It invokes `expo start` directly rather than `npm run dev` because the orchestrator already ran `npm run generate-schemas` for the final gate. The template keeps `predev: npm run generate-schemas` as a safety net for humans starting Metro manually.
+`npm run dev` uses the same project-local wrapper in foreground mode for humans, while Step 12 uses `start` mode so the skill can return after QR generation. The orchestrator already ran `npm run generate-schemas` for the final gate; `predev` remains a safety net for manual starts.
 
 Parse the returned JSON as `$METRO_SESSION`. Branch as follows:
 
@@ -1918,7 +1941,8 @@ Parse the returned JSON as `$METRO_SESSION`. Branch as follows:
 ...
 - Metro session state: .expo/metro-session/state.json
 - Metro log: .expo/metro-session/metro.log
-- Metro launch cmd: node "<plugin-root>/scripts/metro-session.js" start --project-root "<working_dir>"
+- Metro launch cmd: node "<working_dir>/scripts/metro-session.js" start --project-root "<working_dir>"
+- Metro manual dev cmd: npm run dev
 ```
 
 Do not persist PIDs, ports, or Metro URLs to the memory bank. They are ephemeral and are resolved from `state.json` when needed.

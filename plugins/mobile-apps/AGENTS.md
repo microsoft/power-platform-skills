@@ -73,7 +73,7 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     - `DONE_WITH_CONCERNS` requires at least one concern. If none, use `DONE`.
     - Special early-return signals (`INDUSTRY_CONFIRM_REQUESTED:`, `DESIGN_VIBE_REQUESTED:`) pre-date this protocol and remain in effect — they are special-cased "ask the user one question and re-spawn me" handoffs, not terminal returns.
     - The canonical orchestrator handler lives in [`skills/create-mobile-app/SKILL.md`](./skills/create-mobile-app/SKILL.md) Step 3.0. Future skills that spawn agents should reference it rather than duplicating the switch.
-11. **Metro lifecycle is project-local** — `/create-mobile-app` starts Metro through `scripts/metro-session.js`; `/debug-app` reads `.expo/metro-session/state.json` and the sanitized `metro.log` with a persisted byte cursor. Do not restore required `BashOutput`/terminal-ID behavior. Host terminal APIs may be optional conveniences only. Never write unsanitized Metro output to disk, and never signal a recorded PID unless the port probe proves the process is still ours.
+11. **Metro lifecycle is project-local** — `/create-mobile-app` installs `scripts/metro-session.js` into the generated app and wires `npm run dev` through it; `/debug-app` reads `.expo/metro-session/state.json` and the sanitized `metro.log` with a persisted byte cursor. Do not restore required `BashOutput`/terminal-ID behavior. Host terminal APIs may be optional conveniences only. Never write unsanitized Metro output to disk, and never signal a recorded PID unless the port probe proves the process is still ours.
 
 ## Decisions made
 

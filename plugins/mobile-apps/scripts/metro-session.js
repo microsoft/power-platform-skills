@@ -16,6 +16,7 @@
  * and a *different* project's Metro now owns the port, making our log stale.
  *
  * Usage:
+ *   node metro-session.js dev    [--project-root <dir>] [--clear]
  *   node metro-session.js start  [--project-root <dir>] [--clear] [--wait-ready-ms <n>]
  *   node metro-session.js status [--project-root <dir>]
  *   node metro-session.js tail   [--project-root <dir>] [--cursor <bytes>] [--lines <n>]
@@ -303,153 +304,14 @@ function stripAnsi(value) {
   return String(value).replace(/[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d\/#&.:=?%@~_]+)*)?\u0007)|(?:(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g, '');
 }
 
-const SENSITIVE_JSON_KEYS = new Set([
-  'authorization',
-  'proxyauthorization',
-  'clientsecret',
-  'password',
-  'token',
-  'accesstoken',
-  'refreshtoken',
-  'idtoken',
-  'apikey',
-  'accountkey',
-  'sharedaccesskey',
-]);
-
-function normalizeSensitiveKey(value) {
-  return String(value).replace(/[^a-z0-9]/gi, '').toLowerCase();
-}
-
-function redactStructuredValue(value, depth = 0) {
-  if (depth > 4) return { value, changed: false };
-
-  if (Array.isArray(value)) {
-    let changed = false;
-    const next = value.map((item) => {
-      const result = redactStructuredValue(item, depth + 1);
-      changed = changed || result.changed;
-      return result.value;
-    });
-    return { value: changed ? next : value, changed };
-  }
-
-  if (value && typeof value === 'object') {
-    let changed = false;
-    const next = {};
-    for (const [key, item] of Object.entries(value)) {
-      if (SENSITIVE_JSON_KEYS.has(normalizeSensitiveKey(key))) {
-        next[key] = '[REDACTED]';
-        changed = true;
-        continue;
-      }
-      const result = redactStructuredValue(item, depth + 1);
-      next[key] = result.value;
-      changed = changed || result.changed;
-    }
-    return { value: changed ? next : value, changed };
-  }
-
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed || !['{', '[', '"'].includes(trimmed[0])) {
-      return { value, changed: false };
-    }
-    try {
-      const parsed = JSON.parse(trimmed);
-      const result = redactStructuredValue(parsed, depth + 1);
-      return result.changed
-        ? { value: JSON.stringify(result.value), changed: true }
-        : { value, changed: false };
-    } catch {
-      return { value, changed: false };
-    }
-  }
-
-  return { value, changed: false };
-}
-
-function redactStructuredJsonLines(value) {
-  return String(value).replace(/[^\r\n]+/g, (line) => {
-    const leading = line.match(/^\s*/)[0];
-    const payload = line.slice(leading.length);
-    if (!payload) return line;
-    try {
-      const parsed = JSON.parse(payload);
-      const result = redactStructuredValue(parsed);
-      return result.changed ? `${leading}${JSON.stringify(result.value)}` : line;
-    } catch {
-      return line;
-    }
-  });
-}
-
-function redactAuthorizationLines(value) {
-  return String(value).replace(/[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+$/g, (line) => {
-    // Authorization values appear in plain headers, JSON, nested serialized
-    // JSON, and arbitrary logger prefixes. Once a physical line contains an
-    // Authorization key/value delimiter, preserving fragments is not worth the
-    // credential-leak risk: replace the complete line and retain only a marker.
-    const hasAuthorizationValue =
-      /authorization/i.test(line) &&
-      /authorization(?:\\*["'])*\s*[:=]/i.test(line);
-    if (!hasAuthorizationValue) return line;
-    const ending = line.endsWith('\r\n') ? '\r\n' : line.endsWith('\n') ? '\n' : line.endsWith('\r') ? '\r' : '';
-    return `[metro-session] [REDACTED_AUTHORIZATION_LINE]${ending}`;
-  });
-}
+const SENSITIVE_LINE_PATTERN = /\b(?:authorization|bearer|client[_-]?secret|password|token|access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|accountkey|sharedaccesskey)\b|[?&](?:sig|se|sp|sv|token|access_token|code|client_secret)=|\b(?:AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{30,}|sk-[A-Za-z0-9]{20,})\b/i;
 
 function redactLogText(value) {
-  let output = redactAuthorizationLines(redactStructuredJsonLines(stripAnsi(value)));
-
-  // Keep diagnostic labels while replacing only credential values. Examples:
-  //   Authorization: Bearer eyJ...
-  //   client_secret=abc...
-  //   https://host/path?sig=abc&other=value
-  // Double-serialized forms first, e.g. {\"Authorization\":\"Basic ...\"}
-  // or Authorization: \"Basic ...\". Replace the entire logical value so
-  // escaped quotes inside credentials cannot terminate redaction early.
-  output = output.replace(
-    /\\(["'])(?:Proxy-)?Authorization\\\1\s*:\s*\\(["'])(?:(?:\\.)|[^\\\r\n])*?\\\2/gi,
-    'Authorization: [REDACTED]'
-  );
-  output = output.replace(
-    /\b(?:Proxy-)?Authorization\s*:\s*\\(["'])(?:(?:\\.)|[^\\\r\n])*?\\\1/gi,
-    'Authorization: [REDACTED]'
-  );
-  output = output.replace(
-    /(["'])((?:Proxy-)?Authorization)\1(\s*:\s*)(["'])([A-Za-z][A-Za-z0-9_-]*)(?:\s+)(?:(?:\\.)|[^\\\r\n])*?\4/gi,
-    '$1$2$1$3$4$5 [REDACTED]$4'
-  );
-  output = output.replace(
-    /(["'])((?:Proxy-)?Authorization)\1(\s*:\s*)(["'])(?:(?:\\.)|[^\\\r\n])*?\4/gi,
-    '$1$2$1$3$4[REDACTED]$4'
-  );
-  output = output.replace(
-    /\b((?:Proxy-)?Authorization)(\s*:\s*)(["'])(?:(?:\\.)|[^\\\r\n])*?\3/gi,
-    '$1$2$3[REDACTED]$3'
-  );
-  output = output.replace(
-    /\b((?:Proxy-)?Authorization)(\s*:\s*)([A-Za-z][A-Za-z0-9_-]*)(?:\s+)[^\r\n]+/gi,
-    '$1$2$3 [REDACTED]'
-  );
-  output = output.replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [REDACTED]');
-  output = output.replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{8,}\b/g, '[REDACTED_JWT]');
-  output = output.replace(
-    /(["']?)(client[_-]?secret|password|token|access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|accountkey|sharedaccesskey)\1(\s*[:=]\s*)(["'])(?:(?:\\.)|[^\\\r\n])*?\4/gi,
-    '$1$2$1$3$4[REDACTED]$4'
-  );
-  output = output.replace(
-    /(["']?)(client[_-]?secret|password|token|access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|accountkey|sharedaccesskey)\1(\s*[:=]\s*)[^\s,"';&]+/gi,
-    '$1$2$1$3[REDACTED]'
-  );
-  output = output.replace(
-    /([?&](?:sig|se|sp|sv|token|access_token|code|client_secret)=)[^&#\s]+/gi,
-    '$1[REDACTED]'
-  );
-  output = output.replace(/\b(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{30,}|sk-[A-Za-z0-9]{20,})\b/g, '[REDACTED_KEY]');
-
-  return output;
+  return stripAnsi(value).replace(/[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+$/g, (line) => {
+    if (!SENSITIVE_LINE_PATTERN.test(line)) return line;
+    const ending = line.endsWith('\r\n') ? '\r\n' : line.endsWith('\n') ? '\n' : line.endsWith('\r') ? '\r' : '';
+    return `[metro-session] [REDACTED_SENSITIVE_LINE]${ending}`;
+  });
 }
 
 function appendSanitized(paths, value, options = {}) {
@@ -612,6 +474,48 @@ function startSession(projectRoot, options = {}) {
     statePath: paths.statePath,
     logPath: paths.logPath,
   };
+}
+
+function runDevSession(projectRoot, options = {}) {
+  const paths = resolvePaths(projectRoot);
+  ensureProject(paths.projectRoot);
+  ensureSessionDir(paths);
+
+  return withStartLock(paths.startLockPath, () => {
+    const existing = readState(paths);
+    if (existing) {
+      const liveness = resolveLiveness(existing, options);
+      if (liveness.running) {
+        process.stdout.write(
+          `Metro is already running on port ${existing.port || 'unknown'}. ` +
+          `Debug log: ${paths.logPath}\n`
+        );
+        return { ok: true, alreadyRunning: true, ...existing, ...liveness };
+      }
+    }
+
+    rotateLog(paths, options.maxLogBytes || DEFAULT_MAX_LOG_BYTES);
+    writeState(paths, {
+      schemaVersion: STATE_SCHEMA_VERSION,
+      status: 'starting',
+      runnerPid: process.pid,
+      metroPid: null,
+      port: null,
+      metroUrl: null,
+      updatedAt: new Date().toISOString(),
+    });
+    runMetroChild(paths, {
+      clear: options.clear,
+      mirrorOutput: true,
+      stdin: 'inherit',
+      _resolveExpoCli: options._resolveExpoCli,
+      _spawn: options._spawn,
+    });
+    return { ok: true, alreadyRunning: false, ...(readState(paths) || {}) };
+  }, {
+    timeoutMs: options.startLockTimeoutMs,
+    _sleepSync: options._sleepSync,
+  });
 }
 
 function startSessionLocked(paths, options = {}) {
@@ -891,24 +795,16 @@ function waitForOwnState(paths, timeoutMilliseconds = 5000, options = {}) {
   return null;
 }
 
-function runWorker(projectRoot, options = {}) {
-  const paths = resolvePaths(projectRoot);
-  const state = (options._waitForOwnState || waitForOwnState)(paths);
-  if (!state) {
-    throw new Error('Metro session state was not initialized by the parent process.');
-  }
-
+function runMetroChild(paths, options = {}) {
   const cliPath = (options._resolveExpoCli || resolveExpoCli)(paths.projectRoot);
   appendSanitized(paths, `\n--- Metro session started ${new Date().toISOString()} ---\n`);
 
-  // `--clear` arrives on this runner's own argv, so it does not need to be
-  // round-tripped through state.json.
   const child = (options._spawn || spawn)(
     process.execPath,
     [cliPath, 'start', ...(options.clear ? ['--clear'] : [])],
     {
       cwd: paths.projectRoot,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [options.stdin || 'ignore', 'pipe', 'pipe'],
       windowsHide: true,
       env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
     }
@@ -919,9 +815,10 @@ function runWorker(projectRoot, options = {}) {
   let rollingText = '';
   const stdoutWriter = createSanitizedStreamWriter(paths);
   const stderrWriter = createSanitizedStreamWriter(paths);
-  const consume = (writer) => (chunk) => {
+  const consume = (writer, target) => (chunk) => {
     const sanitized = writer.write(chunk);
     if (!sanitized) return;
+    if (options.mirrorOutput && target) target.write(sanitized);
     rollingText = `${rollingText}${sanitized}`.slice(-8192);
     const metroUrl = extractMetroUrl(rollingText);
     if (metroUrl) {
@@ -933,8 +830,8 @@ function runWorker(projectRoot, options = {}) {
     }
     rotateLog(paths);
   };
-  child.stdout.on('data', consume(stdoutWriter));
-  child.stderr.on('data', consume(stderrWriter));
+  child.stdout.on('data', consume(stdoutWriter, process.stdout));
+  child.stderr.on('data', consume(stderrWriter, process.stderr));
 
   let shuttingDown = false;
   const shutdown = (signal) => {
@@ -970,11 +867,28 @@ function runWorker(projectRoot, options = {}) {
     }, process.pid);
     process.exitCode = code || 0;
   });
+
+  return child;
+}
+
+function runWorker(projectRoot, options = {}) {
+  const paths = resolvePaths(projectRoot);
+  const state = (options._waitForOwnState || waitForOwnState)(paths);
+  if (!state) {
+    throw new Error('Metro session state was not initialized by the parent process.');
+  }
+
+  runMetroChild(paths, {
+    clear: options.clear,
+    _resolveExpoCli: options._resolveExpoCli,
+    _spawn: options._spawn,
+  });
 }
 
 function printHelp() {
   process.stdout.write(
     'Usage:\n' +
+      '  node metro-session.js dev    [--project-root <dir>] [--clear]\n' +
       '  node metro-session.js start  [--project-root <dir>] [--clear] [--wait-ready-ms <n>]\n' +
       '  node metro-session.js status [--project-root <dir>]\n' +
       '  node metro-session.js tail   [--project-root <dir>] [--cursor <bytes>] [--wait-ms <n>] [--lines <n>] [--max-bytes <n>]\n' +
@@ -1008,7 +922,9 @@ function main() {
     return;
   }
 
-  if (options.command === 'start') {
+  if (options.command === 'dev') {
+    runDevSession(options.projectRoot, { clear: options.clear });
+  } else if (options.command === 'start') {
     printJson(startSession(options.projectRoot, {
       clear: options.clear,
       waitReadyMs: options.waitReadyMs,
@@ -1050,6 +966,8 @@ module.exports = {
   resolveLiveness,
   resolvePaths,
   rotateLog,
+  runDevSession,
+  runMetroChild,
   runWorker,
   startSession,
   stopSession,

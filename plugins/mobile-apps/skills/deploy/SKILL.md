@@ -18,7 +18,7 @@ This skill uses the standard 4-step deployment flow for this plugin: check memor
 
 - `expo run:ios` / `expo run:android` — local native compile is the user's choice; run your platform-specific native command directly when ready.
 - OTA updates and store distribution — out of scope for v0.
-- Starting Metro for local dev — `/create-mobile-app` and `/debug-app` own the portable wrapper session; direct `npm run dev` remains a manual Expo fallback.
+- Starting Metro for local dev — created apps wire `npm run dev` through the portable wrapper; raw Expo remains available as `npm run dev:expo`.
 
 ## Workflow
 
@@ -160,7 +160,7 @@ Environment   : <env-name>
 App URL       : <url or "see make.powerapps.com">
 Bundle path   : dist/
 
-Local dev:    use the wrapper-owned session for /debug-app, or npm run dev manually
+Local dev:    npm run dev  (captured wrapper session for /debug-app)
 Re-deploy:    /deploy
 List conns:   /list-connections
 ─────────────────────────────────────────────
@@ -170,18 +170,18 @@ List conns:   /list-connections
 
 ## Local dev (out of scope for this skill — for reference only)
 
-When the user wants normal Expo iteration without portable monitoring, they can run directly:
+When the user wants normal Expo iteration with portable monitoring, they can run:
 
 ```bash
-npm run dev          # = expo start  →  Metro + QR for native dev clients
+npm run dev          # wrapper foreground mode → Metro + QR + captured log
 ```
 
-This launches Metro and prints a QR code, but it is not discoverable by `/debug-app` after a host/session restart. They can:
+This launches Metro, prints a QR code, and writes sanitized output to `.expo/metro-session/metro.log` so `/debug-app` can reattach after a host/session restart. They can:
 
 - Scan the QR with the installed native dev client
-- Press `r` to reload, `j` to open the debugger, `m` for the dev menu
+- Reload from the native dev-client menu
 
-Runtime debugging uses the wrapper-owned native dev-client session and sanitized `.expo/metro-session/metro.log`. If the user invokes `/debug-app` while only a manual Metro session exists, the skill offers to start its own wrapper session. Do not use React Native Web, browser automation, direct Metro/localhost HTTP probes, or screen-by-screen runtime checks.
+Use `npm run dev:expo` only when the user explicitly wants raw Expo terminal behavior and does not need `/debug-app` log capture. Do not use React Native Web, browser automation, direct Metro/localhost HTTP probes, or screen-by-screen runtime checks.
 
 If they want to compile a native binary locally, they run the platform-specific native command directly. Local native compile and manual device testing are user-owned and are not deployment gates for this skill.
 

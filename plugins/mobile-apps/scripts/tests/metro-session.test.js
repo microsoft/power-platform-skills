@@ -52,7 +52,7 @@ function seedState(projectRoot, overrides = {}) {
   return paths;
 }
 
-function runCliAsync(command, projectRoot, extraArgs = []) {
+function runCliAsync(command, projectRoot, extraArgs = [], options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
@@ -77,7 +77,7 @@ function runCliAsync(command, projectRoot, extraArgs = []) {
         status,
         stdout,
         stderr,
-        json: stdout.trim() ? JSON.parse(stdout) : null,
+        json: options.rawOutput ? null : stdout.trim() ? JSON.parse(stdout) : null,
       });
     });
   });
@@ -125,13 +125,19 @@ function installFakeExpo(projectRoot) {
     path.join(binDir, 'cli.js'),
     [
       "'use strict';",
-      "console.log('Starting Metro fixture');",
-      "console.log('› Metro: exp+fixture://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8081');",
-      "console.log('Authorization: Bearer fixture-token-1234567890');",
-      "console.log('client_secret=fixture-client-secret-1234567890');",
+      "const net = require('node:net');",
+      "const server = net.createServer();",
       'let heartbeat = 0;',
-      "const timer = setInterval(() => console.log('[fixture] heartbeat ' + (++heartbeat)), 50);",
-      "function stop() { clearInterval(timer); console.log('fixture stopping'); process.exit(0); }",
+      'let timer = null;',
+      "server.listen(0, '127.0.0.1', () => {",
+      "  const port = server.address().port;",
+      "  console.log('Starting Metro fixture');",
+      "  console.log('› Metro: exp+fixture://expo-development-client/?url=' + encodeURIComponent('http://127.0.0.1:' + port));",
+      "  console.log('Authorization: Bearer fixture-token-1234567890');",
+      "  console.log('client_secret=fixture-client-secret-1234567890');",
+      "  timer = setInterval(() => console.log('[fixture] heartbeat ' + (++heartbeat)), 50);",
+      '});',
+      "function stop() { if (timer) clearInterval(timer); server.close(() => { console.log('fixture stopping'); process.exit(0); }); }",
       "process.on('SIGTERM', stop);",
       "process.on('SIGINT', stop);",
       '',
@@ -164,20 +170,13 @@ test('redactLogText removes credentials while preserving diagnostic context', ()
   ].join('\n');
 
   const output = redactLogText(input);
-  assert.match(output, /REDACTED_AUTHORIZATION_LINE/);
-  assert.match(output, /client_secret=\[REDACTED\]/);
-  assert.match(output, /sig=\[REDACTED\]/);
-  assert.match(output, /sp=\[REDACTED\]/);
-  assert.match(output, /token=\[REDACTED\]/);
-  assert.match(output, /\[REDACTED_KEY\]/);
+  assert.match(output, /REDACTED_SENSITIVE_LINE/);
   assert.doesNotMatch(output, /super-secret-value|secret-signature|ghp_/);
   assert.doesNotMatch(
     output,
     /dXNlcjpwYXNz|short-token|quoted-basic-value|json-basic-value|credential|double-serialized|LEAK_MARKER|PREFIX_LEAK_MARKER|two word secret|json secret value|escaped|suffix/
   );
-  assert.ok((output.match(/REDACTED_AUTHORIZATION_LINE/g) || []).length >= 8);
-  assert.match(output, /password="\[REDACTED\]"/);
-  assert.match(output, /"client_secret":"\[REDACTED\]"/);
+  assert.ok((output.match(/REDACTED_SENSITIVE_LINE/g) || []).length >= 10);
 });
 
 test('stream writer redacts a credential split across output chunks', () => {
@@ -186,11 +185,11 @@ test('stream writer redacts a credential split across output chunks', () => {
   const writer = createSanitizedStreamWriter(paths);
 
   assert.equal(writer.write('Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.'), '');
-  assert.equal(writer.write('eyJzdWIiOiJ1c2VyIn0.signature-value-123456\nnext line\n').includes('REDACTED_AUTHORIZATION_LINE'), true);
+  assert.equal(writer.write('eyJzdWIiOiJ1c2VyIn0.signature-value-123456\nnext line\n').includes('REDACTED_SENSITIVE_LINE'), true);
   writer.flush();
 
   const persisted = fs.readFileSync(paths.logPath, 'utf8');
-  assert.match(persisted, /REDACTED_AUTHORIZATION_LINE/);
+  assert.match(persisted, /REDACTED_SENSITIVE_LINE/);
   assert.match(persisted, /next line/);
   assert.doesNotMatch(persisted, /eyJhbGci|signature-value/);
 });
@@ -709,14 +708,14 @@ test('CLI manages a real detached fixture across start, status, tail, and stop',
   assert.ok(ready, 'fixture Metro process should become ready');
   assert.equal(ready.status, 'running');
   assert.match(ready.metroUrl, /^exp\+fixture:/);
-  assert.equal(ready.port, 8081, 'the port is parsed out of the dev-client banner');
+  assert.equal(Number.isInteger(ready.port), true, 'the port is parsed out of the dev-client banner');
 
   const tailed = runCli('tail', projectRoot, ['--cursor', '0']);
   assert.equal(tailed.status, 0, tailed.stderr);
   assert.match(tailed.json.output, /Starting Metro fixture/);
-  assert.match(tailed.json.output, /REDACTED_AUTHORIZATION_LINE/);
-  assert.match(tailed.json.output, /client_secret=\[REDACTED\]/);
+  assert.match(tailed.json.output, /REDACTED_SENSITIVE_LINE/);
   assert.doesNotMatch(tailed.json.output, /fixture-token-1234567890/);
+  assert.doesNotMatch(tailed.json.output, /fixture-client-secret-1234567890/);
   assert.ok(tailed.json.nextCursor > 0);
 
   const stopped = runCli('stop', projectRoot);
@@ -728,6 +727,37 @@ test('CLI manages a real detached fixture across start, status, tail, and stop',
     return status.status === 0 && !status.json.running ? status.json : null;
   });
   assert.ok(stoppedStatus);
+});
+
+test('CLI dev runs foreground Metro through the same captured session', async (context) => {
+  const projectRoot = makeProject();
+  installFakeExpo(projectRoot);
+
+  context.after(() => {
+    runCli('stop', projectRoot);
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  });
+
+  const devRun = runCliAsync('dev', projectRoot, [], { rawOutput: true });
+  const ready = waitFor(() => {
+    const status = runCli('status', projectRoot);
+    return status.status === 0 && status.json.running && status.json.metroUrl
+      ? status.json
+      : null;
+  });
+  assert.ok(ready, 'foreground dev should publish wrapper state for /debug-app');
+  assert.equal(Number.isInteger(ready.port), true);
+
+  const tailed = runCli('tail', projectRoot, ['--cursor', '0']);
+  assert.match(tailed.json.output, /Starting Metro fixture/);
+  assert.match(tailed.json.output, /REDACTED_SENSITIVE_LINE/);
+
+  const stopped = runCli('stop', projectRoot);
+  assert.equal(stopped.status, 0, stopped.stderr);
+  const result = await devRun;
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Starting Metro fixture/);
+  assert.match(result.stdout, /REDACTED_SENSITIVE_LINE/);
 });
 
 test('CLI persists a failed state when Expo cannot be resolved', () => {
@@ -761,6 +791,7 @@ test('skill contracts use the port-anchored Metro session and declare sub-skill 
   const createFrontmatter = createSkill.split('---', 3)[1];
   assert.match(createFrontmatter, /allowed-tools:.*\bSkill\b/);
   assert.match(createSkill, /scripts\/metro-session\.js/);
+  assert.match(createSkill, /npm run dev.*same project-local wrapper/s);
   assert.match(debugSkill, /\.expo\/metro-session\/metro\.log/);
   assert.match(debugSkill, /port-taken/, 'debug must refuse a hijacked port');
   assert.doesNotMatch(debugSkill, /BashOutput|METRO_TERMINAL_ID/);
