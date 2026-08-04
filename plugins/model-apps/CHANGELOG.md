@@ -93,10 +93,12 @@ no breaking changes.
   - **Real primary-name columns.** A downloaded spec named `account`'s primary column `account_name` and
     `contact`'s `contact_name`; neither exists (they are `name` and `fullname`). The value now comes from
     Dataverse metadata and is omitted rather than invented when metadata doesn't supply it.
-  - **Hidden entity components are preserved.** Download reconstructed tables from the *sitemap*, so an app
-    carrying nine tables with two in navigation emitted two — task, email, appointment, phone call, user,
-    team and note vanished from the spec. Entities are now the sitemap set unioned with the app's real
-    entity components.
+  - **Hidden entity components are preserved.** Download reconstructed tables from the *sitemap* only,
+    so a table an app reaches through a lookup, sub-grid or related view — with no navigation entry —
+    vanished from the spec. Entities are now the sitemap set unioned with the tables owned by the app's
+    view/chart/form components. Note `/app-builder` itself never creates such a hidden component (a
+    table with no sitemap subarea does not join the app at all), so this only recovers tables for apps
+    built or edited in the maker.
   - **The solution's own publisher prefix.** The prefix was inferred from the app's unique name and fell
     back to a literal `new` — wrong for an app named `new_customermanagement` inside publisher `contoso`,
     for an app with no prefix, and for prefixes longer than the guess assumed. It is now read from the

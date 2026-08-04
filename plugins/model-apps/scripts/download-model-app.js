@@ -110,58 +110,56 @@ function collectSitemap(app) {
 // the sitemap alone silently dropped those (ADO 6603388), so the download→edit→rebuild round trip
 // lost hidden app dependencies.
 //
-// `appmodulecomponent` rows are the app's real membership record. `componenttype` 1 == Entities and
-// the parent lookup is `appmoduleidunique` (→ appmodule). For an Entity component, `objectid` is the
-// table's METADATA id (EntityDefinitions MetadataId), NOT a row id — so resolve ids to logical names
-// against the entity-definitions list rather than trying to read a record.
+// The entity is derived from the app's VIEW / CHART / FORM components, NOT from its
+// `componenttype eq 1` (Entities) rows. That looks like the obvious source but is unusable:
+// LIVE-verified that every componenttype-1 row carries the SAME `objectid` — the MetadataId of the
+// `entity` metadata table itself — so it identifies the component *kind*, not which table. (On a
+// 2-table app both rows read `9d0f025b-…`, which resolves to the logical name `entity`.)
+// `RetrieveAppComponents` returned 0 rows on the same app, so it is not an alternative here.
+//
+// View/chart/form components DO carry usable ids: each `objectid` is a real row id whose record
+// names its owning table. An app includes its tables' views and forms, so unioning their owners
+// recovers the hidden membership.
+//   componenttype 26 → savedquery.returnedtypecode
+//   componenttype 59 → savedqueryvisualization.primaryentitytypecode
+//   componenttype 60 → systemform.objecttypecode
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodulecomponent
 //
-// `appUniqueId` is the appmodule's `appmoduleidunique` — the lookup targets the *unique* id, NOT
-// `appmoduleid`. Pass the appmoduleid and this resolves the unique id itself (one small read),
-// because the artifact read does not reliably surface it.
-//
-// Best-effort by design: any failure returns an empty list so the caller keeps today's sitemap-derived
-// behavior rather than losing the download entirely.
+// `appId` is the appmoduleid; the parent lookup targets `appmoduleidunique`, so that is resolved
+// first. Best-effort by design: any failure returns an empty list so the caller keeps today's
+// sitemap-derived behavior rather than losing the download entirely.
+const APP_COMPONENT_ENTITY_SOURCES = [
+  { componentType: 26, set: 'savedquery', idField: 'savedqueryid', entityField: 'returnedtypecode' },
+  { componentType: 59, set: 'savedqueryvisualization', idField: 'savedqueryvisualizationid', entityField: 'primaryentitytypecode' },
+  { componentType: 60, set: 'systemform', idField: 'formid', entityField: 'objecttypecode' },
+];
+
 async function appComponentEntities(sdk, appId) {
   if (!appId) return [];
   try {
     const appRows = await sdk.queryRecords('appmodule', { select: ['appmoduleidunique'], filter: `appmoduleid eq ${appId}`, top: 1 });
     const appUniqueId = appRows && appRows[0] && appRows[0].appmoduleidunique;
     if (!appUniqueId) return [];
-    const rows = await sdk.queryRecords('appmodulecomponent', {
-      select: ['objectid', 'componenttype'],
-      filter: `_appmoduleidunique_value eq ${String(appUniqueId).replace(/[{}]/g, '')} and componenttype eq 1`,
-      top: 1000,
-    });
-    const ids = new Set(
-      (rows || []).map((r) => r && r.objectid).filter(Boolean).map((id) => String(id).replace(/[{}]/g, '').toLowerCase())
-    );
-    if (!ids.size) return [];
-    // Resolve MetadataId → LogicalName in ONE read. findTables() does not surface MetadataId, so query
-    // EntityDefinitions directly through the SDK's raw request surface.
-    const defs = await entityDefinitionIndex(sdk);
-    return [...ids].map((id) => defs.get(id)).filter(Boolean);
+    const parent = String(appUniqueId).replace(/[{}]/g, '');
+    const found = new Set();
+    for (const src of APP_COMPONENT_ENTITY_SOURCES) {
+      const rows = await sdk.queryRecords('appmodulecomponent', {
+        select: ['objectid', 'componenttype'],
+        filter: `_appmoduleidunique_value eq ${parent} and componenttype eq ${src.componentType}`,
+        top: 1000,
+      });
+      const ids = [...new Set((rows || []).map((r) => r && r.objectid).filter(Boolean).map((id) => String(id).replace(/[{}]/g, '')))];
+      // Chunk the OR-batched id lookups so a many-component app cannot build an over-long URL.
+      for (let i = 0; i < ids.length; i += 20) {
+        const filter = ids.slice(i, i + 20).map((id) => `${src.idField} eq ${id}`).join(' or ');
+        const recs = await sdk.queryRecords(src.set, { select: [src.idField, src.entityField], filter, top: 1000 });
+        for (const r of recs || []) if (r && r[src.entityField]) found.add(String(r[src.entityField]).toLowerCase());
+      }
+    }
+    return [...found];
   } catch {
     return []; // best-effort — never break the download over the component read
   }
-}
-
-// MetadataId → logical name for every table in the org, as one `/EntityDefinitions` read. Returns an
-// empty Map when the SDK exposes no raw-request escape hatch or the read fails, so callers degrade
-// rather than throw.
-async function entityDefinitionIndex(sdk) {
-  const out = new Map();
-  // The vendored SDK's generic record query is scoped to DATA entity sets; EntityDefinitions is a
-  // metadata endpoint, so go through the raw client when available.
-  const get = typeof sdk.get === 'function' ? sdk.get.bind(sdk)
-    : (sdk.dataverse && typeof sdk.dataverse.get === 'function' ? sdk.dataverse.get.bind(sdk.dataverse) : null);
-  if (!get) return out;
-  const res = await get('/EntityDefinitions?$select=LogicalName,MetadataId');
-  const rows = (res && res.body && res.body.value) || (res && res.value) || [];
-  for (const r of rows) {
-    if (r && r.MetadataId && r.LogicalName) out.set(String(r.MetadataId).replace(/[{}]/g, '').toLowerCase(), String(r.LogicalName).toLowerCase());
-  }
-  return out;
 }
 
 // Read pac's downloaded page tree (<pagesRoot>/<pageId>/{page.tsx,config.json,prompt.txt}) into
@@ -718,4 +716,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { resolveAppId, collectSitemap, appComponentEntities, entityDefinitionIndex, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload };
+module.exports = { resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload };

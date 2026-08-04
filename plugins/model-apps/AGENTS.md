@@ -159,11 +159,18 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   no filter isolates author views. Forms/charts/commands need structured reads the SDK doesn't expose.)
   All four survive on the live app (a rebuild preserves them by discovery), but are absent from the
   downloaded spec, so edit them in Maker or a fresh spec.
-  **Entities are the sitemap's tables UNIONED with the app's real `appmodulecomponent` entity set**
-  (`appComponentEntities`, componenttype 1) — an app routinely includes tables reachable only via a
-  lookup/sub-grid/related view (task, email, annotation, systemuser…), and reconstructing from the
-  sitemap alone silently dropped them. The component read is best-effort: a failure degrades to the
-  sitemap-derived set rather than failing the download. Each entity's **`primaryAttribute` comes from
+  **Entities are the sitemap's tables UNIONED with the entities owned by the app's VIEW / CHART /
+  FORM components** (`appComponentEntities`) — a maker-built app can include tables reachable only via
+  a lookup/sub-grid/related view, with no sitemap entry of their own, and reconstructing from the
+  sitemap alone drops them. Note `componenttype eq 1` (Entities) rows are deliberately NOT used:
+  LIVE-verified that every one carries the same `objectid` (the `entity` metadata table's own id), so
+  it identifies the component *kind*, not which table, and `RetrieveAppComponents` returned 0 rows on
+  the same app. **Scope caveat:** `/app-builder` itself never creates a hidden component — a table
+  with no sitemap subarea does not become an app component at all (LIVE-verified: declaring `task` in
+  `entities[]` without nav left the app's component set unchanged), so for an app-builder-built app
+  the sitemap set already IS the complete set. This union therefore only adds tables for apps built
+  or edited in the maker. The component read is best-effort: a failure degrades to the sitemap-derived
+  set rather than failing the download. Each entity's **`primaryAttribute` comes from
   real Dataverse metadata** (`primaryNameAttribute`) and is **never synthesized**. The old
   `<entity>_name` guess was wrong for most OOB tables (`account` → `name`,
   `contact` → `fullname`) while looking plausible on custom ones, which is why it went unnoticed.

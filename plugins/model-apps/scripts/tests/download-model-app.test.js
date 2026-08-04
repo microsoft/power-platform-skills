@@ -500,22 +500,36 @@ test('recoverAppSolution degrades to uniqueName-only when the prefix cannot be r
 });
 
 // The nine entities from the filed repro: an app on account/contact also carries activity, user and
-// note tables that have no sitemap entry of their own.
+// note tables that have no sitemap entry of their own. Their membership is recovered from the app's
+// VIEW/CHART/FORM components — componenttype 1 (Entities) is unusable because every such row carries
+// the same objectid (the `entity` metadata table's own id), LIVE-verified.
 const NINE = ['account', 'contact', 'task', 'email', 'appointment', 'phonecall', 'systemuser', 'team', 'annotation'];
-const metaIdFor = (n) => `00000000-0000-0000-0000-${String(NINE.indexOf(n) + 1).padStart(12, '0')}`;
-const componentSdk = (opts = {}) => ({
-  queryRecords: async (set, o) => {
-    if (set === 'appmodule') return [{ appmoduleidunique: 'appuniq-1' }];
-    if (set === 'appmodulecomponent') {
-      // componenttype 1 == Entities; the parent lookup is the UNIQUE id, not appmoduleid.
-      assert.match(o.filter, /componenttype eq 1/);
-      assert.match(o.filter, /_appmoduleidunique_value eq appuniq-1/);
-      return (opts.components || NINE).map((n) => ({ objectid: metaIdFor(n), componenttype: 1 }));
-    }
-    return [];
-  },
-  dataverse: { get: async () => ({ status: 200, body: { value: NINE.map((n) => ({ LogicalName: n, MetadataId: metaIdFor(n) })) } }) },
-});
+const componentSdk = (opts = {}) => {
+  const entities = opts.entities || NINE;
+  // Give every entity one view, one chart and one form component, with a distinguishable row id.
+  const viewId = (n) => `1000${NINE.indexOf(n)}000-0000-4000-8000-000000000001`;
+  const chartId = (n) => `2000${NINE.indexOf(n)}000-0000-4000-8000-000000000002`;
+  const formId = (n) => `3000${NINE.indexOf(n)}000-0000-4000-8000-000000000003`;
+  return {
+    queryRecords: async (set, o) => {
+      const filter = (o && o.filter) || '';
+      if (set === 'appmodule') return [{ appmoduleidunique: 'appuniq-1' }];
+      if (set === 'appmodulecomponent') {
+        assert.match(filter, /_appmoduleidunique_value eq appuniq-1/);
+        if (/componenttype eq 26/.test(filter)) return entities.map((n) => ({ objectid: viewId(n), componenttype: 26 }));
+        if (/componenttype eq 59/.test(filter)) return entities.map((n) => ({ objectid: chartId(n), componenttype: 59 }));
+        if (/componenttype eq 60/.test(filter)) return entities.map((n) => ({ objectid: formId(n), componenttype: 60 }));
+        // componenttype 1 must NOT be consulted — it cannot identify a table.
+        assert.fail(`unexpected componenttype filter: ${filter}`);
+      }
+      // Resolve each component id back to its owning entity via that table's own entity field.
+      if (set === 'savedquery') return entities.filter((n) => filter.includes(viewId(n))).map((n) => ({ savedqueryid: viewId(n), returnedtypecode: n }));
+      if (set === 'savedqueryvisualization') return entities.filter((n) => filter.includes(chartId(n))).map((n) => ({ savedqueryvisualizationid: chartId(n), primaryentitytypecode: n }));
+      if (set === 'systemform') return entities.filter((n) => filter.includes(formId(n))).map((n) => ({ formid: formId(n), objecttypecode: n }));
+      return [];
+    },
+  };
+};
 
 test('appComponentEntities recovers ALL app entity components, not just sitemap-visible ones', async () => {
   const got = await appComponentEntities(componentSdk(), 'app-1');
@@ -525,11 +539,10 @@ test('appComponentEntities recovers ALL app entity components, not just sitemap-
 test('appComponentEntities is best-effort — every failure path yields [] so download still works', async () => {
   assert.deepStrictEqual(await appComponentEntities(componentSdk(), null), []);
   assert.deepStrictEqual(await appComponentEntities({ queryRecords: async () => { throw new Error('x'); } }, 'app-1'), []);
-  // No raw metadata read surface -> cannot resolve MetadataId -> [] (never a partial/wrong answer).
-  const noRaw = { queryRecords: componentSdk().queryRecords };
-  assert.deepStrictEqual(await appComponentEntities(noRaw, 'app-1'), []);
-  // An app with no entity components at all.
-  assert.deepStrictEqual(await appComponentEntities(componentSdk({ components: [] }), 'app-1'), []);
+  // An app whose components resolve to nothing.
+  assert.deepStrictEqual(await appComponentEntities(componentSdk({ entities: [] }), 'app-1'), []);
+  // An app row without appmoduleidunique (the lookup parent) cannot be queried.
+  assert.deepStrictEqual(await appComponentEntities({ queryRecords: async () => [{}] }, 'app-1'), []);
 });
 
 test('a COMPONENT-only table with no primary name is dropped with a warning, not a hard download failure', async () => {

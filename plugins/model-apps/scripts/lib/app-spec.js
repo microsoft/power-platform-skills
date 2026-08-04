@@ -837,7 +837,11 @@ function validateAppSpec(spec, opts = {}) {
         const targets = ['entity', 'dashboard', 'url', 'page'].filter((k) => sa[k]);
         if (targets.length === 0) errors.push(`sitemap subArea "${sa.title || ''}" needs an entity, dashboard, url, or page`);
         else if (targets.length > 1) errors.push(`sitemap subArea "${sa.title || ''}" sets multiple targets (${targets.join(', ')}) — pick one`);
-        if (sa.entity && !entityNames.has(sa.entity)) errors.push(`sitemap subArea references unknown entity '${sa.entity}'`);
+        // Case-insensitive: Dataverse logical names are lower-case while `schemaName` is cased
+        // (`Account`), and a sitemap subarea's `entity` comes from the deployed sitemap XML as a
+        // LOGICAL name. A downloaded spec therefore legitimately pairs `schemaName: "Account"` with
+        // `entity: "account"`. Matches the chart check above, which already uses `entityByLower`.
+        if (sa.entity && !entityByLower.has(String(sa.entity).toLowerCase())) errors.push(`sitemap subArea references unknown entity '${sa.entity}'`);
         if (sa.dashboard && !dashNamesSet.has(sa.dashboard)) errors.push(`sitemap subArea references unknown dashboard '${sa.dashboard}' (declare it in dashboards[])`);
         if (sa.url && !isSafeHttpUrl(sa.url)) errors.push(`sitemap subArea "${sa.title || ''}" url must be an http(s) URL (got '${sa.url}')`);
         // schemaVersion 2 references pages by stable KEY; legacy specs still reference by name.
