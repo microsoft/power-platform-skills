@@ -14,7 +14,7 @@ Top-level orchestrator. Owns the user-visible flow; delegates planning to the `n
 
 ## Workflow
 
-0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 3. Plan (planner agent + 4 gates) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`scripts/metro-session.js`) → 12.5 Optional debug handoff → 13. Summary
+0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 3. Plan (planner agent + 4 gates) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npm run dev`) → 12.5 Optional debug handoff → 13. Summary
 
 ---
 
@@ -637,7 +637,7 @@ Then apply these **safe idempotent** prep steps:
 5. Merge the six path aliases into `tsconfig.json` (`@/components`, `@/hooks`, `@/utils`, `@/tokens`, `@/generated`, `@/native`) without deleting existing aliases.
 6. Verify `app/_layout.tsx` imports `PowerAppsProvider` from `@microsoft/power-apps-native-host` and imports `tamaguiConfig`. If either is missing, patch `_layout.tsx` conservatively; do not rewrite custom navigation or unrelated provider code.
 7. Remove placeholder `power.config.json` if its `environmentId` is empty or missing. `npx power-apps init` in Step 6 writes the real file for the selected environment.
-8. Install the project-local Metro wrapper and wire `npm run dev` through it.
+8. Verify `npm run dev` remains the Metro entry point. The template's `metro.config.js` writes `.powernative` logs for `/debug-app`; do not route `dev` through a wrapper.
 
 Do **not** preserve placeholder `power.config.json` from the template. Keeping it would let downstream steps read an empty or stale environment.
 
@@ -655,27 +655,25 @@ Substitute the hardcoded template values with wizard answers from Step 2:
 
 Bundle ID and scheme are left as template defaults — they are fixed across all dev builds and patched by the wrap pipeline at release time.
 
-**Fix 1b — Install project-local Metro wrapper and dev script**
+**Fix 1b — Verify captured dev logging path**
 
-Manual `npm run dev` must use the same capture path as `/create-mobile-app` and `/debug-app`; otherwise a manually-started Expo process can occupy 8081 while the wrapper starts a second Metro on 8082 and watches the wrong log. Copy the plugin wrapper into the app and patch only the script entries:
+Manual `npm run dev` must remain the normal Expo entry point. The template's `metro.config.js` captures Metro terminal output and HTTP bundle failures into `.powernative/metro-logs/`, so manual starts and `/debug-app` use the same log source without a process-owning wrapper. Verify these script entries only; do not add wrapper-specific scripts:
 
 ```bash
-mkdir -p "<working_dir>/scripts"
-cp "${CLAUDE_SKILL_DIR}/../../scripts/metro-session.js" "<working_dir>/scripts/metro-session.js"
 node - "<working_dir>" <<'NODE'
 const fs = require('node:fs');
 const path = require('node:path');
 const root = process.argv[2];
 const packagePath = path.join(root, 'package.json');
 const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
-pkg.scripts = pkg.scripts || {};
-pkg.scripts.dev = 'node scripts/metro-session.js dev';
-pkg.scripts['dev:expo'] = pkg.scripts['dev:expo'] || 'expo start';
-fs.writeFileSync(packagePath, `${JSON.stringify(pkg, null, 2)}\n`);
+if (!pkg.scripts || pkg.scripts.dev !== 'expo start') {
+  throw new Error('Expected package.json scripts.dev to be "expo start". Do not route dev through a wrapper.');
+}
+if (pkg.scripts.predev && pkg.scripts.predev !== 'npm run generate-schemas') {
+  throw new Error('Unexpected predev script. Keep schema generation as the only predev hook.');
+}
 NODE
 ```
-
-Keep `predev: npm run generate-schemas` if present. `dev:expo` remains an escape hatch for humans who explicitly want raw Expo terminal behavior and do not need `/debug-app` log capture.
 
 **Fix 2 — Delete `power.config.json`**
 
@@ -1871,25 +1869,24 @@ After `tsc` passes, offer a static HTML preview. The dev server starts next (Ste
 
 ---
 
-### Step 12 — Start dev server (project-local session)
+### Step 12 — Start dev server (Metro writes project-local logs)
 
 **Print before starting:**
-> "→ [Step 12/13] Launching Metro as a project-local session so you can scan the QR and debug across hosts."
+> "→ [Step 12/13] Launching Metro so you can scan the QR; logs will be written under .powernative/."
 
-This skill launches Metro through the bundled `scripts/metro-session.js` wrapper so:
+This skill launches the template's normal `npm run dev` command so:
 
-1. The native Metro URL is persisted — the user can scan a generated QR immediately.
+1. The native Metro URL is printed by Expo — the user can scan it immediately.
 2. Hot-reload works on file edits — no restart needed for screen tweaks.
-3. `/debug-app` reads one project-local sanitized log regardless of whether the host is VS Code, Copilot CLI, or Claude Code. It never needs an opaque terminal ID.
+3. `/debug-app` reads project-local `.powernative` logs regardless of whether the user or the agent started Metro. It never needs an opaque terminal ID.
 
-The wrapper stores runtime-only state under `<working_dir>/.expo/metro-session/`:
+The template's Metro config stores runtime-only logs under `<working_dir>/.powernative/metro-logs/`:
 
-- `state.json` — dev-server port, PIDs, lifecycle status, and native Metro URL
-- `metro.log` — ANSI-free Metro/app output with common tokens, secrets, keys, and signed-query values redacted before persistence
+- `metro-<timestamp>-pid-<pid>-port-<port>.log` — ANSI-free Metro output and HTTP bundle failures, with sensitive lines removed before persistence
 
-The **port** is the session's identity: it is what the QR encodes, what the device dials, and what `/debug-app` probes to confirm the log it reads still belongs to this app. Expo rolls to the next free port when 8081 is taken, so always report the port the wrapper recorded rather than assuming 8081.
+The **port** is the log identity: it is what the QR encodes, what the device dials, and what `/debug-app` probes to pick the latest live log. Expo rolls to the next free port when 8081 is taken, so always report the port discovered from the log/helper rather than assuming 8081.
 
-`.expo/` is already gitignored by the template. Do not copy these files into `memory-bank.md` or commit them.
+`.powernative/` is gitignored by the template. Do not copy these files into `memory-bank.md` or commit them.
 
 **Launch commands:**
 
@@ -1899,28 +1896,31 @@ npm run generate-schemas    # refresh schema map for any data sources added sinc
 npx tsc --noEmit            # final gate — dev server starts only from a clean TypeScript state
 ```
 
-Run the schema regen and final `tsc` synchronously and check both exits. If either fails, do not launch Metro. Capture the full output once, batch-fix by root cause, rerun the final gate, and continue only when clean. Then launch Metro through the wrapper:
+Run the schema regen and final `tsc` synchronously and check both exits. If either fails, do not launch Metro. Capture the full output once, batch-fix by root cause, rerun the final gate, and continue only when clean. Then start the dev server:
 
 ```bash
-node "<working_dir>/scripts/metro-session.js" start \
-  --project-root "<working_dir>" \
-  --wait-ready-ms 8000
+npm run dev
 ```
 
-The wrapper resolves and executes the project-local Expo CLI directly, then returns while its detached runner continues. Do not launch this command itself with a host background/async flag; doing so would recreate the host-terminal dependency this wrapper removes.
+This is a long-running dev server. In hosts that support background terminals, run it as a background/async terminal only for process lifetime; do not persist or depend on the terminal ID. `/debug-app` discovers logs from `.powernative/metro-logs/`, not from terminal output.
 
-`npm run dev` uses the same project-local wrapper in foreground mode for humans, while Step 12 uses `start` mode so the skill can return after QR generation. The orchestrator already ran `npm run generate-schemas` for the final gate; `predev` remains a safety net for manual starts.
+The orchestrator already ran `npm run generate-schemas` for the final gate; `predev` remains a safety net for manual starts.
 
-Parse the returned JSON as `$METRO_SESSION`. Branch as follows:
+Read the initial terminal output and run the log helper to locate the generated log:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/metro-session.js" status --project-root "<working_dir>"
+```
+
+Branch as follows:
 
 | State | Action |
 |---|---|
-| `status: running` and `metroUrl` present | Continue with QR generation. Report `port` to the user. |
-| `alreadyRunning: true` | Reuse the existing session, `metroUrl`, and `port`; do not start a second Metro process. |
-| `status: starting` and no `metroUrl` after 8s | Run `status --project-root "<working_dir>"` once. If the URL is still absent, print the log/state paths and tell the user Metro is still starting; continue without a QR rather than guessing a URL. |
-| `status: failed` or non-zero exit | Run `tail --project-root "<working_dir>" --lines 120`, surface the sanitized launch error, and STOP. |
+| `status: running` and `logPath` present | Continue with QR handling. Report `port` to the user. |
+| `status: not-started` | Metro has not emitted a `.powernative` log yet. Wait for Expo's `Waiting on ...` line, then rerun `status` once. If still absent, print the terminal output and stop without guessing a URL. |
+| `status: port-conflict` or `port-taken` | Another process owns the latest log's port. Tell the user to stop the stale Metro process and rerun `npm run dev`; do not diagnose from this log. |
 
-**When `$METRO_SESSION.metroUrl` is present:**
+**When Expo prints a Metro URL:**
 
 1. **Generate QR code PNG and present it to the user** (chat-first, deterministic fallback):
   - Define `METRO_QR="<working_dir>/.expo/metro-qr.png"` and run `npx --yes qrcode -o "$METRO_QR" "<metro-url>"`. If the project's npm config requires auth and the fetch fails with `E401`, retry once with `npm_config_registry=https://registry.npmjs.org/ npm_config_always_auth=false` prefixed.
@@ -1932,20 +1932,18 @@ Parse the returned JSON as `$METRO_SESSION`. Branch as follows:
 
   > "✓ Metro is running on port `<port>`.
   > 📱 Scan the QR code shown above (or opened from `<working_dir>/.expo/metro-qr.png`) with your native dev client to load the app. Metro URL: `<metro-url>`
-  > 🔄 Edits hot-reload automatically. Debug log: `<working_dir>/.expo/metro-session/metro.log`."
+  > 🔄 Edits hot-reload automatically. Debug logs: `<working_dir>/.powernative/metro-logs/`."
 
 **Persist only stable discovery paths to memory bank** so resumed sessions and downstream skills can find the session without coupling to a host terminal:
 
 ```markdown
 ## Project facts
 ...
-- Metro session state: .expo/metro-session/state.json
-- Metro log: .expo/metro-session/metro.log
-- Metro launch cmd: node "<working_dir>/scripts/metro-session.js" start --project-root "<working_dir>"
-- Metro manual dev cmd: npm run dev
+- Metro logs: .powernative/metro-logs/
+- Metro launch cmd: npm run dev
 ```
 
-Do not persist PIDs, ports, or Metro URLs to the memory bank. They are ephemeral and are resolved from `state.json` when needed.
+Do not persist PIDs, ports, or Metro URLs to the memory bank. They are ephemeral and are resolved from the latest `.powernative` log when needed.
 
 This skill stops after Step 12 so the user can iterate locally. Production build + tenant push is a separate, explicit user action via the `/deploy` skill.
 
@@ -1957,7 +1955,7 @@ After Metro is running and the QR has been presented, offer a single optional de
 
 > "If the app shows an error or a workflow looks wrong after you load it in the native dev client, tell me the symptom and I can run `/debug-app "<symptom>"` using the project-local Metro log."
 
-Only invoke `/debug-app` if the user asks for debugging or gives a concrete symptom. `/debug-app` uses `.expo/metro-session/metro.log` as its primary diagnostic source; it must not probe `localhost`, request a bundle URL, or run any React Native Web setup. If the user gives no symptom, proceed directly to Step 13.
+Only invoke `/debug-app` if the user asks for debugging or gives a concrete symptom. `/debug-app` uses `.powernative/metro-logs/` as its primary diagnostic source; it must not request a bundle URL or run any React Native Web setup. If the user gives no symptom, proceed directly to Step 13.
 
 When the user is ready to deploy:
 
@@ -1980,7 +1978,7 @@ Native caps   : <list>
 Connectors    : <list>
 Screens       : <N total — M from template, K built in parallel>
 Dev server    : Metro running on port <port>
-Debug log     : .expo/metro-session/metro.log
+Debug logs    : .powernative/metro-logs/
 ─────────────────────────────────────────────
 ```
 
