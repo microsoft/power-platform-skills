@@ -3,5 +3,5 @@
   "private": true,
   "version": "0.0.0",
   "description": "Dev-only: bundles @maker-studio/cds-maker-sdk into a self-contained CJS vendored by the plugin. Not shipped.",
-  "devDependencies": { "esbuild": "^0.28.1" }
+  "devDependencies": { "esbuild": "0.28.1" }
 }
