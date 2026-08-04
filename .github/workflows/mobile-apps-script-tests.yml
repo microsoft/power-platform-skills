@@ -1,5 +1,4 @@
-# Functional tests for cross-host mobile-app scripts. The OS matrix catches
-# process, path, signal, and filesystem differences in wrapper behavior.
+# Functional tests for mobile-app scripts and template contracts.
 name: mobile-apps-script-tests
 
 on:
@@ -32,9 +31,9 @@ jobs:
               with:
                   node-version: 22
 
-            - name: syntax-check-mobile-scripts
+            - name: syntax-check-mobile-template
               shell: bash
-              run: node --check plugins/mobile-apps/scripts/metro-session.js
+              run: node --check plugins/mobile-apps/template/metro.config.js
 
             - name: run-mobile-script-tests
               shell: bash

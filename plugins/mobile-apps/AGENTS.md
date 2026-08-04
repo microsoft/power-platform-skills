@@ -26,7 +26,7 @@ README.md                      ← Plugin overview
 agents/                        ← native-app-planner, data-model-architect, screen-planner, screen-builder
 shared/                        ← shared-instructions, references, samples, memory-bank template
 skills/                        ← /create-mobile-app, /add-dataverse, /add-connector, /add-native, ...
-scripts/                       ← shared helpers: validate-mobile-files.js for skill-owned changed-file validation, metro-session.js for `.powernative` log status/tail
+scripts/                       ← shared helpers, including validate-mobile-files.js for skill-owned changed-file validation
 hooks/                         ← Validator implementations invoked explicitly by mobile workflows
 ```
 
@@ -73,7 +73,7 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     - `DONE_WITH_CONCERNS` requires at least one concern. If none, use `DONE`.
     - Special early-return signals (`INDUSTRY_CONFIRM_REQUESTED:`, `DESIGN_VIBE_REQUESTED:`) pre-date this protocol and remain in effect — they are special-cased "ask the user one question and re-spawn me" handoffs, not terminal returns.
     - The canonical orchestrator handler lives in [`skills/create-mobile-app/SKILL.md`](./skills/create-mobile-app/SKILL.md) Step 3.0. Future skills that spawn agents should reference it rather than duplicating the switch.
-11. **Metro lifecycle is project-local** — template `metro.config.js` writes sanitized `.powernative/metro-logs/` files during normal `npm run dev`; `/debug-app` uses `scripts/metro-session.js` only to locate/tail the latest live log with a persisted byte cursor. Do not restore required `BashOutput`/terminal-ID behavior. Host terminal APIs may be optional conveniences only. Never write unsanitized Metro output to disk, and never diagnose a log unless the port probe proves the logged PID still owns the port.
+11. **Metro lifecycle is project-local** — template `metro.config.js` delegates sanitized `.powernative/metro-logs/` writing to `@microsoft/power-apps-native-host/metro-logger` during normal `npm run dev`; `/debug-app` locates and tails those files directly with a persisted byte cursor. Do not restore required `BashOutput`/terminal-ID behavior. Host terminal APIs may be optional conveniences only. Never write unsanitized Metro output to disk, and never diagnose a log unless the logged PID/port still look live.
 
 ## Decisions made
 

@@ -657,7 +657,7 @@ Bundle ID and scheme are left as template defaults — they are fixed across all
 
 **Fix 1b — Verify captured dev logging path**
 
-Manual `npm run dev` must remain the normal Expo entry point. The template's `metro.config.js` captures Metro terminal output and HTTP bundle failures into `.powernative/metro-logs/`, so manual starts and `/debug-app` use the same log source without a process-owning wrapper. Verify these script entries only; do not add wrapper-specific scripts:
+Manual `npm run dev` must remain the normal Expo entry point. The template's `metro.config.js` delegates Metro terminal output and HTTP bundle failure logging to `@microsoft/power-apps-native-host/metro-logger`, which writes `.powernative/metro-logs/`. Manual starts and `/debug-app` use the same log source without a process-owning wrapper. Verify these script entries only; do not add wrapper-specific scripts:
 
 ```bash
 node - "<working_dir>" <<'NODE'
@@ -1880,7 +1880,7 @@ This skill launches the template's normal `npm run dev` command so:
 2. Hot-reload works on file edits — no restart needed for screen tweaks.
 3. `/debug-app` reads project-local `.powernative` logs regardless of whether the user or the agent started Metro. It never needs an opaque terminal ID.
 
-The template's Metro config stores runtime-only logs under `<working_dir>/.powernative/metro-logs/`:
+The native host Metro logger stores runtime-only logs under `<working_dir>/.powernative/metro-logs/`:
 
 - `metro-<timestamp>-pid-<pid>-port-<port>.log` — ANSI-free Metro output and HTTP bundle failures, with sensitive lines removed before persistence
 
@@ -1906,19 +1906,19 @@ This is a long-running dev server. In hosts that support background terminals, r
 
 The orchestrator already ran `npm run generate-schemas` for the final gate; `predev` remains a safety net for manual starts.
 
-Read the initial terminal output and run the log helper to locate the generated log:
+Read the initial terminal output and locate the generated `.powernative` log directly:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/metro-session.js" status --project-root "<working_dir>"
+ls -t "<working_dir>/.powernative/metro-logs"/metro-*-pid-*-port-*.log 2>/dev/null | head -1
 ```
 
 Branch as follows:
 
 | State | Action |
 |---|---|
-| `status: running` and `logPath` present | Continue with QR handling. Report `port` to the user. |
-| `status: not-started` | Metro has not emitted a `.powernative` log yet. Wait for Expo's `Waiting on ...` line, then rerun `status` once. If still absent, print the terminal output and stop without guessing a URL. |
-| `status: port-conflict` or `port-taken` | Another process owns the latest log's port. Tell the user to stop the stale Metro process and rerun `npm run dev`; do not diagnose from this log. |
+| Latest log exists and Expo printed a Metro URL | Continue with QR handling. Report the port from the URL/log filename to the user. |
+| No log exists yet | Wait for Expo's `Waiting on ...` line, then check the log directory once more. If still absent, print the terminal output and stop without guessing a URL. |
+| A stale log exists but no current Metro output appears | Tell the user to stop stale Metro processes and rerun `npm run dev`; do not diagnose from that log. |
 
 **When Expo prints a Metro URL:**
 

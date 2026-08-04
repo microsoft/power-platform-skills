@@ -18,9 +18,9 @@ Monitor the running app through the project-local `.powernative/metro-logs/` fil
 
 | Form | Behavior |
 |---|---|
-| `/debug-app` (no args) | **Default — project-log-driven mode.** Run Phase 0, locate the latest live `.powernative` Metro log by port/PID, then enter the monitor loop using `metro-session.js tail`. No host terminal ID is required. |
+| `/debug-app` (no args) | **Default — project-log-driven mode.** Run Phase 0, locate the latest live `.powernative` Metro log by port/PID, then enter the monitor loop by reading bytes from that file. No host terminal ID is required. |
 | `/debug-app "<symptom text>"` | **Symptom-driven mode** (recommended when there's a user-visible problem). Free-text symptom such as `"todos not appearing on home screen"`, `"login button does nothing"`, `"list empty after refresh"`. Run Phase 0 → Phase 0.5 (parse symptom → ask the user to reproduce/navigate → walk the likely data path from terminal traces) → enter monitor loop. Catches silent failures (empty lists, blank screens, swallowed errors) that pure log polling misses. |
-| `/debug-app status` | Run `metro-session.js status`, then print current Metro log path, dev-server port, last cursor, fixes applied, and unresolved errors. Do NOT enter the loop. |
+| `/debug-app status` | Locate the latest `.powernative` log, parse its PID/port from the filename, then print log path, dev-server port, last cursor, fixes applied, and unresolved errors. Do NOT enter the loop. |
 | `/debug-app stop` | Stop only the foreground debug loop and preserve `.claude/debug-app/` state. It does not stop Metro; the user owns the `npm run dev` process. |
 
 **Dispatch rule:** if `$ARGUMENTS` is non-empty and is not one of the reserved subcommand tokens (`status`, `stop`, `help`, `--help`, `-h`, `version`, `--version`), treat the entire string (everything after the command name; outer quotes optional) as the symptom and use symptom-driven mode. For `help` / `--help` / `-h`, print the subcommands table above and exit.
@@ -46,8 +46,8 @@ Monitor the running app through the project-local `.powernative/metro-logs/` fil
 Before entering the monitor loop, write a task list and keep it up to date:
 
 ```
-- [ ] Verify the latest `.powernative` Metro log is live (`metro-session.js status`)
-- [ ] Capture baseline log state (`metro-session.js tail`, save byte cursor)
+- [ ] Verify the latest `.powernative` Metro log exists and matches a live PID/port
+- [ ] Capture baseline log state (read latest log, save byte cursor)
 - [ ] (Symptom mode only) Phase 0.5: parse symptom → ask user to navigate → inject console.logs → read new log bytes → walk data path → clean up logs
 - [ ] Monitoring cycle 1: collect → classify → fix if needed
 - [ ] Monitoring cycle 2: collect → classify → fix if needed
@@ -69,20 +69,21 @@ Before entering the loop:
 Determine `<working_dir>` from `--working-dir` when present, otherwise use the current app root. Define:
 
 ```bash
-METRO_LOG_HELPER="${CLAUDE_SKILL_DIR}/../../scripts/metro-session.js"
-node "$METRO_LOG_HELPER" status --project-root "<working_dir>"
+LOG_DIR="<working_dir>/.powernative/metro-logs"
+LOG_PATH="$(ls -t "$LOG_DIR"/metro-*-pid-*-port-*.log 2>/dev/null | head -1)"
 ```
 
-The helper does not start or own Metro. It locates the newest `.powernative/metro-logs/metro-*-pid-*-port-*.log`, then verifies the logged PID still owns the logged port.
+Parse `pid` and `port` from `basename "$LOG_PATH"`, which has the shape `metro-<timestamp>-pid-<pid>-port-<port>.log`. When `port` is numeric, optionally verify the listener with the host shell (`lsof -nP -iTCP:<port> -sTCP:LISTEN -t` on macOS/Linux, `netstat -ano -p tcp` on Windows). Do not persist terminal IDs or depend on terminal output.
 
-Parse the JSON result:
+Branch as follows:
 
 | Status | Meaning | Action |
 |---|---|---|
-| `running: true` | Latest `.powernative` log belongs to a live Metro process | Capture `port`, `pid`, `logPath`, and continue. |
-| `status: port-taken` | The logged process is gone and another process now holds that port | Do NOT diagnose from this log. Tell the user which PID holds the port (`portListeners`) and ask them to restart `npm run dev`. |
-| `status: port-conflict` | The logged process is alive but something else owns the port | The device is talking to the wrong server. Ask the user to stop stale Metro processes and rerun `npm run dev`. |
-| `stopped` or `not-started` | No live `.powernative` log source | Tell the user Metro is not running. Ask them to run `npm run dev`, open the native app, then rerun `/debug-app`. |
+| Log exists, PID is alive, and either port is unknown or the port probe is unavailable | Treat as live. Capture `port`, `pid`, `logPath`, and continue. |
+| Log exists and PID still owns the logged port | Treat as live. Capture `port`, `pid`, `logPath`, and continue. |
+| Log exists, PID is gone, and another process owns the logged port | Do NOT diagnose from this log. Tell the user which PID holds the port and ask them to restart `npm run dev`. |
+| Log exists but PID/port contradict each other | The device may be talking to the wrong server. Ask the user to stop stale Metro processes and rerun `npm run dev`. |
+| No log exists | Tell the user Metro is not running or has not emitted `.powernative` logs. Ask them to run `npm run dev`, open the native app, then rerun `/debug-app`. |
 
 The port check prevents stale-log diagnosis: a log file can outlive its Metro process, so only the socket probe reveals that the log stopped belonging to the app under test.
 
@@ -116,7 +117,7 @@ If `fixes.md` is empty, write a session header:
 Read the latest sanitized log window:
 
 ```bash
-node "$METRO_LOG_HELPER" tail --project-root "<working_dir>" --lines 500 --max-bytes 262144
+tail -n 500 "$LOG_PATH"
 ```
 
 Parse `output`, `port`, and `nextCursor`. Scan `output`:
@@ -340,19 +341,33 @@ Repeat until **3 consecutive clean cycles**, OR the user types `stop`, OR the es
 
 ### Step A — Collect logs
 
-Read `.claude/debug-app/metro-cursor.json`, confirm its `port` matches `metro-session.js status`, then run:
+Read `.claude/debug-app/metro-cursor.json`, confirm its `logPath` still points at the latest live `.powernative` log, then read newly appended bytes:
 
 ```bash
-node "$METRO_LOG_HELPER" tail \
-   --project-root "<working_dir>" \
-   --cursor <saved-cursor> \
-   --wait-ms 5000 \
-   --max-bytes 262144
+node - "$LOG_PATH" <saved-cursor> 262144 <<'NODE'
+const fs = require('node:fs');
+const [file, cursorText, maxText] = process.argv.slice(2);
+const cursor = Number(cursorText);
+const maxBytes = Number(maxText);
+const size = fs.statSync(file).size;
+const start = Number.isInteger(cursor) && cursor <= size ? cursor : 0;
+const fd = fs.openSync(file, 'r');
+const buffer = Buffer.alloc(Math.min(maxBytes, Math.max(0, size - start)));
+const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, start);
+fs.closeSync(fd);
+process.stdout.write(JSON.stringify({
+   cursor: start,
+   nextCursor: start + bytesRead,
+   rotationLost: start !== cursor,
+   truncated: start + bytesRead < size,
+   output: buffer.subarray(0, bytesRead).toString('utf8')
+}, null, 2));
+NODE
 ```
 
 Use only the returned `output` for this cycle. Immediately persist `nextCursor` and the current `port` to `metro-cursor.json`, even when `output` is empty or contains an error; this prevents duplicate processing after interruption and handles log rotation safely.
 
-Count a clean cycle only when the result has `observationComplete: true` and the full `tail --wait-ms 5000` interval contains empty or non-error output. A process transition, or a status of `port-taken` / `port-conflict`, returns `observationComplete: false` and is never a clean cycle.
+Count a clean cycle only after observing a full 5-second interval with empty or non-error new output. If the log file changes, the PID/port check becomes contradictory, or the cursor resets because the file shrank/rotated, never count that cycle as clean.
 
 If `truncated: true`, never count the result as clean. Process any nonempty output, then issue at most three additional tail calls from the returned cursor in the same cycle. If `rotationLost: true`, record an explicit rotation warning in `fixes.md` and require a fresh full observation interval before incrementing the clean counter. If data remains truncated after four chunks, record a backlog warning and continue next cycle rather than consuming unbounded context.
 
@@ -670,7 +685,7 @@ Do NOT attempt a third automated fix for the same error. Wait for user guidance.
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Phase 0 reports `not-started` or `stopped` | No live `.powernative` Metro log exists | Run `npm run dev`, open the native app, then rerun `/debug-app` |
-| Phase 0 reports `failed` | Expo/Metro exited during startup or runtime | Run `metro-session.js tail --lines 120`, fix the sanitized error, then start again |
+| Phase 0 sees recent failure lines | Expo/Metro exited during startup or runtime | Read the latest log tail, fix the sanitized error, then ask the user to restart `npm run dev` |
 | Phase 0 reports "Metro running but no app connected" | Simulator/device hasn't loaded the app yet | Open the app on the simulator/device, then re-run `/debug-app` |
 | Loop appears stuck | Fix taking longer than expected (e.g., type-check on large project) | Wait — log lines should still print as the fix runs. Type `stop` to exit. |
 | Loop exits with "iteration cap reached" | Symptom is intermittent OR a fix is regressing on every reload | Inspect the last 3 entries in `fixes.md` for circularity; re-run with a more specific symptom or fix manually |
