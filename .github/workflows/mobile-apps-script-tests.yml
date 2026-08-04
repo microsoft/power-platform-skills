@@ -1,0 +1,39 @@
+# Mobile Apps telemetry is exercised with isolated configs and local mirrors.
+# The job-level opt-out is a backstop against accidental production emission if
+# the plugin is provisioned later and a new test forgets its local test seam.
+name: mobile-apps-script-tests
+
+on:
+    pull_request:
+        branches:
+            - main
+        paths:
+            - "plugins/mobile-apps/**"
+            - "shared/telemetry/**"
+
+jobs:
+    test-mobile-apps-scripts:
+        name: test-mobile-apps-scripts (${{ matrix.os }})
+        runs-on: ${{ matrix.os }}
+        env:
+            POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: "1"
+        strategy:
+            fail-fast: false
+            matrix:
+                os:
+                    - ubuntu-latest
+                    - windows-latest
+                    - macos-latest
+        steps:
+            - name: checkout
+              uses: actions/checkout@v4
+
+            - name: setup-node
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+
+            - name: run-mobile-apps-script-tests
+              shell: bash
+              working-directory: plugins/mobile-apps/scripts/tests
+              run: node --test

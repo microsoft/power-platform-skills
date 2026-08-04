@@ -216,6 +216,7 @@ Example edit flows:
 | `/deploy` | ✅ v0 | Build + push — `npm run build` then `npx power-apps push` to the env in `power.config.json`. **Does not** drive `expo run:ios` or `expo run:android` (out of scope for v0). |
 | `/open-wrap-url` | ✅ v0 | Opens the Wrap URL in browser for an app ID using `https://make.powerapps.com/environments/<envID>/wrap?appID=<appID>`. Requires both `--app-id` and `--env-id`. |
 | `/report-issue` | ✅ v0 | Read-only diagnostic — collects env / Expo / Node versions, project context, recent errors, and renders a copy-paste-ready GitHub issue body. Sanitizes secrets. |
+| `/telemetry` | ✅ v0 | Enable, disable, or show the per-user Mobile Apps telemetry transmission preference. |
 | `/design-system` | ✅ v0 | End-to-end design system — collects brand inputs (logo, brand doc, website, free text, canvas app, code app, Figma), runs a 3-style visual picker, writes `brand/design-system.md` + `brand/tokens.ts`, renders branded screen previews. Auto-invoked at Step 6.75 of `/create-mobile-app`; also standalone. |
 | `/preview-screens` | ✅ v0 | Renders generated TSX screens as a browser-viewable HTML preview (no Metro needed). Uses Tamagui → HTML mapping. |
 | `/add-datasource` | ✅ v0 | Alias for `/add-connector` — discoverable name for "how do I connect to X?" |
@@ -236,6 +237,24 @@ Example edit flows:
 | `screen-planner` | Read-only — picks navigation pattern, designs per-screen specs |
 | `screen-builder` | Mutation — writes ONE TSX file per assigned screen, runs N in parallel |
 | `offline-profile-architect` | Read-only — proposes per-table row scope, relationships, selected columns, sync frequency; returns `_offline_section.md` for `/setup-offline-profile` to embed in `native-app-plan.md` |
+
+## Telemetry and privacy
+
+The Mobile Apps plugin includes start-only usage telemetry built on the same shared 1DS transport as Power Pages. The checked-in Mobile Apps configuration is currently `disabled: true` with a placeholder key, so it is hard-off until a dedicated Mobile Apps stream and instrumentation key are provisioned. While hard-off, it performs no telemetry shellouts, writes no local event log, and sends nothing.
+
+Once provisioned, a start event can include the skill name, plugin version, session and per-start correlation IDs, OS/Node versions, AI-agent name/version, and whether the host observed the start through `UserPromptSubmit` or `PreToolUse(Skill)`. It never includes prompts, skill arguments, tool inputs, file paths, cwd, app/site names, URLs, credentials, usernames, hostnames, Dataverse organization or tenant IDs, or Entra object IDs.
+
+Both host surfaces are covered — an explicit slash command and a programmatic Skill-tool call — so some hosts may produce two `skill_started` records for one visible run. The plugin does not emit `skill_completed`, success/failure, error, or duration data because the available hook boundary does not prove that the workflow itself completed.
+
+Control the per-user transmission preference with:
+
+```text
+/mobile-app:telemetry status
+/mobile-app:telemetry off
+/mobile-app:telemetry on
+```
+
+After provisioning, `off` stops network transmission but retains the sanitized local diagnostic mirror under `~/.power-platform-skills/telemetry/mobile-app/sessions/<sessionId>/events.jsonl`. Automation can force transmission off with `POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT=1`; this overrides the saved preference and `on`.
 
 ## Known blockers
 

@@ -2,7 +2,7 @@
 
 This file provides guidance to AI Agents when working with the **mobile-app** plugin.
 
-> **Status:** v0 — 23 skills + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
+> **Status:** v0 — 24 skills + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
 
 ## What This Plugin Is
 
@@ -26,8 +26,8 @@ README.md                      ← Plugin overview
 agents/                        ← native-app-planner, data-model-architect, screen-planner, screen-builder
 shared/                        ← shared-instructions, references, samples, memory-bank template
 skills/                        ← /create-mobile-app, /add-dataverse, /add-connector, /add-native, ...
-scripts/                       ← shared helpers, including validate-mobile-files.js for skill-owned changed-file validation
-hooks/                         ← Validator implementations invoked explicitly by mobile workflows
+scripts/                       ← shared helpers, including validate-mobile-files.js and bundled telemetry
+hooks/                         ← Telemetry start hooks plus validators invoked explicitly by mobile workflows
 ```
 
 ## Template source
@@ -56,7 +56,7 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 7. **Persisted plan** — Write `native-app-plan.md` (Mermaid ER + per-screen specs + native capabilities matrix) as the source of truth that sub-skills `Read`.
 8. **CLI compatibility** — Use `npx power-apps ...` for code-app lifecycle and data-source commands. Use `scripts/resolve-environment.js` plus `az` tokens for Dataverse environment URL/tenant discovery and Azure/Entra operations. See [`shared/shared-instructions.md`](./shared/shared-instructions.md).
 9. **Agent invocation namespace** — All `Task` invocations of agents in this plugin MUST use the fully-qualified `mobile-app:<agent-name>` form (e.g. `mobile-app:native-app-planner`, `mobile-app:screen-builder`). Bare names like `native-app-planner` return `Agent type 'native-app-planner' not found` because Claude Code namespaces all plugin agents by plugin name.
-10. **Plugin isolation** — Do not add `hooks/hooks.json`: Claude loads plugin hooks during unrelated workflows, so a mobile write hook can block Canvas Apps tool calls. Mutating skills follow the changed-file gate in `shared/shared-instructions.md`, and final-artifact agents invoke `scripts/validate-mobile-files.js` directly.
+10. **Plugin isolation** — `hooks/hooks.json` is limited to fail-open telemetry start hooks. They never validate, mutate, or block tool calls. Do not add write/validation hooks: mutating skills follow the changed-file gate in `shared/shared-instructions.md`, and final-artifact agents invoke `scripts/validate-mobile-files.js` directly.
 11. **Invocation metadata** — Public entry skills use `user-invocable: true` and remain model-invocable. Bundled implementation helpers use both `user-invocable: false` and `disable-model-invocation: true`; their owner reads `SKILL.md` directly. Hidden standalone workflows such as `assign-offline-profile` and `preview-offline-scope` use `user-invocable: false` without disabling model invocation because no owner reads them directly. Agents use `user-invocable: false` without `disable-model-invocation` so qualified `Task` delegation remains available.
 12. **Sub-agent return-status protocol** — Every agent in this plugin (`native-app-planner`, `data-model-architect`, `screen-planner`, `screen-builder`) MUST return a status code as the **literal first line** of its final message. Orchestrators (skills that invoke agents via `Task`) MUST parse the first line and branch:
 
@@ -73,6 +73,17 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     - `DONE_WITH_CONCERNS` requires at least one concern. If none, use `DONE`.
     - Special early-return signals (`INDUSTRY_CONFIRM_REQUESTED:`, `DESIGN_VIBE_REQUESTED:`) pre-date this protocol and remain in effect — they are special-cased "ask the user one question and re-spawn me" handoffs, not terminal returns.
     - The canonical orchestrator handler lives in [`skills/create-mobile-app/SKILL.md`](./skills/create-mobile-app/SKILL.md) Step 3.0. Future skills that spawn agents should reference it rather than duplicating the switch.
+
+## Telemetry
+
+Mobile Apps bundles the canonical stdlib-only 1DS transport from the repo-root `shared/telemetry/lib` at `scripts/lib/telemetry/lib`. Edit the shared source first, then refresh this physical copy in the same change; never copy another plugin's `ikey.json` or resolver.
+
+- **Start-only lifecycle:** `UserPromptSubmit` records explicit slash-command starts and `PreToolUse(Skill)` records programmatic Skill-tool starts; both may fire for one visible slash command. `UserPromptSubmit` payloads differ by host — Claude Code passes the raw `/mobile-app:<skill>` text, Copilot CLI pre-expands it to a `<skill-context name="<skill>">` wrapper and emits no Skill pre-tool event — so both shapes must stay recognized or manual runs go uncaptured. Do not add `skill_completed`, duration, outcome, or persisted correlation state: Power Pages deliberately removed that flow because the hook boundary does not prove the workflow completed.
+- **Coverage and attribution:** `scripts/lib/mobileapp-hook-utils.js` discovers every user- or model-invocable top-level skill, including `telemetry`. Direct-read helpers with `disable-model-invocation: true` are not independently invoked and are excluded. Bare and `mobile-app:`-qualified names are both attributed; explicitly foreign plugin namespaces are excluded.
+- **Session correlation:** Stable host session ids pass through unchanged. Copilot CLI reports a transient `call_*` id to nested-agent hooks, so `resolveCopilotRootSessionId` in `scripts/lib/mobile-telemetry.js` resolves it to the unique recent UUID session whose local `~/.copilot/session-state/<uuid>/events.jsonl` structurally owns that `agentId`, reading only a bounded tail. Keep host-specific quirks contained in that one function. The verified root is cached as one atomic 30-minute alias file per hashed call id so fresh hook processes reuse it; aliases hold no prompts, cwd, or tool arguments and are never transmitted. Missing, stale, malformed, or ambiguous state fails open to the original id, and Claude Code and Codex ids are not rewritten.
+- **Privacy:** Mobile Apps sends no prompt, tool input, cwd, path, URL, credential, username, hostname, Dataverse org/tenant ID, or Entra object ID. The dynamic `eventInfo` contains only `invocationSource` (`prompt` or `pretool`).
+- **Controls:** `scripts/lib/telemetry/ikey.json` remains `disabled: true` with a Mobile-specific placeholder until its own 1DS key, collector, stream annotation, and Kusto mapping are provisioned. That is a true hard-off: no local log and no POST. Once enabled, `/mobile-app:telemetry off` and `POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT=1` suppress transmission while preserving the local diagnostic mirror.
+- **CI:** Every Mobile Apps test job must set `POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT=1`. The single positive wire test clears that backstop only in its child process and routes the event to `POWER_PLATFORM_SKILLS_FAKE_HTTPS`; all other positive tests remain opted out and exercise the local mirror.
 
 ## Decisions made
 
