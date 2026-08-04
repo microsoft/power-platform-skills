@@ -88,6 +88,26 @@ no breaking changes.
   global choice, authored column width), shared input-safety boundaries, and the `hardening-2` bundle.
 
 ### Fixed
+- **Apps built on standard tables round-trip correctly** — five bugs that all surfaced only when an app
+  reused out-of-the-box Dataverse tables, and were masked on custom tables:
+  - **Real primary-name columns.** A downloaded spec named `account`'s primary column `account_name` and
+    `contact`'s `contact_name`; neither exists (they are `name` and `fullname`). The value now comes from
+    Dataverse metadata and is omitted rather than invented when metadata doesn't supply it.
+  - **Hidden entity components are preserved.** Download reconstructed tables from the *sitemap*, so an app
+    carrying nine tables with two in navigation emitted two — task, email, appointment, phone call, user,
+    team and note vanished from the spec. Entities are now the sitemap set unioned with the app's real
+    entity components.
+  - **The solution's own publisher prefix.** The prefix was inferred from the app's unique name and fell
+    back to a literal `new` — wrong for an app named `new_customermanagement` inside publisher `contoso`,
+    for an app with no prefix, and for prefixes longer than the guess assumed. It is now read from the
+    solution's owning publisher.
+  - **`--verify` no longer passes when AI features didn't apply.** Verification had no awareness of
+    `ai.appFeatures`, so a run that skipped every requested feature still reported a clean PASS. It now
+    reads each per-app setting back and fails when the effective value isn't what the spec asked for.
+  - **AI app settings accept their real values.** `ai.appFeatures` was boolean-only, so platform values
+    such as `2` ("on for everyone") were inexpressible; values may now be a boolean or a non-negative
+    integer. Requires the matching SDK fix (re-vendored here), which also repairs NL grid search writing
+    nothing at all while reporting itself applied.
 - **Teardown leaves nothing behind** — the table icon and generated app-icon web resources are removed
   (web resources delete after tables), cascade cleanup failures are reported instead of silently
   orphaning rows, and reused/system tables are skipped with a reason rather than erroring.

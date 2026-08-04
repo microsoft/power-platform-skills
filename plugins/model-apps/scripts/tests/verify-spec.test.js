@@ -521,3 +521,122 @@ test('verifySpec: a missing persona role (or a foreign same-name role) is a loud
   assert.ok(r.missing.some((m) => m.kind === 'role' && m.name === 'Agent'));
 });
 
+
+// ── AI app features (ADO 6603383 / 6560699) ────────────────────────────────────────────────────
+// verifySpec had NO awareness of spec.ai, so a build whose every requested AI feature was skipped
+// (admin gate off) or silently not persisted still reported a clean PASS. The oracle is the
+// EFFECTIVE app-scoped setting value: what the spec asked for must be what is in force for the app.
+
+const AI_BASE = {
+  solution: { uniqueName: 'S', publisherPrefix: 'co' },
+  app: { name: 'A', uniqueName: 'co_a' },
+  entities: [], views: [], charts: [], forms: [], appShell: { areas: [] },
+};
+// `values` maps the PER-APP setting name -> its effective value. Note these are the app settings, NOT
+// the org readiness gates: nlSearch's gate is the boolean `EnableNLGridSearch` but its per-app setting
+// is the numeric `NLGridSearchSetting` — conflating them is what made NL grid search silently no-op.
+const aiRead = (values) => ({
+  findTable: async () => null,
+  findColumns: async () => [],
+  queryRecords: async () => [],
+  sitemapXml: async () => '',
+  retrieveSetting: async (name) => ({ value: values[name] }),
+});
+const ALL_ON = { formFill: true, nlSearch: true, nlChart: true, m365: true };
+const ALL_SETTINGS_ON = {
+  FormFillBarUXEnabled: '1',
+  NLGridSearchSetting: '1',
+  NLChartDataVisualizationSetting: '1',
+  m365copilotmodelappenabled: '1',
+};
+
+test('verifySpec: requested AI features that are NOT in effect fail verify (no more false PASS)', async () => {
+  const r = await verifySpec({ ...AI_BASE, ai: { appFeatures: ALL_ON } }, aiRead({}));
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.missing.filter((m) => m.kind === 'ai-feature').length, 4);
+});
+
+test('verifySpec: AI features in effect verify clean', async () => {
+  const r = await verifySpec({ ...AI_BASE, ai: { appFeatures: ALL_ON } }, aiRead(ALL_SETTINGS_ON));
+  assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
+  assert.strictEqual(r.checks.filter((c) => c.kind === 'ai-feature' && c.present).length, 4);
+});
+
+test('verifySpec: reads the PER-APP setting, not the org readiness gate, for nlSearch', async () => {
+  // Only the ORG gate is on; the per-app setting is unset. Verify must NOT pass.
+  const r = await verifySpec({ ...AI_BASE, ai: { appFeatures: { nlSearch: true } } }, aiRead({ EnableNLGridSearch: 'true' }));
+  assert.strictEqual(r.ok, false);
+  assert.match(r.missing.find((m) => m.kind === 'ai-feature').detail, /NLGridSearchSetting/);
+});
+
+test('verifySpec: an explicit numeric AI value (2 = on for everyone) is compared verbatim', async () => {
+  const want2 = { ...AI_BASE, ai: { appFeatures: { formFill: 2 } } };
+  const mismatch = await verifySpec(want2, aiRead({ FormFillBarUXEnabled: '1' }));
+  assert.strictEqual(mismatch.ok, false, 'requested 2 but 1 is in effect must fail');
+  assert.match(mismatch.missing.find((m) => m.kind === 'ai-feature').detail, /requested '2'/);
+  const match = await verifySpec(want2, aiRead({ FormFillBarUXEnabled: '2' }));
+  assert.strictEqual(match.ok, true, JSON.stringify(match.missing));
+});
+
+test('verifySpec: an explicit OFF request is verified against 0, not treated as dont-care', async () => {
+  const r = await verifySpec({ ...AI_BASE, ai: { appFeatures: { formFill: false } } }, aiRead({ FormFillBarUXEnabled: '1' }));
+  assert.strictEqual(r.ok, false);
+});
+
+test('verifySpec: a setting read failure fails CLOSED (cannot prove in effect => not present)', async () => {
+  const read = { ...aiRead({}), retrieveSetting: async () => { throw new Error('403 forbidden'); } };
+  const r = await verifySpec({ ...AI_BASE, ai: { appFeatures: { formFill: true } } }, read);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.missing.find((m) => m.kind === 'ai-feature').detail, /could not read app setting/);
+});
+
+test('verifySpec: the AI check is reader-gated and absent-spec-safe (existing callers unaffected)', async () => {
+  // No ai block at all -> no ai checks.
+  const noAi = await verifySpec(AI_BASE, aiRead(ALL_SETTINGS_ON));
+  assert.strictEqual(noAi.checks.filter((c) => c.kind === 'ai-feature').length, 0);
+  // ai requested but the reader cannot read settings -> skipped, not a false failure.
+  const noSupport = { findTable: async () => null, findColumns: async () => [], queryRecords: async () => [], sitemapXml: async () => '' };
+  const r = await verifySpec({ ...AI_BASE, ai: { appFeatures: ALL_ON } }, noSupport);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
+  assert.strictEqual(r.checks.filter((c) => c.kind === 'ai-feature').length, 0);
+});
+
+test('verifySpec: AI settings are read at the APP scope the BUILD wrote under, not the env scope', () => {
+  // Regression guard for a false PASS: when a spec carries no explicit app.uniqueName (neither shipped
+  // sample does), reading `spec.app.uniqueName` yields undefined, the SDK then omits the AppUniqueName
+  // path segment, and RetrieveSetting returns the ENVIRONMENT value. Comparing that against the request
+  // can pass while the app itself has the feature off. The identity must be `appUniqueName(spec)`.
+  const seen = [];
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'Project Tracker' },            // <- no uniqueName, like the real samples
+    entities: [], views: [], charts: [], forms: [], appShell: { areas: [] },
+    ai: { appFeatures: { formFill: true } },
+  };
+  const read = {
+    findTable: async () => null, findColumns: async () => [], queryRecords: async () => [],
+    sitemapXml: async () => '',
+    retrieveSetting: async (name, opts) => { seen.push({ name, opts }); return { value: '1' }; },
+  };
+  return verifySpec(spec, read).then(() => {
+    assert.strictEqual(seen.length, 1);
+    // Same derivation the build uses for setAppAiFeatures: `<publisherPrefix>_<app.name>` sanitized.
+    assert.strictEqual(seen[0].opts.appUniqueName, 'new_projecttracker');
+  });
+});
+
+test('verifySpec: a Boolean-typed AI setting (dataType 2) compares true/false, not 1/0', () => {
+  // Dataverse dataType 2 == Boolean, whose value is the string 'true'/'false'. An exact '1' compare
+  // would report a genuinely-enabled feature as not-in-effect (a false FAIL on a correct build).
+  const read = (value, dataType) => ({
+    findTable: async () => null, findColumns: async () => [], queryRecords: async () => [],
+    sitemapXml: async () => '',
+    retrieveSetting: async () => ({ value, dataType }),
+  });
+  const spec = { ...AI_BASE, ai: { appFeatures: { formFill: true } } };
+  return verifySpec(spec, read('true', 2)).then(async (on) => {
+    assert.strictEqual(on.ok, true, JSON.stringify(on.missing));
+    const off = await verifySpec(spec, read('false', 2));
+    assert.strictEqual(off.ok, false, 'a Boolean-typed setting reading false must still fail');
+  });
+});

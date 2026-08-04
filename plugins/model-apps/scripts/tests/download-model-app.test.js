@@ -160,7 +160,7 @@ test('droppedSubareaCount counts subareas the spec could not round-trip (e.g. da
 });
 
 // ── Task 11: assignPageKeys + missingDownloads + full round-trip ──────────────
-const { assignPageKeys, missingDownloads, runDownload, recoverAppSolution } = require('../download-model-app.js');
+const { assignPageKeys, missingDownloads, runDownload, recoverAppSolution, appComponentEntities } = require('../download-model-app.js');
 const { reconcilePageIds, buildManifest } = require('../lib/page-manifest.js');
 const { hydrateSpec } = require('../lib/hydrate-spec.js');
 const { validateAppSpec } = require('../lib/app-spec.js');
@@ -362,7 +362,7 @@ test('Task-6: full round-trip via runDownload → hydrateSpec → validateAppSpe
     // existing app even after a display-name rename) and the publisher prefix is derived FROM it.
     assert.strictEqual(spec.app.uniqueName, APP_UNIQUE, 'the app real uniquename round-trips into spec.app.uniqueName');
     assert.strictEqual(spec.solution.uniqueName, 'ContosoSln', 'the real unmanaged solution uniquename is recovered for teardown');
-    assert.strictEqual(spec.solution.publisherPrefix, 'test', 'the publisher prefix is derived from the app uniquename (test_roundtrip → test), NOT the recovered solution (Sol F2)');
+    assert.strictEqual(spec.solution.publisherPrefix, 'test', 'this mock SDK exposes no getSolution, so the prefix falls back to the app uniquename (test_roundtrip → test); when getSolution IS available the solution publisher wins — see the recoverAppSolution tests');
     assert.strictEqual(appUniqueName(spec), APP_UNIQUE, 'appUniqueName resolves the REAL uniquename (identity lookup finds the existing app, no duplicate) even though the display name is "Test App"');
     assert.ok(!('prefixResolved' in spec.solution), 'the transient prefixResolved flag is stripped from the persisted spec');
   } finally {
@@ -430,4 +430,120 @@ test('recoverAppSolution returns null when the app has no solution components (c
 test('recoverAppSolution never throws — a query error resolves to null (best-effort)', async () => {
   const sdk = { queryRecords: async () => { throw new Error('boom'); } };
   assert.strictEqual(await recoverAppSolution(sdk, 'app'), null);
+});
+
+// ── OOB-table round-trip fixes (ADO 6603392 / 6603390 / 6603388) ───────────────────────────────
+// All three surfaced on an app built from STANDARD Dataverse tables. Each was masked on custom
+// tables, which is why they survived earlier testing.
+
+test('entityFromMetadata uses the REAL primary-name attribute for OOB tables (no <entity>_name guess)', () => {
+  // The old fallback produced `account_name` / `contact_name`, neither of which exists. It looked
+  // plausible on a custom table (`co_ticket` -> `co_name`), which is exactly why it went unnoticed.
+  const account = entityFromMetadata({ logicalName: 'account', schemaName: 'Account', displayName: 'Account', primaryNameAttribute: 'name' }, 'account');
+  assert.strictEqual(account.primaryAttribute.schemaName, 'name');
+  const contact = entityFromMetadata({ logicalName: 'contact', schemaName: 'Contact', displayName: 'Contact', primaryNameAttribute: 'fullname' }, 'contact');
+  assert.strictEqual(contact.primaryAttribute.schemaName, 'fullname');
+});
+
+test('entityFromMetadata reports a NULL primaryAttribute rather than synthesizing one', () => {
+  // Emitting a fabricated attribute name yields a spec that references a column Dataverse does not
+  // have. Omitting the field entirely is no better — `primaryAttribute` is REQUIRED by App Spec
+  // validation, so the spec would simply fail to validate later with a confusing error. Signalling
+  // null lets runDownload fail the download loudly, naming the table.
+  const e = entityFromMetadata({ logicalName: 'account', displayName: 'Account' }, 'account');
+  assert.strictEqual(e.primaryAttribute, null, 'must not invent a primary attribute');
+  assert.strictEqual(e.existing, true, 'still flagged pre-existing (teardown protection)');
+});
+
+test('a downloaded entity WITH real metadata validates as an App Spec entity', () => {
+  // Guards the regression the null-signalling above could otherwise introduce: the normal path must
+  // still produce a spec that actually validates and can be rebuilt.
+  const { validateAppSpec } = require('../lib/app-spec.js');
+  const account = entityFromMetadata({ logicalName: 'account', schemaName: 'Account', displayName: 'Account', primaryNameAttribute: 'name' }, 'account');
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'co' },
+    app: { name: 'Customer Management', uniqueName: 'contoso_customermanagement' },
+    entities: [account],
+    views: [], charts: [], forms: [], commands: [], dashboards: [], pages: [],
+    webResources: [], appShell: { areas: [] },
+  };
+  const r = validateAppSpec(spec);
+  assert.ok(r.ok, JSON.stringify(r.errors));
+});
+
+test('recoverAppSolution recovers the publisher prefix from the SOLUTION, not the app name', async () => {
+  const sdk = {
+    queryRecords: async (set) => {
+      if (set === 'solutioncomponent') return [{ _solutionid_value: 'sol-1' }];
+      if (set === 'solution') return [{ solutionid: 'sol-1', uniquename: 'ContosoCustomerManagement', ismanaged: false }];
+      return [];
+    },
+    getSolution: async (uniqueName) => ({ uniqueName, publisherPrefix: 'contoso' }),
+  };
+  assert.deepStrictEqual(await recoverAppSolution(sdk, 'app-1'), { uniqueName: 'ContosoCustomerManagement', publisherPrefix: 'contoso' });
+});
+
+test('recoverAppSolution degrades to uniqueName-only when the prefix cannot be recovered', async () => {
+  const base = {
+    queryRecords: async (set) => {
+      if (set === 'solutioncomponent') return [{ _solutionid_value: 'sol-1' }];
+      if (set === 'solution') return [{ solutionid: 'sol-1', uniquename: 'ContosoCustomerManagement', ismanaged: false }];
+      return [];
+    },
+  };
+  // (a) an older vendored bundle with no getSolution at all
+  assert.deepStrictEqual(await recoverAppSolution(base, 'app-1'), { uniqueName: 'ContosoCustomerManagement' });
+  // (b) getSolution throws
+  assert.deepStrictEqual(await recoverAppSolution({ ...base, getSolution: async () => { throw new Error('boom'); } }, 'app-1'), { uniqueName: 'ContosoCustomerManagement' });
+  // (c) a first-party publisher with no customization prefix -> not usable, so not reported
+  assert.deepStrictEqual(await recoverAppSolution({ ...base, getSolution: async () => ({ publisherPrefix: '' }) }, 'app-1'), { uniqueName: 'ContosoCustomerManagement' });
+});
+
+// The nine entities from the filed repro: an app on account/contact also carries activity, user and
+// note tables that have no sitemap entry of their own.
+const NINE = ['account', 'contact', 'task', 'email', 'appointment', 'phonecall', 'systemuser', 'team', 'annotation'];
+const metaIdFor = (n) => `00000000-0000-0000-0000-${String(NINE.indexOf(n) + 1).padStart(12, '0')}`;
+const componentSdk = (opts = {}) => ({
+  queryRecords: async (set, o) => {
+    if (set === 'appmodule') return [{ appmoduleidunique: 'appuniq-1' }];
+    if (set === 'appmodulecomponent') {
+      // componenttype 1 == Entities; the parent lookup is the UNIQUE id, not appmoduleid.
+      assert.match(o.filter, /componenttype eq 1/);
+      assert.match(o.filter, /_appmoduleidunique_value eq appuniq-1/);
+      return (opts.components || NINE).map((n) => ({ objectid: metaIdFor(n), componenttype: 1 }));
+    }
+    return [];
+  },
+  dataverse: { get: async () => ({ status: 200, body: { value: NINE.map((n) => ({ LogicalName: n, MetadataId: metaIdFor(n) })) } }) },
+});
+
+test('appComponentEntities recovers ALL app entity components, not just sitemap-visible ones', async () => {
+  const got = await appComponentEntities(componentSdk(), 'app-1');
+  assert.deepStrictEqual(got.slice().sort(), NINE.slice().sort());
+});
+
+test('appComponentEntities is best-effort — every failure path yields [] so download still works', async () => {
+  assert.deepStrictEqual(await appComponentEntities(componentSdk(), null), []);
+  assert.deepStrictEqual(await appComponentEntities({ queryRecords: async () => { throw new Error('x'); } }, 'app-1'), []);
+  // No raw metadata read surface -> cannot resolve MetadataId -> [] (never a partial/wrong answer).
+  const noRaw = { queryRecords: componentSdk().queryRecords };
+  assert.deepStrictEqual(await appComponentEntities(noRaw, 'app-1'), []);
+  // An app with no entity components at all.
+  assert.deepStrictEqual(await appComponentEntities(componentSdk({ components: [] }), 'app-1'), []);
+});
+
+test('a COMPONENT-only table with no primary name is dropped with a warning, not a hard download failure', async () => {
+  // appComponentEntities is best-effort by contract, so its output must not be able to abort the whole
+  // download. A hidden component table (never in the sitemap, so it did not appear in the spec at all
+  // before this change) that Dataverse reports with no PrimaryNameAttribute would otherwise regress a
+  // previously-working download — and there is no --allow-lossy override for it.
+  const sitemapOnly = new Set(['account']);
+  const metaFor = (logical) => (sitemapOnly.has(logical)
+    ? { logicalName: logical, schemaName: 'Account', displayName: 'Account', primaryNameAttribute: 'name' }
+    // The SDK returns '' (not undefined) when PrimaryNameAttribute is absent.
+    : { logicalName: logical, schemaName: logical, displayName: logical, primaryNameAttribute: '' });
+  const good = entityFromMetadata(metaFor('account'), 'account');
+  const bad = entityFromMetadata(metaFor('annotation'), 'annotation');
+  assert.strictEqual(good.primaryAttribute.schemaName, 'name');
+  assert.strictEqual(bad.primaryAttribute, null, 'an empty PrimaryNameAttribute must not become a guessed name');
 });

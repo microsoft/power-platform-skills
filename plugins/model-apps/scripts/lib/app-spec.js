@@ -988,7 +988,14 @@ function validateAppSpec(spec, opts = {}) {
         } else {
           for (const [k, v] of Object.entries(spec.ai.appFeatures)) {
             if (!AI_FEATURE_KEYS.has(k)) errors.push(`ai.appFeatures: unknown key '${k}' (allowed: formFill, nlSearch, nlChart, m365)`);
-            if (typeof v !== 'boolean') errors.push(`ai.appFeatures.${k}: must be a boolean`);
+            // These map to NUMERIC Dataverse app settings, not booleans: `true`/`false` are the
+            // ergonomic spellings of 1/0, but the platform also defines other values (notably 2 =
+            // "on for everyone"), which a boolean-only contract made inexpressible (ADO 6560699).
+            // Accept a boolean or a non-negative integer; reject anything else (a string like '2'
+            // would silently bypass the range check downstream).
+            if (typeof v !== 'boolean' && !(typeof v === 'number' && Number.isInteger(v) && v >= 0)) {
+              errors.push(`ai.appFeatures.${k}: must be a boolean or a non-negative integer (e.g. true, false, or 2 for "on for everyone")`);
+            }
           }
         }
       }

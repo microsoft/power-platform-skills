@@ -159,10 +159,29 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   no filter isolates author views. Forms/charts/commands need structured reads the SDK doesn't expose.)
   All four survive on the live app (a rebuild preserves them by discovery), but are absent from the
   downloaded spec, so edit them in Maker or a fresh spec.
+  **Entities are the sitemap's tables UNIONED with the app's real `appmodulecomponent` entity set**
+  (`appComponentEntities`, componenttype 1) — an app routinely includes tables reachable only via a
+  lookup/sub-grid/related view (task, email, annotation, systemuser…), and reconstructing from the
+  sitemap alone silently dropped them. The component read is best-effort: a failure degrades to the
+  sitemap-derived set rather than failing the download. Each entity's **`primaryAttribute` comes from
+  real Dataverse metadata** (`primaryNameAttribute`) and is **never synthesized**. The old
+  `<entity>_name` guess was wrong for most OOB tables (`account` → `name`,
+  `contact` → `fullname`) while looking plausible on custom ones, which is why it went unnoticed.
+  Because validation *requires* `primaryAttribute`, a table without one cannot simply be emitted: a
+  **sitemap** table missing it FAILS the download (actionable — the user asked for that table), while a
+  **component-only** table missing it is dropped with a warning (it arrived via a best-effort read and
+  was absent from the spec entirely before this change, so aborting over it would regress a previously
+  working download with no override flag).
   The **solution** is recovered as the app's one *real* unmanaged solution — `recoverAppSolution` enumerates
   the app's solution memberships and excludes the built-in `Active`/`Default`/`Basic` system solutions the
   app is also a member of (see `scripts/lib/system-solutions.js`), so the downloaded spec can cleanly tear
-  down its own solution instead of targeting the restricted `Default`. Recovered **tables are flagged
+  down its own solution instead of targeting the restricted `Default`. Its **publisher prefix is read from
+  that solution's owning publisher** via the SDK's `getSolution` — NOT inferred from the app's uniquename,
+  which is silent-wrong whenever the app name doesn't encode the publisher (an app named
+  `new_customermanagement` inside publisher `contoso`, an app with no prefix, or a prefix longer than the
+  guess assumed all collapsed to a literal `new`). The app-derived value remains the fallback, and
+  `prefixResolved` is true for BOTH trusted sources — it gates the icon own-vs-foreign classification, so
+  a downgrade there silently stops custom nav icons from round-tripping. Recovered **tables are flagged
   `existing: true`**, so a teardown of a downloaded spec never deletes a table (+ its data) this build
   cannot prove it created — download can't distinguish app-created from merely-referenced tables, so it
   fails safe (an orphaned table is recoverable; deleted customer data is not).
@@ -180,14 +199,26 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   view's **column set** (parsed from `layoutxml` — the additive `reconcileView` won't drop a removed spec
   column, so this flags it), plus **relationship** and **command-bar existence** (previously unchecked).
   Content checks are additive + reader-gated (they only fire when the reader supplies `layoutxml` /
-  `entityRelationships` / `commandBar`), so existence-only callers are unaffected. This is the F5
-  "convergence" mitigation: the build is additive (edits to existing artifacts aren't re-applied in
-  place — teardown + rebuild to converge), and verify makes any resulting divergence **loud**.
+  `entityRelationships` / `commandBar`), so existence-only callers are unaffected. It also reconciles
+  **AI app features**: for every `ai.appFeatures` entry it reads the PER-APP setting back and requires
+  the effective value to equal what the spec requested. Verify previously had no awareness of `spec.ai`
+  at all, so a run whose every AI feature was skipped (admin gate off) or silently not persisted still
+  reported a clean PASS. Note the per-app settings are DISTINCT from the org readiness gates —
+  `nlSearch`'s gate is the boolean `EnableNLGridSearch` but its per-app setting is the numeric
+  `NLGridSearchSetting`; conflating them is what let NL grid search report "applied" while writing
+  nothing. This is the F5 "convergence" mitigation: the build is additive (edits to existing artifacts
+  aren't re-applied in place — teardown + rebuild to converge), and verify makes any resulting
+  divergence **loud**.
 - **`scripts/ai-preflight.js`** — standalone preflight report: prints each AI feature's on/off status
   and the exact admin action needed (Power Platform Admin Center → Environments → Settings → Product →
   Features) for anything off. Never fails. The `ai-features` build phase calls this logic internally and
   uses `RetrieveSetting`/`SaveSettingValue` (SDK) for app-level feature flags and `AIModelPublish` +
-  `aiskillconfigs` for per-table row summaries. All AI features are **admin-gated**: the skill preflights
+  `aiskillconfigs` for per-table row summaries. Feature values are `true`/`false` (the numeric settings'
+  1/0) or an explicit integer such as `2` ("on for everyone"). The SDK **reads every write back** and
+  reports a feature in `applied` only when the effective app-scoped value matches the request; anything
+  else lands in `notPersisted` — Dataverse can accept an app-scope `SaveSettingValue` with HTTP 204 and
+  store nothing, so `applied` alone is not a success signal. The build surfaces `notPersisted` in the
+  phase detail and `--verify` fails on it. All AI features are **admin-gated**: the skill preflights
   and skips/warns; it cannot flip admin or tenant switches. `scripts/lib/ai-candidates.js` selects
   good-candidate tables for auto row-summary mode; `scripts/lib/ai-prompt.js` generates tailored summary
   prompts. The `ai` block in the App Spec configures the full set; see

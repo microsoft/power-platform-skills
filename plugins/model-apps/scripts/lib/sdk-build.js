@@ -1735,7 +1735,30 @@ async function runSdkBuild(spec, opts = {}) {
     await runner.run('ai-features', 'enable app AI features', async () => {
       const r = await provision.setAppAiFeatures(appUnique, flags, { solutionUniqueName });
       result.created.ai.appFeatures = r;
-      return (r.applied && r.applied.length) ? `applied: ${r.applied.join(', ')}${r.skipped && r.skipped.length ? '; skipped (admin gate off): ' + r.skipped.join(', ') : ''}` : '(none \u2014 admin gate off)';
+      // `notPersisted` means the SDK wrote the setting, Dataverse answered 204, and the read-back
+      // still did NOT show the requested value — the platform accepted the app-scope write without
+      // storing it. That is a silent failure the build must NOT report as plain success: it was the
+      // false-PASS half of ADO 6603383 (features were pushed onto `applied` while writing nothing).
+      //
+      // It needs its OWN emit: makeRunner's success path emits `{status:'ok'}` with no `detail`, and
+      // the CLI narrator only prints `detail` for `status:'error'` — so a message returned from this
+      // callback would be silently dropped. A `skip` event renders as `⊘ <label>`, which is the
+      // closest thing the narrator has to a warning.
+      const notPersisted = (r && r.notPersisted) || [];
+      if (notPersisted.length) {
+        runner.emit({
+          phase: 'ai-features',
+          status: 'skip',
+          label: `NOT PERSISTED: ${notPersisted.join(', ')} — Dataverse accepted the write but the value is not in effect for this app`,
+          n: runner.total,
+          total: runner.total,
+        });
+      }
+      const parts = [];
+      if (r.applied && r.applied.length) parts.push(`applied: ${r.applied.join(', ')}`);
+      if (r.skipped && r.skipped.length) parts.push(`skipped (admin gate off): ${r.skipped.join(', ')}`);
+      if (notPersisted.length) parts.push(`NOT PERSISTED: ${notPersisted.join(', ')}`);
+      return parts.length ? parts.join('; ') : '(none \u2014 admin gate off)';
     });
     const tables = (spec.ai.summaries && spec.ai.summaries.default === 'off') ? [] : selectSummaryTables(spec);
     for (const logical of tables) {

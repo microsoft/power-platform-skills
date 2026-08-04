@@ -807,11 +807,29 @@ test('validateAppSpec rejects an unknown ai.appFeatures key', () => {
   assert.ok(!r.ok && r.errors.some((e) => /unknown key 'copilot'/i.test(e)));
 });
 
-test('validateAppSpec rejects a non-boolean ai.appFeatures value', () => {
+test('validateAppSpec rejects a non-boolean, non-integer ai.appFeatures value', () => {
   const s = cloneDesk();
   s.ai = { appFeatures: { nlSearch: 'yes' } };
   const r = validateAppSpec(s);
-  assert.ok(!r.ok && r.errors.some((e) => /must be a boolean/i.test(e)));
+  assert.ok(!r.ok && r.errors.some((e) => /must be a boolean or a non-negative integer/i.test(e)));
+});
+
+test('validateAppSpec ACCEPTS an explicit numeric ai.appFeatures value (2 = on for everyone)', () => {
+  // These map to NUMERIC Dataverse app settings. A boolean-only contract made the platform's other
+  // documented values inexpressible, so `2` could never be requested at all (ADO 6560699).
+  const s = cloneDesk();
+  s.ai = { appFeatures: { formFill: 2, nlSearch: true, nlChart: 0, m365: false } };
+  const r = validateAppSpec(s);
+  assert.ok(r.ok, JSON.stringify(r.errors));
+});
+
+test('validateAppSpec rejects a negative or fractional ai.appFeatures value', () => {
+  for (const bad of [-1, 1.5]) {
+    const s = cloneDesk();
+    s.ai = { appFeatures: { formFill: bad } };
+    const r = validateAppSpec(s);
+    assert.ok(!r.ok && r.errors.some((e) => /non-negative integer/i.test(e)), `expected ${bad} to be rejected`);
+  }
 });
 
 test('validateAppSpec rejects ai.summaries.default with an invalid value', () => {

@@ -6,8 +6,23 @@
 
 const { odataLit } = require('./odata.js');
 const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName } = require('./app-spec.js');
-const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause } = require('./sdk-build.js');
+const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName } = require('./sdk-build.js');
 const { extractNavTargets } = require('./pageref-resolver.js');
+
+// The PER-APP setting each AI feature writes — mirrors the SDK's `APP_SETTING` map (api/AiApi.ts).
+// These are deliberately DISTINCT from the org readiness gates in the SDK's `AI_GATE`: e.g. the
+// `nlSearch` org gate is the boolean `EnableNLGridSearch`, but the per-app setting is the numeric
+// `NLGridSearchSetting`. Verify must read the PER-APP setting, because that is what the build wrote
+// and what is in force for this app. Conflating the two is exactly the bug that made NL grid search
+// report "applied" while writing nothing (ADO 6560699 / 6603383).
+// Keep in sync with the vendored SDK; `sdk-surface-contract.test.js` guards the method surface and
+// `verify-spec.test.js` pins these names.
+const AI_APP_SETTING = {
+  formFill: 'FormFillBarUXEnabled',
+  nlSearch: 'NLGridSearchSetting',
+  nlChart: 'NLChartDataVisualizationSetting',
+  m365: 'm365copilotmodelappenabled',
+};
 
 async function verifySpec(spec, read) {
   const checks = [];
@@ -247,6 +262,53 @@ async function verifySpec(spec, read) {
       }
     } catch { row = undefined; }
     add('role', roleName, row, row ? '' : 'persona security role not found (or its business unit could not be resolved)');
+  }
+
+  // AI app features. The verifier previously had NO awareness of `spec.ai` at all, so a build whose
+  // every requested AI feature was skipped (admin gate off) or silently not persisted still reported a
+  // clean PASS — a false success signal for automation (ADO 6603383).
+  //
+  // The oracle is the app-scoped EFFECTIVE value: for each requested feature, read back the per-app
+  // setting and require it to equal what the spec asked for. `true`/`false` are the ergonomic
+  // spellings of the numeric settings' '1'/'0'; any other integer (e.g. 2 = "on for everyone") is
+  // compared verbatim. Dataverse falls back to the ENVIRONMENT value when an app has no override, so
+  // this checks what is actually in force for the app — which is what the maker cares about.
+  //
+  // Reader-gated like the other content checks: a reader without `retrieveSetting` skips this entirely
+  // (existence-only callers and their tests are unaffected).
+  const requestedFeatures = (spec.ai && spec.ai.appFeatures) || null;
+  if (requestedFeatures && typeof read.retrieveSetting === 'function') {
+    // MUST be the same identity the build wrote under — `appUniqueName(spec)`, which falls back to
+    // `<publisherPrefix>_<app.name>` for an authored spec that carries no explicit `app.uniqueName`
+    // (neither shipped sample does, and hydrate never emits `ai`, so that is the COMMON case). Reading
+    // `spec.app.uniqueName` directly yields undefined there, and the SDK omits the `AppUniqueName` path
+    // segment when it is absent — which silently reads the ENVIRONMENT-scoped value instead of the app's.
+    // That would compare the wrong scope and can report a false PASS: exactly the ADO 6603383 failure
+    // class this check exists to eliminate.
+    const appUnique = appUniqueName(spec);
+    for (const [feature, requested] of Object.entries(requestedFeatures)) {
+      const setting = AI_APP_SETTING[feature];
+      if (!setting) continue; // unknown key — validation already reports it
+      const want = typeof requested === 'boolean' ? (requested ? '1' : '0') : String(requested).trim();
+      let effective;
+      let dataType;
+      let readError;
+      try {
+        const res = await read.retrieveSetting(setting, { appUniqueName: appUnique });
+        effective = res && res.value !== undefined && res.value !== null ? String(res.value).trim() : '';
+        dataType = res && res.dataType;
+      } catch (e) { readError = e && e.message; }
+      // Dataverse setting dataType 2 == Boolean, whose value is the STRING 'true'/'false' rather than
+      // '1'/'0' (the SDK's own readiness helper special-cases it the same way). Two of these settings
+      // appear in both the org-gate and app-setting maps, so a Boolean-typed one would fail an exact
+      // '1' compare while being genuinely on. Normalize both sides to on/off for that case.
+      const onOff = (v) => (String(v).toLowerCase() === 'true' ? '1' : String(v).toLowerCase() === 'false' ? '0' : String(v));
+      const present = !readError && (dataType === 2 ? onOff(effective) === onOff(want) : effective === want);
+      add('ai-feature', feature, present, present ? '' :
+        readError
+          ? `could not read app setting '${setting}': ${readError}`
+          : `requested '${want}' but '${setting}' is in effect as '${effective === '' ? '(unset)' : effective}' for this app`);
+    }
   }
 
   const missing2 = checks.filter((c) => !c.present);
