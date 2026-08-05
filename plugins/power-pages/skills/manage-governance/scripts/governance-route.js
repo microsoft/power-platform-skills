@@ -25,6 +25,13 @@ function buildRoute(args) {
   const { op, envId, policy, portalId } = args || {};
   if (!op) throw new Error('buildRoute: op is required');
   if (!envId) throw new Error('buildRoute: envId is required');
+  // getEnv/getStatus/getPortal/getDetails all encode `policy` into the path;
+  // a missing value would silently build `/governance/undefined` and 404 with
+  // a confusing URL instead of failing fast here. `apply` is exempt — its
+  // policy travels in the POST body, not the path.
+  if (op !== 'apply' && !policy) throw new Error('buildRoute: policy is required');
+  // getPortal is the only op that encodes portalId into the path.
+  if (op === 'getPortal' && !portalId) throw new Error('buildRoute: portalId is required');
 
   // Gateway transport. The shared power-platform-api client supplies the
   // env-scoped base URL, so gateway routes are env-relative and the env id

@@ -2,8 +2,10 @@
 
 // list-portals.js — Lists Power Pages portals (websites) in an environment.
 //
-// gateway transport (the only transport): GET /websites?$select=... on
-//                       api.powerplatform.com, env-scoped via base URL.
+// gateway transport (the only transport): GET /websites on
+//                       api.powerplatform.com, env-scoped via base URL. The
+//                       client sends plain `select` (and `skip`) query keys —
+//                       NOT OData `$select`/`$skip` — which the gateway maps.
 //                       Paginates via @odata.nextLink.
 
 const {

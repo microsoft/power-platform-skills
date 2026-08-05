@@ -82,7 +82,11 @@ function renderEnvTable(envs, opts = {}) {
 function mdCell(str) {
   return String(str == null ? '' : str)
     .replace(/\\/g, '\\\\')
-    .replace(/\|/g, '\\|');
+    .replace(/\|/g, '\\|')
+    // A raw newline in a cell breaks the single-line Markdown table row (the
+    // renderer would spill the value onto a new, malformed row), so flatten
+    // any CR/LF runs to a single space.
+    .replace(/[\r\n]+/g, ' ');
 }
 
 /**
