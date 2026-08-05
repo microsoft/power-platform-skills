@@ -35,7 +35,7 @@ function fakeExecFile({ pacTenant = TENANT_A, azTenant = TENANT_A } = {}) {
 
 function fakeWindowsExecFile({ pacTenant = TENANT_A, azTenant = TENANT_A } = {}) {
   return (command, args) => {
-    if (command === 'cmd.exe' && args.join(' ') === '/d /s /c pac.cmd auth who') {
+    if (command === 'cmd.exe' && args.join(' ') === '/d /s /c pac.exe auth who') {
       return `Connected as user@contoso.com\nTenant ID:    ${pacTenant}\n`;
     }
     if (command === 'cmd.exe' && args.join(' ') === '/d /s /c az.cmd account show --query tenantId -o tsv') {

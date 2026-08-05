@@ -37,11 +37,12 @@ function tenantIdFromToken(token) {
 
 function runCli(command, args, { execFile = execFileSync, platform = process.platform } = {}) {
   if (platform === 'win32') {
-    // On Windows, `az` and `pac` are commonly .cmd shims. Node's execFile does
-    // not run cmd shims reliably as executables, even though the same command
-    // works in an interactive terminal. Use cmd.exe with fixed, code-controlled
-    // arguments so the shim is resolved the same way the user's shell resolves it.
-    return execFile('cmd.exe', ['/d', '/s', '/c', `${command}.cmd`, ...args], { encoding: 'utf8', timeout: 15000 });
+    // On Windows, `az` is commonly an `az.cmd` shim, while PAC installs as
+    // `pac.exe`. Node's execFile can miss shell-resolved shims even when the same
+    // command works interactively. Route through cmd.exe with fixed,
+    // code-controlled arguments so the helper matches what users run manually.
+    const executable = command === 'pac' ? 'pac.exe' : `${command}.cmd`;
+    return execFile('cmd.exe', ['/d', '/s', '/c', executable, ...args], { encoding: 'utf8', timeout: 15000 });
   }
   return execFile(command, args, { encoding: 'utf8', timeout: 15000 });
 }
