@@ -1,6 +1,7 @@
 'use strict';
 
-const { execFileSync } = require('child_process');
+const fs = require('fs');
+const zlib = require('zlib');
 const { compareVersions } = require('./bump-solution-version');
 
 function decideReinstall({ installed, installedVersion, zipVersion, detectionFailed } = {}) {
@@ -11,16 +12,76 @@ function decideReinstall({ installed, installedVersion, zipVersion, detectionFai
   return 'offer-clone';
 }
 
+function decodeZipEntry({ method, bytes }) {
+  if (method === 0) return bytes;
+  if (method === 8) return zlib.inflateRawSync(bytes);
+  throw new Error(`Unsupported ZIP compression method for solution.xml: ${method}`);
+}
+
+function readEntryFromCentralDirectory(data, wantedName) {
+  for (let i = 0; i <= data.length - 46; i++) {
+    if (data.readUInt32LE(i) !== 0x02014b50) continue;
+    const method = data.readUInt16LE(i + 10);
+    const compressedSize = data.readUInt32LE(i + 20);
+    const fileNameLength = data.readUInt16LE(i + 28);
+    const extraLength = data.readUInt16LE(i + 30);
+    const commentLength = data.readUInt16LE(i + 32);
+    const localHeaderOffset = data.readUInt32LE(i + 42);
+    const nameStart = i + 46;
+    const nameEnd = nameStart + fileNameLength;
+    if (nameEnd > data.length) continue;
+    const name = data.subarray(nameStart, nameEnd).toString('utf8');
+    if (name.toLowerCase() !== wantedName) {
+      i = Math.max(i, nameEnd + extraLength + commentLength - 1);
+      continue;
+    }
+    if (localHeaderOffset + 30 > data.length || data.readUInt32LE(localHeaderOffset) !== 0x04034b50) {
+      throw new Error('solution.xml ZIP local header is missing or invalid');
+    }
+    const localNameLength = data.readUInt16LE(localHeaderOffset + 26);
+    const localExtraLength = data.readUInt16LE(localHeaderOffset + 28);
+    const dataStart = localHeaderOffset + 30 + localNameLength + localExtraLength;
+    const dataEnd = dataStart + compressedSize;
+    if (dataEnd > data.length) throw new Error('solution.xml ZIP entry is truncated');
+    return decodeZipEntry({ method, bytes: data.subarray(dataStart, dataEnd) }).toString('utf8');
+  }
+  return null;
+}
+
+function readEntryFromLocalHeaders(data, wantedName) {
+  for (let i = 0; i <= data.length - 30; i++) {
+    if (data.readUInt32LE(i) !== 0x04034b50) continue;
+    const method = data.readUInt16LE(i + 8);
+    const compressedSize = data.readUInt32LE(i + 18);
+    const fileNameLength = data.readUInt16LE(i + 26);
+    const extraLength = data.readUInt16LE(i + 28);
+    const nameStart = i + 30;
+    const nameEnd = nameStart + fileNameLength;
+    if (nameEnd > data.length) continue;
+    const name = data.subarray(nameStart, nameEnd).toString('utf8');
+    const dataStart = nameEnd + extraLength;
+    const dataEnd = dataStart + compressedSize;
+    if (name.toLowerCase() === wantedName) {
+      if (compressedSize === 0 || dataEnd > data.length) throw new Error('solution.xml ZIP entry is truncated');
+      return decodeZipEntry({ method, bytes: data.subarray(dataStart, dataEnd) }).toString('utf8');
+    }
+    i = Math.max(i, dataEnd - 1);
+  }
+  return null;
+}
+
 function readSolutionXml(zipPath, deps = {}) {
-  const execFile = deps.execFileSync || execFileSync;
-  // `unzip -p <solution.zip> solution.xml` returns the Dataverse solution
-  // descriptor, which includes fields like:
+  // Dataverse solution zips contain a root `solution.xml` descriptor with:
   //   <UniqueName>contoso_template</UniqueName>
   //   <Version>1.0.0.0</Version>
   //   <Managed>0</Managed>
-  // Tags can have surrounding whitespace/newlines, so extract by tag name
-  // rather than relying on line positions.
-  return execFile('unzip', ['-p', zipPath, 'solution.xml'], { encoding: 'utf8', maxBuffer: 5 * 1024 * 1024 });
+  // Read it directly from ZIP headers instead of shelling out to `unzip`: Windows
+  // plugin hosts often do not have that utility on PATH.
+  const fsImpl = deps.fs || fs;
+  const data = fsImpl.readFileSync(zipPath);
+  const xml = readEntryFromCentralDirectory(data, 'solution.xml') || readEntryFromLocalHeaders(data, 'solution.xml');
+  if (!xml) throw new Error('solution.xml not found in template solution zip');
+  return xml;
 }
 
 function getTag(xml, tagName) {
