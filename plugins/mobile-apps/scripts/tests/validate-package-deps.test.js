@@ -84,6 +84,75 @@ test('blocks a generic package name when installed contents include native code'
   assert.match(result.stderr, /ships native code\/config/);
 });
 
+test('blocks a pure-JavaScript package with a native transitive dependency', (t) => {
+  const projectRoot = makeProject('calendar-helper', ['src/index.js']);
+  const helperManifestPath = path.join(projectRoot, 'node_modules', 'calendar-helper', 'package.json');
+  const helperManifest = JSON.parse(fs.readFileSync(helperManifestPath, 'utf8'));
+  helperManifest.dependencies = { 'calendar-native-engine': '1.0.0' };
+  fs.writeFileSync(helperManifestPath, JSON.stringify(helperManifest));
+
+  const nativeRoot = path.join(
+    projectRoot,
+    'node_modules',
+    'calendar-helper',
+    'node_modules',
+    'calendar-native-engine',
+  );
+  fs.mkdirSync(path.join(nativeRoot, 'ios'), { recursive: true });
+  fs.writeFileSync(
+    path.join(nativeRoot, 'package.json'),
+    JSON.stringify({ name: 'calendar-native-engine', version: '1.0.0' }),
+  );
+  t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
+
+  const result = validate(projectRoot);
+
+  assert.strictEqual(result.status, 2);
+  assert.match(result.stderr, /calendar-helper/);
+  assert.match(result.stderr, /calendar-native-engine/);
+});
+
+test('allows a pure-JavaScript package with a template-allowlisted native dependency', (t) => {
+  const projectRoot = makeProject('gesture-helper', ['src/index.js']);
+  const helperManifestPath = path.join(projectRoot, 'node_modules', 'gesture-helper', 'package.json');
+  const helperManifest = JSON.parse(fs.readFileSync(helperManifestPath, 'utf8'));
+  helperManifest.dependencies = { 'react-native-gesture-handler': '2.30.1' };
+  fs.writeFileSync(helperManifestPath, JSON.stringify(helperManifest));
+
+  const nativeRoot = path.join(projectRoot, 'node_modules', 'react-native-gesture-handler');
+  fs.mkdirSync(path.join(nativeRoot, 'android'), { recursive: true });
+  fs.writeFileSync(
+    path.join(nativeRoot, 'package.json'),
+    JSON.stringify({ name: 'react-native-gesture-handler', version: '2.30.1' }),
+  );
+  t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
+
+  const result = validate(projectRoot);
+
+  assert.strictEqual(result.status, 0, result.stderr);
+});
+
+test('handles cycles in a pure-JavaScript runtime dependency graph', (t) => {
+  const projectRoot = makeProject('package-a', ['src/index.js']);
+  const packageARoot = path.join(projectRoot, 'node_modules', 'package-a');
+  const packageAManifest = JSON.parse(fs.readFileSync(path.join(packageARoot, 'package.json'), 'utf8'));
+  packageAManifest.dependencies = { 'package-b': '1.0.0' };
+  fs.writeFileSync(path.join(packageARoot, 'package.json'), JSON.stringify(packageAManifest));
+
+  const packageBRoot = path.join(projectRoot, 'node_modules', 'package-b');
+  fs.mkdirSync(path.join(packageBRoot, 'src'), { recursive: true });
+  fs.writeFileSync(
+    path.join(packageBRoot, 'package.json'),
+    JSON.stringify({ name: 'package-b', version: '1.0.0', dependencies: { 'package-a': '1.0.0' } }),
+  );
+  fs.writeFileSync(path.join(packageBRoot, 'src', 'index.js'), '');
+  t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
+
+  const result = validate(projectRoot);
+
+  assert.strictEqual(result.status, 0, result.stderr);
+});
+
 test('blocks an uninstalled react-native package conservatively', (t) => {
   const projectRoot = makeProject('placeholder');
   t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
