@@ -73,6 +73,7 @@ function renderTemplateImportStatus({ templateName, statusPath, outputPath, prev
       PREVIEW_IMAGES_JSON: localizePreviewImages(previewImages, outputPath),
     },
     requiredKeys: ['TEMPLATE_NAME', 'STATUS_URL_JSON', 'PREVIEW_IMAGES_JSON'],
+    emitStatus: false,
   });
   if (open) {
     try {

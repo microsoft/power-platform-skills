@@ -86,6 +86,26 @@ test('renderTemplateBrowser renders static template details and preview images',
   assert.doesNotMatch(html, /templates\.map/);
 });
 
+test('renderTemplateBrowser does not print the shared renderTemplate status line', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const dataPath = path.join(dir, 'templates.json');
+  const outputPath = path.join(dir, 'browser.html');
+  fs.writeFileSync(dataPath, JSON.stringify({
+    TEMPLATES_JSON: [
+      { displayName: 'Company Portal', description: 'Internal site', framework: 'react', previewImages: [] },
+    ],
+  }));
+  const originalLog = console.log;
+  const logs = [];
+  console.log = (value) => logs.push(value);
+  t.after(() => { console.log = originalLog; });
+
+  renderTemplateBrowser({ templatesJsonPath: dataPath, outputPath, open: false });
+
+  assert.deepEqual(logs, []);
+});
+
 test('renderTemplateBrowser renders one family with read-only framework variants', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

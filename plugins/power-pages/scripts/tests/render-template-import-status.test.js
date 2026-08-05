@@ -91,6 +91,21 @@ test('renderTemplateImportStatus renders scaffold-style slideshow, progress, and
   assert.match(html, /Template import needs attention/);
 });
 
+test('renderTemplateImportStatus does not print the shared renderTemplate status line', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const outputPath = path.join(dir, 'import.html');
+  const statusPath = path.join(dir, 'status.json');
+  const originalLog = console.log;
+  const logs = [];
+  console.log = (value) => logs.push(value);
+  t.after(() => { console.log = originalLog; });
+
+  renderTemplateImportStatus({ templateName: 'Supplier Portal', statusPath, outputPath });
+
+  assert.deepEqual(logs, []);
+});
+
 test('localizePreviewImages copies local preview images beside the served page', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

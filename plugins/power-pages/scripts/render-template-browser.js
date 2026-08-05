@@ -167,6 +167,7 @@ function renderTemplateBrowser({ templatesJsonPath, outputPath, open = false }, 
       TEMPLATE_SECTIONS_HTML: renderTemplateSectionsHtml(templates),
     },
     requiredKeys: ['TEMPLATE_COUNT', 'TEMPLATE_TABS_HTML', 'TEMPLATE_SECTIONS_HTML'],
+    emitStatus: false,
   });
   const validation = validateRenderedTemplateBrowser({ templates, html: fsImpl.readFileSync(outputPath, 'utf8') });
   if (!validation.ok) {
