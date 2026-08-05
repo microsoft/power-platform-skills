@@ -135,7 +135,17 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   **icon** web resource is referenced by the table itself, so Dataverse refuses to delete it until the table
   is gone (form JS, referenced by its already-deleted form, is safe either way). Teardown also removes the
   build's **generated default app icon** (`<appUnique>_icon`, created in-solution when the spec sets no
-  `app.icon`) so it doesn't leak as an orphan. The empty solution container goes last — but a **built-in
+  `app.icon`) so it doesn't leak as an orphan. **An app is TWO rows** — an `appmodule` AND a `sitemaps`
+  row, with no lookup between them and no server-side cascade; the only link is
+  `sitemap.sitemapnameunique === appmodule.uniquename`. Deleting only the appmodule strands the sitemap
+  forever and, because `sitemapnameunique` is unique-constrained, permanently **burns that unique name**:
+  a later build of an app with the same name fails with *"The name &lt;x&gt; is already in use by an
+  existing site map"*, which the maker cannot act on. `deleteAppCascade` therefore resolves the sitemap
+  by unique name BEFORE deleting the app (afterwards the link is unrecoverable) and **fails closed** —
+  an inconclusive lookup refuses the delete rather than guessing. Pinned by
+  `scripts/tests/app-delete-real-bundle.test.js` against the real vendored bundle, because every other
+  teardown test drives a hand-written mock and would stay green through a regression here.
+  The empty solution container goes last — but a **built-in
   system solution** (`Active`/`Default`/`Basic`) is **skipped** (Dataverse 400s any delete of a restricted
   solution), so a downloaded spec whose real solution could not be recovered (and defaulted to `Default`)
   still tears down cleanly instead of erroring. Command teardown
@@ -169,8 +179,15 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   with no sitemap subarea does not become an app component at all (LIVE-verified: declaring `task` in
   `entities[]` without nav left the app's component set unchanged), so for an app-builder-built app
   the sitemap set already IS the complete set. This union therefore only adds tables for apps built
-  or edited in the maker. The component read is best-effort: a failure degrades to the sitemap-derived
-  set rather than failing the download. Each entity's **`primaryAttribute` comes from
+  or edited in the maker. **Closing ADO 6603388 from the BUILD side is currently blocked by the
+  platform, not merely unimplemented:** the SDK independently verified that a table (`entity`) app
+  component cannot be pinned via `AddAppComponents` at all — the documented shape
+  `{'@odata.type':'Microsoft.Dynamics.CRM.entity', entityid:<MetadataId>}` returns 204 but records a
+  component pointing at the metadata table literally named `entity` (the same finding as the
+  `componenttype eq 1` note above), `metadataid` and a logical-name `entityid` are rejected outright,
+  and a `savedquery` sent in the SAME request pins correctly as a control. No working shape is known,
+  so do NOT claim table components are applied. The component read is best-effort: a failure degrades
+  to the sitemap-derived set rather than failing the download. Each entity's **`primaryAttribute` comes from
   real Dataverse metadata** (`primaryNameAttribute`) and is **never synthesized**. The old
   `<entity>_name` guess was wrong for most OOB tables (`account` → `name`,
   `contact` → `fullname`) while looking plausible on custom ones, which is why it went unnoticed.

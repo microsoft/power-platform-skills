@@ -121,6 +121,14 @@ no breaking changes.
     proves each write against the app-scope override row with retry/backoff (an immediate read could
     return the environment fallback and report a correct write as failed), and reports `unverified` and
     `failed` alongside `notPersisted`. The build surfaces every one of those non-success buckets.
+- **Teardown can no longer burn an app's unique name** — an app is two rows (`appmodule` +
+  `sitemaps`, linked only by `sitemapnameunique`), and deleting just the app module stranded the
+  sitemap. Because that column is unique-constrained, rebuilding an app with the same name then
+  failed with *"the name is already in use by an existing site map"* — unrecoverable and
+  unactionable. The sitemap is now resolved by unique name **before** the app is deleted, and an
+  inconclusive lookup refuses the delete instead of guessing. Requires the matching SDK fix
+  (re-vendored here); previously the sitemap was only found via the app's `componenttype 62`
+  component, so it leaked whenever that lookup came up empty.
 - **Teardown leaves nothing behind** — the table icon and generated app-icon web resources are removed
   (web resources delete after tables), cascade cleanup failures are reported instead of silently
   orphaning rows, and reused/system tables are skipped with a reason rather than erroring.
