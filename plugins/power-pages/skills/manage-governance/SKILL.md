@@ -863,18 +863,46 @@ then behaves as follows:
   here — turn on **both** the External authentication providers **and** OAuth
   2.0 sign-in Governance settings first, then try again."** In this case
   **do NOT prompt for a scope and do NOT POST**: surface that message and stop.
+
+  **Offer ONLY the next parent in dependency order — never a flat OR.** The
+  resolver's JSON output carries an ordered **`remediationChain`** (the
+  currently-Disabled gating parents, **root-first**) and **`next`** (=
+  `remediationChain[0]`). Read `next` from the resolver JSON (the same
+  `resolve-portal-availability.js` call, default JSON mode — `remediationChain`
+  and `next` are always present) and offer the admin **exactly one** enable
+  action: **`next.subject`**. Do **NOT** present the two parents as parallel OR
+  options (*"enable external auth **or** enable oauth"*). That old phrasing is a
+  dead-end for a social IdP whose parents are both off: OAuth 2.0 is itself
+  gated by External Auth, so *"enable oauth"* would immediately hit the same
+  hard block. Because the chain is **root-first**, `next` is always the parent
+  the admin **can** actually turn on right now (External Auth before OAuth 2.0).
+  After that parent is enabled, re-running the resolver drops it from the chain,
+  so `next` advances to the following parent (or the chain empties and the child
+  becomes eligible) — see **Step B.2 (auto-resume)** below.
+
   Any follow-up you offer here MUST be a **free-text prose prompt — NOT an
   `AskUserQuestion` / button menu.** Ask the admin, in plain prose, for a
-  free-text command — e.g. *"Reply **enable external auth** or **enable oauth**
-  to turn a blocking parent on first, name a different setting or site, or reply
-  **cancel** to stop."* Keep the offered actions limited to enabling the
-  blocking parent(s) or cancelling — do **NOT** offer a diagnostic option such
-  as *"Check which sites have which parent off"* (or any similar per-site
-  parent-state breakdown), and do **NOT** wrap the follow-up in numbered /
-  multiple-choice buttons. The admin already knows the parent is off env-wide;
-  only the actionable enable-parent / cancel choices belong here, taken as free
-  text. This is the requirement's *"if there is no portal available, show
-  'External Auth or OAuth2 is Disabled' and ask a free-text command"*.
+  free-text command naming **only `next`** — e.g. for a social IdP with both
+  parents off: *"To turn Google sign-in on, the External authentication
+  providers Governance setting has to be enabled first (OAuth 2.0 depends on it,
+  so it comes next). Reply **enable External Auth** to turn it on now — I'll pick
+  Google back up automatically once it's on — name a different setting or site,
+  or reply **cancel** to stop."* Keep the offered actions limited to enabling
+  **`next`** or cancelling — do **NOT** list a deeper parent (e.g. OAuth 2.0)
+  as a co-equal choice, do **NOT** offer a diagnostic option such as *"Check
+  which sites have which parent off"* (or any similar per-site parent-state
+  breakdown), and do **NOT** wrap the follow-up in numbered / multiple-choice
+  buttons. This is the requirement's *"if there is no portal available, show
+  'External Auth or OAuth2 is Disabled' and ask a free-text command"* — refined
+  so the one command offered is always the enable action that will actually
+  succeed.
+
+  **Remember the original request (`<PENDING_CHILD_INTENT>`).** Before you stop,
+  persist the admin's original child intent — the parsed `{ policy, direction,
+  env, scope, siteIds/siteNames }` for *"&lt;enable/disable&gt; &lt;child&gt;"* —
+  as `<PENDING_CHILD_INTENT>`. This is what lets the flow **auto-resume** the
+  child after the admin enables `next`, instead of making them re-type *"enable
+  Google"*. See Step B.2.
 
 Only the **eligible** (✅ Yes) portals may be chosen. If the admin names a site
 that shows **🚫 No**, tell them the gating parent is Disabled on it and ask them
@@ -884,6 +912,39 @@ ineligible site, and there is **no "force"/"anyway" override** (see Phase
 4.2.2b, which enforces the same rule on the named-site fast path). When
 `<POLICY>` has no `availabilityDependsOn` (Maker Copilot, local login, External
 Auth, OAuth 2.0), **skip this step** and use the plain table from Step B.
+
+**Step B.2 — auto-resume the original child intent after a parent is enabled.**
+This closes the loop the admin actually started from. When `<PENDING_CHILD_INTENT>`
+is set (Step B.1 "No site eligible", or the named-site path Phase 4.2.2b) and the
+admin's next reply is the offered **enable `next`** command, run the parent
+enable as a **normal, fully-gated Apply** (Phase 4.2.3 Impact Summary + `Apply
+now` consent gate + 4.2.4/4.2.5 — the parent has its **own** sign-out consent;
+**never** auto-enable it silently). Then, the moment that parent Apply reaches its
+success terminal state:
+
+1. **Do NOT return to the generic Phase 5 loop and forget the child.** Instead,
+   re-load `<PENDING_CHILD_INTENT>` and **re-run the availability resolver** for
+   that child against the same env.
+2. **Re-present automatically** based on the fresh resolver output:
+   - `next` is still non-null (another parent is still Disabled — e.g. External
+     Auth is now on but OAuth 2.0 is still off for a social IdP) → offer the
+     **new** `next` the same way (Step B.1), keeping `<PENDING_CHILD_INTENT>`
+     set. The chain advances one step per parent enabled.
+   - `available` is now non-empty (every parent enabled → the child is eligible)
+     → **resume the original child operation** exactly where it was blocked:
+     re-enter Step B.1's eligibility view and Step C scope prompt (or, if the
+     original intent already named a scope/sites, jump straight to the Phase
+     4.2.3 Impact Summary for the child). Announce the resume in one line —
+     *"External authentication providers is on now, so I'm picking your original
+     request back up: enabling Google sign-in in &lt;env&gt;."* Then **clear**
+     `<PENDING_CHILD_INTENT>`.
+3. If the admin instead replies with a **different** request (a new policy/env,
+   or `cancel`), discard `<PENDING_CHILD_INTENT>` and handle the new request
+   normally — the resume is an offer, never a lock-in.
+
+This is the single mechanism that fixes **both** review defects: offering only
+the root-first `next` (never a dead-end OR), and remembering + auto-re-presenting
+the original child so the admin never has to re-issue *"enable Google"*.
 
 **Step C — prompt for scope (prose, free text — NOT an `AskUserQuestion`).**
 Ask, using the known verb:
@@ -1008,15 +1069,22 @@ echo '{ "portals": [ { "portalId": "<id>", "name": "<name>", "url": "<url>" }, .
 
 The JSON output partitions the named sites into `available` and
 `unavailable[{ portalId, name, blockingParents, blockedBy }]`. `blockedBy` names
-the Disabled parent(s) in plain "Governance setting" language.
+the Disabled parent(s) in plain "Governance setting" language. It also carries
+the ordered **`remediationChain`** (root-first Disabled gating parents) and
+**`next`** (= `remediationChain[0]`, the one parent to offer enabling first) —
+used by the "every named site unavailable" branch below.
 
 **Act on the partition:**
 
 - **Every named site unavailable** → **do NOT render the Impact Summary and do
   NOT POST.** Tell the admin the child can't be configured on the named site(s)
-  because the gating parent is Disabled there, name the parent(s), and stop —
-  offer to enable the parent on those sites first (or pick a different site).
-  Return to the Phase 5 loop.
+  because the gating parent is Disabled there, name the parent(s), and stop.
+  **Offer only the root-first `next` parent** and **persist the original request
+  as `<PENDING_CHILD_INTENT>`** exactly as in Phase 4.2.1 Step B.1 — read `next`
+  from this resolver's JSON output, offer the single **enable `next`** free-text
+  command (never a flat OR), and on the admin's enable reply run the parent Apply
+  then **auto-resume** the named-site child per Step B.2. Do not make the admin
+  re-type the original request.
 - **Some named sites unavailable** → **drop the blocked sites from
   `<PORTAL_IDS>` / `<PORTAL_NAMES_LIST>`** and tell the admin exactly which were
   removed and why (naming the blocking parent). Proceed to 4.2.3 with **only the
@@ -1739,7 +1807,18 @@ Fetch Env:
 
 Then, instead of an `AskUserQuestion` menu, **re-prompt the user with the
 free-text intent prompt from Phase 2.1** — the same *"Tell me what you'd like to
-do…"* prose with the examples. Do **NOT** present the old four-option menu
+do…"* prose with the examples.
+
+> **Exception — pending child intent takes priority.** If the operation that
+> just finished was a **parent enable** run to unblock a child (i.e.
+> `<PENDING_CHILD_INTENT>` is set — Phase 4.2.1 Step B.2 / Phase 4.2.2b), do
+> **NOT** fall through to this generic re-prompt. Instead follow **Step B.2**:
+> re-run the availability resolver for the pending child and either offer the
+> next `next` parent or auto-resume the original child operation, announcing the
+> resume in one line. Only after the child is resumed (or the admin replies with
+> a different request / `cancel`) do you return to this generic loop.
+
+Do **NOT** present the old four-option menu
 ("Apply the same policy somewhere else" / "Check the same policy somewhere else"
 / "Switch to a different policy" / "Done"). The user simply types their next
 request in natural language (a new policy, env, direction, or scope), and the

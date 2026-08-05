@@ -62,6 +62,69 @@ function dependenciesForPolicy(policyName, mapping) {
   return policy.availabilityDependsOn.slice();
 }
 
+// Transitive parent closure (ALL ancestors) of a policy, walked via each
+// policy's own `availabilityDependsOn`. For a social IdP (e.g. Google) this is
+// { EnableExternalAuthProviders, EnableProtocolOpenAuth }; for a protocol it is
+// { EnableExternalAuthProviders }; for a leaf/independent policy it is empty.
+// Used to keep the remediation chain restricted to real gating ancestors.
+function transitiveParents(policyName, mapping, acc = new Set()) {
+  for (const parent of dependenciesForPolicy(policyName, mapping)) {
+    if (!acc.has(parent)) {
+      acc.add(parent);
+      transitiveParents(parent, mapping, acc);
+    }
+  }
+  return acc;
+}
+
+// Depth of a policy in the availability DAG = longest path to a ROOT (a policy
+// with no `availabilityDependsOn`). Roots (EnableExternalAuthProviders) are
+// depth 0; OAuth 2.0 is depth 1; the social IdPs are depth 2. We topo-sort the
+// blocking parents by this depth so remediation ALWAYS offers the root blocker
+// first — never a parent (e.g. OAuth 2.0) before the parent that itself gates it
+// (External Auth). Offering the deeper one first is the "dead-end OR" defect: its
+// own parent is still off, so enabling it hits the same hard block.
+function availabilityDepth(policyName, mapping, memo = {}) {
+  if (memo[policyName] != null) return memo[policyName];
+  const parents = dependenciesForPolicy(policyName, mapping);
+  const d = parents.length === 0
+    ? 0
+    : 1 + Math.max(...parents.map((p) => availabilityDepth(p, mapping, memo)));
+  memo[policyName] = d;
+  return d;
+}
+
+// Ordered remediation chain: the currently-DISABLED gating parents the admin
+// must enable — IN DEPENDENCY ORDER (root-first) — to unblock `targetPolicy`.
+//
+// `blockingParentNames` is the set of parents that block at least one portal
+// (the union of every unavailable portal's `blockingParents`). We keep only the
+// ones inside `targetPolicy`'s transitive ancestor set, de-dupe, then sort by DAG
+// depth (root-first) with a stable name tie-break. Because the chain is derived
+// from the very blocking data computeAvailability just produced, re-running the
+// resolver after the admin enables one parent naturally drops it from the chain
+// on the next pass — that is what powers the "enable one parent → auto-resume the
+// original child intent" loop. The orchestrator must only ever offer `chain[0]`
+// (surfaced as `next`) at a time, never the whole list as parallel OR-options.
+function computeRemediationChain(targetPolicy, blockingParentNames, mapping) {
+  const closure = transitiveParents(targetPolicy, mapping);
+  const memo = {};
+  const seen = new Set();
+  const chain = [];
+  for (const name of blockingParentNames || []) {
+    if (!closure.has(name) || seen.has(name)) continue;
+    seen.add(name);
+    const p = findPolicy(mapping, name);
+    chain.push({
+      policyName: name,
+      subject: (p && p.subject) || name,
+      depth: availabilityDepth(name, mapping, memo),
+    });
+  }
+  chain.sort((a, b) => a.depth - b.depth || a.policyName.localeCompare(b.policyName));
+  return chain.map(({ policyName, subject }) => ({ policyName, subject }));
+}
+
 // Canonicalize an env-level governance value to All | None | Include | Exclude.
 // get-env.js already normalizes *Sites -> canonical, but be defensive: accept
 // the applyTo enum spellings too so this works whether it is fed the normalized
@@ -241,8 +304,15 @@ function resolvePortalStates(envValue, detailsBody, portals) {
  *   policy: string,
  *   dependencies: string[],
  *   available: Array<object>,
- *   unavailable: Array<object & { blockingParents: string[], blockedBy: string[], unreadParents: string[] }>
+ *   unavailable: Array<object & { blockingParents: string[], blockedBy: string[], unreadParents: string[] }>,
+ *   remediationChain: Array<{ policyName: string, subject: string }>,
+ *   next: { policyName: string, subject: string } | null
  * }}
+ *
+ * `remediationChain` is the root-first ordered list of currently-disabled gating
+ * parents the admin must enable to unblock the child (empty for a leaf policy or
+ * when nothing blocks). `next` is `remediationChain[0]` — the ONLY parent the
+ * orchestrator should offer at a time (see computeRemediationChain).
  */
 function computeAvailability(req, opts = {}) {
   const mapping = opts.mapping || loadMapping();
@@ -253,7 +323,14 @@ function computeAvailability(req, opts = {}) {
 
   // No dependencies -> every portal is available (leaf/independent policy).
   if (deps.length === 0) {
-    return { policy: targetPolicy, dependencies: [], available: portals.slice(), unavailable: [] };
+    return {
+      policy: targetPolicy,
+      dependencies: [],
+      available: portals.slice(),
+      unavailable: [],
+      remediationChain: [],
+      next: null,
+    };
   }
 
   // Pre-normalize each parent's membership sets once.
@@ -307,7 +384,31 @@ function computeAvailability(req, opts = {}) {
       available.push(unreadParents.length ? { ...portal, unreadParents } : portal);
     }
   }
-  return { policy: targetPolicy, dependencies: deps, available, unavailable };
+  // Ordered remediation chain (root-first) from the parents that block at least
+  // one portal. Derived from the same blocking data above, so it shortens by one
+  // each time the admin enables a parent and the resolver is re-run — powering
+  // the "enable one parent -> auto-resume the original child" loop. Only chain[0]
+  // (`next`) is ever offered at a time; a two-parent social IdP with both parents
+  // off yields [External Auth, OAuth 2.0], never the reverse.
+  const blockingUnion = [];
+  const seenBlocking = new Set();
+  for (const u of unavailable) {
+    for (const bp of u.blockingParents) {
+      if (!seenBlocking.has(bp)) {
+        seenBlocking.add(bp);
+        blockingUnion.push(bp);
+      }
+    }
+  }
+  const remediationChain = computeRemediationChain(targetPolicy, blockingUnion, mapping);
+  return {
+    policy: targetPolicy,
+    dependencies: deps,
+    available,
+    unavailable,
+    remediationChain,
+    next: remediationChain[0] || null,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -670,6 +771,9 @@ module.exports = {
   loadMapping,
   findPolicy,
   dependenciesForPolicy,
+  transitiveParents,
+  availabilityDepth,
+  computeRemediationChain,
   canonicalizeEnvValue,
   computeSiteState,
   extractLists,
