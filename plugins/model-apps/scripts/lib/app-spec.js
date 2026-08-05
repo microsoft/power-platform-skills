@@ -32,6 +32,10 @@ const FORM_GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 //   PrivilegeScope depth, least->most permissive (user->Basic … organization->Global)
 // Keep these in lockstep with the SDK; vendor-sdk-smoke asserts the vendored bundle still exposes them.
 const ACCESS_LEVELS = new Set(['read', 'create', 'write', 'delete', 'append', 'appendTo', 'assign', 'share']);
+// Upper bound for a per-app AI feature setting value. MIRRORS `MAX_SETTING_VALUE` in the SDK's
+// api/AiApi.ts, which THROWS an InvalidArgumentError outside this range — validating against the same
+// bound turns a mid-build abort into an up-front spec error naming the offending field.
+const AI_FEATURE_MAX_VALUE = 1000000;
 const PRIVILEGE_SCOPES = new Set(['user', 'businessUnit', 'parentChild', 'organization']);
 
 // The exact ownership marker the vendored SDK (cds-maker-sdk SecurityApi) stamps on the `description`
@@ -997,8 +1001,14 @@ function validateAppSpec(spec, opts = {}) {
             // "on for everyone"), which a boolean-only contract made inexpressible (ADO 6560699).
             // Accept a boolean or a non-negative integer; reject anything else (a string like '2'
             // would silently bypass the range check downstream).
-            if (typeof v !== 'boolean' && !(typeof v === 'number' && Number.isInteger(v) && v >= 0)) {
-              errors.push(`ai.appFeatures.${k}: must be a boolean or a non-negative integer (e.g. true, false, or 2 for "on for everyone")`);
+            //
+            // The upper bound MIRRORS the SDK's `MAX_SETTING_VALUE` in api/AiApi.ts. The SDK THROWS
+            // an InvalidArgumentError for an out-of-range value, so without this bound a spec would
+            // validate cleanly and then abort the build half-applied — validation must reject it up
+            // front, where the maker gets a message naming the field. `isSafeInteger` (not
+            // `isInteger`) because beyond 2^53 an "integer" double no longer round-trips.
+            if (typeof v !== 'boolean' && !(typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 && v <= AI_FEATURE_MAX_VALUE)) {
+              errors.push(`ai.appFeatures.${k}: must be a boolean or an integer between 0 and ${AI_FEATURE_MAX_VALUE} (e.g. true, false, or 2 for "on for everyone")`);
             }
           }
         }

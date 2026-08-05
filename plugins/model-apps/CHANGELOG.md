@@ -105,11 +105,17 @@ no breaking changes.
     solution's owning publisher.
   - **`--verify` no longer passes when AI features didn't apply.** Verification had no awareness of
     `ai.appFeatures`, so a run that skipped every requested feature still reported a clean PASS. It now
-    reads each per-app setting back and fails when the effective value isn't what the spec asked for.
+    proves an APP-SCOPE override row exists holding the requested value, and fails otherwise. Reading
+    the setting back is not enough on its own: Dataverse falls back to the ENVIRONMENT value when an app
+    has no override, so an app that was never configured verifies clean whenever the environment happens
+    to already hold the requested value.
   - **AI app settings accept their real values.** `ai.appFeatures` was boolean-only, so platform values
-    such as `2` ("on for everyone") were inexpressible; values may now be a boolean or a non-negative
-    integer. Requires the matching SDK fix (re-vendored here), which also repairs NL grid search writing
-    nothing at all while reporting itself applied.
+    such as `2` ("on for everyone") were inexpressible; values may now be a boolean or an integer
+    between 0 and 1000000 (the same range the SDK enforces). Requires the matching SDK fix (re-vendored
+    here), which also repairs NL grid search writing nothing at all while reporting itself applied,
+    proves each write against the app-scope override row with retry/backoff (an immediate read could
+    return the environment fallback and report a correct write as failed), and reports `unverified` and
+    `failed` alongside `notPersisted`. The build surfaces every one of those non-success buckets.
 - **Teardown leaves nothing behind** — the table icon and generated app-icon web resources are removed
   (web resources delete after tables), cascade cleanup failures are reported instead of silently
   orphaning rows, and reused/system tables are skipped with a reason rather than erroring.

@@ -811,7 +811,7 @@ test('validateAppSpec rejects a non-boolean, non-integer ai.appFeatures value', 
   const s = cloneDesk();
   s.ai = { appFeatures: { nlSearch: 'yes' } };
   const r = validateAppSpec(s);
-  assert.ok(!r.ok && r.errors.some((e) => /must be a boolean or a non-negative integer/i.test(e)));
+  assert.ok(!r.ok && r.errors.some((e) => /must be a boolean or an integer between 0 and 1000000/i.test(e)), JSON.stringify(r.errors));
 });
 
 test('validateAppSpec ACCEPTS an explicit numeric ai.appFeatures value (2 = on for everyone)', () => {
@@ -823,13 +823,19 @@ test('validateAppSpec ACCEPTS an explicit numeric ai.appFeatures value (2 = on f
   assert.ok(r.ok, JSON.stringify(r.errors));
 });
 
-test('validateAppSpec rejects a negative or fractional ai.appFeatures value', () => {
-  for (const bad of [-1, 1.5]) {
+test('validateAppSpec rejects a negative, fractional or out-of-range ai.appFeatures value', () => {
+  // The upper bound and the unsafe-integer rejection mirror the SDK's `MAX_SETTING_VALUE`: the SDK
+  // THROWS for these, so a spec that validated cleanly would abort the build half-applied.
+  for (const bad of [-1, 1.5, 1000001, Number.MAX_SAFE_INTEGER + 2, NaN, Infinity]) {
     const s = cloneDesk();
     s.ai = { appFeatures: { formFill: bad } };
     const r = validateAppSpec(s);
-    assert.ok(!r.ok && r.errors.some((e) => /non-negative integer/i.test(e)), `expected ${bad} to be rejected`);
+    assert.ok(!r.ok && r.errors.some((e) => /ai\.appFeatures\.formFill/.test(e)), `expected ${bad} to be rejected`);
   }
+  // ...and the boundary itself is still accepted, so the bound is inclusive like the SDK's.
+  const ok = cloneDesk();
+  ok.ai = { appFeatures: { formFill: 1000000 } };
+  assert.ok(validateAppSpec(ok).ok, 'the maximum value must remain valid');
 });
 
 test('validateAppSpec rejects ai.summaries.default with an invalid value', () => {

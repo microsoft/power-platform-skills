@@ -501,7 +501,9 @@ entirely optional; omitting it leaves every AI feature at its platform default.
 "ai": {
   // appFeatures: opt specific AI features in or out for this app (all optional).
   // Values are `true`/`false` (the ergonomic spellings of the underlying numeric settings' 1/0) or an
-  // explicit non-negative integer for a platform-defined value — notably `2` = "on for everyone".
+  // explicit integer between 0 and 1000000 for a platform-defined value — notably `2` = "on for
+  // everyone". The bound mirrors the SDK's own, so an out-of-range value is rejected here rather
+  // than aborting the build half-applied.
   // These write PER-APP settings, which are distinct from the org-level admin gates the build
   // preflights; a feature whose org gate is off is skipped with a warning and never silently applied.
   "appFeatures": {

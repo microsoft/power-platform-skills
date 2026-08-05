@@ -1735,21 +1735,35 @@ async function runSdkBuild(spec, opts = {}) {
     await runner.run('ai-features', 'enable app AI features', async () => {
       const r = await provision.setAppAiFeatures(appUnique, flags, { solutionUniqueName });
       result.created.ai.appFeatures = r;
-      // `notPersisted` means the SDK wrote the setting, Dataverse answered 204, and the read-back
-      // still did NOT show the requested value — the platform accepted the app-scope write without
-      // storing it. That is a silent failure the build must NOT report as plain success: it was the
-      // false-PASS half of ADO 6603383 (features were pushed onto `applied` while writing nothing).
-      //
-      // It needs its OWN emit: makeRunner's success path emits `{status:'ok'}` with no `detail`, and
-      // the CLI narrator only prints `detail` for `status:'error'` — so a message returned from this
-      // callback would be silently dropped. A `skip` event renders as `⊘ <label>`, which is the
-      // closest thing the narrator has to a warning.
-      const notPersisted = (r && r.notPersisted) || [];
-      if (notPersisted.length) {
+      // `applied` is the SDK's ONLY success bucket: a feature reaches it only when the APP-SCOPE
+      // override row is proven present holding the requested value. Every other bucket is a
+      // non-success the build must surface, because reporting them as plain success was the
+      // false-PASS half of ADO 6603383 (features were pushed onto `applied` while writing nothing):
+      //   notPersisted — the write returned 204 but no override was observed for the whole retry
+      //                  budget; Dataverse can accept an app-scope write and store nothing.
+      //   unverified   — the write was issued but the proof could not be READ (no access to
+      //                  appsettings/settingdefinitions/appmodules, or a transport error).
+      //   failed       — the write (or its org-gate read) threw. The SDK keeps going so the rest
+      //                  of the batch still reports, so this arrives as data, never as an exception.
+      // Enumerating the buckets from a table (rather than naming only `notPersisted`) means a bucket
+      // added by a future SDK version is at worst unlabeled, never silently dropped.
+      const PROBLEM_BUCKETS = [
+        ['notPersisted', 'NOT PERSISTED', 'Dataverse accepted the write but no app-scope override holding the requested value was observed'],
+        ['unverified', 'UNVERIFIED', 'the write was issued but could not be confirmed — verify manually before relying on it'],
+        ['failed', 'FAILED', 'the write or its org-gate read threw'],
+      ];
+      const problems = PROBLEM_BUCKETS
+        .map(([key, label, why]) => ({ key, label, why, names: (r && r[key]) || [] }))
+        .filter((p) => p.names.length);
+      // Each problem needs its OWN emit: makeRunner's success path emits `{status:'ok'}` with no
+      // `detail`, and the CLI narrator only prints `detail` for `status:'error'` — so a message
+      // returned from this callback would be silently dropped. A `skip` event renders as
+      // `⊘ <label>`, which is the closest thing the narrator has to a warning.
+      for (const p of problems) {
         runner.emit({
           phase: 'ai-features',
           status: 'skip',
-          label: `NOT PERSISTED: ${notPersisted.join(', ')} — Dataverse accepted the write but the value is not in effect for this app`,
+          label: `${p.label}: ${p.names.join(', ')} \u2014 ${p.why}`,
           n: runner.total,
           total: runner.total,
         });
@@ -1757,7 +1771,7 @@ async function runSdkBuild(spec, opts = {}) {
       const parts = [];
       if (r.applied && r.applied.length) parts.push(`applied: ${r.applied.join(', ')}`);
       if (r.skipped && r.skipped.length) parts.push(`skipped (admin gate off): ${r.skipped.join(', ')}`);
-      if (notPersisted.length) parts.push(`NOT PERSISTED: ${notPersisted.join(', ')}`);
+      for (const p of problems) parts.push(`${p.label}: ${p.names.join(', ')}`);
       return parts.length ? parts.join('; ') : '(none \u2014 admin gate off)';
     });
     const tables = (spec.ai.summaries && spec.ai.summaries.default === 'off') ? [] : selectSummaryTables(spec);

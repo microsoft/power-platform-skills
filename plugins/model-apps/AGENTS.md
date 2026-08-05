@@ -207,10 +207,16 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   column, so this flags it), plus **relationship** and **command-bar existence** (previously unchecked).
   Content checks are additive + reader-gated (they only fire when the reader supplies `layoutxml` /
   `entityRelationships` / `commandBar`), so existence-only callers are unaffected. It also reconciles
-  **AI app features**: for every `ai.appFeatures` entry it reads the PER-APP setting back and requires
-  the effective value to equal what the spec requested. Verify previously had no awareness of `spec.ai`
-  at all, so a run whose every AI feature was skipped (admin gate off) or silently not persisted still
-  reported a clean PASS. Note the per-app settings are DISTINCT from the org readiness gates —
+  **AI app features**: for every `ai.appFeatures` entry it proves an APP-SCOPE OVERRIDE ROW exists in
+  `appsettings` holding the requested value. Verify previously had no awareness of `spec.ai` at all, so
+  a run whose every AI feature was skipped (admin gate off) or silently not persisted still reported a
+  clean PASS. The oracle is deliberately the override row and NOT the effective value:
+  `RetrieveSetting(name, { appUniqueName })` **falls back to the environment value** when the app has no
+  override, so an effective-value compare passes whenever the environment already holds the requested
+  value — a false PASS for an app that was never configured, and the same oracle the SDK uses for its
+  `applied` bucket. It fails CLOSED when the proof cannot be read, and the check needs BOTH
+  `retrieveSetting` and `queryRecords` on the reader (an existence-only reader skips it rather than
+  degrading to the unsound compare). Note the per-app settings are DISTINCT from the org readiness gates —
   `nlSearch`'s gate is the boolean `EnableNLGridSearch` but its per-app setting is the numeric
   `NLGridSearchSetting`; conflating them is what let NL grid search report "applied" while writing
   nothing. This is the F5 "convergence" mitigation: the build is additive (edits to existing artifacts
@@ -221,11 +227,16 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   Features) for anything off. Never fails. The `ai-features` build phase calls this logic internally and
   uses `RetrieveSetting`/`SaveSettingValue` (SDK) for app-level feature flags and `AIModelPublish` +
   `aiskillconfigs` for per-table row summaries. Feature values are `true`/`false` (the numeric settings'
-  1/0) or an explicit integer such as `2` ("on for everyone"). The SDK **reads every write back** and
-  reports a feature in `applied` only when the effective app-scoped value matches the request; anything
-  else lands in `notPersisted` — Dataverse can accept an app-scope `SaveSettingValue` with HTTP 204 and
-  store nothing, so `applied` alone is not a success signal. The build surfaces `notPersisted` in the
-  phase detail and `--verify` fails on it. All AI features are **admin-gated**: the skill preflights
+  1/0) or an explicit integer such as `2` ("on for everyone"), bounded to `0..1000000` — the same range
+  the SDK enforces, so validation rejects an out-of-range value up front instead of aborting the build
+  half-applied. The SDK **proves every write** against the app-scope override row, retrying with backoff
+  (an immediate read can still return the environment fallback, which previously produced a false
+  `notPersisted` on first apply). `applied` is the ONLY success bucket; a feature otherwise lands in
+  `skipped` (org gate off), `notPersisted` (no override observed for the whole retry budget — Dataverse
+  can accept an app-scope `SaveSettingValue` with HTTP 204 and store nothing), `unverified` (the write
+  was issued but the proof could not be read) or `failed` (the write threw; the rest of the batch still
+  reports). The build surfaces **every** non-success bucket as a `⊘` warning plus in the phase detail,
+  and `--verify` fails on any of them. All AI features are **admin-gated**: the skill preflights
   and skips/warns; it cannot flip admin or tenant switches. `scripts/lib/ai-candidates.js` selects
   good-candidate tables for auto row-summary mode; `scripts/lib/ai-prompt.js` generates tailored summary
   prompts. The `ai` block in the App Spec configures the full set; see

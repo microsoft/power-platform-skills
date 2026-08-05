@@ -1834,6 +1834,49 @@ test('ai-features phase: spec without spec.ai is a no-op', async () => {
   assert.strictEqual(find(calls, 'configureRowSummary').length, 0, 'configureRowSummary not called without spec.ai');
 });
 
+// ── AI app-feature non-success buckets (ADO 6603383) ───────────────────────────────────────────
+// `setAppAiFeatures` reports FIVE buckets and `applied` is the ONLY success one. The build must
+// surface every non-success bucket: silently dropping one reproduces the false PASS this fix exists
+// to remove (a feature the platform never stored being reported as a clean build). `unverified` and
+// `failed` were added by a later SDK revision, so this pins that they are surfaced too — not just
+// the original `notPersisted`.
+const aiProblemSpec = () => makeSpec({ ai: { appFeatures: { formFill: true }, summaries: { default: 'off' } } });
+const withAiResult = (result) => {
+  const { sdk, calls } = mockSdk();
+  sdk.setAppAiFeatures = async (appUnique, flags, opts) => { calls.push({ name: 'setAppAiFeatures', args: [appUnique, flags, opts] }); return result; };
+  return { sdk, calls };
+};
+
+test('ai-features phase: notPersisted / unverified / failed are each surfaced as a warning event', async () => {
+  const { sdk } = withAiResult({
+    applied: ['nlChart'], skipped: ['m365'],
+    notPersisted: ['formFill'], unverified: ['nlSearch'], failed: ['other'],
+    outcomes: [],
+  });
+  const events = [];
+  await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['ai-features'], emit: (e) => events.push(e) });
+  const warnings = events.filter((e) => e.phase === 'ai-features' && e.status === 'skip');
+  assert.ok(warnings.some((e) => /NOT PERSISTED: formFill/.test(e.label)), 'notPersisted surfaced');
+  assert.ok(warnings.some((e) => /UNVERIFIED: nlSearch/.test(e.label)), 'unverified surfaced');
+  assert.ok(warnings.some((e) => /FAILED: other/.test(e.label)), 'failed surfaced');
+});
+
+test('ai-features phase: an all-applied result emits no warning events', async () => {
+  const { sdk } = withAiResult({ applied: ['formFill'], skipped: [], notPersisted: [], unverified: [], failed: [], outcomes: [] });
+  const events = [];
+  await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['ai-features'], emit: (e) => events.push(e) });
+  assert.strictEqual(events.filter((e) => e.phase === 'ai-features' && e.status === 'skip').length, 0);
+});
+
+test('ai-features phase: a result missing the newer buckets does not throw (older SDK shape)', async () => {
+  // The vendored bundle and the plugin are versioned together, but a partial result must degrade to
+  // "nothing to warn about" rather than crash the whole build on a missing array.
+  const { sdk } = withAiResult({ applied: ['formFill'], skipped: [] });
+  const events = [];
+  await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['ai-features'], emit: (e) => events.push(e) });
+  assert.strictEqual(events.filter((e) => e.phase === 'ai-features' && e.status === 'error').length, 0, 'no error events');
+});
+
 test('ai-features planFor: spec.ai adds enable + per-table summary plan entries', () => {
   const spec = makeSpec({ ai: { appFeatures: { formFill: true }, summaries: { default: 'auto' } } });
   const items = planFor(spec, { phases: ['ai-features'] });
