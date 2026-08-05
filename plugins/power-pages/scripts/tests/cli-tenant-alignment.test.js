@@ -65,6 +65,7 @@ test('validateCliTenantAlignment succeeds when PAC, Azure account, and token ten
     token: fakeJwt(TENANT_A),
   }, {
     execFile: fakeExecFile(),
+    platform: 'linux',
   }), {
     ok: true,
     pacTenantId: TENANT_A,
@@ -91,6 +92,7 @@ test('validateCliTenantAlignment blocks when PAC and Azure tenants differ', () =
     token: fakeJwt(TENANT_A),
   }, {
     execFile: fakeExecFile({ pacTenant: TENANT_B, azTenant: TENANT_A }),
+    platform: 'linux',
   });
 
   assert.equal(result.ok, false);
@@ -104,5 +106,5 @@ test('run requires either an environment URL or token and passes CLI args throug
     token: 't',
   });
   assert.equal(run([]).ok, false);
-  assert.equal(run(['--token', fakeJwt(TENANT_A)], { execFile: fakeExecFile() }).ok, true);
+  assert.equal(run(['--token', fakeJwt(TENANT_A)], { execFile: fakeExecFile(), platform: 'linux' }).ok, true);
 });
