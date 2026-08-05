@@ -6,9 +6,9 @@
  * Triggers on Write/Edit/MultiEdit of any package.json. Blocks when the
  * resulting deps include known-bad packages, private vendor packages are
  * referenced via the npm registry instead of `file:` paths to vendor *.tgz,
- * OR native/runtime packages are added outside the current package baseline's
- * native/runtime allowlist.
- * Generic JS-only dependencies remain allowed.
+ * OR packages that ship native code/config are added outside the current
+ * package baseline's native/runtime allowlist. Generic JS-only dependencies,
+ * including packages whose names begin with `react-native-`, remain allowed.
  *
  * Allowed icon library: `@expo/vector-icons` only.
  *
@@ -40,10 +40,9 @@ const FORBIDDEN_DEPS = {
 // Names that MUST resolve to a vendor *.tgz file: path.
 const VENDOR_ONLY = [/^expo-msal-intune$/, /^@microsoft\/pa-/];
 
-// Native/runtime packages are fixed by the Expo template baseline. These name
-// patterns intentionally catch Expo modules, React Native packages, config
-// plugins, and native-flavoured UI/runtime packages. Generic JS-only packages
-// like date-fns, zod, uuid, nanoid, or lodash do not match and remain allowed.
+// Name patterns identify packages that need closer inspection; they do not prove
+// that a package ships native code. For example, react-native-calendars is a
+// source-only TypeScript/JavaScript package despite its name.
 const NATIVE_PACKAGE_PATTERNS = [
   /^expo($|-)/,
   /^@expo\//,
@@ -74,6 +73,15 @@ const NATIVE_PACKAGE_PATTERNS = [
 
 const BUNDLED_TEMPLATE_PACKAGE_PATH = path.resolve(__dirname, '..', 'template', 'package.json');
 
+const NATIVE_PACKAGE_MARKERS = new Set([
+  'android',
+  'ios',
+  'macos',
+  'windows',
+  'expo-module.config.json',
+  'react-native.config.js',
+]);
+
 function packageDeps(pkg) {
   return {
     ...(pkg.dependencies || {}),
@@ -89,6 +97,14 @@ function readPackageDepsFromContent(content) {
   } catch {
     return null;
   }
+}
+
+function readRequiredPackageDeps(packagePath) {
+  const deps = readPackageDepsFromContent(fs.readFileSync(packagePath, 'utf8'));
+  if (!deps) {
+    throw new Error('package manifest is not valid JSON');
+  }
+  return deps;
 }
 
 function readPackageLockDeps(packageJsonPath) {
@@ -135,11 +151,10 @@ function reconstructBeforeContent(toolName, toolInput, afterContent) {
 
 function getNativeAllowlistDeps(toolName, toolInput, afterContent, packageJsonPath) {
   if (toolInput.validation_mode === 'explicit-mobile-workflow') {
-    try {
-      return readPackageDepsFromContent(fs.readFileSync(BUNDLED_TEMPLATE_PACKAGE_PATH, 'utf8'));
-    } catch {
-      return null;
-    }
+    // Explicit mobile validation is the final native-runtime gate. If the bundled
+    // template is missing or malformed, allowing the write would silently turn a
+    // verification failure into permission to add arbitrary native dependencies.
+    return readRequiredPackageDeps(BUNDLED_TEMPLATE_PACKAGE_PATH);
   }
 
   const beforeContent = reconstructBeforeContent(toolName, toolInput, afterContent);
@@ -147,7 +162,32 @@ function getNativeAllowlistDeps(toolName, toolInput, afterContent, packageJsonPa
   return beforeDeps || readPackageLockDeps(packageJsonPath);
 }
 
-function isNativeLikePackage(name) {
+function installedPackageNativeState(packageJsonPath, name) {
+  if (typeof packageJsonPath !== 'string') return null;
+  const packageRoot = path.join(path.dirname(packageJsonPath), 'node_modules', ...name.split('/'));
+  const packageManifestPath = path.join(packageRoot, 'package.json');
+  if (!fs.existsSync(packageManifestPath)) return null;
+
+  try {
+    const manifest = JSON.parse(fs.readFileSync(packageManifestPath, 'utf8'));
+    if (manifest.codegenConfig) return true;
+
+    const entries = fs.readdirSync(packageRoot, { withFileTypes: true });
+    return entries.some((entry) => {
+      if (NATIVE_PACKAGE_MARKERS.has(entry.name)) return true;
+      return entry.isFile() && (
+        entry.name.endsWith('.podspec') ||
+        /^app\.plugin\.(?:js|cjs|mjs|ts)$/.test(entry.name)
+      );
+    });
+  } catch {
+    return null;
+  }
+}
+
+function isNativeLikePackage(name, packageJsonPath) {
+  const installedState = installedPackageNativeState(packageJsonPath, name);
+  if (installedState !== null) return installedState;
   return NATIVE_PACKAGE_PATTERNS.some((rx) => rx.test(name));
 }
 
@@ -205,12 +245,12 @@ function findViolations(content, filePath, nativeAllowlistDeps) {
         reason: `\`${name}\` is a private vendor package. Reference must be a \`file:./vendor/<name>-<version>.tgz\` path, not \`${version}\`. Will 404 from npm registry.`,
       });
     }
-    if (!editingBundledTemplatePackage && nativeAllowlistDeps && isNativeLikePackage(name)) {
+    if (!editingBundledTemplatePackage && nativeAllowlistDeps && isNativeLikePackage(name, filePath)) {
       if (!nativeAllowlistDeps[name]) {
         violations.push({
           name,
           version,
-          reason: `Native/runtime dependency \`${name}\` was not present in this app/template package baseline before the edit. Do not add native libraries from an app branch; start from a template/runtime that already ships it. JS-only packages are still allowed.`,
+          reason: `Dependency \`${name}\` ships native code/config but was not present in this app/template package baseline. Start from a template/runtime that already ships it. Pure-JavaScript packages are allowed regardless of naming prefix.`,
         });
       }
     }
@@ -236,7 +276,15 @@ process.stdin.on('end', () => {
   const content = readResult(toolName, toolInput);
   if (!content) process.exit(0);
 
-  const nativeAllowlistDeps = getNativeAllowlistDeps(toolName, toolInput, content, fp);
+  let nativeAllowlistDeps;
+  try {
+    nativeAllowlistDeps = getNativeAllowlistDeps(toolName, toolInput, content, fp);
+  } catch (error) {
+    process.stderr.write(
+      `BLOCKED: unable to load native dependency allowlist from ${BUNDLED_TEMPLATE_PACKAGE_PATH}: ${error.message}\n`,
+    );
+    process.exit(2);
+  }
   const violations = findViolations(content, fp, nativeAllowlistDeps);
   if (violations.length === 0) process.exit(0);
 

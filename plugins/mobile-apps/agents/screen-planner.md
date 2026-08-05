@@ -8,6 +8,8 @@ tools:
   - Read
   - Write
   - Glob
+  - Grep
+  - Bash
   - AskUserQuestion
 ---
 
@@ -54,7 +56,7 @@ The orchestrator splits Gate 4 into two cheaper gates so the user can edit the s
 
 - `<working_dir>/app/index.tsx`, `app/login.tsx`, `app/oauth-callback.tsx`, `app/(app)/_layout.tsx`, `app/(app)/home.tsx` — existing routes
 - `<working_dir>/tamagui.config.ts` — design tokens
-- `<working_dir>/package.json` — installed dependencies (use this to confirm a Tamagui component / Expo module is actually available before referencing it in a spec)
+- `<working_dir>/package.json` — installed dependencies. Native modules must already be present; a verified pure-JavaScript library may instead be proposed with an exact version under `## Screens → JavaScript Dependencies` for the orchestrator to install before screen generation.
 - `<working_dir>/src/components/`, `src/hooks/`, `src/utils/`, `src/tokens/` — shared code copied by the orchestrator
 
 **Hard rule — read-only on the scaffolded files.** You may NEVER write to anything outside this allow-list:
@@ -300,9 +302,15 @@ Pick a layout strategy per screen based on target platform:
 | Theme switching, breakpoints (`useMedia()`) | Scroll insets: `<ScrollView contentInsetAdjustmentBehavior="automatic">` |
 |  | Platform branching: `process.env.EXPO_OS`, `useWindowDimensions` |
 |  | Capabilities: `expo-camera`, `expo-document-picker`, `expo-print`, `expo-secure-store`, `expo-file-system`, `expo-sharing`, `@microsoft/power-apps-native-pdf-viewer`, `@microsoft/power-apps-native-pen-input`, `@microsoft/power-apps-native-bglocation` when allowlisted by the plan (see AGENTS.md §2) |
-|  | Calendar management views: `react-native-calendars` (`Calendar`, `CalendarList`, `Agenda`, `ExpandableCalendar`, `AgendaList`) when present in package.json |
+|  | Calendar management views: `react-native-calendars` (`Calendar`, `CalendarList`, `Agenda`, `ExpandableCalendar`, `AgendaList`) when the approved `JavaScript Dependencies` table includes it |
 
 Reference `${PLUGIN_ROOT}/shared/samples/_layout.tsx` for existing navigation layout patterns (tab structure, safe-area, stack options).
+
+### Pure-JavaScript dependency planning
+
+Read and follow `${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md`. Apply it both when the user explicitly names a JavaScript library and when a screen use case has an established library that materially reduces implementation or accessibility risk. Inspect existing dependencies first; otherwise research at most three candidates with the reference's read-only npm commands, select one compatible JS-only package, and emit the exact-version evidence table in `phase: specs` or legacy mode. Do not install during planning.
+
+Calendar management is one example, not a special ownership path. Full month/week/agenda surfaces trigger candidate selection and normally evaluate `react-native-calendars` first; a lightweight `timeline-day-list` can stay on existing primitives. Other use cases follow the same candidate-selection workflow rather than requiring a hardcoded package map.
 
 ## Step 4 — Per-Screen Spec
 
@@ -347,7 +355,7 @@ For each screen the user adds, provide this compact shape:
 - **Row style override** (List screens only, omit if Shared Conventions default applies): one of the row styles from the guide above, not "generic cards"
 - **Hero type override** (Detail screens only, omit if Shared Conventions default applies): one of the hero types from the guide above
 - **Operational pattern** (Home or workflow screens only): one of `home-dashboard`, `assignment-dashboard`, `walkaround-stepper`, `wizard-progress-stepper`, `floating-action-menu`, `scan-geofence-gate`, `severity-filtered-queue`, `dispatch-signoff-queue`, `audit-timeline`. Omit only for normal CRUD/business screens without a dashboard or workflow shape. Use `floating-action-menu` when a screen has 2-5 related quick actions behind one Create/New trigger; list the trigger label, menu item labels/icons, and route/action for each item.
-- **Calendar pattern** (Calendar/schedule/appointment screens only) — REQUIRED when the screen manages appointments, schedules, visits, availability, personal/team/POS calendars, or date-grouped work. Choose one: `month-agenda` (`Calendar` + agenda rows), `expandable-calendar-agenda` (`CalendarProvider` + `ExpandableCalendar` + `AgendaList`), `calendar-list-range` (`CalendarList` for date-range browsing), or `timeline-day-list` (date chip strip + `FlatList`, only if `react-native-calendars` is unavailable or the plan intentionally avoids a full calendar). For TWEED-like calendar management views, default personal/team/POS calendar screens to `expandable-calendar-agenda` and appointment list screens to `month-agenda`.
+- **Calendar pattern** (Calendar/schedule/appointment screens only) — REQUIRED when the screen manages appointments, schedules, visits, availability, personal/team/POS calendars, or date-grouped work. Choose one: `month-agenda` (`Calendar` + agenda rows), `expandable-calendar-agenda` (`CalendarProvider` + `ExpandableCalendar` + `AgendaList`), `calendar-list-range` (`CalendarList` for date-range browsing), or `timeline-day-list` (date chip strip + `FlatList` when the app intentionally wants a lightweight schedule without another dependency). For TWEED-like calendar management views, default personal/team/POS calendar screens to `expandable-calendar-agenda` and appointment list screens to `month-agenda`.
 - **Control patterns** (emit only for specialized controls) — use `checkbox-field` for boolean or checklist-like toggles, `numeric-stepper` for bounded plus/minus fields, `line-item-stepper-row` for product/order/cart/inventory rows with inline quantity/count adjustment, `searchable-lookup-sheet` for Dataverse lookup/ComboBox fields with many records, `segmented-control` for 2-5 bounded mutually-exclusive options, and `recurrence-rule-editor` for repeating schedules. Include the control-specific contract: checkbox boolean vs multi-select mapping; stepper min/max/step and commit behavior (`local draft until Save/Next` by default); lookup service/search/display fields/pagination and `@odata.bind`; segmented option source, selected state, optional counts, and generated option const mapping; recurrence pattern/start/end/date-time/weekday-mask fields, summary text, and validation rules.
 - **Archetype** — one of List / Detail / Form / Auth / Tab-root / Modal-Sheet / Empty-onboarding (see Step 2)
 - **Role** (omit if open to all signed-in users) — only when the screen is role-gated (e.g. `Supervisor only` for sign-off override, `Inspector (edit) / Supervisor (read) / Auditor (read)` for shared records). The builder uses this together with the UX contract to gate visible controls.
@@ -407,7 +415,7 @@ For each screen the user adds, provide this compact shape:
 - **Lookup writes** — for form/edit screens that set a parent reference (Task → Project, Comment → Task, etc.), explicitly list each lookup field with its `@odata.bind` name + entity set, e.g. `'cr3e9_Project@odata.bind': '/cr3e9_projects(<guid>)'`. Without this the screen-builder will guess and silently lose the relationship. Skip for read-only and no-lookup screens.
 - **Pagination** — `cursor` if the table has no natural record ceiling (visits, inspections, work orders, tickets, any user-created records over time); `none` if the table is a bounded lookup (status types, categories, job types). When `cursor`, include SDK `maxPageSize: 50`, deterministic `orderBy` with a unique key, `select`, `skipToken` continuation support, and server-side `filter` for search in the data spec. Do not imply that `top: 50` alone is pagination.
 - **Native capabilities** — which native modules/wrappers it uses, and which iOS/Android platforms or permission states need fallback handling. For PDF/pen screens, be precise: `document-picker` (`expo-document-picker`) for user-picked files; `pdf-report` (`expo-print`, plus `expo-sharing` only when present and sharing is required) for generated local PDFs; `native-pdf-viewer` (`@microsoft/power-apps-native-pdf-viewer` 0.2.9+) for HTTPS PDF URLs and local `file://` URIs; `pen-input` (`@microsoft/power-apps-native-pen-input`) for signature/ink capture. For location screens, distinguish `geolocation` (`@microsoft/power-apps-native-bglocation`) — continuous/background tracking with native Dataverse sync, needs start/stop/tracking-status UI plus a permission-denied state — from one-shot `location` (`expo-location`) for a single foreground coordinate read.
-- **Calendar library** — REQUIRED for screens with `Calendar pattern` unless the pattern is `timeline-day-list`. Write `react-native-calendars` and name the exact components expected, for example `CalendarProvider`, `ExpandableCalendar`, `AgendaList`, `Calendar`, `CalendarList`, or `Agenda`. The screen-builder imports this library directly; no `/add-native` wrapper is involved.
+- **Calendar library** — REQUIRED for screens with `Calendar pattern` unless the pattern is `timeline-day-list`. Write `react-native-calendars` and name the exact components expected, for example `CalendarProvider`, `ExpandableCalendar`, `AgendaList`, `Calendar`, `CalendarList`, or `Agenda`. The package must also appear in `### JavaScript Dependencies`; the screen-builder imports it directly after the orchestrator installs it. No `/add-native` wrapper or native rebuild is involved.
 - **Navigation** — what links to it / what it links to
 - **Navigation intent** — for each outgoing action, explicitly name `navigate`, `push`, or `replace` (must match Navigation Contracts `Intent`)
 - **State delta** — loading/error are inherited; specify only domain-specific empty copy/icon/CTA or non-standard state behavior. Empty state copy must be domain-specific (not "No items yet"). If the screen has filters, include filter-empty copy that names the active filter and recovery action. If the data source can fail independently, name the error action (`retry inspections`, `refresh assignments`) rather than treating failures as empty. For PDF/pen screens, include the specific native/artifact states: `invalidUrl` for malformed or unsupported PDF viewer input, `viewerFailed`, `pdfGenerationFailed`, `uploadFailed`, `signatureCancelled` (non-error), `signatureCaptureFailed`, and `nativeModuleMissing` where applicable. Examples: `empty: calendar-outline, "No inspections scheduled", CTA "Schedule inspection"`; `filterEmpty: "No critical defects", recovery "Clear severity filter"`.
@@ -579,6 +587,10 @@ Section format (same in all phases):
 
 **Density / motion / surface**
 - Inherits from `## Design Direction`; per-screen specs emit overrides only.
+
+### JavaScript Dependencies
+
+None.
 
 ### Per-Screen Specs
 
