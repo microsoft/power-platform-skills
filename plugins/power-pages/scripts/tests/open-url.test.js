@@ -14,11 +14,13 @@ test('openInDefaultBrowser uses platform-specific opener commands', () => {
   openInDefaultBrowser('https://example.test/a path?q=1&x=2', { os: { platform: () => 'win32' }, execFileSync });
   openInDefaultBrowser('https://example.test', { os: { platform: () => 'linux' }, execFileSync });
 
-  assert.deepEqual(calls, [
-    ['open', ['https://example.test'], { stdio: 'ignore' }],
-    ['powershell.exe', ['-NoProfile', '-Command', 'param([string]$Target) Start-Process -FilePath $Target', 'https://example.test/a path?q=1&x=2'], { stdio: 'ignore', windowsHide: true }],
-    ['xdg-open', ['https://example.test'], { stdio: 'ignore' }],
-  ]);
+  assert.deepEqual(calls[0], ['open', ['https://example.test'], { stdio: 'ignore' }]);
+  assert.equal(calls[1][0], 'powershell.exe');
+  assert.deepEqual(calls[1][1], ['-NoProfile', '-Command', 'Start-Process -FilePath $env:COPILOT_OPEN_TARGET']);
+  assert.equal(calls[1][2].stdio, 'ignore');
+  assert.equal(calls[1][2].windowsHide, true);
+  assert.equal(calls[1][2].env.COPILOT_OPEN_TARGET, 'https://example.test/a path?q=1&x=2');
+  assert.deepEqual(calls[2], ['xdg-open', ['https://example.test'], { stdio: 'ignore' }]);
 });
 
 test('openUrl validates URL shape and reports opener failures without throwing', () => {
