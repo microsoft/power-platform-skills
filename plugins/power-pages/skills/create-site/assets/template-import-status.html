@@ -57,17 +57,17 @@
       background-size: 60px 60px; animation: gridPulse 8s ease-in-out infinite alternate;
     }
     @keyframes gridPulse { 0% { opacity: 0.3; } 100% { opacity: 0.7; } }
-    .center-stage { position: relative; z-index: 10; display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 22px 40px 30px; max-height: 100vh; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; }
+    .center-stage { position: relative; z-index: 10; display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 18px 40px 28px; min-height: 100vh; max-height: 100vh; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; }
     .center-stage::-webkit-scrollbar { display: none; }
-    .orbit-system { position: relative; width: 136px; height: 136px; display: flex; align-items: center; justify-content: center; }
-    .core-shape { position: absolute; width: 74px; height: 74px; z-index: 5; background: url('./power-pages-icon.png') center/contain no-repeat; animation: coreFloat 4s ease-in-out infinite; }
+    .orbit-system { position: relative; width: 124px; height: 124px; display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+    .core-shape { position: absolute; width: 68px; height: 68px; z-index: 5; background: url('./power-pages-icon.png') center/contain no-repeat; animation: coreFloat 4s ease-in-out infinite; }
     @keyframes coreFloat { 0%, 100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-3px) scale(1.025); } }
-    .core-glow { position: absolute; width: 92px; height: 92px; border-radius: 50%; background: radial-gradient(circle, rgba(167, 139, 219, 0.18) 0%, transparent 70%); z-index: 3; animation: coreGlow 3s ease-in-out infinite alternate; filter: blur(18px); }
+    .core-glow { position: absolute; width: 86px; height: 86px; border-radius: 50%; background: radial-gradient(circle, rgba(167, 139, 219, 0.18) 0%, transparent 70%); z-index: 3; animation: coreGlow 3s ease-in-out infinite alternate; filter: blur(18px); }
     @keyframes coreGlow { 0% { transform: scale(1); opacity: 0.5; } 100% { transform: scale(1.5); opacity: 0.9; } }
     .orbit-ring { position: absolute; border: 1px solid rgba(139, 111, 192, 0.15); border-radius: 50%; animation: ringRotate linear infinite; }
-    .orbit-ring:nth-child(3) { width: 98px; height: 98px; animation-duration: 12s; }
-    .orbit-ring:nth-child(4) { width: 124px; height: 124px; animation-duration: 18s; animation-direction: reverse; border-color: rgba(90, 155, 213, 0.12); }
-    .orbit-ring:nth-child(5) { width: 150px; height: 150px; animation-duration: 25s; border-style: dashed; border-color: rgba(139, 111, 192, 0.08); }
+    .orbit-ring:nth-child(3) { width: 90px; height: 90px; animation-duration: 12s; }
+    .orbit-ring:nth-child(4) { width: 114px; height: 114px; animation-duration: 18s; animation-direction: reverse; border-color: rgba(90, 155, 213, 0.12); }
+    .orbit-ring:nth-child(5) { width: 138px; height: 138px; animation-duration: 25s; border-style: dashed; border-color: rgba(139, 111, 192, 0.08); }
     @keyframes ringRotate { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     .orbit-dot { position: absolute; width: 8px; height: 8px; border-radius: 50%; z-index: 6; }
     .orbit-dot::after { content: ''; position: absolute; inset: -4px; border-radius: 50%; filter: blur(6px); }
@@ -77,9 +77,9 @@
     .orbit-dot:nth-child(7)::after { background: rgba(90, 155, 213, 0.4); }
     .orbit-dot:nth-child(8) { background: var(--pp-periwinkle); box-shadow: 0 0 8px rgba(128, 136, 217, 0.5); width: 5px; height: 5px; animation: orbitC 25s linear infinite; }
     .orbit-dot:nth-child(8)::after { background: rgba(128, 136, 217, 0.4); }
-    @keyframes orbitA { from { transform: rotate(0deg) translateX(49px) rotate(0deg); } to { transform: rotate(360deg) translateX(49px) rotate(-360deg); } }
-    @keyframes orbitB { from { transform: rotate(0deg) translateX(62px) rotate(0deg); } to { transform: rotate(360deg) translateX(62px) rotate(-360deg); } }
-    @keyframes orbitC { from { transform: rotate(0deg) translateX(75px) rotate(0deg); } to { transform: rotate(360deg) translateX(75px) rotate(-360deg); } }
+    @keyframes orbitA { from { transform: rotate(0deg) translateX(45px) rotate(0deg); } to { transform: rotate(360deg) translateX(45px) rotate(-360deg); } }
+    @keyframes orbitB { from { transform: rotate(0deg) translateX(57px) rotate(0deg); } to { transform: rotate(360deg) translateX(57px) rotate(-360deg); } }
+    @keyframes orbitC { from { transform: rotate(0deg) translateX(69px) rotate(0deg); } to { transform: rotate(360deg) translateX(69px) rotate(-360deg); } }
     .text-content { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 12px; }
     .brand-title { font-family: 'Outfit', sans-serif; font-weight: 300; font-size: 11px; letter-spacing: 3px; text-transform: uppercase; color: var(--pp-violet); opacity: 0; animation: fadeSlideUp 1s ease-out 0.5s forwards; }
     .main-heading { font-family: 'Outfit', sans-serif; font-weight: 600; font-size: 26px; line-height: 1.25; background: linear-gradient(135deg, var(--pp-deep-violet) 0%, var(--pp-violet) 40%, var(--pp-sky) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; opacity: 0; animation: fadeSlideUp 1s ease-out 0.8s forwards; }
@@ -90,12 +90,12 @@
     .status-icon { width: 16px; height: 16px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
     .status-icon.working { border: 2px solid rgba(139, 111, 192, 0.2); border-top-color: var(--pp-violet); animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .preview-showcase { position: relative; width: min(900px, calc(100vw - 72px)); height: min(54vh, 520px); opacity: 0; animation: fadeSlideUp 1s ease-out 1.35s forwards; }
+    .preview-showcase { position: relative; width: min(900px, calc(100vw - 72px)); height: min(46vh, 500px); max-height: calc(100vh - 390px); min-height: 240px; opacity: 0; animation: fadeSlideUp 1s ease-out 1.35s forwards; flex: 0 0 auto; }
     .preview-frame { width: 100%; height: 100%; overflow: hidden; display: flex; align-items: center; }
     .preview-track { display: flex; width: 100%; height: 100%; transition: transform 0.7s cubic-bezier(0.22, 1, 0.36, 1); will-change: transform; }
     .preview-slide { flex: 0 0 100%; height: 100%; display: flex; align-items: center; justify-content: center; padding: 0 10px; }
     .preview-card { display: inline-flex; max-width: 100%; max-height: 100%; border: 1px solid rgba(139, 111, 192, 0.12); border-radius: 20px; background: var(--pp-surface); box-shadow: 0 2px 12px rgba(139, 111, 192, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04); overflow: hidden; }
-    .preview-card img { display: block; max-width: 100%; max-height: min(54vh, 520px); width: auto; height: auto; object-fit: contain; background: var(--pp-surface); }
+    .preview-card img { display: block; max-width: 100%; max-height: min(46vh, 500px); width: auto; height: auto; object-fit: contain; background: var(--pp-surface); }
     .preview-empty { padding: 20px; color: var(--pp-text-muted); font-size: 13px; text-align: center; }
     .preview-nav { position: absolute; top: 50%; z-index: 7; width: 34px; height: 34px; border-radius: 50%; border: 1px solid rgba(139, 111, 192, 0.16); background: rgba(255, 255, 255, 0.88); color: var(--pp-violet); box-shadow: 0 2px 12px rgba(139, 111, 192, 0.10), 0 1px 3px rgba(0, 0, 0, 0.04); cursor: pointer; font-size: 24px; line-height: 30px; display: flex; align-items: center; justify-content: center; transform: translateY(-50%); transition: background 0.2s ease, transform 0.2s ease; }
     .preview-nav:hover { background: var(--pp-surface); transform: translateY(-50%) scale(1.04); }
@@ -104,7 +104,7 @@
     .preview-nav-next { right: 8px; }
     .preview-showcase.single .preview-nav { display: none; }
     .progress-container { width: min(520px, calc(100vw - 72px)); opacity: 0; animation: fadeSlideUp 1s ease-out 1.5s forwards; display: flex; flex-direction: column; align-items: center; gap: 10px; }
-    .progress-track { width: 100%; height: 3px; background: rgba(139, 111, 192, 0.1); border-radius: 4px; overflow: hidden; position: relative; }
+    .progress-track { display: none; width: 100%; height: 3px; background: rgba(139, 111, 192, 0.1); border-radius: 4px; overflow: hidden; position: relative; }
     .progress-fill { height: 100%; width: 40%; border-radius: 4px; background: linear-gradient(90deg, transparent, var(--pp-violet), var(--pp-lavender), var(--pp-sky), transparent); position: absolute; top: 0; left: -40%; animation: infiniteSlide 2s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
     .progress-fill::after { content: ''; position: absolute; right: 10%; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--pp-sky); box-shadow: 0 0 8px rgba(90, 155, 213, 0.5), 0 0 16px rgba(90, 155, 213, 0.2); opacity: 0.9; }
     @keyframes infiniteSlide { 0% { left: -40%; } 100% { left: 100%; } }
@@ -112,8 +112,8 @@
     .progress-track.complete .progress-fill::after { display: none; }
     .progress-label-text { font-size: 11px; color: var(--pp-text-muted); font-family: 'DM Sans', sans-serif; letter-spacing: 0.3px; }
     .phase-steps { width: min(640px, calc(100vw - 72px)); display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; opacity: 0; animation: fadeSlideUp 1s ease-out 1.65s forwards; }
-    .phase-step { position: relative; border: 1px solid rgba(139, 111, 192, 0.10); border-radius: 12px; background: rgba(255, 255, 255, 0.72); color: var(--pp-text-muted); font-family: 'Outfit', sans-serif; font-size: 11px; font-weight: 500; padding: 8px 10px; text-align: center; }
-    .phase-step.active { border-color: rgba(139, 111, 192, 0.28); color: var(--pp-violet); background: var(--pp-surface); }
+    .phase-step { position: relative; overflow: hidden; border: 1px solid rgba(139, 111, 192, 0.10); border-radius: 12px; background: rgba(255, 255, 255, 0.72); color: var(--pp-text-muted); font-family: 'Outfit', sans-serif; font-size: 11px; font-weight: 500; padding: 8px 10px; text-align: center; }
+    .phase-step.active { border-color: rgba(139, 111, 192, 0.28); color: var(--pp-violet); background: linear-gradient(90deg, rgba(255,255,255,0.88), rgba(139,111,192,0.12), rgba(90,155,213,0.14), rgba(255,255,255,0.88)); background-size: 220% 100%; animation: pillProgress 2s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
     .phase-step.done { color: #229E5C; border-color: rgba(34, 158, 92, 0.20); background: rgba(34, 158, 92, 0.06); }
     .feature-cards { display: flex; gap: 10px; margin-top: 4px; opacity: 0; animation: fadeSlideUp 1s ease-out 2s forwards; }
     .feature-card { background: var(--pp-surface); border: 1px solid rgba(139, 111, 192, 0.1); border-radius: 14px; padding: 14px 16px; width: 128px; box-shadow: 0 2px 12px rgba(139, 111, 192, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04); opacity: 0; transform: translateY(20px) scale(0.95); transition: all 0.8s cubic-bezier(0.22, 1, 0.36, 1); }
@@ -137,8 +137,10 @@
     .toast-message { font-size: 13px; color: var(--pp-text-secondary); }
     @keyframes toastEnter { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
     @keyframes fadeSlideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
-    @media (prefers-reduced-motion: reduce) { .preview-track { transition: none; } }
-    @media (max-width: 600px) { .main-heading { font-size: 24px; } .progress-container { width: 260px; } .feature-cards { flex-direction: column; align-items: center; } .orbit-system { width: 180px; height: 180px; } }
+    @keyframes pillProgress { 0% { background-position: 140% 0; } 100% { background-position: -80% 0; } }
+    @media (prefers-reduced-motion: reduce) { .preview-track { transition: none; } .phase-step.active { animation: none; } }
+    @media (max-height: 760px) { .feature-cards, .tip-area { display: none; } .preview-showcase { max-height: calc(100vh - 300px); } }
+    @media (max-width: 600px) { .main-heading { font-size: 24px; } .progress-container { width: 260px; } .phase-steps { grid-template-columns: 1fr; width: min(320px, calc(100vw - 48px)); } .feature-cards { flex-direction: column; align-items: center; } .orbit-system { width: 124px; height: 124px; } }
   </style>
 </head>
 <body>

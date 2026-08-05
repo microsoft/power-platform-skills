@@ -64,6 +64,8 @@ test('renderTemplateImportStatus renders scaffold-style slideshow, progress, and
   assert.match(html, /Lightning-fast performance/);
   assert.match(html, /Ready to scale globally/);
   assert.match(html, /progressFill/);
+  assert.match(html, /pillProgress/);
+  assert.match(html, /phase-step active/);
   assert.match(html, /Importing solution/);
   assert.match(html, /Seeding data/);
   assert.match(html, /Activating site/);
@@ -75,6 +77,8 @@ test('renderTemplateImportStatus renders scaffold-style slideshow, progress, and
   assert.match(html, /Activating Supplier Portal template site/);
   assert.match(html, /Supplier Portal template is ready/);
   assert.match(html, /status\.state === 'succeeded' && status\.redirectUrl/);
+  assert.match(html, /max-height: calc\(100vh - 390px\)/);
+  assert.match(html, /@media \(max-height: 760px\)/);
   assert.doesNotMatch(html, /progressFromStatus/);
   assert.doesNotMatch(html, /status\.progress/);
   assert.doesNotMatch(html, /status\.percentComplete/);
