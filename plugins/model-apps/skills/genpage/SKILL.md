@@ -272,7 +272,7 @@ The entity-builder reads `Solution` and `Publisher Prefix` directly from the
 plan's `## Environment` — no need to re-thread them here.
 
 Wait for completion. The builder writes a transactional log at
-`<working-dir>/entity-creation-log.md` for recovery on failure.
+`<working-dir>/genpage-entity-creation-log.md` for recovery on failure.
 
 ### Phase 3: App Creation/Selection
 

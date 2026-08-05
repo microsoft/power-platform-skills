@@ -66,6 +66,32 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   page-intents + sample data, then access), run the `spec-lint.js` guardrail, get plan-mode approval.
   Writes `app-spec.json` (the machine contract) + `model-app-plan.md` (rendered by
   `scripts/write-app-spec-doc.js`, never hand-written).
+
+### Working-directory artifact naming
+
+Both skills can be pointed at the SAME working directory (each derives it from a slug off the
+user's request), so file names are a real namespace, not decoration. The rule, in order:
+
+1. **Written by more than one skill → no prefix.** `workflow-log.md` is the shared running log
+   both `/app-builder` and `/genpage` append to; prefixing it would fork one narrative in two.
+2. **Owned by one skill AND collidable → prefix with the OWNING skill.** `genpage-plan.md`,
+   `genpage-edit-plan.md`, `genpage-entity-creation-log.md`, `app-builder-page-plan.md`.
+3. **The app's own artifacts keep their established names** — `app-spec.json` and
+   `model-app-plan.md`. `app-spec.json` is deliberately NOT renamed to match the
+   `model-app-` prefix: the name is the *concept* (`references/app-spec-schema.md`,
+   `scripts/lib/app-spec.js`, `validateAppSpec`/`migrateAppSpec`, "App Spec" throughout the docs
+   and the `--spec` flag of every CLI), it is the user's SOURCE OF TRUTH living in app folders
+   already on disk, and renaming the file alone would create a three-way file/schema/code mismatch
+   that is worse than the prefix asymmetry it fixes.
+4. **A name that exists to prevent confusion must not CONTAIN the name it guards against.**
+   `app-builder-page-plan.md` is deliberately not `app-builder-genpage-plan.md`: the whole point is
+   that a later `/genpage` run cannot consume an app-builder plan (different dialect → wrong PAGEREF
+   tokens, see `scripts/write-page-plan.js`), and lookups here are agent-driven glob/grep, where
+   `*genpage-plan.md` would match a superset name.
+5. **Internal build state lives under `.maker-workspace/`**, never at the top level
+   (`build-log.jsonl`, `build-status.json`, `last-applied.json`, `manifest.json`).
+
+When adding a new artifact, apply rules 1-2 first, then check it against rule 4.
 - **`scripts/lib/spec-lint.js`** — pure App Spec guardrail (`lintAppSpec → { ok, errors,
   warnings }`): errors block the plan gate (e.g. the relationship-name-vs-lookup-name
   collision Dataverse rejects), warnings teach.
