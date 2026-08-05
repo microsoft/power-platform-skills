@@ -1,7 +1,17 @@
 /* Dev-only bundler: @maker-studio/cds-maker-sdk -> self-contained CJS the plugin vendors.
  * Run: node plugins/model-apps/scripts/_vendor-build/build.js --sdk <path-to-ppux>
  *      or set POWER_PLATFORM_UX_SDK_ROOT=<path-to-ppux>
- * Not shipped. Re-run only when the SDK source changes. */
+ * Not shipped. Re-run only when the SDK source changes.
+ *
+ * esbuild is pinned to an EXACT version in package.json (no `^`) on purpose. The stub plugin below
+ * depends on esbuild's *internal* import-interop codegen (`__toESM` / `__copyProps`) — an
+ * implementation detail with no compatibility guarantee, not a public API. That codegen does change
+ * across releases: 0.24.2 -> 0.28.1 rewrote the CJS module wrapper to re-throw init errors on every
+ * require. Because this build's output is a COMMITTED artifact (../vendor/cds-maker-sdk.cjs), a
+ * caret range would let the same SDK source produce a different bundle on someone else's machine —
+ * and caret drift is not hypothetical here: the previous `^0.24.0` was already resolving to 0.24.2.
+ * Bump deliberately, then re-run the vendored-SDK contract tests (scripts/tests/
+ * {sdk-surface-contract,hardening2-real-bundle,vendor-sdk-smoke}.test.js) against the new bundle. */
 const path = require('node:path');
 const fs = require('node:fs');
 
