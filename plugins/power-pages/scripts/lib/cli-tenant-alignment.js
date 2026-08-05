@@ -35,17 +35,28 @@ function tenantIdFromToken(token) {
   return normalizeGuid(payload && payload.tid);
 }
 
-function getPacTenantId(execFile = execFileSync) {
+function runCli(command, args, { execFile = execFileSync, platform = process.platform } = {}) {
+  if (platform === 'win32') {
+    // On Windows, `az` and `pac` are commonly .cmd shims. Node's execFile does
+    // not run cmd shims reliably as executables, even though the same command
+    // works in an interactive terminal. Use cmd.exe with fixed, code-controlled
+    // arguments so the shim is resolved the same way the user's shell resolves it.
+    return execFile('cmd.exe', ['/d', '/s', '/c', `${command}.cmd`, ...args], { encoding: 'utf8', timeout: 15000 });
+  }
+  return execFile(command, args, { encoding: 'utf8', timeout: 15000 });
+}
+
+function getPacTenantId(execFile = execFileSync, platform = process.platform) {
   try {
-    return parsePacTenantId(execFile('pac', ['auth', 'who'], { encoding: 'utf8', timeout: 15000 }));
+    return parsePacTenantId(runCli('pac', ['auth', 'who'], { execFile, platform }));
   } catch {
     return null;
   }
 }
 
-function getAzAccountTenantId(execFile = execFileSync) {
+function getAzAccountTenantId(execFile = execFileSync, platform = process.platform) {
   try {
-    return normalizeGuid(execFile('az', ['account', 'show', '--query', 'tenantId', '-o', 'tsv'], { encoding: 'utf8', timeout: 15000 }));
+    return normalizeGuid(runCli('az', ['account', 'show', '--query', 'tenantId', '-o', 'tsv'], { execFile, platform }));
   } catch {
     return null;
   }
@@ -53,9 +64,10 @@ function getAzAccountTenantId(execFile = execFileSync) {
 
 function validateCliTenantAlignment({ envUrl, token, pacTenantId, azTenantId, tokenTenantId } = {}, deps = {}) {
   const execFile = deps.execFile || execFileSync;
+  const platform = deps.platform || process.platform;
   const getToken = deps.getAuthToken || getAuthToken;
-  const pacTenant = normalizeGuid(pacTenantId) || getPacTenantId(execFile);
-  const azTenant = normalizeGuid(azTenantId) || getAzAccountTenantId(execFile);
+  const pacTenant = normalizeGuid(pacTenantId) || getPacTenantId(execFile, platform);
+  const azTenant = normalizeGuid(azTenantId) || getAzAccountTenantId(execFile, platform);
   const bearerToken = token || (envUrl ? getToken(envUrl) : null);
   const tokenTenant = normalizeGuid(tokenTenantId) || tenantIdFromToken(bearerToken);
 
@@ -93,6 +105,7 @@ function validateCliTenantAlignment({ envUrl, token, pacTenantId, azTenantId, to
 module.exports = {
   decodeJwtPayload,
   parsePacTenantId,
+  runCli,
   tenantIdFromToken,
   validateCliTenantAlignment,
 };

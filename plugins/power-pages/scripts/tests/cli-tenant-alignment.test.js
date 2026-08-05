@@ -33,6 +33,21 @@ function fakeExecFile({ pacTenant = TENANT_A, azTenant = TENANT_A } = {}) {
   };
 }
 
+function fakeWindowsExecFile({ pacTenant = TENANT_A, azTenant = TENANT_A } = {}) {
+  return (command, args) => {
+    if (command === 'cmd.exe' && args.join(' ') === '/d /s /c pac.cmd auth who') {
+      return `Connected as user@contoso.com\nTenant ID:    ${pacTenant}\n`;
+    }
+    if (command === 'cmd.exe' && args.join(' ') === '/d /s /c az.cmd account show --query tenantId -o tsv') {
+      return `${azTenant}\n`;
+    }
+    if (command === 'pac' || command === 'az') {
+      throw new Error('Windows cannot exec cmd shims directly');
+    }
+    throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+  };
+}
+
 test('parsePacTenantId extracts Tenant ID from PAC auth output', () => {
   assert.equal(parsePacTenantId(`User: u\nTenant ID:    ${TENANT_A}\n`), TENANT_A);
   assert.equal(parsePacTenantId(`Tenant: ${TENANT_A}`), TENANT_A);
@@ -58,6 +73,16 @@ test('validateCliTenantAlignment succeeds when PAC, Azure account, and token ten
     mismatches: [],
     error: null,
   });
+});
+
+test('validateCliTenantAlignment invokes Windows cmd shims through cmd.exe', () => {
+  assert.equal(validateCliTenantAlignment({
+    envUrl: 'https://org.crm.dynamics.com',
+    token: fakeJwt(TENANT_A),
+  }, {
+    execFile: fakeWindowsExecFile(),
+    platform: 'win32',
+  }).ok, true);
 });
 
 test('validateCliTenantAlignment blocks when PAC and Azure tenants differ', () => {
