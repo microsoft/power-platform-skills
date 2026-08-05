@@ -585,15 +585,18 @@ const DEFAULT_SETTINGS = {
   m365copilotmodelappenabled: '0',
 };
 const aiMissing = (r, feature) => r.missing.find((m) => m.kind === 'ai-feature' && m.name === feature);
+// The override proof retries the ABSENT case with real backoff; these tests drive that path
+// constantly, so they opt out of the delay. Retry BEHAVIOUR has its own dedicated test below.
+const verifyAi = (spec, read) => verifySpec(spec, read, { proofDelayMs: 0 });
 
 test('verifySpec: requested AI features that are NOT in effect fail verify (no more false PASS)', async () => {
-  const r = await verifySpec({ ...AI_BASE, ai: { appFeatures: ALL_ON } }, aiRead({}));
+  const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: ALL_ON } }, aiRead({}));
   assert.strictEqual(r.ok, false);
   assert.strictEqual(r.missing.filter((m) => m.kind === 'ai-feature').length, 4);
 });
 
 test('verifySpec: AI features in effect verify clean', async () => {
-  const r = await verifySpec({ ...AI_BASE, ai: { appFeatures: ALL_ON } }, aiRead(ALL_SETTINGS_ON));
+  const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: ALL_ON } }, aiRead(ALL_SETTINGS_ON));
   assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
   assert.strictEqual(r.checks.filter((c) => c.kind === 'ai-feature' && c.present).length, 4);
 });
@@ -603,7 +606,7 @@ test('verifySpec: an ENV-fallback value that matches the request is NOT a pass (
   // when the app has no override. Every requested feature reads back exactly as requested, yet the app
   // itself was never configured — an effective-value compare reported PASS for a build the SDK itself
   // classified as notPersisted/skipped.
-  const r = await verifySpec({ ...AI_BASE, ai: { appFeatures: ALL_ON } }, aiRead({}, ALL_SETTINGS_ON));
+  const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: ALL_ON } }, aiRead({}, ALL_SETTINGS_ON));
   assert.strictEqual(r.ok, false, 'env fallback must not satisfy an app-scope request');
   assert.strictEqual(r.missing.filter((m) => m.kind === 'ai-feature').length, 4);
   assert.match(r.missing.find((m) => m.kind === 'ai-feature').detail, /NO app-scope override/);
@@ -613,25 +616,25 @@ test('verifySpec: an ENV-fallback value that matches the request is NOT a pass (
 
 test('verifySpec: reads the PER-APP setting, not the org readiness gate, for nlSearch', async () => {
   // Only the ORG gate is on; the per-app setting has no override. Verify must NOT pass.
-  const r = await verifySpec({ ...AI_BASE, ai: { appFeatures: { nlSearch: true } } }, aiRead({ ...DEFAULT_SETTINGS, NLGridSearchSetting: undefined, EnableNLGridSearch: 'true' }));
+  const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: { nlSearch: true } } }, aiRead({ ...DEFAULT_SETTINGS, NLGridSearchSetting: undefined, EnableNLGridSearch: 'true' }));
   assert.strictEqual(r.ok, false);
   assert.match(aiMissing(r, 'nlSearch').detail, /NLGridSearchSetting/);
 });
 
 test('verifySpec: an explicit numeric AI value (2 = on for everyone) is compared verbatim', async () => {
   const want2 = { ...AI_BASE, ai: { appFeatures: { formFill: 2 } } };
-  const mismatch = await verifySpec(want2, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: '1' }));
+  const mismatch = await verifyAi(want2, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: '1' }));
   assert.strictEqual(mismatch.ok, false, 'requested 2 but the override holds 1 must fail');
   assert.match(aiMissing(mismatch, 'formFill').detail, /requested '2'/);
-  const match = await verifySpec(want2, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: '2' }));
+  const match = await verifyAi(want2, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: '2' }));
   assert.strictEqual(match.ok, true, JSON.stringify(match.missing));
 });
 
 test('verifySpec: an explicit OFF request is verified against 0, not treated as dont-care', async () => {
-  const r = await verifySpec({ ...AI_BASE, ai: { appFeatures: { formFill: false } } }, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: '1' }));
+  const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: { formFill: false } } }, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: '1' }));
   assert.strictEqual(r.ok, false);
   // An explicit disable is still WRITTEN (disabling is never gated), so the override must hold '0'.
-  const ok = await verifySpec({ ...AI_BASE, ai: { appFeatures: { formFill: false } } }, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: '0' }));
+  const ok = await verifyAi({ ...AI_BASE, ai: { appFeatures: { formFill: false } } }, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: '0' }));
   assert.strictEqual(ok.ok, true, JSON.stringify(ok.missing));
 });
 
@@ -639,7 +642,7 @@ test('verifySpec: an unreadable override row fails CLOSED (cannot prove => not p
   // We could look and looking failed, so we must not claim PASS on the strength of an effective value
   // that may simply be the environment default — even though it matches the request here.
   const read = aiRead({ FormFillBarUXEnabled: '1' }, { FormFillBarUXEnabled: '1' }, { proofThrows: true });
-  const r = await verifySpec({ ...AI_BASE, ai: { appFeatures: { formFill: true } } }, read);
+  const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: { formFill: true } } }, read);
   assert.strictEqual(r.ok, false);
   assert.match(r.missing.find((m) => m.kind === 'ai-feature').detail, /could not prove/);
   assert.match(r.missing.find((m) => m.kind === 'ai-feature').detail, /403 forbidden/);
@@ -647,7 +650,7 @@ test('verifySpec: an unreadable override row fails CLOSED (cannot prove => not p
 
 test('verifySpec: an unresolvable app module fails CLOSED rather than proving against the wrong app', async () => {
   const read = aiRead(ALL_SETTINGS_ON, ALL_SETTINGS_ON, { noApp: true });
-  const r = await verifySpec({ ...AI_BASE, ai: { appFeatures: { formFill: true } } }, read);
+  const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: { formFill: true } } }, read);
   assert.strictEqual(r.ok, false);
   assert.match(r.missing.find((m) => m.kind === 'ai-feature').detail, /no app module with unique name 'co_a'/);
 });
@@ -658,11 +661,11 @@ test('verifySpec: a spec with ai but NO appFeatures still verifies every feature
   // had three features written and ZERO verified, and `--verify` reported a clean PASS for features
   // the platform may never have stored. That is ADO 6603383 surviving in the shipped artifact.
   const spec = { ...AI_BASE, ai: { summaries: { default: 'auto' } } };
-  const none = await verifySpec(spec, aiRead({}));
+  const none = await verifyAi(spec, aiRead({}));
   assert.strictEqual(none.checks.filter((c) => c.kind === 'ai-feature').length, 4, 'all four defaults are reconciled');
   assert.strictEqual(none.ok, false, 'unwritten defaults must fail verify');
   // ...and the same spec passes once the defaults really are in place (m365 defaults OFF).
-  const ok = await verifySpec(spec, aiRead(DEFAULT_SETTINGS));
+  const ok = await verifyAi(spec, aiRead(DEFAULT_SETTINGS));
   assert.strictEqual(ok.ok, true, JSON.stringify(ok.missing));
 });
 
@@ -670,25 +673,44 @@ test('verifySpec: an undeclared feature is still checked when the spec declares 
   // The partial-declaration half of the same hole: `{ appFeatures: { m365: true } }` still causes
   // the build to write formFill/nlSearch/nlChart.
   const spec = { ...AI_BASE, ai: { appFeatures: { m365: true } } };
-  const r = await verifySpec(spec, aiRead({ m365copilotmodelappenabled: '1' }));
+  const r = await verifyAi(spec, aiRead({ m365copilotmodelappenabled: '1' }));
   assert.strictEqual(r.checks.filter((c) => c.kind === 'ai-feature').length, 4);
   assert.ok(aiMissing(r, 'formFill'), 'the undeclared formFill default is reconciled');
   assert.strictEqual(r.ok, false);
 });
 
+test('verifySpec: an override row that appears late is retried, not reported as a false FAIL', async () => {
+  // Observed live: an override row can lag briefly behind the write that created it (the SDK
+  // reported a feature not persisted on first apply and clean on a re-run, with the value correct
+  // all along). Verify gates the build's exit code, so a single read would turn that lag into a
+  // false FAIL. Only the ABSENT case is retried — a read ERROR is a different condition.
+  let attempts = 0;
+  const base = aiRead(DEFAULT_SETTINGS);
+  const read = {
+    ...base,
+    queryRecords: async (set, o) => {
+      if (set === 'appsetting') { attempts += 1; if (attempts < 2) return []; }
+      return base.queryRecords(set, o);
+    },
+  };
+  const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: { formFill: true } } }, read);
+  assert.ok(attempts > 1, 'the absent read must be retried');
+  assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
+});
+
 test('verifySpec: the AI check is reader-gated and absent-spec-safe (existing callers unaffected)', async () => {
   // No ai block at all -> no ai checks.
-  const noAi = await verifySpec(AI_BASE, aiRead(ALL_SETTINGS_ON));
+  const noAi = await verifyAi(AI_BASE, aiRead(ALL_SETTINGS_ON));
   assert.strictEqual(noAi.checks.filter((c) => c.kind === 'ai-feature').length, 0);
   // ai requested but the reader cannot read settings -> skipped, not a false failure.
   const noSupport = { findTable: async () => null, findColumns: async () => [], queryRecords: async () => [], sitemapXml: async () => '' };
-  const r = await verifySpec({ ...AI_BASE, ai: { appFeatures: ALL_ON } }, noSupport);
+  const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: ALL_ON } }, noSupport);
   assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
   assert.strictEqual(r.checks.filter((c) => c.kind === 'ai-feature').length, 0);
   // ...and equally when it can read settings but cannot run the override PROOF: the check needs both
   // capabilities, and degrading to the unsound effective-value compare is exactly the false PASS.
   const noQuery = { findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '', retrieveSetting: async () => ({ value: '1' }) };
-  const r2 = await verifySpec({ ...AI_BASE, ai: { appFeatures: ALL_ON } }, noQuery);
+  const r2 = await verifyAi({ ...AI_BASE, ai: { appFeatures: ALL_ON } }, noQuery);
   assert.strictEqual(r2.checks.filter((c) => c.kind === 'ai-feature').length, 0);
 });
 
@@ -714,7 +736,7 @@ test('verifySpec: AI settings are read at the APP scope the BUILD wrote under, n
     },
     retrieveSetting: async (name, opts) => { seen.push({ name, opts }); return { value: '1' }; },
   };
-  return verifySpec(spec, read).then((r) => {
+  return verifyAi(spec, read).then((r) => {
     assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
     // Every feature the BUILD writes is reconciled, not only the one the spec named — the build
     // seeds defaults for all four, so checking fewer would leave the rest silently unverified.
@@ -736,9 +758,9 @@ test('verifySpec: a Boolean-spelled override value compares as on/off, independe
   // authoritative comparison depend on a second request that can fail independently, so a transport
   // error on that read silently flipped a correctly-applied feature to FAIL.
   const spec = { ...AI_BASE, ai: { appFeatures: { formFill: true } } };
-  return verifySpec(spec, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: 'true' })).then(async (on) => {
+  return verifyAi(spec, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: 'true' })).then(async (on) => {
     assert.strictEqual(on.ok, true, JSON.stringify(on.missing));
-    const off = await verifySpec(spec, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: 'false' }));
+    const off = await verifyAi(spec, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: 'false' }));
     assert.strictEqual(off.ok, false, 'a Boolean-spelled setting reading false must still fail');
   });
 });
@@ -749,7 +771,7 @@ test('verifySpec: a failing context read cannot flip a proven feature to FAIL', 
   // silently decided the comparison).
   const spec = { ...AI_BASE, ai: { appFeatures: { formFill: true } } };
   const read = { ...aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: 'true' }), retrieveSetting: async () => { throw new Error('429 too many requests'); } };
-  return verifySpec(spec, read).then((r) => {
+  return verifyAi(spec, read).then((r) => {
     assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
   });
 });

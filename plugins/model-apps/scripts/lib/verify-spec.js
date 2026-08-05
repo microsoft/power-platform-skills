@@ -14,7 +14,10 @@ const { AI_APP_SETTING, resolveAiFlags, featureWantValue, sameSettingValue, reso
 // flag-resolution and override-proof helpers the BUILD uses — see that module for why one source of
 // truth matters here. Re-exported below so existing importers of this file keep working.
 
-async function verifySpec(spec, read) {
+// `opts.proofAttempts` / `opts.proofDelayMs` tune the app-scope override retry (see the ai-feature
+// block below). They exist so tests can drive the absent path without paying real backoff; the
+// defaults are what the CLIs use.
+async function verifySpec(spec, read, opts = {}) {
   const checks = [];
   const add = (kind, name, present, detail) => checks.push({ kind, name, present: !!present, detail: detail || '' });
 
@@ -295,7 +298,10 @@ async function verifySpec(spec, read) {
       const want = featureWantValue(requested);
 
       // (1) Authoritative: does an app-scope override row exist, holding `want`?
-      const proof = app.error ? { error: app.error } : await proveAppOverride(read, app.appModuleId, setting);
+      //     A small retry on the ABSENT case only: an override row can lag briefly behind the write
+      //     that created it, and a single read turns that lag into a false FAIL on the build's exit
+      //     code (`--verify` gates it). A read ERROR is not retried — see proveAppOverride.
+      const proof = app.error ? { error: app.error } : await proveAppOverride(read, app.appModuleId, setting, { attempts: opts.proofAttempts === undefined ? 3 : opts.proofAttempts, delayMs: opts.proofDelayMs === undefined ? 500 : opts.proofDelayMs });
 
       // (2) Context only: what is currently in force (may be the ENVIRONMENT fallback). This read is
       //     genuinely non-load-bearing — it never participates in the comparison, so a transport

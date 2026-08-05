@@ -118,7 +118,7 @@ async function resolveAppModuleId(read, appUniqueName) {
  * Returns `{ exists, value }`, or `{ error }` when the proof could not be RUN — the caller must
  * distinguish "verifiably absent" from "could not look" and never report the latter as success.
  */
-async function proveAppOverride(read, appModuleId, setting) {
+async function proveAppOverride(read, appModuleId, setting, opts = {}) {
   let defId;
   try {
     const defs = await read.queryRecords('settingdefinition', { select: ['settingdefinitionid'], filter: `uniquename eq '${odataLit(setting)}'`, top: 1 });
@@ -131,15 +131,28 @@ async function proveAppOverride(read, appModuleId, setting) {
   // provisioned, and there is no action a maker could take to satisfy it. Report it as unprovable
   // so the caller can say so precisely instead of alleging a missing override.
   if (!defId) return { error: `no setting definition named '${setting}' exists in this environment`, unsupported: true };
-  try {
-    // `appsetting` rows carry the app and definition as lookups; GUID lookup values are compared
-    // UNQUOTED in an OData $filter (…?$filter=_parentappmoduleid_value eq 0000…-0000), matching
-    // the SDK's own query for the same proof.
-    const rows = await read.queryRecords('appsetting', { select: ['value'], filter: `_parentappmoduleid_value eq ${odataGuid(appModuleId)} and _settingdefinitionid_value eq ${odataGuid(defId)}`, top: 1 });
-    return rows && rows.length ? { exists: true, value: rows[0].value } : { exists: false };
-  } catch (e) {
-    return { error: `the app-scope override row could not be read: ${e && e.message}` };
+  // Retry ONLY the absent case, and only when the caller asks. An override row can lag briefly
+  // behind the write that created it (observed live: the SDK reported a feature not persisted on
+  // first apply and clean on a re-run, with the value correct all along), and a verifier that reads
+  // once turns that lag into a false FAIL on the build's exit code. A read ERROR is not retried —
+  // that is a different condition the caller must surface as "could not look", not "not there yet".
+  const attempts = Math.max(1, Math.min(10, opts.attempts || 1));
+  const delayMs = Math.max(0, Math.min(5000, opts.delayMs === undefined ? 500 : opts.delayMs));
+  let last = { exists: false };
+  for (let i = 0; i < attempts; i += 1) {
+    if (i > 0 && delayMs) await new Promise((r) => setTimeout(r, delayMs));
+    try {
+      // `appsetting` rows carry the app and definition as lookups; GUID lookup values are compared
+      // UNQUOTED in an OData $filter (…?$filter=_parentappmoduleid_value eq 0000…-0000), matching
+      // the SDK's own query for the same proof.
+      const rows = await read.queryRecords('appsetting', { select: ['value'], filter: `_parentappmoduleid_value eq ${odataGuid(appModuleId)} and _settingdefinitionid_value eq ${odataGuid(defId)}`, top: 1 });
+      if (rows && rows.length) return { exists: true, value: rows[0].value };
+      last = { exists: false };
+    } catch (e) {
+      return { error: `the app-scope override row could not be read: ${e && e.message}` };
+    }
   }
+  return last;
 }
 
 /**
