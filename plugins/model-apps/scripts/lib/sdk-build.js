@@ -69,6 +69,7 @@ const { fetchSitemap, fetchAppsForPages } = require('./sitemap-pages.js');
 // classifies every generative navigateTo pageId at a REAL call site (never a decoy string / comment GUID).
 const { extractNavTargets, navReferencedKeys, navMalformedRefs, resolvePageRefs, navTargetParity } = require('./pageref-resolver.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
+const { AI_APP_SETTING, resolveAiFlags, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
 const { buildPromptSpec } = require('./ai-prompt.js');
 const { odataLit } = require('./odata.js');
 
@@ -1728,12 +1729,29 @@ async function runSdkBuild(spec, opts = {}) {
   // 7c. AI features (opt-in via spec.ai). Enable app-level agents (gated on admin settings) +
   //     configure per-table row summaries. All AI writes are best-effort-gated: setAppAiFeatures
   //     skips features whose admin gate is off; it never throws.
+  // Features the SDK did not put in `applied`, deferred for a post-publish re-proof (see inside the
+  // ai-features phase for why the verdict cannot honestly be decided at write time).
+  const pendingAiReconfirm = [];
   if (has('ai-features') && spec.ai !== undefined && spec.ai !== null) {
     const solutionUniqueName = spec.solution && spec.solution.uniqueName;
     const appUnique = appUniqueName(spec);
-    const flags = Object.assign({ formFill: true, nlSearch: true, nlChart: true, m365: false }, (spec.ai.appFeatures || {}));
+    const flags = resolveAiFlags(spec);
     await runner.run('ai-features', 'enable app AI features', async () => {
-      const r = await provision.setAppAiFeatures(appUnique, flags, { solutionUniqueName });
+      // The SDK confirms each app-scope write by polling for its `appsettings` override row, and its
+      // DEFAULT budget (4 attempts, 500ms linear backoff ~= 3s) is too short for THIS phase. Measured
+      // live against a real org: on an ESTABLISHED app the override row is queryable ~580ms after the
+      // write, but this phase runs moments after `app-shell` CREATED the app module, and a build of a
+      // brand-new app reported `notPersisted` for all four features while a query seconds later proved
+      // every row present holding exactly the requested value. A freshly created app module is simply
+      // not immediately consistent for the appsettings lookup, so the default budget reports a write
+      // that DID land as a failure.
+      //
+      // Raising the budget is the SDK's own documented remedy for a slow environment
+      // (`SetAppAiFeaturesOptions`). 8 attempts with 1s linear backoff gives ~28s of headroom for the
+      // FIRST feature; the budget is only ever spent when the row is absent, and the app module has
+      // settled by the time the remaining features are written, so the realistic cost is bounded by
+      // the one-time settle time rather than 4x it.
+      const r = await provision.setAppAiFeatures(appUnique, flags, { solutionUniqueName, verifyAttempts: 8, verifyDelayMs: 1000 });
       result.created.ai.appFeatures = r;
       // `applied` is the SDK's ONLY success bucket: a feature reaches it only when the APP-SCOPE
       // override row is proven present holding the requested value. Every other bucket is a
@@ -1745,33 +1763,36 @@ async function runSdkBuild(spec, opts = {}) {
       //                  appsettings/settingdefinitions/appmodules, or a transport error).
       //   failed       — the write (or its org-gate read) threw. The SDK keeps going so the rest
       //                  of the batch still reports, so this arrives as data, never as an exception.
-      // Enumerating the buckets from a table (rather than naming only `notPersisted`) means a bucket
-      // added by a future SDK version is at worst unlabeled, never silently dropped.
-      const PROBLEM_BUCKETS = [
-        ['notPersisted', 'NOT PERSISTED', 'Dataverse accepted the write but no app-scope override holding the requested value was observed'],
-        ['unverified', 'UNVERIFIED', 'the write was issued but could not be confirmed — verify manually before relying on it'],
-        ['failed', 'FAILED', 'the write or its org-gate read threw'],
-      ];
-      const problems = PROBLEM_BUCKETS
-        .map(([key, label, why]) => ({ key, label, why, names: (r && r[key]) || [] }))
-        .filter((p) => p.names.length);
-      // Each problem needs its OWN emit: makeRunner's success path emits `{status:'ok'}` with no
-      // `detail`, and the CLI narrator only prints `detail` for `status:'error'` — so a message
-      // returned from this callback would be silently dropped. A `skip` event renders as
-      // `⊘ <label>`, which is the closest thing the narrator has to a warning.
-      for (const p of problems) {
-        runner.emit({
-          phase: 'ai-features',
-          status: 'skip',
-          label: `${p.label}: ${p.names.join(', ')} \u2014 ${p.why}`,
-          n: runner.total,
-          total: runner.total,
-        });
+      //
+      // RE-CONFIRMATION (live-driven): the SDK's build-time proof produces FALSE `notPersisted`
+      // reports here. Measured against a real org — a fresh build reported `notPersisted` for all
+      // four features with `appOverrideExists:false`, yet `--verify` moments later PROVED every
+      // override row present holding exactly the requested value, and re-running `setAppAiFeatures`
+      // out-of-band on an already-published app reported all four `applied`. Raising the SDK's retry
+      // budget to 8 attempts / ~28s did not change it, so it is not simple read lag: the
+      // `appsettings` override rows only become queryable once the app has been PUBLISHED, which
+      // happens in a later phase.
+      //
+      // So the verdict is DEFERRED rather than decided here: the buckets are recorded and re-proved
+      // after publish (see `reconfirmAiFeatures` below) against the identical override-row oracle the
+      // verifier uses. Warning now would print a scary and WRONG "NOT PERSISTED" and contradict
+      // `--verify`, which passes in the same run.
+      // Tracking: raise with the cds-maker-sdk owners; remove this pass once its proof is reliable.
+      //
+      // Derive the non-success buckets from the RESULT, not a fixed list: a bucket added by a future
+      // SDK revision is then reported verbatim rather than silently dropped (which is the very bug
+      // class this phase exists to remove). `outcomes` is per-feature detail, not a bucket.
+      const problemKeys = Object.keys(r || {}).filter((k) => k !== 'applied' && k !== 'skipped' && k !== 'outcomes' && Array.isArray(r[k]) && r[k].length);
+      for (const key of problemKeys) {
+        for (const feature of r[key]) {
+          const outcome = (r.outcomes || []).find((o) => o && o.feature === feature);
+          pendingAiReconfirm.push({ feature, bucket: key, reason: outcome && outcome.reason });
+        }
       }
       const parts = [];
       if (r.applied && r.applied.length) parts.push(`applied: ${r.applied.join(', ')}`);
       if (r.skipped && r.skipped.length) parts.push(`skipped (admin gate off): ${r.skipped.join(', ')}`);
-      for (const p of problems) parts.push(`${p.label}: ${p.names.join(', ')}`);
+      if (pendingAiReconfirm.length) parts.push(`pending re-check after publish: ${pendingAiReconfirm.map((p) => p.feature).join(', ')}`);
       return parts.length ? parts.join('; ') : '(none \u2014 admin gate off)';
     });
     const tables = (spec.ai.summaries && spec.ai.summaries.default === 'off') ? [] : selectSummaryTables(spec);
@@ -1848,6 +1869,52 @@ async function runSdkBuild(spec, opts = {}) {
       await runner.mapLimit(perEntity, concurrency, ([type, id]) => provision.publishArtifact(type, id));
       if (result.created.app) await provision.publishArtifact('app', result.created.app);
     });
+  }
+
+  // 8b. AI feature re-confirmation — runs LAST, after publish, because the `appsettings` override
+  //     rows a write creates only become queryable once the app has been published (measured live:
+  //     the SDK reported `notPersisted` for every feature at write time and after a 28s retry budget,
+  //     while `--verify` proved every row present later in the same run). Re-proving here against the
+  //     same override-row oracle the verifier uses means the build agrees with `--verify` instead of
+  //     contradicting it, and only a feature that is GENUINELY unproven produces a warning — the
+  //     re-proof can only ever UPGRADE a feature, never hide a real failure.
+  if (pendingAiReconfirm.length) {
+    const flags = resolveAiFlags(spec);
+    const appUnique = appUniqueName(spec);
+    const BUCKET_LABELS = {
+      notPersisted: ['NOT PERSISTED', 'Dataverse accepted the write but no app-scope override holding the requested value was observed'],
+      unverified: ['UNVERIFIED', 'the write was issued but could not be confirmed \u2014 verify manually before relying on it'],
+      failed: ['FAILED', 'the write or its org-gate read threw'],
+    };
+    const app = await resolveAppModuleId(provision, appUnique);
+    const stillBad = [];
+    const reproven = [];
+    for (const p of pendingAiReconfirm) {
+      const setting = AI_APP_SETTING[p.feature];
+      let proof = { error: app.error };
+      if (!app.error && setting) proof = await proveAppOverride(provision, app.appModuleId, setting);
+      if (!proof.error && proof.exists && sameSettingValue(proof.value, featureWantValue(flags && flags[p.feature]))) { reproven.push(p.feature); continue; }
+      const [label, why] = BUCKET_LABELS[p.bucket] || [String(p.bucket).toUpperCase(), 'reported by the SDK as a non-success outcome'];
+      // Prefer the SDK's OWN per-feature reason: it carries the real error text for `failed`, which
+      // a canned bucket description throws away.
+      stillBad.push({ feature: p.feature, label, why: p.reason || proof.error || why });
+    }
+    // Reflect the corrected verdict in the machine-readable result too, so a caller reading
+    // `created.ai.appFeatures` is not told a feature failed when it demonstrably did not.
+    const af = result.created.ai && result.created.ai.appFeatures;
+    if (af && reproven.length) {
+      af.applied = [...(af.applied || []), ...reproven];
+      for (const key of Object.keys(af)) if (Array.isArray(af[key]) && key !== 'applied' && key !== 'skipped') af[key] = af[key].filter((f) => !reproven.includes(f));
+      for (const o of af.outcomes || []) if (reproven.includes(o.feature)) { o.status = 'applied'; o.appOverrideExists = true; o.reason = 'confirmed present after publish by the build\u2019s own override-row proof'; }
+    }
+    // `runner.skip` renders as `⊘ <label>` — the closest thing the narrator has to a warning — and
+    // advances the step counter correctly, which a hand-built `runner.emit` did not.
+    const byLabel = new Map();
+    for (const b of stillBad) {
+      if (!byLabel.has(b.label)) byLabel.set(b.label, { names: [], why: b.why });
+      byLabel.get(b.label).names.push(b.feature);
+    }
+    for (const [label, info] of byLabel) runner.skip('ai-features', `${label}: ${info.names.join(', ')} \u2014 ${info.why}`);
   }
 
   return result;

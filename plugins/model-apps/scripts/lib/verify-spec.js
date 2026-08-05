@@ -8,21 +8,11 @@ const { odataLit } = require('./odata.js');
 const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName } = require('./app-spec.js');
 const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName } = require('./sdk-build.js');
 const { extractNavTargets } = require('./pageref-resolver.js');
+const { AI_APP_SETTING, resolveAiFlags, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
 
-// The PER-APP setting each AI feature writes — mirrors the SDK's `APP_SETTING` map (api/AiApi.ts).
-// These are deliberately DISTINCT from the org readiness gates in the SDK's `AI_GATE`: e.g. the
-// `nlSearch` org gate is the boolean `EnableNLGridSearch`, but the per-app setting is the numeric
-// `NLGridSearchSetting`. Verify must read the PER-APP setting, because that is what the build wrote
-// and what is in force for this app. Conflating the two is exactly the bug that made NL grid search
-// report "applied" while writing nothing (ADO 6560699 / 6603383).
-// Keep in sync with the vendored SDK; `sdk-surface-contract.test.js` guards the method surface and
-// `verify-spec.test.js` pins these names.
-const AI_APP_SETTING = {
-  formFill: 'FormFillBarUXEnabled',
-  nlSearch: 'NLGridSearchSetting',
-  nlChart: 'NLChartDataVisualizationSetting',
-  m365: 'm365copilotmodelappenabled',
-};
+// The PER-APP setting each AI feature writes now lives in ./ai-app-settings.js, together with the
+// flag-resolution and override-proof helpers the BUILD uses — see that module for why one source of
+// truth matters here. Re-exported below so existing importers of this file keep working.
 
 async function verifySpec(spec, read) {
   const checks = [];
@@ -273,9 +263,14 @@ async function verifySpec(spec, read) {
   // matching effective read does NOT prove the build's app-scope write landed: if the environment
   // already holds the requested value, a write the platform silently ignored reads back as a match
   // and verify reports PASS for a feature that was never applied to this app. That is precisely the
-  // false-PASS in ADO 6603383, so this check proves the override in `appsettings` instead — the same
-  // authoritative signal the SDK's own `setAppAiFeatures` uses to decide its `applied` bucket. Using
-  // a weaker oracle here would let verify contradict the build's own honest `notPersisted`/`skipped`.
+  // false-PASS in ADO 6603383, so this proves the override in `appsettings` instead — the same
+  // authoritative signal the SDK's own `setAppAiFeatures` uses to decide its `applied` bucket.
+  //
+  // CRITICAL: the set checked here is `resolveAiFlags(spec)`, the EXACT set the build writes — not
+  // `spec.ai.appFeatures`. The build seeds a default for every feature whenever `spec.ai` exists, so
+  // reconciling only what a spec DECLARED left a spec with `ai.summaries` and no `ai.appFeatures`
+  // with three features written and ZERO verified: a clean PASS for features the platform may never
+  // have stored. One resolver, both callers.
   //
   // A feature the org gate SKIPPED therefore fails here, which is intended: the spec asked for it and
   // it is not configured on the app. The effective value is still read, but only as context in the
@@ -284,7 +279,7 @@ async function verifySpec(spec, read) {
   // Reader-gated like the other content checks: this needs BOTH `retrieveSetting` (context) and
   // `queryRecords` (the proof), so an existence-only reader skips it entirely rather than falling
   // back to the unsound effective-value compare. The shipped CLI reader has both.
-  const requestedFeatures = (spec.ai && spec.ai.appFeatures) || null;
+  const requestedFeatures = resolveAiFlags(spec);
   if (requestedFeatures && typeof read.retrieveSetting === 'function' && typeof read.queryRecords === 'function') {
     // MUST be the same identity the build wrote under — `appUniqueName(spec)`, which falls back to
     // `<publisherPrefix>_<app.name>` for an authored spec that carries no explicit `app.uniqueName`
@@ -292,70 +287,35 @@ async function verifySpec(spec, read) {
     // `spec.app.uniqueName` directly yields undefined there, and the SDK omits the `AppUniqueName` path
     // segment when it is absent — which silently reads the ENVIRONMENT-scoped value instead of the app's.
     const appUnique = appUniqueName(spec);
-    // Resolved ONCE for the whole loop, and deliberately not cached beyond this call: an app can be
-    // deleted and re-imported under the same unique name with a NEW id, and a stale id would prove
-    // the override against the wrong app.
-    let appModuleId;
-    let proofBlocked;
-    try {
-      const rows = await read.queryRecords('appmodule', { select: ['appmoduleid'], filter: `uniquename eq '${odataLit(appUnique)}'`, top: 1 });
-      appModuleId = rows && rows[0] && rows[0].appmoduleid;
-      if (!appModuleId) proofBlocked = `no app module with unique name '${appUnique}' was found`;
-    } catch (e) {
-      proofBlocked = `the app module could not be read: ${e && e.message}`;
-    }
+    // Resolved ONCE for the whole loop (see ai-app-settings.js for why it is never cached longer).
+    const app = await resolveAppModuleId(read, appUnique);
     for (const [feature, requested] of Object.entries(requestedFeatures)) {
       const setting = AI_APP_SETTING[feature];
       if (!setting) continue; // unknown key — validation already reports it
-      const want = typeof requested === 'boolean' ? (requested ? '1' : '0') : String(requested).trim();
+      const want = featureWantValue(requested);
 
       // (1) Authoritative: does an app-scope override row exist, holding `want`?
-      let overrideExists;
-      let overrideValue;
-      let proofError = proofBlocked;
-      if (!proofError) {
-        try {
-          const defs = await read.queryRecords('settingdefinition', { select: ['settingdefinitionid'], filter: `uniquename eq '${odataLit(setting)}'`, top: 1 });
-          const defId = defs && defs[0] && defs[0].settingdefinitionid;
-          if (!defId) {
-            proofError = `no setting definition named '${setting}' exists in this environment`;
-          } else {
-            // `appsetting` rows carry the app and definition as lookups; GUID lookup values are
-            // compared UNQUOTED in OData ($filter _parentappmoduleid_value eq 0000...-0000).
-            const rows = await read.queryRecords('appsetting', { select: ['value'], filter: `_parentappmoduleid_value eq ${appModuleId} and _settingdefinitionid_value eq ${defId}`, top: 1 });
-            overrideExists = !!(rows && rows.length);
-            overrideValue = overrideExists ? rows[0].value : undefined;
-          }
-        } catch (e) {
-          proofError = `the app-scope override row could not be read: ${e && e.message}`;
-        }
-      }
+      const proof = app.error ? { error: app.error } : await proveAppOverride(read, app.appModuleId, setting);
 
-      // (2) Context only: what is currently in force (may be the ENVIRONMENT fallback).
+      // (2) Context only: what is currently in force (may be the ENVIRONMENT fallback). This read is
+      //     genuinely non-load-bearing — it never participates in the comparison, so a transport
+      //     failure here can only cost detail in a message, never flip the verdict.
       let effective;
-      let dataType;
       try {
         const res = await read.retrieveSetting(setting, { appUniqueName: appUnique });
         effective = res && res.value !== undefined && res.value !== null ? String(res.value).trim() : '';
-        dataType = res && res.dataType;
-      } catch { /* informational only — the override row decides the outcome */ }
+      } catch { /* informational only */ }
 
-      // Dataverse setting dataType 2 == Boolean, whose value is the STRING 'true'/'false' rather than
-      // '1'/'0' (the SDK's own readiness helper special-cases it the same way). Two of these settings
-      // appear in both the org-gate and app-setting maps, so a Boolean-typed one would fail an exact
-      // '1' compare while being genuinely on. Normalize both sides to on/off for that case.
-      const onOff = (v) => (String(v).toLowerCase() === 'true' ? '1' : String(v).toLowerCase() === 'false' ? '0' : String(v));
-      const norm = (v) => (dataType === 2 ? onOff(v) : String(v));
       // Fail-closed: when the proof could not be run we could LOOK and looking failed, so we must not
       // claim PASS on the strength of a value that may simply be the environment default.
-      const present = !proofError && overrideExists && norm(overrideValue === undefined || overrideValue === null ? '' : String(overrideValue).trim()) === norm(want);
+      const present = !proof.error && proof.exists && sameSettingValue(proof.value, want);
       const inForce = effective === undefined ? '(unreadable)' : effective === '' ? '(unset)' : effective;
       add('ai-feature', feature, present, present ? '' :
-        proofError
-          ? `could not prove the app-scope setting '${setting}' was applied: ${proofError}`
-          : !overrideExists
+        proof.error
+          ? `could not prove the app-scope setting '${setting}' was applied: ${proof.error}`
+          : !proof.exists
             ? `requested '${want}' but this app has NO app-scope override for '${setting}' (it is in effect as '${inForce}' only by environment fallback, so the app was never configured)`
-            : `requested '${want}' but the app-scope override for '${setting}' holds '${overrideValue === '' || overrideValue === undefined ? '(empty)' : overrideValue}'`);
+            : `requested '${want}' but the app-scope override for '${setting}' holds '${proof.value === '' || proof.value === undefined ? '(empty)' : proof.value}'`);
     }
   }
 

@@ -545,6 +545,59 @@ test('appComponentEntities is best-effort — every failure path yields [] so do
   assert.deepStrictEqual(await appComponentEntities({ queryRecords: async () => [{}] }, 'app-1'), []);
 });
 
+test('runDownload: a sitemap table with no primary name HARD-FAILS naming it; a component-only one is dropped', async () => {
+  // The riskiest new behaviour (hard-failing a previously-working download) had no executable
+  // coverage — the old test only called entityFromMetadata directly, so the branch it named
+  // (`sitemapSet.has(logical) ? noPrimaryName : droppedComponents`) would have passed inverted.
+  const APP_ID = '5111e0f2-0000-4000-8000-00000000000a';
+  const APP_UNIQ_VALUE = '5111e0f2-0000-4000-8000-00000000000b';
+  const APP_UNIQUE = 'test_roundtrip';
+  const VIEW_ID = '5111e0f2-0000-4000-8000-00000000000c';
+  const SM_ID = '5111e0f2-0000-4000-8000-00000000000d';
+  const SM_XML = '<SiteMap><Area><Group><SubArea Entity="account" Title="Accounts"/></Group></Area></SiteMap>';
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-pn-'));
+  // `account` is in the sitemap; `annotation` is reachable ONLY as a view component. Neither has a
+  // primary name, so they must take different branches.
+  const mkSdk = () => ({
+    fetchArtifact: async () => ({
+      name: 'PN App', description: '',
+      siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ type: 'Entity', entity: 'account' }] }] }] },
+    }),
+    queryRecords: async (logical, opts) => {
+      const filter = (opts && opts.filter) || '';
+      if (logical === 'appmodule') {
+        const m = filter.match(/uniquename eq '([^']+)'/);
+        if (m) return m[1] === APP_UNIQUE ? [{ appmoduleid: APP_ID, appmoduleidunique: APP_UNIQ_VALUE }] : [];
+        return [{ appmoduleid: APP_ID, appmoduleidunique: APP_UNIQ_VALUE, uniquename: APP_UNIQUE }];
+      }
+      if (logical === 'appmodulecomponent') {
+        if (/componenttype eq 26/.test(filter)) return [{ objectid: VIEW_ID, componenttype: 26 }];
+        if (/componenttype eq 62/.test(filter)) return [{ objectid: SM_ID, componenttype: 62 }];
+        return [{ objectid: SM_ID, componenttype: 62 }];
+      }
+      if (logical === 'sitemap') return [{ sitemapxml: SM_XML }];
+      if (logical === 'savedquery') return [{ savedqueryid: VIEW_ID, returnedtypecode: 'annotation' }];
+      if (logical === 'webresource') return [];
+      return [];
+    },
+    // Both report an EMPTY PrimaryNameAttribute (the shape the SDK really returns).
+    fetchEntityMetadata: async (logical) => ({ logicalName: logical, schemaName: logical, displayName: logical, primaryNameAttribute: '' }),
+  });
+  const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), download: async () => true };
+  try {
+    const failed = await runDownload({ sdk: mkSdk(), genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
+    assert.strictEqual(failed.ok, false, 'a sitemap table with no primary name must abort the download');
+    assert.match(failed.error, /account/, 'the failure names the offending sitemap table');
+    assert.ok(!/annotation/.test(failed.error), 'a component-only table must NOT be named as a hard failure');
+    assert.match(failed.error, /--allow-lossy-download/, 'the hard failure advertises its override');
+    // ...and with the override it degrades to a warning instead of producing nothing at all.
+    const lossy = await runDownload({ sdk: mkSdk(), genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE, allowLossy: true });
+    assert.strictEqual(lossy.ok, true, `--allow-lossy-download must let the download complete: ${JSON.stringify(lossy)}`);
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
 test('a COMPONENT-only table with no primary name is dropped with a warning, not a hard download failure', async () => {
   // appComponentEntities is best-effort by contract, so its output must not be able to abort the whole
   // download. A hidden component table (never in the sitemap, so it did not appear in the spec at all

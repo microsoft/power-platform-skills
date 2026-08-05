@@ -1877,6 +1877,81 @@ test('ai-features phase: a result missing the newer buckets does not throw (olde
   assert.strictEqual(events.filter((e) => e.phase === 'ai-features' && e.status === 'error').length, 0, 'no error events');
 });
 
+test('ai-features phase: passes a raised verify budget so a fresh app module is not falsely reported', async () => {
+  // Regression guard for a live false `notPersisted`: this phase runs moments after app-shell CREATED
+  // the app module, and the SDK's default budget (4 attempts / 500ms linear ~= 3s) expired before the
+  // appsettings override row became queryable -- a build of a brand-new app reported notPersisted for
+  // every feature while the rows demonstrably existed seconds later.
+  const spec = makeSpec({ ai: { appFeatures: { formFill: true }, summaries: { default: 'off' } } });
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'] });
+  const opts = find(calls, 'setAppAiFeatures')[0].args[2];
+  assert.ok(opts.verifyAttempts > 4, `expected a raised attempt budget, got ${opts.verifyAttempts}`);
+  assert.ok(opts.verifyDelayMs >= 1000, `expected a raised backoff, got ${opts.verifyDelayMs}`);
+  // The solution scope must survive alongside the new knobs.
+  assert.ok(opts.solutionUniqueName, 'solutionUniqueName still passed');
+});
+
+test('ai-features phase: a bucket the plugin does not know about is still reported, not dropped', async () => {
+  // The buckets are derived from the RESULT, not a fixed list: a non-success bucket added by a
+  // future SDK revision must surface verbatim rather than vanish, which is the very bug class this
+  // phase exists to remove. (A fixed three-key table silently dropped anything new.)
+  const { sdk } = withAiResult({ applied: [], skipped: [], notPersisted: [], unverified: [], failed: [], rejected: ['formFill'], outcomes: [] });
+  const events = [];
+  await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['ai-features'], emit: (e) => events.push(e) });
+  const warnings = events.filter((e) => e.phase === 'ai-features' && e.status === 'skip');
+  assert.ok(warnings.some((e) => /REJECTED: formFill/.test(e.label)), `unknown bucket not surfaced: ${JSON.stringify(warnings.map((w) => w.label))}`);
+});
+
+test('ai-features phase: a feature the SDK mis-reports is RE-PROVEN against the override row', async () => {
+  // Live-driven: the SDK's build-time proof returns `notPersisted` with appOverrideExists:false for
+  // a fresh build while `appsettings` demonstrably holds every requested value (re-running it
+  // out-of-band reports all four applied). Printing that as NOT PERSISTED is a false alarm that
+  // also contradicts --verify, which proves the same rows and passes. So anything not in `applied`
+  // is re-proved here against the identical oracle the verifier uses.
+  const { sdk } = withAiResult({ applied: [], skipped: [], notPersisted: ['formFill'], unverified: [], failed: [], outcomes: [{ feature: 'formFill', status: 'notPersisted', reason: 'no override observed' }] });
+  sdk.queryRecords = async (set) => {
+    if (set === 'appmodule') return [{ appmoduleid: 'APPID' }];
+    if (set === 'settingdefinition') return [{ settingdefinitionid: 'DEFID' }];
+    if (set === 'appsetting') return [{ value: '1' }]; // the row IS there
+    return [];
+  };
+  const events = [];
+  const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['ai-features'], emit: (e) => events.push(e) });
+  assert.strictEqual(events.filter((e) => e.phase === 'ai-features' && e.status === 'skip').length, 0, 'no false NOT PERSISTED warning');
+  assert.ok(r.ok, 'build still succeeds');
+});
+
+test('ai-features phase: re-proving does NOT mask a feature that genuinely did not persist', async () => {
+  // The re-confirmation must only ever UPGRADE a proven feature. When the override row really is
+  // absent the warning has to survive, or the fix would reinstate the false PASS.
+  const { sdk } = withAiResult({ applied: [], skipped: [], notPersisted: ['formFill'], unverified: [], failed: [], outcomes: [{ feature: 'formFill', status: 'notPersisted', reason: 'no override observed for FormFillBarUXEnabled' }] });
+  sdk.queryRecords = async (set) => {
+    if (set === 'appmodule') return [{ appmoduleid: 'APPID' }];
+    if (set === 'settingdefinition') return [{ settingdefinitionid: 'DEFID' }];
+    return []; // no override row
+  };
+  const events = [];
+  await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['ai-features'], emit: (e) => events.push(e) });
+  const warn = events.find((e) => e.phase === 'ai-features' && e.status === 'skip');
+  assert.ok(warn, 'a genuinely unpersisted feature must still warn');
+  // ...and it must carry the SDK's OWN reason, not a canned bucket description.
+  assert.match(warn.label, /no override observed for FormFillBarUXEnabled/);
+});
+
+test('ai-features phase: an override holding the WRONG value is not treated as proven', async () => {
+  const { sdk } = withAiResult({ applied: [], skipped: [], notPersisted: ['formFill'], unverified: [], failed: [], outcomes: [] });
+  sdk.queryRecords = async (set) => {
+    if (set === 'appmodule') return [{ appmoduleid: 'APPID' }];
+    if (set === 'settingdefinition') return [{ settingdefinitionid: 'DEFID' }];
+    if (set === 'appsetting') return [{ value: '0' }]; // requested true -> '1'
+    return [];
+  };
+  const events = [];
+  await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['ai-features'], emit: (e) => events.push(e) });
+  assert.ok(events.some((e) => e.phase === 'ai-features' && e.status === 'skip'), 'a wrong-valued override must still warn');
+});
+
 test('ai-features planFor: spec.ai adds enable + per-table summary plan entries', () => {
   const spec = makeSpec({ ai: { appFeatures: { formFill: true }, summaries: { default: 'auto' } } });
   const items = planFor(spec, { phases: ['ai-features'] });

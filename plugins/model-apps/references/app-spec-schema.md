@@ -548,7 +548,8 @@ auto-selects tables that are good row-summary candidates and skips those that ar
 - State an **explicit output shape**: a short paragraph is the recommended default.
 
 **Validation rules** (`validateAppSpec` / `lintAppSpec`):
-- `ai.appFeatures` keys must be one of `formFill · nlSearch · nlChart · m365`; values must be a boolean or a non-negative integer (hard error). `true`/`false` mean the underlying numeric setting's `1`/`0`; use an explicit integer (e.g. `2`) for a platform value like "on for everyone".
+- `ai.appFeatures` keys must be one of `formFill · nlSearch · nlChart · m365`; values must be a boolean or an integer between `0` and `1000000` (hard error) — the same range the SDK enforces, so an out-of-range value is rejected here rather than aborting the build half-applied. `true`/`false` mean the underlying numeric setting's `1`/`0`; use an explicit integer (e.g. `2`) for a platform value like "on for everyone".
+- Omitting `ai.appFeatures` does **not** mean "no AI features": a spec carrying any `ai` block gets the defaults `formFill · nlSearch · nlChart` on and `m365` off, and `--verify` reconciles that whole resolved set.
 - `ai.summaries.default` must be `"auto"` or `"off"` (hard error).
 - `ai.summaries.tables` keys must match a declared entity `schemaName` (case-insensitive, hard error).
 - `columns[]` entries must be declared column `schemaName` values on that entity (hard error in both validate and lint).

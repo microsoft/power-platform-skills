@@ -133,6 +133,10 @@ const APP_COMPONENT_ENTITY_SOURCES = [
   { componentType: 59, set: 'savedqueryvisualization', idField: 'savedqueryvisualizationid', entityField: 'primaryentitytypecode' },
   { componentType: 60, set: 'systemform', idField: 'formid', entityField: 'objecttypecode' },
 ];
+// Dataverse honors `$top` as a HARD cap and omits `@odata.nextLink`, so this is the point past which
+// components of one type stop being inspected. Generous for a real app (a 70-table app has ~1000
+// views), and exceeded only with a warning.
+const COMPONENT_PAGE_CAP = 1000;
 
 async function appComponentEntities(sdk, appId) {
   if (!appId) return [];
@@ -146,14 +150,28 @@ async function appComponentEntities(sdk, appId) {
       const rows = await sdk.queryRecords('appmodulecomponent', {
         select: ['objectid', 'componenttype'],
         filter: `_appmoduleidunique_value eq ${parent} and componenttype eq ${src.componentType}`,
-        top: 1000,
+        top: COMPONENT_PAGE_CAP,
       });
+      // `$top` is a HARD cap in Dataverse (the SDK refuses to combine `top` with `paginate` for
+      // exactly this reason: `@odata.nextLink` is omitted, so the tail is lost with no signal). An
+      // app with more than this many components of one type would silently lose the remainder —
+      // the same silent-drop class as ADO 6603388, just at a higher threshold — so say so rather
+      // than quietly returning a partial set.
+      if ((rows || []).length >= COMPONENT_PAGE_CAP) {
+        process.stderr.write(`WARNING: this app has at least ${COMPONENT_PAGE_CAP} ${src.set} components; only the first ${COMPONENT_PAGE_CAP} were inspected, so a table referenced only beyond that point may be missing from the spec.\n`);
+      }
       const ids = [...new Set((rows || []).map((r) => r && r.objectid).filter(Boolean).map((id) => String(id).replace(/[{}]/g, '')))];
       // Chunk the OR-batched id lookups so a many-component app cannot build an over-long URL.
       for (let i = 0; i < ids.length; i += 20) {
         const filter = ids.slice(i, i + 20).map((id) => `${src.idField} eq ${id}`).join(' or ');
         const recs = await sdk.queryRecords(src.set, { select: [src.idField, src.entityField], filter, top: 1000 });
-        for (const r of recs || []) if (r && r[src.entityField]) found.add(String(r[src.entityField]).toLowerCase());
+        // A dashboard is a `systemform` row too, and its `objecttypecode` is NOT an entity logical
+        // name ('none' / ''). Filtering it here keeps a bogus name out of the metadata fetch loop
+        // instead of relying on that fetch 404-ing into a bare catch.
+        for (const r of recs || []) {
+          const logical = r && r[src.entityField] ? String(r[src.entityField]).toLowerCase() : '';
+          if (logical && logical !== 'none') found.add(logical);
+        }
       }
     }
     return [...found];
@@ -440,7 +458,7 @@ async function recoverAppSolution(sdk, appId) {
 // dashboardReconstructionError } or { ok:false, error }.
 // Logical failures (no sitemap, enumeration down, missing download) return { ok:false } without
 // throwing. Unexpected I/O errors propagate as thrown exceptions (caught by main().catch).
-async function runDownload({ sdk, genpageCli, outDir, appId, appUnique }) {
+async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLossy = false }) {
   const app = await sdk.fetchArtifact('app', appId);
   const { entities: entityLogicals, icons, customRefs } = collectSitemap(app);
 
@@ -561,9 +579,21 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique }) {
   const entities = [];
   const noPrimaryName = [];   // sitemap tables — a hard failure (the user asked for these)
   const droppedComponents = []; // component-only tables — dropped with a warning (best-effort input)
+  const metadataErrors = new Map(); // logical -> error message (the read itself failed)
   for (const logical of allLogicals) {
     let e;
-    try { e = entityFromMetadata(await sdk.fetchEntityMetadata(logical), logical); } catch { continue; }
+    // A metadata READ failure is not the same as metadata that reports no primary name, and it must
+    // not be swallowed: a 429/503 on a sitemap table used to drop it silently, leaving its subarea
+    // behind so validation later complained about a "sitemap subArea references unknown entity" —
+    // the confusing downstream error the explicit branch below exists to avoid. Bucket it by origin
+    // exactly like the no-primary-name case, so the user is told the table AND the reason.
+    try {
+      e = entityFromMetadata(await sdk.fetchEntityMetadata(logical), logical);
+    } catch (err) {
+      metadataErrors.set(logical, (err && err.message) || String(err));
+      (sitemapSet.has(logical) ? noPrimaryName : droppedComponents).push(logical);
+      continue;
+    }
     // `primaryAttribute` is REQUIRED by App Spec validation, so an entity without one cannot be
     // emitted — the spec would fail to validate and the user could not rebuild at all. Guessing the
     // name is what caused ADO 6603392, so the only honest options are fail or drop.
@@ -580,11 +610,18 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique }) {
     }
     entities.push(e);
   }
+  const withReason = (list) => list.map((l) => (metadataErrors.has(l) ? `${l} (metadata read failed: ${metadataErrors.get(l)})` : l)).join(', ');
   if (noPrimaryName.length) {
-    return { ok: false, error: `could not read the primary-name column for table(s): ${noPrimaryName.join(', ')} — refusing to write a spec with a guessed or missing primary attribute` };
+    // Overridable, like the dropped-subarea path: without an escape hatch a download that used to
+    // succeed produces nothing at all, which is an availability regression on a READ-ONLY command.
+    if (!allowLossy) {
+      return { ok: false, error: `could not read the primary-name column for table(s): ${withReason(noPrimaryName)} — refusing to write a spec with a guessed or missing primary attribute (re-run with --allow-lossy-download to drop them instead)` };
+    }
+    process.stderr.write(`WARNING: ${noPrimaryName.length} sitemap table(s) were DROPPED because their primary-name column could not be read (${withReason(noPrimaryName)}) — --allow-lossy-download was set. Their navigation entries are dropped too; the spec will not rebuild them.\n`);
+    for (const l of noPrimaryName) sitemapSet.delete(l);
   }
   if (droppedComponents.length) {
-    process.stderr.write(`WARNING: ${droppedComponents.length} app component table(s) were omitted from the spec because Dataverse reported no primary-name column (${droppedComponents.join(', ')}) — they are NOT in the app's navigation, and the deployed app still references them; declare them by hand if a rebuild needs them.\n`);
+    process.stderr.write(`WARNING: ${droppedComponents.length} app component table(s) were omitted from the spec because Dataverse reported no primary-name column (${withReason(droppedComponents)}) — they are NOT in the app's navigation, and the deployed app still references them; declare them by hand if a rebuild needs them.\n`);
   }
 
   // App identity comes from the app's REAL, immutable uniquename (`appUnique`, captured from Dataverse as
@@ -685,7 +722,7 @@ async function main() {
   const appUnique = appRows && appRows[0] && appRows[0].uniquename;
   const genpageCli = makeGenpageCli(env);
 
-  const result = await runDownload({ sdk, genpageCli, outDir, appId, appUnique });
+  const result = await runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLossy: allowLossyDownload });
   if (!result.ok) { emitResult(false, result); return; }
 
   const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError } = result;

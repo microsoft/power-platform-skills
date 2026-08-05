@@ -92,7 +92,10 @@ no breaking changes.
   reused out-of-the-box Dataverse tables, and were masked on custom tables:
   - **Real primary-name columns.** A downloaded spec named `account`'s primary column `account_name` and
     `contact`'s `contact_name`; neither exists (they are `name` and `fullname`). The value now comes from
-    Dataverse metadata and is omitted rather than invented when metadata doesn't supply it.
+    Dataverse metadata and is never invented. A table Dataverse reports with no primary-name column
+    (or whose metadata read fails) can't be written to a valid spec at all, so a table reached from the
+    app's **navigation** now fails the download naming it — pass `--allow-lossy-download` to drop it
+    instead — while a table found only as a hidden component is dropped with a warning.
   - **Hidden entity components are preserved.** Download reconstructed tables from the *sitemap* only,
     so a table an app reaches through a lookup, sub-grid or related view — with no navigation entry —
     vanished from the spec. Entities are now the sitemap set unioned with the tables owned by the app's
@@ -108,7 +111,9 @@ no breaking changes.
     proves an APP-SCOPE override row exists holding the requested value, and fails otherwise. Reading
     the setting back is not enough on its own: Dataverse falls back to the ENVIRONMENT value when an app
     has no override, so an app that was never configured verifies clean whenever the environment happens
-    to already hold the requested value.
+    to already hold the requested value. Verification also covers the features the build applies **by
+    default** — a spec with an `ai` block but no `ai.appFeatures` previously had three features written
+    and none checked.
   - **AI app settings accept their real values.** `ai.appFeatures` was boolean-only, so platform values
     such as `2` ("on for everyone") were inexpressible; values may now be a boolean or an integer
     between 0 and 1000000 (the same range the SDK enforces). Requires the matching SDK fix (re-vendored

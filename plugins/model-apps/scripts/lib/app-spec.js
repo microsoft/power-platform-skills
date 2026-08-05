@@ -32,10 +32,7 @@ const FORM_GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 //   PrivilegeScope depth, least->most permissive (user->Basic … organization->Global)
 // Keep these in lockstep with the SDK; vendor-sdk-smoke asserts the vendored bundle still exposes them.
 const ACCESS_LEVELS = new Set(['read', 'create', 'write', 'delete', 'append', 'appendTo', 'assign', 'share']);
-// Upper bound for a per-app AI feature setting value. MIRRORS `MAX_SETTING_VALUE` in the SDK's
-// api/AiApi.ts, which THROWS an InvalidArgumentError outside this range — validating against the same
-// bound turns a mid-build abort into an up-front spec error naming the offending field.
-const AI_FEATURE_MAX_VALUE = 1000000;
+const { AI_FEATURE_KEYS, AI_FEATURE_MAX_VALUE } = require('./ai-app-settings.js');
 const PRIVILEGE_SCOPES = new Set(['user', 'businessUnit', 'parentChild', 'organization']);
 
 // The exact ownership marker the vendored SDK (cds-maker-sdk SecurityApi) stamps on the `description`
@@ -989,13 +986,13 @@ function validateAppSpec(spec, opts = {}) {
     if (!spec.ai || typeof spec.ai !== 'object' || Array.isArray(spec.ai)) {
       errors.push('ai must be an object');
     } else {
-      const AI_FEATURE_KEYS = new Set(['formFill', 'nlSearch', 'nlChart', 'm365']);
+      const AI_FEATURE_KEYS_LIST = [...AI_FEATURE_KEYS].join(', ');
       if (spec.ai.appFeatures !== undefined) {
         if (!spec.ai.appFeatures || typeof spec.ai.appFeatures !== 'object' || Array.isArray(spec.ai.appFeatures)) {
           errors.push('ai.appFeatures must be an object');
         } else {
           for (const [k, v] of Object.entries(spec.ai.appFeatures)) {
-            if (!AI_FEATURE_KEYS.has(k)) errors.push(`ai.appFeatures: unknown key '${k}' (allowed: formFill, nlSearch, nlChart, m365)`);
+            if (!AI_FEATURE_KEYS.has(k)) errors.push(`ai.appFeatures: unknown key '${k}' (allowed: ${AI_FEATURE_KEYS_LIST})`);
             // These map to NUMERIC Dataverse app settings, not booleans: `true`/`false` are the
             // ergonomic spellings of 1/0, but the platform also defines other values (notably 2 =
             // "on for everyone"), which a boolean-only contract made inexpressible (ADO 6560699).

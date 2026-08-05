@@ -235,8 +235,17 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   `skipped` (org gate off), `notPersisted` (no override observed for the whole retry budget — Dataverse
   can accept an app-scope `SaveSettingValue` with HTTP 204 and store nothing), `unverified` (the write
   was issued but the proof could not be read) or `failed` (the write threw; the rest of the batch still
-  reports). The build surfaces **every** non-success bucket as a `⊘` warning plus in the phase detail,
-  and `--verify` fails on any of them. All AI features are **admin-gated**: the skill preflights
+  reports). The build surfaces **every** non-success bucket as a `⊘` warning plus in the phase detail
+  — buckets are read off the result object, so one a future SDK adds is reported verbatim rather than
+  silently dropped — and `--verify` fails on any of them. Because the SDK's build-time proof is
+  currently unreliable for a **freshly created** app module (measured live: it reported `notPersisted`
+  for every feature while `appsettings` held all the requested values, and raising its retry budget
+  did not help), anything it does not put in `applied` is **re-proved** against the same override-row
+  oracle the verifier uses, so only genuinely unproven features are warned about.
+  The flag set is resolved ONCE by `scripts/lib/ai-app-settings.js` and shared by the build and the
+  verifier: a spec with an `ai` block but no `ai.appFeatures` still gets defaults written, so
+  reconciling only the DECLARED features left them applied-but-unverified.
+  All AI features are **admin-gated**: the skill preflights
   and skips/warns; it cannot flip admin or tenant switches. `scripts/lib/ai-candidates.js` selects
   good-candidate tables for auto row-summary mode; `scripts/lib/ai-prompt.js` generates tailored summary
   prompts. The `ai` block in the App Spec configures the full set; see
