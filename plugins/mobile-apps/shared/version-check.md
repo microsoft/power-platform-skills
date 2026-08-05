@@ -75,6 +75,10 @@ If the user asks how to run on a real device or simulator: point them at the Exp
 | `@microsoft/power-apps` | `1.2.7` | Power Apps code app SDK |
 | `@microsoft/power-apps-native-host` | `^0.2.20` | native runtime host |
 | `@microsoft/power-apps-native-offline` | `^0.1.3` | offline runtime package |
+| `expo-notifications` | `~55.0.23` | permission, channel, presentation, and response APIs |
+| `@react-native-firebase/app` | `25.1.0` | Firebase native core; v25 retains legacy-architecture compatibility |
+| `@react-native-firebase/messaging` | `25.1.0` | Android/iOS FCM token and topic transport |
+| `expo-build-properties` | `~55.0.14` | iOS static framework configuration for React Native Firebase |
 | `tamagui`, `@tamagui/*` | `2.4.5` | design system primitives with Config v5, all `@tamagui/*` packages tracked together |
 
 ## Standard prereq snippet for skills
@@ -112,4 +116,3 @@ node -e "console.log(JSON.stringify(require('./app.json').expo, null, 2))" 2>/de
 - New skill needs a tool not listed → add it here, then reference from the skill (don't hard-code in the skill).
 - An SDK pin changes in [`plugins/mobile-apps/template/package.json`](https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/template/package.json) → update the SDK table here.
 - A new Power Platform CLI feature requires a newer minimum → bump the table, surface a one-line warning in the affected skills.
-

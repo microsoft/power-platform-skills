@@ -17,6 +17,9 @@
         "expo",
         "react-native",
         "native",
+        "push-notifications",
+        "fcm",
+        "apns",
         "connectors",
         "microsoft"
     ]

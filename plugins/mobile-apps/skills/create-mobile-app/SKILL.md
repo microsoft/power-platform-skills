@@ -1490,7 +1490,7 @@ If the seeding step fails (network drop, permission error, etc.), surface the fa
 **Print before starting:**
 > "→ [Step 9/13] Wiring <N> native capabilities: <list>. Each runs sequentially."
 
-Read the `## Native Capabilities` section from `native-app-plan.md`. For each capability, invoke `/add-native` — it routes to nested helpers for camera/PDF/pen controls when needed, otherwise generates a generic wrapper:
+Read the `## Native Capabilities` section from `native-app-plan.md`. For push notifications, invoke `/add-push-notifications`; for every other capability, invoke `/add-native`:
 
 ```
 Invoke skill: /add-native
@@ -1503,6 +1503,8 @@ Arguments:
 Run sequentially. Each writes a single file under `src/native/` and does not touch `package.json` or `app.config.js`, so they could in principle run in parallel — but sequential keeps the orchestration log readable.
 
 If the plan says "None — this app uses only standard React Native components and Power Platform connectors", skip only the native-capability invocation above and continue to Step 9a. Do NOT skip Step 9a or Step 9b; an app can need a pure-JavaScript library without any native capability, and Tamagui aliases/brand tokens are always required.
+
+Push notifications are the exception to the one-file rule: `/add-push-notifications` owns permission UX, auth/topic lifecycle, and deep-link wiring across the app.
 
 ### Step 9a — Install approved pure-JavaScript dependencies
 

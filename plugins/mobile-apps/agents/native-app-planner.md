@@ -186,6 +186,7 @@ Map each shipped module to a user-facing capability slug. Use this known mapping
 | `video` | `expo-video` | `/add-native video` |
 | `sensors` | `expo-sensors` | `/add-native sensors` |
 | `screen-orientation` | `expo-screen-orientation` | `/add-native screen-orientation` |
+| `push-notifications` | `expo-notifications` + `@react-native-firebase/app` + `@react-native-firebase/messaging` | `/add-push-notifications` |
 | `date-time-picker` | `@react-native-community/datetimepicker` | screen-builder form component rule |
 
 For custom workflows outside Dataverse File/Image form fields, plan `image-picker` with `/add-native image-picker` for user-selected photos and videos, or `document-picker` with `/add-native document-picker` for documents and other files. For Dataverse-bound File/Image fields, plan host `<FilePicker>` / `<ImagePicker>` controls instead. Do not plan broad media-library access when either scoped picker path satisfies the workflow.
@@ -213,16 +214,18 @@ PDF/pen inference rules:
 - `geolocation` means continuous/background GPS tracking with durable storage and inline Dataverse sync via `@microsoft/power-apps-native-bglocation`. Auth is MSAL-only; native uploads each fix to an existing Dataverse table (default entity set `msdyn_locationrecords`). It is distinct from one-shot `location` (`expo-location`). Plan it only for continuous tracking or durable upload, require `/add-native geolocation` to verify the target table exists before use, and never propose the `GeolocationExtension`/HostingSDK path.
 - The Power Apps extensions are use-case-specific, not generic replacements for Expo modules. For other native needs, choose the relevant Expo module or dependency already present in `template/package.json` and still enforce the allowlist.
 
-**Capabilities not present or runtime-banned** — do not propose: anything with required native code/config whose exact package is absent, `expo-notifications` unless a future template ships it, Bluetooth/NFC/BLE/AR without a shipped package, and `expo-haptics` unless the screen-builder hard rule is explicitly removed.
+For `push-notifications`, all three notification/Firebase packages must be present. Also record that the installed native host must expose a typed Entra OID; `/add-push-notifications` blocks rather than decoding tokens when it does not.
+
+**Capabilities not present or runtime-banned** — do not propose: anything with required native code/config whose exact package is absent, Bluetooth/NFC/BLE/AR without a shipped package, and `expo-haptics` unless the screen-builder hard rule is explicitly removed.
 
 ### Pure-JavaScript dependency handoff
 
 Do not put JS-only libraries in `## Native Capabilities` and do not route them through `/add-native`. Pass explicit JavaScript package requests and use cases that may benefit from an established library to `screen-planner`, which follows [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md), chooses a compatible JS-only package, and records an exact approved version under `## Screens → ### JavaScript Dependencies`. `/create-mobile-app` installs that table before screen builders run. Package-specific examples belong in the canonical reference; every library uses the same generic selection gate.
 
-If the requirements imply one of these, DROP the capability and add a transparency note to the `## Native Capabilities` section so the user sees what was excluded and why:
+If requirements imply push notifications but any required notification/Firebase package is absent, DROP the capability and add:
 
 ```markdown
-> Excluded — requirements suggested **push notifications**, but the template does not ship `expo-notifications`. The app cannot include native notifications until the upstream template adds it. File a request at the template repo if you need this.
+> Excluded — requirements suggested **push notifications**, but the template/runtime does not ship the complete `expo-notifications` + React Native Firebase Messaging stack.
 ```
 
 One transparency line per excluded capability, capped at three lines. If more than three were dropped, list the top three and roll up the rest as `> Additionally excluded: <comma-separated list>.`

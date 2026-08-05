@@ -1,0 +1,17 @@
+{
+  "skill_name": "create-push-notification-flow",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Create a Dataverse-triggered Power Automate flow that sends queued Push Notification rows to the target OID FCM topic and marks each row Sent or Failed.",
+      "expected_output": "The skill ensures the outbox schema, uses FlowAgent discovery, proves Google JWT signing first, and creates an idempotent stopped flow before publishing.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Build the raw HTTP FCM v1 flow without a Firebase service-account key. The tenant permits a dedicated Entra app registration and Google Workload Identity Federation.",
+      "expected_output": "The skill configures the Entra token, Google STS exchange, service-account impersonation, and FCM calls without requiring SHA-256, RS256, or a long-lived Google private key.",
+      "files": []
+    }
+  ]
+}

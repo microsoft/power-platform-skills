@@ -192,7 +192,9 @@ For other capabilities (only those actually shipped by the template):
 > /add-native sharing           # expo-sharing wrapper
 ```
 
-Native modules are allowlist-bound by the current template `package.json`. If the relevant package is present and not runtime-banned, `/add-native` can use it through the proper wrapper or host control. If the package is absent, the skill does not install it or fake support; it adds a transparency note and stops for that capability. For example, push notifications require `expo-notifications`; if the template does not ship it, notifications cannot be added until the upstream template includes it.
+Native modules are allowlist-bound by the current template `package.json`. Push notifications use the dedicated `/add-push-notifications` workflow because they require `expo-notifications`, React Native Firebase Messaging, permission UX, auth/topic lifecycle, and Expo Router deep links.
+
+Notification delivery must be tested on matching wrapped physical-device builds. The sender flow uses Dataverse, premium HTTP actions, Google Workload Identity Federation, and optionally Azure Key Vault/secret environment variables; tenant licensing and administrator permissions for those services are required.
 
 ### 4. Add a connector
 
@@ -251,6 +253,10 @@ Example edit flows:
 | `/setup-datamodel` | ✅ v0 | Discoverable alias for `/add-dataverse` optimized for the design-first entry point ("how do I plan my Dataverse schema?"). Same workflow under a more searchable name. |
 | `/add-connector` | ✅ v0 | Generic connector — runs `npx power-apps add-data-source` for any first-party or custom connector |
 | `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
+| `/add-push-notifications` | 🟡 preview | End-to-end notification client setup: permission UX, FCM topics on Android/iOS, Entra OID ↔ `allUsers` lifecycle, and Expo Router deep links. Requires a matching wrapped runtime; the template exposes a GUID-validated signed-in OID through its guarded native-host compatibility patch. |
+| `/setup-fcm` | 🟡 preview | Configure Firebase Android/iOS client files and validate React Native Firebase Messaging setup without storing Admin credentials. |
+| `/setup-apns` | 🟡 preview | Configure the APNs-to-FCM bridge for iOS and validate entitlements/client identity; APNs `.p8` material is never copied into the app. |
+| `/create-push-notification-flow` | 🟡 preview | Create the Dataverse outbox-triggered FCM HTTP v1 sender through FlowAgent, using keyless Entra-to-Google Workload Identity Federation and short-lived service-account impersonation tokens. |
 | `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `npx power-apps add-data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |
 | `/edit-app` | ✅ v0 | Post-generation app editor — updates affected sections of `native-app-plan.md`, applies Dataverse/native/design/connector changes, rebuilds affected screens, runs verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. `--plan-only` preserves the old docs-only behavior. |
 | `/check-updates` | ✅ v0 | Standalone dependency maintenance — checks for a plugin update and restart first, then presents, approves, updates, and validates direct packages one at a time in host, other `@microsoft/*`, and remaining npm package order. |
