@@ -200,7 +200,7 @@ Loophole checks before continuing:
 - If the request is ambiguous about Dataverse vs SharePoint vs another connector, route through `/add-datasource` rather than guessing.
 - If a screen requires a native wrapper, run `/add-native` before screen-builders import `src/native/*`.
 - If a native capability is not shipped by the template, stop with a clear block; do not install native packages or fake support.
-- If a screen requires a pure-JavaScript library, add it with an exact version to `## Screens → JavaScript Dependencies`, include it in the mutation preview, and install it before screen builders run. Determine JS-only status from shipped contents, not from a package-name prefix.
+- If a screen requires a pure-JavaScript library, add it with an exact version to `## Screens → ### JavaScript Dependencies`, include it in the mutation preview, and install it before screen builders run. Determine JS-only status from shipped contents, not from a package-name prefix.
 - If the request changes navigation, update route layouts and navigation contracts before spawning screen-builders.
 - If the request adds a new screen, generate any needed route folder, generated-service snapshot, shared code, and skeleton before building TSX.
 - Do not stop after writing `native-app-plan.md`. The plan update is an internal checkpoint; the app mutation and verification are the user-visible result.
