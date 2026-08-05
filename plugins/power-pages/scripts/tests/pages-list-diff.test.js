@@ -35,6 +35,18 @@ Index  Website Id                             Friendly Name      State
   ]);
 });
 
+test('parsePagesListVerbose handles current pac pages list -v table with Is Site Active column', () => {
+  const output = `
+Index      Website Id                             Portal Id      Friendly Name              Portal Url      Data Model Version      Single Page Application      Is Site Active
+[1]        ${ID1}      N/A            Supplier Invoice Portal     N/A             N/A                     Yes                          No
+`;
+
+  assert.deepEqual(parsePagesListVerbose(output), [
+    { siteName: 'Supplier Invoice Portal', websiteRecordId: ID1, state: 'No' },
+  ]);
+  assert.equal(diffPagesListVerbose('', output).inactive, true);
+});
+
 test('diffPagesListVerbose returns the single imported site added after import', () => {
   const before = `Contoso Portal      ${ID1}      Active`;
   const after = `${before}\nTemplate Site      ${ID2}      Inactive`;

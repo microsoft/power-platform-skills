@@ -10,7 +10,7 @@ function normalizeName(value) {
 }
 
 function isInactiveState(state) {
-  return /inactive|not\s+live|not\s+provisioned|unprovisioned/i.test(state || '');
+  return /inactive|not\s+live|not\s+provisioned|unprovisioned/i.test(state || '') || normalizeName(state).toLowerCase() === 'no';
 }
 
 function normalizeComparableName(value) {
@@ -43,6 +43,22 @@ function expectedSiteNamesFromOptions(options = {}) {
   return names.filter((name) => normalizeComparableName(name));
 }
 
+function parseIndexedGuidRow({ beforeName, afterGuid }) {
+  const afterParts = afterGuid.split(/\s{2,}/).map(normalizeName).filter(Boolean);
+  // Current PAC CLI verbose table shape:
+  //   [1]  <Website Id>  N/A  Supplier Invoice Portal  N/A  N/A  Yes  No
+  // Columns after Website Id are:
+  //   Portal Id, Friendly Name, Portal Url, Data Model Version,
+  //   Single Page Application, Is Site Active
+  // Older output put Friendly Name immediately after Website Id, so only use this
+  // positional parse when the trailing active flag is a boolean-like Yes/No value.
+  if (/^\[?\d+\]?$/.test(beforeName) && afterParts.length >= 6 && /^(yes|no)$/i.test(afterParts[afterParts.length - 1])) {
+    return { name: afterParts[1] || '', state: afterParts[afterParts.length - 1] };
+  }
+  const name = afterParts.shift() || '';
+  return { name, state: normalizeName(afterParts.join(' ')) };
+}
+
 function parsePagesListVerbose(output) {
   // `pac pages list -v` is a human table whose exact columns vary by CLI
   // version/cloud. The stable token we need is the Website Record ID GUID.
@@ -64,10 +80,11 @@ function parsePagesListVerbose(output) {
     //   1                   11111111-1111-1111-1111-111111111111   Contoso Portal   Inactive
     // If the text before the GUID is just an index, take the first verbose
     // column after the GUID as the site name and the remaining columns as state.
-    const afterParts = afterGuid.split(/\s{2,}/).map(normalizeName).filter(Boolean);
-    const name = /^\d+$/.test(beforeName) ? (afterParts.shift() || '') : beforeName;
+    const indexed = /^\[?\d+\]?$/.test(beforeName);
+    const parsedIndexed = indexed ? parseIndexedGuidRow({ beforeName, afterGuid }) : null;
+    const name = indexed ? parsedIndexed.name : beforeName;
     if (!name || /^[-\s|]+$/.test(name) || /website\s+record\s+id/i.test(name)) continue;
-    const state = /^\d+$/.test(beforeName) ? normalizeName(afterParts.join(' ')) : normalizeName(afterGuid);
+    const state = indexed ? parsedIndexed.state : normalizeName(afterGuid);
     rows.push({ siteName: name, websiteRecordId: match[0], state: state || null });
   }
   return rows;
