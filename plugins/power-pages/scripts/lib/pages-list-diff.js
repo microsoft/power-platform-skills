@@ -17,6 +17,32 @@ function normalizeComparableName(value) {
   return normalizeName(String(value || '')).toLowerCase();
 }
 
+function comparableNameAliases(value) {
+  const normalized = normalizeComparableName(value);
+  if (!normalized) return [];
+  const aliases = new Set([normalized]);
+  // Template family names can omit the SPA framework while the imported site row
+  // includes it, e.g. `311 Portal` in solution metadata but `311 Portal React`
+  // in `pac pages list -v`. Strip only known trailing framework tokens so the
+  // fallback does not turn into arbitrary fuzzy matching across unrelated sites.
+  const withoutFramework = normalized.replace(/\s+(react|vue|angular|astro)\s*$/i, '').trim();
+  if (withoutFramework) aliases.add(withoutFramework);
+  return [...aliases];
+}
+
+function siteNameMatchesExpected(siteName, expectedSiteName) {
+  const siteAliases = comparableNameAliases(siteName);
+  const expectedAliases = new Set(comparableNameAliases(expectedSiteName));
+  return siteAliases.some((alias) => expectedAliases.has(alias));
+}
+
+function expectedSiteNamesFromOptions(options = {}) {
+  const names = [];
+  if (options.expectedSiteName) names.push(options.expectedSiteName);
+  if (Array.isArray(options.expectedSiteNames)) names.push(...options.expectedSiteNames);
+  return names.filter((name) => normalizeComparableName(name));
+}
+
 function parsePagesListVerbose(output) {
   // `pac pages list -v` is a human table whose exact columns vary by CLI
   // version/cloud. The stable token we need is the Website Record ID GUID.
@@ -63,9 +89,9 @@ function diffPagesListVerbose(beforeOutput, afterOutput, options = {}) {
     };
   }
   if (added.length === 0) {
-    const expectedSiteName = normalizeComparableName(options.expectedSiteName);
-    if (expectedSiteName) {
-      const existing = after.filter((row) => normalizeComparableName(row.siteName) === expectedSiteName);
+    const expectedSiteNames = expectedSiteNamesFromOptions(options);
+    if (expectedSiteNames.length) {
+      const existing = after.filter((row) => expectedSiteNames.some((expectedSiteName) => siteNameMatchesExpected(row.siteName, expectedSiteName)));
       if (existing.length === 1) {
         return {
           status: 'existing',

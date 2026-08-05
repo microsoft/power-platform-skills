@@ -217,7 +217,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 > 🚦 **Gate (consent · create-site:1.5.confirm-environment):** Confirm the resolved target environment before running template import preflights.
 >
-> **Trigger:** Phase 1.5 after `resolve-template-import-context.js` returns `environmentUrl` and before any `.js` unblock, language, solution import, seed, or activation step.
+> **Trigger:** Phase 1.5 after `resolve-template-import-context.js` returns `environmentUrl` and before any CLI-tenant, `.js` unblock, language, solution import, seed, or activation step.
 > **Why we ask:** PAC auth can point at a different Dataverse environment than the user intended. Even preflights can inspect or modify environment-level settings, so the skill must not continue silently.
 > **Cancel leaves:** `template-cache` — template catalog assets and the selected solution zip may already be cached locally; no org mutation has happened if cancelled here.
 
@@ -231,7 +231,13 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions. Do not run environment preflights or import the template.
       - **Cancel**: stop before environment preflights. Do not emit `template_import_failure` because no import was attempted; `template_used` was already emitted when the template path was selected.
 
-   4. Mark **Confirm target environment** as `completed`, then mark both **Validate JavaScript unblock requirement** and **Validate Dataverse language requirements** as `in_progress`. Run the `.js` blocked-attachment dry run and the Dataverse language check in parallel because both are read-only preflights against the confirmed target environment:
+   4. Mark **Confirm target environment** as `completed` and **Validate CLI tenant alignment** as `in_progress`, then confirm PAC CLI and Azure CLI are authenticated to the same tenant before any import preflight that depends on both CLIs:
+      ```bash
+      node "${PLUGIN_ROOT}/scripts/validate-cli-tenant-alignment.js" --envUrl "<environmentUrl>" --token "<token>"
+      ```
+      - **`ok: true`**: mark **Validate CLI tenant alignment** as `completed`.
+      - **`ok: false`**: surface the error and the `pacTenantId`, `azTenantId`, and `tokenTenantId` fields when present. Stop before import and tell the user to switch either PAC auth or Azure CLI to the same tenant, then rerun the skill. Do not emit `template_import_failure` because no import was attempted.
+   5. Mark both **Validate JavaScript unblock requirement** and **Validate Dataverse language requirements** as `in_progress`. Run the `.js` blocked-attachment dry run and the Dataverse language check in parallel because both are read-only preflights against the confirmed target environment:
       ```bash
       node "${PLUGIN_ROOT}/scripts/lib/fix-blocked-attachments.js" --envUrl "<environmentUrl>" --extensions js --dry-run --quiet
       node "${PLUGIN_ROOT}/scripts/check-available-languages.js" --envUrl "<environmentUrl>" --token "<token>" --requiredLocaleIds "<SELECTED_TEMPLATE_VARIANT.requiredDataverseLanguages or SELECTED_TEMPLATE.requiredDataverseLanguages comma-separated>"
@@ -269,7 +275,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 <!-- not-a-gate: route selection after a blocking preflight; no org mutation has happened and there is no option to override missing template language requirements -->
 
-    5. Use `AskUserQuestion` only when the language preflight cannot continue:
+    6. Use `AskUserQuestion` only when the language preflight cannot continue:
 
        | Question | Header | Options |
        |----------|--------|---------|
@@ -286,7 +292,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 > **Why we ask:** The next step imports an unmanaged Dataverse solution into the user's org. Wrong environment or wrong template is disruptive and cannot be cleanly undone.
 > **Cancel leaves:** `template-cache` — the selected solution zip and preview images may remain in the SHA-keyed temp cache; no org mutation has occurred.
 
-   6. If the language preflight passed but `.js` was blocked and the user approved/verification passed, mark **Validate JavaScript unblock requirement** as `completed`. Then mark **Confirm template import** as `in_progress`, present the template and environment, and ask:
+   7. If the language preflight passed but `.js` was blocked and the user approved/verification passed, mark **Validate JavaScript unblock requirement** as `completed`. Then mark **Confirm template import** as `in_progress`, present the template and environment, and ask:
 
       | Question | Header | Options |
       |----------|--------|---------|
@@ -294,7 +300,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
       - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions.
       - **Cancel**: stop; no org mutation has happened. Do not emit `template_import_failure` because no import was attempted; `template_used` was already emitted when the template path was selected.
-   7. Mark **Confirm template import** as `completed`, then inspect the selected solution zip and check whether that solution is already installed:
+   8. Mark **Confirm template import** as `completed`, then inspect the selected solution zip and check whether that solution is already installed:
       ```bash
       node "${PLUGIN_ROOT}/scripts/inspect-template-solution.js" --zipPath "<SELECTED_TEMPLATE_SOLUTION_ZIP>"
       node "${PLUGIN_ROOT}/scripts/check-solution-installed.js" --solutionName "<uniqueName>" --envUrl "<environmentUrl>"
@@ -478,8 +484,10 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    11. Capture a post-import site list snapshot and identify the newly-imported site:
       ```bash
       node "${PLUGIN_ROOT}/scripts/capture-pages-list.js" --output "<temp-after-pages-list.txt>"
-      node "${PLUGIN_ROOT}/scripts/diff-pages-list.js" --before "<temp-before-pages-list.txt>" --after "<temp-after-pages-list.txt>" --expectedSiteName "<expected site name from solution inspection, if known>"
+      node "${PLUGIN_ROOT}/scripts/diff-pages-list.js" --before "<temp-before-pages-list.txt>" --after "<temp-after-pages-list.txt>" --expectedSiteName "<SELECTED_TEMPLATE.displayName>" [--expectedSiteName "<additional expected site name from solution inspection, if known>"]
       ```
+      Always include `SELECTED_TEMPLATE.displayName` as a fallback expected site name.
+      Add the solution-derived expected site name only when it is known; do not pass a placeholder value.
       - **`status: "found"` and `inactive: true`**: set `IMPORTED_SITE_NAME`, `IMPORTED_WEBSITE_RECORD_ID`, and `IMPORTED_SITE_STATE`, then tell the user: "Template `<displayName>` was imported as `<IMPORTED_SITE_NAME>` (`<IMPORTED_WEBSITE_RECORD_ID>`). Current state from `pac pages list -v`: `<IMPORTED_SITE_STATE>`. The site exists in your environment but is not live yet; activation is the next step."
       - **`status: "existing"` and `inactive: true`**: set `IMPORTED_SITE_NAME`, `IMPORTED_WEBSITE_RECORD_ID`, and `IMPORTED_SITE_STATE` from the matched existing site, then tell the user: "Template `<displayName>` appears to have imported into existing site `<IMPORTED_SITE_NAME>` (`<IMPORTED_WEBSITE_RECORD_ID>`). `pac pages list -v` did not show a new row, which is expected when the site was already present. Current state: `<IMPORTED_SITE_STATE>`. Activation is the next step."
       - **`status: "found"` but `inactive: false`**: show the diff result, then explain that the import succeeded but the inactive state could not be verified automatically. Stop before activation; the next slice will handle recovery.
@@ -502,7 +510,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        Prefer the selected variant's `seedDataPath` when present; otherwise use the family `seedDataPath`. If both are absent, skip this task.
    14. Mark **Apply template seed data** as `completed` or skipped. Do not emit another import success event here; `template_import_success` was emitted immediately after the solution import succeeded so telemetry is not lost if seed or activation handoff changes control flow.
    15. Mark **Activate imported site** as `in_progress`.
-   15. Before invoking `/activate-site`, update `<temp-import-status-dir>/status.json` so the existing status page switches to the third phase:
+   16. Before invoking `/activate-site`, update `<temp-import-status-dir>/status.json` so the existing status page switches to the third phase:
        ```json
        { "state": "running", "phase": "activation", "message": "Activating template site" }
        ```
@@ -516,8 +524,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        ```
        The activate-site skill owns subdomain selection, final activation confirmation, provisioning, polling, and recovery.
        If activation ultimately fails, tell the user the site is imported but not live yet and can be activated later by rerunning `/activate-site` with the imported site identity, then stop. Do **not** treat this as a failed import; the template import telemetry was already emitted before activation handoff.
-   16. When `/activate-site` returns a `siteUrl`, mark **Activate imported site** as `completed` and **Show live template site** as `in_progress`.
-   17. Redirect the already-open template import status page to the live site by updating `<temp-import-status-dir>/status.json`:
+   17. When `/activate-site` returns a `siteUrl`, mark **Activate imported site** as `completed` and **Show live template site** as `in_progress`.
+   18. Redirect the already-open template import status page to the live site by updating `<temp-import-status-dir>/status.json`:
        ```json
        {
          "state": "succeeded",
@@ -528,7 +536,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        Do not open a second browser page for the template path. The status page polls this file and redirects the same tab to `redirectUrl` when the URL is `http` or `https`. If the user closed the status page, show the `siteUrl` for manual opening.
 
        Always surface the activate-site DNS propagation caveat: the site may take a few minutes to load even after activation succeeds.
-   18. Mark **Show live template site** as `completed`, then present the template-path summary:
+   19. Mark **Show live template site** as `completed`, then present the template-path summary:
        - Template name and framework
        - Imported site name and Website Record ID
        - Live site URL
@@ -537,7 +545,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 <!-- not-a-gate: optional post-live template customization branch; the template site is already imported and activated, so this prompt only chooses whether to download editable source files for further local changes -->
 
-   19. Use `AskUserQuestion`:
+   20. Use `AskUserQuestion`:
 
        | Question | Header | Options |
        |----------|--------|---------|
@@ -546,7 +554,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        - **No, finish here**: mark **Select template or choose from-scratch** as `completed`, then stop.
        - **Yes, download and customize**: append the template customization tasks (see [Progress Tracking](#progress-tracking)), then continue below.
 
-   20. Mark **Download imported template site** as `in_progress` and ask where to download the code site:
+   21. Mark **Download imported template site** as `in_progress` and ask where to download the code site:
 
        | Question | Header | Options |
        |----------|--------|---------|
@@ -563,9 +571,9 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        ```
 
        If download fails, surface the command output and ask whether to retry, choose another folder, or stop. If it succeeds, set `PROJECT_ROOT = "<resolved path>"`, mark **Download imported template site** as `completed`, and continue into the planning/customization phases below.
-   21. Mark **Plan template customizations** as `in_progress`, then ask what the user wants changed in the downloaded template site. Use the existing Phase 3/4/5/6/7 implementation, verification, and review flow against `PROJECT_ROOT`; do **not** run Phase 2 scaffold/copy-template. The downloaded site is already a real Power Pages code site, so customize it in place.
-   22. After the customization plan is approved, mark **Plan template customizations** as `completed`, **Implement pages and components** as `in_progress`, and make the requested changes in the downloaded site.
-   23. Run the existing validation/review flow. Do not automatically deploy from this branch unless the user explicitly asks to run `/deploy-site`.
+   22. Mark **Plan template customizations** as `in_progress`, then ask what the user wants changed in the downloaded template site. Use the existing Phase 3/4/5/6/7 implementation, verification, and review flow against `PROJECT_ROOT`; do **not** run Phase 2 scaffold/copy-template. The downloaded site is already a real Power Pages code site, so customize it in place.
+   23. After the customization plan is approved, mark **Plan template customizations** as `completed`, **Implement pages and components** as `in_progress`, and make the requested changes in the downloaded site.
+   24. Run the existing validation/review flow. Do not automatically deploy from this branch unless the user explicitly asks to run `/deploy-site`.
 
 8. For the from-scratch path only, tell the user: "I'll scaffold this site from scratch."
 
@@ -1225,6 +1233,7 @@ After Phase 1.5 selects the template path, append the pre-import template tasks 
 |-------------|------------|-------------|
 | Resolve target environment | Resolving environment | Resolve the active PAC/Azure target environment and token before any environment preflight |
 | Confirm target environment | Confirming environment | Ask whether the resolved environment is the one the user wants for the template install |
+| Validate CLI tenant alignment | Checking CLI tenants | Verify PAC CLI and Azure CLI are authenticated to the same tenant before import |
 | Validate JavaScript unblock requirement | Checking JavaScript setting | Check `blockedattachments` for `.js` and, with consent, remove only `js` before import |
 | Validate Dataverse language requirements | Checking language availability | Call `RetrieveAvailableLanguages` and require every LCID listed in the selected template's `requiredDataverseLanguages` |
 | Confirm template import | Confirming template import | Show the selected template and target environment, then ask for final import consent |

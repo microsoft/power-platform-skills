@@ -12,13 +12,18 @@ const { diffPagesListVerbose } = require('./lib/pages-list-diff');
 // than a thrown exception so the skill can surface the problem and stop before
 // activation.
 function parseArgs(argv) {
-  const args = {};
+  const args = { expectedSiteNames: [] };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--before') args.before = argv[++i];
     else if (arg === '--after') args.after = argv[++i];
-    else if (arg === '--expectedSiteName') args.expectedSiteName = argv[++i];
+    else if (arg === '--expectedSiteName') {
+      const value = argv[++i];
+      args.expectedSiteName = value;
+      args.expectedSiteNames.push(value);
+    }
   }
+  if (!args.expectedSiteNames.length) delete args.expectedSiteNames;
   return args;
 }
 

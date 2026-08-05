@@ -81,6 +81,28 @@ test('diffPagesListVerbose can match an existing template site when import creat
   });
 });
 
+test('diffPagesListVerbose can match an existing template site by normalized aliases when import updates the solution', () => {
+  const before = `311 Portal React      ${ID1}      Inactive`;
+  const after = before;
+
+  assert.deepEqual(diffPagesListVerbose(before, after, { expectedSiteName: '311 Portal' }), {
+    status: 'existing',
+    siteName: '311 Portal React',
+    websiteRecordId: ID1,
+    state: 'Inactive',
+    inactive: true,
+    added: [],
+    warning: 'No new site appeared in pac pages list; matched an existing site by expected template site name.',
+  });
+});
+
+test('diffPagesListVerbose can match an existing template site using alternate expected names', () => {
+  const before = `311 Portal React      ${ID1}      Inactive`;
+  const after = before;
+
+  assert.equal(diffPagesListVerbose(before, after, { expectedSiteNames: ['Supplier Portal', '311 Portal'] }).status, 'existing');
+});
+
 test('diffPagesListVerbose reports ambiguous existing template site matches', () => {
   const before = `Template Site      ${ID1}      Inactive\nTemplate Site      ${ID2}      Inactive`;
   const after = before;
@@ -106,5 +128,20 @@ test('parseArgs reads before and after snapshot file paths', () => {
     before: '/tmp/before.txt',
     after: '/tmp/after.txt',
     expectedSiteName: 'Template Site',
+    expectedSiteNames: ['Template Site'],
+  });
+});
+
+test('parseArgs keeps repeated expected site names as fallback aliases', () => {
+  assert.deepEqual(parseArgs([
+    '--before', '/tmp/before.txt',
+    '--after', '/tmp/after.txt',
+    '--expectedSiteName', '311 Portal',
+    '--expectedSiteName', '311 Portal React',
+  ]), {
+    before: '/tmp/before.txt',
+    after: '/tmp/after.txt',
+    expectedSiteName: '311 Portal React',
+    expectedSiteNames: ['311 Portal', '311 Portal React'],
   });
 });
