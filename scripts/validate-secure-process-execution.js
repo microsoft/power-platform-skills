@@ -63,18 +63,9 @@ const EXCLUDED_DIRECTORY_NAMES = new Set([
   'node_modules',
 ]);
 
-// The separate Playwright hardening PR #383 owns this legacy launcher. Matching
-// uses the exact path, rule, callee, and whitespace-independent call tokens.
-// Any call drift produces both the original finding and a stale-exception error.
-const AUDITED_EXCEPTIONS = Object.freeze([
-  Object.freeze({
-    path: 'plugins/power-pages/scripts/launch-playwright-mcp.js',
-    rule: 'shell-true',
-    callee: 'spawn',
-    call: "spawnFn ( 'npx' , buildMcpArgs ( browser ) , { stdio : 'inherit' , shell : true , } )",
-    reason: 'Legacy Playwright launcher is removed by PR #383; delete this exception when that stacked change lands.',
-  }),
-]);
+// Exceptions must remain rare, exact, and removable. The current production
+// tree needs none; drift behavior stays covered by synthetic tests below.
+const AUDITED_EXCEPTIONS = Object.freeze([]);
 
 function decodeStringLiteral(raw) {
   if (typeof raw !== 'string' || raw.length < 2) return null;

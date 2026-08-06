@@ -179,10 +179,11 @@ test('audited exception schema requires a review reason', () => {
   );
 });
 
-test('repository-wide audit is clean apart from the exact reviewed exception', () => {
+test('repository-wide audit is clean with no audited exceptions', () => {
   const result = auditRepository(REPOSITORY_ROOT);
   assert.deepEqual(result.findings, []);
-  assert.deepEqual(result.audited, AUDITED_EXCEPTIONS);
+  assert.deepEqual(AUDITED_EXCEPTIONS, []);
+  assert.deepEqual(result.audited, []);
   assert.ok(result.files.length > 100, 'expected a repository-wide production scan');
 });
 
@@ -192,6 +193,6 @@ test('CLI audit emits actionable diagnostics and succeeds for the repository', (
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /AUDITED plugins\/power-pages\/scripts\/launch-playwright-mcp\.js/);
-  assert.match(result.stdout, /validation passed \(\d+ production files, 1 audited exception\)/);
+  assert.doesNotMatch(result.stdout, /^AUDITED /m);
+  assert.match(result.stdout, /validation passed \(\d+ production files, 0 audited exceptions\)/);
 });
