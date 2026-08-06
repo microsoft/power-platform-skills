@@ -13,6 +13,15 @@ function createSpawnPreload(dir) {
   const preloadPath = path.join(dir, 'intercept-spawn.js');
   fs.writeFileSync(preloadPath, `
 const { EventEmitter } = require('node:events');
+const fs = require('node:fs');
+const realExistsSync = fs.existsSync;
+fs.existsSync = (candidate) => {
+  if (String(candidate).replaceAll('\\\\', '/').endsWith('/npm/bin/npx-cli.js')) {
+    process.stdout.write('fake-npx-cli ' + candidate + '\\n');
+    return true;
+  }
+  return realExistsSync(candidate);
+};
 require('node:child_process').spawn = (command, args, options) => {
   process.stdout.write('fake-spawn ' + JSON.stringify({ command, args, options }) + '\\n');
   const child = new EventEmitter();
@@ -154,6 +163,7 @@ test('playwright MCP bootstrap supports installed-plugin root environment conven
     });
 
     assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /fake-npx-cli/);
     assert.match(result.stdout, /fake-spawn/);
     assert.match(result.stdout, /--package=@playwright\/mcp@0\.0\.78/);
     assert.match(result.stdout, /"shell":false/);
@@ -167,6 +177,7 @@ test('playwright MCP bootstrap supports installed-plugin root environment conven
     });
 
     assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /fake-npx-cli/);
     assert.match(result.stdout, /fake-spawn/);
     assert.match(result.stdout, /--package=@playwright\/mcp@0\.0\.78/);
     assert.match(result.stdout, /"shell":false/);
