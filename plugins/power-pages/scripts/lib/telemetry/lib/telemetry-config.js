@@ -20,7 +20,8 @@ function dataDisclosure(plugin) {
     "   and correlation fields, plus Dataverse organization and Entra tenant IDs\n" +
     "   when PAC is signed in.\n" +
     pluginSpecific +
-    "   The local diagnostic log retains the same fields even when transmission is off.\n" +
+    "   When plugin telemetry is enabled, the local diagnostic log retains the same\n" +
+    "   fields even when transmission is off. A disabled plugin writes no log.\n" +
     "   Events do not include file paths, prompts, tool inputs, site names,\n" +
     "   Dataverse URLs, credentials, usernames, or hostnames."
   );
