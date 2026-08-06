@@ -328,32 +328,7 @@ handler, condition, and formula behavior exist in the YAML.
 **Problem:** A journey step from the plan's Journey Step Mapping table is not implemented
 in the specified screen/control/handler.
 
-**Detect:** For each row in each Journey Step Mapping table:
+**Detect:** For each mapping row, verify the named screen, control, and event exist and that
+the event formula satisfies Required Formula Behavior.
 
-1. Extract: Step description, Screen, Control, Event Property, Formula Must Include.
-
-2. Locate the Screen's `.pa.yaml` file.
-
-3. Locate the Control within that screen.
-
-4. Find the Event Property (OnSelect, OnChange, etc.) on that control.
-
-5. Check if the formula contains the required pattern from "Formula Must Include".
-
-6. Flag if:
-   - The screen doesn't exist
-   - The control doesn't exist
-   - The event property is missing or empty
-   - The formula doesn't contain the required pattern
-
-**Fix:** This check does not auto-fix. Report to contract verification with the specific
-journey step that failed.
-
-**Report format:**
-
-```
-UNIMPLEMENTED-JOURNEY-STEP: Journey "[JourneyName]", Step [N]
-  Step: "[Step description]"
-  Expected: [Screen].[Control].[EventProperty] must include "[Formula pattern]"
-  Actual: [What was found, or "control missing" / "handler empty"]
-```
+**Fix:** Report the journey and step, expected behavior, and actual YAML to Phase 7.
