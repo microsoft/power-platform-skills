@@ -166,12 +166,17 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 </div>
 
 <script>
-const WEB_ROLES = __WEB_ROLES_DATA__;
-const SERVER_LOGICS = __SERVER_LOGICS_DATA__;
-const RATIONALE = __RATIONALE_DATA__;
-const SECRETS = __SECRETS_DATA__;
+const WEB_ROLES = __JSON_WEB_ROLES_DATA__;
+const SERVER_LOGICS = __JSON_SERVER_LOGICS_DATA__;
+const RATIONALE = __JSON_RATIONALE_DATA__;
+const SECRETS = __JSON_SECRETS_DATA__;
 
-function esc(str) { const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
+function esc(str) { const d = document.createElement('div'); d.textContent = str == null ? '' : String(str); return d.innerHTML; }
+function safeIcon(value) {
+  const icon = String(value ?? '');
+  return /^(?:&#(?:x[0-9a-f]+|\d+);)+$/i.test(icon) ? icon : esc(icon);
+}
+function safeColor(value) { return /^#[0-9a-f]{6}$/i.test(String(value ?? '')) ? value : '#8890a4'; }
 
 // Key Vault banner rendering
 const kvBanner = document.getElementById('keyvaultBanner');
@@ -323,16 +328,16 @@ document.getElementById('statReuse').textContent = reuseCount;
 
 const statusSummary = document.getElementById('statusSummary');
 statusSummary.innerHTML = SERVER_LOGICS.length
-  ? SERVER_LOGICS.map(item => `<span class="logic-chip">${item.displayName || item.name} ${getStatusBadge(item.status)}</span>`).join('')
+  ? SERVER_LOGICS.map(item => `<span class="logic-chip">${esc(item.displayName || item.name)} ${getStatusBadge(item.status)}</span>`).join('')
   : '<span class="logic-chip">No server logic items defined</span>';
 
 const rationaleContainer = document.getElementById('rationaleContainer');
 rationaleContainer.innerHTML = RATIONALE.map(r => `
   <div class="principle">
-    <div class="principle-icon">${r.icon}</div>
+    <div class="principle-icon">${safeIcon(r.icon)}</div>
     <div>
-      <div class="principle-title">${r.title}</div>
-      <div class="principle-desc">${r.desc}</div>
+      <div class="principle-title">${esc(r.title)}</div>
+      <div class="principle-desc">${esc(r.desc)}</div>
     </div>
   </div>
 `).join('');
@@ -352,17 +357,17 @@ const rolesContainer = document.getElementById('rolesContainer');
 rolesContainer.innerHTML = WEB_ROLES.map(role => {
   const assigned = SERVER_LOGICS.filter(item => getAssignedRoleDetails(item).some(entry => entry.id === role.id));
   const assignedMarkup = assigned.length
-    ? assigned.map(item => `<span class="logic-chip">${item.displayName || item.name}</span>`).join('')
+    ? assigned.map(item => `<span class="logic-chip">${esc(item.displayName || item.name)}</span>`).join('')
     : '<span style="font-size:11px;color:var(--text-dim);font-style:italic;">Not assigned</span>';
 
   return `<div class="card"${role.isNew ? ' style="background:var(--accent-bg);border-color:var(--accent-border);"' : ''}>
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
       <div style="display:flex;align-items:flex-start;gap:10px;">
-        <div style="width:10px;height:10px;border-radius:50%;background:${role.color || '#8890a4'};flex-shrink:0;margin-top:6px;"></div>
+        <div style="width:10px;height:10px;border-radius:50%;background:${safeColor(role.color)};flex-shrink:0;margin-top:6px;"></div>
         <div>
-          <span style="font-size:14px;font-weight:700;color:var(--text-bright)">${role.name}</span>
+          <span style="font-size:14px;font-weight:700;color:var(--text-bright)">${esc(role.name)}</span>
           ${role.builtin ? '<span class="builtin-badge">BUILT-IN</span>' : role.isNew ? '<span class="new-badge">PROPOSED</span>' : '<span class="existing-badge">EXISTING</span>'}
-          <div style="font-size:12px;color:var(--text-dim);margin-top:2px;">${role.desc || ''}</div>
+          <div style="font-size:12px;color:var(--text-dim);margin-top:2px;">${esc(role.desc || '')}</div>
         </div>
       </div>
     </div>
@@ -391,10 +396,10 @@ serverLogicContainer.innerHTML = SERVER_LOGICS.map(item => {
     ? roles.map(role => `
       <div class="fn-item">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
-          <div style="font-size:13px;font-weight:700;color:var(--text-bright);">${role.name}</div>
-          <div class="role-chip" style="background:${role.color || '#8890a4'}18;color:${role.color || '#8890a4'};">Assigned Role</div>
+          <div style="font-size:13px;font-weight:700;color:var(--text-bright);">${esc(role.name)}</div>
+          <div class="role-chip" style="background:${safeColor(role.color)}18;color:${safeColor(role.color)};">Assigned Role</div>
         </div>
-        <div style="font-size:12px;color:var(--text-dim);margin-top:8px;">${role.reasoning || 'No role reasoning provided.'}</div>
+        <div style="font-size:12px;color:var(--text-dim);margin-top:8px;">${esc(role.reasoning || 'No role reasoning provided.')}</div>
       </div>
     `).join('')
     : '<div class="fn-item">No web roles assigned.</div>';
@@ -402,19 +407,19 @@ serverLogicContainer.innerHTML = SERVER_LOGICS.map(item => {
   const fnMarkup = (item.functions || []).map(fn => `
     <div class="fn-item">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
-        <div style="font-size:13px;font-weight:700;color:var(--text-bright);"><span class="mono">${fn.name}()</span></div>
-        <div class="fn-chip">${fn.purpose}</div>
+        <div style="font-size:13px;font-weight:700;color:var(--text-bright);"><span class="mono">${esc(fn.name)}()</span></div>
+        <div class="fn-chip">${esc(fn.purpose)}</div>
       </div>
-      <div style="font-size:12px;color:var(--text-dim);margin-top:8px;">${fn.reasoning || ''}</div>
+      <div style="font-size:12px;color:var(--text-dim);margin-top:8px;">${esc(fn.reasoning || '')}</div>
     </div>
   `).join('');
 
   return `<div class="card"${item.status === 'create' ? ' style="background:var(--accent-bg);border-color:var(--accent-border);"' : ''}>
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
       <div>
-        <span style="font-size:14px;font-weight:700;color:var(--text-bright)">${item.displayName || item.name}</span>
+        <span style="font-size:14px;font-weight:700;color:var(--text-bright)">${esc(item.displayName || item.name)}</span>
         ${getStatusBadge(item.status)}${getCustomActionBadge(item)}
-        <div style="font-size:12px;color:var(--text-dim);margin-top:4px;"><span class="mono">${item.name}</span>${item.apiUrl ? ' • <span class="mono">' + item.apiUrl + '</span>' : ''}</div>
+        <div style="font-size:12px;color:var(--text-dim);margin-top:4px;"><span class="mono">${esc(item.name)}</span>${item.apiUrl ? ' • <span class="mono">' + esc(item.apiUrl) + '</span>' : ''}</div>
       </div>
     </div>
 
@@ -425,14 +430,14 @@ serverLogicContainer.innerHTML = SERVER_LOGICS.map(item => {
       </div>
       <div>
         <div class="field-label">API URL</div>
-        <div class="mono" style="font-size:11px;word-break:break-word;">${item.apiUrl || 'Not provided'}</div>
+        <div class="mono" style="font-size:11px;word-break:break-word;">${esc(item.apiUrl || 'Not provided')}</div>
       </div>
     </div>
     ${getCustomActionMarkup(item)}
 
     <div style="margin-top:12px;">
       <div class="field-label">Reasoning</div>
-      <div class="reason-box">${item.rationale || 'No rationale provided.'}</div>
+      <div class="reason-box">${esc(item.rationale || 'No rationale provided.')}</div>
     </div>
 
     <div style="margin-top:12px;">
