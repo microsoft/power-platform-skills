@@ -20,11 +20,11 @@ usage telemetry for this plugin. Default to `status` when no argument is given.
 - `off` stops transmission to Microsoft. **Nothing leaves the machine.**
 - `on` re-enables transmission. The choice is **per-user and per-plugin** and
   takes effect on the next event (no restart).
-- **Anonymous — no personal data.** It records operational fields only: skill name,
-  plugin/PAC/agent versions, OS/Node versions, and Dataverse org/tenant GUIDs when
-  signed in. It never includes file paths, prompts, tool inputs, entity/table names,
-  URLs, credentials, usernames, hostnames, or any user-level identifier (no Entra
-  object id).
+- **Anonymous, with no personal data.** It records skill name, plugin/PAC/agent
+  versions, and OS/Node versions.
+  It never includes Dataverse organization IDs, Entra tenant IDs, Entra user object
+  IDs, file paths, prompts, tool inputs, entity/table names, URLs, credentials,
+  usernames, or hostnames.
 - Once telemetry is enabled (provisioned), the local diagnostic mirror is written
   for every event — even when you've opted out of transmission — at
   `~/.power-platform-skills/telemetry/model-apps/sessions/<sessionId>/events.jsonl`.

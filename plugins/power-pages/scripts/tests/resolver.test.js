@@ -23,11 +23,11 @@ test("isProvisioned is false when the default-region key is missing", () => {
   assert.equal(resolver.isProvisioned(null), false);
 });
 
-test("resolve falls back to the default region with no orgId (no network)", async () => {
+test("resolve falls back to the default region with no routingOrgId", async () => {
   const r = await resolver.resolve({
-    event: { data: {} },
     cfg: { default_region: "us", regions: REGIONS },
     cloud: "Public",
+    routingOrgId: "",
     configDir: undefined,
   });
   assert.equal(r.iKey, "ikeyus");

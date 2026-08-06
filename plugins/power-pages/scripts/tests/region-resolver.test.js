@@ -86,6 +86,24 @@ test("resolve: no orgId → default region without calling Artemis or cache", as
   assert.equal(cacheReadCalled, false);
 });
 
+test("resolve: sovereign cloud uses the cloud stamp without orgId or Artemis", async () => {
+  let fetchCalled = false;
+  const result = await resolve({
+    orgId: "",
+    cloud: "UsGovHigh",
+    regionsMap: REGIONS,
+    defaultRegion: "us",
+    _fetchGeo: () => {
+      fetchCalled = true;
+      return Promise.resolve(null);
+    },
+    _cache: noopCache,
+  });
+  assert.equal(result.region, "high");
+  assert.equal(result.iKey, "ik-hi");
+  assert.equal(fetchCalled, false);
+});
+
 test("resolve: cache hit maps the cached region to THIS plugin's iKey (not a cached key)", async () => {
   let fetchCalled = false;
   // Cache holds region only. The iKey must come from regionsMap, never the cache —

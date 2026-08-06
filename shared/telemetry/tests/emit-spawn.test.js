@@ -117,6 +117,49 @@ test("opts.ikeyJsonPath points the dispatcher at the caller's ikey.json (no env 
   );
 });
 
+test("fireAndForget forwards routingOrgId only to the resolver child context", async () => {
+  const tmp = mkTmp();
+  const probe = path.join(tmp, "probe.json");
+  const ikeyJsonPath = path.join(tmp, "ikey.json");
+  fs.writeFileSync(
+    ikeyJsonPath,
+    JSON.stringify({
+      event_stream_name: "PowerPagesPluginEvent",
+      disabled: false,
+      default_region: "us",
+      regions: {
+        us: {
+          instrumentation_key: "resolver-key",
+          collector_url: "https://example.invalid/OneCollector/1.0/",
+        },
+      },
+    })
+  );
+  fs.writeFileSync(
+    path.join(tmp, "resolver.js"),
+    "module.exports = {" +
+      "async resolve({ cfg, routingOrgId }) {" +
+      "  if (routingOrgId !== '22222222-2222-2222-2222-222222222222') return null;" +
+      "  const e = cfg.regions.us;" +
+      "  return { iKey: e.instrumentation_key, collectorUrl: e.collector_url };" +
+      "}," +
+      "isProvisioned: () => true };"
+  );
+  fireAndForget(sampleEvent, {
+    configDir: tmp,
+    fakeProbe: probe,
+    ikeyJsonPath,
+    routingOrgId: "22222222-2222-2222-2222-222222222222",
+  });
+  for (let i = 0; i < 20; i++) {
+    if (fs.existsSync(probe)) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  assert.ok(fs.existsSync(probe), "resolver should receive the local routing org ID");
+  const body = JSON.parse(JSON.parse(fs.readFileSync(probe, "utf8")).body);
+  assert.equal(body.data.orgId, undefined);
+});
+
 test("env-var opt-out suppresses the POST through the real spawn chain (mirror still written)", async () => {
   // Regression guard: emit-spawn's minimal child-env allowlist used to drop the
   // _OPTOUT var, so the dispatcher (which enforces the opt-out) never saw it and

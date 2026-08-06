@@ -142,9 +142,6 @@ function readStdin() {
     nodeVersion: "v" + String(process.versions.node).split(".")[0],
     skillName,
   };
-  if (pacAuth && pacAuth.orgId) fields.orgId = pacAuth.orgId;
-  if (pacAuth && pacAuth.tenantId) fields.tenantId = pacAuth.tenantId;
-  if (pacAuth && pacAuth.objectId) fields.eventInfo = { aadObjectId: pacAuth.objectId };
   if (agentInfo.aiAgentName) fields.aiAgentName = agentInfo.aiAgentName;
   if (agentInfo.aiAgentVersion) fields.aiAgentVersion = agentInfo.aiAgentVersion;
   if (agentInfo.pacCliVersion) fields.pacCliVersion = agentInfo.pacCliVersion;
@@ -154,6 +151,7 @@ function readStdin() {
       eventsLib.buildSkillStarted(eventStreamName, fields),
       {
         cloud: (pacAuth && pacAuth.cloud) || "",
+        routingOrgId: (pacAuth && pacAuth.orgId) || "",
         configDir,
         fakeProbe,
         // Point the dispatcher at the same ikey.json readIkey() used — the

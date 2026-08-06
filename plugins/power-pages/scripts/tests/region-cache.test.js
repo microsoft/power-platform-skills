@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const crypto = require("node:crypto");
 
 const { read, write, TTL_MS } = require("../lib/telemetry/region/region-cache");
 
@@ -14,13 +15,18 @@ function mkTmp() {
 
 // Path of an org's per-org cache file under a config dir.
 function entryPath(tmp, orgId) {
-  return path.join(tmp, "region-cache", `${orgId}.json`);
+  const key = crypto.createHash("sha256").update(orgId.toLowerCase()).digest("hex");
+  return path.join(tmp, "region-cache", `${key}.json`);
 }
 
 // Write a raw entry file directly (for malformed/expired fixtures).
 function writeRaw(tmp, orgId, contents) {
   fs.mkdirSync(path.join(tmp, "region-cache"), { recursive: true });
   fs.writeFileSync(entryPath(tmp, orgId), contents);
+}
+
+function legacyEntryPath(tmp, orgId) {
+  return path.join(tmp, "region-cache", `${orgId}.json`);
 }
 
 const orgIdA = "11111111-1111-1111-1111-111111111111";
@@ -44,6 +50,11 @@ test("cache stores only the region (no iKey/collectorUrl)", () => {
   write(orgIdA, entryUS, tmp);
   const onDisk = JSON.parse(fs.readFileSync(entryPath(tmp, orgIdA), "utf8"));
   assert.deepEqual(Object.keys(onDisk).sort(), ["expiresAt", "region"]);
+  assert.equal(
+    fs.readdirSync(path.join(tmp, "region-cache")).some((name) => name.includes(orgIdA)),
+    false,
+    "raw organization ID must not be retained in cache filenames"
+  );
 });
 
 test("read returns null for an orgId that was never written", () => {
@@ -60,6 +71,26 @@ test("multiple orgIds coexist as separate files", () => {
   assert.equal(read(orgIdB, tmp).region, "eu");
   assert.ok(fs.existsSync(entryPath(tmp, orgIdA)));
   assert.ok(fs.existsSync(entryPath(tmp, orgIdB)));
+});
+
+test("read migrates all legacy raw-orgId filenames to hashed cache keys", () => {
+  const tmp = mkTmp();
+  fs.mkdirSync(path.join(tmp, "region-cache"), { recursive: true });
+  fs.writeFileSync(
+    legacyEntryPath(tmp, orgIdA),
+    JSON.stringify({ region: "eu", expiresAt: Date.now() + 10_000 }),
+    "utf8"
+  );
+  fs.writeFileSync(
+    legacyEntryPath(tmp, orgIdB),
+    JSON.stringify({ region: "us", expiresAt: Date.now() + 10_000 }),
+    "utf8"
+  );
+  assert.equal(read(orgIdA, tmp).region, "eu");
+  assert.equal(fs.existsSync(legacyEntryPath(tmp, orgIdA)), false);
+  assert.equal(fs.existsSync(legacyEntryPath(tmp, orgIdB)), false);
+  assert.equal(fs.existsSync(entryPath(tmp, orgIdA)), true);
+  assert.equal(fs.existsSync(entryPath(tmp, orgIdB)), true);
 });
 
 test("read returns null when entry is expired", () => {

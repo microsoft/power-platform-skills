@@ -12,6 +12,7 @@ function fireAndForget(event, opts = {}) {
   const configDir = opts.configDir || "";
   const fakeProbe = opts.fakeProbe || "";
   const cloud = opts.cloud || "";
+  const routingOrgId = opts.routingOrgId || "";
   const pluginName = event && event.data && event.data.pluginName;
   const optOutVarName = pluginName ? telemetryOptOutEnvVarName(pluginName) : "";
   const optOutValue =
@@ -41,6 +42,9 @@ function fireAndForget(event, opts = {}) {
         POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
         POWER_PLATFORM_SKILLS_FAKE_HTTPS: fakeProbe,
         POWER_PLATFORM_SKILLS_CLOUD: cloud,
+        // Resolver-only context. This value is never part of the serialized
+        // event, local diagnostic mirror, or transmitted envelope.
+        POWER_PLATFORM_SKILLS_ROUTING_ORG_ID: routingOrgId,
         // ikey.json path: an explicit env override (test seam) wins; otherwise
         // the calling plugin's ikey.json path so the dispatcher reads the
         // plugin's real config rather than shared/'s placeholder.

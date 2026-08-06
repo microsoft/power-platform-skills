@@ -2,8 +2,8 @@
 
 const { execFileSync } = require("node:child_process");
 
-// Reads PAC CLI auth state by shelling out to `pac auth who` and parsing the
-// banner output. Matches the convention used by
+// Reads the minimum PAC CLI routing context by shelling out to `pac auth who`
+// and parsing the banner output. Matches the convention used by
 // plugins/power-pages/scripts/lib/validation-helpers.js (getPacAuthInfo /
 // getEnvironmentUrl) so telemetry stays consistent with the rest of the repo.
 //
@@ -12,13 +12,15 @@ const { execFileSync } = require("node:child_process");
 // already parse via the AUTH_KEYS list documented in the VSCode 1DS extension.
 //
 // Best-effort and fail-closed: missing executable, timeout, non-zero exit, or
-// unparseable output all resolve to null. The result is cached per process so
-// repeated hook invocations only fork once.
+// unparseable output all resolve to null. Tenant and user identity lines are
+// intentionally ignored because telemetry routing needs only the Dataverse
+// organization ID and cloud stamp. The result is cached per process so repeated
+// hook invocations only fork once.
 
 // Cold-start `pac auth who` on Windows is consistently ~3.5-4s (.NET runtime
 // startup + cached-token validation). 3s was too tight and produced silent
-// timeouts that surfaced as missing orgId/tenantId in every event. 8s gives
-// comfortable headroom while staying well under the hook's 30s budget.
+// timeouts that prevented region routing. 8s gives comfortable headroom while
+// staying well under the hook's 30s budget.
 const TIMEOUT_MS = 8000;
 
 let cache;
@@ -56,19 +58,15 @@ function readPacAuth(opts = {}) {
     cache = null;
     return null;
   }
-  const tenantId = pickLine(output, "Tenant Id");
   const orgId = pickLine(output, "Organization Id");
   const cloud = pickLine(output, "Cloud");
-  const objectId = pickLine(output, "Entra ID Object Id");
-  if (!tenantId && !orgId) {
+  if (!orgId) {
     cache = null;
     return null;
   }
   cache = {
-    orgId: orgId || "",
-    tenantId: tenantId || "",
+    orgId,
     cloud: cloud || "",
-    objectId: objectId || "",
   };
   return cache;
 }

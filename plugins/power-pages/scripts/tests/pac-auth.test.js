@@ -2,10 +2,8 @@
 
 // Unit coverage for the bundled telemetry pac-auth copy. The plugin ships a
 // physical copy of shared/telemetry/lib/pac-auth.js (no symlink), so this test
-// asserts the copy parses `pac auth who` the same way — including the optional
-// "Entra ID Object Id" line surfaced as `objectId`. The emit-* hook tests are
-// spawn-based integration tests that call real `pac`, so they can't inject a
-// fake object id; this is the deterministic seam for that field.
+// asserts the copy parses only the local region-routing context and ignores
+// tenant/user identity lines.
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
@@ -30,18 +28,16 @@ Organization Unique Name:    contoso
 Organization Friendly Name:  Contoso
 `;
 
-test("parses orgId, tenantId, cloud, and Entra ID objectId", () => {
+test("parses only orgId and cloud for local region routing", () => {
   pacAuth._resetCache();
   const result = pacAuth.readPacAuth({ _exec: () => SAMPLE_OUTPUT });
   assert.deepEqual(result, {
     orgId: "33333333-3333-3333-3333-333333333333",
-    tenantId: "11111111-1111-1111-1111-111111111111",
     cloud: "Public",
-    objectId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
   });
 });
 
-test("objectId is '' when the Entra ID Object Id line is missing", () => {
+test("ignores tenant and Entra object identity lines", () => {
   pacAuth._resetCache();
   const result = pacAuth.readPacAuth({
     _exec: () =>
@@ -49,7 +45,10 @@ test("objectId is '' when the Entra ID Object Id line is missing", () => {
       "Tenant Id: 11111111-1111-1111-1111-111111111111\n" +
       "Organization Id: 33333333-3333-3333-3333-333333333333\n",
   });
-  assert.equal(result.objectId, "");
+  assert.deepEqual(result, {
+    orgId: "33333333-3333-3333-3333-333333333333",
+    cloud: "Public",
+  });
 });
 
 test("returns null when neither Tenant Id nor Organization Id is found", () => {

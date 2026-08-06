@@ -116,7 +116,9 @@ test("provisioned Tier-1 config → tracked skill emits skill_started to the pro
   assert.equal(body.data.eventName, "skill_started");
   assert.equal(body.data.pluginName, "model-apps");
   assert.equal(body.data.skillName, "genpage");
-  assert.equal(body.data.eventInfo, undefined, "model-apps must not send eventInfo/aadObjectId");
+  assert.equal(body.data.orgId, undefined);
+  assert.equal(body.data.tenantId, undefined);
+  assert.equal(body.data.eventInfo, undefined);
 });
 
 test("enabled config but placeholder key → treated as unprovisioned (no probe)", () => {

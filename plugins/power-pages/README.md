@@ -409,7 +409,8 @@ Enables, disables, or checks the status of anonymous usage telemetry. Per-user a
 - `/power-pages:telemetry status` — show the current setting
 - `/power-pages:telemetry off` — stop sending telemetry (nothing leaves your machine)
 - `/power-pages:telemetry on` — resume sending telemetry
-- No personal data is ever collected (anonymous: skill name, plugin version, OS, Node version)
+- No personal data is collected (anonymous: skill name, plugin version, OS, Node version)
+- Collector events and diagnostic mirrors exclude organization, tenant, and Entra user object IDs
 - Automation/CI: set `POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT=1` to disable (highest precedence — overrides any saved choice)
 
 ## Agents
@@ -524,10 +525,11 @@ This Dataverse relationship check is intended for local validation only and shou
 
 ## Telemetry & privacy
 
-This plugin sends **anonymous** usage telemetry by default to help Microsoft
-improve it. **No personal data is ever collected** — only things like skill name,
-plugin version, OS, and Node version. It never includes file paths, prompts, tool
-inputs, site names, URLs, credentials, usernames, or hostnames.
+This plugin sends **anonymous** usage telemetry by default to help Microsoft improve it.
+It collects fields such as skill name, plugin version, OS, and Node version.
+Collector events and diagnostic mirrors never include Dataverse organization IDs, Entra tenant IDs, Entra user object IDs, file paths, prompts, tool inputs, site names, URLs, credentials, usernames, or hostnames.
+For public-cloud routing, the local resolver sends the organization ID to the Power Platform organization API to obtain the environment geo; the ID is excluded from the collector event and diagnostic mirror.
+Region-cache filenames use a hash, and the next region resolution renames older raw-ID filenames.
 
 **Turn it on or off (per-user, applies to every project):**
 
