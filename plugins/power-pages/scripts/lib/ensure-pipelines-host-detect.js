@@ -86,8 +86,7 @@ function originOf(url) {
   try {
     const trustedUrl = helpers.validateAuthenticatedRequestUrl(url);
     const u = new URL(trustedUrl);
-    helpers.validateDataverseEnvironmentUrl(u.origin);
-    return `${u.protocol}//${u.host}`;
+    return helpers.validateDataverseEnvironmentUrl(u.origin, 'Dataverse URL origin');
   } catch {
     return null;
   }
@@ -118,14 +117,24 @@ async function tryCacheFastPath({ projectRoot, cacheMaxAgeHours, getTokenImpl })
 
   // Probe with a fresh token.
   let token;
+  let trustedHostEnvUrl;
+  let trustedHostApiUrl = cached.finalHostInstanceApiUrl || null;
   try {
-    token = getDataverseToken(originOf(cached.finalHostEnvUrl), getTokenImpl);
+    trustedHostEnvUrl = originOf(cached.finalHostEnvUrl);
+    if (!trustedHostEnvUrl) return null;
+    if (trustedHostApiUrl) {
+      trustedHostApiUrl = helpers.validateDataverseEnvironmentUrl(
+        trustedHostApiUrl,
+        'Cached host API URL',
+      );
+    }
+    token = getDataverseToken(trustedHostEnvUrl, getTokenImpl);
   } catch {
     return null;
   }
 
   const verify = await verifyHostReadiness({
-    hostEnvUrl: cached.finalHostEnvUrl,
+    hostEnvUrl: trustedHostEnvUrl,
     hostToken: token,
     skipWhoAmI: false,
   });
@@ -135,6 +144,8 @@ async function tryCacheFastPath({ projectRoot, cacheMaxAgeHours, getTokenImpl })
   return {
     ...cached,
     schemaVersion: 2,
+    finalHostEnvUrl: trustedHostEnvUrl,
+    finalHostInstanceApiUrl: trustedHostApiUrl,
     cacheHit: true,
     cacheAgeMs: ageMs,
     pipelinesSolutionVersion: verify.pipelinesSolutionVersion || cached.pipelinesSolutionVersion,
@@ -202,6 +213,7 @@ async function detect(opts = {}) {
   if (!noCache) {
     const hit = await tryCacheFastPath({ projectRoot, cacheMaxAgeHours, getTokenImpl });
     if (hit) {
+      hit.sourceEnvUrl = trustedEnvUrl;
       hit.detectionDurationMs = Date.now() - startedAt;
       hit.checkedAt = new Date().toISOString();
       return hit;
@@ -225,11 +237,15 @@ async function detect(opts = {}) {
     }
 
     baseOut.finalHostEnvId = env.envId;
-    helpers.validateDataverseEnvironmentUrl(env.instanceUrl, 'Resolved host environment URL');
-    helpers.validateDataverseEnvironmentUrl(env.instanceApiUrl, 'Resolved host API URL');
-    baseOut.finalHostEnvUrl = env.instanceUrl;
+    baseOut.finalHostEnvUrl = helpers.validateDataverseEnvironmentUrl(
+      env.instanceUrl,
+      'Resolved host environment URL',
+    );
     baseOut.finalHostEnvName = env.displayName || null;
-    baseOut.finalHostInstanceApiUrl = env.instanceApiUrl;
+    baseOut.finalHostInstanceApiUrl = helpers.validateDataverseEnvironmentUrl(
+      env.instanceApiUrl,
+      'Resolved host API URL',
+    );
     baseOut.isPlatformHost = env.environmentSku === 'Platform';
 
     // Phase 2.3 — if PE, check tenant default custom host (CannotRedirect detection)
@@ -284,9 +300,15 @@ async function detect(opts = {}) {
       const h = list.existingCustomHosts[0];
       baseOut.resolutionStatus = 'AvailableUnboundCustomHost';
       baseOut.finalHostEnvId = h.envId;
-      baseOut.finalHostEnvUrl = h.instanceUrl;
+      baseOut.finalHostEnvUrl = helpers.validateDataverseEnvironmentUrl(
+        h.instanceUrl,
+        'Discovered host environment URL',
+      );
       baseOut.finalHostEnvName = h.displayName || null;
-      baseOut.finalHostInstanceApiUrl = h.instanceApiUrl;
+      baseOut.finalHostInstanceApiUrl = helpers.validateDataverseEnvironmentUrl(
+        h.instanceApiUrl,
+        'Discovered host API URL',
+      );
       baseOut.isPlatformHost = false;
       baseOut.pipelinesSolutionVersion = h.pipelinesSolutionVersion || null;
     } else if (list.existingCustomHosts.length > 1) {
@@ -296,9 +318,15 @@ async function detect(opts = {}) {
       const h = list.existingPlatformHost;
       baseOut.resolutionStatus = 'PlatformHostExistsUnbound';
       baseOut.finalHostEnvId = h.envId;
-      baseOut.finalHostEnvUrl = h.instanceUrl;
+      baseOut.finalHostEnvUrl = helpers.validateDataverseEnvironmentUrl(
+        h.instanceUrl,
+        'Discovered platform host environment URL',
+      );
       baseOut.finalHostEnvName = h.displayName || null;
-      baseOut.finalHostInstanceApiUrl = h.instanceApiUrl;
+      baseOut.finalHostInstanceApiUrl = helpers.validateDataverseEnvironmentUrl(
+        h.instanceApiUrl,
+        'Discovered platform host API URL',
+      );
       baseOut.isPlatformHost = true;
       baseOut.pipelinesSolutionVersion = h.pipelinesSolutionVersion || null;
     } else {
