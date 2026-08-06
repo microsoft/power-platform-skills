@@ -189,18 +189,13 @@ EDIT
 - **Controls to Remove:** [control name — or "none"]
 - **Properties to Update:** [control name → property name → new value]
 
-#### Contract (required for verification — even for modified screens)
+#### Contract
 
-- **Primary Content:** [after changes, what is the main data-displaying element — must be specific]
-- **Primary Interaction:** [after changes, what is the main user action — must be specific]
-- **Required Handlers:** [all handlers that must be non-empty after changes — include both existing and new]
-- **Journey Steps:** [which user journey steps this screen implements after changes]
-- **Outcome Handling:** [required feedback and state management after changes]
-  - Validation: [if applicable]
-  - Success feedback: [if applicable]
-  - Failure feedback: [if applicable]
-  - State refresh: [if applicable]
-  - Empty state: [if applicable]
+- **Primary Content:** [control name, type, and data binding after the edit; or "none" with reason]
+- **Primary Interaction:** [control event and required behavior after the edit; or "none" with reason]
+- **Required Handlers:** [existing and new control.event → required formula behavior]
+- **Journey Steps:** [assigned journey step names]
+- **Outcome Handling:** [applicable validation, success, failure, refresh, and empty-state behavior]
 
 ### [Screen Name] (New)
 - **File:** [Name].pa.yaml
