@@ -230,7 +230,7 @@ function tryPacFallback({ envId, packageUniqueName, execImpl = execFileSync }) {
     } catch (err) {
       lastErr = err;
       // Try next candidate if PAC reports an unrecognized arg / subcommand.
-      const stderr = (err.stderr || err.message || '').toLowerCase();
+      const stderr = String(err.stderr || err.message || '').toLowerCase();
       if (!/unrecognized|unknown|invalid argument/i.test(stderr)) break;
     }
   }
@@ -408,10 +408,13 @@ async function installPipelinesApp(opts = {}) {
   }
   let provisioningState = extractProvisioningState(respBody) || 'Installing';
   const rawLocationHeader = postRes.headers?.location || postRes.headers?.Location || null;
-  const locationHeader = rawLocationHeader ? helpers.validateBapUrl(rawLocationHeader) : null;
-  if (locationHeader && new URL(locationHeader).origin !== new URL(cleanBase).origin) {
-    throw new Error('BAP applicationPackages install returned a Location header for a different host.');
-  }
+  const locationHeader = rawLocationHeader
+    ? helpers.validateBapPollingUrl(
+      rawLocationHeader,
+      postUrl,
+      'BAP applicationPackages install Location header',
+    )
+    : null;
   let retryAfterSec = readRetryAfterSec(postRes.headers) || DEFAULT_RETRY_AFTER_SEC;
 
   if (postRes.statusCode === 200 && isTerminalSucceeded(provisioningState)) {

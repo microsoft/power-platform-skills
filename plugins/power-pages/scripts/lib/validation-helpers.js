@@ -283,6 +283,22 @@ function validateBapUrl(value, { allowPath = true } = {}) {
   }).href;
 }
 
+function validateBapPollingUrl(location, initiatingUrl, purpose = 'BAP Location header') {
+  const trustedInitiatingUrl = validateBapUrl(initiatingUrl);
+  let resolvedLocation;
+  try {
+    resolvedLocation = new URL(location, trustedInitiatingUrl).href;
+  } catch {
+    throw new Error(`${purpose} is not a valid URL.`);
+  }
+
+  const trustedPollingUrl = validateBapUrl(resolvedLocation);
+  if (new URL(trustedPollingUrl).origin !== new URL(trustedInitiatingUrl).origin) {
+    throw new Error(`${purpose} points to a different host than the initiating BAP request.`);
+  }
+  return trustedPollingUrl;
+}
+
 /**
  * Gets an Azure CLI access token for the given resource URL.
  * The `--allow-no-subscriptions` flag is only valid on `az login` (other `az`
@@ -496,6 +512,7 @@ module.exports = {
   validateTokenResourceUrl,
   validateAuthenticatedRequestUrl,
   validateBapUrl,
+  validateBapPollingUrl,
   getAuthToken,
   makeRequest,
   odataGet,

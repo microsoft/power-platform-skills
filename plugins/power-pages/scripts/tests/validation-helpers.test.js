@@ -61,6 +61,7 @@ test('URL validation accepts documented Dataverse and Power Platform sovereign-c
     validateDataverseEnvironmentUrl,
     validateTokenResourceUrl,
     validateBapUrl,
+    validateBapPollingUrl,
   } = require(helpersPath);
 
   const dataverseUrls = [
@@ -96,6 +97,27 @@ test('URL validation accepts documented Dataverse and Power Platform sovereign-c
   assert.equal(
     validateBapUrl('https://dod.api.bap.microsoft.us/providers/example'),
     'https://dod.api.bap.microsoft.us/providers/example',
+  );
+  assert.equal(
+    validateBapPollingUrl(
+      '/providers/Microsoft.BusinessAppPlatform/lifecycleOperations/op-1',
+      'https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/environments',
+    ),
+    'https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/lifecycleOperations/op-1',
+  );
+  assert.equal(
+    validateBapPollingUrl(
+      'https://api.bap.microsoft.com/lifecycleOperations/op-2',
+      'https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/environments',
+    ),
+    'https://api.bap.microsoft.com/lifecycleOperations/op-2',
+  );
+  assert.throws(
+    () => validateBapPollingUrl(
+      'https://high.api.bap.microsoft.us/lifecycleOperations/op-3',
+      'https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/environments',
+    ),
+    /different host/,
   );
 });
 

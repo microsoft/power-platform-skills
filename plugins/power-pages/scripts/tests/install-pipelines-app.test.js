@@ -91,6 +91,26 @@ test('PAC fallback uses argv arrays with shell disabled for POSIX and Windows me
   assert.equal(calls[0].args[calls[0].args.indexOf('--environment-id') + 1], envId);
 });
 
+test('PAC fallback handles Buffer stderr while trying compatible argument forms', () => {
+  let calls = 0;
+  const result = tryPacFallback({
+    envId: ENV_ID,
+    packageUniqueName: PACKAGE_NAME,
+    execImpl: () => {
+      calls++;
+      if (calls === 1) {
+        const error = new Error('PAC rejected the first argument form');
+        error.stderr = Buffer.from('Unknown argument: --environment-id');
+        throw error;
+      }
+      return 'Installed';
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(calls, 2);
+});
+
 test('discoverPackage accepts a documented sovereign BAP host', async (t) => {
   withMockedHttp(t, [
     {
@@ -152,8 +172,41 @@ test('rejects a cross-cloud BAP Location header before polling', async (t) => {
 
   await assert.rejects(
     () => installPipelinesApp({ bapToken: 'fake', envId: ENV_ID, sleepImpl: noSleep }),
-    /Location header for a different host/,
+    /Location header.*different host/,
   );
+});
+
+test('resolves a same-host relative BAP Location header before polling', async (t) => {
+  const expectedPollUrl = 'https://api.bap.microsoft.com/lifecycle/op-relative';
+  withMockedHttp(t, [
+    {
+      match: (u, args) => u.includes('/applicationPackages?') && args.method === 'GET',
+      respond: () => ({ statusCode: 200, body: JSON.stringify(PACKAGE_LIST_AVAILABLE) }),
+    },
+    {
+      match: (u, args) => u.includes('/install?') && args.method === 'POST',
+      respond: () => ({
+        statusCode: 202,
+        headers: { location: '/lifecycle/op-relative' },
+        body: JSON.stringify({ properties: { provisioningState: 'Installing' } }),
+      }),
+    },
+    {
+      match: (u, args) => u === expectedPollUrl && args.method === 'GET',
+      respond: () => ({
+        statusCode: 200,
+        body: JSON.stringify({ properties: { provisioningState: 'Installed' } }),
+      }),
+    },
+  ]);
+
+  const result = await installPipelinesApp({
+    bapToken: 'fake',
+    envId: ENV_ID,
+    sleepImpl: noSleep,
+  });
+  assert.equal(result.locationHeader, expectedPollUrl);
+  assert.equal(result.status, 'Succeeded');
 });
 
 test('isTerminalSucceeded recognises both "Succeeded" and "Installed" terminal states', () => {
