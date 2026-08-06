@@ -93,37 +93,19 @@ CREATE
 
 ## Core Functional Journeys
 
-Define 3–5 end-to-end user journeys that the app must support. Each journey spans one or more
-screens and represents a complete user goal. The orchestrating skill verifies these journeys
-after all screens are built.
+### Journey: [Journey Name] ([P1/P2/P3])
 
-**Priority:** Order journeys by importance — P1 journeys are critical paths that must work;
-P2/P3 are secondary flows.
-
-### Journey: [Journey Name] (P1)
-
-- **Entry Point:** [screen and control where the journey starts — e.g., "Home screen, 'Add Task' button"]
-- **Screens Involved:** [ordered list of screens the user traverses — e.g., "Home → TaskForm → Home"]
-- **Required Operations:** [data operations that must occur — e.g., "Patch() to create new Task record"]
-- **Expected Outcome:** [what success looks like — e.g., "New task appears in Home screen gallery"]
-- **Success Behavior:** [user feedback on success — e.g., "Success notification shown, form clears, navigates to Home"]
-- **Failure Behavior:** [user feedback on failure — e.g., "Error banner shown, form remains for retry"]
+- **Expected Outcome:** [successful end state]
+- **Success Behavior:** [feedback and navigation on success]
+- **Failure Behavior:** [feedback and retry behavior on failure]
 
 #### Journey Step Mapping
 
-| Step                | Screen   | Control        | Event Property         | Formula Must Include         |
-| ------------------- | -------- | -------------- | ---------------------- | ---------------------------- |
-| 1. User taps Add    | Home     | Hom_AddTaskBtn | OnSelect               | `Navigate(TaskForm`          |
-| 2. User fills form  | TaskForm | Frm_TaskForm   | (data entry)           | Form fields bound to newTask |
-| 3. User taps Save   | TaskForm | Frm_SaveBtn    | OnSelect               | `Patch(Tasks,`               |
-| 4. Success feedback | TaskForm | (notification) | OnSelect (after Patch) | `Notify(` or navigation      |
-| 5. Return to list   | TaskForm | Frm_SaveBtn    | OnSelect               | `Navigate(Home`              |
+| Step               | Screen   | Control            | Event Property | Required Formula Behavior |
+| ------------------ | -------- | ------------------ | -------------- | ------------------------- |
+| [Step description] | [Screen] | [prefixed control] | [event]        | [verifiable requirement]  |
 
-[Map every step to exactly one screen, control (with prefix), and event — no step may be orphaned]
-
-### Journey: [Journey Name] (P2)
-
-[repeat for each core journey — minimum 3, maximum 5]
+[repeat for each core journey in the approved plan]
 
 ## TechnicalGuide Key Conventions
 [Embed the most critical YAML syntax rules from TechnicalGuide.md that screen-builders must follow:
