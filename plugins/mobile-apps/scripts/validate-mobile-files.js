@@ -15,14 +15,26 @@ const PLUGIN_ROOT = path.resolve(__dirname, '..');
 
 function usage() {
   return [
-    'Usage: node validate-mobile-files.js --project-root <path> --file <path> [--file <path> ...]',
+    'Usage: node validate-mobile-files.js --project-root <path> --file <path> [--file <path> ...] [--approved-js-dependency <name>@<exact-version> ...]',
     '',
     'Paths must be regular files. Relative paths resolve from --project-root.',
+    'Approved JavaScript dependencies must use exact semver versions from the reviewed app plan.',
   ].join('\n');
 }
 
+function parseApprovedJsDependency(value) {
+  if (typeof value !== 'string') return null;
+  const separator = value.lastIndexOf('@');
+  if (separator <= 0) return null;
+  const name = value.slice(0, separator);
+  const version = value.slice(separator + 1);
+  if (!name || (name.startsWith('@') && !name.includes('/'))) return null;
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) return null;
+  return { name, version };
+}
+
 function parseArgs(argv) {
-  const parsed = { projectRoot: null, targets: [] };
+  const parsed = { approvedJsDependencies: [], errors: [], projectRoot: null, targets: [] };
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -31,6 +43,14 @@ function parseArgs(argv) {
       index += 1;
     } else if (arg === '--file') {
       parsed.targets.push(argv[index + 1]);
+      index += 1;
+    } else if (arg === '--approved-js-dependency') {
+      const approvedDependency = parseApprovedJsDependency(argv[index + 1]);
+      if (approvedDependency) {
+        parsed.approvedJsDependencies.push(approvedDependency);
+      } else {
+        parsed.errors.push(`Invalid --approved-js-dependency value: ${argv[index + 1] || '<missing>'}`);
+      }
       index += 1;
     } else if (arg === '--help' || arg === '-h') {
       parsed.help = true;
@@ -47,7 +67,7 @@ function isWithinRoot(filePath, projectRoot) {
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }
 
-function runValidator(validatorName, filePath, content, projectRoot) {
+function runValidator(validatorName, filePath, content, projectRoot, approvedJsDependencies) {
   const validatorPath = path.join(PLUGIN_ROOT, 'hooks', validatorName);
   const payload = JSON.stringify({
     cwd: projectRoot,
@@ -57,6 +77,7 @@ function runValidator(validatorName, filePath, content, projectRoot) {
       file_path: filePath,
       filePath,
       validation_mode: 'explicit-mobile-workflow',
+      approved_js_dependencies: approvedJsDependencies,
     },
   });
 
@@ -73,10 +94,14 @@ function runValidator(validatorName, filePath, content, projectRoot) {
 }
 
 function main(argv) {
-  const { help, projectRoot: projectRootArg, targets } = parseArgs(argv);
+  const { approvedJsDependencies, errors, help, projectRoot: projectRootArg, targets } = parseArgs(argv);
   if (help) {
     process.stdout.write(`${usage()}\n`);
     return 0;
+  }
+  if (errors.length > 0) {
+    process.stderr.write(`${errors.join('\n')}\n\n${usage()}\n`);
+    return 1;
   }
   if (!projectRootArg || targets.length === 0 || targets.some((target) => !target)) {
     process.stderr.write(`${usage()}\n`);
@@ -133,7 +158,13 @@ function main(argv) {
 
     for (const validator of VALIDATORS) {
       if (!validator.appliesTo(filePath)) continue;
-      const result = runValidator(validator.script, filePath, content, projectRoot);
+      const result = runValidator(
+        validator.script,
+        filePath,
+        content,
+        projectRoot,
+        approvedJsDependencies,
+      );
       if (result.stdout) process.stdout.write(result.stdout);
       if (result.stderr) process.stderr.write(result.stderr);
       if (result.error) {
@@ -159,4 +190,5 @@ module.exports = {
   isWithinRoot,
   main,
   parseArgs,
+  parseApprovedJsDependency,
 };

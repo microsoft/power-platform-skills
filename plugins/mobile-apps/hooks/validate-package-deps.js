@@ -6,9 +6,9 @@
  * Triggers on Write/Edit/MultiEdit of any package.json. Blocks when the
  * resulting deps include known-bad packages, private vendor packages are
  * referenced via the npm registry instead of `file:` paths to vendor *.tgz,
- * OR packages that ship native code/config are added outside the current
- * package baseline's native/runtime allowlist. Generic JS-only dependencies,
- * including packages whose names begin with `react-native-`, remain allowed.
+ * OR native/runtime packages are added outside the current package baseline's
+ * native/runtime allowlist. A reviewed exact-version exception may admit an
+ * otherwise ambiguous `react-native-*` package that planning verified is JS-only.
  *
  * Allowed icon library: `@expo/vector-icons` only.
  *
@@ -40,13 +40,14 @@ const FORBIDDEN_DEPS = {
 // Names that MUST resolve to a vendor *.tgz file: path.
 const VENDOR_ONLY = [/^expo-msal-intune$/, /^@microsoft\/pa-/];
 
-// Name patterns identify packages that need closer inspection; they do not prove
-// that a package ships native code. For example, react-native-calendars is a
-// source-only TypeScript/JavaScript package despite its name.
+// These patterns identify packages known to require native runtime support. The
+// broad `react-native-*` namespace is handled separately because it also contains
+// pure-JavaScript packages; those stay blocked unless planning passes an exact
+// reviewed name/version exception to explicit validation.
 const NATIVE_PACKAGE_PATTERNS = [
   /^expo($|-)/,
   /^@expo\//,
-  /^react-native($|-)/,
+  /^react-native$/,
   /^@react-native\//,
   /^@react-native-community\//,
   /^@shopify\/react-native-/,
@@ -71,16 +72,9 @@ const NATIVE_PACKAGE_PATTERNS = [
   /^@sentry\/react-native$/,
 ];
 
-const BUNDLED_TEMPLATE_PACKAGE_PATH = path.resolve(__dirname, '..', 'template', 'package.json');
+const AMBIGUOUS_REACT_NATIVE_PACKAGE_PATTERN = /^react-native-/;
 
-const NATIVE_PACKAGE_MARKERS = new Set([
-  'android',
-  'ios',
-  'macos',
-  'windows',
-  'expo-module.config.json',
-  'react-native.config.js',
-]);
+const BUNDLED_TEMPLATE_PACKAGE_PATH = path.resolve(__dirname, '..', 'template', 'package.json');
 
 function packageDeps(pkg) {
   return {
@@ -162,104 +156,15 @@ function getNativeAllowlistDeps(toolName, toolInput, afterContent, packageJsonPa
   return beforeDeps || readPackageLockDeps(packageJsonPath);
 }
 
-function resolveInstalledPackageRoot(fromRoot, name) {
-  let current = path.resolve(fromRoot);
-  while (true) {
-    const candidate = path.join(current, 'node_modules', ...name.split('/'));
-    if (fs.existsSync(path.join(candidate, 'package.json'))) return candidate;
-    const parent = path.dirname(current);
-    if (parent === current) return null;
-    current = parent;
-  }
-}
-
-function packageHasNativeMarkers(packageRoot, manifest) {
-  if (manifest.codegenConfig) return true;
-  const entries = fs.readdirSync(packageRoot, { withFileTypes: true });
-  return entries.some((entry) => {
-    if (NATIVE_PACKAGE_MARKERS.has(entry.name)) return true;
-    return entry.isFile() && (
-      entry.name.endsWith('.podspec') ||
-      /^app\.plugin\.(?:js|cjs|mjs|ts)$/.test(entry.name)
-    );
-  });
-}
-
-function runtimeDependencySpecs(manifest) {
-  // Installed package devDependencies are authoring/build inputs and are not
-  // shipped as part of the app's runtime graph, so the recursive native check
-  // walks only dependencies, optional dependencies, and peers.
-  const specs = new Map();
-  for (const name of Object.keys(manifest.dependencies || {})) {
-    specs.set(name, { optional: false });
-  }
-  for (const name of Object.keys(manifest.optionalDependencies || {})) {
-    specs.set(name, { optional: true });
-  }
-  for (const name of Object.keys(manifest.peerDependencies || {})) {
-    if (!specs.has(name)) {
-      specs.set(name, { optional: manifest.peerDependenciesMeta?.[name]?.optional === true });
+function approvedJsDependencyVersions(toolInput) {
+  const approved = new Map();
+  if (!Array.isArray(toolInput.approved_js_dependencies)) return approved;
+  for (const entry of toolInput.approved_js_dependencies) {
+    if (typeof entry?.name === 'string' && typeof entry?.version === 'string') {
+      approved.set(entry.name, entry.version);
     }
   }
-  return specs;
-}
-
-function inspectInstalledPackageTree(packageJsonPath, name) {
-  if (typeof packageJsonPath !== 'string') return null;
-  const packageRoot = resolveInstalledPackageRoot(path.dirname(packageJsonPath), name);
-  if (!packageRoot) return null;
-
-  const visited = new Set();
-  const nativePackages = [];
-  const errors = [];
-
-  function visit(currentRoot, requestedName, parentChain) {
-    let resolvedRoot;
-    try {
-      resolvedRoot = fs.realpathSync(currentRoot);
-    } catch (error) {
-      errors.push(`cannot resolve ${requestedName}: ${error.message}`);
-      return;
-    }
-    if (visited.has(resolvedRoot)) return;
-    visited.add(resolvedRoot);
-
-    let manifest;
-    try {
-      manifest = JSON.parse(fs.readFileSync(path.join(currentRoot, 'package.json'), 'utf8'));
-    } catch (error) {
-      errors.push(`cannot read ${requestedName}/package.json: ${error.message}`);
-      return;
-    }
-
-    const packageName = manifest.name || requestedName;
-    const chain = [...parentChain, packageName];
-    try {
-      if (packageHasNativeMarkers(currentRoot, manifest)) {
-        // The native package name is the allowlist boundary. Its own dependency
-        // tree already belongs to the prebuilt runtime when this name is shipped.
-        nativePackages.push({ name: packageName, chain });
-        return;
-      }
-    } catch (error) {
-      errors.push(`cannot inspect ${packageName}: ${error.message}`);
-      return;
-    }
-
-    for (const [dependencyName, spec] of runtimeDependencySpecs(manifest)) {
-      const dependencyRoot = resolveInstalledPackageRoot(currentRoot, dependencyName);
-      if (!dependencyRoot) {
-        if (!spec.optional) {
-          errors.push(`required runtime dependency ${[...chain, dependencyName].join(' -> ')} is not installed`);
-        }
-        continue;
-      }
-      visit(dependencyRoot, dependencyName, chain);
-    }
-  }
-
-  visit(packageRoot, name, []);
-  return { errors, nativePackages };
+  return approved;
 }
 
 function isPackageJson(filePath) {
@@ -288,7 +193,7 @@ function readResult(toolName, toolInput) {
   return '';
 }
 
-function findViolations(content, filePath, nativeAllowlistDeps) {
+function findViolations(content, filePath, nativeAllowlistDeps, approvedJsDependencies) {
   let pkg;
   try {
     pkg = JSON.parse(content);
@@ -317,31 +222,20 @@ function findViolations(content, filePath, nativeAllowlistDeps) {
       });
     }
     if (!editingBundledTemplatePackage && nativeAllowlistDeps && !nativeAllowlistDeps[name]) {
-      const inspection = inspectInstalledPackageTree(filePath, name);
-      if (inspection) {
-        for (const error of inspection.errors) {
-          violations.push({
-            name,
-            version,
-            reason: `Cannot verify runtime dependency tree for \`${name}\`: ${error}.`,
-          });
-        }
-        for (const nativePackage of inspection.nativePackages) {
-          if (nativeAllowlistDeps[nativePackage.name]) continue;
-          const transitive = nativePackage.name !== name;
-          violations.push({
-            name,
-            version,
-            reason: transitive
-              ? `Dependency \`${name}\` pulls runtime dependency \`${nativePackage.name}\` that ships native code/config via ${nativePackage.chain.join(' -> ')}, but \`${nativePackage.name}\` is absent from the app/template baseline.`
-              : `Dependency \`${name}\` ships native code/config but was not present in this app/template package baseline. Start from a template/runtime that already ships it.`,
-          });
-        }
-      } else if (NATIVE_PACKAGE_PATTERNS.some((rx) => rx.test(name))) {
+      if (NATIVE_PACKAGE_PATTERNS.some((rx) => rx.test(name))) {
         violations.push({
           name,
           version,
-          reason: `Dependency \`${name}\` ships native code/config but was not present in this app/template package baseline. Start from a template/runtime that already ships it. Pure-JavaScript packages are allowed regardless of naming prefix.`,
+          reason: `Native/runtime dependency \`${name}\` was not present in this app/template package baseline. Start from a template/runtime that already ships it.`,
+        });
+      } else if (
+        AMBIGUOUS_REACT_NATIVE_PACKAGE_PATTERN.test(name) &&
+        approvedJsDependencies.get(name) !== String(version)
+      ) {
+        violations.push({
+          name,
+          version,
+          reason: `Dependency \`${name}@${version}\` uses the ambiguous \`react-native-*\` namespace and is absent from the app/template baseline. Explicit validation requires the same exact name/version from the user-approved JavaScript Dependencies plan.`,
         });
       }
     }
@@ -376,7 +270,8 @@ process.stdin.on('end', () => {
     );
     process.exit(2);
   }
-  const violations = findViolations(content, fp, nativeAllowlistDeps);
+  const approvedJsDependencies = approvedJsDependencyVersions(toolInput);
+  const violations = findViolations(content, fp, nativeAllowlistDeps, approvedJsDependencies);
   if (violations.length === 0) process.exit(0);
 
   const rel = path.relative(process.cwd(), fp) || fp;
