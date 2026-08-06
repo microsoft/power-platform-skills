@@ -187,10 +187,6 @@ QA fixes applied: [N]
 Status: Done
 ```
 
-**For Repair actions:** You may only edit your assigned screen. If a contract violation
-requires changes to another screen (e.g., a navigation target doesn't exist), report it
-as unresolved — do not attempt to create or modify other screens.
-
 ## Critical Constraints
 
 - **Do NOT call** `describe_control`, `list_controls`, `list_apis`, `list_data_sources`,
