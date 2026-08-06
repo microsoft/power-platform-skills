@@ -160,7 +160,6 @@ inexplicable gaps or clipping.
 
 **Detect:** For every `GroupContainer` whose parent has `LayoutDirection`
 (AutoLayout child), check:
-
 - Is `FillPortions` absent or `=0`?
 - Is `Height` absent?
 - If both → flag it.
@@ -222,7 +221,6 @@ PA default of 5 cannot creep in.
 The container renders one size at design time and another at runtime.
 
 **Detect:** For every control, check whether it has both:
-
 - `FillPortions` with a value greater than 0, AND
 - An explicit `Height` (any non-formula numeric or a formula that doesn't
   reference Parent)
@@ -240,7 +238,6 @@ confuses the layout engine. The container renders one size at design time and
 another at runtime.
 
 **Detect:** For every control, check whether it has both:
-
 - `FillPortions` with a value greater than 0, AND
 - An explicit `Width` (any non-formula numeric or a formula that doesn't
   reference Parent)
