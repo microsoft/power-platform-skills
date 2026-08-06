@@ -56,7 +56,7 @@ The orchestrator splits Gate 4 into two cheaper gates so the user can edit the s
 
 - `<working_dir>/app/index.tsx`, `app/login.tsx`, `app/oauth-callback.tsx`, `app/(app)/_layout.tsx`, `app/(app)/home.tsx` — existing routes
 - `<working_dir>/tamagui.config.ts` — design tokens
-- `<working_dir>/package.json` — installed dependencies. Native modules must already be present; a verified pure-JavaScript library may instead be proposed with an exact version under `## Screens → JavaScript Dependencies` for the orchestrator to install before screen generation.
+- `<working_dir>/package.json` — installed dependencies. Native modules must already be present; a verified pure-JavaScript library may instead be proposed with an exact version under `## Screens → ### JavaScript Dependencies` for the orchestrator to install before screen generation.
 - `<working_dir>/src/components/`, `src/hooks/`, `src/utils/`, `src/tokens/` — shared code copied by the orchestrator
 
 **Hard rule — read-only on the scaffolded files.** You may NEVER write to anything outside this allow-list:
