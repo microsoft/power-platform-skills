@@ -147,32 +147,11 @@ structure (CREATE or EDIT). Follow the template exactly — fill in every sectio
 content from the approved plan, discovery results, and control definitions. Do not omit
 sections unless the template says to.
 
-### Control Prefixes (Mandatory)
+### Control Prefixes
 
-**Before writing any Per-Screen Specification, assign a unique 2-4 character prefix to each
-screen.** This prefix must be used by all controls on that screen to prevent naming conflicts
-when multiple screen builders run in parallel.
-
-**Rules:**
-
-1. **Every screen gets a unique prefix.** Examples: `Hom_`, `Cat_`, `Req_`, `Ord_`, `Adm_`,
-   `Det_`, `Set_`, `Frm_`.
-
-2. **All control names must include the prefix.** Write `Hom_SubmitBtn`, not `SubmitBtn`.
-   Write `Cat_DeviceGallery`, not `DeviceGallery`.
-
-3. **The Contract section uses prefixed names.** Primary Content, Primary Interaction, and
-   Required Handlers must all reference the prefixed control names.
-
-4. **The Journey Step Mapping uses prefixed names.** The Control column must match the actual
-   prefixed control name that will be written to the YAML file.
-
-5. **Do not use generic names.** Generic names like `Gallery1`, `Button1`, `TextInput1` will
-   be renamed by the compiler, breaking contract verification.
-
-**Why this matters:** When parallel screen builders write YAML files, the compiler may rename
-controls to resolve name conflicts. If the plan uses generic names, the contracts become stale
-and verification fails. Prefixed names are globally unique from the start, preventing renames.
+Assign each screen a short, unique prefix such as `Hom_`, and use it for every control on that
+screen. Use the same control names in screen contracts and journey mappings. Avoid generic
+names such as `Button1`; contract verification depends on control names remaining stable.
 
 ### Contract Section (Required for Each Screen)
 
