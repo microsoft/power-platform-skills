@@ -114,9 +114,6 @@ test("hook emits PagesAIPluginEvent with top-level fields for tracked slash comm
   assert.equal(typeof body.data.osName, "string");
   assert.equal(typeof body.data.osVersion, "string");
   assert.match(body.data.nodeVersion, /^v\d+$/);
-  assert.equal(body.data.orgId, undefined);
-  assert.equal(body.data.tenantId, undefined);
-  assert.equal(body.data.eventInfo, undefined);
 });
 
 test("hook exits 0 and emits nothing for an unrelated prompt", () => {

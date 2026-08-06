@@ -23,16 +23,18 @@ Organization Unique Name:    contoso
 Organization Friendly Name:  Contoso
 `;
 
-test("returns only the orgId and cloud needed for local routing", () => {
+test("returns { orgId, tenantId } parsed from `pac auth who` output", () => {
   pacAuth._resetCache();
   const result = pacAuth.readPacAuth({ _exec: () => SAMPLE_OUTPUT });
   assert.deepEqual(result, {
     orgId: "33333333-3333-3333-3333-333333333333",
+    tenantId: "11111111-1111-1111-1111-111111111111",
     cloud: "Public",
+    objectId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
   });
 });
 
-test("ignores tenant and Entra object identity lines", () => {
+test("returns objectId: '' when the Entra ID Object Id line is missing", () => {
   pacAuth._resetCache();
   const result = pacAuth.readPacAuth({
     _exec: () =>
@@ -40,22 +42,24 @@ test("ignores tenant and Entra object identity lines", () => {
       "Tenant Id: 11111111-1111-1111-1111-111111111111\n" +
       "Organization Id: 33333333-3333-3333-3333-333333333333\n",
   });
-  assert.deepEqual(result, {
-    orgId: "33333333-3333-3333-3333-333333333333",
-    cloud: "Public",
-  });
+  assert.equal(result.objectId, "");
 });
 
-test("returns null when only Tenant Id is present", () => {
+test("returns { orgId: '', tenantId } when only Tenant Id line present", () => {
   pacAuth._resetCache();
   const result = pacAuth.readPacAuth({
     _exec: () =>
       "Cloud: Public\nTenant Id: 11111111-1111-1111-1111-111111111111\n",
   });
-  assert.equal(result, null);
+  assert.deepEqual(result, {
+    orgId: "",
+    tenantId: "11111111-1111-1111-1111-111111111111",
+    cloud: "Public",
+    objectId: "",
+  });
 });
 
-test("returns orgId and cloud when Organization Id is present", () => {
+test("returns { tenantId: '', orgId } when only Organization Id line present", () => {
   pacAuth._resetCache();
   const result = pacAuth.readPacAuth({
     _exec: () =>
@@ -63,7 +67,9 @@ test("returns orgId and cloud when Organization Id is present", () => {
   });
   assert.deepEqual(result, {
     orgId: "33333333-3333-3333-3333-333333333333",
+    tenantId: "",
     cloud: "Public",
+    objectId: "",
   });
 });
 
@@ -149,7 +155,9 @@ test("parses values with extra whitespace and mixed casing in label", () => {
   });
   assert.deepEqual(result, {
     orgId: "33333333-3333-3333-3333-333333333333",
+    tenantId: "11111111-1111-1111-1111-111111111111",
     cloud: "",
+    objectId: "",
   });
 });
 

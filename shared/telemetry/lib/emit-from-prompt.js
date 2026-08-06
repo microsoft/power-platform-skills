@@ -88,16 +88,12 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
   }
   if (!provisioned) return { emitted: false, skillName };
 
+  const pacReader = typeof _readPacAuth === "function" ? _readPacAuth : readPacAuth;
   let pacAuth = null;
-  // PAC auth is routing context, not event data. Static-key plugins do not need
-  // it at all; resolver-backed plugins receive only the local org/cloud values.
-  if (resolver) {
-    const pacReader = typeof _readPacAuth === "function" ? _readPacAuth : readPacAuth;
-    try {
-      pacAuth = pacReader();
-    } catch {
-      pacAuth = null;
-    }
+  try {
+    pacAuth = pacReader();
+  } catch {
+    pacAuth = null;
   }
 
   const agentReader =
@@ -124,6 +120,9 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
     nodeVersion: "v" + String(process.versions.node).split(".")[0],
     skillName,
   };
+  if (pacAuth && pacAuth.orgId) fields.orgId = pacAuth.orgId;
+  if (pacAuth && pacAuth.tenantId) fields.tenantId = pacAuth.tenantId;
+  if (pacAuth && pacAuth.objectId) fields.eventInfo = { aadObjectId: pacAuth.objectId };
   if (agentInfo.aiAgentName) fields.aiAgentName = agentInfo.aiAgentName;
   if (agentInfo.aiAgentVersion) fields.aiAgentVersion = agentInfo.aiAgentVersion;
   if (agentInfo.pacCliVersion) fields.pacCliVersion = agentInfo.pacCliVersion;
@@ -134,7 +133,6 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
   try {
     emit(event, {
       cloud: (pacAuth && pacAuth.cloud) || "",
-      routingOrgId: (pacAuth && pacAuth.orgId) || "",
       configDir: process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "",
       fakeProbe: process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "",
       ikeyJsonPath: ikeyPath,

@@ -75,7 +75,7 @@ test("exits 0 and emits nothing for another plugin's slash command", () => {
   assert.equal(waitForFile(probePath, 1500), false, "unrelated command must not emit");
 });
 
-test("provisioned config emits skill_started without stable identity fields", () => {
+test("provisioned config → /model-apps:genpage prompt emits skill_started, WITHOUT aadObjectId", () => {
   const configDir = mkTemp();
   const probePath = path.join(configDir, "probe.json");
   const ikeyPath = writeProvisionedConfig(configDir);
@@ -94,9 +94,8 @@ test("provisioned config emits skill_started without stable identity fields", ()
   assert.equal(body.data.eventName, "skill_started");
   assert.equal(body.data.pluginName, "model-apps");
   assert.equal(body.data.skillName, "genpage");
-  assert.equal(body.data.orgId, undefined);
-  assert.equal(body.data.tenantId, undefined);
-  assert.equal(body.data.eventInfo, undefined);
+  // The _readPacAuth wrapper strips objectId, so no user-level identifier is sent.
+  assert.equal(body.data.eventInfo, undefined, "prompt path must not send eventInfo/aadObjectId");
 });
 
 test("bare /genpage prompt is also recognized (host may drop the plugin prefix)", () => {

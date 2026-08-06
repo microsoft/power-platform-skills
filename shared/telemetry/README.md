@@ -23,7 +23,7 @@ hook (~5ms when disabled, ~3-5s otherwise — incl. when the user opted out)
             ├─ sanitizeData (FIELD_TYPES allowlist)
             ├─ appendLocal({time,name,data}) → telemetry/<plugin>/sessions/<sessionId>/events.jsonl   ← ALWAYS (the mirror)
             ├─ user opt-out (env var POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT=1 OR config.json choice "off"; env wins) → exit (mirror written, no POST)
-            ├─ resolve destination → iKey + collector_url   ← resolver.js (plugin-local context) or static key
+            ├─ resolve destination → iKey + collector_url   ← resolver.js (plugin) or static key
             ├─ iKey missing/placeholder → exit (mirror already written, no POST)
             ├─ build CS4.0 envelope (same time + sanitized data)
             └─ HTTPS POST to the resolved collector_url
@@ -57,7 +57,7 @@ own that decision:
 ```js
 module.exports = {
   // async; may do network I/O (must cache). Returns { iKey, collectorUrl } or null.
-  async resolve({ event, cfg, cloud, routingOrgId, configDir }) { /* ... */ },
+  async resolve({ event, cfg, cloud, configDir }) { /* ... */ },
   // optional sync fast-gate so hooks skip the ~3-5s pac shellout when unprovisioned.
   isProvisioned(cfg) { return true; },
 };
@@ -75,7 +75,7 @@ nothing about it.
 
 Every event carries a fixed allowlist enforced by `lib/events.js`. Field names match the destination Kusto column names (camelCase).
 
-**Anonymous execution context (on every event):**
+**Identity / context (on every event):**
 
 - `pluginName`, `pluginVersion` — read from the plugin's `.claude-plugin/plugin.json`
 - `sessionId` — random UUID generated once per Node process; not persisted
@@ -83,28 +83,22 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 - `osName`, `osVersion` — `process.platform` and OS release string
 - `nodeVersion` — major version only, e.g. `v22`
 
-**Tool + agent (when available, otherwise omitted):**
+**PAC + agent (when available, otherwise omitted):**
 
+- `orgId`, `tenantId` — Dataverse org GUID and Entra tenant GUID, read from `pac auth who` if the user is signed in (`orgId` is passed to the plugin resolver — power-pages uses it for Artemis region routing)
 - `pacCliVersion` — semver from `pac --version`
 - `aiAgentName`, `aiAgentVersion` — host AI agent detected via env in the hook process before the detached dispatcher is spawned. Claude Code (`CLAUDECODE=1`) reports `Claude Code` with the version read from its installed `package.json` via `CLAUDE_CODE_EXECPATH`; that `package.json` only exists for npm-global installs, so when it can't be read (e.g. the native installer's standalone binary) the version falls back to the dotted semver parsed out of `AI_AGENT` (`claude-code_<maj>-<min>-<patch>_agent`), which Claude Code sets regardless of install method. GitHub Copilot CLI (`COPILOT_CLI=1`) reports `Copilot CLI` with the version from `COPILOT_CLI_BINARY_VERSION` or `COPILOT_CLI_VERSION`. Codex, OpenCode, Hermes, and OpenClaw are detected from their agent-specific env flags/version variables (`CODEX_*`, `OPENCODE_*`, `HERMES_*`, `OPENCLAW_*`) or from `AI_AGENT` when it includes a recognizable agent name. Explicit `AI_AGENT_NAME` / `AI_AGENT_VERSION` env vars override detection (used for testing); when `AI_AGENT_NAME` is set but `AI_AGENT_VERSION` is empty, the version is backfilled from whichever detector matches.
 
 **Per-event:**
 
 - `skillName` (on every event)
+- `eventInfo` — caller-supplied JSON object (dynamic Kusto column). The caller is responsible for not putting PII in this payload. Power Pages populates it with `aadObjectId` (the signed-in user's Entra ID / AAD directory object id, parsed from `pac auth who`) when available; the field is omitted when `pac auth who` doesn't surface an object id. On the wire it is sent as a JSON **string** (re-serialized by `emit-dispatcher.js`, not the local mirror) because the tenant-side field mapping flattens `data.<key>` to a single `data_<key>` leaf and does not recurse into nested objects — the Kusto side must `parse_json()` / `todynamic()` it back into a dynamic value.
 
-## What is never included in an event
+## What is NEVER sent
 
-Dataverse organization IDs, Entra tenant IDs, Entra user object IDs, file paths, cwd, env vars, site names, Dataverse URLs, stack traces, `err.message` text, skill arguments, tool inputs, prompt text, usernames, and hostnames are excluded from both the collector event and local diagnostic mirror.
+File paths, cwd, env vars, site names, Dataverse URLs, stack traces, `err.message` text, skill arguments, tool inputs, prompt text, usernames, hostnames.
 
 The dispatcher runs a defense-in-depth allowlist filter against `FIELD_TYPES` before serializing, so any field that bypasses the builders is dropped before it reaches the wire.
-
-Power Pages still needs the Dataverse organization ID to select the public-cloud collector region.
-It passes that ID to the detached resolver as process-local context, never as event data.
-The resolver uses the ID in a request to the Power Platform organization API to obtain the environment geo.
-The ID is absent from the collector envelope and local diagnostic mirror, and the region cache uses a SHA-256 key instead of storing the raw ID in its filename.
-When an upgraded installation next resolves a region, it renames older raw-ID cache filenames to hashed keys.
-Sovereign clouds route from the PAC cloud stamp and do not need an organization ID lookup.
-The PAC parser ignores tenant IDs and Entra user object IDs.
 
 ## Privacy posture
 
@@ -137,7 +131,7 @@ shared/telemetry/
 │  ├─ resolver-loader.js     # discovers an optional plugin resolver.js next to ikey.json
 │  ├─ user-config.js         # reads/writes the per-plugin telemetry opt-out in config.json
 │  ├─ telemetry-config.js    # CLI behind /<plugin>:telemetry on|off|status
-│  ├─ pac-auth.js            # parses only local routing orgId / cloud from `pac auth who`
+│  ├─ pac-auth.js            # parses `pac auth who` for orgId / tenantId / cloud
 │  ├─ agent-info.js          # detects AI agent host + reads `pac --version`
 │  ├─ session.js             # per-process session UUID
 │  ├─ prompt-detector.js     # parses `/plugin:skill` slash commands from prompt text
@@ -257,7 +251,7 @@ If you change the wire-level shape (envelope, transport, allowlist), refresh eve
 
 Every module exposes injectable test seams via `opts._xxx` properties so tests run hermetically (no real network, no real PAC shellouts):
 
-- `pac-auth.js` — `opts._exec` swaps `execFileSync`; tenant and user identity lines are ignored
+- `pac-auth.js` — `opts._exec` swaps `execFileSync`
 - `agent-info.js` — `opts._exec` swaps `execFileSync`
 - `emit-from-prompt.js` — `opts._emit`, `opts._readPacAuth`, `opts._readAgentInfo`
 - `emit-dispatcher.js` — `POWER_PLATFORM_SKILLS_FAKE_HTTPS` env var captures the would-be POST to a probe file; `POWER_PLATFORM_SKILLS_IKEY` / `POWER_PLATFORM_SKILLS_COLLECTOR` bypass resolver.js / static-key resolution

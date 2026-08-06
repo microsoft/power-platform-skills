@@ -512,10 +512,7 @@ repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **physical copy*
   (CI-enforced: `node scripts/validate-telemetry-ikeys.js`).
 - **Emission:** `hooks/run-skill-pretool-telemetry.js` (PreToolUse Skill) and
   `hooks/run-user-prompt-telemetry.js` (UserPromptSubmit `/model-apps:<skill>`).
-- **Privacy:** anonymous, default-on. The fixed event allowlist excludes Dataverse
-  organization IDs, Entra tenant IDs, Entra user object IDs, and caller-supplied
-  dynamic payloads. Model Apps uses a static collector key, so its emitters do not
-  read PAC auth identity for routing. Users opt out of transmission via
+- **Privacy:** anonymous, default-on. Users opt out of transmission via
   `/model-apps:telemetry off`; the local diagnostic mirror
   (`~/.power-platform-skills/telemetry/model-apps/sessions/<id>/events.jsonl`) is
   still written. CI/automation opt out via

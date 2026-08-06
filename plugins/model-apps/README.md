@@ -202,10 +202,10 @@ carries the provisioned model-apps key + stream (staged, not yet enabled). `disa
 true` is the active guard; the placeholder-key check is only a secondary guard for
 un-provisioned copies. Once enabled it is **on by default** (you opt out).
 
-- **What's collected:** skill name, plugin/PAC/agent versions, and OS/Node versions.
-  Dataverse organization IDs, Entra tenant IDs, Entra user object IDs, file paths,
-  prompts, tool inputs, entity/table names, URLs, credentials, usernames, and
-  hostnames are excluded.
+- **What's collected:** skill name, plugin/PAC/agent versions, OS/Node versions, and
+  Dataverse org/tenant GUIDs when signed in. **Never** file paths, prompts, tool
+  inputs, entity/table names, URLs, credentials, usernames, hostnames, or any
+  user-level identifier (no Entra object id).
 - **Local diagnostic mirror:** every event is also written to
   `~/.power-platform-skills/telemetry/model-apps/sessions/<id>/events.jsonl` (even
   when you've opted out of transmission) — hand over that one file when filing an issue.

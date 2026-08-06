@@ -70,24 +70,17 @@ test("buildSkillStarted drops fields not in allowlist", () => {
     file_path: "/etc/passwd",
     error_message: "secret",
   });
-  assert.equal(ev.data.tenantId, undefined);
-  assert.equal(ev.data.orgId, undefined);
+  assert.equal(ev.data.tenantId, "11111111-1111-1111-1111-111111111111");
+  assert.equal(ev.data.orgId, "22222222-2222-2222-2222-222222222222");
   assert.equal(ev.data.leaked_field, undefined);
   assert.equal(ev.data.file_path, undefined);
   assert.equal(ev.data.error_message, undefined);
 });
 
-test("stable identity fields are excluded even when supplied", () => {
-  const ev = buildSkillStarted(ENVELOPE, {
-    ...common,
-    skillName: "add-seo",
-    orgId: "22222222-2222-2222-2222-222222222222",
-    tenantId: "11111111-1111-1111-1111-111111111111",
-    eventInfo: { aadObjectId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" },
-  });
+test("orgId/tenantId omitted when input is missing", () => {
+  const ev = buildSkillStarted(ENVELOPE, { ...common, skillName: "add-seo" });
   assert.equal(ev.data.orgId, undefined);
   assert.equal(ev.data.tenantId, undefined);
-  assert.equal(ev.data.eventInfo, undefined);
 });
 
 test("severity is Info for *_started events even when outcome=failure is supplied (started has no outcome)", () => {
@@ -112,28 +105,33 @@ test("data has stable key set across calls (no key drift)", () => {
   const ev = buildSkillStarted(ENVELOPE, {
     ...common,
     skillName: "x",
+    orgId: "o",
+    tenantId: "t",
     pacCliVersion: "1.36.0",
     aiAgentName: "Claude Code",
     aiAgentVersion: "2.0.0",
+    eventInfo: { detail: "anything" },
   });
   const expectedKeys = [
     "aiAgentName", "aiAgentVersion",
-    "correlationId", "eventName", "eventType",
-    "nodeVersion", "osName", "osVersion",
+    "correlationId", "eventInfo", "eventName", "eventType",
+    "nodeVersion", "orgId", "osName", "osVersion",
     "pacCliVersion",
     "pluginName", "pluginVersion", "sessionId", "severity",
-    "skillName",
+    "skillName", "tenantId",
   ];
   assert.deepEqual(Object.keys(ev.data).sort(), expectedKeys);
 });
 
-test("caller-supplied dynamic objects are excluded from the fixed schema", () => {
+test("eventInfo passes through as a dynamic object (not stringified)", () => {
+  const eventInfo = { region: "us-west", attempt: 3, nested: { a: 1 } };
   const ev = buildSkillStarted(ENVELOPE, {
     ...common,
     skillName: "add-seo",
-    eventInfo: { region: "us-west", attempt: 3 },
+    eventInfo,
   });
-  assert.equal(ev.data.eventInfo, undefined);
+  assert.equal(typeof ev.data.eventInfo, "object");
+  assert.deepEqual(ev.data.eventInfo, eventInfo);
 });
 
 test("buildSkillCompleted carries errorDescription", () => {
@@ -237,6 +235,33 @@ test("durationMs absent when caller does not provide", () => {
   assert.equal(ev.data.durationMs, undefined);
 });
 
+test("eventInfo drops non-object values (no Kusto dynamic-type confusion)", () => {
+  const cases = [
+    "a string", // strings rejected
+    42,         // numbers rejected
+    true,       // booleans rejected
+    new Date(), // Date rejected
+    /regex/,    // RegExp rejected
+  ];
+  for (const v of cases) {
+    const ev = buildSkillStarted(ENVELOPE, {
+      ...common,
+      skillName: "x",
+      eventInfo: v,
+    });
+    assert.equal(ev.data.eventInfo, undefined, `input=${String(v)}`);
+  }
+});
+
+test("eventInfo accepts arrays (valid JSON for dynamic column)", () => {
+  const ev = buildSkillStarted(ENVELOPE, {
+    ...common,
+    skillName: "x",
+    eventInfo: [1, 2, 3],
+  });
+  assert.deepEqual(ev.data.eventInfo, [1, 2, 3]);
+});
+
 test("outcome enforces enum: only 'success' or 'failure' pass through", () => {
   const okSuccess = buildSkillCompleted(ENVELOPE, {
     ...common, skillName: "x", outcome: "success", errorClass: "",
@@ -264,6 +289,7 @@ test("null and undefined dropped uniformly across all types", () => {
     skillName: null,
     durationMs: null,
     outcome: null,
+    eventInfo: null,
     errorClass: null,
     errorDescription: undefined,
   });
@@ -273,6 +299,7 @@ test("null and undefined dropped uniformly across all types", () => {
   assert.equal(ev.data.skillName, undefined);
   assert.equal(ev.data.durationMs, undefined);
   assert.equal(ev.data.outcome, undefined);
+  assert.equal(ev.data.eventInfo, undefined);
   assert.equal(ev.data.errorClass, undefined);
   assert.equal(ev.data.errorDescription, undefined);
 });
@@ -291,7 +318,8 @@ test("FIELD_TYPES is exported and covers every field used in builders", () => {
   const usedFields = [
     "pluginName", "pluginVersion", "sessionId", "correlationId",
     "osName", "osVersion", "nodeVersion",
-    "pacCliVersion", "aiAgentName", "aiAgentVersion",
+    "orgId", "tenantId", "pacCliVersion", "aiAgentName", "aiAgentVersion",
+    "eventInfo",
     "skillName",
     "outcome", "durationMs", "errorClass", "errorDescription",
   ];

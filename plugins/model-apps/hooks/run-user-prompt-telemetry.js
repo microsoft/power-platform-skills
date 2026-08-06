@@ -27,11 +27,12 @@ if (process.env.MODEL_APPS_DISABLE_HOOKS === "1" || process.env.MODEL_APPS_DISAB
   process.exit(0);
 }
 
-let emitFromPrompt, hookUtils, sessionLib;
+let emitFromPrompt, hookUtils, sessionLib, pacAuthLib;
 try {
   emitFromPrompt = require(path.join(TELEMETRY_DIR, "lib", "emit-from-prompt"));
   hookUtils = require(path.join(PLUGIN_ROOT, "scripts", "lib", "modelapps-hook-utils"));
   sessionLib = require(path.join(TELEMETRY_DIR, "lib", "session"));
+  pacAuthLib = require(path.join(TELEMETRY_DIR, "lib", "pac-auth"));
 } catch {
   process.exit(0);
 }
@@ -78,6 +79,15 @@ function readStdin() {
       trackedSkills: hookUtils.TRACKED_SKILLS,
       telemetryDir: TELEMETRY_DIR,
       sessionId: sessionLib.resolveHostSessionId(parsed),
+      // Drop the Entra directory object id before the shared helper attaches it as
+      // eventInfo — model-apps telemetry carries no user-level identifier (an
+      // intentional drift from power-pages). Org/tenant GUIDs still flow via the
+      // helper's own pacAuth reads.
+      _readPacAuth: () => {
+        const a = pacAuthLib.readPacAuth();
+        if (a && a.objectId) delete a.objectId;
+        return a;
+      },
     });
   } catch {
     // fail closed — telemetry never blocks the user's prompt

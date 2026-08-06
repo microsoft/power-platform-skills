@@ -121,7 +121,27 @@ test("emits skill_started with envelope name from ikey.json", () => {
   assert.match(captured.event.data.nodeVersion, /^v\d+$/);
 });
 
-test("keeps PAC identifiers out of event data and forwards orgId only as routing context", () => {
+test("populates orgId/tenantId when PAC auth is present", () => {
+  const telemetryDir = mkTelemetryDir({
+    instrumentationKey: "x",
+    collectorUrl: "https://x",
+    eventStreamName: "PowerPagesPluginEvent",
+  });
+  const captured = {};
+  callWithStub({
+    promptText: "/power-pages:add-seo",
+    telemetryDir,
+    captured,
+    pacAuth: {
+      orgId: "22222222-2222-2222-2222-222222222222",
+      tenantId: "11111111-1111-1111-1111-111111111111",
+    },
+  });
+  assert.equal(captured.event.data.orgId, "22222222-2222-2222-2222-222222222222");
+  assert.equal(captured.event.data.tenantId, "11111111-1111-1111-1111-111111111111");
+});
+
+test("puts the Entra objectId into eventInfo.aadObjectId when present", () => {
   const telemetryDir = mkTelemetryDir({
     instrumentationKey: "x",
     collectorUrl: "https://x",
@@ -136,14 +156,31 @@ test("keeps PAC identifiers out of event data and forwards orgId only as routing
       orgId: "22222222-2222-2222-2222-222222222222",
       tenantId: "11111111-1111-1111-1111-111111111111",
       objectId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-      cloud: "Public",
     },
   });
-  assert.equal(captured.event.data.orgId, undefined);
-  assert.equal(captured.event.data.tenantId, undefined);
+  assert.deepEqual(captured.event.data.eventInfo, {
+    aadObjectId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+  });
+});
+
+test("omits eventInfo when the Entra objectId is absent", () => {
+  const telemetryDir = mkTelemetryDir({
+    instrumentationKey: "x",
+    collectorUrl: "https://x",
+    eventStreamName: "PowerPagesPluginEvent",
+  });
+  const captured = {};
+  callWithStub({
+    promptText: "/power-pages:add-seo",
+    telemetryDir,
+    captured,
+    pacAuth: {
+      orgId: "22222222-2222-2222-2222-222222222222",
+      tenantId: "11111111-1111-1111-1111-111111111111",
+      objectId: "",
+    },
+  });
   assert.equal(captured.event.data.eventInfo, undefined);
-  assert.equal(captured.spawnOpts.routingOrgId, "22222222-2222-2222-2222-222222222222");
-  assert.equal(captured.spawnOpts.cloud, "Public");
 });
 
 test("populates aiAgentName/aiAgentVersion/pacCliVersion when agentInfo is present", () => {
@@ -186,7 +223,7 @@ test("omits agent fields when agentInfo returns empty values", () => {
   assert.equal(captured.event.data.pacCliVersion, undefined);
 });
 
-test("uses empty local routing context when PAC auth is absent", () => {
+test("omits orgId/tenantId when PAC auth is absent", () => {
   const telemetryDir = mkTelemetryDir({
     instrumentationKey: "x",
     collectorUrl: "https://x",
@@ -199,8 +236,8 @@ test("uses empty local routing context when PAC auth is absent", () => {
     captured,
     pacAuth: null,
   });
-  assert.equal(captured.spawnOpts.routingOrgId, "");
-  assert.equal(captured.spawnOpts.cloud, "");
+  assert.equal(captured.event.data.orgId, undefined);
+  assert.equal(captured.event.data.tenantId, undefined);
 });
 
 test("forwards POWER_PLATFORM_SKILLS_CONFIG_DIR and FAKE_HTTPS into spawn opts", () => {
@@ -267,7 +304,6 @@ test("forwards pacAuth.cloud into spawn opts", () => {
     pacAuth: { cloud: "UsGov" },
   });
   assert.equal(captured.spawnOpts.cloud, "UsGov");
-  assert.equal(captured.spawnOpts.routingOrgId, "");
   assert.equal(captured.spawnOpts.iKey, undefined);
   assert.equal(captured.spawnOpts.collectorUrl, undefined);
 });
@@ -286,7 +322,6 @@ test("spawn opts include empty cloud when pacAuth has no cloud", () => {
     pacAuth: null,
   });
   assert.equal(captured.spawnOpts.cloud, "");
-  assert.equal(captured.spawnOpts.routingOrgId, "");
 });
 
 test("does not throw when ikey.json is missing", () => {

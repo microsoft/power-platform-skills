@@ -21,7 +21,6 @@ const DEFAULT_LOCAL_DIR = path.join(os.homedir(), ".power-platform-skills");
 const FAKE_PROBE = process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "";
 const CONFIG_DIR_ENV = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "";
 const CLOUD_ENV = process.env.POWER_PLATFORM_SKILLS_CLOUD || "";
-const ROUTING_ORG_ID_ENV = process.env.POWER_PLATFORM_SKILLS_ROUTING_ORG_ID || "";
 // Override env vars — TEST seams only. Production resolves the iKey/collector
 // via the plugin resolver / static config in ikey.json and never sets these.
 const IKEY_OVERRIDE = process.env.POWER_PLATFORM_SKILLS_IKEY || "";
@@ -87,14 +86,23 @@ function sanitizeData(data) {
 }
 
 // Build the CS4.0 envelope from a pre-sanitized payload + timestamp. `sanitized`
-// is shared with the local mirror so `data` and `time` stay byte-identical.
+// is shared with the local mirror so `data`/`time` stay byte-identical for
+// every field except `eventInfo`: the tenant-side field mapping flattens
+// `data.<key>` to a single `data_<key>` leaf and doesn't recurse into nested
+// objects, so `eventInfo` is stringified just for the wire to survive that
+// flattening. Kusto reads it back with `parse_json()`/`todynamic()`; the
+// local mirror keeps the real object for human readability.
 function buildEnvelope(eventName, time, sanitized, resolvedIKey, eventStreamName) {
+  const wireData = { ...sanitized };
+  if (wireData.eventInfo !== undefined) {
+    wireData.eventInfo = JSON.stringify(wireData.eventInfo);
+  }
   return {
     ver: "4.0",
     name: eventStreamName || eventName || "",
     time,
     iKey: "o:" + String(resolvedIKey || "").split("-")[0],
-    data: sanitized,
+    data: wireData,
   };
 }
 
@@ -138,7 +146,8 @@ process.stdin.on("end", async () => {
   }
 
   // Compute the sanitized payload + timestamp ONCE. The sanitized data is
-  // exactly what lands in Kusto (its field names ARE the Kusto column names).
+  // exactly what lands in Kusto (its field names ARE the Kusto column names),
+  // except `eventInfo` which buildEnvelope() re-serializes for the wire only.
   const time = new Date().toISOString();
   const sanitized = sanitizeData(event.data);
   const localRecord = { time, name: event.name, data: sanitized };
@@ -169,7 +178,6 @@ process.stdin.on("end", async () => {
           event,
           cfg,
           cloud: CLOUD_ENV,
-          routingOrgId: ROUTING_ORG_ID_ENV,
           configDir: CONFIG_DIR_ENV || undefined,
         });
       } catch {

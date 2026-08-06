@@ -53,11 +53,6 @@ async function resolve({
   const fetchGeo = typeof _fetchGeo === "function" ? _fetchGeo : defaultFetchGeo;
   const fallback = entryFromMap(regionsMap, defaultRegion);
 
-  // Sovereign and internal clouds map directly from PAC's cloud stamp. Artemis
-  // needs an org ID only for public-cloud geo selection.
-  const cloudRegion = deriveRegion(cloud, "");
-  if (cloudRegion) return entryFromMap(regionsMap, cloudRegion) || fallback;
-
   if (!orgId) return fallback;
 
   // Cache holds only the plugin-independent org→region mapping; map it to THIS

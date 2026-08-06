@@ -36,11 +36,12 @@ if (process.env.MODEL_APPS_DISABLE_HOOKS === "1" || process.env.MODEL_APPS_DISAB
   process.exit(0);
 }
 
-let emitSpawn, eventsLib, sessionLib, agentInfoLib, resolverLoader;
+let emitSpawn, eventsLib, sessionLib, pacAuthLib, agentInfoLib, resolverLoader;
 try {
   emitSpawn = require(path.join(TELEMETRY_DIR, "lib", "emit-spawn"));
   eventsLib = require(path.join(TELEMETRY_DIR, "lib", "events"));
   sessionLib = require(path.join(TELEMETRY_DIR, "lib", "session"));
+  pacAuthLib = require(path.join(TELEMETRY_DIR, "lib", "pac-auth"));
   agentInfoLib = require(path.join(TELEMETRY_DIR, "lib", "agent-info"));
   resolverLoader = require(path.join(TELEMETRY_DIR, "lib", "resolver-loader"));
 } catch {
@@ -112,8 +113,8 @@ function readStdin() {
   const skillName = hookUtils.getTrackedSkillFromToolInput(parsed.tool_input);
   if (!skillName) process.exit(0);
 
-  // Repo-side hard-off / unconfigured: gate BEFORE the `pac --version` shellout
-  // so a disabled or unconfigured plugin costs
+  // Repo-side hard-off / unconfigured: gate BEFORE the pac shell-outs
+  // (`pac auth who` + `pac --version`) so a disabled or unconfigured plugin costs
   // effectively nothing. The user opt-out is NOT a fast-path: the enriched event
   // is still built and dispatched so the detached dispatcher can write the local
   // diagnostic mirror; it reads the per-plugin config and skips the POST.
@@ -143,6 +144,13 @@ function readStdin() {
   const configDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "";
   const fakeProbe = process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "";
 
+  let pacAuth = null;
+  try {
+    pacAuth = pacAuthLib.readPacAuth();
+  } catch {
+    pacAuth = null;
+  }
+
   let agentInfo = {};
   try {
     agentInfo = {
@@ -163,12 +171,18 @@ function readStdin() {
     nodeVersion: "v" + String(process.versions.node).split(".")[0],
     skillName,
   };
+  if (pacAuth && pacAuth.orgId) fields.orgId = pacAuth.orgId;
+  if (pacAuth && pacAuth.tenantId) fields.tenantId = pacAuth.tenantId;
+  // model-apps intentionally does NOT send the Entra directory object id
+  // (aadObjectId) that power-pages attaches as eventInfo — no user-level
+  // identifier reaches telemetry. Org/tenant GUIDs (org-level) still flow.
   if (agentInfo.aiAgentName) fields.aiAgentName = agentInfo.aiAgentName;
   if (agentInfo.aiAgentVersion) fields.aiAgentVersion = agentInfo.aiAgentVersion;
   if (agentInfo.pacCliVersion) fields.pacCliVersion = agentInfo.pacCliVersion;
 
   try {
     emitSpawn.fireAndForget(eventsLib.buildSkillStarted(eventStreamName, fields), {
+      cloud: (pacAuth && pacAuth.cloud) || "",
       configDir,
       fakeProbe,
       // Point the dispatcher at the same ikey.json readIkey() used — the override

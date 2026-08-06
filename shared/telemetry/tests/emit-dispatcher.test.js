@@ -56,7 +56,6 @@ function runDispatcher({ event, env }) {
       POWER_PLATFORM_SKILLS_FAKE_HTTPS: env.fakeProbe || "",
       POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyJsonPath,
       POWER_PLATFORM_SKILLS_CLOUD: env.cloud || "",
-      POWER_PLATFORM_SKILLS_ROUTING_ORG_ID: env.routingOrgId || "",
       POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: env.optOut || "",
     },
   });
@@ -162,20 +161,18 @@ test("dispatcher writes a probe file when fake-https points to one (happy path)"
   assert.deepEqual(body.data, fakeEvent.data);
 });
 
-test("dispatcher strips stable identity fields from the wire and local mirror", () => {
+test("dispatcher stringifies eventInfo on the wire but keeps it an object in the local mirror", () => {
   const tmp = mkTmp();
   const probePath = path.join(tmp, "probe.json");
-  const eventWithIdentifiers = {
+  const eventWithInfo = {
     name: "PowerPagesPluginEvent",
     data: {
       ...fakeEvent.data,
-      orgId: "22222222-2222-2222-2222-222222222222",
-      tenantId: "33333333-3333-3333-3333-333333333333",
       eventInfo: { aadObjectId: "11111111-2222-3333-4444-555555555555" },
     },
   };
   const { status } = runDispatcher({
-    event: eventWithIdentifiers,
+    event: eventWithInfo,
     env: {
       configDir: tmp,
       iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
@@ -187,9 +184,12 @@ test("dispatcher strips stable identity fields from the wire and local mirror", 
 
   const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
   const body = JSON.parse(probe.body);
-  assert.equal(body.data.orgId, undefined);
-  assert.equal(body.data.tenantId, undefined);
-  assert.equal(body.data.eventInfo, undefined);
+  assert.equal(
+    typeof body.data.eventInfo,
+    "string",
+    "wire envelope must carry eventInfo as a JSON string leaf"
+  );
+  assert.deepEqual(JSON.parse(body.data.eventInfo), eventWithInfo.data.eventInfo);
 
   const mirror = mirrorPath(tmp);
   const mirrorLine = fs
@@ -198,9 +198,12 @@ test("dispatcher strips stable identity fields from the wire and local mirror", 
     .split("\n")
     .pop();
   const mirrorRecord = JSON.parse(mirrorLine);
-  assert.equal(mirrorRecord.data.orgId, undefined);
-  assert.equal(mirrorRecord.data.tenantId, undefined);
-  assert.equal(mirrorRecord.data.eventInfo, undefined);
+  assert.equal(
+    typeof mirrorRecord.data.eventInfo,
+    "object",
+    "local mirror must keep eventInfo as a real object"
+  );
+  assert.deepEqual(mirrorRecord.data.eventInfo, eventWithInfo.data.eventInfo);
 });
 
 test("dispatcher strips unknown fields from event.data (defense-in-depth)", () => {
@@ -461,7 +464,7 @@ test("dispatcher uses static instrumentationKey/collector_url when no resolver i
   assert.equal(probe.headers["x-apikey"], "placeholder");
 });
 
-test("dispatcher passes orgId as resolver-only context without adding it to the event", () => {
+test("dispatcher uses an injected resolver.js to pick iKey/collector", () => {
   const tmp = mkTmp();
   const probePath = path.join(tmp, "probe.json");
   const ikeyPath = path.join(tmp, "ikey.json");
@@ -483,8 +486,7 @@ test("dispatcher passes orgId as resolver-only context without adding it to the 
   fs.writeFileSync(
     path.join(tmp, "resolver.js"),
     "module.exports = {" +
-      "async resolve({ cfg, routingOrgId }) {" +
-      "  if (routingOrgId !== '22222222-2222-2222-2222-222222222222') return null;" +
+      "async resolve({ cfg }) {" +
       "  const e = cfg.regions[cfg.default_region];" +
       "  return { iKey: e.instrumentation_key, collectorUrl: e.collector_url };" +
       "}," +
@@ -492,20 +494,11 @@ test("dispatcher passes orgId as resolver-only context without adding it to the 
   );
   const { status } = runDispatcher({
     event: { name: "PagesPluginEvent", data: { eventName: "skill_started", eventType: "Trace", severity: "Info" } },
-    env: {
-      configDir: tmp,
-      iKey: "",
-      collectorUrl: "",
-      fakeProbe: probePath,
-      ikeyJsonPath: ikeyPath,
-      routingOrgId: "22222222-2222-2222-2222-222222222222",
-    },
+    env: { configDir: tmp, iKey: "", collectorUrl: "", fakeProbe: probePath, ikeyJsonPath: ikeyPath },
   });
   assert.equal(status, 0);
   const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
   assert.equal(probe.headers["x-apikey"], "ikeyusresolved");
-  const body = JSON.parse(probe.body);
-  assert.equal(body.data.orgId, undefined);
 });
 
 test("dispatcher falls back to the static key when a resolver resolves to nothing", () => {

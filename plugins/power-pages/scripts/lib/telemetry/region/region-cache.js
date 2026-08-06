@@ -3,7 +3,6 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const crypto = require("node:crypto");
 
 const DIR_NAME = "region-cache";
 const TTL_MS = 24 * 60 * 60 * 1000;
@@ -24,46 +23,7 @@ function cacheDir(configDir) {
 }
 
 function entryFile(orgId, configDir) {
-  // The organization ID is needed to address the cache but does not need to be
-  // retained on disk. Hashing the normalized GUID keeps raw tenant metadata out
-  // of filenames while preserving deterministic per-org lookups.
-  const key = crypto
-    .createHash("sha256")
-    .update(String(orgId).toLowerCase())
-    .digest("hex");
-  return path.join(cacheDir(configDir), `${key}.json`);
-}
-
-function migrateLegacyEntry(orgId, configDir) {
-  const legacy = path.join(cacheDir(configDir), `${orgId}.json`);
-  const current = entryFile(orgId, configDir);
-  try {
-    if (fs.existsSync(current)) {
-      fs.unlinkSync(legacy);
-    } else {
-      // Versions before the hashed-cache format stored the raw organization ID
-      // in the filename. Rename that exact validated GUID entry so upgrades do
-      // not leave the identifier behind or discard a still-valid region result.
-      fs.renameSync(legacy, current);
-    }
-  } catch {
-    // Missing files and concurrent migrations are both harmless cache misses.
-  }
-}
-
-function migrateLegacyEntries(configDir) {
-  let names;
-  try {
-    names = fs.readdirSync(cacheDir(configDir));
-  } catch {
-    return;
-  }
-  for (const name of names) {
-    const match = name.match(
-      /^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.json$/
-    );
-    if (match) migrateLegacyEntry(match[1], configDir);
-  }
+  return path.join(cacheDir(configDir), `${orgId}.json`);
 }
 
 // Returns the cached { region } for an org, or null when missing / unreadable /
@@ -72,7 +32,6 @@ function migrateLegacyEntries(configDir) {
 // plugins can never hand one plugin another plugin's key).
 function read(orgId, configDir) {
   if (!ORG_ID_RE.test(String(orgId || ""))) return null;
-  migrateLegacyEntries(configDir);
   let entry;
   try {
     entry = JSON.parse(fs.readFileSync(entryFile(orgId, configDir), "utf8"));
@@ -100,8 +59,7 @@ function write(orgId, entry, configDir) {
   } catch {
     return;
   }
-  migrateLegacyEntries(configDir);
-  const file = entryFile(orgId, configDir);
+  const file = path.join(dir, `${orgId}.json`);
   const payload = JSON.stringify({
     region: entry.region,
     expiresAt: Date.now() + TTL_MS,

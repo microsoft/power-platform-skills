@@ -5,12 +5,10 @@
 // lives in ./region/ — shared/telemetry knows nothing about it.
 const { resolve: resolveRegion } = require("./region/region-resolver");
 
-// Resolve the destination iKey/collector from local routing context. The org ID
-// is passed separately from event.data so it cannot enter the diagnostic mirror
-// or transmitted telemetry envelope.
-async function resolve({ cfg, cloud, routingOrgId, configDir }) {
+// Resolve the destination iKey/collector for THIS event's org region.
+async function resolve({ event, cfg, cloud, configDir }) {
   return resolveRegion({
-    orgId: routingOrgId || "",
+    orgId: (event && event.data && event.data.orgId) || "",
     cloud,
     regionsMap: (cfg && cfg.regions) || {},
     defaultRegion: (cfg && cfg.default_region) || "us",
