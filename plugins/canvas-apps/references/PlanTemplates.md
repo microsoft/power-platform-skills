@@ -80,21 +80,16 @@ CREATE
 - **Navigation:** [which screen(s) this navigates to, trigger conditions]
 - **State:** [any local variables set in OnVisible]
 
-#### Contract (required for verification)
+#### Contract
 
-- **Primary Content:** [the main data-displaying element — e.g., "Gallery named `Hom_TaskList` with Items bound to `Filter(Tasks, Status = selectedStatus)`" or "Form named `Req_OrderForm` bound to selectedOrder"]
-- **Primary Interaction:** [the main user action — e.g., "Button named `Req_SubmitBtn` whose OnSelect calls `Patch(Orders, orderForm.LastSubmit)`" or "Gallery item tap sets selectedTask and navigates to Detail"]
-- **Required Handlers:** [list of OnSelect/OnChange/OnVisible formulas that must be non-empty and functional — e.g., "Req_SubmitBtn.OnSelect must call Patch()", "Hom_Gallery1.OnSelect must set selectedItem"]
-- **Journey Steps:** [which user journey steps this screen implements — e.g., "View all tasks", "Filter by status", "Navigate to detail"]
-- **Outcome Handling:** [required feedback and state management — specify each that applies]
-  - Validation: [e.g., "Form validates required fields before submit; shows inline errors"]
-  - Success feedback: [e.g., "After Patch() succeeds, show notification and navigate to List"]
-  - Failure feedback: [e.g., "On Patch() error, show error banner with message"]
-  - State refresh: [e.g., "After save, refresh Gallery.Items to show updated data"]
-  - Empty state: [e.g., "If Gallery.Items is empty, show 'No tasks found' message"]
+- **Primary Content:** [control name, type, and data binding; or "none" with reason]
+- **Primary Interaction:** [control event and required behavior; or "none" with reason]
+- **Required Handlers:** [control.event → required formula behavior]
+- **Journey Steps:** [assigned journey step names]
+- **Outcome Handling:** [applicable validation, success, failure, refresh, and empty-state behavior]
 
 ### [Screen Name]
-[repeat for each screen — every screen MUST have a Contract section with prefixed control names]
+[repeat for each screen; include a Contract with prefixed control names]
 
 ## Core Functional Journeys
 
