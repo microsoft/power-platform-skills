@@ -94,11 +94,13 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 - `skillName` (on every event)
 - `eventInfo` — caller-supplied JSON object (dynamic Kusto column). Power Pages populates it with `aadObjectId`, the signed-in user's stable Entra ID / AAD directory object ID parsed from `pac auth who`, when available. The field is omitted when `pac auth who` does not surface an object ID. On the wire it is sent as a JSON **string** (re-serialized by `emit-dispatcher.js`, not the local mirror) because the tenant-side field mapping flattens `data.<key>` to a single `data_<key>` leaf and does not recurse into nested objects. The Kusto side must `parse_json()` / `todynamic()` it back into a dynamic value.
 
+  `FIELD_TYPES` enforces only that `eventInfo` is a structured JSON value; it does **not** enforce nested keys. Callers **MUST** restrict it to the documented schema. The only approved nested field is currently Power Pages `aadObjectId` as a string. Callers **MUST NOT** add other personal data, prompts, project or site identifiers, paths, URLs, credentials, or arbitrary caller payloads. Any proposed expansion requires review and approval, plus updates to this privacy disclosure, the documented event schema, and tests before code emits the new field.
+
 ## What is NEVER sent
 
 File paths, cwd, env vars, site names, Dataverse URLs, stack traces, `err.message` text, skill arguments, tool inputs, prompt text, usernames, hostnames.
 
-The dispatcher runs a defense-in-depth allowlist filter against `FIELD_TYPES` before serializing, so any field that bypasses the builders is dropped before it reaches the wire.
+The dispatcher runs a defense-in-depth allowlist filter against `FIELD_TYPES` before serializing, so any top-level field that bypasses the builders is dropped before it reaches the wire. This filter does not inspect nested `eventInfo` keys; the caller restriction above is part of the telemetry contract.
 
 ## Privacy posture
 
