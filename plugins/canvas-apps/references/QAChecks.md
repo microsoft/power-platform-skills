@@ -311,76 +311,19 @@ target, variable, or other verifiable pattern named by the requirement.
 
 ---
 
-## Check 15 — MISSING-VALIDATION-BEHAVIOR
+## Check 15 — MISSING-OUTCOME-BEHAVIOR
 
-**Problem:** Outcome Handling requires validation that the screen does not enforce.
+**Problem:** A screen omits validation, success, failure, refresh, or empty-state behavior
+required by its Contract.
 
-**Detect:** Verify the contract's validation predicate guards the relevant mutation or
-navigation handler and that its required invalid feedback is implemented.
+**Detect:** For each applicable Outcome Handling requirement, verify the named control,
+handler, condition, and formula behavior exist in the YAML.
 
-**Fix:** Report the expected validation behavior and actual handler to Phase 7.
-
----
-
-## Check 16 — MISSING-SUCCESS-BEHAVIOR
-
-**Problem:** The plan's Outcome Handling specifies success feedback, but the screen
-does not implement it after data operations.
-
-**Detect:** If the plan's Contract → Outcome Handling → Success feedback is non-empty:
-
-1. Locate the handler that performs the data operation (from Required Handlers).
-2. Check for success feedback patterns:
-   - `Notify(` with success message
-   - `Navigate(` after the data operation (if the requirement specifies navigation)
-   - `Set(` to a success state variable
-   - Conditional logic that handles the success case
-
-3. Flag if no success feedback pattern is found after the data operation.
-
-**Fix:** This check does not auto-fix. Report to contract verification.
-
-**Report format:**
-
-```
-MISSING-SUCCESS-BEHAVIOR: [ScreenName].pa.yaml
-  Plan requirement: "[success feedback requirement from Outcome Handling]"
-  Data operation handler: [ControlName.OnSelect]
-  Issue: No success feedback pattern found after [Patch/Remove/etc.]
-```
+**Fix:** Report the outcome type, expected behavior, and actual YAML to Phase 7.
 
 ---
 
-## Check 17 — MISSING-FAILURE-BEHAVIOR
-
-**Problem:** The plan's Outcome Handling specifies failure/error feedback, but the screen
-does not implement error handling.
-
-**Detect:** If the plan's Contract → Outcome Handling → Failure feedback is non-empty:
-
-1. Locate the handler that performs the data operation.
-2. Check for error handling patterns:
-   - `IfError(` wrapper around the data operation
-   - `IsError(` check after the operation
-   - `Errors(` function reference
-   - `Set(` to an error state variable within error handling
-
-3. Flag if no error handling pattern is found around the data operation.
-
-**Fix:** This check does not auto-fix. Report to contract verification.
-
-**Report format:**
-
-```
-MISSING-FAILURE-BEHAVIOR: [ScreenName].pa.yaml
-  Plan requirement: "[failure feedback requirement from Outcome Handling]"
-  Data operation handler: [ControlName.OnSelect]
-  Issue: No error handling pattern (IfError/IsError) found
-```
-
----
-
-## Check 18 — UNIMPLEMENTED-JOURNEY-STEP
+## Check 16 — UNIMPLEMENTED-JOURNEY-STEP
 
 **Problem:** A journey step from the plan's Journey Step Mapping table is not implemented
 in the specified screen/control/handler.
