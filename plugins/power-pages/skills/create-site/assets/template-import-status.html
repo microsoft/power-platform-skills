@@ -303,28 +303,38 @@
         phaseSolution.className = 'phase-step';
         phaseSeed.className = 'phase-step';
         phaseActivation.className = 'phase-step';
+        phaseSolution.textContent = 'Importing solution';
+        phaseSeed.textContent = 'Seeding data';
+        phaseActivation.textContent = 'Activating site';
         if (phase === 'seed') {
           phaseSolution.classList.add('done');
+          phaseSolution.textContent = 'Imported solution';
           phaseSeed.classList.add('active');
           if (mainHeading) mainHeading.textContent = 'Seeding __TEMPLATE_NAME__ template data';
           return;
         }
         if (phase === 'solutionDone') {
           phaseSolution.classList.add('done');
+          phaseSolution.textContent = 'Imported solution';
           if (mainHeading) mainHeading.textContent = 'Imported __TEMPLATE_NAME__ template';
           return;
         }
         if (phase === 'activation') {
           phaseSolution.classList.add('done');
+          phaseSolution.textContent = 'Imported solution';
           phaseSeed.classList.add('done');
+          phaseSeed.textContent = 'Seeded data';
           phaseActivation.classList.add('active');
           if (mainHeading) mainHeading.textContent = 'Activating __TEMPLATE_NAME__ template site';
           return;
         }
         if (phase === 'done') {
           phaseSolution.classList.add('done');
+          phaseSolution.textContent = 'Imported solution';
           phaseSeed.classList.add('done');
+          phaseSeed.textContent = 'Seeded data';
           phaseActivation.classList.add('done');
+          phaseActivation.textContent = 'Activated site';
           if (mainHeading) mainHeading.textContent = '__TEMPLATE_NAME__ template is ready';
           return;
         }
