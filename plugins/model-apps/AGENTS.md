@@ -147,10 +147,23 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   forever and, because `sitemapnameunique` is unique-constrained, permanently **burns that unique name**:
   a later build of an app with the same name fails with *"The name &lt;x&gt; is already in use by an
   existing site map"*, which the maker cannot act on. `deleteAppCascade` therefore resolves the sitemap
-  by unique name BEFORE deleting the app (afterwards the link is unrecoverable) and **fails closed** —
-  an inconclusive lookup refuses the delete rather than guessing. Pinned by
+  by unique name BEFORE deleting the app (afterwards the link is unrecoverable), then deletes BOTH rows
+  in **one atomic OData `$batch` change set** so no crash or partial failure can strand the sitemap, and
+  **fails closed** — an inconclusive lookup, a missing ETag (the delete could not be made conditional on
+  the row that was actually read), a sitemap whose `sitemapnameunique` no longer matches, or an
+  unparseable batch response all REJECT rather than guess. A rejection means the delete was *not
+  confirmed*, which is not the same as "nothing happened": a retry is always safe, but to tell an
+  already-deleted app from one that was never deleted you must re-read it. A RESOLVED result always means
+  the app is gone, so `success: false` means only a generative-page child leaked. Because the SDK refuses
+  a non-atomic fallback, **`scripts/lib/sdk-http-client.js` must implement `postRaw`** — a transport that
+  sends the multipart body verbatim and returns the raw response STRING (never JSON-parsed); without it
+  the delete fails with `APP_DELETE_NOT_ATOMIC`. That client deliberately does **not** retry a `$batch`:
+  it carries record deletes, and a retry racing an in-flight delete trips Dataverse's concurrent-delete
+  guard, which wedges the row permanently. Pinned by
   `scripts/tests/app-delete-real-bundle.test.js` against the real vendored bundle, because every other
-  teardown test drives a hand-written mock and would stay green through a regression here.
+  teardown test drives a hand-written mock and would stay green through a regression here — including one
+  test that drives the REAL `createAzHttpClient` end to end, so a transport bug fails there instead of
+  live during a teardown.
   The empty solution container goes last — but a **built-in
   system solution** (`Active`/`Default`/`Basic`) is **skipped** (Dataverse 400s any delete of a restricted
   solution), so a downloaded spec whose real solution could not be recovered (and defaulted to `Default`)
@@ -191,8 +204,12 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   `{'@odata.type':'Microsoft.Dynamics.CRM.entity', entityid:<MetadataId>}` returns 204 but records a
   component pointing at the metadata table literally named `entity` (the same finding as the
   `componenttype eq 1` note above), `metadataid` and a logical-name `entityid` are rejected outright,
-  and a `savedquery` sent in the SAME request pins correctly as a control. No working shape is known,
-  so do NOT claim table components are applied. The component read is best-effort: a failure degrades
+  and a `savedquery` sent in the SAME request pins correctly as a control. Direct create is unsupported
+  too (`0x80040800` "The 'Create' method does not support entities of type 'appmodulecomponent'"), so
+  `AddAppComponents` is the only path and its entity handling is broken; `ValidateApp` returns
+  `ValidationSuccess: true` regardless, which is why this went unnoticed. Tracked platform-side as
+  **AB#39140211**, which the SDK notes is likely the real root cause of 6603388's 9-table expectation.
+  No working shape is known, so do NOT claim table components are applied. The component read is best-effort: a failure degrades
   to the sitemap-derived set rather than failing the download. Each entity's **`primaryAttribute` comes from
   real Dataverse metadata** (`primaryNameAttribute`) and is **never synthesized**. The old
   `<entity>_name` guess was wrong for most OOB tables (`account` → `name`,
@@ -260,11 +277,23 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   was issued but the proof could not be read) or `failed` (the write threw; the rest of the batch still
   reports). The build surfaces **every** non-success bucket as a `⊘` warning plus in the phase detail
   — buckets are read off the result object, so one a future SDK adds is reported verbatim rather than
-  silently dropped — and `--verify` fails on any of them. Because the SDK's build-time proof is
-  currently unreliable for a **freshly created** app module (measured live: it reported `notPersisted`
-  for every feature while `appsettings` held all the requested values, and raising its retry budget
-  did not help), anything it does not put in `applied` is **re-proved** against the same override-row
-  oracle the verifier uses, so only genuinely unproven features are warned about.
+  silently dropped — and `--verify` fails on any of them. Verification proves the override ROW, which
+  is keyed by `appmoduleid`; that id is normally resolved from the app's unique NAME, but a freshly
+  created appmodule is **not readable until it is PUBLISHED** (Dataverse omits it from list queries and
+  404s the by-id retrieve), so the build passes the id it already holds
+  (`setAppAiFeatures({ appModuleId: created.app })`) rather than make the SDK look it up. The SDK
+  re-checks a supplied id against the published app when the app IS readable, so a stale id is rejected
+  rather than used to configure the wrong app.
+  **An app-scope setting WRITE is a no-op until the app is published** — LIVE-measured on two separate
+  apps, changing only that variable: the write returned `notPersisted` and a direct `appsettings` query
+  showed **no override row at all**, while fetching + publishing the same app and re-issuing the
+  identical call produced every feature `applied` with real rows holding the requested values. This is
+  not read lag, so re-*proving* after publish cannot fix it. The build therefore **re-issues** the write
+  after publish (`fetch → publish → write`, the exact sequence measured to work) for anything the first
+  attempt did not apply, then falls back to proving the override row. The first write is still issued in
+  the phase itself because an ALREADY-published app — the common case on a rebuild or edit — applies
+  immediately and needs no retry. The retry is best-effort and scoped to the unapplied features; a
+  failure leaves the original verdict standing and reported, never silently upgraded.
   The flag set is resolved ONCE by `scripts/lib/ai-app-settings.js` and shared by the build and the
   verifier: a spec with an `ai` block but no `ai.appFeatures` still gets defaults written, so
   reconciling only the DECLARED features left them applied-but-unverified.

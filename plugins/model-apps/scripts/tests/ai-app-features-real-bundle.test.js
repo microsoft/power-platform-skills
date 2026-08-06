@@ -180,3 +180,48 @@ test('REAL BUNDLE: the override proof is scoped to THIS app and THIS setting', a
   // ...and the app id came from THIS app's unique name.
   assert.ok(calls.some((c) => c.url.includes('/appmodules') && c.url.includes(APP)), 'app module resolved by unique name');
 });
+
+// --- pre-publish verification via an explicitly supplied appModuleId -------------------------
+// A freshly created appmodule is NOT readable until it is PUBLISHED: Dataverse omits it from list
+// queries and 404s the by-id retrieve. Because verification proves the app-scope override ROW —
+// which is keyed by appmoduleid — the by-NAME lookup is the single piece that fails pre-publish, so
+// every feature landed in `unverified` even when the write succeeded. The build hits exactly this:
+// its ai-features phase runs moments after app-shell created the app, long before publish.
+// `appModuleId` skips that lookup; the `appsettings` proof query itself works fine before publish.
+
+test('REAL BUNDLE: a supplied appModuleId proves the override PRE-PUBLISH (app not yet listable)', async () => {
+  // `noApp: true` models the pre-publish reality: the by-name appmodule query returns NO rows.
+  // Without appModuleId this is unverifiable; with it, the proof succeeds.
+  const { sdk } = freshSdk({ noApp: true, gate: '1', effective: '1', overrideRows: [{ value: '1' }] });
+  const r = await sdk.setAppAiFeatures(APP, { formFill: true }, { ...FAST, appModuleId: APP_ID });
+  assert.deepStrictEqual(r.applied, ['formFill'], `expected applied, got ${JSON.stringify(r)}`);
+  assert.deepStrictEqual([r.notPersisted, r.unverified, r.failed], [[], [], []]);
+  assert.strictEqual(r.outcomes[0].appOverrideExists, true);
+});
+
+test('REAL BUNDLE: WITHOUT appModuleId the same pre-publish app cannot be proven (regression witness)', async () => {
+  // The behaviour the build worked around. Kept so a future SDK change that makes the by-name
+  // lookup work pre-publish is noticed here rather than silently making the option pointless.
+  const { sdk } = freshSdk({ noApp: true, gate: '1', effective: '1', overrideRows: [{ value: '1' }] });
+  const r = await sdk.setAppAiFeatures(APP, { formFill: true }, FAST);
+  assert.deepStrictEqual(r.applied, [], `a pre-publish app must not be provable by name: ${JSON.stringify(r)}`);
+  assert.ok(
+    (r.unverified || []).includes('formFill') || (r.failed || []).includes('formFill'),
+    `expected a non-success bucket, got ${JSON.stringify(r)}`
+  );
+});
+
+test('REAL BUNDLE: a supplied appModuleId that DISAGREES with the published app is rejected, not trusted', async () => {
+  // Fail-closed identity check: if the app IS readable by name and resolves to a different id, the
+  // caller's id is stale/wrong and writing under it would configure the wrong app.
+  const { sdk } = freshSdk({ gate: '1', effective: '1', overrideRows: [{ value: '1' }] });
+  await assert.rejects(
+    () => sdk.setAppAiFeatures(APP, { formFill: true }, { ...FAST, appModuleId: '99999999-9999-9999-9999-999999999999' }),
+    /INVALID_ARGUMENT|different|mismatch/i
+  );
+});
+
+test('REAL BUNDLE: a malformed appModuleId is rejected up front', async () => {
+  const { sdk } = freshSdk({ gate: '1', effective: '1', overrideRows: [{ value: '1' }] });
+  await assert.rejects(() => sdk.setAppAiFeatures(APP, { formFill: true }, { ...FAST, appModuleId: 'not-a-guid' }));
+});

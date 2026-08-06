@@ -4,13 +4,21 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, iconWebResources, droppedSubareaCount } = require('../download-model-app.js');
+const { resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount } = require('../download-model-app.js');
 
 test('resolveAppId returns a guid as-is, else resolves by uniquename', async () => {
   const guid = '11111111-2222-3333-4444-555555555555';
   assert.strictEqual(await resolveAppId({}, guid), guid);
   const sdk = { queryRecords: async (l, o) => { assert.match(o.filter, /uniquename eq 'new_app'/); return [{ appmoduleid: 'app-1' }]; } };
   assert.strictEqual(await resolveAppId(sdk, 'new_app'), 'app-1');
+});
+
+test('resolveAppId escapes apostrophes and returns undefined for a missing app', async () => {
+  const calls = [];
+  const sdk = { queryRecords: async (logical, opts) => { calls.push({ logical, opts }); return []; } };
+  assert.strictEqual(await resolveAppId(sdk, "new_bob's_app"), undefined);
+  assert.strictEqual(calls[0].logical, 'appmodule');
+  assert.match(calls[0].opts.filter, /uniquename eq 'new_bob''s_app'/);
 });
 
 test('collectSitemap gathers distinct entities + icons from the sitemap', () => {
@@ -159,6 +167,52 @@ test('droppedSubareaCount counts subareas the spec could not round-trip (e.g. da
   assert.strictEqual(droppedSubareaCount(app, same), 0);
 });
 
+test('readDashboards reconstructs supported tile shapes and skips unreadable dashboards', async () => {
+  const DASH = '{AAAAAAAA-0000-4000-8000-000000000001}';
+  const SKIP = '{BBBBBBBB-0000-4000-8000-000000000002}';
+  const app = { siteMap: { areas: [{ groups: [{ subAreas: [
+    { type: 'DashBoard', dashboardId: DASH, title: 'Sitemap title' },
+    { type: 'DashBoard', dashboardId: SKIP, title: 'Broken dashboard' },
+  ] }] }] } };
+  const sdk = {
+    fetchArtifact: async (type, id) => {
+      if (String(id).toLowerCase() === SKIP.toLowerCase()) throw new Error('dashboard deleted while downloading');
+      return {
+        components: [
+          { type: 'chart', name: 'Revenue', parameters: { TargetEntityType: 'account', ViewId: '{11111111-0000-4000-8000-000000000001}', VisualizationId: '{22222222-0000-4000-8000-000000000002}' } },
+          { type: 'list', name: 'Open Accounts', parameters: { TargetEntityType: 'account', ViewId: '{33333333-0000-4000-8000-000000000003}' } },
+          { type: 'iframe', name: 'Portal', parameters: { Url: 'https://contoso.example' } },
+          { type: 'webresource', name: 'Help', parameters: { WebResourceName: 'new_help.htm' } },
+          { type: 'chart', name: 'Incomplete chart', parameters: { TargetEntityType: 'account' } },
+        ],
+      };
+    },
+    queryRecords: async () => [{ name: 'Executive Dashboard' }],
+  };
+
+  const dashboards = await readDashboards(sdk, app);
+
+  assert.strictEqual(dashboards.length, 1);
+  assert.strictEqual(dashboards[0].name, 'Executive Dashboard');
+  assert.deepStrictEqual(dashboards[0].tiles, [
+    { type: 'chart', name: 'Revenue', entity: 'account', viewId: '11111111-0000-4000-8000-000000000001', visualizationId: '22222222-0000-4000-8000-000000000002' },
+    { type: 'list', name: 'Open Accounts', entity: 'account', viewId: '33333333-0000-4000-8000-000000000003' },
+    { type: 'iframe', name: 'Portal', url: 'https://contoso.example' },
+    { type: 'webresource', name: 'Help', webResource: 'new_help.htm' },
+  ]);
+});
+
+test('readDashboards keeps the sitemap title when the dashboard name lookup fails', async () => {
+  const sdk = {
+    fetchArtifact: async () => ({ components: [{ type: 'iframe', name: 'Portal', parameters: { Url: 'https://contoso.example' } }] }),
+    queryRecords: async () => { throw new Error('systemform read throttled'); },
+  };
+  const dashboards = await readDashboards(sdk, {
+    siteMap: { areas: [{ groups: [{ subAreas: [{ type: 'DashBoard', dashboardId: 'dash-1', title: 'Operations' }] }] }] },
+  });
+  assert.strictEqual(dashboards[0].name, 'Operations');
+});
+
 // ── Task 11: assignPageKeys + missingDownloads + full round-trip ──────────────
 const { assignPageKeys, missingDownloads, runDownload, recoverAppSolution, appComponentEntities } = require('../download-model-app.js');
 const { reconcilePageIds, buildManifest } = require('../lib/page-manifest.js');
@@ -166,6 +220,36 @@ const { hydrateSpec } = require('../lib/hydrate-spec.js');
 const { validateAppSpec } = require('../lib/app-spec.js');
 const { appUniqueName } = require('../lib/sdk-build.js');
 const { resolvePageRefs, reverseResolveNavIds } = require('../lib/pageref-resolver.js');
+
+test('runDownload translates a fail-closed app read into a graceful error, not a raw SDK throw', async () => {
+  // `fetchArtifact('app')` fails closed (`APP_SITEMAP_UNRESOLVED`) rather than hand back an app whose
+  // navigation is untrustworthy. The sitemap IS this function's membership oracle, so that is a
+  // LOGICAL failure of the class its contract says it RETURNS rather than throws — otherwise the CLI
+  // surfaces an opaque SDK error for the very ordinary case of an unpublished app.
+  for (const code of ['APP_SITEMAP_UNRESOLVED', 'APP_UPDATE_NO_ETAG']) {
+    const err = new Error('app sitemap could not be resolved');
+    err.code = code;
+    const sdk = { fetchArtifact: async () => { throw err; } };
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, pages: [] }), download: async () => true };
+    const res = await runDownload({ sdk, genpageCli, outDir: __dirname, appId: 'app-1', appUnique: 'new_app' });
+    assert.strictEqual(res.ok, false, `${code} must return ok:false`);
+    assert.match(res.error, /cannot read app app-1/, `${code} error names the app`);
+    assert.match(res.error, /sitemap could not be resolved/, `${code} keeps the underlying reason`);
+  }
+});
+
+test('runDownload still propagates a genuinely unexpected error (no blanket swallow)', async () => {
+  // Only the two fail-closed read codes are translated. An unexpected I/O error must keep propagating
+  // to main().catch, or a real defect would be reported as an ordinary "download failed".
+  const err = new Error('EACCES: permission denied');
+  err.code = 'EACCES';
+  const sdk = { fetchArtifact: async () => { throw err; } };
+  const genpageCli = { enumerateEnv: async () => ({ ok: true, pages: [] }), download: async () => true };
+  await assert.rejects(
+    runDownload({ sdk, genpageCli, outDir: __dirname, appId: 'app-1', appUnique: 'new_app' }),
+    (caught) => caught && caught.code === 'EACCES'
+  );
+});
 
 test('assignPageKeys: reuses the manifest key + v2 semantics for a reconcile-bound page, mints fresh keys otherwise (I3/§7.3)', () => {
   const GP_O = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';

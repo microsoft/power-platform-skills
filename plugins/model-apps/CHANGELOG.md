@@ -2,11 +2,12 @@
 
 All notable changes to the **model-apps** plugin.
 
-## [Unreleased] — 2.4.0
+## [Unreleased] — 2.5.0
 
 A new **`/app-builder`** skill (Preview) that builds and edits whole model-driven apps,
 plus local-dev ergonomics, sample coverage, and an automated eval suite. Builds on v2.3;
-no breaking changes.
+no breaking changes for skill users. **Plugin-internal breaking change:** a custom
+`HttpClient` injected into the vendored SDK must now implement `postRaw` (see *Changed*).
 
 ### Added
 - **Table icons are described before they are drawn** — each custom table proposes what its glyph
@@ -86,6 +87,29 @@ no breaking changes.
   verified (`requireSuccessfulPush`).
 - **Re-vendored `cds-maker-sdk`** — backlog capability fills (pagination, quick create, idempotent
   global choice, authored column width), shared input-safety boundaries, and the `hardening-2` bundle.
+- **An app and its sitemap are deleted atomically** — the two rows now go out in a single OData
+  `$batch` change set instead of two sequential DELETEs, closing the window where a crash (or a
+  failure on the second call) between them stranded the sitemap and permanently burned the app's
+  unique name. The SDK refuses to fall back to a non-atomic delete, so **an `HttpClient` injected
+  into the SDK must now implement `postRaw`** (verbatim multipart body out, raw response string
+  back) or the delete fails with `APP_DELETE_NOT_ATOMIC`. The plugin's own client implements it and
+  deliberately does **not** retry a `$batch`: it carries record deletes, and a retry racing an
+  in-flight delete trips Dataverse's concurrent-delete guard, which wedges the row permanently.
+- **Every unprovable app delete now refuses instead of guessing** — a missing ETag (the delete could
+  not be made conditional on the row that was actually read), a sitemap whose `sitemapnameunique` no
+  longer matches the app (it belongs to a different app now), or an unreadable/unparseable response
+  all reject rather than resolve. A rejection means the delete was *not confirmed*, which is not the
+  same as "nothing happened" — a retry is always safe, but callers must re-read rather than infer.
+- **AI app-feature writes now actually land on a newly built app** — an app-scope setting write is a
+  **no-op until the app is published**, so a fresh build wrote nothing while reporting a clean run.
+  Live-measured on two separate apps, changing only that variable: the write returned `notPersisted`
+  and a direct `appsettings` query showed no override row at all; fetching + publishing the same app
+  and re-issuing the identical call produced every feature `applied` with real rows holding the
+  requested values. The build now re-issues the write after publish for anything the first attempt did
+  not apply. It also hands the SDK the `appmoduleid` it just created
+  (`setAppAiFeatures({ appModuleId })`) — verification proves the app-scope override *row*, which is
+  keyed by that id, and resolving it by NAME is impossible before publish (Dataverse omits an
+  unpublished appmodule from list queries and 404s the by-id retrieve).
 
 ### Fixed
 - **Apps built on standard tables round-trip correctly** — five bugs that all surfaced only when an app
@@ -152,6 +176,10 @@ no breaking changes.
   `https` org URL and refuses any request outside it.
 - **A lossy download fails instead of reporting success** — unmapped sitemap subareas are named and the
   spec is validated before it is written (`--allow-lossy-download` opts in).
+- **An unreadable app produces an actionable download error, not a raw SDK throw** — the SDK now fails
+  closed rather than hand back an app whose navigation cannot be trusted, and the download translates
+  that into its documented `{ ok: false, error }` result naming the app (the usual cause is an
+  unpublished app, which is not readable).
 - **Assorted robustness** — temp workspaces cannot leak on a failed SDK init, `%` in prompts survives
   cmd.exe, an omitted column `type` defaults to `Text`, `vectorIcon` is verified in the sitemap, and
   entity-subarea `vectorIcon` no longer breaks the app designer.
@@ -163,6 +191,14 @@ no breaking changes.
   `node evals/model-apps/genpage/run-layer-2.js`, `node evals/model-apps/app-builder/run-app-builder.js`.
 - **Vendored-SDK contract tests** lock OData filter encoding, name-based identifiers, and sitemap
   free-text XML escaping.
+- **Real-bundle suites for the two paths a mock cannot cover** — `ai-app-features-real-bundle.test.js`
+  and `app-delete-real-bundle.test.js` drive the shipped `vendor/cds-maker-sdk.cjs` over a fake
+  Dataverse. The SDK's own Jest suite cannot run here (its `canvas` native module is built for the
+  Node-20 ABI), so these are the only executable check that a re-vendored bundle still behaves the
+  way the engine assumes.
+- **The plugin's HTTP transport is tested against the real bundle end to end** — one test wires the
+  actual `createAzHttpClient` to the real SDK and asserts an atomic app delete reaches `/$batch` with
+  the multipart payload intact, so a transport regression fails in CI rather than during a teardown.
 
 ### Removed
 - **Standalone entity/solution scripts, consolidated into the SDK** — `create-table.js`,

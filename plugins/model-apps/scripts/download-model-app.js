@@ -459,7 +459,22 @@ async function recoverAppSolution(sdk, appId) {
 // Logical failures (no sitemap, enumeration down, missing download) return { ok:false } without
 // throwing. Unexpected I/O errors propagate as thrown exceptions (caught by main().catch).
 async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLossy = false }) {
-  const app = await sdk.fetchArtifact('app', appId);
+  // `fetchArtifact('app')` FAILS CLOSED when the app's sitemap cannot be resolved, read, or proven to
+  // still belong to this app (SDK code `APP_SITEMAP_UNRESOLVED`) — rather than returning an app whose
+  // navigation is untrustworthy. That is a LOGICAL failure of exactly the class this function's
+  // contract says it returns rather than throws (the sitemap IS the download's membership oracle), so
+  // translate it instead of letting a raw SDK error escape. A newly created app is the common cause:
+  // an unpublished appmodule is not readable, so the caller's fix is to publish it and retry.
+  let app;
+  try {
+    app = await sdk.fetchArtifact('app', appId);
+  } catch (e) {
+    const code = e && e.code;
+    if (code === 'APP_SITEMAP_UNRESOLVED' || code === 'APP_UPDATE_NO_ETAG') {
+      return { ok: false, error: `cannot read app ${appId}: ${(e && e.message) || code}` };
+    }
+    throw e;
+  }
   const { entities: entityLogicals, icons, customRefs } = collectSitemap(app);
 
   // MEMBERSHIP: the authoritative set of pages owned by this app, from its SITEMAP XML (fail-closed,

@@ -1736,22 +1736,33 @@ async function runSdkBuild(spec, opts = {}) {
     const solutionUniqueName = spec.solution && spec.solution.uniqueName;
     const appUnique = appUniqueName(spec);
     const flags = resolveAiFlags(spec);
+    // NOTE: this first write frequently NO-OPS. An app-scope setting write does nothing until the
+    // app is published, and this phase runs moments after `app-shell` created it (the `publish`
+    // phase is later, and is opt-in). It is still issued here so an ALREADY-published app — the
+    // common case on a rebuild/edit — applies immediately and needs no retry. Anything it does not
+    // apply is re-issued after publish by the block at the end of this function, which replicates
+    // the fetch → publish → write sequence measured to work live.
     await runner.run('ai-features', 'enable app AI features', async () => {
-      // The SDK confirms each app-scope write by polling for its `appsettings` override row, and its
-      // DEFAULT budget (4 attempts, 500ms linear backoff ~= 3s) is too short for THIS phase. Measured
-      // live against a real org: on an ESTABLISHED app the override row is queryable ~580ms after the
-      // write, but this phase runs moments after `app-shell` CREATED the app module, and a build of a
-      // brand-new app reported `notPersisted` for all four features while a query seconds later proved
-      // every row present holding exactly the requested value. A freshly created app module is simply
-      // not immediately consistent for the appsettings lookup, so the default budget reports a write
-      // that DID land as a failure.
+      // The SDK confirms each app-scope write by polling for its `appsettings` override row, keyed by
+      // appmoduleid. That id is normally resolved from the app's unique NAME — but a freshly created
+      // appmodule is not readable until it is PUBLISHED (Dataverse omits it from list queries and 404s
+      // the by-id retrieve), and this phase runs moments after `app-shell` created it. The by-name
+      // lookup is the ONLY piece that fails pre-publish; the `appsettings` proof query itself works
+      // fine. Passing the id we already hold skips the lookup entirely and lets the write be proven
+      // here, in the same phase that made it.
       //
-      // Raising the budget is the SDK's own documented remedy for a slow environment
-      // (`SetAppAiFeaturesOptions`). 8 attempts with 1s linear backoff gives ~28s of headroom for the
-      // FIRST feature; the budget is only ever spent when the row is absent, and the app module has
-      // settled by the time the remaining features are written, so the realistic cost is bounded by
-      // the one-time settle time rather than 4x it.
-      const r = await provision.setAppAiFeatures(appUnique, flags, { solutionUniqueName, verifyAttempts: 8, verifyDelayMs: 1000 });
+      // The SDK still re-checks the id against the published app when the app IS readable, so a stale
+      // or wrong id is rejected rather than silently used to configure another app.
+      //
+      // A modest retry budget still helps: on an established app the override row is queryable ~580ms
+      // after the write (measured live), so the SDK's 4-attempt/500ms default is tight but the budget
+      // is only ever spent when the row is genuinely absent.
+      const r = await provision.setAppAiFeatures(appUnique, flags, {
+        solutionUniqueName,
+        appModuleId: result.created.app || undefined,
+        verifyAttempts: 8,
+        verifyDelayMs: 1000,
+      });
       result.created.ai.appFeatures = r;
       // `applied` is the SDK's ONLY success bucket: a feature reaches it only when the APP-SCOPE
       // override row is proven present holding the requested value. Every other bucket is a
@@ -1764,20 +1775,14 @@ async function runSdkBuild(spec, opts = {}) {
       //   failed       — the write (or its org-gate read) threw. The SDK keeps going so the rest
       //                  of the batch still reports, so this arrives as data, never as an exception.
       //
-      // RE-CONFIRMATION (live-driven): the SDK's build-time proof produces FALSE `notPersisted`
-      // reports here. Measured against a real org — a fresh build reported `notPersisted` for all
-      // four features with `appOverrideExists:false`, yet `--verify` moments later PROVED every
-      // override row present holding exactly the requested value, and re-running `setAppAiFeatures`
-      // out-of-band on an already-published app reported all four `applied`. Raising the SDK's retry
-      // budget to 8 attempts / ~28s did not change it, so it is not simple read lag: the
-      // `appsettings` override rows only become queryable once the app has been PUBLISHED, which
-      // happens in a later phase.
-      //
-      // So the verdict is DEFERRED rather than decided here: the buckets are recorded and re-proved
-      // after publish (see `reconfirmAiFeatures` below) against the identical override-row oracle the
-      // verifier uses. Warning now would print a scary and WRONG "NOT PERSISTED" and contradict
-      // `--verify`, which passes in the same run.
-      // Tracking: raise with the cds-maker-sdk owners; remove this pass once its proof is reliable.
+      // RE-CONFIRMATION (safety net): with `appModuleId` supplied above, the SDK can prove the
+      // override row here, pre-publish, so the normal path decides the verdict in this phase. The
+      // deferral below remains for the residual cases the proof genuinely cannot settle yet — a
+      // transient read failure, or a row that has not materialized inside the retry budget. Deciding
+      // "NOT PERSISTED" on those would print a scary and WRONG verdict that `--verify` then
+      // contradicts in the same run, so the buckets are recorded and re-proved after publish (see
+      // `reconfirmAiFeatures` below) against the identical override-row oracle the verifier uses.
+      // The re-proof can only ever UPGRADE a feature, never hide a real failure.
       //
       // Derive the non-success buckets from the RESULT, not a fixed list: a bucket added by a future
       // SDK revision is then reported verbatim rather than silently dropped (which is the very bug
@@ -1792,7 +1797,7 @@ async function runSdkBuild(spec, opts = {}) {
       const parts = [];
       if (r.applied && r.applied.length) parts.push(`applied: ${r.applied.join(', ')}`);
       if (r.skipped && r.skipped.length) parts.push(`skipped (admin gate off): ${r.skipped.join(', ')}`);
-      if (pendingAiReconfirm.length) parts.push(`pending re-check after publish: ${pendingAiReconfirm.map((p) => p.feature).join(', ')}`);
+      if (pendingAiReconfirm.length) parts.push(`retrying after publish: ${pendingAiReconfirm.map((p) => p.feature).join(', ')}`);
       return parts.length ? parts.join('; ') : '(none \u2014 admin gate off)';
     });
     const tables = (spec.ai.summaries && spec.ai.summaries.default === 'off') ? [] : selectSummaryTables(spec);
@@ -1871,13 +1876,13 @@ async function runSdkBuild(spec, opts = {}) {
     });
   }
 
-  // 8b. AI feature re-confirmation — runs LAST, after publish, because the `appsettings` override
-  //     rows a write creates only become queryable once the app has been published (measured live:
-  //     the SDK reported `notPersisted` for every feature at write time and after a 28s retry budget,
-  //     while `--verify` proved every row present later in the same run). Re-proving here against the
-  //     same override-row oracle the verifier uses means the build agrees with `--verify` instead of
-  //     contradicting it, and only a feature that is GENUINELY unproven produces a warning — the
-  //     re-proof can only ever UPGRADE a feature, never hide a real failure.
+  // 8b. AI feature re-issue + re-confirmation. An app-scope setting write is a NO-OP on a freshly
+  //     created app: measured live on two different apps, the write returned `notPersisted` and a
+  //     direct `appsettings` query showed no override row at ALL, while fetching + publishing that
+  //     same app and re-issuing the identical call produced every feature `applied` with real rows
+  //     holding the requested values. So this pass RE-ISSUES the write (re-proving alone cannot help
+  //     — there is nothing to find), then falls back to proving the override row for anything the
+  //     retry still did not claim. It can only ever UPGRADE a feature, never hide a real failure.
   if (pendingAiReconfirm.length) {
     const flags = resolveAiFlags(spec);
     const appUnique = appUniqueName(spec);
@@ -1886,10 +1891,32 @@ async function runSdkBuild(spec, opts = {}) {
       unverified: ['UNVERIFIED', 'the write was issued but could not be confirmed \u2014 verify manually before relying on it'],
       failed: ['FAILED', 'the write or its org-gate read threw'],
     };
+    // Replicate the sequence proven to work live, in order: fetch the app (so the workspace holds the
+    // server's copy), publish it, then write. Each step is best-effort — a failure here must not fail
+    // the build, it just leaves the original non-success verdict standing and reported.
+    const retryApplied = new Set();
+    if (result.created.app) {
+      const retryFlags = {};
+      for (const p of pendingAiReconfirm) if (flags && Object.prototype.hasOwnProperty.call(flags, p.feature)) retryFlags[p.feature] = flags[p.feature];
+      if (Object.keys(retryFlags).length) {
+        try {
+          await provision.fetchArtifact('app', result.created.app);
+          await provision.publishArtifact('app', result.created.app);
+          const retry = await provision.setAppAiFeatures(appUnique, retryFlags, {
+            solutionUniqueName: spec.solution && spec.solution.uniqueName,
+            appModuleId: result.created.app,
+            verifyAttempts: 6,
+            verifyDelayMs: 1000,
+          });
+          for (const f of (retry && retry.applied) || []) retryApplied.add(f);
+        } catch { /* leave the original verdict standing; it is reported below */ }
+      }
+    }
     const app = await resolveAppModuleId(provision, appUnique);
     const stillBad = [];
     const reproven = [];
     for (const p of pendingAiReconfirm) {
+      if (retryApplied.has(p.feature)) { reproven.push(p.feature); continue; }
       const setting = AI_APP_SETTING[p.feature];
       let proof = { error: app.error };
       if (!app.error && setting) proof = await proveAppOverride(provision, app.appModuleId, setting);
@@ -1905,7 +1932,7 @@ async function runSdkBuild(spec, opts = {}) {
     if (af && reproven.length) {
       af.applied = [...(af.applied || []), ...reproven];
       for (const key of Object.keys(af)) if (Array.isArray(af[key]) && key !== 'applied' && key !== 'skipped') af[key] = af[key].filter((f) => !reproven.includes(f));
-      for (const o of af.outcomes || []) if (reproven.includes(o.feature)) { o.status = 'applied'; o.appOverrideExists = true; o.reason = 'confirmed present after publish by the build\u2019s own override-row proof'; }
+      for (const o of af.outcomes || []) if (reproven.includes(o.feature)) { o.status = 'applied'; o.appOverrideExists = true; o.reason = 'applied by the post-publish re-issue (an app-scope write is a no-op before the app is published)'; }
     }
     // `runner.skip` renders as `⊘ <label>` — the closest thing the narrator has to a warning — and
     // advances the step counter correctly, which a hand-built `runner.emit` did not.
