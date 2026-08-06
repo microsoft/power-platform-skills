@@ -23,105 +23,263 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const args = process.argv.slice(2);
-
-function getArg(name) {
+function getArg(args, name) {
   const idx = args.indexOf(`--${name}`);
   return idx !== -1 && idx + 1 < args.length ? args[idx + 1] : null;
 }
 
-const vaultName = getArg('vaultName');
-const secretName = getArg('secretName');
-const secretValueArg = getArg('secretValue');
-
-if (!vaultName || !secretName) {
-  process.stderr.write(
-    'Usage:\n' +
-    '  printf \'%s\' \'<value>\' | node store-keyvault-secret.js --vaultName <name> --secretName <name>\n' +
-    '  node store-keyvault-secret.js --vaultName <name> --secretName <name> --secretValue <value>\n'
-  );
-  process.exit(1);
+function parseArgs(args) {
+  return {
+    vaultName: getArg(args, 'vaultName'),
+    secretName: getArg(args, 'secretName'),
+    secretValue: getArg(args, 'secretValue'),
+  };
 }
 
-// Azure Key Vault name: 3-24 chars, starts with letter, alphanumerics and hyphens
-if (!/^[a-zA-Z][a-zA-Z0-9-]{1,22}[a-zA-Z0-9]$/.test(vaultName)) {
-  process.stderr.write(
-    'Error: --vaultName must be 3-24 characters, starting with a letter, containing only alphanumerics and hyphens.\n'
-  );
-  process.exit(1);
-}
+function cleanupTemporarySecret(
+  fsImpl,
+  tempFileHandle,
+  tempFile,
+  tempFileCreated,
+  tempDir
+) {
+  const errors = [];
 
-// Key Vault secret name: 1-127 chars, alphanumerics and hyphens
-if (!/^[a-zA-Z0-9]([a-zA-Z0-9-]{0,125}[a-zA-Z0-9])?$/.test(secretName)) {
-  process.stderr.write(
-    'Error: --secretName must be 1-127 characters, alphanumerics and hyphens only.\n'
-  );
-  process.exit(1);
-}
+  if (tempFileHandle !== null) {
+    try {
+      fsImpl.closeSync(tempFileHandle);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
 
-// Resolve the secret value: prefer stdin, fall back to --secretValue
-let secretValue = secretValueArg;
+  if (tempFileCreated) {
+    try {
+      fsImpl.unlinkSync(tempFile);
+    } catch (error) {
+      if (error.code !== 'ENOENT') errors.push(error);
+    }
+  }
 
-if (!secretValue) {
-  // Read from stdin (non-TTY only — don't block waiting for interactive input)
-  if (process.stdin.isTTY) {
-    process.stderr.write(
-      'Error: No secret value provided. Pipe the value via stdin or pass --secretValue.\n'
+  if (tempDir) {
+    try {
+      fsImpl.rmdirSync(tempDir);
+    } catch (error) {
+      if (error.code !== 'ENOENT') errors.push(error);
+    }
+  }
+
+  if (errors.length === 1) {
+    const error = new Error(`Failed to remove temporary secret artifacts: ${errors[0].message}`, {
+      cause: errors[0],
+    });
+    error.code = 'TEMP_CLEANUP_FAILED';
+    throw error;
+  }
+
+  if (errors.length > 1) {
+    const detail = errors.map((item) => item.message).join('; ');
+    const error = new AggregateError(
+      errors,
+      `Failed to remove temporary secret artifacts: ${detail}`
     );
-    process.exit(1);
-  }
-  try {
-    secretValue = fs.readFileSync(process.stdin.fd, 'utf8');
-  } catch {
-    process.stderr.write('Error: Failed to read secret value from stdin.\n');
-    process.exit(1);
+    error.code = 'TEMP_CLEANUP_FAILED';
+    throw error;
   }
 }
 
-if (!secretValue) {
-  process.stderr.write('Error: Secret value is empty.\n');
-  process.exit(1);
-}
-
-// Write the secret to a temp file with restrictive permissions (owner-only read/write).
-// This avoids passing the secret as a CLI argument to `az`, which would be visible
-// in process listings (ps, /proc) to other users on the same machine.
-const tmpFile = path.join(os.tmpdir(), `kv-secret-${process.pid}-${Date.now()}`);
-
-try {
-  fs.writeFileSync(tmpFile, secretValue, { mode: 0o600 });
-
-  const result = spawnSync('az', [
-    'keyvault', 'secret', 'set',
-    '--vault-name', vaultName,
-    '--name', secretName,
-    '--file', tmpFile,
-    '--encoding', 'utf-8',
-    '--query', '{secretUri:id}',
-    '-o', 'json',
-  ], { encoding: 'utf8', timeout: 30000 });
-
-  if (result.error) {
-    process.stderr.write('Failed to run Azure CLI. Ensure `az` is installed and available on PATH.\n');
-    process.exit(1);
-  }
-
-  if (result.status !== 0) {
-    process.stderr.write(
-      `Failed to store secret in Key Vault "${vaultName}". Ensure you have access and the vault exists.\n`
-    );
-    if (result.stderr) process.stderr.write(result.stderr);
-    process.exit(1);
-  }
+function storeKeyVaultSecret(
+  { vaultName, secretName, secretValue },
+  {
+    fsImpl = fs,
+    osImpl = os,
+    pathImpl = path,
+    spawnSyncImpl = spawnSync,
+    platform = process.platform,
+  } = {}
+) {
+  let tempDir = null;
+  let tempFile = null;
+  let tempFileHandle = null;
+  let tempFileCreated = false;
+  let output;
+  let operationError = null;
+  let cleanupError = null;
 
   try {
-    const parsed = JSON.parse(result.stdout);
-    process.stdout.write(JSON.stringify(parsed));
-  } catch {
-    process.stderr.write('Failed to parse Azure CLI output.\n');
-    process.exit(1);
+    tempDir = fsImpl.mkdtempSync(pathImpl.join(osImpl.tmpdir(), 'kv-secret-'));
+
+    // Node's POSIX mode bits do not map to Windows ACLs. On Windows, the private
+    // directory inherits the current user's temp-directory DACL instead.
+    // See: https://nodejs.org/api/fs.html#file-modes
+    if (platform !== 'win32') {
+      fsImpl.chmodSync(tempDir, 0o700);
+    }
+
+    tempFile = pathImpl.join(tempDir, 'secret');
+    // `wx` maps to O_CREAT | O_EXCL, so an attacker-created file or symlink wins
+    // the race by making this write fail instead of redirecting the secret.
+    // See: https://nodejs.org/api/fs.html#file-system-flags
+    tempFileHandle = fsImpl.openSync(tempFile, 'wx', 0o600);
+    tempFileCreated = true;
+    fsImpl.writeFileSync(tempFileHandle, secretValue, 'utf8');
+    fsImpl.closeSync(tempFileHandle);
+    tempFileHandle = null;
+
+    const result = spawnSyncImpl('az', [
+      'keyvault', 'secret', 'set',
+      '--vault-name', vaultName,
+      '--name', secretName,
+      '--file', tempFile,
+      '--encoding', 'utf-8',
+      '--query', '{secretUri:id}',
+      '-o', 'json',
+    ], { encoding: 'utf8', timeout: 30000 });
+
+    if (result.error) {
+      const error = new Error('Failed to run Azure CLI.');
+      error.code = 'AZ_SPAWN_FAILED';
+      error.cause = result.error;
+      throw error;
+    }
+
+    if (result.status !== 0) {
+      const error = new Error(`Failed to store secret in Key Vault "${vaultName}".`);
+      error.code = 'AZ_COMMAND_FAILED';
+      error.stderr = result.stderr;
+      throw error;
+    }
+
+    try {
+      output = JSON.parse(result.stdout);
+    } catch (cause) {
+      const error = new Error('Failed to parse Azure CLI output.');
+      error.code = 'AZ_OUTPUT_INVALID';
+      error.cause = cause;
+      throw error;
+    }
+  } catch (error) {
+    operationError = error;
+  } finally {
+    try {
+      cleanupTemporarySecret(
+        fsImpl,
+        tempFileHandle,
+        tempFile,
+        tempFileCreated,
+        tempDir
+      );
+    } catch (error) {
+      cleanupError = error;
+    }
   }
-} finally {
-  // Always clean up the temp file
-  try { fs.unlinkSync(tmpFile); } catch { /* ignore cleanup errors */ }
+
+  if (operationError) {
+    if (cleanupError) operationError.cleanupError = cleanupError;
+    throw operationError;
+  }
+  if (cleanupError) throw cleanupError;
+
+  return output;
 }
+
+function runCli(
+  args = process.argv.slice(2),
+  {
+    stdin = process.stdin,
+    stdout = process.stdout,
+    stderr = process.stderr,
+  } = {},
+  dependencies
+) {
+  const { vaultName, secretName, secretValue: secretValueArg } = parseArgs(args);
+
+  if (!vaultName || !secretName) {
+    stderr.write(
+      'Usage:\n' +
+      '  printf \'%s\' \'<value>\' | node store-keyvault-secret.js --vaultName <name> --secretName <name>\n' +
+      '  node store-keyvault-secret.js --vaultName <name> --secretName <name> --secretValue <value>\n'
+    );
+    return 1;
+  }
+
+  // Azure Key Vault name: 3-24 chars, starts with letter, alphanumerics and hyphens
+  if (!/^[a-zA-Z][a-zA-Z0-9-]{1,22}[a-zA-Z0-9]$/.test(vaultName)) {
+    stderr.write(
+      'Error: --vaultName must be 3-24 characters, starting with a letter, containing only alphanumerics and hyphens.\n'
+    );
+    return 1;
+  }
+
+  // Key Vault secret name: 1-127 chars, alphanumerics and hyphens
+  if (!/^[a-zA-Z0-9]([a-zA-Z0-9-]{0,125}[a-zA-Z0-9])?$/.test(secretName)) {
+    stderr.write(
+      'Error: --secretName must be 1-127 characters, alphanumerics and hyphens only.\n'
+    );
+    return 1;
+  }
+
+  // Resolve the secret value: prefer stdin, fall back to --secretValue.
+  let secretValue = secretValueArg;
+  if (!secretValue) {
+    // Read from stdin (non-TTY only — don't block waiting for interactive input).
+    if (stdin.isTTY) {
+      stderr.write(
+        'Error: No secret value provided. Pipe the value via stdin or pass --secretValue.\n'
+      );
+      return 1;
+    }
+
+    try {
+      secretValue = fs.readFileSync(stdin.fd, 'utf8');
+    } catch {
+      stderr.write('Error: Failed to read secret value from stdin.\n');
+      return 1;
+    }
+  }
+
+  if (!secretValue) {
+    stderr.write('Error: Secret value is empty.\n');
+    return 1;
+  }
+
+  try {
+    const result = storeKeyVaultSecret(
+      { vaultName, secretName, secretValue },
+      dependencies
+    );
+    stdout.write(JSON.stringify(result));
+    return 0;
+  } catch (error) {
+    if (error.code === 'AZ_SPAWN_FAILED') {
+      stderr.write('Failed to run Azure CLI. Ensure `az` is installed and available on PATH.\n');
+    } else if (error.code === 'AZ_COMMAND_FAILED') {
+      stderr.write(
+        `Failed to store secret in Key Vault "${vaultName}". Ensure you have access and the vault exists.\n`
+      );
+      if (error.stderr) stderr.write(error.stderr);
+    } else if (error.code === 'AZ_OUTPUT_INVALID') {
+      stderr.write('Failed to parse Azure CLI output.\n');
+    } else if (error.code === 'TEMP_CLEANUP_FAILED') {
+      stderr.write(`${error.message}\n`);
+    } else {
+      stderr.write(`Failed to prepare temporary secret file: ${error.message}\n`);
+    }
+
+    if (error.cleanupError) {
+      stderr.write(`${error.cleanupError.message}\n`);
+    }
+    return 1;
+  }
+}
+
+if (require.main === module) {
+  process.exitCode = runCli();
+}
+
+module.exports = {
+  cleanupTemporarySecret,
+  parseArgs,
+  runCli,
+  storeKeyVaultSecret,
+};
