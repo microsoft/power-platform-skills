@@ -376,40 +376,10 @@ all screen and journey violations by the screen that must be repaired.
 
 #### Repair contract violations
 
-**If any contract check fails:**
-
-1. **Group failures by screen.** Each failing screen gets one repair invocation listing all
-   its violations.
-
-2. **Do not remove functionality.** Never silently delete navigation or controls to pass checks.
-
-3. **Reinvoke the screen builder** for each failing screen with an explicit repair prompt:
-
-   > You are the canvas-screen-builder agent. **Repair** the **[Screen Name]** screen.
-   >
-   > - Action: Repair
-   > - Target file: [ScreenName].pa.yaml
-   > - Plan document: [absolute path to canvas-app-plan.md]
-   > - Working directory: [absolute path]
-   >
-   > **Contract violations found:**
-   >
-   > - [List each specific failure, e.g., "Primary Content: Gallery 'TaskList' missing — plan
-   >   > requires a Gallery with Items bound to Tasks data source"]
-   > - [e.g., "Required Handler: SubmitBtn.OnSelect is empty — plan requires Patch() call"]
-   > - [e.g., "Outcome Handling: Missing failure feedback — plan requires IfError() wrapper"]
-   >
-   > Read the plan document. Implement the missing contract obligations. Do not remove any
-   > existing functionality.
-
-4. **After repair, re-run the plan-contract checks** for the repaired screens only.
-
-5. **Limit repair iterations to 2.** If violations remain after 2 repair attempts:
-   - **Log the unresolved violations** for inclusion in the Phase 8 summary.
-   - **Continue to compilation** — contract violations do not block generation.
-
-After verification and repair attempts, continue to compilation. Contract and journey
-violations are logged for reporting but do not block generation.
+If violations exist, invoke one Repair screen builder per failing screen in parallel. Pass the
+target file, plan path, working directory, and all violations assigned to that screen. Re-run
+the plan-contract checks for repaired screens, for at most two repair rounds. Record unresolved
+violations for Phase 8, then continue to compilation.
 
 ### Step 7.2 — Compile
 
