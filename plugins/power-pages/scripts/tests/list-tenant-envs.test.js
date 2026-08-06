@@ -22,6 +22,7 @@ function fakeEnv(overrides = {}) {
 
 test('originOf extracts scheme + host', () => {
   assert.equal(originOf('https://x.api.crm.dynamics.com/some/path'), 'https://x.api.crm.dynamics.com');
+  assert.equal(originOf('https://ORG.API.CRM.DYNAMICS.COM/some/path'), 'https://org.api.crm.dynamics.com');
   assert.equal(originOf('https://x.api.crm.dynamics.com'), 'https://x.api.crm.dynamics.com');
   assert.equal(originOf('https://x.api.crm.microsoftdynamics.us'), 'https://x.api.crm.microsoftdynamics.us');
   assert.equal(originOf('https://x.api.crm.appsplatform.us'), 'https://x.api.crm.appsplatform.us');

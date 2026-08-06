@@ -187,8 +187,7 @@ function originOf(url) {
   try {
     const trustedUrl = helpers.validateAuthenticatedRequestUrl(url);
     const u = new URL(trustedUrl);
-    if (!helpers.validateDataverseEnvironmentUrl(u.origin)) return null;
-    return `${u.protocol}//${u.host}`;
+    return helpers.validateDataverseEnvironmentUrl(u.origin);
   } catch {
     return null;
   }
