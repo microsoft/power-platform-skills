@@ -436,6 +436,8 @@ The plugin ships with two MCP servers configured in `.mcp.json` — they start a
 | **playwright** | Headless browser automation for live previews and runtime tests |
 | **microsoft-learn** | Grounded search/fetch over official Microsoft Learn docs |
 
+The plugin host must provide an absolute `PLUGIN_ROOT` (GitHub Copilot) or `CLAUDE_PLUGIN_ROOT` (Claude Code). The Playwright bootstrap resolves its launcher only from that declared plugin root and never from the workspace working directory.
+
 ## Typical Workflow
 
 A common end-to-end workflow looks like this:
