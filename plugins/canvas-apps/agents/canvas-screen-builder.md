@@ -181,10 +181,6 @@ Contract violations fixed:
 Contract violations remaining: [none, or list with reason]
   - [violation]: [why it could not be fixed]
 
-Journey Steps Implemented:
-  - [Step description]
-Journey Steps Unresolved: [none, or list]
-
 QA fixes applied: [N]
   - [one-line description per fix, or "clean" if N=0]
 
