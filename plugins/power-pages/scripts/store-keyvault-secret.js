@@ -219,7 +219,7 @@ function runCli(
     return 1;
   }
 
-  // Resolve the secret value: prefer stdin, fall back to --secretValue.
+  // Resolve the secret value: use --secretValue when present, otherwise read stdin.
   let secretValue = secretValueArg;
   if (!secretValue) {
     // Read from stdin (non-TTY only — don't block waiting for interactive input).
