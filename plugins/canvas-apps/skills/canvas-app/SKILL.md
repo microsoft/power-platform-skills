@@ -399,29 +399,7 @@ iterate until the entire directory compiles clean.
 
 Track how many `compile_canvas` passes were needed.
 
-### Step 7.3 — Sync Contract Names After Compilation
-
-After successful compilation, scan all `.pa.yaml` files and compare actual control names
-against the plan's Contract control names. Compiler fixes or repairs may have renamed controls.
-
-**For each screen:**
-
-1. Extract all control names from the `.pa.yaml` file (lines matching `^\s*-\s+[^:]+:$`).
-2. Compare against the Contract's control names (Primary Content, Primary Interaction,
-   Required Handlers).
-3. If a planned control name does not exist but a similar prefixed name does (e.g., plan
-   says `SubmitBtn` but file has `Req_SubmitBtn`), **update the Contract in canvas-app-plan.md**
-   to use the actual name.
-
-**Update the plan document using Edit:**
-
-1. For each renamed control, update all Contract references in `canvas-app-plan.md`.
-2. Update the Journey Step Mapping table if any Control names changed.
-3. Write the updated plan so post-compilation verification uses accurate names.
-
-This sync is mandatory — do not skip it even if you believe no renames occurred.
-
-### Step 7.4 — Re-verify Contracts After Compilation
+### Step 7.3 — Re-verify Contracts After Compilation
 
 Compiler-error fixes may alter control properties, handlers, or formulas. Re-run contract
 verification to ensure fixes did not break planned functionality.
@@ -455,7 +433,7 @@ Re-run the journey checks from Step 7.1:
 
 3. **Re-run `compile_canvas`** after the repair to verify the fix didn't break compilation.
 
-4. **Re-run Step 7.4** after successful compilation.
+4. **Re-run Step 7.3** after successful compilation.
 
 5. **Repeat this loop** (repair → compile → verify) up to 2 times total.
 
