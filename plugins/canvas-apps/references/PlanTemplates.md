@@ -199,25 +199,21 @@ EDIT
 
 ### [Screen Name] (New)
 - **File:** [Name].pa.yaml
+- **Control Prefix:** [short unique prefix, e.g., `Set_`]
 - **Purpose:** [description]
 - **Layout:** [VerticalAutoLayout / ManualLayout, root container details]
-- **Key Controls:** [list with purpose of each]
+- **Key Controls:** [prefixed control names and purpose]
 - **Data Binding:** [variable names, data source references, collection names]
 - **Navigation:** [which screen(s) this navigates to, trigger conditions]
 - **State:** [any local variables set in OnVisible]
 
-#### Contract (required for verification)
+#### Contract
 
-- **Primary Content:** [the main data-displaying element — e.g., "Gallery showing tasks filtered by assignee" or "Form bound to selectedOrder"]
-- **Primary Interaction:** [the main user action — e.g., "Submit button that calls Patch() to save record" or "Gallery item tap sets selectedTask and navigates to Detail"]
-- **Required Handlers:** [list of OnSelect/OnChange/OnVisible formulas that must be non-empty and functional — e.g., "SubmitBtn.OnSelect must call Patch()", "Gallery1.OnSelect must set selectedItem"]
-- **Journey Steps:** [which user journey steps this screen implements — e.g., "View all tasks", "Filter by status", "Navigate to detail"]
-- **Outcome Handling:** [required feedback and state management]
-  - Validation: [if applicable]
-  - Success feedback: [if applicable]
-  - Failure feedback: [if applicable]
-  - State refresh: [if applicable]
-  - Empty state: [if applicable]
+- **Primary Content:** [control name, type, and data binding; or "none" with reason]
+- **Primary Interaction:** [control event and required behavior; or "none" with reason]
+- **Required Handlers:** [control.event → required formula behavior]
+- **Journey Steps:** [assigned journey step names]
+- **Outcome Handling:** [applicable validation, success, failure, refresh, and empty-state behavior]
 
 ## Core Functional Journeys
 
