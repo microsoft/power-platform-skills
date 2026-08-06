@@ -662,6 +662,13 @@ NODE20_BIN=/path/to/node20/bin node scripts/run-tests.js --with-sdk /path/to/pow
 ```
 
 - `run-tests.js` runs the full `scripts/tests/*.test.js` suite and prints a combined PASS/FAIL.
+  **CI runs this same command** — `.github/workflows/model-apps-script-tests.yml`, on any PR
+  touching `plugins/model-apps/**` or `evals/model-apps/**`, across ubuntu × windows × macos and
+  Node 20 × 22, plus a second job for the offline eval tests. A green PR therefore means exactly
+  what a green local run means. The job sets
+  `POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"` (transmission only — the local
+  diagnostic mirror still writes, so it cannot change what the tests assert); keep that env var on
+  any new job that could execute a telemetry-emitting hook or script.
 - The SDK's Jest suite needs **Node 20** (its `canvas` native module is built for the Node-20 ABI).
   Set `NODE20_BIN` to a Node-20 bin dir; without it the SDK suite is skipped (plugin suite still runs).
 - genpage evals: `node --test evals/model-apps/genpage/tests/*.test.js`, plus the Layer 1/2 runners

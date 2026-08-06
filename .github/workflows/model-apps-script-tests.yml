@@ -1,0 +1,90 @@
+# Functional unit tests for the model-apps plugin, across ubuntu × windows × macos
+# and Node 20 × 22.
+#
+# Why a matrix: these scripts shell out to `pac`/`az`, build filesystem paths, and
+# parse CLI output, so path-separator and shell differences are a real regression
+# class that a single-OS run would miss. Both Node versions are covered because the
+# plugin is developed on Node 22 while the repo's other test workflow pins Node 20 —
+# a version-only failure should be attributable, not a mystery.
+#
+# Deliberately mirrors `power-pages-script-tests.yml` rather than extending it: the
+# two plugins have independent path filters, so a change to one must not spend CI
+# time on the other.
+name: model-apps-script-tests
+
+on:
+    pull_request:
+        branches:
+            - main
+        paths:
+            - "plugins/model-apps/**"
+            # The eval harness lives at the repo root but is owned by this plugin, so
+            # an eval-only change must still trigger the eval job below.
+            - "evals/model-apps/**"
+            - ".github/workflows/model-apps-script-tests.yml"
+
+jobs:
+    test-model-apps-scripts:
+        name: test-model-apps-scripts (${{ matrix.os }}, node ${{ matrix.node }})
+        runs-on: ${{ matrix.os }}
+        # Defense-in-depth: opt this CI job out of telemetry transmission so a test
+        # that forgets to isolate emission can never POST to a real collector. The
+        # plugin's committed ikey.json currently ships `disabled: true`, but that is
+        # a value that can change; the guard must not depend on it. Suppresses
+        # TRANSMISSION only — the local diagnostic mirror is still written, so this
+        # cannot change what the tests actually assert.
+        env:
+            POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"
+        strategy:
+            fail-fast: false
+            matrix:
+                os:
+                    - ubuntu-latest
+                    - windows-latest
+                    - macos-latest
+                node:
+                    - 20
+                    - 22
+        steps:
+            - name: checkout
+              uses: actions/checkout@v4
+
+            - name: setup-node
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ matrix.node }}
+
+            # run-tests.js is the plugin's own regression gate: it runs every
+            # scripts/tests/*.test.js and exits non-zero on any failure. Invoking it
+            # (rather than a bare `node --test`) keeps CI and the documented local
+            # command identical, so a green PR means the same thing a green local run
+            # does. The vendored SDK's own Jest suite is intentionally NOT run here —
+            # it needs a Node-20-ABI `canvas` native module and the SDK source tree,
+            # neither of which exists in this repo; the real-bundle contract tests in
+            # scripts/tests/ cover the shipped bundle instead.
+            - name: run-model-apps-script-tests
+              shell: bash
+              working-directory: plugins/model-apps
+              run: node scripts/run-tests.js
+
+    test-model-apps-evals:
+        name: test-model-apps-evals
+        runs-on: ubuntu-latest
+        env:
+            POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"
+        steps:
+            - name: checkout
+              uses: actions/checkout@v4
+
+            - name: setup-node
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 20
+
+            # The eval harness lives at the repo root (evals/model-apps/**) but is
+            # owned by this plugin, so it is gated by the same path filter. These are
+            # the offline scoring/fixture tests only — the Layer 1/2 runners need a
+            # live Dataverse org and are run manually.
+            - name: run-model-apps-eval-tests
+              shell: bash
+              run: node --test evals/model-apps/app-builder/tests/*.test.js evals/model-apps/genpage/tests/*.test.js

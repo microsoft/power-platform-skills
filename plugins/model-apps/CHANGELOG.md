@@ -187,6 +187,9 @@ no breaking changes for skill users. **Plugin-internal breaking change:** a cust
 ### Tests
 - Plugin unit tests (+ optional vendored SDK suite): `node scripts/run-tests.js --with-sdk <ppux>`
   from `plugins/model-apps/`.
+- **These tests now run in CI** (`model-apps-script-tests`) on every PR touching the plugin or its
+  evals, across ubuntu × windows × macos and Node 20 × 22 — previously every test workflow was
+  scoped to `plugins/power-pages/**`, so the model-apps suite never ran on a PR at all.
 - Eval fixtures run separately, from the repo root: `node evals/model-apps/genpage/run-layer-1.js`,
   `node evals/model-apps/genpage/run-layer-2.js`, `node evals/model-apps/app-builder/run-app-builder.js`.
 - **Vendored-SDK contract tests** lock OData filter encoding, name-based identifiers, and sitemap
