@@ -159,34 +159,11 @@ Complete the Contract subsection in `PlanTemplates.md` for every screen. Use spe
 names, bindings, handlers, and outcomes that Phase 7 can verify; explicitly mark fields that
 do not apply.
 
-### Core Functional Journeys (Required)
+### Core Functional Journeys
 
-After all Per-Screen Specifications, write the **Core Functional Journeys** section. This is
-mandatory for both CREATE and EDIT modes.
-
-**Requirements:**
-
-1. **Define 3–5 journeys** prioritized as P1 (critical), P2 (important), or P3 (nice-to-have).
-
-2. **Map every journey step** to a specific screen, control, and event property using the
-   Journey Step Mapping table. No step may be orphaned — every step must have exactly one
-   responsible screen and control.
-
-3. **Specify formula requirements** — for each step, state what the formula must include
-   (e.g., "must call `Patch(`", "must contain `Navigate(Home`").
-
-4. **Never use vague requirements** such as:
-   - ❌ "supports editing"
-   - ❌ "allows user to save"
-   - ❌ "handles errors appropriately"
-
-   Instead use specific, verifiable requirements:
-   - ✅ "EditBtn.OnSelect must call `Patch(Tasks, {ID: selectedTask.ID, ...})`"
-   - ✅ "SaveBtn.OnSelect must call `Patch()` and then `Navigate(Home`"
-   - ✅ "SaveBtn.OnSelect must include `IfError(Patch(...), Set(errorMessage, ...))`"
-
-5. **Validate coverage** — before writing the plan document, verify that every journey step
-   maps to exactly one screen. If a step has no responsible screen, the plan is incomplete.
+Complete the Core Functional Journeys section in `PlanTemplates.md`. Map every step to one
+screen, control, event, and verifiable formula requirement; do not leave orphaned or vague
+steps.
 
 Mark the "Write plan document" task complete when done.
 
