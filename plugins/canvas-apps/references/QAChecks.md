@@ -255,10 +255,10 @@ against the parent's available space.
 
 ---
 
-## Plan-Contract QA Checks
+## Plan-Contract QA Checks (Phase 7 only)
 
-The following checks compare the generated `.pa.yaml` files against `canvas-app-plan.md`.
-They run before and after compilation during Phase 7.
+The orchestrating skill runs the following checks before and after compilation. Screen builders
+must not run them during parallel self-QA.
 
 These checks require access to both the plan document and the YAML files. They do NOT use
 arbitrary control-count heuristics — they verify specific planned elements exist.

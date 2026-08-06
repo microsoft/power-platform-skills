@@ -125,12 +125,14 @@ than editing another file.
 
 ## Step 3.5 — Self-QA
 
-After writing or editing the file, run the runtime-anti-pattern checks that `compile_canvas`
-does not catch.
+After writing or editing the file, run the local runtime-anti-pattern checks that
+`compile_canvas` does not catch. Do not run the Plan-Contract QA Checks; Phase 7 runs them
+after all screen builders finish.
 
 1. Read `${PLUGIN_ROOT}/references/QAChecks.md`
 2. Re-read the `.pa.yaml` file you just wrote or edited
-3. Apply each check in order; for every issue found, fix it inline using `Edit`
+3. Apply each check before the `Plan-Contract QA Checks` section; fix each issue inline using
+   `Edit`
 4. Track the count and a one-line description of every fix applied
 
 **Scope for Create actions:** apply all checks to the full new screen.
