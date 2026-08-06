@@ -51,13 +51,9 @@ Read `canvas-app-plan.md` at the path provided in your invocation prompt.
 - The **Control Definitions** for any new control types your screen uses (full `describe_control` output embedded in the plan)
 - The **TechnicalGuide Key Conventions** section (YAML syntax rules)
 
-**If your action is `Repair`**, locate and extract:
-
-- The **Per-Screen Specification** or **Per-Screen Edit Specification** for your screen
-- The **Contract** section for your screen (Primary Content, Primary Interaction, Required Handlers, Journey Steps)
-- The **Control Definitions** for any control types needed to fix the violations
-- The **TechnicalGuide Key Conventions** section (YAML syntax rules)
-- Also note the **Contract violations** from your invocation prompt — these are the specific issues to fix
+**If your action is `Repair`**, read the applicable Per-Screen Specification, its Contract, the
+control definitions needed for the repair, and the TechnicalGuide conventions. Treat the
+Contract violations in the invocation prompt as the repair scope.
 
 Do not call `describe_control`, `list_controls`, `list_apis`, or `list_data_sources`. All of that information is embedded in the plan document.
 
