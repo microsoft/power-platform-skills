@@ -290,36 +290,13 @@ empty, boolean-only, comment-only, semicolon-only, or stub-text formulas.
 
 ## Check 13 — INVALID-NAVIGATION-TARGET
 
-**Problem:** A `Navigate()` call references a screen that either:
+**Problem:** A `Navigate()` call targets a screen that is missing or absent from the plan.
 
-- Does not exist as a `.pa.yaml` file, or
-- Is not listed in the plan's Screens table
+**Detect:** For every `Navigate()` call, verify its first argument names both an existing
+`.pa.yaml` screen and a screen in the plan's Screens table.
 
-**Detect:** For each `.pa.yaml` file:
-
-1. Extract all `Navigate()` calls from all handler properties.
-2. Parse the target screen name (first argument to Navigate).
-3. Check if a corresponding `.pa.yaml` file exists in the working directory.
-4. Check if the target screen is listed in the plan's Screens table.
-
-5. Flag any navigation target that fails either check.
-
-**Fix:** This check does not auto-fix. Invalid navigation targets indicate either:
-
-- A typo in the Navigate() call (fix in the source screen)
-- A missing screen (the target screen builder failed)
-
-Report to contract verification for repair.
-
-**Report format:**
-
-```
-INVALID-NAVIGATION-TARGET: [SourceScreen].pa.yaml
-  Control: [ControlName]
-  Handler: [HandlerProperty]
-  Navigate target: [TargetScreenName]
-  Issue: [File does not exist / Not in plan]
-```
+**Fix:** Report the source control and event, target name, and missing file or plan entry to
+Phase 7.
 
 ---
 
