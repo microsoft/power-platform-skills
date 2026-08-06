@@ -327,26 +327,13 @@ After the planner completes, read `canvas-app-plan.md` from the working director
 Extract the screen list from the `## Screens` table — collect each screen name, its target
 file name, and its action (Create or Modify).
 
-### Step 6.0 — Verify Control Prefix Assignments
+### Step 6.1 — Verify Stable Control Names
 
-Before invoking any screen builder, verify that `canvas-app-plan.md` assigns a **unique
-2-4 character prefix** to each screen's controls. This prevents the compiler from renaming
-controls during Phase 7, which would cause contract name drift.
+Confirm every screen has a unique Control Prefix and that its planned control names use it. If
+the plan fails this check, reinvoke the planner once with the naming violations. Record any
+remaining violations and continue so the app can still be generated for evaluation.
 
-**Check the Per-Screen Specifications section:**
-
-1. Each screen must have a `Control Prefix` line (e.g., `Hom_`, `Cat_`, `Req_`, `Ord_`, `Adm_`).
-2. All control names in that screen's Contract section must use the prefix (e.g., `Hom_SubmitBtn`,
-   not `SubmitBtn`).
-3. No two screens may share the same prefix.
-
-**If prefixes are missing or controls use generic names:**
-
-1. Reinvoke the planner agent with a prompt specifying that control prefixes are mandatory.
-2. If the planner still produces unprefixed names, **log a warning and proceed anyway** —
-   contract verification may fail later, but apps must always be generated for evaluation.
-
-### Step 6.1 — Invoke Screen Builders
+### Step 6.2 — Invoke Screen Builders
 
 Invoke one `canvas-screen-builder` agent per screen. **Fire all invocations in a single
 message** (parallel execution) — do not wait for one screen to finish before starting the
