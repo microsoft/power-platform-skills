@@ -8,7 +8,21 @@
 
 ## Overview
 
-This skill guides the user through migrating an existing Power Pages site from the Standard Data Model (SDM) to the Enhanced Data Model (EDM). The skill is structured as 12 phases that cover prerequisite checks, in-flight migration detection, customization analysis and remediation (performed **before** migration), migration execution, data-model version switch, and post-migration validation/rollback.
+The **Enhanced Data Model (EDM)** is the next-generation storage model for Power Pages sites. Instead of spreading site configuration across many bespoke `adx_*` Dataverse tables (the legacy **Standard Data Model**, or **SDM**), EDM consolidates site metadata into a small set of unified tables — most notably `powerpagecomponent` — where component-specific properties are stored as JSON in a `content` column. The result is a simpler, future-proof schema that the Power Pages platform and tooling can evolve without per-component table churn, cleaner ALM with fewer tables to package, faster runtime resolution because the platform no longer joins across many `adx_*` tables, and a consistent surface for new Power Pages features that are being built EDM-first.
+
+It's important to note that **not all `adx_*` tables move into `powerpagecomponent`**. Only the **metadata** `adx_*` tables — the ones that describe the structure and authoring surface of the site, such as `adx_webpage`, `adx_webtemplate`, `adx_contentsnippet`, `adx_sitesetting`, `adx_pagetemplate`, `adx_weblink`, `adx_entityform`, `adx_entitylist`, and similar configuration tables — are consolidated into `powerpagecomponent` (with their per-row properties moved into the `content` JSON column). The **transactional / runtime** `adx_*` tables — the ones that capture end-user activity at runtime, such as `adx_invitation`, `adx_inviteredemption`, `adx_portalcomment`, `adx_externalidentity`, and the entity-form / advanced-form submission and log tables — are **not** migrated into `powerpagecomponent`; they remain on their existing schemas and keep storing runtime data as before. What changes for those transactional tables is that their lookups to metadata records get rewired during the references migration so they point at the new `powerpagecomponent` rows instead of the legacy metadata `adx_*` rows.
+
+Existing sites were authored on SDM and continue to run on `adx_*` tables, so to benefit from EDM (and to stay aligned with where the Power Pages platform is headed) each site must be **migrated**. Migration moves the site's configuration metadata into the EDM `powerpagecomponent` shape, rewires transactional references onto those new metadata records, and flips the site record to serve from EDM. Migration is also where **customizations** — custom `adx_*` columns, Liquid that reads `adx_*` attributes, FetchXML over `adx_*` tables, plugins, and workflows — are surfaced and **remediated**, because those customizations don't carry over automatically and must be rewritten or restructured to work against EDM.
+
+The skill is structured as **4 high-level phases**. Phase 1 and Phase 4 run the same way for every site, while Phase 2 and Phase 3 are **track-branched** — their shape depends on the migration mode chosen in step 1.7, which derives the track from the environment type. The **Authoring Track** (mode `configurationData` or `all`) is used for Dev and Single-environment setups, where the metadata itself is migrated locally and customizations are scanned and fixed against SDM source before references move. The **Downstream Track** (mode `configurationDataReferences`) is used for Test, UAT, and Production environments where configuration metadata is assumed to have already arrived via ALM solution import from Dev; only transactional references migrate here, and any customization findings indicate an upstream ALM gap rather than work the user should do locally.
+
+**Phase 1 — Site Discovery & Pre-checks** runs for both tracks and covers seven sub-steps: establish CLI context (1.1), identify the site context (1.2), discover the site and validate it's on SDM (1.3), check for any prior or in-flight migration (1.4), validate the required Dataverse dependencies (1.5), validate the template and its V2 EDM package (1.6), and determine the environment type plus migration mode (1.7) — this last sub-step is where the track is derived.
+
+On the **Authoring Track** (17 sub-steps total), **Phase 2 — Configuration Migration & Customization Remediation** captures an SDM baseline snapshot (2.1), migrates the configuration metadata with `pac pages migrate-datamodel --mode <configurationData|all>` (2.2), locates the auto-emitted `SiteCustomization*.csv` report (2.3), and remediates customizations by staging FetchXML and Liquid auto-rewrites alongside augmented prompts for plugins and Data Model Extensions, then applying the staged diff and uploading back to Dataverse with `pac pages upload --modelVersion 1` (2.4). **Phase 3 — Migration Execution** then runs a four-sub-step path: an SDM↔EDM data diff validation as a pre-refs safety gate (3.1), the transactional references migration (3.2, auto-skipped when mode was `all`), EDM activation via `--updateDataModelVersion --portalId <…>` (3.3), and the user-confirmed site restart (3.4).
+
+On the **Downstream Track** (18 sub-steps total), **Phase 2 — Setting Up Metadata** is shorter because configuration metadata is assumed to have arrived via ALM: verify the metadata is present in the target environment (2.1), capture snapshots for later diffs (2.2), and confirm metadata readiness via a user-facing gate before Phase 3 starts moving transactional data (2.3). **Phase 3 — Migration Execution** is longer here because customizations are scanned and remediated after the refs migration emits its own customization report: data diff validation (3.1), migrate refs with `--mode configurationDataReferences` (3.2), locate the customization report (3.3), remediate customizations with the same staged-rewrite and augmented-prompt flow as the Authoring Track but with a stronger warning since Prod/Test/UAT findings typically signal an ALM gap upstream (3.4), activate EDM (3.5), and confirm the site restart (3.6).
+
+**Phase 4 — Post-Migration Validation** is also shared across tracks and consists of two sub-steps: a runtime smoke-test recommendation that points the user at the `/test-site` flow (4.1) and a final status summary that records skill usage and writes the final execution report (4.2).
 
 > **Note:** EDM migration is a preview feature. Behavior may change before GA. Always test on a non-production environment first.
 
@@ -141,7 +155,7 @@ cwd/
 └── migration-reports/                 ← <OUTPUT_DIR> — all migration artifacts
     ├── SiteCustomization.csv          ← PAC writes here
     ├── customization-report.html      ← script writes here
-    ├── skill-execution-report.html
+    ├── sdm-to-edm-migration-report.html
     ├── remediation-staged/            ← rewriter-proposed files (mirrors <SITE_ROOT> layout)
     │   └── web-templates/
     │       └── migration-check-demo/
@@ -182,7 +196,7 @@ Test-Path .\website.yml
 | --- | --- | --- |
 | `SiteCustomization.csv` (and auto-numbered `SiteCustomization<N>.csv`) | `pac pages migrate-datamodel --siteCustomizationReportPath` | `<OUTPUT_DIR>` (PAC sometimes writes to cwd instead — step 2.1 globs for it) |
 | `customization-report.html` | `generate-migration-reports.js` | `<OUTPUT_DIR>` |
-| `skill-execution-report.html` | `generate-migration-reports.js` | `<OUTPUT_DIR>` |
+| `sdm-to-edm-migration-report.html` | `generate-migration-reports.js` | `<OUTPUT_DIR>` |
 | `remediation-staged/<rel path>` (proposed file copies) | `generate-migration-reports.js --automate-fetchxml --automate-liquid` | `<OUTPUT_DIR>/remediation-staged/` (mirrors `<SITE_ROOT>` layout; live source untouched until apply step) |
 | `remediation-diff.json` (structured per-file diff manifest) | same script | `<OUTPUT_DIR>` (consumed by live report's Remediation Diff card and by `apply-remediation.js`) |
 
@@ -256,9 +270,9 @@ The skill executes local-only analysis (no Dataverse API) for every customizatio
 - **`categorizePlugin(snippet)`** — name-prefix match on `Microsoft.*` / `Adxstudio.*` / custom; emits per-finding action including original entity and step name.
 - **`buildDataModelExtensionChecklists(items)`** — groups column findings by source `adx_*` table; produces one checklist per source table with suggested new-table name and step-by-step guidance from the migration doc.
 
-Output is rendered in `skill-execution-report.html` under the "Liquid Findings — Categorized", "Plugin Findings — Categorized", "Auto-applied Rewrites", "Data Model Extensions — Per-table Remediation Checklists", and the augmented-prompts sections.
+Output is rendered in `sdm-to-edm-migration-report.html` under the "Liquid Findings — Categorized", "Plugin Findings — Categorized", "Auto-applied Rewrites", "Data Model Extensions — Per-table Remediation Checklists", and the augmented-prompts sections.
 
-See `assets/skill-execution-report.html` for the rendered remediation guidance shown to users.
+See `assets/sdm-to-edm-migration-report.html` for the rendered remediation guidance shown to users.
 
 ---
 
@@ -272,7 +286,7 @@ Two customization categories — **custom plugins** and **Data Model Extensions*
 For both, the skill follows a **paste-ready augmented-prompt** pattern:
 
 1. The script generates a complete, self-contained prompt tailored to the user's actual findings
-2. The prompt is written to a `.txt` file in `<OUTPUT_DIR>/` and embedded in `skill-execution-report.html`
+2. The prompt is written to a `.txt` file in `<OUTPUT_DIR>/` and embedded in `sdm-to-edm-migration-report.html`
 3. The user opens a fresh Claude Code session pointed at the relevant working directory (their plugin repo for plugins; any working dir for DME)
 4. The user pastes the prompt as the first message
 5. The receiving session performs the work — refactoring plugin code OR building a Dataverse solution package — and surfaces a diff or artifact for the user to review before applying

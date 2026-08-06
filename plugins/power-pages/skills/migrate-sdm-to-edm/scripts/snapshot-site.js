@@ -233,6 +233,24 @@ function scanWebLinkSets(siteRoot) {
   return { count: inventory.length, inventory, parseErrors: errors };
 }
 
+// Derive a flat per-link inventory from the per-set link data captured by
+// scanWebLinkSets. Each record represents a single navigation link with its
+// parent set's slug for context.
+function deriveWebLinks(linkSetsResult) {
+  const inventory = [];
+  for (const set of linkSetsResult.inventory || []) {
+    for (const linkName of set.linkNames || []) {
+      inventory.push({
+        slug: set.slug,
+        name: linkName,
+        parentSet: set.name,
+        language: set.language,
+      });
+    }
+  }
+  return { count: inventory.length, inventory, parseErrors: [] };
+}
+
 function scanWebTemplates(siteRoot, withContentHash) {
   const errors = [];
   const inventory = [];
@@ -348,6 +366,11 @@ function main() {
     webPages: scanWebPages(siteRoot, withContentHash),
     contentSnippets: scanContentSnippets(siteRoot, withContentHash),
     webLinkSets: scanWebLinkSets(siteRoot),
+    // webLinks is derived from the per-set link inventory captured by
+    // scanWebLinkSets above. It exposes each individual link as its own
+    // record so the Navigation group in the live report shows the actual
+    // navigation items, not just the menu containers.
+    webLinks: deriveWebLinks(scanWebLinkSets(siteRoot)),
     webTemplates: scanWebTemplates(siteRoot, withContentHash),
     webFiles: scanFlatFolder(siteRoot, 'web-files', '.webfile.yml',
       { name: 'adx_name', partialUrl: 'adx_partialurl' }),
@@ -400,6 +423,7 @@ function main() {
     webPages: ['kind', 'slug', 'partialUrl', 'language'],
     contentSnippets: ['slug', 'language', 'name'],
     webLinkSets: ['slug', 'language', 'name'],
+    webLinks: ['slug', 'language', 'name'],
     webTemplates: ['slug', 'name'],
     webFiles: ['name', 'partialUrl'],
     pageTemplates: ['name'],
