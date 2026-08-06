@@ -370,61 +370,9 @@ screens that compile but do not implement their planned functionality.
 
 ### Step 7.1 — Verify Plan Contracts
 
-#### Extract contracts from the plan
-
-Read `canvas-app-plan.md` and extract, for each screen, the **Contract** section:
-
-- Primary Content (control name and data binding)
-- Primary Interaction (control name and handler requirement)
-- Required Handlers (list of ControlName.Handler patterns)
-- Journey Steps (list of steps this screen implements)
-- Outcome Handling (validation, success/failure feedback, state refresh, empty state)
-
-Also extract the **Core Functional Journeys** section with their Journey Step Mapping tables.
-
-#### Verify each screen against its contract
-
-For each screen in the plan, read its `.pa.yaml` file and verify:
-
-1. **Screen exists** — the `.pa.yaml` file was written and is non-empty.
-
-2. **Primary Content exists** — the control named in "Primary Content" is present.
-   - A Gallery must have an `Items` property referencing data.
-   - A Form must have a `DataSource` property.
-   - A DataTable must have an `Items` property.
-   - Content controls must have their stated data bindings.
-
-3. **Primary Interaction exists** — the control named in "Primary Interaction" is present and
-   has a non-empty, non-placeholder handler.
-   - Buttons must have `OnSelect` with actual logic (not empty, not just a comment).
-   - Gallery items with navigation must have `OnSelect` containing `Navigate()` or state updates.
-   - Forms with submit must have a submit button whose `OnSelect` calls `Patch()`, `SubmitForm()`,
-     or equivalent.
-
-4. **Required Handlers are implemented** — for each handler listed in "Required Handlers":
-   - The control exists.
-   - The handler property (`OnSelect`, `OnChange`, `OnVisible`, etc.) is present.
-   - The handler contains the required function call or pattern (e.g., "must call Patch()"
-     means the formula contains `Patch(`).
-   - The handler is NOT a placeholder:
-     - ❌ Empty: `=`
-     - ❌ Boolean: `=false` or `=true`
-     - ❌ Comment only: `=// TODO`
-     - ❌ Stub: `="not implemented"`
-
-5. **Required data operations exist** — for each handler that must perform a data operation
-   (Patch, Remove, Collect, ClearCollect, SubmitForm), verify the formula contains the
-   required function call.
-
-6. **Navigation targets exist** — for every `Navigate()` call in the screen, the target screen's
-   `.pa.yaml` file exists and is non-empty.
-
-7. **Outcome Handling is implemented** (where specified in the contract):
-   - **Validation**: If required, form/input validation logic exists.
-   - **Success feedback**: If required, success notification or navigation exists after data ops.
-   - **Failure feedback**: If required, error handling with `IfError()` or `IsError()` exists.
-   - **State refresh**: If required, data refresh after mutations exists.
-   - **Empty state**: If required, conditional display for empty data exists.
+Read `canvas-app-plan.md`, every generated `.pa.yaml` file, and the `Plan-Contract QA Checks
+(Phase 7 only)` section of `${PLUGIN_ROOT}/references/QAChecks.md`. Run those checks and group
+all screen and journey violations by the screen that must be repaired.
 
 #### Repair contract violations
 
@@ -454,34 +402,11 @@ For each screen in the plan, read its `.pa.yaml` file and verify:
    > Read the plan document. Implement the missing contract obligations. Do not remove any
    > existing functionality.
 
-4. **After repair, re-run the screen contract checks** for the repaired screens only.
+4. **After repair, re-run the plan-contract checks** for the repaired screens only.
 
 5. **Limit repair iterations to 2.** If violations remain after 2 repair attempts:
    - **Log the unresolved violations** for inclusion in the Phase 8 summary.
    - **Continue to compilation** — contract violations do not block generation.
-
-#### Verify Core Journeys
-
-After all screens pass their individual contracts, verify the **Core Functional Journeys** from
-the plan document using the Journey Step Mapping tables:
-
-1. **For each journey step in the mapping table:**
-   - Verify the specified Screen exists.
-   - Verify the specified Control exists in that screen.
-   - Verify the Event Property (OnSelect, OnChange, etc.) contains the required formula pattern.
-
-2. **Verify navigation chain** — for multi-screen journeys, verify that navigation from each
-   screen to the next is implemented.
-
-3. **Verify Success/Failure Behaviors** — check that the handlers implementing success and
-   failure behaviors exist and are non-placeholder.
-
-**If any journey check fails:**
-
-1. Identify which screen(s) are missing the required elements.
-2. Reinvoke the screen builder(s) with repair prompts specifying the journey obligations.
-3. Limit journey repair to 1 additional iteration.
-4. If journey verification still fails, **log the failures** for the Phase 8 summary.
 
 After verification and repair attempts, continue to compilation. Contract and journey
 violations are logged for reporting but do not block generation.
