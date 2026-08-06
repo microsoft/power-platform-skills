@@ -357,7 +357,7 @@ skills/
 | `/genpage` | Build and deploy generative pages for a model-driven Power App |
 | `/app-builder` | **(Preview)** Build and edit a whole model-driven app — tables, columns, relationships, adaptive forms, views, Choice-column charts, generative pages, app + sitemap, sample data, and admin-gated AI features — from a natural-language intent, via the vendored `cds-maker-sdk` |
 | `/report-issue` | File a bug/issue about the model-apps plugin to the GitHub repository |
-| `/telemetry` | Enable/disable/check anonymous usage telemetry (`on \| off \| status`) |
+| `/telemetry` | Enable, disable, or check usage telemetry (`on \| off \| status`) |
 
 ## Agents
 
@@ -512,7 +512,10 @@ repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **physical copy*
   (CI-enforced: `node scripts/validate-telemetry-ikeys.js`).
 - **Emission:** `hooks/run-skill-pretool-telemetry.js` (PreToolUse Skill) and
   `hooks/run-user-prompt-telemetry.js` (UserPromptSubmit `/model-apps:<skill>`).
-- **Privacy:** anonymous, default-on. Users opt out of transmission via
+- **Privacy:** default-on usage telemetry. Events include Dataverse organization
+  and Entra tenant GUIDs when PAC is signed in, but Model Apps excludes the
+  signed-in user's Entra object ID. The local diagnostic mirror retains the same
+  event fields. Users opt out of transmission via
   `/model-apps:telemetry off`; the local diagnostic mirror
   (`~/.power-platform-skills/telemetry/model-apps/sessions/<id>/events.jsonl`) is
   still written. CI/automation opt out via

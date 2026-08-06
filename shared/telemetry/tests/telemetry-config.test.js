@@ -29,7 +29,9 @@ test("off writes the per-plugin opt-out and confirms", () => {
   const { status, stdout } = run(["--action", "off", "--plugin", "power-pages"], dir);
   assert.equal(status, 0);
   assert.match(stdout, /OFF/);
-  assert.match(stdout, /No personal data is collected/);
+  assert.match(stdout, /Dataverse organization and Entra tenant IDs/);
+  assert.match(stdout, /eventInfo\.aadObjectId/);
+  assert.doesNotMatch(stdout, /anonymous/i);
   const cfg = JSON.parse(fs.readFileSync(path.join(dir, "config.json"), "utf8"));
   assert.equal(cfg.telemetry["power-pages"], "off");
 });
@@ -65,7 +67,18 @@ test("status reports ON by default and never reads ikey.json", () => {
   const { status, stdout } = run(["--action", "status", "--plugin", "power-pages"], dir);
   assert.equal(status, 0);
   assert.match(stdout, /Telemetry \(power-pages\): ON/);
-  assert.match(stdout, /No personal data is collected/);
+  assert.match(stdout, /Dataverse organization and Entra tenant IDs/);
+  assert.match(stdout, /eventInfo\.aadObjectId/);
+  assert.doesNotMatch(stdout, /anonymous/i);
+});
+
+test("status discloses Model Apps identifiers without claiming an Entra user object ID", () => {
+  const dir = mkTmp();
+  const { status, stdout } = run(["--action", "status", "--plugin", "model-apps"], dir);
+  assert.equal(status, 0);
+  assert.match(stdout, /Dataverse organization and Entra tenant IDs/);
+  assert.match(stdout, /Model Apps excludes the signed-in user's Entra object ID/);
+  assert.doesNotMatch(stdout, /anonymous/i);
 });
 
 test("status reports OFF after opt-out", () => {
