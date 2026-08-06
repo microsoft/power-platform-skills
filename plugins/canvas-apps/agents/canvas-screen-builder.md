@@ -71,12 +71,8 @@ Do not call `describe_control`, `list_controls`, `list_apis`, or `list_data_sour
 
 Write `[ScreenName].pa.yaml` to the working directory.
 
-**Before writing any YAML, read the Contract section for your screen.** You must implement:
-
-1. **Every control listed** in Primary Content and Primary Interaction.
-2. **Every handler listed** in Required Handlers — with actual logic, not placeholders.
-3. **Every journey step** assigned to your screen in the Journey Step Mapping table.
-4. **Every outcome behavior** specified in Outcome Handling (validation, success/failure feedback, etc.).
+Implement every applicable obligation in the screen Contract and every journey step assigned to
+this screen.
 
 **Reject placeholder handlers.** The following are NOT valid implementations:
 
