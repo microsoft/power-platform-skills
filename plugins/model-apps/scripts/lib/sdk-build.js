@@ -1915,12 +1915,24 @@ async function runSdkBuild(spec, opts = {}) {
     const app = await resolveAppModuleId(provision, appUnique);
     const stillBad = [];
     const reproven = [];
+    // Track HOW each feature was recovered so the reported reason is true for that path. Claiming a
+    // re-issue applied something the proof merely found is the same "report what you did not verify"
+    // failure this whole phase exists to remove.
+    const reprovenBy = new Map();
     for (const p of pendingAiReconfirm) {
-      if (retryApplied.has(p.feature)) { reproven.push(p.feature); continue; }
+      if (retryApplied.has(p.feature)) {
+        reproven.push(p.feature);
+        reprovenBy.set(p.feature, 'applied by the post-publish re-issue (an app-scope write is a no-op before the app is published)');
+        continue;
+      }
       const setting = AI_APP_SETTING[p.feature];
       let proof = { error: app.error };
       if (!app.error && setting) proof = await proveAppOverride(provision, app.appModuleId, setting);
-      if (!proof.error && proof.exists && sameSettingValue(proof.value, featureWantValue(flags && flags[p.feature]))) { reproven.push(p.feature); continue; }
+      if (!proof.error && proof.exists && sameSettingValue(proof.value, featureWantValue(flags && flags[p.feature]))) {
+        reproven.push(p.feature);
+        reprovenBy.set(p.feature, 'confirmed present after publish by the build\u2019s own override-row proof');
+        continue;
+      }
       const [label, why] = BUCKET_LABELS[p.bucket] || [String(p.bucket).toUpperCase(), 'reported by the SDK as a non-success outcome'];
       // Prefer the SDK's OWN per-feature reason: it carries the real error text for `failed`, which
       // a canned bucket description throws away.
@@ -1932,7 +1944,7 @@ async function runSdkBuild(spec, opts = {}) {
     if (af && reproven.length) {
       af.applied = [...(af.applied || []), ...reproven];
       for (const key of Object.keys(af)) if (Array.isArray(af[key]) && key !== 'applied' && key !== 'skipped') af[key] = af[key].filter((f) => !reproven.includes(f));
-      for (const o of af.outcomes || []) if (reproven.includes(o.feature)) { o.status = 'applied'; o.appOverrideExists = true; o.reason = 'applied by the post-publish re-issue (an app-scope write is a no-op before the app is published)'; }
+      for (const o of af.outcomes || []) if (reproven.includes(o.feature)) { o.status = 'applied'; o.appOverrideExists = true; o.reason = reprovenBy.get(o.feature); }
     }
     // `runner.skip` renders as `⊘ <label>` — the closest thing the narrator has to a warning — and
     // advances the step counter correctly, which a hand-built `runner.emit` did not.

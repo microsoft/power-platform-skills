@@ -2004,6 +2004,30 @@ test('ai-features phase: a retry that still fails is reported honestly, not swal
   assert.ok(warnings.some((e) => /NOT PERSISTED: formFill/.test(e.label)), 'a genuinely failing feature still warns');
 });
 
+test('ai-features phase: the recovery reason names the path that actually recovered the feature', async () => {
+  // Two recovery paths land in the same bucket: the post-publish RE-ISSUE, and the override-row
+  // PROOF. Reporting "applied by the re-issue" for something the proof merely found would be the
+  // same report-what-you-did-not-verify failure this phase exists to remove.
+  const spec = makeSpec({ ai: { appFeatures: { formFill: true }, summaries: { default: 'off' } } });
+  const { sdk, calls } = mockSdk();
+  // The retry never applies anything, so recovery can only come from the proof path.
+  sdk.setAppAiFeatures = async (appUnique, flags, opts) => {
+    calls.push({ name: 'setAppAiFeatures', args: [appUnique, flags, opts] });
+    return { applied: [], skipped: [], notPersisted: ['formFill'], unverified: [], failed: [], outcomes: [{ feature: 'formFill', status: 'notPersisted' }] };
+  };
+  // ...but the override row IS present, so the proof recovers it.
+  sdk.queryRecords = async (logical) => {
+    if (logical === 'appmodule') return [{ appmoduleid: 'app-guid' }];
+    if (logical === 'settingdefinition') return [{ settingdefinitionid: 'def-guid' }];
+    if (logical === 'appsetting') return [{ value: '1' }];
+    return [];
+  };
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['app-shell', 'ai-features'] });
+  const outcome = (result.created.ai.appFeatures.outcomes || []).find((o) => o.feature === 'formFill');
+  assert.strictEqual(outcome.status, 'applied');
+  assert.match(outcome.reason, /override-row proof/, `the proof path must not claim the re-issue applied it: ${outcome.reason}`);
+});
+
 test('ai-features phase: a bucket the plugin does not know about is still reported, not dropped', async () => {
   // The buckets are derived from the RESULT, not a fixed list: a non-success bucket added by a
   // future SDK revision must surface verbatim rather than vanish, which is the very bug class this
