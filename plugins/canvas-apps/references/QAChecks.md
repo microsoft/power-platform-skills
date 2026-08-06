@@ -281,30 +281,10 @@ from journey steps assigned to that screen. Flag each name that is absent from t
 **Problem:** A handler listed in the plan's Required Handlers section exists but contains
 a placeholder value instead of actual logic.
 
-**Detect:** For each Required Handler in the plan (format: `ControlName.HandlerProperty`):
+**Detect:** For each Required Handler, verify the control and event property exist and reject
+empty, boolean-only, comment-only, semicolon-only, or stub-text formulas.
 
-1. Locate the control in the `.pa.yaml` file.
-2. Find the handler property (OnSelect, OnChange, OnVisible, etc.).
-3. Check if the handler value matches any placeholder pattern:
-   - Empty: `=` (nothing after the equals sign)
-   - Boolean placeholder: `=false` or `=true` (when used as a stub)
-   - Comment only: `=// TODO`, `=// FIXME`, `=// not implemented`
-   - Stub string: `="TODO"`, `="not implemented"`, `="placeholder"`
-   - Semicolon only: `=;`
-
-4. Flag any handler that matches a placeholder pattern.
-
-**Fix:** This check does not auto-fix. Report the violation to contract verification.
-
-**Report format:**
-
-```
-EMPTY-OR-PLACEHOLDER-HANDLER: [ScreenName].pa.yaml
-  Control: [ControlName]
-  Handler: [HandlerProperty]
-  Current value: [the placeholder value]
-  Plan requirement: "[what the handler must do, from Required Handlers]"
-```
+**Fix:** Report the handler's current value and required behavior to Phase 7.
 
 ---
 
