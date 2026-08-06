@@ -255,55 +255,6 @@ against the parent's available space.
 
 ---
 
-## Check 11 — EMPTY-NAV-TARGET (navigation to screen with no content)
-
-**Problem:** A `Navigate()` call points to a screen that exists but contains only empty
-containers — no leaf controls, no data bindings, no meaningful content. Users can navigate
-to the screen but see nothing useful. This is a symptom of incomplete screen generation,
-not a layout issue.
-
-**Detect:** For each `.pa.yaml` file in the working directory:
-
-1. Extract all `Navigate()` calls (may appear in `OnSelect`, `OnVisible`, or other handlers).
-   Handle multiline formulas, conditional navigation (`If(..., Navigate(...))`), and
-   transition arguments (`Navigate(Screen, ScreenTransition.Fade)`).
-
-2. For each unique target screen name found in `Navigate()` calls, locate the corresponding
-   `.pa.yaml` file.
-
-3. Read the target screen's `.pa.yaml` and check whether it contains at least one **leaf
-   control** — any control that is not a container (`GroupContainer`, `Screen`). Examples
-   of leaf controls: `Button`, `ModernText`, `Label`, `Gallery`, `DataTable`, `Form`,
-   `TextInput`, `Image`, `ModernCard`, etc.
-
-4. Flag any navigation target that:
-   - Has no controls at all (only the screen definition), OR
-   - Has only `GroupContainer` controls with no children, OR
-   - Has only `GroupContainer` controls whose children are also empty containers
-
-**Fix:** This check **does not fix automatically**. Empty navigation targets indicate the
-screen builder failed to implement the screen's planned content.
-
-1. **Report the violation** with the source control, the `Navigate()` formula, and the
-   empty target screen name.
-
-2. **Do not remove the navigation.** The navigation was planned and approved — removing it
-   silently violates the user's requirements.
-
-3. **Escalate to the skill's Phase 7 contract verification**, which will reinvoke
-   the screen builder with explicit repair instructions.
-
-**Exception:** A confirmation screen or transition screen that intentionally shows only a
-brief message (e.g., "Saving..." spinner, "Success!" acknowledgment) before auto-navigating
-elsewhere is valid. If the screen's plan contract explicitly states it is a transient screen
-with no primary content, do not flag it.
-
-**Note:** This is a syntactic guard, not a functional completeness check. A screen with one
-button satisfies this check even if that button does nothing. Full functional verification
-is handled by Phase 7's plan contract verification, not by this QA check.
-
----
-
 ## Plan-Contract QA Checks
 
 The following checks compare the generated `.pa.yaml` files against `canvas-app-plan.md`.
@@ -314,7 +265,7 @@ arbitrary control-count heuristics — they verify specific planned elements exi
 
 ---
 
-## Check 12 — MISSING-PLANNED-CONTROL
+## Check 11 — MISSING-PLANNED-CONTROL
 
 **Problem:** A control specified in the plan's Per-Screen Specification (Primary Content,
 Primary Interaction, or Key Controls) does not exist in the screen's `.pa.yaml` file.
@@ -344,7 +295,7 @@ MISSING-PLANNED-CONTROL: [ScreenName].pa.yaml
 
 ---
 
-## Check 13 — EMPTY-OR-PLACEHOLDER-HANDLER
+## Check 12 — EMPTY-OR-PLACEHOLDER-HANDLER
 
 **Problem:** A handler listed in the plan's Required Handlers section exists but contains
 a placeholder value instead of actual logic.
@@ -376,7 +327,7 @@ EMPTY-OR-PLACEHOLDER-HANDLER: [ScreenName].pa.yaml
 
 ---
 
-## Check 14 — INVALID-NAVIGATION-TARGET
+## Check 13 — INVALID-NAVIGATION-TARGET
 
 **Problem:** A `Navigate()` call references a screen that either:
 
@@ -411,7 +362,7 @@ INVALID-NAVIGATION-TARGET: [SourceScreen].pa.yaml
 
 ---
 
-## Check 15 — MISSING-REQUIRED-DATA-OPERATION
+## Check 14 — MISSING-REQUIRED-DATA-OPERATION
 
 **Problem:** A handler that the plan specifies must perform a data operation (Patch, Remove,
 Collect, ClearCollect, SubmitForm, UpdateContext, Set) does not contain that operation.
@@ -446,7 +397,7 @@ MISSING-REQUIRED-DATA-OPERATION: [ScreenName].pa.yaml
 
 ---
 
-## Check 16 — MISSING-VALIDATION-BEHAVIOR
+## Check 15 — MISSING-VALIDATION-BEHAVIOR
 
 **Problem:** The plan's Outcome Handling specifies validation behavior, but the screen
 does not implement input validation.
@@ -475,7 +426,7 @@ MISSING-VALIDATION-BEHAVIOR: [ScreenName].pa.yaml
 
 ---
 
-## Check 17 — MISSING-SUCCESS-BEHAVIOR
+## Check 16 — MISSING-SUCCESS-BEHAVIOR
 
 **Problem:** The plan's Outcome Handling specifies success feedback, but the screen
 does not implement it after data operations.
@@ -504,7 +455,7 @@ MISSING-SUCCESS-BEHAVIOR: [ScreenName].pa.yaml
 
 ---
 
-## Check 18 — MISSING-FAILURE-BEHAVIOR
+## Check 17 — MISSING-FAILURE-BEHAVIOR
 
 **Problem:** The plan's Outcome Handling specifies failure/error feedback, but the screen
 does not implement error handling.
@@ -533,7 +484,7 @@ MISSING-FAILURE-BEHAVIOR: [ScreenName].pa.yaml
 
 ---
 
-## Check 19 — UNIMPLEMENTED-JOURNEY-STEP
+## Check 18 — UNIMPLEMENTED-JOURNEY-STEP
 
 **Problem:** A journey step from the plan's Journey Step Mapping table is not implemented
 in the specified screen/control/handler.
