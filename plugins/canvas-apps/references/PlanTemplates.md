@@ -11,51 +11,41 @@ consumed by `canvas-screen-builder` agents. Use the mode-appropriate template be
 # Canvas App Plan
 
 ## Mode
-
 CREATE
 
 ## App Requirements
-
 [The original user requirements passed to this agent]
 
 ## Working Directory
-
 [The absolute path where .pa.yaml files should be written]
 
 ## Discovery Summary
-
 - Controls available: [N] — notable: [list of most relevant]
 - Data sources: [names or "none connected"]
 - Connectors: [names or "none connected"]
 
 ## Data Source Schemas
-
 [For each data source used in the app, embed the FULL output of get_data_source_schema]
 [Screen builders will reference column names and Power Fx types from here]
 [Omit entirely if no data sources are used]
 
 ### [DataSourceName]
-
 [Full get_data_source_schema output]
 
 ## API Details
-
 [For each connector used in the app, embed the FULL output of describe_api]
 [Screen builders will reference operation names and parameters from here]
 [Omit entirely if no connectors are used]
 
 ### [ApiName]
-
 [Full describe_api output]
 
 ## Screens
-
-| Screen | File           | Purpose       | Key Controls |
-| ------ | -------------- | ------------- | ------------ |
-| [Name] | [Name].pa.yaml | [description] | [controls]   |
+| Screen | File | Purpose | Key Controls |
+|--------|------|---------|--------------|
+| [Name] | [Name].pa.yaml | [description] | [controls] |
 
 ## Aesthetic Direction
-
 - Palette: [description]
 - Primary background: RGBA([...])
 - Accent color: RGBA([...])
@@ -65,27 +55,22 @@ CREATE
 - Typography scale: [header size/weight, body size/weight, caption size]
 
 ## Named Variables and Shared State
-
 [App-level variables, named formulas, collection names — so each builder uses consistent names]
 [Example: selectedItem (Record), isLoading (Boolean), appTheme (Record with color fields)]
 
 ## Control Definitions
-
 [For each control type used in the design, embed the FULL output of describe_control]
 [Builders will reference property names from here — do not summarize or abbreviate]
 
 ### [ControlTypeName]
-
 [Full describe_control output]
 
 ### [ControlTypeName]
-
 [Full describe_control output]
 
 ## Per-Screen Specifications
 
 ### [Screen Name]
-
 - **File:** [Name].pa.yaml
 - **Control Prefix:** [2-4 char unique prefix for all controls on this screen — e.g., `Hom_`, `Cat_`, `Req_`]
 - **Purpose:** [description]
@@ -109,7 +94,6 @@ CREATE
   - Empty state: [e.g., "If Gallery.Items is empty, show 'No tasks found' message"]
 
 ### [Screen Name]
-
 [repeat for each screen — every screen MUST have a Contract section with prefixed control names]
 
 ## Core Functional Journeys
@@ -147,9 +131,7 @@ P2/P3 are secondary flows.
 [repeat for each core journey — minimum 3, maximum 5]
 
 ## TechnicalGuide Key Conventions
-
 [Embed the most critical YAML syntax rules from TechnicalGuide.md that screen-builders must follow:
-
 - Formula prefix (= required)
 - Multi-line formula syntax (|- block scalar)
 - String quoting rules
@@ -166,19 +148,15 @@ P2/P3 are secondary flows.
 # Canvas App Plan
 
 ## Mode
-
 EDIT
 
 ## Edit Requirements
-
 [The original user edit requirements passed to this agent]
 
 ## Working Directory
-
 [The absolute path where .pa.yaml files are located]
 
 ## Current App Summary
-
 - Screens: [list each screen with brief description]
 - Layout strategy: [ManualLayout / AutoLayout / mixed]
 - Current palette:
@@ -190,53 +168,43 @@ EDIT
 - Data sources: [names or "none connected"]
 
 ## Screens to Modify
-
-| Screen | File           | Summary of Changes |
-| ------ | -------------- | ------------------ |
-| [Name] | [Name].pa.yaml | [description]      |
-
-## Screens to Add
-
-| Screen | File           | Purpose       |
-| ------ | -------------- | ------------- |
+| Screen | File | Summary of Changes |
+|--------|------|--------------------|
 | [Name] | [Name].pa.yaml | [description] |
 
+## Screens to Add
+| Screen | File | Purpose |
+|--------|------|---------|
+| [Name] | [Name].pa.yaml | [description] |
 (omit this section if no new screens)
 
 ## Data Source Schemas
-
 [For each data source involved in the edit, embed the FULL output of get_data_source_schema]
 [Editors will reference column names and Power Fx types from here]
 [Omit entirely if no data sources are involved]
 
 ### [DataSourceName]
-
 [Full get_data_source_schema output]
 
 ## API Details
-
 [For each connector involved in the edit, embed the FULL output of describe_api]
 [Editors will reference operation names and parameters from here]
 [Omit entirely if no connectors are involved]
 
 ### [ApiName]
-
 [Full describe_api output]
 
 ## Control Definitions
-
 [For each NEW control type not already in the existing app, embed the FULL output of describe_control]
 [Editors will reference property names from here — do not summarize or abbreviate]
 [Omit entirely if no new control types are being added]
 
 ### [ControlTypeName]
-
 [Full describe_control output]
 
 ## Per-Screen Edit Specifications
 
 ### [Screen Name] (Existing)
-
 - **File:** [Name].pa.yaml
 - **Current State:** [brief summary of what the screen currently contains]
 - **Changes Required:** [specific numbered list of changes to apply]
@@ -258,7 +226,6 @@ EDIT
   - Empty state: [if applicable]
 
 ### [Screen Name] (New)
-
 - **File:** [Name].pa.yaml
 - **Purpose:** [description]
 - **Layout:** [VerticalAutoLayout / ManualLayout, root container details]
@@ -311,9 +278,7 @@ P2/P3 are secondary flows.
 [repeat for each core journey — minimum 3, maximum 5]
 
 ## TechnicalGuide Key Conventions
-
 [Embed the most critical YAML syntax rules from TechnicalGuide.md that screen-editors must follow:
-
 - Formula prefix (= required)
 - Multi-line formula syntax (|- block scalar)
 - String quoting rules
