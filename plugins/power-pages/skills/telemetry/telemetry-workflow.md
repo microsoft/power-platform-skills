@@ -23,8 +23,8 @@ telemetry for this plugin. Default to `status` when no argument is given.
 - Events include skill name, plugin/PAC/agent versions, OS/Node versions, session
   and correlation IDs, and Dataverse organization and Entra tenant GUIDs when PAC
   is signed in.
-  Power Pages also includes the signed-in user's Entra object ID as
-  `eventInfo.aadObjectId`; Model Apps excludes it.
+  Power Pages can also include the signed-in user's Entra object ID as
+  `eventInfo.aadObjectId` when PAC exposes it; Model Apps excludes it.
   The local diagnostic mirror retains the same event fields even when transmission
   is off.
 - Events do not include file paths, prompts, tool inputs, site names, Dataverse

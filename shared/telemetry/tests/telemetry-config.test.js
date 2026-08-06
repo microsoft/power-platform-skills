@@ -31,6 +31,7 @@ test("off writes the per-plugin opt-out and confirms", () => {
   assert.match(stdout, /OFF/);
   assert.match(stdout, /Dataverse organization and Entra tenant IDs/);
   assert.match(stdout, /eventInfo\.aadObjectId/);
+  assert.match(stdout, /when PAC exposes it/);
   assert.doesNotMatch(stdout, /anonymous/i);
   const cfg = JSON.parse(fs.readFileSync(path.join(dir, "config.json"), "utf8"));
   assert.equal(cfg.telemetry["power-pages"], "off");
@@ -69,6 +70,7 @@ test("status reports ON by default and never reads ikey.json", () => {
   assert.match(stdout, /Telemetry \(power-pages\): ON/);
   assert.match(stdout, /Dataverse organization and Entra tenant IDs/);
   assert.match(stdout, /eventInfo\.aadObjectId/);
+  assert.match(stdout, /when PAC exposes it/);
   assert.doesNotMatch(stdout, /anonymous/i);
 });
 

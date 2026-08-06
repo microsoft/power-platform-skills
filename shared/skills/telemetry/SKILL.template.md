@@ -2,8 +2,8 @@
 name: telemetry
 description: >
   Use this skill when the user wants to enable, disable, turn on or off, opt out
-  of, opt in to, or check the status of {{PLUGIN_NAME}} usage
-  usage data. Triggers: "disable telemetry", "turn off telemetry", "opt out of
+  of, opt in to, or check the status of {{PLUGIN_NAME}} telemetry or its usage
+  data. Triggers: "disable telemetry", "turn off telemetry", "opt out of
   telemetry", "stop collecting usage data", "enable telemetry", "telemetry status".
 user-invocable: true
 argument-hint: "on | off | status"

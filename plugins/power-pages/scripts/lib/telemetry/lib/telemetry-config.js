@@ -10,7 +10,8 @@ const { pluginLogDir, latestSessionLog } = require("./local-log");
 function dataDisclosure(plugin) {
   const pluginSpecific =
     plugin === "power-pages"
-      ? "   Power Pages also records the signed-in user's Entra object ID as eventInfo.aadObjectId.\n"
+      ? "   Power Pages can also record the signed-in user's Entra object ID as\n" +
+        "   eventInfo.aadObjectId when PAC exposes it.\n"
       : plugin === "model-apps"
         ? "   Model Apps excludes the signed-in user's Entra object ID.\n"
         : "";
