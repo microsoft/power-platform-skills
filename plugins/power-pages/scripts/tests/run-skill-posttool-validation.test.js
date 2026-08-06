@@ -54,6 +54,12 @@ function runHook(root, skill, env = {}) {
   });
 }
 
+function nodeRequireOption(filePath) {
+  // NODE_OPTIONS tokenization treats Windows backslashes as escapes. Forward
+  // slashes remain valid in absolute Windows paths and survive on all runners.
+  return `--require "${filePath.replace(/\\/g, '/').replace(/"/g, '\\"')}"`;
+}
+
 test('activate-site validator passes a metacharacter project path literally to its child', (t) => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-activation-'));
   const root = path.join(parent, 'site-$ACTIVATION_PATH_PROBE-%ACTIVATION_PATH_PROBE%-&');
@@ -80,7 +86,7 @@ if (path.basename(process.argv[1] || '') === 'check-activation-status.js') {
   const res = runHook(root, 'activate-site', {
     ACTIVATION_ARG_CAPTURE: capturePath,
     ACTIVATION_PATH_PROBE: 'expanded-by-a-shell',
-    NODE_OPTIONS: `--require "${preloadPath.replace(/"/g, '\\"')}"`,
+    NODE_OPTIONS: nodeRequireOption(preloadPath),
   });
 
   assert.equal(res.status, 0, `hook should approve; stderr=${res.stderr}`);
@@ -112,7 +118,7 @@ if (path.basename(process.argv[1] || '') === 'validate-export.js') {
   const res = runHook(root, 'export-solution', {
     EXPORT_ARG_CAPTURE: capturePath,
     EXPORT_PATH_PROBE: 'expanded-by-a-shell',
-    NODE_OPTIONS: `--require "${preloadPath.replace(/"/g, '\\"')}"`,
+    NODE_OPTIONS: nodeRequireOption(preloadPath),
   });
 
   assert.equal(res.status, 0, `hook should approve; stderr=${res.stderr}`);
