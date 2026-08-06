@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 2,
+  "solution": { "uniqueName": "Hardening", "displayName": "Hardening", "publisherPrefix": "new" },
+  "app": { "name": "Hardening", "description": "Exercises the 2026-07-15 fixes: lookup-heavy default views (#2), N:N ordering (#3), sub-grid section+title (#5), and valid sample-data binds/choices (#1/#4)." },
+  "entities": [
+    {
+      "schemaName": "new_customer", "displayName": "Customer", "pluralName": "Customers",
+      "primaryAttribute": { "schemaName": "new_name", "displayName": "Name" },
+      "columns": [ { "schemaName": "new_tier", "displayName": "Tier", "type": "Choice", "options": ["Free", "Pro"] } ]
+    },
+    {
+      "schemaName": "new_ticket", "displayName": "Ticket", "pluralName": "Tickets",
+      "primaryAttribute": { "schemaName": "new_subject", "displayName": "Subject" },
+      "quickCreate": true,
+      "columns": [
+        { "schemaName": "new_a", "displayName": "A", "type": "Text" },
+        { "schemaName": "new_b", "displayName": "B", "type": "Text" },
+        { "schemaName": "new_c", "displayName": "C", "type": "Text" },
+        { "schemaName": "new_d", "displayName": "D", "type": "Text" },
+        { "schemaName": "new_e", "displayName": "E", "type": "Text" },
+        { "schemaName": "new_f", "displayName": "F", "type": "Text" },
+        { "schemaName": "new_g", "displayName": "G", "type": "Text" },
+        { "schemaName": "new_h", "displayName": "H", "type": "Text" },
+        { "schemaName": "new_status", "displayName": "Status", "type": "Choice", "options": ["New", "Open", "Closed"] }
+      ]
+    },
+    {
+      "schemaName": "new_tag", "displayName": "Tag", "pluralName": "Tags",
+      "primaryAttribute": { "schemaName": "new_label", "displayName": "Label" },
+      "columns": []
+    }
+  ],
+  "relationships": [
+    { "type": "OneToMany", "referenced": "new_customer", "referencing": "new_ticket",
+      "lookup": { "schemaName": "new_CustomerId", "displayName": "Customer" } },
+    { "type": "ManyToMany", "entity1": "new_ticket", "entity2": "new_tag" }
+  ],
+  "forms": [
+    {
+      "entity": "new_customer", "type": "main", "name": "Customer", "layout": "auto",
+      "subgrids": [ { "childEntity": "new_ticket", "view": "Open Tickets" } ]
+    }
+  ],
+  "views": [
+    {
+      "entity": "new_ticket", "type": "main", "name": "Open Tickets",
+      "columns": ["new_subject", "new_status"], "sort": [{ "attr": "new_subject", "dir": "asc" }], "activeOnly": true
+    }
+  ],
+  "appShell": {
+    "areas": [ { "label": "Main", "groups": [ { "label": "Records", "subAreas": [
+      { "entity": "new_customer", "title": "Customers" },
+      { "entity": "new_ticket", "title": "Tickets" },
+      { "entity": "new_tag", "title": "Tags" }
+    ] } ] } ]
+  },
+  "sampleData": {
+    "new_customer": [ { "new_name": "Acme", "new_tier": "Pro" } ],
+    "new_ticket": [ { "new_subject": "Down", "new_status": "Open", "new_a": "x",
+      "$parent": { "entity": "new_customer", "match": { "new_name": "Acme" } } } ],
+    "new_tag": [ { "new_label": "urgent" } ]
+  }
+}

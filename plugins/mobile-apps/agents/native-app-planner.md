@@ -61,16 +61,17 @@ The orchestrator's Step 3 has a documented inline-gate fallback for exactly this
 Read these references once before doing anything else:
 
 - `${PLUGIN_ROOT}/AGENTS.md` — plugin conventions
-- `${PLUGIN_ROOT}/template/package.json` — **the native-capability allowlist**. The set of native modules in this file is fixed by the rewrap pipeline; you may NEVER propose a capability whose module is not present here. See Step 3 for how this list is enforced.
+- `${PLUGIN_ROOT}/template/package.json` — **the native-code allowlist**. The set of modules with native code/config is fixed by the rewrap pipeline; you may NEVER propose a native capability whose module is not present here. Pure-JavaScript app dependencies are planned separately by `screen-planner` under `## Screens` and need not be bundled in this template.
 
 Do NOT attempt to read `app.config.js` from the working directory — scaffolding has not run yet. Reading `template/package.json` from `${PLUGIN_ROOT}` IS allowed and IS required.
 
 From the planner prompt extract:
 - **Target platforms** — iOS + Android by default. If the user picked just one platform, native modules need `Platform.OS` branching notes in the screen plan.
 - **Native capability hints** — words like "scan", "photo", "camera" -> `expo-camera`; "pick file", "upload PDF", "import document", "attach file" -> `expo-document-picker`; "generate PDF", "export report", "print report", "evidence packet" -> `pdf-report` (`expo-print` plus optional `expo-sharing`); "view PDF", "open PDF", "preview PDF" -> `native-pdf-viewer` for HTTPS URLs or local `file://` URIs with `@microsoft/power-apps-native-pdf-viewer` 0.2.9+; "signature", "sign off", "approval", "pen", "ink", "draw" -> `pen-input` with `@microsoft/power-apps-native-pen-input`; "track location", "background location", "GPS tracking", "follow my route", "breadcrumb", "field worker location" -> `geolocation` with `@microsoft/power-apps-native-bglocation` (continuous/background tracking + Dataverse sync); "where am I", "current location", "one-shot location", "tag this with my coordinates" -> one-shot `location` with `expo-location`; "save token", "credentials" -> `expo-secure-store`; "share / send" -> `expo-sharing`; "save file / download" -> `expo-file-system`. **Capability hints that the template does NOT ship** (including PDF viewer, PDF report, sharing, pen, or geolocation packages when absent) are surfaced to the user as transparency notes per Step 3 - never silently promoted into the plan. If the request is generated-report-shaped and the Power Apps PDF viewer package is absent, fall back to `pdf-report` only when `expo-print` is present; otherwise drop the PDF capability.
+- **Pure-JavaScript dependency hints** — pass any explicit JavaScript-library request, or any feature that may benefit from an established JS-only package instead of custom code, to `screen-planner`. These are app dependencies, not native capabilities. The screen planner reuses suitable installed packages first; otherwise it follows the canonical candidate-selection workflow and records the selected package with an exact version under `## Screens → ### JavaScript Dependencies`.
 - **Industry confirmed** — if the prompt contains a line `Industry confirmed: <slug>`, the orchestrator already ran the industry-confidence check (see Step 3c). Treat that slug as the locked industry for Step 3c — skip detection, skip the confidence check, jump straight to mapping the industry to aesthetic direction / palette / tone.
 
-Capture these for the native capabilities section in Step 4.
+Carry each input into its owning planning step: native hints into `## Native Capabilities`, pure-JavaScript dependency hints into the `screen-planner` prompt, and the confirmed industry into design planning.
 
 ## Step 2 — Spawn `data-model-architect` + inline planning in parallel
 
@@ -112,12 +113,12 @@ Build the native capabilities matrix yourself (this is a small enough surface to
 
 ### Step 3.0 — Build the allowlist (MANDATORY, before any cap is proposed)
 
-The set of native modules the rewrap pipeline supports is FIXED by `${PLUGIN_ROOT}/template/package.json`. You may NEVER propose a capability whose underlying module is not present there — the customer's binary is built from a pre-built base, not from their `package.json`. Adding a module to the plan that's not shipped means a downstream `/add-native` call WILL stop, and the orchestrator's whole flow stalls at Step 9.
+The set of modules with native code/config that the rewrap pipeline supports is FIXED by `${PLUGIN_ROOT}/template/package.json`. You may NEVER propose a native capability whose underlying module is not present there — the customer's binary is built from a pre-built base, not from their `package.json`. Adding a native module to the plan that's not shipped means a downstream `/add-native` call WILL stop, and the orchestrator's whole flow stalls at Step 9. This restriction does not apply to verified pure-JavaScript dependencies; do not infer native code from a package-name prefix.
 
 Read the template's `package.json`:
 
 ```bash
-node -e "const p = require('${PLUGIN_ROOT}/template/package.json'); const deps = Object.keys({...p.dependencies, ...p.devDependencies}); console.log(deps.filter(d => d.startsWith('expo-') || d.startsWith('react-native-') || d.startsWith('@react-native-community/') || d.startsWith('@microsoft/extension-') || d === '@microsoft/power-apps-native-bglocation').join('\n'));"
+node -e "const p = require('${PLUGIN_ROOT}/template/package.json'); console.log(Object.keys({...p.dependencies, ...p.devDependencies}).sort().join('\n'));"
 ```
 
 Map each shipped module to a user-facing capability slug. Use this known mapping table, but still gate every row against the live allowlist output; a listed capability is supported only when its exact package appears in `template/package.json` and is not runtime-banned.
@@ -134,7 +135,6 @@ Map each shipped module to a user-facing capability slug. Use this known mapping
 | `secure-store` | `expo-secure-store` | — |
 | `file-system` | `expo-file-system` | — |
 | `sharing` | `expo-sharing` | — |
-| `calendar-management-view` | `react-native-calendars` | — |
 | `location` | `expo-location` | `/add-native location` |
 | `biometrics` / `local-authentication` | `expo-local-authentication` | `/add-native biometrics` |
 | `clipboard` | `expo-clipboard` | `/add-native clipboard` |
@@ -169,23 +169,11 @@ PDF/pen inference rules:
 - `geolocation` means continuous/background GPS tracking with durable storage and inline Dataverse sync via `@microsoft/power-apps-native-bglocation`. Auth is MSAL-only; native uploads each fix to an existing Dataverse table (default entity set `msdyn_locationrecords`). It is distinct from one-shot `location` (`expo-location`). Plan it only for continuous tracking or durable upload, require `/add-native geolocation` to verify the target table exists before use, and never propose the `GeolocationExtension`/HostingSDK path.
 - The Power Apps extensions are use-case-specific, not generic replacements for Expo modules. For other native needs, choose the relevant Expo module or dependency already present in `template/package.json` and still enforce the allowlist.
 
-**Capabilities not present or runtime-banned** — do not propose: anything whose exact package is absent, `expo-notifications` unless a future template ships it, Bluetooth/NFC/BLE/AR without a shipped package, and `expo-haptics` unless the screen-builder hard rule is explicitly removed.
+**Capabilities not present or runtime-banned** — do not propose: anything with required native code/config whose exact package is absent, `expo-notifications` unless a future template ships it, Bluetooth/NFC/BLE/AR without a shipped package, and `expo-haptics` unless the screen-builder hard rule is explicitly removed.
 
-### Calendar management view capability
+### Pure-JavaScript dependency handoff
 
-If requirements mention calendar management, scheduling, appointment calendars, personal/team/POS calendar views, month/week/day views, agenda, availability, visits, routes by date, or field-service schedules, propose `calendar-management-view` when `react-native-calendars` is present in `${PLUGIN_ROOT}/template/package.json`. This is a UI library capability, not an Expo permission capability: it needs no `/add-native` wrapper, no `app.config.js` permission changes, and no native skill invocation.
-
-The native-capability matrix row MUST use:
-
-| Field | Required value |
-|---|---|
-| Capability | `calendar-management-view` |
-| Module | `react-native-calendars` |
-| Used by screens | every calendar/agenda/schedule screen, such as personal calendar, team calendar, POS calendar, appointment list |
-| Justification | render real mobile calendar/agenda surfaces instead of generic FlatList-only date groupings |
-| Dedicated skill | blank / `None — UI library, screen-builder imports directly` |
-
-If `react-native-calendars` is absent from the template/package allowlist, do NOT silently plan generic calendar widgets. Add a transparency note: `> Excluded — requirements suggested calendar management views, but this template does not ship react-native-calendars. Update the template/package.json or use timeline/list scheduling screens until the template includes it.`
+Do not put JS-only libraries in `## Native Capabilities` and do not route them through `/add-native`. Pass explicit JavaScript package requests and use cases that may benefit from an established library to `screen-planner`, which follows [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md), chooses a compatible JS-only package, and records an exact approved version under `## Screens → ### JavaScript Dependencies`. `/create-mobile-app` installs that table before screen builders run. Package-specific examples belong in the canonical reference; every library uses the same generic selection gate.
 
 If the requirements imply one of these, DROP the capability and add a transparency note to the `## Native Capabilities` section so the user sees what was excluded and why:
 
@@ -453,6 +441,8 @@ Working directory: [absolute path]
 Plugin root: ${PLUGIN_ROOT}
 
 Expand each screen in the locked graph into a compact delta spec. Do NOT repeat values already present in Shared Conventions, Design Direction, brand/design-system.md, or universal builder rules. Write Standard Imports ONCE near the top. Per-spec Resolved Imports list only entity-specific additions. Cap Open Questions at 3.
+
+Apply the canonical JavaScript dependency workflow for both explicit package requests and use-case-driven needs. Research read-only, emit exact versions plus JS-only evidence, and do not install anything.
 
 Style-picker + preview rules unchanged — honour the same `skip_preview` policy as the legacy single-pass mode (default `skip_preview: true` when `Design vibe opt-in: deferred`).
 

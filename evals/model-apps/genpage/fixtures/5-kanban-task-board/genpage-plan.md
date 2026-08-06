@@ -27,6 +27,10 @@ No entity creation required — all entities already exist.
 ## Existing Entities
 task
 
+## Connector Bindings
+
+No connector bindings.
+
 ## Design Preferences
 - Styling: Fluent UI V9 Cards in a 3-column horizontal layout. Priority color-coded badges: green = Low, blue = Normal, orange = High, red = Critical. Clean column headers with icons (ClipboardTaskRegular, PlayRegular, CheckmarkCircleRegular). Neutral background per column with subtle border.
 - Features: Drag-and-drop between columns using native HTML5 DnD (no external library — no react-dnd, @dnd-kit, or react-beautiful-dnd). Status updates persist to Dataverse via dataApi.updateRow on drop. Loading, empty, and error states per column. Window cache (window.__genpage_tasks_v1) for list data. Display task subject, priority badge, due date (scheduledend), and owner name (ownerid) on each card.

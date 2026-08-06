@@ -1,11 +1,13 @@
-# Data Fetching Pattern (Dataverse pages — de-dupe + cache)
+# Data Fetching Pattern (real host reads — de-dupe + cache)
 
-**Read this when:** a page fetches Dataverse data on mount via `props.dataApi`.
-This is the default for **any** data-backed page — not only list/detail pages.
-The in-flight de-dupe below is what makes a page survive the genpage host's
-**double mount** (see below); the resolved cache additionally skips the spinner
-on return navigation. Skip this ONLY for pages that never fetch on mount:
-mock-data pages, forms with no initial fetch, and short-lived dialogs.
+**Read this when:** a page fetches data on mount through a real host read:
+Dataverse calls via `props.dataApi` OR connector calls such as
+`queryConnectorTable` / `executeConnectorOperation`. This is the default for
+**any** data-backed page — not only list/detail pages. The in-flight de-dupe
+below is what makes a page survive the genpage host's **double mount** (see
+below); the resolved cache additionally skips the spinner on return navigation.
+Skip this ONLY for pages that never fetch on mount: pages that render inline
+mock arrays, forms with no initial fetch, and short-lived dialogs.
 
 ## Why this pattern is needed
 
@@ -19,10 +21,11 @@ Two independent platform behaviors make a naive on-mount fetch run more than onc
    **even when the effect's dependency array is correct**, so it cannot be fixed
    by tuning deps alone — it must be de-duped.
 2. **`dataApi` is a new reference every render.** The host hands a fresh
-   `dataApi` object on each render. Putting `dataApi` in a `useEffect` /
-   `useMemo` / `useCallback` dependency array therefore re-fires the effect on
-   every render (not just on mount). **Never put `dataApi` in a dependency
-   array** — depend on a readiness boolean instead (see the pattern).
+   `dataApi` object on each render. Dataverse and connector methods both hang
+   off that object, so putting `dataApi` (or a connector wrapper derived from it)
+   in a `useEffect` / `useMemo` / `useCallback` dependency array re-fires the
+   effect on every render (not just on mount). **Never put `dataApi` in a
+   dependency array** — depend on a readiness boolean instead (see the pattern).
 
 `window` state survives both the module re-evaluation the host does on
 navigation AND the double-mount (the second mount runs in the same window), so
@@ -199,13 +202,42 @@ dependency array alongside `dataReady` (e.g. `[dataReady, reloadKey]`).
 > and only write the cache when the captured generation still matches. For the
 > common single-load-then-mutate flow this is unnecessary.
 
+## Connector calls use the same window de-dupe
+
+For connector-backed pages, substitute the host read inside the same in-flight
+promise. The cache keys must still be unique per **page + connector operation**
+because two connector panels can read the same connection reference with
+different dataset/table/parameter shapes:
+
+```typescript
+const connectorApi = dataApi as unknown as {
+    queryConnectorTable?: (connectorLogicalName: string, dataset: string, table: string, options: Record<string, unknown>) => Promise<{ rows: DocumentRow[] }>;
+};
+
+let inflight = winAny[INFLIGHT_KEY] as Promise<DocumentRow[]> | undefined;
+if (!inflight) {
+    inflight = connectorApi
+        .queryConnectorTable!("new_uxtest_sharepoint", "https://contoso.sharepoint.com/sites/docs", "<list-guid>", { top: 50 })
+        .then((result) => {
+            winAny[CACHE_KEY] = result.rows;
+            return result.rows;
+        })
+        .finally(() => { if (winAny[INFLIGHT_KEY] === inflight) delete winAny[INFLIGHT_KEY]; });
+    winAny[INFLIGHT_KEY] = inflight;
+}
+```
+
+The reason this is identical to Dataverse caching is the host behavior, not the
+backend: the double-mount re-runs any on-mount effect, and a connector call is a
+real network read with the same duplicate-request and spinner-flash failure mode.
+
 ## Scope — de-dupe always, cache when it helps
 
 The **in-flight de-dupe** (and readiness-only deps) applies to **any page that
 fetches on mount** — it is the fix for the host double-mount, so don't skip it.
 
 Skip the whole pattern only for pages that **never fetch on mount**:
-- Mock-data pages (no real fetch)
+- Pages that render inline mock arrays (no real fetch)
 - Forms with no initial fetch
 
 For the **resolved cache** specifically, keep the de-dupe but drop (or

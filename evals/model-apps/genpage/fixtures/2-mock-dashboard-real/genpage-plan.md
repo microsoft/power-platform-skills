@@ -27,6 +27,10 @@ No entity creation required — all entities already exist.
 ## Existing Entities
 None
 
+## Connector Bindings
+
+No connector bindings.
+
 ## Design Preferences
 - Styling: Modern dark theme. Base on Fluent UI v9 `webDarkTheme` with a deep neutral background (near-black `#0E1116`/`#14171C`), elevated card surfaces (`#1B1F25`), subtle 1px borders using `colorNeutralStroke2`, and a vibrant accent palette — primary accent teal/cyan (`#2EE6D6`), secondary accent magenta (`#FF4FA3`), and supporting amber (`#FFB547`) for warnings. High-contrast typography using `colorNeutralForeground1` for headings and `colorNeutralForeground3` for secondary labels. Card corners radius `tokens.borderRadiusLarge`, soft shadow `tokens.shadow16` for elevation.
 - Features: Single-page dashboard, no routing. KPI summary bar at the top (4 metric tiles with delta indicators), a full-width monthly revenue chart in the middle (12-month line/area chart with grid lines and tooltips), and a top-5 customers table at the bottom (rank, customer name, revenue YTD, deals closed, growth %). Optional time-range pill toggle (Last 6M / Last 12M / YTD) that filters the chart and KPIs. Hover states on all interactive elements, sparkline-style mini-chart on each KPI tile.

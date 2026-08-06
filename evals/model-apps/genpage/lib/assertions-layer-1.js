@@ -71,6 +71,250 @@ function allMatches(pattern, text) {
   return [...text.matchAll(new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : pattern.flags + 'g'))];
 }
 
+const REQUIRED_PLAN_SECTIONS = [
+  'User Requirements',
+  'Working Directory',
+  'Plugin Root',
+  'Environment',
+  'Pages',
+  'Entity Creation Required',
+  'Existing Entities',
+  'Connector Bindings',
+  'Design Preferences',
+  'Relevant Samples',
+  'Per-Page Specifications',
+];
+
+const OPTIONAL_PLAN_SECTIONS = new Set(['Solution Packaging']);
+
+const REQUIRED_PER_PAGE_FIELDS = [
+  'File',
+  'Purpose',
+  'Entities',
+  'Needs caching',
+  'Key Features',
+  'Components',
+  'Layout',
+  'Data Binding',
+  'Interactions',
+];
+
+function schemaError(code, message, details = {}) {
+  return { code, message, ...details };
+}
+
+function parseHeadingLine(line) {
+  const match = /^(#{1,3})\s+(.+?)\s*$/.exec(line);
+  if (!match) return null;
+  return { level: match[1].length, title: match[2].trim() };
+}
+
+function parsePlanSections(plan) {
+  const lines = plan.split(/\r?\n/);
+  const sections = [];
+  for (let i = 0; i < lines.length; i++) {
+    const heading = parseHeadingLine(lines[i]);
+    if (heading && heading.level === 2) {
+      const start = i;
+      let end = lines.length;
+      for (let j = i + 1; j < lines.length; j++) {
+        const nextHeading = parseHeadingLine(lines[j]);
+        if (nextHeading && nextHeading.level === 2) {
+          end = j;
+          break;
+        }
+      }
+      sections.push({
+        title: heading.title,
+        startLine: start + 1,
+        content: lines.slice(start + 1, end).join('\n').trim(),
+      });
+    }
+  }
+  return sections;
+}
+
+function findMarkdownTable(sectionText, requiredColumns) {
+  const lines = sectionText.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^\s*\|.*\|\s*$/.test(lines[i])) continue;
+    const headers = lines[i]
+      .split('|')
+      .slice(1, -1)
+      .map((header) => header.trim().toLowerCase());
+    const hasRequired = requiredColumns.every((column) => headers.includes(column.toLowerCase()));
+    if (hasRequired) return { lineIndex: i, headers, lines: lines.slice(i) };
+  }
+  return null;
+}
+
+function parseMarkdownRows(sectionText, requiredColumns) {
+  const table = findMarkdownTable(sectionText, requiredColumns);
+  if (!table) return [];
+  const rows = [];
+  for (const line of table.lines.slice(2)) {
+    if (!/^\s*\|.*\|\s*$/.test(line)) break;
+    const cells = line.split('|').slice(1, -1).map((cell) => cell.trim());
+    if (cells.length === 0 || cells.every((cell) => cell === '')) continue;
+    const row = {};
+    for (let i = 0; i < table.headers.length; i++) {
+      row[table.headers[i]] = cells[i] || '';
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+function parsePerPageBlocks(sectionText) {
+  const lines = sectionText.split(/\r?\n/);
+  const blocks = new Map();
+  let current = null;
+  for (const line of lines) {
+    const heading = parseHeadingLine(line);
+    if (heading && heading.level === 3) {
+      current = { title: heading.title, lines: [] };
+      blocks.set(heading.title, current);
+      continue;
+    }
+    if (current) current.lines.push(line);
+  }
+  return blocks;
+}
+
+function hasBulletField(lines, field) {
+  const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Some fixture plans use the required field as a parent bullet whose details
+  // are nested on following lines. The schema contract requires the field to be
+  // present; it does not require single-line prose after the colon.
+  return lines.some((line) => new RegExp(`^\\s*[-*]\\s+\\*\\*${escaped}:\\*\\*`, 'i').test(line));
+}
+
+function validateEnvironment(sectionText, errors) {
+  for (const field of ['URL', 'App', 'Languages', 'Solution', 'Publisher Prefix']) {
+    const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (!new RegExp(`^\\s*[-*]?\\s*${escaped}:\\s*\\S`, 'mi').test(sectionText)) {
+      errors.push(schemaError('missing-environment-field', `## Environment missing required field "${field}"`, { section: 'Environment', field }));
+    }
+  }
+}
+
+function validateEntityCreationSection(sectionText, errors) {
+  if (/^No entity creation required — all entities already exist\.\s*$/i.test(sectionText.trim())) return;
+
+  const entityBlocks = [...sectionText.matchAll(/^###\s+(.+?)\s*$/gmi)];
+  if (entityBlocks.length === 0) {
+    errors.push(schemaError('missing-entity-block', '## Entity Creation Required must contain entity subsections or the exact no-entity sentinel', { section: 'Entity Creation Required' }));
+    return;
+  }
+
+  for (let index = 0; index < entityBlocks.length; index++) {
+    const name = entityBlocks[index][1].trim();
+    const start = entityBlocks[index].index + entityBlocks[index][0].length;
+    const end = index + 1 < entityBlocks.length ? entityBlocks[index + 1].index : sectionText.length;
+    const block = sectionText.slice(start, end);
+    for (const field of ['Display Name', 'Display Plural', 'Primary Name Suffix']) {
+      const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (!new RegExp(`^\\s*[-*]\\s+${escaped}:\\s*\\S`, 'mi').test(block)) {
+        errors.push(schemaError('missing-entity-field', `entity "${name}" missing required field "${field}"`, { section: 'Entity Creation Required', entity: name, field }));
+      }
+    }
+    for (const [label, columns] of [
+      ['Columns', ['Suffix', 'Type', 'Required', 'Notes']],
+      ['Choice Columns', ['Column Suffix', 'Options']],
+      ['Relationships', ['Type', 'Related Table', 'Lookup Suffix', 'Cascade']],
+    ]) {
+      if (!new RegExp(`^\\s*[-*]\\s+${label}:`, 'mi').test(block) || !findMarkdownTable(block, columns)) {
+        errors.push(schemaError('missing-entity-table', `entity "${name}" missing required "${label}" table`, { section: 'Entity Creation Required', entity: name, table: label }));
+      }
+    }
+  }
+}
+
+function validateGenpagePlanSchema(plan) {
+  const errors = [];
+  if (!plan || typeof plan !== 'string') {
+    return [schemaError('missing-plan', 'genpage-plan.md is empty or missing')];
+  }
+
+  if (!/^#\s+Genpage Plan\s*$/m.test(plan)) {
+    errors.push(schemaError('missing-title', 'plan missing exact "# Genpage Plan" title'));
+  }
+
+  const sections = parsePlanSections(plan);
+  const byTitle = new Map(sections.map((section) => [section.title, section]));
+  for (const section of REQUIRED_PLAN_SECTIONS) {
+    if (!byTitle.has(section)) {
+      errors.push(schemaError('missing-section', `plan missing required section "## ${section}"`, { section }));
+    }
+  }
+
+  // Section order is part of the machine contract. Validate using only known
+  // headings so optional prose headings cannot create false positives.
+  const observed = sections
+    .map((section) => section.title)
+    .filter((title) => REQUIRED_PLAN_SECTIONS.includes(title) || OPTIONAL_PLAN_SECTIONS.has(title));
+  const expected = [
+    ...REQUIRED_PLAN_SECTIONS.slice(0, 8),
+    ...(observed.includes('Solution Packaging') ? ['Solution Packaging'] : []),
+    ...REQUIRED_PLAN_SECTIONS.slice(8),
+  ];
+  const comparable = observed.filter((title) => expected.includes(title));
+  if (comparable.join('\n') !== expected.filter((title) => comparable.includes(title)).join('\n')) {
+    errors.push(schemaError('section-order', 'required plan sections are not in references/plan-schema.md order'));
+  }
+
+  const envSection = byTitle.get('Environment');
+  if (envSection) validateEnvironment(envSection.content, errors);
+
+  const pagesSection = byTitle.get('Pages');
+  const pageRows = pagesSection ? parseMarkdownRows(pagesSection.content, ['Page', 'File', 'Purpose', 'Entities']) : [];
+  if (pagesSection && pageRows.length === 0) {
+    errors.push(schemaError('missing-pages-table', '## Pages must contain a table with Page, File, Purpose, and Entities columns', { section: 'Pages' }));
+  }
+
+  const entitySection = byTitle.get('Entity Creation Required');
+  if (entitySection) validateEntityCreationSection(entitySection.content, errors);
+
+  const connectorSection = byTitle.get('Connector Bindings');
+  if (connectorSection) {
+    const body = connectorSection.content.trim();
+    if (body !== 'No connector bindings.' && !findMarkdownTable(body, ['Logical Name', 'Connector Id', 'Dataset', 'Tables (GUIDs)', 'Table Display Names', 'Operations', 'Fields', 'Parameters', 'Response'])) {
+      errors.push(schemaError('missing-connector-table', '## Connector Bindings must be the exact no-bindings sentinel or the full connector binding table', { section: 'Connector Bindings' }));
+    }
+  }
+
+  const samplesSection = byTitle.get('Relevant Samples');
+  if (samplesSection && !findMarkdownTable(samplesSection.content, ['Page', 'Sample', 'Reason'])) {
+    errors.push(schemaError('missing-samples-table', '## Relevant Samples must contain a table with Page, Sample, and Reason columns', { section: 'Relevant Samples' }));
+  }
+
+  const perPageSection = byTitle.get('Per-Page Specifications');
+  if (perPageSection) {
+    const blocks = parsePerPageBlocks(perPageSection.content);
+    for (const row of pageRows) {
+      const pageName = row.page;
+      const block = blocks.get(pageName);
+      if (!block) {
+        errors.push(schemaError('missing-page-spec', `## Per-Page Specifications missing page subsection "### ${pageName}"`, { section: 'Per-Page Specifications', page: pageName }));
+        continue;
+      }
+      for (const field of REQUIRED_PER_PAGE_FIELDS) {
+        if (!hasBulletField(block.lines, field)) {
+          errors.push(schemaError('missing-per-page-field', `page "${pageName}" missing required per-page field "${field}"`, { section: 'Per-Page Specifications', page: pageName, field }));
+        }
+      }
+    }
+
+    for (const pageName of blocks.keys()) {
+      if (!pageRows.some((row) => row.page === pageName)) {
+        errors.push(schemaError('extra-page-spec', `per-page subsection "### ${pageName}" has no matching ## Pages row`, { section: 'Per-Page Specifications', page: pageName }));
+      }
+    }
+  }
+
+  return errors;
+}
+
 const WORKFLOW_ASSERTIONS = new Map();
 
 WORKFLOW_ASSERTIONS.set(
@@ -220,22 +464,19 @@ WORKFLOW_ASSERTIONS.set(
   'Phase 1 (Planner): genpage-plan.md is written to the working directory, conforming to references/plan-schema.md',
   ({ fixture }) => {
     if (!fixture.genpagePlan) return fail('genpage-plan.md not present in fixture');
-    const required = [
-      '# Genpage Plan',
-      '## User Requirements',
-      '## Working Directory',
-      '## Plugin Root',
-      '## Environment',
-      '## Pages',
-    ];
-    const missing = required.filter((h) => !fixture.genpagePlan.includes(h));
-    if (missing.length > 0) return fail(`plan missing heading(s): ${missing.join(', ')}`);
+    const errors = validateGenpagePlanSchema(fixture.genpagePlan);
+    if (errors.length > 0) {
+      // Keep the runner output readable while still exposing the first concrete
+      // schema violation; the full structured list is available to unit tests via
+      // validateGenpagePlanSchema().
+      return fail(errors[0].message);
+    }
     return pass();
   }
 );
 
 WORKFLOW_ASSERTIONS.set(
-  'Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked; on ok:false the orchestrator surfaces the message to the user and halts',
+  'Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked (provision-entities.js, or legacy create-table.js/add-column.js/create-relationship.js/create-record.js); on ok:false the orchestrator surfaces the message to the user and halts',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     const plan = fixture.genpagePlan;
@@ -247,7 +488,7 @@ WORKFLOW_ASSERTIONS.set(
     // against a meta-list mention of the entity-builder agent name. Meta-lists
     // like "## Agents Invoked" can name the agent before the actual commands.
     const idxCheck = log.search(/check-auth\.js/);
-    const idxFirstScript = log.search(/\b(create-table\.js|add-column\.js|create-relationship\.js|create-record\.js)\b/);
+    const idxFirstScript = log.search(/\b(provision-entities\.js|create-table\.js|add-column\.js|create-relationship\.js|create-record\.js)\b/);
     if (idxFirstScript !== -1 && idxFirstScript < idxCheck) {
       return fail('entity creation script invoked before check-auth.js');
     }
@@ -624,16 +865,34 @@ PHASE_EXPECTATIONS.set(
 );
 
 PHASE_EXPECTATIONS.set(
-  'Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> (always — \'Default\' is a valid value, never omitted)',
+  'Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> (always — \'Default\' is a valid value, never omitted); provision-entities.js flow specifies solution via input JSON, verified through ## Environment → Solution: declaration',
   ({ fixture }) => {
     const log = fixture.entityCreationLog || fixture.workflowLog;
     if (!log) return fail('no entity-creation-log.md or workflow-log.md');
-    const matches = allMatches(/(create-table\.js|add-column\.js|create-relationship\.js)([^\n]*)/g, log);
+    
+    // Check legacy flow: old-script calls must have --solution
+    const legacyMatches = allMatches(/(create-table\.js|add-column\.js|create-relationship\.js)([^\n]*)/g, log);
     const offenders = [];
-    for (const m of matches) {
+    for (const m of legacyMatches) {
       if (!/--solution\b/.test(m[2])) offenders.push(m[1]);
     }
     if (offenders.length > 0) return fail(`${offenders.length} call(s) missing --solution: ${offenders.slice(0,3).join(', ')}`);
+    
+    // Check new flow: provision-entities.js must have Solution: declared in plan or log
+    // Check for provision-entities.js in both workflowLog and entityCreationLog
+    const usesNewFlow = /\bprovision-entities\.js\b/.test(fixture.workflowLog || '') || /\bprovision-entities\.js\b/.test(fixture.entityCreationLog || '');
+    if (usesNewFlow) {
+      // Solution must be declared in ## Environment section (plan or entity-creation-log)
+      const planEnv = planSection(fixture.genpagePlan, 'Environment');
+      const logEnv = planSection(fixture.entityCreationLog, 'Environment');
+      const solutionPattern = /^\s*[-*]?\s*Solution:\s*(\S+)/m;
+      const hasSolution = (planEnv && solutionPattern.test(planEnv)) || (logEnv && solutionPattern.test(logEnv));
+      if (!hasSolution) return fail('provision-entities.js used but no Solution: declaration in ## Environment');
+    }
+    
+    // Skip if no entity provisioning detected
+    if (legacyMatches.length === 0 && !usesNewFlow) return skip('no entity provisioning detected');
+    
     return pass();
   }
 );
@@ -804,6 +1063,7 @@ module.exports = {
   WORKFLOW_ASSERTIONS,
   PHASE_EXPECTATIONS,
   planSection,
+  validateGenpagePlanSchema,
   entitiesNeedCreating,
   newAppNeeded,
   logHas,

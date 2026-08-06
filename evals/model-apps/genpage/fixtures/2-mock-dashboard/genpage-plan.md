@@ -17,8 +17,9 @@ D:\Projects\power-platform-skills\plugins\model-apps
 ## Environment
 
 - Active Profile: aurora365-user1@auroratstgeo.onmicrosoft.com
-- Environment URL: https://aurorabapenv4ab3f.crm10.dynamics.com/
+- URL: https://aurorabapenv4ab3f.crm10.dynamics.com/
 - App: Sales Hub (12345678-1234-1234-1234-123456789abc)
+- Languages: English (1033) only
 - Solution: Default
 - Publisher Prefix: new
 
@@ -36,6 +37,10 @@ No entity creation required — all entities already exist.
 
 (none — mock data page)
 
+## Connector Bindings
+
+No connector bindings.
+
 ## Design Preferences
 
 - Modern dark theme look (use Fluent UI V9 dark tokens)
@@ -46,12 +51,23 @@ No entity creation required — all entities already exist.
 
 ## Relevant Samples
 
-- plugins/model-apps/samples/8-dashboard-with-charts.tsx (KPI + D3 pattern)
-
+| Page | Sample | Reason |
+|------|--------|--------|
+| Sales Metrics | 8-dashboard-with-charts.tsx | KPI + D3 pattern |
 ## Per-Page Specifications
 
 ### Sales Metrics
 
+
+- **File:** dashboard.tsx
+- **Purpose:** Mock dashboard with KPI bar, D3 revenue chart, top customers grid
+- **Entities:** (mock data)
+- **Needs caching:** false
+- **Key Features:** KPI summary cards, D3 monthly revenue trend chart, and top customers grid backed by inline mock arrays.
+- **Components:** Card, Text, DataGrid/Table, Button, Tooltip, and D3.js for the line chart.
+- **Layout:** Dark responsive dashboard with KPI row, chart section, and customer table; no 100vh/100vw.
+- **Data Binding:** Inline mock arrays for monthly revenue, top customers, and KPI summary; no host fetch.
+- **Interactions:** Chart hover tooltip and keyboard-reachable dashboard controls over local state only.
 - File: dashboard.tsx
 - Data: mock arrays for monthly revenue, top customers, KPI summary
 - Components:

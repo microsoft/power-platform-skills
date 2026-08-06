@@ -1,0 +1,10 @@
+solution	solution ContosoProjects (publisher new)
+data-model	table new_project ("Project")
+data-model	column new_project.new_budget (Money)
+data-model	column new_project.new_status (Choice)
+views	view "Active Projects" for new_project
+views	enrich default views for new_project
+forms	form for new_project
+app-shell	app module "Project Tracker" + sitemap
+app-shell	app icon (generated) new_projecttracker_icon
+publish	publish customizations

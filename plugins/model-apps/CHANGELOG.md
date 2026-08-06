@@ -2,6 +2,136 @@
 
 All notable changes to the **model-apps** plugin.
 
+## [Unreleased] — 2.4.0
+
+A new **`/app-builder`** skill (Preview) that builds and edits whole model-driven apps,
+plus local-dev ergonomics, sample coverage, and an automated eval suite. Builds on v2.3;
+no breaking changes.
+
+### Added
+- **Table icons are described before they are drawn** — each custom table proposes what its glyph
+  will **depict** in plain language (`entities[].iconDescription`, e.g. "an outlined clipboard with
+  a checkmark"), shown in `model-app-plan.md` for approval before any SVG is authored. A Fluent
+  token name is rejected: the SVG is drawn fresh, so a token the user has never seen describes
+  nothing. Also valid on sitemap areas, groups and non-entity subareas.
+- **Jobs-to-be-done drive the design** — authoring now starts at Level (a0) by asking who uses the
+  app and what each of them needs to get done, *before* the data model, and carries those jobs
+  through to the surfaces that satisfy them (`personas[].jobs[].surfaces[]`). Previously jobs were
+  only asked for at the end, to size security roles — and the playbook contradicted the skill by
+  declaring roles out of scope, so they were never enumerated at all.
+- **`scripts/write-app-spec-doc.js`** — renders `model-app-plan.md`, a readable design document
+  (jobs → surfaces traceability, data model, every surface, navigation, access model, sample data)
+  from the spec. It replaces a hand-written counts summary, so it is complete, always agrees with
+  what will build, and is regenerable after any edit.
+- **Design-gap warnings at the lint gate** — jobs with no covering surface, an app with no
+  generative pages, or no personas at all are now surfaced as warnings instead of passing silently.
+- **`/app-builder` skill (Preview)** — natural-language intent → deployed model-driven app: tables,
+  columns, relationships, adaptive forms with sub-grids, views, Choice-column charts, dashboards,
+  generative pages, app + sitemap, and sample data, via the headless vendored `cds-maker-sdk`.
+- **Security roles per persona (`personas[]`)** — one role per persona, sized to the privileges its
+  jobs declare (unioned, max scope wins). Injects `appmodule` read and associates the app so it opens
+  for non-admins (`appAccess: false` opts out). Idempotent and converging; fail-closed on a same-name
+  role the builder did not author.
+- **`--changed-only` partial apply (Preview, off by default)** — after a fresh baseline, a page-only
+  `.tsx` edit re-runs just the pages phase; any other change falls back to a full build.
+- **AI-first features** (`ai` block → `ai-features` phase) — form fill, NL search, NL charts, M365
+  Copilot and row summaries, admin-gated via `ai-preflight.js`.
+- **Table icons** (`entities[].vectorIcon` / `icon`), plus a semantic default icon per table from the
+  authoring flow instead of the stock cube.
+- **Opt-in auto sub-grids** (`forms[].autoSubgrids: true`) — a sub-grid on the parent form per 1:N child.
+- **Form edits can REMOVE a field**, not just add one; forms and views now update in place on edit.
+- **The app shows your form, not the blank stock form** — a built main form becomes the entity default.
+- **Parent lookups surface in views** — 1:N lookups appear in auto-layout, authored, and built-in
+  default views.
+- **Fail-closed page deployment + verification** — `PAGEREF_<key>` navigation is resolved to real page
+  ids before upload and an unresolved token halts the build; a manifest-aware download round-trips pages.
+- **`scripts/preview-app.js`** — renders the whole app design (data model, sitemap, forms, page intents)
+  for review before building.
+- **Page generation reuses the `/genpage` worker via a plan adapter** — `write-page-plan.js`
+  projects the App Spec into the `genpage-plan.md` the page-builder actually reads, so an intent page
+  can no longer silently fail to become `.tsx`. Untrusted spec text (including download-derived) is
+  neutralised so it cannot forge plan sections.
+- **`promote-intent-pages.js`** — validates every generated page (written, structurally a module,
+  `PAGEREF_` tokens in exact parity with `navigatesTo`) and flips them all `intent → tsx` in one
+  atomic write, or exits 3 leaving the spec untouched.
+- **Eval suites** — an offline `/app-builder` structural harness (`evals/model-apps/app-builder/`) and
+  the genpage Layer 1/2 TAP runners with shipping fixtures.
+- **`check-auth.js --env` support** — SDK builds accept `--env <url>` or a positional URL, treat a
+  missing PAC login as a warning, and reserve `--require-pac` for genpage.
+- **`/app-builder` is covered by the v2.3 hooks + telemetry** — tracked-skill discovery is derived from
+  `skills/*/SKILL.md`, and the write-safety and icon-import guards now recognise app-builder working dirs.
+- **Docs + marketplace metadata cover both skills** — `/app-builder` is documented as Preview in the
+  plugin and repository READMEs.
+
+### Changed
+- **The connectors feature flag is re-probed before code generation** — the result is passed as
+  `Connectors: enabled|disabled` in every page-builder dispatch and overrides the plan, so a plan
+  authored while the flag was ON can no longer emit connector calls the run never binds.
+- **Surface classification is explicit** — the authoring flow now enumerates every surface each job
+  needs and classifies it (record CRUD → form + view; overview/dashboard/analytics/wizard/composite
+  → generative page), and states each call out loud. Pages were previously one item in a long list
+  behind a "never force-add it" hedge, so they were routinely skipped.
+- **Forms resolve by `(entity, name, type)`** — a table's same-named Main/Quick View/Card forms no
+  longer block an edit, and teardown no longer over-deletes them.
+- **Views are identified by `entity|name`** — same-named views on different tables no longer cross-wire
+  a dashboard tile, sub-grid, or snapshot entry to the wrong view.
+- **App identity round-trips by its real uniquename** — no duplicate app on rebuild.
+- **Nav icons round-trip** — custom icon web resources are re-declared on download (portable across
+  environments) and entity-subarea sitemap icons survive a download→build cycle.
+- **Pre-existing duplicate page names no longer block an unrelated build** — the check only errors when
+  a new page collides.
+- **Staged-flow authoring** — design-only authoring, an explicit generate-pages step, a `--stage`
+  selector, and fewer approval gates with checks run earlier and automatically.
+- **Sample-data idempotency is explicit** (`seedRecordGraph.matchOn`), and every artifact push is
+  verified (`requireSuccessfulPush`).
+- **Re-vendored `cds-maker-sdk`** — backlog capability fills (pagination, quick create, idempotent
+  global choice, authored column width), shared input-safety boundaries, and the `hardening-2` bundle.
+
+### Fixed
+- **Teardown leaves nothing behind** — the table icon and generated app-icon web resources are removed
+  (web resources delete after tables), cascade cleanup failures are reported instead of silently
+  orphaning rows, and reused/system tables are skipped with a reason rather than erroring.
+- **Command-bar teardown is fail-closed** — only the bar for a table this spec created is deleted, so a
+  command on an existing table can never remove another app's buttons.
+- **Exported solutions are self-contained** — the app icon and sitemap are added to the solution, so
+  import no longer fails on missing components.
+- **Relationships to a standard/system table no longer halt the build** — the schema name auto-prepends
+  the publisher prefix.
+- **System tables keep their default sitemap icon** — the transparent-spacer placeholder is stripped.
+- **Editing an existing app updates the sitemap for page-less apps too.**
+- **Sub-grids pass `targetEntity` to the SDK** — prevents empty `<TargetEntityType/>` output and
+  edit-time validation failures.
+- **Classic dashboards round-trip** through download/edit with id-passthrough tiles, and dashboard tiles
+  render in a 2-column grid.
+- **AI row summaries errored on every record** — the prompt filtered on the primary name column instead
+  of the primary key.
+- **CLI flags fail loudly instead of silently** — a value-less flag no longer passes the usage guard;
+  notably `--apply --only` (with no phase list) used to run a *full* apply.
+- **The Dataverse token is never sent to another origin** — the HTTP client requires an absolute
+  `https` org URL and refuses any request outside it.
+- **A lossy download fails instead of reporting success** — unmapped sitemap subareas are named and the
+  spec is validated before it is written (`--allow-lossy-download` opts in).
+- **Assorted robustness** — temp workspaces cannot leak on a failed SDK init, `%` in prompts survives
+  cmd.exe, an omitted column `type` defaults to `Text`, `vectorIcon` is verified in the sitemap, and
+  entity-subarea `vectorIcon` no longer breaks the app designer.
+
+### Tests
+- Plugin unit tests (+ optional vendored SDK suite): `node scripts/run-tests.js --with-sdk <ppux>`
+  from `plugins/model-apps/`.
+- Eval fixtures run separately, from the repo root: `node evals/model-apps/genpage/run-layer-1.js`,
+  `node evals/model-apps/genpage/run-layer-2.js`, `node evals/model-apps/app-builder/run-app-builder.js`.
+- **Vendored-SDK contract tests** lock OData filter encoding, name-based identifiers, and sitemap
+  free-text XML escaping.
+
+### Removed
+- **Standalone entity/solution scripts, consolidated into the SDK** — `create-table.js`,
+  `add-column.js`, `create-relationship.js`, `create-record.js`, `create-solution.js` and
+  `add-to-solution.js` are replaced by `provision-entities.js` and `provision-solution.js`.
+
+### Known limitations
+- **App EDIT does not re-pin a new chart** as an explicit app component — a chart added to an existing
+  app needs a manual pin or a rebuild.
+
 ## 2.3.0 — 2026-07-23
 
 Plugin observability + authoring guardrails: default-on (but ship-disabled)

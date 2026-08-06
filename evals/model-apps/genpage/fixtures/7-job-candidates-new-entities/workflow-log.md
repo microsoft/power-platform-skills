@@ -46,24 +46,13 @@
 
 ## Phase 2b — Entity Builder (genpage-entity-builder agent invoked via Task)
 - Reads Solution=Default, Publisher Prefix=cr from plan ## Environment
-- Created cr_jobrequisition first (independent table, no lookups)
-  - node create-table.js https://... cr_jobrequisition "Job Requisition" "Job Requisitions" --primary-name "Title" --primary-name-logical cr_title --solution Default
-  - 4 second propagation delay observed
-  - node add-column.js https://... cr_jobrequisition cr_department "Department" string --max-length 100 --solution Default
-  - node add-column.js https://... cr_jobrequisition cr_openings "Openings" integer --min 0 --max 1000 --solution Default
-- Created cr_candidate second (has lookup to cr_jobrequisition)
-  - node create-table.js https://... cr_candidate "Candidate" "Candidates" --primary-name "Name" --primary-name-logical cr_name --solution Default
-  - 4 second propagation delay observed
-  - node add-column.js https://... cr_candidate cr_status "Status" picklist --options '[{"value":100000000,"label":"Applied"},{"value":100000001,"label":"Interviewing"},{"value":100000002,"label":"Offered"},{"value":100000003,"label":"Hired"}]' --solution Default
-  - node add-column.js https://... cr_candidate cr_interviewscore "Interview Score" integer --min 0 --max 100 --solution Default
-  - node add-column.js https://... cr_candidate cr_recruiter "Recruiter" string --max-length 100 --solution Default
-  - node create-relationship.js https://... 1n --from cr_jobrequisition --to cr_candidate --lookup cr_jobrequisition "Job Requisition" --solution Default
-  - 8 second propagation delay observed before sample data insert
-
-### Sample data
-- User confirmed via AskUserQuestion: yes add sample data
-- node create-record.js https://... cr_jobrequisition '[{ "cr_title": "Senior Engineer", "cr_department": "Engineering", "cr_openings": 2 }, { "cr_title": "Product Designer", "cr_department": "Design", "cr_openings": 1 }]' — OData $batch round-trip
-- node create-record.js https://... cr_candidate '[{ "cr_name": "Alice Chen", "cr_status": 100000001, "cr_interviewscore": 87, "cr_recruiter": "Marcus Wei", "cr_jobrequisition@odata.bind": "/cr_jobrequisitions(<id>)" }, ... 7 more records ]' — $batch
+- Wrote job-candidates/provision-input.json with:
+  - Tables: cr_jobrequisition (columns: cr_title/primary, cr_department/string, cr_openings/integer), cr_candidate (columns: cr_name/primary, cr_status/picklist, cr_interviewscore/integer, cr_recruiter/string)
+  - Relationship: 1:N from cr_jobrequisition to cr_candidate (lookup: cr_jobrequisition)
+  - Sample data: 2 cr_jobrequisition records, 8 cr_candidate records (parent binding via $parent/match)
+  - Solution: Default (embedded in JSON)
+- node ${CLAUDE_PLUGIN_ROOT}/scripts/provision-entities.js --env https://aurorabapenv4ab3f.crm10.dynamics.com --input @job-candidates/provision-input.json --apply --sample-data
+- SDK handles table ordering and metadata propagation
 - Transaction log written to job-candidates/entity-creation-log.md
 
 ## Phase 3 — App creation
