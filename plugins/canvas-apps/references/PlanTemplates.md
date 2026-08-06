@@ -72,10 +72,10 @@ CREATE
 
 ### [Screen Name]
 - **File:** [Name].pa.yaml
-- **Control Prefix:** [2-4 char unique prefix for all controls on this screen — e.g., `Hom_`, `Cat_`, `Req_`]
+- **Control Prefix:** [short unique prefix, e.g., `Hom_`]
 - **Purpose:** [description]
 - **Layout:** [VerticalAutoLayout / ManualLayout, root container details]
-- **Key Controls:** [list with purpose of each — ALL must use the Control Prefix]
+- **Key Controls:** [prefixed control names and purpose]
 - **Data Binding:** [variable names, data source references, collection names]
 - **Navigation:** [which screen(s) this navigates to, trigger conditions]
 - **State:** [any local variables set in OnVisible]
