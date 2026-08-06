@@ -300,38 +300,14 @@ Phase 7.
 
 ---
 
-## Check 14 — MISSING-REQUIRED-DATA-OPERATION
+## Check 14 — MISSING-REQUIRED-FORMULA-BEHAVIOR
 
-**Problem:** A handler that the plan specifies must perform a data operation (Patch, Remove,
-Collect, ClearCollect, SubmitForm, UpdateContext, Set) does not contain that operation.
+**Problem:** A Required Handler exists but omits behavior specified by its Contract.
 
-**Detect:** For each Required Handler in the plan:
+**Detect:** For each Required Handler, verify its formula contains the concrete function,
+target, variable, or other verifiable pattern named by the requirement.
 
-1. Parse the requirement text for data operation keywords:
-   - "must call Patch()" → look for `Patch(`
-   - "must call Remove()" → look for `Remove(`
-   - "must call Collect()" → look for `Collect(`
-   - "must call ClearCollect()" → look for `ClearCollect(`
-   - "must call SubmitForm()" → look for `SubmitForm(`
-   - "must set [variable]" → look for `Set([variable]` or `UpdateContext({[variable]`
-
-2. Locate the handler in the `.pa.yaml` file.
-3. Check if the handler formula contains the required pattern.
-
-4. Flag any handler missing its required data operation.
-
-**Fix:** This check does not auto-fix. Report to contract verification.
-
-**Report format:**
-
-```
-MISSING-REQUIRED-DATA-OPERATION: [ScreenName].pa.yaml
-  Control: [ControlName]
-  Handler: [HandlerProperty]
-  Required operation: [Patch / Remove / etc.]
-  Plan requirement: "[exact text from Required Handlers]"
-  Current formula: [first 100 chars of handler]
-```
+**Fix:** Report the handler, expected behavior, and actual formula to Phase 7.
 
 ---
 
