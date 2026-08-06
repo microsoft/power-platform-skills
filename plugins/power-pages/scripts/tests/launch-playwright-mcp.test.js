@@ -78,13 +78,16 @@ test('fullscreen config maximizes the browser and uses the real viewport size', 
   assert.equal(config.browser.contextOptions.viewport, null);
 });
 
-test('launch uses Node and raw argv without a shell', () => {
+test('launch preserves an explicit npx CLI path and uses raw argv without a shell', () => {
   let spawnCall;
   const child = new EventEmitter();
 
   launch({
     browser: 'msedge',
     npxCliPath: 'C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npx-cli.js',
+    resolveNpxCliFn() {
+      assert.fail('explicit npxCliPath must bypass default resolution');
+    },
     spawnFn(command, args, options) {
       spawnCall = { command, args, options };
       return child;
@@ -111,6 +114,37 @@ test('launch uses Node and raw argv without a shell', () => {
 
   child.emit('exit', 7);
   assert.equal(spawnCall.exitCode, 7);
+});
+
+test('launch reports missing npm once and does not spawn', () => {
+  const exits = [];
+  let spawnCalls = 0;
+  let stderr = '';
+
+  const child = launch({
+    browser: 'chrome',
+    resolveNpxCliFn() {
+      throw new Error('Could not locate npm/bin/npx-cli.js');
+    },
+    spawnFn() {
+      spawnCalls += 1;
+      return new EventEmitter();
+    },
+    exitFn(code) {
+      exits.push(code);
+    },
+    writeError(message) {
+      stderr += message;
+    },
+  });
+
+  assert.equal(child, null);
+  assert.equal(spawnCalls, 0);
+  assert.deepEqual(exits, [1]);
+  assert.equal(
+    stderr,
+    'Failed to start Playwright MCP: Could not locate npm/bin/npx-cli.js\n',
+  );
 });
 
 test('launch reports spawn errors and exits with failure', () => {

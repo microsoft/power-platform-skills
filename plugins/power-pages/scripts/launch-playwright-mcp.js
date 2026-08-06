@@ -57,12 +57,24 @@ function resolveNpxCli({
 
 function launch({
   browser = detectBrowser(),
-  npxCliPath = resolveNpxCli(),
+  npxCliPath,
+  resolveNpxCliFn = resolveNpxCli,
   spawnFn = spawn,
   exitFn = (code) => process.exit(code),
   writeError = (message) => process.stderr.write(message),
 } = {}) {
-  const child = spawnFn(process.execPath, [npxCliPath, ...buildMcpArgs(browser)], {
+  let resolvedNpxCliPath = npxCliPath;
+  if (resolvedNpxCliPath === undefined) {
+    try {
+      resolvedNpxCliPath = resolveNpxCliFn();
+    } catch (error) {
+      writeError(`Failed to start Playwright MCP: ${error.message}\n`);
+      exitFn(1);
+      return null;
+    }
+  }
+
+  const child = spawnFn(process.execPath, [resolvedNpxCliPath, ...buildMcpArgs(browser)], {
     stdio: 'inherit',
     shell: false,
   });
