@@ -408,24 +408,9 @@ Re-run all Plan-Contract QA Checks against the compiled YAML.
 
 #### Repair post-compilation regressions
 
-**If any check fails after compilation:**
-
-1. The compilation fix introduced a regression.
-
-2. **Attempt a single targeted repair:** Read the affected file, restore the missing element
-   using `Edit`, preserving the compilation fix where possible.
-
-3. **Re-run `compile_canvas`** after the repair to verify the fix didn't break compilation.
-
-4. **Re-run Step 7.3** after successful compilation.
-
-5. **Repeat this loop** (repair → compile → verify) up to 2 times total.
-
-6. **If the loop cannot converge:**
-   - **Log all remaining violations** for the Phase 8 summary.
-   - **If compilation succeeds, proceed to Phase 8** — apps must always be generated.
-   - **If compilation fails, continue attempting fixes** — compilation is blocking, but
-     contract violations are not.
+If violations exist, use the same screen-scoped Repair process from Step 7.1, then compile and
+rerun the Plan-Contract QA Checks. Stop after two repair rounds. Record remaining contract
+violations if compilation is clean; compilation errors remain blocking.
 
 #### Success criteria
 
