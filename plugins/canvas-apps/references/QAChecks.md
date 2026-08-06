@@ -267,31 +267,12 @@ arbitrary control-count heuristics — they verify specific planned elements exi
 
 ## Check 11 — MISSING-PLANNED-CONTROL
 
-**Problem:** A control specified in the plan's Per-Screen Specification (Primary Content,
-Primary Interaction, or Key Controls) does not exist in the screen's `.pa.yaml` file.
+**Problem:** A control required by the plan does not exist in the screen's `.pa.yaml` file.
 
-**Detect:** For each screen in the plan:
+**Detect:** Collect the exact control names from the screen's Key Controls and Contract and
+from journey steps assigned to that screen. Flag each name that is absent from the YAML.
 
-1. Extract control names from:
-   - Primary Content (e.g., "Gallery named `TaskList`" → look for `TaskList`)
-   - Primary Interaction (e.g., "Button named `SubmitBtn`" → look for `SubmitBtn`)
-   - Key Controls list
-   - Required Handlers (e.g., "SaveBtn.OnSelect" → look for `SaveBtn`)
-
-2. Read the screen's `.pa.yaml` and search for each control name.
-
-3. Flag any control name from the plan that does not appear in the YAML.
-
-**Fix:** This check does not auto-fix. Report the violation to the skill's contract
-verification phase, which will reinvoke the screen builder with repair instructions.
-
-**Report format:**
-
-```
-MISSING-PLANNED-CONTROL: [ScreenName].pa.yaml
-  Missing: [ControlName] (specified in [Primary Content / Primary Interaction / Key Controls])
-  Plan requirement: "[exact text from plan]"
-```
+**Fix:** Report the missing control and its plan requirement to Phase 7 for repair.
 
 ---
 
