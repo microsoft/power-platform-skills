@@ -465,33 +465,20 @@ A common end-to-end workflow looks like this:
 
 Steps can be run independently — you don't need to follow this exact order. Each skill checks its own prerequisites and will tell you if something is missing. If something goes wrong, `/diagnose-deployment` pattern-matches deployment errors and `/report-issue` opens a pre-filled GitHub issue.
 
-## Running Without Interruption
+## Runtime approvals
 
-The plugin invokes multiple tools during a session. To reduce approval prompts:
+Keep your AI host's runtime approval prompts enabled while using this plugin.
+Plugin scripts run on your workstation with the filesystem access and cloud sign-in state available to your user account.
+A script that invokes `pac` or `az` may therefore act on Power Platform environments, Dataverse data, and Azure tenants that you can access.
 
-**Option 1 — Permission mode (recommended)**
+Before approving a command, check the executable, script path, arguments, and target environment.
+Pay particular attention to commands that read or change project files, environment configuration, tenant resources, or business data.
+Do not grant blanket approval to command families such as `node`, `npm`, `git`, `pac`, or `az`.
 
-```jsonc
-// .claude/settings.json
-{
-  "defaultMode": "acceptEdits",
-  "permissions": {
-    "allow": [
-      "Bash(npm run *)",
-      "Bash(git *)",
-      "Bash(pac *)",
-      "Bash(az *)",
-      "Bash(node *)"
-    ]
-  }
-}
-```
-
-**Option 2 — Auto-accept all**
-
-```bash
-claude --dangerously-skip-permissions
-```
+If your host supports command-specific allow rules, use them only for an exact plugin script path that you have inspected and expect to run.
+Keep approval prompts for commands whose arguments or environment variables select a project, environment, tenant, or data source.
+Permission features and rule syntax vary by host and version, so follow the documentation for your host.
+Suppressing an approval prompt does not sandbox a script, restrict the programs it can start, or guarantee that the command is safe.
 
 ## ALM prompts you may see
 
