@@ -74,14 +74,8 @@ Write `[ScreenName].pa.yaml` to the working directory.
 Implement every applicable obligation in the screen Contract and every journey step assigned to
 this screen.
 
-**Reject placeholder handlers.** The following are NOT valid implementations:
-
-- Empty formulas: `OnSelect: =`
-- Boolean placeholders: `OnSelect: =false` or `OnSelect: =true`
-- Comments only: `OnSelect: =// TODO`
-- Stub text: `OnSelect: ="not implemented"`
-
-If a handler is listed in Required Handlers, it must contain the specified formula pattern.
+Required handlers must contain the formula behavior specified by the contract; placeholders are
+invalid.
 
 Follow the conventions from the plan document's TechnicalGuide Key Conventions section:
 
