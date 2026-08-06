@@ -41,6 +41,25 @@ claude --plugin-dir /path/to/plugins/<plugin-name>
 
 No root-level build, lint, or test commands exist. Build/test tooling lives inside each plugin.
 
+## CI
+
+**Only two workflows run on every PR** — `validate-keyword-case` and `validate-repository-metadata`.
+Both are repo-wide and enforce metadata/marketplace rules, not behavior.
+
+**Every test workflow is path-filtered to a single plugin** (`power-pages` → `plugins/power-pages/**`;
+`model-apps` → `plugins/model-apps/**` + `evals/model-apps/**`). This is deliberate — a PR should not
+spend CI on a plugin it never touched — but it has a corollary: *a green PR does not mean the repo is
+green*, only that the paths you touched are.
+
+**A test suite with no workflow silently never runs.** When you add tests to a plugin, add or extend
+that plugin's own path-filtered workflow in the same PR; do not widen another plugin's filter to
+cover yours.
+
+A plugin that has adopted telemetry must also set its opt-out env var on any job that could execute a
+telemetry-emitting hook or script (see `## Shared Telemetry`) — e.g.
+`POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"`. It suppresses transmission only, so it
+cannot change what a test asserts.
+
 ## Plugin Conventions
 
 Each plugin follows this structure:

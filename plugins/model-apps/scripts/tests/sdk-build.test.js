@@ -2028,6 +2028,30 @@ test('ai-features phase: the recovery reason names the path that actually recove
   assert.match(outcome.reason, /override-row proof/, `the proof path must not claim the re-issue applied it: ${outcome.reason}`);
 });
 
+test('ai-features phase: a not-persisted warning carries a real sequential step index, not `total`', async () => {
+  // Regression guard for a reviewed defect: this warning was once emitted by hand with
+  // `n: runner.total`, so the CLI printed `[total/total]` for it and the progress counter jumped.
+  // `runner.skip` shares the same monotonic counter as `runner.run`, which is why the warning must
+  // go through it rather than a bespoke emit.
+  const spec = makeSpec({ ai: { appFeatures: { formFill: true }, summaries: { default: 'off' } } });
+  const { sdk, calls } = mockSdk();
+  sdk.setAppAiFeatures = async (appUnique, flags, opts) => {
+    calls.push({ name: 'setAppAiFeatures', args: [appUnique, flags, opts] });
+    return { applied: [], skipped: [], notPersisted: ['formFill'], unverified: [], failed: [], outcomes: [] };
+  };
+  const events = [];
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+  const warn = events.find((e) => e.phase === 'ai-features' && e.status === 'skip' && /NOT PERSISTED/.test(e.label));
+  assert.ok(warn, 'the warning is emitted');
+  assert.ok(Number.isInteger(warn.n) && warn.n > 0, `step index must be a real number, got ${warn.n}`);
+  // Every terminal event shares one counter, so the warning's index must be strictly greater than
+  // the step before it — the exact property a hard-coded `total` destroys.
+  const terminal = events.filter((e) => e.status === 'ok' || e.status === 'skip' || e.status === 'error');
+  const idx = terminal.indexOf(warn);
+  assert.ok(idx > 0, 'the warning is not the first terminal event');
+  assert.strictEqual(warn.n, terminal[idx - 1].n + 1, `expected a sequential index, got ${terminal[idx - 1].n} -> ${warn.n}`);
+});
+
 test('ai-features phase: a bucket the plugin does not know about is still reported, not dropped', async () => {
   // The buckets are derived from the RESULT, not a fixed list: a non-success bucket added by a
   // future SDK revision must surface verbatim rather than vanish, which is the very bug class this

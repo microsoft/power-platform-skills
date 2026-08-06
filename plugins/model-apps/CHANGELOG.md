@@ -17,7 +17,10 @@ No change to any skill's public surface.
 - **`ai.appFeatures` could not express non-boolean values** such as `2` ("on for everyone") — a
   value may now be a boolean or an integer `0..1000000`.
 - **Download invented primary-name columns** (`account_name`, `contact_name` — neither exists) —
-  now read from Dataverse metadata, never synthesized.
+  now read from Dataverse metadata, never synthesized. Because a spec *requires* `primaryAttribute`,
+  a table whose metadata does not supply one can no longer be emitted: a table reached from the app's
+  **navigation** now **fails** the download naming it (`--allow-lossy-download` drops it instead),
+  while a table found only as a hidden component is dropped with a warning.
 - **Download replaced the solution's publisher prefix with `new`** — now read from the solution's
   owning publisher.
 - **Download dropped tables with no sitemap entry** — the entity set is now the sitemap set unioned
