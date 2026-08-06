@@ -313,30 +313,12 @@ target, variable, or other verifiable pattern named by the requirement.
 
 ## Check 15 — MISSING-VALIDATION-BEHAVIOR
 
-**Problem:** The plan's Outcome Handling specifies validation behavior, but the screen
-does not implement input validation.
+**Problem:** Outcome Handling requires validation that the screen does not enforce.
 
-**Detect:** If the plan's Contract → Outcome Handling → Validation is non-empty:
+**Detect:** Verify the contract's validation predicate guards the relevant mutation or
+navigation handler and that its required invalid feedback is implemented.
 
-1. Identify the form or input controls mentioned in the validation requirement.
-2. Check for validation patterns in the submit handler:
-   - `If(IsBlank(` or `If(!IsBlank(`
-   - `IsMatch(`
-   - `Len(` comparisons
-   - Form validation: `Form.Valid` or `EditForm.Valid`
-
-3. Flag if no validation pattern is found in the submit handler.
-
-**Fix:** This check does not auto-fix. Report to contract verification.
-
-**Report format:**
-
-```
-MISSING-VALIDATION-BEHAVIOR: [ScreenName].pa.yaml
-  Plan requirement: "[validation requirement from Outcome Handling]"
-  Submit handler: [ControlName.OnSelect]
-  Issue: No validation pattern found
-```
+**Fix:** Report the expected validation behavior and actual handler to Phase 7.
 
 ---
 
