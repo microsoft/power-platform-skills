@@ -218,7 +218,7 @@ Plan document: [working directory]/canvas-app-plan.md
 - **Embed full `describe_control` output** in the plan document — never summarize property
   names. Downstream agents must be able to write correct YAML from the plan document alone.
 - **Only include properties that were returned by `describe_control` specifically for that control.**
-  If you are uncertain whether a property exists for a control, it does not exist. Only the `describe_control`
+  If you are uncertain whether a property exists for a control, it does not exist. Only the `describe_control` 
   output is authoritative — not training data, not intuition, not analogies to similar controls.
 - **Embed exact RGBA values** from the approved plan — not prose color descriptions.
   Consistent visual design across parallel agents depends on exact values.
