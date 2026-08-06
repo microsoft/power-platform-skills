@@ -151,26 +151,8 @@ Mark the task complete. Return a concise result to the orchestrating skill:
 Screen: [Screen Name]
 Action: Create
 File: [working directory]/[ScreenName].pa.yaml
-
-Contract Implementation:
-  Primary Content: [Implemented / Missing — control name]
-  Primary Interaction: [Implemented / Missing — control name]
-  Required Handlers:
-    - [ControlName.Handler]: [Implemented / Missing]
-  Outcome Handling:
-    - Validation: [Implemented / N/A]
-    - Success feedback: [Implemented / N/A]
-    - Failure feedback: [Implemented / N/A]
-    - State refresh: [Implemented / N/A]
-    - Empty state: [Implemented / N/A]
-
-Journey Steps Implemented:
-  - [Step description from Journey Step Mapping]
-Journey Steps Unresolved: [none, or list]
-
 QA fixes applied: [N]
   - [one-line description per fix, or "clean" if N=0]
-
 Status: Done
 ```
 
