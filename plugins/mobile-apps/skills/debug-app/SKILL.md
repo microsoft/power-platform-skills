@@ -114,13 +114,29 @@ If `fixes.md` is empty, write a session header:
 
 ### 0.2 Verify Metro bundled and the app is running
 
-Read the latest sanitized log window:
+Read a bounded baseline window and return a real byte cursor:
 
 ```bash
-tail -n 500 "$LOG_PATH"
+node - "$LOG_PATH" 262144 <<'NODE'
+const fs = require('node:fs');
+const [file, maxText] = process.argv.slice(2);
+const maxBytes = Number(maxText);
+const size = fs.statSync(file).size;
+const start = Math.max(0, size - maxBytes);
+const fd = fs.openSync(file, 'r');
+const buffer = Buffer.alloc(size - start);
+const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, start);
+fs.closeSync(fd);
+process.stdout.write(JSON.stringify({
+   cursor: start,
+   nextCursor: start + bytesRead,
+   truncated: start > 0,
+   output: buffer.subarray(0, bytesRead).toString('utf8')
+}, null, 2));
+NODE
 ```
 
-Parse `output`, `port`, and `nextCursor`. Scan `output`:
+Parse `output`, `cursor`, `nextCursor`, and `truncated`; use the `pid`, `port`, and `logPath` resolved in Phase 0.0. Scan `output`:
 
 - Most recent error-class line is `SyntaxError`, `Unable to resolve module`, `transform failed`, or `error: Bundling failed` → bundle is broken. Treat as a Step B "Import / Bundle" critical error and route through Step D immediately. Do NOT enter the steady-state loop until the bundle is healthy.
 - Output contains `Bundling complete` / `iOS Bundled` / `Android Bundled` with no later error-class line → Metro is healthy. Proceed.
@@ -128,6 +144,8 @@ Parse `output`, `port`, and `nextCursor`. Scan `output`:
   > **Metro is running but no app is connected yet.** Open the app on a device or simulator, then re-run `/debug-app`.
   Stop here.
 - Output is empty despite `status.running: true` → Metro has not emitted enough state yet. Tell the user to wait for the native URL, then re-run `/debug-app`; do not guess readiness.
+
+If `truncated: true`, the baseline covers only the latest 256 KiB. Record that older history was omitted; do not claim the full session history was inspected.
 
 Before initializing the cursor, pass **all** classifiable entries in this initial
 window through Step B, including JS runtime errors, React warnings, network/API
@@ -183,17 +201,19 @@ Write `.claude/debug-app/metro-cursor.json` using structured JSON:
 
 ```json
 {
+   "logPath": "/absolute/project/.powernative/metro-logs/metro-<timestamp>-pid-12345-port-8081.log",
+   "pid": 12345,
    "port": 8081,
    "cursor": 12345,
    "updatedAt": "<ISO timestamp>"
 }
 ```
 
-Set `cursor` to `nextCursor` from Phase 0.2. On later invocations:
+Set `logPath`, `pid`, and `port` from Phase 0.0, and set `cursor` to `nextCursor` from Phase 0.2. On later invocations:
 
-- Same `port` and `running: true` → reuse the saved cursor so old errors are not processed again.
-- Different `port` → a new Metro session is in play. Discard the old cursor and initialize from the latest log window.
-- `tail.rotationLost: true` (the saved cursor is past end-of-file, which can only happen when the log rotated) → accept the returned reset cursor and record the rotation in `fixes.md`.
+- Same `logPath`, `pid`, and `port`, with the process still owning the port → reuse the saved cursor so old errors are not processed again.
+- Different `logPath`, `pid`, or `port` → a new Metro session is in play. Discard the old cursor and initialize from the latest log window.
+- `rotationLost: true` from Step A → accept the returned reset cursor and record the file shrink/replacement in `fixes.md`.
 
 ---
 
@@ -341,7 +361,7 @@ Repeat until **3 consecutive clean cycles**, OR the user types `stop`, OR the es
 
 ### Step A — Collect logs
 
-Read `.claude/debug-app/metro-cursor.json`, confirm its `logPath` still points at the latest live `.powernative` log, then read newly appended bytes:
+Read `.claude/debug-app/metro-cursor.json`, rediscover the latest live `.powernative` log using Phase 0.0, and confirm the saved `logPath`, `pid`, and `port` still match. If any differ, return to Phase 0.2 and initialize a new baseline. Otherwise read newly appended bytes:
 
 ```bash
 node - "$LOG_PATH" <saved-cursor> 262144 <<'NODE'
@@ -365,7 +385,7 @@ process.stdout.write(JSON.stringify({
 NODE
 ```
 
-Use only the returned `output` for this cycle. Immediately persist `nextCursor` and the current `port` to `metro-cursor.json`, even when `output` is empty or contains an error; this prevents duplicate processing after interruption and handles log rotation safely.
+Use only the returned `output` for this cycle. Immediately persist the current `logPath`, `pid`, `port`, `nextCursor`, and a new `updatedAt` to `metro-cursor.json`, even when `output` is empty or contains an error; this prevents duplicate processing after interruption and handles file replacement safely.
 
 Count a clean cycle only after observing a full 5-second interval with empty or non-error new output. If the log file changes, the PID/port check becomes contradictory, or the cursor resets because the file shrank/rotated, never count that cycle as clean.
 

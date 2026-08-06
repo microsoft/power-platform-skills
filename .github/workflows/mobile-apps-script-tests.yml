@@ -9,6 +9,8 @@ on:
             - "plugins/mobile-apps/scripts/**"
             - "plugins/mobile-apps/skills/create-mobile-app/SKILL.md"
             - "plugins/mobile-apps/skills/debug-app/SKILL.md"
+            - "plugins/mobile-apps/template/metro.config.js"
+            - "plugins/mobile-apps/template/package.json"
             - ".github/workflows/mobile-apps-script-tests.yml"
 
 jobs:
