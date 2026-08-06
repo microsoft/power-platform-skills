@@ -136,6 +136,48 @@ test('store-keyvault-secret rejects explicit empty --secretValue without reading
   assert.equal(stderr, 'Error: Secret value is empty.\n');
 });
 
+for (const [name, args] of [
+  [
+    'bare trailing --secretValue',
+    [
+      '--vaultName', 'my-vault',
+      '--secretName', 'my-secret',
+      '--secretValue',
+    ],
+  ],
+  [
+    '--secretValue followed by another option',
+    [
+      '--vaultName', 'my-vault',
+      '--secretName', 'my-secret',
+      '--secretValue', '--unused',
+    ],
+  ],
+]) {
+  test(`store-keyvault-secret rejects ${name} without reading stdin`, () => {
+    let stderr = '';
+    const status = runCli(
+      args,
+      {
+        stdin: {
+          isTTY: false,
+          get fd() {
+            assert.fail('stdin must not be read when --secretValue is present');
+          },
+        },
+        stdout: { write: () => assert.fail('missing values must not produce output') },
+        stderr: { write: (value) => { stderr += value; } },
+      },
+      {
+        spawnSyncImpl: () => assert.fail('az must not run for a missing secret value'),
+      }
+    );
+
+    assert.equal(status, 1);
+    assert.equal(stderr, 'Error: Secret value is empty.\n');
+  });
+}
+
 test('store-keyvault-secret uses a private temp directory and keeps the secret out of az argv', (t) => {
   const tempRoot = makeTempRoot(t);
   const secretValue = 'secret value with spaces';

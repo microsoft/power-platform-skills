@@ -25,7 +25,12 @@ const { spawnSync } = require('child_process');
 
 function getArg(args, name) {
   const idx = args.indexOf(`--${name}`);
-  return idx !== -1 && idx + 1 < args.length ? args[idx + 1] : null;
+  if (idx === -1) return null;
+
+  // Arguments use `--name value`. A bare flag or `--name --other` is present but
+  // empty, so callers can reject it without falling back to another input source.
+  const value = args[idx + 1];
+  return value === undefined || value.startsWith('--') ? '' : value;
 }
 
 function parseArgs(args) {
