@@ -47,6 +47,7 @@ Read `canvas-app-plan.md` at the path provided in your invocation prompt.
 **If your action is `Modify`**, locate and extract:
 
 - The **Per-Screen Edit Specification** for your assigned screen
+- The **Contract** section for your screen
 - The **Current App Summary** section (palette, layout strategy, variables, data sources)
 - The **Control Definitions** for any new control types your screen uses (full `describe_control` output embedded in the plan)
 - The **TechnicalGuide Key Conventions** section (YAML syntax rules)
@@ -100,13 +101,8 @@ listed in the Per-Screen Edit Specification:
 - For each **control to add**: use `Edit` to insert the new control YAML in the correct location
 - For each **control to remove**: use `Edit` to delete the control's YAML block
 
-**The Contract section applies to Modify actions too.** After your changes, the screen must
-satisfy its contract. Verify that:
-
-1. Primary Content still exists (or is newly added per the edit spec).
-2. Primary Interaction still exists with a non-placeholder handler.
-3. All Required Handlers are implemented.
-4. Journey steps assigned to this screen are still functional.
+After applying the requested changes, ensure the screen still satisfies its Contract and
+assigned journey steps.
 
 Follow the conventions from the plan document's TechnicalGuide Key Conventions section:
 
