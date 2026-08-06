@@ -414,16 +414,8 @@ violations if compilation is clean; compilation errors remain blocking.
 
 #### Success criteria
 
-**Generation always proceeds if compilation succeeds.** Contract violations are logged but
-do not block — apps must be produced for evaluation.
-
-Track two outcomes separately:
-
-- **Compilation status:** Clean or Errors (errors block generation)
-- **Contract status:** Clean or Violations (violations determine marker type)
-
-**On compilation success:** Proceed to Phase 8. The completion marker will reflect whether
-contracts passed (`GENERATION_COMPLETE`) or failed (`GENERATION_COMPLETE_WITH_WARNINGS`).
+Compilation must succeed. Unresolved contract violations do not block completion, but Phase 8
+must report them.
 
 ---
 
@@ -432,152 +424,31 @@ contracts passed (`GENERATION_COMPLETE`) or failed (`GENERATION_COMPLETE_WITH_WA
 Delete `canvas-app-plan.md` from the working directory using `Bash`:
 `rm <working-directory>/canvas-app-plan.md`
 
-Present a final summary based on the outcome:
+Present a final summary based on the mode.
 
-**Outcome A: Compilation AND contracts pass (CREATE mode):**
+**CREATE mode:**
 
 > **App generation complete.**
 >
-> | Screen        | File               | Status  |
-> | ------------- | ------------------ | ------- |
+> | Screen | File | Status |
+> |--------|------|--------|
 > | [Screen Name] | [filename].pa.yaml | Created |
 >
 > **Compiled clean** after [N] pass(es). | **Screens:** [N] | **Data:** [source or collections]
 >
-> **Contracts:** All verified ✓
->
-> **GENERATION_COMPLETE**
+> **Contracts:** [verified, or N unresolved followed by the violation list]
 
-**Outcome A: Compilation AND contracts pass (EDIT mode):**
+**EDIT mode (complex):**
 
 > **Edit complete.**
 >
-> | Action            | Screen        | File               | Status |
-> | ----------------- | ------------- | ------------------ | ------ |
-> | [Create / Modify] | [Screen Name] | [filename].pa.yaml | Done   |
+> | Action | Screen | File | Status |
+> |--------|--------|------|--------|
+> | [Create / Modify] | [Screen Name] | [filename].pa.yaml | Done |
 >
 > **Compiled clean** after [N] pass(es).
 >
-> **Contracts:** All verified ✓
->
-> **GENERATION_COMPLETE**
-
-**Outcome B: Compilation passes, contracts fail (CREATE mode):**
-
-> **App generation complete with warnings.**
->
-> | Screen        | File               | Status  |
-> | ------------- | ------------------ | ------- |
-> | [Screen Name] | [filename].pa.yaml | Created |
->
-> **Compiled clean** after [N] pass(es). | **Screens:** [N] | **Data:** [source or collections]
->
-> **Contracts:** [N] unresolved violations ⚠
->
-> [Include full Contract Violation Report — see format below]
->
-> **GENERATION_COMPLETE_WITH_WARNINGS**
-
-**Outcome B: Compilation passes, contracts fail (EDIT mode):**
-
-> **Edit complete with warnings.**
->
-> | Action            | Screen        | File               | Status |
-> | ----------------- | ------------- | ------------------ | ------ |
-> | [Create / Modify] | [Screen Name] | [filename].pa.yaml | Done   |
->
-> **Compiled clean** after [N] pass(es).
->
-> **Contracts:** [N] unresolved violations ⚠
->
-> [Include full Contract Violation Report — see format below]
->
-> **GENERATION_COMPLETE_WITH_WARNINGS**
-
-**Outcome C: Compilation fails:**
-
-> ❌ **App generation FAILED**
->
-> Compilation could not be completed after maximum fix attempts.
->
-> **Compilation errors:**
-> [list remaining errors]
->
-> **Files written:** [list of .pa.yaml files that were created]
->
-> **GENERATION_FAILED**
-
----
-
-## Contract Violation Report Format
-
-When contracts fail, include a detailed report for benchmark analysis. This report must
-contain enough information to diagnose GI-004 regressions.
-
-> **Contract Violation Report**
->
-> **Summary:** [N] screen violations, [N] journey violations
->
-> **Screen Contract Violations:**
->
-> | Screen       | Control       | Violation                                                    | Repair Attempts | Final State                                 |
-> | ------------ | ------------- | ------------------------------------------------------------ | --------------- | ------------------------------------------- |
-> | [ScreenName] | [ControlName] | [e.g., "Primary Content missing — Gallery not found"]        | [0/1/2]         | [e.g., "Control absent" or "Handler empty"] |
-> | [ScreenName] | [ControlName] | [e.g., "Required Handler SubmitBtn.OnSelect is placeholder"] | [2]             | [e.g., "OnSelect: =false"]                  |
->
-> **Journey Violations:**
->
-> | Journey       | Step      | Screen   | Control   | Expected                            | Actual                             |
-> | ------------- | --------- | -------- | --------- | ----------------------------------- | ---------------------------------- |
-> | [JourneyName] | [StepNum] | [Screen] | [Control] | [e.g., "OnSelect must call Patch("] | [e.g., "OnSelect: =Navigate(Home"] |
->
-> **YAML Evidence:**
->
-> For each violation, include the actual YAML snippet from the `.pa.yaml` file:
->
-> ```yaml
-> # [ScreenName].pa.yaml — [ControlName]
-> - [ControlName]:
->     Control: [ControlType]
->     OnSelect: =[actual formula or empty]
-> ```
->
-> **Repair History:**
->
-> - Pre-compilation: [N] violations found, [N] repaired, [N] unresolved
-> - Post-compilation: [N] regressions found, [N] repaired, [N] unresolved
+> **Contracts:** [verified, or N unresolved followed by the violation list]
 
 If any compilation errors remain after exhausting fixes, report them explicitly so the user
 knows what needs manual attention.
-
----
-
-## Completion Markers
-
-The pipeline detects generation outcomes via these exact markers in the skill output.
-**Always emit exactly one marker at the end of Phase 8:**
-
-- `GENERATION_COMPLETE` — compilation succeeds AND all contract/journey verifications pass.
-  This is a fully successful generation.
-
-- `GENERATION_COMPLETE_WITH_WARNINGS` — compilation succeeds but contract/journey verification
-  failed. The app was generated and can be evaluated, but has known functional gaps.
-  Benchmark analysis must count this separately from full success.
-
-- `GENERATION_FAILED` — compilation cannot be fixed. This is rare and indicates a pipeline
-  or syntax failure, not a contract violation.
-
-**Marker selection logic:**
-
-```
-if compilation_failed:
-    emit GENERATION_FAILED
-elif contract_violations > 0:
-    emit GENERATION_COMPLETE_WITH_WARNINGS
-else:
-    emit GENERATION_COMPLETE
-```
-
-These markers must appear on their own line, exactly as shown, with no additional formatting.
-Do not emit a marker until Phase 8 is reached — partial completions or mid-phase states should
-not emit markers.
