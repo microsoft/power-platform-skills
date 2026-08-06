@@ -331,7 +331,7 @@ file name, and its action (Create or Modify).
 
 Confirm every screen has a unique Control Prefix and that its planned control names use it. If
 the plan fails this check, reinvoke the planner once with the naming violations. Record any
-remaining violations and continue so the app can still be generated for evaluation.
+remaining violations and continue without blocking generation.
 
 ### Step 6.2 — Invoke Screen Builders
 
