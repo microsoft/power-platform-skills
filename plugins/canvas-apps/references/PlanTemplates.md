@@ -217,33 +217,20 @@ EDIT
 
 ## Core Functional Journeys
 
-Define 3–5 end-to-end user journeys that the edit must preserve or enable. Each journey spans
-one or more screens and represents a complete user goal.
+### Journey: [Journey Name] ([P1/P2/P3])
 
-**Priority:** Order journeys by importance — P1 journeys are critical paths that must work;
-P2/P3 are secondary flows.
-
-### Journey: [Journey Name] (P1)
-
-- **Entry Point:** [screen and control where the journey starts]
-- **Screens Involved:** [ordered list of screens]
-- **Required Operations:** [data operations that must occur]
-- **Expected Outcome:** [what success looks like]
-- **Success Behavior:** [user feedback on success]
-- **Failure Behavior:** [user feedback on failure]
 - **Affected by this edit:** [Yes/No — if Yes, explain how]
+- **Expected Outcome:** [successful end state]
+- **Success Behavior:** [feedback and navigation on success]
+- **Failure Behavior:** [feedback and retry behavior on failure]
 
 #### Journey Step Mapping
 
-| Step               | Screen   | Control   | Event Property          | Formula Must Include       |
-| ------------------ | -------- | --------- | ----------------------- | -------------------------- |
-| [Step description] | [Screen] | [Control] | [OnSelect/OnChange/etc] | [Required formula pattern] |
+| Step               | Screen   | Control            | Event Property | Required Formula Behavior |
+| ------------------ | -------- | ------------------ | -------------- | ------------------------- |
+| [Step description] | [Screen] | [prefixed control] | [event]        | [verifiable requirement]  |
 
-[Map every step to exactly one screen, control, and event — no step may be orphaned]
-
-### Journey: [Journey Name] (P2)
-
-[repeat for each core journey — minimum 3, maximum 5]
+[repeat for each core journey the edit must preserve or enable]
 
 ## TechnicalGuide Key Conventions
 [Embed the most critical YAML syntax rules from TechnicalGuide.md that screen-editors must follow:
