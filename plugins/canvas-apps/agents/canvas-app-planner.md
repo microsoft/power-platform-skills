@@ -55,20 +55,17 @@ Internalize both. These govern every YAML syntax and design decision.
 ### CREATE mode
 
 Call `list_controls`, `list_apis`, and `list_data_sources`. Summarize:
-
 - Which controls are most relevant to the approved plan's screens
 - Which data sources (if any) should drive the app's data layer
 
 Then call the detail tools for resources the app will use. Collect the full output of each
 for embedding in the plan document:
-
 - `describe_api` — for each connector, to get operations and parameters
 - `get_data_source_schema` — for each data source, to get columns and Power Fx types
 
 ### EDIT mode
 
 Read all `.pa.yaml` files in the working directory. Extract:
-
 - All screens, controls, layout strategies, and formulas
 - Exact RGBA color values in use
 - All variable names and data bindings
