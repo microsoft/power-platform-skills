@@ -21,7 +21,8 @@ function dataDisclosure(plugin) {
     "   when PAC is signed in.\n" +
     pluginSpecific +
     "   When plugin telemetry is enabled, the local diagnostic log retains the same\n" +
-    "   fields even when transmission is off. A disabled plugin writes no log.\n" +
+    "   fields even when transmission is off. A plugin whose committed telemetry\n" +
+    "   config has disabled: true is hard-disabled and writes no log.\n" +
     "   Events do not include file paths, prompts, tool inputs, site names,\n" +
     "   Dataverse URLs, credentials, usernames, or hostnames."
   );
