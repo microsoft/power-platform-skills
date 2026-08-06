@@ -5,45 +5,73 @@
 // then falls back to Playwright's bundled Chromium.
 // Self-contained — no external dependencies required.
 
-const { spawn } = require('child_process');
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
 const path = require('path');
 const { detectBrowser } = require('./lib/detect-browser');
 
-function quoteShellArg(value, platform = process.platform) {
-  const argument = String(value);
-
-  if (platform === 'win32') {
-    if (argument.includes('"')) {
-      throw new Error('Cannot quote an argument containing double quotes for cmd.exe.');
-    }
-
-    return `"${argument}"`;
-  }
-
-  return `'${argument.replace(/'/g, "'\\''")}'`;
-}
+const PLAYWRIGHT_MCP_VERSION = '0.0.78';
+const PLAYWRIGHT_MCP_PACKAGE = `@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}`;
 
 function buildMcpArgs(browser, {
   configPath = path.join(__dirname, 'playwright-mcp-fullscreen.config.json'),
-  platform = process.platform,
 } = {}) {
+  // Marketplace installs copy only this plugin directory and do not run npm install,
+  // so a lockfile would not materialize a local executable. Keep the runtime package
+  // immutable, and disable lifecycle scripts while npx prepares the reviewed version.
   return [
-    '-y',
-    '@playwright/mcp@latest',
+    '--yes',
+    '--ignore-scripts',
+    `--package=${PLAYWRIGHT_MCP_PACKAGE}`,
+    'playwright-mcp',
     '--browser',
     browser,
     '--config',
-    quoteShellArg(configPath, platform),
+    configPath,
   ];
 }
 
-function launch({ browser = detectBrowser(), spawnFn = spawn, onExit = (code) => process.exit(code || 0) } = {}) {
-  const child = spawnFn('npx', buildMcpArgs(browser), {
+function resolveNpxCli({
+  execPath = process.execPath,
+  platform = process.platform,
+  existsSync = fs.existsSync,
+} = {}) {
+  // Windows exposes npx as a .cmd shim that cannot run with shell:false. Invoking
+  // npm's JavaScript entrypoint through Node preserves raw argv on every platform.
+  const pathApi = platform === 'win32' ? path.win32 : path.posix;
+  const nodeDir = pathApi.dirname(execPath);
+  const candidates = [
+    pathApi.resolve(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npx-cli.js'),
+    pathApi.join(nodeDir, 'node_modules', 'npm', 'bin', 'npx-cli.js'),
+  ];
+  const match = candidates.find((candidate) => existsSync(candidate));
+
+  if (!match) {
+    throw new Error(
+      'Could not locate npm/bin/npx-cli.js beside the current Node installation. Install Node.js with npm before starting the Playwright MCP server.',
+    );
+  }
+
+  return match;
+}
+
+function launch({
+  browser = detectBrowser(),
+  npxCliPath = resolveNpxCli(),
+  spawnFn = spawn,
+  exitFn = (code) => process.exit(code),
+  writeError = (message) => process.stderr.write(message),
+} = {}) {
+  const child = spawnFn(process.execPath, [npxCliPath, ...buildMcpArgs(browser)], {
     stdio: 'inherit',
-    shell: true,
+    shell: false,
   });
 
-  child.on('exit', onExit);
+  child.once('error', (error) => {
+    writeError(`Failed to start Playwright MCP: ${error.message}\n`);
+    exitFn(1);
+  });
+  child.once('exit', (code) => exitFn(code ?? 1));
   return child;
 }
 
@@ -51,4 +79,9 @@ if (require.main === module) {
   launch();
 }
 
-module.exports = { buildMcpArgs, launch, quoteShellArg };
+module.exports = {
+  PLAYWRIGHT_MCP_PACKAGE,
+  buildMcpArgs,
+  launch,
+  resolveNpxCli,
+};
