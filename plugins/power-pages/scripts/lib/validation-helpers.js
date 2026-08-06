@@ -227,11 +227,13 @@ function parseTrustedMicrosoftUrl(value, {
 
   // URL.port is empty for an explicit default :443, so inspect the original
   // authority as well. Microsoft service endpoints used here never require a
-  // caller-selected port.
-  if (!value.startsWith('https://')) {
-    throw new Error(`${purpose} must use the canonical "https://" scheme.`);
+  // caller-selected port. URL schemes are case-insensitive, so capture the raw
+  // authority without requiring callers to use lowercase `https://`.
+  const authorityMatch = /^https:\/\/([^/?#]*)/i.exec(value);
+  if (!authorityMatch) {
+    throw new Error(`${purpose} must use HTTPS.`);
   }
-  const authority = value.slice('https://'.length).split(/[/?#]/, 1)[0];
+  const authority = authorityMatch[1];
   if (authority.includes(':')) {
     throw new Error(`${purpose} must not contain a port.`);
   }

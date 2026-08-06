@@ -72,6 +72,14 @@ test('URL validation accepts documented Dataverse and Power Platform sovereign-c
   for (const url of dataverseUrls) {
     assert.equal(validateDataverseEnvironmentUrl(url), url);
   }
+  assert.equal(
+    validateDataverseEnvironmentUrl('HTTPS://ORG.CRM.DYNAMICS.COM'),
+    'https://org.crm.dynamics.com',
+  );
+  assert.equal(
+    validateDataverseEnvironmentUrl('HtTpS://Org.Api.Crm.MicrosoftDynamics.Us'),
+    'https://org.api.crm.microsoftdynamics.us',
+  );
 
   assert.equal(
     validateTokenResourceUrl('https://high.service.flow.microsoft.us/'),
@@ -102,6 +110,7 @@ test('URL validation rejects malicious hosts, credentials, ports, fragments, and
     'http://org.crm.dynamics.com',
     'https://user:pass@org.crm.dynamics.com',
     'https://org.crm.dynamics.com:443',
+    'HTTPS://org.crm.dynamics.com:443',
     'https://org.crm.dynamics.com#fragment',
     'https://org.crm.dynamics.com.attacker.invalid',
     'https://org_crm.dynamics.com',
