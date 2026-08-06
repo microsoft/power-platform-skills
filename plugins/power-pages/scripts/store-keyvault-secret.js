@@ -24,8 +24,15 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 function getArg(args, name) {
-  const idx = args.indexOf(`--${name}`);
-  if (idx === -1) return null;
+  const flag = `--${name}`;
+  const idx = args.indexOf(flag);
+  const inlineArg = args.find((arg) => arg.startsWith(`${flag}=`));
+
+  if (idx === -1) {
+    // Slice after the first `=` so values can contain leading dashes, spaces, and
+    // additional `=` characters without entering the spaced-form option grammar.
+    return inlineArg === undefined ? null : inlineArg.slice(flag.length + 1);
+  }
 
   // Arguments use `--name value`. A bare flag or `--name --other` is present but
   // empty, so callers can reject it without falling back to another input source.

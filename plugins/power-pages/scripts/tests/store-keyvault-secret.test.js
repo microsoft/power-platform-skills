@@ -6,7 +6,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const cliPath = path.join(__dirname, '..', 'store-keyvault-secret.js');
-const { runCli, storeKeyVaultSecret } = require('../store-keyvault-secret');
+const { parseArgs, runCli, storeKeyVaultSecret } = require('../store-keyvault-secret');
 
 function runStoreKeyvaultSecret(args, opts = {}) {
   return spawnSync(process.execPath, [cliPath, ...args], {
@@ -177,6 +177,41 @@ for (const [name, args] of [
     assert.equal(stderr, 'Error: Secret value is empty.\n');
   });
 }
+
+test('store-keyvault-secret parses unambiguous inline secret values verbatim', () => {
+  assert.equal(
+    parseArgs(['--secretValue=--foo']).secretValue,
+    '--foo'
+  );
+  assert.equal(
+    parseArgs(['--secretValue=value with spaces=and=equals']).secretValue,
+    'value with spaces=and=equals'
+  );
+});
+
+test('store-keyvault-secret rejects empty inline --secretValue without reading stdin', () => {
+  let stderr = '';
+  const status = runCli(
+    [
+      '--vaultName', 'my-vault',
+      '--secretName', 'my-secret',
+      '--secretValue=',
+    ],
+    {
+      stdin: {
+        isTTY: false,
+        get fd() {
+          assert.fail('stdin must not be read when inline --secretValue is present');
+        },
+      },
+      stdout: { write: () => assert.fail('empty secrets must not produce output') },
+      stderr: { write: (value) => { stderr += value; } },
+    }
+  );
+
+  assert.equal(status, 1);
+  assert.equal(stderr, 'Error: Secret value is empty.\n');
+});
 
 test('store-keyvault-secret uses a private temp directory and keeps the secret out of az argv', (t) => {
   const tempRoot = makeTempRoot(t);
