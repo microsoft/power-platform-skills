@@ -136,8 +136,8 @@ reserve your reasoning for logic correctness that the compiler cannot catch.
 
 ### Repair action — Fix contract violations on an existing screen
 
-You will be invoked with a Repair action when the orchestrating skill's contract verification
-(Phase 6a) detects that your screen does not fulfill its plan contract. The invocation prompt
+You will be invoked with a Repair action when the orchestrating skill's Phase 7 contract
+verification detects that your screen does not fulfill its plan contract. The invocation prompt
 will include a list of **contract violations** — specific missing elements.
 
 1. **Read the plan document** to understand the full screen contract (Primary Content, Primary

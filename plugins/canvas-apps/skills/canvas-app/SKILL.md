@@ -383,12 +383,14 @@ Wait for all screen-builder tasks to complete before proceeding.
 
 ---
 
-## Phase 6a — Plan Contract Verification
+## Phase 7 — Validate and Fix
 
 After all screen-builders finish, verify each screen fulfills its plan contract. This catches
 screens that compile but do not implement their planned functionality.
 
-### Step 6a.1 — Extract contracts from the plan
+### Step 7.1 — Verify Plan Contracts
+
+#### Extract contracts from the plan
 
 Read `canvas-app-plan.md` and extract, for each screen, the **Contract** section:
 
@@ -400,7 +402,7 @@ Read `canvas-app-plan.md` and extract, for each screen, the **Contract** section
 
 Also extract the **Core Functional Journeys** section with their Journey Step Mapping tables.
 
-### Step 6a.2 — Verify each screen against its contract
+#### Verify each screen against its contract
 
 For each screen in the plan, read its `.pa.yaml` file and verify:
 
@@ -444,7 +446,7 @@ For each screen in the plan, read its `.pa.yaml` file and verify:
    - **State refresh**: If required, data refresh after mutations exists.
    - **Empty state**: If required, conditional display for empty data exists.
 
-### Step 6a.3 — Handle failures (best-effort repair)
+#### Repair contract violations
 
 **If any contract check fails:**
 
@@ -472,13 +474,13 @@ For each screen in the plan, read its `.pa.yaml` file and verify:
    > Read the plan document. Implement the missing contract obligations. Do not remove any
    > existing functionality.
 
-4. **After repair, re-run Step 6a.2** for the repaired screens only.
+4. **After repair, re-run the screen contract checks** for the repaired screens only.
 
 5. **Limit repair iterations to 2.** If violations remain after 2 repair attempts:
    - **Log the unresolved violations** for inclusion in the Phase 8 summary.
-   - **Proceed to Phase 7 anyway** — apps must always be generated for evaluation.
+   - **Continue to compilation** — contract violations do not block generation.
 
-### Step 6a.4 — Verify Core Journeys
+#### Verify Core Journeys
 
 After all screens pass their individual contracts, verify the **Core Functional Journeys** from
 the plan document using the Journey Step Mapping tables:
@@ -501,20 +503,14 @@ the plan document using the Journey Step Mapping tables:
 3. Limit journey repair to 1 additional iteration.
 4. If journey verification still fails, **log the failures** for the Phase 8 summary.
 
-### Step 6a.5 — Proceed
+After verification and repair attempts, continue to compilation. Contract and journey
+violations are logged for reporting but do not block generation.
 
-**Always proceed to Phase 7** after completing verification and repair attempts. Contract
-and journey violations are logged for reporting but do not block generation — apps must
-always be produced for evaluation.
+### Step 7.2 — Compile
 
----
+Call `compile_canvas` on the working directory.
 
-## Phase 7 — Validate and Fix
-
-After all screen-builders have finished writing their files, call `compile_canvas` on the
-working directory.
-
-**On success:** Proceed to Step 7.1 (Contract Sync).
+**On success:** Proceed to Step 7.3.
 
 **On failure:** Read every error in the output. Errors will reference specific files and
 line numbers. For each error:
@@ -528,7 +524,7 @@ iterate until the entire directory compiles clean.
 
 Track how many `compile_canvas` passes were needed.
 
-### Step 7.1 — Contract Sync After Compilation
+### Step 7.3 — Sync Contract Names After Compilation
 
 After successful compilation, scan all `.pa.yaml` files and compare actual control names
 against the plan's Contract control names. Compiler fixes or repairs may have renamed controls.
@@ -546,22 +542,18 @@ against the plan's Contract control names. Compiler fixes or repairs may have re
 
 1. For each renamed control, update all Contract references in `canvas-app-plan.md`.
 2. Update the Journey Step Mapping table if any Control names changed.
-3. Write the updated plan so Phase 7a verification uses accurate names.
+3. Write the updated plan so post-compilation verification uses accurate names.
 
 This sync is mandatory — do not skip it even if you believe no renames occurred.
 
-After Contract Sync, proceed to Phase 7a.
-
----
-
-## Phase 7a — Post-Compilation Contract Re-Verification
+### Step 7.4 — Re-verify Contracts After Compilation
 
 Compiler-error fixes may alter control properties, handlers, or formulas. Re-run contract
 verification to ensure fixes did not break planned functionality.
 
-### Step 7a.1 — Re-verify screen contracts
+#### Re-verify screen contracts
 
-For each screen, re-run the contract checks from Step 6a.2:
+For each screen, re-run the contract checks from Step 7.1:
 
 1. Primary Content still exists and has correct bindings.
 2. Primary Interaction still exists with non-empty, non-placeholder handler.
@@ -569,15 +561,15 @@ For each screen, re-run the contract checks from Step 6a.2:
 4. Required data operations are still present.
 5. Outcome Handling is still in place (validation, success/failure feedback, state refresh).
 
-### Step 7a.2 — Re-verify core journeys
+#### Re-verify core journeys
 
-Re-run the journey checks from Step 6a.4:
+Re-run the journey checks from Step 7.1:
 
 1. Each journey step's Control and Event Property still have the required formula pattern.
 2. Navigation between journey screens is still functional.
 3. Success/Failure Behaviors are still implemented.
 
-### Step 7a.3 — Handle post-compilation failures (best-effort)
+#### Repair post-compilation regressions
 
 **If any check fails after compilation:**
 
@@ -588,7 +580,7 @@ Re-run the journey checks from Step 6a.4:
 
 3. **Re-run `compile_canvas`** after the repair to verify the fix didn't break compilation.
 
-4. **Re-run contract verification** (Step 7a.1 and 7a.2) after successful compilation.
+4. **Re-run Step 7.4** after successful compilation.
 
 5. **Repeat this loop** (repair → compile → verify) up to 2 times total.
 
@@ -598,7 +590,7 @@ Re-run the journey checks from Step 6a.4:
    - **If compilation fails, continue attempting fixes** — compilation is blocking, but
      contract violations are not.
 
-### Step 7a.4 — Success criteria
+#### Success criteria
 
 **Generation always proceeds if compilation succeeds.** Contract violations are logged but
 do not block — apps must be produced for evaluation.
@@ -730,8 +722,8 @@ contain enough information to diagnose GI-004 regressions.
 >
 > **Repair History:**
 >
-> - Phase 6a: [N] violations found, [N] repaired, [N] unresolved
-> - Phase 7a: [N] regressions found, [N] repaired, [N] unresolved
+> - Pre-compilation: [N] violations found, [N] repaired, [N] unresolved
+> - Post-compilation: [N] regressions found, [N] repaired, [N] unresolved
 
 If any compilation errors remain after exhausting fixes, report them explicitly so the user
 knows what needs manual attention.

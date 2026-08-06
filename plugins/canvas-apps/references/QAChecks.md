@@ -293,7 +293,7 @@ screen builder failed to implement the screen's planned content.
 2. **Do not remove the navigation.** The navigation was planned and approved — removing it
    silently violates the user's requirements.
 
-3. **Escalate to the skill's contract verification phase** (Phase 6a), which will reinvoke
+3. **Escalate to the skill's Phase 7 contract verification**, which will reinvoke
    the screen builder with explicit repair instructions.
 
 **Exception:** A confirmation screen or transition screen that intentionally shows only a
@@ -303,14 +303,14 @@ with no primary content, do not flag it.
 
 **Note:** This is a syntactic guard, not a functional completeness check. A screen with one
 button satisfies this check even if that button does nothing. Full functional verification
-is handled by Phase 6a's plan contract verification, not by this QA check.
+is handled by Phase 7's plan contract verification, not by this QA check.
 
 ---
 
 ## Plan-Contract QA Checks
 
 The following checks compare the generated `.pa.yaml` files against `canvas-app-plan.md`.
-They are run during Phase 6a contract verification and Phase 7a post-compilation re-verification.
+They run before and after compilation during Phase 7.
 
 These checks require access to both the plan document and the YAML files. They do NOT use
 arbitrary control-count heuristics — they verify specific planned elements exist.

@@ -156,7 +156,7 @@ names such as `Button1`; contract verification depends on control names remainin
 ### Screen Contracts
 
 Complete the Contract subsection in `PlanTemplates.md` for every screen. Use specific control
-names, bindings, handlers, and outcomes that Phase 6a can verify; explicitly mark fields that
+names, bindings, handlers, and outcomes that Phase 7 can verify; explicitly mark fields that
 do not apply.
 
 ### Core Functional Journeys (Required)
