@@ -9,7 +9,7 @@ body:
       description: Which plugin is this bug related to?
       options:
         - canvas-apps
-        - code-apps-preview
+        - code-apps
         - mcp-apps
         - mobile-app
         - model-apps
