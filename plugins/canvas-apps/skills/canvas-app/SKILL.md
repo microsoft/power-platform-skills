@@ -404,23 +404,7 @@ Track how many `compile_canvas` passes were needed.
 Compiler-error fixes may alter control properties, handlers, or formulas. Re-run contract
 verification to ensure fixes did not break planned functionality.
 
-#### Re-verify screen contracts
-
-For each screen, re-run the contract checks from Step 7.1:
-
-1. Primary Content still exists and has correct bindings.
-2. Primary Interaction still exists with non-empty, non-placeholder handler.
-3. Required Handlers are still implemented (not emptied or commented out during fixes).
-4. Required data operations are still present.
-5. Outcome Handling is still in place (validation, success/failure feedback, state refresh).
-
-#### Re-verify core journeys
-
-Re-run the journey checks from Step 7.1:
-
-1. Each journey step's Control and Event Property still have the required formula pattern.
-2. Navigation between journey screens is still functional.
-3. Success/Failure Behaviors are still implemented.
+Re-run all Plan-Contract QA Checks against the compiled YAML.
 
 #### Repair post-compilation regressions
 
