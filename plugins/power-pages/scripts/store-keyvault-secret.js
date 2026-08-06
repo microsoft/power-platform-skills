@@ -221,7 +221,7 @@ function runCli(
 
   // Resolve the secret value: use --secretValue when present, otherwise read stdin.
   let secretValue = secretValueArg;
-  if (!secretValue) {
+  if (secretValue === null) {
     // Read from stdin (non-TTY only — don't block waiting for interactive input).
     if (stdin.isTTY) {
       stderr.write(
