@@ -162,22 +162,9 @@ Status: Done
 Screen: [Screen Name]
 Action: Modify
 File: [working directory]/[ScreenName].pa.yaml
-
-Contract Implementation:
-  Primary Content: [Preserved / Added / Modified — control name]
-  Primary Interaction: [Preserved / Added / Modified — control name]
-  Required Handlers:
-    - [ControlName.Handler]: [Preserved / Added / Modified]
-
-Journey Steps Implemented:
-  - [Step description]
-Journey Steps Unresolved: [none, or list]
-
 Changes applied: [brief list of what was changed/added]
-
 QA fixes applied: [N]
   - [one-line description per fix, or "clean" if N=0]
-
 Status: Done
 ```
 
