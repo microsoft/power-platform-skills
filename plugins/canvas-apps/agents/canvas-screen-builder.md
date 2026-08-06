@@ -118,33 +118,10 @@ reserve your reasoning for logic correctness that the compiler cannot catch.
 
 ### Repair action — Fix contract violations on an existing screen
 
-You will be invoked with a Repair action when the orchestrating skill's Phase 7 contract
-verification detects that your screen does not fulfill its plan contract. The invocation prompt
-will include a list of **contract violations** — specific missing elements.
-
-1. **Read the plan document** to understand the full screen contract (Primary Content, Primary
-   Interaction, Required Handlers, Journey Steps).
-
-2. **Read the current `.pa.yaml`** to understand what already exists.
-
-3. **For each contract violation**, implement the missing element:
-   - **Missing Primary Content** — add the required data-displaying control (Gallery, Form,
-     DataTable, etc.) with proper data bindings as specified in the plan.
-
-   - **Missing Primary Interaction** — add or fix the required interactive control. Ensure its
-     handler (`OnSelect`, `OnChange`, etc.) contains the required logic.
-
-   - **Empty/placeholder handler** — replace the empty or placeholder formula with actual
-     implementation. Reference the plan's Required Handlers section for what the formula must do.
-
-   - **Missing navigation target** — if your screen navigates to a target that doesn't exist,
-     that's the target screen's problem, not yours. But if your own navigation handler is empty
-     or incorrect, fix it.
-
-4. **Do not remove existing functionality.** Repair means adding or fixing — never deleting
-   controls or navigation that were planned and approved.
-
-5. **Do not add filler controls** just to pass checks. Implement the actual planned content.
+Read the current `.pa.yaml` and fix only the violations listed in the invocation prompt,
+implementing the behavior required by the Contract. Preserve existing functionality and do not
+add filler controls. If a violation requires another screen, report it as unresolved rather
+than editing another file.
 
 ## Step 3.5 — Self-QA
 
