@@ -153,41 +153,11 @@ Assign each screen a short, unique prefix such as `Hom_`, and use it for every c
 screen. Use the same control names in screen contracts and journey mappings. Avoid generic
 names such as `Button1`; contract verification depends on control names remaining stable.
 
-### Contract Section (Required for Each Screen)
+### Screen Contracts
 
-Every Per-Screen Specification **must** include a **Contract** subsection. This contract is
-verified by the orchestrating skill in Phase 6a — screens that do not fulfill their contract
-will trigger repair loops.
-
-For each screen, specify:
-
-- **Primary Content** — the main data-displaying element. Be specific: "Gallery named
-  `TaskList` with Items bound to `Filter(Tasks, Status = selectedStatus)`" not just "a
-  gallery". If the screen has no primary content (e.g., a transient confirmation screen),
-  state that explicitly.
-
-- **Primary Interaction** — the main user action and what it does. Be specific: "Button named
-  `SubmitBtn` whose OnSelect calls `Patch(Orders, orderForm.LastSubmit)`" not just "a submit
-  button". If the screen has no primary interaction (e.g., a read-only detail view), state
-  that explicitly.
-
-- **Required Handlers** — list each handler that must be non-empty and what it must do. Format:
-  `ControlName.HandlerProperty must [action]`. Example: "TaskList.OnSelect must set
-  selectedTask variable", "SubmitBtn.OnSelect must call Patch()".
-
-- **Journey Steps** — which user journey steps this screen implements. These come from the
-  approved plan's purpose description. Example: "View filtered list of tasks", "Navigate to
-  task detail", "Mark task complete".
-
-- **Outcome Handling** — specify required feedback and state management:
-  - Validation (if the screen has forms/inputs)
-  - Success feedback (after data operations)
-  - Failure feedback (error handling)
-  - State refresh (after mutations)
-  - Empty state (when no data exists)
-
-The Contract section is the acceptance criteria for the screen. Do not write vague contracts —
-write contracts that can be mechanically verified.
+Complete the Contract subsection in `PlanTemplates.md` for every screen. Use specific control
+names, bindings, handlers, and outcomes that Phase 6a can verify; explicitly mark fields that
+do not apply.
 
 ### Core Functional Journeys (Required)
 
