@@ -27,7 +27,14 @@ function makeTempRoot(t) {
 test('store-keyvault-secret fails with no arguments', () => {
   const result = runStoreKeyvaultSecret([]);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /Usage:/);
+  assert.match(
+    result.stderr,
+    /printf '%s' '<value>' \| node store-keyvault-secret\.js --vaultName <name> --secretName <name>/
+  );
+  assert.match(result.stderr, /--secretValue <value>/);
+  assert.match(result.stderr, /--secretValue=<value>/);
+  assert.match(result.stderr, /Prefer stdin so the secret is not visible in process arguments/);
+  assert.match(result.stderr, /Use the `=` form for values that begin with dashes/);
 });
 
 test('store-keyvault-secret fails with missing --secretName', () => {

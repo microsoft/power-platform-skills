@@ -8,8 +8,10 @@
 // Usage (preferred — secret never in process args):
 //   printf '%s' '<value>' | node store-keyvault-secret.js --vaultName <name> --secretName <name>
 //
-// Usage (convenience — secret is in the node process args but NOT in the az args):
+// Usage (convenience - secret is visible in the Node process args, not the az args):
 //   node store-keyvault-secret.js --vaultName <name> --secretName <name> --secretValue <value>
+//   node store-keyvault-secret.js --vaultName <name> --secretName <name> --secretValue=<value>
+// Use the `=` form when the value begins with dashes.
 //
 // Output (JSON to stdout):
 //   { "secretUri": "https://myvault.vault.azure.net/secrets/mysecret/abc123..." }
@@ -210,7 +212,9 @@ function runCli(
     stderr.write(
       'Usage:\n' +
       '  printf \'%s\' \'<value>\' | node store-keyvault-secret.js --vaultName <name> --secretName <name>\n' +
-      '  node store-keyvault-secret.js --vaultName <name> --secretName <name> --secretValue <value>\n'
+      '  node store-keyvault-secret.js --vaultName <name> --secretName <name> --secretValue <value>\n' +
+      '  node store-keyvault-secret.js --vaultName <name> --secretName <name> --secretValue=<value>\n' +
+      'Prefer stdin so the secret is not visible in process arguments. Use the `=` form for values that begin with dashes.\n'
     );
     return 1;
   }
