@@ -28,8 +28,8 @@ function makeSiteRoot(entityLogicalNames) {
   return root;
 }
 
-test('integration transport mirrors makeRequest includeHeaders behavior', async () => {
-  const mock = await startMock([
+function startHeaderMock() {
+  return startMock([
     {
       method: 'GET',
       matcher: '/headers',
@@ -37,15 +37,26 @@ test('integration transport mirrors makeRequest includeHeaders behavior', async 
       body: { ok: true },
     },
   ]);
-  try {
-    const withoutHeaders = await makeLocalRequest({ url: `${mock.baseUrl}/headers` });
-    assert.equal(Object.hasOwn(withoutHeaders, 'headers'), false);
+}
 
-    const withHeaders = await makeLocalRequest({
+test('integration transport omits response headers by default', async () => {
+  const mock = await startHeaderMock();
+  try {
+    const result = await makeLocalRequest({ url: `${mock.baseUrl}/headers` });
+    assert.equal(Object.hasOwn(result, 'headers'), false);
+  } finally {
+    await mock.close();
+  }
+});
+
+test('integration transport includes response headers when requested', async () => {
+  const mock = await startHeaderMock();
+  try {
+    const result = await makeLocalRequest({
       url: `${mock.baseUrl}/headers`,
       includeHeaders: true,
     });
-    assert.equal(withHeaders.headers['x-test-header'], 'present');
+    assert.equal(result.headers['x-test-header'], 'present');
   } finally {
     await mock.close();
   }
