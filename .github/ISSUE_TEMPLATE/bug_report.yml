@@ -9,7 +9,9 @@ body:
       description: Which plugin is this bug related to?
       options:
         - canvas-apps
-        - code-apps
+        - code-apps-preview
+        - mcp-apps
+        - mobile-app
         - model-apps
         - power-automate
         - power-pages
