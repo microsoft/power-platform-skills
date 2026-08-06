@@ -45,13 +45,83 @@ function backdatePlan(root, secondsAgo = 60) {
   fs.utimesSync(p, ts, ts);
 }
 
-function runHook(root, skill) {
+function runHook(root, skill, env = {}) {
   return spawnSync(process.execPath, [HOOK_PATH], {
     input: JSON.stringify({ tool_input: { skill }, cwd: root }),
     encoding: 'utf8',
     cwd: root,
+    env: { ...process.env, ...env },
   });
 }
+
+test('activate-site validator passes a metacharacter project path literally to its child', (t) => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-activation-'));
+  const root = path.join(parent, 'site-$ACTIVATION_PATH_PROBE-%ACTIVATION_PATH_PROBE%-&');
+  const preloadPath = path.join(parent, 'capture-activation-argv.cjs');
+  const capturePath = path.join(parent, 'captured-project-root.txt');
+  fs.mkdirSync(root);
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+
+  writeJson(path.join(root, 'powerpages.config.json'), {
+    siteName: 'Activation path test',
+    websiteRecordId: '00000000-0000-0000-0000-000000000001',
+  });
+  fs.writeFileSync(preloadPath, `
+const fs = require('fs');
+const path = require('path');
+if (path.basename(process.argv[1] || '') === 'check-activation-status.js') {
+  const projectRootIndex = process.argv.indexOf('--projectRoot');
+  fs.writeFileSync(process.env.ACTIVATION_ARG_CAPTURE, process.argv[projectRootIndex + 1], 'utf8');
+  process.stdout.write(JSON.stringify({ activated: true, siteName: 'Activation path test' }));
+  process.exit(0);
+}
+`, 'utf8');
+
+  const res = runHook(root, 'activate-site', {
+    ACTIVATION_ARG_CAPTURE: capturePath,
+    ACTIVATION_PATH_PROBE: 'expanded-by-a-shell',
+    NODE_OPTIONS: `--require "${preloadPath.replace(/"/g, '\\"')}"`,
+  });
+
+  assert.equal(res.status, 0, `hook should approve; stderr=${res.stderr}`);
+  assert.equal(fs.readFileSync(capturePath, 'utf8'), root);
+});
+
+test('export-solution validator passes a metacharacter ZIP path literally to unzip', (t) => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-export-'));
+  const root = path.join(parent, 'site-$EXPORT_PATH_PROBE-%EXPORT_PATH_PROBE%-&');
+  const zipPath = path.join(root, 'solution-$EXPORT_PATH_PROBE-%EXPORT_PATH_PROBE%-&_managed.zip');
+  const preloadPath = path.join(parent, 'capture-unzip-argv.cjs');
+  const capturePath = path.join(parent, 'captured-unzip-call.json');
+  fs.mkdirSync(root);
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+
+  writeJson(path.join(root, 'powerpages.config.json'), { siteName: 'Export path test' });
+  fs.writeFileSync(zipPath, Buffer.alloc(2048));
+  fs.writeFileSync(preloadPath, `
+const fs = require('fs');
+const path = require('path');
+if (path.basename(process.argv[1] || '') === 'validate-export.js') {
+  require('child_process').execFileSync = (file, args, options) => {
+    fs.writeFileSync(process.env.EXPORT_ARG_CAPTURE, JSON.stringify({ file, args, shell: options.shell }), 'utf8');
+    return '  123  2026-01-01 00:00  Solution.xml\\n';
+  };
+}
+`, 'utf8');
+
+  const res = runHook(root, 'export-solution', {
+    EXPORT_ARG_CAPTURE: capturePath,
+    EXPORT_PATH_PROBE: 'expanded-by-a-shell',
+    NODE_OPTIONS: `--require "${preloadPath.replace(/"/g, '\\"')}"`,
+  });
+
+  assert.equal(res.status, 0, `hook should approve; stderr=${res.stderr}`);
+  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, 'utf8')), {
+    file: 'unzip',
+    args: ['-l', zipPath],
+    shell: false,
+  });
+});
 
 test('hook spawns the reconcile backstop and heals a skipped refresh after an ALM skill', (t) => {
   const root = makeProject(t);

@@ -140,13 +140,11 @@ test('throws when the response body is not valid JSON', async (t) => {
   );
 });
 
-// --- sanitizeEnvUrl: defense against command injection via --envUrl ---
+// --- sanitizeEnvUrl: trusted token and request destination enforcement ---
 //
-// The output of sanitizeEnvUrl is passed to helpers.getAuthToken, which
-// interpolates it into `az account get-access-token --resource "${url}"`
-// via execSync (a shell command). If we didn't sanitize, an attacker who
-// could pass a malicious --envUrl on the CLI could execute arbitrary
-// shell commands.
+// The shared validator restricts token resources and authenticated requests to
+// known Microsoft Dataverse hosts. getAuthToken also passes the URL as one
+// execFileSync argument, so shell metacharacters are never command syntax.
 
 test('sanitizeEnvUrl accepts a plain Dataverse URL and returns just the origin', () => {
   assert.equal(

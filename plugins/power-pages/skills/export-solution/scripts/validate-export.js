@@ -6,7 +6,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const { approve, block, runValidation, findProjectRoot, findPath, readDeferralMarker } = require('../../../scripts/lib/validation-helpers');
 
 runValidation(async (cwd) => {
@@ -45,9 +45,11 @@ runValidation(async (cwd) => {
 
     // Verify Solution.xml is inside the zip
     try {
-      const output = execSync(`unzip -l "${zipPath}" 2>/dev/null | grep -i solution.xml`, {
+      const output = execFileSync('unzip', ['-l', zipPath], {
         encoding: 'utf8',
         timeout: 10000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+        shell: false,
       });
       if (!output || !output.toLowerCase().includes('solution.xml')) {
         return block(`Solution zip '${path.basename(zipPath)}' does not contain solution.xml. The export appears corrupt.`);
