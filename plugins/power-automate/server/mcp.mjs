@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// FlowAgent MCP v2.5.0
+import{createRequire}from'module';const require=createRequire(import.meta.url);
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -27701,9 +27701,9 @@ function dataverseConnectionReferencesUrl(instanceUrl, opts) {
 var PPAPI_API_VERSION = "1";
 var PPAPI_DEFAULT_SUFFIX = "environment.api.powerplatform.com";
 function ppapiBaseUrl(envId, templateOverride, suffixOverride) {
-  const rawId = envId.replace(/^Default-/i, "");
-  const hex = rawId.replace(/-/g, "");
-  const prefix = hex.slice(0, 30);
+  const isDefault = /^Default-/i.test(envId);
+  const hex = envId.replace(/^Default-/i, "").toLowerCase().replace(/-/g, "");
+  const prefix = (isDefault ? "default" : "") + hex.slice(0, 30);
   const shard = hex.slice(30, 32);
   const template = templateOverride ?? process.env.PA_PPAPI_BASE_URL;
   if (template) {
@@ -28618,6 +28618,7 @@ var FlowClient = class _FlowClient {
     if (opts.autoResolveConnectionRefs !== false && body.properties?.definition) {
       autoMerged = await this.autoMergeConnectionRefs(envId, flowId, body);
     }
+    this.stripInjectedAuthentication(body);
     if (body.properties?.definition) {
       try {
         const ctx = await this.getFlowContext(envId, flowId);
@@ -28633,7 +28634,7 @@ var FlowClient = class _FlowClient {
         logger.debug(`updateFlow: Dataverse path failed, falling through to PPAPI`);
       }
     }
-    this.stripInjectedAuthentication(body);
+    this.rewriteConnectionNamesForPpapi(body);
     const path5 = `/powerautomate/flows/${flowId}${this.ppapiFlowQs({})}`;
     const result = await this.ppapiRequestWithFallback(envId, path5, "PATCH", body);
     if (autoMerged.length)
@@ -28732,12 +28733,59 @@ var FlowClient = class _FlowClient {
   }
   /**
    * Remove `authentication` fields that PPAPI injects into action inputs on read.
-   * These cause WorkflowRunActionInputsInvalidProperty on write.
-   * Also translate `host.connectionName` to `host.connectionReferenceName` for
-   * solution flows where PPAPI returns connectionName but the API requires
-   * connectionReferenceName (#314 finding 2).
+   * These cause WorkflowRunActionInputsInvalidProperty on write — applies to BOTH
+   * the PPAPI and Dataverse write paths (#360).
+   *
+   * Walks top-level actions and triggers, plus common nesting containers
+   * (If/else, Switch cases, Scope, Foreach, Until) so nested actions are covered.
    */
-  stripInjectedAuthentication(body, connectionReferences) {
+  stripInjectedAuthentication(body) {
+    const def = body.properties?.definition;
+    if (!def)
+      return;
+    const stripAuth = (inputs) => {
+      if (!inputs || typeof inputs !== "object" || Array.isArray(inputs))
+        return;
+      const inp = inputs;
+      if ("authentication" in inp)
+        delete inp.authentication;
+    };
+    const walkActions = (actions) => {
+      if (!actions || typeof actions !== "object" || Array.isArray(actions))
+        return;
+      for (const action of Object.values(actions)) {
+        stripAuth(action?.inputs);
+        if (action?.actions)
+          walkActions(action.actions);
+        if (action?.else?.actions)
+          walkActions(action.else.actions);
+        if (action?.default?.actions)
+          walkActions(action.default.actions);
+        if (action?.cases) {
+          for (const c of Object.values(action.cases)) {
+            if (c?.actions)
+              walkActions(c.actions);
+          }
+        }
+      }
+    };
+    walkActions(def.actions);
+    const triggers = def.triggers;
+    if (triggers) {
+      for (const trigger of Object.values(triggers)) {
+        stripAuth(trigger?.inputs);
+      }
+    }
+  }
+  /**
+   * Translate `host.connectionName` to `host.connectionReferenceName` for solution
+   * flows where PPAPI returns connectionName but the PPAPI write API requires
+   * connectionReferenceName (#314 finding 2).
+   *
+   * NOT called for the Dataverse write path — Dataverse clientdata stores the
+   * native format (connectionName) and the rewrite would corrupt it.
+   */
+  rewriteConnectionNamesForPpapi(body, connectionReferences) {
     const def = body.properties?.definition;
     if (!def)
       return;
@@ -28750,12 +28798,12 @@ var FlowClient = class _FlowClient {
         }
       }
     }
+    if (Object.keys(connRefMap).length === 0)
+      return;
     const fixHost = (inputs) => {
       if (!inputs || typeof inputs !== "object" || Array.isArray(inputs))
         return;
       const inp = inputs;
-      if ("authentication" in inp)
-        delete inp.authentication;
       const host = inp.host;
       if (host && host.connectionName && !host.connectionReferenceName) {
         const logicalName = connRefMap[host.connectionName];
@@ -28765,12 +28813,26 @@ var FlowClient = class _FlowClient {
         }
       }
     };
-    const actions = def.actions;
-    if (actions) {
+    const walkActions = (actions) => {
+      if (!actions || typeof actions !== "object" || Array.isArray(actions))
+        return;
       for (const action of Object.values(actions)) {
         fixHost(action?.inputs);
+        if (action?.actions)
+          walkActions(action.actions);
+        if (action?.else?.actions)
+          walkActions(action.else.actions);
+        if (action?.default?.actions)
+          walkActions(action.default.actions);
+        if (action?.cases) {
+          for (const c of Object.values(action.cases)) {
+            if (c?.actions)
+              walkActions(c.actions);
+          }
+        }
       }
-    }
+    };
+    walkActions(def.actions);
     const triggers = def.triggers;
     if (triggers) {
       for (const trigger of Object.values(triggers)) {
@@ -42224,7 +42286,7 @@ var jsonRecord = external_exports.preprocess((v) => {
     }
   }
   return v;
-}, external_exports.record(external_exports.unknown()));
+}, external_exports.record(external_exports.string(), external_exports.unknown()));
 function buildToolContext(mcpCtx, config3, clientFactory) {
   let client = null;
   function getClient() {
@@ -43106,9 +43168,9 @@ async function createMcpServer(authProvider, deps = {}) {
     try {
       const opts = {};
       if (query)
-        opts.searchText = query;
+        opts.query = query;
       if (connector)
-        opts.operationGroupName = connector;
+        opts.connector = connector;
       opts.top = top || 20;
       const results = await ctx.getClient().searchOperations(ctx.resolveEnv(env), opts);
       const s = (Array.isArray(results) ? results : []).map((op) => ({
@@ -43128,13 +43190,14 @@ async function createMcpServer(authProvider, deps = {}) {
       const schema = await ctx.getClient().getOperationSchema(ctx.resolveEnv(env), connector, operation);
       const props = schema?.properties ?? schema;
       const inputs = props?.inputsDefinition ?? {};
-      const params = inputs?.parameters ?? {};
+      const params = inputs?.properties ?? inputs?.parameters ?? {};
+      const requiredSet = new Set(Array.isArray(inputs?.required) ? inputs.required : []);
       return safeResult({
         operationId: operation,
         connector,
         summary: props?.summary ?? props?.description,
         actionType: inferActionType(props),
-        parameters: Object.fromEntries(Object.entries(params).map(([k, v]) => [k, { type: v?.type, required: v?.required ?? false, description: v?.summary ?? v?.description, enum: v?.enum, default: v?.default, dynamicValues: v?.["x-ms-dynamic-values"] ? true : void 0, dynamicTree: v?.["x-ms-dynamic-tree"] ? true : void 0 }]))
+        parameters: Object.fromEntries(Object.entries(params).map(([k, v]) => [k, { type: v?.type, required: requiredSet.has(k) || v?.required === true, description: v?.summary ?? v?.description, enum: v?.enum, default: v?.default, dynamicValues: v?.["x-ms-dynamic-values"] ? true : void 0, dynamicTree: v?.["x-ms-dynamic-tree"] ? true : void 0 }]))
       });
     } catch (e) {
       return safeError(e);
