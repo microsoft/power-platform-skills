@@ -36,11 +36,15 @@ test('skill contracts read .powernative logs directly', () => {
   assert.match(createFrontmatter, /allowed-tools:.*\bSkill\b/);
   assert.match(createSkill, /\.powernative\/metro-logs/);
   assert.match(createSkill, /npm run dev/);
+  assert.match(createSkill, /npx expo start/);
+  assert.match(createSkill, /without rerunning the `predev` schema hook/);
   assert.doesNotMatch(createSkill, /scripts\/metro-session\.js|dev:expo|copy the plugin wrapper/i);
   assert.match(debugSkill, /\.powernative\/metro-logs/);
   assert.match(debugSkill, /latest .*\.powernative/i);
   assert.match(debugSkill, /"logPath":/);
   assert.match(debugSkill, /"pid":/);
+  assert.match(debugSkill, /predates project-local Metro logging/);
+  assert.match(debugSkill, /\^0\.2\.26/);
   assert.doesNotMatch(debugSkill, /tail -n 500 "\$LOG_PATH"/);
   assert.doesNotMatch(debugSkill, /BashOutput|METRO_TERMINAL_ID|metro-session\.js|start --project-root/);
   assert.match(deploySkill, /\.powernative/);

@@ -14,7 +14,7 @@ Top-level orchestrator. Owns the user-visible flow; delegates planning to the `n
 
 ## Workflow
 
-0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 3. Plan (planner agent + 4 gates) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9a. Install planned JavaScript dependencies → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npm run dev`) → 12.5 Optional debug handoff → 13. Summary
+0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 3. Plan (planner agent + 4 gates) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9a. Install planned JavaScript dependencies → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npx expo start`) → 12.5 Optional debug handoff → 13. Summary
 
 ---
 
@@ -1880,7 +1880,7 @@ After `tsc` passes, offer a static HTML preview. The dev server starts next (Ste
 **Print before starting:**
 > "→ [Step 12/13] Launching Metro so you can scan the QR; logs will be written under .powernative/."
 
-This skill launches the template's normal `npm run dev` command so:
+This skill runs the schema/typecheck gates explicitly, then launches `npx expo start`. Manual `npm run dev` remains the template's normal entry point and produces the same project-local log because logging is configured in `metro.config.js`.
 
 1. The native Metro URL is printed by Expo — the user can scan it immediately.
 2. Hot-reload works on file edits — no restart needed for screen tweaks.
@@ -1902,15 +1902,15 @@ npm run generate-schemas    # refresh schema map for any data sources added sinc
 npx tsc --noEmit            # final gate — dev server starts only from a clean TypeScript state
 ```
 
-Run the schema regen and final `tsc` synchronously and check both exits. If either fails, do not launch Metro. Capture the full output once, batch-fix by root cause, rerun the final gate, and continue only when clean. Then start the dev server:
+Run the schema regen and final `tsc` synchronously and check both exits. If either fails, do not launch Metro. Capture the full output once, batch-fix by root cause, rerun the final gate, and continue only when clean. Then start the dev server without rerunning the `predev` schema hook:
 
 ```bash
-npm run dev
+npx expo start
 ```
 
 This is a long-running dev server. In hosts that support background terminals, run it as a background/async terminal only for process lifetime; do not persist or depend on the terminal ID. `/debug-app` discovers logs from `.powernative/metro-logs/`, not from terminal output.
 
-The orchestrator already ran `npm run generate-schemas` for the final gate; `predev` remains a safety net for manual starts.
+The orchestrator already ran `npm run generate-schemas` for the final gate; `predev` remains a safety net for manual `npm run dev` starts.
 
 Read the initial terminal output and locate the generated `.powernative` log directly:
 

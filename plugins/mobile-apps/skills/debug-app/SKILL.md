@@ -83,7 +83,8 @@ Branch as follows:
 | Log exists and PID still owns the logged port | Treat as live. Capture `port`, `pid`, `logPath`, and continue. |
 | Log exists, PID is gone, and another process owns the logged port | Do NOT diagnose from this log. Tell the user which PID holds the port and ask them to restart `npm run dev`. |
 | Log exists but PID/port contradict each other | The device may be talking to the wrong server. Ask the user to stop stale Metro processes and rerun `npm run dev`. |
-| No log exists | Tell the user Metro is not running or has not emitted `.powernative` logs. Ask them to run `npm run dev`, open the native app, then rerun `/debug-app`. |
+| No log exists and `metro.config.js` does not directly import `@microsoft/power-apps-native-host/metro-logger`, or `package.json` does not require `@microsoft/power-apps-native-host` `^0.2.26` or newer | This project predates project-local Metro logging. Stop and report both missing contract pieces. Do not enter a restart loop or edit customer-owned config from `/debug-app`; the user must adopt the current template's Metro config and host dependency first. |
+| No log exists and the Metro config/dependency contract is current | Tell the user Metro is not running or has not emitted `.powernative` logs. Ask them to run `npm run dev`, open the native app, then rerun `/debug-app`. |
 
 The port check prevents stale-log diagnosis: a log file can outlive its Metro process, so only the socket probe reveals that the log stopped belonging to the app under test.
 
