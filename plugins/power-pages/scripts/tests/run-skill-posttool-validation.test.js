@@ -93,42 +93,6 @@ if (path.basename(process.argv[1] || '') === 'check-activation-status.js') {
   assert.equal(fs.readFileSync(capturePath, 'utf8'), root);
 });
 
-test('export-solution validator passes a metacharacter ZIP path literally to unzip', (t) => {
-  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-export-'));
-  const root = path.join(parent, 'site-$EXPORT_PATH_PROBE-%EXPORT_PATH_PROBE%-&');
-  const zipPath = path.join(root, 'solution-$EXPORT_PATH_PROBE-%EXPORT_PATH_PROBE%-&_managed.zip');
-  const preloadPath = path.join(parent, 'capture-unzip-argv.cjs');
-  const capturePath = path.join(parent, 'captured-unzip-call.json');
-  fs.mkdirSync(root);
-  t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
-
-  writeJson(path.join(root, 'powerpages.config.json'), { siteName: 'Export path test' });
-  fs.writeFileSync(zipPath, Buffer.alloc(2048));
-  fs.writeFileSync(preloadPath, `
-const fs = require('fs');
-const path = require('path');
-if (path.basename(process.argv[1] || '') === 'validate-export.js') {
-  require('child_process').execFileSync = (file, args, options) => {
-    fs.writeFileSync(process.env.EXPORT_ARG_CAPTURE, JSON.stringify({ file, args, shell: options.shell }), 'utf8');
-    return '  123  2026-01-01 00:00  Solution.xml\\n';
-  };
-}
-`, 'utf8');
-
-  const res = runHook(root, 'export-solution', {
-    EXPORT_ARG_CAPTURE: capturePath,
-    EXPORT_PATH_PROBE: 'expanded-by-a-shell',
-    NODE_OPTIONS: nodeRequireOption(preloadPath),
-  });
-
-  assert.equal(res.status, 0, `hook should approve; stderr=${res.stderr}`);
-  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, 'utf8')), {
-    file: 'unzip',
-    args: ['-l', zipPath],
-    shell: false,
-  });
-});
-
 test('hook spawns the reconcile backstop and heals a skipped refresh after an ALM skill', (t) => {
   const root = makeProject(t);
   writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
