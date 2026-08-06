@@ -23,6 +23,10 @@ function fakeEnv(overrides = {}) {
 test('originOf extracts scheme + host', () => {
   assert.equal(originOf('https://x.api.crm.dynamics.com/some/path'), 'https://x.api.crm.dynamics.com');
   assert.equal(originOf('https://x.api.crm.dynamics.com'), 'https://x.api.crm.dynamics.com');
+  assert.equal(originOf('https://x.api.crm.microsoftdynamics.us'), 'https://x.api.crm.microsoftdynamics.us');
+  assert.equal(originOf('https://x.api.crm.appsplatform.us'), 'https://x.api.crm.appsplatform.us');
+  assert.equal(originOf('https://x.api.crm.dynamics.cn'), 'https://x.api.crm.dynamics.cn');
+  assert.equal(originOf('https://x.api.crm.dynamics.com.attacker.invalid'), null);
   assert.equal(originOf('not a url'), null);
 });
 
@@ -297,6 +301,28 @@ test('listTenantEnvs: token-acquisition failure marks env as inaccessible', asyn
   assert.equal(result.inaccessibleEnvs[0].envId, 'e1');
   assert.equal(result.inaccessibleEnvs[0].reason, 'token-acquisition-failed');
   assert.match(result.inaccessibleEnvs[0].detail, /az failed/);
+});
+
+test('listTenantEnvs: rejects a malicious Dataverse-derived API host before token acquisition', async () => {
+  const envs = [
+    fakeEnv({
+      name: 'bad-host',
+      linkedEnvironmentMetadata: {
+        instanceUrl: 'https://bad-host.crm.dynamics.com/',
+        instanceApiUrl: 'https://bad-host.api.crm.dynamics.com.attacker.invalid',
+      },
+    }),
+  ];
+  let tokenCalls = 0;
+  const result = await listTenantEnvs({
+    bapToken: 'fake',
+    listImpl: async () => envs,
+    getTokenImpl: () => { tokenCalls++; return 'token'; },
+    verifyImpl: async () => { throw new Error('must not probe an untrusted host'); },
+  });
+
+  assert.equal(tokenCalls, 0);
+  assert.equal(result.inaccessibleEnvs[0].reason, 'invalid-instance-api-url');
 });
 
 test('listTenantEnvs: throws when --source bap and --bapToken is missing', async () => {

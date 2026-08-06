@@ -38,7 +38,6 @@
 
 'use strict';
 
-const { execSync } = require('child_process');
 const helpers = require('./validation-helpers');
 const { verifyHostReadiness } = require('./verify-host-readiness');
 const { listEnvsViaPac } = require('./pac-bap-shim');
@@ -103,8 +102,9 @@ function parseArgs(argv) {
 
 async function listBapEnvs(bapToken, apiVersion, bapBase) {
   if (!bapToken) throw new Error('BAP token required for source=bap');
-  const cleanBase = bapBase.replace(/\/+$/, '');
+  const cleanBase = helpers.validateBapUrl(bapBase, { allowPath: false }).replace(/\/+$/, '');
   const url = `${cleanBase}/providers/Microsoft.BusinessAppPlatform/environments?api-version=${encodeURIComponent(apiVersion)}&$expand=${encodeURIComponent('properties.linkedEnvironmentMetadata,properties.permissions')}`;
+  helpers.validateBapUrl(url);
 
   const res = await helpers.makeRequest({
     url,
@@ -175,20 +175,19 @@ async function listEnvsBySource({ source, bapToken, apiVersion, bapBase, listImp
 }
 
 function getDataverseToken(originUrl, getTokenImpl) {
-  // Pluggable for tests. Default impl shells out to `az`.
-  if (typeof getTokenImpl === 'function') return getTokenImpl(originUrl);
-  try {
-    const out = execSync(`az account get-access-token --resource "${originUrl}" --query accessToken -o tsv`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-    return out.trim();
-  } catch (e) {
-    throw new Error(`az token acquisition failed for ${originUrl}: ${e.message || e.stderr?.toString() || 'unknown'}`);
-  }
+  const trustedOrigin = helpers.validateDataverseEnvironmentUrl(originUrl);
+  if (typeof getTokenImpl === 'function') return getTokenImpl(trustedOrigin);
+  const token = helpers.getAuthToken(trustedOrigin);
+  if (!token) throw new Error(`az token acquisition failed for ${trustedOrigin}`);
+  return token;
 }
 
 // Extracts the origin (scheme + host) from a full URL.
 function originOf(url) {
   try {
-    const u = new URL(url);
+    const trustedUrl = helpers.validateAuthenticatedRequestUrl(url);
+    const u = new URL(trustedUrl);
+    if (!helpers.validateDataverseEnvironmentUrl(u.origin)) return null;
     return `${u.protocol}//${u.host}`;
   } catch {
     return null;

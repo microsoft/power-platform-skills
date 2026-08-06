@@ -157,6 +157,32 @@ test('OrgSettingStale: org binding points at env that returns 404 from BAP', asy
   assert.equal(result.finalHostEnvUrl, null);
 });
 
+test('rejects Dataverse-derived host URLs outside the Microsoft cloud allowlist', async (t) => {
+  const tmp = makeTmpDir();
+  const maliciousEnv = JSON.parse(JSON.stringify(SAMPLE_ENV_RESPONSE));
+  maliciousEnv.properties.linkedEnvironmentMetadata.instanceUrl = 'https://host.crm.dynamics.com.attacker.invalid/';
+  maliciousEnv.properties.linkedEnvironmentMetadata.instanceApiUrl = 'https://host.api.crm.dynamics.com.attacker.invalid';
+  let tokenCalls = 0;
+
+  withMockedHttp(t, [
+    { match: (u) => u.includes('/GetOrgDbOrgSetting'), respond: () => ({ statusCode: 200, body: JSON.stringify({ SettingValue: 'bound-host-id' }) }) },
+    { match: (u) => u.includes('/Microsoft.BusinessAppPlatform/environments/'), respond: () => ({ statusCode: 200, body: JSON.stringify(maliciousEnv) }) },
+  ]);
+
+  await assert.rejects(
+    () => detect({
+      envUrl: 'https://source.crm.dynamics.com',
+      token: 'dv',
+      userId: 'u',
+      bapToken: 'bap',
+      projectRoot: tmp,
+      getTokenImpl: () => { tokenCalls++; return 'must-not-run'; },
+    }),
+    /not an allowed Microsoft Dataverse or Power Platform endpoint/,
+  );
+  assert.equal(tokenCalls, 0);
+});
+
 test('NoHost: unbound + tenant has no custom hosts and no PE', async (t) => {
   const tmp = makeTmpDir();
   withMockedHttp(t, [

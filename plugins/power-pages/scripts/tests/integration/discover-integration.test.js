@@ -1,15 +1,16 @@
 'use strict';
 
-// Integration test for discover-site-components.js — runs against a real HTTP
-// mock server (not injected makeRequest) so we validate the actual network
-// code paths, URL construction, authorization header handling, and pagination.
+// Integration test for discover-site-components.js against a real local HTTP
+// server. Production rejects HTTP and non-Microsoft hosts before sending bearer
+// tokens, so these tests inject the local-only transport while still exercising
+// URL construction, authorization header handling, and pagination end to end.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { startMock } = require('./mock-dataverse');
+const { makeLocalRequest, startMock } = require('./mock-dataverse');
 const {
   discoverSiteComponents,
 } = require('../../lib/discover-site-components');
@@ -79,6 +80,7 @@ test('integration: discover follows @odata.nextLink pagination against a real HT
       token: 'fake-integration-token',
       siteId: 'site-42',
       solutionId: 'sol-integration',
+      makeRequest: makeLocalRequest,
     });
 
     assert.equal(result.powerpagecomponents.total, 4, 'should aggregate both pages');
@@ -117,7 +119,7 @@ test('integration: discover surfaces HTTP 500 with a clear error', async () => {
   ]);
   try {
     await assert.rejects(
-      discoverSiteComponents({ envUrl: mock.baseUrl, token: 'x', siteId: 'site-42' }),
+      discoverSiteComponents({ envUrl: mock.baseUrl, token: 'x', siteId: 'site-42', makeRequest: makeLocalRequest }),
       /HTTP 500/
     );
   } finally {
@@ -135,6 +137,7 @@ test('integration: discover survives an empty site (no components, no solutionId
       envUrl: mock.baseUrl,
       token: 'x',
       siteId: 'site-empty',
+      makeRequest: makeLocalRequest,
     });
     assert.equal(result.powerpagecomponents.total, 0);
     assert.deepEqual(Object.keys(result.powerpagecomponents.byType), []);
@@ -169,6 +172,7 @@ test('integration: countSolutionMembership cross-site safety check flags ppcs no
       'sol-xyz',
       'fake-token',
       sitePpcIdSet,
+      makeLocalRequest,
     );
     assert.equal(result.total, 5);
     assert.equal(result.byComponentType[10373], 3);
@@ -196,6 +200,7 @@ test('integration: countSolutionMembership returns empty crossSitePpcs when site
       'sol-xyz',
       'fake-token',
       null,
+      makeLocalRequest,
     );
     assert.deepEqual(result.crossSitePpcs, [],
       'no cross-site check when caller did not supply the site set');
@@ -257,6 +262,7 @@ test('integration: discover with publisherPrefix queries env vars + tables endpo
       siteId: 'site-42',
       publisherPrefix: 'contoso',
       projectRoot,
+      makeRequest: makeLocalRequest,
     });
     assert.equal(result.envVars.length, 1);
     assert.equal(result.envVars[0].schemaName, 'contoso_FeatureFlag');

@@ -36,8 +36,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
-
 const helpers = require('./validation-helpers');
 const { almPath } = require('./alm-paths');
 const { checkEnvHostBinding } = require('./check-env-host-binding');
@@ -86,7 +84,9 @@ function parseArgs(argv) {
 
 function originOf(url) {
   try {
-    const u = new URL(url);
+    const trustedUrl = helpers.validateAuthenticatedRequestUrl(url);
+    const u = new URL(trustedUrl);
+    helpers.validateDataverseEnvironmentUrl(u.origin);
     return `${u.protocol}//${u.host}`;
   } catch {
     return null;
@@ -94,15 +94,11 @@ function originOf(url) {
 }
 
 function getDataverseToken(originUrl, getTokenImpl) {
-  if (typeof getTokenImpl === 'function') return getTokenImpl(originUrl);
-  try {
-    return execSync(`az account get-access-token --resource "${originUrl}" --query accessToken -o tsv`, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim();
-  } catch (e) {
-    throw new Error(`az token acquisition failed for ${originUrl}: ${e.message || e.stderr?.toString() || 'unknown'}`);
-  }
+  const trustedOrigin = helpers.validateDataverseEnvironmentUrl(originUrl);
+  if (typeof getTokenImpl === 'function') return getTokenImpl(trustedOrigin);
+  const token = helpers.getAuthToken(trustedOrigin);
+  if (!token) throw new Error(`az token acquisition failed for ${trustedOrigin}`);
+  return token;
 }
 
 async function tryCacheFastPath({ projectRoot, cacheMaxAgeHours, getTokenImpl }) {
@@ -173,12 +169,13 @@ async function detect(opts = {}) {
   // BAP token is only required for source=bap. In source=pac or source=auto-with-PAC-fallback,
   // detection works without BAP — the shim uses PAC CLI for env list/get.
   if (source === 'bap' && !bapToken) throw new Error('--bapToken is required when --source bap');
+  const trustedEnvUrl = helpers.validateDataverseEnvironmentUrl(envUrl);
 
   const startedAt = Date.now();
   const baseOut = {
     schemaVersion: 2,
     checkedAt: new Date().toISOString(),
-    sourceEnvUrl: envUrl,
+    sourceEnvUrl: trustedEnvUrl,
     sourceEnvId: null,
     actionTaken: 'none',
     finalHostEnvUrl: null,
@@ -212,7 +209,7 @@ async function detect(opts = {}) {
   }
 
   // Phase 2.1 — org-setting probe
-  const binding = await checkEnvHostBinding({ envUrl, token });
+  const binding = await checkEnvHostBinding({ envUrl: trustedEnvUrl, token });
 
   if (binding.bound) {
     baseOut.sourceEnvId = binding.hostEnvId; // hostEnvId here is the env GUID stored in the org setting
@@ -228,6 +225,8 @@ async function detect(opts = {}) {
     }
 
     baseOut.finalHostEnvId = env.envId;
+    helpers.validateDataverseEnvironmentUrl(env.instanceUrl, 'Resolved host environment URL');
+    helpers.validateDataverseEnvironmentUrl(env.instanceApiUrl, 'Resolved host API URL');
     baseOut.finalHostEnvUrl = env.instanceUrl;
     baseOut.finalHostEnvName = env.displayName || null;
     baseOut.finalHostInstanceApiUrl = env.instanceApiUrl;
@@ -235,7 +234,7 @@ async function detect(opts = {}) {
 
     // Phase 2.3 — if PE, check tenant default custom host (CannotRedirect detection)
     if (baseOut.isPlatformHost) {
-      const def = await discoverPipelinesHost({ envUrl, token, userId });
+      const def = await discoverPipelinesHost({ envUrl: trustedEnvUrl, token, userId });
       if (def.found && def.hostEnvUrl) {
         baseOut.tenantDefaultCustomHostEnvId = def.hostEnvUrl;
         // The org setting and tenant default are both env GUIDs. Compare them.

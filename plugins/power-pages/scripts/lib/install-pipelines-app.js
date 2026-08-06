@@ -59,7 +59,7 @@
 'use strict';
 
 const crypto = require('crypto');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const helpers = require('./validation-helpers');
 
 const DEFAULT_API_VERSION = '2022-03-01-preview';
@@ -150,8 +150,9 @@ function readRetryAfterSec(headers) {
 // canonical package object (name + state) or null if no Pipelines package
 // is exposed for this env (rare — tenant policy can hide packages).
 async function discoverPackage({ bapToken, envId, apiVersion, bapBase, correlationId }) {
-  const cleanBase = bapBase.replace(/\/+$/, '');
+  const cleanBase = helpers.validateBapUrl(bapBase, { allowPath: false }).replace(/\/+$/, '');
   const url = `${cleanBase}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${encodeURIComponent(envId)}/applicationPackages?api-version=${encodeURIComponent(apiVersion)}`;
+  helpers.validateBapUrl(url);
 
   const res = await helpers.makeRequest({
     url,
@@ -208,7 +209,7 @@ function normalizePackage(pkg) {
 
 // PAC fallback path: shells out to `pac application install`. Used when the
 // BAP install POST returns 401/403/5xx.
-function tryPacFallback({ envId, packageUniqueName }) {
+function tryPacFallback({ envId, packageUniqueName, execImpl = execFileSync }) {
   // Best-effort. PAC's argument names have varied across versions, so we try
   // the modern form first and fall through to legacy on stderr signals.
   const candidates = [
@@ -218,10 +219,14 @@ function tryPacFallback({ envId, packageUniqueName }) {
   ];
   let lastErr = null;
   for (const argv of candidates) {
-    const cmd = ['pac', ...argv].map((a) => (/[\s"']/.test(a) ? `"${a}"` : a)).join(' ');
     try {
-      const out = execSync(cmd, { encoding: 'utf8', timeout: 600000, stdio: ['ignore', 'pipe', 'pipe'] });
-      return { ok: true, command: cmd, stdout: out };
+      const out = execImpl('pac', argv, {
+        encoding: 'utf8',
+        timeout: 600000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: false,
+      });
+      return { ok: true, command: ['pac', ...argv], stdout: out };
     } catch (err) {
       lastErr = err;
       // Try next candidate if PAC reports an unrecognized arg / subcommand.
@@ -239,7 +244,8 @@ async function verifySolutionInstalled({ instanceApiUrl, hostToken }) {
   if (!instanceApiUrl || !hostToken) {
     return { ok: false, reason: 'instanceApiUrl or hostToken not provided — caller should verify separately' };
   }
-  const url = `${instanceApiUrl.replace(/\/+$/, '')}/api/data/v9.0/solutions?$filter=uniquename eq '${PIPELINES_SOLUTION_UNIQUE_NAME}'&$select=uniquename,version&$top=1`;
+  const trustedInstanceApiUrl = helpers.validateDataverseEnvironmentUrl(instanceApiUrl, 'Host Dataverse API URL');
+  const url = `${trustedInstanceApiUrl}/api/data/v9.0/solutions?$filter=uniquename eq '${PIPELINES_SOLUTION_UNIQUE_NAME}'&$select=uniquename,version&$top=1`;
   const res = await helpers.makeRequest({
     url,
     method: 'GET',
@@ -283,7 +289,7 @@ async function installPipelinesApp(opts = {}) {
   const now = nowImpl || (() => Date.now());
   const pacFallback = pacFallbackImpl || tryPacFallback;
 
-  const cleanBase = bapBase.replace(/\/+$/, '');
+  const cleanBase = helpers.validateBapUrl(bapBase, { allowPath: false }).replace(/\/+$/, '');
   const cid = correlationId || crypto.randomUUID();
   const startedAt = now();
 
@@ -324,6 +330,7 @@ async function installPipelinesApp(opts = {}) {
   // BAP install POST
   const packageUniqueName = pkg?.uniqueName || PIPELINES_PACKAGE_UNIQUE_NAMES[0];
   const postUrl = `${cleanBase}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${encodeURIComponent(envId)}/applicationPackages/${encodeURIComponent(packageUniqueName)}/install?api-version=${encodeURIComponent(apiVersion)}`;
+  helpers.validateBapUrl(postUrl);
   const postRes = await helpers.makeRequest({
     url: postUrl,
     method: 'POST',
@@ -400,7 +407,11 @@ async function installPipelinesApp(opts = {}) {
     try { respBody = JSON.parse(postRes.body); } catch { respBody = null; }
   }
   let provisioningState = extractProvisioningState(respBody) || 'Installing';
-  const locationHeader = postRes.headers?.location || postRes.headers?.Location || null;
+  const rawLocationHeader = postRes.headers?.location || postRes.headers?.Location || null;
+  const locationHeader = rawLocationHeader ? helpers.validateBapUrl(rawLocationHeader) : null;
+  if (locationHeader && new URL(locationHeader).origin !== new URL(cleanBase).origin) {
+    throw new Error('BAP applicationPackages install returned a Location header for a different host.');
+  }
   let retryAfterSec = readRetryAfterSec(postRes.headers) || DEFAULT_RETRY_AFTER_SEC;
 
   if (postRes.statusCode === 200 && isTerminalSucceeded(provisioningState)) {
@@ -509,6 +520,7 @@ module.exports = {
   isTerminalSucceeded,
   isTerminalFailed,
   readRetryAfterSec,
+  tryPacFallback,
   PIPELINES_PACKAGE_UNIQUE_NAMES,
   PIPELINES_PACKAGE_DISPLAY_PATTERNS,
   PIPELINES_SOLUTION_UNIQUE_NAME,
