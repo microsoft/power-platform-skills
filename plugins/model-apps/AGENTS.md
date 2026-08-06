@@ -55,9 +55,11 @@ tree and teardown order both did before).
 A second skill (`/app-builder`) builds a whole **model-driven app** (tables, columns,
 relationships, adaptive forms with sub-grids, views, Choice-column charts, app module +
 sitemap) from a natural-language intent — distinct from `/genpage`, which builds generative
-*pages*. The **entire flow runs in the main conversation loop** (not via a `Task` subagent):
-subagents are headless, so `AskUserQuestion` and plan mode can't reach the user from one, and
-the whole point is the multi-turn, propose-then-confirm authoring + the live build narration.
+*pages*. The **whole flow runs in the main conversation loop, never a `Task` subagent** — subagents
+are headless, so `AskUserQuestion` and plan mode cannot reach the user. For the end-to-end flow,
+stage→phase mapping and page-identity model, see
+[`docs/architecture.md`](docs/architecture.md) → `## /app-builder — build pipeline`; that doc owns
+the pipeline and delegates each script's **behavioral spec** to the entries below.
 
 - **`references/authoring-flow.md`** — the Phase-1 authoring playbook the skill executes itself:
   validate prereqs, select the env via PAC (`pac auth list` / `pac org who`), detect existing
