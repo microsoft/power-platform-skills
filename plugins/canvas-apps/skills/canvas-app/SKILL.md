@@ -88,12 +88,12 @@ unspecified and you MUST ask.
 Call `AskUserQuestion` with the applicable questions from the table below (include only the
 ones that need answers):
 
-| Question                                                                                  | Header                | When to Ask                                                                                                                                                             | Options                                                                                                                                                                                                                                    |
-| ----------------------------------------------------------------------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Who will primarily use this app, and on what device?                                      | Target Users & Device | Only if not clear from `$ARGUMENTS`                                                                                                                                     | _(3–4 dynamically inferred options that combine the user role with their likely device, e.g., for "visitor check-in": Front desk staff on desktop/tablet, Security team on tablet, Self-service kiosk on tablet, Visitors on their phone)_ |
-| Do you have a screenshot or mockup for reference? (paste an image or provide a file path) | Reference             | Only if user has NOT already attached/pasted an image with their request                                                                                                | Yes I'll share one now, No just pick a direction for me                                                                                                                                                                                    |
-| What aesthetic direction?                                                                 | Aesthetic             | Only if not clear from `$ARGUMENTS` (skip if user already described a visual direction like "dark themed", "minimal", "corporate style", or provided a reference image) | Clean & Professional (Recommended), Bold & High-Contrast, Soft & Approachable, Dense & Utilitarian                                                                                                                                         |
-| Which features do you need? (multi-select)                                                | Features              | Only if `$ARGUMENTS` is vague on features                                                                                                                               | _(3–4 dynamically inferred options based on app purpose + target users)_                                                                                                                                                                   |
+| Question | Header | When to Ask | Options |
+|----------|--------|-------------|---------|
+| Who will primarily use this app, and on what device? | Target Users & Device | Only if not clear from `$ARGUMENTS` | *(3–4 dynamically inferred options that combine the user role with their likely device, e.g., for "visitor check-in": Front desk staff on desktop/tablet, Security team on tablet, Self-service kiosk on tablet, Visitors on their phone)* |
+| Do you have a screenshot or mockup for reference? (paste an image or provide a file path) | Reference | Only if user has NOT already attached/pasted an image with their request | Yes I'll share one now, No just pick a direction for me |
+| What aesthetic direction? | Aesthetic | Only if not clear from `$ARGUMENTS` (skip if user already described a visual direction like "dark themed", "minimal", "corporate style", or provided a reference image) | Clean & Professional (Recommended), Bold & High-Contrast, Soft & Approachable, Dense & Utilitarian |
+| Which features do you need? (multi-select) | Features | Only if `$ARGUMENTS` is vague on features | *(3–4 dynamically inferred options based on app purpose + target users)* |
 
 **Rules:**
 
@@ -107,7 +107,6 @@ ones that need answers):
 4. Store all answers for use in the planner prompt below.
 
 **Target users & device influence design decisions:**
-
 - **Desktop users** → data-dense layouts, tables, keyboard-friendly, multi-column. ManualLayout acceptable for pixel-perfect dashboards.
 - **Tablet users** → touch-friendly targets, medium density, AutoLayout (responsive) so the app adapts to landscape/portrait.
 - **Phone users** → large touch targets, single-column, simplified navigation, AutoLayout (responsive), minimal typing.
@@ -123,7 +122,6 @@ Read all synced `.pa.yaml` files. Based on `$ARGUMENTS` and the current app stat
 whether this is a **simple** or **complex** edit:
 
 **Simple** — all of the following are true:
-
 - Changes affect ≤ 2 controls or properties
 - Changes are confined to ≤ 1 screen
 - No new screens are being added
@@ -133,7 +131,6 @@ whether this is a **simple** or **complex** edit:
 Examples: change a button color, update label text, fix a formula, adjust a control size.
 
 **Complex** — any of the following are true:
-
 - Changes span multiple screens
 - One or more new screens need to be created
 - New data sources or connectors are required
@@ -275,11 +272,9 @@ Example prompt:
 >
 > Approved plan:
 > [paste the full plan you presented in Step 5.3 — screens, data strategy, aesthetic
->
-> > direction, all RGBA values]
+> direction, all RGBA values]
 >
 > User preferences (from wizard):
->
 > - Target users & device: [answer]
 > - Aesthetic direction: [answer]
 > - Features: [answer]
@@ -304,11 +299,9 @@ Example prompt:
 >
 > Approved plan:
 > [paste the full plan you presented in Step 5.3 — screens to modify/add, approach,
->
-> > all RGBA values]
+> all RGBA values]
 >
 > Current app state:
->
 > - Palette: [exact RGBA values extracted from existing files]
 > - Variables: [variable names found in existing files]
 > - Layout strategy: [AutoLayout / ManualLayout as found in existing files]
