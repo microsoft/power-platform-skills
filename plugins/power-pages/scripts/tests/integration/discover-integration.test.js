@@ -28,6 +28,29 @@ function makeSiteRoot(entityLogicalNames) {
   return root;
 }
 
+test('integration transport mirrors makeRequest includeHeaders behavior', async () => {
+  const mock = await startMock([
+    {
+      method: 'GET',
+      matcher: '/headers',
+      headers: { 'x-test-header': 'present' },
+      body: { ok: true },
+    },
+  ]);
+  try {
+    const withoutHeaders = await makeLocalRequest({ url: `${mock.baseUrl}/headers` });
+    assert.equal(Object.hasOwn(withoutHeaders, 'headers'), false);
+
+    const withHeaders = await makeLocalRequest({
+      url: `${mock.baseUrl}/headers`,
+      includeHeaders: true,
+    });
+    assert.equal(withHeaders.headers['x-test-header'], 'present');
+  } finally {
+    await mock.close();
+  }
+});
+
 test('integration: discover follows @odata.nextLink pagination against a real HTTP server', async () => {
   let mockBase = null;
 
