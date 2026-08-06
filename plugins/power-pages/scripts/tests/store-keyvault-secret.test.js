@@ -16,63 +16,12 @@ function runStoreKeyvaultSecret(args, opts = {}) {
   });
 }
 
-function makeFakeAzureCli(t) {
+function makeTempRoot(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'store-keyvault-secret-test-'));
-  const binDir = path.join(root, 'fake az bin');
   const tempRoot = path.join(root, 'temporary files');
-  const reportPath = path.join(root, 'az-report.json');
-  const fakeAzPath = path.join(binDir, 'fake-az.js');
-
-  fs.mkdirSync(binDir);
   fs.mkdirSync(tempRoot);
-  fs.writeFileSync(fakeAzPath, `
-const fs = require('fs');
-const path = require('path');
-const args = process.argv.slice(2);
-const fileIndex = args.indexOf('--file');
-const secretPath = fileIndex === -1 ? null : args[fileIndex + 1];
-const report = {
-  argv: args,
-  secret: secretPath ? fs.readFileSync(secretPath, 'utf8') : null,
-  secretPath,
-  fileMode: secretPath ? fs.statSync(secretPath).mode & 0o777 : null,
-  directoryMode: secretPath ? fs.statSync(path.dirname(secretPath)).mode & 0o777 : null,
-};
-fs.writeFileSync(process.env.FAKE_AZ_REPORT, JSON.stringify(report));
-if (process.env.FAKE_AZ_EXIT) {
-  process.stderr.write('fake Azure CLI failure\\n');
-  process.exit(Number(process.env.FAKE_AZ_EXIT));
-}
-process.stdout.write(JSON.stringify({ secretUri: 'https://example.vault.azure.net/secrets/test/version' }));
-`);
-
-  if (process.platform === 'win32') {
-    fs.writeFileSync(
-      path.join(binDir, 'az.cmd'),
-      `@"${process.execPath}" "%~dp0fake-az.js" %*\r\n`
-    );
-  } else {
-    const launcherPath = path.join(binDir, 'az');
-    fs.writeFileSync(launcherPath, '#!/usr/bin/env node\nrequire("./fake-az.js");\n', { mode: 0o755 });
-  }
-
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-
-  return {
-    reportPath,
-    tempRoot,
-    env(overrides = {}) {
-      return {
-        ...process.env,
-        PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}`,
-        TMPDIR: tempRoot,
-        TMP: tempRoot,
-        TEMP: tempRoot,
-        FAKE_AZ_REPORT: reportPath,
-        ...overrides,
-      };
-    },
-  };
+  return tempRoot;
 }
 
 test('store-keyvault-secret fails with no arguments', () => {
@@ -164,19 +113,48 @@ test('store-keyvault-secret rejects empty stdin', () => {
 });
 
 test('store-keyvault-secret uses a private temp directory and keeps the secret out of az argv', (t) => {
-  const fakeAzureCli = makeFakeAzureCli(t);
+  const tempRoot = makeTempRoot(t);
   const secretValue = 'secret value with spaces';
-  const result = runStoreKeyvaultSecret([
-    '--vaultName', 'my-vault',
-    '--secretName', 'my-secret',
-  ], { input: secretValue, env: fakeAzureCli.env() });
+  let report;
 
-  assert.equal(result.status, 0, result.stderr);
-  const report = JSON.parse(fs.readFileSync(fakeAzureCli.reportPath, 'utf8'));
+  const result = storeKeyVaultSecret(
+    {
+      vaultName: 'my-vault',
+      secretName: 'my-secret',
+      secretValue,
+    },
+    {
+      osImpl: { tmpdir: () => tempRoot },
+      spawnSyncImpl(command, args, options) {
+        const fileIndex = args.indexOf('--file');
+        const secretPath = fileIndex === -1 ? null : args[fileIndex + 1];
+        report = {
+          command,
+          args,
+          options,
+          secret: fs.readFileSync(secretPath, 'utf8'),
+          secretPath,
+          fileMode: fs.statSync(secretPath).mode & 0o777,
+          directoryMode: fs.statSync(path.dirname(secretPath)).mode & 0o777,
+        };
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            secretUri: 'https://example.vault.azure.net/secrets/test/version',
+          }),
+          stderr: '',
+        };
+      },
+    }
+  );
+
+  assert.equal(result.secretUri, 'https://example.vault.azure.net/secrets/test/version');
+  assert.equal(report.command, 'az');
+  assert.deepEqual(report.options, { encoding: 'utf8', timeout: 30000 });
   assert.equal(report.secret, secretValue);
-  assert.equal(report.argv.includes(secretValue), false);
-  assert.notEqual(path.dirname(report.secretPath), fakeAzureCli.tempRoot);
-  assert.equal(report.secretPath.startsWith(`${fakeAzureCli.tempRoot}${path.sep}`), true);
+  assert.equal(report.args.includes(secretValue), false);
+  assert.notEqual(path.dirname(report.secretPath), tempRoot);
+  assert.equal(report.secretPath.startsWith(`${tempRoot}${path.sep}`), true);
   assert.equal(fs.existsSync(report.secretPath), false);
   assert.equal(fs.existsSync(path.dirname(report.secretPath)), false);
   if (process.platform !== 'win32') {
@@ -186,17 +164,48 @@ test('store-keyvault-secret uses a private temp directory and keeps the secret o
 });
 
 test('store-keyvault-secret cleans up the private temp directory when az fails', (t) => {
-  const fakeAzureCli = makeFakeAzureCli(t);
-  const result = runStoreKeyvaultSecret([
-    '--vaultName', 'my-vault',
-    '--secretName', 'my-secret',
-  ], {
-    input: 'secret-on-failure',
-    env: fakeAzureCli.env({ FAKE_AZ_EXIT: '7' }),
-  });
+  const tempRoot = makeTempRoot(t);
+  const secretValue = 'secret-on-failure';
+  let report;
 
-  assert.equal(result.status, 1);
-  const report = JSON.parse(fs.readFileSync(fakeAzureCli.reportPath, 'utf8'));
+  assert.throws(
+    () => storeKeyVaultSecret(
+      {
+        vaultName: 'my-vault',
+        secretName: 'my-secret',
+        secretValue,
+      },
+      {
+        osImpl: { tmpdir: () => tempRoot },
+        spawnSyncImpl(command, args) {
+          const fileIndex = args.indexOf('--file');
+          const secretPath = fileIndex === -1 ? null : args[fileIndex + 1];
+          report = {
+            command,
+            args,
+            secret: fs.readFileSync(secretPath, 'utf8'),
+            secretPath,
+          };
+          return {
+            status: 7,
+            stdout: '',
+            stderr: 'fake Azure CLI failure\n',
+          };
+        },
+      }
+    ),
+    (error) => {
+      assert.equal(error.code, 'AZ_COMMAND_FAILED');
+      assert.equal(error.stderr, 'fake Azure CLI failure\n');
+      return true;
+    }
+  );
+
+  assert.equal(report.command, 'az');
+  assert.equal(report.secret, secretValue);
+  assert.equal(report.args.includes(secretValue), false);
+  assert.notEqual(path.dirname(report.secretPath), tempRoot);
+  assert.equal(report.secretPath.startsWith(`${tempRoot}${path.sep}`), true);
   assert.equal(fs.existsSync(report.secretPath), false);
   assert.equal(fs.existsSync(path.dirname(report.secretPath)), false);
 });
