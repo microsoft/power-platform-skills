@@ -132,6 +132,22 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   snapshot (`.maker-workspace/apply-snapshot.json`); any non-page edit (or an edit to a pre-existing app)
   falls back to a full build. Teardown tombstones+deletes the snapshot. See
   [`docs/changed-only-design.md`](docs/changed-only-design.md) for the v1 scope + contract.
+  **App TABLE components are pinned by OData REFERENCE** (ADO 6612527). The SDK sends
+  `{ '@odata.id': '<EntitySetName>(<MetadataId>)' }` per sitemap table, NOT an `@odata.type` instance:
+  `Microsoft.Dynamics.CRM.entity` names a real Dataverse table (metadata-as-data), so the old instance
+  payload pinned the `entity` TABLE and every app exported as
+  `<AppModuleComponent type="1" schemaName="entity" />`. The **set segment** decides the resulting
+  `objectid`; an unknown set 400s, so a typo cannot silently pin the wrong table. The reference form is
+  also the ONLY one that can express an abstract EDM table (`activitypointer`, `principal`), which an
+  instance payload rejects outright. Three consequences the build depends on: ONE bad component fails
+  the WHOLE `AddAppComponents` call (zero rows), so an unresolvable table **HALTS** the build naming it
+  rather than shipping an app whose nav points at content it lacks; `AddAppComponents` does NOT
+  de-duplicate (N components → N rows); and because a 204 says only that the request was *accepted*,
+  the SDK **reads the components back** and asserts each declared table has a `componenttype: 1` row
+  carrying that table's MetadataId, failing closed on an inconclusive read. That last point is the
+  general rule this bug taught: **assert what you PRODUCED, not what you intended** — "some table
+  component exists" was true of the corrupt apps too, and `ValidateApp` reported success on them.
+  Pinned by `scripts/tests/app-entity-components-real-bundle.test.js`.
 - **`scripts/teardown-model-app.js` → `scripts/lib/sdk-teardown.js`** — the first-class, **classifier-safe**
   teardown (reverse of the build), for cleaning up live-verification probes or a failed build. Deletes
   exactly the artifacts a given App Spec declares, in dependency-safe order (**app module → security
@@ -183,21 +199,21 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   **Entities are the sitemap's tables UNIONED with the entities owned by the app's VIEW / CHART /
   FORM components** (`appComponentEntities`) — a maker-built app can include tables reachable only via
   a lookup/sub-grid/related view, with no sitemap entry of their own, and reconstructing from the
-  sitemap alone drops them. Note `componenttype eq 1` (Entities) rows are deliberately NOT used:
-  LIVE-verified that every one carries the same `objectid` (the `entity` metadata table's own id), so
-  it identifies the component *kind*, not which table, and `RetrieveAppComponents` returned 0 rows on
-  the same app. **Scope caveat:** `/app-builder` itself never creates a hidden component — a table
+  sitemap alone drops them. Note `componenttype eq 1` (Entities) rows are deliberately NOT used, but
+  the REASON changed: apps built before the entity-component fix carry junk rows that all share one
+  `objectid` (the `entity` metadata table's own id), so on those apps the row identifies the
+  component *kind*, not which table. Newly built apps now carry CORRECT per-table objectids (see the
+  build note below), so reading them is viable — it is not done yet because a legacy app's junk rows
+  would resolve to the table literally named `entity` and have to be filtered.
+  **Scope caveat:** `/app-builder` itself never creates a hidden component — a table
   with no sitemap subarea does not become an app component at all (LIVE-verified: declaring `task` in
   `entities[]` without nav left the app's component set unchanged), so for an app-builder-built app
   the sitemap set already IS the complete set. This union therefore only adds tables for apps built
-  or edited in the maker. **Closing ADO 6603388 from the BUILD side is blocked by the platform, not
-  merely unimplemented:** a table (`entity`) app component cannot be pinned via `AddAppComponents` at
-  all — the documented shape returns 204 but records a component pointing at the metadata table
-  literally named `entity` (the same finding as the `componenttype eq 1` note above), while
-  `metadataid` and a logical-name `entityid` are rejected and a `savedquery` in the SAME request pins
-  correctly as a control. Direct create is unsupported too, and `ValidateApp` reports success
-  regardless, which is why it went unnoticed. Tracked platform-side as **AB#39140211**. Do NOT claim
-  table components are applied. The component read is best-effort: a failure degrades
+  or edited in the maker. **ADO 6603388 (download) is still open**, and a live attempt to construct
+  the hidden component it describes did not succeed: pinning `task` via `AddAppComponents` with the
+  now-correct reference shape returned 204 but wrote no row, before or after publish. So the
+  download-side fix cannot currently be verified end to end — do not implement it speculatively.
+  The component read is best-effort: a failure degrades
   to the sitemap-derived set rather than failing the download. Each entity's **`primaryAttribute` comes from
   real Dataverse metadata** (`primaryNameAttribute`) and is **never synthesized**. The old
   `<entity>_name` guess was wrong for most OOB tables (`account` → `name`,

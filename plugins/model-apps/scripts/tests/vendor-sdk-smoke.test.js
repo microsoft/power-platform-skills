@@ -263,8 +263,21 @@ test('CONTRACT: free-text sitemap titles/URLs are XML-escaped, not rejected (a s
   // capture the sitemapxml the push serializes.
   let sitemapXml = '';
   const ws = mkTempWorkspace('sdk-esc-');
+  // This test is about XML ESCAPING, not component pinning — but the push now resolves each sitemap
+  // table to an OData reference and reads the components back, both fail-closed. Answer those reads
+  // so an unrelated refusal cannot masquerade as an escaping failure.
+  const TABLE_METADATA_ID = '22222222-2222-2222-2222-222222222222';
   const httpClient = {
-    get: async () => ({ status: 200, headers: {}, body: {} }),
+    get: async (url) => {
+      const m = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(url);
+      if (m) return { status: 200, headers: {}, body: { LogicalName: m[1], MetadataId: TABLE_METADATA_ID, EntitySetName: `${m[1]}s` } };
+      if (/\/appmodulecomponents/.test(url)) return { status: 200, headers: {}, body: { value: [{ objectid: TABLE_METADATA_ID, componenttype: 1 }] } };
+      if (/\/appmodules/.test(url)) {
+        const row = { appmoduleid: '11111111-1111-1111-1111-111111111111', appmoduleidunique: '33333333-3333-3333-3333-333333333333' };
+        return { status: 200, headers: {}, body: /RetrieveUnpublishedMultiple/i.test(url) ? { value: [row] } : row };
+      }
+      return { status: 200, headers: {}, body: {} };
+    },
     post: async (url, body) => { if (/\/sitemaps\b/.test(url) && body && body.sitemapxml) sitemapXml = String(body.sitemapxml); return { status: 204, headers: { 'odata-entityid': 'https://x/y(11111111-1111-1111-1111-111111111111)' }, body: {} }; },
     patch: async () => ({ status: 204, headers: {}, body: {} }),
     delete: async () => ({ status: 204, headers: {}, body: {} }),

@@ -2,7 +2,43 @@
 
 All notable changes to the **model-apps** plugin.
 
-## [Unreleased] — 2.4.1
+## [Unreleased] — 2.4.2
+
+Fixes a malformed app module: generated apps did not actually contain their tables.
+
+### Fixed
+- **Generated apps contained invalid `entity` table components instead of their real tables**
+  (ADO 6612527). An exported app read `<AppModuleComponent type="1" schemaName="entity" />` where it
+  should have listed `account`, `contact`, `activitypointer` — and the malformed app then broke
+  unrelated app-processing and metadata-discovery paths. Tables are now pinned by OData **reference**
+  (`{ '@odata.id': '<EntitySetName>(<MetadataId>)' }`) instead of as an `@odata.type` instance:
+  `Microsoft.Dynamics.CRM.entity` names a real Dataverse table (metadata-as-data), so the old payload
+  pinned the `entity` table exactly as asked. The reference form is also the only one that can express
+  an abstract EDM table such as `activitypointer`.
+- **A table that cannot be resolved now halts the build, naming it.** One bad component fails the
+  whole `AddAppComponents` call, so a silently-skipped table previously emptied the app's component
+  list rather than degrading it.
+- **App components are read back and verified after the write.** `AddAppComponents` returned 204 for
+  every corrupt app — a 2xx means the request was accepted, not which rows it wrote — and
+  `ValidateApp` reported success too. The build now asserts every declared table has a
+  `componenttype: 1` row carrying that table's MetadataId, and fails closed if it cannot check.
+
+### Changed
+- **Re-vendored `cds-maker-sdk`** with the above.
+
+### Tests
+- `app-entity-components-real-bundle.test.js` drives the shipped bundle: tables sent as references,
+  an unresolvable table refused, the read-back catching both a missing component and the exact
+  6612527 corruption (rows present but pointing at `entity`). 6 of its 7 tests fail against the
+  previous bundle.
+
+### Known limitations
+- **ADO 6603388 (download drops entity components not in the sitemap) is still open.** A live attempt
+  to construct the hidden component it describes did not succeed — pinning a table with no sitemap
+  entry returned 204 but wrote no row, before or after publish — so the download-side change cannot
+  be verified end to end yet.
+
+## 2.4.1
 
 Bug fixes for apps built on **out-of-the-box** tables, and the matching `cds-maker-sdk` uptake.
 No change to any skill's public surface.
