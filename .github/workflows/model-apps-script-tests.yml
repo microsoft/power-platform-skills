@@ -84,7 +84,9 @@ jobs:
             # The eval harness lives at the repo root (evals/model-apps/**) but is
             # owned by this plugin, so it is gated by the same path filter. These are
             # the offline scoring/fixture tests only — the Layer 1/2 runners need a
-            # live Dataverse org and are run manually.
+            # live Dataverse org and are run manually. `evals/model-apps/tests/` holds
+            # tests for code shared by the app-builder and genpage runners; a new test
+            # directory has to be added here or it silently never runs.
             - name: run-model-apps-eval-tests
               shell: bash
-              run: node --test evals/model-apps/app-builder/tests/*.test.js evals/model-apps/genpage/tests/*.test.js
+              run: node --test evals/model-apps/tests/*.test.js evals/model-apps/app-builder/tests/*.test.js evals/model-apps/genpage/tests/*.test.js

@@ -38,6 +38,20 @@ Fixes a malformed app module: generated apps did not actually contain their tabl
   entry returned 204 but wrote no row, before or after publish — so the download-side change cannot
   be verified end to end yet.
 
+### Eval harness
+- **A value-less or malformed runner flag is now rejected instead of silently changing scope.**
+  `argv[++i]` is `undefined` for a trailing flag and `undefined` is falsy, so `--tier` alone became
+  "no tier filter" and `--fixtures` alone fell back to the built-in fixtures — the run then reported
+  PASS for a scope the caller never asked for. `--eval 1.5` was truncated to fixture `1` and graded
+  the wrong one; an unknown `--tier` produced "no fixtures matched the filter", blaming the fixtures
+  rather than the argument. All three runners (app-builder + genpage layers 1/2) shipped a
+  byte-identical copy of this parser, so it is now shared at `evals/model-apps/lib/eval-args.js`.
+- **A malformed fixture names the fixture.** A bare `JSON.parse` reported only a character offset,
+  which tells an operator running a corpus nothing about which fixture to fix. A UTF-8 BOM (the
+  Windows editor default) no longer fails an otherwise-valid file, and a spec that is `null`, an
+  array, a string or a number is rejected up front instead of surfacing later as an opaque
+  stage-facts error.
+
 ## 2.4.1
 
 Bug fixes for apps built on **out-of-the-box** tables, and the matching `cds-maker-sdk` uptake.
