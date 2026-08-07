@@ -90,3 +90,53 @@ test('the model-apps CI workflow opts out of telemetry transmission on every job
   assert.ok(jobCount >= 2, `expected at least 2 jobs, found ${jobCount}`);
   assert.strictEqual(optOuts, jobCount, `every job must set the opt-out (${optOuts} set / ${jobCount} jobs)`);
 });
+
+// --- committed lock files must not carry a registry URL ---------------------------------------
+// `resolved` records the exact feed a package came from. Public npm is blocked on some Microsoft
+// networks, so a contributor installing through an internal Azure Artifacts feed would rewrite
+// every `resolved` to that internal URL and leak it into this OSS repo on the next commit. The
+// `.npmrc` (`omit-lockfile-registry-resolved=true`) stops npm writing the field; this test is the
+// backstop that catches a lock regenerated without it, or committed from another machine.
+const REPO_ROOT = path.resolve(__dirname, '..', '..', '..', '..');
+const VENDOR_BUILD = path.join(REPO_ROOT, 'plugins', 'model-apps', 'scripts', '_vendor-build');
+
+test('the vendor-build lock file carries no registry URL of any kind', () => {
+  const lockPath = path.join(VENDOR_BUILD, 'package-lock.json');
+  const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+  const offenders = [];
+  for (const [name, entry] of Object.entries(lock.packages || {})) {
+    if (entry && entry.resolved !== undefined) offenders.push(`packages['${name}'] -> ${entry.resolved}`);
+  }
+  for (const [name, entry] of Object.entries(lock.dependencies || {})) {
+    if (entry && entry.resolved !== undefined) offenders.push(`dependencies['${name}'] -> ${entry.resolved}`);
+  }
+  assert.deepStrictEqual(
+    offenders,
+    [],
+    `package-lock.json must not record a feed URL (an internal Azure Artifacts URL would leak into this OSS repo).\n` +
+      `Re-run \`npm install\` in ${VENDOR_BUILD} with its .npmrc present, or delete the "resolved" keys.\nFound:\n  ${offenders.join('\n  ')}`
+  );
+});
+
+test('the vendor-build lock still pins every platform binary WITH an integrity hash', () => {
+  // Stripping `resolved` must not cost supply-chain protection, and regenerating the lock on one
+  // OS can silently collapse the tree: a `npm install --package-lock-only` that reuses a Windows
+  // node_modules dropped 28 packages to 3, losing every non-Windows esbuild binary that CI needs.
+  const lock = JSON.parse(fs.readFileSync(path.join(VENDOR_BUILD, 'package-lock.json'), 'utf8'));
+  const pkgs = Object.entries(lock.packages || {}).filter(([name]) => name !== '');
+  const missingIntegrity = pkgs.filter(([, e]) => !e.link && e.integrity === undefined).map(([n]) => n);
+  assert.deepStrictEqual(missingIntegrity, [], 'every locked package keeps its integrity hash');
+  // esbuild ships one optional package per platform; a single-platform lock means the tree was
+  // regenerated on one OS and the others were lost.
+  const platforms = pkgs.filter(([name]) => name.startsWith('node_modules/@esbuild/'));
+  assert.ok(platforms.length >= 10, `expected the full cross-platform esbuild set, found ${platforms.length}: ${platforms.map(([n]) => n).join(', ')}`);
+});
+
+test('the .npmrc that prevents the leak sits next to the package.json it governs', () => {
+  // npm reads the per-project .npmrc from the directory that OWNS package.json and does NOT walk
+  // up, so a repo-root .npmrc alone would NOT cover this lock file — verified with `npm config
+  // get` from inside the directory. Deleting this file silently re-enables the leak.
+  const npmrc = path.join(VENDOR_BUILD, '.npmrc');
+  assert.ok(fs.existsSync(npmrc), `${npmrc} is required: without it npm rewrites "resolved" with the contributor's feed URL`);
+  assert.match(fs.readFileSync(npmrc, 'utf8'), /^\s*omit-lockfile-registry-resolved\s*=\s*true\s*$/m);
+});
