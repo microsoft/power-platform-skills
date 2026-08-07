@@ -21,9 +21,10 @@ try {
   process.exit(0);
 }
 
-let hookUtils;
+let hookUtils, detectFramework;
 try {
   hookUtils = require(path.join(PLUGIN_ROOT, "scripts", "lib", "powerpages-hook-utils"));
+  detectFramework = require(path.join(PLUGIN_ROOT, "scripts", "lib", "detect-site-framework"));
 } catch {
   process.exit(0);
 }
@@ -132,6 +133,20 @@ function readStdin() {
     agentInfo = {};
   }
 
+  // Which SPA framework the site under work uses. Resolved AFTER the disabled /
+  // isProvisioned gates above so an opted-out or unprovisioned plugin pays
+  // nothing for it. Claude Code supplies the host session's working directory on
+  // the hook payload (same field run-skill-posttool-validation.js reads); fall
+  // back to this process's cwd for hosts that don't.
+  let framework = null;
+  try {
+    framework = detectFramework.detectSiteFramework(
+      typeof parsed.cwd === "string" && parsed.cwd ? parsed.cwd : process.cwd()
+    );
+  } catch {
+    framework = null;
+  }
+
   const fields = {
     pluginName: "power-pages",
     pluginVersion: readPluginVersion(),
@@ -144,7 +159,15 @@ function readStdin() {
   };
   if (pacAuth && pacAuth.orgId) fields.orgId = pacAuth.orgId;
   if (pacAuth && pacAuth.tenantId) fields.tenantId = pacAuth.tenantId;
-  if (pacAuth && pacAuth.objectId) fields.eventInfo = { aadObjectId: pacAuth.objectId };
+  // `eventInfo` carries two INDEPENDENT signals, so it is assembled up front and
+  // assigned only when non-empty. Creating it inside the objectId guard instead
+  // would drop `framework` on every unauthenticated run (`pac auth who` surfaces
+  // no object id), and mutating the undefined would throw — a throw the
+  // fail-closed wrapper swallows, silently degrading the run to no event at all.
+  const eventInfo = {};
+  if (framework) eventInfo.framework = framework;
+  if (pacAuth && pacAuth.objectId) eventInfo.aadObjectId = pacAuth.objectId;
+  if (Object.keys(eventInfo).length > 0) fields.eventInfo = eventInfo;
   if (agentInfo.aiAgentName) fields.aiAgentName = agentInfo.aiAgentName;
   if (agentInfo.aiAgentVersion) fields.aiAgentVersion = agentInfo.aiAgentVersion;
   if (agentInfo.pacCliVersion) fields.pacCliVersion = agentInfo.pacCliVersion;

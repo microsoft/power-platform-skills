@@ -14,8 +14,7 @@ function mkConfigDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-ph-"));
 }
 
-function runHook({ input, configDir, ikeyPath, fakeProbe }) {
-  return spawnSync(process.execPath, [HOOK], {
+function runHook({ input, configDir, ikeyPath, fakeProbe }) {  return spawnSync(process.execPath, [HOOK], {
     input,
     encoding: "utf8",
     env: {
@@ -121,6 +120,106 @@ test("exits 0 and emits skill_started to probe when skill is tracked (provisione
   assert.equal(body.data.eventName, "skill_started");
   assert.equal(body.data.pluginName, "power-pages");
   assert.equal(body.data.skillName, "create-site");
+});
+
+// Materializes a Power Pages code site (config marker + package.json) so the
+// framework detector has something to find from the hook's reported cwd.
+function mkSite(deps) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-site-"));
+  fs.writeFileSync(
+    path.join(root, "powerpages.config.json"),
+    JSON.stringify({ siteName: "Test Site", compiledPath: "dist" })
+  );
+  fs.writeFileSync(
+    path.join(root, "package.json"),
+    JSON.stringify({ name: "test-site", dependencies: deps })
+  );
+  return root;
+}
+
+test("pretool hook reports the site framework in eventInfo from the payload cwd", () => {
+  const configDir = mkConfigDir();
+  const probePath = path.join(configDir, "probe.json");
+  const ikeyPath = writeProvisionedConfig(configDir);
+
+  const { status } = runHook({
+    input: JSON.stringify({
+      tool_input: { skill: "add-seo" },
+      // Claude Code puts the host session's working directory on the hook
+      // payload (same field run-skill-posttool-validation.js reads).
+      cwd: mkSite({ "@angular/core": "^19.1.0", rxjs: "~7.8.0" }),
+    }),
+    configDir,
+    ikeyPath,
+    fakeProbe: probePath,
+  });
+  assert.equal(status, 0);
+  assert.ok(waitForFile(probePath, 5_000), "dispatcher should have written probe");
+  const body = JSON.parse(JSON.parse(fs.readFileSync(probePath, "utf8")).body);
+  // eventInfo is JSON-stringified for the wire (the tenant-side field mapping
+  // flattens data.<key> and doesn't recurse) — see emit-dispatcher buildEnvelope.
+  assert.equal(typeof body.data.eventInfo, "string");
+  const eventInfo = JSON.parse(body.data.eventInfo);
+  // Asserted WITHOUT requiring aadObjectId: `framework` must survive whether or
+  // not `pac auth who` surfaces an object id (it won't on a CI runner with no
+  // pac / no signed-in user). Regression guard against rebuilding eventInfo
+  // inside the objectId guard, which would drop the framework on every
+  // unauthenticated run.
+  assert.equal(eventInfo.framework, "angular");
+});
+
+test("pretool hook finds a site in a CHILD of cwd (recommended create-site layout)", () => {
+  // create-site's recommended target is "New folder in current directory", which
+  // leaves powerpages.config.json one level BELOW the host cwd that later hooks
+  // report. Guards the root-discovery path that makes the metric representative.
+  const configDir = mkConfigDir();
+  const probePath = path.join(configDir, "probe.json");
+  const ikeyPath = writeProvisionedConfig(configDir);
+
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-parent-"));
+  const site = path.join(parent, "contoso-portal");
+  fs.mkdirSync(site);
+  fs.writeFileSync(path.join(site, "powerpages.config.json"), "{}");
+  fs.writeFileSync(
+    path.join(site, "package.json"),
+    JSON.stringify({ dependencies: { react: "^19.0.0" } })
+  );
+
+  const { status } = runHook({
+    input: JSON.stringify({ tool_input: { skill: "add-seo" }, cwd: parent }),
+    configDir,
+    ikeyPath,
+    fakeProbe: probePath,
+  });
+  assert.equal(status, 0);
+  assert.ok(waitForFile(probePath, 5_000), "dispatcher should have written probe");
+  const body = JSON.parse(JSON.parse(fs.readFileSync(probePath, "utf8")).body);
+  assert.equal(JSON.parse(body.data.eventInfo).framework, "react");
+});
+
+test("pretool hook omits framework when cwd is not a Power Pages code site", () => {
+  const configDir = mkConfigDir();
+  const probePath = path.join(configDir, "probe.json");
+  const ikeyPath = writeProvisionedConfig(configDir);
+
+  const { status } = runHook({
+    input: JSON.stringify({
+      tool_input: { skill: "add-seo" },
+      cwd: fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-nosite-")),
+    }),
+    configDir,
+    ikeyPath,
+    fakeProbe: probePath,
+  });
+  assert.equal(status, 0);
+  assert.ok(waitForFile(probePath, 5_000), "dispatcher should have written probe");
+  const body = JSON.parse(JSON.parse(fs.readFileSync(probePath, "utf8")).body);
+  const eventInfo =
+    typeof body.data.eventInfo === "string" ? JSON.parse(body.data.eventInfo) : {};
+  assert.ok(
+    !("framework" in eventInfo),
+    "no framework key should be emitted outside a Power Pages code site"
+  );
 });
 
 test("pretool hook exits 0 when ikey.json has regions but default_region entry has no key", () => {

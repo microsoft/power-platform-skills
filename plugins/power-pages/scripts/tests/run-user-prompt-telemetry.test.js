@@ -17,9 +17,9 @@ function mkConfigDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-upt-"));
 }
 
-function runHook({ prompt, configDir, fakeProbe, ikeyPath }) {
+function runHook({ prompt, configDir, fakeProbe, ikeyPath, cwd }) {
   return spawnSync(process.execPath, [HOOK], {
-    input: JSON.stringify({ prompt }),
+    input: JSON.stringify(cwd ? { prompt, cwd } : { prompt }),
     encoding: "utf8",
     env: {
       ...process.env,
@@ -53,12 +53,11 @@ function waitForFile(filePath, timeoutMs) {
   return fs.existsSync(filePath);
 }
 
-test("hook emits PagesAIPluginEvent with top-level fields for tracked slash command", () => {
-  const configDir = mkConfigDir();
-  const probePath = path.join(configDir, "probe.json");
-  // Point the hook at a temp ikey.json via the override seam instead of
-  // mutating the checked-in scripts/lib/telemetry/ikey.json (which would race
-  // with other test files running in parallel).
+// Writes an isolated, provisioned telemetry config into configDir (temp
+// ikey.json + a resolver.js sibling — the dispatcher discovers region routing by
+// that convention) so emission runs against an example.invalid key instead of
+// the checked-in prod config. Returns the ikey path.
+function writeProvisionedConfig(configDir) {
   const ikeyPath = path.join(configDir, "ikey.json");
   fs.writeFileSync(
     ikeyPath,
@@ -88,6 +87,31 @@ test("hook emits PagesAIPluginEvent with top-level fields for tracked slash comm
     path.join(configDir, "resolver.js"),
     `module.exports = require(${JSON.stringify(shippedResolver)});\n`
   );
+  return ikeyPath;
+}
+
+// Materializes a Power Pages code site (config marker + package.json) so the
+// framework detector has something to find from the hook's reported cwd.
+function mkSite(deps) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-site-"));
+  fs.writeFileSync(
+    path.join(root, "powerpages.config.json"),
+    JSON.stringify({ siteName: "Test Site", compiledPath: "dist" })
+  );
+  fs.writeFileSync(
+    path.join(root, "package.json"),
+    JSON.stringify({ name: "test-site", dependencies: deps })
+  );
+  return root;
+}
+
+test("hook emits PagesAIPluginEvent with top-level fields for tracked slash command", () => {
+  const configDir = mkConfigDir();
+  const probePath = path.join(configDir, "probe.json");
+  // Point the hook at a temp ikey.json via the override seam instead of
+  // mutating the checked-in scripts/lib/telemetry/ikey.json (which would race
+  // with other test files running in parallel).
+  const ikeyPath = writeProvisionedConfig(configDir);
 
   const { status } = runHook({
     prompt: "/power-pages:add-seo",
@@ -116,8 +140,57 @@ test("hook emits PagesAIPluginEvent with top-level fields for tracked slash comm
   assert.match(body.data.nodeVersion, /^v\d+$/);
 });
 
-test("hook exits 0 and emits nothing for an unrelated prompt", () => {
+test("hook reports the site framework in eventInfo from the payload cwd", () => {
   const configDir = mkConfigDir();
+  const probePath = path.join(configDir, "probe.json");
+  const ikeyPath = writeProvisionedConfig(configDir);
+
+  const { status } = runHook({
+    prompt: "/power-pages:add-seo",
+    configDir,
+    fakeProbe: probePath,
+    ikeyPath,
+    cwd: mkSite({ vue: "^3.5.0", "vue-router": "^4.5.0" }),
+  });
+  assert.equal(status, 0);
+  assert.ok(waitForFile(probePath, 5_000), "dispatcher should have written probe");
+  const body = JSON.parse(JSON.parse(fs.readFileSync(probePath, "utf8")).body);
+  // eventInfo is JSON-stringified for the wire (the tenant-side field mapping
+  // flattens data.<key> and doesn't recurse) — see emit-dispatcher buildEnvelope.
+  assert.equal(typeof body.data.eventInfo, "string");
+  const eventInfo = JSON.parse(body.data.eventInfo);
+  // Asserted WITHOUT requiring aadObjectId: `framework` must survive whether or
+  // not `pac auth who` surfaces an object id (it won't on a CI runner with no
+  // pac / no signed-in user). Regression guard against rebuilding eventInfo
+  // inside the objectId guard, which would drop the framework on every
+  // unauthenticated run.
+  assert.equal(eventInfo.framework, "vue");
+});
+
+test("hook omits framework when cwd is not a Power Pages code site", () => {
+  const configDir = mkConfigDir();
+  const probePath = path.join(configDir, "probe.json");
+  const ikeyPath = writeProvisionedConfig(configDir);
+
+  const { status } = runHook({
+    prompt: "/power-pages:add-seo",
+    configDir,
+    fakeProbe: probePath,
+    ikeyPath,
+    cwd: fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-nosite-")),
+  });
+  assert.equal(status, 0);
+  assert.ok(waitForFile(probePath, 5_000), "dispatcher should have written probe");
+  const body = JSON.parse(JSON.parse(fs.readFileSync(probePath, "utf8")).body);
+  const eventInfo =
+    typeof body.data.eventInfo === "string" ? JSON.parse(body.data.eventInfo) : {};
+  assert.ok(
+    !("framework" in eventInfo),
+    "no framework key should be emitted outside a Power Pages code site"
+  );
+});
+
+test("hook exits 0 and emits nothing for an unrelated prompt", () => {  const configDir = mkConfigDir();
   const probePath = path.join(configDir, "probe.json");
   const { status } = runHook({
     prompt: "just some user text",

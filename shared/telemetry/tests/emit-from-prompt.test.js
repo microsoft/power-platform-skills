@@ -35,12 +35,13 @@ function mkTelemetryDir({ instrumentationKey, collectorUrl, eventStreamName, dis
 
 const TRACKED = { "add-seo": {}, "create-site": {} };
 
-function callWithStub({ promptText, telemetryDir, captured, pacAuth, agentInfo }) {
+function callWithStub({ promptText, telemetryDir, captured, pacAuth, agentInfo, eventInfo }) {
   return emitSkillStartedFromPrompt(promptText, {
     pluginName: "power-pages",
     pluginVersion: "1.2.3",
     trackedSkills: TRACKED,
     telemetryDir,
+    eventInfo,
     _emit: (event, spawnOpts) => {
       captured.event = event;
       captured.spawnOpts = spawnOpts;
@@ -181,6 +182,148 @@ test("omits eventInfo when the Entra objectId is absent", () => {
     },
   });
   assert.equal(captured.event.data.eventInfo, undefined);
+});
+
+test("merges a caller-supplied eventInfo object alongside aadObjectId", () => {
+  const telemetryDir = mkTelemetryDir({
+    instrumentationKey: "x",
+    collectorUrl: "https://x",
+    eventStreamName: "PowerPagesPluginEvent",
+  });
+  const captured = {};
+  callWithStub({
+    promptText: "/power-pages:add-seo",
+    telemetryDir,
+    captured,
+    pacAuth: { objectId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" },
+    eventInfo: { framework: "react" },
+  });
+  assert.deepEqual(captured.event.data.eventInfo, {
+    framework: "react",
+    aadObjectId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+  });
+});
+
+test("keeps a caller-supplied eventInfo when the Entra objectId is absent", () => {
+  // The caller's payload is INDEPENDENT of AAD identity. Assembling eventInfo
+  // inside the objectId guard would silently drop it on every unauthenticated
+  // run — the exact regression this guards.
+  const telemetryDir = mkTelemetryDir({
+    instrumentationKey: "x",
+    collectorUrl: "https://x",
+    eventStreamName: "PowerPagesPluginEvent",
+  });
+  const captured = {};
+  callWithStub({
+    promptText: "/power-pages:add-seo",
+    telemetryDir,
+    captured,
+    pacAuth: null,
+    eventInfo: { framework: "astro" },
+  });
+  assert.deepEqual(captured.event.data.eventInfo, { framework: "astro" });
+});
+
+test("resolves a caller-supplied eventInfo thunk", () => {
+  const telemetryDir = mkTelemetryDir({
+    instrumentationKey: "x",
+    collectorUrl: "https://x",
+    eventStreamName: "PowerPagesPluginEvent",
+  });
+  const captured = {};
+  callWithStub({
+    promptText: "/power-pages:add-seo",
+    telemetryDir,
+    captured,
+    eventInfo: () => ({ framework: "vue" }),
+  });
+  assert.deepEqual(captured.event.data.eventInfo, { framework: "vue" });
+});
+
+test("does not invoke the eventInfo thunk for an untracked prompt", () => {
+  // The thunk exists so plugins can defer real work (filesystem probing) until
+  // after the slash-command / disabled / provisioned gates. If it ran eagerly,
+  // every user keystroke-level prompt would pay that cost.
+  const telemetryDir = mkTelemetryDir({
+    instrumentationKey: "x",
+    collectorUrl: "https://x",
+    eventStreamName: "PowerPagesPluginEvent",
+  });
+  let calls = 0;
+  callWithStub({
+    promptText: "not a slash command",
+    telemetryDir,
+    captured: {},
+    eventInfo: () => {
+      calls += 1;
+      return { framework: "react" };
+    },
+  });
+  assert.equal(calls, 0);
+});
+
+test("does not invoke the eventInfo thunk when the plugin is disabled", () => {
+  const telemetryDir = mkTelemetryDir({
+    instrumentationKey: "x",
+    collectorUrl: "https://x",
+    eventStreamName: "PowerPagesPluginEvent",
+    disabled: true,
+  });
+  let calls = 0;
+  callWithStub({
+    promptText: "/power-pages:add-seo",
+    telemetryDir,
+    captured: {},
+    eventInfo: () => {
+      calls += 1;
+      return { framework: "react" };
+    },
+  });
+  assert.equal(calls, 0);
+});
+
+test("drops a throwing eventInfo thunk without losing the event", () => {
+  const telemetryDir = mkTelemetryDir({
+    instrumentationKey: "x",
+    collectorUrl: "https://x",
+    eventStreamName: "PowerPagesPluginEvent",
+  });
+  const captured = {};
+  const result = callWithStub({
+    promptText: "/power-pages:add-seo",
+    telemetryDir,
+    captured,
+    pacAuth: { objectId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" },
+    eventInfo: () => {
+      throw new Error("boom");
+    },
+  });
+  assert.equal(result.emitted, true);
+  assert.deepEqual(captured.event.data.eventInfo, {
+    aadObjectId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+  });
+});
+
+test("ignores non-object eventInfo values", () => {
+  const telemetryDir = mkTelemetryDir({
+    instrumentationKey: "x",
+    collectorUrl: "https://x",
+    eventStreamName: "PowerPagesPluginEvent",
+  });
+  for (const bad of ["react", 42, true, ["react"]]) {
+    const captured = {};
+    callWithStub({
+      promptText: "/power-pages:add-seo",
+      telemetryDir,
+      captured,
+      eventInfo: bad,
+    });
+    assert.equal(
+      captured.event.data.eventInfo,
+      undefined,
+      `non-object eventInfo (${JSON.stringify(bad)}) must be dropped`
+    );
+  }
 });
 
 test("populates aiAgentName/aiAgentVersion/pacCliVersion when agentInfo is present", () => {
