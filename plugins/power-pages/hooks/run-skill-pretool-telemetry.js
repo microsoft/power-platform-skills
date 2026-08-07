@@ -21,12 +21,23 @@ try {
   process.exit(0);
 }
 
-let hookUtils, detectFramework;
+let hookUtils;
 try {
   hookUtils = require(path.join(PLUGIN_ROOT, "scripts", "lib", "powerpages-hook-utils"));
-  detectFramework = require(path.join(PLUGIN_ROOT, "scripts", "lib", "detect-site-framework"));
 } catch {
   process.exit(0);
+}
+
+// Loaded separately and NON-fatally: the framework signal is one optional field
+// inside `eventInfo`, so it must not be able to take the whole event down with
+// it. (It pulls in validation-helpers, a large module with its own require
+// graph — bundling it into the block above would widen the blast radius of any
+// packaging slip or syntax error there from "no framework" to "no telemetry".)
+let detectFramework = null;
+try {
+  detectFramework = require(path.join(PLUGIN_ROOT, "scripts", "lib", "detect-site-framework"));
+} catch {
+  detectFramework = null;
 }
 
 function readPluginVersion() {
@@ -140,9 +151,11 @@ function readStdin() {
   // back to this process's cwd for hosts that don't.
   let framework = null;
   try {
-    framework = detectFramework.detectSiteFramework(
-      typeof parsed.cwd === "string" && parsed.cwd ? parsed.cwd : process.cwd()
-    );
+    framework = detectFramework
+      ? detectFramework.detectSiteFramework(
+          typeof parsed.cwd === "string" && parsed.cwd ? parsed.cwd : process.cwd()
+        )
+      : null;
   } catch {
     framework = null;
   }

@@ -10,7 +10,14 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { findProjectRoot } = require("./validation-helpers");
+const { findPath } = require("./validation-helpers");
+
+// The one marker that means "Power Pages code site". `findProjectRoot` also
+// matches `.powerpages-site/` (declarative design-studio sites from
+// `pac pages download`), but those have no SPA framework and no package.json,
+// so this module resolves the root against the code-site marker ONLY — matching
+// how detect-project-context.js decides `siteType: "code"`.
+const CONFIG_MARKER = "powerpages.config.json";
 
 // Ordered marker list — the FIRST match wins, so order is load-bearing:
 //
@@ -39,17 +46,43 @@ function readJson(filePath) {
 }
 
 /**
- * Resolves the framework of the Power Pages code site containing `startDir`.
+ * Resolves the root of the Power Pages code site containing `startDir`.
  *
- * Root discovery delegates to `validation-helpers.findProjectRoot`, which walks
- * UP from `startDir` and then scans ONE level of immediate children. The child
- * scan is not optional polish — `create-site`'s recommended target location is
- * "New folder in current directory", which puts `powerpages.config.json` in a
+ * Same two-phase shape as `validation-helpers.findProjectRoot` — walk UP, then
+ * scan ONE level of immediate children (via that module's `findPath`, so the
+ * skip rules for `node_modules`/`.git` stay in one place) — but matched against
+ * the code-site marker only.
+ *
+ * The child scan is not optional polish: `create-site`'s recommended target
+ * location is "New folder in current directory", which puts the config in a
  * CHILD of the host session cwd that later hooks report. (The skill's
  * `cd "<PROJECT_ROOT>"` calls run in Bash-tool subshells and never move the host
- * cwd.) An upward-only walk would therefore miss the most common layout on every
- * subsequent skill run, biasing the metric toward whichever users happened to
- * scaffold in place.
+ * cwd.) An upward-only walk would miss the most common layout on every
+ * subsequent skill run, biasing the metric toward users who scaffolded in place.
+ *
+ * Why not call `findProjectRoot` directly: it matches EITHER marker, so it costs
+ * a second full child scan for `.powerpages-site/` whose result this module then
+ * throws away — on a large cwd that scan is the dominant cost of a miss, and a
+ * miss is exactly what a non-Pages directory produces. Matching one marker also
+ * avoids a wrong answer when a declarative site sits *closer* than the enclosing
+ * code site: `findProjectRoot` would stop at the declarative root and report no
+ * framework even though the cwd is inside a code site.
+ */
+function findCodeSiteRoot(startDir) {
+  let current = path.resolve(startDir);
+  while (true) {
+    if (fs.existsSync(path.join(current, CONFIG_MARKER))) return current;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+
+  const childHit = findPath(startDir, CONFIG_MARKER);
+  return childHit ? path.dirname(childHit) : null;
+}
+
+/**
+ * Resolves the framework of the Power Pages code site containing `startDir`.
  *
  * Known limitation: a site scaffolded into an unrelated absolute path ("Any
  * other directory") is unreachable from cwd and reports null.
@@ -64,20 +97,11 @@ function detectSiteFramework(startDir) {
 
     let projectRoot;
     try {
-      projectRoot = findProjectRoot(dir);
+      projectRoot = findCodeSiteRoot(dir);
     } catch {
       projectRoot = null;
     }
     if (!projectRoot) return null;
-
-    // findProjectRoot also matches `.powerpages-site/` (declarative
-    // design-studio sites downloaded via `pac pages download`). Those have no
-    // SPA framework and no package.json, so require the code-site marker
-    // specifically — matching how detect-project-context.js decides
-    // `siteType: "code"`.
-    if (!fs.existsSync(path.join(projectRoot, "powerpages.config.json"))) {
-      return null;
-    }
 
     const pkg = readJson(path.join(projectRoot, "package.json"));
     if (!pkg || typeof pkg !== "object") return null;

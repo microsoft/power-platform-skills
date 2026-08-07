@@ -7,7 +7,7 @@ const fs = require("node:fs");
 const PLUGIN_ROOT = path.resolve(__dirname, "..");
 const TELEMETRY_DIR = path.join(PLUGIN_ROOT, "scripts", "lib", "telemetry");
 
-let emitFromPrompt, hookUtils, sessionLib, detectFramework;
+let emitFromPrompt, hookUtils, sessionLib;
 try {
   emitFromPrompt = require(path.join(
     TELEMETRY_DIR,
@@ -21,6 +21,17 @@ try {
     "powerpages-hook-utils"
   ));
   sessionLib = require(path.join(TELEMETRY_DIR, "lib", "session"));
+} catch {
+  process.exit(0);
+}
+
+// Loaded separately and NON-fatally: the framework signal is one optional field
+// inside `eventInfo`, so it must not be able to take the whole event down with
+// it. (It pulls in validation-helpers, a large module with its own require
+// graph — bundling it into the block above would widen the blast radius of any
+// packaging slip or syntax error there from "no framework" to "no telemetry".)
+let detectFramework = null;
+try {
   detectFramework = require(path.join(
     PLUGIN_ROOT,
     "scripts",
@@ -28,7 +39,7 @@ try {
     "detect-site-framework"
   ));
 } catch {
-  process.exit(0);
+  detectFramework = null;
 }
 
 function readPluginVersion() {
@@ -83,6 +94,7 @@ function readStdin() {
       // reason. Claude Code supplies the host cwd on the payload; fall back to
       // this process's cwd for hosts that don't.
       eventInfo: () => {
+        if (!detectFramework) return null;
         const framework = detectFramework.detectSiteFramework(
           typeof parsed.cwd === "string" && parsed.cwd ? parsed.cwd : process.cwd()
         );
