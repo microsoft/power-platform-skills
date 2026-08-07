@@ -140,3 +140,46 @@ test('the .npmrc that prevents the leak sits next to the package.json it governs
   assert.ok(fs.existsSync(npmrc), `${npmrc} is required: without it npm rewrites "resolved" with the contributor's feed URL`);
   assert.match(fs.readFileSync(npmrc, 'utf8'), /^\s*omit-lockfile-registry-resolved\s*=\s*true\s*$/m);
 });
+
+// The `.npmrc` that strips `resolved` only governs the directory that OWNS package.json -- npm does
+// NOT walk up -- so it protects _vendor-build and nothing else. Verified: `npm config get` reads
+// false from plugins/mobile-apps/template and from the power-pages create-site asset packages,
+// each of which has its own package.json. That is the DESIRED scope (those are templates scaffolded
+// into user projects; forcing our lockfile policy on a user's project would be wrong), but it means
+// a lock file added to any other plugin tomorrow would be unprotected. This sweep is the backstop
+// for that: it does not demand the strip everywhere, only that no committed lock leaks a NON-PUBLIC
+// feed URL, which is the actual security property.
+function findLockFiles(dir, out = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === 'node_modules' || entry.name === '.git') continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) findLockFiles(full, out);
+    else if (entry.name === 'package-lock.json') out.push(full);
+  }
+  return out;
+}
+
+test('NO committed lock file anywhere in the repo records a non-public registry URL', () => {
+  const locks = findLockFiles(REPO_ROOT);
+  assert.ok(locks.length > 0, 'the sweep must actually find the lock file(s) it is guarding');
+  const offenders = [];
+  for (const lockPath of locks) {
+    const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    for (const section of ['packages', 'dependencies']) {
+      for (const [name, entry] of Object.entries(lock[section] || {})) {
+        const url = entry && entry.resolved;
+        if (typeof url !== 'string' || !/^https?:/i.test(url)) continue;
+        // Public npm (and its official mirror) are fine in an OSS repo; an internal Azure Artifacts
+        // or on-prem feed URL is the leak this guards against.
+        const host = new URL(url).host.toLowerCase();
+        if (host === 'registry.npmjs.org' || host === 'registry.yarnpkg.com') continue;
+        offenders.push(`${path.relative(REPO_ROOT, lockPath)} :: ${section}['${name}'] -> ${url}`);
+      }
+    }
+  }
+  assert.deepStrictEqual(
+    offenders,
+    [],
+    `a committed package-lock.json records a non-public feed URL, which would leak an internal registry into this OSS repo:\n  ${offenders.join('\n  ')}`
+  );
+});
