@@ -13,6 +13,7 @@ const events = require('./telemetry/lib/events');
 const { fireAndForget } = require('./telemetry/lib/emit-spawn');
 const { loadResolver } = require('./telemetry/lib/resolver-loader');
 const session = require('./telemetry/lib/session');
+const { findAppInstanceId } = require('./app-identity');
 
 function readPluginVersion() {
   const manifestPath = path.resolve(__dirname, '..', '..', '.claude-plugin', 'plugin.json');
@@ -236,7 +237,15 @@ function commonFields(context, invocation, opts = {}) {
     nodeVersion: `v${String(process.versions.node).split('.')[0]}`,
     skillName: invocation.skillName,
   };
-  if (invocation.source) fields.eventInfo = { invocationSource: invocation.source };
+
+  // `eventInfo` is the shared schema's caller-supplied JSON field, so app
+  // identity rides here rather than needing a new allowlisted column.
+  const eventInfo = {};
+  if (invocation.source) eventInfo.invocationSource = invocation.source;
+  const appInstanceId = findAppInstanceId(opts.cwd) || null;
+  eventInfo.appInstanceId = appInstanceId;
+  if (Object.keys(eventInfo).length) fields.eventInfo = eventInfo;
+
   if (ai.aiAgentName) fields.aiAgentName = ai.aiAgentName;
   if (ai.aiAgentVersion) fields.aiAgentVersion = ai.aiAgentVersion;
   return fields;
