@@ -357,7 +357,11 @@ test('verify CLI prints per-check status and aliases missing checks into emitRes
 });
 
 test('verify CLI accepts a positional spec, uses the default workspace, and prints PASS', async () => {
-  const specPath = 'D:\\Projects\\power-platform-skills-sdk\\plugins\\model-apps\\samples\\app-spec.support-desk.json';
+  // Build the path with `path.join` rather than a hard-coded `D:\...` literal: the CLI derives the
+  // default workspace via path.join, so on a POSIX runner it produces `samples/.maker-workspace`
+  // and a backslash-anchored assertion could never match (this test failed on every non-Windows CI
+  // runner for that reason, not because the CLI was wrong).
+  const specPath = path.join(__dirname, '..', '..', 'samples', 'app-spec.support-desk.json');
   const harness = loadVerifyCli({
     parseResult: { positional: [specPath], flags: { env: 'https://org.example' } },
     verifyResult: {
@@ -374,7 +378,7 @@ test('verify CLI accepts a positional spec, uses the default workspace, and prin
   assert.match(stderr, /✓ verify PASS \(1\/1 present\)/);
   assert.strictEqual(emitted.ok, true);
   assert.deepStrictEqual(emitted.payload.missing, []);
-  assert.ok(harness.events.some((e) => e.type === 'createMakerSdk' && /samples\\.maker-workspace$/.test(e.cfg.workspacePath)));
+  assert.ok(harness.events.some((e) => e.type === 'createMakerSdk' && e.cfg.workspacePath === path.join(__dirname, '..', '..', 'samples', '.maker-workspace')));
 });
 
 test('verify CLI entrypoint converts SDK startup errors into emitResult failures', async () => {

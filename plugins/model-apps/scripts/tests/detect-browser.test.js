@@ -6,6 +6,13 @@ const Module = require('node:module');
 
 const modulePath = path.join(__dirname, '..', 'lib', 'detect-browser.js');
 
+// The module builds its candidate paths with `path.join`, which emits the HOST separator — so on
+// Linux/macOS a simulated `platform: 'win32'` still produces `C:\Program Files/Microsoft/...`.
+// Hard-coding backslashes here made every probe miss and the detector fall through to 'chromium',
+// failing these tests on every non-Windows runner. Build the expectations the same way the module
+// does so the test asserts the LOOKUP ORDER (what it is really about) on any host.
+const winPath = (...segments) => path.join(...segments);
+
 function withDetectedBrowser({ platform, existing = [], which = [], existsThrows = [] }) {
   const originalLoad = Module._load;
   const originalEnv = {
@@ -63,8 +70,8 @@ function withDetectedBrowser({ platform, existing = [], which = [], existsThrows
 }
 
 test('Windows prefers preinstalled Edge before Chrome when both browsers exist', () => {
-  const edge = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
-  const chrome = 'C:\\Users\\Maker\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe';
+  const edge = winPath('C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe');
+  const chrome = winPath('C:\\Users\\Maker\\AppData\\Local', 'Google', 'Chrome', 'Application', 'chrome.exe');
 
   const result = withDetectedBrowser({ platform: 'win32', existing: [edge, chrome] });
 
@@ -73,7 +80,7 @@ test('Windows prefers preinstalled Edge before Chrome when both browsers exist',
 });
 
 test('Windows falls through to Chrome when no Edge install path exists', () => {
-  const chrome = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+  const chrome = winPath('C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe');
 
   const result = withDetectedBrowser({ platform: 'win32', existing: [chrome] });
 
@@ -82,8 +89,8 @@ test('Windows falls through to Chrome when no Edge install path exists', () => {
 });
 
 test('filesystem probe failures are treated the same as a missing browser path', () => {
-  const edge = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
-  const chrome = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+  const edge = winPath('C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe');
+  const chrome = winPath('C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe');
 
   const result = withDetectedBrowser({
     platform: 'win32',
