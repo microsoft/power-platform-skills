@@ -25,7 +25,6 @@ function quoteShellArg(value, platform = process.platform) {
 
 function buildMcpArgs(browser, {
   configPath = path.join(__dirname, 'playwright-mcp-fullscreen.config.json'),
-  platform = process.platform,
 } = {}) {
   return [
     '-y',
@@ -33,14 +32,13 @@ function buildMcpArgs(browser, {
     '--browser',
     browser,
     '--config',
-    quoteShellArg(configPath, platform),
+    configPath,
   ];
 }
 
 function launch({ browser = detectBrowser(), spawnFn = spawn, onExit = (code) => process.exit(code || 0) } = {}) {
   const child = spawnFn('npx', buildMcpArgs(browser), {
     stdio: 'inherit',
-    shell: true,
   });
 
   child.on('exit', onExit);
@@ -51,4 +49,4 @@ if (require.main === module) {
   launch();
 }
 
-module.exports = { buildMcpArgs, launch, quoteShellArg };
+module.exports = { buildMcpArgs, launch };
