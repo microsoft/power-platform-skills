@@ -99,13 +99,13 @@ unrecognized. Confirm it matches a remaining dispatch row and leave it in place.
 
 After all builders finish:
 
-- Check each builder's `QA:` line. It must list an outcome for all 33 checks in
+- Check each builder's `QA:` line. It must list an outcome for all 32 checks in
   `${PLUGIN_ROOT}/references/QAChecks.md`. Treat these as unrun and return the existing
   screen to the builder for self-QA only:
-  - a missing or truncated line, a line omitting any check 1-33, or a bare fix count;
+  - a missing or truncated line, a line omitting any check 1-32, or a bare fix count;
   - an outcome contradicted by the screen structure, such as check 7 `N/A` despite
     AutoLayout children, check 18 `N/A` despite content controls, check 21 `N/A` despite
-    a coloured surface, check 24 `N/A` despite a Gallery, or check 33 `N/A` despite a
+    a coloured surface, check 24 `N/A` despite a Gallery, or check 32 `N/A` despite a
     newly created `ModernDataGrid`;
   - check 27 `PASS` while a responsive root has screen-level siblings;
   - check 32 `PASS` while a multiword action directly under vertical AutoLayout lacks

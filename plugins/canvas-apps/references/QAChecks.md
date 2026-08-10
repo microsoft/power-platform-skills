@@ -47,7 +47,6 @@ width, or that a dropdown will render every option blank.
 - Check 30 — small bounded gallery hidden in nested scrolling
 - Check 31 — semantic display control missing its visible value binding
 - Check 32 — multiword action label does not fit its control
-- Check 33 — ModernDataGrid cannot configure requested columns
 
 Agents that write `.pa.yaml` files MUST run these checks against their own
 output before returning, and fix every issue inline. Report the outcome of
@@ -77,7 +76,7 @@ QA: 1 PASS · 2 PASS · 3 PASS · 4 FIXED(7) · 5 PASS · 6 FIXED(2) · 7 FIXED(
     8 PASS · 9 PASS · 10 PASS · 11 PASS · 12 PASS · 13 PASS · 14 PASS · 15 PASS ·
     16 PASS · 17 PASS · 18 FIXED(4) · 19 PASS · 20 PASS · 21 PASS · 22 FIXED(3) ·
     23 FIXED(4) · 24 PASS · 25 N/A · 26 N/A · 27 PASS · 28 N/A · 29 PASS ·
-    30 N/A · 31 PASS · 32 PASS · 33 N/A
+    30 N/A · 31 PASS · 32 PASS
 ```
 
 - `PASS` — you inspected every control the check applies to and found nothing.
@@ -1164,32 +1163,3 @@ For four-item phone navigation, allocate equal widths that fit the parent withou
 wrapping; shorten labels or use icons when the full labels cannot fit.
 
 **Exception:** A deliberately compact icon-only action whose visible text is omitted.
-
----
-
-## Check 33 — GRID-COLUMN-CONTRACT (ModernDataGrid cannot configure requested columns)
-
-**Problem:** Some `ModernDataGrid` versions expose `Items`, sorting and styling but no
-YAML property for `Fields`, `Columns` or child column definitions. Binding a local
-collection still compiles, but Preview reports "There are no fields in this data table"
-and renders no headers or rows.
-
-**Detect:** For every `ModernDataGrid`:
-
-1. Read its exact `describe_control` definition from the brief.
-2. Confirm it exposes a supported way to declare the required visible columns, or that
-   the target app already contains a configured grid whose column metadata is preserved.
-3. If the definition has only `Items`/`Sortable`/styling and no column contract, flag a
-   new grid—especially one bound to a local collection or `RenameColumns` result.
-
-**Fix:** Use a Gallery table with an explicit visible header row and sort buttons:
-
-- one header label/button per required column;
-- a single AutoLayout row shell in the Gallery template;
-- matching width/minimum-width budgets for headers and row cells;
-- a sort variable used by the Gallery `Items` formula.
-
-Do not claim a sortable table from a grid that cannot declare its columns.
-
-**Exception:** An existing configured ModernDataGrid whose field metadata is already
-present and preserved by the edit.

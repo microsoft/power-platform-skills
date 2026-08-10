@@ -153,12 +153,12 @@ the first builder returns, so return promptly rather than polishing indefinitely
 Screen: [logical name]
 Action: [Create / Modify]
 File: [absolute target file]
-QA: 1 [outcome] · 2 [outcome] · … · 33 [outcome]
+QA: 1 [outcome] · 2 [outcome] · … · 32 [outcome]
 - [fix summary, or "clean"]
 Status: Done
 ```
 
-The `QA:` line must list all 33 checks. A return without it is incomplete, and the
+The `QA:` line must list all 32 checks. A return without it is incomplete, and the
 orchestrator will send the screen back.
 
 ## Constraints
