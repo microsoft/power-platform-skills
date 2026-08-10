@@ -228,6 +228,17 @@ Examples:
 
 Keep total screen count tight — under 8 for v0 unless the requirements explicitly demand more. The user can iterate later.
 
+### Sign-out placement rule
+
+Every generated signed-in app MUST include a Profile screen and place sign-out there:
+
+- Always add exactly one Profile screen at `/(app)/profile` with file `app/(app)/profile.tsx`.
+- The Profile screen must be useful for the app being built, not a sign-out-only screen. Include 2-4 requirement-driven sections such as role/team/site context, assigned territory, default filters, saved preferences, contact/support info, app/environment details, or domain-specific account settings. Pick sections from the app's users and workflow; do not add generic filler.
+- Add a visible `Sign out` button on the Profile screen. The button uses `useAuth().signOut`, asks for confirmation, and returns to `/login` after sign-out.
+- Include the Profile screen in the Screen Map, Navigation Contracts, and Per-Screen Specs on every generated app, even when the user's requirements do not mention profile, account, settings, or sign-out.
+- Never make sign-out the Home screen's primary CTA, and never create a Home screen whose main purpose is signing out.
+- Do not put sign-out on Home, business-data screens, drawers, headers, or overflow menus. Profile is the only sign-out owner.
+
 ## Step 3.5 — Shared Conventions (graph phase output)
 
 **Print before starting:**
@@ -357,6 +368,8 @@ For each screen the user adds, provide this compact shape:
 - **Presentation** — `default` (push onto stack) | `modal` (slide-up sheet, full-screen) | `formSheet` (iOS form-sheet — partial overlay). Use `modal` for create/edit forms reached from a list, `formSheet` for confirmations or short pickers, `default` for everything else. Inner `_layout.tsx` files use this to set `<Stack.Screen options={{ presentation }}>`.
 - **Layout delta** — only the screen-specific structure not implied by archetype + Shared Conventions. Name custom/app-specific components and the one primary visual arrangement; do NOT restate safe area, skeleton, default row wrappers, default buttons, or universal chrome.
 - **UX contract** — required for Home, workflow, queue, picker, review, audit, and form screens; omit only for simple read-only CRUD screens. Include only fields that apply: header title source + subtitle/context source; primary action label + placement (`bottom CTA` unless read-only); whether a create action is `visible-label`, `extended FAB`, or `icon-only FAB with accessibility label`; disabled reason text; filter chips and counts; selected-state cue; severity/status/urgency fields; countdown/SLA field; tab/section badge count source; timeline event fields (`timestamp`, `actor`, `action`, `status`).
+- **Profile content** — REQUIRED on the Profile screen only. List 2-4 app-specific profile sections based on the app requirements and target users, for example `Role + team`, `Assigned site/territory`, `Default queue filters`, `App support/contact`, `Environment/app version`. Include any generated service needed for those sections; otherwise use local/static app context plus `useAuth()`.
+- **Sign-out affordance** — REQUIRED on the Profile screen and omitted from every other screen. Write `visible Button "Sign out" using useAuth().signOut with confirm`; sign-out returns to `/login` after completion.
 - **Data** — which generated services it calls, with method names (e.g., bounded lookup: `AccountsService.getAll({ top: 50, orderBy: ['name asc'], select: ['name'] })`; cursor list: `InspectionsService.getAll({ maxPageSize: 50, orderBy: ['scheduledDate asc', 'inspectionid asc'], select: [...] })` plus `skipToken` continuation support)
 - **Related entity fields** (REQUIRED if any UI field on the screen displays data from an entity OTHER than the primary `Data` service's table; OMIT entirely otherwise) — one entry per cross-entity field. The `data-model-architect`'s Step 6a Cross-entity Read Audit reads this block to decide which calculated columns to propose. Mechanical schema:
 
@@ -605,6 +618,17 @@ Section format (same in all phases):
 - **Pagination:** cursor
 - **Navigation:** row tap → `/(app)/inspections/[id]`; bottom CTA → `/(app)/inspections/new`
 - **State delta:** empty "No inspections scheduled", CTA "New inspection"
+
+#### Profile (`/(app)/profile`)
+- **Domain layout decisions:** Key fields: signed-in account state + domain role/team context + app-specific defaults. Visual emphasis: the user's operational context, not the sign-out button. Different from generic: profile sections mirror the app's workflow, with sign-out separated at the bottom.
+- **Archetype:** Tab-root
+- **Purpose:** Let the signed-in user review account context, app-specific preferences/context, support details, and sign out.
+- **Layout delta:** account summary block → 2-4 app-specific profile sections → app/support info rows → separated destructive action zone.
+- **Profile content:** choose sections from the app requirements, such as assigned team/site, default queue filters, supervisor/escalation contact, territory/route, app support, or environment/app version.
+- **Sign-out affordance:** visible Button "Sign out" using `useAuth().signOut` with confirm.
+- **Data:** `useAuth()` plus generated services only when the Profile content needs persisted app-specific user context; otherwise local/static app context.
+- **Navigation:** reached from Profile tab/drawer entry; sign-out replaces to `/login` after `signOut`.
+- **Key user actions:** review profile/context, adjust supported app-specific defaults when planned, sign out.
 
 ### Open Questions for the User
 - Should "Capture receipt" support multiple photos per inspection or just one? Assumed one for v0.
