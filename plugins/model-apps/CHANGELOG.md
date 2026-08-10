@@ -2,7 +2,43 @@
 
 All notable changes to the **model-apps** plugin.
 
-## [Unreleased] — 2.4.2
+## [Unreleased] — 2.4.3
+
+Fixes four crash paths and a smoke-eval assertion that could never pass live.
+
+### Fixed
+- **Malformed specs now produce validation errors instead of raw `TypeError`s.** `validateAppSpec()`
+  and `lintAppSpec()` crashed on a `null` spec, an object- or string-shaped collection
+  (`entities: {}`), and `null` entries inside a collection; `preview-app` crashed when a persona
+  privilege's `access` was a scalar rather than an array. These are work-in-progress shapes an author
+  hits constantly, and a crash killed the authoring flow instead of reporting the problem.
+- **`verify-model-app` no longer surfaces a raw Dataverse HTTP 400 for a missing table.** A declared
+  table that does not exist makes the saved-view query 400 (`returnedtypecode` names an unknown
+  entity); the read error is now captured and reported as a structured missing-artifact finding.
+- **The live smoke eval asserted an outcome the builder never produces.** Its spec put a bare Fluent
+  `vectorIcon` ("Grid") on an *entity* subarea — the one shape the builder deliberately drops,
+  because it breaks the modern app-designer property pane — while asserting the deployed sitemap
+  contained `VectorIcon="Grid"`. The offline test hid it by hand-writing the sitemap XML it wanted to
+  see. The spec now uses an emittable `/WebResources/<name>.svg` reference and keeps the bare token
+  as a negative control; assertions are scoped to the `<SubArea>` that declared the icon (the spec
+  reuses one icon on the parent `<Area>`, which a document-wide scan let satisfy every subarea check)
+  and their expected values stay independent of the builder, so a builder that stops emitting the
+  icon makes the eval FAIL rather than silently invert into an absence check.
+
+### Changed
+- **`download-model-app.js --app` now accepts a display name**, not just an id or `uniquename`. It
+  resolves in identity order (id → `uniquename` → display name) and **fails closed** when a display
+  name matches more than one app, listing the candidate unique names instead of guessing. A display
+  name previously hit a dead-end "app 'x' not found", even though that is the only name the maker
+  portal shows.
+
+### Tests
+- A contract test drives the **real vendored SDK** and asserts the serialized sitemap bytes: a
+  platform-ref `VectorIcon` reaches the XML on an Entity subarea, and the bundle does **not** filter a
+  bare Fluent token — pinning that `appDef` is the only guard, so the drop cannot be delegated to the
+  SDK.
+
+## [2.4.2]
 
 Fixes a malformed app module: generated apps did not actually contain their tables.
 
@@ -18,14 +54,6 @@ Fixes a malformed app module: generated apps did not actually contain their tabl
 - **A table that cannot be resolved now halts the build, naming it.** One bad component fails the
   whole `AddAppComponents` call, so a silently-skipped table previously emptied the app's component
   list rather than degrading it.
-- **Malformed specs now produce validation errors instead of raw `TypeError`s.** `validateAppSpec()`
-  and `lintAppSpec()` crashed on a `null` spec, an object- or string-shaped collection
-  (`entities: {}`), and `null` entries inside a collection; `preview-app` crashed when a persona
-  privilege's `access` was a scalar rather than an array. These are work-in-progress shapes an author
-  hits constantly, and a crash killed the authoring flow instead of reporting the problem.
-- **`verify-model-app` no longer surfaces a raw Dataverse HTTP 400 for a missing table.** A declared
-  table that does not exist makes the saved-view query 400 (`returnedtypecode` names an unknown
-  entity); the read error is now captured and reported as a structured missing-artifact finding.
 - **App components are read back and verified after the write.** `AddAppComponents` returned 204 for
   every corrupt app — a 2xx means the request was accepted, not which rows it wrote — and
   `ValidateApp` reported success too. The build now asserts every declared table has a
@@ -33,24 +61,12 @@ Fixes a malformed app module: generated apps did not actually contain their tabl
 
 ### Changed
 - **Re-vendored `cds-maker-sdk`** with the above.
-- **`download-model-app.js --app` now accepts a display name**, not just an id or `uniquename`. It
-  resolves in identity order (id → `uniquename` → display name) and **fails closed** when a display
-  name matches more than one app, listing the candidate unique names instead of guessing. A display
-  name previously hit a dead-end "app 'x' not found", even though that is the only name the maker
-  portal shows.
 
 ### Tests
 - `app-entity-components-real-bundle.test.js` drives the shipped bundle: tables sent as references,
   an unresolvable table refused, the read-back catching both a missing component and the exact
   6612527 corruption (rows present but pointing at `entity`). 6 of its 7 tests fail against the
   previous bundle.
-- **Fixed a live-only failure in the smoke eval.** Its spec put a bare Fluent `vectorIcon` ("Grid") on
-  an *entity* subarea — a shape the builder deliberately drops — while asserting the deployed sitemap
-  contained `VectorIcon="Grid"`, so the check could never pass against a real org. The offline test
-  hid it by hand-writing the sitemap XML it wanted to see. The spec now uses an emittable
-  `/WebResources/<name>.svg` reference, assertions are derived from what `appDef` actually emits, and
-  a negative control proves the bare token stays out of the deployed sitemap. A new contract test
-  drives the **real vendored SDK** and asserts the serialized XML bytes.
 
 ### Known limitations
 - **ADO 6603388 (download drops entity components not in the sitemap) is still open.** A live attempt
