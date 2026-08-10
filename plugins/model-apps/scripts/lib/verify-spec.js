@@ -39,9 +39,15 @@ async function verifySpec(spec, read, opts = {}) {
     // (reconcileView is additive-union, so a removed/renamed spec column would otherwise silently NOT
     // apply and still pass an existence-only verify). Best-effort: the column check only runs when the
     // deployed row actually carries layoutxml — an existence-only reader (no layoutxml) skips it.
-    const rows = await read.queryRecords('savedquery', { select: ['savedqueryid', 'layoutxml'], filter: `returnedtypecode eq '${String(v.entity).toLowerCase()}' and name eq '${odataLit(v.name)}'`, top: 1 });
+    let rows = [];
+    let readError = null;
+    try {
+      rows = await read.queryRecords('savedquery', { select: ['savedqueryid', 'layoutxml'], filter: `returnedtypecode eq '${String(v.entity).toLowerCase()}' and name eq '${odataLit(v.name)}'`, top: 1 });
+    } catch (error) {
+      readError = error;
+    }
     const row = rows && rows[0];
-    add('view', viewName, row);
+    add('view', viewName, row, readError ? String(readError.message || readError) : '');
     const specCols = (v.columns || []).map((c) => String(c).toLowerCase());
     if (row && row.layoutxml && specCols.length) {
       // Deployed column set from the saved view's layoutxml (<cell name="…"/> per column). We require

@@ -21,6 +21,20 @@ test('a clean spec passes with no errors', () => {
   assert.strictEqual(r.errors.length, 0);
 });
 
+test('malformed top-level collections return lint errors instead of throwing', () => {
+  for (const spec of [
+    null,
+    { entities: {} },
+    { relationships: {} },
+    { forms: {} },
+    { entities: [null] },
+  ]) {
+    assert.doesNotThrow(() => lintAppSpec(spec));
+    const result = lintAppSpec(spec);
+    assert.equal(result.ok, false, JSON.stringify(spec));
+  }
+});
+
 test('a view named like the stock default ("Active <Plural>") WARNS about the merge-onto-default collision', () => {
   const s = base();
   s.views = [{ entity: 'new_ticket', name: 'Active Tickets', columns: ['new_name', 'new_priority'], activeOnly: true }];

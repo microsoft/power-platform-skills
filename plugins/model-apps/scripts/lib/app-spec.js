@@ -411,6 +411,16 @@ function validateAppSpec(spec, opts = {}) {
   if (!spec || typeof spec !== 'object') {
     return { ok: false, errors: ['spec is not an object'], warnings };
   }
+  const recordArray = (value) => (Array.isArray(value) ? value : []).map((item) => (
+    item && typeof item === 'object' && !Array.isArray(item) ? item : {}
+  ));
+  for (const key of ['entities', 'relationships', 'globalChoices', 'webResources', 'views', 'charts', 'forms', 'commands', 'dashboards', 'pages', 'personas']) {
+    if (spec[key] !== undefined && !Array.isArray(spec[key])) errors.push(`${key} must be an array`);
+  }
+  spec = { ...spec };
+  for (const key of ['entities', 'relationships', 'globalChoices', 'webResources', 'views', 'charts', 'forms', 'commands', 'dashboards', 'pages', 'personas']) {
+    spec[key] = recordArray(spec[key]);
+  }
   if (!spec.solution || !spec.solution.uniqueName) {
     errors.push('solution.uniqueName is required');
   }

@@ -83,3 +83,19 @@ test('malformed JSON exits non-zero before a partial preview is printed', () => 
   assert.equal(res.stdout, '');
   assert.match(res.stderr, /SyntaxError/);
 });
+
+test('renders scalar persona privilege access without crashing', () => {
+  const specPath = writeSpec({
+    personas: [
+      {
+        persona: 'Support',
+        jobs: [{ name: 'Read tickets', privileges: [{ entity: 'new_ticket', access: 'read' }] }],
+      },
+    ],
+  });
+
+  const res = run(['--spec', '@' + specPath]);
+
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /new_ticket: read @ user/);
+});

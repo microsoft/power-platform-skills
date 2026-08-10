@@ -16,11 +16,22 @@ function lintAppSpec(spec) {
   const warnings = [];
   const E = (m) => errors.push(m);
   const W = (m) => warnings.push(m);
+  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
+    return { ok: false, errors: ['spec is not an object'], warnings };
+  }
   const lc = (s) => String(s || '').toLowerCase();
   // Lint runs on WORK-IN-PROGRESS specs (it is the gate the author hits before plan mode), so a
   // half-typed collection must produce findings, not a crash that kills the authoring flow.
   // validateAppSpec is what reports the shape error itself.
   const arrOf = (v) => (Array.isArray(v) ? v : []);
+  const recordArray = (v) => arrOf(v).map((item) => item && typeof item === 'object' && !Array.isArray(item) ? item : {});
+  for (const key of ['entities', 'relationships', 'globalChoices', 'webResources', 'views', 'charts', 'forms', 'commands', 'dashboards', 'pages', 'personas']) {
+    if (spec[key] !== undefined && !Array.isArray(spec[key])) E(`${key} must be an array`);
+  }
+  spec = { ...spec };
+  for (const key of ['entities', 'relationships', 'globalChoices', 'webResources', 'views', 'charts', 'forms', 'commands', 'dashboards', 'pages', 'personas']) {
+    spec[key] = recordArray(spec[key]);
+  }
 
   const prefix = spec.solution && spec.solution.publisherPrefix;
   const entityNames = new Set();

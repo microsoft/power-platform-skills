@@ -18,6 +18,14 @@ Fixes a malformed app module: generated apps did not actually contain their tabl
 - **A table that cannot be resolved now halts the build, naming it.** One bad component fails the
   whole `AddAppComponents` call, so a silently-skipped table previously emptied the app's component
   list rather than degrading it.
+- **Malformed specs now produce validation errors instead of raw `TypeError`s.** `validateAppSpec()`
+  and `lintAppSpec()` crashed on a `null` spec, an object- or string-shaped collection
+  (`entities: {}`), and `null` entries inside a collection; `preview-app` crashed when a persona
+  privilege's `access` was a scalar rather than an array. These are work-in-progress shapes an author
+  hits constantly, and a crash killed the authoring flow instead of reporting the problem.
+- **`verify-model-app` no longer surfaces a raw Dataverse HTTP 400 for a missing table.** A declared
+  table that does not exist makes the saved-view query 400 (`returnedtypecode` names an unknown
+  entity); the read error is now captured and reported as a structured missing-artifact finding.
 - **App components are read back and verified after the write.** `AddAppComponents` returned 204 for
   every corrupt app — a 2xx means the request was accepted, not which rows it wrote — and
   `ValidateApp` reported success too. The build now asserts every declared table has a
