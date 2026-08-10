@@ -8,17 +8,57 @@ const { resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, 
 
 test('resolveAppId returns a guid as-is, else resolves by uniquename', async () => {
   const guid = '11111111-2222-3333-4444-555555555555';
-  assert.strictEqual(await resolveAppId({}, guid), guid);
+  assert.deepStrictEqual(await resolveAppId({}, guid), { appId: guid });
   const sdk = { queryRecords: async (l, o) => { assert.match(o.filter, /uniquename eq 'new_app'/); return [{ appmoduleid: 'app-1' }]; } };
-  assert.strictEqual(await resolveAppId(sdk, 'new_app'), 'app-1');
+  assert.deepStrictEqual(await resolveAppId(sdk, 'new_app'), { appId: 'app-1', matchedBy: 'uniqueName' });
 });
 
-test('resolveAppId escapes apostrophes and returns undefined for a missing app', async () => {
+test('resolveAppId escapes apostrophes and reports an actionable error for a missing app', async () => {
   const calls = [];
   const sdk = { queryRecords: async (logical, opts) => { calls.push({ logical, opts }); return []; } };
-  assert.strictEqual(await resolveAppId(sdk, "new_bob's_app"), undefined);
+  const r = await resolveAppId(sdk, "new_bob's_app");
+  assert.match(r.error, /not found/);
+  // The dead-end "app 'x' not found" gave an operator holding a display name nowhere to go.
+  assert.match(r.error, /unique name/);
+  assert.strictEqual(r.appId, undefined);
   assert.strictEqual(calls[0].logical, 'appmodule');
   assert.match(calls[0].opts.filter, /uniquename eq 'new_bob''s_app'/);
+  // The display-name fallback must escape the apostrophe the same way, or it is an OData syntax error.
+  assert.match(calls[1].opts.filter, /name eq 'new_bob''s_app'/);
+});
+
+// A live tester hit this: the maker portal shows a DISPLAY name, but --app only accepted the unique
+// name, so the obvious input failed with a dead-end error.
+test('resolveAppId falls back to an unambiguous display name and reports the unique name', async () => {
+  const sdk = {
+    queryRecords: async (_l, o) => (/uniquename eq/.test(o.filter) ? [] : [{ appmoduleid: 'app-9', uniquename: 'new_smokeapp', name: 'Smoke App' }]),
+  };
+  assert.deepStrictEqual(await resolveAppId(sdk, 'Smoke App'), { appId: 'app-9', matchedBy: 'displayName', uniqueName: 'new_smokeapp' });
+});
+
+// Display names are mutable AND non-unique, so guessing could download a different app than the
+// operator meant — refuse and hand back the unique names instead.
+test('resolveAppId fails closed when a display name matches more than one app', async () => {
+  const sdk = {
+    queryRecords: async (_l, o) => (/uniquename eq/.test(o.filter) ? [] : [
+      { appmoduleid: 'app-1', uniquename: 'new_sales', name: 'Sales' },
+      { appmoduleid: 'app-2', uniquename: 'contoso_sales', name: 'Sales' },
+    ]),
+  };
+  const r = await resolveAppId(sdk, 'Sales');
+  assert.strictEqual(r.appId, undefined, 'must not pick one of the ambiguous matches');
+  assert.match(r.error, /shared by 2 apps/);
+  assert.match(r.error, /new_sales, contoso_sales/);
+});
+
+// A GUID is authoritative: resolving it must not cost a query, and must never reach the
+// display-name fallback (an app DISPLAY-named like a GUID could otherwise shadow a real id).
+test('resolveAppId issues no query for a GUID', async () => {
+  let queried = false;
+  const sdk = { queryRecords: async () => { queried = true; return []; } };
+  const r = await resolveAppId(sdk, 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
+  assert.strictEqual(r.appId, 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
+  assert.strictEqual(queried, false);
 });
 
 test('collectSitemap gathers distinct entities + icons from the sitemap', () => {

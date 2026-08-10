@@ -403,8 +403,12 @@ existing app (add a field/view/page, edit a page's code, retitle/reorder nav, sw
 deployed app fresh into a spec first**, then edit that spec and re-run Phase 2:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/download-model-app.js" --env <envUrl> --app <appId|uniqueName> --out <working-dir>
+node "${PLUGIN_ROOT}/scripts/download-model-app.js" --env <envUrl> --app <appId|uniqueName|displayName> --out <working-dir>
 ```
+
+`--app` resolves in identity order: app id (GUID) → `uniquename` → display name. Prefer the **unique
+name** — it is immutable, while a display name can be renamed and is not unique. A display name that
+matches more than one app is refused, listing the candidate unique names rather than guessing.
 
 This reconstructs the app into `<working-dir>/app-spec.json`. **Round-trip scope — be precise, it is
 not everything:**

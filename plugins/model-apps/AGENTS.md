@@ -148,6 +148,11 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   general rule this bug taught: **assert what you PRODUCED, not what you intended** — "some table
   component exists" was true of the corrupt apps too, and `ValidateApp` reported success on them.
   Pinned by `scripts/tests/app-entity-components-real-bundle.test.js`.
+  The same rule binds **tests and evals**: derive an expectation from the value the code under test
+  actually emits, never from a hand-written fixture of what it *should* emit. `smoke-eval.js` asserted
+  a `VectorIcon` the builder deliberately drops, and its unit test hand-wrote sitemap XML containing
+  that value — so the offline suite was green while every live run failed. Assertions now come from
+  `appDef`, and `vendor-sdk-smoke.test.js` checks the bytes the real vendored SDK serializes.
 - **`scripts/teardown-model-app.js` → `scripts/lib/sdk-teardown.js`** — the first-class, **classifier-safe**
   teardown (reverse of the build), for cleaning up live-verification probes or a failed build. Deletes
   exactly the artifacts a given App Spec declares, in dependency-safe order (**app module → security

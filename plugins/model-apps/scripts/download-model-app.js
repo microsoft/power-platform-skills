@@ -5,7 +5,7 @@
 // pages (via pac list+download, incl. Maker-authored), its entities (minimal — the build reuses
 // existing tables idempotently), the icon web resources, and its solution, via hydrate-spec.
 //
-// Usage: node download-model-app.js --env <orgUrl> --app <appId|uniqueName> --out <dir> [--allow-lossy-download]
+// Usage: node download-model-app.js --env <orgUrl> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download]
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -66,10 +66,33 @@ function makeProvision(env, workspaceDir) {
   return sdk;
 }
 
+// Resolve `--app` to an app GUID. Accepts the app's id, its immutable `uniquename`, or — as a
+// convenience — its DISPLAY name. Identity order matters: an id and a uniquename are unique and
+// authoritative, so they are tried first and a display-name query is never issued for them.
+//
+// A display NAME is resolved only as a LAST RESORT and FAILS CLOSED on ambiguity. Unlike a
+// uniquename it is mutable and NOT unique — Dataverse happily holds two appmodules both named
+// "Sales" — so silently taking the first match could download a different app than the operator
+// meant. On multiple matches we return the candidate unique names instead of guessing.
+// Display names were previously rejected outright with a bare "not found", which is a dead end for
+// an operator holding the name the maker portal shows them (the unique name is not surfaced there).
+//
+// Returns { appId, matchedBy?, uniqueName? } on success, or { error } describing how to retry.
 async function resolveAppId(sdk, appArg) {
-  if (/^[0-9a-fA-F-]{36}$/.test(appArg)) return appArg;
-  const rows = await sdk.queryRecords('appmodule', { select: ['appmoduleid'], filter: `uniquename eq '${String(appArg).replace(/'/g, "''")}'`, top: 1 });
-  return rows && rows[0] && rows[0].appmoduleid;
+  if (/^[0-9a-fA-F-]{36}$/.test(appArg)) return { appId: appArg };
+  // OData string literals escape a single quote by DOUBLING it: O'Brien -> 'O''Brien'.
+  const esc = String(appArg).replace(/'/g, "''");
+  const byUnique = await sdk.queryRecords('appmodule', { select: ['appmoduleid'], filter: `uniquename eq '${esc}'`, top: 1 });
+  if (byUnique && byUnique[0] && byUnique[0].appmoduleid) return { appId: byUnique[0].appmoduleid, matchedBy: 'uniqueName' };
+
+  const byName = await sdk.queryRecords('appmodule', { select: ['appmoduleid', 'uniquename', 'name'], filter: `name eq '${esc}'`, top: 50 });
+  const matches = (byName || []).filter((r) => r && r.appmoduleid);
+  if (matches.length === 1) return { appId: matches[0].appmoduleid, matchedBy: 'displayName', uniqueName: matches[0].uniquename };
+  if (matches.length > 1) {
+    const names = matches.map((m) => m.uniquename).filter(Boolean).join(', ');
+    return { error: `'${appArg}' is a DISPLAY name shared by ${matches.length} apps — display names are not unique, so re-run --app with one of these unique names: ${names}` };
+  }
+  return { error: `app '${appArg}' not found — --app takes the app's id (GUID), its unique name (e.g. new_myapp), or an unambiguous display name` };
 }
 
 // The distinct entity logical names + icon web-resource NAMES referenced by the app's sitemap. Returns
@@ -723,14 +746,20 @@ async function main() {
   const outArg = typeof flags.out === 'string' ? flags.out : (typeof flags.output === 'string' ? flags.output : undefined);
   const allowLossyDownload = flags['allow-lossy-download'] === true;
   if (!env || !appArg || flags.app === true || flags.out === true || flags.output === true) {
-    process.stderr.write('Usage: node download-model-app.js --env <url> --app <appId|uniqueName> --out <dir> [--allow-lossy-download]\n');
+    process.stderr.write('Usage: node download-model-app.js --env <url> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download]\n');
     process.exit(1);
   }
   const outDir = path.resolve(outArg || '.');
   fs.mkdirSync(outDir, { recursive: true });
   const sdk = makeProvision(env, path.join(outDir, '.maker-workspace'));
-  const appId = await resolveAppId(sdk, appArg);
-  if (!appId) { emitResult(false, { ok: false, error: `app '${appArg}' not found` }); return; }
+  const resolved = await resolveAppId(sdk, appArg);
+  if (resolved.error) { emitResult(false, { ok: false, error: resolved.error }); return; }
+  const appId = resolved.appId;
+  // Narrate a display-name match so the operator learns the app's stable identity: the unique name
+  // is what every later build/teardown must be given, and it survives a rename of the display name.
+  if (resolved.matchedBy === 'displayName') {
+    process.stderr.write(`(resolved display name '${appArg}' to app unique name '${resolved.uniqueName}' — prefer the unique name, it is immutable)\n`);
+  }
 
   // Resolve the app's unique name early — needed for fetchSitemap (MEMBERSHIP) + manifest lookup.
   const appRows = await sdk.queryRecords('appmodule', { select: ['uniquename'], filter: `appmoduleid eq ${appId}`, top: 1 });

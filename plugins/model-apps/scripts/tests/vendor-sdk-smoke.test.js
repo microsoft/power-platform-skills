@@ -530,3 +530,84 @@ test('CONTRACT: the vendored bundle still carries the exact SDK role-ownership m
 });
 
 
+
+// A custom nav glyph — and the download->build round-trip — depend on a PLATFORM-REF `VectorIcon`
+// surviving serialization onto an ENTITY subarea. Reading the minified bundle cannot prove that; only
+// the serialized payload can, so assert the bytes the SDK would POST.
+test('CONTRACT: a platform-ref VectorIcon on an Entity subarea reaches the serialized sitemap XML', async () => {
+  const { createMakerSdk } = require(BUNDLE);
+  const { appDef } = require('../lib/sdk-build.js');
+  const { buildSmokeSpec } = require('../smoke-eval.js');
+  const spec = buildSmokeSpec('t');
+  const def = appDef(spec, { forms: {}, views: {}, charts: {}, dashboards: {}, pages: {} });
+
+  let sitemapXml = '';
+  const TABLE_METADATA_ID = '22222222-2222-2222-2222-222222222222';
+  // The push resolves each sitemap table to an OData reference and reads the pinned components back,
+  // both fail-closed — answer those reads (same shape as the escaping contract above) so an unrelated
+  // refusal cannot masquerade as an icon-serialization failure.
+  const httpClient = {
+    get: async (url) => {
+      const m = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(url);
+      if (m) return { status: 200, headers: {}, body: { LogicalName: m[1], MetadataId: TABLE_METADATA_ID, EntitySetName: `${m[1]}s` } };
+      if (/\/appmodulecomponents/.test(url)) return { status: 200, headers: {}, body: { value: [{ objectid: TABLE_METADATA_ID, componenttype: 1 }] } };
+      if (/\/appmodules/.test(url)) {
+        const row = { appmoduleid: '11111111-1111-1111-1111-111111111111', appmoduleidunique: '33333333-3333-3333-3333-333333333333' };
+        return { status: 200, headers: {}, body: /RetrieveUnpublishedMultiple/i.test(url) ? { value: [row] } : row };
+      }
+      return { status: 200, headers: {}, body: {} };
+    },
+    post: async (url, body) => {
+      if (/\/sitemaps\b/.test(url) && body && body.sitemapxml) sitemapXml = String(body.sitemapxml);
+      return { status: 204, headers: { 'odata-entityid': 'https://x/y(11111111-1111-1111-1111-111111111111)' }, body: {} };
+    },
+    patch: async () => ({ status: 204, headers: {}, body: {} }),
+    delete: async () => ({ status: 204, headers: {}, body: {} }),
+    put: async () => ({ status: 204, headers: {}, body: {} }),
+  };
+  const sdk = createMakerSdk({ workspacePath: mkTempWorkspace('sdk-vecicon-'), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+  sdk.initWorkspace();
+  const art = sdk.createArtifact('app', { name: spec.app.name, uniqueName: 'new_vecapp', description: '', siteMap: def.siteMap, components: def.components });
+  await assert.doesNotReject(sdk.pushArtifact('app', art.id), 'the smoke spec must push without a component-verification refusal');
+
+  assert.ok(sitemapXml, 'the sitemap was serialized and posted');
+  assert.match(sitemapXml, /<SubArea[^>]*Entity="new_torder"[^>]*VectorIcon="\/WebResources\/new_tvec\.svg"/, 'platform-ref VectorIcon is serialized onto the Entity subarea');
+  // The bare token is absent only because appDef already removed it — asserting that here would
+  // re-test appDef, not the bundle. The test below establishes what the BUNDLE actually does.
+  assert.ok(!/VectorIcon="Grid"/.test(sitemapXml), 'appDef removed the bare token before the payload reached the SDK');
+});
+
+// Establishes WHERE the bare-Fluent-token guard lives, by pushing a hand-built siteMap that bypasses
+// appDef entirely. The vendored SDK happily serializes `VectorIcon="Grid"` onto an Entity subarea —
+// it has no such guard — which is exactly why `appDef` must drop it (lib/sdk-build.js) and why the
+// drop cannot be delegated to the bundle. If a future re-vendor ADDS a guard, this test fails and
+// tells us the defense moved, rather than silently leaving two layers that both assume the other.
+test('CONTRACT: the vendored SDK does NOT filter a bare Fluent VectorIcon — appDef is the only guard', async () => {
+  const { createMakerSdk } = require(BUNDLE);
+  let sitemapXml = '';
+  const TABLE_METADATA_ID = '22222222-2222-2222-2222-222222222222';
+  const httpClient = {
+    get: async (url) => {
+      const m = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(url);
+      if (m) return { status: 200, headers: {}, body: { LogicalName: m[1], MetadataId: TABLE_METADATA_ID, EntitySetName: `${m[1]}s` } };
+      if (/\/appmodulecomponents/.test(url)) return { status: 200, headers: {}, body: { value: [{ objectid: TABLE_METADATA_ID, componenttype: 1 }] } };
+      if (/\/appmodules/.test(url)) {
+        const row = { appmoduleid: '11111111-1111-1111-1111-111111111111', appmoduleidunique: '33333333-3333-3333-3333-333333333333' };
+        return { status: 200, headers: {}, body: /RetrieveUnpublishedMultiple/i.test(url) ? { value: [row] } : row };
+      }
+      return { status: 200, headers: {}, body: {} };
+    },
+    post: async (url, body) => { if (/\/sitemaps\b/.test(url) && body && body.sitemapxml) sitemapXml = String(body.sitemapxml); return { status: 204, headers: { 'odata-entityid': 'https://x/y(11111111-1111-1111-1111-111111111111)' }, body: {} }; },
+    patch: async () => ({ status: 204, headers: {}, body: {} }),
+    delete: async () => ({ status: 204, headers: {}, body: {} }),
+    put: async () => ({ status: 204, headers: {}, body: {} }),
+  };
+  const sdk = createMakerSdk({ workspacePath: mkTempWorkspace('sdk-vecraw-'), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+  sdk.initWorkspace();
+  const siteMap = { areas: [{ id: 'area_0', title: 'Main', groups: [{ id: 'g0', title: 'G', subAreas: [
+    { id: 's0', title: 'Orders', type: 'Entity', entity: 'new_torder', vectorIcon: 'Grid' },
+  ] }] }] };
+  const art = sdk.createArtifact('app', { name: 'Raw Token', uniqueName: 'new_rawtoken', description: '', siteMap, components: { forms: [], views: [], charts: [] } });
+  await sdk.pushArtifact('app', art.id);
+  assert.match(sitemapXml, /<SubArea[^>]*Entity="new_torder"[^>]*VectorIcon="Grid"/, 'the bundle serializes a bare token when handed one — so the plugin must not hand it one');
+});

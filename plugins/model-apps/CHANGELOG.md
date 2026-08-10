@@ -25,12 +25,24 @@ Fixes a malformed app module: generated apps did not actually contain their tabl
 
 ### Changed
 - **Re-vendored `cds-maker-sdk`** with the above.
+- **`download-model-app.js --app` now accepts a display name**, not just an id or `uniquename`. It
+  resolves in identity order (id → `uniquename` → display name) and **fails closed** when a display
+  name matches more than one app, listing the candidate unique names instead of guessing. A display
+  name previously hit a dead-end "app 'x' not found", even though that is the only name the maker
+  portal shows.
 
 ### Tests
 - `app-entity-components-real-bundle.test.js` drives the shipped bundle: tables sent as references,
   an unresolvable table refused, the read-back catching both a missing component and the exact
   6612527 corruption (rows present but pointing at `entity`). 6 of its 7 tests fail against the
   previous bundle.
+- **Fixed a live-only failure in the smoke eval.** Its spec put a bare Fluent `vectorIcon` ("Grid") on
+  an *entity* subarea — a shape the builder deliberately drops — while asserting the deployed sitemap
+  contained `VectorIcon="Grid"`, so the check could never pass against a real org. The offline test
+  hid it by hand-writing the sitemap XML it wanted to see. The spec now uses an emittable
+  `/WebResources/<name>.svg` reference, assertions are derived from what `appDef` actually emits, and
+  a negative control proves the bare token stays out of the deployed sitemap. A new contract test
+  drives the **real vendored SDK** and asserts the serialized XML bytes.
 
 ### Known limitations
 - **ADO 6603388 (download drops entity components not in the sitemap) is still open.** A live attempt
