@@ -303,8 +303,7 @@ test('hook attaches app identity from app.json when cwd is a project root', (t) 
     JSON.stringify({
       expo: {
         extra: {
-          powerPlatformSkills: {
-            schemaVersion: 1,
+          telemetry: {
             appInstanceId: '5d7e71b1-61d6-4a91-9c2e-cba5db983e38',
           },
         },
@@ -334,8 +333,7 @@ test('hook resolves --working-dir from tool input when cwd is outside the projec
     JSON.stringify({
       expo: {
         extra: {
-          powerPlatformSkills: {
-            schemaVersion: 1,
+          telemetry: {
             appInstanceId: 'e5b2f43c-fa9f-44a0-b8a7-54e4f956f9db',
           },
         },

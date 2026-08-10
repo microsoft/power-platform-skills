@@ -29,11 +29,11 @@ function readAppInstanceId(projectRoot) {
   if (!isPlainObject(appJson) || !isPlainObject(appJson.expo)) return '';
 
   const extra = appJson.expo.extra;
-  const identity = isPlainObject(extra) && isPlainObject(extra.powerPlatformSkills)
-    ? extra.powerPlatformSkills
+  const telemetry = isPlainObject(extra) && isPlainObject(extra.telemetry)
+    ? extra.telemetry
     : null;
-  const appInstanceId = identity && typeof identity.appInstanceId === 'string'
-    ? identity.appInstanceId
+  const appInstanceId = telemetry && typeof telemetry.appInstanceId === 'string'
+    ? telemetry.appInstanceId
     : '';
 
   return APP_INSTANCE_ID.test(appInstanceId) ? appInstanceId : '';
@@ -58,14 +58,13 @@ function ensureAppInstanceId(projectRoot = process.cwd()) {
   const next = isPlainObject(appJson) ? appJson : {};
   next.expo = isPlainObject(next.expo) ? next.expo : {};
   next.expo.extra = isPlainObject(next.expo.extra) ? next.expo.extra : {};
-  const skillIdentity = isPlainObject(next.expo.extra.powerPlatformSkills)
-    ? next.expo.extra.powerPlatformSkills
+  const telemetry = isPlainObject(next.expo.extra.telemetry)
+    ? next.expo.extra.telemetry
     : {};
 
   const appInstanceId = crypto.randomUUID();
-  next.expo.extra.powerPlatformSkills = {
-    ...skillIdentity,
-    schemaVersion: 1,
+  next.expo.extra.telemetry = {
+    ...telemetry,
     appInstanceId,
   };
 

@@ -191,11 +191,35 @@ test('started event is allowlisted and carries no user, tenant, prompt, or path 
 
 test('app instance id is minted once and reused by later skill runs', (t) => {
   const project = tempProject(t);
+  fs.writeFileSync(
+    path.join(project, 'app.json'),
+    JSON.stringify({
+      expo: {
+        extra: {
+          powerappsNative: {
+            schemaVersion: 1,
+            templateVersion: 1,
+          },
+        },
+      },
+    }),
+  );
   const appInstanceId = ensureAppInstanceId(project);
   assert.match(appInstanceId, /^[0-9a-f-]{36}$/);
   assert.equal(ensureAppInstanceId(project), appInstanceId);
   assert.equal(findAppInstanceId(project), appInstanceId);
   assert.equal(findAppInstanceId(path.join(project, 'src', 'screens')), '');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(project, 'app.json'), 'utf8')), {
+    expo: {
+      extra: {
+        powerappsNative: {
+          schemaVersion: 1,
+          templateVersion: 1,
+        },
+        telemetry: { appInstanceId },
+      },
+    },
+  });
 });
 
 test('events outside a project carry no app identity', (t) => {
@@ -209,8 +233,7 @@ test('a hand-edited app identity is ignored rather than emitted', (t) => {
     JSON.stringify({
       expo: {
         extra: {
-          powerPlatformSkills: {
-            schemaVersion: 1,
+          telemetry: {
             appInstanceId: 'contoso-field-inspections',
           },
         },
